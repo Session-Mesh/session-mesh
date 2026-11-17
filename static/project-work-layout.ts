@@ -15,3 +15,11 @@ export function focusWorkCard(root:HTMLElement,key:string):void {
   const target=Array.from(root.querySelectorAll<HTMLElement>('[data-followup-key]')).find(node=>node.dataset.followupKey===`row-${key}`);
   target?.focus({preventScroll:true});target?.scrollIntoView({block:'nearest',inline:'nearest'});
 }
+
+/** Phone selections reveal the inspector heading rather than the bottom of a long document. */
+export function revealWorkInspector(root:HTMLElement):void {
+  const doc=root.ownerDocument;if(doc.hidden||!doc.hasFocus())return;
+  root.querySelector('.project-work-inspector')?.scrollIntoView({
+    block:doc.defaultView?.matchMedia('(max-width:640px)').matches?'start':'nearest',inline:'nearest',
+  });
+}
