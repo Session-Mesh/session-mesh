@@ -7,6 +7,7 @@ import { window, part } from '../static/project-followup-primitives.ts';
 import { recordedInstant, observedInterval, ObservationAge } from '../static/project-followup-time.ts';
 import { dependencyGraph, durationGeometry } from '../static/project-followup-graph.ts';
 import { readFollowupContext, resolveFollowupLinks } from '../static/project-followup-context.ts';
+import { ProjectFollowupController } from '../static/project-followup-controller.ts';
 import { FollowupPreferenceStore } from '../static/project-followup-preferences.ts';
 import { acceptedReceipt, roadmapRows, estimateMinutes, rowGraph, taskCoverage } from '../static/project-followup-model.ts';
 import { followupCatalog, roadmapObservation, roadmapTask, attemptObservation } from './helpers/project-followup-fixtures.ts';
@@ -127,4 +128,29 @@ test('task window coverage does not inherit unrelated operator truncation', () =
   assert.equal(taskCoverage(summary), true); assert.equal(rowGraph(roadmapRows(summary), summary).timing?.span, 20);
   summary.followup!.task_details.truncated = true; summary.followup!.task_details.total = 201;
   assert.equal(taskCoverage(summary), false); assert.equal(rowGraph(roadmapRows(summary), summary).schedule, null);
+});
+
+test('followup only mouse drags capture and write scroll while touch keeps tap and drag invalidation', () => {
+  for (const pointerType of ['mouse', 'touch', 'pen']) {
+    let left = 40, writes = 0, captures = 0;
+    const chart = { get scrollLeft() { return left; }, set scrollLeft(value: number) { left = value; writes++; },
+      setPointerCapture() { captures++; } };
+    // Exercise the production pointer handlers without constructing a DOM, timer or provider.
+    const controller = Object.assign(Object.create(ProjectFollowupController.prototype), {
+      options: { root: { querySelector: () => chart } }, pointers: new Set<number>(), pointer: null, invalidClick: false,
+    });
+    const pointer = (x: number, id = 1) => ({ pointerId: id, pointerType, clientX: x, clientY: 20 });
+    controller.pointerDown(pointer(100)); controller.pointerMove(pointer(97));
+    assert.equal(controller.invalidClick, false, `${pointerType} clean tap stays actionable`);
+    controller.pointerMove(pointer(60));
+    assert.equal(controller.invalidClick, true, `${pointerType} drag cannot activate a row`);
+    assert.equal(writes, pointerType === 'mouse' ? 1 : 0, `${pointerType} scroll ownership`);
+    assert.equal(captures, pointerType === 'mouse' ? 1 : 0, `${pointerType} capture ownership`);
+    assert.equal(left, pointerType === 'mouse' ? 80 : 40);
+    controller.invalidate(); controller.pointerMove(pointer(30));
+    assert.equal(controller.pointer, null); assert.equal(controller.invalidClick, true);
+    assert.equal(writes, pointerType === 'mouse' ? 1 : 0, 'cancelled tracking cannot write scroll');
+    controller.pointers.clear(); controller.pointerDown(pointer(100)); controller.pointerDown(pointer(90, 2));
+    assert.equal(controller.pointer, null); assert.equal(controller.invalidClick, true, 'multitouch invalidates click');
+  }
 });

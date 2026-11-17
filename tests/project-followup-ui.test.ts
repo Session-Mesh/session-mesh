@@ -265,27 +265,76 @@ describe('native recorded followup', { skip }, () => {
       await page.locator('#projects-return').click(); await fixture.continuity(page, sockets, input);
     } finally { await page.close(); }
   });
+  test('native touch pans work charts without script capture or scroll writes', async () => {
+    const {page,sockets,input}=await fixture.sessionPage(true);
+    try {
+      const tasks=['queued','active','blocked','done'].map((state,index)=>roadmapTask({id:`touch-${index}`,state,
+        objective:`Touch scrolling task ${index}`,depends_on:index?[`touch-${index-1}`]:[]}));
+      await load(page,followupCatalog(roadmapObservation(tasks)),fixture,true);
+      for(const mode of ['kanban','timeline','dependencies']) {
+        try {
+        await page.locator('[data-followup-key="view-mode"]').selectOption(mode);
+        const chart=page.locator('.project-followup-chart');await chart.scrollIntoViewIfNeeded();
+        assert.ok(await chart.evaluate(element=>element.scrollWidth>element.clientWidth+60),'fixture has useful local horizontal travel');
+        const touchAction=await chart.evaluate(element=>getComputedStyle(element).touchAction);
+        assert.ok(touchAction.includes('pan-x')||touchAction==='auto'||touchAction==='manipulation','browser may pan horizontally');
+        await chart.evaluate(element=>{
+          const descriptor=Object.getOwnPropertyDescriptor(Element.prototype,'scrollLeft')!;
+          const capture=element.setPointerCapture.bind(element),probe={writes:0,captures:0,ended:false};(element as any).touchProbe=probe;
+          element.scrollLeft=0;
+          element.addEventListener('scroll',()=>{probe.ended=false;},{passive:true});
+          element.addEventListener('scrollend',()=>{probe.ended=true;},{passive:true});
+          Object.defineProperty(element,'scrollLeft',{configurable:true,get(){return descriptor.get!.call(element);},set(value){probe.writes++;descriptor.set!.call(element,value);}});
+          element.setPointerCapture=id=>{probe.captures++;capture(id);};
+        });
+        const box=(await chart.boundingBox())!,x=box.x+box.width-24,y=Math.max(100,Math.min(750,box.y+24));
+        const cdp=await page.context().newCDPSession(page);
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+        for(const distance of [20,50,90,130])await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-distance,y}]});
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.detach();
+        await page.waitForFunction(()=>document.querySelector('.project-followup-chart')!.scrollLeft>30);
+        await chart.evaluate(async element=>{
+          const probe=(element as any).touchProbe;let previous=element.scrollLeft,stable=0;
+          for(let frame=0;frame<180;frame++){
+            await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
+            const current=element.scrollLeft;stable=current===previous?stable+1:0;previous=current;
+            if(stable>=(probe.ended?2:8))return;
+          }
+          throw new Error('native scrolling did not settle within180 animation frames');
+        });
+        assert.deepEqual(await chart.evaluate(element=>{const probe=(element as any).touchProbe;return{writes:probe.writes,captures:probe.captures};}),{writes:0,captures:0},`${mode}: native touch bypasses script scroll/capture`);
+        assert.equal(await page.locator('.project-work-inspector').count(),0,'scroll gesture cannot select a task');
+        await page.locator('[data-followup-key="row-touch-0"]').tap();
+        assert.equal(await page.locator('.project-followup-detail h5').textContent(),'touch-0 · Touch scrolling task 0',`${mode}: the first clean tap after native rest selects the exact task`);
+        await page.locator('[data-followup-key="close-detail"]').click();
+        } catch(error) { throw new Error(`${mode}: ${String(error)}`,{cause:error}); }
+      }
+      await page.locator('#projects-return').click();await fixture.continuity(page,sockets,input);
+    } finally {await page.close();}
+  });
   test('pointer sequences suppress unintended row activation', async () => {
     const { page } = await fixture.sessionPage();
     try {
       await load(page, followupCatalog(), fixture, false);
       const button = page.locator('[data-followup-key="row-task"]');
-      await button.dispatchEvent('pointerdown', { pointerId: 1, clientX: 20, clientY: 20 });
-      await button.dispatchEvent('pointermove', { pointerId: 1, clientX: 27, clientY: 20 });
-      await button.dispatchEvent('pointerup', { pointerId: 1, clientX: 27, clientY: 20 });
+      await button.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 1, clientX: 20, clientY: 20 });
+      await button.dispatchEvent('pointermove', { pointerType: 'touch', pointerId: 1, clientX: 27, clientY: 20 });
+      await button.dispatchEvent('pointerup', { pointerType: 'touch', pointerId: 1, clientX: 27, clientY: 20 });
       await button.dispatchEvent('click', { detail: 1 }); assert.equal(await page.locator('.project-followup-detail').count(), 0);
-      await button.dispatchEvent('pointerdown', { pointerId: 2, clientX: 20, clientY: 20 });
-      await button.dispatchEvent('pointercancel', { pointerId: 2 });
+      await button.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 2, clientX: 20, clientY: 20 });
+      await button.dispatchEvent('pointercancel', { pointerType: 'touch', pointerId: 2 });
       await button.dispatchEvent('click', { detail: 1 }); assert.equal(await page.locator('.project-followup-detail').count(), 0);
-      await button.dispatchEvent('pointerdown', { pointerId: 3, clientX: 20, clientY: 20 });
-      await button.dispatchEvent('lostpointercapture', { pointerId: 3 });
-      await button.dispatchEvent('pointerup', { pointerId: 3 });
+      await button.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 3, clientX: 20, clientY: 20 });
+      await button.dispatchEvent('lostpointercapture', { pointerType: 'touch', pointerId: 3 });
+      await button.dispatchEvent('pointerup', { pointerType: 'touch', pointerId: 3 });
       await button.dispatchEvent('click', { detail: 1 }); assert.equal(await page.locator('.project-followup-detail').count(), 0);
-      await button.dispatchEvent('pointerdown', { pointerId: 4, clientX: 20, clientY: 20 });
-      await button.dispatchEvent('pointerdown', { pointerId: 5, clientX: 20, clientY: 20 });
-      await button.dispatchEvent('pointerup', { pointerId: 4 }); await button.dispatchEvent('pointerup', { pointerId: 5 });
+      await button.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 4, clientX: 20, clientY: 20 });
+      await button.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 5, clientX: 20, clientY: 20 });
+      await button.dispatchEvent('pointerup', { pointerType: 'touch', pointerId: 4 }); await button.dispatchEvent('pointerup', { pointerType: 'touch', pointerId: 5 });
       await button.dispatchEvent('click', { detail: 1 }); assert.equal(await page.locator('.project-followup-detail').count(), 0);
-      await button.click(); assert.equal(await page.locator('.project-followup-detail').count(), 1);
+      await button.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 6, clientX: 20, clientY: 20 });
+      await button.dispatchEvent('pointerup', { pointerType: 'touch', pointerId: 6, clientX: 20, clientY: 20 });
+      await button.dispatchEvent('click', { detail: 1 }); assert.equal(await page.locator('.project-followup-detail').count(), 1);
     } finally { await page.close(); }
   });
   test('attempt pages retain every selected claim and disclosure on refresh', async () => {

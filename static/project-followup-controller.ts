@@ -33,7 +33,7 @@ export class ProjectFollowupController {
   private revisionInconsistent = false;
   private timer: ReturnType<typeof setInterval>;
   private stopped = false;
-  private pointer: { id: number; x: number; y: number; left: number } | null = null;
+  private pointer: { id: number; type: string; x: number; y: number; left: number } | null = null;
   private pointers = new Set<number>();
   private invalidClick = false;
   private naturalRelease = false;
@@ -85,7 +85,7 @@ export class ProjectFollowupController {
   private pointerDown(event: PointerEvent) {
     if (this.pointers.size) { this.pointers.add(event.pointerId); this.invalidate(); return; }
     this.pointers.add(event.pointerId); this.invalidClick = false; this.naturalRelease = false;
-    this.pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, left: this.chart()?.scrollLeft ?? 0 };
+    this.pointer = { id: event.pointerId, type: event.pointerType, x: event.clientX, y: event.clientY, left: this.chart()?.scrollLeft ?? 0 };
   }
   private pointerMove(event: PointerEvent) {
     const pointer = this.pointer; if (!pointer || pointer.id !== event.pointerId) return;
@@ -93,7 +93,8 @@ export class ProjectFollowupController {
     if (distance < 6) return;
     this.invalidClick = true;
     const chart = this.chart();
-    if (chart && Math.abs(event.clientX - pointer.x) > Math.abs(event.clientY - pointer.y)) {
+    // Touch and pen keep native scrolling, inertia and pinch; tracking still suppresses drag clicks.
+    if (pointer.type === 'mouse' && chart && Math.abs(event.clientX - pointer.x) > Math.abs(event.clientY - pointer.y)) {
       try { chart.setPointerCapture(event.pointerId); } catch { /* The browser may already have cancelled a native gesture. */ }
       chart.scrollLeft = pointer.left - (event.clientX - pointer.x);
     }
