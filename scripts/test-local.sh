@@ -40,25 +40,43 @@ require_tools() {
     echo "test-local: Node $version is unsupported; use 22.13+ or 24+ (type stripping)." >&2
     exit 1
   fi
-  # The demo compiler test runs scripts/compile-demo-tsx.sh, confined by bubblewrap.
-  [ -x /usr/bin/bwrap ] || { echo 'test-local: missing /usr/bin/bwrap (package bubblewrap).' >&2; exit 1; }
-  if ! /usr/bin/bwrap --unshare-all --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind-try /lib64 /lib64 \
-      -- /usr/bin/true; then
-    echo 'test-local: bubblewrap cannot create its namespaces (Ubuntu 24.04: see docs/development.md, section "bubblewrap and Ubuntu 24.04").' >&2
-    exit 1
+  # The demo compiler test runs scripts/compile-demo-tsx.sh, confined by bubblewrap, on Linux only:
+  # elsewhere the launcher refuses to run the compiler and the tests check that refusal instead
+  # (demo-compiler/README.md).
+  if [ "$(uname -s)" = Linux ]; then
+    [ -x /usr/bin/bwrap ] || { echo 'test-local: missing /usr/bin/bwrap (package bubblewrap).' >&2; exit 1; }
+    if ! /usr/bin/bwrap --unshare-all --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind-try /lib64 /lib64 \
+        -- /usr/bin/true; then
+      echo 'test-local: bubblewrap cannot create its namespaces (Ubuntu 24.04: see docs/development.md, section "bubblewrap and Ubuntu 24.04").' >&2
+      exit 1
+    fi
   fi
 }
 
 # select_python: MESH_PYTHON, otherwise .venv/, created or completed as needed.
 source scripts/test-local-python.sh
 
+# The newest Playwright Chromium under PLAYWRIGHT_BROWSERS_PATH, in the layout of this system.
+newest_chromium() {
+  local layout
+  case "$(uname -s)" in
+    Darwin) layout='chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium' ;;
+    *) layout='chromium-*/chrome-linux*/chrome' ;;
+  esac
+  # shellcheck disable=SC2086 # $layout is a glob.
+  ls -d "$PLAYWRIGHT_BROWSERS_PATH"/$layout 2>/dev/null | sort -V | tail -1 || true
+}
+
 select_chromium() {
   local chrome
+  # The tests pin Playwright's browsers to ~/.cache/ms-playwright (tests/conftest.py), which is
+  # Playwright's own default on Linux only (macOS: ~/Library/Caches): install and look there.
+  export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
   if [ -z "${MESH_CHROMIUM:-}" ]; then
-    chrome="$(ls -d "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux*/chrome 2>/dev/null | sort -V | tail -1 || true)"
+    chrome="$(newest_chromium)"
     if [ -z "$chrome" ] && [ "$preflight_only" -eq 0 ]; then
       "$PY" -m playwright install chromium
-      chrome="$(ls -d "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux*/chrome 2>/dev/null | sort -V | tail -1 || true)"
+      chrome="$(newest_chromium)"
     fi
     [ -n "$chrome" ] && export MESH_CHROMIUM="$chrome"
   fi
@@ -71,6 +89,15 @@ select_chromium() {
 
 # Short private scratch for sockets, prepared before anything is installed.
 prepare_scratch() {
+  # macOS sets TMPDIR to a per-user directory under /var/folders: too long for the socket paths, and
+  # /var is a symlink, as is /tmp. Unless TMPDIR names another directory, use the physical /private/tmp.
+  local user_tmp
+  if [ "$(uname -s)" = Darwin ]; then
+    user_tmp="$(getconf DARWIN_USER_TEMP_DIR)"
+    if [ -z "${TMPDIR:-}" ] || [ "${TMPDIR%/}" = "${user_tmp%/}" ]; then
+      TMPDIR=/private/tmp
+    fi
+  fi
   source scripts/test-tmpdir.sh
   mesh_prepare_test_tmpdir
 }
@@ -87,9 +114,11 @@ frontend_checks() {
 }
 
 node_tests() {
-  local files=()
-  mapfile -d '' files < <(find tests -type f \( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \) \
-    -not -path '*/node_modules/*' -print0 | sort -z)
+  local files=() file
+  # A read loop rather than mapfile, which the bash 3.2 of macOS lacks.
+  while IFS= read -r -d '' file; do files+=("$file"); done \
+    < <(find tests -type f \( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \) \
+      -not -path '*/node_modules/*' -print0 | sort -z)
   [ "${#files[@]}" -eq 0 ] || node --experimental-strip-types --test "${files[@]}"
 }
 
