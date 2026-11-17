@@ -160,7 +160,8 @@ preamble_lines() {
 		;;
 	css) if [[ "$first" == '@charset'* ]]; then echo 1; else echo 0; fi ;;
 	html)
-		if [[ "${first,,}" =~ ^[[:space:]]*\<!doctype ]]; then
+		# Lowercased with tr: ${var,,} needs bash 4, and macOS ships bash 3.2.
+		if [[ "$(printf %s "$first" | tr "[:upper:]" "[:lower:]")" =~ ^[[:space:]]*\<!doctype ]]; then
 			echo 1
 		else
 			echo "manual:no doctype on the first line"
@@ -177,7 +178,8 @@ fix_file() {
 		return 1
 	fi
 	tmp=$(mktemp)
-	mode=$(stat -c '%a' "$path")
+	# GNU stat, else BSD stat (macOS).
+	mode=$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")
 	{
 		[[ "$preamble" -gt 0 ]] && head -n "$preamble" "$path"
 		render_header "$kind"
@@ -192,11 +194,12 @@ fix_file() {
 	echo "FIXED: $path"
 }
 
+# Read loops rather than mapfile, which the bash 3.2 of macOS lacks.
 if [[ ${#files[@]} -eq 0 ]]; then
 	if $staged_mode; then
-		mapfile -t files < <(git diff --cached --name-only --diff-filter=ACMR)
+		while IFS= read -r file; do files+=("$file"); done < <(git diff --cached --name-only --diff-filter=ACMR)
 	else
-		mapfile -t files < <(git ls-files)
+		while IFS= read -r file; do files+=("$file"); done < <(git ls-files)
 	fi
 fi
 
