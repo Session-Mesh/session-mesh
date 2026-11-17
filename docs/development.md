@@ -36,6 +36,12 @@ created that way; see [Native PTY host](install.md#native-pty-host) for an exist
 `scripts/bootstrap.sh` takes its dependencies from that commit, except `mcp-kit`, pinned to a public
 source revision until a release has the API it needs.
 
+On macOS the script runs with the system bash 3.2 and needs no bubblewrap: there the demo compiler
+launcher refuses to run, and its tests check that refusal ([bubblewrap](#bubblewrap-and-ubuntu-2404)).
+Its Playwright Chromium goes to `~/.cache/ms-playwright` there too, where the tests look for it.
+The test sockets need a short temporary directory: when `TMPDIR` is unset or is the default per-user
+directory under `/var/folders`, the script uses `/private/tmp` instead; another `TMPDIR` is kept.
+
 The public CI (`.github/workflows/public-ci.yml`) runs the same suite in parallel jobs, plus a leak
 check of the tree and, on pull requests, the contributor license agreement check `cla`
 ([CONTRIBUTING.md](../CONTRIBUTING.md#the-cla-check-blocks-the-merge)).
@@ -54,6 +60,7 @@ or identities.
 | Debian, Ubuntu | `sudo apt update && sudo apt install git curl python3 python3-venv bubblewrap opam build-essential libgmp-dev libsqlite3-dev pkg-config` |
 | Fedora | `sudo dnf install git curl python3 nodejs npm bubblewrap opam gcc make gmp-devel pkgconf-pkg-config` |
 | Arch | `sudo pacman -S git curl python nodejs npm bubblewrap opam base-devel gmp pkgconf` |
+| macOS (Homebrew) | `xcode-select --install`, then `brew install opam node gmp pkgconf sqlite python@3.14` |
 
 - **Node.** Ubuntu 24.04 and Debian 12 package Node 18, too old: install Node 24 from
   [nodejs.org](https://nodejs.org/en/download) (prebuilt binary, nvm or the NodeSource packages),
