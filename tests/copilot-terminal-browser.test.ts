@@ -40,16 +40,20 @@ before(async () => {
   await provider.start();
 });
 after(async () => {
-  // A real Copilot outlives the PTY host for a moment: stop what carries the run's directory first.
-  if (mesh) {
-    for (const entry of fs.readdirSync('/proc').filter(name => /^\d+$/.test(name))) {
-      let cwd = '';
-      try { cwd = fs.readlinkSync(`/proc/${entry}/cwd`); } catch { continue; }
-      if (cwd.startsWith(mesh.scratch) && Number(entry) !== process.pid) { try { process.kill(Number(entry), 'SIGKILL'); } catch { /* gone */ } }
+  try {
+    // A real Copilot outlives the PTY host for a moment: stop what carries the run's directory first.
+    // Through /proc, so on Linux only; elsewhere the mesh and the provider are still stopped below.
+    if (mesh && fs.existsSync('/proc')) {
+      for (const entry of fs.readdirSync('/proc').filter(name => /^\d+$/.test(name))) {
+        let cwd = '';
+        try { cwd = fs.readlinkSync(`/proc/${entry}/cwd`); } catch { continue; }
+        if (cwd.startsWith(mesh.scratch) && Number(entry) !== process.pid) { try { process.kill(Number(entry), 'SIGKILL'); } catch { /* gone */ } }
+      }
     }
+  } finally {
+    await mesh?.stop();
+    await provider.stop();
   }
-  await mesh?.stop();
-  await provider.stop();
 });
 
 /** The witness's status row ("offset=N pasted=[…] submitted=N"), '' while it is not drawn. */
