@@ -656,7 +656,7 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .project-followup-zoom, .project-followup-pages { flex-wrap: wrap; }
 .project-followup button, .projects-detail select { min-height: 44px; min-width: 44px; white-space: normal; overflow-wrap: anywhere; }
 .project-followup button[aria-pressed="true"] { outline: 2px solid var(--accent, #6cafff); outline-offset: -2px; }
-.project-followup-chart { max-width: 100%; max-height: 4096px; overflow: auto; touch-action: pan-y pinch-zoom; overscroll-behavior-x: contain; }
+.project-followup-chart { max-width: 100%; max-height: 4096px; overflow: auto; touch-action: pan-x pan-y pinch-zoom; overscroll-behavior-x: contain; }
 .project-followup-plane { position: relative; max-width: 32768px; min-width: 100%; }
 .project-followup-row { height: 72px; box-sizing: border-box; display: flex; align-items: center; gap: .6rem; border-bottom: 1px solid var(--border, #555); padding: .35rem 0; }
 .project-followup-row > button { width: 220px; max-width: 40vw; flex-shrink: 0; text-align: start; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
