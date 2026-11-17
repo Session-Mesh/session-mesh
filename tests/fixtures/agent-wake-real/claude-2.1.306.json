@@ -1,0 +1,9 @@
+{
+  "client": "Claude Code 2.1.306",
+  "date": "2026-10-21",
+  "environment": "disposable PTY and process; repository worktree; live Mesh services untouched",
+  "transaction": "one text burst followed 250 ms later by Enter in the same host queue transaction",
+  "result": "submitted",
+  "evidence": "the client consumed the prompt, inspected agent_inbox context, produced a response, and returned to idle",
+  "captured_content": "none"
+}

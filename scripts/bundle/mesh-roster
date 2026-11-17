@@ -1,0 +1,13 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+# A public Roster CLI of the bundle, run by the bundle's own Node: installed as
+# libexec/mesh-roster-roadmap and libexec/mesh-roster-pipeline, it runs
+# optional/roster/scripts/roster-roadmap.cjs or roster-pipeline.cjs. Those CLIs start with
+# #!/usr/bin/env node, and the project observation worker that runs them has the PATH of the PTY
+# host, which never holds the bundled Node (mesh sessions inherit that PATH and keep the user's own
+# node). Shell built-ins only: the PATH may hold nothing at all.
+root=${0%/*}/..
+name=${0##*/}
+exec "$root/runtime/node/bin/node" "$root/optional/roster/scripts/${name#mesh-}.cjs" "$@"

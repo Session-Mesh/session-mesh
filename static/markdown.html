@@ -1,0 +1,150 @@
+<!doctype html>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+  Copyright (c) 2026 Atacama <contact@atacama.tech>
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{title}}</title>
+<link rel="stylesheet" href="/viewlib/hljs-github-dark.min.css" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="/viewlib/hljs-github.min.css" media="(prefers-color-scheme: light)">
+<style>
+  :root { color-scheme: light dark; --bg: #ffffff; --fg: #1f2328; --mute: #59636e; --line: #d1d9e0; --code: #f6f8fa; --link: #0969da; --quote: #59636e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d1117; --fg: #d8dee9; --mute: #8b949e; --line: #30363d; --code: #161b22; --link: #79b8ff; --quote: #9aa4b2; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.65 -apple-system, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+  main { width: 100%; margin: 0 auto; padding: 28px 24px 80px; }
+  .bar { position: sticky; top: 0; display: flex; justify-content: space-between; gap: 12px; padding: 6px 24px; font: 12px ui-monospace, monospace; color: var(--mute); background: var(--bg); border-bottom: 1px solid var(--line); z-index: 2; }
+  .bar a { color: var(--mute); }
+  h1, h2, h3, h4 { line-height: 1.25; margin: 1.6em 0 .6em; }
+  h1 { font-size: 2em; padding-bottom: .3em; border-bottom: 1px solid var(--line); margin-top: .4em; }
+  h2 { font-size: 1.5em; padding-bottom: .3em; border-bottom: 1px solid var(--line); }
+  a { color: var(--link); }
+  p, ul, ol, table, pre, blockquote { margin: 0 0 1em; }
+  code { font: 0.88em ui-monospace, "JetBrains Mono", Menlo, monospace; background: var(--code); padding: .15em .35em; border-radius: 5px; }
+  pre { background: var(--code); padding: 14px 16px; border-radius: 8px; overflow-x: auto; }
+  pre code, pre code.hljs { background: none; padding: 0; font-size: 13px; line-height: 1.5; }
+  blockquote { border-left: 4px solid var(--line); padding: 0 1em; color: var(--quote); }
+  table { border-collapse: collapse; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--line); padding: 6px 12px; }
+  th { background: var(--code); }
+  img { max-width: 100%; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
+  li > p { margin: 0; }
+  .task { list-style: none; margin-left: -1.3em; }
+  pre.mermaid { background: none; text-align: center; }
+  .err { color: #e5534b; font-size: 12px; }
+</style>
+</head>
+<body>
+<!-- English on purpose: this page runs in a sandboxed frame without access to the interface's
+     language catalogs (static/i18n/). Keep its few labels short and lower-case, like code.html.
+     See docs/features.md, "Documents in the side panel". -->
+<div class="bar"><span>{{title}}</span><a href="?raw=1">source</a></div>
+<main id="doc"></main>
+<script type="application/json" id="src">{{src}}</script>
+<script nonce="{{nonce}}" src="/viewlib/marked.min.js"></script>
+<script nonce="{{nonce}}" src="/viewlib/highlight.min.js"></script>
+<script nonce="{{nonce}}" src="/viewlib/mermaid.min.js"></script>
+<script nonce="{{nonce}}" src="/viewlib/purify.min.js"></script>
+<script nonce="{{nonce}}">
+  const md = JSON.parse(document.getElementById("src").textContent);
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const escape = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // the document's own HTML never runs: no script (the CSP allows only this
+  // page's nonce), and no forms, frames, refresh, base, styles or overlays
+  const PURIFY = { FORBID_TAGS: ["style", "form", "iframe", "frame", "object", "embed", "meta", "link", "base"], FORBID_ATTR: ["style"] };
+  const renderer = new marked.Renderer();
+  const diagrams = [];   // mermaid sources, put back as text after rendering
+  renderer.code = ({ text, lang }) => {
+    lang = (lang || "").trim().split(/\s+/)[0];
+    if (lang === "mermaid") { diagrams.push(text); return `<pre class="mermaid" data-i="${diagrams.length - 1}"></pre>`; }
+    const html = lang && hljs.getLanguage(lang) ? hljs.highlight(text, { language: lang }).value : hljs.highlightAuto(text).value;
+    return `<pre><code class="hljs language-${escape(lang)}">${html}</code></pre>`;
+  };
+  // drop a YAML front matter block instead of rendering it as a paragraph
+  const body = md.replace(/^---\n[\s\S]*?\n---\n/, "");
+  document.getElementById("doc").innerHTML = DOMPurify.sanitize(marked.parse(body, { gfm: true, renderer }), PURIFY);
+  // The sandbox has no allow-popups, so target=_blank would do nothing. In the
+  // mesh's panel, a click asks the mesh to open the link in a new tab; opened
+  // on its own (new tab), the page simply follows the link.
+  // the token of the load the mesh started (absent when this page was navigated to)
+  const MESH_TOKEN = new URLSearchParams(location.search).get("dt");
+  // Every link leaving this document's origin goes through the mesh, judged on the
+  // resolved URL (so //host and HTTPS:// are caught); other schemes are inert.
+  for (const a of document.querySelectorAll("#doc a[href]")) {
+    let url;
+    try { url = new URL(a.getAttribute("href"), location.href); } catch { continue; }
+    // (the sandbox makes location.origin "null": compare the URL's own scheme and host)
+    const external = url.protocol !== location.protocol || url.host !== location.host;
+    // a fragment naming a conversation (#h:<agent>:<id>) in this same document:
+    // framed, ask the mesh to show it instead of following the fragment
+    const session = !external && url.pathname === location.pathname
+      && /^#h:(claude|codex):([0-9A-Za-z][0-9A-Za-z-]{7,63})$/.exec(url.hash);
+    if (session) {
+      a.addEventListener("click", (e) => {
+        if (window.parent === window || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        window.parent.postMessage({ smesh: "goto-session", agent: session[1], id: session[2], token: MESH_TOKEN }, "*");
+      });
+      continue;
+    }
+    const otherMarkdown = !external && /\.(md|markdown)$/i.test(url.pathname) && url.pathname !== location.pathname;
+    if (otherMarkdown) {
+      // opened through the mesh (a fresh trusted load) rather than navigated to here
+      a.addEventListener("click", (e) => {
+        if (window.parent === window) return;
+        e.preventDefault();
+        window.parent.postMessage({ smesh: "nav", url: url.href, token: MESH_TOKEN }, "*");
+      });
+      continue;
+    }
+    if (!external) continue;
+    a.rel = "noopener noreferrer";
+    a.addEventListener("click", (e) => {
+      if (window.parent === window && /^https?:$/.test(url.protocol)) return;
+      e.preventDefault();
+      if (/^https?:$/.test(url.protocol)) window.parent.postMessage({ smesh: "open", url: url.href, token: MESH_TOKEN }, "*");
+    });
+  }
+  // The mesh's panel reloads this page when the file changes (mesh-open --watch): report
+  // the scroll position, and take back the one the mesh remembers. Numbers only, and the
+  // mesh is the only sender listened to.
+  let wanted = null, diagramsDone = false;
+  const restore = () => { if (wanted !== null) scrollTo(0, wanted); };
+  if (window.parent !== window) {
+    let queued = false;
+    addEventListener("scroll", () => {
+      if (queued) return;
+      queued = true;
+      setTimeout(() => { queued = false; window.parent.postMessage({ smesh: "scroll", y: scrollY, token: MESH_TOKEN }, "*"); }, 100);
+    }, { passive: true });
+    addEventListener("message", (e) => {
+      if (e.source !== window.parent || e.data?.smesh !== "scrollto" || !Number.isFinite(e.data.y)) return;
+      wanted = e.data.y;
+      restore();
+      if (diagramsDone) wanted = null;
+    });
+  }
+  // render each diagram from its source (mermaid.run would re-read the escaped HTML)
+  mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", securityLevel: "strict" });
+  (async () => {
+    for (const el of document.querySelectorAll("pre.mermaid")) {
+      try {
+        const { svg } = await mermaid.render(`mmd-${el.dataset.i}`, diagrams[el.dataset.i]);
+        el.innerHTML = svg;
+      } catch (e) {
+        el.innerHTML = `<span class="err">mermaid: ${escape(e.message || String(e))}</span>\n${escape(diagrams[el.dataset.i])}`;
+      }
+    }
+    diagramsDone = true;   // the diagrams change the page's height: restore again once they are in
+    restore();
+    wanted = null;
+  })();
+</script>
+</body>
+</html>

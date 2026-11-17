@@ -1,0 +1,275 @@
+(test
+ (name mesh_history_test)
+ (modules mesh_history_test)
+ (libraries mesh_history alcotest yojson unix sqlite3))
+
+(test
+ (name smoke)
+ (modules smoke)
+ (libraries mesh_board_mcp mcp-kit alcotest unix))
+
+; The served guide must be ocaml/lib/agent-guide.md, the file the generated
+; module embeds, byte for byte.
+
+(test
+ (name agent_guide_test)
+ (modules agent_guide_test)
+ (libraries mesh_board_mcp mcp-kit mcp-kit.stdio alcotest yojson)
+ (action
+  (run %{test} %{dep:../lib/agent-guide.md})))
+
+(test
+ (name mesh_read_test)
+ (modules mesh_read_test)
+ (libraries mesh_read mcp-kit alcotest unix yojson))
+
+(test
+ (name ptyhost_support)
+ (modules ptyhost_support)
+ (libraries mesh_pty_support eio_main))
+
+(test
+ (name pty_raw_replay_test)
+ (modules pty_raw_replay_test)
+ (libraries mesh_pty_support alcotest))
+
+(test
+ (name pty_replay_window_test)
+ (modules pty_replay_window_test)
+ (libraries mesh_pty_support alcotest))
+
+(test
+ (name pty_output_coalescing_test)
+ (modules pty_output_coalescing_test)
+ (libraries mesh_pty_support mesh_wire eio alcotest))
+
+(test
+ (name pty_output_reader_test)
+ (modules pty_output_reader_test)
+ (libraries mesh_pty_support eio_main eio.unix alcotest cstruct))
+
+(test
+ (name ptyhost_preflight)
+ (modules ptyhost_preflight)
+ (libraries mesh_wire mesh_ptyhost yojson eio eio_main))
+
+(test
+ (name ptyhost_observe)
+ (modules ptyhost_observe)
+ (libraries mesh_pty_support yojson unix mtime))
+
+; Compile the exact host source privately: internal lifecycle tests need dispatch
+; and attach, without adding a production hook or widening the public interface.
+
+(rule
+ (target ptyhost_exit_impl.ml)
+ (deps ../lib/mesh_ptyhost.ml)
+ (action
+  (copy %{dep:../lib/mesh_ptyhost.ml} %{target})))
+
+(test
+ (name ptyhost_exit_publication_test)
+ (modules ptyhost_exit_publication_test ptyhost_exit_impl)
+ (libraries
+  mesh_agent_resume_preset
+  mesh_platform
+  mesh_project_codec
+  mesh_project_store
+  mesh_project_observation
+  mesh_pty_processes
+  mesh_pty_support
+  mesh_wire
+  yojson
+  eio_main
+  eio.unix
+  alcotest
+  unix
+  test_scratch))
+
+; Private fixture directories, independent of the caller's umask and of dune's TMPDIR.
+
+(library
+ (name test_scratch)
+ (modules test_scratch)
+ (libraries unix))
+
+(test
+ (name agent_fresh_claude_test)
+ (modules agent_fresh_claude_test)
+ (libraries
+  test_scratch
+  mesh_agent_resume_preset
+  mesh_resume_profile
+  eio_main
+  unix
+  digestif
+  yojson
+  alcotest))
+
+; Black-box check of the built host: `kill` works although the host ignores SIGHUP.
+
+(test
+ (name ptyhost_inherited_sighup_test)
+ (modules ptyhost_inherited_sighup_test)
+ (libraries test_scratch unix yojson)
+ (action
+  (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
+
+; Black-box robustness of the built host. The first argument is the path of
+; the host executable.
+
+(library
+ (name ptyhost_blackbox)
+ (modules ptyhost_blackbox)
+ (libraries unix yojson))
+
+(test
+ (name ptyhost_robustness_test)
+ (modules ptyhost_robustness_test)
+ (libraries ptyhost_blackbox test_scratch alcotest unix yojson)
+ (action
+  (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
+
+; The geometry an attach reply names for its replay; the same host argument.
+
+(test
+ (name ptyhost_replay_geometry_test)
+ (modules ptyhost_replay_geometry_test)
+ (libraries ptyhost_blackbox test_scratch alcotest unix yojson)
+ (action
+  (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
+
+; The exact host source again, for session-isolation checks that need an
+; injected failure inside a session's fibers.
+
+(rule
+ (target ptyhost_isolation_impl.ml)
+ (deps ../lib/mesh_ptyhost.ml)
+ (action
+  (copy %{dep:../lib/mesh_ptyhost.ml} %{target})))
+
+(test
+ (name ptyhost_isolation_test)
+ (modules ptyhost_isolation_test ptyhost_isolation_impl)
+ (libraries
+  mesh_agent_resume_preset
+  mesh_platform
+  mesh_project_codec
+  mesh_project_store
+  mesh_project_observation
+  mesh_pty_processes
+  mesh_pty_support
+  mesh_wire
+  ptyhost_blackbox
+  yojson
+  eio_main
+  eio.unix
+  alcotest
+  unix))
+
+; Black-box start-up of the built host against its runtime directory.
+
+(test
+ (name ptyhost_runtime_dir_test)
+ (modules ptyhost_runtime_dir_test)
+ (libraries ptyhost_blackbox test_scratch alcotest unix)
+ (action
+  (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
+
+; The process facts the host serves: their rules on fake facts, then the
+; built host over its socket.
+
+(test
+ (name ptyhost_processes_test)
+ (modules ptyhost_processes_test)
+ (libraries
+  mesh_pty_processes
+  mesh_platform
+  mesh_wire
+  ptyhost_blackbox
+  test_scratch
+  alcotest
+  unix
+  yojson)
+ (action
+  (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
+
+(test
+ (name project_host_test)
+ (modules project_host_test)
+ (deps fixtures/projects/i1-catalog-2mib.json)
+ (libraries
+  ptyhost_blackbox
+  test_scratch
+  alcotest
+  unix
+  yojson
+  base64
+  digestif)
+ (action
+  (run
+   %{test}
+   %{exe:../bin/mesh_ptyhost_main.exe}
+   %{exe:project_test_host.exe})))
+
+(rule
+ (target project_test_host_impl.ml)
+ (deps ../lib/mesh_ptyhost.ml)
+ (action
+  (copy %{dep:../lib/mesh_ptyhost.ml} %{target})))
+
+(executable
+ (name project_test_host)
+ (modules project_test_host project_test_host_impl)
+ (libraries
+  mesh_agent_resume_preset
+  mesh_platform
+  mesh_project_codec
+  mesh_project_store
+  mesh_project_observation
+  mesh_pty_processes
+  mesh_pty_support
+  mesh_wire
+  yojson
+  eio_main
+  eio.unix
+  unix))
+
+(test
+ (name project_store_test)
+ (modules project_store_test)
+ (deps fixtures/projects/n4-authored.json)
+ (libraries
+  mesh_project_store
+  mesh_project_codec
+  ptyhost_blackbox
+  test_scratch
+  alcotest
+  unix
+  yojson))
+
+(test
+ (name project_observation_test)
+ (modules project_observation_test)
+ (libraries
+  mesh_project_observation
+  mesh_project_store
+  mesh_project_codec
+  ptyhost_blackbox
+  test_scratch
+  alcotest
+  unix
+  yojson))
+
+(test
+ (name project_fd_ownership_test)
+ (modules project_fd_ownership_test)
+ (libraries
+  mesh_project_observation
+  mesh_project_store
+  mesh_project_codec
+  ptyhost_blackbox
+  test_scratch
+  alcotest
+  unix
+  yojson))

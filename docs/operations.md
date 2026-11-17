@@ -1,0 +1,1650 @@
+# Operating session-mesh
+
+This page is for the person who runs session-mesh on their machine, after the installation described in
+[install.md](install.md). Most operations only touch the web server and leave the sessions
+alone. The exceptions say so: restarting or replacing the PTY host ends every mesh session.
+
+The two systemd user units are:
+
+| Unit | Process | Restarting it |
+|---|---|---|
+| `session-mesh` | the web server (`server.py`) | safe: sessions keep running, pages reconnect |
+| `session-mesh-pty` | the PTY host, which owns the sessions | ends every mesh session |
+
+On macOS the same two processes are the launchd jobs `io.session-mesh.web` and
+`io.session-mesh.pty`. Each procedure below gives the macOS command next to the Linux one. In them,
+`<domain>` is where the jobs are loaded: `gui/$(id -u)` under a graphical login, `user/$(id -u)`
+for agents installed without one, and `system` for boot-time daemons, whose commands need `sudo`
+([macOS](#macos)).
+
+- [Upgrading](#upgrading): a release install, rolling back, a source install
+- [Source installs](#source-installs): moving between a clone, an extracted bundle and a release
+- [Restoring sessions after a PTY host restart](#restoring-sessions-after-a-pty-host-restart)
+- [Replacing the PTY host](#replacing-the-pty-host)
+- [macOS](#macos)
+- [Complete removal](#complete-removal)
+- [Logging out devices and replacing the token](#logging-out-devices-and-replacing-the-token)
+- [Answer buttons in notifications](#answer-buttons-in-notifications)
+- [Documents opened with mesh-open](#documents-opened-with-mesh-open)
+- [Making every new terminal a mesh session](#making-every-new-terminal-a-mesh-session)
+- [Using another port than 7690](#using-another-port-than-7690)
+- [HTTPS on a VPN address with a reverse proxy](#https-on-a-vpn-address-with-a-reverse-proxy)
+- [Restricting folders and agents](#restricting-folders-and-agents)
+- [Debugging the agent hook](#debugging-the-agent-hook)
+- [A second mesh for testing](#a-second-mesh-for-testing)
+- [Installer limits](#installer-limits)
+
+## Upgrading
+
+How you upgrade depends on how session-mesh was installed: a *release install* (the `install.sh`
+of a release, the default in [install.md](install.md)) runs from
+`~/.local/share/session-mesh/current`; a *source install* runs a git checkout in place
+([Source installs](#source-installs)).
+
+### Upgrading a release install
+
+```sh
+~/.local/share/session-mesh/current/install.sh --upgrade            # the latest published release
+~/.local/share/session-mesh/current/install.sh --upgrade --to v0.3.0 # a given release
+```
+
+`--upgrade` asks GitHub for the latest published release (`/releases/latest`, which never names a
+draft or a pre-release), downloads that release's `SHA256SUMS` and `install.sh` over HTTPS, checks
+the installer against `SHA256SUMS` and runs it. The new installer checks that the hashes stamped in
+it are the lines of that `SHA256SUMS`, then installs its own release as a first install does: the
+bundle of your platform (or, for a release without one, its native programs and code archive),
+checked against its stamp and extracted into `releases/<tag>/`, beside the release that runs. When `gh` is on your `PATH` and logged in, the
+build attestation of the new `install.sh` and of every downloaded file is checked too, against the
+release workflow and the tag being installed, and any failure stops the upgrade. Without `gh`, or
+with `gh` not logged in, the installer says once that the attestation was not checked and prints
+the command to run by hand (`gh attestation verify FILE --repo Session-Mesh/session-mesh
+--signer-workflow Session-Mesh/session-mesh/.github/workflows/release.yml --source-ref
+refs/tags/<tag>`). Set `MESH_REQUIRE_ATTESTATION=1` to make that a refusal instead: nothing is
+installed unless every attestation was checked.
+
+The check needs a `gh` recent enough to support `--source-ref` (tested with gh 2.102.1). An
+older `gh` rejects the option; the installer counts that as a failed check and installs nothing,
+whatever `MESH_REQUIRE_ATTESTATION` is set to (that variable only decides what happens when `gh` is
+missing or not logged in). Update `gh`, or take it off your `PATH` to install with the SHA-256
+checks only.
+
+Only then does it change anything:
+
+1. It points `current` at the new release (the old one becomes `previous`) and restarts the web
+   server (`session-mesh`), which does not end sessions. Open pages notice the new version and
+   reload when nothing is being typed, or on the "⟳ Reload" button of the sidebar footer.
+2. If the web server does not answer within about 6 seconds, it points `current` back, restores the
+   web unit as it was, restarts the web server on the previous release, and stops with an error. A
+   first release install over a source install does the same: it removes `current`, restores the
+   checkout's units (on macOS, its web job's plist) and restarts the checkout's web server.
+3. It never restarts the PTY host: that ends every mesh session. It says whether `mesh-ptyhost`
+   differs between the two releases and, if it does, gives the command to run when you are ready
+   (`systemctl --user restart session-mesh-pty`; on macOS `launchctl kickstart -k
+   <domain>/io.session-mesh.pty`), after taking the snapshot as in [Restoring sessions
+   after a PTY host restart](#restoring-sessions-after-a-pty-host-restart)). `--restart-pty` makes
+   the installer run it. Until then the running host keeps the version it started with.
+4. It keeps `current` and `previous`, and deletes older releases. On Linux it also keeps the
+   release the running PTY host was started from (read from `/proc/<pid>/exe` of the
+   `session-mesh-pty` unit's main process), so that a host left running across two upgrades keeps
+   its files. macOS has no such record: there an older release is deleted even if the running host
+   came from it. The running host is not stopped by that (its program stays loaded), and its next
+   restart runs `current`.
+
+**Refusals.** Nothing changes when one of these happens:
+
+- A release older than the one installed: `--upgrade` refuses a downgrade unless `--to` names that
+  release. `--upgrade` to the installed release does nothing.
+- Services that run another extracted bundle ([Moving from an extracted
+  bundle](#moving-from-an-extracted-bundle)): `--upgrade` refuses; run the release's `install.sh`
+  with `--switch-from-bundle` instead.
+- A unit the installer did not write. The installer acts only on units it wrote itself: the file in
+  `~/.config/systemd/user/` with no drop-in, running a program under
+  `~/.local/share/session-mesh/current/` (on macOS, the plist's program). A `session-mesh-pty` unit
+  with another host, or a drop-in made with `systemctl --user edit`, makes `--upgrade` stop and say
+  what to do: to keep the customisation, upgrade by hand; to hand the unit back to the installer,
+  remove it and run the release's `install.sh` without `--upgrade` (for the PTY unit, this ends
+  every mesh session).
+- A source install: `--upgrade` refuses and says to run `git pull`.
+- A `SHA256SUMS` that is missing or malformed, an `install.sh` that differs from it, a stamp it does
+  not list, a downloaded file that differs from its stamp, or an attestation that fails.
+
+**What the checks rely on.** The installer and `SHA256SUMS` come from the project's GitHub
+repository over HTTPS. The SHA-256 checks catch a corrupted or truncated download, not a release
+whose files were replaced together with its `SHA256SUMS`. The attestation proves that a file was
+built by the repository's release workflow from the tag being installed. Both rely on GitHub and on
+everyone who can push to the repository, as described in [What you are
+trusting](#prebuilt-binaries).
+
+**Offline.** `--assets-dir /absolute/dir` takes the files of a release from a directory instead of
+GitHub: the bundle of your platform (`mesh-linux-x86_64.tar.gz`, `mesh-linux-arm64.tar.gz` or
+`mesh-macos-arm64.tar.gz`), or, for a release without one, the five native programs of your
+platform and `session-mesh-<tag>.tar.gz`; and, for an upgrade, `SHA256SUMS` and `install.sh`. An upgrade from a directory needs `--to`, since the latest release can only be asked
+from GitHub.
+
+### Rolling back
+
+```sh
+~/.local/share/session-mesh/current/install.sh --rollback
+```
+
+`--rollback` points `current` back at `previous` (they swap), restarts the web server, checks that
+it answers, and reports the PTY host as an upgrade does; `--restart-pty` restarts it too. It
+downloads nothing and needs the previous release still on disk.
+
+### Upgrading a source install
+
+```sh
+git pull
+./install.sh
+```
+
+`./install.sh` rewrites the web unit and restarts the web server; `systemctl --user restart
+session-mesh` alone is enough when only the code changed. On macOS the latter is `launchctl
+kickstart -k <domain>/io.session-mesh.web` (with `sudo` for the `system` domain).
+
+A change to the PTY host itself (a rebuilt `mesh-ptyhost`) takes effect only when that process
+restarts, which ends the sessions. Do it deliberately, with the procedure below.
+
+An installation from a version with the Python PTY host has a `session-mesh-pty` unit that runs
+`ptyhost.py`. After `git pull`, `./install.sh` refuses to continue until that unit is replaced, and
+if the unit restarts first, `ptyhost.py` exits with status 78 and prints the commands, so
+`systemctl --user status session-mesh-pty` shows it failed and no PTY host runs. Replace it as in
+[Replacing the PTY host](#replacing-the-pty-host), or move to a release install, whose installer
+replaces that unit itself ([Moving a source install to a
+release](#moving-a-source-install-to-a-release)).
+
+## Source installs
+
+A source install runs a git checkout in place: the web unit runs `<checkout>/server.py`, and the
+native programs come from `--ptyhost`, from `PATH` or from your opam switch
+([Native PTY host](install.md#native-pty-host)). It is the developer path; `--upgrade`, `--rollback`,
+`--restart-pty` and `--assets-dir` belong to release installs and are refused there.
+
+A *bundle install* runs an extracted bundle in place: `./mesh install` in that directory runs its
+`app/install.sh`, and the units run `<bundle>/bin/mesh-python <bundle>/app/server.py` and
+`<bundle>/bin/mesh-ptyhost`, with the bundle's own Python and programs. It follows the rules of a
+source install, except that the bundle brings its PTY host (`--ptyhost` is refused) and is not
+upgraded in place: extract the newer bundle elsewhere and move to it as below, or install a
+release. In an installed release (`~/.local/share/session-mesh/current/mesh install`), `./mesh
+install` runs that release's own `install.sh` instead.
+
+### Moving a source install to a release
+
+Run a release's `install.sh` as for a first install. It recognises the units that an earlier
+installer wrote for a checkout, says that it replaces them, and points them at
+`~/.local/share/session-mesh/current`:
+
+- the web unit that runs `<checkout>/server.py`, keeping its port;
+- a PTY unit that runs the removed Python host (`<checkout>/ptyhost.py`). The unit file is
+  rewritten, and the host is not restarted: a running one keeps running, and the installer gives the
+  restart command.
+
+A PTY unit that runs a native `mesh-ptyhost` you chose (from `--ptyhost`, `PATH` or the opam
+switch) is left as it is, with a warning: the web server then runs from the release and the PTY host
+stays yours. `--upgrade` refuses until that unit is replaced ([Replacing the PTY
+host](#replacing-the-pty-host)). No configuration or data moves, and the checkout is not changed.
+
+### Moving from an extracted bundle
+
+An account may already run session-mesh from an extracted bundle: an earlier `./mesh install`, or
+a bundle unpacked by hand, for example under `~/.local/libexec/session-mesh/releases/<name>/`. The
+installer recognises those services by their shape: a web unit that runs `<D>/bin/mesh-python
+<D>/app/server.py`, or a PTY unit that runs `<D>/bin/mesh-ptyhost`, where `<D>` holds the bundle's
+`env.sh` and `libexec/mesh-ptyhost`. A release install, a bundle install of another directory or a
+source install then leaves them as they are: it stops before changing any unit and names the
+option. (A release install has already extracted and checked its release under `releases/<tag>/`
+by then; no service uses it.)
+
+```sh
+bash install.sh --switch-from-bundle      # a release's install.sh; also ./mesh install, ./install.sh
+```
+
+With `--switch-from-bundle`, the installer says what moves and what stays, then:
+
+- rewrites the web unit for the new installation and restarts the web server, keeping its port;
+  if the new web server does not answer, it restores both unit files and restarts the old web
+  server, never the PTY host (on macOS, only a release install goes back this way);
+- on Linux, rewrites the PTY unit for the new installation without restarting it: the running PTY
+  host and its sessions keep running the old bundle's program until it restarts (which ends every
+  mesh session), and the installer gives the command; on macOS, the PTY job is preserved, since
+  launchd cannot point it elsewhere without stopping the host;
+- never deletes anything of the old bundle. Remove `<D>` yourself, only after no unit runs from
+  it and the PTY host has restarted (`systemctl --user show session-mesh-pty -p MainPID`, then
+  `readlink /proc/<pid>/exe`, names the program it runs).
+
+Configuration and data (`~/.config/session-mesh`, `~/.cache/session-mesh`) do not move, and the
+token is kept. `--switch-from-bundle` cannot be combined with `--upgrade`, `--rollback` or
+`--uninstall`.
+
+**Drop-ins on the units.** A drop-in of `session-mesh.service` or `session-mesh-pty.service` (a
+`.conf` file under `~/.config/systemd/user/<unit>.d/`, such as one made with `systemctl --user
+edit`) that sets `ExecStart=`, `Environment=`, `EnvironmentFile=`, `UnsetEnvironment=` or
+`PassEnvironment=` overrides the command and environment the installer writes: after a switch, the
+unit would keep running what the drop-in says and the installer could not tell. On Linux, a release
+install, a bundle install and every switch therefore stop before changing a unit or `current`, and
+name the drop-in and the settings it overrides; a release install has by then downloaded and
+checked its release into `releases/<tag>`, which a rerun uses. When the drop-in sets `MESH_PORT`,
+the refusal says so. The
+installation's own unit then provides the server, so the migration is by hand and happens before
+the switch: move the drop-in aside (or remove it), reload systemd, and run the installer again.
+
+```sh
+mv -- ~/.config/systemd/user/session-mesh.service.d/override.conf{,.disabled}
+systemctl --user daemon-reload
+bash install.sh --switch-from-bundle
+```
+
+systemd reads only `*.conf` files, so the renamed file no longer applies and stays for reference.
+A port the drop-in set is given to the installer instead (`MESH_PORT=7691 bash install.sh
+--switch-from-bundle`). Any drop-in, even one without those settings, makes a later `--upgrade`
+refuse (see "Refusals" in [Upgrading a release install](#upgrading-a-release-install)), so other
+customisation is kept by hand. The installer never edits or removes a drop-in. A source install
+still reads `MESH_PORT` from a drop-in.
+
+### Moving a release install to a clone
+
+From the checkout, run `./install.sh --from-source` (or `--ptyhost /absolute/path`). Without one of
+them, the installer refuses and names both choices. It says what it does, then removes the link
+`~/.local/share/session-mesh/current`, keeping the release directories, and from then on everything
+runs from the clone: the web unit, the mesh commands, and the board MCP server, which agents now
+take from the opam switch. The PTY unit the release install wrote is rewritten for the clone's host
+and not restarted; the running host keeps the release's program until you restart it. A PTY unit
+the release install did not write is left as it is. If the clone's web server does not answer, the
+installer points `current` at the release again, restores both unit files and restarts the
+release's web server, never the PTY host.
+
+## Restoring sessions after a PTY host restart
+
+While it runs, the web server keeps a snapshot of the sessions in
+`~/.config/session-mesh/sessions-snapshot.json` (mode 0600, refreshed every 10 seconds, even with no
+page open): name, folder and, for a Claude Code or Codex session, the conversation id and its
+options. After a PTY host restart, the sidebar offers to restore them. Nothing restarts without a
+click, so an agent launched with permissive options never comes back on its own.
+
+1. `systemctl --user restart session-mesh` (macOS: `launchctl kickstart -k
+   <domain>/io.session-mesh.web`), so that the web server runs the current code and writes the
+   snapshot. Sessions are not touched.
+2. Check that `~/.config/session-mesh/sessions-snapshot.json` exists (about 10 seconds) and lists
+   your sessions.
+3. `systemctl --user restart session-mesh-pty` (macOS: `launchctl kickstart -k
+   <domain>/io.session-mesh.pty`). The sessions end.
+4. Reload the page, keep the sessions you want checked and click "Restore N sessions". Each session
+   returns under the same name and in the same folder. An agent resumes **the same conversation**
+   (`claude --resume <id>` or `codex resume <id>`, with its options); other programs (an editor, a
+   build) come back as a plain shell. "Ignore" dismisses the offer.
+
+### Restoring exactly one offer (for tools)
+
+A tool that must never restore twice, or from an outdated offer, first reads `restore_guard` in
+the answer of `GET /api/sessions` (`"exact-v1"` on a server that implements the guard below) and
+**never targets a server that does not announce it**: an older server runs the same body as a
+page restore, without any guard (it answers `ok: true` even when the name is taken or `expected`
+is wrong, and can start a second agent on the conversation), and checking `guarded: true` in the
+answer comes after the damage. The check is made before the send, not on the answer. It then sends
+the offer it saw in `restorable` with its precondition: `POST /api/restore` with the body
+`{"names": [N], "expected": {"name": N, "created", "agent_kind", "resume_id", "cwd"}}` and nothing
+else (cookie or master Bearer token, as for the page; never a session token). `names` is exactly
+the one name `N`. `created` is the finite number of the offer (not a boolean), `cwd` its exact
+path, `agent_kind` is `shell` (an offer without agent) or one of the resumable agent types the
+server knows (`respawn.AGENT_TYPES`: today `claude`, `codex`, `pi`, `opencode`, `gemini`, `agy`, `copilot`, `vibe`; the list grows with it), `resume_id` the
+conversation id, or `null` (always for `shell`). The server restores that offer only if it still
+equals `expected`, the target name is exactly free (the session is created under `N`: no `-2`
+suffix and no `unique_name`; a collision in the PTY host is a refusal too) and the conversation is
+not running. An identified agent offer that has no conversation id is **not** degraded to a shell:
+it is refused. All checks run under the restore and organisation locks, before the PTY is created.
+
+The answer keeps the page's envelope, with status 200 (the one exception is a 5xx raised by the
+checks before the intent is written, see below): `{"results": {N: result}}`. Success:
+
+```json
+{"ok": true, "id": N, "created": <the new session's creation date>, "resumed": true,
+ "guarded": true, "previous": {"name": N, "created": <the offer's date>}}
+```
+
+`created` is the real incarnation just created, the identity to bind later requests to. Any
+failure is `{"ok": false, "code", "phase", "error", ...}`; `phase` says what **this request** may
+have created (`not-started`: nothing; an earlier request of the same tool may have):
+
+| `phase` | `code` | Meaning |
+| --- | --- | --- |
+| `not-started` | `not-found` | no such offer: unknown name, already restored or discarded, or its folder is gone. After a success whose answer was lost, or a `completion-failed` whose retry finds the offer already dropped, the session **exists**: look for it by name |
+| `not-started` | `expected-mismatch` | the offer differs; `mismatched` lists the fields (`created`, `agent_kind`, `resume_id`, `cwd`) |
+| `not-started` | `target-occupied` | a session already has that name, or a restore of this very offer was sent by the page a moment ago (under 120 seconds) and its outcome is unknown: the session may be about to take it |
+| `not-started` | `conversation-running` | the conversation is already running, was restored (or its creation attempted) in the last 120 seconds, or is being resumed from the history |
+| `not-started` | `not-resumable` | an identified agent whose conversation id is unknown |
+| `not-started` | `launch-refused` | refused for good: before anything was sent to the PTY host (policy: folder outside the allowed roots, unreadable conversation, Gemini settings; Pi unavailable; the host's listing failed) or by an error reply of the host to the creation; `status` is the refusal's HTTP status (503 for the Pi and listing cases). The intent is withdrawn so that repeating is allowed; if withdrawing it fails to be written the intent stays and a repeat answers `restore-interrupted` |
+| `not-started` | `not-restored` | the restore intent could not be written; no session was created. Repeat the same request. The write may nevertheless have reached the file (only the directory sync failing): the server then withdraws it, and if that fails too the repeat answers `restore-interrupted` (use "Ignore"); the message says so |
+| `created` | `completion-failed` | the session exists (`id`, `created`) but the board transfer or the snapshot update failed: repeat the same request |
+| `uncertain` | `restore-interrupted` | the offer is marked as being restored but no session carrying its nonce is running (it ended, another session holds the name, the creation never happened, or the host does not show it yet): repeat the request, or use "Ignore" |
+| `uncertain` | `host-error` | the PTY host did not confirm the creation (timeout or transport error), or did not answer the check that follows it: the session may exist or appear later; repeat the same request |
+
+A malformed body (shape, `names` other than `[expected.name]`, types, lengths, a number too large
+for a float) is a 400 with a plain-text message; authentication failures keep the route's 401 or
+403. A 5xx from a failure before the intent is written (the PTY host cannot be listed) means
+nothing was created. Once the intent is written, no PTY host error is ever a 5xx: it is a
+`host-error` answer (`uncertain`), or `completion-failed` (`created`), in the usual envelope.
+
+What the mechanism guarantees, and its limits:
+
+- Before creating the shell, the server writes (and fsyncs, directory included) an intent on the
+  offer: `restoring: {"nonce"}`. The same nonce is put in the session's host meta (visible in the
+  host's `list`). If that write fails nothing is created and the code is `not-restored`
+  (**repeating is allowed**, with the caveat of the table above).
+- A request cancelled between the intent write and the creation (a handler cancelled in that
+  instant, for example by a shutdown) leaves an intent with no session: the offer then answers
+  `restore-interrupted` for good, which is safe (nothing runs) but needs "Ignore".
+- If the session was created but its board transfer or the snapshot update failed, the code is
+  `completion-failed` (`phase: "created"`, with `id` and `created`); **repeating the same
+  request** finds the session by its nonce and completes the transfer without a second shell. A
+  server crash after the intent is written is covered the same way.
+- If no session carrying the nonce runs (it ended, the creation never happened, or another session
+  took the name), the code is `restore-interrupted`: the server cannot tell "never created"
+  from "created and ended", so it never recreates. Use "Ignore" and restore from a fresh offer.
+- The intent is withdrawn only on a **final refusal**: an error reply of the host to the creation,
+  or a refusal raised before anything is sent (the name is taken, folder outside the allowed roots,
+  Pi unavailable, the host's listing before the creation failing). A timeout, a cancelled request
+  or any transport error after the creation was sent is **not** final: the host may still create
+  the session (the native host does so in a fiber while it already serves `list`). The intent
+  stays, the conversation is held for 120 seconds, the answer is `host-error` (`uncertain`), and
+  every later request, the exact one or the page's, is resolved by the nonce. If withdrawing the
+  intent fails to be written it stays too.
+- The same rule holds for every path that starts an agent on a conversation, and the 120-second
+  hold is shared: after a creation sent to the host whose outcome is unknown (timeout, transport
+  error, cancellation), the page's "Restore" and the History's "resume" hold the conversation
+  exactly like the exact restore does, so no path starts a second agent on it. The same holds after
+  a reply of the host that the server cannot read (a malformed answer, after the send), and after a
+  History resume that succeeded (the new agent shows in no listing until it has opened its
+  transcript). The page's restore of an offer without conversation (a shell) holds the offer itself
+  for the same 120 seconds, so a second click after a timed-out one starts no second shell; the
+  offer is held as well when the session was created and the listing that confirms it, or the end
+  of the path, then fails or never answers (the session exists, the offer is not settled). A
+  refusal that came before the send holds nothing, and a connection to the host that fails before
+  anything is written counts as such a refusal: nothing was created, so the guarded restore
+  withdraws its intent and a retry is allowed (it does not answer `restore-interrupted`). A resume cancelled while it waits for a lock is held too (it
+  cannot tell it from a cancelled send).
+- What is held is in the memory of the web server: the conversations of `recent_conversations` and
+  the offers held for a shell (`HELD_OFFERS`) are forgotten when the web server restarts, and after
+  120 seconds. A restart of the web server in the middle of a page restore therefore loses the hold;
+  the durable protection is the intent of the guarded restore (`restoring`, written before the
+  creation), which a tool uses instead of the page's button when "never twice" matters.
+- "Ignore" deletes the offers **and the agent mail retained for them** (mail is kept for an offered
+  incarnation for 24 hours; with the offer gone nothing can receive it, and it is pruned). The bar
+  says so under its buttons. After a restoration that returned warnings (the mail was not
+  transferred and stays at the old identity, or the session came back under another name), the page
+  shows them next to the result by session name; the offer stays until it is restored again or
+  ignored. A transfer that cannot complete is repeated by the same restore request of the guarded
+  path; `agentmail.transfer_incarnation` is idempotent and can be run by hand from the owner's
+  account to move the mail of an old incarnation to the new one.
+- `restore_lock` and `organisation_lock` are held across the calls to the PTY host (each with a 5
+  second limit; the worst case of one exact restore is about 6 calls), so a slow host delays every
+  other restore, move and rename for that long. They are not changed here. A History resume
+  records its conversation in the 20-second guard before it gets `restore_lock`: a restore that
+  arrives while the resume still waits is refused as `conversation-running`, safely but earlier
+  than strictly needed.
+- A session listing that takes the organisation lock (the page's, the snapshot loop, the
+  restores' own) reads the PTY host inside it. Read before the lock, a listing that waited for a
+  restore pruned the organisation with a list older than the restore, and erased the label, folder
+  and rank the restore had just given the new session (seen with a client polling `/api/sessions`
+  while exact restores ran). The visible consequence: such a listing now waits behind a restore or
+  a move in progress, for the duration of their host calls. Lock order is unchanged:
+  `restore_lock`, then `organisation_lock`.
+- `new_session(exact=True)` lists the host again before the creation; the exact restore has
+  already checked the name, so that second listing is redundant (it only narrows the window between
+  check and creation, and its failure is a refusal before the send).
+- A session the owner renamed has a label (in `mesh.json`); the host keeps the generated name, and
+  the History row shows the label. A History resume starts a new incarnation under a free generated
+  name and gives it back the label the conversation last had (kept in `conversation-names.json`,
+  bound to the conversation id of Claude, Codex or Pi, so it survives a stop and a server restart).
+  The last label wins, including a cleared one. A label belongs to the conversation the session was in when
+  it was given (not to the ones that ran in it before a `/clear` or a resume), and a label given while the
+  conversation is not known (Pi after `/new` with two transcripts, or a Codex that holds no rollout open, whose conversation the
+  mesh can only guess) is applied to none. Known limit: the mesh learns of a switch of conversation (`/clear`, `/new`) from its
+  next inventory of the sessions, so a rename made before that inventory has seen the switch is still recorded on the earlier
+  conversation. When a live session already shows that label (as
+  its label or its host name) the resume does not apply it, and the session keeps its generated
+  name. Only the label is carried: a session stopped on purpose leaves no folder or rank to restore.
+  A failure to apply the label is logged and never fails the resume (the agent is already started).
+- A conversation restored in the last 120 seconds (or whose creation was attempted without a
+  confirmation) is refused as `conversation-running` even if no listing shows its agent yet, so two
+  offers sharing one `resume_id` never start two agents. The History's "resume" and the restore
+  consult each other: a resume within those 120 seconds answers 409, and a restore of a
+  conversation the History is resuming (during its 20-second guard) is refused. This memory is
+  kept in the server's memory only: **a server restart forgets it**, and for up to 120 seconds
+  after the restart an agent just started that no listing shows yet is not protected (the intent
+  marker on the offer, which is in the snapshot file, still is).
+- The page's restore (`{"names": [...]}`) refuses an offer carrying the intent ("An exact restore
+  is in progress for this offer: repeat the exact request, or discard the offer") and creates
+  nothing.
+- Retrying after a success whose answer was lost finds `not-found` (phase `not-started`: this
+  request created nothing): the restore happened (look for the session by name), but the tool
+  cannot tell it from an offer restored by someone else.
+- Rolling back to an older server: it does not know the intent. Its snapshot validation keeps the
+  offer but drops the `restoring` marker in memory; it writes the file only when the state changes,
+  so the marker stays on disk and reappears when the new server returns. The offer is restorable
+  again from the page of the older server: it creates a suffixed session (`N-2`), and for an agent
+  offer it starts a second agent on the same conversation whenever its `running_conversations`
+  does not see the first one (an agent just started shows in no listing yet). Finish or ignore
+  marked offers before rolling back.
+
+What is lost: the screen content and any work in progress at the moment of the restart. A folder
+deleted in the meantime is not recreated (the session goes to the top of the list). If step 1 was
+skipped and the web server still ran older code, there may be no snapshot and nothing is offered.
+The last session of a mesh that ended on its own may also be offered by mistake: use "Ignore".
+
+Agent mail (messages between agent sessions) is kept for 24 hours after the loss and moves to the
+restored session of the same conversation. The offer itself lasts 14 days: a restoration after 24
+hours succeeds without the mail and says "mail expired". Pending mail counts against the mailbox
+limits meanwhile, so many unrestored agents can make senders get "mailbox full": ignore the offers
+you do not want. If the mail could not be moved, the restored session is running and the result
+carries a warning; the offer stays and the mail waits for the old identity (ignore the offer to
+release it).
+
+## Replacing the PTY host
+
+The PTY host is the native `mesh-ptyhost`. The installer chooses it only when no `session-mesh-pty`
+unit exists, and otherwise refuses `--ptyhost` and `--from-source` (except when moving a release
+install to a clone, [Source installs](#source-installs)). Replacing it, for example handing a PTY
+unit you wrote back to a release install, or moving a source install from the Python host of an
+earlier version (a source install recognises a unit that runs `ptyhost.py` and refuses with these
+commands), means removing that unit first, which **ends every mesh session** (take the snapshot
+first, as in steps 1 and 2 above):
+
+```sh
+systemctl --user disable --now session-mesh-pty
+rm ~/.config/systemd/user/session-mesh-pty.service
+systemctl --user daemon-reload
+systemctl --user reset-failed session-mesh-pty   # only if the unit had failed; see below
+~/.local/share/session-mesh/current/install.sh   # release install; from a clone: ./install.sh [--ptyhost PATH]
+```
+
+A source install needs the native host first, built or obtained ([Native PTY host](install.md#native-pty-host)). The installer
+creates a PTY unit only when systemd no longer knows it at all: a unit that had failed keeps its
+"failed" state after its file is removed, and the installer refuses with "PTY configuration is
+masked, incomplete or ambiguous" until `systemctl --user reset-failed session-mesh-pty` clears it.
+A drop-in directory `~/.config/systemd/user/session-mesh-pty.service.d/` blocks it in the same way;
+remove it too if you created one.
+
+The PTY host's socket is `<runtime>/session-mesh/ptyhost.sock`, where `<runtime>` is the first of
+these that is set and non-empty:
+
+1. `MESH_RUNTIME_DIR`;
+2. `XDG_RUNTIME_DIR`;
+3. a default: on Linux `/run/user/<uid>`; on macOS
+   `~/Library/Application Support/session-mesh/run`, where `~` is your home directory as the user
+   database records it (not `$HOME`, so that a program run with another `HOME` still finds the
+   socket). Other systems have no default and need one of the variables.
+
+The server, the clients and `install.sh` apply the same order, without validation
+(on macOS, a rerun of `install.sh` first keeps the directory of an installed PTY job), so on both
+systems every program of your account finds the socket without any variable set. Only the native
+host (`mesh-ptyhost`) validates the directory, and on macOS it also creates the default one:
+`~/Library/Application Support` must exist (it does on every macOS account), and the `session-mesh`
+and `run` directories below it are created with mode 0700, a symbolic link in their place being
+refused. It refuses to start, with one `not starting` line and status 1, unless the directory is an
+absolute canonical path (equal to its real path: a trailing slash or a symlink is refused), a
+directory owned by you, writable neither by group nor by others, and short enough for the platform's
+socket path limit (`sun_path`): the socket path `<runtime>/session-mesh/ptyhost.sock` may have at
+most 107 bytes on Linux and 103 on macOS. On macOS the default directory fits for a user name of up
+to 25 bytes; with a longer one, the host and the installer refuse and ask for a shorter
+`MESH_RUNTIME_DIR`. The `/run/user/<uid>` guess must also be mode exactly 0700. An invalid
+`MESH_RUNTIME_DIR` is an error, never a reason to try `XDG_RUNTIME_DIR`. Sessions keep
+`MESH_RUNTIME_DIR`, so `mesh-attach` and `mesh-rename` inside them find the same socket (an isolated
+agent, started under another account, gets neither variable). `mesh-platform runtime-dir` prints the
+directory the native host would use ([macOS](#macos)).
+
+A stopped PTY host can leave its socket, `<runtime>/session-mesh/ptyhost.sock`, behind: a
+host killed with SIGKILL, or a unit written by an installer older than `RuntimeDirectory=` (units
+written now let systemd remove that directory when the host stops). When the PTY unit is stopped,
+the installer removes that file only if it is a socket of your account on which nothing accepts a
+connection, and says so. Otherwise it refuses and prints the remedy: check that
+`systemctl --user status session-mesh-pty` shows the unit inactive and that no PTY host started by
+hand is running, then remove the file with `rm --` and run the installer again.
+
+## macOS
+
+macOS support is best effort: the project fixes what blocks it, and further work follows issues and
+pull requests. The limits are listed below.
+
+On macOS the native PTY host, the web server, the installer, agent detection in mesh sessions and
+in other terminals, recovery from a stale socket, and the `/view` document viewer work as on Linux.
+Besides your home directory and `/tmp`, the viewer also serves documents from your private
+temporary directory (`/var/folders/…/T`), where macOS programs write their temporary files. The
+server asks the system for it once at start (`getconf DARWIN_USER_TEMP_DIR`) and does not read
+`$TMPDIR`, which a launchd job may not have. It is used only if that directory lies under
+`/private/var/folders`, is yours and no other user can write to it; otherwise only home and `/tmp`
+are served. Like your home directory, and unlike `/tmp`, it is searched for a relative document
+name.
+
+The viewer serves a file only under the exact name the system reports for it, so on macOS a few
+documents get 404:
+
+- a path written in a case other than the one on disk, on a case-insensitive volume;
+- a name stored decomposed (an accent as a separate character, NFD) and requested composed (NFC),
+  or the reverse;
+- rarely, a file with several hard links, when another program opens it through another of its
+  names at the same moment (macOS then reports that other name). Reloading the document works.
+
+A Mac used only over SSH, with nobody logged in at the screen, is the normal server case and is
+supported: see [Running at boot on a headless Mac](#running-at-boot-on-a-headless-mac).
+Limitations:
+
+- the isolated agent and the demo sandbox are Linux-only;
+- there is no macOS CI yet;
+- a release publishes a bundle for Apple silicon (macOS 13.5 or newer) and the native programs
+  (macOS 13 or newer), and its `install.sh` installs them like on Linux ([Prebuilt
+  binaries](#prebuilt-binaries)); an Intel Mac installs from a clone, with the native programs
+  built from source (below). The macOS release files are qualified on GitHub's macOS runner; no
+  macOS CI runs the rest of the test suite.
+
+Prerequisites on macOS:
+
+- macOS 12.3 or later for a source install: the installer relies on `plutil -extract … raw`
+  (macOS 12) and `readlink -f` (macOS 12.3), and refuses an older system. A release needs macOS
+  13.0 or later (its native programs are built for macOS 13), and its bundle macOS 13.5 or later
+  (the bundled Node 24); on macOS 13.0 to 13.4 the release installer installs the native programs
+  and the code, run with your Python.
+- Python 3.10 or later with `aiohttp` 3.x for the web server, for example from a virtual
+  environment: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`, then pass
+  `MESH_PYTHON="$PWD/.venv/bin/python"` to the installer ([Python from a virtual
+  environment](install.md#python-from-a-virtual-environment)). The `/usr/bin/python3` of the
+  Command Line Tools is often older than 3.10 and has no `aiohttp`; the installer refuses it for the
+  server and prints the Homebrew and venv commands. The commands it links into `~/.local/bin`
+  (`mesh-attach`, `mesh-rename`, `mesh-open`, `mesh-logout-all`) use only the standard library and
+  run with the first `python3` on `PATH`, including the system Python 3.9.
+- Xcode Command Line Tools (`xcode-select --install`) for the C compiler the OCaml build needs,
+  and [opam](https://opam.ocaml.org/), for example from Homebrew (`brew install python opam`). If
+  opam asks for system packages, install Homebrew `gmp` and `pkg-config`.
+- An opam switch with OCaml 5.3, created before the bootstrap:
+  `opam switch create session-mesh ocaml-base-compiler.5.3.0`. The bootstrap needs network access
+  to fetch its dependencies ([Native PTY host](install.md#native-pty-host)).
+
+### Installing on macOS
+
+No release publishes a macOS bundle yet, so a release's `install.sh` refuses on a Mac and names
+the platforms it has. Build the native host into the switch, then run the installer of a clone
+with the same switch:
+
+```sh
+MESH_OPAM_SWITCH=session-mesh bash scripts/bootstrap.sh --install-only
+MESH_OPAM_SWITCH=session-mesh MESH_PYTHON="$PWD/.venv/bin/python" ./install.sh --from-source
+```
+
+A source install takes the native host from `--ptyhost`, else `mesh-ptyhost` on `PATH`, else the
+switch's `bin` directory. The installer writes two launchd jobs and loads them with `launchctl bootstrap`:
+
+| Job | Runs | Log |
+|---|---|---|
+| `io.session-mesh.pty` | the native PTY host, which owns the sessions | `~/Library/Logs/session-mesh/pty.log` |
+| `io.session-mesh.web` | the web server on `127.0.0.1:MESH_PORT` (default 7690) | `~/Library/Logs/session-mesh/web.log` |
+
+Without options they are **agents** in `~/Library/LaunchAgents/`, installed without `sudo`. Where
+they are loaded decides how long they live:
+
+- **Under a graphical login** (`gui/<uid>`), they start at each login. Logging out stops them, and
+  with the PTY host every mesh session.
+- **Without a graphical login**, over SSH for example, they are loaded in the background domain
+  `user/<uid>`. They keep running after you disconnect, but only until the Mac restarts: after a
+  restart nothing loads them again until you rerun `./install.sh` or run
+  `launchctl bootstrap user/$(id -u) ~/Library/LaunchAgents/io.session-mesh.pty.plist` and the same
+  for `io.session-mesh.web.plist`. The installer says so when it finishes.
+
+Both jobs are restarted when they exit with an error or are killed (`KeepAlive` on an unsuccessful
+exit). A start that fails again, for example on an unusable runtime directory, is retried at most
+every 30 seconds (`ThrottleInterval`). They run with a `PATH` made of `current/bin` (a release
+install) or the switch's `bin` directory (a source install),
+`~/.local/bin`, Homebrew's directories and the system's, because launchd itself gives only
+`/usr/bin:/bin:/usr/sbin:/sbin`, and with a `LANG`: the installer's, else the one already installed,
+else your region's (`defaults read -g AppleLocale`, for example `fr_FR.UTF-8`) when that locale
+exists, else `en_US.UTF-8`. Without it the mesh shells would run in the C locale, which an SSH login
+often has.
+
+As on Linux, rerunning `./install.sh` replaces the web job, keeps the installed port without
+`MESH_PORT`, loads the PTY job only when it is not running and never restarts it, so the sessions
+keep running. It refuses `--ptyhost` once a PTY job exists. When `LANG` or
+`PATH` change, it rewrites them in the PTY plist, but a running PTY host keeps its environment
+(launchd applies a plist when it loads the job, also for a restart after a crash) until the job is
+loaded again: at the next login or boot, or at once with `launchctl bootout` then
+`launchctl bootstrap`, which ends every mesh session. The installer says which values changed.
+
+Both jobs always share one domain. A rerun keeps the session type of the installed PTY agent: an
+agent installed without a graphical login stays in `user/<uid>`, even when you rerun the installer
+from a graphical session. An agent installed under a graphical login cannot be loaded without one;
+the installer then stops before changing anything and gives two remedies: rerun it while logged in
+graphically, or remove the PTY agent and reinstall.
+
+**Runtime directory.** Both jobs receive the same `MESH_RUNTIME_DIR`: the value of an installed PTY
+job, else the order of the hosts and clients: `MESH_RUNTIME_DIR` from the installer's environment,
+else `XDG_RUNTIME_DIR`, else the macOS default, `~/Library/Application Support/session-mesh/run`,
+created as the native host creates it. This is Apple's per-user location for application data, which
+the system does not purge (unlike the per-user temporary directory). The installer refuses a
+directory that the native host would refuse (see [Replacing the PTY
+host](#replacing-the-pty-host)), including a socket path over 103 bytes, and a
+`MESH_RUNTIME_DIR` that differs from the installed PTY job's. It checks the directory before it
+removes a socket left there by a killed host, as on Linux. `mesh-attach`, `mesh-rename` and the
+server find the same socket with no variable set. In this section `~` is your home directory as the
+user database records it, not `$HOME`: it holds the agents, the logs, the command links in
+`~/.local/bin` and the default runtime directory.
+
+**Stopping and uninstalling.** `./install.sh --uninstall` unloads the web job from every domain it
+is loaded in and removes its plist, and removes this service's `tailscale serve` publication as on
+Linux; the PTY host and its sessions keep running. For a boot-time web daemon it asks before running
+`sudo`, and without a terminal it prints the two commands to run instead. To stop everything, which
+**ends every mesh session**:
+
+```sh
+./install.sh --uninstall
+launchctl bootout gui/$(id -u)/io.session-mesh.pty    # user/$(id -u) when installed without a graphical session
+rm ~/Library/LaunchAgents/io.session-mesh.pty.plist
+# boot-time daemons instead:
+#   sudo launchctl bootout system/io.session-mesh.pty
+#   sudo rm /Library/LaunchDaemons/io.session-mesh.pty.plist
+```
+
+The uninstaller prints the exact command for your installation. The rest of
+[Complete removal](#complete-removal) (commands in `~/.local/bin`, `~/.config/session-mesh`,
+`~/.cache/session-mesh`) applies unchanged; also remove `~/Library/Logs/session-mesh` and
+`~/Library/Application Support/session-mesh` if you want.
+
+With `--tailscale`, the installer uses `tailscale` on `PATH`, else the command inside the
+Tailscale app. It runs no `sudo` for Tailscale on macOS: if `tailscale serve` is refused, it stops
+and says so.
+
+### Running at boot on a headless Mac
+
+Agents in `user/<uid>` stop at a restart. To have the mesh start at boot with nobody logged in, as
+`loginctl enable-linger` does on Linux, install the two jobs once as **boot-time daemons**:
+
+```sh
+MESH_OPAM_SWITCH=session-mesh MESH_PYTHON="$PWD/.venv/bin/python" ./install.sh --at-boot
+```
+
+The installer prepares and checks everything first, then lists every command it will run with
+`sudo` (on a rerun also the `bootout`, `bootstrap` or `kickstart` of a job already loaded) and asks
+for one confirmation, a `y` typed on the terminal; without a terminal, or with any other answer,
+it changes nothing. It runs each of them by its absolute path (`/usr/bin/install`, `/bin/launchctl`,
+`/bin/rm`), not through `PATH`. It
+writes `/Library/LaunchDaemons/io.session-mesh.pty.plist` and `io.session-mesh.web.plist` (owner
+root, mode 644, which launchd requires there) and loads them in the `system` domain. Each daemon
+runs as your account (`UserName`, `GroupName`) with the environment a login would give it, which
+launchd gives a daemon none of: `HOME`, `USER`, `LOGNAME`, `SHELL`, plus the same `PATH`, `LANG`
+and `MESH_RUNTIME_DIR` as the agents. Logs, configuration and runtime directory stay in your home.
+
+Verified on macOS 15 (Apple silicon): both daemons ran as your account, never as root, and the
+login page answered after a restart with nobody logged in.
+
+Once daemons are installed, run the installer again with `--at-boot` (it asks again before
+`sudo`); without it, it refuses. It does not move existing agents to daemons, because that ends
+every mesh session. To move deliberately:
+
+```sh
+./install.sh --uninstall
+launchctl bootout user/$(id -u)/io.session-mesh.pty    # gui/$(id -u) under a graphical login; ends every mesh session
+rm ~/Library/LaunchAgents/io.session-mesh.pty.plist
+./install.sh --at-boot
+```
+
+With FileVault on, a restart waits until the disk is unlocked before any daemon starts, so after a
+power cut the mesh comes back only once someone unlocks the Mac. A daemon runs outside any login
+session, so the login keychain is locked unless you are logged in: an agent that keeps its
+credentials only in the keychain may need another way to log in (this was not tested).
+
+The installer does not use a user crontab `@reboot` entry to load the agents without `sudo`:
+Apple does not document whether cron runs such an entry at boot before any login, nor whether it
+may load agents into `user/<uid>` from there, and it was not verified.
+
+### Starting by hand for development
+
+Both processes need the same private runtime directory, and the native host validates it as
+described in [Replacing the PTY host](#replacing-the-pty-host). The server also needs
+`MESH_OPAM_SWITCH`: without it, it looks for `mesh-board-mcp` in the switch of its own opam
+environment, or else in `<checkout>/_opam/bin`, so agents started by the mesh do not find it.
+
+```sh
+export MESH_RUNTIME_DIR="$HOME/.local/state/session-mesh-dev"   # any private directory you own, not the installed jobs' default
+export MESH_OPAM_SWITCH=session-mesh   # the switch the bootstrap installed into
+mkdir -p -m 700 "$MESH_RUNTIME_DIR"
+opam exec --switch=session-mesh -- mesh-ptyhost &
+MESH_PORT=7699 .venv/bin/python server.py   # in another terminal with the same MESH_RUNTIME_DIR
+```
+
+Use another runtime directory and port than the installed agents, or unload them first.
+
+### Diagnostics
+
+The native host answers a read-only `processes` request on its socket (refused for the isolated
+agent); on macOS the server takes its process facts from it, where on Linux it keeps reading
+`/proc`.
+
+`mesh-platform`, installed with the release programs (`~/.local/share/session-mesh/current/bin`) or
+with the OCaml package, shows what the platform layer sees:
+`capabilities`, `runtime-dir`, `snapshot`, `process PID`, `command-line PID` and `require FEATURE`
+(exit status 0 when available, 78 when refused). Use it first when something does not work.
+
+## Complete removal
+
+`install.sh --uninstall` (`~/.local/share/session-mesh/current/install.sh` for a release install,
+`./install.sh` in a clone) removes only the web unit and this service's own `tailscale serve`
+publication. To remove the rest, which **ends every mesh session**:
+
+The uninstaller recognises its `tailscale serve` publication by the port it proxies to, read from
+the installed web unit (or from `MESH_PORT` when the unit has none), and leaves any other
+publication in place.
+
+```sh
+~/.local/share/session-mesh/current/install.sh --uninstall   # or, in a clone: ./install.sh --uninstall
+systemctl --user disable --now session-mesh-pty
+rm ~/.config/systemd/user/session-mesh-pty.service
+rm -r ~/.config/systemd/user/session-mesh.service.d    # only if you used systemctl --user edit
+systemctl --user daemon-reload
+rm ~/.local/bin/mesh-open ~/.local/bin/mesh-attach ~/.local/bin/mesh-rename ~/.local/bin/mesh-logout-all
+rm -r ~/.config/session-mesh                          # token, snapshot, names
+rm -r ~/.local/share/session-mesh                     # the installed releases, if any
+if [ -d ~/.cache/session-mesh ]; then rm -r ~/.cache/session-mesh; fi   # uploads, history index
+```
+
+The web server creates `~/.cache/session-mesh` when it first saves the history index, which it
+builds right after starting as soon as a conversation of any of the eight History agents (Claude
+Code, Codex, Pi, OpenCode, Gemini, Antigravity, Copilot, Vibe) exists, or when a file is uploaded;
+hence the test in the last line.
+
+That directory holds the index in two forms: `history.json` (the cache of the parse state) and
+`history.sqlite` (the full-text database kept by the `mesh-history` helper). Both hold prompts and
+replies and are rebuilt from the transcripts, so removing them loses nothing.
+
+- **Helper stopped.** The log line `history: database helper stopped: <reason>` means the helper
+  failed (timeout, locked or corrupt file). The in-memory index and ripgrep answer meanwhile, and
+  the helper is started again after 30 s.
+- **Quarantine.** A database the helper finds corrupt is renamed `history.sqlite.corrupt-<UTC
+  stamp>` (mode 0600, with its `-wal` and `-shm` files) and a new one is built; only the newest is
+  kept. Delete it once you have looked at it.
+- **Downgrade.** A `mesh-history` older than the database (schema 2) refuses to open it. That
+  is logged as above, History falls back to the in-memory index and ripgrep, and the helper is
+  tried again every 300 s. Nothing is lost: the newer helper resumes from the same file.
+- **Unreadable transcripts.** A scan that fails on one file, one OpenCode conversation or one
+  step skips it and logs it once (the path and the error type, never the content). The History tab
+  shows how many transcripts are left out; if it is non-zero for every file of one agent, a reader
+  is failing on that agent's format: report it. When the scan itself fails, `/api/history` still
+  answers with the last good index and `degraded: true`.
+
+An operator right granted to your user with `sudo tailscale set --operator=…` during installation,
+if any, stays in Tailscale's settings: the uninstaller does not touch it.
+
+## Logging out devices and replacing the token
+
+A lost or stolen phone stays logged in until you act. The login cookie asks the browser to keep it
+30 days, but the server does not check its age: the value is an HMAC of the token and of a
+generation counter (`cookiegen.py`), the same for every device, and it is accepted for as long as
+neither changes. "Sign out this device" only deletes the cookie from that browser. To log out every
+browser at once without changing the token:
+
+```sh
+mesh-logout-all
+```
+
+The same is available in the page: the ⏻ button at the bottom of the sidebar offers "All devices…"
+(after a confirmation; this browser is logged out too) and "Sign out this device". Each device then
+logs in again with the token. The command goes through the running mesh; when the mesh is stopped,
+it raises the `cookie-generation` counter in `~/.config/session-mesh` directly. The master token, the
+sessions' own tokens and the running terminals do not change.
+
+If the token itself may have leaked (for example a shared `?token=` link, which also stays in the
+history of the browser that opened it), replace it: delete
+`~/.config/session-mesh/token` and restart the web server, which creates a new one.
+
+```sh
+rm ~/.config/session-mesh/token
+systemctl --user restart session-mesh
+cat ~/.config/session-mesh/token
+```
+
+The login cookies are derived from the token, so every browser must log in again. The session
+tokens (`MESH_SESSION_TOKEN`) that running sessions received at their start are derived from it
+too, and stop being accepted. Until each session is restarted, inside it:
+
+- `mesh-open` fails ("session token refused");
+- the agent hook `mesh-event` is refused; it fails silently and the agent carries on;
+- `mesh-board-mcp`, the agents' board and messaging tools, is refused by the server.
+
+`mesh-rename` keeps working, because it reads the new master token from
+`~/.config/session-mesh/token`.
+
+## Answer buttons in notifications
+
+**Answering from a notification is off by default.** The buttons ("1", "2" on a Claude Code
+question) type the choice into the terminal. They rely on an undocumented value of Claude Code's
+state; if a permission prompt ever reported the same value, a tap could approve a command. To turn
+them on, set `MESH_ANSWER_BUTTONS=1` in the web server's environment and restart it:
+
+```sh
+systemctl --user edit session-mesh        # add under [Service]: Environment=MESH_ANSWER_BUTTONS=1
+systemctl --user restart session-mesh
+```
+
+Only the value `1` turns them on, and nothing in the page or the API can change it. Even then, the
+buttons only reach devices that ticked "details" in the sidebar footer. When they are off, no
+notification carries buttons and `/api/push/act` answers 403.
+
+## Documents opened with mesh-open
+
+- **From a mesh session**, the document opens next to the pane showing that session, and only in
+  the pages that show it. It uses the session's own token (`MESH_SESSION_TOKEN`), which the agent
+  hook, the `mesh-board` tools (whiteboard, demos, messages, session requests) and the Pi extension
+  use too, each on that session's data only; the complete list is in
+  [SECURITY.md](../SECURITY.md#what-session-mesh-defends-against). The mesh's master token never
+  enters a session. Without `MESH_SESSION_TOKEN`, `mesh-open` refuses rather than use the master
+  token when `MESH_SESSION` is set or when the PTY host lists a session whose shell is one of its
+  ancestors. Otherwise (outside the mesh, when no PTY host answers, in a sandbox that hides the
+  ancestry, or in a process that left the session's process tree, such as a detached process or a
+  multiplexer whose server was started elsewhere), `mesh-open` uses the master token and opens the
+  document in every page.
+- Running `mesh-open FILE` again reloads the document; `--reload` says so explicitly; `--watch`
+  reloads it whenever the file changes on disk (the file itself, not its stylesheets or images; the
+  page must stay open).
+- A document's `/view/…` link (new tab, Ctrl+click) **expires after 12 hours**; opening the document
+  again from the mesh gives a fresh one.
+- A link gives access to the document, plus the relative files it uses (stylesheets, images) up to
+  two subdirectories below it, never in a hidden directory nor through `../`. For a document placed
+  directly in `~`, `/tmp` or the macOS private temporary directory, or in a hidden directory, only
+  the document itself is served: put a report and its files in a subdirectory. An HTML, SVG or
+  Markdown document that `mesh-open` opened from a session is also served alone, without the files
+  next to it, for 12 hours, even when you open it yourself meanwhile.
+  `~/.config/session-mesh`, `~/.ssh`, `~/.gnupg` and the other credential files listed in [SECURITY.md](../SECURITY.md) are never served.
+- Remote images and scripts loaded from a CDN do not display in the panel.
+- A link works without the login cookie, for anyone who has it and reaches the server's port.
+  The script of an HTML document can send its own link out, with what it can read: open only
+  documents you trust ([SECURITY.md](../SECURITY.md#documents-that-send-data-out)).
+- A mesh on another port than 7690 needs `MESH_PORT` exported in the shell where `mesh-open` runs,
+  except in sessions started by the web server, which receive it
+  ([Using another port than 7690](#using-another-port-than-7690)).
+
+## Making every new terminal a mesh session
+
+Added at the end of `~/.bashrc`, this makes each new Terminator window or tab a mesh session. If the
+PTY host does not answer, the normal shell continues; `NO_MESH=1 terminator` opens a terminal
+outside the mesh.
+
+```bash
+# session-mesh: new Terminator terminals are mesh sessions
+if [[ $- == *i* && -t 0 && -t 1 && -n "$TERMINATOR_UUID" && -z "$NO_MESH" ]] && command -v mesh-attach >/dev/null; then
+  mesh-attach && exit
+  export NO_MESH=1   # fallback shell (ptyhost down): its child shells do not try again
+fi
+```
+
+Mesh shells are started by the PTY host without `TERMINATOR_UUID`, so the rule does not fire a
+second time inside them. Adapt the test to the variable your terminal emulator sets.
+
+## Using another port than 7690
+
+`MESH_PORT=7700 ./install.sh` writes `MESH_PORT=7700` into the web unit (on macOS, into the web
+job's plist), and the web server listens there. Running `./install.sh` again without `MESH_PORT`
+keeps 7700. The clients do not learn it from the server: `mesh-open`, `mesh-rename`,
+`mesh-logout-all`, the agent hook `mesh-event`, `mesh-board-mcp` and the Pi extension each read
+`MESH_PORT` from their own environment and use 7690 when it is unset.
+
+- **In a session started by the web server** (sidebar, "New session", restore), the server hands
+  the session the port it listens on, in `MESH_PORT`, together with `MESH_CONF_DIR`. The tools and
+  agents of that session reach the right mesh.
+- **Outside a mesh session**, and **in a session started by `mesh-attach`**, the variable comes from
+  your shell. `mesh-attach` creates its session through the PTY host directly, and the PTY host
+  starts the shell with a cleaned environment that keeps no `MESH_*` variable. Without the variable,
+  these tools send their requests to port 7690 and fail, or reach whatever listens there.
+
+To make every client use the same port, export it in your shell's startup files. Each mesh session
+starts an interactive login shell, and agents are typed into that shell, so this also covers the
+sessions of `mesh-attach`. For bash, put the line in a file a login shell reads (`~/.bash_profile`
+or `~/.profile`, or `~/.bashrc` if your profile sources it):
+
+```sh
+export MESH_PORT=7700
+```
+
+Sessions that were already running keep their old environment until they are restarted.
+
+## HTTPS on a VPN address with a reverse proxy
+
+This section lets you open session-mesh from another machine on a VPN that is not Tailscale
+(WireGuard, for example), over HTTPS with a certificate your browsers accept, while the server keeps
+listening on loopback only. The proxy is [Caddy](https://caddyserver.com/docs/): it listens on the
+VPN address, holds the certificate, and forwards to `http://127.0.0.1:7690`. `MESH_HOST` stays at
+its default (the server still refuses a non-loopback address), and neither
+`MESH_ALLOW_NON_LOOPBACK` nor `MESH_TRUST_PROXY` is set.
+
+Why HTTPS and not plain HTTP on the VPN: the service worker, push notifications, the clipboard and
+the microphone only work in a secure context, and the login cookie is marked `Secure` only when the
+server learns that the browser used HTTPS. A self-signed certificate that the browser has to be told
+to accept does not give the service worker a secure context; use a certificate from an authority the
+browser already trusts.
+
+In the examples, `mesh.example.com` is a name you control, `192.0.2.1` stands for this machine's VPN
+address (a documentation address from RFC 5737: write your own), and the name resolves to that
+address (a DNS `A` record in your zone, or in the DNS that your VPN clients use). Some resolvers drop
+a public record that points to a private address, as a protection against DNS rebinding (dnsmasq
+`stop-dns-rebind`, Pi-hole, Unbound `private-address`): if the name does not resolve on a client,
+add an exception for your zone (dnsmasq `rebind-domain-ok=/example.com/`, Unbound
+`private-domain: "example.com"`) or publish the record in the VPN's own DNS.
+
+### What the proxy must do
+
+The server decides whether a request comes from its own page from `Host`, `X-Forwarded-Host` and
+`X-Forwarded-Proto`, and believes the forwarded ones only on a connection that comes from this
+machine. For every request, the websocket upgrade of a terminal included, the proxy must:
+
+| The proxy... | Because |
+|---|---|
+| keeps the browser's `Host` unchanged | the server compares the page's `Origin` with `Host`; a rewritten `Host` makes every action answer 403 |
+| sets `X-Forwarded-Host` to that same `Host`, overwriting any client value | with a forwarded host different from `Host`, the server ignores the forwarded scheme |
+| sets `X-Forwarded-Proto: https`, overwriting any client value | the cookie is marked `Secure`, and the `https://` `Origin` of POSTs and websockets matches |
+| passes websocket upgrades and request bodies unchanged | terminals use `/ws/<name>`; uploads are plain POSTs |
+
+Caddy's `reverse_proxy` does all of this by default: it forwards the original `Host`, writes
+`X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` itself (overwriting what a client sent,
+as long as you declare no `trusted_proxies`), and proxies websockets without configuration. The
+Caddyfiles below therefore set none of them, and no server setting is needed. Do not add
+`header_up Host ...`, which breaks the first row, and do not add `trusted_proxies` unless Caddy
+itself sits behind another proxy you control.
+
+`MESH_TRUST_PROXY=1` is for proxies that rewrite `Host` (nginx's default); leave it unset with
+Caddy. The interface has no server-sent events or long polling, only that websocket, so no buffering
+or timeout setting is needed. Caddy applies no request-size limit by default; the server's own
+limits apply.
+
+### Caddy's admin endpoint: set it in the global options
+
+By default Caddy serves an administration API on `localhost:2019`, and its documentation describes
+no authentication for it. Any local user of this machine can therefore send it a new configuration
+(`POST /load`) that routes `mesh.example.com` to a program of their own. The proxy terminates TLS
+with your certificate, so that program would receive the token typed at the next login and the
+cookie that follows. Before the proxy, a local user could reach `127.0.0.1:7690` but could not
+sign in; with an open admin endpoint, they can obtain the credential. Caddy's documentation
+itself recommends a permissioned Unix socket when untrusted code runs on the machine.
+
+Both Caddyfiles below start with a global options block that moves the admin endpoint to a socket
+that only the `caddy` user (and root) can open. **This syntax needs Caddy 2.7.3 or later**: the
+`|mode` suffix of a Unix socket address came with that release, whose notes mark it experimental.
+Check with `caddy version` before you rely on it: the Caddy packaged by Debian 12 and Ubuntu 24.04
+is 2.6.2, which probably takes `|0200` as part of the file name instead of a mode (not run on that
+version). On such a version, install a current Caddy from Caddy's own package repository, or use
+`admin off` (below) and restart instead of reloading.
+
+```caddyfile
+{
+	admin unix//run/caddy/admin.sock|0200
+}
+```
+
+`0200` is the file mode of the socket (writing to it is what opens a connection). Caddy documents it
+as the default mode of Unix sockets in network addresses; the examples state it so that nothing
+depends on a default. The `caddy` user must be able to create the socket in `/run/caddy`: if your
+service unit does not already create that directory (the unit Caddy ships has no
+`RuntimeDirectory`), run `sudo systemctl edit caddy` and add, in the drop-in it opens:
+
+```ini
+[Service]
+RuntimeDirectory=caddy
+RuntimeDirectoryMode=0700
+```
+
+The first switch from the default port 2019 to the socket needs `sudo systemctl daemon-reload`
+(for the drop-in) and then `sudo systemctl restart caddy`, not a reload: the running instance still
+listens on 2019, and the new `RuntimeDirectory` only takes effect at a start. Later Caddyfile
+changes can use `reload`. Check the socket once Caddy runs with the final Caddyfile (step 1 of
+"Checking that it works" below): `ls -l /run/caddy/admin.sock` must show `s-w-------` with owner
+`caddy`.
+
+The other safe choice is `admin off`. Caddy's documentation says config changes are then impossible
+without stopping and starting the server, and that `caddy reload` needs the admin endpoint.
+How you apply a change then depends on the choice:
+
+- With the socket, `sudo systemctl reload caddy` works. The packaged unit runs
+  `caddy reload --config /etc/caddy/Caddyfile --force` as the `caddy` user. That command reads
+  the admin address from the Caddyfile it is given (`DetermineAdminAPIAddress`), and the function
+  that sends the request (`AdminAPIRequest`) drops the `|0200` suffix, through
+  `SplitUnixSocketPermissionsBits`, before it connects. The socket belongs to `caddy`, so the
+  command can open it: no `--address` is needed (source: `cmdReload`, `DetermineAdminAPIAddress` and
+  `AdminAPIRequest` in Caddy's `cmd/commandfuncs.go`; read in source, not run). `--force` also makes
+  Caddy reload certificate files, which is how a renewed certificate file is picked up.
+- With `admin off`, `caddy reload` fails: apply every Caddyfile change, and every renewed
+  certificate file, with `sudo systemctl restart caddy`. A restart cuts the browser connections for
+  a moment; the sessions keep running in the server.
+
+Do not leave the admin endpoint at its default, and do not give the socket a mode that lets other
+users write to it.
+
+### Caddyfile with a certificate issued by Caddy (DNS-01)
+
+A VPN address is not reachable from the internet, so the certificate authority cannot validate it
+over HTTP. The DNS-01 challenge proves control of the name with a DNS record instead. It needs:
+
+- a Caddy build that includes the plugin of your DNS provider: the standard binary does not, so use
+  `xcaddy build --with github.com/caddy-dns/<provider>` or a package that includes it;
+- an API token that can edit records of that zone.
+
+Caddy then obtains a certificate from Let's Encrypt and renews it before it expires, without a
+reload. For the provider plugin, the CA account (`email`) and the ZeroSSL fallback, follow Caddy's
+own documentation (`tls` directive, automatic HTTPS); only what concerns the token is specific to
+session-mesh and kept below.
+
+```caddyfile
+{
+	admin unix//run/caddy/admin.sock|0200
+	auto_https disable_redirects
+}
+
+mesh.example.com {
+	bind 192.0.2.1
+	tls {
+		dns <provider> {env.DNS_API_TOKEN}
+	}
+	reverse_proxy 127.0.0.1:7690
+}
+```
+
+The parameters after `dns <provider>` depend on the plugin: take them from its documentation.
+`{env.DNS_API_TOKEN}` is read while Caddy runs and is the form Caddy's own `tls` documentation shows,
+but not every module accepts placeholders. If yours does not, write `{$DNS_API_TOKEN}`, which is
+replaced before the Caddyfile is parsed. The token then becomes part of the configuration that Caddy
+keeps on disk (its `autosave.json`) and serves on its admin endpoint, which is one more reason to
+restrict that endpoint as above. Put the token in the Caddy service's environment, not in the
+Caddyfile, with the precautions of the next subsection.
+
+#### Keep the token out of the journal
+
+The packaged unit (`caddyserver/dist`, `init/caddy.service`) starts Caddy with
+`ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile`. `--environ` makes
+`printEnvironment` (`cmd/main.go`) write the whole environment, one `NAME=value` line per variable,
+to standard output, which systemd sends to the journal. The token therefore lands in the journal at
+every start, where members of `adm`, `systemd-journal` or `wheel` (depending on the distribution)
+can read it, and in every journal backup. This holds for any secret you put in Caddy's environment,
+not only this token (source read, not run).
+
+Put the token in a file read with `EnvironmentFile=`; unlike `Environment=`, its content does not
+appear in `systemctl show caddy`. systemd reads that file as root, so `caddy` needs no access to it.
+Create it empty with the right owner and mode, so that the token never goes through your shell
+history, then edit it:
+
+```sh
+sudo install -m 600 -o root -g root /dev/null /etc/caddy/dns.env
+sudoedit /etc/caddy/dns.env
+```
+
+The file holds one line, with the variable name used in the Caddyfile and no quotes:
+`DNS_API_TOKEN=<the token>`. Then, in the drop-in opened by `sudo systemctl edit caddy`, clear
+`ExecStart=` and redefine it without `--environ`:
+
+```ini
+[Service]
+EnvironmentFile=/etc/caddy/dns.env
+ExecStart=
+ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile
+```
+
+The empty `ExecStart=` is required: without it systemd refuses a second `ExecStart=` in a service
+whose type is not `oneshot`, and the unit fails to load. Take the `ExecStart=` line from your own
+unit (`systemctl show -p ExecStart caddy` before the change; a distribution package may use another
+path) and keep everything except `--environ`. After
+`sudo systemctl daemon-reload && sudo systemctl restart caddy`, check that the flag is gone and that
+the token is not logged: `systemctl show -p ExecStart caddy` must not contain `--environ`, and
+`sudo journalctl -u caddy --since -5min | grep -c DNS_API_TOKEN` (adapt the name to your variable)
+must print 0.
+
+The unit's output also reaches other places than the journal: on Debian and Ubuntu, rsyslog writes
+it to `/var/log/syslog` and its rotated `.gz` files (group `adm`), and a remote log collector may
+hold copies. Journals and logs written before this change may already hold the token. Count the
+lines without printing them: `sudo journalctl -u caddy | grep -c DNS_API_TOKEN` and
+`sudo zgrep -c DNS_API_TOKEN /var/log/syslog*`. If a count is not zero, treat the token as exposed:
+
+1. create a new token at your DNS provider and replace the content of `/etc/caddy/dns.env`;
+2. run `sudo systemctl restart caddy`: `EnvironmentFile=` is read only at start, so without the
+   restart Caddy keeps the old token and the renewal, about 30 days before the certificate
+   expires, fails without any visible sign;
+3. revoke the old token at your provider. From then on the leaked value is useless.
+
+Deleting the old entries is optional and depends on your retention policy. `journalctl` cannot
+purge one unit: `sudo journalctl --rotate && sudo journalctl --vacuum-time=1s` removes every
+archived journal of the machine, audit evidence included. The same restart is needed after any
+later rotation of the token.
+
+`bind 192.0.2.1` makes the site listen on the VPN address only. Caddy's documentation says that
+`default_bind` does not apply to the server it creates on port 80 to redirect to HTTPS, and says
+nothing for `bind`. In `modules/caddyhttp/autohttps.go`, that redirect listener is built from the
+address of the HTTPS listener with only the port replaced, so with `bind` it would be
+`192.0.2.1:80`, not every interface (source read, not run). `auto_https disable_redirects` removes
+that server anyway, which is the safe choice: nothing listens on port 80, and a browser that types
+`http://mesh.example.com` gets a refused connection, so type or bookmark the `https://` address. If
+you want the redirect on the VPN address, drop that line and add an explicit site block, which
+Caddy documents as the way to configure the redirect server:
+
+```caddyfile
+http://mesh.example.com {
+	bind 192.0.2.1
+	redir https://mesh.example.com{uri}
+}
+```
+
+(This variant was not run: check it with step 1 below.) Never write `0.0.0.0`, and do not remove
+`bind`: without it Caddy listens on every interface. If step 1 shows the UDP listener of HTTP/3 on
+another address, add `servers { protocols h1 h2 }` to the global options to switch HTTP/3 off. Your
+host name appears in the Certificate Transparency logs: choose a name that discloses nothing you
+want private. The name resolves to a private address only inside your network, but the zone itself
+is public.
+
+### Caddyfile with a certificate you already have
+
+If you obtain the certificate another way, point Caddy at the files. Use the full chain (the
+certificate followed by its intermediates) as the certificate file: some mobile browsers do not
+fetch missing intermediates. Caddy does not renew certificates loaded from files, and it does not
+manage a certificate for that name while a loaded one covers it. Renew the files yourself, then run
+`sudo systemctl reload caddy` (with the admin socket; `--force` makes Caddy read the files again)
+or `sudo systemctl restart caddy` (with `admin off`).
+
+```caddyfile
+{
+	admin unix//run/caddy/admin.sock|0200
+	auto_https disable_redirects
+}
+
+mesh.example.com {
+	bind 192.0.2.1
+	tls /etc/caddy/certs/mesh.example.com.fullchain.pem /etc/caddy/certs/mesh.example.com.key
+	reverse_proxy 127.0.0.1:7690
+}
+```
+
+The key must be readable by the `caddy` user and by nobody else who should not be able to
+impersonate the name. The remarks above on port 80 and on the bind address apply here too.
+
+### If the VPN address is absent at boot
+
+Caddy fails to start when `192.0.2.1` does not exist yet, which happens when the WireGuard interface
+comes up after it. Order the units with a drop-in (`sudo systemctl edit caddy`); `vpn.service`
+stands for the unit that creates your VPN interface (with `wg-quick`, the instance of its template
+unit for your interface name):
+
+```ini
+[Unit]
+After=network-online.target vpn.service
+Wants=network-online.target
+Requires=vpn.service
+```
+
+`Requires=` also stops Caddy when the VPN stops, which is the intent. If systemd does not manage
+your VPN, you can allow binding an address that is not configured yet, and accept that Caddy then
+starts before the VPN is up. That setting is machine-wide: every program on the machine, not only
+Caddy, can then bind any address it does not own. Make it persistent in a file such as
+`/etc/sysctl.d/90-nonlocal-bind.conf` and load it with `sudo sysctl --system`:
+
+```ini
+net.ipv4.ip_nonlocal_bind = 1
+# only if the VPN address is IPv6:
+net.ipv6.ip_nonlocal_bind = 1
+```
+
+Session-mesh is not affected either way: it listens on loopback and does not depend on the VPN.
+
+### Checking that it works
+
+Each step says where it runs. Replace `mesh.example.com` and `192.0.2.1` with your values.
+
+1. On the server. The server is still loopback only and Caddy listens where you meant:
+   - `ss -ltn 'sport = :7690'` shows `127.0.0.1:7690` and nothing else;
+   - `ss -ltn 'sport = :443'` and `ss -lun 'sport = :443'` (HTTP/3 uses UDP) show `192.0.2.1:443`
+     only;
+   - `ss -ltn 'sport = :80'` shows nothing, or only `192.0.2.1:80` if you chose the `http://` block;
+   - `ss -ltn 'sport = :2019'` shows nothing (the admin endpoint is on the socket or off), and, with
+     the socket, `ls -l /run/caddy/admin.sock` shows `s-w-------`.
+2. On a machine on the VPN. `curl -sS -o /dev/null -w '%{http_code}\n' https://mesh.example.com/login`
+   prints `200` with no certificate warning.
+3. On the server, which holds the token file. Sign in from the command line and read the cookie flags.
+   The file ends with a newline, which the server does not strip from what it receives, so the pipe
+   removes it. The token goes through standard input: it is neither in the command line nor in the
+   shell history.
+
+   ```bash
+   tr -d '\n' < ~/.config/session-mesh/token \
+     | curl -si --data-urlencode token@- https://mesh.example.com/login \
+     | grep -i -E '^(set-cookie|location):'
+   ```
+
+   It shows a `set-cookie` line with `Secure`, `HttpOnly` and `SameSite=Strict`. A
+   `location: /login?bad=1` line and no cookie mean that the token was wrong or still had its
+   newline. The command resolves the name on the server. If the name exists only in the VPN's DNS and the server does not use it, add
+   `--resolve mesh.example.com:443:192.0.2.1` to the `curl` options. To run it on another machine,
+   copy the token file there first and use its path.
+4. In a browser, sign in, open a terminal and upload a file. If the page loads but every action
+   answers 403, the proxy changed `Host`, or does not send `X-Forwarded-Host`, or does not send
+   `X-Forwarded-Proto: https` (the `https://` origin of the page is then compared with `http://`).
+
+### What this protects, and what it does not
+
+- It encrypts the token, the cookie and the terminals between the browser and the VPN address, and
+  gives the page a secure context.
+- It authenticates nobody. Every machine that the VPN lets reach `192.0.2.1:443` gets the login page;
+  the token stays the only credential. Limit the VPN's own rules (WireGuard `AllowedIPs`, firewall)
+  to the devices that need it, and read
+  [SECURITY.md](../SECURITY.md#reverse-proxy-on-a-vpn-address).
+- Any local user of this machine can still reach `127.0.0.1:7690` directly, as before, but cannot
+  sign in without the token, with the reservations of
+  [Other users on the same machine](../SECURITY.md#other-users-on-the-same-machine): other routes to
+  the credential exist, and a user who occupies `127.0.0.1:7690` while the server is stopped,
+  starting or restarting receives what your login sends (through the proxy as well). The proxy
+  must not widen that reach: while Caddy's admin endpoint is open on
+  `localhost:2019`, a local user can make the proxy forward to their own program and read the token
+  and the cookie at the next login (see above). Restricting that endpoint is part of this setup.
+- Caddy becomes one more program that holds your certificate key and sees the traffic in clear: keep
+  it updated and run it under its own user.
+- Caddy's logs can contain the `/login?token=…` URL if the server is down or fails while someone
+  signs in through a link (the same limit as in
+  [SECURITY.md](../SECURITY.md#other-limits)). Access logs are off unless you add `log` to a site.
+  To strip the token from logged URLs, you can add this to the global options (not run: check it
+  with `caddy validate`). The global `log` option configures Caddy's `default` logger, which also
+  carries its runtime messages, not only requests. `wrap json` keeps their format, because Caddy's
+  default encoder is JSON when its output is not a terminal, as under systemd; with `wrap console`
+  they would switch to the console format:
+
+  ```caddyfile
+  log {
+  	format filter {
+  		wrap json
+  		request>uri query {
+  			delete token
+  		}
+  	}
+  }
+  ```
+
+  Caddy's documentation says the global `log` option configures the `default` logger when it has
+  no name, and that the site `log` directive configures access logs in a logger of its own (`log0`,
+  `log1`, ...). A `log` directive that you add to the site block with its own `output` or `format`
+  therefore escapes this filter and can record `?token=`: put the same `query { delete token }`
+  filter inside it. Not run: the page does not say whether a bare `log` directive goes through the
+  `default` logger's filter.
+
+### What was tested
+
+`tests/vpn-tls-proxy.test.ts` runs the real server on a throwaway port and home, without
+`MESH_TRUST_PROXY`, behind a small Node HTTPS proxy with a throwaway certificate that mimics Caddy's
+`reverse_proxy` defaults (Host kept, the three forwarded headers written by the proxy). It checks
+the login, including the command-line login of step 3 (token with its newline removed, passed on
+standard input and URL-encoded; the same file posted unstripped is refused), the `Secure` cookie, an
+authenticated call, a same-origin POST and upload accepted, cross-origin and wrong-scheme ones
+refused, forged `X-Forwarded-Host` and `X-Forwarded-Proto` sent by a client replaced by the proxy
+without changing what the server answers, and a websocket upgrade accepted from the page origin
+(that last case needs the native PTY host, `MESH_PTYHOST_CMD`, and is skipped without it).
+The forged-header case shows what the server answers when the proxy overwrites those headers, and
+that the test proxy does overwrite them; it does not show that Caddy does (that is Caddy's documented
+behaviour, checked by step 4).
+**Caddy itself, the Caddyfiles above, the admin socket, the redirect and HTTP/3 listeners, and the
+certificate issuance were not run in CI.** The statements about Caddy come from its documentation
+and source: confirm them with the checks above the first time you set it up.
+
+## Restricting folders and agents
+
+By default "New session" accepts any existing folder and offers every integrated agent. To narrow
+that, write a JSON file and give its absolute path in the web server's environment as
+`MESH_LAUNCH_SETTINGS` (with `systemctl --user edit session-mesh`, as in
+[configuration.md](configuration.md#environment-variables)), then restart the web server:
+
+```json
+{"v": 1, "workspace_roots": ["/home/USER/projects"], "enabled_agents": ["claude", "pi"]}
+```
+
+- `workspace_roots`: 1 to 16 existing directories under your home directory. A session, or a
+  session an agent asks to create, can only start in one of them or below. This holds for every
+  way a session starts: "New session", a conversation resumed from the history, a session restored
+  after a restart, an agent moved in from another terminal (it is left running there), and a
+  restart. A refused one says "Folder outside the allowed workspace roots". Sessions already
+  running elsewhere are not stopped, and a shell can still `cd` anywhere.
+- `enabled_agents`: the agent presets offered, among `claude`, `codex`, `codex-yolo` (Codex
+  without approvals or sandbox), `pi`, `opencode`, `agy`, `copilot` and `gemini`. The shell and a custom command remain available. It filters the presets
+  of "New session" and of agents' requests only: resuming, restoring or moving in a conversation of
+  another agent is not refused.
+
+The file is read at startup, and rewritten by "Configuration" when you edit these two settings
+there (after typing the master token): the rewrite is atomic, keeps the file's mode, and takes
+effect for the next session without a restart. The file is identified by a revision (the SHA-256
+of its bytes): a save made from a page that loaded an older revision is refused, and so is any
+save while the file holds bytes this server did not write (you edited it by hand: restart the web
+server to apply your edit). It must contain exactly these three fields. The web server does
+not start when the variable names a missing, malformed or symbolic-link file (the reason is in
+`journalctl --user -u session-mesh`). `python3 launchsettings.py`, run from the checkout with the
+same variable set, prints the settings as the server reads them.
+
+## Debugging the agent hook
+
+Claude Code sessions started by the mesh report their state (busy, waiting, finished) through the
+hook `bin/mesh-event`. It never prints anything and always exits successfully, so a
+failure cannot disturb the agent. To see why it fails, export `MESH_EVENT_DEBUG=1` in the shell of
+the session before starting the agent: the hook then writes its error on standard error.
+
+## Waking Codex with codex queue
+
+This wake is **off by default**. Delivery through `codex queue` to a Codex already open in a terminal
+has not been tried on a real session (`docs/agent-integration.md`, criterion 8), so until the owner has done that trial a Codex session is never woken
+and its messages wait in the inbox. To turn it on, export `MESH_CODEX_QUEUE_WAKE=1` in the environment of
+the web server (for example `systemctl --user edit session-mesh` with `Environment=MESH_CODEX_QUEUE_WAKE=1`)
+and restart it; any other value leaves it off. The setting is read once at start-up.
+
+Trial before turning it on, on a disposable Codex session (a scratch folder and a throw-away
+`CODEX_HOME`, never a conversation that matters): start the web server with the setting, open a Codex
+session, send it one message from another session, and check that the notice reaches the already
+open terminal while Codex is idle, that it does not disturb a turn in progress and an open permission
+dialog, and that reading the inbox clears any unconfirmed mark. Turn the setting off again if any of
+these fails.
+
+With the setting on, the mesh wakes a Codex session by running `codex queue --thread <conversation id> --message <fixed
+line>` (no `--resume`) for the exact conversation the session holds open. It uses the `codex` first on
+the PATH that sessions get (`~/.local/bin` included) as an absolute path, with a short environment
+(no `MESH_*` name, no secret) and at most 15 seconds and 64 KiB of output. Each attempt is recorded
+in `codex-queue-wakes.json` in the configuration folder (0600) before the process starts and is never
+repeated: a session whose attempt failed shows the unconfirmed mark until its inbox is read. A session
+that was alive when the state file was found damaged (the file is kept next to it as
+`codex-queue-wakes.json.damaged-<time>`) stays unconfirmed until it ends, whatever is read, and so does a
+wake withheld because 1024 attempts are in doubt (until a later wake succeeds). To stop waking Codex, unset
+`MESH_CODEX_QUEUE_WAKE` (or remove `codex` from the PATH sessions see); with it unset, the state file is
+neither read nor written.
+`MESH_CODEX_QUEUE_TIMEOUT_SECONDS` (1 to 60) shortens the limit for tests, and `MESH_CODEX_QUEUE_MAX_TRACKED` (1 to 1024) the number of attempts kept.
+
+Known limits of this wake: one `codex queue` is run per notification (the notifications of one Codex
+turn are not grouped); the conversation is checked again just before the attempt is recorded, not between
+that record and the exec; two servers sharing one configuration folder are not supported for this wake; and
+the `codex` found first on the PATH that sessions get is trusted, as is every directory of that PATH;
+and a wake withheld because every one of the 1024 kept attempts is in doubt is retried like a transport
+failure, so the retry backoff (up to 60 seconds) applies to the wakes of every agent until room exists
+(theoretical: it takes 1024 sessions with an unconfirmed attempt).
+
+## Settings reserved for tests
+
+`MESH_HISTORY_RESUME_GRACE` is not an operating setting: leave it unset. After a conversation is
+resumed from the History, the web server keeps that conversation marked as "just resumed" for 20
+seconds, so that a second click cannot start a second agent while the first has not yet opened its
+transcript. The variable, read once at start-up in the web server's environment, replaces those 20
+seconds with a number of seconds from 1 to 60, so that a test need not wait the whole delay. A
+value that is not a number in that range is ignored: the server logs it once, uses 20 seconds and
+starts normally. A shorter delay only weakens the protection against a double click.
+
+## A second mesh for testing
+
+To try a branch without touching the mesh you use, `scripts/preprod.sh` starts, from the current
+checkout, a second PTY host and web server that share nothing with it:
+
+```sh
+scripts/preprod.sh start     # http://127.0.0.1:7691, token in ~/.cache/session-mesh-preprod/conf/token
+scripts/preprod.sh status
+scripts/preprod.sh stop      # ends its sessions, then stops its two processes, and only them
+```
+
+It has its own port (7691), configuration directory (`MESH_CONF_DIR`), cache directory
+(`MESH_CACHE_DIR`) and runtime directory under `/tmp` (both `MESH_RUNTIME_DIR` and
+`XDG_RUNTIME_DIR`), hence its own PTY host socket. `HOME` does not
+change, so the agents keep their logins. **Push notifications are off** there (`MESH_PUSH=0`). The
+script refuses to start when the port, socket or configuration directory are those of the main
+mesh, or when the port is taken; `scripts/preprod.sh check` runs only those checks. Variables:
+`MESH_PREPROD_PORT`, `MESH_PREPROD_DIR`, `MESH_PREPROD_RUNTIME`. It installs no systemd unit, so it
+does not come back after a reboot.
+
+Sessions of that mesh receive `MESH_CONF_DIR` and `MESH_PORT`, so `mesh-open` there reaches that
+mesh.
+
+## Installer limits
+
+`install.sh` checks these before changing anything, and stops with a message when one fails:
+
+- It runs only as an ordinary account, never as root or with `sudo`. On Linux it also needs a
+  systemd user session: when `systemctl --user` cannot reach the user manager (a container or WSL
+  without systemd), it stops with "session-mesh needs a systemd user session".
+- A release installer runs from a file, on a platform for which the release publishes a bundle or
+  the native programs, and installs only files whose SHA-256 (and, with `gh` logged in,
+  attestation) matches, and a bundle only when its native programs match its manifest
+  ([Installing a release](#installing-a-release)).
+- A source install, or a release installed from its native programs, needs Python 3.10 or newer
+  with the dependencies of `requirements.txt`; an install from a bundle runs the bundle's own
+  Python and asks nothing of the machine's.
+- Services that run another extracted bundle are left as they are unless `--switch-from-bundle`
+  ([Moving from an extracted bundle](#moving-from-an-extracted-bundle)).
+- On Linux, a release install, a bundle install or a switch refuses while a drop-in of either unit
+  sets `ExecStart=`, `Environment=`, `EnvironmentFile=`, `UnsetEnvironment=` or
+  `PassEnvironment=` ([Moving from an extracted
+  bundle](#moving-from-an-extracted-bundle), "Drop-ins on the units").
+- `MESH_PORT` (default: the port of the installed web unit, otherwise 7690) must be a number from 1
+  to 65535 without a leading zero.
+- systemd does not accept quotes, backslashes or glob characters (`*`, `?`, `[`) in an executable
+  path: the installer refuses such a path for the Python interpreter or the native PTY host. Spaces,
+  `%` and `$` are supported. The checkout path may not contain control characters.
+- On macOS: the system must be macOS 12.3 or later; the PTY socket path must fit in 103 bytes;
+  agents and boot-time daemons are never mixed, and the session type of an installed PTY agent
+  must be loadable from the current login ([macOS](#macos)).
+- The installer refuses to proceed when the PTY unit is in transition, is masked, waits for
+  `systemctl --user daemon-reload`, or when a file other than a stale socket of your account sits
+  where its socket goes while the unit is stopped ([Replacing the PTY host](#replacing-the-pty-host)
+  gives the remedy).
+
+### Prebuilt binaries
+
+A release of session-mesh carries its own installer, a *bundle* per platform (an archive that runs
+session-mesh without Python, Node, opam or a compiler on the machine;
+[docs/binary-bundles.md](binary-bundles.md) describes its content and how it is built), and the
+native programs of each platform with the code of the tagged commit. Releases are on the
+[releases page](https://github.com/Session-Mesh/session-mesh/releases) of the repository. Check
+`install.sh` as shown below before you run it; once running, it installs the bundle of your
+platform when your system meets the bundle's floor (table below), otherwise the release's native
+programs and the code, run with your Python (`MESH_PYTHON`, else `python3` on `PATH`, 3.10 or later
+with `aiohttp`), and says why. It checks every file it downloads against the checksum stamped into
+it. On Linux it reads the glibc version with `getconf GNU_LIBC_VERSION`; where that fails (musl, as
+on Alpine) it installs the native programs, which are static. A Mac older than macOS 13.0 is
+refused, with the floors named: install from a clone there.
+
+**What a release contains.**
+
+| File | Content |
+|---|---|
+| `install.sh` | the installer of that release, with the release tag and the SHA-256 of every other file written into it |
+| `mesh-<platform>.tar.gz` | the bundle of a platform: the code of the tagged commit, its own CPython and Node runtimes with the locked Python dependencies, and the native programs `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform` and `mesh-history`; `mesh-macos-arm64.tar.gz` only when its build passed (the release notes say whether it is there) |
+| `<program>-<platform>` | each of the five native programs alone, for `linux-x86_64`, `linux-aarch64` and `macos-arm64` |
+| `session-mesh-<tag>.tar.gz` | the code of the tagged commit (`git archive`), which the native programs run with |
+| `SHA256SUMS` | the SHA-256 of every file above, `install.sh` included |
+
+Every one of these files also carries a build provenance attestation, stored by GitHub rather than
+attached to the release (see the trust model below).
+
+| Platform | Bundle | Native programs | Built and qualified on |
+|---|---|---|---|
+| Linux, x86-64 | `mesh-linux-x86_64.tar.gz`: glibc 2.28 or newer | `<program>-linux-x86_64`: static, any libc | bundle in the `manylinux_2_28` image (AlmaLinux 8, glibc 2.28) on Ubuntu 22.04; programs in an Alpine container on Ubuntu 24.04 |
+| Linux, arm64 (aarch64) | `mesh-linux-arm64.tar.gz`: glibc 2.28 or newer | `<program>-linux-aarch64`: static, any libc | the same, on the arm64 runners |
+| macOS, Apple silicon | `mesh-macos-arm64.tar.gz`: macOS 13.5 or newer | `<program>-macos-arm64`: macOS 13.0 or newer | macOS 14 runner |
+
+The floors are written once, in `install.sh` (`BUNDLE_GLIBC_FLOOR`, `BUNDLE_MACOS_FLOOR`,
+`PROGRAMS_MACOS_FLOOR`): the installer checks your machine against them, and the release workflow
+checks the files against the same values (`scripts/release-floor.sh`).
+
+Every file is built and qualified by its own job of the release workflow, on that platform's
+runner, and the release is published only when every job passed in the same run, with one
+exception: when the macOS bundle's job fails, the release is published without
+`mesh-macos-arm64.tar.gz`, and a Mac then installs the macOS native programs and the code. No other
+file may be missing. What the jobs check:
+
+- the Linux bundles are built in the `manylinux_2_28` image of their architecture, pinned by digest;
+  no ELF file of a bundle may require a glibc symbol version newer than 2.28
+  (`scripts/release-check-glibc.sh`, which reads the symbol versions with `objdump -T`), and each
+  bundle is run, extracted, in that image (glibc 2.28) as well as on the runner;
+
+- the static Linux programs are built in an Alpine image pinned by digest, checked to be statically
+  linked, and started (`scripts/release-smoke.sh`: the PTY host answers on its socket, the other
+  programs start);
+- the macOS programs are built for macOS 13, checked to link `/usr/lib/libSystem.B.dylib` only and
+  to hold no object built for a newer macOS (`scripts/release-check-macos.sh`), and started the
+  same way;
+- each bundle is run, extracted, on the runner that built it (`scripts/smoke-bundle.sh`: HTTP, a
+  native PTY session and the board MCP server, with nothing but the system's utilities on `PATH`);
+  the macOS bundle's native programs pass the checks of the macOS programs, every Mach-O file of it
+  is checked against macOS 13.5, and its build refuses any library outside the system's
+  (`/usr/lib`, `/System/Library`). The Linux bundles' runtimes and native programs use the system
+  glibc, which is why they are built against the oldest supported one.
+
+Intel Macs get neither a bundle nor native programs: install from a clone there
+([Installing on macOS](#installing-on-macos)).
+
+A tag with a suffix (`v1.3.0-rc.1`) is published as a pre-release: GitHub never reports it as the
+latest release, so only someone who names that tag installs it.
+
+**What you are trusting.** A release is built and published by the release workflow
+(`.github/workflows/release.yml`) on GitHub's runners, with no step by hand and no signing key of
+ours. Three things protect what you download:
+
+- HTTPS from GitHub delivers the files as GitHub stores them.
+- `SHA256SUMS`, from the same release, detects a corrupted or incomplete download. It does not
+  detect a tampered release: whoever could replace a file could replace `SHA256SUMS` too.
+- The build provenance attestation (GitHub artifact attestations, Sigstore, keyless) is a signed
+  statement, bound to the workflow run's identity, that this exact file was built by the release
+  workflow of `Session-Mesh/session-mesh` from the tag named in the check below
+  (`--source-ref refs/tags/<tag>`). A file uploaded by hand, built by any other workflow, or built
+  from another tag fails that check.
+
+The attestation says which workflow built a file and from which tag; it does not say that the tag
+names a reviewed commit of `main`. The release workflow does refuse a tag whose commit is not on
+`main`, but that check is part of the workflow file of the tagged commit itself: anyone who can push
+to the repository can push a tag on a commit whose workflow lacks the check, and the release built
+from it carries a valid attestation. Anyone holding a token with `contents: write` can also replace
+the files of a published release, `SHA256SUMS` included; files uploaded by hand fail the attestation
+check, so run it.
+
+**So the trust rests on GitHub and on every credential that can push to the repository**: the
+maintainers' accounts and every token they hold, including the tokens stored on machines where
+agents run. Two-factor authentication protects the interactive sign-in only, not those tokens. A
+compromised credential with push access is not defended against: it can publish a release that
+passes every check, attestation included. The attestation also does not prove that the source is
+free of defects.
+
+The repository owner can narrow this with two GitHub settings, which this document does not claim
+are enabled: immutable releases (the files of a published release can no longer be replaced or
+deleted), and a tag ruleset that restricts who may create `v*` tags.
+
+**Checking `install.sh` before running it.** Download `install.sh` and `SHA256SUMS` of one release
+into an empty directory, then check both the checksum and the provenance:
+
+```sh
+tag=v1.2.3   # the release you install
+base="https://github.com/Session-Mesh/session-mesh/releases/download/$tag"
+curl -fsSLO "$base/install.sh" -O "$base/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS      # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
+gh attestation verify install.sh --repo Session-Mesh/session-mesh \
+  --signer-workflow Session-Mesh/session-mesh/.github/workflows/release.yml \
+  --source-ref "refs/tags/$tag"
+bash install.sh
+```
+
+The checksum check must report `install.sh: OK` (in an English locale); `--ignore-missing` skips
+the files you did not download. The macOS command has not been run on a Mac. `gh attestation
+verify` needs the [`gh` CLI](https://cli.github.com/), recent enough to support `--source-ref`
+(tested with 2.102.1), logged in (`gh auth login`), and network access; keep `--signer-workflow`,
+without which any workflow of the repository would be accepted, and `--source-ref`, without
+which a file built from any other tag would be accepted. Without `gh`, skip that line: you then rely on HTTPS and the checksum,
+which do not detect a tampered release.
+Once running, the installer applies the same two checks to the bundle it downloads: the hash stamped
+into it and, when `gh` is on your `PATH` and logged in, the attestation with the same
+`--signer-workflow` and `--source-ref` ([Installing a release](#installing-a-release)). A bundle
+downloaded by hand is checked the same way (both commands, with its name instead of `install.sh`),
+then used as in [docs/binary-bundles.md](binary-bundles.md).
+
+#### Installing a release
+
+The release workflow stamps into `install.sh` the release tag and the `SHA256SUMS` line of every
+bundle of the release. From those values only (never a value from the environment), the installer
+picks the bundle of this machine (`uname -s`, `uname -m`), builds its URL
+`https://github.com/Session-Mesh/session-mesh/releases/download/<tag>/mesh-<platform>.tar.gz`,
+downloads it into a staging directory `~/.local/share/session-mesh/releases/.stage-<tag>.*`, checks
+its hash, then (with `gh` logged in) its attestation, against the release workflow and
+`refs/tags/<tag>`. Only then does it extract the archive, check that it holds one bundle
+`mesh-<platform>/` whose five native programs have the hashes recorded in its `bundle.json`, and
+rename that directory to `releases/<tag>`.
+
+- Without `gh`, or with `gh` not logged in, the attestation is not checked: the installer says
+  so once, with the command to check a file by hand. With `MESH_REQUIRE_ATTESTATION=1` in the
+  environment it refuses instead, and installs nothing. Any other failure of `gh attestation
+  verify` refuses the release.
+- An archive that differs, a bundle that does not match its manifest, a missing asset or a network
+  failure: the staging directory is deleted, nothing of the release is installed, and the installer
+  exits with an error that names the file. It never falls back to another source.
+- The directories `~/.local`, `~/.local/share`, `session-mesh` and `releases` are created with mode
+  0755; an existing one that is not yours, or is writable by group or others, is refused, and
+  `session-mesh` and `releases` must not be symbolic links. Nothing in a release directory is
+  writable by group or others.
+- A release already on disk is reused when its `release.sha256` names the stamped archive and its
+  native programs still match its `bundle.json`; otherwise the installer refuses and says how to
+  remove it. The check is that and no more: `release.sha256` is written by the installer, and the
+  rest of the bundle (`app/`, `runtime/`) is not compared with its archive again, so a modified file
+  there is reused without a warning. Only the account that owns the installation can modify it,
+  which is the same account that runs the services; to be sure of a release directory, remove it and
+  reinstall it. A release branch built from the repository has the same limit.
+- The installer keeps a copy of itself in `releases/<tag>/install.sh`, the command for
+  `--upgrade`, `--rollback` and `--uninstall`. It must run from a file: piped into `bash`, it
+  refuses.
+- A machine for which the release publishes neither a bundle nor the native programs (an Intel
+  Mac, another architecture): the installer names the platforms the release has and downloads
+  nothing; use a source install.
+
+A release directory is an extracted bundle: `current/bin/mesh-python` is the bundle's Python (the
+web unit runs `current/bin/mesh-python current/app/server.py`), `current/bin/mesh-ptyhost` a
+wrapper that executes the native `current/libexec/mesh-ptyhost`, and `current/bin/mesh-attach` and
+the other commands linked into `~/.local/bin` wrappers that run the bundle's Python. Each wrapper
+sources the bundle's `env.sh`, which sets `MESH_BIN_DIR` to the bundle's `bin/`.
+
+**A release without a bundle for this platform.** The installer prefers the bundle. When the release
+has none for this machine but publishes its native programs, it installs those instead: the code
+archive `session-mesh-<tag>.tar.gz` and the five programs `<program>-<platform>`
+(`linux-x86_64`, `linux-aarch64` or `macos-arm64`), each checked against the stamp (and its
+attestation) before anything is unpacked, then laid out as `releases/<tag>/app` (the code) and
+`releases/<tag>/bin` (the programs). The web unit then runs this machine's Python
+(`MESH_PYTHON`, else `python3` on `PATH`, checked as for a source install) on
+`current/app/server.py`, and the PTY unit runs `current/bin/mesh-ptyhost`, the native program
+itself. Such a release is reused, upgraded and rolled back like any other; an upgrade may move
+between the two kinds.
+
+#### Where the native programs are found
+
+The web server gives agents the board MCP server `MESH_BIN_DIR/mesh-board-mcp` when `MESH_BIN_DIR`
+is set, which a release or bundle install always does through `env.sh`: agents of a release
+install use the `mesh-board-mcp` of the release the web server runs. Without `MESH_BIN_DIR` (a
+source install, or a release installed from its native programs, whose `app/bin/mesh-board-mcp`
+links to the release's own), `agentmcp.py` uses `bin/mesh-board-mcp` beside the code when it exists, otherwise
+the `bin` directory of the opam switch: `MESH_OPAM_SWITCH`, otherwise the switch of the current
+opam environment, otherwise a local switch in the checkout (`_opam/`). The PTY host is the
+exception: its unit or job runs the exact file the installer chose (`current/bin/mesh-ptyhost`
+for a release install). `mesh-read` and `mesh-platform` are commands you run, or that you add to an
+agent's configuration, by their path in one of these places.
+
+Building from source with `scripts/bootstrap.sh` ([install.md](install.md#native-pty-host)) remains
+supported and installs the same programs into an opam switch.
+
+#### Publishing a release
+
+A maintainer publishes a release by pushing a tag on a commit of `main`; nothing else:
+
+```sh
+git switch main && git pull --ff-only
+git tag v1.2.3            # or v1.3.0-rc.1 for a pre-release
+git push origin v1.2.3
+```
+
+The workflow then refuses a tag of another form (`vX.Y.Z` or `vX.Y.Z-suffix` only) and a tag whose
+commit is not on `main`, before any build. On each platform's runner it builds and qualifies the
+native programs and the bundle as [Prebuilt binaries](#prebuilt-binaries) describes; any build or
+check that fails stops the release, the macOS bundle's included. It takes from each build only the
+files of its own target (`scripts/release-assets.sh collect` and `collect-bundle`), adds the code
+archive, assembles the stamped `install.sh` and `SHA256SUMS` (`scripts/release-assets.sh bundle`),
+checks them, attests every file and publishes the release. A release older than the current latest
+one (`v1.2.4` published after `v1.3.0`) is published with `--latest=false`, so that whoever asks
+GitHub for the latest release gets the newest one; versions are compared as semantic versions,
+`v1.10.0` after `v1.9.0` and `rc.10` after `rc.9`. It never creates a tag and never modifies
+an existing release: a second run for the same tag fails. If publishing fails part-way (an upload
+error), a draft may remain; delete it on the releases page, then re-run the workflow. A manual run
+(the "Run workflow" button) is a dry run: it builds and keeps the files as a workflow artifact for
+14 days, and never creates a tag or a release; run on `main`, it also fills the build caches that
+the next tag run reads.
+
+The native programs are built from the opam repository at the commit fixed in
+`scripts/release-pins.sh`, the static Linux ones in an Alpine image pinned by digest whose packages
+are not pinned (`scripts/release-build-static.sh`); the bundle's Python dependencies are locked with hashes in
+`scripts/bundle/requirements.lock`, and its CPython and Node versions are fixed by
+`scripts/build-bundle.sh`. The runner images and their system packages are not pinned, so two
+builds of one commit may differ.

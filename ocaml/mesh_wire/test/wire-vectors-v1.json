@@ -1,0 +1,72 @@
+{
+  "format": 1,
+  "frames": [
+    {
+      "kind": "C",
+      "payload_hex": "7b226f70223a226c697374227d",
+      "wire_hex": "430000000d7b226f70223a226c697374227d"
+    },
+    {
+      "kind": "D",
+      "payload_hex": "7465726d696e616c20627974657300ff",
+      "wire_hex": "44000000107465726d696e616c20627974657300ff"
+    },
+    {
+      "kind": "R",
+      "payload_hex": "7b22726f7773223a32342c22636f6c73223a38307d",
+      "wire_hex": "52000000157b22726f7773223a32342c22636f6c73223a38307d"
+    },
+    {
+      "kind": "X",
+      "payload_hex": "7b22636f6465223a307d",
+      "wire_hex": "580000000a7b22636f6465223a307d"
+    }
+  ],
+  "length_limits": [
+    {
+      "accepted": true,
+      "header_hex": "4300040000",
+      "kind": "C",
+      "length": 262144
+    },
+    {
+      "accepted": false,
+      "header_hex": "4300040001",
+      "kind": "C",
+      "length": 262145
+    },
+    {
+      "accepted": true,
+      "header_hex": "4400800000",
+      "kind": "D",
+      "length": 8388608
+    },
+    {
+      "accepted": false,
+      "header_hex": "4400800001",
+      "kind": "D",
+      "length": 8388609
+    }
+  ],
+  "session_token": {
+    "bad_mac": "ms1.alpha.0123456789abcdef0123456789abcdef.b0601b3aff6c3cf60c4197fd53c4daf8b2ce9ae94fefe345b91c0b23c855e8b0",
+    "different_case": "ms1.Alpha.0123456789abcdef0123456789abcdef.b0601b3aff6c3cf60c4197fd53c4daf8b2ce9ae94fefe345b91c0b23c855e8b8",
+    "legacy_prefix": "ds1.alpha.0123456789abcdef0123456789abcdef.f39fb42aa046615c842681f169fe1ad9404f812f2c1ef26040fff13caf261f46",
+    "malformed_nonce": "ms1.alpha.not-a-nonce.b0601b3aff6c3cf60c4197fd53c4daf8b2ce9ae94fefe345b91c0b23c855e8b8",
+    "master_token": "mesh-wire-reference-v1",
+    "other_name": "ms1.beta.0123456789abcdef0123456789abcdef.b0601b3aff6c3cf60c4197fd53c4daf8b2ce9ae94fefe345b91c0b23c855e8b8",
+    "valid": "ms1.alpha.0123456789abcdef0123456789abcdef.b0601b3aff6c3cf60c4197fd53c4daf8b2ce9ae94fefe345b91c0b23c855e8b8"
+  },
+  "truncated_frames": [
+    {
+      "kind": "C",
+      "result": "incomplete_payload",
+      "wire_hex": "43000000027b"
+    },
+    {
+      "kind": "D",
+      "result": "incomplete_payload",
+      "wire_hex": "4400000001"
+    }
+  ]
+}

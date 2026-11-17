@@ -1,0 +1,56 @@
+(lang dune 3.24)
+
+(name session_mesh)
+
+(generate_opam_files true)
+
+(package
+ (name session_mesh)
+ (synopsis "Session Mesh's local agent tools")
+ (description "Local, session-scoped tools for Session Mesh agents.")
+ (authors "Mathias Bourgoin")
+ (maintainers "Mathias Bourgoin")
+ (license AGPL-3.0-or-later)
+ (homepage "https://github.com/Session-Mesh/session-mesh")
+ (bug_reports "https://github.com/Session-Mesh/session-mesh/issues")
+ (depends
+  ; The compiler CI tests; scripts/bootstrap.sh refuses any other.
+  (ocaml
+   (and
+    (>= 5.3)
+    (< 5.4)))
+  (dune
+   (>= 3.24))
+  ; Provisional pin: mcp-kit is released on opam only as 0.2.0, and
+  ; mesh-board-mcp needs a newer API. scripts/bootstrap.sh pins it to a public
+  ; source revision (as 0.2.0+pin) until a release has that API.
+  (mcp-kit
+   (> 0.2.0))
+  cohttp
+  cohttp-lwt
+  cohttp-lwt-unix
+  lwt
+  uri
+  digestif
+  base64
+  cstruct
+  yojson
+  ; The History index (mesh-history): SQLite FTS5 through Caqti. caqti.classic
+  ; (the Caqti 2 request API) exists from 2.3; the system needs libsqlite3.
+  (caqti
+   (>= 2.3))
+  caqti-driver-sqlite3
+  uutf
+  uucp
+  (eio
+   (>= 1.4))
+  (eio_main
+   (>= 1.4))
+  mtime
+  (alcotest :with-test)
+  (sqlite3 :with-test)
+  (qcheck-core :with-test)
+  (quint-connect
+   (and
+    :with-test
+    (>= 0.3.0)))))

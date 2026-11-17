@@ -1,0 +1,388 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+"""Owner-approved session lifecycle requests never grant mutation to MCP."""
+
+import pytest
+import shlex
+from pathlib import Path
+from types import SimpleNamespace
+
+import session_helpers
+import sessionrequests
+import server
+from session_helpers import add_session
+
+
+def agent(sessions):
+    headers = add_session(sessions, "alpha")
+    sessions[0].update(pid=1, activity=1.0, attached=0, cwd=str(Path.home()))
+    sessions[0]["meta"]["known_agent"] = "codex"
+    return headers
+
+
+async def test_startup_worker_recovers_approved_but_not_uncertain_work(tmp_path, monkeypatch):
+    requests = sessionrequests.Requests(tmp_path / "actions.sqlite3", clock=lambda: 10.0)
+    made = requests.create({"id": "alpha", "created": 1.0, "agent": "codex", "cwd": "/work"},
+                           {"action": "create", "preset": "codex"},
+                           enabled_agents={"codex"}, resumable={"codex"})
+    claim = requests.claim(made["id"], "a" * 32)
+    requests.decide(made["id"], True, claim["claim_nonce"])
+    calls = []
+
+    async def execute(item):
+        calls.append(item["id"])
+        return {"id": "created"}
+
+    monkeypatch.setattr(server, "_execute_session_action", execute)
+    app = {"session_requests": requests, "session_action_tasks": {}}
+    await server.start_session_actions(app)
+    await __import__("asyncio").gather(*tuple(app["session_action_tasks"].values()))
+    assert calls == [made["id"]]
+    assert requests.status(made["id"])["state"] == "completed"
+    await server.start_session_actions(app)
+    assert calls == [made["id"]]
+
+
+@pytest.fixture
+def mesh_listing(monkeypatch):
+    return session_helpers.listing.__wrapped__(monkeypatch)
+
+
+async def test_session_token_only_records_intent_and_owner_rejects_it(
+        client, mesh_listing, auth_cookie):
+    headers = agent(mesh_listing)
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "create", "preset": "claude",
+                                   "name": "review", "model": "sonnet"})
+    assert made.status == 202
+    request = (await made.json())["request"]
+    assert request["state"] == "pending" and request["source"]["cwd"] == str(Path.home())
+
+    status = await client.get("/api/session-actions/@self/request",
+                              params={"id": request["id"]}, headers=headers)
+    assert status.status == 200 and (await status.json())["request"] == request
+    assert (await client.post(f"/api/session-actions/{request['id']}/decision",
+                              headers=headers, json={"approve": False})).status == 401
+
+    claimed = await client.post(f"/api/session-actions/{request['id']}/claim",
+                                headers=auth_cookie, json={"tab_nonce": "a" * 32})
+    claim_nonce = (await claimed.json())["claim_nonce"]
+    rejected = await client.post(f"/api/session-actions/{request['id']}/decision",
+                                 headers=auth_cookie,
+                                 json={"approve": False, "claim_nonce": claim_nonce})
+    assert rejected.status == 200
+    body = (await rejected.json())["request"]
+    assert body["state"] == "rejected" and body["result"] is None
+    assert (await client.post(f"/api/session-actions/{request['id']}/decision",
+                              headers=auth_cookie,
+                              json={"approve": False, "claim_nonce": "b" * 24})).status == 409
+
+
+async def test_two_owner_pages_get_one_claim_and_one_stable_decision(
+        client, mesh_listing, auth_cookie):
+    headers = agent(mesh_listing)
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "create", "preset": "codex"})
+    request_id = (await made.json())["request"]["id"]
+    first, second = await __import__("asyncio").gather(*(
+        client.post(f"/api/session-actions/{request_id}/claim", headers=auth_cookie,
+                    json={"tab_nonce": nonce * 32}) for nonce in ("a", "b")))
+    assert sorted((first.status, second.status)) == [200, 409]
+    winner = first if first.status == 200 else second
+    loser = second if winner is first else first
+    claim_nonce = (await winner.json())["claim_nonce"]
+    assert (await loser.json())["request"]["state"] == "claimed"
+    rejected = await client.post(f"/api/session-actions/{request_id}/decision",
+                                 headers=auth_cookie,
+                                 json={"approve": False, "claim_nonce": claim_nonce})
+    assert rejected.status == 200
+    assert (await client.post(f"/api/session-actions/{request_id}/decision",
+                              headers=auth_cookie,
+                              json={"approve": True, "claim_nonce": "z" * 24})).status == 409
+    assert (await rejected.json())["request"]["state"] == "rejected"
+
+
+async def test_two_pages_with_same_tab_nonce_cannot_recover_winner_secret(
+        client, mesh_listing, auth_cookie):
+    headers = agent(mesh_listing)
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "create", "preset": "codex"})
+    request_id = (await made.json())["request"]["id"]
+    first, duplicate = await __import__("asyncio").gather(*(
+        client.post(f"/api/session-actions/{request_id}/claim",
+                    headers=auth_cookie, json={"tab_nonce": "a" * 32})
+        for _ in range(2)))
+    if duplicate.status == 200:
+        first, duplicate = duplicate, first
+    assert first.status == 200
+    secret = (await first.json())["claim_nonce"]
+    assert duplicate.status == 409
+    assert "claim_nonce" not in await duplicate.json()
+    renewed = await client.post(f"/api/session-actions/{request_id}/claim",
+                                headers=auth_cookie,
+                                json={"tab_nonce": "a" * 32, "claim_nonce": secret})
+    assert renewed.status == 200 and (await renewed.json())["claim_nonce"] == secret
+
+
+async def test_lost_decision_response_is_status_replay_not_second_execution(
+        client, mesh_listing, auth_cookie, monkeypatch):
+    headers = agent(mesh_listing)
+    calls = []
+
+    async def new_session(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "created-once"
+
+    monkeypatch.setattr(server, "new_session", new_session)
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "create", "preset": "codex"})
+    request_id = (await made.json())["request"]["id"]
+    claim = await client.post(f"/api/session-actions/{request_id}/claim", headers=auth_cookie,
+                              json={"tab_nonce": "a" * 32})
+    secret = (await claim.json())["claim_nonce"]
+    payload = {"approve": True, "claim_nonce": secret}
+    first = await client.post(f"/api/session-actions/{request_id}/decision",
+                              headers=auth_cookie, json=payload)
+    replay = await client.post(f"/api/session-actions/{request_id}/decision",
+                               headers=auth_cookie, json=payload)
+    assert first.status == replay.status == 200
+    assert (await replay.json())["request"]["state"] == "completed"
+    assert len(calls) == 1
+
+
+async def test_request_cannot_select_a_command_directory_or_other_restart_target(client, mesh_listing):
+    headers = agent(mesh_listing)
+    for body in (
+        {"action": "create", "preset": "custom", "command": "sh"},
+        {"action": "create", "preset": "codex", "cwd": "/tmp"},
+        {"action": "restart", "name": "other"},
+    ):
+        assert (await client.post("/api/session-actions/@self/request",
+                                  headers=headers, json=body)).status == 400
+
+
+async def test_request_is_exactly_incarnation_bound(client, mesh_listing):
+    headers = agent(mesh_listing)
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "create", "preset": "codex"})
+    request_id = (await made.json())["request"]["id"]
+    mesh_listing[0]["created"] = 2.0
+    assert (await client.get("/api/session-actions/@self/request",
+                             params={"id": request_id}, headers=headers)).status == 404
+
+
+async def test_owner_approval_uses_current_directory_closed_preset_and_model(
+        client, mesh_listing, auth_cookie, monkeypatch):
+    headers = agent(mesh_listing)
+    calls = []
+
+    async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32):
+        calls.append((base, cwd, shlex.split(command), agent, known_agent, keep))
+        return "review-codex"
+
+    monkeypatch.setattr(server, "new_session", new_session)
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "create", "preset": "codex",
+                                   "name": "review", "model": "gpt-6.1-sol"})
+    request_id = (await made.json())["request"]["id"]
+    claimed = await client.post(f"/api/session-actions/{request_id}/claim",
+                                headers=auth_cookie, json={"tab_nonce": "a" * 32})
+    claim_nonce = (await claimed.json())["claim_nonce"]
+    approved = await client.post(f"/api/session-actions/{request_id}/decision",
+                                 headers=auth_cookie,
+                                 json={"approve": True, "claim_nonce": claim_nonce})
+    assert approved.status == 200
+    assert (await approved.json())["request"]["result"] == {"id": "review-codex"}
+    base, cwd, argv, agent_kind, known_agent, _keep = calls[0]
+    assert (base, cwd, agent_kind, known_agent) == ("review", str(Path.home()), "codex", "codex")
+    assert argv[-2:] == ["--model", "gpt-6.1-sol"]
+    assert argv.count("--model") == 1
+
+
+async def test_claude_opus_baker_unlock_uses_the_exact_catalogue_argv(
+        client, mesh_listing, auth_cookie, monkeypatch):
+    headers = agent(mesh_listing)
+    calls = []
+
+    async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32):
+        calls.append((base, cwd, shlex.split(command), agent, known_agent, keep))
+        return "baker-unlock"
+
+    monkeypatch.setattr(server, "new_session", new_session)
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "create", "preset": "claude",
+                                   "name": "baker-unlock", "model": "opus"})
+    request_id = (await made.json())["request"]["id"]
+    claimed = await client.post(f"/api/session-actions/{request_id}/claim",
+                                headers=auth_cookie, json={"tab_nonce": "a" * 32})
+    claim_nonce = (await claimed.json())["claim_nonce"]
+    approved = await client.post(f"/api/session-actions/{request_id}/decision",
+                                 headers=auth_cookie,
+                                 json={"approve": True, "claim_nonce": claim_nonce})
+    assert approved.status == 200
+    assert calls == [("baker-unlock", str(Path.home()),
+                      server._model_argv(server.AGENT_PRESETS["claude"], "opus"),
+                      "claude", "claude", 32)]
+
+
+async def test_replaced_source_incarnation_cannot_execute_an_approved_request(
+        client, mesh_listing, auth_cookie, monkeypatch):
+    headers = agent(mesh_listing)
+    spawned = False
+
+    async def forbidden(*_args, **_kwargs):
+        nonlocal spawned
+        spawned = True
+
+    monkeypatch.setattr(server, "new_session", forbidden)
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "create", "preset": "codex"})
+    request_id = (await made.json())["request"]["id"]
+    claimed = await client.post(f"/api/session-actions/{request_id}/claim",
+                                headers=auth_cookie, json={"tab_nonce": "a" * 32})
+    claim_nonce = (await claimed.json())["claim_nonce"]
+    mesh_listing[0]["created"] = 2.0
+    decided = await client.post(f"/api/session-actions/{request_id}/decision",
+                                headers=auth_cookie,
+                                json={"approve": True, "claim_nonce": claim_nonce})
+    request = (await decided.json())["request"]
+    assert decided.status == 200 and request["state"] == "failed" and not spawned
+    assert "replaced" in request["result"]["error"]
+
+
+async def test_restart_approval_revalidates_self_then_resumes_with_replaced_model(
+        client, mesh_listing, auth_cookie, monkeypatch):
+    headers = agent(mesh_listing)
+    calls = []
+    agent_info = {"type": "codex", "session_id": "0199aa00-0000-7000-8000-000000000001",
+                  "argv": ["codex", "-m", "old-model"], "pid": 44}
+
+    async def replace_session(old_name, old_created, base, cwd, command, agent, known_agent):
+        calls.append((old_name, old_created, base, cwd, shlex.split(command), agent, known_agent))
+        return "alpha-2"
+
+    def described(_listed, _observed):
+        # "name" too: the hook state is applied to a real listing, whose entries all have one
+        return {"mesh": [{"id": "alpha", "name": "alpha", "created": 1.0, "agent": agent_info}], "external": []}
+
+    monkeypatch.setattr(server, "replace_session", replace_session)
+    monkeypatch.setattr(server, "list_sessions", described)
+    monkeypatch.setattr(server.respawn, "forget_live", lambda *_args: None)
+
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "restart", "model": "gpt-6.1-sol"})
+    request_id = (await made.json())["request"]["id"]
+    claimed = await client.post(f"/api/session-actions/{request_id}/claim",
+                                headers=auth_cookie, json={"tab_nonce": "a" * 32})
+    claim_nonce = (await claimed.json())["claim_nonce"]
+    approved = await client.post(f"/api/session-actions/{request_id}/decision",
+                                 headers=auth_cookie,
+                                 json={"approve": True, "claim_nonce": claim_nonce})
+    assert approved.status == 200
+    assert (await approved.json())["request"]["result"] == {"id": "alpha-2"}
+    assert calls[0][:4] == ("alpha", 1.0, "alpha", str(Path.home()))
+    argv = calls[0][4]
+    assert argv[-2:] == ["--model", "gpt-6.1-sol"] and "old-model" not in argv
+
+
+async def test_approval_rechecks_workspace_policy_before_any_spawn(
+        client, mesh_listing, auth_cookie, monkeypatch):
+    headers = agent(mesh_listing)
+    spawned = False
+    monkeypatch.setattr(server, "LAUNCH_SETTINGS", SimpleNamespace(allows_cwd=lambda _cwd: False))
+
+    async def forbidden(*_args, **_kwargs):
+        nonlocal spawned
+        spawned = True
+        raise AssertionError("spawn must not run")
+
+    monkeypatch.setattr(server, "new_session", forbidden)
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "create", "preset": "codex"})
+    request_id = (await made.json())["request"]["id"]
+    claimed = await client.post(f"/api/session-actions/{request_id}/claim",
+                                headers=auth_cookie, json={"tab_nonce": "a" * 32})
+    claim_nonce = (await claimed.json())["claim_nonce"]
+    decided = await client.post(f"/api/session-actions/{request_id}/decision",
+                                headers=auth_cookie,
+                                json={"approve": True, "claim_nonce": claim_nonce})
+    assert decided.status == 200 and not spawned
+    request = (await decided.json())["request"]
+    assert request["state"] == "failed" and "workspace roots" in request["result"]["error"]
+
+
+async def test_restart_preparation_failure_never_stops_source(monkeypatch):
+    calls = []
+
+    async def failed_spawn(*_args, **_kwargs):
+        raise server.web.HTTPServiceUnavailable(text="spawn failed")
+
+    async def host(request):
+        calls.append(request)
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "new_session", failed_spawn)
+    monkeypatch.setattr(server, "host", host)
+    with pytest.raises(server.web.HTTPServiceUnavailable) as failure:
+        await server.replace_session("old", 1.0, "old", str(Path.home()),
+                                     "codex resume sid", "codex", "codex")
+    assert failure.value.text == "spawn failed"
+    assert calls == []
+
+
+async def test_restart_starts_deferred_command_only_after_exact_source_is_stopped(monkeypatch):
+    calls = []
+
+    async def prepared(*_args, **_kwargs):
+        calls.append(("prepare", _args))
+        return "old-2"
+
+    async def host(request):
+        calls.append((request["op"], request))
+        if request["op"] == "list":
+            if sum(call[0] == "list" for call in calls) == 1:
+                return [{"name": "old-2", "created": 2.0}]
+            return [{"name": "old-2", "created": 2.0}]
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "new_session", prepared)
+    monkeypatch.setattr(server, "host", host)
+    assert await server.replace_session("old", 1.0, "old", str(Path.home()),
+                                        "codex resume sid", "codex", "codex") == "old-2"
+    assert [call[0] for call in calls] == ["prepare", "list", "kill_if", "list", "start_if"]
+    assert calls[-1][1]["command"] == "codex resume sid"
+
+
+async def test_restart_never_starts_replacement_before_source_exit(monkeypatch):
+    calls = []
+
+    async def prepared(*_args, **_kwargs):
+        return "old-2"
+
+    async def host(request):
+        calls.append(request["op"])
+        if request["op"] == "list":
+            return [{"name": "old-2", "created": 2.0},
+                    {"name": "old", "created": 1.0}]
+        return {"ok": True}
+
+    class Clock:
+        value = 0.0
+
+        def time(self):
+            self.value += 3.0
+            return self.value
+
+    async def no_wait(_delay):
+        return None
+
+    monkeypatch.setattr(server, "new_session", prepared)
+    monkeypatch.setattr(server, "host", host)
+    monkeypatch.setattr(server.asyncio, "get_running_loop", lambda: Clock())
+    monkeypatch.setattr(server.asyncio, "sleep", no_wait)
+    with pytest.raises(server.web.HTTPServiceUnavailable) as failure:
+        await server.replace_session("old", 1.0, "old", str(Path.home()),
+                                     "codex resume sid", "codex", "codex")
+    assert "still active" in failure.value.text
+    assert "start_if" not in calls

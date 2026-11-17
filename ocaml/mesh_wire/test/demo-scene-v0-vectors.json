@@ -1,0 +1,100 @@
+{
+  "format": 1,
+  "cases": [
+    {
+      "name": "empty-published-scene",
+      "accepted": true,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": []}
+    },
+    {
+      "name": "unicode-and-disclosure",
+      "accepted": true,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Éléphant 🐘", "theme": "light", "nodes": [{"type": "disclosure", "summary": "Détails", "children": [{"type": "text", "text": "Bonjour\nMonde"}]}]}
+    },
+    {
+      "name": "native-checklist",
+      "accepted": true,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Tâches", "theme": "dark", "nodes": [{"type": "checklist", "items": ["Préparer", "Vérifier"]}]}
+    },
+    {
+      "name": "native-progress",
+      "accepted": true,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Feuille de route", "theme": "dark", "nodes": [{"type": "progress", "label": "Transport", "value": 42}]}
+    },
+    {
+      "name": "host-rendered-metric",
+      "accepted": true,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Feuille de route", "theme": "dark", "nodes": [{"type": "metric", "label": "Sessions actives", "value": "3"}]}
+    },
+    {
+      "name": "host-rendered-status",
+      "accepted": true,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Feuille de route", "theme": "dark", "nodes": [{"type": "status", "label": "Canal prêt", "state": "success"}]}
+    },
+    {
+      "name": "unknown-root-field",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [], "script": "alert(1)"}
+    },
+    {
+      "name": "unknown-node-field",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "text", "text": "hello", "onclick": "alert(1)"}]}
+    },
+    {
+      "name": "missing-node-kind",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"text": "hello"}]}
+    },
+    {
+      "name": "blank-disclosure-summary",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "disclosure", "summary": " ", "children": []}]}
+    },
+    {
+      "name": "blank-checklist-item",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "checklist", "items": [" "]}]}
+    },
+    {
+      "name": "progress-out-of-range",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "progress", "label": "Trop loin", "value": 101}]}
+    },
+    {
+      "name": "progress-extra-style",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "progress", "label": "Risqué", "value": 50, "style": "width:999%"}]}
+    },
+    {
+      "name": "metric-extra-style",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "metric", "label": "Risqué", "value": "3", "style": "color:red"}]}
+    },
+    {
+      "name": "metric-blank-value",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "metric", "label": "Sessions", "value": " "}]}
+    },
+    {
+      "name": "status-unknown-state",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "status", "label": "Canal", "state": "critical"}]}
+    },
+    {
+      "name": "status-extra-style",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "status", "label": "Canal", "state": "danger", "style": "color:red"}]}
+    },
+    {
+      "name": "control-character",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "text", "text": "bad\rtext"}]}
+    },
+    {
+      "name": "unknown-node-kind",
+      "accepted": false,
+      "scene": {"format": "mesh-scene-v0", "version": 1, "title": "Démo", "theme": "dark", "nodes": [{"type": "iframe", "text": "hello"}]}
+    }
+  ]
+}

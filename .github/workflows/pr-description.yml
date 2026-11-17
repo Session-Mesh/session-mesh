@@ -1,0 +1,99 @@
+# Checks the description of a pull request with the leak guard's public content rules (no
+# personal e-mail address, home path, tailnet address or name, secret). WARNING MODE: a finding
+# is reported as a warning annotation and in the job summary, and the job still succeeds; only
+# a failure of the tool itself fails it: exit status 2 or more, a report saying that secrets were
+# not checked (gitleaks missing), or exit status 1 without any finding line. The report (already
+# redacted) is always printed in the log. The job is not a required check
+# yet; the `pr-body` command already exits 1 on a finding, so making it blocking later is a
+# matter of changing the `warn_only` line below. A separate workflow, so that editing a description
+# does not re-run public-ci. `pull_request`, never `pull_request_target`: a fork's token is
+# read-only anyway, so the job writes no comment. The description reaches the script through an
+# environment variable only, never interpolated into the script text.
+# tests/public-ci-workflow.test.ts enforces these rules.
+name: pr-description
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-description-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Generic rules only: the private list never reaches CI.
+  MESH_LEAK_PRIVATE_RULES: ""
+  NODE_VERSION: "24"
+
+jobs:
+  description:
+    name: PR description (no personal details)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install gitleaks (pinned, SHA-256 checked)
+        run: |
+          bash .github/scripts/install-gitleaks.sh "$RUNNER_TEMP/gitleaks"
+          echo "MESH_LEAK_GITLEAKS=$RUNNER_TEMP/gitleaks/gitleaks" >> "$GITHUB_ENV"
+      - name: leak-guard on the description (warning mode)
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          warn_only=true
+          if [[ -z "$BODY" ]]; then
+            echo "empty description: nothing to check"
+            exit 0
+          fi
+          printf '%s' "$BODY" > "$RUNNER_TEMP/pr-body.md"
+          status=0
+          node --experimental-strip-types tools/leak-guard/cli.ts pr-body "$RUNNER_TEMP/pr-body.md" > "$RUNNER_TEMP/report.txt" || status=$?
+          cat "$RUNNER_TEMP/report.txt"
+          if [[ "$status" -ne 0 && "$status" -ne 1 ]]; then
+            echo "leak-guard failed to run (exit $status)"
+            exit "$status"
+          fi
+          if grep -q 'secrets were NOT checked' "$RUNNER_TEMP/report.txt"; then
+            echo "leak-guard could not check secrets: tool failure"
+            exit 2
+          fi
+          if [[ "$status" -eq 0 ]]; then
+            echo "description clean"
+            exit 0
+          fi
+          if ! grep -q '^<pr-body>' "$RUNNER_TEMP/report.txt"; then
+            echo "leak-guard exited 1 without any finding line: tool failure"
+            exit 2
+          fi
+          # Each finding line of the (already redacted) report becomes a warning annotation.
+          # Lines are only ever printed behind the ::warning:: prefix, with % escaped.
+          hint="Remove the personal detail from the description; see the comment at the top of .github/pull_request_template.md."
+          {
+            echo "### PR description: personal details found"
+            echo
+            echo "$hint"
+            echo
+            echo '```'
+            grep '^<pr-body>' "$RUNNER_TEMP/report.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r line; do
+            echo "::warning title=PR description::${line//%/%25}"
+          done < <(grep '^<pr-body>' "$RUNNER_TEMP/report.txt")
+          echo "::warning title=PR description::${hint}"
+          if [[ "$warn_only" == true ]]; then
+            exit 0
+          fi
+          exit 1

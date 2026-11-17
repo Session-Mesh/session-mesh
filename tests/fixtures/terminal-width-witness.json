@@ -1,0 +1,14 @@
+{
+  "paragraphs": [
+    {
+      "first": "  2. Click the install icon at the right of the address bar (a screen with an arrow), or the three dots menu then \"Cast, save and share\", \"Install page as app",
+      "rest": "\". The exact label depends on the version of Chrome.",
+      "indent": 5
+    },
+    {
+      "first": "  On Linux, the old logo can stay in the desktop application launcher for a few moments after the reinstallation, because the desktop environment keeps icons in a cache. If that is",
+      "rest": "the case, close and reopen your desktop session, then tell me what you see.",
+      "indent": 2
+    }
+  ]
+}

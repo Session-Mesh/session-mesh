@@ -1,0 +1,13 @@
+[Unit]
+Description=session-mesh web terminal
+Wants=session-mesh-pty.service
+After=network.target session-mesh-pty.service
+
+[Service]
+ExecStart=:"@PYTHON@" "@ROOT@/server.py"
+Environment="MESH_PORT=@PORT@"
+@ENV_OPAM_SWITCH@
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

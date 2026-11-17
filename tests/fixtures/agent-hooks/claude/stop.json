@@ -1,0 +1,12 @@
+{
+  "background_tasks": [],
+  "cwd": "/scratch/work",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "REPLY",
+  "permission_mode": "default",
+  "prompt_id": "UUID",
+  "session_crons": [],
+  "session_id": "UUID",
+  "stop_hook_active": false,
+  "transcript_path": "/home/USER/.claude/projects/-scratch-work/UUID.jsonl"
+}

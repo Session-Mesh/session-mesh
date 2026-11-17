@@ -1,0 +1,68 @@
+; Backend selection happens at build time on %{system}.
+;
+; backend_linux.ml, backend_darwin.ml and backend_unsupported.ml are always
+; compiled, and backend_check.ml checks each of them against
+; Backend_contract.S on every build, whichever one is selected. Only one is
+; copied to backend.ml, the module the rest of the library calls; backend.mli
+; is that module's contract (also Backend_contract.S). The three rules have
+; mutually exclusive enabled_if conditions, so exactly one defines backend.ml.
+;
+; darwin_stubs.c (libproc, sysctl) is compiled on every system so
+; that backend_darwin.ml links everywhere: its macOS code is guarded by
+; #ifdef __APPLE__, and elsewhere every stub answers "unsupported". The Linux
+; build therefore needs no Apple header.
+;
+; dune's enabled_if has no prefix match, so the Linux variants of %{system} are
+; listed: linux, linux_elf, linux_aout, linux_eabi, linux_eabihf. Another
+; "linux_*" value would get the unsupported backend (while
+; Mesh_platform.platform, which matches the prefix "linux", would still say
+; Linux). Such a build reports platform Linux with the unsupported backend, so
+; [require] messages would wrongly blame a missing executable. Add it to the
+; Linux rule and to the last rule below. macosx selects the darwin backend;
+; every other system gets the unsupported one.
+;
+; system_name.ml records %{system} so that [Mesh_platform.platform] reports
+; Linux or Macos independently of which backend was selected.
+
+(library
+ (name mesh_platform)
+ (libraries unix)
+ (foreign_stubs
+  (language c)
+  (names darwin_stubs)
+  (flags :standard -Wall -Wextra)))
+
+(rule
+ (enabled_if
+  (or
+   (= %{system} linux)
+   (= %{system} linux_elf)
+   (= %{system} linux_aout)
+   (= %{system} linux_eabi)
+   (= %{system} linux_eabihf)))
+ (action
+  (copy backend_linux.ml backend.ml)))
+
+(rule
+ (enabled_if
+  (= %{system} macosx))
+ (action
+  (copy backend_darwin.ml backend.ml)))
+
+(rule
+ (enabled_if
+  (and
+   (<> %{system} macosx)
+   (<> %{system} linux)
+   (<> %{system} linux_elf)
+   (<> %{system} linux_aout)
+   (<> %{system} linux_eabi)
+   (<> %{system} linux_eabihf)))
+ (action
+  (copy backend_unsupported.ml backend.ml)))
+
+(rule
+ (action
+  (with-stdout-to
+   system_name.ml
+   (echo "let value = \"%{system}\"\n"))))

@@ -1,0 +1,58 @@
+{
+  "cwd": "/scratch/work",
+  "duration_ms": 0,
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "default",
+  "prompt_id": "UUID",
+  "scratchpad_dir": "/tmp/PROJECT-DIR/UUID/scratchpad",
+  "session_id": "UUID",
+  "tool_input": {
+    "annotations": {},
+    "answers": {
+      "What is your favourite colour?": "Red"
+    },
+    "questions": [
+      {
+        "header": "Colour",
+        "multiSelect": false,
+        "options": [
+          {
+            "description": "DESCRIPTION",
+            "label": "Red"
+          },
+          {
+            "description": "DESCRIPTION",
+            "label": "Blue"
+          }
+        ],
+        "question": "What is your favourite colour?"
+      }
+    ]
+  },
+  "tool_name": "AskUserQuestion",
+  "tool_response": {
+    "annotations": {},
+    "answers": {
+      "What is your favourite colour?": "Red"
+    },
+    "questions": [
+      {
+        "header": "Colour",
+        "multiSelect": false,
+        "options": [
+          {
+            "description": "DESCRIPTION",
+            "label": "Red"
+          },
+          {
+            "description": "DESCRIPTION",
+            "label": "Blue"
+          }
+        ],
+        "question": "What is your favourite colour?"
+      }
+    ]
+  },
+  "tool_use_id": "toolu_PLACEHOLDER",
+  "transcript_path": "/home/USER/.claude/projects/-scratch-work/UUID.jsonl"
+}

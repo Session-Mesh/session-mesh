@@ -1,0 +1,8 @@
+# Maintainers of session-mesh: the commit addresses the CLA check accepts without a line in
+# CLA-SIGNATORIES.md. One maintainer per line: Name <ID+login@users.noreply.github.com>.
+# This file is the only place that holds these addresses. It changes together with the
+# "Maintainers" list of CONTRIBUTORS.md and the account names of .github/CODEOWNERS
+# (tests/cla-check-maintainers.test.ts compares the three). The check reads the copy on the base
+# branch, so a pull request cannot make its own author a maintainer.
+Mathias Bourgoin <5654071+mathiasbourgoin@users.noreply.github.com>
+Julien Tesson <142053968+julien-atacama@users.noreply.github.com>

@@ -1,0 +1,7 @@
+{
+  "cwd": "/scratch/work",
+  "hook_event_name": "SessionStart",
+  "session_id": "UUID",
+  "source": "startup",
+  "transcript_path": "/home/USER/.claude/projects/-scratch-work/UUID.jsonl"
+}

@@ -1,0 +1,119 @@
+(test
+ (name runner_target_test)
+ (modules runner_target_test)
+ (libraries mesh_runner_target mesh_wire alcotest qcheck-core yojson))
+
+(test
+ (name demo_artifact_test)
+ (modules demo_artifact_test)
+ (libraries mesh_demo_artifact mesh_runner_target alcotest yojson))
+
+(test
+ (name demo_runtime_admission_test)
+ (modules demo_runtime_admission_test)
+ (libraries
+  mesh_demo_runtime_admission
+  mesh_runner_target
+  alcotest
+  yojson
+  str)
+ (deps demo-runtime-admission-v1-vectors.json)
+ (action
+  (setenv
+   MESH_DEMO_ADMISSION_VECTORS
+   %{dep:demo-runtime-admission-v1-vectors.json}
+   (run %{test}))))
+
+(test
+ (name demo_runtime_catalog_test)
+ (modules demo_runtime_catalog_test)
+ (libraries
+  mesh_demo_runtime_catalog
+  mesh_demo_runtime_admission
+  mesh_runner_target
+  alcotest
+  yojson)
+ (deps demo-runtime-admission-v1-vectors.json)
+ (action
+  (setenv
+   MESH_DEMO_CATALOG_VECTORS
+   %{dep:demo-runtime-admission-v1-vectors.json}
+   (run %{test}))))
+
+(test
+ (name demo_input_schema_test)
+ (modules demo_input_schema_test)
+ (libraries mesh_demo_input_schema alcotest yojson)
+ (deps demo-input-schema-v1-vectors.json)
+ (action
+  (setenv
+   MESH_DEMO_INPUT_SCHEMA_VECTORS
+   %{dep:demo-input-schema-v1-vectors.json}
+   (run %{test}))))
+
+(test
+ (name mod_descriptor_test)
+ (modules mod_descriptor_test)
+ (libraries mesh_mod_descriptor alcotest yojson)
+ (deps mod-descriptor-v1-vectors.json))
+
+(executable
+ (name demo_scene_test)
+ (modules demo_scene_test)
+ (libraries mesh_demo_scene alcotest yojson))
+
+(rule
+ (alias runtest)
+ (deps
+  demo-scene-v0-vectors.json
+  demo-scene-v1-vectors.json
+  demo-scene-v2-vectors.json)
+ (action
+  (setenv
+   MESH_SCENE_VECTORS
+   %{dep:demo-scene-v0-vectors.json}
+   (setenv
+    MESH_SCENE_V1_VECTORS
+    %{dep:demo-scene-v1-vectors.json}
+    (setenv
+     MESH_SCENE_V2_VECTORS
+     %{dep:demo-scene-v2-vectors.json}
+     (run %{exe:demo_scene_test.exe}))))))
+
+(executable
+ (name demo_artifact_fixture)
+ (modules demo_artifact_fixture)
+ (libraries mesh_demo_artifact mesh_runner_target base64 yojson))
+
+(test
+ (name mesh_wire_test)
+ (modules mesh_wire_test)
+ (libraries mesh_wire alcotest qcheck-core yojson)
+ (deps wire-vectors-v1.json))
+
+(test
+ (name pty_capability)
+ (modules pty_capability)
+ (libraries eio_main eio.unix mtime alcotest unix yojson)
+ (deps pty_capability_child.py))
+
+(test
+ (name ptyhost_interop)
+ (modules ptyhost_interop)
+ (libraries mesh_wire mesh_platform unix yojson))
+
+(rule
+ (alias runtest)
+ (action
+  (run %{exe:ptyhost_interop.exe} --diagnostic-test)))
+
+; The opam package quint-connect (>= 0.3.0, a test dependency) installs the findlib
+; library ocaml-quint-connect: the replay runs where it is installed and is
+; skipped elsewhere.
+
+(test
+ (name ptyhost_lifecycle_itf)
+ (modules ptyhost_lifecycle_itf)
+ (build_if %{lib-available:ocaml-quint-connect})
+ (libraries mesh_wire mesh_platform ocaml-quint-connect alcotest unix yojson)
+ (deps ptyhost_lifecycle.qnt ptyhost_lifecycle.itf.json))

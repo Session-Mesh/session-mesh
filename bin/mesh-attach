@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+"""mesh-attach — use a session-mesh terminal from any local terminal.
+
+  mesh-attach            new mesh session in the current directory, attached
+  mesh-attach NAME       attach to an existing mesh session
+  mesh-attach -l         list mesh sessions
+
+The session lives in ptyhost, not in this terminal: closing the window only
+detaches (the session stays in the mesh, also reachable from the browser);
+`exit` in the shell ends it. Browser and terminal can be attached together;
+the size follows whichever resized last."""
+
+import asyncio
+import os
+import re
+import signal
+import sys
+import termios
+import tty
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import localmesh  # noqa: E402
+import organize  # noqa: E402
+import ptyhost  # noqa: E402
+
+# The native host's reply to "new" when the name exists (tests/mesh-attach-name-taken.test.ts).
+NAME_TAKEN = "Name already taken"
+
+
+def size():
+    try:
+        s = os.get_terminal_size(sys.stdout.fileno())
+        return s.lines, s.columns
+    except OSError:
+        return 40, 120
+
+
+async def unique(base):
+    taken = {s["name"] for s in await ptyhost.request({"op": "list"})}
+    base = re.sub(r"[^A-Za-z0-9_-]+", "-", base).strip("-")[:32] or "term"
+    name, i = base, 2
+    while name in taken:
+        name, i = f"{base}-{i}", i + 1
+    return name
+
+
+async def create(base, cwd):
+    """A new session under a free name. Several terminals opening at once (a
+    Terminator layout) race for the same name: on "name taken", try the next."""
+    for _ in range(20):
+        name = await unique(base)
+        try:
+            env, meta = localmesh.session_env(name)
+        except OSError:      # no readable master token (server never started, other HOME):
+            env, meta = {}, {}   # the session simply has no session token, as before
+        reply = await ptyhost.request({"op": "new", "name": name, "cwd": cwd, "command": None,
+                                       "env": env, "meta": meta})
+        if reply.get("ok"):
+            return name
+        if NAME_TAKEN not in str(reply.get("error", "")):
+            print(f"mesh-attach: {reply.get('error')}", file=sys.stderr)
+            return None
+    print("mesh-attach: no free name", file=sys.stderr)
+    return None
+
+
+# Modes a program in the session may have left on in this terminal (alternate
+# screen, mouse reporting, bracketed paste, hidden cursor): turned off on the way out.
+# Leaving the alternate screen (1049) also restores a saved cursor, even when not in
+# it: wrapped in save/restore (ESC 7 / ESC 8) so the cursor stays where it is.
+# Then mouse reporting, bracketed paste, cursor keys/keypad, modifyOtherKeys,
+# the kitty keyboard protocol, and the cursor shown again.
+RESET_MODES = (b"\x1b7\x1b[?1049l\x1b8\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l"
+               b"\x1b[?1l\x1b>\x1b[>4;0m\x1b[<u\x1b[?25h")
+LOST = 3          # exit status when ptyhost goes away (the bashrc hook then keeps the shell)
+
+
+def write_all(fd, data):
+    """os.write may write only part of a frame (a signal during a big replay)."""
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
+async def run(name):
+    """Attach this terminal to session ``name``. Returns the exit status: 0 on
+    a detach or when the session's shell exits, LOST when ptyhost goes away."""
+    rows, cols = size()
+    reader, writer = await ptyhost.attach(name, rows, cols)
+    loop = asyncio.get_running_loop()
+    stdin, stdout = sys.stdin.fileno(), sys.stdout.fileno()
+    saved = termios.tcgetattr(stdin)
+    tty.setraw(stdin)
+    done = asyncio.Event()
+    status = {"code": 0}
+
+    def on_input():
+        data = os.read(stdin, 65536)
+        if not data:
+            done.set()
+            return
+        writer.write(ptyhost.frame(b"D", data))
+
+    def on_winch():
+        r, c = size()
+        writer.write(ptyhost.frame(b"R", {"rows": r, "cols": c}))
+
+    async def output():
+        try:
+            while True:
+                kind, payload = await ptyhost.read_frame(reader)
+                if kind == b"D":
+                    write_all(stdout, payload)
+                elif kind == b"X":
+                    break
+        except (asyncio.IncompleteReadError, ConnectionError):
+            status["code"] = LOST
+        done.set()
+
+    loop.add_reader(stdin, on_input)
+    loop.add_signal_handler(signal.SIGWINCH, on_winch)
+    # closing the window (SIGHUP) or being asked to stop (SIGTERM): detach, the session lives on
+    for sig in (signal.SIGHUP, signal.SIGTERM):
+        loop.add_signal_handler(sig, done.set)
+    task = asyncio.ensure_future(output())
+    try:
+        await done.wait()
+    finally:
+        task.cancel()
+        loop.remove_reader(stdin)
+        try:
+            write_all(stdout, RESET_MODES)
+        except OSError:
+            pass
+        termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
+        writer.close()
+    if status["code"] == LOST:
+        print("mesh-attach: connection to ptyhost lost (the session may still be there: mesh-attach -l)",
+              file=sys.stderr)
+    return status["code"]
+
+
+def pty_start_hint():
+    """The command that starts the PTY host installed by install.sh on this platform."""
+    if sys.platform == "darwin":
+        uid = os.getuid()
+        label = "io.session-mesh.pty"
+        return (f"launchctl kickstart gui/{uid}/{label}, or, installed without a graphical login,"
+                f" launchctl bootstrap user/{uid} ~/Library/LaunchAgents/{label}.plist (if the job is not loaded)"
+                f" then launchctl kickstart user/{uid}/{label}, or"
+                f" sudo launchctl kickstart system/{label} for boot-time daemons; rerunning install.sh also works")
+    return "systemctl --user start session-mesh-pty"
+
+
+async def main(argv):
+    if argv[:1] in (["-h"], ["--help"]):
+        print(__doc__.strip())
+        return 0
+    try:
+        sessions = await ptyhost.request({"op": "list"})
+    except OSError:
+        print(f"mesh-attach: ptyhost is not responding ({pty_start_hint()})", file=sys.stderr)
+        return 1
+    if argv[:1] == ["-l"]:
+        org = organize.view(sessions, prune=False)["sessions"]   # read-only: the server prunes
+        for s in sessions:
+            o = org.get(s["name"], {})
+            extra = "  ".join(x for x in (f"“{o['label']}”" if o.get("label") else "",
+                                          f"📁 {o['folder']}" if o.get("folder") else "") if x)
+            print(f"{s['name']:<28} {s['cwd'].replace(str(Path.home()), '~')}  ({s['attached']} attached)  {extra}".rstrip())
+        return 0
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):   # e.g. $(bash -ic …) would hang raw
+        print("mesh-attach: run it in a terminal", file=sys.stderr)
+        return 1
+    if argv:
+        name = argv[0]
+        if name not in {s["name"] for s in sessions}:
+            print(f"mesh-attach: no session “{name}” (mesh-attach -l)", file=sys.stderr)
+            return 1
+        if name == localmesh.current_session(sessions):
+            # its output would be written back into itself, without end
+            print(f"mesh-attach: “{name}” is the session you are already in", file=sys.stderr)
+            return 1
+    else:
+        cwd = os.getcwd()
+        name = await create(f"{Path(cwd).name or 'home'}-term", cwd)
+        if name is None:
+            return 1
+    return await run(name)
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main(sys.argv[1:])))

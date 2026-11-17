@@ -1,0 +1,5 @@
+{
+  "name": "session-mesh",
+  "version": "1.0.0",
+  "description": "Reports the state of this Copilot CLI session (working, waiting, done) to the Session Mesh that launched it. Loaded for that session only, with --plugin-dir."
+}

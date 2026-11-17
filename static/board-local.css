@@ -1,0 +1,19 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ * Copyright (c) 2026 Atacama <contact@atacama.tech>
+ */
+
+:root { color-scheme: dark; background: #0d1117; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { font: 13px/1.4 ui-monospace, "JetBrains Mono", "Fira Code", monospace; }
+.board-shell { width: 100%; height: 100%; position: relative; }
+.board-shell > .excalidraw { width: 100%; height: 100%; }
+.board-status { position: fixed; z-index: 20; right: 12px; bottom: 10px; padding: 3px 8px; border: 1px solid #495260; border-radius: 5px; background: #11151ce8; color: #d8dee9; font-size: 11px; pointer-events: none; }
+.board-conflict { position: fixed; z-index: 21; top: 10px; left: 10px; right: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 7px 10px; border: 1px solid #e0a63a; border-radius: 6px; background: #211b10f2; color: #ffe1a4; font-size: 12px; }
+.board-conflict button { border: 1px solid #e0a63a; border-radius: 4px; padding: 3px 7px; background: #34270d; color: #ffe1a4; font: inherit; cursor: pointer; }
+.board-conflict button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@media (max-width: 520px) { .board-conflict { align-items: stretch; flex-direction: column; text-align: center; } }
+/* "Mermaid to Excalidraw" needs the Excalidraw chunk that is not shipped (it embeds
+   elkjs, EPL-2.0: static/vendor/THIRD_PARTY.md). Its entry is the last item of the
+   extra tools menu and shares the "toolbar-embeddable" test id with "Web Embed". */
+.App-toolbar__extra-tools-dropdown .dropdown-menu-container > [data-testid="toolbar-embeddable"]:last-child { display: none; }

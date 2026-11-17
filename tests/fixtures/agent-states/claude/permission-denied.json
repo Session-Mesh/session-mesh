@@ -1,0 +1,291 @@
+{
+ "captured_with": "Claude Code 2.1.288 (claude --version), interactive, default permission mode",
+ "state": "the same permission prompt just after answering 3 (No)",
+ "session": {
+  "pid": 4242,
+  "sessionId": "00000000-0000-4000-8000-000000000001",
+  "cwd": "/tmp/scratch",
+  "startedAt": 1700000000000,
+  "procStart": "1000",
+  "version": "2.1.288",
+  "peerProtocol": 1,
+  "peerFeatures": [
+   "notify_idle",
+   "reply_across_default_dirs",
+   "artifact_yield"
+  ],
+  "kind": "interactive",
+  "entrypoint": "cli",
+  "pidDomain": "linux:0000:pid:[0]",
+  "messagingSocketPath": "/run/user/1000/cc-socks/4242.sock",
+  "name": "scratch-a1",
+  "nameSource": "derived",
+  "nameSince": 1700000000000,
+  "status": "idle",
+  "updatedAt": 1700000048816,
+  "statusUpdatedAt": 1700000048816
+ },
+ "transcript": [
+  {
+   "type": "user",
+   "parentUuid": null,
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000001",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": "user prompt 1"
+   }
+  },
+  {
+   "type": "ai-title",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "aiTitle": "Conversation title"
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000002",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000003",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0001",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000003",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000004",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0001",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_0001",
+      "name": "Bash",
+      "input": {
+       "command": "a shell command",
+       "description": "what it does"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000004",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000005",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "tool_use_id": "toolu_0001",
+      "content": "tool output",
+      "is_error": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "ai-title",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "aiTitle": "Conversation title"
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000006",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000007",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0002",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000007",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000008",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0002",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "text",
+      "text": "assistant text 1"
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000009",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000010",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": "user prompt 2"
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000011",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000012",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0003",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000012",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000013",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0003",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_0002",
+      "name": "Bash",
+      "input": {
+       "command": "a shell command",
+       "description": "what it does"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000013",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000014",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "tool_use_id": "toolu_0002",
+      "content": "The user doesn't want to proceed with this tool use.",
+      "is_error": true
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000014",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000015",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "[Request interrupted by user for tool use]"
+     }
+    ]
+   }
+  }
+ ]
+}

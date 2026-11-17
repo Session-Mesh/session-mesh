@@ -1,0 +1,12 @@
+{
+  "cwd": "/scratch/work",
+  "effort": {
+    "level": "medium"
+  },
+  "error": "model_not_found",
+  "hook_event_name": "StopFailure",
+  "last_assistant_message": "REPLY",
+  "prompt_id": "UUID",
+  "session_id": "UUID",
+  "transcript_path": "/home/USER/.claude/projects/-scratch-work/UUID.jsonl"
+}

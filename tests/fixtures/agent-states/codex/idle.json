@@ -1,0 +1,117 @@
+{
+ "captured_with": "codex-cli 0.160.0 (codex --version), interactive TUI, one prompt, low effort",
+ "state": "idle after one reply; codex keeps the rollout open (seen in /proc/<pid>/fd)",
+ "rollout": [
+  {
+   "timestamp": "2026-01-01T00:00:00.000Z",
+   "type": "session_meta",
+   "payload": {
+    "id": "00000000-0000-7000-8000-000000000001",
+    "session_id": "00000000-0000-7000-8000-000000000001",
+    "timestamp": "2026-01-01T00:00:00.000Z",
+    "cwd": "/tmp/scratch",
+    "originator": "codex-tui",
+    "cli_version": "0.160.0",
+    "source": "cli",
+    "thread_source": "user"
+   }
+  },
+  {
+   "timestamp": "2026-01-01T00:00:00.000Z",
+   "type": "event_msg",
+   "payload": {
+    "type": "task_started",
+    "turn_id": "00000000-0000-7000-8000-000000000002"
+   }
+  },
+  {
+   "timestamp": "2026-01-01T00:00:00.000Z",
+   "type": "response_item",
+   "payload": {
+    "type": "message",
+    "id": "msg_user",
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nplaceholder\n</INSTRUCTIONS>"
+     },
+     {
+      "type": "input_text",
+      "text": "<environment_context>\n  <cwd>/tmp/scratch</cwd>\n</environment_context>"
+     }
+    ]
+   }
+  },
+  {
+   "timestamp": "2026-01-01T00:00:00.000Z",
+   "type": "turn_context",
+   "payload": {
+    "turn_id": "00000000-0000-7000-8000-000000000002",
+    "cwd": "/tmp/scratch",
+    "model": "codex-model",
+    "approvals_reviewer": "user"
+   }
+  },
+  {
+   "timestamp": "2026-01-01T00:00:00.000Z",
+   "type": "response_item",
+   "payload": {
+    "type": "message",
+    "id": "msg_user",
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "user prompt 1"
+     }
+    ]
+   }
+  },
+  {
+   "timestamp": "2026-01-01T00:00:00.000Z",
+   "type": "event_msg",
+   "payload": {
+    "type": "item_completed",
+    "thread_id": "00000000-0000-7000-8000-000000000001",
+    "turn_id": "00000000-0000-7000-8000-000000000002",
+    "item": {
+     "type": "AgentMessage",
+     "id": "msg_assistant",
+     "content": [
+      {
+       "type": "Text",
+       "text": "assistant text 1"
+      }
+     ],
+     "phase": "final_answer"
+    }
+   }
+  },
+  {
+   "timestamp": "2026-01-01T00:00:00.000Z",
+   "type": "response_item",
+   "payload": {
+    "type": "message",
+    "id": "msg_assistant",
+    "role": "assistant",
+    "content": [
+     {
+      "type": "output_text",
+      "text": "assistant text 1"
+     }
+    ],
+    "phase": "final_answer"
+   }
+  },
+  {
+   "timestamp": "2026-01-01T00:00:00.000Z",
+   "type": "event_msg",
+   "payload": {
+    "type": "task_complete",
+    "turn_id": "00000000-0000-7000-8000-000000000002",
+    "last_agent_message": "assistant text 1"
+   }
+  }
+ ]
+}

@@ -1,0 +1,9 @@
+{
+  "cwd": "/scratch/work",
+  "hook_event_name": "SessionStart",
+  "model": "claude-haiku-4-5-20251001",
+  "scratchpad_dir": "/tmp/PROJECT-DIR/UUID/scratchpad",
+  "session_id": "UUID",
+  "source": "startup",
+  "transcript_path": "/home/USER/.claude/projects/-scratch-work/UUID.jsonl"
+}

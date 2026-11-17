@@ -1,0 +1,14 @@
+(rule
+ (alias wire-mutation)
+ (deps mesh_wire/test/wire-vectors-v1.json)
+ (action
+  (progn
+   (chdir
+    mesh_wire/test
+    (run %{exe:mesh_wire/test/mesh_wire_test.exe}))
+   (chdir
+    mesh_wire/test
+    (run %{exe:mesh_wire/test/runner_target_test.exe}))
+   (chdir
+    test
+    (run %{exe:test/ptyhost_preflight.exe})))))

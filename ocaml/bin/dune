@@ -1,0 +1,23 @@
+(executable
+ (name mesh_board_mcp_main)
+ (public_name mesh-board-mcp)
+ (modules mesh_board_mcp_main)
+ (libraries mesh_board_mcp mcp-kit.stdio))
+
+(executable
+ (name mesh_read_main)
+ (public_name mesh-read)
+ (modules mesh_read_main)
+ (libraries mesh_read mcp-kit.stdio))
+
+(executable
+ (name mesh_history_main)
+ (public_name mesh-history)
+ (modules mesh_history_main)
+ (libraries mesh_history unix))
+
+(executable
+ (name mesh_ptyhost_main)
+ (public_name mesh-ptyhost)
+ (modules mesh_ptyhost_main)
+ (libraries mesh_ptyhost))

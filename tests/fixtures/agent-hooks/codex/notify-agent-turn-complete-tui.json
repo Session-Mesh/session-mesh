@@ -1,0 +1,15 @@
+{
+  "argv_shape": "notify program invoked as: <program...> <json-payload>; the payload is the last argv element, stdin unused",
+  "env_session_keys_seen": [],
+  "payload": {
+    "client": "codex-tui",
+    "cwd": "/scratch/work",
+    "input-messages": [
+      "PROMPT"
+    ],
+    "last-assistant-message": "REPLY",
+    "thread-id": "THREAD-ID",
+    "turn-id": "TURN-ID",
+    "type": "agent-turn-complete"
+  }
+}

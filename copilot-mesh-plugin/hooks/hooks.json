@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "userPromptSubmitted": [
+      {"type": "command", "bash": "[ -x \"$MESH_EVENT_BIN\" ] && exec \"$MESH_EVENT_BIN\" copilot userPromptSubmitted; exit 0", "timeoutSec": 5}
+    ],
+    "postToolUse": [
+      {"type": "command", "bash": "[ -x \"$MESH_EVENT_BIN\" ] && exec \"$MESH_EVENT_BIN\" copilot postToolUse; exit 0", "timeoutSec": 5}
+    ],
+    "postToolUseFailure": [
+      {"type": "command", "bash": "[ -x \"$MESH_EVENT_BIN\" ] && exec \"$MESH_EVENT_BIN\" copilot postToolUseFailure; exit 0", "timeoutSec": 5}
+    ],
+    "notification": [
+      {"type": "command", "bash": "[ -x \"$MESH_EVENT_BIN\" ] && exec \"$MESH_EVENT_BIN\" copilot notification; exit 0", "timeoutSec": 5}
+    ],
+    "agentStop": [
+      {"type": "command", "bash": "[ -x \"$MESH_EVENT_BIN\" ] && exec \"$MESH_EVENT_BIN\" copilot agentStop; exit 0", "timeoutSec": 5}
+    ],
+    "errorOccurred": [
+      {"type": "command", "bash": "[ -x \"$MESH_EVENT_BIN\" ] && exec \"$MESH_EVENT_BIN\" copilot errorOccurred; exit 0", "timeoutSec": 5}
+    ]
+  }
+}

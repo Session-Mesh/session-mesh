@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+"""Translate one local Claude/Codex/Gemini/agy/Copilot/Vibe hook into a bounded Mesh shadow event.
+
+Hooks must never become a dependency of the agent they observe: every failure
+is deliberately silent (unless MESH_EVENT_DEBUG=1) and exits successfully.
+Claude and Codex hooks print nothing; an agy hook prints the JSON answer agy waits for.
+"""
+
+import json
+import os
+import re
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+
+
+MAX_STDIN = 1024 * 1024
+MAX_TEXT = 256
+DETAIL_MAX = 2048
+TOTAL_TIMEOUT = 1.9
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirection is an error: following it would resend the Authorization header to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, None)
+
+
+# Never through a proxy, never redirected: the request carries the session token and is meant for this host only.
+LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
+
+
+def text(value):
+    return value[:MAX_TEXT] if isinstance(value, str) else None
+
+
+def event_id(hook, value):
+    if not isinstance(value, str):
+        return None
+    candidate = f"{hook}:{value}"
+    return candidate if len(candidate) <= 64 else None
+
+
+def compact_detail(detail):
+    """Keep a valid envelope below EVT-10 even for non-ASCII hook fields."""
+    while len(json.dumps(detail, separators=(",", ":"), ensure_ascii=False).encode()) > DETAIL_MAX:
+        strings = [(len(value.encode("utf-8")), key) for key, value in detail.items()
+                   if isinstance(value, str) and value]
+        if not strings:
+            return {}
+        _, key = max(strings)
+        detail[key] = detail[key][:-1]
+    return detail
+
+
+def claude_event(payload, at):
+    if not isinstance(payload, dict) or "agent_id" in payload:
+        return None
+    hook = payload.get("hook_event_name")
+    tool = text(payload.get("tool_name"))
+    if hook == "UserPromptSubmit":
+        kind, ident = "working", payload.get("prompt_id")
+    elif hook == "PreToolUse":
+        if tool == "AskUserQuestion":
+            return None
+        kind, ident = "working", payload.get("tool_use_id")
+    elif hook == "PermissionRequest":
+        kind, ident = ("waiting_question" if tool == "AskUserQuestion" else "waiting_permission"), payload.get("prompt_id")
+    elif hook == "PostToolUse":
+        kind, ident = "working", payload.get("tool_use_id")
+    elif hook == "Stop" and payload.get("background_tasks") == []:
+        kind, ident = "done", payload.get("prompt_id")
+    elif hook == "StopFailure":
+        kind, ident = "error", payload.get("prompt_id")
+    else:
+        return None
+    detail = {"source": "claude", "hook": hook}
+    if tool is not None:
+        detail["tool"] = tool
+    tool_use_id = text(payload.get("tool_use_id"))
+    if tool_use_id is not None:
+        detail["tool_use_id"] = tool_use_id
+    error = text(payload.get("error"))
+    if hook == "StopFailure" and error is not None:
+        detail["error"] = error
+    event = {"type": kind, "at": at, "detail": compact_detail(detail)}
+    ident = event_id(hook, ident)
+    if ident is not None:
+        event["id"] = ident
+    return event
+
+
+def codex_event(payload, at):
+    if not isinstance(payload, dict) or payload.get("type") != "agent-turn-complete":
+        return None
+    detail = {"source": "codex", "hook": "agent-turn-complete"}
+    thread_id = text(payload.get("thread-id"))
+    if thread_id is not None:
+        detail["thread_id"] = thread_id
+    event = {"type": "done", "at": at, "detail": compact_detail(detail)}
+    ident = event_id("agent-turn-complete", payload.get("turn-id"))
+    if ident is not None:
+        event["id"] = ident
+    return event
+
+
+GEMINI_KINDS = {"BeforeAgent": "working", "BeforeTool": "working", "AfterTool": "working",
+                "AfterAgent": "done"}
+
+
+def gemini_event(payload, at):
+    """A Gemini CLI hook (stdin JSON, see its hooks reference) as a Mesh event, with the conversation
+    (session_id) that `gemini --resume` takes."""
+    if not isinstance(payload, dict):
+        return None
+    hook = payload.get("hook_event_name")
+    if hook == "Notification" and payload.get("notification_type") == "ToolPermission":
+        kind = "waiting_permission"
+    else:
+        kind = GEMINI_KINDS.get(hook)
+    if kind is None:
+        return None
+    detail = {"source": "gemini", "hook": hook}
+    session = text(payload.get("session_id"))
+    if session is not None:
+        detail["session"] = session
+    tool = text(payload.get("tool_name"))
+    if tool is not None:
+        detail["tool"] = tool
+    return {"type": kind, "at": at, "detail": compact_detail(detail)}
+
+
+AGY_CONVERSATION = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{7,63}")
+
+
+def agy_event(hook, payload, at):
+    """One Antigravity (agy) hook, named by the command line since its payload does not carry the
+    event. Only the events that close or open a turn are read: PreInvocation says the agent works
+    (not observed: that it fires again while a permission prompt is open, and that ``Stop`` does not
+    fire then, are assumptions; no permission-prompt event is reported, so an open prompt shows as
+    busy at best), Stop with ``fullyIdle`` says it is back at its prompt. Tool hooks are not used:
+    their reply decides the permission. The server keeps only the events of the session's own agy
+    (see ``EventState.foreign``): this hook runs for every agy, nested ones included."""
+    if not isinstance(payload, dict):
+        return None
+    if hook == "PreInvocation":
+        kind = "working"
+    elif hook == "Stop" and payload.get("terminationReason") == "error":
+        kind = "error"
+    elif hook == "Stop" and payload.get("fullyIdle") is True:
+        kind = "done"
+    else:
+        return None
+    detail = {"source": "agy", "hook": hook}
+    conversation = payload.get("conversationId")
+    if isinstance(conversation, str) and AGY_CONVERSATION.fullmatch(conversation):
+        detail["session"] = conversation
+    # No "id": whether the counters of the payload are unique across turns is not documented, and a
+    # repeated id would drop a real event (an end of turn that never reaches the mesh).
+    return {"type": kind, "at": at, "detail": compact_detail(detail)}
+
+
+# A UUID, as the server and discover read it: Copilot names its conversations with nothing else.
+COPILOT_SESSION = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+COPILOT_NOTIFICATIONS = {"permission_prompt": "waiting_permission", "elicitation_dialog": "waiting_question"}
+
+
+def copilot_event(hook, payload, at):
+    """One Copilot CLI hook (registered by the per-session plugin, copilot-mesh-plugin/).
+
+    The hook name comes from argv: Copilot's payload does not carry it. ``notification`` is the only event
+    that says a prompt is really on screen (``permissionRequest`` also fires for an auto-approved tool).
+    A sub-agent's hooks (they carry ``agentId``) say nothing about the user's terminal."""
+    if not isinstance(payload, dict) or "agentId" in payload:
+        return None
+    if hook in ("userPromptSubmitted", "postToolUse", "postToolUseFailure"):
+        kind = "working"
+    elif hook == "notification":
+        kind = COPILOT_NOTIFICATIONS.get(payload.get("notification_type"))
+    elif hook == "agentStop":
+        kind = "done"
+    elif hook == "errorOccurred" and payload.get("recoverable") is False:
+        kind = "error"
+    else:
+        kind = None
+    if kind is None:
+        return None
+    detail = {"source": "copilot", "hook": hook}
+    tool = text(payload.get("toolName"))
+    if tool is not None:
+        detail["tool"] = tool
+    session = payload.get("sessionId")
+    if isinstance(session, str) and COPILOT_SESSION.fullmatch(session):
+        detail["session"] = session
+    event = {"type": kind, "at": at, "detail": compact_detail(detail)}
+    stamp = payload.get("timestamp")
+    ident = event_id(hook, str(stamp) if isinstance(stamp, int) and not isinstance(stamp, bool) else None)
+    if ident is not None:
+        event["id"] = ident
+    return event
+
+
+VIBE_SESSION = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+VIBE_NOTIFICATIONS = {"approval_requested": "waiting_permission", "question_asked": "waiting_question",
+                      "turn_completed": "done", "turn_failed": "error"}
+
+
+def vibe_event(payload, at):
+    """Mistral Vibe hooks (the ``.vibe/hooks.toml`` Mesh hands it): a prompt or a tool is work, a
+    notification says an approval or a question opened or the turn ended, a new session is idle.
+    A sub-agent (it has a parent session) never speaks for the terminal."""
+    if not isinstance(payload, dict) or payload.get("parent_session_id"):
+        return None
+    hook = payload.get("hook_event_name")
+    if hook == "notification":
+        kind = VIBE_NOTIFICATIONS.get(payload.get("notification_type"))
+    elif hook in ("pre_agent", "pre_tool", "post_tool"):
+        kind = "working"
+    elif hook == "session_start":
+        kind = "done"
+    else:
+        kind = None
+    if kind is None:
+        return None
+    detail = {"source": "vibe", "hook": hook}
+    session = payload.get("session_id")
+    if isinstance(session, str) and VIBE_SESSION.fullmatch(session):
+        detail["session"] = session
+    tool = text(payload.get("tool_name"))
+    if tool is not None:
+        detail["tool"] = tool
+    return {"type": kind, "at": at, "detail": compact_detail(detail)}
+
+
+def read_claude():
+    raw = sys.stdin.buffer.read(MAX_STDIN + 1)
+    if len(raw) > MAX_STDIN:
+        return None
+    try:
+        return json.loads(raw)
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
+def local_url(route):
+    """The local mesh's URL (as meshpaths.local_url; this hook imports nothing
+    from the mesh). MESH_PORT must be a port number: anything else would be
+    read as another part of the URL the session token is sent to."""
+    value = os.environ.get("MESH_PORT") or "7690"
+    if not (value.isascii() and value.isdigit() and len(value) <= 5 and 1 <= int(value) <= 65535):
+        raise ValueError("MESH_PORT must be a port number between 1 and 65535")
+    return f"http://127.0.0.1:{int(value)}{route}"
+
+
+def send(token, event, remaining):
+    request = urllib.request.Request(
+        local_url("/api/event"),
+        data=json.dumps(event, separators=(",", ":")).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"MeshSession {token}"},
+    )
+    # A daemon worker gives the hook a real total deadline. Its socket timeout
+    # remains 1.5 s as documented; a blocked local read cannot delay the agent
+    # beyond the remaining 1.9 s budget.
+    def deliver():
+        try:
+            with LOCAL.open(request, timeout=min(1.5, remaining)):
+                pass
+        except BaseException:
+            pass
+
+    worker = threading.Thread(target=deliver, daemon=True)
+    worker.start()
+    worker.join(remaining)
+
+
+def main(argv):
+    at = time.time()
+    deadline = time.monotonic() + TOTAL_TIMEOUT
+    agy = len(argv) == 3 and argv[1] == "agy"
+    if agy:
+        # agy waits for a JSON answer and the plugin is installed for every agy, in or out of a mesh
+        # terminal: answer before looking for a token. A Stop hook must say "decision" and any value but
+        # "continue" lets the agent stop; nothing else is ever said to it.
+        payload = read_claude()
+        print('{"decision":"allow"}' if argv[2] == "Stop" else "{}", flush=True)
+    token = os.environ.get("MESH_SESSION_TOKEN", "").strip()
+    if not token:
+        return
+    if len(argv) == 2 and argv[1] == "claude":
+        event = claude_event(read_claude(), at)
+    elif len(argv) == 2 and argv[1] == "gemini":
+        event = gemini_event(read_claude(), at)
+    elif agy:
+        event = agy_event(argv[2], payload, at)
+    elif len(argv) == 3 and argv[1] == "copilot":
+        event = copilot_event(argv[2], read_claude(), at)
+    elif len(argv) == 2 and argv[1] == "vibe":
+        event = vibe_event(read_claude(), at)
+    elif len(argv) >= 3 and argv[1] == "codex":
+        try:
+            event = codex_event(json.loads(argv[-1]), at)
+        except ValueError:
+            event = None
+    else:
+        event = None
+    remaining = deadline - time.monotonic()
+    if event is not None and remaining > 0:
+        send(token, event, remaining)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv)
+    except BaseException as exc:
+        if os.environ.get("MESH_EVENT_DEBUG") == "1":
+            print(f"mesh-event: {exc}", file=sys.stderr)

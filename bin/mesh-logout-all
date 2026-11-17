@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+"""mesh-logout-all — log every browser out of session-mesh at once.
+
+Raises the cookie generation: each `mesh_auth` cookie ever issued stops working, so a lost or
+stolen phone loses its access. Log in again with the token (or its ?token= link) where wanted.
+The master token (mesh-rename, mesh-attach, mesh-open outside a session) and the sessions' own
+tokens (mesh-open inside a session, mesh-event) keep working, as do the running terminals.
+
+Asks the running mesh with the master token; when it does not answer, raises the generation
+directly in the config dir (MESH_CONF_DIR, else ~/.config/session-mesh). Port: MESH_PORT."""
+
+import json
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import cookiegen  # noqa: E402
+import meshpaths  # noqa: E402
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirection is an error: following it would resend the Authorization header to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, None)
+
+
+# Never through a proxy, never redirected: the request carries the master token and is meant for this host only.
+LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
+
+
+def through_server(token):
+    """The new generation, or None when no mesh answers. A mesh that answers with an error is fatal."""
+    req = urllib.request.Request(
+        meshpaths.local_url("/api/logout-all"), data=b"", method="POST",
+        headers={"Authorization": f"Bearer {token}"})
+    try:
+        with LOCAL.open(req, timeout=10) as reply:
+            return json.load(reply)["generation"]
+    except urllib.error.HTTPError as e:
+        sys.exit(f"mesh-logout-all: the mesh refused ({e.code} {e.reason})")
+    except (urllib.error.URLError, OSError):
+        return None
+
+
+def main():
+    if len(sys.argv) > 1:
+        sys.exit(__doc__)
+    token_file = meshpaths.CONF_DIR / "token"
+    try:
+        token = token_file.read_text().strip()
+    except OSError as e:
+        sys.exit(f"mesh-logout-all: unreadable token ({e})")
+    generation = through_server(token)
+    if generation is not None:
+        print(f"All devices are signed out (generation {generation}).")
+        return
+    generation = cookiegen.bump(meshpaths.CONF_DIR / cookiegen.FILE_NAME)
+    print(f"The mesh is not responding: generation raised on disk ({generation}). "
+          "All devices are signed out.")
+
+
+if __name__ == "__main__":
+    main()

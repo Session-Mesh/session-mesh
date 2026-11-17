@@ -1,0 +1,4 @@
+(executable
+ (name mesh_platform_main)
+ (public_name mesh-platform)
+ (libraries mesh_platform unix yojson))

@@ -1,0 +1,8 @@
+# Runtime dependencies of the session-mesh server (the PTY host is the native mesh-ptyhost).
+# Tested with the versions pinned in requirements-dev.txt; older releases are not tested.
+# Prefer your distribution's packages (install.sh names them); otherwise, in a venv:
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#   MESH_PYTHON="$PWD/.venv/bin/python" ./install.sh
+aiohttp>=3,<4
+# Optional: push notifications (Web Push).
+cryptography

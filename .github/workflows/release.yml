@@ -1,0 +1,719 @@
+# A release of session-mesh, built and published by this workflow when a tag is pushed, with no
+# step by hand. Its files:
+# - the prebuilt native programs (mesh-ptyhost, mesh-board-mcp, mesh-read, mesh-platform, mesh-history) for
+#   linux-x86_64, linux-aarch64 and macos-arm64, named <program>-<os>-<arch>;
+# - session-mesh-<tag>.tar.gz, the `git archive` of the built commit;
+# - the bundle of each platform, mesh-<os>-<arch>.tar.gz (scripts/build-bundle.sh), for
+#   linux-x86_64, linux-arm64 and macos-arm64: session-mesh with its own Python and Node runtimes,
+#   its locked Python dependencies and its native programs, which runs without Python, Node, opam
+#   or a compiler on the machine;
+# - install.sh of that commit, with the tag and the SHA-256 of every other file stamped into it;
+#   it installs the bundle of the machine's platform when the machine meets the bundle's floor
+#   (BUNDLE_*_FLOOR in install.sh), otherwise its native programs and the code archive with the
+#   machine's Python;
+# - SHA256SUMS over all of them, the stamped install.sh included;
+# and a signed build provenance attestation of every file (the publish job; see the attest step).
+# The package job assembles the files (scripts/release-assets.sh bundle).
+#
+# Triggers: a push of a tag v<major>.<minor>.<patch>[-<suffix>] publishes the release; the tag must
+# name a commit of main (the tag job checks it against origin/main). A tag with a -<suffix> is
+# published as a pre-release, which GitHub never reports as the latest release; a release older
+# (semver) than the current latest one is published with --latest=false. A manual run is a
+# dry run: it builds, checks and keeps the files as a workflow artifact, and never creates a tag or
+# a release; a manual run on main also seeds the opam caches the tag runs read.
+#
+# Every build job but one is required: a release is published only when every file was built and
+# qualified by its job in the same run, on its platform's own runner. The exception is the macOS
+# bundle: when its job fails, the release is published without mesh-macos-arm64.tar.gz (the release
+# notes say so; macOS machines then install the macOS native programs and the code archive), and
+# only then. The package and publish jobs accept exactly these two sets of files.
+#
+# Reproducibility: every build reads the opam repository at the fixed commit of
+# scripts/release-pins.sh, with the dune and mcp-kit pins of scripts/bootstrap.sh; the static Linux
+# build also runs in an Alpine image pinned by digest (ALPINE_IMAGE), but the Alpine packages it
+# installs are not pinned (see scripts/release-build-static.sh). The AlmaLinux packages of the manylinux
+# build, the libstdc++ and libgcc_s that the Linux bundles ship included, are not pinned either. The
+# bundles' Python dependencies
+# are locked with hashes (scripts/bundle/requirements.lock), and their Node and CPython versions are
+# fixed by scripts/build-bundle.sh, which checks the Node archive against the SHA-256 pinned in
+# scripts/bundle/node.sha256. The runner images themselves are not pinned.
+#
+# Caches: a build restores an opam cache only when its key matches exactly (no restore-keys
+# prefix fallback), and the key covers every input of the build (the pins, the build scripts, the
+# image or the compiler and deployment target). A release is therefore built either from opam
+# state made with these exact pins or cold, never from the state of older pins.
+#
+# Native programs. Linux: static musl executables, built in an Alpine container
+# (scripts/release-build-static.sh) on the native runner of each architecture; they run on any
+# Linux of that architecture, whatever its libc. macOS: dynamic, linked against
+# /usr/lib/libSystem.B.dylib only, built for macOS 13 and later; Intel macOS is not built. Every
+# job runs scripts/release-smoke.sh on the programs it built before they are uploaded.
+#
+# Bundles. Linux: built in the manylinux_2_28 image of each architecture (AlmaLinux 8, glibc 2.28),
+# pinned by digest: the bundled CPython (python-build-standalone, glibc 2.17), Node 24 (glibc 2.28)
+# and the native programs built there need glibc 2.28 at most, which scripts/release-check-glibc.sh
+# checks on every ELF file against BUNDLE_GLIBC_FLOOR of install.sh. macOS arm64: built on the
+# runner of the macOS programs, with the same deployment target for its native programs and the
+# same link checks (scripts/release-check-macos.sh), then every Mach-O file of the bundle is checked
+# against BUNDLE_MACOS_FLOOR of install.sh. Each bundle is qualified on the runner that built it:
+# scripts/smoke-bundle.sh runs the extracted archive with nothing but the system's utilities (the
+# Linux ones also inside their build image, on glibc 2.28). install.sh, scripts/release-floor.sh
+# and these checks share one definition of the floors.
+#
+# Same rules as public-ci.yml: no secret of ours (the release step uses the run's own
+# token), actions pinned by full commit SHA, a read-only token except in the publish job, which
+# attests the files and creates the release. Only GitHub's own actions (actions/*) are used, except
+# ocaml/setup-ocaml and astral-sh/setup-uv in the read-only macOS build jobs; the release is created with
+# the gh CLI preinstalled on the runner, so no third-party code ever holds the write token.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  OCAML_COMPILER: ocaml-base-compiler.5.3.0
+  # alpine 3.20.10, the multi-architecture index: the same builder on x86_64 and aarch64.
+  ALPINE_IMAGE: alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+  # uv of the macOS bundle; the Linux bundles use the same version, pinned in
+  # scripts/bundle/linux-builder.sha256.
+  UV_VERSION: "0.7.2"
+  PYTHON_VERSION: "3.12.9"
+  # The public Roster distribution included in the bundles (optional/roster), at a fixed commit.
+  ROSTER_REVISION: 757bf97d22bc14c8330c16ee0cdcd1385c8b93c6
+
+jobs:
+  # The release name, decided once, before any build: the pushed tag, or a dry-run name for a
+  # manual run. Refuses a name outside the tag pattern, and a tag whose commit is not on main, so
+  # that no build starts for a release that cannot be published.
+  tag:
+    name: release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.name.outputs.tag }}
+    steps:
+      - name: Name the release
+        id: name
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v0.0.0-dryrun.${GITHUB_SHA:0:12}"
+          fi
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::not a release tag name: $tag"
+            exit 1
+          fi
+          echo "release: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'push'
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # The tag must name the built commit, and that commit must be on main as it is now: a tag
+      # pushed on a branch that is not merged, or on a commit main no longer holds, is refused.
+      - name: Check that the tag names a commit of main
+        if: github.event_name == 'push'
+        env:
+          RELEASE_TAG: ${{ steps.name.outputs.tag }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          commit="$(git rev-parse --verify "$GITHUB_SHA^{commit}")"
+          tagged="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
+          if [ "$tagged" != "$commit" ]; then
+            echo "::error::tag $RELEASE_TAG names $tagged, not the built commit $commit"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$commit" refs/remotes/origin/main; then
+            echo "::error::$RELEASE_TAG names $commit, which is not on main: tag a commit of main"
+            exit 1
+          fi
+          echo "$RELEASE_TAG names $commit, on main"
+
+  linux:
+    name: ${{ matrix.target }} (static musl)
+    needs: tag
+    runs-on: ${{ matrix.runner }}
+    # Cold: the compiler and every dependency are built from source inside the container.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-24.04
+          - target: linux-aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The opam root of the build container (compiler and dependencies), restored from the cache
+      # that a manual run on main saved; the key follows everything that changes the build, and
+      # only an exact key match is restored (no restore-keys): otherwise the build is cold.
+      - name: Restore the container's opam root
+        id: opam-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/opam-static
+          key: release-opam-static-${{ matrix.target }}-${{ env.ALPINE_IMAGE }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh', 'scripts/release-build-static.sh', 'scripts/release-pins.sh', 'scripts/build-sqlite.sh', 'scripts/bundle/sqlite.sha256') }}
+      - name: Build static executables in Alpine
+        run: |
+          mkdir -p "$RUNNER_TEMP/opam-static" "$RUNNER_TEMP/out"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -v "$RUNNER_TEMP/out:/out" \
+            -v "$RUNNER_TEMP/opam-static:/opam" \
+            "$ALPINE_IMAGE" \
+            sh -c 'apk update >/dev/null && apk add bash >/dev/null && exec bash /src/scripts/release-build-static.sh /src /out'
+          # The container ran as root: its files must belong to the runner user before the cache
+          # is saved (the cache action reads them as that user) and the later steps read them.
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/opam-static" "$RUNNER_TEMP/out"
+      - name: Save the container's opam root
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.opam-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/opam-static
+          key: ${{ steps.opam-cache.outputs.cache-primary-key }}
+      - name: Check that the executables are static
+        run: |
+          for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history; do
+            info="$(file "$RUNNER_TEMP/out/$program")"
+            echo "$info"
+            [[ "$info" == *"statically linked"* ]]
+            [[ "$(LC_ALL=C ldd "$RUNNER_TEMP/out/$program" 2>&1 || true)" == *"not a dynamic executable"* ]]
+          done
+      # The smoke script talks to the host's socket with nc -U.
+      - name: Install netcat for the smoke check
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends netcat-openbsd
+      - name: Smoke check on the runner
+        run: bash scripts/release-smoke.sh "$RUNNER_TEMP/out"
+      - name: Name the assets
+        run: bash scripts/release-assets.sh name "$RUNNER_TEMP/out" "${{ matrix.target }}" "$RUNNER_TEMP/assets"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: programs-${{ matrix.target }}
+          path: ${{ runner.temp }}/assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    name: macos-arm64
+    needs: tag
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      # mesh-history carries the pinned SQLite (scripts/build-sqlite.sh), built in the cached local switch so
+      # that a restored switch keeps the path its sqlite3 binding recorded; no Homebrew library is linked.
+      MESH_SQLITE_PREFIX: ${{ github.workspace }}/_opam/mesh-sqlite
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore the opam state
+        id: opam-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # The opam root and the local switch _opam that setup-ocaml creates in the workspace and
+        # bootstrap.sh installs into, as in public-ci.yml.
+        with:
+          path: |
+            ~/.opam
+            _opam
+          # The deployment target is part of the key: objects of a switch built for another
+          # target must not be linked into this one. Exact match only (no restore-keys): a
+          # missing key means a cold build.
+          key: release-opam-macos-arm64-${{ env.OCAML_COMPILER }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh', 'scripts/release-pins.sh', 'scripts/build-sqlite.sh', 'scripts/bundle/sqlite.sha256') }}
+      - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3.9.1
+        with:
+          ocaml-compiler: ${{ env.OCAML_COMPILER }}
+          opam-pin: false
+          cache: false
+      # The deployment target is the floor the installer checks a Mac against (install.sh).
+      - name: Check the deployment target against PROGRAMS_MACOS_FLOOR
+        run: test "$MACOSX_DEPLOYMENT_TARGET" = "$(bash scripts/release-floor.sh macos-programs)"
+      # The same fixed opam repository commit as the Linux build.
+      - name: Fix the opam repository commit
+        run: |
+          source scripts/release-pins.sh
+          opam repository set-url default "$opam_repository"
+          opam update default
+      - name: Install the OCaml dependencies (scripts/bootstrap.sh --deps-only)
+        run: bash scripts/bootstrap.sh --deps-only
+      - name: Save the opam state
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.opam-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.opam
+            _opam
+          key: ${{ steps.opam-cache.outputs.cache-primary-key }}
+      # The build output is kept for the linker check below (pipefail: a failed build fails here).
+      - name: Build and strip
+        run: |
+          (cd ocaml && opam exec -- dune build -p session_mesh @install 2>&1) | tee "$RUNNER_TEMP/build.log"
+          mkdir -p "$RUNNER_TEMP/out"
+          for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history; do
+            cp -L "ocaml/_build/install/default/bin/$program" "$RUNNER_TEMP/out/$program"
+            chmod u+w "$RUNNER_TEMP/out/$program"
+            strip "$RUNNER_TEMP/out/$program"
+          done
+      # Only the system library (/usr/lib/libSystem.B.dylib) may be linked: a Homebrew or opam
+      # library would not exist on the machine that downloads the binary.
+      - name: Check what the executables link
+        run: |
+          bash scripts/release-check-macos.sh links \
+            "$RUNNER_TEMP/out/mesh-ptyhost" "$RUNNER_TEMP/out/mesh-board-mcp" \
+            "$RUNNER_TEMP/out/mesh-read" "$RUNNER_TEMP/out/mesh-platform" "$RUNNER_TEMP/out/mesh-history"
+      # A binary holding objects built for a newer macOS than MACOSX_DEPLOYMENT_TARGET may fail
+      # to load on the oldest supported version. The linker says so in the build output; the
+      # OCaml runtime of a restored switch is checked directly, from its own load commands.
+      - name: Check the deployment target
+        run: |
+          bash scripts/release-check-macos.sh linker-log "$RUNNER_TEMP/build.log"
+          opam exec -- bash scripts/release-check-macos.sh runtime-minos "$MACOSX_DEPLOYMENT_TARGET"
+      - name: Smoke check on the runner
+        run: bash scripts/release-smoke.sh "$RUNNER_TEMP/out"
+      - name: Name the assets
+        run: bash scripts/release-assets.sh name "$RUNNER_TEMP/out" macos-arm64 "$RUNNER_TEMP/assets"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: programs-macos-arm64
+          path: ${{ runner.temp }}/assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # The Linux bundles, built in the manylinux_2_28 image of each architecture (AlmaLinux 8, glibc
+  # 2.28) pinned by digest in the matrix (scripts/release-build-bundle-linux.sh): the native
+  # programs, then the bundle. Then, on the runner: no file of the bundle may need a glibc newer than
+  # the floor (scripts/release-check-glibc.sh, BUNDLE_GLIBC_FLOOR of install.sh), the extracted
+  # bundle is smoke-tested in the build image itself (glibc 2.28, the floor) and on the runner, and
+  # its demo compiler is tested in bubblewrap, which a container cannot run. The artifact holds that
+  # one archive.
+  linux-bundle:
+    name: ${{ matrix.target }} bundle
+    needs: tag
+    runs-on: ${{ matrix.runner }}
+    # Cold: the compiler and every OCaml dependency are built from source inside the container.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-22.04
+            # quay.io/pypa/manylinux_2_28_x86_64, the image of 2026-11-15.
+            image: quay.io/pypa/manylinux_2_28_x86_64@sha256:d086f64cddcace250ef0f0073583c51b8298159303290a730c9f59bd91edfd2c
+          - target: linux-arm64
+            runner: ubuntu-22.04-arm
+            # quay.io/pypa/manylinux_2_28_aarch64, the image of 2026-11-15.
+            image: quay.io/pypa/manylinux_2_28_aarch64@sha256:34a5e614a4eb26f73f8bf44cbbf2acf8011620453d03ea35a58537bb3cde44de
+    env:
+      TARGET: ${{ matrix.target }}
+      MANYLINUX_IMAGE: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mathiasbourgoin/roster
+          ref: ${{ env.ROSTER_REVISION }}
+          path: .bundle-roster
+          persist-credentials: false
+      # The opam root of the build container, restored by exact key only (no restore-keys): a
+      # missing key means a cold build.
+      - name: Restore the container's opam root
+        id: opam-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/opam-bundle
+          key: release-opam-bundle-${{ matrix.target }}-${{ matrix.image }}-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh', 'scripts/release-build-bundle-linux.sh', 'scripts/bundle/linux-builder.sha256', 'scripts/release-pins.sh', 'scripts/build-sqlite.sh', 'scripts/bundle/sqlite.sha256') }}
+      - name: Build the bundle in the manylinux_2_28 image
+        run: |
+          mkdir -p "$RUNNER_TEMP/opam-bundle" "$RUNNER_TEMP/out"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -v "$RUNNER_TEMP/out:/out" \
+            -v "$RUNNER_TEMP/opam-bundle:/opam" \
+            -e PYTHON_VERSION -e OCAML_COMPILER -e GITHUB_SERVER_URL -e GITHUB_REPOSITORY \
+            "$MANYLINUX_IMAGE" \
+            bash /src/scripts/release-build-bundle-linux.sh /src /out /src/.bundle-roster
+          # The container ran as root: its files must belong to the runner user before the cache
+          # is saved and the later steps read them.
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/opam-bundle" "$RUNNER_TEMP/out"
+          test -f "$RUNNER_TEMP/out/mesh-$TARGET.tar.gz"
+      - name: Save the container's opam root
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.opam-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/opam-bundle
+          key: ${{ steps.opam-cache.outputs.cache-primary-key }}
+      - name: Check that no file of the bundle needs a newer glibc than the floor
+        run: bash scripts/release-check-glibc.sh "$RUNNER_TEMP/out/mesh-$TARGET.tar.gz"
+      # The qualification of the platform: the extracted bundle, with only the system's utilities
+      # on PATH, serves HTTP, runs a native PTY session and answers MCP; first on glibc 2.28 (the
+      # build image, with the distribution's git in /usr/bin for the project observation, as on a
+      # user's machine), then on the runner.
+      - name: Smoke-test the extracted bundle on glibc 2.28, in the build image
+        run: |
+          docker run --rm -e MESH_SMOKE_REQUIRE_ROSTER=1 -v "$GITHUB_WORKSPACE:/src:ro" -v "$RUNNER_TEMP/out:/out:ro" \
+            "$MANYLINUX_IMAGE" \
+            bash -c 'dnf install -y -q git-core >/dev/null && exec bash /src/scripts/smoke-bundle.sh "$0"' "/out/mesh-$TARGET.tar.gz"
+      - name: Smoke-test the extracted bundle on the runner
+        run: bash scripts/smoke-bundle.sh "$RUNNER_TEMP/out/mesh-$TARGET.tar.gz"
+        env:
+          MESH_SMOKE_REQUIRE_ROSTER: "1"
+      - name: Install bubblewrap for the demo compiler test
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap
+      # The test build-bundle.sh leaves to the caller in a container (--skip-compiler-test).
+      - name: Test the bundle's demo compiler in bubblewrap, on the runner
+        run: |
+          work="$(mktemp -d)"
+          tar -xzf "$RUNNER_TEMP/out/mesh-$TARGET.tar.gz" -C "$work"
+          node_bin="$work/mesh-$TARGET/runtime/node/bin"
+          PATH="$node_bin:$PATH" "$node_bin/node" "$work/mesh-$TARGET/app/demo-compiler/test-compiler.mjs"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bundle-${{ matrix.target }}
+          path: ${{ runner.temp }}/out/mesh-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # The macOS arm64 bundle, on the runner of the macOS programs: its native programs are built for
+  # the same deployment target and pass the same link and deployment-target checks as the macos
+  # job's, then every Mach-O file of the bundle (its programs, Node, CPython and the Python
+  # extensions) is checked against BUNDLE_MACOS_FLOOR of install.sh, then the extracted bundle is
+  # smoke-tested. The one optional build job: if it fails, the release is published without it.
+  macos-bundle:
+    name: macos-arm64 bundle
+    needs: tag
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      TARGET: macos-arm64
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      # mesh-history carries the pinned SQLite (scripts/build-sqlite.sh), built in the cached local switch so
+      # that a restored switch keeps the path its sqlite3 binding recorded; no Homebrew library is linked.
+      MESH_SQLITE_PREFIX: ${{ github.workspace }}/_opam/mesh-sqlite
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mathiasbourgoin/roster
+          ref: ${{ env.ROSTER_REVISION }}
+          path: .bundle-roster
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      # As in the macos job, the deployment target is part of the key, and only an exact key
+      # match is restored.
+      - name: Restore the opam state
+        id: opam-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.opam
+            _opam
+          key: release-opam-bundle-macos-arm64-${{ env.OCAML_COMPILER }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh', 'scripts/release-pins.sh', 'scripts/build-sqlite.sh', 'scripts/bundle/sqlite.sha256') }}
+      - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3.9.1
+        with:
+          ocaml-compiler: ${{ env.OCAML_COMPILER }}
+          opam-pin: false
+          cache: false
+      - name: Fix the opam repository commit
+        run: |
+          source scripts/release-pins.sh
+          opam repository set-url default "$opam_repository"
+          opam update default
+      - name: Install the OCaml dependencies (scripts/bootstrap.sh --deps-only)
+        run: bash scripts/bootstrap.sh --deps-only
+      - name: Save the opam state
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.opam-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.opam
+            _opam
+          key: ${{ steps.opam-cache.outputs.cache-primary-key }}
+      # The build output is kept for the linker check below (pipefail: a failed build fails here).
+      - name: Build the native programs
+        run: bash scripts/bootstrap.sh --install-only 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Check the native programs as the macos job does
+        run: |
+          bin="$(opam var bin)"
+          bash scripts/release-check-macos.sh links \
+            "$bin/mesh-ptyhost" "$bin/mesh-board-mcp" "$bin/mesh-read" "$bin/mesh-platform" "$bin/mesh-history"
+          bash scripts/release-check-macos.sh linker-log "$RUNNER_TEMP/build.log"
+          opam exec -- bash scripts/release-check-macos.sh runtime-minos "$MACOSX_DEPLOYMENT_TARGET"
+      - name: Build the bundle
+        run: |
+          bash scripts/build-bundle.sh --output "$RUNNER_TEMP/out" --native-bin "$(opam var bin)" \
+            --roster-dir "$GITHUB_WORKSPACE/.bundle-roster" --python-version "$PYTHON_VERSION"
+          test -f "$RUNNER_TEMP/out/mesh-$TARGET.tar.gz"
+      - name: Check the deployment target and the libraries of the bundle
+        run: bash scripts/release-check-macos.sh bundle "$RUNNER_TEMP/out/mesh-$TARGET.tar.gz" "$(bash scripts/release-floor.sh macos-bundle)"
+      - name: Smoke-test the extracted bundle
+        run: bash scripts/smoke-bundle.sh "$RUNNER_TEMP/out/mesh-$TARGET.tar.gz"
+        env:
+          MESH_SMOKE_REQUIRE_ROSTER: "1"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bundle-macos-arm64
+          path: ${{ runner.temp }}/out/mesh-macos-arm64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # Assembles every file of the release from the programs and bundles of the build jobs and the
+  # built commit: the code archive, the stamped install.sh and SHA256SUMS
+  # (scripts/release-assets.sh bundle). Read-only, as the build jobs; a dry run keeps the result as a
+  # workflow artifact. It runs when every required build job passed, whatever the macOS bundle job
+  # did, and takes the macOS bundle only when that job passed. It also hands the floors of
+  # install.sh to the publish job, for the release notes.
+  package:
+    name: release files
+    needs: [tag, linux, macos, linux-bundle, macos-bundle]
+    if: needs.tag.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success' && needs.linux-bundle.result == 'success' && !cancelled()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      glibc-floor: ${{ steps.floors.outputs.glibc }}
+      macos-bundle-floor: ${{ steps.floors.outputs.macos-bundle }}
+      macos-programs-floor: ${{ steps.floors.outputs.macos-programs }}
+    env:
+      RELEASE_TAG: ${{ needs.tag.outputs.tag }}
+      MACOS_BUNDLE_RESULT: ${{ needs.macos-bundle.result }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Each build's artifact by its exact name, into its own directory; the collect steps take from
+      # it only the files of that target, and refuse it if it holds anything else. A build job
+      # therefore cannot provide the files of another target through an extra artifact (a download
+      # by pattern, merged, would let one overwrite another's files).
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: programs-linux-x86_64
+          path: ${{ runner.temp }}/programs/linux-x86_64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: programs-linux-aarch64
+          path: ${{ runner.temp }}/programs/linux-aarch64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: programs-macos-arm64
+          path: ${{ runner.temp }}/programs/macos-arm64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bundle-linux-x86_64
+          path: ${{ runner.temp }}/bundles/linux-x86_64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bundle-linux-arm64
+          path: ${{ runner.temp }}/bundles/linux-arm64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.macos-bundle.result == 'success'
+        with:
+          name: bundle-macos-arm64
+          path: ${{ runner.temp }}/bundles/macos-arm64
+      - name: Collect the programs and the bundle of each target
+        run: |
+          for target in linux-x86_64 linux-aarch64 macos-arm64; do
+            bash scripts/release-assets.sh collect "$target" "$RUNNER_TEMP/programs/$target" "$RUNNER_TEMP/dist"
+          done
+          platforms="linux-x86_64 linux-arm64"
+          if [ "$MACOS_BUNDLE_RESULT" = success ]; then
+            platforms="$platforms macos-arm64"
+          else
+            echo "::warning::the macOS bundle job did not pass ($MACOS_BUNDLE_RESULT): the release has no mesh-macos-arm64.tar.gz"
+          fi
+          for platform in $platforms; do
+            bash scripts/release-assets.sh collect-bundle "$platform" "$RUNNER_TEMP/bundles/$platform" "$RUNNER_TEMP/dist"
+          done
+      - name: Assemble the release files
+        run: bash scripts/release-assets.sh bundle "$RELEASE_TAG" "$GITHUB_SHA" "$RUNNER_TEMP/dist"
+      - name: Read the floors of install.sh
+        id: floors
+        run: |
+          for floor in glibc macos-bundle macos-programs; do
+            echo "$floor=$(bash scripts/release-floor.sh "$floor")" >> "$GITHUB_OUTPUT"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # The only job with a write token, and only for a tag push. It never checks out, builds or runs
+  # anything from the other jobs: it checks the files of the package job against their SHA256SUMS,
+  # attests them and publishes the release.
+  publish:
+    name: publish release
+    needs: [tag, package]
+    if: needs.tag.result == 'success' && needs.package.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !cancelled()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # contents: write creates the release; id-token and attestations: write sign the build
+    # provenance (the attest step). Nothing else is writable in this workflow.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_TAG: ${{ needs.tag.outputs.tag }}
+      GLIBC_FLOOR: ${{ needs.package.outputs.glibc-floor }}
+      MACOS_BUNDLE_FLOOR: ${{ needs.package.outputs.macos-bundle-floor }}
+      MACOS_PROGRAMS_FLOOR: ${{ needs.package.outputs.macos-programs-floor }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: dist
+      # Exactly the 15 programs, the 2 Linux bundles, the macOS bundle or not, the code archive of
+      # this tag, install.sh and SHA256SUMS, which lists every other file and matches each: 21 or
+      # 20 files, and no other set.
+      - name: Check the release files
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::not a release tag name: $RELEASE_TAG"; exit 1; }
+          for floor in "$GLIBC_FLOOR" "$MACOS_BUNDLE_FLOOR" "$MACOS_PROGRAMS_FLOOR"; do
+            [[ "$floor" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "::error::not a version: $floor"; exit 1; }
+          done
+          cd dist
+          mapfile -t present < <(find . -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)
+          expected=(install.sh SHA256SUMS "session-mesh-$RELEASE_TAG.tar.gz" mesh-linux-x86_64.tar.gz mesh-linux-arm64.tar.gz)
+          for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history; do
+            for target in linux-x86_64 linux-aarch64 macos-arm64; do expected+=("$program-$target"); done
+          done
+          if [ -e mesh-macos-arm64.tar.gz ]; then expected+=(mesh-macos-arm64.tar.gz); fi
+          test "$(printf '%s\n' "${present[@]}")" = "$(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)"
+          test "${#present[@]}" -eq 20 || test "${#present[@]}" -eq 21
+          test "$(printf '%s\n' "${present[@]}" | grep -vx SHA256SUMS)" = "$(awk '{print $2}' SHA256SUMS | LC_ALL=C sort)"
+          sha256sum --check --strict SHA256SUMS
+      # A signed statement (Sigstore, keyless: the run's OIDC identity, no key to manage) that each
+      # file, SHA256SUMS included, was built by this workflow from this tag. It runs before the
+      # release is created: if it fails, nothing is published. Verify with `gh attestation verify
+      # <file> --repo <owner>/<repo> --signer-workflow <owner>/<repo>/.github/workflows/release.yml
+      # --source-ref refs/tags/<tag>`.
+      - name: Attest the build provenance of the released files
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+      # One step, with the gh CLI preinstalled on the runner (no third-party action holds the write
+      # token). A release that already exists for the tag, published or draft, is never modified:
+      # the step refuses, so a re-run cannot replace or add files of an existing release. The tag
+      # must still name the built commit (it may have been moved since the push); the release
+      # requires the tag as it is (--verify-tag) and never creates one.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export GH_REPO="$GITHUB_REPOSITORY"
+          existing="$(gh api --paginate "repos/$GH_REPO/releases" --jq '.[].tag_name')"
+          if printf '%s\n' "$existing" | grep -Fxq -- "$RELEASE_TAG"; then
+            echo "::error::a release for $RELEASE_TAG already exists (published or draft); it is left unchanged"
+            exit 1
+          fi
+          # An annotated tag lists the tag object, then its commit (^{}): the last line is the commit.
+          refs="$(git ls-remote "https://github.com/$GH_REPO.git" "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
+          tagged="$(printf '%s\n' "$refs" | awk 'END {print $1}')"
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::tag $RELEASE_TAG points at ${tagged:-nothing}, not at the built commit $GITHUB_SHA"
+            exit 1
+          fi
+          # A tag with a -<suffix> (v1.2.0-rc.1) is a pre-release: never reported as the latest.
+          kind=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then kind=(--prerelease); fi
+          # gh makes every new release the latest one. A release older than the current latest
+          # (v1.2.4, a fix of an older line, after v1.3.0) is published with --latest=false, so
+          # that installers asking for the latest release keep getting the newest one. Versions
+          # are compared as semver: numbers as numbers, then pre-release identifiers one by one.
+          prerelease_older() {
+            local -a x y
+            local i a b
+            # Identifiers compare in ASCII order, whatever the runner locale (bash >= 4.1 collates [[ < ]]).
+            local LC_ALL=C
+            IFS=. read -r -a x <<< "$1"
+            IFS=. read -r -a y <<< "$2"
+            for ((i = 0; i < ${#x[@]}; i++)); do
+              if ((i >= ${#y[@]})); then return 1; fi
+              a=${x[i]} b=${y[i]}
+              if [[ $a == "$b" ]]; then continue; fi
+              if [[ $a =~ ^[0-9]+$ && $b =~ ^[0-9]+$ ]]; then ((10#$a < 10#$b)) && return 0; return 1; fi
+              if [[ $a =~ ^[0-9]+$ ]]; then return 0; fi
+              if [[ $b =~ ^[0-9]+$ ]]; then return 1; fi
+              [[ $a < $b ]] && return 0; return 1
+            done
+            ((${#x[@]} < ${#y[@]})) && return 0; return 1
+          }
+          version_older() {
+            local a=${1#v} b=${2#v} i
+            local -a x y
+            IFS=. read -r -a x <<< "${a%%-*}"
+            IFS=. read -r -a y <<< "${b%%-*}"
+            for i in 0 1 2; do
+              if ((10#${x[i]} < 10#${y[i]})); then return 0; fi
+              if ((10#${x[i]} > 10#${y[i]})); then return 1; fi
+            done
+            if [[ $a != *-* ]]; then return 1; fi
+            if [[ $b != *-* ]]; then return 0; fi
+            prerelease_older "${a#*-}" "${b#*-}"
+          }
+          latest=()
+          if [ "${#kind[@]}" -eq 0 ]; then
+            # No published release yet: GitHub answers 404 and this one becomes the latest.
+            if current="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>"$RUNNER_TEMP/latest.err")"; then
+              if ! [[ "$current" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+                echo "::error::the latest release $current is not a release tag name; cannot order $RELEASE_TAG against it, nothing was published"
+                exit 1
+              fi
+              if version_older "$RELEASE_TAG" "$current"; then
+                echo "$RELEASE_TAG is older than the latest release $current: published with --latest=false"
+                latest=(--latest=false)
+              fi
+            elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/latest.err"; then
+              cat "$RUNNER_TEMP/latest.err" >&2
+              echo "::error::cannot read the latest release of $GH_REPO; nothing was published"
+              exit 1
+            fi
+          fi
+          if [ -e dist/mesh-macos-arm64.tar.gz ]; then
+            bundles="mesh-linux-x86_64.tar.gz, mesh-linux-arm64.tar.gz (Linux with glibc $GLIBC_FLOOR or newer) and mesh-macos-arm64.tar.gz (macOS $MACOS_BUNDLE_FLOOR or newer)"
+            macos="The macOS bundle is part of this release."
+          else
+            bundles="mesh-linux-x86_64.tar.gz and mesh-linux-arm64.tar.gz (Linux with glibc $GLIBC_FLOOR or newer)"
+            macos="This release has no macOS bundle (its build did not pass): on a Mac, install.sh installs the macOS native programs and the code archive, run with the Mac's Python 3.10 or newer with aiohttp (MESH_PYTHON)."
+          fi
+          {
+            echo "Install with install.sh, after checking it: see \"Prebuilt binaries\" in docs/operations.md."
+            echo "Files: install.sh (this release's installer, which checks every file it downloads); the bundles $bundles,"
+            echo "session-mesh with its own Python and Node runtimes and native programs; the native programs mesh-ptyhost,"
+            echo "mesh-board-mcp, mesh-read, mesh-platform and mesh-history for linux-x86_64, linux-aarch64 (static executables) and"
+            echo "macos-arm64 (macOS $MACOS_PROGRAMS_FLOOR or newer), with the code archive session-mesh-$RELEASE_TAG.tar.gz; and SHA256SUMS."
+            echo "install.sh installs the bundle of your platform when your system meets its floor, otherwise the native"
+            echo "programs and the code archive. $macos Every file carries a build provenance attestation."
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$RELEASE_TAG" --verify-tag "${kind[@]}" "${latest[@]}" --title "$RELEASE_TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" -- dist/*

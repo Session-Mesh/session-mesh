@@ -1,0 +1,14 @@
+{
+  "code": "globalThis.__mesh_result={type:\"text\",text:\"ok\"};",
+  "canonical": "{\"version\":1,\"runner_id\":\"runner_a\",\"resource_id\":\"resource_1\",\"incarnation\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"demo_id\":\"demo_01\",\"revision\":3,\"format\":\"tsx-quickjs-v0\",\"code_digest\":\"c52fd3de91e7fadaa0c16cc294324e26889d0f3ffa1e86ca380161851446f5b0\",\"compiler_profile\":\"esbuild-0.25.10-bwrap-v1\",\"runtime_profile\":\"quickjs-emscripten-0.32.0+worker-v1+view-v0\",\"limits\":{\"code_bytes\":131072,\"frame_time_ms\":60000,\"output_bytes\":65536,\"text_bytes\":2000,\"nodes\":100,\"depth\":6,\"update_interval_ms\":100}}",
+  "expected": {
+    "runner_id": "runner_a",
+    "resource_id": "resource_1",
+    "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "demo_id": "demo_01",
+    "revision": 3,
+    "code_digest": "c52fd3de91e7fadaa0c16cc294324e26889d0f3ffa1e86ca380161851446f5b0",
+    "compiler_profile": "esbuild-0.25.10-bwrap-v1",
+    "runtime_profile": "quickjs-emscripten-0.32.0+worker-v1+view-v0"
+  }
+}

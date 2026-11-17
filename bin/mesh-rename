@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+"""mesh-rename — rename a session-mesh session, or file it in a folder.
+
+  mesh-rename NEW NAME                  rename the mesh session this runs in
+  mesh-rename -s SESSION NEW NAME       rename another session (mesh-attach -l)
+  mesh-rename --clear [-s SESSION]      back to the default name
+  mesh-rename --folder FOLDER [-s S]    file the session in a folder (created
+                                        if needed); --folder "" takes it out
+
+The name is a label shown by the mesh (and by mesh-attach -l); the session
+keeps its ptyhost name, used by `mesh-attach NAME`."""
+
+import argparse
+import asyncio
+import json
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import meshpaths  # noqa: E402
+import localmesh  # noqa: E402
+import ptyhost  # noqa: E402
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirection is an error: following it would resend the Authorization header to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, None)
+
+
+# Never through a proxy, never redirected: the request carries the master token and is meant for this host only.
+LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
+
+
+def organize(op):
+    try:
+        token = (meshpaths.CONF_DIR / "token").read_text().strip()
+    except OSError as e:
+        sys.exit(f"mesh-rename: session-mesh token not found ({e}); is session-mesh installed for this user?")
+    req = urllib.request.Request(
+        meshpaths.local_url("/api/organize"), data=json.dumps(op).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+    try:
+        with LOCAL.open(req, timeout=10) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"mesh-rename : {e.read().decode() or e.reason}")
+    except OSError as e:
+        sys.exit(f"mesh-rename: session-mesh is not responding ({e})")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="mesh-rename", description=__doc__.split("\n\n")[0])
+    ap.add_argument("name", nargs="*", help="new name")
+    ap.add_argument("-s", "--session", help="mesh session (default: the current one)")
+    ap.add_argument("--clear", action="store_true", help="go back to the default name")
+    ap.add_argument("--folder", help="put it in this folder (\"\": no folder)")
+    args = ap.parse_args()
+    try:
+        sessions = asyncio.run(ptyhost.request({"op": "list"}))
+    except OSError:
+        sys.exit("mesh-rename: ptyhost is not responding")
+    target = args.session or localmesh.current_session(sessions)
+    if not target:
+        sys.exit("mesh-rename: not inside a mesh session; name one with -s (mesh-attach -l)")
+    if not (args.name or args.clear or args.folder is not None):
+        ap.error("give a name, --clear or --folder")
+    if args.folder is not None:
+        folder = args.folder.strip()
+        if folder:
+            organize({"op": "folder-add", "name": folder})
+        organize({"op": "move", "id": target, "folder": folder or None, "before": None})
+        print(f"{target}: folder “{folder}”" if folder else f"{target}: no folder")
+    if args.name or args.clear:
+        label = "" if args.clear else " ".join(args.name)
+        organize({"op": "rename", "id": target, "label": label})
+        print(f"{target}: “{label}”" if label else f"{target}: default name")
+
+
+if __name__ == "__main__":
+    main()

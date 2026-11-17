@@ -1,0 +1,87 @@
+name: Bug report
+description: Something in session-mesh does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. This issue is public: before pasting output, remove anything private,
+        such as your token, user name, host names, paths, session names and conversation text.
+        A security problem goes through SECURITY.md, not a public issue.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ./install.sh
+        2. ...
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: session-mesh version
+      description: The output of `git rev-parse --short HEAD` in your checkout.
+    validations:
+      required: true
+  - type: input
+    id: distribution
+    attributes:
+      label: Linux distribution and version
+      placeholder: Debian 12, Ubuntu 24.04, Fedora 41, Arch...
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: The interpreter the units run (`MESH_PYTHON`, otherwise `python3 --version`).
+    validations:
+      required: true
+  - type: input
+    id: aiohttp
+    attributes:
+      label: aiohttp version
+      description: The output of `python3 -c 'import aiohttp; print(aiohttp.__version__)'` with that interpreter.
+    validations:
+      required: true
+  - type: input
+    id: systemd
+    attributes:
+      label: systemd version
+      description: The first line of `systemctl --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: pty-host
+    attributes:
+      label: PTY host
+      options:
+        - Native (mesh-ptyhost)
+        - I do not know
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and device, for an interface problem
+      placeholder: Firefox 133 on a desktop, Chrome on Android...
+    validations:
+      required: false
+  - type: textarea
+    id: journal
+    attributes:
+      label: Journal excerpt
+      description: |
+        The relevant lines of `journalctl --user -u session-mesh -u session-mesh-pty --since "10 min ago"`,
+        with private details removed.
+      render: text
+    validations:
+      required: false

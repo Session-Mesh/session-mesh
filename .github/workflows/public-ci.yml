@@ -1,0 +1,529 @@
+# Public CI of session-mesh: the local-mode suite of scripts/test-local.sh, split
+# into parallel jobs on GitHub-hosted runners, plus the leak check with the
+# public rules only, and the CLA check of every commit of a pull request (the job also runs
+# elsewhere, to fail there: see the cla job). No
+# secret, no self-hosted runner, read-only token, every third-party action
+# pinned by full commit SHA (tag in the trailing comment).
+# Fork pull requests run with the same unprivileged token as everyone else
+# (`pull_request`, never `pull_request_target`). tests/public-ci-workflow.test.ts
+# and tests/public-ci-workflow-cla.test.ts enforce these rules.
+# Ten minutes per job is a target, not a limit: timeout-minutes is a safety net that ends a
+# hung job (45 minutes), never a cap that cancels a slow runner's run.
+name: public-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # The default three, plus `edited`: a pull request whose base branch is changed is checked
+    # again against the new base (the cla job; tools/cla-check/SPEC.md). Every job runs on it, so
+    # that no required check is left as skipped. A title or description edit also re-runs them.
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    # bash -eo pipefail: a failing stage of a pipeline fails the step.
+    shell: bash
+
+env:
+  # Generic rules only: the private list never reaches CI.
+  MESH_LEAK_PRIVATE_RULES: ""
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "24"
+  # The bash 3.2 of macOS, for the installer parse test (tests/install-macos.test.ts): bash 3.2.57,
+  # pinned by the digest of its multi-platform index.
+  BASH32_IMAGE: bash:3.2@sha256:2556c2da19c32c1614d318645c73a7bf64d38be21cf69e98e3ca51f053983719
+
+jobs:
+  frontend:
+    name: frontend and Node tests
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            demo-compiler/package-lock.json
+      # The native PTY host, built once by the native job: every test job runs against it.
+      - name: Fetch the native PTY host
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mesh-ptyhost-linux-x86_64
+          path: ${{ runner.temp }}/native-host
+      - name: Point the tests at the native PTY host
+        run: |
+          chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost"
+          # The plain absolute path (CONTRIBUTING.md, "Which PTY host the tests run"): no quoting.
+          echo "MESH_PTYHOST_CMD=$RUNNER_TEMP/native-host/mesh-ptyhost" >> "$GITHUB_ENV"
+      # Some Node tests start server.py or the bin/ scripts with MESH_PYTHON: they get
+      # the pinned test interpreter, and the step fails here if it lacks the runtime dependencies.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install the Python the Node tests start
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -c 'import aiohttp, cryptography'
+          echo "MESH_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
+      # The demo compiler test runs scripts/compile-demo-tsx.sh inside bubblewrap. Ubuntu 24.04
+      # forbids unprivileged user namespaces without an AppArmor profile: the narrowest way out of
+      # docs/development.md ("bubblewrap and Ubuntu 24.04"), the profile for /usr/bin/bwrap only, then the
+      # preflight probe of scripts/test-local.sh.
+      - name: Install bubblewrap and its AppArmor profile
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap apparmor-profiles
+          sudo cp /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          /usr/bin/bwrap --unshare-all --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind-try /lib64 /lib64 -- /usr/bin/true
+      - name: Install gitleaks (pinned, SHA-256 checked)
+        run: |
+          bash .github/scripts/install-gitleaks.sh "$RUNNER_TEMP/gitleaks"
+          echo "MESH_LEAK_GITLEAKS=$RUNNER_TEMP/gitleaks/gitleaks" >> "$GITHUB_ENV"
+      - name: Frontend checks
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm run check:folder-state
+          npm run check:pane-actions
+          npm run check:workspace-spec
+          npm run check:ptyhost-lifecycle
+          npm ci --ignore-scripts --no-audit --no-fund --prefix demo-compiler
+          npm test --prefix demo-compiler
+      # MESH_BASH32 runs the digest-pinned bash 3.2 image on the checkout, read-only.
+      - name: A bash 3.2 for the installer parse test
+        run: |
+          docker pull -q "$BASH32_IMAGE"
+          wrapper="$RUNNER_TEMP/bash32/bash"
+          mkdir -p "${wrapper%/*}"
+          cat > "$wrapper" <<'WRAPPER'
+          #!/bin/sh
+          exec docker run --rm -v "$PWD:$PWD:ro" -w "$PWD" "$BASH32_IMAGE" bash "$@"
+          WRAPPER
+          chmod +x "$wrapper"
+          # Captured whole, then the first line checked: `| head -n 1` closed the pipe while docker
+          # still wrote, and pipefail failed the step on that broken pipe.
+          version="$("$wrapper" --version)"
+          printf '%s\n' "${version%%$'\n'*}" | grep -F 'version 3.2.'
+          echo "MESH_BASH32=$wrapper" >> "$GITHUB_ENV"
+      - name: Node tests
+        run: |
+          source scripts/test-tmpdir.sh
+          export TMPDIR=/tmp
+          mesh_prepare_test_tmpdir
+          mapfile -d '' files < <(find tests -type f \( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \) \
+            -not -path '*/node_modules/*' -print0 | sort -z)
+          # Four files at a time on any runner: most tests wait on servers and timers, and a 2-vCPU
+          # runner would otherwise run one file at a time (Node's default there), far past 10 minutes.
+          node --experimental-strip-types --test --test-concurrency=4 "${files[@]}"
+
+  python:
+    name: ruff and pytest (without browser)
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Fetch the native PTY host
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mesh-ptyhost-linux-x86_64
+          path: ${{ runner.temp }}/native-host
+      - name: Point the tests at the native PTY host
+        run: |
+          chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost"
+          # The plain absolute path (CONTRIBUTING.md, "Which PTY host the tests run"): no quoting.
+          echo "MESH_PTYHOST_CMD=$RUNNER_TEMP/native-host/mesh-ptyhost" >> "$GITHUB_ENV"
+      - name: Install dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          python -m pip install -r requirements-dev.txt
+      - name: ruff
+        run: python -m ruff check .
+      - name: pytest
+        run: |
+          source scripts/test-tmpdir.sh
+          export TMPDIR=/tmp
+          mesh_prepare_test_tmpdir
+          python -m pytest -q -m 'not browser'
+
+  browser:
+    name: browser tests (Chromium, shard ${{ matrix.shard }} of 4)
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # The whole browser suite runs serially in about 9 minutes on a fast
+    # workstation: four shards keep each job within the 10-minute target on a runner.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      SHARDS: 4
+      SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            requirements-browser.txt
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements-browser.txt') }}
+      - name: Fetch the native PTY host
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mesh-ptyhost-linux-x86_64
+          path: ${{ runner.temp }}/native-host
+      - name: Point the tests at the native PTY host
+        run: |
+          chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost"
+          # The plain absolute path (CONTRIBUTING.md, "Which PTY host the tests run"): no quoting.
+          echo "MESH_PTYHOST_CMD=$RUNNER_TEMP/native-host/mesh-ptyhost" >> "$GITHUB_ENV"
+      - name: Install dependencies and Chromium
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          python -m pip install -r requirements-dev.txt -r requirements-browser.txt
+          python -m playwright install --with-deps chromium
+      - name: Browser tests
+        run: |
+          chrome="$(find "$HOME/.cache/ms-playwright/" -path '*/chromium-*/chrome-linux*/chrome' -type f | sort -V | tail -1)"
+          test -x "$chrome"
+          export MESH_CHROMIUM="$chrome" MESH_REQUIRE_BROWSER=1
+          source scripts/test-tmpdir.sh
+          export TMPDIR=/tmp
+          mesh_prepare_test_tmpdir
+          # Files carrying browser tests, largest first, each given to the
+          # least-loaded shard (by test count); every file lands in one shard.
+          python -m pytest -q --collect-only -m browser | grep '::' | cut -d: -f1 | sort | uniq -c \
+            | sort -k1,1nr -k2,2 > "$RUNNER_TEMP/browser-files"
+          mapfile -t files < <(awk -v n="$SHARDS" -v k="$SHARD" '{best = 0
+            for (i = 1; i < n; i++) if (load[i] < load[best]) best = i
+            load[best] += $1; if (best == k) print $2}' "$RUNNER_TEMP/browser-files")
+          test "${#files[@]}" -gt 0
+          python -m pytest -q -m browser "${files[@]}"
+      # The Node tests that drive a Chromium skip themselves in the frontend job, which has none.
+      # They run here, with the Chromium installed above, split over the same four shards. The
+      # list is discovered, never typed: every tests/*.test.ts that names MESH_CHROMIUM or imports
+      # terminal-browser-lib joins, so a new browser test cannot stay silently skipped. A test that
+      # also needs the native ptyhost (MESH_NATIVE_PTYHOST) belongs to the ocaml job or stays
+      # local, outside these shards. Files are dealt out in name order; about 160 s of tests in all.
+      - name: Node browser tests (this shard's part)
+        run: |
+          chrome="$(find "$HOME/.cache/ms-playwright/" -path '*/chromium-*/chrome-linux*/chrome' -type f | sort -V | tail -1)"
+          test -x "$chrome"
+          export MESH_CHROMIUM="$chrome" MESH_REQUIRE_BROWSER=1 MESH_PYTHON="$(command -v python)"
+          source scripts/test-tmpdir.sh
+          export TMPDIR=/tmp
+          mesh_prepare_test_tmpdir
+          # NUL-separated names end to end (a name with a space or a quote survives), a byte-order
+          # sort for a stable split, and pipefail so that any failure of the discovery fails the step.
+          set -o pipefail
+          grep -lZE 'MESH_CHROMIUM|terminal-browser-lib' -- tests/*.test.ts \
+            | xargs -0 -r grep -LZ MESH_NATIVE_PTYHOST -- \
+            | LC_ALL=C sort -z > "$RUNNER_TEMP/node-browser-candidates"
+          mapfile -d '' -t candidates < "$RUNNER_TEMP/node-browser-candidates"
+          files=()
+          for index in "${!candidates[@]}"; do
+            if (( index % SHARDS == SHARD )); then files+=("${candidates[$index]}"); fi
+          done
+          test "${#files[@]}" -gt 0
+          printf 'shard %s of %s runs: %s\n' "$SHARD" "$SHARDS" "${files[*]}"
+          node --experimental-strip-types --test --test-reporter=tap "${files[@]}" \
+            | tee "$RUNNER_TEMP/node-browser.tap"
+          # A skipped describe still reports `# skipped 0`: `# pass` is the guard.
+          grep -qx '# skipped 0' "$RUNNER_TEMP/node-browser.tap"
+          grep -Eqx '# pass [1-9][0-9]*' "$RUNNER_TEMP/node-browser.tap"
+
+  ocaml:
+    name: OCaml build, tests and native ptyhost gate
+    runs-on: ubuntu-24.04
+    # Measured on a 2-vCPU runner: warm opam state (restore from the cache), about 7 minutes.
+    # Cold (no cache entry yet, or a changed key): the compiler and every dependency are built
+    # from source first, about 15 minutes before the project build and tests start, so such a run
+    # exceeds the 10-minute target; the 45-minute timeout only ends a hung run. The state is
+    # saved as soon as the dependencies are installed, before the project build and tests, so a
+    # cold run that gets that far leaves a cache entry behind even if it later fails, and the
+    # next run is warm. Only main saves (a manual run on main seeds it).
+    timeout-minutes: 45
+    env:
+      OCAML_COMPILER: ocaml-base-compiler.5.3.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # Full opam state once the dependencies are installed: the opam root
+      # (~/.opam, where the pins live) and the local switch _opam that
+      # setup-ocaml creates in the workspace and bootstrap.sh installs into.
+      # Restored before setup-ocaml, which still runs `opam init --bare` and
+      # re-adds the default repository on every run, then finds
+      # _opam/.opam-switch/switch-config and skips the switch creation (the
+      # compiler build). A restore-keys hit restores an older state that the
+      # dependency step completes.
+      - name: Restore the opam state
+        id: opam-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.opam
+            _opam
+          key: opam-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh') }}
+          restore-keys: |
+            opam-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-
+      - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3.9.1
+        with:
+          ocaml-compiler: ${{ env.OCAML_COMPILER }}
+          # The package lives in ocaml/; the steps below install it and its pins.
+          opam-pin: false
+          # Its own cache only records the bare compiler and is never refreshed
+          # once the key exists; restored over the state above it would hide
+          # what bootstrap.sh installed. The steps around bootstrap.sh replace it.
+          cache: false
+      - name: Install the gate's Python dependencies
+        run: python -m pip install -r requirements-dev.txt
+      # The dependency phase of scripts/bootstrap.sh alone. The bootstrap.sh run
+      # below repeats it as no-ops, then builds and tests.
+      - name: Install the OCaml dependencies (scripts/bootstrap.sh --deps-only)
+        run: bash scripts/bootstrap.sh --deps-only
+      # Only main writes cache entries: a push, or a manual run started on main
+      # to seed the cache. Pull requests (forks included) only read them.
+      - name: Trim the opam state before saving it
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.opam-cache.outputs.cache-hit != 'true'
+        run: opam clean --all-switches --download-cache --logs --repo-cache --untracked --unused-repositories
+      - name: Save the opam state
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.opam-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.opam
+            _opam
+          key: ${{ steps.opam-cache.outputs.cache-primary-key }}
+      - name: Build, test and install (scripts/bootstrap.sh)
+        run: |
+          source scripts/test-tmpdir.sh
+          export TMPDIR=/tmp
+          mesh_prepare_test_tmpdir
+          bash scripts/bootstrap.sh
+      # Skipped in the frontend job (no opam there); here it must run.
+      - name: Board MCP switch convention (needs the bootstrapped switch)
+        run: |
+          MESH_PYTHON="$(command -v python)"
+          export MESH_PYTHON
+          node --experimental-strip-types --test --test-reporter=tap tests/board-mcp-switch.test.ts \
+            | tee "$RUNNER_TEMP/board-mcp-switch.tap"
+          # The `# pass` check is the guard: a skipped describe (no switch
+          # found) still reports `# skipped 0`, with `# pass 0`. The first
+          # check only catches tests skipped one by one.
+          grep -qx '# skipped 0' "$RUNNER_TEMP/board-mcp-switch.tap"
+          grep -Eqx '# pass [1-9][0-9]*' "$RUNNER_TEMP/board-mcp-switch.tap"
+      - name: Native ptyhost conformance gate
+        run: |
+          source scripts/test-tmpdir.sh
+          export TMPDIR=/tmp
+          mesh_prepare_test_tmpdir
+          bin="$(opam var bin)"
+          PYTHON="$(command -v python)" bash scripts/test-ptyhost-t41.sh "$bin/mesh-ptyhost"
+      # Skipped in the frontend job (no native host there); here the built host exists. Its
+      # browser sibling, tests/projects-workspace.test.ts, also needs a Chromium: local only.
+      - name: Native project catalog ratchet (needs the built native host)
+        run: |
+          source scripts/test-tmpdir.sh
+          export TMPDIR=/tmp
+          mesh_prepare_test_tmpdir
+          MESH_NATIVE_PTYHOST="$(opam var bin)/mesh-ptyhost" MESH_REQUIRE_NATIVE_PROJECTS=1 \
+            node --experimental-strip-types --test --test-reporter=tap tests/project-native-catalog-ratchet.test.ts \
+            | tee "$RUNNER_TEMP/native-ratchet.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/native-ratchet.tap"
+          grep -Eqx '# pass [1-9][0-9]*' "$RUNNER_TEMP/native-ratchet.tap"
+
+      # mesh-history (the History index) end to end; its alcotest suite already ran in bootstrap.sh.
+      - name: History index protocol (needs the built mesh-history)
+        run: |
+          MESH_HISTORY_CMD="$(opam var bin)/mesh-history" MESH_REQUIRE_NATIVE_HISTORY=1 \
+            node --experimental-strip-types --test --test-reporter=tap tests/history-db-protocol.test.ts \
+            | tee "$RUNNER_TEMP/history-db.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/history-db.tap"
+          grep -Eqx '# pass [1-9][0-9]*' "$RUNNER_TEMP/history-db.tap"
+
+  # The native PTY host, built once and handed to every test job as the artifact
+  # mesh-ptyhost-linux-x86_64 (tests find it through MESH_PTYHOST_CMD). The binary is cached on
+  # the hash of everything that can change it: the OCaml sources outside ocaml/test, the
+  # bootstrap script that pins the dependencies, and the compiler. A hit costs seconds (no opam,
+  # no compiler); a miss builds it from the opam state of the ocaml job, only the programs
+  # (`dune build -p session_mesh @install`), no tests. Only main writes the cache entry.
+  # Measured on a 2-vCPU runner: binary cache hit, about 10 seconds; miss with a cold opam
+  # state, about 15 minutes; a miss with a warm opam state takes a few minutes (restore, setup,
+  # dependency no-op, build). The test jobs wait for this one, so a pull request's total wall
+  # clock is this job plus the slowest test job: about 9 minutes when both caches are warm, and
+  # more when the host must be rebuilt. The 45-minute timeout only ends a hung run.
+  native:
+    name: native PTY host (linux-x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OCAML_COMPILER: ocaml-base-compiler.5.3.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore the built host
+        id: host-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: native-host
+          key: native-host-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/**', '!ocaml/test/**', '!ocaml/_build/**', 'scripts/bootstrap.sh') }}
+      # The same opam state, key and setup as the ocaml job (it is the one that saves it).
+      - name: Restore the opam state
+        if: steps.host-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.opam
+            _opam
+          key: opam-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh') }}
+          restore-keys: |
+            opam-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-
+      - if: steps.host-cache.outputs.cache-hit != 'true'
+        uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3.9.1
+        with:
+          ocaml-compiler: ${{ env.OCAML_COMPILER }}
+          opam-pin: false
+          cache: false
+      - name: Build the programs (scripts/bootstrap.sh --deps-only, then dune build)
+        if: steps.host-cache.outputs.cache-hit != 'true'
+        run: |
+          bash scripts/bootstrap.sh --deps-only
+          (cd ocaml && opam exec -- dune build -p session_mesh @install)
+          mkdir -p native-host
+          cp -L ocaml/_build/install/default/bin/mesh-ptyhost native-host/mesh-ptyhost
+      - name: Save the built host
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.host-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: native-host
+          key: ${{ steps.host-cache.outputs.cache-primary-key }}
+      - name: Show what the host links
+        run: |
+          test -x native-host/mesh-ptyhost
+          ldd native-host/mesh-ptyhost
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mesh-ptyhost-linux-x86_64
+          path: native-host/mesh-ptyhost
+          if-no-files-found: error
+          retention-days: 3
+
+  leaks:
+    name: leak check (public rules)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install gitleaks (pinned, SHA-256 checked)
+        run: |
+          bash .github/scripts/install-gitleaks.sh "$RUNNER_TEMP/gitleaks"
+          echo "MESH_LEAK_GITLEAKS=$RUNNER_TEMP/gitleaks/gitleaks" >> "$GITHUB_ENV"
+      - name: leak-guard on the tree
+        run: node --experimental-strip-types tools/leak-guard/cli.ts worktree
+      - name: SPDX license and copyright headers
+        run: bash scripts/check-copyright.sh
+
+  # A pull request is a straight line of commits on main (it is integrated by "Rebase and merge"),
+  # every commit is by a maintainer or by a CLA signatory, and changes the register only as its
+  # author may (CONTRIBUTING.md). The base and head come from GitHub's test
+  # merge commit, never from the event payload, and the checker is the base branch's copy, so a
+  # pull request cannot loosen it by editing the script. `name: cla` is the check name that
+  # CONTRIBUTING.md cites.
+  cla:
+    name: cla
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # The job runs on every event, because a skipped job satisfies a required check: a
+      # workflow_dispatch on the branch of a pull request would otherwise attach a skipped `cla`
+      # to its head commit. Outside a pull request it fails, except on main, where the commits
+      # were integrated already and there is nothing left to judge.
+      - name: Refuse to pass outside a pull request, except on main
+        if: github.event_name != 'pull_request'
+        run: |
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            echo "cla: nothing verified. These commits are on main already; the cla check judges pull requests."
+          else
+            echo "::error::the cla check only runs on pull requests (ref: $GITHUB_REF)"
+            exit 1
+          fi
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - if: github.event_name == 'pull_request'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: A linear pull request whose every commit is by a maintainer or a CLA signatory and changes the register as allowed
+        if: github.event_name == 'pull_request'
+        run: |
+          # pull_request checks out the test merge commit: parent 1 is the base branch, parent 2
+          # the head of the pull request. Anything else fails here or in the checker, which judges
+          # the register as that merge commit holds it (tools/cla-check/SPEC.md).
+          base=$(git rev-parse --verify 'HEAD^1^{commit}')
+          head=$(git rev-parse --verify 'HEAD^2^{commit}')
+          merge=$(git rev-parse --verify 'HEAD^{commit}')
+          checker="$RUNNER_TEMP/cla-check.ts"
+          # The base branch always holds the checker; without it the job fails here.
+          git cat-file blob "$base:tools/cla-check/cla-check.ts" > "$checker"
+          node --experimental-strip-types "$checker" --repo . --base "$base" --head "$head" --merge "$merge"

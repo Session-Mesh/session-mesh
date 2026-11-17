@@ -1,0 +1,762 @@
+[
+  {
+    "pattern": "^This OpenCode version is not supported by session-mesh \\(only 1\\.x and 2\\.x are\\): a conversation cannot be resumed$",
+    "key": "server.opencodeUnsupportedResumeRefused"
+  },
+  {
+    "pattern": "^The OpenCode version could not be read \\(opencode not found, or no version answer\\): a conversation cannot be resumed$",
+    "key": "server.opencodeUnreadableResumeRefused"
+  },
+  {
+    "pattern": "^OpenCode 2 would start an empty conversation: the conversation is not in OpenCode's store, resume refused$",
+    "key": "server.opencodeUnknownSession"
+  },
+  {
+    "pattern": "^OpenCode 2 does not take the option (?<name>\\S+): launch refused rather than started without it$",
+    "key": "server.opencodeOptionRefused"
+  },
+  {
+    "pattern": "^Invalid project request$",
+    "key": "server.projectInvalidRequest"
+  },
+  {
+    "pattern": "^Unsupported project operation$",
+    "key": "server.projectUnsupportedOperation"
+  },
+  {
+    "pattern": "^ptyhost is not responding \\(systemctl --user start session-mesh-pty\\)$",
+    "key": "server.ptyhostNotResponding"
+  },
+  {
+    "pattern": "^ptyhost did not confirm the prepared session$",
+    "key": "server.ptyhostSessionUnconfirmed"
+  },
+  {
+    "pattern": "^ptyhost did not confirm the restored session$",
+    "key": "server.ptyhostRestoreUnconfirmed"
+  },
+  {
+    "pattern": "^ptyhost does not support conditional stop$",
+    "key": "server.ptyhostNoConditionalKill"
+  },
+  {
+    "pattern": "^Invalid ptyhost reply$",
+    "key": "server.ptyhostInvalidReply"
+  },
+  {
+    "pattern": "^Session replaced or stop already requested$",
+    "key": "server.sessionReplacedOrStopRequested"
+  },
+  {
+    "pattern": "^Session replaced or missing$",
+    "key": "server.sessionReplacedOrGone"
+  },
+  {
+    "pattern": "^Session replaced: reload the whiteboard$",
+    "key": "server.sessionReplacedReloadBoard"
+  },
+  {
+    "pattern": "^Session replaced$",
+    "key": "server.sessionReplaced"
+  },
+  {
+    "pattern": "^Conversation still active; standby session waiting: (?<name>.+)$",
+    "key": "server.conversationStillActive"
+  },
+  {
+    "pattern": "^Conversation stopped, but a standby session is available: (?<name>.+)$",
+    "key": "server.conversationStoppedFallback"
+  },
+  {
+    "pattern": "^Non-canonical Pi command$",
+    "key": "server.piCommandNotCanonical"
+  },
+  {
+    "pattern": "^Non-canonical Copilot command$",
+    "key": "server.copilotCommandNotCanonical"
+  },
+  {
+    "pattern": "^Non-canonical Vibe command$",
+    "key": "server.vibeCommandNotCanonical"
+  },
+  {
+    "pattern": "^The conversation of a Copilot running outside the mesh cannot be known \\(no hook reports it, and a /new or /resume may have changed it since it started\\): the agent was not stopped$",
+    "key": "server.copilotConversationUnknown"
+  },
+  {
+    "pattern": "^invalid env$",
+    "key": "server.ptyhostEnvInvalid"
+  },
+  {
+    "pattern": "^invalid request$",
+    "key": "server.ptyhostInvalidRequest"
+  },
+  {
+    "pattern": "^Name already taken$",
+    "key": "server.ptyhostNameTaken"
+  },
+  {
+    "pattern": "^Folder not found \\((?<path>.+?)\\): the agent was not stopped$",
+    "key": "server.folderNotFoundAgentKept"
+  },
+  {
+    "pattern": "^Folder not found: (?<path>.+)$",
+    "key": "server.folderNotFound"
+  },
+  {
+    "pattern": "^Folder outside the allowed workspace roots$",
+    "key": "server.folderOutsideRoots"
+  },
+  {
+    "pattern": "^Gemini CLI is not started in the home directory: it would take the real \\~/\\.gemini for a project folder \\(settings loaded twice, hooks run twice, \\~/\\.agents/skills not found\\)\\. Choose a subfolder\\. The agent was not stopped\\.$",
+    "key": "server.geminiInHomeAgentKept"
+  },
+  {
+    "pattern": "^Gemini CLI is not started in the home directory: it would take the real \\~/\\.gemini for a project folder \\(settings loaded twice, hooks run twice, \\~/\\.agents/skills not found\\)\\. Choose a subfolder\\.$",
+    "key": "server.geminiInHome"
+  },
+  {
+    "pattern": "^Gemini settings: (?<detail>.+)$",
+    "key": "server.geminiSettingsRefused"
+  },
+  {
+    "pattern": "^Unknown or disabled preset$",
+    "key": "server.presetUnknown"
+  },
+  {
+    "pattern": "^Invalid name \\(letters, digits, - and _\\)$",
+    "key": "server.nameInvalid"
+  },
+  {
+    "pattern": "^Session ID not found$",
+    "key": "server.sessionIdNotFound"
+  },
+  {
+    "pattern": "^Pi conversation missing or ambiguous; resume refused$",
+    "key": "server.piConversationMissing"
+  },
+  {
+    "pattern": "^the saved command has an option Mesh cannot read \\((?<option>.+?)\\) and names (?<name>\\S+): resume refused rather than restarted without \\S+$",
+    "key": "server.resumeRefusedUnreadOption"
+  },
+  {
+    "pattern": "^the saved command has a codex subcommand and names (?<name>\\S+): resume refused rather than restarted without \\S+$",
+    "key": "server.resumeRefusedSubcommand"
+  },
+  {
+    "pattern": "^the saved command has a launcher Mesh cannot read and names (?<name>\\S+): resume refused rather than restarted without \\S+$",
+    "key": "server.resumeRefusedLauncher"
+  },
+  {
+    "pattern": "^the session was started with codex exec, which is not interactive: resume refused$",
+    "key": "server.resumeRefusedCodexExec"
+  },
+  {
+    "pattern": "^the session was started with opencode run, which is not interactive: resume refused$",
+    "key": "server.resumeRefusedOpencodeRun"
+  },
+  {
+    "pattern": "^the saved command is a shell string Mesh cannot parse: resume refused$",
+    "key": "server.resumeRefusedShellString"
+  },
+  {
+    "pattern": "^the session was started with copilot -p or --acp, which is not interactive: resume refused$",
+    "key": "server.resumeRefusedCopilotPrint"
+  },
+  {
+    "pattern": "^No recognized agent in this session$",
+    "key": "server.noAgentInSession"
+  },
+  {
+    "pattern": "^A restart is already in progress for this agent$",
+    "key": "server.relaunchAlreadyRunning"
+  },
+  {
+    "pattern": "^The process did not stop; nothing was restarted$",
+    "key": "server.processNotStopped"
+  },
+  {
+    "pattern": "^The agent is stopped but the restart failed \\((?<reason>.+?)\\); restart it by hand: cd (?<cwd>.+?) && (?<command>.+)$",
+    "key": "server.relaunchFailed"
+  },
+  {
+    "pattern": "^Integer pid expected$",
+    "key": "server.pidExpected"
+  },
+  {
+    "pattern": "^Session not found$",
+    "key": "server.sessionNotFound"
+  },
+  {
+    "pattern": "^Pi does not report a reliable idle state; manual restart only$",
+    "key": "server.piNoIdle"
+  },
+  {
+    "pattern": "^This agent does not report a reliable idle state; manual restart only$",
+    "key": "server.noReliableIdle"
+  },
+  {
+    "pattern": "^Mistral Vibe: (?<detail>.+)$",
+    "key": "server.vibeRefused"
+  },
+  {
+    "pattern": "^the session was started with vibe --prompt, which is not interactive: resume refused$",
+    "key": "server.resumeRefusedVibePrompt"
+  },
+  {
+    "pattern": "^the saved command has a vibe subcommand and names (?<name>\\S+): resume refused rather than restarted without \\S+$",
+    "key": "server.resumeRefusedVibeSubcommand"
+  },
+  {
+    "pattern": "^Unknown mode$",
+    "key": "server.modeUnknown"
+  },
+  {
+    "pattern": "^Search took too long$",
+    "key": "server.searchTooLong"
+  },
+  {
+    "pattern": "^Search replaced by a newer one$",
+    "key": "server.searchSuperseded"
+  },
+  {
+    "pattern": "^History is being indexed, try again in a moment$",
+    "key": "server.historyIndexing"
+  },
+  {
+    "pattern": "^(?<agent>.+?) is still running in the mesh: stop it first$",
+    "key": "server.agentStillRunningInMesh"
+  },
+  {
+    "pattern": "^(?<agent>.+?) is still running in (?<host>.+?): stop it first$",
+    "key": "server.agentStillRunning"
+  },
+  {
+    "pattern": "^(?<agent>.+?) may still be running in (?<host>.+?): its conversation id is only a guess, check that terminal first$",
+    "key": "server.agentMaybeRunning"
+  },
+  {
+    "pattern": "^Transcript modified less than 2 min ago: the session may still be running$",
+    "key": "server.transcriptRecentlyModified"
+  },
+  {
+    "pattern": "^Mesh does not delete (?<agent>\\S+) conversations: remove it with \\S+ itself$",
+    "key": "server.historyDeleteUnsupported"
+  },
+  {
+    "pattern": "^Mesh starts Gemini in a private home of its own: a conversation of your own ~/\\.gemini cannot be resumed here, only with the command on the card$",
+    "key": "server.geminiNotResumableHere"
+  },
+  {
+    "pattern": "^Antigravity does not record this conversation's folder: resume it from its folder with the command on the card$",
+    "key": "server.agyNotResumableHere"
+  },
+  {
+    "pattern": "^Resume already in progress$",
+    "key": "server.historyResumeInProgress"
+  },
+  {
+    "pattern": "^This conversation was just restored: nothing was started$",
+    "key": "server.conversationJustRestored"
+  },
+  {
+    "pattern": "^ptyhost reply not understood: the session may still appear$",
+    "key": "server.ptyhostReplyNotUnderstood"
+  },
+  {
+    "pattern": "^This conversation is running in (?<host>.+?): use “Restart” on that terminal$",
+    "key": "server.conversationRunningElsewhere"
+  },
+  {
+    "pattern": "^The session folder no longer exists: (?<path>.+)$",
+    "key": "server.sessionFolderGone"
+  },
+  {
+    "pattern": "^Pi transcript missing or ambiguous$",
+    "key": "server.piTranscriptMissing"
+  },
+  {
+    "pattern": "^Empty file$",
+    "key": "server.emptyFile"
+  },
+  {
+    "pattern": "^JSON object expected$",
+    "key": "server.jsonObjectExpected"
+  },
+  {
+    "pattern": "^Invalid JSON body$",
+    "key": "server.jsonBodyInvalid"
+  },
+  {
+    "pattern": "^Empty body expected$",
+    "key": "server.emptyBodyExpected"
+  },
+  {
+    "pattern": "^Rename interrupted: check the organization and the recovery$",
+    "key": "server.renameInterrupted"
+  },
+  {
+    "pattern": "^Rename cancelled: the recovery snapshot could not be updated$",
+    "key": "server.renameCancelled"
+  },
+  {
+    "pattern": "^created required$",
+    "key": "server.createdRequired"
+  },
+  {
+    "pattern": "^Demo session replaced$",
+    "key": "server.demoSessionReplaced"
+  },
+  {
+    "pattern": "^Demo session missing$",
+    "key": "server.demoSessionMissing"
+  },
+  {
+    "pattern": "^Demo missing$",
+    "key": "server.demoMissing"
+  },
+  {
+    "pattern": "^Demo revision unavailable$",
+    "key": "server.demoRevisionUnavailable"
+  },
+  {
+    "pattern": "^Demo ID required$",
+    "key": "server.demoIdRequired"
+  },
+  {
+    "pattern": "^Demo version out of date$",
+    "key": "server.demoVersionStale"
+  },
+  {
+    "pattern": "^Invalid revisions request$",
+    "key": "server.demoRevisionsQueryInvalid"
+  },
+  {
+    "pattern": "^Invalid demo scene$",
+    "key": "server.demoSceneInvalid"
+  },
+  {
+    "pattern": "^Demo scene too large$",
+    "key": "server.demoSceneTooLarge"
+  },
+  {
+    "pattern": "^Invalid demo restore$",
+    "key": "server.demoRestoreInvalid"
+  },
+  {
+    "pattern": "^Invalid restore request$",
+    "key": "server.demoRestoreQueryInvalid"
+  },
+  {
+    "pattern": "^Invalid demo ID$",
+    "key": "server.demoIdInvalid"
+  },
+  {
+    "pattern": "^Invalid demo revision$",
+    "key": "server.demoRevisionInvalid"
+  },
+  {
+    "pattern": "^Invalid demo identity$",
+    "key": "server.demoIdentityInvalid"
+  },
+  {
+    "pattern": "^Demo storage is not private$",
+    "key": "server.demoStorageNotPrivate"
+  },
+  {
+    "pattern": "^Demo storage unavailable$",
+    "key": "server.demoStorageUnavailable"
+  },
+  {
+    "pattern": "^Demo storage too large$",
+    "key": "server.demoStorageTooLarge"
+  },
+  {
+    "pattern": "^Demo storage unreadable$",
+    "key": "server.demoStorageUnreadable"
+  },
+  {
+    "pattern": "^Invalid demo storage$",
+    "key": "server.demoStorageInvalid"
+  },
+  {
+    "pattern": "^Demo catalog too large$",
+    "key": "server.demoCatalogTooLarge"
+  },
+  {
+    "pattern": "^Demo catalog unreadable$",
+    "key": "server.demoCatalogUnreadable"
+  },
+  {
+    "pattern": "^Invalid demo catalog$",
+    "key": "server.demoCatalogInvalid"
+  },
+  {
+    "pattern": "^Demo capacity reached$",
+    "key": "server.demoCapacityReached"
+  },
+  {
+    "pattern": "^Could not save the demo$",
+    "key": "server.demoSaveFailed"
+  },
+  {
+    "pattern": "^Could not save the catalog$",
+    "key": "server.demoCatalogSaveFailed"
+  },
+  {
+    "pattern": "^A new demo starts at revision zero$",
+    "key": "server.demoNewStartsAtZero"
+  },
+  {
+    "pattern": "^Session still active$",
+    "key": "server.demoSessionStillActive"
+  },
+  {
+    "pattern": "^Archive missing or revision changed$",
+    "key": "server.demoArchiveChanged"
+  },
+  {
+    "pattern": "^Catalog missing or changed$",
+    "key": "server.demoCatalogChanged"
+  },
+  {
+    "pattern": "^Whiteboard version out of date$",
+    "key": "server.boardVersionStale"
+  },
+  {
+    "pattern": "^Whiteboard revision unavailable$",
+    "key": "server.boardRevisionUnavailable"
+  },
+  {
+    "pattern": "^Whiteboard storage unavailable$",
+    "key": "server.boardStorageUnavailable"
+  },
+  {
+    "pattern": "^Whiteboard document corrupted, cannot save$",
+    "key": "server.boardCorrupt"
+  },
+  {
+    "pattern": "^Could not save the whiteboard$",
+    "key": "server.boardSaveFailed"
+  },
+  {
+    "pattern": "^Invalid Excalidraw document$",
+    "key": "server.excalidrawInvalid"
+  },
+  {
+    "pattern": "^Excalidraw document too large$",
+    "key": "server.excalidrawTooLarge"
+  },
+  {
+    "pattern": "^Invalid whiteboard provenance$",
+    "key": "server.boardProvenanceInvalid"
+  },
+  {
+    "pattern": "^Invalid whiteboard date$",
+    "key": "server.boardDateInvalid"
+  },
+  {
+    "pattern": "^Invalid whiteboard restore$",
+    "key": "server.boardRestoreInvalid"
+  },
+  {
+    "pattern": "^Invalid session list$",
+    "key": "server.sessionListInvalid"
+  },
+  {
+    "pattern": "^Agent message or session unavailable$",
+    "key": "server.mailUnavailable"
+  },
+  {
+    "pattern": "^Agent inbox full$",
+    "key": "server.mailInboxFull"
+  },
+  {
+    "pattern": "^Invalid agent message fields$",
+    "key": "server.mailFieldsInvalid"
+  },
+  {
+    "pattern": "^Agent message storage unavailable$",
+    "key": "server.mailStorageUnavailable"
+  },
+  {
+    "pattern": "^Agent messages corrupted, cannot save$",
+    "key": "server.mailCorrupt"
+  },
+  {
+    "pattern": "^Could not save agent messages$",
+    "key": "server.mailSaveFailed"
+  },
+  {
+    "pattern": "^Invalid authorization request ID$",
+    "key": "server.consentRequestIdInvalid"
+  },
+  {
+    "pattern": "^Invalid authorization decision$",
+    "key": "server.consentDecisionInvalid"
+  },
+  {
+    "pattern": "^Invalid authorization decision date$",
+    "key": "server.consentDecisionDateInvalid"
+  },
+  {
+    "pattern": "^Invalid authorization policy ID$",
+    "key": "server.consentPolicyIdInvalid"
+  },
+  {
+    "pattern": "^Requesting session replaced$",
+    "key": "server.sourceSessionReplaced"
+  },
+  {
+    "pattern": "^Session folder not found$",
+    "key": "server.sessionFolderNotFound"
+  },
+  {
+    "pattern": "^Agent (?<agent>.+) is disabled in the configuration$",
+    "key": "server.agentDisabledInConfig"
+  },
+  {
+    "pattern": "^Agent to resume unavailable$",
+    "key": "server.resumeAgentUnavailable"
+  },
+  {
+    "pattern": "^Action failed$",
+    "key": "server.actionFailed"
+  },
+  {
+    "pattern": "^Execution result unknown after restart$",
+    "key": "server.actionResultUnknown"
+  },
+  {
+    "pattern": "^Authorization expired before execution$",
+    "key": "server.actionAuthorizationExpired"
+  },
+  {
+    "pattern": "^Invalid decision$",
+    "key": "server.decisionInvalid"
+  },
+  {
+    "pattern": "^Request missing, lease lost or incompatible decision$",
+    "key": "server.requestGoneOrIncompatible"
+  },
+  {
+    "pattern": "^Invalid tab identity$",
+    "key": "server.tabIdentityInvalid"
+  },
+  {
+    "pattern": "^Invalid lease$",
+    "key": "server.leaseInvalid"
+  },
+  {
+    "pattern": "^names: a list of at most (?<max>\\d+) session names$",
+    "key": "server.restoreNamesLimit"
+  },
+  {
+    "pattern": "^Not found, already restored or folder gone$",
+    "key": "server.restoreNotFound"
+  },
+  {
+    "pattern": "^This conversation is already running \\(another session\\): nothing was restarted$",
+    "key": "server.restoreAlreadyRunning"
+  },
+  {
+    "pattern": "^An exact restore is in progress for this offer: repeat the exact request, or discard the offer$",
+    "key": "server.restoreInProgress"
+  },
+  {
+    "pattern": "^A restore of this offer was sent a moment ago and its outcome is unknown: the session may still appear\\. Wait a little, then look at the sessions again$",
+    "key": "server.restoreOfferHeld"
+  },
+  {
+    "pattern": "^agent mail not transferred \\(kept for the old identity\\): the restored session is not exactly the offered one$",
+    "key": "server.mailNotTransferredExact"
+  },
+  {
+    "pattern": "^agent mail not transferred \\(kept for the old identity\\)$",
+    "key": "server.mailNotTransferred"
+  },
+  {
+    "pattern": "^mail expired: agent mail is kept 24 hours after the loss; none was found for this session$",
+    "key": "server.mailExpired"
+  },
+  {
+    "pattern": "^restored under another name: (?<name>.+)$",
+    "key": "server.restoredUnderName"
+  },
+  {
+    "pattern": "^organisation not restored$",
+    "key": "server.organisationNotRestored"
+  },
+  {
+    "pattern": "^Push unavailable \\(Python cryptography package missing\\)$",
+    "key": "server.pushUnavailable"
+  },
+  {
+    "pattern": "^Unreadable VAPID key: (?<reason>.+)$",
+    "key": "server.vapidKeyUnreadable"
+  },
+  {
+    "pattern": "^detail: boolean expected$",
+    "key": "server.detailBooleanExpected"
+  },
+  {
+    "pattern": "^Device not subscribed$",
+    "key": "server.deviceNotSubscribed"
+  },
+  {
+    "pattern": "^Invalid subscription$",
+    "key": "server.subscriptionInvalid"
+  },
+  {
+    "pattern": "^Invalid keys$",
+    "key": "server.keysInvalid"
+  },
+  {
+    "pattern": "^Answer buttons disabled: the owner enables them with MESH_ANSWER_BUTTONS=1 in the server environment$",
+    "key": "server.answerButtonsDisabled"
+  },
+  {
+    "pattern": "^Action expired: open the session$",
+    "key": "server.actionExpired"
+  },
+  {
+    "pattern": "^Invalid action$",
+    "key": "server.actionInvalid"
+  },
+  {
+    "pattern": "^The session is no longer waiting for this answer: open it$",
+    "key": "server.noLongerWaiting"
+  },
+  {
+    "pattern": "^Session unreachable: (?<reason>.+)$",
+    "key": "server.sessionUnreachable"
+  },
+  {
+    "pattern": "^Pi not found in ~\\/\\.local\\/bin or PATH$",
+    "key": "server.piNotFound"
+  },
+  {
+    "pattern": "^Could not check the Pi version$",
+    "key": "server.piVersionCheckFailed"
+  },
+  {
+    "pattern": "^Unknown Pi version; Mesh MCP requires Pi 1\\.3\\.0 or later$",
+    "key": "server.piVersionUnknown"
+  },
+  {
+    "pattern": "^Pi (?<version>\\d+(?:\\.\\d+)*) does not support Mesh MCP; Pi 1\\.3\\.0 or later required$",
+    "key": "server.piVersionUnsupported"
+  },
+  {
+    "pattern": "^Mesh MCP server unavailable: (?<path>.+)$",
+    "key": "server.meshMcpUnavailable"
+  },
+  {
+    "pattern": "^Invalid Pi MCP configuration$",
+    "key": "server.piMcpConfigInvalid"
+  },
+  {
+    "pattern": "^Could not prepare Mesh MCP for Pi: (?<reason>.+)$",
+    "key": "server.piMcpPrepareFailed"
+  },
+  {
+    "pattern": "^“(?<field>.+?)” must be a string$",
+    "key": "server.fieldMustBeString"
+  },
+  {
+    "pattern": "^Mesh session not found$",
+    "key": "server.meshSessionNotFound"
+  },
+  {
+    "pattern": "^Unknown folder: (?<folder>.+)$",
+    "key": "server.folderUnknownNamed"
+  },
+  {
+    "pattern": "^Empty folder name$",
+    "key": "server.folderNameEmpty"
+  },
+  {
+    "pattern": "^Unknown folder or empty name$",
+    "key": "server.folderUnknownOrEmpty"
+  },
+  {
+    "pattern": "^The folder “(?<folder>.+?)” already exists$",
+    "key": "server.folderExists"
+  },
+  {
+    "pattern": "^Unknown folder$",
+    "key": "server.folderUnknown"
+  },
+  {
+    "pattern": "^Unknown operation: (?<operation>.+)$",
+    "key": "server.operationUnknown"
+  },
+  {
+    "pattern": "^Protected folder$",
+    "key": "server.protectedFolder"
+  },
+  {
+    "pattern": "^Outside the allowed folders$",
+    "key": "server.outsideAllowedFolders"
+  },
+  {
+    "pattern": "^Read denied$",
+    "key": "server.readDenied"
+  },
+  {
+    "pattern": "^Path expected$",
+    "key": "server.pathExpected"
+  },
+  {
+    "pattern": "^Protected folder unavailable$",
+    "key": "server.protectedFolderUnavailable"
+  },
+  {
+    "pattern": "^Document refused: protected folder$",
+    "key": "server.documentDeniedProtected"
+  },
+  {
+    "pattern": "^Not found: (?<path>.+)$",
+    "key": "server.notFoundPath"
+  },
+  {
+    "pattern": "^Not found$",
+    "key": "server.notFound"
+  },
+  {
+    "pattern": "^Unreadable file name$",
+    "key": "server.fileNameUnreadable"
+  },
+  {
+    "pattern": "^Link expired: reopen the document from the mesh$",
+    "key": "server.viewLinkExpired"
+  },
+  {
+    "pattern": "^Invalid target$",
+    "key": "server.targetInvalid"
+  },
+  {
+    "pattern": "^A web page does not open in a panel; open it in a browser$",
+    "key": "server.webPageNotInPanel"
+  },
+  {
+    "pattern": "^Absolute http\\(s\\) URL expected$",
+    "key": "server.absoluteUrlExpected"
+  },
+  {
+    "pattern": "^No system browser available$",
+    "key": "server.noSystemBrowser"
+  },
+  {
+    "pattern": "^Could not launch the system browser$",
+    "key": "server.systemBrowserFailed"
+  },
+  {
+    "pattern": "^targets: list of paths expected$",
+    "key": "server.targetsListExpected"
+  },
+  {
+    "pattern": "^WebSocket expected$",
+    "key": "server.websocketExpected"
+  }
+]

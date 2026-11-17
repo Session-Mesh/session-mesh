@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+set -euo pipefail
+MESH_BUNDLE_ROOT=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=scripts/bundle/env.sh
+source "$MESH_BUNDLE_ROOT/env.sh"
+command=${1:-help}
+(($# == 0)) || shift
+case $command in
+  install)
+    # One installer. In an installed release (releases/<tag>/), its stamped install.sh; otherwise
+    # app/install.sh, whose bundle install runs the services from this directory with the
+    # bundle's own Python and programs (install.sh, "Bundle install").
+    if [[ -f $MESH_BUNDLE_ROOT/install.sh ]]; then exec bash "$MESH_BUNDLE_ROOT/install.sh" "$@"; fi
+    exec bash "$MESH_BUNDLE_ROOT/app/install.sh" "$@"
+    ;;
+  web) exec "$MESH_PYTHON" "$MESH_BUNDLE_ROOT/app/server.py" "$@" ;;
+  run)
+    # Foreground, uninstalled mode. Only the two children created here are stopped.
+    "$MESH_BIN_DIR/mesh-ptyhost" & native_pid=$!
+    web_pid=
+    cleanup() {
+      [[ -z $web_pid ]] || kill "$web_pid" 2>/dev/null || true
+      kill "$native_pid" 2>/dev/null || true
+      wait "$native_pid" 2>/dev/null || true
+    }
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    "$MESH_PYTHON" "$MESH_BUNDLE_ROOT/app/server.py" "$@" & web_pid=$!
+    wait "$web_pid"
+    ;;
+  doctor)
+    "$MESH_PYTHON" -c 'import sys,aiohttp,cryptography; print("Bundled Python:", sys.version.split()[0]); print("Runtime dependencies: OK")'
+    "$MESH_PROJECT_OBSERVATION_RUNTIME" --version
+    (cd "$MESH_BUNDLE_ROOT/app" && "$MESH_PYTHON" -c 'import agentmcp; assert agentmcp.board_available(), "Bundled MCP missing"; print("Mesh MCP:", agentmcp.BOARD_MCP)')
+    ;;
+  *) printf '%s\n' 'Session Mesh' './mesh run       Run locally in the foreground' './mesh install   Install user services (systemd or launchd)' './mesh doctor    Check bundled runtime and MCP'; exit 2 ;;
+esac

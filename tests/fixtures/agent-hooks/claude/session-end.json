@@ -1,0 +1,8 @@
+{
+  "cwd": "/scratch/work",
+  "hook_event_name": "SessionEnd",
+  "prompt_id": "UUID",
+  "reason": "other",
+  "session_id": "UUID",
+  "transcript_path": "/home/USER/.claude/projects/-scratch-work/UUID.jsonl"
+}

@@ -1,0 +1,34 @@
+# Files that scripts/check-copyright.sh never checks or modifies. One shell glob per line, matched
+# against the repository-relative path (a `*` also matches `/`). Lines starting with `#` are comments.
+
+# Third-party files keep their own license and notice: never modified.
+static/vendor/*
+LICENSES/*
+# Roster harness and agent-skill files installed and updated by the Roster tooling.
+.harness/*
+.claude/*
+.agents/*
+.opencode/*
+# Working briefs, probes and documents: not shipped source.
+briefs/*
+docs/*
+# Test fixtures whose bytes are asserted or hashed by tests.
+tests/fixtures/*
+# Generated bundles: rebuilt from their TypeScript sources by tools/build-*.mjs, whose --check mode
+# compares the bytes (the sources carry the header).
+static/demo-catalog.js
+static/demo-view.js
+static/folder-state.js
+static/history-state.js
+static/pane-actions.js
+static/project-catalog.js
+static/projects.js
+static/session-activity.js
+static/shortcuts.js
+static/terminal-links.js
+static/workspace-spec.js
+static/board.html
+demo-runtime/input-codec-v1.mjs
+demo-runtime/worker-protocol-v2.mjs
+demo-runtime/view-codec-v2.mjs
+tools/project-observation.mjs

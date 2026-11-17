@@ -1,0 +1,119 @@
+{
+ "captured_with": "Claude Code 2.1.288 (claude --version), interactive, default permission mode",
+ "state": "2.5 s into a reply (prompt: write the numbers 1 to 400)",
+ "session": {
+  "pid": 4242,
+  "sessionId": "00000000-0000-4000-8000-000000000001",
+  "cwd": "/tmp/scratch",
+  "startedAt": 1700000000000,
+  "procStart": "1000",
+  "version": "2.1.288",
+  "peerProtocol": 1,
+  "peerFeatures": [
+   "notify_idle",
+   "reply_across_default_dirs",
+   "artifact_yield"
+  ],
+  "kind": "interactive",
+  "entrypoint": "cli",
+  "pidDomain": "linux:0000:pid:[0]",
+  "messagingSocketPath": "/run/user/1000/cc-socks/4242.sock",
+  "name": "scratch-a1",
+  "nameSource": "derived",
+  "nameSince": 1700000000001,
+  "status": "busy",
+  "updatedAt": 1700000039826,
+  "statusUpdatedAt": 1700000039826
+ },
+ "transcript": [
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000001",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000002",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": "user prompt 1"
+   }
+  },
+  {
+   "type": "ai-title",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "aiTitle": "Conversation title"
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000003",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000004",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0001",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000004",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000005",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0001",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "text",
+      "text": "assistant text 1"
+     }
+    ]
+   }
+  },
+  {
+   "type": "ai-title",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "aiTitle": "Conversation title"
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000006",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000007",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": "user prompt 2"
+   }
+  }
+ ]
+}

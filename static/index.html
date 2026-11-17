@@ -1,0 +1,398 @@
+<!doctype html>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+  Copyright (c) 2026 Atacama <contact@atacama.tech>
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content">
+<title>Session Mesh</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="client-version" content="__CLIENT_VERSION__">
+<meta name="theme-color" content="#11151c">
+<link rel="apple-touch-icon" href="/static/icons/icon-192.png?v=6f13fb609ae0fc2c">
+<link rel="stylesheet" href="/static/vendor/xterm.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <header class="side-head">
+      <div class="brand"><svg class="brand-logo" viewBox="0 0 240 130" fill="none" aria-hidden="true" focusable="false"><defs><mask id="smui-mask-left"><rect x="0" y="0" width="240" height="130" fill="white"/><line x1="100" y1="59" x2="145" y2="104" stroke="black" stroke-width="21" stroke-linecap="butt"/></mask><mask id="smui-mask-right"><rect x="0" y="0" width="240" height="130" fill="white"/><line x1="95" y1="26" x2="140" y2="71" stroke="black" stroke-width="21" stroke-linecap="butt"/></mask></defs><polygon points="24,42 40,26 95,26 134,65 95,104 40,104 24,88" stroke="#1CE838" stroke-width="11" stroke-linejoin="round" mask="url(#smui-mask-left)"/><polygon points="145,26 200,26 216,42 216,88 200,104 145,104 106,65" stroke="currentColor" stroke-width="11" stroke-linejoin="round" mask="url(#smui-mask-right)"/><polyline points="52,48 69,65 52,82" stroke="#1CE838" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/><polyline points="169,48 186,65 169,82" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg> session mesh</div>
+      <button id="btn-new" class="btn primary" title="New session (n)" data-i18n-title="side.newTitle" data-i18n="side.new">+ New</button>
+    </header>
+    <nav class="main-modes" aria-label="Main workspace" data-i18n-aria-label="projectWorkspace.modes">
+      <button id="btn-sessions" aria-label="Sessions mode" data-i18n-aria-label="projectWorkspace.sessionsMode" type="button" class="btn on" aria-pressed="true" data-i18n="bar.sessions">Sessions</button>
+      <button id="btn-projects" aria-label="Projects mode" data-i18n-aria-label="projectWorkspace.projectsMode" type="button" class="btn" aria-pressed="false" title="Projects" data-i18n-title="projects.title" data-i18n="projects.title">Projects</button>
+    </nav>
+    <section id="project-navigation" hidden aria-label="Projects" data-i18n-aria-label="projects.title">
+      <div class="project-navigation-head"><span data-i18n="projects.title">Projects</span><button id="project-refresh" type="button" class="btn ghost sm" data-i18n="projectWorkspace.refresh">Refresh</button></div>
+      <nav id="project-sidebar-list" aria-label="Saved projects" data-i18n-aria-label="projectWorkspace.savedProjects"></nav>
+    </section>
+    <div class="tabs" role="tablist">
+      <button id="tab-live" role="tab" data-tab="live"><span class="dot unread"></span><span data-i18n="tabs.live">Live</span> <span class="n" id="n-live"></span></button>
+      <button id="tab-hist" role="tab" data-tab="hist"><span data-i18n="tabs.history">History</span> <span class="n" id="n-hist"></span></button>
+    </div>
+    <div id="restore" class="restore" hidden></div>
+    <input id="filter"class="filter" placeholder="Filter…" data-i18n-placeholder="side.filter" title="Search sessions: Ctrl+K (Cmd+K on macOS) outside a terminal, Ctrl+Shift+K from anywhere" data-i18n-title="side.filterTitle" autocomplete="off">
+    <div id="hchips" class="chips" hidden></div>
+    <section id="tree" class="tree" hidden>
+      <div class="tree-head">
+        <button class="btn ghost sm" id="tree-up" title="Parent folder" data-i18n-title="tree.up">↑</button>
+        <span class="tree-path"><span id="tree-path" dir="ltr"></span></span>
+        <button class="btn ghost sm" id="tree-hidden" title="Show hidden files" data-i18n-title="tree.hidden">.*</button>
+        <button class="btn ghost sm" id="tree-close" title="Close the file tree" data-i18n-title="tree.close">✕</button>
+      </div>
+      <div id="tree-body" class="tree-body" role="tree"></div>
+      <div class="tree-hint mute" data-i18n="tree.hint">click: open · right-click (HTML, Markdown): the source</div>
+    </section>
+    <div id="list" class="list"></div>
+    <div id="hlist" class="list" hidden></div>
+    <footer class="side-foot"><span id="foot"></span><label id="push-detail-row" class="push-detail" hidden title="By default a notification only carries the session name and the kind of event. Checked: it also carries the agent's text, the command or URL at stake and the choices (visible on this device's lock screen)." data-i18n-title="foot.pushDetailTitle"><input type="checkbox" id="push-detail"> <span data-i18n="foot.pushDetail">details</span></label><button id="btn-shortcuts" type="button" class="btn ghost sm" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" data-i18n-title="shortcuts.open" data-i18n-aria-label="shortcuts.title">?</button><select id="lang-select" class="btn ghost sm" title="Interface language" aria-label="Interface language" data-i18n-title="foot.language" data-i18n-aria-label="foot.language"></select><a id="source-link" class="btn ghost sm" href="https://github.com/Session-Mesh/session-mesh" target="_blank" rel="noopener noreferrer" title="The source code of this interface (AGPL-3.0-or-later)" data-i18n-title="foot.sourceTitle" data-i18n="foot.source">Source code</a><button id="btn-reload" class="btn ghost sm" title="Reload the app (fetches the latest version)" data-i18n-title="foot.reloadTitle" data-i18n="foot.reload">⟳ Reload</button><button id="btn-push" class="btn ghost sm" hidden></button><button class="btn ghost sm" popovertarget="logout-pop" title="Sign out" aria-label="Sign out" data-i18n-title="foot.logout" data-i18n-aria-label="foot.logout">⏻</button><div id="logout-pop" popover><button id="btn-logout" class="btn sm" data-i18n="foot.logoutDevice">Sign out this device</button> <button id="btn-logout-all" class="btn sm" title="The token and the sessions do not change" data-i18n-title="foot.logoutAllTitle" data-i18n="foot.logoutAll">All devices…</button></div></footer>
+  </aside>
+
+  <div id="side-grip" class="grip" title="Drag to widen" data-i18n-title="side.grip"></div>
+
+  <main id="main">
+    <div class="bar">
+      <button id="btn-menu" class="btn" aria-controls="side" aria-expanded="false" data-i18n="bar.sessions">Sessions</button>
+      <div class="bar-title mute" id="bar-hint" data-i18n="bar.hint">Click a session to open it in the active pane</div>
+      <div class="bar-actions">
+        <button id="btn-font-down" class="btn ghost" title="Smaller font" data-i18n-title="bar.fontDown">A−</button>
+        <button id="btn-font-up" class="btn ghost" title="Larger font" data-i18n-title="bar.fontUp">A+</button>
+        <button id="btn-web" class="btn ghost" title="Open a page or an HTML document alongside (key o)" data-i18n-title="bar.webTitle" data-i18n="bar.web">🌐 Page</button>
+        <button id="btn-split" class="btn ghost" title="Add a column (max 3)" data-i18n-title="bar.splitTitle" data-i18n="bar.split">⊞ Column</button>
+        <button id="btn-explore" class="btn ghost" title="History explorer (Esc to go back)" data-i18n-title="bar.exploreTitle" data-i18n="bar.explore">▤ Explorer</button>
+        <button id="btn-config" class="btn ghost" title="Read-only view of the paths, versions and settings in use" data-i18n-title="bar.configTitle" data-i18n="bar.config">Configuration</button>
+        <button id="btn-management" class="btn ghost" title="Read-only local inventory of the sessions (Esc to go back)" data-i18n-title="bar.managementTitle" data-i18n="bar.management">Management</button>
+      </div>
+      <button id="btn-mobile-panels" class="btn ghost" aria-label="Open panes" aria-controls="mobile-panels-sheet" aria-expanded="false" title="Choose a pane; the session goes on" data-i18n-aria-label="mobile.panelsAria" data-i18n-title="mobile.panelsTitle" data-i18n="mobile.panels">Panes</button>
+      <button id="btn-mobile-actions" class="btn ghost" aria-controls="mobile-actions-sheet" aria-expanded="false" data-i18n="mobile.actions">Actions</button>
+    </div>
+
+    <dialog id="mobile-actions-sheet" aria-labelledby="mobile-actions-title">
+      <div class="mobile-actions-head"><h2 id="mobile-actions-title" data-i18n="mobile.actions">Actions</h2><button class="btn ghost" type="button" value="cancel" aria-label="Close the actions" data-i18n-aria-label="mobile.closeActions" data-i18n="common.close">Close</button></div>
+      <div class="mobile-actions-list">
+        <button class="btn" type="button" data-mobile-action="btn-font-down" data-i18n="mobile.fontDown">Smaller text</button>
+        <button class="btn" type="button" data-mobile-action="btn-font-up" data-i18n="mobile.fontUp">Larger text</button>
+        <button class="btn" type="button" data-mobile-action="btn-web" data-i18n="mobile.web">Open a page</button>
+        <button class="btn" type="button" data-mobile-action="btn-explore" data-i18n="mobile.explore">Explore the history</button>
+        <button class="btn" type="button" data-mobile-action="pi-scroll" id="mobile-pi-scroll" hidden data-i18n="mobile.piScroll">Restore Pi full-screen scrolling</button>
+        <button class="btn" type="button" data-mobile-action="raw-scrollback" id="mobile-raw-scrollback" hidden data-i18n="mobile.rawScrollback">Enable Codex scrollback</button>
+        <button class="btn" type="button" data-mobile-action="btn-projects" data-i18n="projects.title">Projects</button>
+        <button class="btn" type="button" data-mobile-action="btn-config" data-i18n="config.title">Configuration</button>
+        <button class="btn" type="button" data-mobile-action="btn-management" data-i18n="management.title">Mesh management</button>
+      </div>
+    </dialog>
+
+    <dialog id="mobile-panels-sheet" aria-labelledby="mobile-panels-title">
+      <div class="mobile-actions-head"><h2 id="mobile-panels-title" data-i18n="mobile.panelsAria">Open panes</h2><button class="btn ghost" type="button" value="cancel" aria-label="Close the panes" data-i18n-aria-label="mobile.closePanels" data-i18n="common.close">Close</button></div>
+      <div id="mobile-panels-list" class="mobile-actions-list"></div>
+    </dialog>
+
+    <button id="update-bar" class="update-bar" hidden data-i18n="bar.update">New version: reload</button>
+    <div id="panes"></div>
+
+    <section id="explorer" hidden>
+      <div class="ex-stats" id="ex-stats"></div>
+      <div class="ex-tools">
+        <input id="ex-q" class="filter" placeholder="Search title, recap, message text, folder, branch…" data-i18n-placeholder="explorer.search" autocomplete="off">
+        <span id="ex-chips" class="chips"></span>
+        <select id="ex-sort" class="btn" aria-label="Sort" data-i18n-aria-label="explorer.sort">
+          <option value="recent" data-i18n="explorer.sortRecent">Sort: recent</option><option value="old" data-i18n="explorer.sortOld">Sort: oldest</option>
+          <option value="bytes" data-i18n="explorer.sortBytes">Sort: size</option><option value="msgs" data-i18n="explorer.sortMsgs">Sort: messages</option>
+          <option value="tokens" data-i18n="explorer.sortTokens">Sort: tokens</option>
+        </select>
+      </div>
+      <div class="ex-bulk" id="ex-bulk" hidden></div>
+      <div class="ex-table"><table>
+        <thead><tr>
+          <th class="c-cb"><input type="checkbox" id="ex-all" aria-label="Select all" data-i18n-aria-label="explorer.selectAll"></th>
+          <th class="c-when" data-i18n="explorer.colWhen">When</th><th data-i18n="explorer.colSession">Session</th><th class="c-proj" data-i18n="explorer.colFolder">Folder</th><th class="c-agent" data-i18n="explorer.colAgent">Agent</th>
+          <th class="c-num" data-i18n="explorer.colMsgs">Msgs</th><th class="c-num" data-i18n="explorer.colTokens">Tokens</th><th class="c-num" data-i18n="explorer.colSize">Size</th>
+        </tr></thead>
+        <tbody id="ex-rows"></tbody>
+      </table><div id="ex-more" class="ex-more"></div></div>
+    </section>
+
+    <section id="projects" hidden aria-labelledby="projects-title">
+      <header class="projects-head"><h1 id="projects-title" data-i18n="projects.title">Projects</h1>
+        <button id="projects-return" class="btn" type="button" data-i18n="projects.return">Back to Sessions</button></header>
+      <p id="projects-module-status" role="status"></p>
+      <button id="projects-module-retry" class="btn" type="button" hidden data-i18n="projects.retry">Retry Projects</button>
+      <div id="projects-root"></div>
+    </section>
+
+    <section id="management" hidden aria-labelledby="management-title">
+      <header class="management-head">
+        <div><h1 id="management-title" data-i18n="management.title">Mesh management</h1><p data-i18n="management.intro">Read-only local view: stops are observations, not exit times.</p></div>
+        <p id="management-authority" class="management-authority" role="status"></p>
+      </header>
+      <div class="management-body">
+        <h2 class="management-heading" data-i18n="management.active">Active sessions, heaviest first</h2>
+        <div id="management-rows" class="management-rows" aria-live="polite"></div>
+        <p id="management-external" class="management-external" hidden></p>
+        <h2 class="management-heading" data-i18n="management.recentTitle">Stopped or lost recently</h2>
+        <p id="management-retention" class="management-retention"></p>
+        <div id="management-recent" class="management-rows" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <form id="line" class="line" hidden>
+      <textarea id="line-text" rows="1" enterkeyhint="send" placeholder="Write to the agent… (⏎ sends)" aria-label="Write in the terminal" data-i18n-placeholder="line.placeholder" data-i18n-aria-label="line.aria"></textarea>
+      <button type="button" id="line-direct" class="btn ghost sm line-direct" hidden title="Direct writing: what you type goes straight to the agent and this field stays empty. Tap to go back to the input line; the agent line keeps what was typed." aria-label="Direct writing: what you type goes straight to the agent and this field stays empty. Tap to go back to the input line; the agent line keeps what was typed." data-i18n-title="line.directTitle" data-i18n-aria-label="line.directTitle" data-i18n="line.direct">Direct</button>
+      <button class="btn primary" aria-label="Send" data-i18n-aria-label="common.send">⏎</button>
+    </form>
+    <div id="keys" class="keys" hidden>
+      <div class="key-segment" role="group" aria-label="Main keys" data-i18n-aria-label="keys.main">
+        <button data-k="esc">Esc</button><button data-k="tab">Tab</button>
+        <button data-k="ctrl" class="mod">Ctrl</button>
+        <button data-k="up">↑</button><button data-k="down">↓</button>
+        <button data-k="left">←</button><button data-k="right">→</button>
+        <button data-k="nl" title="new line" data-i18n-title="keys.newlineTitle" data-i18n="keys.newline">↵ line</button>
+      </div>
+      <div class="key-segment" role="group" aria-label="Secondary keys" data-i18n-aria-label="keys.secondary">
+        <button data-k="cc" class="interrupt" aria-label="Interrupt with Ctrl+C" data-i18n-aria-label="keys.interrupt">^C</button>
+        <button data-k="copy" title="Copy the text selected in the terminal" data-i18n-title="keys.copyTitle" data-i18n="common.copy">Copy</button><button data-k="paste" data-i18n="keys.paste">Paste</button><button data-k="compose">✎</button><button data-k="file">📎</button><button data-k="enter">⏎</button>
+      </div>
+    </div>
+    <div id="flash" class="flash" role="status" aria-live="polite" hidden></div>
+    <div id="active-order-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <input id="file-input" class="attach-input" type="file" multiple hidden>
+    <input id="camera-input" class="attach-input" type="file" accept="image/*" capture="environment" hidden>
+    <input id="gallery-input" class="attach-input" type="file" accept="image/*,video/*" multiple hidden>
+  </main>
+
+<template id="pane-tpl">
+  <section class="pane">
+    <div class="pane-head">
+      <button type="button" class="btn ghost sm back" data-act="back" hidden>←</button>
+      <div class="p-identity">
+        <span class="p-name">—</span>
+        <details class="p-name-disclosure">
+          <summary aria-label="Full name" data-i18n-aria-label="pane.fullName" data-i18n="pane.fullName">Full name</summary>
+          <div class="p-full-name">—</div>
+        </details>
+      </div>
+      <div class="p-status">
+        <span class="p-agent" hidden></span>
+        <span class="conn" hidden></span>
+        <span class="p-unread" hidden data-i18n="pane.unread">Unread here</span>
+        <span class="p-board-hint" hidden data-i18n="pane.boardModified">Whiteboard changed</span>
+      </div>
+      <span class="p-cwd mute"></span>
+      <div class="p-actions">
+        <details class="p-provenance"><summary aria-label="Pane identity" data-i18n-aria-label="pane.identity" data-i18n="pane.info">Info</summary><div class="p-provenance-body"></div></details>
+        <button type="button" class="btn ghost sm p-primary" data-act="compose" title="Mailbox: messages between agents for this session" aria-label="Open the mailbox of this session" data-i18n-title="pane.mailboxTitle" data-i18n-aria-label="pane.mailboxAria"><span data-i18n="pane.mailbox">Mailbox</span><span class="mail-badge" hidden><span class="mail-badge-count" aria-hidden="true"></span><span class="sr-only" role="status"></span></span></button>
+        <button type="button" class="btn ghost sm p-primary" data-act="board" title="Open the whiteboard alongside" aria-label="Open the whiteboard alongside" data-i18n-title="pane.boardOpen" data-i18n-aria-label="pane.boardOpen" data-i18n="pane.board">Whiteboard</button>
+        <button type="button" class="btn ghost sm p-primary" data-act="more" aria-haspopup="menu" aria-expanded="false" aria-label="More" data-i18n-aria-label="pane.more" data-i18n="pane.more">More</button>
+        <button type="button" class="btn ghost sm" data-act="close" title="Close this pane (the session goes on)" data-i18n-title="pane.closeTitle" data-i18n="pane.close">Close pane</button>
+        <div class="p-menu" role="menu" aria-label="Pane actions" data-i18n-aria-label="pane.menu" hidden></div>
+      </div>
+    </div>
+    <div class="pane-body">
+      <div class="demo-tools" hidden>
+        <label class="demo-switch"><span data-i18n="demo.label">Demo</span><select aria-label="Choose a demo of this session" data-i18n-aria-label="demo.chooseAria"></select></label>
+        <button type="button" class="btn sm demo-history" aria-label="History of this demo" data-i18n-aria-label="demo.historyAria" data-i18n="common.history">History</button>
+      </div>
+      <div class="demo-offer" hidden><span></span><button type="button" class="btn sm" data-i18n="common.show">Show</button></div>
+      <div class="term" hidden></div>
+      <button class="to-bottom" type="button" title="Back to the bottom" aria-label="Back to the bottom" data-i18n-title="pane.toBottom" data-i18n-aria-label="pane.toBottom" tabindex="-1">↓</button>
+      <iframe class="web" hidden referrerpolicy="no-referrer"></iframe>
+      <div class="detail" hidden></div>
+      <div class="empty">
+        <p><span class="wide-only" data-i18n="pane.emptyWide">Choose a session on the left</span><span class="narrow-only" data-i18n="pane.emptyNarrow">Choose a session under Sessions</span><span data-i18n="pane.emptyOr">, or open a new one.</span></p>
+        <button class="btn primary" data-act="new" data-i18n="pane.newSession">+ New session</button>
+      </div>
+      <div class="drop" hidden data-i18n="pane.drop">Drop to send to the machine — the path will be pasted</div>
+    </div>
+  </section>
+</template>
+</div>
+
+<dialog id="dlg-agent-mail-consent" aria-labelledby="agent-mail-consent-title">
+  <form method="dialog">
+    <h2 id="agent-mail-consent-title" data-i18n="mail.title">Message from another agent</h2>
+    <p id="agent-mail-consent-description"></p>
+    <p class="mute" data-i18n="mail.hidden">The agent cannot read the content until you allow it.</p>
+    <div class="agent-mail-consent-actions">
+      <button class="btn ghost" value="later" data-i18n="mail.later">Later</button>
+      <button class="btn danger" value="no" data-i18n="mail.refuse">Refuse</button>
+      <button class="btn" value="yes" data-i18n="mail.once">Read this time</button>
+      <button class="btn primary" value="always" data-i18n="mail.always">Always for this exact session</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-demo-chooser" aria-labelledby="demo-chooser-title">
+  <form method="dialog">
+    <h2 id="demo-chooser-title" data-i18n="demo.chooseTitle">Choose a demo</h2>
+    <p class="mute"><span data-i18n="demo.session">Session:</span> <span data-demo-session></span></p>
+    <div class="demo-choices" data-demo-choices></div>
+    <div class="row"><button class="btn ghost demo-chooser-cancel" value="cancel" data-i18n="common.cancel">Cancel</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-demo-history" aria-labelledby="demo-history-title">
+  <div>
+    <h2 id="demo-history-title" data-i18n="demo.historyTitle">Demo history</h2>
+    <p class="mute"><span data-i18n="demo.demo">Demo:</span> <span data-demo-history-label></span></p>
+    <div class="demo-history-choices" data-demo-history-choices></div>
+    <section class="demo-history-confirmation" data-demo-history-confirmation hidden>
+      <p data-demo-history-confirmation-text></p>
+      <p class="mute" data-i18n="demo.restoreNote">The current revision stays intact. A new revision will be added.</p>
+      <div class="row">
+        <button type="button" class="btn ghost" data-demo-history-back data-i18n="common.back">Back</button>
+        <button type="button" class="btn primary" data-demo-history-confirm data-i18n="demo.restoreConfirm">Create the restore</button>
+      </div>
+    </section>
+    <div class="row"><button type="button" class="btn ghost demo-history-cancel" data-close-dialog data-i18n="common.close">Close</button></div>
+  </div>
+</dialog>
+
+<dialog id="dlg-new">
+  <form method="dialog" id="form-new">
+    <h2 data-i18n="new.title">New session</h2>
+    <label><span data-i18n="new.folder">Folder</span>
+      <input name="cwd" list="dirs" required autocomplete="off">
+      <datalist id="dirs"></datalist>
+    </label>
+    <fieldset class="presets">
+      <legend data-i18n="new.launch">Launch</legend>
+      <label><input type="radio" name="preset" value="shell"> shell</label>
+      <label><input type="radio" name="preset" value="claude" checked> claude</label>
+      <label><input type="radio" name="preset" value="codex"> Codex</label>
+      <label><input type="radio" name="preset" value="codex-yolo"> <span data-i18n="new.codexYolo">Codex (no approvals)</span></label>
+      <label><input type="radio" name="preset" value="pi"> Pi</label>
+      <label><input type="radio" name="preset" value="opencode"> OpenCode</label>
+      <label><input type="radio" name="preset" value="gemini"> Gemini CLI</label>
+      <label><input type="radio" name="preset" value="agy"> Antigravity</label>
+      <label><input type="radio" name="preset" value="copilot"> Copilot CLI</label>
+      <label><input type="radio" name="preset" value="vibe"> Mistral Vibe</label>
+      <label><input type="radio" name="preset" value="custom"> <span data-i18n="new.custom">other</span></label>
+    </fieldset>
+    <input name="command" placeholder="command" data-i18n-placeholder="new.command" hidden>
+    <label><span data-i18n="new.name">Name</span> <span class="mute" data-i18n="new.optional">(optional)</span>
+      <input name="name" pattern="[A-Za-z0-9_-]{1,48}" autocomplete="off">
+    </label>
+    <div class="err" id="new-err"></div>
+    <div class="row">
+      <button type="button" class="btn ghost" data-close-dialog data-i18n="common.cancel">Cancel</button>
+      <button class="btn primary" value="ok" data-i18n="common.open">Open</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-web">
+  <form method="dialog" id="form-web">
+    <h2 data-i18n="web.title">Open a page alongside</h2>
+    <label><span data-i18n="web.target">File on the machine</span>
+      <input name="target" list="docs" required autocomplete="off" placeholder="~/notes/report.html" data-i18n-placeholder="web.placeholder">
+      <datalist id="docs"></datalist>
+    </label>
+    <p class="mute small"><span data-i18n="web.hint">In a terminal, clicking a .html path also opens it here (Ctrl+click: new tab). Agents can run</span> <code data-i18n="web.example">mesh-open file.html</code><span data-i18n="web.hintEnd">.</span></p>
+    <div class="err" id="web-err"></div>
+    <div class="row">
+      <button type="button" class="btn ghost" data-close-dialog data-i18n="common.cancel">Cancel</button>
+      <button class="btn primary" data-i18n="common.open">Open</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-shortcuts" aria-labelledby="shortcuts-title">
+  <form method="dialog">
+    <h2 id="shortcuts-title" data-i18n="shortcuts.title">Keyboard shortcuts</h2>
+    <div id="shortcuts-list" class="shortcut-list"></div>
+    <div class="row">
+      <button class="btn primary" data-i18n="common.close">Close</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-folder">
+  <form method="dialog" id="form-folder">
+    <h2><span data-i18n="folder.titleBefore">Organize “</span><span id="folder-session"></span><span data-i18n="folder.titleAfter">”</span></h2>
+    <div id="folder-choices" class="folder-choices"></div>
+    <label><span data-i18n="folder.new">New folder</span>
+      <input name="newfolder" autocomplete="off" placeholder="project name" data-i18n-placeholder="folder.newPlaceholder">
+    </label>
+    <label><span data-i18n="folder.label">Session name</span> <span class="mute" data-i18n="folder.labelHint">(empty: default name)</span>
+      <input name="sessionlabel" autocomplete="off">
+    </label>
+    <div class="row">
+      <button type="button" class="btn ghost" data-close-dialog data-i18n="common.cancel">Cancel</button>
+      <button class="btn primary" id="folder-save" data-i18n="common.save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-mailbox" aria-labelledby="mailbox-title">
+  <div class="mailbox-head">
+    <h2 id="mailbox-title" data-i18n="mailbox.title">Mailbox</h2>
+    <button type="button" class="btn ghost" data-close-dialog data-i18n="common.close">Close</button>
+  </div>
+  <p id="mailbox-session" class="mute"></p>
+  <p class="mute mailbox-notice" data-i18n="mailbox.notice">Messages between agents, shown as plain text: nothing in them is run, and links are not clickable. Reading here gives the agent no permission.</p>
+  <div id="mailbox-body"></div>
+</dialog>
+
+<dialog id="dlg-config" aria-labelledby="config-title">
+  <div class="mailbox-head">
+    <h2 id="config-title" data-i18n="config.title">Configuration</h2>
+    <button type="button" class="btn ghost" data-close-dialog data-i18n="common.close">Close</button>
+  </div>
+  <p class="mute config-notice" data-i18n="config.notice">Read-only: what this mesh is using right now. No token, key or file content is ever shown here.</p>
+  <div id="config-body"></div>
+</dialog>
+
+<dialog id="dlg-compose">
+  <h2 data-i18n="compose.title">Write in the terminal</h2>
+  <textarea id="compose-text" rows="9" placeholder="Multi-line text: sent in one block, like a paste." data-i18n-placeholder="compose.placeholder"></textarea>
+  <div class="row">
+    <span class="mute hint-keys" data-i18n="compose.hint">Ctrl+Enter: send · pasting an image or a file inserts its path</span>
+    <button type="button" class="btn ghost" id="compose-attach" title="Attach: file, photo, recording" data-i18n-title="compose.attachTitle">📎</button>
+    <button type="button" class="btn ghost" data-close-dialog data-i18n="common.cancel">Cancel</button>
+    <button type="button" class="btn" id="compose-insert" data-i18n="compose.insert">Insert</button>
+    <button type="button" class="btn primary" id="compose-send" data-i18n="compose.send">Send ⏎</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-attach" aria-labelledby="attach-title">
+  <h2 id="attach-title" data-i18n="attach.title">Attach</h2>
+  <div id="attach-menu" role="menu"></div>
+  <div id="attach-capture" hidden>
+    <p id="cap-status" class="mute" role="status"></p>
+    <div class="cap-stage">
+      <video id="cap-video" muted playsinline hidden></video>
+      <img id="cap-image" alt="Photo preview" data-i18n-alt="attach.preview" hidden>
+      <audio id="cap-audio" controls hidden></audio>
+      <div id="cap-rec" hidden><span class="rec-dot"></span> <span id="cap-time">0:00</span></div>
+    </div>
+  </div>
+  <div class="row" id="attach-actions">
+    <button type="button" class="btn ghost" id="cap-cancel" data-i18n="common.cancel">Cancel</button>
+    <button type="button" class="btn" id="cap-retry" hidden data-i18n="attach.retake">Retake</button>
+    <button type="button" class="btn" id="cap-main" hidden></button>
+    <button type="button" class="btn primary" id="cap-send" hidden data-i18n="common.send">Send</button>
+  </div>
+</dialog>
+
+<script src="/static/vendor/xterm.min.js"></script>
+<script src="/static/vendor/addon-fit.min.js"></script>
+<script src="/static/i18n.js?v=__CLIENT_VERSION__"></script>
+<script src="/static/folder-state.js"></script>
+<script src="/static/history-state.js"></script>
+<script src="/static/session-activity.js"></script>
+<script src="/static/demo-catalog.js"></script>
+<script src="/static/pane-actions.js"></script>
+<script src="/static/workspace-spec.js"></script>
+<script src="/static/terminal-links.js"></script>
+<script src="/static/shortcuts.js"></script>
+<script src="/static/app.js"></script>
+<!-- mesh:local-entry:start -->
+<script src="/static/local-entry.js"></script>
+<!-- mesh:local-entry:end -->
+</body>
+</html>

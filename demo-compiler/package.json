@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "type": "module",
+  "name": "mesh-demo-compiler",
+  "version": "0.0.0",
+  "description": "Bounded TSX compiler for demos; no guest code execution",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "test": "node test-compiler.mjs"
+  },
+  "dependencies": {
+    "esbuild": "0.25.10"
+  }
+}

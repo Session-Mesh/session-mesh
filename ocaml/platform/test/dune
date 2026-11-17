@@ -1,0 +1,4 @@
+(test
+ (name mesh_platform_test)
+ (deps ../cli/mesh_platform_main.exe)
+ (libraries mesh_platform unix alcotest yojson))

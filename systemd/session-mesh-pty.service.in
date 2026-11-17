@@ -1,0 +1,16 @@
+[Unit]
+Description=session-mesh native pty host (owns the mesh terminals)
+
+[Service]
+ExecStart=:"@PTYHOST@"
+Restart=on-failure
+# systemd creates $XDG_RUNTIME_DIR/session-mesh (the socket's directory, path unchanged) on start
+# and removes it on stop, so a stopped host never leaves a stale ptyhost.sock behind.
+RuntimeDirectory=session-mesh
+RuntimeDirectoryMode=0700
+# A session killed by the kernel OOM killer ends alone, not the whole unit and every session.
+OOMPolicy=continue
+# Stopping this unit ends every mesh session. The installer never restarts it.
+
+[Install]
+WantedBy=default.target

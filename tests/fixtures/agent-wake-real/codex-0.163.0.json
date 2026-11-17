@@ -1,0 +1,9 @@
+{
+  "client": "codex-cli 0.163.0",
+  "date": "2026-10-21",
+  "environment": "disposable PTY and process; repository worktree; live Mesh services untouched",
+  "transaction": "one text burst followed 250 ms later by Enter in the same host queue transaction",
+  "result": "submitted",
+  "evidence": "the client consumed the prompt, returned to idle, and asked for owner consent before reading agent_inbox",
+  "captured_content": "none"
+}

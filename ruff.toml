@@ -1,0 +1,17 @@
+extend-include = [
+  "bin/mesh-attach",
+  "bin/mesh-event",
+  "bin/mesh-logout-all",
+  "bin/mesh-open",
+  "bin/mesh-rename",
+]
+
+extend-exclude = [
+  "static/vendor",
+  "tests",
+]
+
+[lint]
+# Start with unambiguous correctness and dead-code findings.  Style is deliberately
+# not gated yet: it needs a separately reviewed migration rather than a noisy bulk edit.
+select = ["E4", "E7", "E9", "F"]

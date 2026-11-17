@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "exceptions": [
+    {
+      "path": "static/vendor/board-7159781822abec77.js",
+      "rule": "secret",
+      "substring": "gcp-api-key:sha256:831eae7f580f7721f62d7f654e8c071879bcafd6452d5613f8db051f15082b85",
+      "reason": "Public Firebase web API key of excalidraw.com (VITE_APP_FIREBASE_CONFIG.apiKey) that @excalidraw/excalidraw@0.17.6 ships in dist/excalidraw.production.min.js, carried unchanged into the generated whiteboard bundle; a Firebase web key identifies a project and is public by design. The board does not use it, and its CSP (connect-src self) would block any call to Firebase. Owner decision 2026-11-13. Update the path at each rebuild of the bundle."
+    },
+    {
+      "path": "static/vendor/xterm.min.js",
+      "rule": "secret",
+      "substring": "generic-api-key:sha256:640aed0105386a54b4a1d9115bc0a4efa6044bec37a70cb969759b06f7d9b739",
+      "reason": "Not a secret: gitleaks generic-api-key matches a minified class-export assignment (a 16-character JavaScript identifier, a key-map class name) in @xterm/xterm 5.5.0 lib/xterm.js, vendored unchanged. Reviewed 2026-11-14; recompute the digest when xterm is updated."
+    },
+    {
+      "path": "static/vendor/monaco/vs/editor/editor.main.js",
+      "rule": "secret",
+      "substring": "generic-api-key:sha256:316a454fa711dfc93e0419dce10a980d5c7d800a9ebc069f29c0435fdaa65666",
+      "reason": "Not a secret: gitleaks generic-api-key matches a minified export assignment (a 19-character JavaScript identifier from the keybinding resolver) in monaco-editor 0.52.2 vs/editor/editor.main.js, vendored unchanged. Reviewed 2026-11-14; recompute the digest when Monaco is updated."
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+node_modules
+/_build/
+_opam/
+ocaml/_build/
+ocaml/compile_commands.json
+ocaml/session_mesh.install

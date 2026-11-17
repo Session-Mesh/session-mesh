@@ -1,0 +1,820 @@
+{
+ "captured_with": "Claude Code 2.1.288 (claude --version), interactive, default permission mode",
+ "state": "turn over, prompt free, a background shell of the subagent still running",
+ "session": {
+  "pid": 4242,
+  "sessionId": "00000000-0000-4000-8000-000000000001",
+  "cwd": "/tmp/scratch",
+  "startedAt": 1700000000000,
+  "procStart": "1000",
+  "version": "2.1.288",
+  "peerProtocol": 1,
+  "peerFeatures": [
+   "notify_idle",
+   "reply_across_default_dirs",
+   "artifact_yield"
+  ],
+  "kind": "interactive",
+  "entrypoint": "cli",
+  "pidDomain": "linux:0000:pid:[0]",
+  "messagingSocketPath": "/run/user/1000/cc-socks/4242.sock",
+  "name": "scratch-a1",
+  "nameSource": "derived",
+  "nameSince": 1700000000001,
+  "status": "shell",
+  "updatedAt": 1700000148403,
+  "statusUpdatedAt": 1700000148403
+ },
+ "transcript": [
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000001",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000002",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": "user prompt 1"
+   }
+  },
+  {
+   "type": "ai-title",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "aiTitle": "Conversation title"
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000003",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000004",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0001",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000004",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000005",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0001",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "text",
+      "text": "assistant text 1"
+     }
+    ]
+   }
+  },
+  {
+   "type": "ai-title",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "aiTitle": "Conversation title"
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000006",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000007",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": "user prompt 2"
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000008",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000009",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0002",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000009",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000010",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0002",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "text",
+      "text": "assistant text 2"
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000011",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000012",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": "user prompt 3"
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000013",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000014",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0003",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000014",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000015",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0003",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_0001",
+      "name": "AskUserQuestion",
+      "input": {
+       "questions": [
+        {
+         "question": "Question 1?",
+         "header": "Header",
+         "options": [
+          {
+           "label": "Option A",
+           "description": "Option A described"
+          },
+          {
+           "label": "Option B",
+           "description": "Option B described"
+          }
+         ],
+         "multiSelect": false
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000015",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000016",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "tool_use_id": "toolu_0001",
+      "content": "tool output",
+      "is_error": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000017",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000018",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0004",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000018",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000019",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0004",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "text",
+      "text": "assistant text 3"
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000020",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000021",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": "user prompt 4"
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000022",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000023",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0005",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000023",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000024",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0005",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_0002",
+      "name": "Bash",
+      "input": {
+       "command": "a shell command",
+       "description": "what it does"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000024",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000025",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "tool_use_id": "toolu_0002",
+      "content": "tool output",
+      "is_error": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000026",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000027",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0006",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000027",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000028",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0006",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "text",
+      "text": "assistant text 4"
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000029",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000030",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": "user prompt 5"
+   }
+  },
+  {
+   "type": "ai-title",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "aiTitle": "Conversation title"
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000031",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000032",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0007",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000032",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000033",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0007",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_0003",
+      "name": "Bash",
+      "input": {
+       "command": "a shell command",
+       "description": "what it does"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000033",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000034",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "tool_use_id": "toolu_0003",
+      "content": "tool output",
+      "is_error": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000035",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000036",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0008",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000036",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000037",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0008",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "text",
+      "text": "assistant text 5"
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000038",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000039",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": "user prompt 6"
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000040",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000041",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0009",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000041",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000042",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0009",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_0004",
+      "name": "Agent",
+      "input": {
+       "description": "a subagent task",
+       "prompt": "the subagent prompt",
+       "run_in_background": "true"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000042",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000043",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "tool_use_id": "toolu_0004",
+      "content": "tool output",
+      "is_error": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000043",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000044",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0009",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "tool_use",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_0005",
+      "name": "AskUserQuestion",
+      "input": {
+       "questions": [
+        {
+         "question": "Question 1?",
+         "header": "Header",
+         "options": [
+          {
+           "label": "Option A",
+           "description": "Option A described"
+          },
+          {
+           "label": "Option B",
+           "description": "Option B described"
+          }
+         ],
+         "multiSelect": false
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "type": "user",
+   "parentUuid": "00000000-0000-4000-a000-000000000044",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000045",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "tool_use_id": "toolu_0005",
+      "content": "tool output",
+      "is_error": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000046",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000047",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0010",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "signature"
+     }
+    ]
+   }
+  },
+  {
+   "type": "assistant",
+   "parentUuid": "00000000-0000-4000-a000-000000000047",
+   "isSidechain": false,
+   "uuid": "00000000-0000-4000-a000-000000000048",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "cwd": "/tmp/scratch",
+   "version": "2.1.288",
+   "userType": "external",
+   "entrypoint": "cli",
+   "message": {
+    "role": "assistant",
+    "id": "msg_0010",
+    "type": "message",
+    "model": "claude-model",
+    "stop_reason": "end_turn",
+    "content": [
+     {
+      "type": "text",
+      "text": "assistant text 6"
+     }
+    ]
+   }
+  },
+  {
+   "type": "ai-title",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
+   "aiTitle": "Conversation title"
+  }
+ ]
+}

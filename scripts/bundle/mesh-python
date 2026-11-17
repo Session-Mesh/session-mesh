@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+set -euo pipefail
+MESH_BUNDLE_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=scripts/bundle/env.sh
+source "$MESH_BUNDLE_ROOT/env.sh"
+exec "$MESH_BUNDLE_ROOT/runtime/python/bin/python3" "$@"

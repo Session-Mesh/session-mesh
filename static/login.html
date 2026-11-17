@@ -1,0 +1,26 @@
+<!doctype html>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+  Copyright (c) 2026 Atacama <contact@atacama.tech>
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Session Mesh</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#11151c">
+<link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+<link rel="stylesheet" href="/static/login.css">
+</head>
+<body>
+<form method="post" action="/login">
+  <h1><span>❯</span> session mesh</h1>
+  <p data-i18n="login.tokenHint">Token in ~/.config/session-mesh/token</p>
+  <input name="token" type="password" placeholder="access token" data-i18n-placeholder="login.tokenPlaceholder" autofocus autocomplete="current-password">
+  <button data-i18n="login.enter">Enter</button>
+  <div class="bad" id="bad" data-i18n="login.refused">Token refused.</div>
+</form>
+<script src="/static/login.js"></script>
+</body>
+</html>

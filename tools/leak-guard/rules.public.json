@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "email": {
+    "allowedAddresses": ["noreply@github.com", "git@github.com", "git@gitlab.com", "contact@atacama.tech"],
+    "allowedDomains": ["users.noreply.github.com", "example.com", "example.org", "example.net"],
+    "allowedTopLevels": ["example", "invalid", "test", "localhost"]
+  },
+  "homeTemplates": ["USER", "user", "username", "u", "owner", "me", "you", "name", "example", "alice", "bob", "runner"],
+  "tailnetIpv6Groups": ["fd7a", "115c", "a1e0"],
+  "tailnetExampleLabels": ["example", "tailnet", "your-tailnet", "tailnet-name", "tailxxxx"],
+  "vendor": {
+    "prefixes": ["static/vendor/"],
+    "exemptRules": ["email", "tailnet-host"]
+  },
+  "identity": {
+    "domain": "users.noreply.github.com",
+    "committerAddresses": ["noreply@github.com"]
+  },
+  "message": {
+    "sessionTrailers": ["claude-session", "codex-session", "agent-session"]
+  }
+}

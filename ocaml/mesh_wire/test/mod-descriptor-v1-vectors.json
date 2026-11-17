@@ -1,0 +1,13 @@
+{
+  "canonical": "{\"v\":1,\"kind\":\"mod\",\"mod_id\":\"roadmap-card\",\"code_digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"capabilities\":[]}",
+  "invalid": [
+    {"name":"unknown-field","error":"invalid-fields","bytes":"{\"v\":1,\"kind\":\"mod\",\"mod_id\":\"roadmap-card\",\"code_digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"capabilities\":[],\"url\":\"https://example.invalid\"}"},
+    {"name":"duplicate-field","error":"invalid-fields","bytes":"{\"v\":1,\"kind\":\"mod\",\"mod_id\":\"roadmap-card\",\"mod_id\":\"other\",\"code_digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"capabilities\":[]}"},
+    {"name":"wrong-version","error":"unsupported-version","bytes":"{\"v\":2,\"kind\":\"mod\",\"mod_id\":\"roadmap-card\",\"code_digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"capabilities\":[]}"},
+    {"name":"wrong-kind","error":"invalid-fields","bytes":"{\"v\":1,\"kind\":\"demo\",\"mod_id\":\"roadmap-card\",\"code_digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"capabilities\":[]}"},
+    {"name":"invalid-id","error":"invalid-mod-id","bytes":"{\"v\":1,\"kind\":\"mod\",\"mod_id\":\"Roadmap Card\",\"code_digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"capabilities\":[]}"},
+    {"name":"invalid-digest","error":"invalid-code-digest","bytes":"{\"v\":1,\"kind\":\"mod\",\"mod_id\":\"roadmap-card\",\"code_digest\":\"ABCDEF\",\"capabilities\":[]}"},
+    {"name":"known-capability","error":"capabilities-unavailable","bytes":"{\"v\":1,\"kind\":\"mod\",\"mod_id\":\"roadmap-card\",\"code_digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"capabilities\":[\"portfolio.read\"]}"},
+    {"name":"unknown-capability","error":"capabilities-unavailable","bytes":"{\"v\":1,\"kind\":\"mod\",\"mod_id\":\"roadmap-card\",\"code_digest\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"capabilities\":[\"extension.arbitrary\"]}"}
+  ]
+}

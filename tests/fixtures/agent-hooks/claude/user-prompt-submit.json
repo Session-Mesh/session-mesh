@@ -1,0 +1,10 @@
+{
+  "cwd": "/scratch/work",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "default",
+  "prompt": "PROMPT",
+  "prompt_id": "UUID",
+  "scratchpad_dir": "/tmp/PROJECT-DIR/UUID/scratchpad",
+  "session_id": "UUID",
+  "transcript_path": "/home/USER/.claude/projects/-scratch-work/UUID.jsonl"
+}

@@ -1,0 +1,43 @@
+(library
+ (name mesh_wire)
+ (public_name session_mesh.wire)
+ (modules mesh_wire)
+ (libraries digestif)
+ (instrumentation
+  (backend mutaml)))
+
+(library
+ (name mesh_runner_target)
+ (public_name session_mesh.runner-target)
+ (modules mesh_runner_target)
+ (libraries mesh_wire yojson))
+
+(library
+ (name mesh_demo_artifact)
+ (modules mesh_demo_artifact)
+ (libraries mesh_runner_target digestif base64 yojson))
+
+(library
+ (name mesh_demo_runtime_admission)
+ (modules mesh_demo_runtime_admission)
+ (libraries mesh_runner_target yojson))
+
+(library
+ (name mesh_demo_input_schema)
+ (modules mesh_demo_input_schema)
+ (libraries yojson uutf uucp))
+
+(library
+ (name mesh_demo_runtime_catalog)
+ (modules mesh_demo_runtime_catalog)
+ (libraries mesh_demo_runtime_admission))
+
+(library
+ (name mesh_demo_scene)
+ (modules mesh_demo_scene)
+ (libraries yojson uutf uucp))
+
+(library
+ (name mesh_mod_descriptor)
+ (modules mesh_mod_descriptor)
+ (libraries yojson))

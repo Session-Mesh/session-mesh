@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+"""mesh-open [--reload | --watch] FILE — show a local document in session-mesh's side panel.
+
+Run from a mesh session, the document opens next to that session's pane (the session
+token in $MESH_SESSION_TOKEN is the credential, nothing else is needed); in a session
+without that token it refuses (a session is recognised by $MESH_SESSION or, when the PTY
+host answers, by a session shell among this process's ancestors). Outside any session it
+opens in every page, with the mesh's own token.
+
+Running it again on the same file reloads it; --reload says so explicitly.
+--watch also reloads the document whenever the file changes on disk (the page must
+stay open). Web pages (http:// or https://) are not shown in a panel: open them in a
+browser. Meant for agents too: "write the report to ~/notes/x.html, then
+run mesh-open on it"."""
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import meshpaths  # noqa: E402
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirection is an error: following it would resend the Authorization header to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, None)
+
+
+# Never through a proxy, never redirected: the request carries a credential and is meant for this host only.
+LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
+
+parser = argparse.ArgumentParser(prog="mesh-open", description=__doc__.split("\n", 1)[1].strip(),
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument("target", metavar="FILE")
+parser.add_argument("--reload", action="store_true", help="reload the document if it is already open")
+parser.add_argument("--watch", action="store_true", help="reload it whenever the file changes")
+args = parser.parse_args()
+
+target = args.target
+if target.lower().startswith(("http://", "https://")):
+    parser.error("a web page does not open in a panel; open it in a browser")
+target = str(Path(target).expanduser().resolve())
+
+
+def session_by_ancestry():
+    """The mesh session whose shell is an ancestor of this process, found without the
+    environment, which a tool may strip. None when no PTY host answers: its sessions end with it."""
+    import asyncio
+    import localmesh
+    try:
+        return localmesh.current_session(asyncio.run(localmesh.list_sessions()))
+    # asyncio.TimeoutError is not an OSError before Python 3.11; a hostile reply can nest deeply.
+    except (OSError, EOFError, ValueError, LookupError, TypeError, RecursionError,
+            TimeoutError, asyncio.TimeoutError):
+        return None
+
+
+def credential():
+    """(Authorization header, is it a session token). The master token is read only outside any session."""
+    session_token = os.environ.get("MESH_SESSION_TOKEN", "").strip()
+    if session_token:
+        return f"MeshSession {session_token}", True
+    if os.environ.get("MESH_SESSION", "").strip():
+        sys.exit("mesh-open: MESH_SESSION is set but MESH_SESSION_TOKEN is not; "
+                 "in a mesh session only the session token is used")
+    session = session_by_ancestry()
+    if session:
+        sys.exit(f"mesh-open: this runs in mesh session {session} but MESH_SESSION_TOKEN is not set; "
+                 "in a mesh session only the session token is used")
+    try:
+        return "Bearer " + (meshpaths.CONF_DIR / "token").read_text().strip(), False
+    except OSError as e:
+        sys.exit(f"mesh-open: session-mesh token not found ({e})")
+
+
+authorization, by_session = credential()
+req = urllib.request.Request(
+    meshpaths.local_url("/api/open"),
+    data=json.dumps({"target": target, "reload": args.reload, "watch": args.watch}).encode(),
+    headers={"Content-Type": "application/json", "Authorization": authorization},
+)
+try:
+    with LOCAL.open(req, timeout=5) as r:
+        print("opened in session-mesh:", json.load(r)["target"])
+except urllib.error.HTTPError as e:
+    if by_session and e.code == 401:
+        sys.exit("mesh-open: session token refused (the session is closed or MESH_SESSION_TOKEN is out of date)")
+    sys.exit(f"mesh-open : {e.read().decode() or e.reason}")
+except OSError as e:
+    sys.exit(f"mesh-open: session-mesh is not responding ({e})")

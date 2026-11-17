@@ -1,0 +1,29 @@
+{
+  "cwd": "/scratch/work",
+  "hook_event_name": "PermissionRequest",
+  "permission_mode": "default",
+  "prompt_id": "UUID",
+  "scratchpad_dir": "/tmp/PROJECT-DIR/UUID/scratchpad",
+  "session_id": "UUID",
+  "tool_input": {
+    "questions": [
+      {
+        "header": "Colour",
+        "multiSelect": false,
+        "options": [
+          {
+            "description": "DESCRIPTION",
+            "label": "Red"
+          },
+          {
+            "description": "DESCRIPTION",
+            "label": "Blue"
+          }
+        ],
+        "question": "What is your favourite colour?"
+      }
+    ]
+  },
+  "tool_name": "AskUserQuestion",
+  "transcript_path": "/home/USER/.claude/projects/-scratch-work/UUID.jsonl"
+}

@@ -1,0 +1,24 @@
+{
+  "agent_id": "AGENT-ID",
+  "agent_transcript_path": "/home/USER/.claude/projects/-scratch-work/UUID/subagents/agent-AGENT-ID.jsonl",
+  "agent_type": "general-purpose",
+  "background_tasks": [
+    {
+      "agent_type": "general-purpose",
+      "description": "DESCRIPTION",
+      "id": "AGENT-ID",
+      "status": "running",
+      "type": "subagent"
+    }
+  ],
+  "cwd": "/scratch/work",
+  "hook_event_name": "SubagentStop",
+  "last_assistant_message": "REPLY",
+  "permission_mode": "default",
+  "prompt_id": "UUID",
+  "scratchpad_dir": "/tmp/PROJECT-DIR/UUID/scratchpad",
+  "session_crons": [],
+  "session_id": "UUID",
+  "stop_hook_active": false,
+  "transcript_path": "/home/USER/.claude/projects/-scratch-work/UUID.jsonl"
+}

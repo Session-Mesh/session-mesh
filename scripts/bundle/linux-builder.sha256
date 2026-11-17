@@ -1,0 +1,4 @@
+324e78e3f33efeba279aacf9f9610cfec7b2df7d7e0e1640f75f09de85f96cc9  https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-linux
+c363d070b1771b6830c6806eb9fd5ff1a54d0fe97bf389cd2dff20b6d203b2ad  https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-arm64-linux
+dd10babf6c531597d246c97e55e32ca17b44fe251405fe539ec8ea2f22fac2d6  https://github.com/astral-sh/uv/releases/download/0.7.2/uv-x86_64-unknown-linux-musl.tar.gz
+d5b31df40da794dab943c55e67d14fc111146e185b14a6de6eb749ee264a641c  https://github.com/astral-sh/uv/releases/download/0.7.2/uv-aarch64-unknown-linux-musl.tar.gz

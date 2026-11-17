@@ -1,0 +1,100 @@
+<!doctype html>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+  Copyright (c) 2026 Atacama <contact@atacama.tech>
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{title}}</title>
+<style>
+  :root { color-scheme: light dark; --bg: #ffffff; --fg: #1f2328; --mute: #59636e; --line: #d1d9e0; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --fg: #d8dee9; --mute: #8b949e; --line: #30363d; } }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); }
+  body { display: flex; flex-direction: column; font: 12px ui-monospace, "JetBrains Mono", Menlo, monospace; }
+  .bar { display: flex; gap: 14px; align-items: center; padding: 5px 14px; color: var(--mute); border-bottom: 1px solid var(--line); flex: none; white-space: nowrap; overflow: hidden; }
+  .bar .name { color: var(--fg); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  .bar .sp { flex: 1; }
+  .bar a, .bar button { color: var(--mute); background: none; border: 0; font: inherit; cursor: pointer; padding: 0; }
+  .bar a:hover, .bar button:hover { color: var(--fg); }
+  #editor { flex: 1; min-height: 0; }
+  .hit { background: rgba(245, 197, 107, .22); }
+  .hit-margin { border-left: 3px solid #f5c56b; }
+</style>
+</head>
+<body>
+<!-- English on purpose: this page runs in a sandboxed frame without access to the interface's
+     language catalogs (static/i18n/). Keep its few labels short and lower-case, like markdown.html.
+     See docs/features.md, "Documents in the side panel". -->
+<div class="bar">
+  <span class="name">{{title}}</span><span id="info"></span><span class="sp"></span>
+  <button id="wrap" title="Line wrap">↩ wrap</button>
+  <a href="?raw=1">source</a>
+</div>
+<div id="editor"></div>
+<script type="application/json" id="src" nonce="{{nonce}}">{{src}}</script>
+<script src="/viewlib/monaco/vs/loader.js?v={{monaco}}" nonce="{{nonce}}"></script>
+<script nonce="{{nonce}}">
+  const text = JSON.parse(document.getElementById("src").textContent);
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  // "#L42" or "#L42-50" selects lines (the mesh adds it for "file.py:42")
+  const hashLines = () => {
+    const m = location.hash.match(/^#L(\d+)(?:-L?(\d+))?/);
+    return m ? [Number(m[1]), Number(m[2] || m[1])] : null;
+  };
+  // the loader stamps each module's script tag with this page's nonce (no 'strict-dynamic')
+  // urlArgs: module URLs carry the vendored version, so a Monaco upgrade never mixes cached modules
+  require.config({ paths: { vs: "/viewlib/monaco/vs" }, cspNonce: "{{nonce}}", urlArgs: "v={{monaco}}" });
+  require(["vs/editor/editor.main"], () => {
+    // The CSS and HTML language workers are not shipped (their MDN-derived data is
+    // CC BY-SA 2.5, see static/vendor/THIRD_PARTY.md): turn off every feature that
+    // would start them. Colouring comes from the Monarch grammars and is unaffected.
+    const { css, html } = monaco.languages;
+    for (const defaults of [css.cssDefaults, css.lessDefaults, css.scssDefaults,
+      html.htmlDefaults, html.handlebarDefaults, html.razorDefaults]) defaults.setModeConfiguration({});
+    const editor = monaco.editor.create(document.getElementById("editor"), {
+      value: text, language: "{{lang}}", readOnly: true, domReadOnly: true,
+      theme: dark ? "vs-dark" : "vs", automaticLayout: true, minimap: { enabled: true },
+      fontSize: 13, scrollBeyondLastLine: false, renderWhitespace: "selection",
+      contextmenu: false, links: false, wordWrap: "off",
+    });
+    document.getElementById("info").textContent = `${editor.getModel().getLineCount()} lines · {{lang}}`;
+    let decorations = [];
+    const reveal = () => {
+      const lines = hashLines();
+      if (!lines) return;
+      const [a, b] = lines;
+      editor.revealLinesInCenter(a, b);
+      decorations = editor.deltaDecorations(decorations, [{
+        range: new monaco.Range(a, 1, b, 1),
+        options: { isWholeLine: true, className: "hit", linesDecorationsClassName: "hit-margin" },
+      }]);
+      editor.setPosition({ lineNumber: a, column: 1 });
+    };
+    reveal();
+    addEventListener("hashchange", reveal);
+    // The mesh reloads this page when the file changes (if followed): report the
+    // scroll position, and take back the one it remembers. Numbers only; only the
+    // load the mesh started (its token) reports, and only the mesh is listened to.
+    const token = new URLSearchParams(location.search).get("dt");
+    let queued = false;
+    editor.onDidScrollChange(() => {
+      if (queued || !token || window.parent === window) return;
+      queued = true;
+      setTimeout(() => { queued = false; window.parent.postMessage({ smesh: "scroll", y: editor.getScrollTop(), token }, "*"); }, 150);
+    });
+    addEventListener("message", (e) => {
+      if (e.source !== window.parent || e.data?.smesh !== "scrollto" || !Number.isFinite(e.data.y)) return;
+      editor.setScrollTop(e.data.y);
+    });
+    window.parent.postMessage({ smesh: "ready", token }, "*");
+    let wrap = false;
+    document.getElementById("wrap").addEventListener("click", () => {
+      wrap = !wrap;
+      editor.updateOptions({ wordWrap: wrap ? "on" : "off" });
+    });
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+{
+  "about": "Releases shown in the History tab of index.html, newest first. Edit this file, then run node site/tools/changelog-to-history.mjs. See site/README.md, section History: the releases.",
+  "releases": [
+    {
+      "version": "v0.1.0",
+      "title": "first public release",
+      "changelog_heading": "0.1.0 (first public release)",
+      "summary": "The first public release of session-mesh, an alpha.",
+      "highlights": [
+        {
+          "text": "Shells, Claude Code, Codex, Pi, OpenCode, Gemini CLI, Antigravity, Copilot CLI, Mistral Vibe or any command in your browser, in up to three columns, with the machine's other terminals listed beside them.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "Sessions and agents." },
+            { "file": "docs/features.md", "heading": "Starting and finding sessions" }
+          ]
+        },
+        {
+          "text": "Documents beside the terminals: HTML, Markdown, PDF, images and source files, in a sandboxed viewer.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "Documents beside the terminals." },
+            { "file": "docs/features.md", "heading": "Documents beside the terminals" }
+          ]
+        },
+        {
+          "text": "Messages between agents: no agent reads a message, and no session is started or restarted at an agent's request, before you approve.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "Messages between agents." },
+            { "file": "docs/features.md", "heading": "Messages and requests from agents" }
+          ]
+        },
+        {
+          "requires": "projects",
+          "text": "Projects: a tab beside Sessions for your projects, with their repository, README and Roster roadmap as a Kanban board, a dependency graph or a Gantt chart, and their GitHub or GitLab issues, read-only.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "Projects." },
+            { "file": "docs/features.md", "heading": "Projects and recorded Roster state" }
+          ]
+        },
+        {
+          "text": "On your phone: one column, the session list as a drawer, and optional push notifications that by default carry only the session name and the kind of event.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "Phone layout and push notifications" },
+            { "file": "docs/features.md", "heading": "Phone" },
+            { "file": "docs/features.md", "heading": "Notifications" }
+          ]
+        },
+        {
+          "unless": "macos-documents",
+          "text": "Linux first, and macOS 12.3 or later on Apple silicon, supported on a best-effort basis; on macOS, documents beside the terminals are not available yet.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "Install from a release." },
+            { "file": "CHANGELOG.md", "lead": "macOS installer with launchd." },
+            { "file": "docs/operations.md", "heading": "macOS" }
+          ]
+        },
+        {
+          "requires": "macos-documents",
+          "text": "Linux first, and macOS 12.3 or later on Apple silicon, supported on a best-effort basis.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "Install from a release." },
+            { "file": "CHANGELOG.md", "lead": "macOS installer with launchd." },
+            { "file": "docs/operations.md", "heading": "macOS" }
+          ]
+        },
+        {
+          "text": "Local only by default: the server listens on `127.0.0.1`, and publishing it on your Tailscale network is optional.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "Loopback only by default." },
+            { "file": "CHANGELOG.md", "lead": "Tailscale is optional." },
+            { "file": "SECURITY.md", "heading": "What session-mesh defends against" }
+          ]
+        }
+      ]
+    }
+  ]
+}

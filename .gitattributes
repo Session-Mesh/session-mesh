@@ -1,0 +1,7 @@
+# When two contributors each append a signatory line, a local rebase or merge keeps both lines.
+# Pull requests are integrated by "Rebase and merge" and must be linear:
+# tools/cla-check/cla-check.ts refuses merge commits inside a pull request.
+CLA-SIGNATORIES.md merge=union
+
+# GitHub language statistics: the vendored third-party files are not the project's code.
+static/vendor/** linguist-vendored

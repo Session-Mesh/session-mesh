@@ -1,0 +1,6 @@
+# Browser tests (pytest -m browser), on top of requirements-dev.txt.
+# CI installs the matching Chromium with `python -m playwright install --with-deps
+# chromium` into Playwright's default cache (~/.cache/ms-playwright, kept between
+# runs by actions/cache) and points MESH_CHROMIUM at it. Local runs may provide
+# MESH_CHROMIUM or use Playwright's normal browser lookup.
+playwright==1.56.0
