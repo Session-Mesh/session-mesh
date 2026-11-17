@@ -61,7 +61,7 @@ or identities.
 
 | Distribution | Command |
 |---|---|
-| Debian, Ubuntu | `sudo apt update && sudo apt install git curl python3 python3-venv bubblewrap opam build-essential libgmp-dev pkg-config` |
+| Debian, Ubuntu | `sudo apt update && sudo apt install git curl python3 python3-venv bubblewrap opam build-essential libgmp-dev libsqlite3-dev pkg-config` |
 | Fedora | `sudo dnf install git curl python3 nodejs npm bubblewrap opam gcc make gmp-devel pkgconf-pkg-config` |
 | Arch | `sudo pacman -S git curl python nodejs npm bubblewrap opam base-devel gmp pkgconf` |
 | macOS (Homebrew) | `xcode-select --install`, then `brew install opam node gmp pkgconf sqlite python@3.14` |
