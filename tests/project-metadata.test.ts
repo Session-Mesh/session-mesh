@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { parseProjectConfig } from '../static/project-catalog.ts';
 import { generateSnapshot } from '../tools/project-snapshot.ts';
 import { readProjectConfigState, editProjectConfig } from '../tools/project-config.ts';
-import { mkdtemp, writeFile, readFile, access, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, access, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,7 +22,8 @@ const config = () => ({ kind: 'mesh-project-config', schema_version: 2,
   }] });
 
 test('legacy common text survives explicit projection, migration and repairing edits', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'project-common-text-'));
+  // Resolved here and below: project file paths refuse symlinks, and the macOS temporary directory is under /var, a symlink.
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'project-common-text-'));
   try {
     for (const text of ['Line\nBreak', '\t', '\r']) {
       const value = { kind: 'mesh-project-config', schema_version: 1, machine_id: 'machine', projects: [{
@@ -67,7 +68,7 @@ test('an explicit repository replacement repairs legacy normalization without br
   const parsed = parseProjectConfig(legacy); assert.ok(parsed);
   assert.ok(parsed.projects[0]!.repository!.url.length > 4096, 'legacy normalization produces the unsupported target value');
   assert.equal(parseProjectConfig({ ...legacy, schema_version: 2, features: ['project-metadata/1'] }), null, 'target canonical URL bound remains strict');
-  const dir = await mkdtemp(join(tmpdir(), 'project-repository-repair-'));
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'project-repository-repair-'));
   try {
     const path = join(dir, 'config.json'); await writeFile(path, JSON.stringify(legacy), { mode: 0o600 });
     const before = await readProjectConfigState(path); assert.equal(before.status, 'ok');
@@ -158,7 +159,7 @@ test('explicit metadata projection retains authored data while stripping private
 });
 
 test('config2 default projection refuses before any provider starts', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'project-version-'));
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'project-version-'));
   try {
     const marker = join(dir, 'called'), executable = join(dir, 'provider');
     await writeFile(executable, `#!/usr/bin/node\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called');process.stdout.write('{}');\n`, { mode: 0o700 });
@@ -169,7 +170,7 @@ test('config2 default projection refuses before any provider starts', async () =
 });
 
 test('reserved source migration refuses before provider side effects', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'project-reserved-source-'));
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'project-reserved-source-'));
   try {
     const marker = join(dir, 'called'), executable = join(dir, 'provider');
     await writeFile(executable, `#!/usr/bin/node\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called');process.stdout.write('{}');\n`, { mode: 0o700 });
