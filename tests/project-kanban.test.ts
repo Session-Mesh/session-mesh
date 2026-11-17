@@ -53,19 +53,27 @@ test('Kanban in Chrome: readable desktop/phone cards, safe titles, selection and
           assert.equal(await selected.getAttribute('aria-pressed'), 'true', 'selection survives mode changes');
           const board = page.locator('.project-kanban'); await board.scrollIntoViewIfNeeded();
           await board.evaluate(element => { element.scrollLeft = 0; });
-          const box = (await board.boundingBox())!, x = box.x + box.width - 15, y = box.y + 20;
           if (mobile) {
-            const touch = await page.context().newCDPSession(page);
-            await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
-            await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x - 60, y }] });
-            await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x - 210, y }] });
-            await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await touch.detach();
+            const lanes = board.locator('.project-kanban-lane');
+            const boxes = await lanes.evaluateAll(elements => elements.map(element => { const r=element.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}; }));
+            assert.ok(boxes.every((box,index)=>Math.abs(box.x-boxes[0]!.x)<1&&Math.abs(box.width-boxes[0]!.width)<1&&(!index||box.y>=boxes[index-1]!.y+boxes[index-1]!.height)), 'phone statuses form full-width vertical sections');
+            assert.ok(await board.evaluate(element=>element.scrollWidth<=element.clientWidth+1));
+            assert.equal(await board.evaluate(element=>getComputedStyle(element).maxHeight),'none');
+            const firstLane=lanes.first();await firstLane.scrollIntoViewIfNeeded();const before=(await firstLane.boundingBox())!;
+            const x=before.x+before.width/2,y=Math.max(120,Math.min(800,before.y+80));
+            const touch=await page.context().newCDPSession(page);
+            await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+            for(const distance of [30,70,110])await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:y-distance}]});
+            await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await touch.detach();
+            await page.waitForFunction(previous=>document.querySelector('.project-kanban-lane')!.getBoundingClientRect().y<previous-20,before.y);
+            assert.equal(await board.evaluate(element=>element.scrollLeft),0,'phone needs no horizontal board travel');
           } else {
+            const box = (await board.boundingBox())!, x = box.x + box.width - 15, y = box.y + 20;
             await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x - 210, y, { steps: 6 }); await page.mouse.up();
+            assert.ok(await board.evaluate(element => element.scrollLeft > 50), 'desktop mouse pans the board locally');
+            await board.focus(); await board.evaluate(element => { element.scrollLeft = 0; }); await page.keyboard.press('ArrowRight');
+            await page.waitForFunction(() => document.querySelector('.project-kanban')!.scrollLeft > 10);
           }
-          assert.ok(await board.evaluate(element => element.scrollLeft > 50), 'actual pointer/touch gesture scrolls the board locally');
-          await board.focus(); await board.evaluate(element => { element.scrollLeft = 0; }); await page.keyboard.press('ArrowRight');
-          await page.waitForFunction(() => document.querySelector('.project-kanban')!.scrollLeft > 10);
           assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
           if (process.env.MESH_PROJECT_EVIDENCE) {
             fs.mkdirSync(process.env.MESH_PROJECT_EVIDENCE, { recursive: true });
