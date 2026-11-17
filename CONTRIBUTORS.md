@@ -10,6 +10,7 @@ rule of section 12 of the agreement.
 
 - Mathias Bourgoin
 - Julien Tesson
+- Ilias Garnier
 
 ## Contributors
 
