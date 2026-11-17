@@ -90,6 +90,10 @@ class FakeHost:
                                   'created': 5000.0 + len(self.sessions), 'activity': 0,
                                   'attached': 0, 'meta': req['meta']})
             return {'ok': True, 'name': req['name']}
+        if req['op'] == 'processes':
+            # ptyhost.host_identity off Linux, where the host names itself: an unknown host, as
+            # on Linux, where it reads the peer of a socket that does not exist here.
+            return {}
         raise AssertionError(req)
 
 def install(fake):
