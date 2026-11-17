@@ -3,9 +3,9 @@
 # require that review: the maintainers read such changes before merging.
 # GitHub reads account names here; CONTRIBUTORS.md lists the maintainers by name, and
 # tools/cla-check/MAINTAINERS holds their commit addresses. The three change together.
-/.github/              @mathiasbourgoin @julien-atacama
-/tools/cla-check/      @mathiasbourgoin @julien-atacama
-/CLA.md                @mathiasbourgoin @julien-atacama
-/CLA-SIGNATORIES.md    @mathiasbourgoin @julien-atacama
-/CONTRIBUTORS.md       @mathiasbourgoin @julien-atacama
-/.gitattributes        @mathiasbourgoin @julien-atacama
+/.github/              @mathiasbourgoin @julien-atacama @igarnier
+/tools/cla-check/      @mathiasbourgoin @julien-atacama @igarnier
+/CLA.md                @mathiasbourgoin @julien-atacama @igarnier
+/CLA-SIGNATORIES.md    @mathiasbourgoin @julien-atacama @igarnier
+/CONTRIBUTORS.md       @mathiasbourgoin @julien-atacama @igarnier
+/.gitattributes        @mathiasbourgoin @julien-atacama @igarnier
