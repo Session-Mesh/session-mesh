@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+#
+# CodeRabbit review settings. Reviews are advisory: the public CI and a maintainer's review
+# decide a merge. Reference: https://docs.coderabbit.ai/reference/configuration
+language: en-US
+tone_instructions: "Be brief and specific. Comment on correctness, security and the project rules in CONTRIBUTING.md; skip style nits a linter would catch."
+early_access: false
+reviews:
+  profile: chill
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_filters:
+    - "!static/vendor/**"
+    - "!package-lock.json"
+    - "!LICENSES/**"
+  path_instructions:
+    - path: "**/*.py"
+      instructions: >-
+        The project adds no new Python (CONTRIBUTING.md, "No new Python"). Flag any new Python
+        file, module or script. A small fix inside an existing Python file is acceptable.
+    - path: "static/**"
+      instructions: >-
+        Interface text must come from the catalogs in static/i18n/, never as a literal; a new key
+        must exist in both en.json and fr.json. Some .js files are built from the .ts file of the
+        same name: review the .ts source.
+    - path: "{server.py,sessionauth.py,sessiontoken.py,view.py,ptyhost.py,ocaml/**}"
+      instructions: >-
+        This code sits on a trust boundary (authentication, /view, session tokens, the route
+        table, the PTY host). Check the change against the threat model in SECURITY.md and say
+        explicitly if it widens what an unauthenticated or less trusted caller can do.
+    - path: "site/**"
+      instructions: >-
+        The showcase site, published separately from the application. It must keep its strict
+        Content Security Policy: no inline scripts or styles, no third-party resources.
+chat:
+  auto_reply: true
