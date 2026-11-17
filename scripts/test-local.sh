@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-# Run the complete local-mode test suite: frontend checks, the OCaml build and
-# tests (the native PTY host that every other test starts), Node tests, ruff,
-# the Python and browser suite, then the native ptyhost gate.
+# Run the complete local-mode test suite: the OCaml build and tests (the native
+# PTY host that every other test starts), frontend checks, Node tests, ruff, the
+# Python and browser suite, then the native ptyhost gate.
 #   scripts/test-local.sh            everything
 #   scripts/test-local.sh -k menu    extra arguments go to pytest
 #   scripts/test-local.sh --preflight-only   check prerequisites only
@@ -133,8 +133,9 @@ if [ "$preflight_only" -eq 1 ]; then
 fi
 "$PY" scripts/check-test-environment.py requirements-dev.txt requirements-browser.txt
 prepare_scratch
-frontend_checks
+# The host first: the frontend checks include project tests that start it, as in CI.
 build_native_host
+frontend_checks
 node_tests
 "$PY" -m ruff check .
 "$PY" -m pytest -q "$@"
