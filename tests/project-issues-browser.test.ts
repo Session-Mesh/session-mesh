@@ -89,13 +89,25 @@ test('Chrome issue reader: explicit source reads, labels, safe bodies, paging, s
           assert.deepEqual(await page.evaluate('(window.issuesTest).lastIdentity'),{host:'gitlab.com',issueId:'9007',nodeId:null,projectId:'123'});
           assert.equal(await host.locator('.project-work-card').filter({hasText:'github ·'}).count(),0,'late old-source reply cannot publish');
           assert.notEqual(await host.locator('.project-work-card').first().getAttribute('data-work-key'),githubKey,'equal issue ID/title never conflates sources');
-          const board=host.locator('.project-kanban');await board.scrollIntoViewIfNeeded();await board.focus();await page.keyboard.press('ArrowRight');await page.waitForTimeout(150);
-          const overflow=await board.evaluate(element=>element.scrollWidth>element.clientWidth);if(overflow)assert.ok(await board.evaluate(element=>element.scrollLeft)>0,'keyboard moves local lanes');
+          const board=host.locator('.project-kanban');await board.scrollIntoViewIfNeeded();
           if(width===390){
-            await board.evaluate(element=>element.scrollLeft=0);const box=(await board.boundingBox())!,x=box.x+box.width-15,y=box.y+10;
+            const lanes=board.locator('.project-kanban-lane');
+            const boxes=await lanes.evaluateAll(elements=>elements.map(element=>{const box=element.getBoundingClientRect();return{x:box.x,y:box.y,width:box.width,height:box.height};}));
+            assert.ok(boxes.every((box,index)=>Math.abs(box.x-boxes[0]!.x)<1&&Math.abs(box.width-boxes[0]!.width)<1&&(!index||box.y>=boxes[index-1]!.y+boxes[index-1]!.height)),'phone issue statuses are full-width vertical sections');
+            assert.equal(await board.evaluate(element=>getComputedStyle(element).maxHeight),'none','phone issue board uses page flow');
+            assert.ok(await board.evaluate(element=>element.scrollWidth<=element.clientWidth+1),'no internal horizontal issue travel');
+            assert.equal(await host.locator('.project-work-inspector').count(),0);
+            const first=lanes.first();await first.scrollIntoViewIfNeeded();const before=(await first.boundingBox())!;
+            const x=before.x+before.width/2,y=Math.max(120,Math.min(800,before.y+80));
             const cdp=await page.context().newCDPSession(page);await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
-            await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-60,y}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-210,y}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.detach();await page.waitForTimeout(150);
-            assert.ok(await board.evaluate(element=>element.scrollLeft)>50,'phone touch moves local issue lanes');
+            for(const distance of [30,70,110])await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:y-distance}]});
+            await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.detach();
+            await page.waitForFunction(previous=>document.querySelector('#issues-test .project-kanban-lane')!.getBoundingClientRect().y<previous-20,before.y);
+            assert.equal(await board.evaluate(element=>element.scrollLeft),0,'phone vertical scroll needs no horizontal board travel');
+            assert.equal(await host.locator('.project-work-inspector').count(),0,'vertical touch does not select an issue');
+          }else{
+            await board.focus();await page.keyboard.press('ArrowRight');await page.waitForTimeout(150);
+            const overflow=await board.evaluate(element=>element.scrollWidth>element.clientWidth);if(overflow)assert.ok(await board.evaluate(element=>element.scrollLeft)>0,'desktop keyboard moves local lanes');
           }
           assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
           await board.evaluate(element=>element.scrollLeft=0);

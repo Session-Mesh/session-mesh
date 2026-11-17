@@ -272,42 +272,64 @@ describe('native recorded followup', { skip }, () => {
         objective:`Touch scrolling task ${index}`,depends_on:index?[`touch-${index-1}`]:[]}));
       await load(page,followupCatalog(roadmapObservation(tasks)),fixture,true);
       for(const mode of ['kanban','timeline','dependencies']) {
+        let cleanup:(()=>Promise<void>)|undefined;
         try {
-        await page.locator('[data-followup-key="view-mode"]').selectOption(mode);
-        const chart=page.locator('.project-followup-chart');await chart.scrollIntoViewIfNeeded();
-        assert.ok(await chart.evaluate(element=>element.scrollWidth>element.clientWidth+60),'fixture has useful local horizontal travel');
-        const touchAction=await chart.evaluate(element=>getComputedStyle(element).touchAction);
-        assert.ok(touchAction.includes('pan-x')||touchAction==='auto'||touchAction==='manipulation','browser may pan horizontally');
-        await chart.evaluate(element=>{
-          const descriptor=Object.getOwnPropertyDescriptor(Element.prototype,'scrollLeft')!;
-          const capture=element.setPointerCapture.bind(element),probe={writes:0,captures:0,ended:false};(element as any).touchProbe=probe;
-          element.scrollLeft=0;
-          element.addEventListener('scroll',()=>{probe.ended=false;},{passive:true});
-          element.addEventListener('scrollend',()=>{probe.ended=true;},{passive:true});
-          Object.defineProperty(element,'scrollLeft',{configurable:true,get(){return descriptor.get!.call(element);},set(value){probe.writes++;descriptor.set!.call(element,value);}});
-          element.setPointerCapture=id=>{probe.captures++;capture(id);};
-        });
-        const box=(await chart.boundingBox())!,x=box.x+box.width-24,y=Math.max(100,Math.min(750,box.y+24));
-        const cdp=await page.context().newCDPSession(page);
-        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
-        for(const distance of [20,50,90,130])await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-distance,y}]});
-        await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.detach();
-        await page.waitForFunction(()=>document.querySelector('.project-followup-chart')!.scrollLeft>30);
-        await chart.evaluate(async element=>{
-          const probe=(element as any).touchProbe;let previous=element.scrollLeft,stable=0;
-          for(let frame=0;frame<180;frame++){
-            await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
-            const current=element.scrollLeft;stable=current===previous?stable+1:0;previous=current;
-            if(stable>=(probe.ended?2:8))return;
-          }
-          throw new Error('native scrolling did not settle within180 animation frames');
-        });
-        assert.deepEqual(await chart.evaluate(element=>{const probe=(element as any).touchProbe;return{writes:probe.writes,captures:probe.captures};}),{writes:0,captures:0},`${mode}: native touch bypasses script scroll/capture`);
-        assert.equal(await page.locator('.project-work-inspector').count(),0,'scroll gesture cannot select a task');
-        await page.locator('[data-followup-key="row-touch-0"]').tap();
-        assert.equal(await page.locator('.project-followup-detail h5').textContent(),'touch-0 · Touch scrolling task 0',`${mode}: the first clean tap after native rest selects the exact task`);
-        await page.locator('[data-followup-key="close-detail"]').click();
+          await page.locator('[data-followup-key="view-mode"]').selectOption(mode);
+          const vertical=mode==='kanban',chart=page.locator('.project-followup-chart');await chart.scrollIntoViewIfNeeded();
+          if(vertical){
+            await chart.locator('.project-kanban-lane').first().scrollIntoViewIfNeeded();
+            assert.ok(await chart.evaluate(element=>element.scrollWidth<=element.clientWidth+1),'phone Kanban needs no horizontal travel');
+            assert.equal(await chart.evaluate(element=>getComputedStyle(element).maxHeight),'none');
+          }else assert.ok(await chart.evaluate(element=>element.scrollWidth>element.clientWidth+60),'fixture has useful local horizontal travel');
+          const touchAction=await chart.evaluate(element=>getComputedStyle(element).touchAction);
+          assert.ok(touchAction.includes('pan-x')||touchAction==='auto'||touchAction==='manipulation','browser may pan horizontally');
+          const handle=await chart.elementHandle();assert.ok(handle);
+          cleanup=async()=>{try{await handle.evaluate(element=>(element as any).touchProbe?.restore());}finally{await handle.dispose();}};
+          await handle.evaluate((element,vertical)=>{
+            const scroller=vertical?element.closest('#projects')!:element,abort=new AbortController();
+            const properties=[{object:element,key:'scrollLeft',descriptor:Object.getOwnPropertyDescriptor(element,'scrollLeft')},
+              {object:element,key:'setPointerCapture',descriptor:Object.getOwnPropertyDescriptor(element,'setPointerCapture')},
+              ...(vertical?[{object:scroller,key:'scrollTop',descriptor:Object.getOwnPropertyDescriptor(scroller,'scrollTop')}]:[])];
+            const capture=element.setPointerCapture.bind(element),probe={writes:0,captures:0,ended:false,restore:()=>{
+              abort.abort();for(const property of properties){if(property.descriptor)Object.defineProperty(property.object,property.key,property.descriptor);else delete (property.object as any)[property.key];}
+              delete (element as any).touchProbe;
+            }};(element as any).touchProbe=probe;
+            const observe=(target:Element,key:'scrollLeft'|'scrollTop')=>{
+              const native=Object.getOwnPropertyDescriptor(Element.prototype,key)!;
+              Object.defineProperty(target,key,{configurable:true,get(){return native.get!.call(target);},set(value){probe.writes++;native.set!.call(target,value);}});
+            };
+            element.scrollLeft=0;observe(element,'scrollLeft');if(vertical)observe(scroller,'scrollTop');
+            scroller.addEventListener('scroll',()=>{probe.ended=false;},{passive:true,signal:abort.signal});
+            scroller.addEventListener('scrollend',()=>{probe.ended=true;},{passive:true,signal:abort.signal});
+            element.setPointerCapture=id=>{probe.captures++;capture(id);};
+          },vertical);
+          const box=(await chart.boundingBox())!,x=vertical?box.x+box.width/2:box.x+box.width-24,y=vertical?Math.max(220,Math.min(700,box.y+120)):Math.max(100,Math.min(750,box.y+24));
+          const before=await chart.evaluate(element=>element.closest('#projects')!.scrollTop);
+          const cdp=await page.context().newCDPSession(page);
+          await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+          for(const distance of [20,50,90,130])await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[vertical?{x,y:y-distance}:{x:x-distance,y}]});
+          await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.detach();
+          if(vertical){
+            await page.waitForFunction(before=>document.querySelector('#projects')!.scrollTop>before+30,before);
+            assert.equal(await chart.evaluate(element=>element.scrollLeft),0,'Kanban gesture moves the page vertically');
+          }else await page.waitForFunction(()=>document.querySelector('.project-followup-chart')!.scrollLeft>30);
+          await chart.evaluate(async(element,vertical)=>{
+            const probe=(element as any).touchProbe,position=()=>vertical?element.closest('#projects')!.scrollTop:element.scrollLeft;
+            let previous=position(),stable=0;
+            for(let frame=0;frame<180;frame++){
+              await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
+              const current=position();stable=current===previous?stable+1:0;previous=current;
+              if(stable>=(probe.ended?2:8))return;
+            }
+            throw new Error('native scrolling did not settle within 180 animation frames');
+          },vertical);
+          assert.deepEqual(await chart.evaluate(element=>{const probe=(element as any).touchProbe;return{writes:probe.writes,captures:probe.captures};}),{writes:0,captures:0},`${mode}: native touch bypasses script scroll/capture`);
+          assert.equal(await page.locator('.project-work-inspector').count(),0,'scroll gesture cannot select a task');
+          await page.locator('[data-followup-key="row-touch-0"]').tap();
+          assert.equal(await page.locator('.project-followup-detail h5').textContent(),'touch-0 · Touch scrolling task 0',`${mode}: the first clean tap after native rest selects the exact task`);
+          await page.locator('[data-followup-key="close-detail"]').click();
         } catch(error) { throw new Error(`${mode}: ${String(error)}`,{cause:error}); }
+        finally {await cleanup?.();}
       }
       await page.locator('#projects-return').click();await fixture.continuity(page,sockets,input);
     } finally {await page.close();}
