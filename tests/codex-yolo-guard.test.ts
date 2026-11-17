@@ -33,6 +33,8 @@ after(async () => {
 
 /** A mesh whose launch settings enable only `enabled`, with a fake `codex` that records its token. */
 async function meshWith(enabled: string[]): Promise<Running> {
+  // Before the server starts: a missing host must fail the test, not leave a server running.
+  const [hostCommand, ...hostArguments] = ptyhostArgv();
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-codex-guard-'));
   bins.push(bin);
   fs.writeFileSync(path.join(bin, 'codex'),
@@ -44,7 +46,6 @@ async function meshWith(enabled: string[]): Promise<Running> {
   where.env.MESH_LAUNCH_SETTINGS = settings;
   const {child, result, output} = await runServer(where);
   assert.equal(result.listened, true, result.output);
-  const [hostCommand, ...hostArguments] = ptyhostArgv();
   const host = spawn(hostCommand, hostArguments, {cwd: REPO, stdio: 'ignore',
     env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C'}});
   await waitFor('ptyhost socket', 10000, () => fs.existsSync(path.join(where.home, 'run', 'session-mesh', 'ptyhost.sock')));

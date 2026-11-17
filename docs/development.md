@@ -7,8 +7,8 @@ machine. The rules for contributions (languages, commits, the CLA) are in
 
 ## Running the suite
 
-`scripts/test-local.sh` runs the complete local suite: frontend checks, the OCaml build and its
-tests (which installs the native PTY host that the other tests start), Node tests, `ruff`, the
+`scripts/test-local.sh` runs the complete local suite: the OCaml build and its tests (which
+installs the native PTY host that the other tests start), frontend checks, Node tests, `ruff`, the
 Python suite including browser tests, then the gate of the native PTY host. The tests that start
 the host take it from `MESH_PTYHOST_CMD` (the absolute path of the executable, nothing else), else
 `mesh-ptyhost` on `PATH`, and fail with a message naming both when neither exists; to run `pytest`
