@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, writeFile, readFile, mkdir, symlink, link, readdir, stat, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, mkdir, symlink, link, readdir, stat, rm, realpath } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -13,7 +13,8 @@ import { parseProjectConfig, parseProjectCatalog } from '../static/project-catal
 import { roadmapTask, roadmapObservation, attemptObservation, followupCatalog } from './helpers/project-followup-fixtures.ts';
 
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'mesh-project-test-'));
+  // Resolved: project file paths refuse symlinks, and the macOS temporary directory is under /var, a symlink.
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'mesh-project-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }

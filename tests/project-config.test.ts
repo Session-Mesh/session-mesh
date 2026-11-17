@@ -20,7 +20,8 @@ async function api() {
   return import(moduleURL.href);
 }
 async function fixture(run: (path: string, dir: string) => Promise<void>) {
-  const dir = await fs.mkdtemp(join(tmpdir(), 'project-config-'));
+  // Resolved: project file paths refuse symlinks, and the macOS temporary directory is under /var, a symlink.
+  const dir = await fs.mkdtemp(join(await fs.realpath(tmpdir()), 'project-config-'));
   try { const path = join(dir, 'config.json'); await fs.writeFile(path, JSON.stringify(legacy()), { mode: 0o600 }); await run(path, dir); }
   finally { await fs.rm(dir, { recursive: true, force: true }); }
 }
