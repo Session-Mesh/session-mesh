@@ -97,10 +97,13 @@
  (libraries eio_main eio.unix mtime alcotest unix yojson)
  (deps pty_capability_child.py))
 
+; The Python harness starts the host that MESH_PTYHOST_CMD names, the built one in
+; scripts/bootstrap.sh: depend on it, or the test can run while this build replaces it.
 (test
  (name ptyhost_interop)
  (modules ptyhost_interop)
- (libraries mesh_wire mesh_platform unix yojson))
+ (libraries mesh_wire mesh_platform unix yojson)
+ (deps ../../bin/mesh_ptyhost_main.exe))
 
 (rule
  (alias runtest)
