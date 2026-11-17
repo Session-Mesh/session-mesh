@@ -16,7 +16,8 @@ async function geometry(page:Page,host:Locator,width:number){
   assert.ok(chart&&inspector);
   if(width===1560)assert.ok(inspector.x>=chart.x+chart.width+10,'wide inspector sits beside the chart');
   else assert.ok(inspector.y>=chart.y+chart.height+10,'phone inspector sits below the chart');
-  assert.ok(chart.height<=page.viewportSize()!.height*0.7+1,'Kanban is bounded to70vh');
+  if(width===1560)assert.ok(chart.height<=page.viewportSize()!.height*0.7+1,'desktop Kanban is bounded to70vh');
+  else assert.equal(await host.locator('.project-kanban').evaluate(element=>getComputedStyle(element).maxHeight),'none','phone board uses page vertical scroll');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
 }
 async function screenshot(page:Page,name:string){
@@ -40,7 +41,7 @@ test('Chrome work inspectors: responsive Roster provenance, issue pan/focus, clo
           timeline:Array.from({length:60},(_,i)=>attemptObservation(i+1)),blocker:'Visible blocker marker '+'long blocker text '.repeat(100)}));
         await fixture.mountFollowup(page,followupCatalog(roadmapObservation(tasks)));
         const roster=page.locator('#standalone-followup');await roster.locator('[data-followup-key="view-mode"]').selectOption('kanban');
-        const blocked=roster.locator('[data-followup-key="row-blocked"]');await blocked.focus();await page.keyboard.press('Enter');
+        const blocked=roster.locator('[data-followup-key="row-blocked"]');if(width===390)await blocked.tap();else{await blocked.focus();await page.keyboard.press('Enter');}
         assert.equal(await blocked.getAttribute('aria-pressed'),'true');
         const inspector=roster.getByRole('complementary',{name:'Work details',exact:true});await inspector.waitFor();await geometry(page,roster,width);
         if(width===390){const top=await inspector.evaluate(element=>element.getBoundingClientRect().top);assert.ok(top>=40&&top<850,'phone selection brings the inspector heading into view');}
@@ -53,6 +54,7 @@ test('Chrome work inspectors: responsive Roster provenance, issue pan/focus, clo
         if(width===1560){const target=await nextClaims.boundingBox(),bounds=await inspector.boundingBox();assert.ok(target&&bounds&&target.y>=bounds.y&&target.y+target.height<=bounds.y+bounds.height,'focused claim pager remains visible after repaint');}
         await inspector.locator('[data-followup-key="close-detail"]').click();assert.equal(await inspector.count(),0);
         assert.equal(await blocked.evaluate(el=>document.activeElement===el),true);assert.equal(await blocked.getAttribute('aria-pressed'),'false');
+        if(width===390){const box=await blocked.boundingBox();assert.ok(box&&box.y>=40&&box.y<900,'closing roster detail returns to the selected card');}
         const working=roster.locator('[data-followup-key="row-working"]');assert.equal(await working.locator('.project-work-status').textContent(),'Open assignment');assert.match(await working.getAttribute('title')??'',/work activity unknown/);
         await working.focus();await page.keyboard.press('Space');await geometry(page,roster,width);
         assert.equal(await inspector.locator('.project-selected-progress').isVisible(),true);assert.match(await inspector.locator('.project-selected-progress').textContent()??'',/Checking inspector progress marker/);
@@ -75,8 +77,9 @@ test('Chrome work inspectors: responsive Roster provenance, issue pan/focus, clo
           view.root.id='inspector-issues-test';document.querySelector('#projects')!.append(view.root);(window as any).inspectorIssue=view;
         },translations);
         const issues=page.locator('#inspector-issues-test');await issues.getByRole('button',{name:'Read issues',exact:true}).click();
-        const first=issues.locator('.project-work-card').first();await first.focus();await page.keyboard.press('Enter');await geometry(page,issues,width);
-        const issueInspector=issues.getByRole('complementary',{name:'Work details',exact:true});await issueInspector.locator('.project-artifact-markdown[data-markdown-state="rendered"]').waitFor();assert.match(await issueInspector.textContent()??'',/Visible issue detail marker/);
+        const first=issues.locator('.project-work-card').first();if(width===390)await first.tap();else{await first.focus();await page.keyboard.press('Enter');}await geometry(page,issues,width);
+        const issueInspector=issues.getByRole('complementary',{name:'Work details',exact:true});if(width===390){const box=await issueInspector.boundingBox();assert.ok(box&&box.y>=40&&box.y<850,'phone issue tap reveals the full inspector heading');}await issueInspector.locator('.project-artifact-markdown[data-markdown-state="rendered"]').waitFor();assert.match(await issueInspector.textContent()??'',/Visible issue detail marker/);
+        assert.equal(await issueInspector.locator('.project-issue-detail h3').textContent(),'1 · '+'Long issue title '.repeat(15).slice(0,240),'issue inspector preserves the full selected title');
         if(width===1560){
           await issueInspector.evaluate(element=>{element.scrollTop=400;(window as any).sameIssueInspector=element;});
           await first.evaluate(element=>element.focus({preventScroll:true}));await page.keyboard.press('Enter');
@@ -113,6 +116,7 @@ test('Chrome work inspectors: responsive Roster provenance, issue pan/focus, clo
         assert.equal(await second.evaluate(el=>document.activeElement===el),true,'selection restores exact card focus');assert.equal(await second.getAttribute('aria-pressed'),'true');
         await issueInspector.scrollIntoViewIfNeeded();await screenshot(page,`issue-inspector-${width}.png`);
         await issueInspector.locator('[data-followup-key="close-detail"]').focus();await page.keyboard.press('Escape');assert.equal(await issueInspector.count(),0);assert.equal(await second.evaluate(el=>document.activeElement===el),true);assert.equal(await second.getAttribute('aria-pressed'),'false');
+        if(width===390){const box=await second.boundingBox();assert.ok(box&&box.y>=40&&box.y<900,'closing issue detail returns to selected card');}
         await issues.getByLabel('Labels',{exact:true}).focus();await page.keyboard.press('Escape');assert.equal(await page.locator('#projects').isVisible(),false,'without issue inspector native select Escape reaches Projects shortcut');await fixture.enter(page,width===390);
         await second.evaluate(el=>el.focus({preventScroll:true}));await page.keyboard.press('Enter');await board.evaluate(el=>{el.scrollLeft=100;el.scrollTop=60;});
         const beforeFilter=await board.evaluate(el=>({left:el.scrollLeft,top:el.scrollTop}));const filter=issues.getByLabel('Labels',{exact:true});await filter.focus();await filter.selectOption('keep');

@@ -5,7 +5,7 @@ import type { ProjectDom } from './project-catalog-view.ts';
 import type { IssueReader, IssuePage, IssueRecord } from './project-issue-client.ts';
 import { renderKanban } from './project-kanban-view.ts';
 import { renderProjectMarkdown } from './project-markdown.ts';
-import { workLayout,workInspector,focusWorkCard } from './project-work-layout.ts';
+import { workLayout,workInspector,focusWorkCard,revealWorkInspector } from './project-work-layout.ts';
 interface ReadingPosition {
   pan:{left:number;top:number};
   inspectorKey:string|undefined;
@@ -76,8 +76,8 @@ export class ProjectIssueView {
     if(page.partial)this.root.append(dom.element('p',dom.t('projects.issues.partial')));
     const cards=page.items.filter(item=>!this.filter||item.labels.some(label=>label.name===this.filter));
     const chart=renderKanban(dom,cards,this.selected,key=>{
-      if(this.selected===key){this.root.querySelector('.project-work-inspector')?.scrollIntoView({block:'nearest'});return;}
-      this.selected=key;this.paint();this.root.querySelector('.project-issue-detail')?.scrollIntoView({block:'nearest'});
+      if(this.selected===key){revealWorkInspector(this.root);return;}
+      this.selected=key;this.paint();revealWorkInspector(this.root);
     });
     // Empty Markdown can clamp the saved position; preserve any subsequent reader movement.
     let initialInspectorTop=0;

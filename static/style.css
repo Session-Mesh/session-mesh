@@ -1010,3 +1010,12 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .project-membership-row summary span { color:var(--mute); font-size:.85em; }
 .project-membership-row p { margin:8px 0; font-size:.875rem; white-space:pre-wrap; }
 .project-membership-row h5 { margin:12px 0 4px; }
+
+/* Phone work boards are vertical status sections in the page scroll flow. */
+@media(max-width:640px) {
+  .project-kanban { display:flex;flex-direction:column;gap:10px;overflow:visible; }
+  .project-kanban-lane { width:100%;box-sizing:border-box; }
+  .project-work-layout .project-kanban { max-height:none; }
+  .project-kanban-empty { min-height:0;display:block; }
+  .project-work-inspector { scroll-margin-block:64px 12px; }
+}

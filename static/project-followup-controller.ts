@@ -9,7 +9,7 @@ import type { FollowupPreferences, FollowupMode } from './project-followup-prefe
 import { FollowupView } from './project-followup-view.ts';
 import { followupRows, validValue } from './project-followup-model.ts';
 import type { FollowupRow } from './project-followup-model.ts';
-import { workInspector,focusWorkCard } from './project-work-layout.ts';
+import { workInspector,focusWorkCard,revealWorkInspector } from './project-work-layout.ts';
 import { renderFollowupDetail, formatRange } from './project-followup-detail.ts';
 import { ObservationAge } from './project-followup-time.ts';
 import { readFollowupContext, resolveFollowupLinks, followupScope, FollowupFreshness } from './project-followup-context.ts';
@@ -207,7 +207,7 @@ export class ProjectFollowupController {
     if(key!==null)focusWorkCard(this.options.root,key);
   }
   private revealDetail(){
-    if(!this.dom.doc.hidden&&this.dom.doc.hasFocus())this.options.root.querySelector('.project-work-inspector')?.scrollIntoView({block:'nearest',inline:'nearest'});
+    revealWorkInspector(this.options.root);
   }
   private select(key: string) { if (this.stopped) return; this.save(); if(this.state.selected!==key)this.state.inspectorTop=0;this.state.selected = key; this.state.attemptPage = 0; this.paint();this.revealDetail(); }
   /** Select a reported task across every page and presentation mode. */
