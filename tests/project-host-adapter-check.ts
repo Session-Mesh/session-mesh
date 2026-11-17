@@ -12,10 +12,11 @@ import { ptyhostArgv } from './ptyhost-command.ts';
 import { REPO, scratchHome, runServer, stopServer } from './mesh-server-lib.ts';
 
 export async function checkProjectBridge(): Promise<void> {
+  // Before the server starts: a missing host must fail the test, not leave a server running.
+  const [hostProgram, ...hostArgs] = ptyhostArgv();
   const where = await scratchHome('mesh-project-bridge-');
   const { child: server, result } = await runServer(where);
   assert.ok(result.listened, result.output);
-  const [hostProgram, ...hostArgs] = ptyhostArgv();
   const host = spawn(hostProgram, hostArgs, {
     cwd: REPO, env: { ...where.env, SHELL: '/bin/sh' }, stdio: 'ignore' });
   try {
