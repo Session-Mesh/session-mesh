@@ -65,7 +65,7 @@ file is acceptable when it is needed; write its test in OCaml or TypeScript when
 - Before opening a pull request, run the complete local suite:
 
   ```sh
-  scripts/test-local.sh --preflight-only   # prerequisites: Node 22.13+ or 24+, npm, git, opam, Python 3, bubblewrap
+  scripts/test-local.sh --preflight-only   # prerequisites: Node 22.13+ or 24+, npm, git, opam, Python 3.10–3.14, bubblewrap
   scripts/test-local.sh
   ```
 

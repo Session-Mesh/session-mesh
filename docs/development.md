@@ -23,7 +23,10 @@ scripts/test-local.sh -k menu            # extra arguments go to pytest
 ```
 
 It needs Node 22.13+ or 24+, npm, git, opam, Python 3 and bubblewrap. It uses `MESH_PYTHON`,
-otherwise a `.venv/` it creates from `requirements-dev.txt` and `requirements-browser.txt`. Browser
+otherwise a `.venv/` it creates with `python3` from `requirements-dev.txt` and
+`requirements-browser.txt`. That `python3` must be Python 3.10 to 3.14, the versions the pinned
+packages install on; with another, the script stops and shows how to create `.venv` with a
+supported one (for example `python3.14`), which later runs then use. Browser
 tests use `MESH_CHROMIUM`, otherwise the newest Playwright Chromium in `~/.cache/ms-playwright`,
 installed if missing. OCaml uses `MESH_OPAM_SWITCH`, otherwise the current switch, which must use
 OCaml 5.3 and read only the opam repository commit of `scripts/release-pins.sh` (a missing switch is
