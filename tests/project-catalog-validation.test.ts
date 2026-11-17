@@ -6,13 +6,14 @@ import assert from "node:assert/strict";
 import { test, before, after } from "node:test";
 import { createHash } from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
-import { mkdtemp, writeFile, stat, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, stat, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { build } from "esbuild";
 let root: string, entry: string, provider: string, marker: string;
 before(async () => {
-  root = await mkdtemp(join(tmpdir(), "mi1-validate-")); entry = join(root,"project-observation.mjs");
+  // Resolved: project file paths refuse symlinks, and the macOS temporary directory is under /var, a symlink.
+  root = await mkdtemp(join(await realpath(tmpdir()), "mi1-validate-")); entry = join(root,"project-observation.mjs");
   marker = join(root,"provider-ran"); provider=join(root,"provider.mjs");
   await writeFile(provider,`#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)},"called");`,{mode:0o700});
   await build({entryPoints:[new URL("../tools/project-observation.ts",import.meta.url).pathname],outfile:entry,bundle:true,platform:"node",format:"esm",target:"es2022"});
