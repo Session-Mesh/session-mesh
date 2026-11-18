@@ -98,7 +98,8 @@ switch_exists=yes
 printf '%s\n' "$switches" | grep -Fxq -- "$switch" || switch_exists=no
 if [ "$mode" = --print-bin ]; then
   if [ "$switch_exists" = no ]; then
-    echo "bootstrap: opam switch '$switch' does not exist; run bootstrap.sh --install-only to create it." >&2
+    # Named explicitly: OPAMROOT and MESH_OPAM_SWITCH may be set for this run only.
+    echo "bootstrap: opam switch '$switch' does not exist; to create it, run: OPAMROOT=$(printf %q "$(opam var root)") MESH_OPAM_SWITCH=$(printf %q "$switch") bash scripts/bootstrap.sh --install-only" >&2
     exit 1
   fi
   opam var --switch="$switch" bin
@@ -148,7 +149,12 @@ register_pinned_repository() {
     *)
       opam repository set-url "$pinned_repository" "$opam_repository"
       echo "bootstrap: the opam repository $pinned_repository now points at $opam_repository" >&2
-      echo "bootstrap: (to undo: $(opam_command repository set-url "$pinned_repository" "$previous"))." >&2
+      # opam lists a URL unredacted: a former URL with userinfo (user:password@) is not printed.
+      if [[ "$previous" =~ ^[^:/]+://[^/@]*@ ]]; then
+        echo "bootstrap: (its former URL carried credentials and is not printed; restore it from your own opam configuration if needed)." >&2
+      else
+        echo "bootstrap: (to undo: $(opam_command repository set-url "$pinned_repository" "$previous"))." >&2
+      fi
       ;;
   esac
 }
@@ -220,8 +226,12 @@ if [ "$switch_exists" = no ]; then
   switch_created=yes
 fi
 
-compiler="$(opam exec --switch="$switch" -- ocamlc -version)" \
-  || partial_switch "no OCaml compiler runs in the opam switch '$switch'."
+# ocamlc is run from the switch's bin directory: by name, opam exec could find another OCaml on the
+# host's PATH when the switch has none.
+if ! switch_bin="$(opam var --switch="$switch" bin)" \
+  || ! compiler="$(opam exec --switch="$switch" -- "$switch_bin/ocamlc" -version)"; then
+  partial_switch "no OCaml compiler runs in the opam switch '$switch'."
+fi
 # Only OCaml 5.3 is accepted: it is the compiler CI builds and tests with
 # (.github/workflows/public-ci.yml, OCAML_COMPILER). ocaml/dune-project states
 # the same range (>= 5.3 & < 5.4); widen both once CI covers another release.
