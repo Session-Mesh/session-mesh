@@ -99,6 +99,12 @@ test('two hot windows promote only when the second starts where the first ended'
   assert.equal(windows('idle', [[100, 65], [110, 65]]), 'active');
 });
 
+test('two cold windows demote only when the second starts where the first ended', () => {
+  assert.equal(windows('idle', [[100, 65], [110, 65], [120, 0.2], [140, 0.2]]), 'active');
+  assert.equal(windows('idle', [[100, 65], [110, 65], [120, 0.2], [140, 0.2], [150, 0.2]]), 'inactive');
+  assert.equal(windows('idle', [[100, 65], [110, 65], [120, 0.2], [130, 0.2]]), 'inactive');
+});
+
 test('a missing sample breaks the run of cold windows during the grace period', () => {
   assert.equal(steps('idle', [65, 65, 0.2, null, 0.2], 'codex'), 'active');
   assert.equal(steps('idle', [65, 65, 0.2, null, 0.2, 0.2], 'codex'), 'inactive');
