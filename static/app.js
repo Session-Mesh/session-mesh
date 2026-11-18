@@ -1045,6 +1045,7 @@ class Pane {
     // xterm's own listeners, added when the terminal was opened, have run: the cause is spent
     for (const type of ["focus", "blur"]) textarea.addEventListener(type, () => { this.focusCause = null; });
     const release = () => {
+      window.removeEventListener("blur", abandon);
       this.pressed = false;
       setTimeout(() => {   // after xterm has reported the release
         if (!this.heldFocusIn) return;
@@ -1052,9 +1053,16 @@ class Pane {
         this.reportFocus(true);
       });
     };
+    // The release went to another application: the press no longer holds focus reports back.
+    // The textarea blurs with the window, so a held focus-in is withdrawn, not sent.
+    const abandon = () => {
+      window.removeEventListener("mouseup", release, true);
+      this.pressed = false; this.heldFocusIn = false;
+    };
     this.termEl.addEventListener("mousedown", () => {
       this.pressed = true;
       window.addEventListener("mouseup", release, { capture: true, once: true });
+      window.addEventListener("blur", abandon, { once: true });
     }, true);
   }
   // true when xterm's focus report `d` must not reach the program
@@ -1075,12 +1083,16 @@ class Pane {
     return false;
   }
   // A focus change the textarea did not cause: the pane left while the phone input line had
-  // the focus, or the browser window losing or regaining it while it had.
+  // the focus, or the browser window losing or regaining it while it had. The report is not
+  // human input: it bypasses the input lease, so it never marks it dirty, and the state
+  // changes only once the report is on the socket.
   reportFocus(focused) {
     if (this.focusReported === focused || !this.term.modes.sendFocusMode) return;
     if (!localMeshEffectsAllowed() || this.conn?.replaying || this.conn?.draining) return;
+    const terminal = this.conn?.terminal;
+    if (!terminal?.isOpen()) return;
+    try { terminal.queueInput(enc.encode(focused ? "\x1b[I" : "\x1b[O")); } catch { return; }
     this.focusReported = focused;
-    this.send(focused ? "\x1b[I" : "\x1b[O");
   }
 
   // The document path or URL under a mouse event, from the visible buffer text.
@@ -2738,7 +2750,9 @@ function setActive(p, persist = false) {
     if (persist) saveLayout();
     return;
   }
-  if (active?.mounted && document.activeElement === $("#line-text")) active.reportFocus(false);   // the input line was its focus
+  // the pane left had the focus outside its textarea (the phone input line, or a control the
+  // switch went through); a focused textarea reports its own blur
+  if (active?.mounted && document.activeElement !== active.term.textarea) active.reportFocus(false);
   active = p;
   endDirectLine();   // direct writing belongs to the pane left
   if (p) p.activeAt = ++activeSeq;
