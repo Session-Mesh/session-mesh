@@ -23,7 +23,18 @@
 # number of commits, the commits a "Rebase and merge" landed), checked to be on main. "Rebase and
 # merge" is the only merge method the repository allows; the script checks it anyway: the landed
 # commits must be ordinary commits whose authors and author dates are, in order, those of the commits
-# of the pull request (a squash or a merge commit does not match, and nothing is pushed).
+# of the pull request (a squash or a merge commit does not match, and nothing is pushed), and each
+# landed commit must carry the same change (patch id) as the commit of the pull request it stands
+# for, fetched by its id from this repository, so that a forged author and date cannot
+# align another commit of main; a commit of the pull request that has no landed commit must be an
+# empty one, which a rebase merge drops.
+# The replay does not converge or repair anything. For each register file that a landed commit
+# changed, release/latest must hold it, before the replay, exactly as main held it before the range,
+# and the replayed file must be, after it, exactly the file of main (mode and blob id, byte for byte).
+# Any difference (a line only release/latest holds, an entry of another pull request not yet
+# backported or merged later, a removal that found no line to remove) gives a comment on the original
+# pull request, nothing is pushed and the job fails: the workflow never self-heals a drifted register,
+# a maintainer backports by hand (docs/development.md).
 # A commit is replayed with `--no-renames`: a rename into a register path brings that path's new
 # content, a rename out of one deletes it, and the other side of the rename stays on main. Before
 # the push, the difference from release/latest must name only the five register paths, exactly
@@ -128,10 +139,49 @@ jobs:
           paths=(CONTRIBUTORS.md CLA.md CLA-SIGNATORIES.md tools/cla-check/MAINTAINERS .github/CODEOWNERS)
           git merge-base --is-ancestor "$LANDED" origin/main || { echo "::error::the merged commits are not on main"; exit 1; }
           # "Rebase and merge" lands the commits of the pull request with their authors and author
-          # dates, one landed commit for each; a squash or a merge commit does not match.
-          pr_commits=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/commits" --jq '.[] | "\(.commit.author.email) \(.commit.author.date)"')
-          landed_commits=$(TZ=UTC git rev-list --reverse --no-commit-header --date=format-local:%Y-%m-%dT%H:%M:%SZ --format='%ae %ad' "$LANDED~$COUNT..$LANDED")
-          [[ "$pr_commits" == "$landed_commits" ]] || { echo "::error::the landed commits are not those of the pull request as a rebase merge lands them"; exit 1; }
+          # dates, one landed commit for each, except that it drops a commit without any change. The
+          # landed commits are found from the merge commit, walking back from the newest commit of
+          # the pull request: each is the next commit before LANDED, or has no landed commit and is
+          # then verified empty through the API (never an offset of COUNT, which an empty commit
+          # skews). A squash or a merge commit matches neither way, and nothing is pushed.
+          pr_commits=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/commits" --jq '.[] | "\(.sha) \(.commit.author.email) \(.commit.author.date)"')
+          pr_shas=()
+          pr_identities=()
+          while IFS=' ' read -r sha identity; do
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::unexpected commit list"; exit 1; }
+            pr_shas+=("$sha")
+            pr_identities+=("$identity")
+          done <<< "$pr_commits"
+          [[ "${#pr_shas[@]}" -eq "$COUNT" ]] || { echo "::error::the commit list is not the number of commits of the event"; exit 1; }
+          # The first COUNT commits back from the merge commit; an error of git fails the step.
+          chain=$(git rev-list --first-parent --max-count="$COUNT" "$LANDED")
+          chain_commits=()
+          while IFS= read -r line; do [[ -z "$line" ]] || chain_commits+=("$line"); done <<< "$chain"
+          landed=()
+          landed_pr=()
+          for (( index=COUNT-1; index>=0; index-- )); do
+            candidate=""
+            [[ "${#landed[@]}" -ge "${#chain_commits[@]}" ]] || candidate="${chain_commits[${#landed[@]}]}"
+            identity=""
+            [[ -z "$candidate" ]] || identity=$(TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format='%ae %ad' "$candidate")
+            if [[ "$identity" == "${pr_identities[$index]}" ]]; then
+              landed+=("$candidate")
+              landed_pr+=("${pr_shas[$index]}")
+            else
+              changed_files=$(gh api "repos/$GITHUB_REPOSITORY/commits/${pr_shas[$index]}" --jq '.files | length')
+              [[ "$changed_files" == 0 ]] || { echo "::error::the landed commits are not those of the pull request as a rebase merge lands them"; exit 1; }
+            fi
+          done
+          # Author and author date are not enough: both can be forged on a commit of the pull request. A
+          # landed commit must also carry the same change as the commit it stands for, compared by patch id
+          # (the changed lines, whatever base a rebase gave them) against the commit as the API lists it,
+          # fetched by its id from this repository: objects only, never checked out or run.
+          patch_id() { git diff-tree -p --binary --no-renames "$1" | git patch-id --stable | cut -d' ' -f1; }
+          for (( index=0; index<${#landed[@]}; index++ )); do
+            git fetch --quiet --no-tags origin "${landed_pr[$index]}" || { echo "::error::a commit of the pull request cannot be fetched; nothing is pushed"; exit 1; }
+            landed_id=$(patch_id "${landed[$index]}")
+            [[ -n "$landed_id" && "$landed_id" == "$(patch_id "${landed_pr[$index]}")" ]] || { echo "::error::a landed commit does not carry the change of its commit of the pull request"; exit 1; }
+          done
           # A pathspec also takes the content of a directory of the same name: what a diff names must be
           # the register paths exactly, each absent or a regular file in the index. Checked on every
           # replayed commit before it is recorded, then on the whole result.
@@ -147,11 +197,47 @@ jobs:
               [[ -z "$mode" || "$mode" == 100644 || "$mode" == 100755 ]] || { echo "::error::$path is not a regular file; nothing is pushed"; exit 1; }
             done
           }
+          # No convergence, no repair. A register file that a landed commit changed is backported only when
+          # release/latest holds it exactly as main held it before the range (the parent of the oldest landed
+          # commit: mode and blob id, byte for byte, never a set of lines), so that what release/latest alone
+          # holds (a signatory line, a revocation, a duplicated line) cannot be erased or reinstated by the
+          # replay, and what earlier pull requests not yet backported changed is not skipped. After the replay
+          # the file must also be main's (below). Any difference: the original pull request gets a comment,
+          # nothing is pushed and the job fails, a maintainer backports by hand (docs/development.md). A git
+          # error is an error, never an equal answer.
+          refuse_register() {
+            gh pr comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body "$2 The workflow does not reconcile a drifted register: nothing is pushed. A maintainer backports the register changes of this pull request by hand, starting from the difference between release/latest and main for $1 (docs/development.md, 'Backports to the maintenance branch')."
+            echo "::error::the replay does not give $1 as it is on main; nothing is pushed"
+            exit 1
+          }
+          replay_message="Replaying the commits of this pull request does not give this register file of main on release/latest (a change of another pull request merged to main later, or a removal that found no line to remove)."
+          base_message="This register file on release/latest is not what main held before the commits of this pull request (a line only release/latest holds, or a change of an earlier pull request not yet backported)."
+          touched_paths=""
+          range_base="origin/main"
+          [[ "${#landed[@]}" -eq 0 ]] || range_base="${landed[${#landed[@]}-1]}^"
+          for path in "${paths[@]}"; do
+            touched=false
+            for (( index=0; index<${#landed[@]}; index++ )); do
+              status=0
+              git diff --quiet "${landed[$index]}^" "${landed[$index]}" -- "$path" || status=$?
+              case "$status" in
+                0) ;;
+                1) touched=true ;;
+                *) echo "::error::the landed commits cannot be compared; nothing is pushed"; exit 1 ;;
+              esac
+            done
+            [[ "$touched" == true ]] || continue
+            touched_paths="$touched_paths $path"
+            before_range=$(git ls-tree "$range_base" -- "$path")
+            on_release=$(git ls-tree origin/release/latest -- "$path")
+            [[ "$on_release" == "$before_range" ]] || refuse_register "$path" "$base_message"
+          done
           branch="backport-$NUMBER-cla-register-to-release/latest"
           git switch --quiet --create "$branch" origin/release/latest
           export GIT_COMMITTER_NAME=GitHub GIT_COMMITTER_EMAIL=noreply@github.com
           patch="$RUNNER_TEMP/register.patch"
-          for commit in $(git rev-list --reverse "$LANDED~$COUNT..$LANDED"); do
+          for (( index=${#landed[@]}-1; index>=0; index-- )); do
+            commit="${landed[$index]}"
             [[ "$(git rev-list --parents --max-count=1 "$commit" | wc -w)" -eq 2 ]] || { echo "::error::$commit is not an ordinary commit"; exit 1; }
             git diff --binary --no-renames "$commit^" "$commit" -- "${paths[@]}" > "$patch"
             [[ -s "$patch" ]] || continue
@@ -163,8 +249,17 @@ jobs:
             check_register_paths --cached
             git commit --quiet --reuse-message="$commit"
           done
+          # The replay must reproduce main: for each register file that a landed commit changed, the entry
+          # (mode and blob id) the replay gives must be, byte for byte, the one of main. Any difference (an
+          # entry of a pull request merged later, a removal that found no line to remove) is refused.
+          for path in $touched_paths; do
+            replayed=$(git ls-tree HEAD -- "$path")
+            on_main=$(git ls-tree origin/main -- "$path")
+            [[ "$replayed" == "$on_main" ]] || refuse_register "$path" "$replay_message"
+          done
           check_register_paths origin/release/latest HEAD
-          if [[ "$(git rev-list --count origin/release/latest..HEAD)" -eq 0 ]]; then
+          # No commit, or commits whose changes cancel out (a line added and then removed on main): nothing to open.
+          if [[ "$(git rev-list --count origin/release/latest..HEAD)" -eq 0 ]] || git diff --quiet origin/release/latest HEAD; then
             echo "release/latest already has these register changes"
             exit 0
           fi
