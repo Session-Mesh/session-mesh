@@ -83,8 +83,20 @@ const paneMenuHolds = new Set();
 const paneStopHolds = new Set();
 let paneInventoryIssue = 0;
 
-// The terminals' colours come from the colour theme (static/themes.ts), like the page's.
-const terminalTheme = () => MeshThemes.runtime.terminal();
+// The terminals' colours come from the colour theme (static/themes.ts), like the page's. Themes
+// are cosmetic: when static/themes.js did not load (a 404 during an upgrade, a stale cache, a
+// blocked request), meshThemes() is null and the app keeps the default dark look instead of
+// failing to start. Every use of MeshThemes goes through meshThemes().
+const meshThemes = () => globalThis.MeshThemes ?? null;
+const DEFAULT_TERMINAL_THEME = Object.freeze({
+  background: "#0d1117", foreground: "#d8dee9", cursor: "#7ee0a1", cursorAccent: "#0d1117",
+  selectionBackground: "#2d3b4f",
+  black: "#1b2029", red: "#ff7b72", green: "#7ee0a1", yellow: "#f5c56b", blue: "#79b8ff",
+  magenta: "#d2a8ff", cyan: "#76e3ea", white: "#d8dee9",
+  brightBlack: "#4b5361", brightRed: "#ffa198", brightGreen: "#a5f0c0", brightYellow: "#ffdf8a",
+  brightBlue: "#a5cdff", brightMagenta: "#e2c5ff", brightCyan: "#b3f0f5", brightWhite: "#ffffff",
+});
+const terminalTheme = () => meshThemes()?.runtime.terminal() ?? DEFAULT_TERMINAL_THEME;
 
 // ---------------------------------------------------------------- helpers
 
@@ -6939,16 +6951,16 @@ whenTranslated(() => {
 // static/themes.js applied both before the first paint; a change here or in another tab of this
 // browser repaints the page and every open terminal at once, without a reload.
 const PALETTE_OPTION = "palette";
-MeshThemes.runtime.onChange((colours) => {
-  const theme = MeshThemes.terminalTheme(colours);
+meshThemes()?.runtime.onChange((colours) => {
+  const theme = meshThemes().terminalTheme(colours);
   for (const pane of panes) if (pane.term) pane.term.options.theme = theme;
 });
 
 function renderThemeSelect(select) {
-  const themes = MeshThemes.runtime;
+  const themes = meshThemes().runtime;
   const custom = Object.keys(themes.palette()).length > 0;
-  const options = MeshThemes.THEMES.map(({ id }) => {
-    const name = t(MeshThemes.themeLabelKey(id));
+  const options = meshThemes().THEMES.map(({ id }) => {
+    const name = t(meshThemes().themeLabelKey(id));
     return new Option(custom && id === themes.current() ? t("theme.withPalette", { name }) : name, id);
   });
   select.replaceChildren(...options, new Option(t("theme.customize"), PALETTE_OPTION));
@@ -6963,34 +6975,34 @@ function paletteErrorText(result) {
 }
 
 function paletteStatusText(saved) {
-  const themes = MeshThemes.runtime;
+  const themes = meshThemes().runtime;
   const count = Object.keys(themes.palette()).length;
   if (!saved) return t("theme.paletteNotSaved");
   if (!count) return t("theme.paletteCleared");
   const colours = themes.colours();
-  const ratio = Math.min(MeshThemes.contrastRatio(colours["--fg"], colours["--bg"]),
-    MeshThemes.contrastRatio(colours["--fg"], colours["--term"]), MeshThemes.contrastRatio(colours["--fg"], colours["--panel"]));
+  const ratio = Math.min(meshThemes().contrastRatio(colours["--fg"], colours["--bg"]),
+    meshThemes().contrastRatio(colours["--fg"], colours["--term"]), meshThemes().contrastRatio(colours["--fg"], colours["--panel"]));
   const applied = t("theme.paletteApplied", { n: count });
   return ratio < 4.5 ? `${applied} ${t("theme.paletteLowContrast", { ratio: ratio.toFixed(1) })}` : applied;
 }
 
 function setupPaletteEditor() {
-  const themes = MeshThemes.runtime;
+  const themes = meshThemes().runtime;
   const text = $("#palette-text");
   const status = $("#palette-status");
   const report = (message, bad) => { status.textContent = message; status.classList.toggle("bad", bad); };
-  const show = () => { text.value = MeshThemes.formatPalette(themes.palette()); };
+  const show = () => { text.value = meshThemes().formatPalette(themes.palette()); };
   // Each variable name is its own <code>, never broken across lines.
   const hint = $("#palette-hint");
   hint.textContent = t("theme.paletteHint", { names: "" });
-  hint.append(...MeshThemes.VARIABLES.flatMap((name, i) => {
+  hint.append(...meshThemes().VARIABLES.flatMap((name, i) => {
     const code = document.createElement("code");
     code.textContent = name;
     return i ? [" ", code] : [code];
   }));
   show();
   $("#palette-apply").addEventListener("click", () => {
-    const result = MeshThemes.parsePalette(text.value);
+    const result = meshThemes().parsePalette(text.value);
     if (!result.ok) return report(paletteErrorText(result), true);
     const saved = themes.setPalette(result.palette);
     show();
@@ -7002,7 +7014,7 @@ function setupPaletteEditor() {
     report(paletteStatusText(saved), !saved);
   });
   $("#palette-fill").addEventListener("click", () => {
-    text.value = MeshThemes.formatPalette(themes.colours());
+    text.value = meshThemes().formatPalette(themes.colours());
     text.focus();
   });
   return show;
@@ -7010,9 +7022,11 @@ function setupPaletteEditor() {
 
 whenTranslated(() => {
   const select = $("#theme-select");
+  // Without static/themes.js only the default look exists: there is nothing to choose.
+  if (!meshThemes()) { select.hidden = true; return; }
   const showPalette = setupPaletteEditor();
   renderThemeSelect(select);
-  MeshThemes.runtime.onChange(() => { renderThemeSelect(select); showPalette(); });
+  meshThemes().runtime.onChange(() => { renderThemeSelect(select); showPalette(); });
   // The arrow keys change a closed <select> at once. A change made by a key press on the select
   // itself only browses: passing over "Custom palette…" does not open the dialog. Choosing that
   // entry from the open list (pointer, or Enter in the list) does.
@@ -7023,8 +7037,8 @@ whenTranslated(() => {
     setTimeout(() => { browsing = false; }, 0);
   });
   select.addEventListener("change", () => {
-    if (select.value !== PALETTE_OPTION) { MeshThemes.runtime.use(select.value); return; }
-    select.value = MeshThemes.runtime.current();
+    if (select.value !== PALETTE_OPTION) { meshThemes().runtime.use(select.value); return; }
+    select.value = meshThemes().runtime.current();
     if (browsing) return;
     const dialog = $("#dlg-palette");
     if (!dialog.open) dialog.showModal();

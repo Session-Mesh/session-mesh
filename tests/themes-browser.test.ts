@@ -4,7 +4,8 @@
 // Colour themes in a real page: the footer selector repaints the page and the open terminal
 // without a reload, the choice is applied before the body is parsed on the next load (no flash
 // of the default theme), and the custom palette dialog is validated, applied
-// to the terminal and reset. Needs MESH_CHROMIUM (skipped without it).
+// to the terminal and reset. Without static/themes.js the app still starts in the default look.
+// Needs MESH_CHROMIUM (skipped without it).
 import assert from 'node:assert/strict';
 import {after, afterEach, before, describe, test} from 'node:test';
 import type {Page} from 'playwright-core';
@@ -114,6 +115,26 @@ describe('colour themes', {skip}, () => {
       codes.map(code => ({name: code.textContent, lines: code.getClientRects().length})));
     assert.ok(names.length > 30, `${names.length} names`);
     for (const {name, lines} of names) assert.equal(lines, 1, `${name} spans ${lines} lines`);
+  });
+
+  test('without static/themes.js the app starts in the default look and terminals open', async () => {
+    const name = `themes-${counter += 1}`;
+    await mesh.newShell(name);
+    const errors: string[] = [];
+    const blocked: string[] = [];
+    const page = await mesh.openPage(name, DESKTOP, undefined, watched => {
+      watched.on('pageerror', error => errors.push(String(error)));
+    }, {routes: watched => watched.route(/\/static\/themes\.js(\?|$)/, route => {
+      blocked.push(route.request().url());
+      return route.abort();
+    })});
+    pages.push(page);
+    assert.ok(blocked.length > 0, 'themes.js was requested and failed');
+    assert.equal(await page.evaluate(() => typeof (globalThis as {MeshThemes?: unknown}).MeshThemes), 'undefined');
+    assert.deepEqual(errors, []);
+    assert.equal(await terminalBackground(page), '#0d1117', 'the terminal uses the default theme');
+    assert.equal(await bodyBackground(page), 'rgb(11, 14, 19)', 'the page keeps the default dark look');
+    assert.equal(await page.locator('#theme-select').isHidden(), true, 'no theme to choose');
   });
 
   test('on a phone the selector sits in the sidebar footer without widening the page', async () => {
