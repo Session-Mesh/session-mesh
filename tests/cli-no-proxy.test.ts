@@ -5,7 +5,7 @@
 // mesh directly even when the environment names a proxy, never hand the token to that proxy, and never
 // follow a redirection elsewhere (it would resend the Authorization header to another host).
 import assert from 'node:assert/strict';
-import {spawn, spawnSync} from 'node:child_process';
+import {execFileSync, spawn, spawnSync} from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -119,11 +119,30 @@ function frame(kind: string, payload: unknown): Buffer {
   return Buffer.concat([head, body]);
 }
 
+// Off Linux there is no /proc: the CLIs find their ancestors by asking the host for its process
+// facts (`processes`, discover.read_stat). The stand-in answers with the real parents, from ps.
+function processRow(pid: number): object | undefined {
+  try {
+    const ppid = Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], {encoding: 'utf8'}).trim());
+    return Number.isInteger(ppid) ? {pid, ppid, comm: 'test', state: 'S', pgrp: pid, sid: pid, tpgid: 0} : undefined;
+  } catch {
+    return undefined;   // ps found no such process
+  }
+}
+
 const ptyhost = net.createServer(socket => {
   let pending = Buffer.alloc(0);
   socket.on('data', chunk => {
     pending = Buffer.concat([pending, chunk]);
     if (pending.length >= 5 && pending.length >= 5 + pending.readUInt32BE(1)) {
+      const request = JSON.parse(pending.subarray(5, 5 + pending.readUInt32BE(1)).toString()) as {op?: string; pids?: number[]};
+      if (request.op === 'processes') {
+        const pids = request.pids ?? [];
+        const rows = pids.map(processRow);
+        socket.end(frame('C', {processes: rows.filter(Boolean),
+          errors: pids.filter((_pid, i) => !rows[i]).map(pid => ({pid, kind: 'not_found'}))}));
+        return;
+      }
       socket.end(frame('R', [{name: 's1', pid: sessionShellPid, cwd: '/', created: 0, activity: 0, attached: 0, meta: {}}]));
     }
   });
