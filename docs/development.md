@@ -95,12 +95,16 @@ the same two ways apply.
 
 ## Backports to the maintenance branch
 
-For maintainers. The rules for contributors (target `main`, the `semver:` labels, `release/0.1`)
+For maintainers. The rules for contributors (target `main`, the `semver:` labels, `release/latest`)
 are in [CONTRIBUTING.md](../CONTRIBUTING.md#branches-and-versions). Three workflows implement
 them: `branch-policy.yml` (the checks `semver label` and `release branch guard`, from
 `tools/branch-policy/branch-policy.ts`), `backport.yml` (the cherry-pick and the pull request to
-`release/0.1`) and `release.yml` (a tag on `release/0.1` is accepted). `tests/backport-workflow.test.ts`
+`release/latest`) and `release.yml` (a tag on `release/latest` is accepted). `tests/backport-workflow.test.ts`
 and `tests/branch-policy.test.ts` keep their safety rules.
+
+The maintenance branch is a single moving branch, `release/latest`. It points at the current minor
+line: today the tag `v0.1.0`, so it receives the 0.1.x patches. Tags (`v0.1.0`, `v0.1.1`, ...) are
+immutable; only the branch moves, at each new minor release (see "At each new minor release").
 
 **One-time setup of the backport workflow.**
 
@@ -111,26 +115,74 @@ and `tests/branch-policy.test.ts` keep their safety rules.
    as `BACKPORT_APP_PRIVATE_KEY`. With them, the backport pull request is opened by the App and
    its CI starts. Without them the workflow uses the run's own token: the pull request is opened,
    GitHub starts no workflow for it, and a comment on it asks a maintainer to close and reopen it
-   to start the CI.
+   to start the CI. That fallback also needs the repository setting "Allow GitHub Actions to create
+   and approve pull requests" (Settings, Actions, General, Workflow permissions) to be on: while it
+   is off, the run's token cannot open the pull request at all, and the GitHub App is required.
 3. The workflow runs on `pull_request_target`, which GitHub blocks on public repositories from
    2026-12-02 unless an Actions policy allows it: add a policy for `.github/workflows/backport.yml`
    that allows `pull_request_target`.
-4. Add the checks `semver label` and `release branch guard` to the required checks of `main`, and
-   the same two, `cla` and the CI jobs to those of `release/**`.
+4. Put the workflows on `release/latest` before anything is required of it. A workflow of a
+   pull request runs as it is in the merge of the pull request into its base branch, and a tag
+   push runs the workflow of the tagged commit, so a maintenance branch cut before these workflows
+   existed has none of them: the first backport pull request would get no CI, no `semver label` and
+   no `release branch guard`, and a tag on it would not build. A maintainer who may push to the
+   branch cherry-picks onto `release/latest` the commits that add or change `branch-policy.yml`,
+   `public-ci.yml`, `release.yml` and the files they run (`tools/branch-policy`, `tools/cla-check`,
+   the scripts under `scripts/` and `.github/scripts/` that they call). This cannot go through a
+   normal pull request: the `release branch guard` refuses a pull request that is not a backport.
+   `backport.yml` itself stays on `main`: it runs on `pull_request_target`, which reads the
+   workflow of the base branch of the merged pull request, `main`.
+5. Only then add the checks `semver label` and `release branch guard` to the required checks of
+   `main`, and the same two, `cla` and the CI jobs to those of `release/**`.
+
+**One-time migration from `release/0.1`.** If the maintenance branch exists under the name
+`release/0.1`, the owner renames it to `release/latest` (Settings, Branches, or the branch rename
+of the GitHub API). A GitHub rename keeps the branch protection rules that name it, and retargets
+the open pull requests; it does not touch the tags. Do it once, at the merge of the pull request
+that introduces `release/latest`, then do step 4 above if the workflows are not on the branch yet.
 
 **Safety of `pull_request_target`.** The job checks out the base branch, never the pull request,
 runs none of its code, reads only booleans, the number and label names of the event, and gives a
 write token to a third-party action pinned by commit SHA (`korthout/backport-action`).
+The action also adds, by default, a target branch for every label of the merged pull request that
+matches `backport <branch>`; the workflow sets `label_pattern: ""` so that `release/latest` is the
+only target, and `tests/backport-workflow.test.ts` requires that empty value.
 The cherry-picked commits keep their authors; their committer is `GitHub <noreply@github.com>`,
 which the `cla` job accepts. The `release branch guard` only checks that the description points
 to a merged `semver: patch` pull request: the review of the backport pull request is what checks
 that the changes are the same.
 
-**Cutting 0.1.x.** Merge the backports, update the changelog on `release/0.1`, tag the release
-branch tip `v0.1.x`: `release.yml` publishes it, and as a version older than the latest release
-it is not marked latest once 0.2.0 exists. Then add the release to `site/releases.json` and the
-changelog heading to `main` by a pull request labelled `semver: minor`: the site is deployed from
-`main` only.
+**Cutting a patch release (0.x.y).** The changelog entry of the release is prepared as a pull
+request to `main`, labelled `semver: patch`, that adds the heading of the release and its entries
+to `CHANGELOG.md` and nothing else: merged to `main`, it is backported to `release/latest` like any
+fix. If its cherry-pick conflicts (the `main` changelog may carry entries of the next minor
+version above the release heading), the workflow comments with the commands to do it by hand:
+resolve it so that `release/latest` only holds the entries of its own line. Then:
+
+1. Merge the backports of the fixes, and the backport of the changelog pull request.
+2. Tag the tip of `release/latest` `v0.x.y` (a tag of a commit that `release/latest` holds):
+   `release.yml` publishes it, and as a version older than the latest release it is not marked
+   latest once a newer minor exists.
+3. Add the release to `site/releases.json` by a pull request to `main` labelled `semver: minor`:
+   the site is deployed from `main` only, and is not backported. The changelog heading is on `main`
+   already, from the first step.
+
+**At each new minor release (v0.2.0, ...).** `release/latest` moves to the new minor line; the
+previous line is then no longer maintained (no more backports to it, no more 0.1.x tags).
+This is an owner action, a reset of a protected branch:
+
+1. Before moving it, wait for or close the open backport pull requests (pull requests whose base
+   is `release/latest`): after the move their commits would sit on the wrong line.
+2. Tag the new minor version `v0.2.0` on `main` (the tag job accepts a commit of `main`); the tag
+   is immutable and stays where it is.
+3. Move `release/latest` to that tag's commit. GitHub's web interface cannot reset a branch to
+   an earlier or unrelated commit, and the protection rule forbids force pushes: the owner
+   allows force pushes on the rule of `release/**` for themselves only, runs
+   `gh api -X PATCH repos/Session-Mesh/session-mesh/git/refs/heads/release/latest -f sha=<commit of v0.2.0> -F force=true`,
+   then turns the force push permission off again. The required checks and the other
+   rules of the branch stay as they are.
+4. Check that `release/latest` and `v0.2.0` name the same commit. From here on, the backports
+   go to the 0.2.x line, and the 0.2.y patches are tagged on `release/latest`.
 
 ## Languages
 

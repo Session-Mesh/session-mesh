@@ -32,11 +32,11 @@ describe('the backport workflow as committed', () => {
     assert.deepEqual(checkWorkflow(text, 'backport'), []);
   });
 
-  test('backports to release/0.1, with the label semver: patch, from a merged pull request to main', () => {
-    assert.match(text, /^ {10}target_branches: release\/0\.1$/m);
+  test('backports to release/latest, with the label semver: patch, from a merged pull request to main', () => {
+    assert.match(text, /^ {10}target_branches: release\/latest$/m);
     assert.match(text, /^ {10}add_labels: "semver: patch"$/m);
-    assert.match(text, /^ {10}pull_title: "\[0\.1\] \$\{pull_title\}"$/m);
-    assert.equal(BACKPORT_TARGET, 'release/0.1');
+    assert.match(text, /^ {10}pull_title: "\[\$\{target_branch\}\] \$\{pull_title\}"$/m);
+    assert.equal(BACKPORT_TARGET, 'release/latest');
     assert.equal(BACKPORT_LABEL, 'semver: patch');
     assert.match(text, /^ {4}types: \[closed, labeled\]$/m);
     assert.match(text, /^ {4}branches: \[main\]$/m);
@@ -75,6 +75,9 @@ describe('the backport profile rejects what would run a pull request\'s code wit
     ['the head branch name', edit('          CREATED:', '          BRANCH: ${{ github.head_ref }}\n          CREATED:'), /head_ref/],
     ['the event read with brackets', edit('          CREATED:', "          X: ${{ github.event['pull_request']['title'] }}\n          CREATED:"),
       /other than github\.event\.<path>/],
+    ['the pull request title after a quoted }}', edit('          CREATED:', "          X: ${{ format('}}{0}', github.event.pull_request.title) }}\n          CREATED:"),
+      /untrusted event data in an expression \(github\.event\.pull_request\.title\)/],
+    ['an expression that never closes', `${text}# ${"${{ format('}}', github.event.pull_request.title)"}\n`, /expression never closed/],
     ['the whole github context', edit('          CREATED:', '          X: ${{ toJSON(github) }}\n          CREATED:'), /read whole or by a computed index/],
     ['another secret', edit('          CREATED:', '          X: ${{ secrets.DEPLOY_KEY }}\n          CREATED:'), /secret other than BACKPORT_APP_ID and BACKPORT_APP_PRIVATE_KEY/],
     ['the whole secrets context', edit('          CREATED:', '          X: ${{ toJSON(secrets) }}\n          CREATED:'), /secret other than/],
@@ -98,11 +101,15 @@ describe('the backport profile rejects what would run a pull request\'s code wit
     ['a step that builds the repository', edit('      - name: Tell the maintainers to start the CI\n', '      - run: npm ci\n      - name: Tell the maintainers to start the CI\n'), /steps must be/],
     ['a script that runs a file of the checkout', edit('          for number in $CREATED; do', '          bash scripts/test-local.sh\n          for number in $CREATED; do'), /runs something of the checkout/],
     ['a script that runs node', edit('          for number in $CREATED; do', '          node tools/x.ts\n          for number in $CREATED; do'), /runs something of the checkout/],
+    ['an inline script that runs a file of the checkout', edit('        run: |\n', '        run: bash scripts/test-local.sh\n        notes: |\n'), /runs something of the checkout/],
+    ['an inline script that runs node', edit('        run: |\n', '        run: node tools/x.ts\n        notes: |\n'), /runs something of the checkout/],
     ['a gate that no longer needs a merge', edit('      github.event.pull_request.merged == true &&\n', ''), /if: must be exactly/],
     ['a gate that no longer needs the label', edit("      contains(github.event.pull_request.labels.*.name, 'semver: patch') &&\n", ''), /if: must be exactly/],
     ['a gate that accepts any label added later', edit("github.event.label.name == 'semver: patch'", "github.event.label.name != ''"), /if: must be exactly/],
     ['no gate', edit(/ {4}if: >-\n(?: {6}.*\n)+/.exec(text)?.[0] ?? '', ''), /no job-level if/],
-    ['a backport to main', edit('target_branches: release/0.1', 'target_branches: main'), /backport input target_branches/],
+    ['a backport to main', edit('target_branches: release/latest', 'target_branches: main'), /backport input target_branches/],
+    ['a backport without the empty label pattern', edit('          label_pattern: ""\n', ''), /label_pattern must be/],
+    ['a backport with the default label pattern', edit('label_pattern: ""', 'label_pattern: ^backport ([^ ]+)$'), /label_pattern must be/],
     ['a backport to another repository', edit('          git_committer_name: GitHub\n', '          git_committer_name: GitHub\n          experimental: \'{"downstream_repo": "x"}\'\n'), /backport input experimental is not allowed/],
     ['a backport of another pull request', edit('          git_committer_name: GitHub\n', '          git_committer_name: GitHub\n          source_pr_number: 1\n'), /source_pr_number is not allowed/],
     ['another committer', edit('git_committer_email: noreply@github.com', 'git_committer_email: bot@example.com'), /git_committer_email/],

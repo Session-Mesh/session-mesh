@@ -15,7 +15,7 @@ import {blockOf, continuation, expressions, githubProperties, jobBlocks, type Li
   from './public-ci-workflow-lib.ts';
 
 export const BACKPORT_JOB = 'backport';
-export const BACKPORT_TARGET = 'release/0.1';
+export const BACKPORT_TARGET = 'release/latest';
 export const BACKPORT_LABEL = 'semver: patch';
 export const BACKPORT_WRITE_SCOPES = ['contents', 'pull-requests'];
 export const BACKPORT_SECRETS = ['BACKPORT_APP_ID', 'BACKPORT_APP_PRIVATE_KEY'];
@@ -93,7 +93,8 @@ export function checkBackportSecrets(lines: Line[]): string[] {
 // named anywhere, comments aside.
 export function checkBackportEvent(lines: Line[]): string[] {
   const problems: string[] = [];
-  for (const {number, body} of expressions(lines)) {
+  for (const {number, body, unparsable} of expressions(lines)) {
+    if (unparsable) problems.push(`line ${number}: expression never closed (a quoted }} is not its end)`);
     const properties = githubProperties(body);
     if (properties.includes(null)) problems.push(`line ${number}: github context read whole or by a computed index`);
     if (properties.includes('head_ref')) problems.push(`line ${number}: untrusted event data in an expression (head_ref)`);
@@ -167,16 +168,20 @@ function checkAppToken(lines: Line[], step: Line[]): string[] {
     ...(guarded ? [] : [`line ${step[0].number}: the app token step must be guarded by if: env.HAS_APP_TOKEN == 'true'`])];
 }
 
-// The inputs that make a backport do something else than the pull request to release/0.1.
-const FORBIDDEN_BACKPORT_INPUTS = ['experimental', 'source_pr_number', 'target_branches_by_label', 'label_pattern'];
+// The inputs that make a backport do something else than the pull request to release/latest.
+const EMPTY_LABEL_PATTERN_LINE = /^\s+label_pattern: (?:""|'')\s*(?:#.*)?$/;
+const FORBIDDEN_BACKPORT_INPUTS = ['experimental', 'source_pr_number', 'target_branches_by_label'];
 
 function checkBackportAction(lines: Line[], step: Line[]): string[] {
   const given = inputs(lines, step);
   const problems = FORBIDDEN_BACKPORT_INPUTS.filter((key) => given.has(key)).map((key) => `line ${given.get(key)?.number}: backport input ${key} is not allowed`);
   const expected: [string, (value: string) => boolean][] = [
     ['target_branches', (value) => value === BACKPORT_TARGET], ['add_labels', (value) => value === BACKPORT_LABEL],
-    ['pull_title', (value) => value.startsWith('[0.1] ')], ['git_committer_name', (value) => value === 'GitHub'],
+    ['pull_title', (value) => value === '[${target_branch}] ${pull_title}'], ['git_committer_name', (value) => value === 'GitHub'],
     ['git_committer_email', (value) => value === 'noreply@github.com']];
+  // The action also targets the branches named by labels of the merged pull request, matched by its
+  // default label_pattern: only the explicitly empty pattern leaves target_branches alone.
+  if (!EMPTY_LABEL_PATTERN_LINE.test(given.get('label_pattern')?.raw ?? '')) problems.push(`line ${step[0].number}: backport input label_pattern must be "" (no target taken from labels)`);
   for (const [key, valid] of expected) {
     if (!given.has(key) || !valid(given.get(key)?.value ?? '')) problems.push(`line ${step[0].number}: backport input ${key} missing or not as expected`);
   }
@@ -201,7 +206,9 @@ function checkBackportSteps(lines: Line[]): string[] {
     if (action === CHECKOUT_ACTION) problems.push(...checkCheckout(lines, step));
     if (action === BACKPORT_ACTION) problems.push(...checkBackportAction(lines, step));
     if (action !== undefined) continue;
-    const script = step.filter((line) => line.inBlock).map((line) => line.raw.trim());
+    // The block scalar lines, and the value of an inline `run: command`.
+    const inline = step.filter((line) => line.key === 'run' && !/^[|>][-+0-9]*$/.test(line.value)).map((line) => line.value);
+    const script = [...inline, ...step.filter((line) => line.inBlock).map((line) => line.raw.trim())];
     for (const line of script.filter((item) => /(?:^|[\s;&|(])(?:\.\/|bash\b|sh\b|node\b|npm\b|npx\b|python\d*\b|source\b|eval\b|make\b|git\b)|\.\.?\//.test(item))) {
       problems.push(`job ${BACKPORT_JOB}: the script runs something of the checkout or a shell: ${line.slice(0, 60)}`);
     }
