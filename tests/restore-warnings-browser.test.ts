@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type Page} from 'playwright-core';
 import {Lab} from './restore-exact-lib.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const skip = !CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM not set' : false;
@@ -29,7 +30,7 @@ before(async () => {
   // A skipped describe does not skip this file-level hook: start nothing without a Chromium.
   if (skip) return;
   lab = await Lab.start();
-  browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']});
+  browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
 });
 after(async () => {
   await browser?.close();

@@ -8,11 +8,12 @@ import {test} from 'node:test';
 import {build} from 'esbuild';
 import {chromium} from 'playwright-core';
 import {followupCatalog} from './helpers/project-followup-fixtures.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 const root=path.resolve(import.meta.dirname,'..');
 test('Chrome overview requests: explicit open states, scoped identities, unavailable sources and bounded readable cards',
  {timeout:30000,skip:!process.env.MESH_CHROMIUM&&!process.env.MESH_REQUIRE_BROWSER?'MESH_CHROMIUM not configured':false},async()=>{
   const code=await build({stdin:{contents:"export {ProjectCockpitView} from './static/project-cockpit-view.ts';",resolveDir:root},bundle:true,platform:'browser',format:'iife',globalName:'AttentionTest',write:false});
-  const browser=await chromium.launch({executablePath:process.env.MESH_CHROMIUM,args:['--mute-audio','--no-sandbox']});
+  const browser=await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM, ['--mute-audio','--no-sandbox']));
   try{for(const width of [1560,390]){
     const page=await browser.newPage({viewport:{width,height:1000}});
     try{

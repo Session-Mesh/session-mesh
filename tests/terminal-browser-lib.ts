@@ -16,6 +16,7 @@ import path from 'node:path';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
 import {removeScratch} from './mesh-server-lib.ts';
 import {chromium, type Browser, type Page} from 'playwright-core';
+import {BROWSER_LOCALE, chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 export const REPO = path.resolve(import.meta.dirname, '..');
 export const WITNESS = path.join(REPO, 'tests', 'fixtures', 'terminal-width-witness.mjs');
@@ -73,7 +74,7 @@ export class TerminalMesh {
     this.spawn([PYTHON, 'server.py'], env);
     await this.waitUntil('server.py', () => accepts({host: '127.0.0.1', port}));
     this.base = `http://127.0.0.1:${port}`;
-    this.browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']});
+    this.browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
   }
 
   private hostEnv: NodeJS.ProcessEnv = {};
@@ -134,7 +135,7 @@ export class TerminalMesh {
     options: PageOptions = {}): Promise<Page> {
     assert.ok(this.browser, 'start() first');
     const phone = options.phone === true;
-    const context = await this.browser.newContext({viewport, hasTouch: phone, isMobile: phone});
+    const context = await this.browser.newContext({locale: BROWSER_LOCALE, viewport, hasTouch: phone, isMobile: phone});
     if (init) await context.addInitScript(init);
     const page = await context.newPage();
     watch?.(page);

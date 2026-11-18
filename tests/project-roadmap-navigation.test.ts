@@ -9,6 +9,7 @@ import {build} from 'esbuild';
 import {chromium} from 'playwright-core';
 import {followupCatalog,roadmapObservation,roadmapTask} from './helpers/project-followup-fixtures.ts';
 import {parseProjectCatalog} from '../static/project-catalog.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 const root=path.resolve(import.meta.dirname,'..');
 test('Chrome: every roadmap has its own lifecycle and exact source navigation, including empty and stale boards',
  {skip:!process.env.MESH_CHROMIUM&&!process.env.MESH_REQUIRE_BROWSER?'MESH_CHROMIUM absent':false},async()=>{
@@ -21,7 +22,7 @@ test('Chrome: every roadmap has its own lifecycle and exact source navigation, i
  raw.projects[0]!.sources.push({id:'offline',kind:'roster',label:'Offline source',status:'unavailable',observed_at:'2026-11-14T12:01:00Z',error_code:'missing-executable'});
  const catalog=parseProjectCatalog(raw);assert.ok(catalog);
  const bundle=await build({stdin:{contents:"export {ProjectCockpitView} from './static/project-cockpit-view.ts';export {ProjectCatalogView,ProjectDom} from './static/project-catalog-view.ts';",resolveDir:root},bundle:true,format:'iife',globalName:'RoadmapProbe',write:false});
- const browser=await chromium.launch({executablePath:process.env.MESH_CHROMIUM,args:['--no-sandbox','--mute-audio']});
+ const browser=await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM, ['--no-sandbox','--mute-audio']));
  try{for(const width of [1560,390])for(const lang of ['en','fr']){
   const page=await browser.newPage({viewport:{width,height:1000}});
   try{

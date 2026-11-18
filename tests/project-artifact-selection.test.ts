@@ -6,10 +6,11 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {build} from 'esbuild';
 import {chromium} from 'playwright-core';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 const root=path.resolve(import.meta.dirname,'..');
 test('Chrome: reader refuses obsolete source after factory failure and preserves focus on unchanged observation',{skip:!process.env.MESH_CHROMIUM&&!process.env.MESH_REQUIRE_BROWSER?'MESH_CHROMIUM not configured':false},async()=>{
   const result=await build({stdin:{contents:`export {ProjectArtifactView} from './static/project-artifact-view.ts';export {ProjectCockpitView} from './static/project-cockpit-view.ts';`,resolveDir:root},bundle:true,platform:'browser',format:'iife',globalName:'ReaderProbe',write:false});
-  const browser=await chromium.launch({executablePath:process.env.MESH_CHROMIUM,args:['--mute-audio','--no-sandbox']});
+  const browser=await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM, ['--mute-audio','--no-sandbox']));
   try{
     for(const width of [1280,390]){
     const page=await browser.newPage({viewport:{width,height:900}});await page.setContent('<html lang="en"><body></body></html>');await page.addScriptTag({content:result.outputFiles[0]!.text});
@@ -36,7 +37,7 @@ test('Chrome: reader refuses obsolete source after factory failure and preserves
 
 test('Chrome: unavailable reader keeps Roster task navigation and a specific runtime status',{skip:!process.env.MESH_CHROMIUM&&!process.env.MESH_REQUIRE_BROWSER?'MESH_CHROMIUM not configured':false},async()=>{
   const result=await build({stdin:{contents:`export {ProjectCockpitView} from './static/project-cockpit-view.ts';export {artifactRequest} from './static/project-artifact-client.ts';`,resolveDir:root},bundle:true,platform:'browser',format:'iife',globalName:'ReaderProbe',write:false});
-  const browser=await chromium.launch({executablePath:process.env.MESH_CHROMIUM,args:['--mute-audio','--no-sandbox']});
+  const browser=await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM, ['--mute-audio','--no-sandbox']));
   try{
     const page=await browser.newPage();await page.setContent('<html lang="en"><body></body></html>');await page.addScriptTag({content:result.outputFiles[0]!.text});
     const state=await page.evaluate(`(async()=>{

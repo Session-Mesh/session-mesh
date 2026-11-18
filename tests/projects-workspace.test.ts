@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import { chromium, type BrowserContext, type Page } from 'playwright-core';
 import { REPO, scratchHome, runServer, stopServer } from './mesh-server-lib.ts';
 import { parseProjectConfig } from '../static/project-catalog.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const NATIVE = process.env.MESH_NATIVE_PTYHOST || '';
 const CHROMIUM = process.env.MESH_CHROMIUM || '';
@@ -162,7 +163,7 @@ for (const width of [1280, 390]) test(`actual native Projects create/settings/co
       const launched = await runServer(where); server = launched.child; assert.ok(launched.result.listened, launched.result.output);
       const origin = `http://127.0.0.1:${where.port}`;
       const token = fs.readFileSync(path.join(where.confDir, 'token'), 'utf8').trim();
-      browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio'] });
+      browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
       const a = await browser.newContext({ viewport: { width, height: 900 }, locale: 'en-US', hasTouch: width === 390 });
       const b = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'en-US' });
       await login(a, origin, token); await login(b, origin, token);
@@ -356,7 +357,7 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
     await socketReady(path.join(where.home, 'run', 'session-mesh', 'ptyhost.sock'));
     const launched = await runServer(where); server = launched.child; assert.ok(launched.result.listened, launched.result.output);
     const origin = `http://127.0.0.1:${where.port}`, token = fs.readFileSync(path.join(where.confDir, 'token'), 'utf8').trim();
-    browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio'] });
+    browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
     const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'en-US', hasTouch: width === 390 });
     await login(context, origin, token);
     const created = await context.request.post(origin + '/api/new', { data: { name: 'i1-live', cwd: where.home, preset: 'custom', command: '/bin/cat' } });

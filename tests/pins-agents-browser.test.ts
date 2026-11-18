@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type BrowserContext, type Page} from 'playwright-core';
 import {AgentMesh} from './helpers/agent-mail-mesh.ts';
+import {chromiumLaunchOptions, READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
 
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const skip = !CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM not set' : false;
@@ -42,7 +43,7 @@ before(async () => {
   // A skipped describe does not skip this file-level hook: start nothing without a Chromium.
   if (skip) return;
   lab = await AgentMesh.start('pins-', []);
-  browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']});
+  browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
 });
 after(async () => {
   for (const context of contexts) {
@@ -74,8 +75,8 @@ async function board(specs: Spec[], locale = 'en'): Promise<{page: Page; errors:
   await page.goto(`${lab.mesh.base}/login?token=${encodeURIComponent(lab.mesh.token())}`);
   await page.goto('about:blank');
   await page.goto(`${lab.mesh.base}/`);
-  await page.waitForFunction(() => !restoringWorkspace, undefined, {timeout: 15000});
-  if (specs.length) await page.locator(`#list .item[data-id="${specs[0]!.id}"]`).waitFor({timeout: 15000});
+  await page.waitForFunction(() => !restoringWorkspace, undefined, {timeout: READY_TIMEOUT_MS});
+  if (specs.length) await page.locator(`#list .item[data-id="${specs[0]!.id}"]`).waitFor({timeout: READY_TIMEOUT_MS});
   return {page, errors};
 }
 
@@ -83,7 +84,7 @@ async function board(specs: Spec[], locale = 'en'): Promise<{page: Page; errors:
 async function closeAll(page: Page): Promise<void> {
   sessions = [];
   await page.evaluate(() => refresh());
-  await page.waitForFunction(() => data.mesh.length === 0, undefined, {timeout: 15000});
+  await page.waitForFunction(() => data.mesh.length === 0, undefined, {timeout: READY_TIMEOUT_MS});
   await page.evaluate(() => renderList(true));   // an explicit redraw: a focused item defers the passive one
 }
 

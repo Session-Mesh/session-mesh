@@ -17,6 +17,7 @@ import {after, before, describe, test} from 'node:test';
 import type {Page} from 'playwright-core';
 import {FakeProvider} from './helpers/fake-copilot-provider.ts';
 import {REPO, rows, settle, skip, TerminalMesh, typeLine} from './terminal-browser-lib.ts';
+import {READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
 
 type Line = {translateToString(trim: boolean): string};
 type Pane = {term: {buffer: {active: {type: string; length: number; getLine(y: number): Line | undefined}};
@@ -79,7 +80,7 @@ async function startWitness(page: Page): Promise<void> {
     const buffer = active.term.buffer.active;
     for (let y = 0; y < buffer.length; y++) if (buffer.getLine(y)!.translateToString(true).startsWith('offset=')) return true;
     return false;
-  }, undefined, {timeout: 15000});
+  }, undefined, {timeout: READY_TIMEOUT_MS});
   await settle(page);
 }
 

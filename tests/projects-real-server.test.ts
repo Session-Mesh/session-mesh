@@ -11,6 +11,7 @@ import { once } from 'node:events';
 import { test } from 'node:test';
 import { chromium } from 'playwright-core';
 import { ptyhostArgv } from './ptyhost-command.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
@@ -57,7 +58,7 @@ test('hostile catalog stays inert through real authenticated signed view and ind
     fs.writeFileSync(file,JSON.stringify({kind:'mesh-project-catalog',schema_version:1,machine_id:'isolated',
       revision:'a'.repeat(64),generated_at:'2026-11-14T12:00:00Z',projects:[{id:'hostile',title:hostile,
         description:hostile,sources:[],sessions:[]}]}),{mode:0o600});
-    browser = await chromium.launch({executablePath:CHROMIUM,args:['--no-sandbox','--mute-audio']});
+    browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox','--mute-audio']));
     const context = await browser.newContext({viewport:{width:850,height:900},locale:'en-US'});
     const token = fs.readFileSync(path.join(conf,'token'),'utf8').trim();
     assert.ok((await context.request.post(origin+'/login',{form:{token}})).ok());
