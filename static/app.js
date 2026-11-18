@@ -1069,6 +1069,9 @@ class Pane {
   filterFocusReport(d) {
     if (d !== "\x1b[I" && d !== "\x1b[O") return false;
     const cause = this.focusCause, focusIn = d === "\x1b[I";
+    // A tap gives the focus back to the input line, possibly before the press is released:
+    // the pane keeps the focus, so a focus-in held for that release still stands.
+    if (cause && !focusIn && cause.to && cause.to === $("#line-text") && active === this) return true;
     this.heldFocusIn = false;
     if (!cause) { this.focusReported = focusIn; return false; }
     if (focusIn) {
@@ -1077,7 +1080,6 @@ class Pane {
       this.focusReported = true;
       return false;
     }
-    if (cause.to && cause.to === $("#line-text") && active === this) return true;
     if (this.focusReported === false) return true;
     this.focusReported = false;
     return false;
@@ -1962,6 +1964,11 @@ class Pane {
 
   detach() {
     if (!this.conn) return;
+    // The session left keeps no focus-in: its focus-out goes on its own connection. The pane's
+    // focus state is then reset, so the next session starts unreported (whatever the pane
+    // reported to the previous one) and gets a focus-in only per the rules above.
+    if (this.focusReported === true) this.reportFocus(false);
+    this.focusReported = null; this.heldFocusIn = false;
     this.dropReaderAnchor(this.conn);
     this.conn.closed = true;
     if (this.conn.autoRedraw) clearTimeout(this.conn.autoRedraw.timer);
