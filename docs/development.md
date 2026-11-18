@@ -41,6 +41,10 @@ launcher refuses to run, and its tests check that refusal ([bubblewrap](#bubblew
 Its Playwright Chromium goes to `~/.cache/ms-playwright` there too, where the tests look for it.
 The test sockets need a short temporary directory: when `TMPDIR` is unset or is the default per-user
 directory under `/var/folders`, the script uses `/private/tmp` instead; another `TMPDIR` is kept.
+The script creates `.venv/` with the `python3` on your `PATH`, which on macOS can be the system
+Python 3.9 or a Homebrew Python newer than the pinned test packages support. Before the first run,
+check `python3 --version`, or create `.venv/` with Homebrew's `python@3.14` yourself:
+`python3.14 -m venv .venv && .venv/bin/python -m pip install -r requirements-dev.txt -r requirements-browser.txt`.
 
 The public CI (`.github/workflows/public-ci.yml`) runs the same suite in parallel jobs, plus a leak
 check of the tree and, on pull requests, the contributor license agreement check `cla`

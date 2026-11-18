@@ -56,15 +56,20 @@ require_tools() {
 # select_python: MESH_PYTHON, otherwise .venv/, created or completed as needed.
 source scripts/test-local-python.sh
 
-# The newest Playwright Chromium under PLAYWRIGHT_BROWSERS_PATH, in the layout of this system.
+# The newest executable Playwright Chromium under PLAYWRIGHT_BROWSERS_PATH, in the layout of this
+# system: on macOS chrome-mac/Chromium.app (Playwright 1.56) or chrome-mac-arm64/Google Chrome for
+# Testing.app (later builds). A revision whose browser is not executable is passed over.
 newest_chromium() {
-  local layout
+  local layout candidate newest=''
   case "$(uname -s)" in
-    Darwin) layout='chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium' ;;
+    Darwin) layout='chromium-*/chrome-mac*/*.app/Contents/MacOS/*' ;;
     *) layout='chromium-*/chrome-linux*/chrome' ;;
   esac
   # shellcheck disable=SC2086 # $layout is a glob.
-  ls -d "$PLAYWRIGHT_BROWSERS_PATH"/$layout 2>/dev/null | sort -V | tail -1 || true
+  while IFS= read -r candidate; do
+    if [ -f "$candidate" ] && [ -x "$candidate" ]; then newest=$candidate; fi
+  done < <(ls -d "$PLAYWRIGHT_BROWSERS_PATH"/$layout 2>/dev/null | sort -V)
+  printf '%s\n' "$newest"
 }
 
 select_chromium() {
