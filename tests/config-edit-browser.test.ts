@@ -14,6 +14,7 @@ import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type BrowserContext, type Page} from 'playwright-core';
 import {ConfigMesh} from './helpers/config-edit-mesh.ts';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
+import {allSectionsText, eachSection, showSection} from './helpers/config-sections.ts';
 
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const SHOTS = process.env.MESH_SHOT_DIR ?? '';
@@ -58,6 +59,8 @@ async function opened(locale: string, width: number): Promise<{page: Page; probl
   } else {
     await page.locator('#btn-config').click();
   }
+  await page.locator('#dlg-config[open] .config-shell').waitFor();
+  await showSection(page, 'agents');
   await page.locator('#dlg-config[open] .config-launch').waitFor();
   return {page, problems};
 }
@@ -218,10 +221,13 @@ describe('editing the launch settings in the Configuration dialog', {skip}, () =
     await restore();
     mesh.elevation = '';
     const {page} = await opened('en-US', 390);
-    const rows = page.locator('#dlg-config .config-section:not(.config-launch) .config-row');
-    const without = await rows.evaluateAll(items => items.filter(item => !item.querySelector('.config-hint')).map(item => item.querySelector('dt')?.textContent));
+    const without: (string | null | undefined)[] = [];
+    await eachSection(page, async () => {
+      const rows = page.locator('#dlg-config .config-section:not(.config-launch) .config-row');
+      without.push(...await rows.evaluateAll(items => items.filter(item => !item.querySelector('.config-hint')).map(item => item.querySelector('dt')?.textContent)));
+    });
     assert.deepEqual(without, ['Version', 'Advertised capabilities'], 'only these two rows carry no hint (a detected fact)');
-    const text = await page.locator('#dlg-config').innerText();
+    const text = await allSectionsText(page);
     for (const phrase of ['MESH_PORT', 'MESH_HOST', 'MESH_TRUST_PROXY', 'systemctl --user edit session-mesh', 'never restarted from this page']) {
       assert.ok(text.includes(phrase), phrase);
     }

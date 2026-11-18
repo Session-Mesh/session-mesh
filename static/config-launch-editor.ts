@@ -72,7 +72,7 @@ export class LaunchEditor {
   constructor(doc: Document, view: LaunchView, elevation: Elevation, ports: LaunchPorts, notice: LaunchNotice | null = null) {
     this.doc = doc; this.view = view; this.ports = ports;
     this.element = doc.createElement("section");
-    this.element.className = "config-section config-launch"; this.element.dataset.section = "launch";
+    this.element.className = "config-section config-card config-launch"; this.element.dataset.section = "launch";
     this.agents = new Set(view.agents); this.roots = [...view.roots];
     this.mode = elevation.active && view.editable ? "editing" : "locked";
     if (notice === "saved") this.message = { text: ports.t("config.launch.saved"), ok: true };
@@ -123,7 +123,7 @@ export class LaunchEditor {
 
   private draw(): void {
     const { t } = this.ports;
-    const heading = this.el("h3", "", t("config.launch.title"));
+    const heading = this.el("h4", "", t("config.launch.title"));
     const parts: HTMLElement[] = [heading];
     if (!this.view.editable) {
       parts.push(this.el("p", "mute", t("config.launch.noFile")), this.summary());
