@@ -164,12 +164,14 @@ is_checkout_switch() {
   [ "$directory" = "$worktree" ]
 }
 refuse_shared_switch() {
-  local dedicated=session-mesh
+  local dedicated=session-mesh root
+  # The retries name the opam root, as the undo commands do: OPAMROOT may be set for this run only.
+  root="$(printf %q "$(opam var root)")"
   [ "$switch" != "$dedicated" ] || dedicated=session-mesh-pinned
   echo "bootstrap: the opam switch '$switch' reads the repositories '${1:-}', not only $opam_repository." >&2
   echo "bootstrap: other projects may use that switch, so its repositories are left as they are. Either:" >&2
-  echo "bootstrap: - use a dedicated switch, created if missing: MESH_OPAM_SWITCH=$dedicated bash scripts/bootstrap.sh $mode" >&2
-  echo "bootstrap: - or make '$switch' read only that commit: MESH_OPAM_SWITCH=$(printf '%q' "$switch") MESH_OPAM_SELECT_PINNED=1 bash scripts/bootstrap.sh $mode" >&2
+  echo "bootstrap: - use a dedicated switch, created if missing: OPAMROOT=$root MESH_OPAM_SWITCH=$dedicated bash scripts/bootstrap.sh $mode" >&2
+  echo "bootstrap: - or make '$switch' read only that commit: OPAMROOT=$root MESH_OPAM_SWITCH=$(printf '%q' "$switch") MESH_OPAM_SELECT_PINNED=1 bash scripts/bootstrap.sh $mode" >&2
   echo "bootstrap:   (the bootstrap then prints the command that restores its repositories)." >&2
   exit 1
 }

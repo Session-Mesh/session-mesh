@@ -196,8 +196,8 @@ describe('scripts/bootstrap.sh modes', () => {
     assert.ok(run.calls.every((call) => !/^(install|pin)\b/.test(call)), run.calls.join('\n'));
     assert.deepEqual(run.selected(name), selection);
     assert.match(run.output, /its repositories are left as they are/);
-    assert.match(run.output, /MESH_OPAM_SWITCH=session-mesh bash scripts\/bootstrap\.sh --deps-only/);
-    assert.ok(run.output.includes(`MESH_OPAM_SWITCH=${quoted(name)} MESH_OPAM_SELECT_PINNED=1 bash scripts/bootstrap.sh --deps-only`), run.output);
+    assert.ok(run.output.includes(`OPAMROOT=${quoted(ROOT)} MESH_OPAM_SWITCH=session-mesh bash scripts/bootstrap.sh --deps-only`), run.output);
+    assert.ok(run.output.includes(`OPAMROOT=${quoted(ROOT)} MESH_OPAM_SWITCH=${quoted(name)} MESH_OPAM_SELECT_PINNED=1 bash scripts/bootstrap.sh --deps-only`), run.output);
   };
   const undo = (run: Run, ...words: string[]) => {
     const expected = `to undo: ${opamCommand('repository', ...words)})`;
