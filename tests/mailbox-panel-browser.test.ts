@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type BrowserContext, type Page} from 'playwright-core';
 import {AgentMesh, type Agent} from './helpers/agent-mail-mesh.ts';
+import {chromiumLaunchOptions, READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
 
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const skip = !CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM not set' : false;
@@ -42,7 +43,7 @@ before(async () => {
   await lab.send(lab.agents.alpha!, beta, HOSTILE);
   await lab.send(lab.agents.gamma!, beta, 'task for beta', 'task');
   await lab.send(beta, lab.agents.alpha!, 'beta answers alpha');
-  browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']});
+  browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
 });
 after(async () => {
   for (const context of contexts) await context.close().catch(() => undefined);
@@ -61,7 +62,7 @@ async function signedIn(locale: string, width = 1400, height = 900): Promise<{pa
   await page.goto(`${lab.mesh.base}/login?token=${encodeURIComponent(lab.mesh.token())}`);
   await page.goto('about:blank');
   await page.goto(`${lab.mesh.base}/#beta`);
-  await page.waitForFunction(() => panes.some(pane => pane.id === 'beta') && !restoringWorkspace, undefined, {timeout: 15000});
+  await page.waitForFunction(() => panes.some(pane => pane.id === 'beta') && !restoringWorkspace, undefined, {timeout: READY_TIMEOUT_MS});
   return {page, errors, calls: () => calls};
 }
 

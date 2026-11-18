@@ -9,6 +9,7 @@ import {build} from 'esbuild';
 import {chromium} from 'playwright-core';
 import {parseHostReply} from '../static/project-host.ts';
 import {followupCatalog,roadmapObservation} from './helpers/project-followup-fixtures.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const root=path.resolve(import.meta.dirname,'..');
 const skip=!process.env.MESH_CHROMIUM&&!process.env.MESH_REQUIRE_BROWSER?'MESH_CHROMIUM not configured':false;
@@ -23,7 +24,7 @@ const owner=parseHostReply({kind:'mesh-project-reply',version:1,op:'project_read
 const bundle=async()=> (await build({stdin:{contents:"export {ProjectCockpitView} from './static/project-cockpit-view.ts';export {mountProjectWorkspace} from './static/project-workspace.ts';",resolveDir:root},bundle:true,format:'iife',globalName:'MembershipTest',write:false})).outputFiles[0]!.text;
 
 test('Chrome owner membership is independent, inert, bounded and distinct from observed sessions',{skip,timeout:30000},async()=>{
-  const code=await bundle(),browser=await chromium.launch({executablePath:process.env.MESH_CHROMIUM,args:['--no-sandbox','--mute-audio']});
+  const code=await bundle(),browser=await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM, ['--no-sandbox','--mute-audio']));
   try{for(const width of [1560,390])for(const lang of ['en','fr']){
     const page=await browser.newPage({viewport:{width,height:1000}});
     try{
@@ -70,7 +71,7 @@ test('Chrome owner membership is independent, inert, bounded and distinct from o
 });
 
 test('Chrome workspace forwards only selected same-boot owner read membership and suppresses late selection',{skip,timeout:30000},async()=>{
-  const code=await bundle(),browser=await chromium.launch({executablePath:process.env.MESH_CHROMIUM,args:['--no-sandbox','--mute-audio']});
+  const code=await bundle(),browser=await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM, ['--no-sandbox','--mute-audio']));
   try{for(const width of [1560,390]){
     const page=await browser.newPage({viewport:{width,height:1000}});try{
       await page.setContent('<html lang="en"><body><aside id="sidebar"></aside><main id="root"></main></body></html>');await page.addStyleTag({path:path.join(root,'static/style.css')});await page.addScriptTag({content:code});

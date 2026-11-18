@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import http from 'node:http';
 import fs from 'node:fs';
 import { followupCatalog } from './helpers/project-followup-fixtures.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const chromiumPath = process.env.MESH_CHROMIUM ?? '';
 for (const width of [1280, 390]) test(`unsupported collection stays honest and recovers in a new scope at ${width}px`,
@@ -17,7 +18,7 @@ for (const width of [1280, 390]) test(`unsupported collection stays honest and r
       resolveDir: new URL('..', import.meta.url).pathname }, bundle: true, format: 'iife', globalName: 'WorkspaceTest', write: false }).outputFiles[0]!.text;
     const server = http.createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<main id="root"></main><nav id="sidebar"></nav><button id="sessions">Sessions</button>'); });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    const browser = await chromium.launch({ executablePath: chromiumPath, args: ['--no-sandbox', '--mute-audio', '--disable-gpu'] });
+    const browser = await chromium.launch(chromiumLaunchOptions(chromiumPath, ['--no-sandbox', '--mute-audio', '--disable-gpu']));
     try {
       const page = await browser.newPage({ viewport: {width, height: 900} }); page.setDefaultTimeout(5000);
       await page.goto(`http://127.0.0.1:${(server.address() as {port:number}).port}`);

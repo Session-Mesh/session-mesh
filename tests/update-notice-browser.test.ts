@@ -13,6 +13,7 @@ import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type Page} from 'playwright-core';
 import {startUpdateHost, NOTES, type UpdateHost} from './helpers/update-host.ts';
 import {startMesh, type Mesh} from './mesh-server-lib.ts';
+import {chromiumLaunchOptions, READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
 
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const skip = !CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM not set' : false;
@@ -34,7 +35,7 @@ before(async () => {
     else await new Promise(resolve => setTimeout(resolve, 50));
   }
   assert.ok(line, 'the host announced the release');
-  browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']});
+  browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
 });
 after(async () => {
   await browser?.close();
@@ -66,7 +67,7 @@ describe('update notice banner', {skip}, () => {
   test('shows the release, its notes and the command; closing it holds until a newer release', async () => {
     const {page, problems} = await signedIn('en-US');
     const banner = page.locator('#update-notice');
-    await banner.waitFor({state: 'visible', timeout: 15000});
+    await banner.waitFor({state: 'visible', timeout: READY_TIMEOUT_MS});
     assert.equal(await banner.getAttribute('role'), 'status');
     assert.match(await banner.innerText(), /Session Mesh v0\.2\.0 is available, with a security fix\./);
     assert.equal(await banner.locator('a').getAttribute('href'), NOTES);
@@ -85,7 +86,7 @@ describe('update notice banner', {skip}, () => {
     // Dismissed for an older release only: the newer one comes back.
     await page.evaluate(() => localStorage.setItem('mesh.update.dismissed', 'v0.1.9'));
     await page.reload();
-    await banner.waitFor({state: 'visible', timeout: 15000});
+    await banner.waitFor({state: 'visible', timeout: READY_TIMEOUT_MS});
     assert.deepEqual(problems, []);
   });
 
@@ -100,7 +101,7 @@ describe('update notice banner', {skip}, () => {
     await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
     await page.goto(`${mesh.base}/`);
     const banner = page.locator('#update-notice');
-    await banner.waitFor({state: 'visible', timeout: 15000});
+    await banner.waitFor({state: 'visible', timeout: READY_TIMEOUT_MS});
     await page.getByRole('button', {name: 'Hide this notice until the next release'}).click();
     await banner.waitFor({state: 'hidden'});
     await page.waitForTimeout(3000);   // several /api/sessions polls
@@ -111,7 +112,7 @@ describe('update notice banner', {skip}, () => {
   test('French, and no sideways scroll on a phone', async () => {
     const {page, problems} = await signedIn('fr-FR', 360);
     const banner = page.locator('#update-notice');
-    await banner.waitFor({state: 'visible', timeout: 15000});
+    await banner.waitFor({state: 'visible', timeout: READY_TIMEOUT_MS});
     assert.match(await banner.innerText(), /Session Mesh v0\.2\.0 est disponible, avec un correctif de sécurité\./);
     assert.ok(await page.getByRole('button', {name: "Masquer cet avis jusqu'à la prochaine version"}).isVisible());
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

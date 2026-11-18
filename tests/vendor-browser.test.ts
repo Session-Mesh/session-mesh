@@ -17,6 +17,7 @@ import type {AddressInfo} from 'node:net';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type Page} from 'playwright-core';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const STATIC = path.join(ROOT, 'static');
@@ -95,7 +96,7 @@ describe('pages without the removed third-party files', {skip}, () => {
     server = http.createServer(handle);
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox']});
+    browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox']));
   });
   after(async () => {
     await browser?.close();

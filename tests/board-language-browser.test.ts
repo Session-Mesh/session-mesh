@@ -17,6 +17,7 @@ import type {AddressInfo} from 'node:net';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser} from 'playwright-core';
+import {chromiumLaunchOptions, READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
 
 const STATIC = path.resolve(process.env.MESH_BOARD_STATIC ?? path.join(import.meta.dirname, '..', 'static'));
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
@@ -50,7 +51,7 @@ describe('whiteboard interface language', {skip}, () => {
     server = http.createServer(handle);
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox']});
+    browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox']));
   });
   after(async () => {
     await browser?.close();
@@ -64,7 +65,7 @@ describe('whiteboard interface language', {skip}, () => {
       await page.goto(`${origin}/static/board.html?session=s`);
       const tool = page.locator('[data-testid="toolbar-selection"]');
       await tool.waitFor({state: 'attached'});
-      await page.waitForFunction(expected => document.querySelector('[data-testid="toolbar-selection"]')?.getAttribute('aria-label') === expected, selection, {timeout: 10000});
+      await page.waitForFunction(expected => document.querySelector('[data-testid="toolbar-selection"]')?.getAttribute('aria-label') === expected, selection, {timeout: READY_TIMEOUT_MS});
       assert.equal(await tool.getAttribute('aria-label'), selection);
       assert.match(await page.evaluate(() => document.documentElement.lang), lang);
       await context.close();
