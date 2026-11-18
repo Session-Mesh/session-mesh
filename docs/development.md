@@ -61,10 +61,10 @@ or identities.
 
 | Distribution | Command |
 |---|---|
-| Debian, Ubuntu | `sudo apt update && sudo apt install git curl python3 python3-venv bubblewrap opam build-essential libgmp-dev libsqlite3-dev pkg-config` |
-| Fedora | `sudo dnf install git curl python3 nodejs npm bubblewrap opam gcc make gmp-devel pkgconf-pkg-config` |
-| Arch | `sudo pacman -S git curl python nodejs npm bubblewrap opam base-devel gmp pkgconf` |
-| macOS (Homebrew) | `xcode-select --install`, then `brew install opam node gmp pkgconf sqlite python@3.14` |
+| Debian, Ubuntu | `sudo apt update && sudo apt install git curl python3 python3-venv bubblewrap opam build-essential libgmp-dev libsqlite3-dev pkg-config jq` |
+| Fedora | `sudo dnf install git curl python3 nodejs npm bubblewrap opam gcc make gmp-devel pkgconf-pkg-config jq` |
+| Arch | `sudo pacman -S git curl python nodejs npm bubblewrap opam base-devel gmp pkgconf jq` |
+| macOS (Homebrew) | `xcode-select --install`, then `brew install opam node gmp pkgconf sqlite python@3.14 jq` |
 
 - **Node.** Ubuntu 24.04 and Debian 12 package Node 18, too old: install Node 24 from
   [nodejs.org](https://nodejs.org/en/download) (prebuilt binary, nvm or the NodeSource packages),
@@ -508,6 +508,126 @@ that the queue's temporary branch holds the entry's commits as a straight line o
 the method is rebase (if it holds a merge commit instead, `cla` refuses the entry: it fails safe);
 that `pull_request_target` workflows do not start on `merge_group`; and the `merge_commit_sha` of
 a pull request merged by the queue. Also the committer identity of the commits the queue rebases (expected: GitHub <noreply@github.com>; if it differs, `cla` refuses every entry: it fails closed), and the behaviour of a required job skipped because a job it needs failed (the documentation is read, no run reproduced it). A first queued merge of a harmless pull request is the test.
+
+## Nightly pre-releases
+
+`nightly.yml` publishes a pre-release of the tip of `main` once a night (02:17 UTC, plus a manual
+run on `main`), so that users can try the next version. It runs on `schedule` and
+`workflow_dispatch` only, never on a pull request or a fork, and uses no action and no secret: the
+`gh` CLI of the runner and the run's own token.
+
+- **Tag.** `v<next minor>.0-nightly.<YYYYMMDD>`: the minor after the latest stable release
+  (`/releases/latest`, which never names a pre-release), with the UTC date. The hyphen suffix makes
+  it a pre-release for GitHub and for the update notice, which ignores pre-releases
+  (`mesh_update_check.ml`); `release.yml` never marks it the latest release. At most one nightly per
+  UTC date: if a tag for the date exists and has a release, or `release.yml` is running on it, the
+  run does nothing and says so. The `decide` job has a read-only token, which cannot list draft
+  releases: it sees published releases only, and a draft is seen by the retention step of the
+  `start` job (write permission). `release.yml` itself refuses to overwrite an existing release for
+  a tag, a draft included. A tag with neither a release nor a running `release.yml` is an orphan (an
+  earlier run died after tagging it): the run starts `release.yml` on it again instead of skipping,
+  at most twice per tag in all (`MAX_REDISPATCH`), so a nightly that keeps failing does not loop; it
+  then stays as it is, with a warning, until a maintainer looks at the runs. An orphan is published
+  by a scheduled run, so it is checked like a new tag: it must be an annotated tag whose tagger is
+  `github-actions[bot]` (read through the API tag object; a lightweight tag is refused), its commit
+  must be `main`'s head or an ancestor of `main`, and the same CI gate must pass on that commit.
+  Anything that cannot be read, and any failed check, means the job does not start `release.yml` and
+  writes the reason in its summary. The tagger name is written by whoever creates a tag object, so it
+  is a consistency check, not an authentication: what bounds a hand-made tag is the CI gate on its
+  commit, the ancestry check and the exact tag pattern.
+- **When.** The `decide` job (read-only token) publishes only when the tip of `main` differs from the
+  commit of the previous nightly tag and every check that `public-ci.yml` runs on a push to `main`
+  and that the ruleset requires (the table in [CONTRIBUTING.md](../CONTRIBUTING.md#required-checks):
+  all but the pull request only checks) is completed and successful on that commit. Only check runs
+  of the GitHub Actions app (the `integration_id` 15368 the ruleset requires) count. The check runs
+  API is asked with `filter=all` (its default, `filter=latest`, keeps only the newest run of each
+  name and would let a re-run replace a failure), and every run of a required name must be
+  successful, with at least one: a second suite on the same commit (a manual run of `public-ci.yml`
+  on `main`) or a re-run does not supersede an earlier failure, which keeps blocking until `main`
+  moves. If CI is red, still running, skipped, cancelled or missing,
+  nothing is published and the job summary says which check. The check
+  names are copied in `nightly.yml`: rename a job of `public-ci.yml` and the nightly stops until
+  the list follows.
+- **How.** The `start` job, the only one with a write token (`contents` and `actions`), creates an
+  annotated tag on that commit through the API, whose message is the opening of the release notes
+  (a warning that it is a build untested by users, and the commits since the previous nightly),
+  starts `release.yml` on the tag, then removes the old nightlies (that cleanup comes last and may
+  fail without failing the run, so it can never leave a tag with no started release). A tag created with the run's
+  token starts no workflow, so nothing runs twice; `release.yml` refuses a push of a nightly tag.
+  `release.yml` then builds, qualifies, attests and publishes exactly what a release is, signed
+  from `refs/tags/<tag>` by `release.yml`, so `install.sh` verifies a nightly like any release.
+  The green-CI check is made by `nightly.yml` before it tags; `release.yml` does not repeat it. A
+  person with write access can run `release.yml` directly on a nightly-shaped tag that names any
+  ancestor of `main`, red CI included, or move the tag between the `decide` job and the start of
+  `release.yml`, which re-verifies only that the tag is the built commit and on `main`. The real
+  frontier is the write-access boundary, not these checks.
+  A pushed tag containing `-nightly` anywhere (for example `v0.2.0-nightly.x`, which a ruleset
+  excluding `v*-nightly.*` does not cover) is refused by the tag job whatever its form.
+  The tag job of `release.yml` accepts a manual run on a tag of exactly the nightly form and
+  checks that the tag names the built commit and that this commit is `main`'s head or an ancestor
+  of `main`: for a nightly, `release/latest` is not accepted (a stable tag may still name a commit
+  of `release/latest`).
+- **Retention.** The newest seven nightlies are kept. Older ones (release and tag) are deleted by
+  the `start` job: a tag is only ever matched by the exact pattern
+  `^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}$`, a release is deleted only if it is a pre-release,
+  and a run deletes at most three. The releases are listed (not looked up by tag, which does not
+  see a draft), so a draft nightly is deleted with its tag within the same cap. The nightly of the
+  run is never deleted (it sorts last among equal dates). Only tags with a real calendar date
+  (`20261399` is not one) that is not after today's UTC date take part: a tag with an invalid or
+  future date is ignored, which means kept, not counted among the newest seven and not deletable,
+  and a warning names it for a maintainer. Ignoring was chosen over deleting or counting because a
+  misdated tag can then neither displace a real nightly nor be removed by the job. A failure of
+  this step is logged and does not fail the run.
+- **Concurrency.** One group, `nightly`, never cancelled.
+
+What the owner configures on GitHub, none of which the repository can do itself:
+
+- Actions: the workflow permissions of the repository must allow the run's token to be given the
+  `contents: write` and `actions: write` scopes the workflow requests (the repository default may
+  stay read-only; the workflow asks per job).
+- Tag rulesets. Today there is no tag ruleset: the only rule is the branch ruleset of `main`
+  (27540466). Anyone with write access can therefore create a tag of the nightly form and run
+  `release.yml` on it. That is no privilege gain over pushing a stable `v*` tag, which such a person
+  can already do, but it is a gap. What GitHub's documentation says about bypass (checked
+  2026-11-18, "About rulesets" and "Creating rulesets for a repository" on docs.github.com):
+  a bypass list can name roles, teams and GitHub Apps, for branch and tag rulesets alike. It does
+  not say that the GitHub Actions app, nor the `GITHUB_TOKEN` of a workflow run, is an app that can
+  be selected in that list or that the token acts as an actor of the list. That could not be
+  verified from the documentation, and was not tried on the repository. Until someone has tried it
+  in the ruleset settings, assume the run's token cannot bypass a tag ruleset: then any ruleset that
+  restricts creation or deletion of `v*-nightly.*` tags would make the nightly impossible (the
+  `start` job could neither create nor delete them). So:
+  - Do not put a restriction on creation, update or deletion on `v*-nightly.*`. Leave those tags to
+    the workflows, and rely on the exact-pattern checks in code: the tag names matched by one
+    pattern, `release.yml` refusing a push of a nightly tag, requiring the tag's commit to be on
+    `main`, and the orphan checks of the `decide` job. This leaves the gap above open for
+    nightly-shaped tags.
+  - Protect the stable `v*` tags with a ruleset restricted to the maintainers (creation, update and
+    deletion), excluding `v*-nightly.*` from its target. No workflow and no contributor can then
+    create or move a stable tag, and no bypass for the Actions app is needed or wanted: a bypass for
+    it on `v*` would let any workflow on any branch create stable tags.
+  - If a maintainer finds that the Actions app can be added to a ruleset's bypass list and that the
+    run's token then bypasses it, a ruleset on `v*-nightly.*` only, restricting creation, update and
+    deletion, with a bypass for that app and the maintainers, closes the nightly gap; it would not
+    stop another workflow on a branch from creating a nightly-shaped tag, which is why `release.yml`
+    also requires the tag's commit to be on `main`. Test that the nightly still runs before relying
+    on it.
+  If no tag ruleset exists, the `start` job works as it does today.
+- Immutable releases, if enabled: check that a published pre-release and its tag can still be
+  deleted. If not, the retention step fails on the oldest nightly (logged, the run itself still
+  succeeds because `release.yml` is started before the retention) and old nightlies accumulate
+  until the setting allows the deletion.
+- The required checks of the `main` ruleset must keep the names listed in `nightly.yml`.
+
+Known limitation: a pull request whose head is the tip of `main` (for example a pull request toward
+a `release/**` branch opened from `main`'s head) attaches its `pull_request` check runs to the same
+commit. With `filter=all`, a pending or failed run of such a pull request under a required name
+blocks the nightly while it lasts. This fails closed and costs availability only (no nightly that
+night, with the check named in the job summary); it ends when the pending run turns green or when
+`main` moves; a failed or cancelled run keeps blocking until `main` moves. It is not handled in code.
+
+A user installs a nightly with `install.sh --upgrade --to <nightly tag>`
+([Upgrading a release install](operations.md#upgrading-a-release-install)).
 
 ## Languages
 

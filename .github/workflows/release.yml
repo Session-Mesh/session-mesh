@@ -21,8 +21,17 @@
 # published as a pre-release, which GitHub never reports as the latest release; a release older
 # (semver) than the current latest one is published with --latest=false (v0.1.3 after v0.2.0 is not
 # the latest). A manual run is a
-# dry run: it builds, checks and keeps the files as a workflow artifact, and never creates a tag or
-# a release; a manual run on main also seeds the opam caches the tag runs read.
+# dry run (except on a nightly tag, below): it builds, checks and keeps the files as a workflow
+# artifact, and never creates a tag or a release; a manual run on main also seeds the opam caches
+# the tag runs read.
+#
+# Nightly pre-releases (nightly.yml) are published by this same workflow: nightly.yml creates the
+# annotated tag v<major>.<minor>.<patch>-nightly.<YYYYMMDD> on a commit of main with the run's own
+# token (which starts no workflow by itself), then starts this workflow manually on that tag. The
+# run has the tag as its ref, so the files and their attestations are those of a tag release, signed
+# by this workflow from refs/tags/<tag>, which is what install.sh checks. The tag job accepts a
+# manual run for a tag of exactly that form only; a push of such a tag is refused, so that a tag
+# pushed with another credential never starts a second run.
 #
 # Every build job but one is required: a release is published only when every file was built and
 # qualified by its job in the same run, on its platform's own runner. The exception is the macOS
@@ -106,12 +115,27 @@ jobs:
     timeout-minutes: 5
     outputs:
       tag: ${{ steps.name.outputs.tag }}
+      publish: ${{ steps.name.outputs.publish }}
     steps:
+      # publish is true for a tag push and for a manual run on a nightly tag (see the header), false
+      # for a dry run. A nightly tag is never published from a push.
       - name: Name the release
         id: name
         run: |
+          nightly='^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}$'
+          publish=false
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             tag="$GITHUB_REF_NAME"
+            publish=true
+            # Any tag containing -nightly, not only the exact nightly form: a ruleset that excludes
+            # v*-nightly.* from its target does not protect v0.2.0-nightly.x, which must not publish.
+            if [[ "$tag" == *-nightly* ]]; then
+              echo "::error::$tag contains -nightly: nightly pre-releases are published by nightly.yml, never from a push"
+              exit 1
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF_TYPE" = tag ] && [[ "$GITHUB_REF_NAME" =~ $nightly ]]; then
+            tag="$GITHUB_REF_NAME"
+            publish=true
           else
             tag="v0.0.0-dryrun.${GITHUB_SHA:0:12}"
           fi
@@ -119,10 +143,11 @@ jobs:
             echo "::error::not a release tag name: $tag"
             exit 1
           fi
-          echo "release: $tag"
+          echo "release: $tag (publish: $publish)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name == 'push'
+        if: steps.name.outputs.publish == 'true'
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -130,7 +155,7 @@ jobs:
       # maintenance branch release/latest (v0.1.3 is cut there): a tag pushed on a
       # branch that is not merged, or on a commit no longer held by one of these two, is refused.
       - name: Check that the tag names a commit of main or of release/latest
-        if: github.event_name == 'push'
+        if: steps.name.outputs.publish == 'true'
         env:
           RELEASE_TAG: ${{ steps.name.outputs.tag }}
         run: |
@@ -144,6 +169,15 @@ jobs:
           if git merge-base --is-ancestor "$commit" refs/remotes/origin/main; then
             echo "$RELEASE_TAG names $commit, on main"
             exit 0
+          fi
+          # A nightly is a build of main (nightly.yml tags the tip of main): its commit must be main's
+          # head or an ancestor of it, which the test above establishes, and release/latest is no
+          # alternative for it. main's head at tag time is not recorded anywhere that could be
+          # trusted later, so "reachable from main now" is the strictest check that keeps a late
+          # start (an orphan re-dispatched after main moved on) working.
+          if [[ "$RELEASE_TAG" == *-nightly.* ]]; then
+            echo "::error::$RELEASE_TAG names $commit, which is not on main: a nightly is a build of main and is never published from another branch"
+            exit 1
           fi
           if git fetch --no-tags origin +refs/heads/release/latest:refs/remotes/origin/release/latest &&
             git merge-base --is-ancestor "$commit" refs/remotes/origin/release/latest; then
@@ -582,13 +616,13 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # The only job with a write token, and only for a tag push. It never checks out, builds or runs
+  # The only job with a write token, and only for a tag push or a nightly tag run. It never checks out, builds or runs
   # anything from the other jobs: it checks the files of the package job against their SHA256SUMS,
   # attests them and publishes the release.
   publish:
     name: publish release
     needs: [tag, package]
-    if: needs.tag.result == 'success' && needs.package.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !cancelled()
+    if: needs.tag.result == 'success' && needs.package.result == 'success' && needs.tag.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/v') && !cancelled()
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # contents: write creates the release; id-token and attestations: write sign the build
@@ -730,5 +764,21 @@ jobs:
             echo "install.sh installs the bundle of your platform when your system meets its floor, otherwise the native"
             echo "programs and the code archive. $macos Every file carries a build provenance attestation."
           } > "$RUNNER_TEMP/notes.md"
+          # A nightly tag is annotated by nightly.yml: its message (the pre-release warning and the
+          # commits since the previous nightly) opens the notes. The tag object is the first line
+          # of ls-remote, the commit the second; a lightweight nightly tag is refused.
+          if [[ "$RELEASE_TAG" == *-nightly.* ]]; then
+            if [ "$(printf '%s\n' "$refs" | wc -l)" -ne 2 ]; then
+              echo "::error::$RELEASE_TAG is not an annotated tag; nothing was published"
+              exit 1
+            fi
+            tag_object="$(printf '%s\n' "$refs" | awk 'NR == 1 {print $1}')"
+            # Written whole first: with pipefail, cutting the stream with head could fail the step
+            # exactly when the message is long.
+            gh api "repos/$GH_REPO/git/tags/$tag_object" --jq .message > "$RUNNER_TEMP/tag-message.md"
+            head -c 60000 "$RUNNER_TEMP/tag-message.md" > "$RUNNER_TEMP/nightly-notes.md"
+            { cat "$RUNNER_TEMP/nightly-notes.md"; echo; echo; cat "$RUNNER_TEMP/notes.md"; } > "$RUNNER_TEMP/notes-all.md"
+            mv "$RUNNER_TEMP/notes-all.md" "$RUNNER_TEMP/notes.md"
+          fi
           gh release create "$RELEASE_TAG" --verify-tag "${kind[@]}" "${latest[@]}" --title "$RELEASE_TAG" \
             --notes-file "$RUNNER_TEMP/notes.md" -- dist/*

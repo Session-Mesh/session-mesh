@@ -155,6 +155,20 @@ took effect (no announcement at the next poll).
 ~/.local/share/session-mesh/current/install.sh --upgrade --to v0.3.0 # a given release
 ```
 
+A nightly pre-release of `main` (`v<next minor>.0-nightly.<YYYYMMDD>`, published once a night when
+CI is green; see [Nightly pre-releases](development.md#nightly-pre-releases)) is installed the same
+way, by naming its tag: `install.sh --upgrade --to v0.2.0-nightly.20261118`. A plain `--upgrade`
+and the update notice never offer it, because both ignore pre-releases. It is built and attested by
+the same workflow as a release and checked the same way, and no user has run it before you:
+`--rollback` returns to the previous release.
+
+A nightly installation gets no update notice at all, security notices included: the notice is
+only produced for a stable release install (`ocaml/lib/mesh_update_report.ml` ignores a
+pre-release). To leave the nightly track, run `install.sh --upgrade --to <stable tag>`, for example
+`--to v0.1.1`: a plain `--upgrade` refuses while the latest stable release is older than the
+installed nightly (a stable 0.1.x is older than 0.2.0-nightly), and works once a stable release
+newer than the nightly is published. From then on the notice works as for any stable install.
+
 `--upgrade` asks GitHub for the latest published release (`/releases/latest`, which never names a
 draft or a pre-release), downloads that release's `SHA256SUMS` and `install.sh` over HTTPS, checks
 the installer against `SHA256SUMS` and runs it. The new installer checks that the hashes stamped in
