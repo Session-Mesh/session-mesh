@@ -18,8 +18,10 @@ import {after, before, describe, test} from 'node:test';
 const REPO = path.resolve(import.meta.dirname, '..');
 const PINNED = /^opam_repository="([^"]+)"$/m.exec(fs.readFileSync(path.join(REPO, 'scripts', 'release-pins.sh'), 'utf8'))?.[1] ?? '';
 // `repository list --all` has the layout of opam 2.6.1: a '#' header, then name, URL as
-// registered, switches. A second add of a repository or a second creation of a switch fails, as
-// with opam.
+// registered, switches; as opam does, it wraps the URL onto a line of its own when COLUMNS is set,
+// even into a pipe. A second add of a repository or a second creation of a switch fails, as with
+// opam. With FAKE_CREATE_FAILS, creating a switch registers it without a compiler and fails, as a
+// failed compiler installation does.
 const FAKE_OPAM = String.raw`#!/bin/sh
 printf '%s\n' "$*" >> "$OPAM_CALLS"
 state="$FAKE_STATE"
@@ -34,14 +36,18 @@ case "$1 $2" in
     echo '[ERROR] No switch is currently set.' >&2; exit 50 ;;
   'switch create')
     repos=$(printf '%s\n' "$@" | sed -n 's/^--repos=//p')
-    name=$(printf '%s\n' "$@" | sed -n '5p')
+    name=$(printf '%s\n' "$@" | sed -n '6p')
     if grep -Fxq -- "$name" "$state/switches"; then echo "[ERROR] switch $name exists" >&2; exit 2; fi
     echo "$name" >> "$state/switches"
+    if [ -n "$FAKE_CREATE_FAILS" ]; then echo "$name" >> "$state/without-compiler"; exit 31; fi
     printf '%s\n' "$repos" | tr ',' '\n' > "$state/selected-$(key "$name")"; exit 0 ;;
   'repository list')
     if [ "$3" = --all ]; then
       echo '# Repository # Url # Switches(rank)'
-      while read -r name url; do printf '%-12s %s <default>\n' "$name" "$url"; done < "$state/repositories"
+      while read -r name url; do
+        if [ -n "$COLUMNS" ]; then printf '%-12s\n             %s <default>\n' "$name" "$url"
+        else printf '%-12s %s <default>\n' "$name" "$url"; fi
+      done < "$state/repositories"
     else cat "$state/selected-$(key "$(switch_of "$3")")"; fi
     exit 0 ;;
   'repository add')
@@ -55,12 +61,22 @@ case "$1 $2" in
     printf '%s\n' "$@" > "$selection"; exit 0 ;;
 esac
 case "$*" in
-  *'ocamlc -version') echo 5.3.0 ;;
+  *'ocamlc -version')
+    if [ "$(switch_of "$2")" = "$FAKE_NO_COMPILER" ] || grep -Fxq -- "$(switch_of "$2")" "$state/without-compiler" 2>/dev/null; then
+      echo 'ocamlc: command not found' >&2; exit 127; fi
+    echo 5.3.0 ;;
+  'var root') echo "$FAKE_ROOT" ;;
   'pin list --switch='*' --short') for pin in $FAKE_PINS; do echo "$pin"; done ;;
   'var --switch='*' bin') echo /fake/bin ;;
 esac
 `;
-const WITH_PYTEST = '#!/bin/sh\nexit 0\n';
+// The opam root the fake reports, with a space: the printed commands must quote it.
+const ROOT = '/fake/opam root';
+// The shell quoting bootstrap.sh applies (bash printf %q), to compare printed commands with.
+const quoted = (word: string) => spawnSync('bash', ['-c', 'printf %q "$1"', '_', word], {encoding: 'utf8'}).stdout;
+const opamCommand = (...words: string[]) => `opam ${words[0]} ${words[1]} --root=${quoted(ROOT)}`
+  + words.slice(2).map((word) => ` ${quoted(word)}`).join('');
+const WITH_PYTEST ='#!/bin/sh\nexit 0\n';
 const WITHOUT_PYTEST = '#!/bin/sh\nexit 1\n';
 const OPAM_ORG = 'https://opam.ocaml.org';
 
@@ -105,7 +121,8 @@ function bootstrap(args: string[], python: string, options: {pins?: string; stat
   writeState(stateDir, {...onPin(), ...options.state});
   const env: Record<string, string | undefined> = {...process.env, PATH: `${scratch}:${process.env.PATH}`,
     OPAM_CALLS: calls, FAKE_STATE: stateDir, MESH_OPAM_SWITCH: 'fake-switch', MESH_OPAM_SELECT_PINNED: undefined,
-    OCAML_COMPILER: undefined, FAKE_SWITCH_LIST_FAILS: undefined,
+    OCAML_COMPILER: undefined, FAKE_SWITCH_LIST_FAILS: undefined, FAKE_CREATE_FAILS: undefined, FAKE_NO_COMPILER: undefined,
+    COLUMNS: undefined, FAKE_ROOT: ROOT,
     PYTHON: python, FAKE_PINS: options.pins ?? '', ...options.env};
   for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name];
   const result = spawnSync('bash', ['scripts/bootstrap.sh', ...args], {cwd: REPO, env, encoding: 'utf8'});
@@ -180,7 +197,11 @@ describe('scripts/bootstrap.sh modes', () => {
     assert.deepEqual(run.selected(name), selection);
     assert.match(run.output, /its repositories are left as they are/);
     assert.match(run.output, /MESH_OPAM_SWITCH=session-mesh bash scripts\/bootstrap\.sh --deps-only/);
-    assert.ok(run.output.includes(`MESH_OPAM_SWITCH=${name} MESH_OPAM_SELECT_PINNED=1 bash scripts/bootstrap.sh --deps-only`), run.output);
+    assert.ok(run.output.includes(`MESH_OPAM_SWITCH=${quoted(name)} MESH_OPAM_SELECT_PINNED=1 bash scripts/bootstrap.sh --deps-only`), run.output);
+  };
+  const undo = (run: Run, ...words: string[]) => {
+    const expected = `to undo: ${opamCommand('repository', ...words)})`;
+    assert.ok(run.output.includes(expected), `${expected}\n${run.output}`);
   };
 
   test('a switch that already reads only the pinned repository is left as it is', () => {
@@ -188,6 +209,12 @@ describe('scripts/bootstrap.sh modes', () => {
     assert.equal(run.status, 0, run.output);
     assert.deepEqual(changes(run.calls), []);
     assert.deepEqual(run.selected('fake-switch'), ['default']);
+  });
+
+  test('with COLUMNS set, a switch on the pinned repository is still recognised', () => {
+    const run = bootstrap(['--deps-only'], withPytest, {env: {COLUMNS: '80'}});
+    assert.equal(run.status, 0, run.output);
+    assert.deepEqual(changes(run.calls), []);
   });
 
   test('an existing named switch on other repositories is refused and left as it is', () => {
@@ -227,13 +254,13 @@ describe('scripts/bootstrap.sh modes', () => {
       'repository set-repos --switch=fake-switch session-mesh',
     ]);
     assert.ok(beforeDune(run.calls, run.calls.indexOf('repository set-repos --switch=fake-switch session-mesh')), run.calls.join('\n'));
-    assert.match(run.output, /to undo: opam repository set-repos --switch='fake-switch' beta default\)/);
+    undo(run, 'set-repos', '--switch=fake-switch', 'beta', 'default');
     assert.deepEqual(run.selected('fake-switch'), ['session-mesh']);
     assert.ok(run.repositories.includes(`default ${OPAM_ORG}`), run.repositories.join('\n'));
   });
 
   const old = 'git+https://github.com/ocaml/opam-repository.git#0000000000000000000000000000000000000000';
-  const undoUrl = /to undo: opam repository set-url session-mesh 'git\+https:\/\/github\.com\/ocaml\/opam-repository\.git#0{40}'\)/;
+  const undoUrl = (run: Run) => undo(run, 'set-url', 'session-mesh', old);
   test('a switch that reads only session-mesh follows a changed pin without the opt-in, and prints the undo', () => {
     const run = bootstrap(['--deps-only'], withPytest, {
       state: {repositories: {'session-mesh': old}, selected: {'fake-switch': ['session-mesh']}}});
@@ -242,7 +269,7 @@ describe('scripts/bootstrap.sh modes', () => {
     assert.ok(beforeDune(run.calls, run.calls.indexOf(`repository set-url session-mesh ${PINNED}`)), run.calls.join('\n'));
     assert.deepEqual(run.repositories, [`session-mesh ${PINNED}`]);
     assert.deepEqual(run.selected('fake-switch'), ['session-mesh']);
-    assert.match(run.output, undoUrl);
+    undoUrl(run);
     assert.ok(!/MESH_OPAM_SELECT_PINNED|session-mesh-pinned/.test(run.output), run.output);
   });
 
@@ -270,8 +297,8 @@ describe('scripts/bootstrap.sh modes', () => {
       `repository set-url session-mesh ${PINNED}`,
       'repository set-repos --switch=fake-switch session-mesh',
     ]);
-    assert.match(run.output, undoUrl);
-    assert.match(run.output, /to undo: opam repository set-repos --switch='fake-switch' session-mesh default\)/);
+    undoUrl(run);
+    undo(run, 'set-repos', '--switch=fake-switch', 'session-mesh', 'default');
   });
 
   test('a switch on session-mesh and another repository is still refused without the opt-in', () => {
@@ -310,7 +337,32 @@ describe('scripts/bootstrap.sh modes', () => {
     const run = bootstrap(['--deps-only'], withPytest, {env: {MESH_OPAM_SELECT_PINNED: '1'},
       state: {selected: {'fake-switch': []}}});
     assert.equal(run.status, 0, run.output);
-    assert.match(run.output, /to undo: opam repository set-repos --switch='fake-switch'\)/);
+    undo(run, 'set-repos', '--switch=fake-switch');
+  });
+
+  test('a local switch whose directory holds a quote and a space is quoted in the refusal and in the undo', () => {
+    const local = path.join(fs.realpathSync(scratch), "O'Brien mesh");
+    fs.mkdirSync(local, {recursive: true});
+    const state = {...elsewhere, switches: [local], selected: {[local]: ['default']}};
+    refused(bootstrap(['--deps-only'], withPytest, {env: {MESH_OPAM_SWITCH: local}, state}), ['default'], local);
+    const run = bootstrap(['--deps-only'], withPytest, {env: {MESH_OPAM_SWITCH: local, MESH_OPAM_SELECT_PINNED: '1'}, state});
+    assert.equal(run.status, 0, run.output);
+    undo(run, 'set-repos', `--switch=${local}`, 'default');
+  });
+
+  test('a switch left without a compiler by a failed creation names its removal, on that run and the next', () => {
+    const removal = `remove it and rerun: opam switch remove --root=${quoted(ROOT)} fake-switch`;
+    const failed = bootstrap(['--install-only'], withPytest, {env: {FAKE_CREATE_FAILS: '1'},
+      state: {...elsewhere, switches: ['other'], selected: {other: ['default']}}});
+    assert.equal(failed.status, 1, failed.output);
+    assert.match(failed.output, /creating the opam switch 'fake-switch' failed/);
+    assert.ok(failed.output.includes(removal), failed.output);
+    const rerun = bootstrap(['--install-only'], withPytest, {env: {FAKE_NO_COMPILER: 'fake-switch'},
+      state: {...elsewhere, switches: ['other', 'fake-switch'], selected: {other: ['default'], 'fake-switch': ['session-mesh']}}});
+    assert.equal(rerun.status, 1, rerun.output);
+    assert.match(rerun.output, /no OCaml compiler runs in the opam switch 'fake-switch'/);
+    assert.ok(rerun.output.includes(removal), rerun.output);
+    assert.ok(rerun.calls.every((call) => !/^(install|pin)\b/.test(call)), rerun.calls.join('\n'));
   });
 
   test('a failed switch listing stops the bootstrap before any change', () => {
@@ -323,7 +375,7 @@ describe('scripts/bootstrap.sh modes', () => {
     const run = bootstrap(['--install-only'], withoutPytest, {state: {...elsewhere, switches: ['other'], current: 'other',
       selected: {other: ['default']}}});
     assert.equal(run.status, 0, run.output);
-    const create = '--no-switch --repos=session-mesh fake-switch ocaml-base-compiler.5.3.0';
+    const create = '--no-switch --no-install --repos=session-mesh fake-switch ocaml-base-compiler.5.3.0';
     assert.deepEqual(changes(run.calls), [
       `repository add --dont-select session-mesh ${PINNED}`,
       `switch create ${create}`,

@@ -123,8 +123,19 @@ pinned_repository=session-mesh
 switch_created=no
 # `opam repository list --all` prints a header line that starts with '#', then one line per
 # repository: its name, its URL as registered (git+https://...#<commit>), the switches using it.
+# opam wraps that table at COLUMNS when it is set, even into a pipe, which would put the URL on a
+# line of its own; without COLUMNS it does not wrap a piped table, so COLUMNS is removed here.
 repository_url() {
-  opam repository list --all --color=never | awk -v name="$1" '$1 == name { print $2 }'
+  env -u COLUMNS opam repository list --all --color=never | awk -v name="$1" '$1 == name { print $2 }'
+}
+# A command printed for the user to copy names the opam root explicitly (OPAMROOT may be set for
+# this run only and not in the shell the command is copied into) and shell-quotes every argument.
+opam_command() {
+  local root
+  root="$(opam var root)"
+  printf 'opam %s %s --root=%q' "$1" "$2" "$root"
+  shift 2
+  [ "$#" -eq 0 ] || printf ' %q' "$@"
 }
 # When the pin has changed since an earlier run, the URL is moved and the command that restores the
 # former one is printed: every switch that reads session-mesh follows it.
@@ -137,7 +148,7 @@ register_pinned_repository() {
     *)
       opam repository set-url "$pinned_repository" "$opam_repository"
       echo "bootstrap: the opam repository $pinned_repository now points at $opam_repository" >&2
-      echo "bootstrap: (to undo: opam repository set-url $pinned_repository '$previous')." >&2
+      echo "bootstrap: (to undo: $(opam_command repository set-url "$pinned_repository" "$previous"))." >&2
       ;;
   esac
 }
@@ -185,18 +196,30 @@ select_pinned_repository() {
   register_pinned_repository
   opam repository set-repos --switch="$switch" "$pinned_repository"
   echo "bootstrap: '$switch' now reads packages only from $opam_repository" >&2
-  echo "bootstrap: (to undo: opam repository set-repos --switch='$switch'${listed:+ $listed})." >&2
+  # Repository names are single words, so the list is split on purpose.
+  # shellcheck disable=SC2086
+  echo "bootstrap: (to undo: $(opam_command repository set-repos "--switch=$switch" $listed))." >&2
+}
+# A failed compiler installation can leave the switch registered without a compiler; a rerun would
+# then find it and stop at the compiler check. Both failures name the command that removes it.
+partial_switch() {
+  echo "bootstrap: $1 If the bootstrap failed while creating '$switch', remove it and rerun: $(opam_command switch remove "$switch")" >&2
+  exit 1
 }
 if [ "$switch_exists" = no ]; then
   register_pinned_repository
   case "$switch" in
     /*) mkdir -p -- "$switch" ;;
   esac
-  opam switch create --no-switch --repos="$pinned_repository" "$switch" "${OCAML_COMPILER:-ocaml-base-compiler.5.3.0}"
+  # --no-install: in a directory that holds opam files (the checkout's ocaml/), opam would otherwise
+  # pin and install those packages while creating the switch, before the pins below.
+  opam switch create --no-switch --no-install --repos="$pinned_repository" "$switch" "${OCAML_COMPILER:-ocaml-base-compiler.5.3.0}" \
+    || partial_switch "creating the opam switch '$switch' failed."
   switch_created=yes
 fi
 
-compiler="$(opam exec --switch="$switch" -- ocamlc -version)"
+compiler="$(opam exec --switch="$switch" -- ocamlc -version)" \
+  || partial_switch "no OCaml compiler runs in the opam switch '$switch'."
 # Only OCaml 5.3 is accepted: it is the compiler CI builds and tests with
 # (.github/workflows/public-ci.yml, OCAML_COMPILER). ocaml/dune-project states
 # the same range (>= 5.3 & < 5.4); widen both once CI covers another release.
