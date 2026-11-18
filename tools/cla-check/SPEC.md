@@ -128,6 +128,14 @@ The workflow runs on the `pull_request` types `opened`, `synchronize`, `reopened
   condition would count as a passed required check; editing the title or the description of a pull
   request therefore re-runs the whole CI.
 
+## The merge queue
+
+On the `merge_group` event the workflow runs this same checker over the queued commits: `--base` is the
+event's `base_sha`, `--head` its `head_sha` (the checked-out commit), and `--merge` a local commit of
+(base, head) with the head's tree, built by the job because the queue provides none. Rule 0 refuses a
+head that is not a straight line on the base, so the check fails safe when the queue's commit is
+not one. The checker and `MAINTAINERS` are the base's copies.
+
 ## Known limits
 
 - **Git does not verify addresses.** A commit can carry anyone's address, a maintainer's included.

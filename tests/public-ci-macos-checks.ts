@@ -59,7 +59,11 @@ export function checkMacosJob(lines: Line[]): string[] {
   if (name?.value !== MACOS_JOB_NAME) problems.push(`job ${MACOS_JOB}: name is not "${MACOS_JOB_NAME}"`);
   if (directChild(block, 'continue-on-error')?.value !== 'true') problems.push(`job ${MACOS_JOB}: no job-level continue-on-error: true`);
   if (directChild(block, 'needs')) problems.push(`job ${MACOS_JOB}: needs another job (it must run alone, in parallel)`);
-  if (directChild(block, 'if')) problems.push(`job ${MACOS_JOB}: job-level condition (a skipped job would look like a pass)`);
+  // The one condition allowed keeps the informational job off the merge queue; it is not a required check.
+  const condition = directChild(block, 'if');
+  if (condition && condition.value !== "github.event_name != 'merge_group'") {
+    problems.push(`job ${MACOS_JOB}: job-level condition (a skipped job would look like a pass)`);
+  }
   const permissions = directChild(block, 'permissions');
   const scopes = permissions ? blockOf(lines, lines.indexOf(permissions)).map((line) => `${line.key}: ${line.value}`) : [];
   if (scopes.length !== 1 || scopes[0] !== 'contents: read') problems.push(`job ${MACOS_JOB}: permissions must be exactly contents: read`);

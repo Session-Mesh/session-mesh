@@ -44,7 +44,8 @@ describe('the informational macOS job', () => {
     assert.match(body, /^ {4}continue-on-error: true$/m);
     assert.match(body, new RegExp(`^ {4}timeout-minutes: ${MACOS_TIMEOUT_MINUTES}$`, 'm'));
     assert.match(body, /^ {4}permissions:\n {6}contents: read\n/m);
-    assert.doesNotMatch(body, /^ {4}(?:needs|if):/m, 'the job runs alone, on every event');
+    assert.doesNotMatch(body, /^ {4}needs:/m, 'the job runs alone');
+    assert.match(body, /^ {4}if: github\.event_name != 'merge_group'$/m, 'on every event but the merge queue');
   });
 
   test('every long step has a timeout of its own below the job timeout, so a hang fails the step instead of cancelling the job', () => {
@@ -115,7 +116,7 @@ describe('the informational macOS job', () => {
       ['an action is pinned by tag', 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1', 'actions/setup-node@v4',
         /actions\/setup-node@v4 not pinned/],
       ['the job waits for another job', '    timeout-minutes: 45\n', '    timeout-minutes: 45\n    needs: native\n', /needs another job/],
-      ['the job is conditional', '    timeout-minutes: 45\n', '    timeout-minutes: 45\n    if: github.event_name == \'push\'\n', /job-level condition/],
+      ['the job is conditional on another event', '    if: github.event_name != \'merge_group\'\n', '    if: github.event_name == \'push\'\n', /job-level condition/],
       ['the job is renamed', 'name: macos (arm64, informational)', 'name: macos (arm64)', /name is not/],
       ['the allow-list is not read', 'list=tests/macos-ci-tests.txt', 'list=/dev/null', /does not read tests\/macos-ci-tests\.txt/],
       ['the Node step discovers its tests', 'list="$RUNNER_TEMP/macos-node-tests.txt"', 'list="$(find tests -name \'*.test.ts\')"',

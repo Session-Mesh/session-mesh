@@ -335,8 +335,8 @@ describe('the PR description workflow', () => {
     assert.ok(checkWorkflow(title, 'description').some((problem) => /untrusted event data/.test(problem)));
   });
 
-  test('triggers on pull_request only, with the four types and a read-only token', () => {
-    assert.match(text, /^on:\n {2}pull_request:\n {4}types: \[opened, edited, reopened, synchronize\]\n/m);
+  test('triggers on pull_request and the merge queue only, with the four types and a read-only token', () => {
+    assert.match(text, /^on:\n {2}pull_request:\n {4}types: \[opened, edited, reopened, synchronize\]\n(?: {2}#.*\n)* {2}merge_group:\n {4}types: \[checks_requested\]\n/m);
     assert.match(text, /^permissions:\n {2}contents: read\n/m);
     assert.doesNotMatch(text.replace(/^\s*#.*$/gm, ''), /pull_request_target|workflow_run|pull-requests|issues:/);
   });
