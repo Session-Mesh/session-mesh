@@ -1,0 +1,89 @@
+# Automatic triage of new issues: the issue is classified by Ollama's decision API (model `clef`, one
+# `choice` question) and gets at most ONE label from a fixed allow-list (bug, enhancement, documentation,
+# question) that also exists in the repository, only when the chosen option is probable enough and no
+# human label from that list is there yet. The decision is made by
+# the code in tools/issue-triage/issue-triage.ts, never by the model: the model gets no tool and no
+# access to the repository, and its answer is validated strictly (anything else adds no label). Nothing
+# is ever closed, locked, assigned, commented, edited or removed.
+# - Triggers: `issues: opened` only, and a manual `workflow_dispatch` on one existing issue, which is
+#   a dry run (decision written to the job summary, nothing added) unless `dry_run` is unchecked.
+#   Starting a dispatch needs write access to the repository. No pull_request, no schedule.
+# - The secret OLLAMA_API_KEY lives in the GitHub environment `issue-triage` and reaches the single
+#   step that runs the script, through step-level env. The job token is limited to `issues: write`,
+#   `contents: read` (checkout of a public repository) and `actions: read` (counting the runs of the
+#   last 24 hours for the daily cap).
+# - The job timeout (8 minutes) covers the worst case of the script: its calls time out at 15 s (GitHub) and 60 s
+#   (Ollama), about 5.5 minutes if every call hits its limit.
+# - Abuse and cost controls (script, before any Ollama call): kill switch TRIAGE_ENABLED=false, daily cap
+#   TRIAGE_DAILY_CAP (default 100, issue events only), skip of empty/short/locked issues, optional account
+#   age filter TRIAGE_MIN_ACCOUNT_AGE_DAYS (default off). The concurrency group `issue-triage-global` is
+#   declared on the job (so a run whose job is skipped, e.g. a maintainer's issue, never joins it) and
+#   shared by all `issues` runs: GitHub keeps at most one running and one pending run per group and
+#   cancels an older pending run when a newer one queues, so in a burst the excess runs are dropped for
+#   free and those issues stay unlabelled (a maintainer can run the dispatch on them). A dispatch has its
+#   own group per issue number, so it never cancels a pending issue run.
+# - The issue text is untrusted: the script reads the event file (GITHUB_EVENT_PATH) and the API, no
+#   expression of this workflow carries any of it. The job never fails on a triage problem.
+# - Default branch only: the job `if:` requires the workflow ref to be the repository's default branch
+#   (also for a dispatch) and the script refuses to run otherwise, so a branch pushed by a writer cannot
+#   use the key even if the environment's deployment-branch setting is missing.
+# - Opened by a bot, or by an owner, member or collaborator: skipped (maintainers label by hand);
+#   a dispatch is not skipped, so that a maintainer can test on his own issues.
+# tests/issue-triage-workflow.test.ts and tests/issue-triage.test.ts enforce these rules.
+name: issue-triage
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Number of the existing issue to triage
+        required: true
+        type: number
+      dry_run:
+        description: Only write the decision to the job summary, add no label
+        required: false
+        type: boolean
+        default: true
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  triage:
+    name: Classify the issue
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'workflow_dispatch' || (github.event.issue.user.type != 'Bot' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)))
+    concurrency:
+      group: issue-triage-${{ github.event_name == 'issues' && 'global' || format('dispatch-{0}-{1}', inputs.issue_number, inputs.dry_run) }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: issue-triage
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Classify the issue and add at most one label
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+          OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL }}
+          TRIAGE_ENABLED: ${{ vars.TRIAGE_ENABLED }}
+          TRIAGE_DAILY_CAP: ${{ vars.TRIAGE_DAILY_CAP }}
+          TRIAGE_MIN_ACCOUNT_AGE_DAYS: ${{ vars.TRIAGE_MIN_ACCOUNT_AGE_DAYS }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types tools/issue-triage/issue-triage.ts
