@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {build} from 'esbuild';
 import {chromium} from 'playwright-core';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 test('overview does not hide later assigned work behind early queued or finished tasks',()=>{
   const summary=followupCatalog(roadmapObservation([
@@ -32,7 +33,7 @@ test('Chrome overview keeps short status badges readable and long unknown states
   const root=path.resolve(import.meta.dirname,'..');
   const bundle=await build({stdin:{contents:"export {ProjectCockpitView} from './static/project-cockpit-view.ts';",resolveDir:root},bundle:true,platform:'browser',format:'iife',globalName:'PreviewTest',write:false});
   const translations=JSON.parse(fs.readFileSync(path.join(root,'static/i18n/en.json'),'utf8'));
-  const browser=await chromium.launch({executablePath:process.env.MESH_CHROMIUM,args:['--no-sandbox','--mute-audio']});
+  const browser=await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM, ['--no-sandbox','--mute-audio']));
   try{for(const width of [1560,390])for(const state of ['active','queued','W'.repeat(80)]){
     const catalog=followupCatalog(roadmapObservation([roadmapTask({id:'opaque',objective:'Inspect this source state while preserving the complete project workflow and session relationship. '.repeat(2),state})]));
     const page=await browser.newPage({viewport:{width,height:1000}});

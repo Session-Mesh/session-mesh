@@ -8,6 +8,7 @@ import http from 'node:http';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { after, before, describe, run, test } from 'node:test';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const ROOT = process.cwd();
 const require = createRequire(path.join(ROOT, 'package.json'));
@@ -28,7 +29,7 @@ async function start() {
     response.setHeader('Content-Type', pathname.endsWith('.js') ? 'text/javascript' : pathname.endsWith('.css') ? 'text/css' : 'text/plain'); response.end(fs.readFileSync(file));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); origin = 'http://127.0.0.1:' + server.address().port;
-  browser = await require('playwright-core').chromium.launch({ executablePath: process.env.MESH_CHROMIUM, args: ['--no-sandbox', '--mute-audio'] });
+  browser = await require('playwright-core').chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM, ['--no-sandbox', '--mute-audio']));
 }
 async function mount(page, catalog, context) {
   await page.evaluate(async ({ catalog, context, translations }) => {

@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { after, before, describe, test } from 'node:test';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { readProjectCatalog } from '../static/projects.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const NOW = '2026-11-14T12:00:00Z';
@@ -99,7 +100,7 @@ describe('native Projects isolation with mounted Sessions', {skip}, () => {
     });
     await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
     origin=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    browser=await chromium.launch({executablePath:CHROMIUM,args:['--no-sandbox','--mute-audio']});
+    browser=await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox','--mute-audio']));
   });
   after(async()=>{await browser?.close();server?.close();});
 

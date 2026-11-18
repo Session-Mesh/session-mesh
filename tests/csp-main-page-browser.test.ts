@@ -23,6 +23,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type BrowserContext, type Frame, type Page} from 'playwright-core';
 import {ptyhostArgv} from './ptyhost-command.ts';
+import {chromiumLaunchOptions, READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const PYTHON = process.env.MESH_PYTHON || 'python3';
@@ -171,7 +172,7 @@ describe('the interface pages run under their Content-Security-Policy', {skip}, 
     start([PYTHON, 'server.py'], env);
     await waitUntil('server.py', () => accepts({host: '127.0.0.1', port}));
     base = `http://127.0.0.1:${port}`;
-    browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']});
+    browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
   });
 
   after(async () => {
@@ -262,7 +263,7 @@ describe('the interface pages run under their Content-Security-Policy', {skip}, 
     await page.goto('about:blank');
     await page.goto(`${base}/#%E0%A4%A`);
     // A function, not a string: the policy refuses the eval a string predicate needs.
-    await page.waitForFunction(() => panes.length > 0 && !restoringWorkspace, undefined, {timeout: 10000});
+    await page.waitForFunction(() => panes.length > 0 && !restoringWorkspace, undefined, {timeout: READY_TIMEOUT_MS});
     assert.deepEqual(errors, []);
     await close();
   });
