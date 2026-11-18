@@ -178,11 +178,17 @@ try {
   // rather than a source helper's /usr/bin/env python3 shebang.
   const commands = path.join(env.HOME, '.local', 'bin');
   fs.mkdirSync(commands, {recursive: true});
-  for (const name of ['mesh-event', 'mesh-open', 'mesh-attach', 'mesh-rename', 'mesh-logout-all']) {
+  for (const name of ['mesh-event', 'mesh-open', 'mesh-attach', 'mesh-rename']) {
     const wrapper = path.join(bundle, 'bin', name);
     assert.match(fs.readFileSync(wrapper, 'utf8'), /^#!\/usr\/bin\/env bash\n/);
     fs.symlinkSync(wrapper, path.join(commands, name));
   }
+  // mesh-logout-all is the native program itself: an ELF or Mach-O executable, no wrapper.
+  const logoutAll = path.join(bundle, 'bin', 'mesh-logout-all');
+  const magic = fs.readFileSync(logoutAll).subarray(0, 4).toString('hex');
+  assert.ok(['7f454c46', 'cffaedfe'].includes(magic), `bin/mesh-logout-all is not a native executable (${magic})`);
+  fs.accessSync(logoutAll, fs.constants.X_OK);
+  fs.symlinkSync(logoutAll, path.join(commands, 'mesh-logout-all'));
   const noPython = path.join(env.HOME, 'no-system-python');
   fs.mkdirSync(noPython);
   fs.writeFileSync(path.join(noPython, 'python3'), '#!/bin/sh\nexit 89\n', {mode: 0o700});
@@ -191,6 +197,13 @@ try {
   });
   assert.equal(attached.status, 0, attached.stderr);
   assert.match(attached.stdout, /bundle-smoke/);
+  // Through ~/.local/bin, without any Python, against the running server: every login revoked.
+  const loggedOut = spawnSync(path.join(commands, 'mesh-logout-all'), [], {
+    env: {...env, PATH: `${noPython}:/usr/bin:/bin`}, encoding: 'utf8', timeout: 20000,
+  });
+  assert.equal(loggedOut.status, 0, loggedOut.stderr);
+  assert.equal(loggedOut.stderr, '');
+  assert.match(loggedOut.stdout, /^All devices are signed out \(generation \d+\)\.$/m);
   mcp = spawn(path.join(bundle, 'bin', 'mesh-board-mcp'), [], {
     env: {...env, MESH_SESSION_TOKEN: sessionToken}, stdio: ['pipe', 'pipe', 'pipe'],
   });

@@ -172,7 +172,7 @@ function checkout(fx: Fixture): string {
   fs.copyFileSync(path.join(SOURCE, 'install.sh'), path.join(dir, 'install.sh'));
   copyInstallerScripts(SOURCE, dir);
   fs.cpSync(path.join(SOURCE, 'systemd'), path.join(dir, 'systemd'), {recursive: true});
-  for (const cmd of ['mesh-open', 'mesh-attach', 'mesh-rename', 'mesh-logout-all']) fs.writeFileSync(path.join(dir, 'bin', cmd), '');
+  for (const cmd of ['mesh-open', 'mesh-attach', 'mesh-rename']) fs.writeFileSync(path.join(dir, 'bin', cmd), '');
   writeExecutable(path.join(fx.fakes, 'mesh-ptyhost'), 'exit 97');
   return path.join(dir, 'install.sh');
 }

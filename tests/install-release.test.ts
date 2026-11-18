@@ -13,27 +13,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {describe, test} from 'node:test';
-import {bundleAsset, current, downloaded, DOWNLOAD, escape, type Fixture, fixture, GH, installed, LATEST, mode, NATIVE, previous, PROGRAMS,
-  publish, releases, run, running, setLatest, sha, SOURCE, systemctl, unit} from './install-release-lib.ts';
+import {bundleAsset, current, downloaded, DOWNLOAD, escape, fixture, GH, installed, installedV1, LATEST, mode, NATIVE, previous, PROGRAMS,
+  linkedHome, publish, releases, run, running, setLatest, sha, SOURCE, systemctl, unit, withPythonLogoutAll} from './install-release-lib.ts';
 
 const WEB_RESTART = 'systemctl --user restart session-mesh.service';
 const PTY_RESTART = 'systemctl --user restart session-mesh-pty.service';
-
-// The fixture with its HOME a symbolic link to the real directory.
-function linkedHome(fx: Fixture): Fixture {
-  fs.renameSync(fx.home, `${fx.home}-real`);
-  fs.symlinkSync(`${fx.home}-real`, fx.home);
-  return fx;
-}
-
-// v1.0.0 installed from its downloaded install.sh, the PTY host then running.
-function installedV1(fx = fixture(), opts = {}) {
-  publish(fx, 'v1.0.0', opts);
-  const first = run(fx, downloaded(fx, 'v1.0.0'));
-  assert.equal(first.status, 0, first.output);
-  running(fx, 'session-mesh-pty.service');
-  return fx;
-}
 
 describe('a first release install', () => {
   test('installs the bundle of its tag and platform, verified, and runs everything from current/ with the bundled Python', () => {
@@ -64,6 +48,9 @@ describe('a first release install', () => {
     assert.doesNotMatch(unit(fx, 'session-mesh.service'), /MESH_OPAM_SWITCH/);
     assert.doesNotMatch(result.calls, /^python3 /m, 'no Python of the machine is used');
     assert.equal(fs.readlinkSync(path.join(fx.home, '.local/bin/mesh-open')), `${fx.share}/current/bin/mesh-open`);
+    assert.equal(fs.readlinkSync(path.join(fx.home, '.local/bin/mesh-logout-all')), `${fx.share}/current/bin/mesh-logout-all`);
+    assert.equal(fs.readFileSync(path.join(release, NATIVE['mesh-logout-all']), 'utf8'), 'v1.0.0 mesh-logout-all',
+      'the native program of the bundle, not a wrapper');
     assert.ok(systemctl(result.calls).includes('systemctl --user start session-mesh-pty.service'));
     assert.match(result.stdout, /release  : v1\.0\.0 \(upgrade: .*current\/install\.sh --upgrade/);
     assert.ok(!fs.existsSync(path.join(fx.home, '.config/session-mesh')), 'no configuration is written into or for the release');
@@ -170,6 +157,22 @@ describe('install.sh --upgrade', () => {
     assert.ok(calls.includes(WEB_RESTART), calls.join('\n'));
     assert.ok(!calls.some((line) => /session-mesh-pty\.service$/.test(line) && /restart|start|stop/.test(line)), calls.join('\n'));
     assert.match(result.output, /mesh-ptyhost changed \(v1\.0\.0 -> v1\.1\.0\)\. .*restarting it ends every mesh session.*systemctl --user restart session-mesh-pty\.service \(or rerun the installer with --restart-pty\)/);
+  });
+
+  // A 0.1.x release ran mesh-logout-all as a Python command (withPythonLogoutAll). The installer of
+  // the new release (the second stage of an upgrade, which the 0.1.x installer downloads and runs)
+  // links the command to the new release's native program, whatever the link named before.
+  test('update from 0.1.x re-links mesh-logout-all to the native binary', () => {
+    const fx = installedV1();
+    const link = withPythonLogoutAll(fx);
+    const elf = '\x7fELF';
+    publish(fx, 'v1.1.0', {program: (program: string) => `${program === 'mesh-logout-all' ? elf : ''}v1.1.0 ${program}`});
+    const result = run(fx, downloaded(fx, 'v1.1.0'));
+    assert.equal(result.status, 0, result.output);
+    assert.equal(fs.readlinkSync(link), `${fx.share}/current/bin/mesh-logout-all`);
+    const target = fs.realpathSync(link);
+    assert.equal(target, fs.realpathSync(path.join(fx.share, 'releases/v1.1.0/bin/mesh-logout-all')));
+    assert.equal(fs.readFileSync(target).subarray(0, 4).toString('hex'), '7f454c46', 'an ELF executable, not a Python file');
   });
 
   test('an unchanged mesh-ptyhost is reported as such; --restart-pty restarts a changed one', () => {

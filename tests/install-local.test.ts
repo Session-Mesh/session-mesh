@@ -43,7 +43,7 @@ function fixture(checkoutName = 'checkout', fakes: Record<string, string> = FAKE
   fs.copyFileSync(path.join(SOURCE, 'install.sh'), path.join(checkout, 'install.sh'));
   fs.cpSync(path.join(SOURCE, 'systemd'), path.join(checkout, 'systemd'), {recursive: true});
   copyInstallerScripts(SOURCE, checkout);
-  for (const cmd of ['mesh-open', 'mesh-attach', 'mesh-rename', 'mesh-logout-all']) fs.writeFileSync(path.join(checkout, 'bin', cmd), '');
+  for (const cmd of ['mesh-open', 'mesh-attach', 'mesh-rename']) fs.writeFileSync(path.join(checkout, 'bin', cmd), '');
   const home = path.join(root, 'home');
   const bin = path.join(root, 'fakes');
   fs.mkdirSync(home, {mode: 0o700});
@@ -69,6 +69,7 @@ const withoutHost = (extra: Record<string, string> = {}) => {
   return {...rest, ...extra};
 };
 const re = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const isLink = (file: string) => { try { return fs.lstatSync(file).isSymbolicLink(); } catch { return false; } };
 const unit = (fx: Fixture, name: string) => fs.readFileSync(path.join(fx.home, '.config/systemd/user', name), 'utf8');
 
 describe('install.sh: local install without Tailscale', () => {
@@ -141,6 +142,117 @@ describe('install.sh: local install without Tailscale', () => {
     assert.equal(run.status, 0, run.stderr);
     assert.match(unit(fx, 'session-mesh-pty.service'), new RegExp(`^ExecStart=:"${re(path.join(bin, 'mesh-ptyhost'))}"$`, 'm'));
   });
+
+  // mesh-logout-all is native: a source install links the program scripts/bootstrap.sh installs in the
+  // opam switch, replacing the link of an earlier (0.1.x) install to the checkout's Python command.
+  const switchOpam = '[[ $* == "switch show" ]] && echo sw; [[ $* == "var --switch=sw bin" ]] && echo "$SWITCH_BIN"; exit 0';
+
+  test('a source install links mesh-logout-all to the native program of the opam switch, replacing a 0.1.x link', () => {
+    const fx = fixture('checkout', {...FAKES, opam: switchOpam});
+    const bin = path.join(fx.root, 'switch-bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'mesh-logout-all'), '\x7fELF native mesh-logout-all', {mode: 0o755});
+    const link = path.join(fx.home, '.local/bin/mesh-logout-all');
+    fs.mkdirSync(path.dirname(link), {recursive: true});
+    fs.symlinkSync(path.join(fx.checkout, 'bin', 'mesh-logout-all'), link);
+    const run = install(fx, [], {SWITCH_BIN: bin});
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(fs.readlinkSync(link), path.join(bin, 'mesh-logout-all'));
+    assert.equal(fs.readFileSync(link).subarray(0, 4).toString('hex'), '7f454c46', 'an ELF executable, not a Python file');
+    assert.equal(fs.readlinkSync(path.join(fx.home, '.local/bin/mesh-open')), path.join(fx.checkout, 'bin', 'mesh-open'));
+  });
+
+  test('a source install whose opam switch lacks mesh-logout-all names it, says how to build it, and leaves no link to the Python command', () => {
+    const fx = fixture('checkout', {...FAKES, opam: switchOpam});
+    const bin = path.join(fx.root, 'switch-bin');
+    fs.mkdirSync(bin);
+    const link = path.join(fx.home, '.local/bin/mesh-logout-all');
+    fs.mkdirSync(path.dirname(link), {recursive: true});
+    fs.symlinkSync(path.join(fx.checkout, 'bin', 'mesh-logout-all'), link);
+    const run = install(fx, [], {SWITCH_BIN: bin});
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout + run.stderr,
+      /mesh-logout-all is not installed: the native program mesh-logout-all is missing from the opam switch '([^']+)'\. Build it with MESH_OPAM_SWITCH='\1' bash scripts\/bootstrap\.sh --install-only/);
+    assert.ok(!fs.existsSync(link) && !isLink(link), 'the link to the Python command is gone');
+  });
+
+  // The installer replaces only a link to a mesh-logout-all of session-mesh, and removes one only when
+  // it no longer resolves (scripts/install-common.sh). A user's link stays, even into a directory that
+  // holds programs named like ours.
+  const USER_LINKS: Record<string, (root: string) => string> = {
+    'a program elsewhere': (root) => path.join(root, 'mine/mesh-logout-all'),
+    'a prefix holding mesh-ptyhost and mesh-board-mcp': (root) => {
+      fs.mkdirSync(path.join(root, 'prefix/bin'), {recursive: true});
+      for (const name of ['mesh-ptyhost', 'mesh-board-mcp']) writeExecutable(path.join(root, 'prefix/bin', name), 'exit 0');
+      return path.join(root, 'prefix/bin/mesh-logout-all');
+    },
+  };
+  for (const [label, place] of Object.entries(USER_LINKS)) {
+    for (const present of [true, false]) {
+      test(`a source install ${present ? 'with' : 'without'} the native program leaves the user's own link to ${label}`, () => {
+        const fx = fixture('checkout', {...FAKES, opam: switchOpam});
+        const bin = path.join(fx.root, 'switch-bin');
+        fs.mkdirSync(bin);
+        if (present) fs.writeFileSync(path.join(bin, 'mesh-logout-all'), 'native', {mode: 0o755});
+        const mine = place(fx.root);
+        const link = path.join(fx.home, '.local/bin/mesh-logout-all');
+        for (const file of [mine, link]) fs.mkdirSync(path.dirname(file), {recursive: true});
+        fs.writeFileSync(mine, 'mine', {mode: 0o755});
+        fs.symlinkSync(mine, link);
+        const run = install(fx, [], {SWITCH_BIN: bin});
+        assert.equal(run.status, 0, run.stderr);
+        assert.equal(fs.readlinkSync(link), mine);
+        assert.equal(fs.readFileSync(mine, 'utf8'), 'mine');
+        assert.match(run.stdout + run.stderr, present ? /was not made by this installer: it is left as it is/
+          : /the native program mesh-logout-all is missing from the opam switch[^:]*: \S+ is left as it is/);
+      });
+    }
+  }
+
+  // A link an earlier source install made with another opam switch, where opam installed session_mesh.
+  function otherSwitch(root: string, withProgram: boolean): string {
+    const prefix = path.join(root, 'other-switch');
+    fs.mkdirSync(path.join(prefix, '.opam-switch/install'), {recursive: true});
+    fs.mkdirSync(path.join(prefix, 'bin'));
+    fs.writeFileSync(path.join(prefix, '.opam-switch/install/session_mesh.install'), '');
+    if (withProgram) writeExecutable(path.join(prefix, 'bin/mesh-logout-all'), 'echo other switch');
+    return path.join(prefix, 'bin/mesh-logout-all');
+  }
+
+  test('a source install replaces a link to the mesh-logout-all of another opam switch', () => {
+    const fx = fixture('checkout', {...FAKES, opam: switchOpam});
+    const bin = path.join(fx.root, 'switch-bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'mesh-logout-all'), 'native', {mode: 0o755});
+    const link = path.join(fx.home, '.local/bin/mesh-logout-all');
+    fs.mkdirSync(path.dirname(link), {recursive: true});
+    fs.symlinkSync(otherSwitch(fx.root, true), link);
+    const run = install(fx, [], {SWITCH_BIN: bin});
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(fs.readlinkSync(link), path.join(bin, 'mesh-logout-all'));
+    assert.doesNotMatch(run.stdout + run.stderr, /was not made by this installer/);
+  });
+
+  for (const resolves of [true, false]) {
+    test(`a source install without the program ${resolves ? 'keeps a working' : 'removes a dangling'} link to another opam switch`, () => {
+      const fx = fixture('checkout', {...FAKES, opam: switchOpam});
+      const bin = path.join(fx.root, 'switch-bin');
+      fs.mkdirSync(bin);
+      const link = path.join(fx.home, '.local/bin/mesh-logout-all');
+      const target = otherSwitch(fx.root, resolves);
+      fs.mkdirSync(path.dirname(link), {recursive: true});
+      fs.symlinkSync(target, link);
+      const run = install(fx, [], {SWITCH_BIN: bin});
+      assert.equal(run.status, 0, run.stderr);
+      if (resolves) {
+        assert.equal(fs.readlinkSync(link), target);
+        assert.match(run.stdout + run.stderr, /is missing from the opam switch[^:]*: \S+ is left as it is/);
+      } else {
+        assert.ok(!fs.existsSync(link) && !isLink(link), 'the dangling link is gone');
+        assert.match(run.stdout + run.stderr, /mesh-logout-all is not installed/);
+      }
+    });
+  }
 
   test('without a native host the installer refuses before any change, and says how to get one', () => {
     const fx = fixture('checkout', withoutHost());

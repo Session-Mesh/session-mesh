@@ -117,7 +117,7 @@ trusting](#prebuilt-binaries).
 
 **Offline.** `--assets-dir /absolute/dir` takes the files of a release from a directory instead of
 GitHub: the bundle of your platform (`mesh-linux-x86_64.tar.gz`, `mesh-linux-arm64.tar.gz` or
-`mesh-macos-arm64.tar.gz`), or, for a release without one, the five native programs of your
+`mesh-macos-arm64.tar.gz`), or, for a release without one, the six native programs of your
 platform and `session-mesh-<tag>.tar.gz`; and, for an upgrade, `SHA256SUMS` and `install.sh`. An upgrade from a directory needs `--to`, since the latest release can only be asked
 from GitHub.
 
@@ -129,7 +129,9 @@ from GitHub.
 
 `--rollback` points `current` back at `previous` (they swap), restarts the web server, checks that
 it answers, and reports the PTY host as an upgrade does; `--restart-pty` restarts it too. It
-downloads nothing and needs the previous release still on disk.
+downloads nothing and needs the previous release still on disk. `~/.local/bin/mesh-logout-all`
+follows the release restored: a 0.1.x release of native programs has the command as
+`current/app/bin/mesh-logout-all`, a later one as `current/bin/mesh-logout-all`.
 
 ### Upgrading a source install
 
@@ -139,7 +141,11 @@ git pull
 ```
 
 `./install.sh` rewrites the web unit and restarts the web server; `systemctl --user restart
-session-mesh` alone is enough when only the code changed. On macOS the latter is `launchctl
+session-mesh` alone is enough when only the code changed. `mesh-logout-all` is a native program
+taken from the opam switch: when `./install.sh` reports that it is missing from the switch (for
+example after a `git pull` from a version where it was a Python script), build the programs with
+`MESH_OPAM_SWITCH=<switch> bash scripts/bootstrap.sh --install-only`, then run
+`MESH_OPAM_SWITCH=<switch> ./install.sh` again with the same switch. On macOS the latter is `launchctl
 kickstart -k <domain>/io.session-mesh.web` (with `sudo` for the `system` domain).
 
 A change to the PTY host itself (a rebuilt `mesh-ptyhost`) takes effect only when that process
@@ -549,8 +555,9 @@ Prerequisites on macOS:
   environment](install.md#python-from-a-virtual-environment)). The `/usr/bin/python3` of the
   Command Line Tools is often older than 3.10 and has no `aiohttp`; the installer refuses it for the
   server and prints the Homebrew and venv commands. The commands it links into `~/.local/bin`
-  (`mesh-attach`, `mesh-rename`, `mesh-open`, `mesh-logout-all`) use only the standard library and
-  run with the first `python3` on `PATH`, including the system Python 3.9.
+  (`mesh-attach`, `mesh-rename`, `mesh-open`) use only the standard library and run with the
+  first `python3` on `PATH`, including the system Python 3.9. `mesh-logout-all` is a native
+  program, which the bootstrap installs in the opam switch.
 - Xcode Command Line Tools (`xcode-select --install`) for the C compiler the OCaml build needs,
   and [opam](https://opam.ocaml.org/), for example from Homebrew (`brew install python opam`). If
   opam asks for system packages, install Homebrew `gmp` and `pkg-config`.
@@ -784,8 +791,12 @@ mesh-logout-all
 The same is available in the page: the ⏻ button at the bottom of the sidebar offers "All devices…"
 (after a confirmation; this browser is logged out too) and "Sign out this device". Each device then
 logs in again with the token. The command goes through the running mesh; when the mesh is stopped,
-it raises the `cookie-generation` counter in `~/.config/session-mesh` directly. The master token, the
-sessions' own tokens and the running terminals do not change.
+it raises the `cookie-generation` counter in `~/.config/session-mesh` directly. It does so only
+when nothing answers on the mesh's port: the connection is refused or closed, or 10 seconds pass,
+without one byte of an answer. A refusal from the mesh (for example a wrong token) is reported and
+changes nothing on disk, and so is an answer that begins and then stops, or that is not a complete
+HTTP response (`the mesh gave an unreadable answer`): stop the mesh, then run the command again.
+The master token, the sessions' own tokens and the running terminals do not change.
 
 If the token itself may have leaked (for example a shared `?token=` link, which also stays in the
 history of the browser that opened it), replace it: delete
@@ -1439,8 +1450,8 @@ refused, with the floors named: install from a clone there.
 | File | Content |
 |---|---|
 | `install.sh` | the installer of that release, with the release tag and the SHA-256 of every other file written into it |
-| `mesh-<platform>.tar.gz` | the bundle of a platform: the code of the tagged commit, its own CPython and Node runtimes with the locked Python dependencies, and the native programs `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform` and `mesh-history`; `mesh-macos-arm64.tar.gz` only when its build passed (the release notes say whether it is there) |
-| `<program>-<platform>` | each of the five native programs alone, for `linux-x86_64`, `linux-aarch64` and `macos-arm64` |
+| `mesh-<platform>.tar.gz` | the bundle of a platform: the code of the tagged commit, its own CPython and Node runtimes with the locked Python dependencies, and the native programs `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history` and `mesh-logout-all`; `mesh-macos-arm64.tar.gz` only when its build passed (the release notes say whether it is there) |
+| `<program>-<platform>` | each of the six native programs alone, for `linux-x86_64`, `linux-aarch64` and `macos-arm64` |
 | `session-mesh-<tag>.tar.gz` | the code of the tagged commit (`git archive`), which the native programs run with |
 | `SHA256SUMS` | the SHA-256 of every file above, `install.sh` included |
 
@@ -1555,7 +1566,7 @@ picks the bundle of this machine (`uname -s`, `uname -m`), builds its URL
 downloads it into a staging directory `~/.local/share/session-mesh/releases/.stage-<tag>.*`, checks
 its hash, then (with `gh` logged in) its attestation, against the release workflow and
 `refs/tags/<tag>`. Only then does it extract the archive, check that it holds one bundle
-`mesh-<platform>/` whose five native programs have the hashes recorded in its `bundle.json`, and
+`mesh-<platform>/` whose six native programs have the hashes recorded in its `bundle.json`, and
 rename that directory to `releases/<tag>`.
 
 - Without `gh`, or with `gh` not logged in, the attestation is not checked: the installer says
@@ -1585,19 +1596,20 @@ rename that directory to `releases/<tag>`.
 
 A release directory is an extracted bundle: `current/bin/mesh-python` is the bundle's Python (the
 web unit runs `current/bin/mesh-python current/app/server.py`), `current/bin/mesh-ptyhost` a
-wrapper that executes the native `current/libexec/mesh-ptyhost`, and `current/bin/mesh-attach` and
-the other commands linked into `~/.local/bin` wrappers that run the bundle's Python. Each wrapper
+wrapper that executes the native `current/libexec/mesh-ptyhost`, `current/bin/mesh-logout-all` the
+native command itself, and `current/bin/mesh-attach` and the other commands linked into
+`~/.local/bin` wrappers that run the bundle's Python. Each wrapper
 sources the bundle's `env.sh`, which sets `MESH_BIN_DIR` to the bundle's `bin/`.
 
 **A release without a bundle for this platform.** The installer prefers the bundle. When the release
 has none for this machine but publishes its native programs, it installs those instead: the code
-archive `session-mesh-<tag>.tar.gz` and the five programs `<program>-<platform>`
+archive `session-mesh-<tag>.tar.gz` and the six programs `<program>-<platform>`
 (`linux-x86_64`, `linux-aarch64` or `macos-arm64`), each checked against the stamp (and its
 attestation) before anything is unpacked, then laid out as `releases/<tag>/app` (the code) and
 `releases/<tag>/bin` (the programs). The web unit then runs this machine's Python
 (`MESH_PYTHON`, else `python3` on `PATH`, checked as for a source install) on
-`current/app/server.py`, and the PTY unit runs `current/bin/mesh-ptyhost`, the native program
-itself. Such a release is reused, upgraded and rolled back like any other; an upgrade may move
+`current/app/server.py`, the PTY unit runs `current/bin/mesh-ptyhost`, the native program
+itself, and `~/.local/bin/mesh-logout-all` links to `current/bin/mesh-logout-all`. Such a release is reused, upgraded and rolled back like any other; an upgrade may move
 between the two kinds.
 
 #### Where the native programs are found

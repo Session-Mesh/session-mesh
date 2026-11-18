@@ -71,6 +71,17 @@ jobs:
           chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost"
           # The plain absolute path (CONTRIBUTING.md, "Which PTY host the tests run"): no quoting.
           echo "MESH_PTYHOST_CMD=$RUNNER_TEMP/native-host/mesh-ptyhost" >> "$GITHUB_ENV"
+      # mesh-logout-all, built by the same job: its oracles (tests/cli-no-proxy.test.ts,
+      # tests/test_logout_all.py) run against it through MESH_LOGOUT_ALL_CMD.
+      - name: Fetch mesh-logout-all
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mesh-logout-all-linux-x86_64
+          path: ${{ runner.temp }}/native-logout-all
+      - name: Point the tests at mesh-logout-all
+        run: |
+          chmod +x "$RUNNER_TEMP/native-logout-all/mesh-logout-all"
+          echo "MESH_LOGOUT_ALL_CMD=$RUNNER_TEMP/native-logout-all/mesh-logout-all" >> "$GITHUB_ENV"
       # Some Node tests start server.py or the bin/ scripts with MESH_PYTHON: they get
       # the pinned test interpreter, and the step fails here if it lacks the runtime dependencies.
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -164,6 +175,17 @@ jobs:
           chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost"
           # The plain absolute path (CONTRIBUTING.md, "Which PTY host the tests run"): no quoting.
           echo "MESH_PTYHOST_CMD=$RUNNER_TEMP/native-host/mesh-ptyhost" >> "$GITHUB_ENV"
+      # mesh-logout-all, built by the same job: its oracles (tests/cli-no-proxy.test.ts,
+      # tests/test_logout_all.py) run against it through MESH_LOGOUT_ALL_CMD.
+      - name: Fetch mesh-logout-all
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mesh-logout-all-linux-x86_64
+          path: ${{ runner.temp }}/native-logout-all
+      - name: Point the tests at mesh-logout-all
+        run: |
+          chmod +x "$RUNNER_TEMP/native-logout-all/mesh-logout-all"
+          echo "MESH_LOGOUT_ALL_CMD=$RUNNER_TEMP/native-logout-all/mesh-logout-all" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
@@ -396,9 +418,10 @@ jobs:
           grep -Eqx '# pass [1-9][0-9]*' "$RUNNER_TEMP/history-db.tap"
 
   # The native PTY host, built once and handed to every test job as the artifact
-  # mesh-ptyhost-linux-x86_64 (tests find it through MESH_PTYHOST_CMD). The binary is cached on
-  # the hash of everything that can change it: the OCaml sources outside ocaml/test, the
-  # bootstrap script that pins the dependencies, the commit of the opam repository
+  # mesh-ptyhost-linux-x86_64 (tests find it through MESH_PTYHOST_CMD), and mesh-logout-all, handed
+  # to the frontend and python jobs as mesh-logout-all-linux-x86_64 (MESH_LOGOUT_ALL_CMD). Both
+  # binaries are cached on the hash of everything that can change them: the OCaml sources outside
+  # ocaml/test, the bootstrap script that pins the dependencies, the commit of the opam repository
   # (scripts/release-pins.sh), and the compiler. A hit costs seconds (no opam,
   # no compiler); a miss builds it from the opam state of the ocaml job, only the programs
   # (`dune build -p session_mesh @install`), no tests. Only main writes the cache entry.
@@ -447,6 +470,7 @@ jobs:
           (cd ocaml && opam exec -- dune build -p session_mesh @install)
           mkdir -p native-host
           cp -L ocaml/_build/install/default/bin/mesh-ptyhost native-host/mesh-ptyhost
+          cp -L ocaml/_build/install/default/bin/mesh-logout-all native-host/mesh-logout-all
       - name: Save the built host
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.host-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -457,10 +481,17 @@ jobs:
         run: |
           test -x native-host/mesh-ptyhost
           ldd native-host/mesh-ptyhost
+          test -x native-host/mesh-logout-all
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mesh-ptyhost-linux-x86_64
           path: native-host/mesh-ptyhost
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mesh-logout-all-linux-x86_64
+          path: native-host/mesh-logout-all
           if-no-files-found: error
           retention-days: 3
 

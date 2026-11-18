@@ -14,7 +14,7 @@ The installer links these into `~/.local/bin`.
 | `mesh-open FILE` | Shows a local document in the interface (a web page is refused: open it in a browser). From a mesh session it opens next to that session's pane; `--watch` reloads it when the file changes. |
 | `mesh-attach [NAME]` | Opens a new mesh session in the current terminal, or attaches to `NAME`; `-l` lists sessions. Closing the window only detaches. |
 | `mesh-rename NAME` | Renames the current mesh session; `--folder FOLDER` files it, `-s SESSION` targets another one, `--clear` restores the default name. |
-| `mesh-logout-all` | Logs out every browser at once. The token and the sessions are unchanged. |
+| `mesh-logout-all` | Logs out every browser at once. The token and the sessions are unchanged. A native program, not a Python script: a release links its own; a source install links the one `scripts/bootstrap.sh` installs in the opam switch, and when that switch lacks it, the installer warns and makes no link (a link of your own is left as it is). Build it with `MESH_OPAM_SWITCH=<switch> bash scripts/bootstrap.sh --install-only`, then run `MESH_OPAM_SWITCH=<switch> ./install.sh` again with the same switch. |
 
 ## Environment variables
 
