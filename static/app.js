@@ -4234,6 +4234,12 @@ function checkClientVersion(announced) {
   reloadApp();
 }
 $("#update-bar").addEventListener("click", requestReload);
+// A newer Session Mesh release, as the server found it (static/update-notice.ts).
+function showUpdateNotice(update) {
+  let store = null;
+  try { store = window.localStorage; } catch {}
+  try { MeshUpdateNotice.render($("#update-notice"), update, t, store, MeshI18n.locale()); } catch {}
+}
 document.addEventListener("input", () => queueMicrotask(renderReloadStatus), { capture: true });
 $("#btn-reload").addEventListener("click", requestReload);
 
@@ -4450,6 +4456,7 @@ function applyInventorySnapshot(issue, { next, identities }) {
   } catch { return; }
   if (observedInventory && localMeshEffectsAllowed()) receiveBoardSignals(data.signals);
   if (localMeshEffectsAllowed()) checkClientVersion(data.client_version);
+  showUpdateNotice(data.update);
   if (typeof data.now === "number") clockOffset = data.now - Date.now() / 1000;
   directLineAlive();   // the agent may have left the foreground
   markSeen();   // before the panes and the list are drawn

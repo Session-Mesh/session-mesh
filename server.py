@@ -935,9 +935,21 @@ async def sessions(event_state=None, organisation_lock=None):
     return data
 
 
+async def _update_notice():
+    """The PTY host's update notice (a dict), None on any failure: an older host answers an error,
+    a silent or broken one is bounded by the request timeout. Never raises (cancellation aside)."""
+    try:
+        reply = await ptyhost.request({"op": "update_notice"})
+        update = reply.get("update") if isinstance(reply, dict) and reply.get("ok") is True else None
+        return update if isinstance(update, dict) else None
+    except Exception:    # any failure of this optional notice must leave /api/sessions intact
+        return None
+
+
 async def api_sessions(request):
     result = await sessions(request.app["event_state"], request.app["organisation_lock"])
     result["sessionRequests"] = request.app["session_requests"].pending()
+    result["update"] = await _update_notice()
     consent = await asyncio.to_thread(agentmail.consent_projection)
     result["agentMailConsent"] = consent["requests"]
     # A wake line nobody followed: shown on the session, never typed (claudewake).
@@ -4291,7 +4303,7 @@ async def close_sockets(app):
 
 # ---------------------------------------------------------------- app
 
-CLIENT_FILES = ("index.html", "i18n.js", "folder-state.js", "history-state.js", "session-activity.js", "demo-catalog.js", "pane-actions.js", "workspace-spec.js", "terminal-links.js", "shortcuts.js", "projects.js", "project-catalog.js", "app.js", "local-entry.js", "style.css", "themes.js", "themes.css", "sw.js", "board.html")
+CLIENT_FILES = ("index.html", "i18n.js", "folder-state.js", "history-state.js", "session-activity.js", "demo-catalog.js", "pane-actions.js", "workspace-spec.js", "terminal-links.js", "shortcuts.js", "update-notice.js", "projects.js", "project-catalog.js", "app.js", "local-entry.js", "style.css", "themes.js", "themes.css", "sw.js", "board.html")
 _client_version_cache = ((), "")   # (stat signature, version)
 
 

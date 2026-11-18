@@ -86,6 +86,12 @@ val run :
     system thread so that session I/O continues during the scan, and is refused
     while stopping and in the Unix identity split. *)
 
+(** [update_notice] (exactly [op]) answers [ok] and [update], the latest answer
+    of the release check that this host runs in the background
+    ([Mesh_update_host]): the "update available" object or [null]. It reads
+    memory only. An older host answers [invalid request] to it, and no older
+    client sends it. *)
+
 (** Native Projects uses six version-1 [project_*] requests. It owns a fixed
     startup [MESH_CONF_DIR/projects.json] (effective user's persistent
     [.config/session-mesh] by default), and refuses before registry access in

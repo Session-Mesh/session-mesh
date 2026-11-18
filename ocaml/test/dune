@@ -4,6 +4,16 @@
  (libraries mesh_history alcotest yojson unix sqlite3))
 
 (test
+ (name mesh_update_test)
+ (modules mesh_update_test)
+ (libraries mesh_update alcotest yojson unix))
+
+(test
+ (name mesh_update_host_test)
+ (modules mesh_update_host_test)
+ (libraries mesh_update_host alcotest eio_main yojson unix))
+
+(test
  (name smoke)
  (modules smoke)
  (libraries mesh_board_mcp mcp-kit alcotest unix))
@@ -104,6 +114,7 @@
   mesh_project_observation
   mesh_pty_processes
   mesh_pty_support
+  mesh_update_host
   mesh_wire
   yojson
   eio_main
@@ -156,6 +167,15 @@
  (action
   (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
 
+; The update check inside the host, with a fake curl; the same host argument.
+
+(test
+ (name ptyhost_update_test)
+ (modules ptyhost_update_test)
+ (libraries ptyhost_blackbox test_scratch alcotest unix yojson)
+ (action
+  (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
+
 ; The geometry an attach reply names for its replay; the same host argument.
 
 (test
@@ -185,6 +205,7 @@
   mesh_project_observation
   mesh_pty_processes
   mesh_pty_support
+  mesh_update_host
   mesh_wire
   ptyhost_blackbox
   yojson
@@ -255,6 +276,7 @@
   mesh_project_observation
   mesh_pty_processes
   mesh_pty_support
+  mesh_update_host
   mesh_wire
   yojson
   eio_main

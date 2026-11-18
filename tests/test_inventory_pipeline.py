@@ -34,7 +34,7 @@ const context = vm.createContext({
   MeshSessionActivity: {update: previous => { calls.push('activity'); return previous; }},
   isAdjacentPane: () => false, isHist: () => false,
 });
-for (const name of ['receiveBoardSignals', 'checkClientVersion', 'markSeen',
+for (const name of ['receiveBoardSignals', 'checkClientVersion', 'showUpdateNotice', 'markSeen',
   'invalidateReplacedDemoPanes', 'handleOpen', 'checkDemoSceneUpdates',
   'renderLists', 'renderManagement', 'renderRestore', 'pollWatched', 'pollHistory']) {
   context[name] = () => calls.push(name);
@@ -62,7 +62,7 @@ const capture = created => {
 (async () => {
   await context.refreshInventory(load(snapshot(1)));
   assert.deepEqual(calls, ['session-actions', 'agent-mail', 'activity',
-    'receiveBoardSignals', 'checkClientVersion', 'markSeen',
+    'receiveBoardSignals', 'checkClientVersion', 'showUpdateNotice', 'markSeen',
     'invalidateReplacedDemoPanes', 'checkDemoSceneUpdates', 'renderLists',
     'renderRestore', 'pollWatched', 'pollHistory']);
   const oldTarget = capture(1);

@@ -17,7 +17,7 @@ On macOS the same two processes are the launchd jobs `io.session-mesh.web` and
 for agents installed without one, and `system` for boot-time daemons, whose commands need `sudo`
 ([macOS](#macos)).
 
-- [Upgrading](#upgrading): a release install, rolling back, a source install
+- [Upgrading](#upgrading): the update notice, a release install, rolling back, a source install
 - [Source installs](#source-installs): moving between a clone, an extracted bundle and a release
 - [Restoring sessions after a PTY host restart](#restoring-sessions-after-a-pty-host-restart)
 - [Replacing the PTY host](#replacing-the-pty-host)
@@ -40,6 +40,113 @@ How you upgrade depends on how session-mesh was installed: a *release install* (
 of a release, the default in [install.md](install.md)) runs from
 `~/.local/share/session-mesh/current`; a *source install* runs a git checkout in place
 ([Source installs](#source-installs)).
+
+### Update notice
+
+A release install tells you when a newer release is published: the interface shows a banner
+("Session Mesh v0.2.0 is available", a link to the release notes and the upgrade command), the PTY
+host writes the same sentence once in its log, when it first announces a release
+(`journalctl --user -u session-mesh-pty`),
+and `./mesh` (its help and `./mesh doctor`) prints it too. Closing the banner hides it in that
+browser until a newer release appears (until the page is reloaded, when the browser's storage is
+blocked). Nothing is downloaded or installed: you upgrade with the command shown,
+[as below](#upgrading-a-release-install).
+
+How it works:
+
+- The PTY host (`mesh-ptyhost`) runs the check, in a background task, at startup and then whenever
+  three hours have passed. It keeps the latest answer in memory; the web server asks the host for it
+  (the `update_notice` request) when it lists the sessions and relays it to the page. A web server
+  or a host from before the check shows nothing: an older host answers that request with an error,
+  and an older web server never sends it. The check is the one `mesh-platform update-check` runs
+  by hand, from the cache: a restart within three hours of the last answer makes no request. The
+  host runs `curl` as a child process with a time limit of 30 seconds (curl's own limit is 20),
+  killed and reaped when it is exceeded and when the host stops, so a slow network never delays
+  the sessions or a shutdown, and every failure is ignored. The child's standard input and error go
+  to `/dev/null` and only its first 64 bytes of output are read, so a misbehaving `curl` cannot
+  fill the host's memory, and the time limit holds even if a killed process leaves a descendant
+  holding the pipe. The host writes only the cache below (and its short-lived working files
+  `update-fetch.*` and `update-check.json.<pid>.tmp`, in the same directory, removed after each request
+  and, when a killed process left them, at startup); it only reads the settings file; the PTY host is not restarted by an
+  upgrade, so it follows `current` to report the release you have installed, not the one it was
+  started from. It asks GitHub's public releases list
+  (`https://api.github.com/repos/Session-Mesh/session-mesh/releases`, first page) with `curl`,
+  without credentials, and keeps the answer in `~/.cache/session-mesh/update-check.json`
+  (`MESH_CACHE_DIR`). The next request sends the answer's ETag back (`If-None-Match`), so an
+  unchanged list costs a small `304` answer. Without an `Authorization` header a `304` still counts
+  against GitHub's rate limit (60 unauthenticated requests per hour per IP address); at one request
+  every three hours an installation makes at most 8 a day, far below it, which is why the interval is
+  three hours. The browser never contacts GitHub.
+- What the request carries: `GET` of that URL over HTTPS with the headers `Accept:
+  application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, `User-Agent:
+  session-mesh-update-check` (fixed, no version, host name or user name) and, once an answer is
+  cached, `If-None-Match`. `curl` is started with `-q`, so a `~/.curlrc` (an `Authorization`
+  header, `--netrc`) cannot change it; curl still honours the usual proxy environment variables.
+  GitHub sees the installation's IP address, as for any request. `./mesh` (help, `doctor`) only
+  reads the cache: it never makes a request.
+- Drafts and pre-releases are ignored. With no published release, nothing is shown.
+- The installed version is the release directory the programs run from
+  (`releases/<tag>/`). A source install or an extracted bundle has no such directory: it makes no
+  request and shows nothing.
+- A failed request (no network, GitHub unreachable, `curl` missing) shows nothing and is retried
+  three hours later; `mesh-platform update-check --debug` prints the reason, and the host logs it
+  too when `MESH_UPDATE_DEBUG=1` is in its environment. A cache directory that cannot be written
+  makes no request at all (the attempt could not be dated), and a request is never made more than
+  once in three hours by one host, whatever the cache holds.
+
+Two settings control it, and they apply **without restarting the PTY host** (a restart ends the mesh
+sessions). They are lines of a small file, `update-notice`, in the configuration directory
+(`~/.config/session-mesh/update-notice`, or `$MESH_CONF_DIR/update-notice`: the directory of the
+token and the other settings, [Configuration](configuration.md)):
+
+```
+# ~/.config/session-mesh/update-notice
+check=0
+notice=security
+```
+
+- `check=1` or `check=0`: `0` turns the feature off.
+- `notice=` one of `all`, `minor`, `major`, `security`, `none` (the table below).
+- One `key=value` per line, each key at most once; blank lines, lines starting with `#` and keys
+  other than these two are ignored. A key with another value, or set twice, makes the whole file
+  unusable.
+- The file is optional. Make it with your own user and mode 0600 (`chmod 600`): it is ignored when it
+  is a symbolic link, not a regular file, owned by another user, writable by group or others, or
+  larger than 4096 bytes. An ignored file changes nothing: the environment values below apply, and
+  the reason is logged under `MESH_UPDATE_DEBUG=1` (or shown by `mesh-platform update-check --debug`).
+
+The PTY host reads the file at startup and again at every look (every ten minutes), so the next look
+after you save it takes it into account. With `check=0` or `notice=none` that look makes no
+request and drops the announcement the host holds: the banner is gone at the next refresh of the
+session list, and the next `./mesh` line is empty. Removing the file, or the line, goes back to the
+environment values. `mesh-platform update-check` (which `./mesh help` and `./mesh doctor` run with
+`--cache-only`) reads the same file, so its line agrees with the host's.
+
+The file **overrides** the host's environment, whose variables remain the defaults when the file
+does not set the key (`systemctl --user edit session-mesh-pty`, lines `Environment=NAME=value`; these
+are read when the host starts, so changing them applies at its next restart, which ends the mesh
+sessions: [Replacing the PTY host](#replacing-the-pty-host)). To disable the check without
+restarting anything: `printf 'check=0\n' > ~/.config/session-mesh/update-notice && chmod 600 ~/.config/session-mesh/update-notice`.
+
+| `notice` / `MESH_UPDATE_NOTICE` | Announces |
+|---|---|
+| `all` (default) | any newer release, patch releases included |
+| `minor` | a newer minor or major release |
+| `major` | a newer major release |
+| `security` | only releases marked as security fixes |
+| `none` | nothing, and makes no request |
+
+A release marked as a security fix is announced at every level except `none`, and the banner and
+log line say so. When the newest release is not announced at your level but an earlier one newer
+than yours is (level `security`, latest `v0.1.5` an ordinary release, `v0.1.4` a security fix), the
+notice names that earlier release. The banner and log line carry the security label only when the release they name is itself marked, and the displayed command is `--upgrade --to <that tag>`, so it installs the release the notice names. A newer release is not assumed to contain a fix published on an older line: read the release notes.
+A release is marked as a security fix by a line `Security: yes` in its release notes
+([CONTRIBUTING.md](../CONTRIBUTING.md#branches-and-versions)).
+
+`check=0` in the file turns the whole feature off: no request, no banner, no line.
+`MESH_UPDATE_CHECK=0` in the environment does the same, unless the file says `check=1`, which takes
+precedence over it. A misspelt key in the file is ignored without a message, so check that `check=0`
+took effect (no announcement at the next poll).
 
 ### Upgrading a release install
 

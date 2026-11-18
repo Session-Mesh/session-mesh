@@ -373,3 +373,40 @@ async def test_restoring_a_wrapped_codex_keeps_yolo(client, auth_cookie, fake_ho
 def test_resume_in_the_mesh_reads_a_wrapped_external_agent():
     agent = {"type": "claude", "session_id": SID, "argv": ["node", NODE_CLI, "--model", "opus"]}
     assert server._resume_argv(agent) == agentmcp.inject("claude", ["claude", "--resume", SID, "--model", "opus", *resumeargs.CLAUDE_INLINE])
+
+
+@pytest.mark.parametrize("reply", [
+    {"error": "invalid request"},          # an older host
+    {"ok": True},                          # no field
+    {"ok": True, "update": "garbage"},     # wrong type
+    {"ok": False, "update": {"tag": "v9"}},
+    "garbage", None, [], 7,
+])
+async def test_the_update_notice_ignores_any_reply_that_is_not_an_update(monkeypatch, reply):
+    async def request(req):
+        return reply
+    monkeypatch.setattr(ptyhost, "request", request)
+    assert await server._update_notice() is None
+
+
+async def test_the_update_notice_is_relayed_from_a_good_reply(monkeypatch):
+    async def request(req):
+        return {"ok": True, "update": {"tag": "v9"}}
+    monkeypatch.setattr(ptyhost, "request", request)
+    assert await server._update_notice() == {"tag": "v9"}
+
+
+@pytest.mark.parametrize("exc", [ConnectionResetError(), EOFError(), ValueError(), RecursionError(),
+                                 asyncio.IncompleteReadError(b"", 5), AssertionError("op")])
+async def test_the_update_notice_swallows_any_failure(monkeypatch, exc):
+    async def request(req):
+        raise exc
+    monkeypatch.setattr(ptyhost, "request", request)
+    assert await server._update_notice() is None
+
+
+async def test_a_silent_host_gives_no_update_when_the_request_times_out(monkeypatch):
+    async def request(req):
+        await asyncio.wait_for(asyncio.sleep(3600), 0.05)
+    monkeypatch.setattr(ptyhost, "request", request)
+    assert await server._update_notice() is None

@@ -642,3 +642,19 @@ nothing in the server: it still listens only on loopback, and the proxy must kee
   ([why](docs/operations.md#answer-buttons-in-notifications)).
 - The history index `~/.cache/session-mesh/history.json` contains conversation text and is created
   with mode 0600; the agents' own transcripts keep the permissions those agents give them.
+- A release install checks for a newer release at startup and then at most every three hours, from
+  the PTY host (a background task of the process that owns the sessions; it starts `curl` as a child
+  with a time limit, standard input and error discarded; it writes only `update-check.json` and
+  its short-lived working files (`update-fetch.*`, `update-check.json.<pid>.tmp`) in
+  `~/.cache/session-mesh`, and only reads the settings file `update-notice` of the configuration
+  directory): one
+  unauthenticated `GET` of GitHub's public releases API over HTTPS. It sends the headers `Accept`,
+  `X-GitHub-Api-Version`, `If-None-Match` (the ETag GitHub gave) and the fixed `User-Agent:
+  session-mesh-update-check`, with no version, host name or user data; `curl` ignores any `~/.curlrc`
+  (`-q`). GitHub sees the installation's IP address.
+  It never downloads or runs anything. It is turned off, without restarting the host (a restart
+  ends the sessions), by a line `check=0` in the file `update-notice` of the configuration directory
+  (`~/.config/session-mesh`, or `MESH_CONF_DIR`), which the host re-reads at every look; the file is
+  ignored when it is a symbolic link, not a regular file of the same user, writable by group or
+  others, or larger than 4096 bytes. `MESH_UPDATE_CHECK=0` in the host's environment is the default
+  when the file does not say ([Update notice](docs/operations.md#update-notice)).

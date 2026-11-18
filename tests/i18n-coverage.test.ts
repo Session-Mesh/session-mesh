@@ -26,7 +26,7 @@ const loadCatalog = (code: string) => readJson(path.join(I18N, `${code}.json`)) 
 
 // Files the scan does not apply to, with the reason.
 const GENERATED = new Set(['pane-actions.js', 'folder-state.js', 'history-state.js', 'session-activity.js',
-  'demo-catalog.js', 'demo-view.js', 'workspace-spec.js', 'shortcuts.js', 'terminal-links.js', 'projects.js', 'themes.js']);   // built from the .ts next to them
+  'demo-catalog.js', 'demo-view.js', 'workspace-spec.js', 'shortcuts.js', 'terminal-links.js', 'projects.js', 'themes.js', 'update-notice.js']);   // built from the .ts next to them
 // Sandboxed documents rendered by the server (/view, demo scenes): no network
 // (connect-src 'none'), no storage, so no catalog can reach them until the
 // server injects the language. Their text is English; the French check applies.

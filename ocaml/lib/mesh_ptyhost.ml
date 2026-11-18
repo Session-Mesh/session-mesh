@@ -592,7 +592,7 @@ let bound_selection sessions fields ~operation ~geometry =
   | Some s -> (s, size)
 
 let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(agent_presets = None)
-    ?(isolated_agent = None) env sw sessions owned reservations pending stopping
+    ?(isolated_agent = None) ?(update = Mesh_update_host.create ()) env sw sessions owned reservations pending stopping
     observer =
   (* One closure per host lifetime, never per client connection. No fallback if
      secure randomness fails; generation allocation is non-yielding and burned. *)
@@ -730,6 +730,11 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
             then invalid_arg "private preset identity");
         `Assoc [ ("version", `Int 1); ("ready", `Bool true) ]
     | Some (`String "list") -> `List (List.map session_json !sessions)
+    | Some (`String "update_notice") ->
+        (* The latest answer of the release check, from memory: no request, no
+           file. [null] when no newer release is announced. *)
+        if List.map fst fields <> [ "op" ] then invalid_arg "keys";
+        `Assoc [ ("ok", `Bool true); ("update", Mesh_update_host.latest update) ]
     | Some (`String "processes") ->
         (* Read-only. Refused in the Unix identity split (Linux only, where
            clients read /proc themselves): there another account's clients
@@ -2114,8 +2119,9 @@ let run_impl ?project_store_hook ?project_observation_hook ?private_preset_direc
     and owned = ref []
     and reservations = Hashtbl.create 16 in
     let pending = ref [] and stopping = ref false in
+    let update = Mesh_update_host.create () in
     let dispatch_owned =
-      dispatch ?project_store_hook ?project_observation_hook ~preset ~agent_presets ~isolated_agent env sw
+      dispatch ?project_store_hook ?project_observation_hook ~preset ~agent_presets ~isolated_agent ~update env sw
         sessions owned reservations pending stopping observer
     in
     let stop, resolve = Eio.Promise.create () in
@@ -2144,6 +2150,11 @@ let run_impl ?project_store_hook ?project_observation_hook ?private_preset_direc
                           Eio.Time.Mono.sleep (Eio.Stdenv.mono_clock env) 0.1
                         done))
                   observer;
+                (* Ends with [accept_sw], so a stop does not wait for it. *)
+                Mesh_update_host.start update ~sw:accept_sw
+                  ~mgr:(Eio.Stdenv.process_mgr env)
+                  ~clock:(Eio.Stdenv.mono_clock env)
+                  ~log:(fun text -> log "%s" text);
                 while true do
                   (* Out of descriptors (EMFILE) or another accept error:
                      the sessions stay; retry once some may be free. *)
