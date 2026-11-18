@@ -179,4 +179,36 @@ describe('clicks into a program that reports focus', {skip}, () => {
     await page.waitForTimeout(100);
     assert.deepEqual(await focusOf('phone-a'), [FOCUS_OUT], 'the pane left through the session list');
   });
+
+  test('on a phone, a session switch inside one pane reports the focus-out to the session left and starts the next unreported', async () => {
+    const page = await open('swap-b', true);   // swap-b's program already asks for focus reports
+    await mesh.newShell('swap-a');
+    await page.evaluate(() => refresh());
+    const focusOf = async (session: string): Promise<string[]> =>
+      (await framesOf(page, session)).filter(f => f.d === FOCUS_IN || f.d === FOCUS_OUT).map(f => f.d);
+    const switchTo = async (session: string): Promise<void> => {
+      await page.locator('#btn-menu').click();
+      await page.locator(`#list .item[data-id="${session}"]`).click();
+      await page.waitForFunction(id => panes.length === 1 && active.id === id && active.conn?.terminal?.isOpen()
+        && active.conn?.replaying === false, session, {timeout: 10000});
+      await page.waitForTimeout(300);
+    };
+    await switchTo('swap-a');
+    await runProgram(page);
+    const at = await screenCenter(page, 'swap-a');
+    await forget(page);
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    assert.deepEqual(await focusOf('swap-a'), [FOCUS_IN]);
+    await forget(page);
+    await switchTo('swap-b');
+    assert.deepEqual(await focusOf('swap-a'), [FOCUS_OUT], 'the session left is told it lost the focus');
+    assert.deepEqual(await focusOf('swap-b'), [], 'the session attached is reported nothing yet');
+    await forget(page);
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    const frames = await framesOf(page, 'swap-b');
+    assert.equal(assertClicksKept(frames), 1, JSON.stringify(frames));
+    assert.deepEqual(await focusOf('swap-b'), [FOCUS_IN], `the first tap reports the focus-in: ${JSON.stringify(frames)}`);
+  });
 });
