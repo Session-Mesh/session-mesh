@@ -8,8 +8,9 @@
 #   scripts/test-local.sh            everything
 #   scripts/test-local.sh -k menu    extra arguments go to pytest
 #   scripts/test-local.sh --preflight-only   check prerequisites only
-# Python: MESH_PYTHON when set, otherwise .venv/ (created from the pinned
-# requirements when absent). Chromium: MESH_CHROMIUM when set, otherwise the
+# Python: MESH_PYTHON when set, otherwise .venv/, created from the pinned
+# requirements, or completed when its install did not finish
+# (scripts/test-local-python.sh). Chromium: MESH_CHROMIUM when set, otherwise the
 # newest Playwright build under ~/.cache/ms-playwright, installed when absent.
 # OCaml: MESH_OPAM_SWITCH (see scripts/bootstrap.sh), otherwise the current
 # opam switch. Tests are discovered by name, so adding one needs no edit here:
@@ -48,54 +49,8 @@ require_tools() {
   fi
 }
 
-# The Pythons that .venv may be created from: every pin of requirements-dev.txt and
-# requirements-browser.txt needs 3.10 or later, and aiohttp 3.14.3 has binary wheels for
-# CPython 3.10 to 3.14 only (pip falls back to a source build, which fails, on a newer one).
-# Move the bounds with those pins.
-venv_python_min=3.10
-venv_python_max=3.14
-
-check_venv_python() {
-  local version
-  version="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')" \
-    || { echo 'test-local: python3 does not run.' >&2; exit 1; }
-  if ! printf '%s\n' "$venv_python_min" "$version" "$venv_python_max" | sort -C -V; then
-    echo "test-local: python3 is Python $version; the pinned test packages install on Python $venv_python_min to $venv_python_max." >&2
-    echo "test-local: create .venv with one of those, for example python$venv_python_max, then run this script again:" >&2
-    echo "  python$venv_python_max -m venv .venv && .venv/bin/python -m pip install -r requirements-dev.txt -r requirements-browser.txt" >&2
-    exit 1
-  fi
-}
-
-select_python() {
-  if [ -n "${MESH_PYTHON:-}" ]; then
-    PY="$(command -v -- "$MESH_PYTHON")" || { echo 'test-local: MESH_PYTHON is not executable.' >&2; exit 1; }
-    case "$PY" in /*) ;; *) PY="$PWD/$PY" ;; esac
-    PATH="$(dirname "$PY"):$PATH"
-  else
-    if [ ! -x .venv/bin/python ]; then
-      check_venv_python
-      [ "$preflight_only" -eq 0 ] || { echo 'test-local: .venv absent (created by a full run).'; PY=python3; return; }
-      if [ -e .venv ]; then
-        echo 'test-local: .venv exists but has no bin/python; remove it or set MESH_PYTHON.' >&2
-        exit 1
-      fi
-      python3 -m venv .venv
-      # Remove a half-made .venv: the next run would otherwise take it as ready.
-      if ! .venv/bin/python -m pip install -q -r requirements-dev.txt -r requirements-browser.txt; then
-        rm -rf .venv
-        echo 'test-local: installing the test packages into .venv failed; .venv was removed.' >&2
-        exit 1
-      fi
-    fi
-    PY="$PWD/.venv/bin/python"
-    VIRTUAL_ENV="$PWD/.venv"
-    PATH="$VIRTUAL_ENV/bin:$PATH"
-    export VIRTUAL_ENV
-  fi
-  # Node tests that start the real server read the interpreter from MESH_PYTHON.
-  export PATH MESH_PYTHON="$PY"
-}
+# select_python: MESH_PYTHON, otherwise .venv/, created or completed as needed.
+source scripts/test-local-python.sh
 
 select_chromium() {
   local chrome
