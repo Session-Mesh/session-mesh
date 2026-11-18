@@ -115,6 +115,25 @@ instructions ask the agent to call it once, unconditionally: that read costs abo
 the agent's context in every session, a cost accepted so that an agent knows these features before
 it needs them rather than never discovering them.
 
+The "Folder" field of the "New session" dialog starts with the folder of the session you are
+looking at (the home folder when there is none) and offers basic suggestions through the browser's
+own drop-down list (a native `<datalist>`):
+
+- **What is suggested:** your home folder, then the 80 most recently modified folders directly
+  under `~/dev`, newest first. Folders whose name starts with a dot are left out. If `~/dev` does
+  not exist, only the home folder is offered.
+- **Where it comes from:** the list is read by the web server (`GET /api/dirs`) each time the dialog
+  opens, and not refreshed while it stays open. If that request fails, the field gets no new
+  suggestions: the first time it has none, and later it may keep the list from the previous opening.
+- **Limits:** the list does not follow what you type and does not go down into subfolders, and
+  `~/dev` is fixed: projects kept elsewhere are not suggested (type or paste the path). Suggestions
+  ignore the allowed work folders ([Restricting folders and
+  agents](operations.md#restricting-folders-and-agents)) and do not check that a folder is usable.
+  The folder is checked only when you start the session: it must exist, and when work folders are
+  configured it must be inside one of them, otherwise the server refuses it ("Folder outside the
+  allowed workspace roots"), even if it was suggested. How the drop-down looks and filters, notably
+  on a phone, depends on the browser.
+
 The "Live" tab of the sidebar lists the mesh's own sessions under "Mesh — interactive", with each
 conversation's title, last prompt and state. Sessions that need you are also repeated at the top in
 three groups: "Waiting for you" (a question or a permission), "Finished, unread" (until you open the
