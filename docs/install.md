@@ -260,7 +260,12 @@ moves the URL of `session-mesh` to the new commit, without that variable, and pr
 belongs to the whole opam root: moving its URL moves every switch that reads it, and two checkouts
 with different pins (for example `main` and a release branch) move it back and forth on each run.
 Give such checkouts their own opam root (`OPAMROOT`): a local switch is not enough, since every
-switch of a root reads the same `session-mesh` repository. The local
+switch of a root reads the same `session-mesh` repository. The installed web service then needs
+that root as well: the installer records `MESH_OPAM_SWITCH` in it, not `OPAMROOT`, and without
+`OPAMROOT` the server looks for `mesh-board-mcp` under `~/.opam`, so agents start without the board.
+Run `install.sh` with the same `OPAMROOT` exported, then give it to the service: on Linux,
+`systemctl --user edit session-mesh.service`, add `Environment=OPAMROOT=/path/to/that/root` under
+`[Service]`, and restart the service. The local
 switch of the checkout (`_opam/`, as in CI) is changed without that variable. `MESH_OPAM_SWITCH` may also be the absolute directory of a local
 switch. Without `MESH_OPAM_SWITCH`, the bootstrap uses your current switch and does not pick another
 one, because `install.sh` and the server also look for the programs in the current switch.
