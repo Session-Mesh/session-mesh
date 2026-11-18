@@ -11,6 +11,7 @@ vm.runInNewContext(source, context);
 const activity = context.MeshSessionActivity;
 assert.ok(activity, "typed activity bundle must export its browser API");
 
+// codex reports no status of its own: its "idle" is inferred from the rollout, so CPU decides.
 const session = (id, status = "idle", created = 1, updated = 1) =>
   ({ id, kind: "mesh", name: id, created, agent: { type: "codex", status, updated } });
 const metric = (value, end, state = "derived") => ({
@@ -35,6 +36,9 @@ for (const rows of [null, management("quiet", 1, metric(90, 1))]) {
 }
 
 let result = update(null, [session("busy", "busy"), session("quiet")],
+  management("quiet", 1, metric(72, 90)), 90);
+assert.equal(result.phaseById.quiet, "unknown", "one hot window must not promote");
+result = update(result, [session("busy", "busy"), session("quiet")],
   management("quiet", 1, metric(72, 100)), 100);
 assert.deepEqual([...result.activeIds], ["busy", "quiet"]);
 assert.equal(result.phaseById.quiet, "active");
@@ -59,7 +63,9 @@ assert.equal(update(null, [session("quiet")], management("quiet", 1, malformed),
   "unknown", "malformed measurements cannot prove activity");
 const oldWindow = update(result, [session("quiet")], management("quiet", 1, metric(90, 110)), 130);
 assert.equal(oldWindow.phaseById.quiet, "unknown", "an older window cannot revive a demoted session");
-const lost = update(update(null, [session("quiet")], management("quiet", 1, metric(80, 100)), 100),
+const hotTwice = update(update(null, [session("quiet")], management("quiet", 1, metric(80, 90)), 90),
+  [session("quiet")], management("quiet", 1, metric(80, 100)), 100);
+const lost = update(hotTwice,
   [session("quiet")], management("quiet", 1, metric(null, 0, "unknown")), 131);
 assert.equal(lost.phaseById.quiet, "unknown", "unknown activity must not be retained indefinitely");
 const changed = update(result, [session("quiet", "idle", 2)], management("quiet", 1, metric(80, 130)), 130);

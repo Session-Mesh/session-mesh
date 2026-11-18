@@ -362,17 +362,21 @@ async def test_a_background_shell_is_its_own_quiet_state_outside_the_sections(bo
 
 async def test_silent_mesh_agent_with_verified_cpu_stays_in_actives(board):
     tab = await board([])
+    # codex's "idle" only means its rollout was not written lately (a long tool call): CPU decides,
+    # and a sustained load (two consecutive 10 s windows at or above 5 % of a core) keeps it active.
     await tab.evaluate("""() => {
-      const now = 1000;
       data.mesh = [{id: 'quiet', name: 'quiet', kind: 'mesh', cwd: '/tmp', cmd: 'codex',
         created: 1, activity: 1, attached: 0, rank: null,
         agent: {type: 'codex', status: 'idle', updated: 1}}];
       data.external = [];
-      data.management = {sessions: [{name: 'quiet', created: 1, source: 'mesh',
+      const sample = (now, start) => ({sessions: [{name: 'quiet', created: 1, source: 'mesh',
         lifecycle: 'active', agent_type: 'codex', metrics: {cpu_percent: {
           state: 'derived', source: 'procfs-stat', value: 65, observed_at: now,
-          window: {start: 10, end: 20}, reason: null}}}]};
-      activityRanking = MeshSessionActivity.update(null, data.mesh, data.management, now);
+          window: {start, end: start + 10}, reason: null}}}]});
+      data.management = sample(990, 0);
+      activityRanking = MeshSessionActivity.update(null, data.mesh, data.management, 990);
+      data.management = sample(1000, 10);
+      activityRanking = MeshSessionActivity.update(activityRanking, data.mesh, data.management, 1000);
       renderList();
     }""")
     assert await ids(tab, "busy") == ["quiet"]
