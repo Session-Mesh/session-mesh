@@ -24,6 +24,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import {installFakeClaude, MANAGED} from './claude-wake-lib.ts';
+import {ptyhostArgv} from './ptyhost-command.ts';
 
 export const REPO = path.resolve(import.meta.dirname, '..');
 export const ROUTE_TABLE_FILE = path.join(REPO, 'tests', 'test_route_auth_table.py');
@@ -264,11 +265,12 @@ export type Mesh = {
   stop: () => Promise<void>;
 };
 
-/** Why session-token checks cannot run here, or false when they can. */
+/**
+ * Why session-token checks cannot run here, or false when they can. A missing PTY host is not a reason to
+ * skip: ptyhostArgv() throws (MESH_PTYHOST_CMD, else mesh-ptyhost on PATH; CONTRIBUTING.md), so the run fails.
+ */
 export function sessionSkipReason(): string | false {
-  const command = (process.env.MESH_PTYHOST_CMD ?? '').trim();
-  if (command === '') return 'SKIPPED (no PTY host): MESH_PTYHOST_CMD is not set; a session token exists only '
-    + 'for a live session, which needs the native PTY host (ocaml/_build/default/bin/mesh_ptyhost_main.exe)';
+  ptyhostArgv();
   if (MANAGED.length > 0) return `SKIPPED: managed Claude settings at ${MANAGED[0]} change what a Claude session does`;
   return false;
 }
@@ -364,7 +366,7 @@ export async function startMesh(options: {session: boolean}): Promise<Mesh> {
   try {
     if (fake !== undefined) {
       const socket = path.join(home, 'run', 'session-mesh', 'ptyhost.sock');
-      await startChild('the PTY host', (process.env.MESH_PTYHOST_CMD ?? '').trim().split(/\s+/),
+      await startChild('the PTY host', ptyhostArgv(),
         {PATH: env.PATH, HOME: home, XDG_RUNTIME_DIR: env.XDG_RUNTIME_DIR, LANG: 'C'}, children, () => fs.existsSync(socket));
     }
     await startChild('the server', SERVER_COMMAND, env, children, () => accepts(port)); // limit: another listener on this port would also pass; its answers are not told apart
