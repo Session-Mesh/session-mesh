@@ -182,7 +182,10 @@ print(json.dumps({"row": {f.value: s.value for f, s in agentcap.MATRIX["agy"].it
     }
   });
 
-  test('a running process names its conversation only through its argv; nothing is read from the agy store', () => {
+  // discover reads a process's argv from /proc on Linux, and from the PTY host's process facts elsewhere;
+  // this test runs no host, so there it would read nothing.
+  test('a running process names its conversation only through its argv; nothing is read from the agy store',
+    {skip: process.platform !== 'linux' && 'reads argv without a PTY host: Linux only (/proc)'}, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-proc-'));
     fs.writeFileSync(path.join(dir, 'agy'), '#!/bin/sh\nread line\n', {mode: 0o755});
     const named = spawn(path.join(dir, 'agy'), ['--conversation', SID], {stdio: ['pipe', 'ignore', 'ignore']});

@@ -10,6 +10,7 @@
 // recovery restores the wheel after a replay cut at 2 MiB. It does not show that agy asks for them.
 // A real PTY host, server.py and Chromium (MESH_CHROMIUM; skipped without it).
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
@@ -98,8 +99,12 @@ describe('full-screen agent TUI in the page', {skip}, () => {
     const named = path.join(mesh.scratch, 'agy');   // a program the kernel names agy, as discovery sees Antigravity
     fs.copyFileSync(process.execPath, named);
     fs.chmodSync(named, 0o755);
+    // A node linked to a shared libnode (Homebrew's) finds it relative to its own path, so its copy cannot
+    // start: it then runs with argv[0] agy instead, which discovery reads when the process name is node.
+    const program = spawnSync(named, ['-e', '0']).status === 0 ? named
+      : `perl -e 'exec {$ARGV[0]} "agy", @ARGV[1..$#ARGV]' ${process.execPath}`;
     const first = await mesh.openPage('recovery', DESKTOP);
-    await typeLine(first, `exec ${named} ${WITNESS} churn`);
+    await typeLine(first, `exec ${program} ${WITNESS} churn`);
     await first.waitForFunction(() => find('recovery')?.agent?.type === 'agy' && find('recovery')?.agent?.foreground === true,
       undefined, {timeout: 20000});
     await first.waitForTimeout(4000);   // the churn is over
