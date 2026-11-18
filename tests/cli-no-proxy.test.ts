@@ -187,6 +187,20 @@ function assertDirect(expected: Seen[]): void {
   assert.deepEqual(seenByMesh, expected);
 }
 
+// The test's own Python, with an empty MESH_PORT: for checks that resolve the
+// port without running a CLI, so nothing ever reaches the real default port.
+function runPython(code: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(PYTHON, ['-c', code], {cwd: REPO, env: {...process.env, MESH_PORT: ''},
+      stdio: ['ignore', 'pipe', 'pipe']});
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
+    child.on('error', reject);
+    child.on('close', exit => exit === 0 ? resolve(output) : reject(new Error(output)));
+  });
+}
+
 describe('mesh CLIs ignore proxy variables for the local mesh', () => {
   test('mesh-open sends the master token straight to the mesh', async () => {
     const result = await runCli('mesh-open', ['page.md']);
@@ -428,9 +442,23 @@ describe('mesh CLIs accept only a port number in MESH_PORT', () => {
     });
   }
 
+  // An empty MESH_PORT falls back to the default port 7690, silently. Both parsers are
+  // checked by resolving that fallback in the test's Python, no process runs and the
+  // default port is never contacted: it may be the live mesh of the machine running
+  // the suite, to which no test must ever send a credential.
   test('an empty MESH_PORT means the default port, not an error', async () => {
-    const result = await runCli('mesh-open', ['page.md'], {MESH_PORT: ''});
-    assert.doesNotMatch(result.output, /MESH_PORT must be/);
-    assert.deepEqual(seenByThirdParty, []);
+    const snippet = `import meshpaths\n`
+      + `print(meshpaths.local_url('/api/open'))`;
+    const resolved = await runPython(snippet);
+    assert.equal(resolved.trim(), 'http://127.0.0.1:7690/api/open');
+
+    const loader = `import importlib.machinery, importlib.util\n`
+      + `loader = importlib.machinery.SourceFileLoader('mesh_event_for_the_test', ${JSON.stringify(path.join(REPO, 'bin', 'mesh-event'))})\n`
+      + `spec = importlib.util.spec_from_loader(loader.name, loader)\n`
+      + `hook = importlib.util.module_from_spec(spec)\n`
+      + `spec.loader.exec_module(hook)\n`
+      + `print(hook.local_url('/api/event'))`;
+    const hookResolved = await runPython(loader);
+    assert.equal(hookResolved.trim(), 'http://127.0.0.1:7690/api/event');
   });
 });
