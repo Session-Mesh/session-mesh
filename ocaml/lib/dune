@@ -119,3 +119,18 @@
   uri
   yojson
   unix))
+
+; What the native command-line programs share: the mesh's directories and port,
+; the cookie generation file, and the request to the local mesh (no proxy, no
+; redirection followed).
+
+(library
+ (name mesh_cli)
+ (wrapped false)
+ (modules mesh_python_text mesh_paths mesh_generation mesh_local_http)
+ (libraries cohttp unix))
+
+(library
+ (name mesh_logout_all)
+ (modules mesh_logout_all)
+ (libraries mesh_cli yojson unix))

@@ -4,12 +4,16 @@
 """The cookie is bound to a generation on disk; raising it logs every browser out at once."""
 
 import asyncio
+import json
 import os
+import re
+import shutil
 import stat
-import sys
+import subprocess
 from http.cookies import SimpleCookie
 from pathlib import Path
 
+import aiohttp
 import pytest
 from aiohttp.test_utils import TestServer
 
@@ -17,7 +21,39 @@ import cookiegen
 import server
 from session_helpers import add_session, listing  # noqa: F401
 
-MESH_LOGOUT_ALL = Path(__file__).resolve().parent.parent / "bin" / "mesh-logout-all"
+BUILT_LOGOUT_ALL = (Path(__file__).resolve().parent.parent
+                    / "ocaml" / "_build" / "default" / "bin" / "mesh_logout_all_main.exe")
+
+
+def default_logout_all():
+    """The native program of this checkout's dune build, else the one scripts/bootstrap.sh installs
+    in the opam switch (MESH_OPAM_SWITCH, else the current one)."""
+    if BUILT_LOGOUT_ALL.is_file() and os.access(BUILT_LOGOUT_ALL, os.X_OK):
+        return str(BUILT_LOGOUT_ALL)
+    switch = os.environ.get("MESH_OPAM_SWITCH", "")
+    opam = shutil.which("opam")
+    if opam:
+        found = subprocess.run([opam, "var", *([f"--switch={switch}"] if switch else []), "bin"],
+                               capture_output=True, text=True, check=False)
+        installed = Path(found.stdout.strip()) / "mesh-logout-all"
+        if found.returncode == 0 and installed.is_file() and os.access(installed, os.X_OK):
+            return str(installed)
+    pytest.fail("no mesh-logout-all to test: set MESH_LOGOUT_ALL_CMD to the absolute path of the native "
+                "program, or build it (scripts/bootstrap.sh, or dune build in ocaml/)")
+
+
+def logout_all_command():
+    """The mesh-logout-all under test: MESH_LOGOUT_ALL_CMD, a path to an executable or a JSON argv
+    array (never a shell string); else default_logout_all()."""
+    raw = os.environ.get("MESH_LOGOUT_ALL_CMD", "")
+    if not raw:
+        return [default_logout_all()]
+    if not raw.lstrip().startswith("["):
+        return [raw]
+    argv = json.loads(raw)
+    assert isinstance(argv, list) and argv and all(isinstance(item, str) for item in argv), \
+        "MESH_LOGOUT_ALL_CMD must be a path or a JSON array of strings"
+    return argv
 
 
 @pytest.fixture(autouse=True)
@@ -180,11 +216,34 @@ async def test_logout_needs_credentials_and_the_origin(client, auth_cookie):
 
 async def run_cli(port):
     env = {"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], "MESH_PORT": str(port)}
+    argv = logout_all_command()
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, str(MESH_LOGOUT_ALL), env=env,
+        *argv, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     out, err = await asyncio.wait_for(proc.communicate(), 20)
     return proc.returncode, out.decode(), err.decode()
+
+
+async def closed_port():
+    """A port nothing listens on any more: the command finds no mesh there."""
+    probe = TestServer(server.make_app(), host="127.0.0.1")
+    await probe.start_server()
+    port = probe.port
+    await probe.close()
+    return port
+
+
+def generation_on_disk_from(out):
+    """The generation the command announces after raising it on disk."""
+    found = re.search(r"generation raised on disk \((\d+)\)", out)
+    assert found, out
+    return int(found.group(1))
+
+
+async def status_from(port, headers):
+    async with aiohttp.ClientSession() as http, \
+            http.get(f"http://127.0.0.1:{port}/api/sessions", headers=headers) as resp:
+        return resp.status
 
 
 @pytest.fixture
@@ -195,21 +254,22 @@ async def live():
     await test_server.close()
 
 
-async def test_the_command_with_the_server_up(live, auth_cookie):
+async def test_the_command_with_the_server_up(live, auth_cookie, auth_bearer):
+    assert await status_from(live.port, auth_cookie) == 200
     code, out, err = await run_cli(live.port)
     assert (code, err) == (0, "")
-    assert "generation 1" in out
+    assert out == "All devices are signed out (generation 1).\n"
     assert server.GENERATION.current() == 1
+    assert await status_from(live.port, auth_cookie) == 401        # the cookie from before
+    assert await status_from(live.port, auth_bearer) == 200        # the master token still works
 
 
 async def test_the_command_with_the_server_down(auth_cookie):
-    probe = TestServer(server.make_app(), host="127.0.0.1")
-    await probe.start_server()
-    port = probe.port
-    await probe.close()                                  # nothing listens on this port any more
+    port = await closed_port()
     code, out, err = await run_cli(port)
     assert (code, err) == (0, "")
     assert "is not responding" in out
+    assert out == "The mesh is not responding: generation raised on disk (1). All devices are signed out.\n"
     assert server.GENERATION.current() == 1
     assert server.cookie_value() != auth_cookie["Cookie"].split("=", 1)[1]
 
@@ -218,3 +278,47 @@ async def test_a_bump_made_on_disk_is_seen_by_the_running_server(client, auth_co
     assert (await client.get("/api/sessions", headers=auth_cookie)).status == 200
     cookiegen.bump(server.GENERATION_FILE)
     assert (await client.get("/api/sessions", headers=auth_cookie)).status == 401
+
+
+async def test_interop_a_bump_by_the_command_is_seen_by_the_running_server(client, auth_cookie):
+    assert (await client.get("/api/sessions", headers=auth_cookie)).status == 200
+    code, _out, err = await run_cli(await closed_port())
+    assert (code, err) == (0, "")
+    assert (await client.get("/api/sessions", headers=auth_cookie)).status == 401
+
+
+async def test_interop_the_command_and_cookiegen_share_the_generation_file():
+    port = await closed_port()
+    code, out, err = await run_cli(port)
+    assert (code, err) == (0, "")
+    written = generation_on_disk_from(out)
+    assert written == 1
+    assert server.GENERATION_FILE.read_text() == "1\n"
+    assert stat.S_IMODE(server.GENERATION_FILE.stat().st_mode) == 0o600
+    assert cookiegen.read(server.GENERATION_FILE) == written            # binary -> cookiegen
+    bumped = cookiegen.bump(server.GENERATION_FILE)                     # cookiegen -> binary
+    code, out, err = await run_cli(port)
+    assert (code, err) == (0, "")
+    assert generation_on_disk_from(out) == bumped + 1
+    assert cookiegen.read(server.GENERATION_FILE) == bumped + 1
+
+
+async def test_interop_the_command_creates_a_missing_generation_file():
+    server.GENERATION_FILE.unlink()
+    code, out, err = await run_cli(await closed_port())
+    assert (code, err) == (0, "")
+    assert generation_on_disk_from(out) == 1
+    assert server.GENERATION_FILE.read_text() == "1\n"
+    assert stat.S_IMODE(server.GENERATION_FILE.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("junk", ["", "abc\n", "-3\n", "1.5\n"])
+async def test_interop_the_command_never_reads_a_damaged_file_as_zero(junk):
+    server.GENERATION_FILE.write_text(junk)
+    code, out, err = await run_cli(await closed_port())
+    assert (code, err) == (0, "")
+    assert f"session-mesh: {server.GENERATION_FILE} is not a generation number; every login is revoked\n" in out
+    raised = generation_on_disk_from(out)
+    assert raised > 1_000_000
+    assert cookiegen.read(server.GENERATION_FILE) == raised
+    assert stat.S_IMODE(server.GENERATION_FILE.stat().st_mode) == 0o600

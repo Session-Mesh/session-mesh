@@ -127,7 +127,7 @@ describe('release-check-macos.sh runtime-minos', () => {
   });
 });
 
-// opam, apk and strip are recorders; `opam exec ... dune build` creates the four programs. The
+// opam, apk and strip are recorders; `opam exec ... dune build` creates the six programs. The
 // switch reads only the default repository, which the script has set to the pin; the repository
 // listing has the layout of opam 2.6.
 const FAKE_OPAM = `#!/bin/sh
@@ -138,7 +138,7 @@ case "$*" in
   'repository list --all'*) printf '# Repository # Url # Switches(rank)\\ndefault      %s <default>\\n' "$PINNED_REPOSITORY" ;;
   *'ocamlc -version') echo 5.3.0 ;;
   *'dune build'*) mkdir -p _build/install/default/bin
-    for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history; do : > "_build/install/default/bin/$program"; done ;;
+    for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all; do : > "_build/install/default/bin/$program"; done ;;
 esac
 `;
 
@@ -172,6 +172,9 @@ printf '#define SQLITE_VERSION  "3.54.1"\\n' > "$dest/sqlite-amalgamation-354010
   const result = spawnSync('bash', ['scripts/release-build-static.sh', REPO, path.join(scratch, name, 'out')],
     {cwd: REPO, env, encoding: 'utf8'});
   assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(fs.readdirSync(path.join(scratch, name, 'out')).sort(),
+    ['mesh-board-mcp', 'mesh-history', 'mesh-logout-all', 'mesh-platform', 'mesh-ptyhost', 'mesh-read'],
+    'the six programs are copied out');
   assert.deepEqual(fs.readdirSync(tmp), [], 'the copy of the repository it builds in is removed');
   return fs.readFileSync(calls, 'utf8').split('\n').filter((line) => !line.includes('--switch=static'));
 }

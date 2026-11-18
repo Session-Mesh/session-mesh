@@ -5,7 +5,7 @@
 // mesh directly even when the environment names a proxy, never hand the token to that proxy, and never
 // follow a redirection elsewhere (it would resend the Authorization header to another host).
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -15,6 +15,36 @@ import {after, before, beforeEach, describe, test} from 'node:test';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const PYTHON = process.env.MESH_PYTHON || 'python3';
+// The mesh-logout-all under test: MESH_LOGOUT_ALL_CMD, a path to an executable or a JSON argv array
+// (never a shell string); else the native program of this checkout's dune build, else the one
+// scripts/bootstrap.sh installs in the opam switch (MESH_OPAM_SWITCH, else the current one).
+function isExecutable(file: string): boolean {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+function defaultLogoutAll(): string {
+  const built = path.join(REPO, 'ocaml', '_build', 'default', 'bin', 'mesh_logout_all_main.exe');
+  if (isExecutable(built)) return built;
+  const switchArgs = process.env.MESH_OPAM_SWITCH ? [`--switch=${process.env.MESH_OPAM_SWITCH}`] : [];
+  const opam = spawnSync('opam', ['var', ...switchArgs, 'bin'], {encoding: 'utf8'});
+  const installed = opam.status === 0 ? path.join(opam.stdout.trim(), 'mesh-logout-all') : '';
+  if (installed && isExecutable(installed)) return installed;
+  throw new Error('no mesh-logout-all to test: set MESH_LOGOUT_ALL_CMD to the absolute path of the native program, '
+    + 'or build it (scripts/bootstrap.sh, or dune build in ocaml/)');
+}
+function logoutAllCommand(): string[] {
+  const raw = process.env.MESH_LOGOUT_ALL_CMD ?? '';
+  if (!raw) return [defaultLogoutAll()];
+  if (!raw.trimStart().startsWith('[')) return [raw];
+  const argv: unknown = JSON.parse(raw);
+  assert.ok(Array.isArray(argv) && argv.length > 0 && argv.every(item => typeof item === 'string'),
+    'MESH_LOGOUT_ALL_CMD must be a path or a JSON array of strings');
+  return argv as string[];
+}
 const MASTER = 'master-token-for-the-test';
 const SESSION = 'session-token-for-the-test';
 const PROXY_VARIABLES = ['http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY', 'https_proxy', 'HTTPS_PROXY'];
@@ -31,6 +61,7 @@ let meshPort = 0;
 let proxyPort = 0;
 let thirdPartyPort = 0;
 let redirectStatus = 0;
+let refusalStatus = 0;
 
 const REPLIES: Record<string, object> = {
   '/api/open': {target: 'shown'},
@@ -47,6 +78,11 @@ const mesh = http.createServer((request, response) => {
     if (redirectStatus) {
       response.writeHead(redirectStatus, {Location: `http://localhost:${thirdPartyPort}${request.url ?? '/'}`});
       response.end();
+      return;
+    }
+    if (refusalStatus) {
+      response.writeHead(refusalStatus, {'Content-Type': 'application/json'});
+      response.end(JSON.stringify({error: 'refused'}));
       return;
     }
     response.writeHead(200, {'Content-Type': 'application/json'});
@@ -122,6 +158,7 @@ beforeEach(() => {
   seenByThirdParty.length = 0;
   proxyConnections = 0;
   redirectStatus = 0;
+  refusalStatus = 0;
   sessionShellPid = 1;
 });
 
@@ -135,7 +172,8 @@ function environment(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 function runCli(name: string, args: string[], extra: NodeJS.ProcessEnv = {}): Promise<{code: number | null; output: string}> {
   return new Promise(resolve => {
-    const child = spawn(PYTHON, [path.join(REPO, 'bin', name), ...args],
+    const argv = name === 'mesh-logout-all' ? logoutAllCommand() : [PYTHON, path.join(REPO, 'bin', name)];
+    const child = spawn(argv[0], [...argv.slice(1), ...args],
       {cwd: scratch, env: environment(extra), stdio: ['ignore', 'pipe', 'pipe']});
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });
@@ -179,6 +217,7 @@ describe('mesh CLIs ignore proxy variables for the local mesh', () => {
     const result = await runCli('mesh-logout-all', []);
     assert.equal(result.code, 0, result.output);
     assert.match(result.output, /generation 7/);
+    assert.ok(!result.output.includes(MASTER), 'the master token was printed');
     assertDirect([{method: 'POST', url: '/api/logout-all', authorization: `Bearer ${MASTER}`}]);
   });
 
@@ -215,6 +254,7 @@ describe('mesh CLIs never follow a redirection', () => {
     assert.notEqual(result.code, 0, result.output);
     assert.match(result.output, /redirect refused/);
     assert.doesNotMatch(result.output, /signed out/);
+    assert.ok(!result.output.includes(MASTER), 'the master token was printed');
     assert.deepEqual(seenByThirdParty, []);
   });
 
@@ -225,6 +265,72 @@ describe('mesh CLIs never follow a redirection', () => {
     assert.equal(result.code, 0, result.output);
     assert.equal(seenByMesh.length, 1);
     assert.deepEqual(seenByThirdParty, []);
+  });
+});
+
+// mesh-logout-all carries the master token: an answer other than 2xx is fatal and never falls back to
+// the generation file (only a mesh that does not answer does), and no outcome prints the token.
+describe('mesh-logout-all keeps the master token and the generation file to itself', () => {
+  const generationFile = path.join(confDir, 'cookie-generation');
+  const generation = (): string | null => fs.existsSync(generationFile) ? fs.readFileSync(generationFile, 'utf8') : null;
+
+  for (const status of [401, 403, 404, 500]) {
+    test(`mesh-logout-all reports a ${status} without the disk fallback and without the token`, async () => {
+      refusalStatus = status;
+      const before = generation();
+      const result = await runCli('mesh-logout-all', []);
+      assert.equal(result.code, 1, result.output);
+      assert.match(result.output, new RegExp(`^mesh-logout-all: the mesh refused \\(${status} `, 'm'));
+      assert.doesNotMatch(result.output, /signed out/);
+      assert.ok(!result.output.includes(MASTER), 'the master token was printed');
+      assert.equal(generation(), before, 'the offline fallback ran on a refusal');
+      assertDirect([{method: 'POST', url: '/api/logout-all', authorization: `Bearer ${MASTER}`}]);
+    });
+  }
+
+  test('mesh-logout-all names an unreadable token without printing it', {skip: process.getuid?.() === 0 && 'root reads a mode-000 file'}, async () => {
+    const locked = path.join(scratch, 'conf-locked-token');
+    fs.mkdirSync(locked, {recursive: true});
+    fs.writeFileSync(path.join(locked, 'token'), MASTER + '\n', {mode: 0o000});
+    const result = await runCli('mesh-logout-all', [], {MESH_CONF_DIR: locked});
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /^mesh-logout-all: unreadable token \(.*token.*\)$/m);
+    assert.ok(!result.output.includes(MASTER), 'the master token was printed');
+    assert.ok(!fs.existsSync(path.join(locked, 'cookie-generation')), 'the generation file was written');
+    assertDirect([]);
+  });
+
+  // A line that cannot be written ends the command with exit 1 and a reason, not an uncaught exception
+  // (exit 2): stdout a pipe nobody reads, or a full device.
+  for (const sink of ['a closed pipe', 'a full device'] as const) {
+    const skip = sink === 'a full device' && !fs.existsSync('/dev/full') && 'no /dev/full';
+    test(`mesh-logout-all exits 1 when its stdout is ${sink}`, {skip}, async () => {
+      const full = sink === 'a full device' ? fs.openSync('/dev/full', 'w') : undefined;
+      const result = await new Promise<{code: number | null; stderr: string}>(resolve => {
+        const argv = logoutAllCommand();
+        const child = spawn(argv[0], argv.slice(1), {cwd: scratch, env: environment({}), stdio: ['ignore', full ?? 'pipe', 'pipe']});
+        child.stdout?.destroy();
+        let stderr = '';
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        child.on('close', code => resolve({code, stderr}));
+      });
+      if (full !== undefined) fs.closeSync(full);
+      assert.equal(result.code, 1, result.stderr);
+      assert.match(result.stderr, /^mesh-logout-all: cannot write on stdout \(.+\)$/m);
+      assert.doesNotMatch(result.stderr, /Fatal error|exception/);
+      assert.ok(!result.stderr.includes(MASTER), 'the master token was printed');
+    });
+  }
+
+  test('mesh-logout-all names a token that is not a file without printing anything else', async () => {
+    const odd = path.join(scratch, 'conf-token-directory');
+    fs.mkdirSync(path.join(odd, 'token'), {recursive: true});
+    const result = await runCli('mesh-logout-all', [], {MESH_CONF_DIR: odd});
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /^mesh-logout-all: unreadable token \(.*token.*\)$/m);
+    assert.doesNotMatch(result.output, /Traceback/);
+    assert.ok(!fs.existsSync(path.join(odd, 'cookie-generation')), 'the generation file was written');
+    assertDirect([]);
   });
 });
 
@@ -295,7 +401,9 @@ describe('mesh CLIs accept only a port number in MESH_PORT', () => {
     ['mesh-event', ['codex', turn], {MESH_SESSION_TOKEN: SESSION, MESH_EVENT_DEBUG: '1'}],
   ];
   const badPorts = (): string[] => [`${meshPort}@localhost:${thirdPartyPort}`, `${meshPort}@localhost`,
-    `${thirdPartyPort}/x`, `${meshPort}#`, `${meshPort}?`, ` ${meshPort}`, '0', '65536', '-1', '1e3', '٧٦٩٠', 'http'];
+    `${thirdPartyPort}/x`, `${meshPort}#`, `${meshPort}?`, ` ${meshPort}`, '0', '65536', '-1', '1e3', '٧٦٩٠', 'http',
+    // integer syntaxes a language's integer parser accepts but that are no port number
+    '0x1E5A', '7_690', '+7690'];
 
   for (const [name, args, extra] of CLIS) {
     test(`${name}${extra.MESH_SESSION_TOKEN && name === 'mesh-open' ? ' (session token)' : ''} sends nothing with a malformed MESH_PORT`, async () => {
