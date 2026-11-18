@@ -320,3 +320,42 @@ function docMatches(text: string) {
   }
   return out;
 }
+
+// Copy on select. The per-device preference is stored under COPY_ON_SELECT_KEY (client store);
+// only an explicit `false` turns it off, so a missing, malformed or older value keeps the default.
+export const COPY_ON_SELECT_KEY = "copyOnSelect";
+export const copyOnSelectEnabled = (stored: unknown): boolean => stored !== false;
+
+export type CopyOnSelectState = {
+  enabled: boolean;
+  selection: string;
+  /** the pane is shown and the page is in the foreground: a hidden pane never writes the clipboard */
+  visible: boolean;
+  /** the program tracks the mouse (xterm's mouseTrackingMode is not "none") */
+  mouseTracking: boolean;
+  /** the user held Shift or Option to force a text selection */
+  forced: boolean;
+};
+
+/**
+ * Whether the held modifiers force a text selection past a program that tracks the mouse, by
+ * xterm's own rule: Shift on Linux and Windows, Option on macOS (macOptionClickForcesSelection).
+ * The link handler and copy on select share it, so the two never disagree.
+ */
+export function forcesSelection(event: {shiftKey: boolean; altKey: boolean}, platform: "mac" | "other"): boolean {
+  return platform === "mac" ? event.altKey : event.shiftKey;
+}
+
+/** How long a double click waits for a possible third click before its word is copied (ms). */
+export const COPY_ON_SELECT_MULTI_CLICK_MS = 350;
+
+/** The wait before a release copies: none for a drag or a triple click, one window for a double click. */
+export function copyOnSelectDelay(clickCount: number): number {
+  return clickCount === 2 ? COPY_ON_SELECT_MULTI_CLICK_MS : 0;
+}
+
+/** Whether the selection that has just settled is written to the clipboard. */
+export function shouldCopyOnSelect(state: CopyOnSelectState): boolean {
+  if (!state.enabled || !state.visible || state.selection.trim() === "") return false;
+  return !state.mouseTracking || state.forced;
+}

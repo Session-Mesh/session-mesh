@@ -251,6 +251,16 @@ session had before this browser attached, then rewrapped to the browser's width.
   "🎙 Microphone recording" (5 minutes at most) wherever the browser allows it. Nothing is sent
   before you confirm, and the camera and microphone stop when the capture ends.
 - **Font size.** "A−" and "A+" in the top bar.
+- **Copy on select.** Selecting text in a terminal copies it to the clipboard when you release the
+  mouse button, or lift your finger after a long-press selection on a phone; the text stays
+  selected. It is on by default and is a per-browser preference, kept in the page's client store
+  (browser local storage) under the key `copyOnSelect` (`false` turns it off, anything else keeps
+  it on); the Configuration dialog has no control for it yet. Nothing is copied for an empty selection,
+  from a hidden pane or page, or while a program tracks the mouse, unless you force the selection
+  with `Shift`+drag (`Option`+drag on macOS). Browsers only let a page write the clipboard from a
+  user gesture in a secure context (HTTPS or localhost); when the browser refuses, the page says
+  so once and keeps working. `Ctrl+C`, `Ctrl+Shift+C`, right-click and the phone "Copy" button
+  still copy as before, and clear the selection afterwards.
 - **Garbled display.** "Redraw the terminal" (pane "More" menu or session menu) briefly changes the
   terminal size so the program redraws itself. When several browsers show the same session, the
   session has the size of the one that sent it last, and output drawn for another width can
