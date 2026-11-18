@@ -174,6 +174,35 @@ pull requests; rename the job first if the label should not say "informational",
 `MACOS_JOB_NAME` in the same file and the table in CONTRIBUTING.md), and move its timeout to the
 other jobs' safety net if the cold build needs it.
 
+## The apt mirror step of the Ubuntu jobs
+
+Every job on an Ubuntu runner that installs packages (`apt-get`, `ocaml/setup-ocaml`, which runs
+`apt-get install` for 29 packages, and `playwright install --with-deps`) first runs
+`bash .github/scripts/fast-apt-mirror.sh`, in `public-ci.yml` and in the two `apt-get` steps of
+`release.yml`.
+
+Why: the hosted images read `/etc/apt/sources.list.d/ubuntu.sources` with
+`URIs: mirror+file:/etc/apt/apt-mirrors.txt`, and the mirror that list gives varies from job to job.
+Measured on two runs (44388371635 and 44380708745, 2026-11-18), not more: where the log shows
+`azure.archive.ubuntu.com`, packages came in 0 to 2 s and `playwright install --with-deps` took 19 to 29 s;
+where it shows `us-east-2.ec2.archive.ubuntu.com`, the same installs ran at 57 to 99 kB/s with stalls of
+20 to 200 s per package (setup-ocaml 492 s, 436 s of it in apt; Playwright installs of 300 to 630 s).
+The pull request wall-clock median over 12 runs of the same day was 992 s (16.5 min), against 435 s for
+the one run with the fast mirror everywhere. The causal link is shown on those two runs; the other
+runs were read from step durations only. Compare the first runs after the change with that median.
+
+What the script does: it writes `/etc/apt/apt.conf.d/zzz-ci-retries` (`Acquire::Retries "3"`, and a 20 s
+`Acquire::http::Timeout` and `Acquire::https::Timeout`, which bound a stalled transfer, not a whole
+download); then, on x86_64 with a DEB822 `ubuntu.sources`, it points the archive URIs at
+`azure.archive.ubuntu.com` (the security stanza keeps `security.ubuntu.com`) and checks that with an
+`apt-get update` limited to `ubuntu.sources`, bounded to 120 s and run with `--error-on=any` (without it a failed fetch is only a warning and the dead mirror would be kept). If that fails, the original file is
+restored and the job goes on with the runner's own mirror. `Acquire::ForceIPv4` is not set: nothing in the
+logs points to IPv6. It never fails the job, apt still verifies every signature, and it does nothing off
+Linux, nothing to the mirror on a runner without that file (the 22.04 and arm runners of `release.yml` get
+the retries only), and nothing on a second run. To disable it, remove the step or set
+`CI_APT_MIRROR_DISABLE: "1"` in its `env`. `tests/ci-apt-mirror.test.ts` checks the step order of every
+job and the script with a fake `sudo`, `apt-get` and `uname`.
+
 ## Backports to the maintenance branch
 
 For maintainers. The rules for contributors (target `main`, the `semver:` labels, `release/latest`)
