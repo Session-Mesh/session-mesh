@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-// The owner's read-only "Configuration" dialog: the effective paths, the served version, the
+// The owner's "Configuration" dialog, laid out in sections (settings-shell.ts): the effective paths, the served version, the
 // terminal host, the detected agents, and the network and notification state, as GET /api/config
 // reports them. Bundled into pane-actions.js, so it adds no served file.
 //
@@ -9,6 +9,7 @@
 // path to the clipboard. The server never sends a secret, and the page shows nothing it did not
 // receive. A value that is missing or of the wrong type is shown as "unknown", never guessed.
 
+import { SettingsShell, type ShellSection } from "./settings-shell.ts";
 import { LaunchEditor, parseElevation, parseLaunch, type LaunchNotice, type LaunchPorts } from "./config-launch-editor.ts";
 
 export type ConfigTranslate = (key: string, params?: Record<string, string | number>) => string;
@@ -145,13 +146,16 @@ export function buildSections(raw: unknown, t: ConfigTranslate, language: string
 export class ConfigPanel {
   private generation = 0;
   private editor: LaunchEditor | null = null;
+  private shell: SettingsShell | null = null;
+  private selected: string | null = null;
   private readonly elements: ConfigElements;
   private readonly ports: ConfigPorts;
   private readonly language: () => string;
   constructor(elements: ConfigElements, ports: ConfigPorts, language: () => string) {
     this.elements = elements; this.ports = ports; this.language = language;
     elements.dialog.addEventListener("close", () => {
-      this.generation += 1; this.editor?.dispose(); this.editor = null; elements.body.replaceChildren();
+      this.generation += 1; this.editor?.dispose(); this.editor = null; this.disposeShell(); this.selected = null;
+      elements.body.replaceChildren();
     });
   }
 
@@ -165,8 +169,8 @@ export class ConfigPanel {
     const doc = this.elements.dialog.ownerDocument;
     return sections.map((section) => {
       const block = doc.createElement("section");
-      block.className = "config-section"; block.dataset.section = section.id;
-      const heading = doc.createElement("h3");
+      block.className = "config-section config-card"; block.dataset.section = section.id;
+      const heading = doc.createElement("h4");
       heading.textContent = section.title;
       const list = doc.createElement("dl");
       list.className = "config-list";
@@ -183,6 +187,34 @@ export class ConfigPanel {
       block.append(heading, list);
       return block;
     });
+  }
+
+  private disposeShell(): void {
+    if (this.shell !== null) this.selected = this.shell.selected;
+    this.shell?.dispose(); this.shell = null;
+  }
+
+  private soon(kind: string): HTMLElement {
+    const card = this.elements.dialog.ownerDocument.createElement("section");
+    card.className = "config-section config-card config-soon"; card.dataset.section = `soon-${kind}`;
+    const heading = card.ownerDocument.createElement("h4"), line = card.ownerDocument.createElement("p");
+    heading.textContent = this.ports.t("config.soon"); line.className = "mute"; line.textContent = this.ports.t(`config.soon.${kind}`);
+    card.append(heading, line);
+    return card;
+  }
+
+  // Where each existing card lives. Nothing moves between cards, only between sections.
+  private layout(cards: readonly HTMLElement[], launch: HTMLElement): ShellSection[] {
+    const { t } = this.ports;
+    const pick = (...ids: string[]) => cards.filter((card) => ids.includes(card.dataset.section ?? ""));
+    return [
+      { id: "appearance", title: t("config.section.appearance"), cards: [this.soon("appearance")] },
+      { id: "terminal", title: t("config.section.terminal"), cards: [this.soon("terminal")] },
+      { id: "notifications", title: t("config.section.notifications"), cards: pick("notifications") },
+      { id: "updates", title: t("config.section.updates"), cards: [this.soon("updates")] },
+      { id: "agents", title: t("config.section.agents"), cards: [...pick("agents"), launch] },
+      { id: "system", title: t("config.section.system"), cards: pick("paths", "version", "host", "network") },
+    ];
   }
 
   private copyButton(label: string, copied: string): HTMLButtonElement {
@@ -205,16 +237,16 @@ export class ConfigPanel {
     const mine = ++this.generation;
     const result = await this.ports.load().catch(() => ({ state: "error" as const }));
     if (mine !== this.generation || !dialog.open) return;
-    this.editor?.dispose(); this.editor = null;
+    this.editor?.dispose(); this.editor = null; this.disposeShell();
     if (result.state !== "ok") { body.replaceChildren(this.note(this.ports.t("config.loadFailed"))); return; }
     const raw = record(result.value);
     const { t, elevate, revoke, save } = this.ports;
     this.editor = new LaunchEditor(dialog.ownerDocument, parseLaunch(raw.launch), parseElevation(raw.elevation),
       { t, elevate, revoke, save, reload: (next) => { void this.load(next); } }, notice);
-    const sections = this.render(buildSections(result.value, t, this.language()));
-    const at = sections.findIndex((section) => section.dataset.section === "agents");
-    sections.splice(at < 0 ? sections.length : at + 1, 0, this.editor.element);
-    body.replaceChildren(...sections);
+    const cards = this.render(buildSections(result.value, t, this.language()));
+    this.shell = new SettingsShell(dialog.ownerDocument, { nav: t("config.nav"), back: t("config.back") },
+      this.layout(cards, this.editor.element), this.selected);
+    body.replaceChildren(this.shell.element);
   }
 
   open(): boolean {

@@ -794,17 +794,49 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 @media (min-width:1800px) { .project-cockpit { padding:24px 40px 40px; } }
 @media (max-width:850px) { .project-cockpit { padding:12px 16px; } .project-cockpit .cockpit-overview-grid { grid-template-columns:minmax(0,1fr); } .project-cockpit .cockpit-tabs { gap:20px; margin:16px 0; } .project-cockpit .cockpit-card { padding:16px; } .project-cockpit .project-overview-heading h2 { font-size:24px; } .project-cockpit .cockpit-description { max-height:3.1em; } .project-cockpit .cockpit-actions button { padding:6px 10px; min-height:34px; } }
 
-/* ---------------- configuration dialog (read-only) */
+/* ---------------- configuration dialog */
 .config-notice { font-size: 12px; }
-.config-section h3 { margin: 14px 0 6px; font-size: 13px; }
+.config-section h4 { margin: 14px 0 6px; font-size: 13px; }
 .config-list { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
-.config-row { display: grid; grid-template-columns: minmax(0, 11em) minmax(0, 1fr); gap: 4px 10px; border-bottom: 1px solid var(--line); padding-bottom: 6px; min-width: 0; }
+.config-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px;  border-bottom: 1px solid var(--line); padding-bottom: 6px; min-width: 0; }
 .config-row dt { color: var(--mute); font-size: 12px; overflow-wrap: anywhere; }
 .config-row dd { margin: 0; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
 .config-hint { flex-basis: 100%; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 .config-value { overflow-wrap: anywhere; word-break: break-word; min-width: 0; font-size: 13px; }
 .config-value.mono { font: 12px/1.45 var(--mono); }
-@media (max-width: 600px) { .config-row { grid-template-columns: minmax(0, 1fr); } .config-copy { min-height: 36px; } }
+@media (max-width: 600px) { .config-copy { min-height: 36px; } }
+/* Sections: a sidebar and a grid of cards; one column and a drill-down list on a phone (760px, as the page). */
+#dlg-config { width: min(1100px, 94vw); max-width: none; box-sizing: border-box; max-height: calc(100dvh - 32px); overflow: hidden; }
+#dlg-config[open] { display: flex; flex-direction: column; height: min(760px, calc(100dvh - 32px)); }
+#dlg-config .config-notice { margin: 0 0 12px; }
+#config-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.config-shell { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; }
+.config-nav { overflow-y: auto; border-right: 1px solid var(--line); padding-right: 12px; }
+.config-nav-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.config-nav-button { width: 100%; text-align: left; background: transparent; color: var(--fg); border: 0; border-left: 3px solid transparent; border-radius: 6px; padding: 9px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.config-nav-button:hover { background: var(--panel-2); }
+.config-nav-button[aria-current="true"] { background: var(--panel-2); border-left-color: var(--accent); font-weight: 600; }
+.config-nav-button:focus-visible, .config-back:focus-visible, .config-panel-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.config-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.config-panel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.config-panel-title { margin: 0; font-size: 15px; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.config-back { display: none; }
+.config-cards { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: 12px; align-content: start; padding: 2px 4px 2px 0; }
+.config-card { border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px 12px; min-width: 0; background: var(--bg); }
+.config-card h4 { margin-top: 10px; }
+.config-card.config-launch, .config-card[data-section="paths"] { grid-column: 1 / -1; }
+.config-soon p { margin: 0; font-size: 13px; }
+@media (max-width: 760px), (max-height: 500px) {
+  #dlg-config { width: 100vw; height: 100dvh; max-height: none; border-radius: 0; border-width: 0; padding: 14px; margin: 0; }
+  #dlg-config[open] { height: 100dvh; }
+  .config-shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .config-nav { border-right: 0; padding-right: 0; }
+  .config-nav-button { min-height: 48px; border-bottom: 1px solid var(--line); border-radius: 0; border-left-width: 0; padding: 12px 6px; font-size: 15px; display: flex; justify-content: space-between; }
+  .config-nav-button::after { content: "›"; color: var(--mute); }
+  .config-nav-button[aria-current="true"] { background: transparent; }
+  .config-shell[data-view="list"] .config-panel, .config-shell[data-view="section"] .config-nav { display: none; }
+  .config-back { display: inline-block; min-height: 36px; }
+}
 .config-launch .config-bar, .config-launch .config-add, .config-launch .config-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
 .config-launch .config-bar { justify-content: space-between; }
 .config-launch .config-clock { margin: 0; font-size: 12px; }
