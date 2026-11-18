@@ -1,0 +1,380 @@
+# Nightly pre-release of session-mesh: once a night, the tip of main is tagged
+# v<next minor>.0-nightly.<YYYYMMDD> and published as a pre-release, so that users can try the next
+# version. Triggers: a schedule and a manual run, nothing else (no pull_request, no
+# pull_request_target, no fork trigger); a manual run is accepted on main only.
+#
+# Two jobs, and no build here: the files are built, attested and published by release.yml, the one
+# workflow that signs releases (install.sh checks its attestations with --signer-workflow release.yml
+# and --source-ref refs/tags/<tag>).
+# - decide (read-only token): whether to publish. The tip of main must differ from the commit of the
+#   previous nightly tag, no nightly tag may exist for today's UTC date (one nightly per day), and
+#   every check that public-ci.yml runs on main and that the ruleset requires must have completed
+#   successfully on that commit (see the comment at the gate). Otherwise nothing happens and the job
+#   summary says why. A tag that exists for today without a release and without a running
+#   release.yml is an orphan (an earlier run died after tagging): it is not skipped, release.yml is
+#   started on it again, at most MAX_REDISPATCH runs per tag, and only if the tag is an
+#   annotated tag of github-actions[bot] on main's head or an ancestor of main whose commit passes the
+#   same CI gate. decide has a read-only token, which cannot list draft releases: it sees published
+#   releases only. A draft is seen by the retention step of start (write permission); and
+#   release.yml itself refuses to overwrite an existing release for a tag.
+# - start (the only job with a write token: contents and actions): creates the annotated tag on the
+#   decided commit, through the API, with the run's own token, which starts no workflow by itself (a
+#   push of the tag would not either; release.yml refuses a push of a nightly tag anyway), starts
+#   release.yml on that tag, then removes the nightly pre-releases (drafts included: this job
+#   has the permission to list them) beyond the newest seven. The removal comes last and cannot fail the run: a failed cleanup must never leave
+#   a tag without a started release. The tag message is the release notes' opening: the warning and
+#   the commits since the previous nightly.
+# release.yml publishes a tag with a hyphen suffix with --prerelease and never as the latest release;
+# the update notice of an installation ignores pre-releases (mesh_update_check.ml).
+#
+# No secret and no third-party action: the gh CLI of the runner and the run's token only. Nightly
+# tags are matched in the shell by one exact pattern (nightly_tag_pattern); no other tag or release
+# is ever deleted, and at most MAX_DELETIONS per run.
+name: nightly
+
+on:
+  schedule:
+    # 02:17 UTC, off the hour.
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Newest nightly pre-releases kept, the new one included.
+  NIGHTLY_KEEP: "7"
+  # The most nightly releases or tags one run deletes.
+  MAX_DELETIONS: "3"
+  # The most release.yml runs started on one nightly tag, the first one included.
+  MAX_REDISPATCH: "2"
+
+jobs:
+  decide:
+    name: decide nightly
+    if: github.repository == 'Session-Mesh/session-mesh' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      tag: ${{ steps.decide.outputs.tag }}
+      previous: ${{ steps.decide.outputs.previous }}
+      redispatch: ${{ steps.decide.outputs.redispatch }}
+    steps:
+      - name: Decide whether to publish a nightly
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          nightly_tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}$'
+          export GH_REPO="$GITHUB_REPOSITORY"
+          skip() {
+            echo "Nightly skipped: $*" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          # The checks of public-ci.yml that run on a push to main and that the ruleset requires
+          # (CONTRIBUTING.md, "Required checks"); the pull request only checks do not run there.
+          required=(
+            "cla"
+            "leak check (public rules)"
+            "OCaml build, tests and native ptyhost gate"
+            "frontend and Node tests"
+            "ruff and pytest (without browser)"
+            "browser tests (Chromium, shard 0 of 4)"
+            "browser tests (Chromium, shard 1 of 4)"
+            "browser tests (Chromium, shard 2 of 4)"
+            "browser tests (Chromium, shard 3 of 4)"
+          )
+          # Only check runs of the app the ruleset requires (GitHub Actions, integration_id 15368)
+          # count: a same-named check run created by another app is ignored. The API is asked with
+          # filter=all: its default, filter=latest, keeps only the newest run of each name and would
+          # let a re-run replace an earlier failure. With filter=all every run of a required name on
+          # the commit must be completed/success, and there must be at least one. Chosen on purpose:
+          # a second suite on the same commit (a manual run of public-ci.yml on main) or a re-run does
+          # not supersede an earlier failure, the failed run still blocks the nightly until main moves
+          # on; a missing, neutral, skipped, cancelled or unfinished run fails closed, and so does a
+          # check run list that cannot be read. ci_failures prints one line per required check that is
+          # not green on the commit given, and nothing when all are.
+          ci_failures() {
+            local sha="$1" runs name state
+            runs="$(gh api --paginate "repos/$GH_REPO/commits/$sha/check-runs?filter=all&per_page=100" --jq '.check_runs[] | select(.app.id == 15368) | [.name, .status, (.conclusion // "")] | @tsv')" || { echo "the check runs of $sha cannot be read"; return 0; }
+            for name in "${required[@]}"; do
+              state="$(awk -F'\t' -v wanted="$name" '$1 == wanted {runs++; if ($2 != "completed" || $3 != "success") bad = bad (bad == "" ? "" : ", ") $2 "/" $3} END {if (runs == 0) print "none"; else if (bad != "") print "not green: " bad}' <<< "$runs")"
+              if [ "$state" = none ]; then
+                echo "$name: no run yet"
+              elif [ -n "$state" ]; then
+                echo "$name: $state"
+              fi
+            done
+          }
+          failures="$(ci_failures "$GITHUB_SHA")"
+          if [ -n "$failures" ]; then
+            skip "CI is not green on $GITHUB_SHA: $(tr '\n' ';' <<< "$failures" | sed 's/;/; /g')"
+          fi
+          # The newest nightly tag by date, whatever the version it carries.
+          nightlies="$(gh api --paginate "repos/$GH_REPO/git/matching-refs/tags/v" --jq '.[].ref | ltrimstr("refs/tags/")' | { grep -E "$nightly_tag_pattern" || true; })"
+          today="$(date -u +%Y%m%d)"
+          # What exists for a nightly tag: a published release, or release.yml runs started on it. A
+          # failed read stops the job (fail closed).
+          # The run history is read before the release list: a run completed in the history snapshot has
+          # already published its release, which the later read includes.
+          history="$(gh api --paginate "repos/$GH_REPO/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100" --jq '.workflow_runs[] | [.head_branch, .status] | @tsv')"
+          released_tags="$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name')"
+          has_release() { grep -Fxq -- "$1" <<< "$released_tags"; }
+          running_count() { awk -F'\t' -v wanted="$1" '$1 == wanted && $2 != "completed" {n++} END {print n + 0}' <<< "$history"; }
+          existing="$(grep -- "-nightly\.$today\$" <<< "$nightlies" | head -n 1 || true)"
+          if [ -n "$existing" ]; then
+            # One nightly per UTC day. A tag that has a published release is a finished nightly; one
+            # that release.yml is running on is under way. Neither is touched. A tag with neither is
+            # an orphan (a run died after tagging): release.yml is started on it again, unless it
+            # already ran MAX_REDISPATCH times on it, which ends a loop of failures.
+            released=0
+            if has_release "$existing"; then released=1; fi
+            total="$(awk -F'\t' -v wanted="$existing" '$1 == wanted {n++} END {print n + 0}' <<< "$history")"
+            active="$(running_count "$existing")"
+            if [ "$released" -gt 0 ]; then
+              skip "the nightly $existing is already released (one nightly per UTC day, none is overwritten)"
+            elif [ "$active" -gt 0 ]; then
+              skip "release.yml is still running on $existing (one nightly per UTC day)"
+            elif [ "$total" -ge "$MAX_REDISPATCH" ]; then
+              echo "::warning::$existing has no release and release.yml already ran $total times on it; it is not started again, look at those runs"
+              skip "$existing has no release and release.yml already ran $total times on it"
+            fi
+            # An orphan is published by this scheduled run, so it is trusted no more than a fresh tag:
+            # it must be an annotated tag created by the workflow (tagger github-actions[bot], read
+            # through the API tag object; a lightweight tag, a tag object of another tagger or one
+            # that does not point at a commit is refused), its commit must be main's head or an
+            # ancestor of it (compare status identical or ahead), and the same CI gate as above must
+            # pass on that commit. Anything that cannot be read is a refusal. The tagger name is
+            # metadata that whoever pushes a tag object writes, so it is a consistency check against
+            # an accidental or lazy tag, not an authentication: the CI gate and the ancestry check
+            # are what bound a hand-made tag.
+            tag_ref="$(gh api "repos/$GH_REPO/git/ref/tags/$existing" --jq '"\(.object.type)|\(.object.sha)"')" || skip "the ref of the orphan tag $existing cannot be read; not started again"
+            IFS='|' read -r ref_type tag_object <<< "$tag_ref"
+            [ "$ref_type" = tag ] && [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]] || skip "the orphan tag $existing is not an annotated tag ($ref_type); not started again"
+            tag_data="$(gh api "repos/$GH_REPO/git/tags/$tag_object" --jq '"\(.tag)|\(.tagger.name // "-")|\(.object.type)|\(.object.sha)"')" || skip "the tag object of $existing cannot be read; not started again"
+            IFS='|' read -r tag_name tagger target_type tag_commit <<< "$tag_data"
+            [ "$tag_name" = "$existing" ] || skip "the tag object behind $existing names $tag_name; not started again"
+            [ "$tagger" = 'github-actions[bot]' ] || skip "the orphan tag $existing was not created by github-actions[bot] (tagger: $tagger); not started again"
+            [ "$target_type" = commit ] && [[ "$tag_commit" =~ ^[0-9a-f]{40}$ ]] || skip "the orphan tag $existing does not point at a commit; not started again"
+            if [ "$tag_commit" != "$GITHUB_SHA" ]; then
+              position="$(gh api "repos/$GH_REPO/compare/$tag_commit...$GITHUB_SHA" --jq .status)" || skip "the position of $tag_commit against main cannot be read; $existing is not started again"
+              case "$position" in
+                identical|ahead) ;;
+                *) skip "the commit $tag_commit of the orphan tag $existing is not main's head or an ancestor of it ($position); not started again" ;;
+              esac
+              failures="$(ci_failures "$tag_commit")"
+              if [ -n "$failures" ]; then
+                skip "CI is not green on $tag_commit, the commit of the orphan tag $existing: $(tr '\n' ';' <<< "$failures" | sed 's/;/; /g'); not started again"
+              fi
+            fi
+            echo "The tag $existing has no release and no running release.yml ($total earlier runs): starting release.yml on it again." | tee -a "$GITHUB_STEP_SUMMARY"
+            {
+              echo "publish=true"
+              echo "tag=$existing"
+              echo "previous="
+              echo "redispatch=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          previous=""
+          # Only nightlies the retention counts: a real calendar date, not later than today (UTC). A
+          # future-dated or invalid tag would otherwise be the "newest" one and block the nightly.
+          # Of those, only a nightly that exists counts as the previous one: it has a published
+          # release, or release.yml is running on it. The orphan of an earlier day (tagged, never
+          # released, no run in flight) is not published here: it is a past day's commit, and the
+          # run publishes today's nightly instead. It is ignored, so it can neither block today's
+          # nightly nor be the base of its commit list, and the summary names it. The retention
+          # removes it with the old nightlies.
+          valid=""
+          while IFS= read -r candidate; do
+            [ -n "$candidate" ] || continue
+            day="${candidate##*-nightly.}"
+            [ "$(date -u -d "${day:0:4}-${day:4:2}-${day:6:2}" +%Y%m%d 2>/dev/null || true)" = "$day" ] || continue
+            [[ "$day" > "$today" ]] && continue
+            if ! has_release "$candidate" && [ "$(running_count "$candidate")" -eq 0 ]; then
+              echo "Ignored $candidate as the previous nightly: it has no published release and no running release.yml (an orphan of an earlier day)." | tee -a "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            valid+="$candidate"$'\n'
+          done <<< "$nightlies"
+          nightlies="${valid%$'\n'}"
+          if [ -n "$nightlies" ]; then
+            previous_tag="$(awk '{date = $0; sub(/.*-nightly\./, "", date); print date, $0}' <<< "$nightlies" | LC_ALL=C sort | tail -n 1 | cut -d ' ' -f 2)"
+            previous="$(gh api "repos/$GH_REPO/commits/$previous_tag" --jq .sha)"
+            if [ "$previous" = "$GITHUB_SHA" ]; then
+              skip "main has not moved since $previous_tag ($GITHUB_SHA)"
+            fi
+          fi
+          # The version base: the minor after the latest stable release (/releases/latest never
+          # names a draft or a pre-release).
+          latest="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"
+          if ! [[ "$latest" =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
+            skip "the latest release $latest is not a stable release tag; the next version cannot be derived"
+          fi
+          tag="v${BASH_REMATCH[1]}.$((10#${BASH_REMATCH[2]} + 1)).0-nightly.$today"
+          [[ "$tag" =~ $nightly_tag_pattern ]] || skip "$tag is not a nightly tag name"
+          {
+            echo "Nightly $tag of $GITHUB_SHA: CI is green, main moved since ${previous:-the first nightly}."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "publish=true"
+            echo "tag=$tag"
+            echo "previous=$previous"
+            echo "redispatch=false"
+          } >> "$GITHUB_OUTPUT"
+
+  start:
+    name: start nightly release
+    needs: decide
+    if: needs.decide.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # contents: write creates the tag and deletes old nightlies; actions: write starts release.yml
+    # on the tag. Nothing else is writable in this workflow, and release.yml holds its own
+    # permissions (attestations included).
+    permissions:
+      contents: write
+      actions: write
+    env:
+      NIGHTLY_TAG: ${{ needs.decide.outputs.tag }}
+      PREVIOUS_SHA: ${{ needs.decide.outputs.previous }}
+      REDISPATCH: ${{ needs.decide.outputs.redispatch }}
+    steps:
+      - name: Annotate and create the nightly tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          nightly_tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}$'
+          export GH_REPO="$GITHUB_REPOSITORY"
+          [[ "$NIGHTLY_TAG" =~ $nightly_tag_pattern ]] || { echo "::error::not a nightly tag name: $NIGHTLY_TAG"; exit 1; }
+          if [ "$REDISPATCH" = true ]; then
+            echo "The orphan tag $NIGHTLY_TAG is kept as it is; only release.yml is started again." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [[ "$PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]] || PREVIOUS_SHA=""
+          # The first nightly lists the last 20 commits of main; the next ones list those since the
+          # previous nightly, at most 50. Subjects are data: first line, cut, no mention.
+          subject='"- \(.sha[0:9]) \(.commit.message | split("\n")[0] | .[0:120] | gsub("@"; "(at)"))"'
+          if [ -n "$PREVIOUS_SHA" ]; then
+            gh api "repos/$GH_REPO/compare/$PREVIOUS_SHA...$GITHUB_SHA" --jq ".commits | reverse | .[0:50][] | $subject" > "$RUNNER_TEMP/commits.md" || : > "$RUNNER_TEMP/commits.md"
+          else
+            gh api "repos/$GH_REPO/commits?sha=$GITHUB_SHA&per_page=20" --jq ".[] | $subject" > "$RUNNER_TEMP/commits.md" || : > "$RUNNER_TEMP/commits.md"
+          fi
+          {
+            echo "Nightly build of main at $GITHUB_SHA. It is an untested-by-users build of the next version: expect breakage, and prefer the latest stable release."
+            echo
+            if [ -s "$RUNNER_TEMP/commits.md" ]; then
+              echo "Commits since the previous nightly (newest first):"
+              echo
+              cat "$RUNNER_TEMP/commits.md"
+            else
+              echo "No commit list could be read."
+            fi
+          } > "$RUNNER_TEMP/message.md"
+          tag_object="$(gh api -X POST "repos/$GH_REPO/git/tags" -f tag="$NIGHTLY_TAG" -F message=@"$RUNNER_TEMP/message.md" -f object="$GITHUB_SHA" -f type=commit --jq .sha)"
+          gh api -X POST "repos/$GH_REPO/git/refs" -f ref="refs/tags/$NIGHTLY_TAG" -f sha="$tag_object" --silent
+          echo "Tagged $NIGHTLY_TAG at $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Start the release workflow on the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export GH_REPO="$GITHUB_REPOSITORY"
+          gh workflow run release.yml --ref "$NIGHTLY_TAG"
+          echo "release.yml started on $NIGHTLY_TAG: it builds, attests and publishes the pre-release (see the Actions tab)." >> "$GITHUB_STEP_SUMMARY"
+      # Last, and allowed to fail without failing the run: the tag exists and release.yml is
+      # started, so a failure here (an API error, a setting that forbids a deletion) only leaves old
+      # nightlies until the next published nightly: the ERR trap logs it as a warning and ends the step successfully.
+      - name: Remove the nightlies beyond the newest ones
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          nightly_tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}$'
+          export GH_REPO="$GITHUB_REPOSITORY"
+          trap 'echo "::warning::the retention of old nightlies stopped at line $LINENO; the older nightlies stay until the next published nightly"; exit 0' ERR
+          # Oldest first by date, all but the newest NIGHTLY_KEEP; only a tag that matches the nightly
+          # pattern exactly is ever deleted, only a release that is a pre-release is ever deleted, and
+          # at most MAX_DELETIONS per run. A nightly is a tag, a release or both: the releases are
+          # listed (a draft has no entry under releases/tags; this job has the permission to list
+          # drafts), each deleted by id, then its tag. Which tags take part:
+          # - NIGHTLY_TAG, the nightly of this run, is never deleted, and sorts last among equal dates.
+          # - A date that is not a real calendar date (20261399) is invalid: the tag is ignored.
+          # - A date after today's UTC date is a future date: the tag is ignored too. It is not
+          #   deletable, not "older" than anything and not counted among the newest seven, so a
+          #   misdated tag can neither displace a real nightly from the kept ones nor be deleted by
+          #   this job; it is only reported, and a maintainer decides.
+          # The newest seven are then the newest seven valid, non-future nightlies.
+          releases="$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[] | [.tag_name, .id, .draft, .prerelease] | @tsv')"
+          refs="$(gh api --paginate "repos/$GH_REPO/git/matching-refs/tags/v" --jq '.[].ref | ltrimstr("refs/tags/")')"
+          today="$(date -u +%Y%m%d)"
+          not_prerelease_count() { awk -F'\t' -v wanted="$1" '$1 == wanted && $4 != "true" {n++} END {print n + 0}' <<< "$releases"; }
+          dated=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            day="${tag##*-nightly.}"
+            if [ "$(date -u -d "${day:0:4}-${day:4:2}-${day:6:2}" +%Y%m%d 2>/dev/null || true)" != "$day" ]; then
+              echo "::warning::$tag has no valid calendar date; it is ignored by the retention"
+              continue
+            fi
+            if [[ "$day" > "$today" ]]; then
+              echo "::warning::$tag is dated after today ($today); it is ignored by the retention"
+              continue
+            fi
+            if [ "$(not_prerelease_count "$tag")" -gt 0 ]; then
+              echo "::warning::a release of $tag is not a pre-release; it is left alone"
+              continue
+            fi
+            own=0
+            [ "$tag" = "$NIGHTLY_TAG" ] && own=1
+            dated+=("$day $own $tag")
+          done < <({ printf '%s\n' "$refs"; cut -f 1 <<< "$releases"; } | { grep -E "$nightly_tag_pattern" || true; } | sort -u)
+          nightlies=()
+          if [ "${#dated[@]}" -gt 0 ]; then
+            mapfile -t nightlies < <(printf '%s\n' "${dated[@]}" | LC_ALL=C sort | cut -d ' ' -f 3)
+          fi
+          excess=$((${#nightlies[@]} - NIGHTLY_KEEP))
+          deleted=0
+          for tag in "${nightlies[@]:0:$((excess > 0 ? excess : 0))}"; do
+            [[ "$tag" =~ $nightly_tag_pattern ]] || continue
+            [ "$tag" != "$NIGHTLY_TAG" ] || continue
+            if [ "$deleted" -ge "$MAX_DELETIONS" ]; then
+              echo "Deletion cap of $MAX_DELETIONS reached; the older nightlies stay until the next published nightly." | tee -a "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+            not_prerelease="$(not_prerelease_count "$tag")"
+            if [ "$not_prerelease" -gt 0 ]; then
+              echo "::warning::a release of $tag is not a pre-release; it is left alone"
+              continue
+            fi
+            mapfile -t ids < <(awk -F'\t' -v wanted="$tag" '$1 == wanted {print $2}' <<< "$releases")
+            for id in "${ids[@]}"; do
+              [[ "$id" =~ ^[0-9]+$ ]] || continue
+              gh api -X DELETE "repos/$GH_REPO/releases/$id" --silent
+            done
+            if grep -Fxq -- "$tag" <<< "$refs"; then
+              if ! gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$tag" --silent; then
+                echo "::warning::the tag $tag could not be deleted (a ruleset may forbid it); the other nightlies are still cleaned up"
+                deleted=$((deleted + 1))
+                continue
+              fi
+            fi
+            deleted=$((deleted + 1))
+            echo "Removed the nightly $tag" >> "$GITHUB_STEP_SUMMARY"
+          done

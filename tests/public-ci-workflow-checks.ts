@@ -18,8 +18,9 @@ import {BACKPORT_CHECKS, checkBackportEvent, checkBackportPermissions, checkBack
 import {checkRegisterEvent, checkRegisterPermissions, checkRegisterSecrets, checkRegisterTriggers, REGISTER_CHECKS} from './backport-register-workflow-checks.ts';
 import {checkCleanupTriggers, checkPreviewActions, checkPreviewEvent, checkPreviewSecrets, checkPreviewTriggers, CLEANUP_CHECKS, PREVIEW_CHECKS} from './site-preview-workflow-checks.ts';
 import {checkReleasePermissions, checkReleaseRunners, checkReleaseTimeouts, RELEASE_CHECKS, releaseTokenLines} from './release-workflow-checks.ts';
+import {checkNightlyPermissions, checkNightlyTriggers, NIGHTLY_CHECKS, nightlyTokenLines} from './nightly-workflow-checks.ts';
 
-export type Profile = 'public' | 'description' | 'release' | 'site' | 'preview' | 'preview-cleanup' | 'policy' | 'backport' | 'register';
+export type Profile = 'public' | 'description' | 'release' | 'site' | 'preview' | 'preview-cleanup' | 'policy' | 'backport' | 'register' | 'nightly';
 
 // The one place where untrusted event text may enter an expression: the description workflow hands
 // the pull request body to its script through an environment variable.
@@ -255,6 +256,8 @@ function profileChecks(profile: Profile): {runners: Check; secrets: Check; injec
     case 'release':
       return {...shared, runners: checkReleaseRunners, secrets: (items) => checkSecrets(items, releaseTokenLines(items)),
         permissions: checkReleasePermissions, timeouts: checkReleaseTimeouts};
+    case 'nightly':
+      return {...shared, secrets: (items) => checkSecrets(items, nightlyTokenLines(items)), triggers: checkNightlyTriggers, permissions: checkNightlyPermissions};
     case 'site':
       return {...shared, permissions: checkSitePermissions};
     case 'preview':
@@ -291,6 +294,7 @@ export function checkWorkflow(text: string, profile: Profile = 'public'): string
   if (profile === 'release') checks.push(...RELEASE_CHECKS);
   if (profile === 'backport') checks.push(...BACKPORT_CHECKS);
   if (profile === 'register') checks.push(...REGISTER_CHECKS);
+  if (profile === 'nightly') checks.push(...NIGHTLY_CHECKS);
   if (profile === 'preview') checks.push(...PREVIEW_CHECKS);
   if (profile === 'preview-cleanup') checks.push(...CLEANUP_CHECKS);
   return checks.flatMap((check) => check(lines));

@@ -477,16 +477,16 @@ describe('release.yml as committed', () => {
     assert.equal(job(RELEASE_WRITE_JOB).find((line) => line.key === 'RELEASE_TAG')?.value, '${{ needs.tag.outputs.tag }}');
   });
 
-  test('the publish job runs for a v tag push only, after the tag and package jobs passed', () => {
+  test('the publish job runs for a published tag (v tag push or nightly tag run) only, after the tag and package jobs passed', () => {
     const condition = job(RELEASE_WRITE_JOB).find((line) => line.key === 'if' && line.indent === 4)?.value;
-    assert.equal(condition, "needs.tag.result == 'success' && needs.package.result == 'success' && github.event_name == 'push' && " +
+    assert.equal(condition, "needs.tag.result == 'success' && needs.package.result == 'success' && needs.tag.outputs.publish == 'true' && " +
       "startsWith(github.ref, 'refs/tags/v') && !cancelled()");
     assert.equal(job(RELEASE_WRITE_JOB).find((line) => line.key === 'needs')?.value, '[tag, package]');
   });
 
-  test('the tag job checks out the full history and checks main or release/latest, for tag pushes only, read-only', () => {
-    assert.match(raw('tag'), /actions\/checkout@[0-9a-f]{40} # [^\n]*\n\s+if: github\.event_name == 'push'\n\s+with:\n\s+persist-credentials: false\n\s+fetch-depth: 0\n/);
-    assert.match(raw('tag'), /- name: Check that the tag names a commit of main or of release\/latest\n\s+if: github\.event_name == 'push'\n/);
+  test('the tag job checks out the full history and checks main or release/latest, for published tags only, read-only', () => {
+    assert.match(raw('tag'), /actions\/checkout@[0-9a-f]{40} # [^\n]*\n\s+if: steps\.name\.outputs\.publish == 'true'\n\s+with:\n\s+persist-credentials: false\n\s+fetch-depth: 0\n/);
+    assert.match(raw('tag'), /- name: Check that the tag names a commit of main or of release\/latest\n\s+if: steps\.name\.outputs\.publish == 'true'\n/);
     assert.ok(!job('tag').some((line) => line.key === 'permissions'), 'the tag job keeps the read-only default');
   });
 

@@ -165,7 +165,7 @@ function checkReleaseTagPatterns(lines: Line[]): string[] {
 // write job names the results it needs and !cancelled() (a job condition without a status function
 // would also require every job upstream of the package job, the optional one included).
 export const RELEASE_WRITE_CONDITION = "needs.tag.result == 'success' && needs.package.result == 'success' && " +
-  "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !cancelled()";
+  "needs.tag.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/v') && !cancelled()";
 
 function checkReleaseWriteJob(lines: Line[]): string[] {
   const writeJob = jobBlocks(lines).find((job) => job.name === RELEASE_WRITE_JOB)?.block ?? [];

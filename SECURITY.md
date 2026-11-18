@@ -42,7 +42,14 @@ install.
   passes every check, and a token with `contents: write` can replace a published release's files.
   Two-factor authentication does not protect those tokens. Immutable releases and a tag ruleset
   restricting `v*` tags narrow this; the repository owner decides whether they are enabled
-  ([what you are trusting](docs/operations.md#prebuilt-binaries)).
+  ([what you are trusting](docs/operations.md#prebuilt-binaries)). Nightly pre-releases are
+  published by the same release workflow, started by a scheduled workflow on a tag it creates on a
+  commit of `main` after checking that the required checks passed on it; they carry the same
+  attestations, and no installation offers them by itself. That check belongs to the scheduled
+  workflow only: `release.yml` itself re-verifies that the tag is the built commit and that this
+  commit is `main`'s head or an ancestor of it, not the checks, and a person with write access can
+  run it on a nightly-shaped tag, or move the tag between the two steps. The boundary that matters
+  is therefore write access to the repository, as for stable releases.
 
 ### What session-mesh defends against
 
