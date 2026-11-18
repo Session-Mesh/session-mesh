@@ -2,10 +2,12 @@
 
 `cla-check.ts` decides whether a pull request may be merged with respect to the
 [Contributor License Agreement](../../CLA.md). Pull requests are integrated by **"Rebase and merge"
-only**, and the branch rule of `main` requires a branch to be up to date before merging. The check
-therefore accepts only a **linear pull request**: a straight line of ordinary commits on top of the
+only**. The branch rule of `main` does not require a branch to be up to date before merging; the
+check itself requires, when it runs, the base to be an ancestor of the head. It therefore accepts
+only a **linear pull request**: a straight line of ordinary commits on top of the
 tip of the base. For such a pull request, the tree GitHub's test merge holds is the head's tree, and
-it is also the tree the rebase lands; the check judges that tree.
+it is also the tree the rebase lands as long as the base has not moved; the check judges that
+tree (see "Re-running the check" when the base moves).
 
 Why linear: a rebase replays ordinary commits and drops merge commits. If a merge commit of the pull
 request undid, in the judged tree, what an ordinary commit did to the register, the check would see
@@ -116,8 +118,11 @@ evaluated; Git runs without a shell.
 
 The workflow runs on the `pull_request` types `opened`, `synchronize`, `reopened` and `edited`.
 
-- **`main` moves after the check ran.** The branch is no longer up to date, so the branch rule
-  forbids merging until the branch is rebased, which pushes new commits and runs the check again.
+- **`main` moves after the check ran.** The check does not run again, and the branch rule does not
+  require an up-to-date branch, so the earlier verdict stays on the pull request. The rebase then
+  lands the same commits on a tree the check did not judge: a register line removed from `main` in
+  the meantime is not seen. A maintainer who wants a verdict on the current `main` rebases the
+  branch (or asks for it), which pushes new commits and runs the check again.
 - **The base branch of the pull request is changed.** That is an `edited` event: the check runs
   again against the new base. Every job of the workflow runs on it, since a job skipped by a
   condition would count as a passed required check; editing the title or the description of a pull
