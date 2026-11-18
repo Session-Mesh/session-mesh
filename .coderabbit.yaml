@@ -30,7 +30,7 @@ reviews:
         Interface text must come from the catalogs in static/i18n/, never as a literal; a new key
         must exist in both en.json and fr.json. Some .js files are built from the .ts file of the
         same name: review the .ts source.
-    - path: "{server.py,sessionauth.py,sessiontoken.py,view.py,ptyhost.py,ocaml/**}"
+    - path: "{server.py,sessionauth.py,sessiontoken.py,cookiegen.py,view.py,ptyhost.py,ocaml/**}"
       instructions: >-
         This code sits on a trust boundary (authentication, /view, session tokens, the route
         table, the PTY host). Check the change against the threat model in SECURITY.md and say
