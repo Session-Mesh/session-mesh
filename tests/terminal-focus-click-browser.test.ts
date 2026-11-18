@@ -26,6 +26,7 @@ const PHONE = {width: 390, height: 800};
 const DESKTOP = {width: 1280, height: 800};
 const FOCUS_IN = '\x1b[I', FOCUS_OUT = '\x1b[O';
 const PRESS = /\x1b\[<0;\d+;\d+M/;
+const RELEASE = /\x1b\[<0;\d+;\d+m/;
 // A full-screen program asking for what Claude Code asks for, then reading its input away.
 const PROGRAM = "stty raw -echo; printf '\\033[?1049h\\033[?1004h\\033[?1003h\\033[?1006h\\033[2J'; exec cat >/dev/null";
 
@@ -118,8 +119,10 @@ describe('clicks into a program that reports focus', {skip}, () => {
     const frames = await framesOf(page, 'first-click');
     assert.equal(assertClicksKept(frames), 1, JSON.stringify(frames));
     const press = frames.findIndex(f => PRESS.test(f.d));
+    const release = frames.findIndex(f => RELEASE.test(f.d));
     const focusIn = frames.findIndex(f => f.d.includes(FOCUS_IN));
-    assert.ok(focusIn > press, `the focus-in is still reported, after the click: ${JSON.stringify(frames)}`);
+    assert.ok(press >= 0 && release > press && focusIn > release,
+      `the focus-in is still reported, after the release: ${JSON.stringify(frames)}`);
     assert.equal(frames.filter(f => f.d.includes(FOCUS_IN)).length, 1, JSON.stringify(frames));
   });
 
@@ -146,5 +149,34 @@ describe('clicks into a program that reports focus', {skip}, () => {
     await page.waitForTimeout(100);
     assert.deepEqual((await framesOf(page, 'pane-a')).map(f => f.d), [FOCUS_IN]);
     assert.deepEqual((await framesOf(page, 'pane-b')).map(f => f.d), [FOCUS_OUT]);
+  });
+
+  test('on a phone, the window and a pane switch through the session list report the focus the input line held', async () => {
+    const page = await open('phone-b', true);
+    await mesh.newShell('phone-a');
+    await page.evaluate(() => refresh());
+    await page.evaluate(() => addPane('phone-a'));
+    await page.waitForFunction(() => panes.length === 2 && panes.every(p => p.conn?.terminal?.isOpen()), null, {timeout: 10000});
+    await page.waitForFunction(() => active.id === 'phone-a' && active.conn?.replaying === false, null, {timeout: 10000});
+    await runProgram(page);
+    const at = await screenCenter(page, 'phone-a');
+    await forget(page);   // xterm answers the program turning focus reports on
+    await page.touchscreen.tap(at.x, at.y);   // the pane takes the focus, then gives it to the input line
+    await page.waitForTimeout(600);
+    assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('#line-text')), true);
+    const focusOf = async (session: string): Promise<string[]> =>
+      (await framesOf(page, session)).filter(f => f.d === FOCUS_IN || f.d === FOCUS_OUT).map(f => f.d);
+    assert.deepEqual(await focusOf('phone-a'), [FOCUS_IN]);
+    await forget(page);
+    // Playwright pages keep the window focus: the window's events are dispatched
+    await page.evaluate(() => { window.dispatchEvent(new FocusEvent('blur')); window.dispatchEvent(new FocusEvent('focus')); });
+    await page.waitForTimeout(100);
+    assert.deepEqual(await focusOf('phone-a'), [FOCUS_OUT, FOCUS_IN], 'the window left and regained');
+    await forget(page);
+    await page.locator('#btn-menu').click();
+    await page.locator('#list .item[data-id="phone-b"]').click();
+    await page.waitForFunction(() => active.id === 'phone-b');
+    await page.waitForTimeout(100);
+    assert.deepEqual(await focusOf('phone-a'), [FOCUS_OUT], 'the pane left through the session list');
   });
 });
