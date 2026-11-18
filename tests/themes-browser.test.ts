@@ -93,6 +93,58 @@ describe('colour themes', {skip}, () => {
     assert.equal(await page.locator('#palette-text').inputValue(), '{}');
   });
 
+  test('a change in another tab keeps an unsaved draft; the field carries its help and its errors', async () => {
+    const page = await open();
+    await page.locator('#theme-select').selectOption('palette');
+    await page.locator('#dlg-palette[open]').waitFor();
+    const field = page.locator('#palette-text');
+    assert.equal(await field.getAttribute('aria-describedby'), 'palette-hint');
+    await field.fill('{"--bg": ');
+    await page.locator('#palette-apply').click();
+    assert.equal(await field.getAttribute('aria-invalid'), 'true');
+    assert.equal(await field.getAttribute('aria-errormessage'), 'palette-status');
+
+    const otherTab = (key: string, value: string): Promise<void> => page.evaluate(([key, value]) => {
+      localStorage.setItem(key!, value!);
+      window.dispatchEvent(new StorageEvent('storage', {key}));
+    }, [key, value]);
+    await otherTab('mesh.theme', '"nord"');
+    assert.equal(await page.evaluate(() => document.documentElement.dataset['theme']), 'nord');
+    assert.equal(await field.inputValue(), '{"--bg": ', 'the unsaved draft is kept');
+
+    await page.locator('#palette-reset').click();
+    assert.equal(await field.getAttribute('aria-invalid'), null);
+    assert.equal(await field.getAttribute('aria-errormessage'), null);
+    await otherTab('mesh.palette', '{"--bg":"#000000"}');
+    assert.equal(await field.inputValue(), '{\n  "--bg": "#000000"\n}', 'a field that holds no draft follows the change');
+  });
+
+  test('a custom palette applies under Default dark too, and its contrast warning never rounds up', async () => {
+    const page = await open();
+    const apply = async (palette: string): Promise<string> => {
+      await page.locator('#palette-text').fill(palette);
+      await page.locator('#palette-apply').click();
+      return await page.locator('#palette-status').textContent() ?? '';
+    };
+    const colourOf = (selector: string, property: 'color' | 'backgroundColor'): Promise<string> =>
+      page.locator(selector).first().evaluate((element, property) => getComputedStyle(element)[property], property);
+    assert.equal(await colourOf('#palette-apply', 'color'), 'rgb(11, 14, 19)');
+    await page.evaluate(() => (document.querySelector('#dlg-palette') as HTMLDialogElement).showModal());
+
+    await apply('{"--raise": "#345678", "--accent": "#0b0e13", "--on-accent": "#ffffff"}');
+    assert.equal(await page.evaluate(() => document.documentElement.dataset['theme']), 'default');
+    assert.equal(await colourOf('.tabs button.cur', 'backgroundColor'), 'rgb(52, 86, 120)');
+    assert.equal(await colourOf('#palette-apply', 'color'), 'rgb(255, 255, 255)');
+
+    // #747474 on black is 4.49:1: it fails, and must not read as 4.5.
+    assert.match(await apply('{"--fg": "#747474", "--bg": "#000000", "--term": "#000000", "--panel": "#000000"}'), / 4[.,]4:1/);
+    assert.match(await apply('{"--fg": "#fff0"}'), / 1[.,]0:1/, 'transparent text is measured as invisible');
+    assert.match(await apply('{"--bg": "#00000080"}'), /translucent|translucide/);
+
+    await page.locator('#palette-reset').click();
+    assert.equal(await colourOf('.tabs button.cur', 'backgroundColor'), 'rgb(29, 37, 48)', 'back to style.css');
+  });
+
   test('arrow keys browse the closed selector without opening the palette editor', async () => {
     const page = await open();
     const select = page.locator('#theme-select');

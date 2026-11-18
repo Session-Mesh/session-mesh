@@ -946,6 +946,7 @@
   "theme.paletteUnknown": "Variable inconnue : {key}",
   "theme.paletteNotColour": "Pas une couleur hexadécimale : {key}",
   "theme.paletteLowContrast": "Attention : le contraste du texte est de {ratio}:1, sous le 4,5:1 du WCAG AA.",
+  "theme.paletteContrastUnknown": "Le contraste du texte n'a pas pu être vérifié : un fond est translucide.",
   "tree.close": "Fermer l'arborescence",
   "tree.empty": "vide",
   "tree.hidden": "Afficher les fichiers cachés",

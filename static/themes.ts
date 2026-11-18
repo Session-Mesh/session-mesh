@@ -88,8 +88,9 @@ const SOLARIZED_LIGHT: Colours = {
   '--idle': '#586600', '--wait': '#a83c10' /* derived from orange */, '--off': '#93a1a1',
   '--danger': '#b8221f' /* derived from red */, '--fg-2': '#4f6369', '--raise': '#e3dcc4' /* derived */,
   '--line-2': '#93a1a1', '--on-accent': '#fdf6e3', '--cursor': '#586e75', '--selection': '#e3dcc4',
+  // Bright white is #ffffff rather than base3: base3 is this terminal's background itself.
   ...ansi(['#073642', ...SOLARIZED_ACCENTS, '#eee8d5',
-    '#002b36', '#cb4b16', '#586e75', '#657b83', '#839496', '#6c71c4', '#93a1a1', '#fdf6e3']),
+    '#002b36', '#cb4b16', '#586e75', '#657b83', '#839496', '#6c71c4', '#93a1a1', '#ffffff']),
 };
 
 // Gruvbox dark, medium contrast.
@@ -99,7 +100,8 @@ const GRUVBOX_DARK: Colours = {
   '--wait': '#fe9640' /* derived from orange */, '--off': '#665c54', '--danger': '#fc9386' /* derived from red */,
   '--fg-2': '#d5c4a1', '--raise': '#46413e' /* derived */, '--line-2': '#665c54', '--on-accent': '#1d2021',
   '--cursor': '#ebdbb2', '--selection': '#504945',
-  ...ansi(['#282828', '#cc241d', '#98971a', '#d79921', '#458588', '#b16286', '#689d6a', '#a89984',
+  // Black is bg1 rather than the source's #282828: that is this terminal's background itself.
+  ...ansi(['#3c3836', '#cc241d', '#98971a', '#d79921', '#458588', '#b16286', '#689d6a', '#a89984',
     '#928374', '#fb4934', '#b8bb26', '#fabd2f', '#83a598', '#d3869b', '#8ec07c', '#ebdbb2']),
 };
 
@@ -190,10 +192,12 @@ function readJson(storage: StorageLike | null, key: string): unknown {
   } catch { return null; }
 }
 
+// Without a storage (the browser blocks it) nothing is kept: the write reports a failure.
 function writeJson(storage: StorageLike | null, key: string, value: unknown): boolean {
+  if (!storage) return false;
   try {
-    if (value === null) storage?.removeItem(key);
-    else storage?.setItem(key, JSON.stringify(value));
+    if (value === null) storage.removeItem(key);
+    else storage.setItem(key, JSON.stringify(value));
     return true;
   } catch { return false; }
 }
@@ -236,18 +240,30 @@ export function terminalTheme(colours: Colours): TerminalTheme {
 }
 
 // WCAG 2.x relative luminance and contrast ratio, for the tests and the palette editor's warning.
-function luminance(hex: string): number {
+type Rgba = readonly [number, number, number, number];
+
+function rgba(hex: string): Rgba {
   let digits = hex.trim().slice(1);
   if (digits.length <= 4) digits = [...digits].map((c) => c + c).join('');
-  const channel = (i: number): number => {
-    const value = parseInt(digits.slice(i, i + 2), 16) / 255;
-    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
+  const byte = (i: number): number => parseInt(digits.slice(i, i + 2), 16) / 255;
+  return [byte(0), byte(2), byte(4), digits.length === 8 ? byte(6) : 1];
 }
 
-export function contrastRatio(a: string, b: string): number {
-  const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+function luminance(colour: Rgba): number {
+  const linear = (value: number): number => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  return 0.2126 * linear(colour[0]) + 0.7152 * linear(colour[1]) + 0.0722 * linear(colour[2]);
+}
+
+/** The contrast of `foreground` drawn over `background`. A translucent foreground is measured as it
+ *  shows, blended over the background. A translucent background lets through what lies under it,
+ *  which is not known here: the ratio is then NaN ("could not be checked"). */
+export function contrastRatio(foreground: string, background: string): number {
+  const under = rgba(background);
+  if (under[3] < 1) return Number.NaN;
+  const over = rgba(foreground);
+  const blend = (i: 0 | 1 | 2): number => over[i] * over[3] + under[i] * (1 - over[3]);
+  const shown: Rgba = [blend(0), blend(1), blend(2), 1];
+  const [light, dark] = [luminance(shown), luminance(under)].sort((x, y) => y - x) as [number, number];
   return (light + 0.05) / (dark + 0.05);
 }
 
@@ -258,11 +274,15 @@ export type ApplyTarget = {
   querySelector(selector: string): { setAttribute(name: string, value: string): void } | null;
 };
 
-/** Sets the variables on :root (inline, over style.css), the colour scheme and the theme-color. */
-export function applyColours(target: ApplyTarget, id: ThemeId, colours: Colours): void {
+/** Sets the variables on :root (inline, over style.css), the colour scheme and the theme-color.
+ *  data-palette marks a custom palette: themes.css then routes style.css's literal colours through
+ *  the variables under the default theme too, so an override such as --raise shows there. */
+export function applyColours(target: ApplyTarget, id: ThemeId, colours: Colours, custom = false): void {
   const root = target.documentElement;
   const scheme = findTheme(id)?.scheme ?? 'dark';
   root.dataset['theme'] = id;
+  if (custom) root.dataset['palette'] = 'custom';
+  else delete root.dataset['palette'];
   root.dataset['scheme'] = scheme;
   root.style.colorScheme = scheme;
   for (const key of VARIABLES) if (colours[key]) root.style.setProperty(key, colours[key]);
@@ -289,7 +309,7 @@ export function createRuntime(target: ApplyTarget, storage: StorageLike | null):
   let palette = readPalette(storage);
   const apply = (): void => {
     const colours = resolveColours(id, palette);
-    applyColours(target, id, colours);
+    applyColours(target, id, colours, Object.keys(palette).length > 0);
     for (const listener of listeners) listener(colours);
   };
   apply();
