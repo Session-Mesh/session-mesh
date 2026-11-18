@@ -46,7 +46,7 @@ describe('the backport workflow as committed', () => {
     assert.match(text, /^ {6}HAS_APP_TOKEN: \$\{\{ secrets\.BACKPORT_APP_ID != '' && secrets\.BACKPORT_APP_PRIVATE_KEY != '' \}\}$/m);
     assert.equal(text.split(TOKEN).length - 1, 2, 'the checkout and the backport action take the same token');
     assert.match(text, /^ {8}if: env\.HAS_APP_TOKEN != 'true' && steps\.backport\.outputs\.created_pull_numbers != ''$/m);
-    assert.match(text, /A maintainer starts it by closing and reopening this pull request/);
+    assert.match(text, /A maintainer with write access starts it with 'Approve workflows to run' on this pull request if its runs are awaiting approval\./);
   });
 
   test('pins its two actions by full commit SHA, the exact versions this test names', () => {

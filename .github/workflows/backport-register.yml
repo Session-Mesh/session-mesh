@@ -1,0 +1,216 @@
+# Automatic backport of the CLA register to the maintenance branch (CONTRIBUTING.md, "Branches and
+# versions"). The `cla` check of a pull request to release/latest reads the maintainers and the
+# signatories on release/latest, so the register files must follow main there whatever the label of
+# the pull request that changed them: CONTRIBUTORS.md, CLA.md, CLA-SIGNATORIES.md,
+# tools/cla-check/MAINTAINERS and .github/CODEOWNERS.
+#
+# When a pull request without the label `semver: patch` is merged to main and changes one of these
+# files (backport.yml backports a `semver: patch` pull request whole, register included), each
+# commit it landed on main is replayed onto a branch from release/latest restricted to these files,
+# with its author and message and `GitHub <noreply@github.com>` as committer, the committer the cla
+# job accepts. A commit that changes none of them is left out, so the rest of the pull request stays
+# on main. The pull request "[release/latest] CLA register changes of #<number>" is then opened with
+# the label `semver: patch` and the line "Backport of #<number>"; the release branch guard of
+# branch-policy.yml accepts it because it changes only these files. When a change does not apply,
+# nothing is pushed and the original pull request gets a comment.
+#
+# Trigger and token. As backport.yml, this runs on `pull_request_target` and never runs code of the
+# pull request. The first job reads the list of files of the merged pull request through the API with
+# a read-only token and compares each name (and former name of a rename) with jq, by exact string
+# equality, so a name with a newline in it cannot pass for a register file; only when a register file
+# is in it does the second job get a write token. That job checks out the base branch, and its one
+# script runs git and gh only, on the commits of main named by the event (its merge commit id and its
+# number of commits, the commits a "Rebase and merge" landed), checked to be on main. "Rebase and
+# merge" is the only merge method the repository allows; the script checks it anyway: the landed
+# commits must be ordinary commits whose authors and author dates are, in order, those of the commits
+# of the pull request (a squash or a merge commit does not match, and nothing is pushed).
+# A commit is replayed with `--no-renames`: a rename into a register path brings that path's new
+# content, a rename out of one deletes it, and the other side of the rename stays on main. Before
+# the push, the difference from release/latest must name only the five register paths, exactly
+# (NUL-separated, so a directory or a name that merely starts with one of them aborts), and each of
+# them must be absent or a regular file (a symbolic link or a submodule aborts); the same check runs
+# on every replayed commit before it is recorded, so no intermediate commit holds such a path. A
+# rerun after a push whose pull request was not opened reuses the branch when it is this replay and
+# refuses any other branch of that name, never force-pushing. Git reads no configuration from the
+# repository: the attributes of the work tree name no filter or driver that this runner has
+# configured. The event is read for
+# booleans, numbers, a commit id and label names, never for text a contributor writes.
+# The token is the GitHub App's when BACKPORT_APP_ID and BACKPORT_APP_PRIVATE_KEY are set (see
+# backport.yml). tests/backport-register-workflow.test.ts enforces these rules and replays the script
+# on a repository, with the cla check on the result.
+name: backport-register
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backport-register-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  register-files:
+    name: CLA register files changed
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      changed: ${{ steps.files.outputs.changed }}
+    steps:
+      - name: List the files of the merged pull request
+        id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          PATCH: "${{ contains(github.event.pull_request.labels.*.name, 'semver: patch') }}"
+        run: |
+          set -euo pipefail
+          [[ "$NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::unexpected pull request number"; exit 1; }
+          paths=(CONTRIBUTORS.md CLA.md CLA-SIGNATORIES.md tools/cla-check/MAINTAINERS .github/CODEOWNERS)
+          changed=false
+          # A `semver: patch` pull request is backported whole by backport.yml, register included.
+          if [[ "$PATCH" != "true" ]]; then
+            # One JSON array per page; each name is compared whole with jq, never split into lines.
+            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/files")
+            changed=$(jq -n '[inputs | if type == "array" then .[] else error("not a file list") end | .filename, (.previous_filename // empty)] | any(IN($ARGS.positional[]))' --args "${paths[@]}" <<< "$files")
+            [[ "$changed" == true || "$changed" == false ]] || { echo "::error::unexpected file list"; exit 1; }
+            # The API lists at most 3000 files of a pull request: a list that long may be cut, and the release guard rejects it.
+            [[ "$(jq -n '[inputs | .[]] | length' <<< "$files")" -lt 3000 ]] || { echo "::error::the pull request lists 3000 files, the most the API returns; its register changes are backported by hand"; exit 1; }
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+  register-backport:
+    name: backport the CLA register to release/latest
+    needs: register-files
+    if: needs.register-files.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      # Only the boolean reaches the steps, never a secret.
+      HAS_APP_TOKEN: ${{ secrets.BACKPORT_APP_ID != '' && secrets.BACKPORT_APP_PRIVATE_KEY != '' }}
+    steps:
+      - name: Create the GitHub App token
+        id: app-token
+        if: env.HAS_APP_TOKEN == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BACKPORT_APP_ID }}
+          private-key: ${{ secrets.BACKPORT_APP_PRIVATE_KEY }}
+      # The base branch with its whole history and the other branches (release/latest), never the
+      # pull request; the script pushes with these credentials.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          fetch-depth: 0
+      - name: Open the pull request of the register changes
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          LANDED: ${{ github.event.pull_request.merge_commit_sha }}
+          COUNT: ${{ github.event.pull_request.commits }}
+        run: |
+          set -euo pipefail
+          [[ "$NUMBER" =~ ^[0-9]+$ && "$COUNT" =~ ^[1-9][0-9]*$ && "$LANDED" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::unexpected event values"; exit 1; }
+          (( COUNT <= 250 )) || { echo "::error::more commits than the API lists"; exit 1; }
+          paths=(CONTRIBUTORS.md CLA.md CLA-SIGNATORIES.md tools/cla-check/MAINTAINERS .github/CODEOWNERS)
+          git merge-base --is-ancestor "$LANDED" origin/main || { echo "::error::the merged commits are not on main"; exit 1; }
+          # "Rebase and merge" lands the commits of the pull request with their authors and author
+          # dates, one landed commit for each; a squash or a merge commit does not match.
+          pr_commits=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/commits" --jq '.[] | "\(.commit.author.email) \(.commit.author.date)"')
+          landed_commits=$(TZ=UTC git rev-list --reverse --no-commit-header --date=format-local:%Y-%m-%dT%H:%M:%SZ --format='%ae %ad' "$LANDED~$COUNT..$LANDED")
+          [[ "$pr_commits" == "$landed_commits" ]] || { echo "::error::the landed commits are not those of the pull request as a rebase merge lands them"; exit 1; }
+          # A pathspec also takes the content of a directory of the same name: what a diff names must be
+          # the register paths exactly, each absent or a regular file in the index. Checked on every
+          # replayed commit before it is recorded, then on the whole result.
+          check_register_paths() {
+            git diff --name-only -z --no-renames "$@" > "$RUNNER_TEMP/backported"
+            while IFS= read -r -d '' file; do
+              known=false
+              for path in "${paths[@]}"; do if [[ "$file" == "$path" ]]; then known=true; fi; done
+              [[ "$known" == true ]] || { echo "::error::the replay changes a path other than the register files; nothing is pushed"; exit 1; }
+            done < "$RUNNER_TEMP/backported"
+            for path in "${paths[@]}"; do
+              mode=$(git ls-files --format='%(objectmode)' -- "$path")
+              [[ -z "$mode" || "$mode" == 100644 || "$mode" == 100755 ]] || { echo "::error::$path is not a regular file; nothing is pushed"; exit 1; }
+            done
+          }
+          branch="backport-$NUMBER-cla-register-to-release/latest"
+          git switch --quiet --create "$branch" origin/release/latest
+          export GIT_COMMITTER_NAME=GitHub GIT_COMMITTER_EMAIL=noreply@github.com
+          patch="$RUNNER_TEMP/register.patch"
+          for commit in $(git rev-list --reverse "$LANDED~$COUNT..$LANDED"); do
+            [[ "$(git rev-list --parents --max-count=1 "$commit" | wc -w)" -eq 2 ]] || { echo "::error::$commit is not an ordinary commit"; exit 1; }
+            git diff --binary --no-renames "$commit^" "$commit" -- "${paths[@]}" > "$patch"
+            [[ -s "$patch" ]] || continue
+            if ! git apply --3way --index "$patch"; then
+              gh pr comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body "The changes of this pull request to the CLA register files do not apply to release/latest (commit $commit). A maintainer backports them by hand: a pull request to release/latest with only these files, the label 'semver: patch' and the line 'Backport of #$NUMBER' (CONTRIBUTING.md, 'Branches and versions')."
+              exit 1
+            fi
+            git diff --cached --quiet && continue
+            check_register_paths --cached
+            git commit --quiet --reuse-message="$commit"
+          done
+          check_register_paths origin/release/latest HEAD
+          if [[ "$(git rev-list --count origin/release/latest..HEAD)" -eq 0 ]]; then
+            echo "release/latest already has these register changes"
+            exit 0
+          fi
+          if [[ -z "$(git ls-remote origin "refs/heads/$branch" | cut -f1)" ]]; then
+            git push --quiet origin "HEAD:refs/heads/$branch"
+          else
+            # A rerun after a push whose pull request was not opened: the branch is reused when it is
+            # this replay, never overwritten; anything else is reported and left alone. The committer date
+            # differs between runs, so the commit ids do: every commit is compared in order, by tree,
+            # author, author date and full message, and the branch must be a straight line on the current
+            # release/latest (an intermediate tree that check_register_paths never saw is refused).
+            git fetch --quiet origin "refs/heads/$branch"
+            # Read with loops, not mapfile: scripts/test-local.sh runs these steps with the Bash 3.2 of macOS.
+            expected=()
+            while IFS= read -r line; do expected+=("$line"); done < <(git rev-list --reverse origin/release/latest..HEAD)
+            existing=()
+            while IFS= read -r line; do existing+=("$line"); done < <(git rev-list --reverse origin/release/latest..FETCH_HEAD)
+            same=true
+            git merge-base --is-ancestor origin/release/latest FETCH_HEAD || same=false
+            [[ -z "$(git rev-list --min-parents=2 origin/release/latest..FETCH_HEAD)" ]] || same=false
+            [[ "${#existing[@]}" -eq "${#expected[@]}" ]] || same=false
+            if [[ "$same" == true ]]; then
+              for index in "${!expected[@]}"; do
+                [[ "$(git rev-list --no-walk --no-commit-header --format='%T%n%an <%ae> %at%n%B' "${expected[$index]}")" == "$(git rev-list --no-walk --no-commit-header --format='%T%n%an <%ae> %at%n%B' "${existing[$index]}")" ]] || same=false
+              done
+            fi
+            if [[ "$same" != true ]]; then
+              echo "::error::the branch $branch exists and is not this replay; it is left as it is, a maintainer decides"
+              exit 1
+            fi
+            echo "the branch $branch is this replay; reusing it"
+            # Only a pull request of this repository to release/latest counts; an open one without the label is repaired.
+            found=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --base release/latest --state all --json url,state,isCrossRepository,labels --jq '[.[] | select(.isCrossRepository | not)][0] // empty | [.url, .state, (any(.labels[]; .name == "semver: patch") | tostring)] | @tsv')
+            if [[ -n "$found" ]]; then
+              IFS=$'\t' read -r open_pr open_state open_label <<< "$found"
+              echo "the pull request $open_pr already exists"
+              if [[ "$open_state" == OPEN && "$open_label" != true ]]; then
+                gh pr edit "$open_pr" --repo "$GITHUB_REPOSITORY" --add-label "semver: patch"
+              fi
+              exit 0
+            fi
+          fi
+          body="Backport of #$NUMBER to \`release/latest\`, restricted to the CLA register files (CONTRIBUTORS.md, CLA.md, CLA-SIGNATORIES.md, tools/cla-check/MAINTAINERS, .github/CODEOWNERS).
+
+          Each commit of the merged pull request that changes one of these files is replayed with its author and message, without its other files, by the backport-register workflow (CONTRIBUTING.md, \"Branches and versions\"). Review it like any other pull request."
+          url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base release/latest --head "$branch" --label "semver: patch" --title "[release/latest] CLA register changes of #$NUMBER" --body "$body")
+          if [[ "$HAS_APP_TOKEN" != "true" ]]; then
+            gh pr comment "$url" --repo "$GITHUB_REPOSITORY" --body "This pull request was opened with the run's own token, so GitHub holds its workflow runs until they are approved: the CI has not started. A maintainer with write access starts it with 'Approve workflows to run' on this pull request; closing and reopening it is not needed."
+          fi

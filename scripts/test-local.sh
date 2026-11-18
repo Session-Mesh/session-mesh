@@ -29,7 +29,7 @@ fi
 
 require_tools() {
   local tool
-  for tool in node npm git opam python3; do
+  for tool in node npm git opam python3 jq; do
     command -v "$tool" >/dev/null 2>&1 || { echo "test-local: missing required tool: $tool" >&2; exit 1; }
   done
   local version major minor

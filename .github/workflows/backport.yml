@@ -18,7 +18,7 @@
 # The backport pull request is opened with a GitHub App token (secrets BACKPORT_APP_ID and
 # BACKPORT_APP_PRIVATE_KEY), so that the CI runs on it. Without these two secrets, the run's own
 # token opens it: GitHub starts no workflow for a pull request opened that way, and a comment
-# on it tells the maintainers to start the CI (close and reopen it).
+# on it tells the maintainers to start the CI ("Approve workflows to run").
 # The cherry-picked commits keep their author; their committer is GitHub's, which the cla job accepts.
 # tests/backport-workflow.test.ts and tests/public-ci-workflow.test.ts enforce these rules.
 name: backport
@@ -91,7 +91,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CREATED: ${{ steps.backport.outputs.created_pull_numbers }}
         run: |
-          body="This pull request was opened with the run's own token, and GitHub starts no workflow for such a pull request: the CI has not run. A maintainer starts it by closing and reopening this pull request. (The backport workflow opens its pull requests with a GitHub App when the secrets BACKPORT_APP_ID and BACKPORT_APP_PRIVATE_KEY are set; see 'Branches and versions' in CONTRIBUTING.md.)"
+          body="This pull request was opened with the run's own token, and GitHub holds the workflow runs of such a pull request until they are approved: the CI has not run. A maintainer with write access starts it with 'Approve workflows to run' on this pull request if its runs are awaiting approval. (The backport workflow opens its pull requests with a GitHub App when the secrets BACKPORT_APP_ID and BACKPORT_APP_PRIVATE_KEY are set; see 'Branches and versions' in CONTRIBUTING.md.)"
           for number in $CREATED; do
             [[ "$number" =~ ^[0-9]+$ ]] || continue
             gh pr comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"

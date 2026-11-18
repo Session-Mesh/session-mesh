@@ -114,11 +114,51 @@ the same two ways apply.
 ## Backports to the maintenance branch
 
 For maintainers. The rules for contributors (target `main`, the `semver:` labels, `release/latest`)
-are in [CONTRIBUTING.md](../CONTRIBUTING.md#branches-and-versions). Three workflows implement
+are in [CONTRIBUTING.md](../CONTRIBUTING.md#branches-and-versions). Four workflows implement
 them: `branch-policy.yml` (the checks `semver label` and `release branch guard`, from
 `tools/branch-policy/branch-policy.ts`), `backport.yml` (the cherry-pick and the pull request to
-`release/latest`) and `release.yml` (a tag on `release/latest` is accepted). `tests/backport-workflow.test.ts`
-and `tests/branch-policy.test.ts` keep their safety rules.
+`release/latest`), `backport-register.yml` (the CLA register files of any other merged pull
+request, alone) and `release.yml` (a tag on `release/latest` is accepted).
+`tests/backport-workflow.test.ts`, `tests/backport-register-workflow.test.ts` and
+`tests/branch-policy.test.ts` keep their safety rules; `tests/backport-register-replay.test.ts`
+runs the register script on a repository and checks that the `cla` check accepts its result.
+
+**Limits of the register backport.** It replays the commits that "Rebase and merge" landed on
+`main`, found from the merge commit id and the commit count of the event, and checks first that
+their authors and author dates are those of the pull request's commits: a pull request merged
+another way is refused, and its register files are backported by hand. A rename into a register
+path brings its new content and a rename out of one deletes it; the job also refuses a result that
+changes any other path (a directory named like a register file, for example) or leaves a register
+path as a symbolic link or a submodule, in any replayed commit and not only in the final tree. A
+rerun after a push whose pull request was not opened reuses the pushed branch when it is the same
+replay and stops on any other branch of that name, never force-pushing over it. Each replayed
+commit keeps its author, because the `cla` check accepts a signatory line only from a commit
+authored with its address: a backport by hand does the same, for example with
+`git diff <commit>^ <commit> -- <register files> | git apply --index` then
+`git commit --reuse-message=<commit>` for each commit. Register changes merged to `main` before
+`backport-register.yml` existed may not be on `release/latest`: compare the two branches on the
+register files first (`git diff origin/release/latest origin/main -- <register files>`; an earlier
+`semver: patch` backport, or the cut itself, may already have carried some of them) and replay
+only what is missing.
+
+Two cases are left to a maintainer. A pull request that lists 3000 files (the most the API returns)
+fails the read-only job with an explicit message, because its list may be cut: backport its
+register files by hand. If `release/latest` advances between the push of the backport branch and a
+rerun that must open its pull request, the rerun stops with an explicit error, because the saved
+branch is no longer a straight line on the current base and an old base would fail the CLA
+ancestry check: delete that branch (it holds only a replay) or rebase it by hand, then rerun the
+workflow; the workflow never force-pushes. The release guard reads the labels from the event
+payload of its run: if a held run was approved before the label `semver: patch` was on the pull
+request and the guard fails for a missing label, remove and re-apply the label to run it again.
+
+When the patch does not apply (the same register line changed differently on `main` and on
+`release/latest`), finish the backport by hand: create a branch from `origin/release/latest`; run
+`git apply --3way --index` and resolve the conflict in the register file; stage only the intended
+register paths (`git add -- <register files>`, never `git add -A`) and check with
+`git diff --cached --name-only` that nothing else is staged; then commit with the original message
+and author, `git commit --reuse-message=<commit>` (it keeps the author of `<commit>`; do not use
+`--reset-author`). Repeat for each commit that changes a register file, in order, and open a pull
+request to `release/latest` with the label `semver: patch` and the line `Backport of #<number>`.
 
 The maintenance branch is a single moving branch, `release/latest`. It points at the current minor
 line: today the tag `v0.1.0`, so it receives the 0.1.x patches. Tags (`v0.1.0`, `v0.1.1`, ...) are
@@ -131,14 +171,16 @@ immutable; only the branch moves, at each new minor release (see "At each new mi
    change `.github/workflows`; install it on this repository only.
 2. Store its numeric App ID as the repository secret `BACKPORT_APP_ID` and a generated private key
    as `BACKPORT_APP_PRIVATE_KEY`. With them, the backport pull request is opened by the App and
-   its CI starts. Without them the workflow uses the run's own token: the pull request is opened,
-   GitHub starts no workflow for it, and a comment on it asks a maintainer to close and reopen it
-   to start the CI. That fallback also needs the repository setting "Allow GitHub Actions to create
+   its CI starts. Without them the workflow uses the run's own token: the pull request is opened
+   and its CI does not start by itself. On a register backport (`backport-register.yml`) GitHub
+   holds the workflow runs until they are approved, and a comment on the pull request asks a
+   maintainer with write access to select "Approve workflows to run"; closing and reopening it is
+   not needed. `backport.yml` gives the same instruction. That fallback also needs the repository setting "Allow GitHub Actions to create
    and approve pull requests" (Settings, Actions, General, Workflow permissions) to be on: while it
    is off, the run's token cannot open the pull request at all, and the GitHub App is required.
 3. The workflow runs on `pull_request_target`, which GitHub blocks on public repositories from
    2026-12-02 unless an Actions policy allows it: add a policy for `.github/workflows/backport.yml`
-   that allows `pull_request_target`.
+   and `.github/workflows/backport-register.yml` that allows `pull_request_target`.
 4. Put the workflows on `release/latest` before anything is required of it. A workflow of a
    pull request runs as it is in the merge of the pull request into its base branch, and a tag
    push runs the workflow of the tagged commit, so a maintenance branch cut before these workflows
@@ -148,8 +190,11 @@ immutable; only the branch moves, at each new minor release (see "At each new mi
    `public-ci.yml`, `release.yml` and the files they run (`tools/branch-policy`, `tools/cla-check`,
    the scripts under `scripts/` and `.github/scripts/` that they call). This cannot go through a
    normal pull request: the `release branch guard` refuses a pull request that is not a backport.
-   `backport.yml` itself stays on `main`: it runs on `pull_request_target`, which reads the
-   workflow of the base branch of the merged pull request, `main`.
+   `backport.yml` and `backport-register.yml` stay on `main`: they run on `pull_request_target`,
+   which reads the workflow of the base branch of the merged pull request, `main`. The release
+   branch guard of a register backport runs `tools/branch-policy/branch-policy.ts` as it is on
+   `release/latest`: until the version that accepts a register-only backport is there, it refuses
+   one whose source is not `semver: patch`.
 5. Only then add the checks `semver label` and `release branch guard` to the required checks of
    `main`, and the same two, `cla` and the CI jobs to those of `release/**`.
 

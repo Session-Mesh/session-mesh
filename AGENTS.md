@@ -35,7 +35,10 @@ node --experimental-strip-types tools/leak-guard/cli.ts worktree
   original pull request, following CONTRIBUTING.md, "Branches and versions".
 - A pull request to `main` carries exactly one label, `semver: patch` (a fix the released line should
   also get, backported automatically after the merge) or `semver: minor` (everything else). If you
-  cannot set labels, state the intended one in the description.
+  cannot set labels, state the intended one in the description. Changes to the CLA register files
+  (`CONTRIBUTORS.md`, `CLA.md`, `CLA-SIGNATORIES.md`, `tools/cla-check/MAINTAINERS`,
+  `.github/CODEOWNERS`) reach `release/latest` whatever the label: after the merge, a workflow opens
+  a pull request with these files alone.
 - Keep the branch linear on top of the tip of `main`: rebase, never merge `main` into it, no merge
   commits. The `cla` check refuses anything else; the merge method is "Rebase and merge" only.
 - Every commit author and committer address must be a maintainer's or have a line in

@@ -26,7 +26,8 @@ you have in mind. The project has strong opinions about its trust boundaries
    ([How a pull request is merged](#how-a-pull-request-is-merged)).
 6. Wait for the required checks below, the automatic CodeRabbit review and a maintainer's review.
    A maintainer merges with "Rebase and merge", the only merge method the repository allows. A
-   merged `semver: patch` pull request is then backported to `release/latest` automatically.
+   merged `semver: patch` pull request is then backported to `release/latest` automatically, and
+   so are the changes of any other merged pull request to the CLA register files.
 
 ### Required checks
 
@@ -36,7 +37,7 @@ pull request.
 | Check | Workflow | What it guards |
 | --- | --- | --- |
 | `semver label` | `branch-policy.yml` | A pull request to `main` carries exactly one `semver:` label. |
-| `release branch guard` | `branch-policy.yml` | A pull request to `release/**` is a backport of a merged `semver: patch` pull request. |
+| `release branch guard` | `branch-policy.yml` | A pull request to `release/**` is a backport of a merged `semver: patch` pull request, or the CLA register changes of another merged pull request. |
 | `cla` | `public-ci.yml` | Linear history on the tip of `main`; every author and committer is a maintainer or a signatory ([details](#the-cla-check-blocks-the-merge)). |
 | `leak check (public rules)` | `public-ci.yml` | No personal details or secrets in the files of the tree, and SPDX license headers. |
 | `PR description (no personal details)` | `pr-description.yml` | Reports personal details in the description as warnings; it fails only if the tool itself fails ([Commits and identity](#commits-and-identity)). |
@@ -65,7 +66,7 @@ file is acceptable when it is needed; write its test in OCaml or TypeScript when
 - Before opening a pull request, run the complete local suite:
 
   ```sh
-  scripts/test-local.sh --preflight-only   # prerequisites: Node 22.13+ or 24+, npm, git, opam, Python 3.10–3.14, bubblewrap
+  scripts/test-local.sh --preflight-only   # prerequisites: Node 22.13+ or 24+, npm, git, opam, jq, Python 3.10–3.14, bubblewrap
   scripts/test-local.sh
   ```
 
@@ -165,10 +166,21 @@ against it by hand only when the backport workflow reports a conflict, as descri
   "Rebase and merge". When a cherry-pick conflicts, the workflow comments on the original pull
   request with the commands to do it by hand: open that pull request to `release/latest` yourself,
   keep the label and the line `Backport of #<number>`.
+- **The CLA register always follows `main`.** The `cla` check of a pull request to
+  `release/latest` reads the maintainers and the signatories on `release/latest`. So when a pull
+  request without `semver: patch` is merged and changes `CONTRIBUTORS.md`, `CLA.md`,
+  `CLA-SIGNATORIES.md`, `tools/cla-check/MAINTAINERS` or `.github/CODEOWNERS`, a second workflow
+  backports these files alone: each commit that changes one of them is replayed onto
+  `release/latest` without its other files, under its original author, and the pull request
+  `[release/latest] CLA register changes of #<number>` is opened. The rest of a `semver: minor`
+  pull request stays on `main`. Merge that pull request before any backport that relies on the
+  new maintainer or signatory.
 - **The guard.** A pull request whose base is `release/**` must carry `semver: patch` and
   reference, with `Backport of #<number>`, a pull request merged to `main` that carries
-  `semver: patch` too; the check `release branch guard` fails otherwise. A fix that only concerns
-  the maintenance branch is first made on `main` when the code exists there.
+  `semver: patch` too. A pull request that changes only the five register files above may instead
+  reference a merged pull request without that label that changed one of them. The check
+  `release branch guard` fails otherwise. A fix that only concerns the maintenance branch is
+  first made on `main` when the code exists there.
 - **Tags.** A tag `v0.x.y` of the current line is pushed on a commit of `release/latest`; the release workflow accepts a
   tag on `main` or on `release/latest`, and publishes a version older than the
   current latest release without marking it "latest".
