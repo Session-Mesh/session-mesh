@@ -99,10 +99,24 @@ test('two hot windows promote only when the second starts where the first ended'
   assert.equal(windows('idle', [[100, 65], [110, 65]]), 'active');
 });
 
-test('two cold windows demote only when the second starts where the first ended', () => {
-  assert.equal(windows('idle', [[100, 65], [110, 65], [120, 0.2], [140, 0.2]]), 'active');
-  assert.equal(windows('idle', [[100, 65], [110, 65], [120, 0.2], [140, 0.2], [150, 0.2]]), 'inactive');
+// Demotion is eager on purpose: a client that shares the CPU baseline may only ever see gapped windows.
+test('two cold windows demote whether or not the second starts where the first ended', () => {
+  assert.equal(windows('idle', [[100, 65], [110, 65], [120, 0.2]]), 'active');
+  assert.equal(windows('idle', [[100, 65], [110, 65], [120, 0.2], [140, 0.2]]), 'inactive');
   assert.equal(windows('idle', [[100, 65], [110, 65], [120, 0.2], [130, 0.2]]), 'inactive');
+});
+
+test('gapped cold windows over more than 30 s demote an active session', () => {
+  const samples: [number, number][] = [[100, 65], [110, 65]];
+  for (let end = 130; end <= 3730; end += 20) samples.push([end, 0.2]);
+  assert.equal(windows('idle', samples), 'inactive');
+});
+
+test('an active session demotes once no hot window has been seen for more than 30 s', () => {
+  // Each status change restarts the cold run, so only the time bound can demote here.
+  const flipping: Step[] = [65, 65, [undefined, 0.2], ['idle', 0.2], [undefined, 0.2]];
+  assert.equal(steps('idle', flipping, 'codex'), 'active');
+  assert.equal(steps('idle', [...flipping, ['idle', 0.2]], 'codex'), 'inactive');
 });
 
 test('a missing sample breaks the run of cold windows during the grace period', () => {
