@@ -27,16 +27,15 @@ systemd_quote() { local value=${1//\\/\\\\}; value=${value//\"/\\\"}; printf '%s
 # sub, fragment, dropins. $2 names it in refusals. Its failure is the first sign of a missing
 # user session (sudo, root, container, WSL).
 observe_unit() {
-  local observation key value reload=
-  local -A observed=()
+  local observation key value reload= seen=' ' count=0
   observation=$(systemctl --user show "$1" --property=LoadState,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload 2>/dev/null) \
     || user_session_refusal "systemctl --user show"
   load='' active='' sub='' fragment='' dropins=''
   while IFS='=' read -r key value; do
-    # ${observed[$key]+x} rather than the -v operator of bash 4.2: the bash 3.2 of macOS parses
-    # this file, though it never runs it.
-    [[ -z ${observed[$key]+x} ]] || refuse "ambiguous $2 manager observation"
-    observed[$key]=1
+    # The keys seen as a space-separated list, not an associative array: the bash 3.2 of macOS
+    # has none, and the installer tests run this file there.
+    [[ $seen != *" $key "* ]] || refuse "ambiguous $2 manager observation"
+    seen+="$key " count=$((count + 1))
     case $key in
       LoadState) load=$value ;; ActiveState) active=$value ;; SubState) sub=$value ;;
       FragmentPath) fragment=$value ;; DropInPaths) dropins=$value ;;
@@ -44,7 +43,7 @@ observe_unit() {
       *) refuse "unexpected $2 manager observation" ;;
     esac
   done <<< "$observation"
-  [[ ${#observed[@]} == 6 && $reload == no ]] || refuse "$2 configuration requires reload or observation is incomplete"
+  [[ $count == 6 && $reload == no ]] || refuse "$2 configuration requires reload or observation is incomplete"
 }
 
 # The value of the only ExecStart line of file $1; fails when there is not exactly one.
