@@ -10,7 +10,7 @@
 // Linux programs, macOS link and deployment-target checks, the glibc floor of the Linux bundles),
 // exact-key caches only, the run's token named only for the gh CLI of the write job, which runs no
 // repository code, runs for tag pushes only and publishes on an existing tag, a tag job that checks
-// the tag is on main or on its release branch, the macOS bundle as the one build job a release may go without, manual runs
+// the tag is on main or on release/latest, the macOS bundle as the one build job a release may go without, manual runs
 // as dry runs without inputs, no signature file, one tag pattern.
 import {blockOf, commandAt, jobBlocks, type Line, MAX_TIMEOUT_MINUTES, permissionValues, stepOf, timeoutProblems, usesOf}
   from './public-ci-workflow-lib.ts';
@@ -211,9 +211,9 @@ function checkReleasePackageJob(lines: Line[]): string[] {
 }
 
 // The tag job, which every other job waits for, checks that the pushed tag names a commit of main,
-// or of the maintenance branch of its series: it fetches main and runs
+// or of the maintenance branch release/latest: it fetches main and runs
 // `git merge-base --is-ancestor <commit> refs/remotes/origin/main`, and, failing that, fetches
-// release/<series> (the series is the tag's <major>.<minor>) and runs the same test against it.
+// release/latest and runs the same test against it.
 function checkReleaseMainAncestry(lines: Line[]): string[] {
   const tagJob = jobBlocks(lines).find((job) => job.name === RELEASE_TAG_JOB)?.block ?? [];
   const has = (pattern: RegExp): boolean => tagJob.some((line) => pattern.test(line.text));
@@ -221,9 +221,9 @@ function checkReleaseMainAncestry(lines: Line[]): string[] {
   if (!has(/\bgit fetch\b.*\brefs\/heads\/main:refs\/remotes\/origin\/main\b/) || !has(/\bgit merge-base --is-ancestor\b.*\brefs\/remotes\/origin\/main\b/)) {
     problems.push(`job ${RELEASE_TAG_JOB}: no check that the tag names a commit of main (git fetch of main, then merge-base --is-ancestor)`);
   }
-  if (!has(/\bgit fetch\b.*\brefs\/heads\/release\/\$series:refs\/remotes\/origin\/release\/\$series\b/) ||
-      !has(/\bgit merge-base --is-ancestor\b.*\brefs\/remotes\/origin\/release\/\$series\b/)) {
-    problems.push(`job ${RELEASE_TAG_JOB}: no check that the tag names a commit of its release branch (git fetch of release/$series, then merge-base --is-ancestor)`);
+  if (!has(/\bgit fetch\b.*\brefs\/heads\/release\/latest:refs\/remotes\/origin\/release\/latest\b/) ||
+      !has(/\bgit merge-base --is-ancestor\b.*\brefs\/remotes\/origin\/release\/latest\b/)) {
+    problems.push(`job ${RELEASE_TAG_JOB}: no check that the tag names a commit of release/latest (git fetch of release/latest, then merge-base --is-ancestor)`);
   }
   return problems;
 }

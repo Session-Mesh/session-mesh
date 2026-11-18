@@ -56,12 +56,12 @@ describe('the cla job of the public CI', () => {
     assert.equal(onMain.status, 0);
     assert.match(onMain.stdout, /nothing verified/);
     assert.match(onMain.stdout, /on main already/);
-    const onRelease = run('refs/heads/release/0.1');
+    const onRelease = run('refs/heads/release/latest');
     assert.equal(onRelease.status, 0);
-    assert.match(onRelease.stdout, /nothing verified.*on release\/0\.1 already/);
+    assert.match(onRelease.stdout, /nothing verified.*on release\/latest already/);
     // The check of record stays on pull requests: a branch that is not main or under release/ fails.
-    for (const ref of ['refs/heads/feature', 'refs/heads/release', 'refs/heads/releases/0.1', 'refs/heads/main-x', 'refs/heads/x/release/0.1',
-      'refs/tags/release/0.1', 'refs/tags/v0.1.0', 'refs/pull/1/merge', '']) {
+    for (const ref of ['refs/heads/feature', 'refs/heads/release', 'refs/heads/releases/0.1', 'refs/heads/main-x', 'refs/heads/x/release/latest',
+      'refs/tags/release/latest', 'refs/tags/v0.1.0', 'refs/pull/1/merge', '']) {
       const elsewhere = run(ref);
       assert.equal(elsewhere.status, 1, ref);
       assert.match(elsewhere.stdout, /the cla check only runs on pull requests/, ref);

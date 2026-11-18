@@ -45,23 +45,23 @@ describe('semver label of a pull request to main', () => {
   });
 
   test('does not judge a pull request to another branch', () => {
-    for (const base of ['release/0.1', 'topic', 'Main', 'main/x']) assert.deepEqual(semverLabelProblems(pull(base, [])), [], base);
+    for (const base of ['release/latest', 'topic', 'Main', 'main/x']) assert.deepEqual(semverLabelProblems(pull(base, [])), [], base);
   });
 });
 
 describe('release branch guard', () => {
   const lookupOf = (pulls: Record<number, SourcePull>) => async (number: number): Promise<SourcePull | null> => pulls[number] ?? null;
   const guard = (facts: PullRequestFacts, pulls: Record<number, SourcePull> = {}) => releaseGuardProblems(facts, lookupOf(pulls));
-  const BODY = 'Backport of #12 to `release/0.1`.\n\nCherry-picked.';
+  const BODY = 'Backport of #12 to `release/latest`.\n\nCherry-picked.';
 
   test('accepts a backport of a pull request merged to main with semver: patch', async () => {
-    assert.deepEqual(await guard(pull('release/0.1', [PATCH], BODY), {12: merged([PATCH, 'bug'])}), []);
+    assert.deepEqual(await guard(pull('release/latest', [PATCH], BODY), {12: merged([PATCH, 'bug'])}), []);
     assert.deepEqual(await guard(pull('release/0.2', [PATCH], '# Description\nBackport of #12 and Backport of #13'), {12: merged([PATCH]), 13: merged([PATCH])}), []);
   });
 
   test('refuses a pull request to a release branch without the label semver: patch', async () => {
     for (const labels of [[], [MINOR], ['bug']]) {
-      const problems = await guard(pull('release/0.1', labels, BODY), {12: merged([PATCH])});
+      const problems = await guard(pull('release/latest', labels, BODY), {12: merged([PATCH])});
       assert.equal(problems.length, 1);
       assert.match(problems[0], /must carry the label "semver: patch"/);
     }
@@ -69,7 +69,7 @@ describe('release branch guard', () => {
 
   test('refuses a description that references no pull request', async () => {
     for (const body of ['', 'A fix.', 'Backport #12', 'backport of #12', 'Backport of 12', 'See #12']) {
-      const problems = await guard(pull('release/0.1', [PATCH], body), {12: merged([PATCH])});
+      const problems = await guard(pull('release/latest', [PATCH], body), {12: merged([PATCH])});
       assert.match(problems.join('\n'), /must say "Backport of #<number>"/, JSON.stringify(body));
     }
   });
@@ -78,26 +78,26 @@ describe('release branch guard', () => {
     const cases: [string, SourcePull | undefined, RegExp][] = [
       ['missing', undefined, /#12 is not a pull request of this repository/],
       ['open', merged([PATCH], 'main', false), /#12 is not merged/],
-      ['merged to a release branch', merged([PATCH], 'release/0.1'), /#12 was not merged to main/],
+      ['merged to a release branch', merged([PATCH], 'release/latest'), /#12 was not merged to main/],
       ['merged to a topic branch', merged([PATCH], 'topic'), /#12 was not merged to main/],
       ['a minor change', merged([MINOR]), /#12 does not carry the label "semver: patch"/],
       ['unlabelled', merged([]), /#12 does not carry the label "semver: patch"/],
     ];
     for (const [label, source, pattern] of cases) {
-      const problems = await guard(pull('release/0.1', [PATCH], BODY), source ? {12: source} : {});
+      const problems = await guard(pull('release/latest', [PATCH], BODY), source ? {12: source} : {});
       assert.match(problems.join('\n'), pattern, label);
     }
   });
 
   test('refuses when one of several referenced pull requests is not a merged patch', async () => {
-    const problems = await guard(pull('release/0.1', [PATCH], 'Backport of #1\nBackport of #2'), {1: merged([PATCH]), 2: merged([MINOR])});
+    const problems = await guard(pull('release/latest', [PATCH], 'Backport of #1\nBackport of #2'), {1: merged([PATCH]), 2: merged([MINOR])});
     assert.deepEqual(problems, ['#2 does not carry the label "semver: patch"']);
   });
 
   test('refuses a description naming more pull requests than a backport may', async () => {
     const body = Array.from({length: MAX_REFERENCES + 1}, (_, index) => `Backport of #${index + 1}`).join('\n');
     const calls: number[] = [];
-    const problems = await releaseGuardProblems(pull('release/0.1', [PATCH], body), async (number) => {
+    const problems = await releaseGuardProblems(pull('release/latest', [PATCH], body), async (number) => {
       calls.push(number);
       return merged([PATCH]);
     });
@@ -111,7 +111,7 @@ describe('release branch guard', () => {
 
   test('looks each referenced pull request up once', async () => {
     const calls: number[] = [];
-    await releaseGuardProblems(pull('release/0.1', [PATCH], 'Backport of #3\nBackport of #3'), async (number) => {
+    await releaseGuardProblems(pull('release/latest', [PATCH], 'Backport of #3\nBackport of #3'), async (number) => {
       calls.push(number);
       return merged([PATCH]);
     });
@@ -210,12 +210,12 @@ describe('the command line', () => {
   });
 
   test('release-guard: a valid backport passes, a minor source and an unknown number fail', async () => {
-    const ok = await run('release-guard', event('release/0.1', [PATCH], 'Backport of #12 to `release/0.1`.'));
+    const ok = await run('release-guard', event('release/latest', [PATCH], 'Backport of #12 to `release/latest`.'));
     assert.equal(ok.status, 0, ok.output);
-    const minor = await run('release-guard', event('release/0.1', [PATCH], 'Backport of #13'));
+    const minor = await run('release-guard', event('release/latest', [PATCH], 'Backport of #13'));
     assert.equal(minor.status, 1);
     assert.match(minor.output, /#13 does not carry the label "semver: patch"/);
-    const unknown = await run('release-guard', event('release/0.1', [PATCH], 'Backport of #99'));
+    const unknown = await run('release-guard', event('release/latest', [PATCH], 'Backport of #99'));
     assert.equal(unknown.status, 1);
     assert.match(unknown.output, /#99 is not a pull request of this repository/);
   });
@@ -223,15 +223,15 @@ describe('the command line', () => {
   test('release-guard passes on a pull request to main without token or lookup', async () => {
     const result = await run('release-guard', event('main', []), {GITHUB_TOKEN: '', GITHUB_API_URL: 'http://127.0.0.1:1'});
     assert.equal(result.status, 0, result.output);
-    const release = await run('release-guard', event('release/0.1', [PATCH], 'Backport of #12'), {GITHUB_TOKEN: ''});
+    const release = await run('release-guard', event('release/latest', [PATCH], 'Backport of #12'), {GITHUB_TOKEN: ''});
     assert.equal(release.status, 2, 'a backport without a token: a usage error, the guard does not guess');
   });
 
   test('release-guard: an unreachable or refusing API is an error (2), never an acceptance', async () => {
-    const refused = await run('release-guard', event('release/0.1', [PATCH], 'Backport of #12'), {GITHUB_TOKEN: 'wrong'});
+    const refused = await run('release-guard', event('release/latest', [PATCH], 'Backport of #12'), {GITHUB_TOKEN: 'wrong'});
     assert.equal(refused.status, 2, refused.output);
     assert.match(refused.output, /GitHub answered 401/);
-    const down = await run('release-guard', event('release/0.1', [PATCH], 'Backport of #12'), {GITHUB_API_URL: 'http://127.0.0.1:1'});
+    const down = await run('release-guard', event('release/latest', [PATCH], 'Backport of #12'), {GITHUB_API_URL: 'http://127.0.0.1:1'});
     assert.equal(down.status, 2, down.output);
   });
 
@@ -310,7 +310,7 @@ describe('.coderabbit.yaml', () => {
 
   test('reviews the pull requests whose base is a release branch', () => {
     assert.match(text, /^ {2}auto_review:\n {4}enabled: true\n {4}drafts: false\n(?: {4}#.*\n)* {4}base_branches: \["release\/\.\*"\]\n/m);
-    assert.ok(/^(?:release\/.*)$/.test('release/0.1'));
-    assert.ok(!/^(?:release\/.*)$/.test('pre-release/0.1'));
+    assert.ok(/^(?:release\/.*)$/.test('release/latest'));
+    assert.ok(!/^(?:release\/.*)$/.test('pre-release/latest'));
   });
 });

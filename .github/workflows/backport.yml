@@ -1,7 +1,7 @@
 # Automatic backport of a fix to the maintenance branch (CONTRIBUTING.md, "Branches and versions").
 # When a pull request labelled `semver: patch` is merged to main (or gets that label after it was
-# merged), the commits it landed are cherry-picked onto a new branch from release/0.1, and a pull
-# request "[0.1] <original title>" to release/0.1 is opened with the label `semver: patch` and
+# merged), the commits it landed are cherry-picked onto a new branch from release/latest, and a pull
+# request "[release/latest] <original title>" to release/latest is opened with the label `semver: patch` and
 # the line "Backport of #<number>" (which the release branch guard of branch-policy.yml checks).
 # When a cherry-pick conflicts, nothing is pushed and the action comments on the original pull
 # request with the commands to backport it by hand.
@@ -41,7 +41,7 @@ defaults:
 
 jobs:
   backport:
-    name: backport to release/0.1
+    name: backport to release/latest
     if: >-
       github.event.pull_request.merged == true &&
       contains(github.event.pull_request.labels.*.name, 'semver: patch') &&
@@ -72,9 +72,13 @@ jobs:
         uses: korthout/backport-action@ad272ff24e4a8593bf18a951a154ae6af93b26b8 # v5.0.0
         with:
           github_token: ${{ steps.app-token.outputs.token || github.token }}
-          target_branches: release/0.1
+          target_branches: release/latest
+          # The action reads a label of the form `backport <branch>` of the merged pull request as an
+          # extra target next to target_branches; an empty pattern turns that off, so that only the
+          # branch above is ever targeted.
+          label_pattern: ""
           add_labels: "semver: patch"
-          pull_title: "[0.1] ${pull_title}"
+          pull_title: "[${target_branch}] ${pull_title}"
           pull_description: |-
             Backport of #${pull_number} to `${target_branch}`.
 
