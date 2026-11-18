@@ -317,6 +317,8 @@ describe('install.sh: Tailscale state is classified strictly', () => {
     const run = install(fx, ['--tailscale']);
     assert.equal(run.status, 1, run.output);
     assert.match(run.stderr, /boom: serve failed/);
+    // The file that kept that stderr (in TMPDIR, the fixture's root) is removed on that exit too.
+    assert.deepEqual(fs.readdirSync(fx.root).filter((name) => name.startsWith('mesh-serve.')), []);
   });
 });
 
