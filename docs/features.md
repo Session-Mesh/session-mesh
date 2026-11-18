@@ -31,6 +31,7 @@ Interface labels are quoted as they appear in the English interface.
 - [Notifications](#notifications)
 - [Phone](#phone)
 - [Language, reload, source code and sign-out](#language-reload-source-code-and-sign-out)
+- [Colour themes and custom palette](#colour-themes-and-custom-palette)
 
 ## Keyboard and mouse shortcuts
 
@@ -990,6 +991,8 @@ The footer of the sidebar holds:
 
 - the **language** selector: "🌐 Auto" follows the browser's preferred languages, otherwise English
   or Français, remembered by this browser;
+- the **colour theme** selector, remembered by this browser
+  ([Colour themes and custom palette](#colour-themes-and-custom-palette));
 - "**Source code**", a link to the source of this interface, which the AGPL-3.0-or-later licence
   makes available to its users;
 - "**⟳ Reload**", which fetches the latest version of the page. When the server has a newer version,
@@ -997,3 +1000,30 @@ The footer of the sidebar holds:
   text or an operation in progress;
 - **⏻**: "Sign out this device", or "All devices…", which signs out every browser without changing
   the token or the sessions ([docs/operations.md](operations.md#logging-out-devices-and-replacing-the-token)).
+
+## Colour themes and custom palette
+
+The theme selector, next to the language selector in the sidebar footer, offers the default dark
+theme, a light theme, Solarized Dark, Solarized Light, Gruvbox Dark and Nord. The page and every
+open terminal change at once, without a reload; other tabs of the same browser follow. The choice
+is kept in this browser, like the language, and applied before the page is drawn on the next load.
+
+The terminals use the theme's own colours: background, text, cursor, selection and the 16 ANSI
+colours. Where a source palette had no shade for an interface element (a second panel, a muted
+text), the theme uses one derived from it, chosen so that text keeps a WCAG AA contrast (4.5:1).
+
+"Custom palette…", the last entry of the selector, opens an editor for overrides laid over the
+chosen theme: a JSON object of colour variables, for example
+
+```json
+{ "--bg": "#002b36", "--term": "#001e26", "--ansi-red": "#ff5f5f" }
+```
+
+The interface variables are `--bg`, `--term` (terminal background), `--panel`, `--panel-2`,
+`--line`, `--line-2`, `--fg`, `--fg-2`, `--mute`, `--accent`, `--on-accent`, `--raise`, `--busy`,
+`--idle`, `--wait`, `--off` and `--danger`; the terminal ones are `--cursor`, `--selection` and
+`--ansi-black` to `--ansi-white` with their `--ansi-bright-…` forms. Only those names and only
+hexadecimal colours (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) are accepted; anything else is
+refused with the offending names, and nothing is applied. "Start from the current theme" fills the
+editor with every variable of the theme in use; "Reset" removes the overrides. The palette is kept
+in this browser only: another browser or device keeps its own.

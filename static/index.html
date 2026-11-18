@@ -12,9 +12,11 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="client-version" content="__CLIENT_VERSION__">
 <meta name="theme-color" content="#11151c">
+<script src="/static/themes.js?v=__CLIENT_VERSION__"></script>
 <link rel="apple-touch-icon" href="/static/icons/icon-192.png?v=6f13fb609ae0fc2c">
 <link rel="stylesheet" href="/static/vendor/xterm.css">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/themes.css?v=__CLIENT_VERSION__">
 </head>
 <body>
 <div id="app">
@@ -50,7 +52,7 @@
     </section>
     <div id="list" class="list"></div>
     <div id="hlist" class="list" hidden></div>
-    <footer class="side-foot"><span id="foot"></span><label id="push-detail-row" class="push-detail" hidden title="By default a notification only carries the session name and the kind of event. Checked: it also carries the agent's text, the command or URL at stake and the choices (visible on this device's lock screen)." data-i18n-title="foot.pushDetailTitle"><input type="checkbox" id="push-detail"> <span data-i18n="foot.pushDetail">details</span></label><button id="btn-shortcuts" type="button" class="btn ghost sm" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" data-i18n-title="shortcuts.open" data-i18n-aria-label="shortcuts.title">?</button><select id="lang-select" class="btn ghost sm" title="Interface language" aria-label="Interface language" data-i18n-title="foot.language" data-i18n-aria-label="foot.language"></select><a id="source-link" class="btn ghost sm" href="https://github.com/Session-Mesh/session-mesh" target="_blank" rel="noopener noreferrer" title="The source code of this interface (AGPL-3.0-or-later)" data-i18n-title="foot.sourceTitle" data-i18n="foot.source">Source code</a><button id="btn-reload" class="btn ghost sm" title="Reload the app (fetches the latest version)" data-i18n-title="foot.reloadTitle" data-i18n="foot.reload">⟳ Reload</button><button id="btn-push" class="btn ghost sm" hidden></button><button class="btn ghost sm" popovertarget="logout-pop" title="Sign out" aria-label="Sign out" data-i18n-title="foot.logout" data-i18n-aria-label="foot.logout">⏻</button><div id="logout-pop" popover><button id="btn-logout" class="btn sm" data-i18n="foot.logoutDevice">Sign out this device</button> <button id="btn-logout-all" class="btn sm" title="The token and the sessions do not change" data-i18n-title="foot.logoutAllTitle" data-i18n="foot.logoutAll">All devices…</button></div></footer>
+    <footer class="side-foot"><span id="foot"></span><label id="push-detail-row" class="push-detail" hidden title="By default a notification only carries the session name and the kind of event. Checked: it also carries the agent's text, the command or URL at stake and the choices (visible on this device's lock screen)." data-i18n-title="foot.pushDetailTitle"><input type="checkbox" id="push-detail"> <span data-i18n="foot.pushDetail">details</span></label><button id="btn-shortcuts" type="button" class="btn ghost sm" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" data-i18n-title="shortcuts.open" data-i18n-aria-label="shortcuts.title">?</button><select id="lang-select" class="btn ghost sm" title="Interface language" aria-label="Interface language" data-i18n-title="foot.language" data-i18n-aria-label="foot.language"></select><select id="theme-select" class="btn ghost sm" title="Colour theme" aria-label="Colour theme" data-i18n-title="theme.select" data-i18n-aria-label="theme.select"></select><a id="source-link" class="btn ghost sm" href="https://github.com/Session-Mesh/session-mesh" target="_blank" rel="noopener noreferrer" title="The source code of this interface (AGPL-3.0-or-later)" data-i18n-title="foot.sourceTitle" data-i18n="foot.source">Source code</a><button id="btn-reload" class="btn ghost sm" title="Reload the app (fetches the latest version)" data-i18n-title="foot.reloadTitle" data-i18n="foot.reload">⟳ Reload</button><button id="btn-push" class="btn ghost sm" hidden></button><button class="btn ghost sm" popovertarget="logout-pop" title="Sign out" aria-label="Sign out" data-i18n-title="foot.logout" data-i18n-aria-label="foot.logout">⏻</button><div id="logout-pop" popover><button id="btn-logout" class="btn sm" data-i18n="foot.logoutDevice">Sign out this device</button> <button id="btn-logout-all" class="btn sm" title="The token and the sessions do not change" data-i18n-title="foot.logoutAllTitle" data-i18n="foot.logoutAll">All devices…</button></div></footer>
   </aside>
 
   <div id="side-grip" class="grip" title="Drag to widen" data-i18n-title="side.grip"></div>
@@ -345,6 +347,21 @@
   </div>
   <p class="mute config-notice" data-i18n="config.notice">Read-only: what this mesh is using right now. No token, key or file content is ever shown here.</p>
   <div id="config-body"></div>
+</dialog>
+
+<dialog id="dlg-palette" class="palette-editor" aria-labelledby="palette-title">
+  <div class="mailbox-head">
+    <h2 id="palette-title" data-i18n="theme.paletteTitle">Custom palette (this browser)</h2>
+    <button type="button" class="btn ghost" data-close-dialog data-i18n="common.close">Close</button>
+  </div>
+  <p id="palette-hint" class="mute small"></p>
+  <textarea id="palette-text" rows="10" spellcheck="false" autocomplete="off" aria-labelledby="palette-title"></textarea>
+  <p id="palette-status" class="palette-status" role="status"></p>
+  <div class="row">
+    <button type="button" id="palette-fill" class="btn ghost sm" data-i18n="theme.paletteFill">Start from the current theme</button>
+    <button type="button" id="palette-reset" class="btn ghost sm" data-i18n="theme.paletteReset">Reset</button>
+    <button type="button" id="palette-apply" class="btn primary sm" data-i18n="theme.paletteApply">Apply</button>
+  </div>
 </dialog>
 
 <dialog id="dlg-compose">
