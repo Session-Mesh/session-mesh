@@ -64,8 +64,8 @@ Optional:
   Pi 1.3 or later), are in [agents.md](agents.md).
 - `gh`, the GitHub CLI, logged in (`gh auth login`): when it is on your `PATH`, the installer checks
   the build attestation of every file it downloads ([Install a release](#install-a-release)).
-- opam with an OCaml 5.3 switch, only for a source install: it builds the native PTY host and the
-  other native programs ([Native PTY host](#native-pty-host)).
+- opam, only for a source install: `scripts/bootstrap.sh` creates an OCaml 5.3 switch and builds
+  the native PTY host and the other native programs in it ([Native PTY host](#native-pty-host)).
 - Tailscale, to reach the interface from your other devices ([Tailscale](#tailscale)).
 
 ## Install a release
@@ -233,16 +233,37 @@ A source install takes the host from the first of these that applies:
 A release has bundles for Linux x86-64, Linux arm64 and macOS on Apple silicon. There is none for
 another architecture, such as an Intel Mac: use a source install there.
 
-**Build.** `scripts/bootstrap.sh --install-only` installs the OCaml dependencies into an existing
-OCaml 5.3 opam switch, then builds and installs `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`,
-`mesh-platform` and `mesh-history` into that switch. It needs opam, a C compiler, the GMP and SQLite
-(with FTS5) headers and `pkg-config` (the OCaml part of
+**Build.** `scripts/bootstrap.sh --install-only` installs the OCaml dependencies into the opam
+switch named by `MESH_OPAM_SWITCH` (otherwise the current switch), then builds and installs
+`mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform` and `mesh-history` into that switch.
+It needs an initialised opam (`opam init`), a C compiler, the GMP and SQLite (with FTS5) headers and
+`pkg-config` (the OCaml part of
 [Test tools on a fresh machine](development.md#test-tools-on-a-fresh-machine)), and no Python test
 environment. SQLite 3.27 or newer is needed for accent folding in the full-text index; with an
-older SQLite, `mesh-history` uses the `remove_diacritics 1` tokenizer instead:
+older SQLite, `mesh-history` uses the `remove_diacritics 1` tokenizer instead.
+
+The bootstrap reads packages from the opam repository at the commit fixed in
+`scripts/release-pins.sh`, the one CI and the releases build with, whatever your own opam
+repositories hold: no `opam update` is needed. It registers that commit in your opam root as the
+repository `session-mesh` and selects it for its switch only; your other switches and the `default`
+repository are not changed. A switch that does not exist yet is created with OCaml 5.3 from that
+repository, without becoming your current switch. An existing switch must use OCaml 5.3 and already
+read only that commit: the bootstrap does not change the repositories of a switch that other
+projects may use, your current switch included, and stops with a message instead. Use a dedicated
+switch, as below, which is created when missing. To let the bootstrap make an existing switch read
+only that commit, set `MESH_OPAM_SELECT_PINNED=1`; it then prints the command that restores the
+repositories the switch read before. A switch that reads only the `session-mesh` repository (one an
+earlier bootstrap created or moved) is kept on later runs: when the pin has changed, the bootstrap
+moves the URL of `session-mesh` to the new commit, without that variable, and prints the
+`opam repository set-url` command that restores the former URL. The `session-mesh` repository
+belongs to the whole opam root: moving its URL moves every switch that reads it, and two checkouts
+with different pins (for example `main` and a release branch) move it back and forth on each run.
+Give such checkouts their own opam root (`OPAMROOT`) or their own repository-local switch. The local
+switch of the checkout (`_opam/`, as in CI) is changed without that variable. `MESH_OPAM_SWITCH` may also be the absolute directory of a local
+switch. Without `MESH_OPAM_SWITCH`, the bootstrap uses your current switch and does not pick another
+one, because `install.sh` and the server also look for the programs in the current switch.
 
 ```sh
-opam switch create session-mesh ocaml-base-compiler.5.3.0
 MESH_OPAM_SWITCH=session-mesh bash scripts/bootstrap.sh --install-only
 MESH_OPAM_SWITCH=session-mesh ./install.sh --ptyhost "$(opam var --switch=session-mesh bin)/mesh-ptyhost"
 ```
