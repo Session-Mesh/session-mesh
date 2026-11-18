@@ -26,7 +26,9 @@ It needs Node 22.13+ or 24+, npm, git, opam, Python 3 and bubblewrap. It uses `M
 otherwise a `.venv/` it creates with `python3` from `requirements-dev.txt` and
 `requirements-browser.txt`. That `python3` must be Python 3.10 to 3.14, the versions the pinned
 packages install on; with another, the script stops and shows how to create `.venv` with a
-supported one (for example `python3.14`), which later runs then use. Browser
+supported one (for example `python3.14`). A `.venv` is ready once the packages are installed in
+it (the script then writes `.venv/.test-local-installed`); one without that file, whose install
+failed or that you made by hand, is completed by the next run once you fix the cause. Browser
 tests use `MESH_CHROMIUM`, otherwise the newest Playwright Chromium in `~/.cache/ms-playwright`,
 installed if missing. OCaml uses `MESH_OPAM_SWITCH`, otherwise the current switch, which must use
 OCaml 5.3 and read only the opam repository commit of `scripts/release-pins.sh` (a missing switch is
