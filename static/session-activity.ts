@@ -61,12 +61,16 @@ function cpuFor(raw: unknown, session: Session, now: number): Cpu | null {
  * The server samples /proc every 10 s and reports percent of one core. An idle Claude or Codex process
  * still burns 0-3 clock ticks per window (0-0.3 % at 100 Hz), so any positive value is noise. 5 %
  * (50 ticks per window) is well above that noise and still far below a working agent. A single hot
- * window can be a timer or garbage collection, so two adjacent fresh windows (the second starts where
- * the first ended) at or above the threshold are needed to promote, and two adjacent fresh windows below it
- * demote again. A gap between windows, a missing sample or a status change breaks the run. */
+ * window can be a timer or garbage collection, so promotion is strict: two adjacent fresh windows (the
+ * second starts where the first ended) at or above the threshold, and a gap, a missing sample or a status
+ * change breaks the run. Demotion is deliberately eager, so a session can never stay marked busy: two fresh
+ * windows below the threshold demote whether or not they are adjacent (the CPU baseline is shared by every
+ * client, so one client can see only gapped windows), and an active session also demotes once no hot window
+ * (or busy status) has been seen for more than DEMOTE_AFTER_SECONDS. */
 const ACTIVE_CPU_PERCENT = 5;
 const WINDOWS_TO_PROMOTE = 2;
 const WINDOWS_TO_DEMOTE = 2;
+const DEMOTE_AFTER_SECONDS = 30;
 
 /** Whether the status alone decides the phase, without looking at CPU. */
 const statusDecides = (session: Session): boolean => session.status === "busy" || session.status === "waiting"
@@ -93,6 +97,8 @@ export function update(previous: Ranking | null, rawSessions: unknown, managemen
     let positiveAt = prior?.positiveAt ?? null;
     const adjacent = cpu !== null && prior !== null && prior.windowEnd !== null && cpu.windowStart === prior.windowEnd;
     const wasActive = prior?.phase === "active";
+    const recentlyHot = positiveAt !== null && now - positiveAt <= DEMOTE_AFTER_SECONDS;
+    const staysActive = (count: number) => wasActive && count < WINDOWS_TO_DEMOTE && recentlyHot;
     if (known && !statusDecides(session)) {
       const hot = cpu !== null && cpu.value >= ACTIVE_CPU_PERCENT;
       if (hot && freshWindow) {
@@ -103,15 +109,15 @@ export function update(previous: Ranking | null, rawSessions: unknown, managemen
       } else if (hot) {
         phase = wasActive ? "active" : "unknown";
       } else if (cpu && freshWindow) {
-        zeroWindows = adjacent ? zeroWindows + 1 : 1;
+        zeroWindows += 1;
         hotWindows = 0;
-        phase = wasActive && zeroWindows < WINDOWS_TO_DEMOTE ? "active" : "inactive";
+        phase = staysActive(zeroWindows) ? "active" : "inactive";
       } else if (cpu) {
-        phase = wasActive && zeroWindows < WINDOWS_TO_DEMOTE ? "active" : "inactive";
+        phase = staysActive(zeroWindows) ? "active" : "inactive";
       } else {
         hotWindows = 0;
         zeroWindows = 0;
-        phase = wasActive && positiveAt !== null && now - positiveAt <= 30 ? "active" : "unknown";
+        phase = wasActive && recentlyHot ? "active" : "unknown";
       }
     }
     if (session.status === "busy") {
