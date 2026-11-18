@@ -1,0 +1,346 @@
+# The tests the informational macOS job of public-ci.yml runs: an allow-list, not a deny-list.
+#
+# Format: one path per line, relative to the repository root; `#` starts a comment, blank lines
+# are ignored. A `.py` entry is run by `pytest -m 'not browser'`, any other entry by
+# `node --experimental-strip-types --test`. The job reads this file
+# (docs/development.md, "The macOS job"); tests/public-ci-workflow-macos.test.ts checks that it
+# does and that every path below exists.
+#
+# To add a file: run it on a Mac with MESH_BASH32=/bin/bash, a free MESH_PORT and MESH_SESSION_TOKEN
+# unset, and list it only if it passes twice in a row (or fix the code or the test first, in the
+# same pull request). Keep the lists sorted. When you list a file below, delete its line of the
+# "not listed" comments at the end.
+#
+# Listed here: every file that passed twice in a row on macOS 15.6 arm64 (Homebrew Node 24,
+# Python 3.11 venv, system bash 3.2), with the OCaml programs built from this tree except
+# mesh-history (its sqlite dependencies were not installed there). The browser tests (file names
+# with `browser`) are not listed: no Chromium runs in this job.
+#
+# Node tests
+tests/agentcap-history.test.ts
+tests/agent-guide-copy.test.ts
+tests/agent-mail-live-list.test.ts
+tests/agent-mail-policy-pair.test.ts
+tests/backport-register-replay.test.ts
+tests/backport-register-workflow.test.ts
+tests/backport-workflow.test.ts
+tests/board-mcp-switch.test.ts
+tests/bootstrap-modes.test.ts
+tests/branch-policy.test.ts
+tests/bundle-licenses.test.ts
+tests/bundle-python-download-url.test.ts
+tests/check-copyright.test.ts
+tests/cla-check-maintainers.test.ts
+tests/cla-check-merge.test.ts
+tests/cla-check.test.ts
+tests/codex-queue-wake-state.test.ts
+tests/compile-demo-tsx-mounts.test.ts
+tests/copilot-discover.test.ts
+tests/copilot-hook-state.test.ts
+tests/copilot-idle.test.ts
+tests/copilot-launch-line.test.ts
+tests/copilot-real.test.ts
+tests/copilot-resume.test.ts
+tests/direct-line.test.ts
+tests/event-sequence.test.ts
+tests/gemini-resume.test.ts
+tests/history-agents-db.test.ts
+tests/history-agents.test.ts
+tests/history-db-protocol.test.ts
+tests/history-review2-fixes.test.ts
+tests/history-review3-fixes.test.ts
+tests/history-review4-fixes.test.ts
+tests/history-review5-fixes.test.ts
+tests/history-review-fixes.test.ts
+tests/host-loopback.test.ts
+tests/i18n-coverage.test.ts
+tests/i18n.test.ts
+tests/idle-observable.test.ts
+tests/index-html-structure.test.ts
+tests/launch-line-argv.test.ts
+tests/leak-guard-allow.test.ts
+tests/leak-guard-gitleaks-adapter.test.ts
+tests/leak-guard-hooks.test.ts
+tests/leak-guard-secret-exceptions.test.ts
+tests/leak-guard.test.ts
+tests/mailbox-panel.test.ts
+tests/mesh-attach-name-taken.test.ts
+tests/mesh-attach-not-responding.test.ts
+tests/mobile-actions-focus.test.ts
+tests/native-host-alignment.test.ts
+tests/opencode-config-merge.test.ts
+tests/opencode-events.test.ts
+tests/opencode-executable.test.ts
+tests/opencode-launch-once.test.ts
+tests/opencode-quiet-turn.test.ts
+tests/opencode-resume.test.ts
+tests/opencode-v2-events.test.ts
+tests/opencode-v2-mailbox.test.ts
+tests/opencode-v2-real.test.ts
+tests/pi-wake-no-proxy.test.ts
+tests/portfolio-optional-observer.test.ts
+tests/project-activity.test.ts
+tests/project-artifact-client.test.ts
+tests/project-artifact-selection.test.ts
+tests/project-attention-view.test.ts
+tests/project-catalog.test.ts
+tests/project-catalog-validation.test.ts
+tests/project-cockpit-view.test.ts
+tests/project-collection-unavailable.test.ts
+tests/project-config.test.ts
+tests/project-dependency-svg.test.ts
+tests/project-followup-regressions.test.ts
+tests/project-followup.test.ts
+tests/project-followup-ui.test.ts
+tests/project-gantt-label.test.ts
+tests/project-gantt.test.ts
+tests/project-host-adapter.test.ts
+tests/project-intent-receipt.test.ts
+tests/project-issue-identity.test.ts
+tests/project-kanban.test.ts
+tests/project-membership-view.test.ts
+tests/project-metadata.test.ts
+tests/project-native-catalog-ratchet.test.ts
+tests/project-observation-bridge.test.ts
+tests/project-provider-signal-ratchet.test.ts
+tests/project-reader-import.test.ts
+tests/project-repository.test.ts
+tests/project-roadmap-lifecycle.test.ts
+tests/project-roadmap-navigation.test.ts
+tests/project-snapshot.test.ts
+tests/projects-real-server.test.ts
+tests/projects-ui.test.ts
+tests/projects-workspace.test.ts
+tests/project-work-inspector.test.ts
+tests/project-work-preview.test.ts
+tests/ptyhost-lost-sighup.test.ts
+tests/ptyhost-python-removed.test.ts
+tests/ptyhost-runtime-dir.test.ts
+tests/public-ci-workflow-cla.test.ts
+tests/public-ci-workflow-macos.test.ts
+tests/public-ci-workflow.test.ts
+tests/pwa-icons.test.ts
+tests/release-floor-scripts.test.ts
+tests/release-scripts.test.ts
+tests/release-sqlite.test.ts
+tests/release-workflow-scripts.test.ts
+tests/release-workflow.test.ts
+tests/respawn-hooked-conversation.test.ts
+tests/restore-organisation-race.test.ts
+tests/restore-page-shell.test.ts
+tests/server-messages-drift.test.ts
+tests/server-robustness.test.ts
+tests/session-activity-idle.test.ts
+tests/shortcuts.test.ts
+tests/site-workflow.test.ts
+tests/terminal-links.test.ts
+tests/terminal-replay.test.ts
+tests/test-local-python.test.ts
+tests/themes.test.ts
+tests/third-party-licenses.test.ts
+tests/third-party.test.ts
+tests/token-file.test.ts
+tests/upload-modes.test.ts
+tests/vendor-checksums.test.ts
+tests/vibe-config-merge.test.ts
+tests/vibe-events.test.ts
+tests/vibe-real.test.ts
+tests/vibe-resume.test.ts
+tests/view-hardening.test.ts
+tests/web-page-panel.test.ts
+tests/workflow-yaml-plain-scalars.test.ts
+tests/wrapped-links.test.ts
+
+# pytest files
+tests/test_agentcap.py
+tests/test_agent_hooks_fixtures.py
+tests/test_agent_mail_api.py
+tests/test_agentmail.py
+tests/test_agentmcp.py
+tests/test_agentwake.py
+tests/test_auth.py
+tests/test_board_open_queue.py
+tests/test_board.py
+tests/test_body_limits.py
+tests/test_browse.py
+tests/test_claudepolicy.py
+tests/test_claudewake_post.py
+tests/test_claudewake.py
+tests/test_claudewake_server.py
+tests/test_client_version.py
+tests/test_codeview.py
+tests/test_codeview_subresources.py
+tests/test_conversation_names.py
+tests/test_demo_scene.py
+tests/test_discover_foreground.py
+tests/test_discover_said.py
+tests/test_external.py
+tests/test_history.py
+tests/test_inventory_pipeline.py
+tests/test_launchplan.py
+tests/test_launchsettings.py
+tests/test_local_terminal_handle.py
+tests/test_mesh_conf_dir.py
+tests/test_mesh_event.py
+tests/test_mesh_open.py
+tests/test_observability.py
+tests/test_pimcp.py
+tests/test_projectartifacts.py
+tests/test_projectissues.py
+tests/test_ptyhost_t41_wiring.py
+tests/test_ptyhost_uid_split.py
+tests/test_push_minimal.py
+tests/test_push.py
+tests/test_push_switch.py
+tests/test_pwa.py
+tests/test_quint_lifecycle_checker.py
+tests/test_respawn_snapshot.py
+tests/test_respawn_validation.py
+tests/test_resumeargs.py
+tests/test_resumeargs_socket.py
+tests/test_resumeargs_wrapped.py
+tests/test_resume_profile.py
+tests/test_route_auth_table.py
+tests/test_session_action_api.py
+tests/test_session_auth.py
+tests/test_session_open_scope.py
+tests/test_sessionrequests.py
+tests/test_session_token.py
+tests/test_signalbus.py
+tests/test_test_environment.py
+tests/test_upload.py
+tests/test_view_bases.py
+tests/test_view_candidate_uncertainty.py
+tests/test_view_capability.py
+tests/test_view_deny_identity.py
+tests/test_view_fifo.py
+tests/test_view_inode_cache_reuse.py
+tests/test_view_markdown.py
+tests/test_view_oracle.py
+tests/test_view_policy.py
+tests/test_view.py
+tests/test_view_relative.py
+tests/test_view_review.py
+tests/test_watcher.py
+tests/test_wire_vectors.py
+
+# Not listed (failed or timed out on that host), by cause. Evidence: the first run of each file.
+#
+# Installers and release scripts written for Linux: the tests run them with a PATH that holds the
+# coreutils in /usr/bin only, with GNU find or bash 4 features, or against the Linux bundle.
+# tests/install-bundle.test.ts
+# tests/install-local.test.ts
+# tests/install-logout-all-link.test.ts
+# tests/install-macos-daemons.test.ts
+# tests/install-macos-runtime.test.ts
+# tests/install-macos.test.ts
+# tests/install-release-floors.test.ts
+# tests/install-release-programs.test.ts
+# tests/install-release.test.ts
+# tests/install-release-units.test.ts
+# tests/install-safety.test.ts
+# tests/preprod-runtime-dir.test.ts
+# tests/release-assets.test.ts
+# tests/release-native-scripts.test.ts
+# tests/release-workflow-publish.test.ts
+# tests/test_install_backend.py
+# tests/test_preprod_launcher.py
+#
+# The Linux process table (/proc) or the helper tests/ptyhost_proc.py, which reads it.
+# tests/test_board_api.py
+# tests/test_discover_platform.py
+# tests/test_fixture_isolation.py
+# tests/test_input_validation.py
+# tests/test_organize.py
+# tests/test_portfolio.py
+# tests/test_ptyhost_client.py
+# tests/test_ptyhost_env.py
+# tests/test_ptyhost_errors.py
+# tests/test_ptyhost_m1.py
+# tests/test_ptyhost_nonblocking.py
+# tests/test_ptyhost.py
+# tests/test_ptyhost_replay.py
+# tests/test_ptyhost_t41.py
+# tests/test_ptyhost_t42.py
+# tests/test_ptyhost_t42_writer.py
+# tests/test_ptyhost_t43.py
+# tests/test_ptyhost_t44e.py
+# tests/test_push_actions.py
+# tests/test_restore_e2e.py
+# tests/test_server_pty.py
+# tests/test_session_e2e.py
+# tests/vibe-presets.test.ts
+#
+# Failed on the hosted macos-15 runner (run 44377336319, Node 24, Python 3.12) after passing on the
+# Mac this list was derived on. Evidence: the assertion messages of that run.
+# - Waiting for a killed process to exit: discover.read_stat has no /proc off Linux and asks a PTY
+#   host socket; these tests run no host there, so the killed child is never reported gone and the
+#   server answers 409 after 10 s ("The process did not stop; nothing was restarted"). Whether the
+#   first Mac reached a host already running on the default socket is not established.
+# tests/opencode-v2-gate.test.ts
+# tests/vibe-launch.test.ts
+# - A shell started with env {PATH: /nonexistent} wrote "Error: $HOME must be set to run brew." to
+#   stderr where the test expects it empty. Where that line comes from on the runner is not
+#   established.
+# tests/gemini-presets.test.ts
+
+# Timed out (150 s for a Node file, 240 s for a pytest file).
+# tests/agent-mail-owner-mailbox.test.ts
+# tests/agent-mail-startup-hold.test.ts
+# tests/agy-presets.test.ts
+# tests/codex-queue-wake.test.ts
+# tests/config-route.test.ts
+# tests/history-resume-name.test.ts
+# tests/vpn-tls-proxy.test.ts
+#
+# Sessions driven through a fake agent or the PTY host that did not start or were not discovered on
+# the host, and other assertion failures, not diagnosed one by one: each is a candidate finding.
+# tests/agent-mail-restore-continuity.test.ts
+# tests/agent-mail-restore-exact.test.ts
+# tests/agent-mail-restore-failures.test.ts
+# tests/agy-config-resume.test.ts
+# tests/claude-socket-wake-bridge.test.ts
+# tests/claude-socket-wake-root.test.ts
+# tests/claude-socket-wake-state.test.ts
+# tests/claude-socket-wake.test.ts
+# tests/cli-no-proxy.test.ts
+# tests/codex-presets.test.ts
+# tests/codex-yolo-guard.test.ts
+# tests/config-edit-hardening.test.ts
+# tests/config-edit-route.test.ts
+# tests/config-host-states.test.ts
+# tests/copilot-adopt.test.ts
+# tests/copilot-presets.test.ts
+# tests/hook-conversation-rules.test.ts
+# tests/http-auth.test.ts
+# tests/http-route-table.test.ts
+# tests/leak-guard-pr-body.test.ts
+# tests/opencode-discover.test.ts
+# tests/opencode-presets.test.ts
+# tests/opencode-store-readonly.test.ts
+# tests/opencode-v2-presets.test.ts
+# tests/ptyhost-session-lifecycle.test.ts
+# tests/ptyhost-startup.test.ts
+# tests/restore-exact.test.ts
+# tests/restore-exact-uncertain.test.ts
+# tests/restore-exact-wave2.test.ts
+# tests/session-mesh-env.test.ts
+# tests/stale-hook-report.test.ts
+# tests/test_agent_states.py
+# tests/test_discover_codex.py
+# tests/test_discover_smoke.py
+# tests/test_event_api.py
+# tests/test_interop_cleanup.py
+# tests/test_localmesh.py
+# tests/test_logout_all.py
+# tests/test_management.py
+# tests/test_mesh_context_startup.py
+# tests/test_opens_broadcast.py
+# tests/test_respawn_organisation.py
+# tests/test_restore_api.py
+# tests/test_server_ptyhost_compat.py
+# tests/test_test_tmpdir.py
+# tests/vibe-discover.test.ts
+# tests/vibe-sweeper.test.ts
+# tests/view-filename-sandbox.test.ts
+# tests/wake-idle-gate.test.ts

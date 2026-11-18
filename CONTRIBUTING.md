@@ -46,6 +46,14 @@ pull request.
 | `ruff and pytest (without browser)` | `public-ci.yml` | Lint and tests of the existing Python code. |
 | `browser tests (Chromium, shard N of 4)` | `public-ci.yml` | The browser tests, split over four jobs (`N` is 0 to 3). |
 
+One more check runs on every pull request and is **not** required: `macos (arm64, informational)`
+(`public-ci.yml`). It builds and tests the native programs on a macOS arm64 runner and runs the
+tests listed in `tests/macos-ci-tests.txt` (an allow-list of the Node and pytest files known to
+pass on macOS; add yours there when it passes), so that a macOS-only breakage shows on the pull
+request. Its failure never blocks a merge, but read it when your change touches the installers,
+the shell scripts, the OCaml code or anything platform-specific; scripts must keep working with
+the bash 3.2 of macOS ([docs/development.md](docs/development.md#the-macos-job)).
+
 No approving review is required by the rule; a maintainer reads every pull request before merging
 it. CodeRabbit reviews pull requests to `main` and `release/**` (settings in
 [.coderabbit.yaml](.coderabbit.yaml)); its comments are advisory.

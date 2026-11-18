@@ -13,6 +13,7 @@
 // `release` (release.yml: the shared rules plus the checks of tests/release-workflow-checks.ts).
 import {blockOf, commandAt, expressions, githubProperties, jobBlocks, type Line, MAX_TIMEOUT_MINUTES, parseLines, permissionValues, stepOf, timeoutProblems,
   usesOf} from './public-ci-workflow-lib.ts';
+import {allowedContinueOnError, checkMacosJob, runnerFor, timeoutCap} from './public-ci-macos-checks.ts';
 import {BACKPORT_CHECKS, checkBackportEvent, checkBackportPermissions, checkBackportSecrets, checkBackportTriggers} from './backport-workflow-checks.ts';
 import {checkRegisterEvent, checkRegisterPermissions, checkRegisterSecrets, checkRegisterTriggers, REGISTER_CHECKS} from './backport-register-workflow-checks.ts';
 import {checkCleanupTriggers, checkPreviewActions, checkPreviewEvent, checkPreviewSecrets, checkPreviewTriggers, CLEANUP_CHECKS, PREVIEW_CHECKS} from './site-preview-workflow-checks.ts';
@@ -42,8 +43,8 @@ function checkUnparsed(lines: Line[]): string[] {
 }
 
 // A failing step or job never passes as green.
-function checkContinueOnError(lines: Line[]): string[] {
-  return lines.filter((line) => !line.inBlock &&
+function checkContinueOnError(lines: Line[], allowed: Set<Line> = new Set()): string[] {
+  return lines.filter((line) => !line.inBlock && !allowed.has(line) &&
       /(?:^|[\s{,])continue-on-error\s*:(?!\s*false\s*(?:[,}]|$))/.test(line.text))
     .map((line) => `line ${line.number}: continue-on-error other than false`);
 }
@@ -86,13 +87,15 @@ function checkDockerImages(lines: Line[]): string[] {
   return problems;
 }
 
-function checkRunners(lines: Line[]): string[] {
+// `runnerOf`: the one runner a `runs-on:` line may name (the public profile gives the macOS job its own).
+function checkRunners(lines: Line[], runnerOf: (line: Line) => string = () => RUNNER): string[] {
   const problems: string[] = [];
   lines.forEach((line, index) => {
     if (line.key !== 'runs-on') return;
     const value = line.value || blockOf(lines, index).map((item) => item.text.trim()).join(' ');
+    const expected = runnerOf(line);
     if (/self-hosted/i.test(value)) problems.push(`line ${line.number}: self-hosted runner`);
-    else if (value !== RUNNER) problems.push(`line ${line.number}: runner ${value || '(empty)'} is not ${RUNNER}`);
+    else if (value !== expected) problems.push(`line ${line.number}: runner ${value || '(empty)'} is not ${expected}`);
   });
   if (/self-hosted/i.test(lines.map((line) => line.text).join('\n')) &&
       problems.every((problem) => !problem.includes('self-hosted'))) problems.push('self-hosted label outside runs-on');
@@ -240,9 +243,10 @@ type Check = (items: Line[]) => string[];
 
 // The checks that differ from one profile to the next.
 function profileChecks(profile: Profile): {runners: Check; secrets: Check; injection: Check; actions: Check; triggers: Check;
-  permissions: Check; timeouts: Check} {
-  const shared = {runners: checkRunners, secrets: (items: Line[]) => checkSecrets(items), injection: (items: Line[]) => checkInjection(items),
-    actions: (items: Line[]) => checkActions(items), triggers: checkTriggers, permissions: checkPermissions, timeouts: checkTimeouts};
+  permissions: Check; timeouts: Check; continueOnError: Check} {
+  const shared = {runners: (items: Line[]) => checkRunners(items), secrets: (items: Line[]) => checkSecrets(items),
+    injection: (items: Line[]) => checkInjection(items), actions: (items: Line[]) => checkActions(items), triggers: checkTriggers,
+    permissions: checkPermissions, timeouts: checkTimeouts, continueOnError: (items: Line[]) => checkContinueOnError(items)};
   switch (profile) {
     case 'release':
       return {...shared, runners: checkReleaseRunners, secrets: (items) => checkSecrets(items, releaseTokenLines(items)),
@@ -263,6 +267,11 @@ function profileChecks(profile: Profile): {runners: Check; secrets: Check; injec
     case 'register':
       return {...shared, secrets: checkRegisterSecrets, injection: checkRegisterEvent, actions: (items) => checkActions(items, false),
         triggers: checkRegisterTriggers, permissions: checkRegisterPermissions};
+    case 'public':
+      // public-ci.yml: the informational macOS job is the one exception (tests/public-ci-macos-checks.ts).
+      return {...shared, runners: (items) => checkRunners(items, runnerFor(items, RUNNER)),
+        timeouts: (items) => timeoutProblems(items, (job) => timeoutCap(job, MAX_TIMEOUT_MINUTES)),
+        continueOnError: (items) => checkContinueOnError(items, allowedContinueOnError(items))};
     default:
       return shared;
   }
@@ -271,8 +280,9 @@ function profileChecks(profile: Profile): {runners: Check; secrets: Check; injec
 export function checkWorkflow(text: string, profile: Profile = 'public'): string[] {
   const lines = parseLines(text);
   const picked = profileChecks(profile);
-  const checks: Check[] = [checkUnparsed, picked.runners, picked.secrets, picked.injection, picked.actions, checkImages, checkContinueOnError,
+  const checks: Check[] = [checkUnparsed, picked.runners, picked.secrets, picked.injection, picked.actions, checkImages, picked.continueOnError,
     picked.triggers, picked.permissions, picked.timeouts, checkLeakRules];
+  if (profile === 'public') checks.push(checkMacosJob);
   if (profile !== 'release') checks.push(checkDockerImages);
   if (profile === 'release') checks.push(...RELEASE_CHECKS);
   if (profile === 'backport') checks.push(...BACKPORT_CHECKS);

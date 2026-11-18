@@ -562,3 +562,188 @@ jobs:
           # The base branch always holds the checker; without it the job fails here.
           git cat-file blob "$base:tools/cla-check/cla-check.ts" > "$checker"
           node --experimental-strip-types "$checker" --repo . --base "$base" --head "$head" --merge "$merge"
+
+  # macOS arm64, informational: the native programs and the tests that need no browser, on a
+  # GitHub-hosted runner, so that a macOS-only breakage shows on the pull request instead of at
+  # release time. `continue-on-error: true` keeps a failure from failing the workflow run, and
+  # the check is not in the ruleset's required list (CONTRIBUTING.md, "Required checks"), so it
+  # never blocks a merge; its result stays visible on the pull request. To promote it: drop
+  # `continue-on-error`, add `macos (arm64, informational)` to the ruleset (renaming the job
+  # first is advisable), and relax the macOS exception of tests/public-ci-macos-checks.ts
+  # (docs/development.md, "The macOS job"). It needs no other job and no job needs it: the pull
+  # request's wall clock does not grow. Same toolchain as the release's macos job (macOS 13
+  # deployment target, pinned SQLite), no Chromium, no browser test. Its steps run in the system
+  # bash 3.2 (/bin/bash), as a Mac user's installers do. Timeout 45 minutes, the safety net of the
+  # workflow header (a target of ten minutes is not a cap): a cold opam state took 15 min 20 s on
+  # the first run (setup-ocaml 5.5 min, dependencies 5.5 min); main then saves the state, as the
+  # ocaml job does, and later runs are warm.
+  macos:
+    name: macos (arm64, informational)
+    runs-on: macos-15
+    continue-on-error: true
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: /bin/bash -eo pipefail {0}
+    env:
+      OCAML_COMPILER: ocaml-base-compiler.5.3.0
+      # The deployment target of the release programs (PROGRAMS_MACOS_FLOOR), and the pinned SQLite
+      # of mesh-history, built in the cached local switch as in release.yml.
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      MESH_SQLITE_PREFIX: ${{ github.workspace }}/_opam/mesh-sqlite
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      # Cheap checks first. The runner's bash 3.2 and BSD tools (stat, sed, find) run the repository's scripts.
+      - name: SPDX license and copyright headers (BSD stat)
+        run: /bin/bash scripts/check-copyright.sh
+      - name: The system bash 3.2
+        run: |
+          version="$(/bin/bash --version)"
+          printf '%s\n' "${version%%$'\n'*}" | grep -F 'version 3.2.'
+          echo "MESH_BASH32=/bin/bash" >> "$GITHUB_ENV"
+      # The tests that run here are the ones listed in tests/macos-ci-tests.txt (an allow-list, see
+      # docs/development.md, "The macOS job"): other tests assume Linux (/proc) and would keep the
+      # job red. `.py` entries go to pytest, every other entry to the Node test runner. Read first: a
+      # malformed list fails the job in seconds, before the opam work.
+      - name: Read the macOS test list
+        run: |
+          list=tests/macos-ci-tests.txt
+          [ -s "$list" ] || { echo "empty or absent list: $list" >&2; exit 1; }
+          # A read loop: bash 3.2 has no mapfile.
+          : > "$RUNNER_TEMP/macos-node-tests.txt"
+          : > "$RUNNER_TEMP/macos-pytest-tests.txt"
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%%#*}"
+            line="${line//[[:space:]]/}"
+            [ -n "$line" ] || continue
+            # tests/ prefix (so no leading dash), no "..", only safe characters, a test extension.
+            case "$line" in *..*) echo "refused list entry: $line" >&2; exit 1 ;; esac
+            printf '%s\n' "$line" | grep -Eq '^tests/[A-Za-z0-9._/-]+\.(ts|py)$' || { echo "refused list entry: $line" >&2; exit 1; }
+            case "$line" in
+              *.py) printf '%s\n' "$line" >> "$RUNNER_TEMP/macos-pytest-tests.txt" ;;
+              *) printf '%s\n' "$line" >> "$RUNNER_TEMP/macos-node-tests.txt" ;;
+            esac
+          done < "$list"
+          [ -s "$RUNNER_TEMP/macos-node-tests.txt" ] && [ -s "$RUNNER_TEMP/macos-pytest-tests.txt" ] || { echo "no Node or no pytest entry in $list" >&2; exit 1; }
+          wc -l "$RUNNER_TEMP/macos-node-tests.txt" "$RUNNER_TEMP/macos-pytest-tests.txt"
+      # The opam state of this job only (the Linux states hold other binaries). The key covers
+      # the deployment target and the files that decide the SQLite build, as in release.yml.
+      - name: Restore the opam state
+        id: opam-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.opam
+            _opam
+          key: opam-${{ runner.os }}-${{ runner.arch }}-macos15-${{ env.OCAML_COMPILER }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh', 'scripts/release-pins.sh', 'scripts/build-sqlite.sh', 'scripts/bundle/sqlite.sha256') }}
+          restore-keys: |
+            opam-${{ runner.os }}-${{ runner.arch }}-macos15-${{ env.OCAML_COMPILER }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-
+      - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3.9.1
+        with:
+          ocaml-compiler: ${{ env.OCAML_COMPILER }}
+          opam-pin: false
+          cache: false
+      - name: Install the test Python dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -c 'import aiohttp, cryptography'
+          echo "MESH_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
+          echo "PYTHON=$(command -v python)" >> "$GITHUB_ENV"
+      # The same fixed opam repository commit as every other build.
+      - name: Fix the opam repository commit
+        run: |
+          source scripts/release-pins.sh
+          opam repository set-url default "$opam_repository"
+          opam update default
+      - name: Install the OCaml dependencies (scripts/bootstrap.sh --deps-only)
+        run: /bin/bash scripts/bootstrap.sh --deps-only
+      # Only main writes cache entries, as in the ocaml job.
+      - name: Trim the opam state before saving it
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.opam-cache.outputs.cache-hit != 'true'
+        run: opam clean --all-switches --download-cache --logs --repo-cache --untracked --unused-repositories
+      - name: Save the opam state
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.opam-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.opam
+            _opam
+          key: ${{ steps.opam-cache.outputs.cache-primary-key }}
+      # Build and install the native programs (no test): a build failure stops the later steps, and a
+      # test failure below does not hide the other results. The build output is kept for the linker
+      # check (pipefail: a failed build fails here).
+      - name: Build and install (scripts/bootstrap.sh --install-only)
+        id: build
+        run: |
+          export TMPDIR=/private/tmp
+          /bin/bash scripts/bootstrap.sh --install-only 2>&1 | tee "$RUNNER_TEMP/build.log"
+          bin="$(opam var bin)"
+          echo "MESH_PTYHOST_CMD=$bin/mesh-ptyhost" >> "$GITHUB_ENV"
+          echo "MESH_LOGOUT_ALL_CMD=$bin/mesh-logout-all" >> "$GITHUB_ENV"
+      # The native tests, as scripts/bootstrap.sh runs them (same environment, same dune runtest), but
+      # as a step of their own: a red native test fails the job (a real regression stays visible) while
+      # the Node and pytest steps below still report. Known failure on macOS 15 arm64 (run
+      # 44373102590): the alcotest case "actual pure validator cancellation keeps lane independent" of
+      # ocaml/test/project_host_test.ml (socket 7) ends with "observation cancelled: not within 15 s".
+      # Its cause (a macOS defect of the cancellation of a held validator, a slow runner or a Linux
+      # assumption of the fixture) is not established; it is not skipped, so the job stays red until
+      # that is fixed or understood.
+      - name: Native tests (dune runtest)
+        if: "!cancelled() && steps.build.outcome == 'success'"
+        run: |
+          source scripts/test-tmpdir.sh
+          # macOS TMPDIR is too long for socket paths (scripts/test-local.sh, prepare_scratch).
+          export TMPDIR=/private/tmp
+          mesh_prepare_test_tmpdir
+          export PYTHON="$MESH_PYTHON"
+          export MESH_PROJECT_VALIDATOR_ENTRY="$PWD/tools/project-observation.mjs"
+          export MESH_PTYHOST_CMD="$PWD/ocaml/_build/default/bin/mesh_ptyhost_main.exe"
+          opam exec -- dune runtest --root ocaml
+      # The release checks of release.yml (macos job), on the programs this pull request builds.
+      - name: Check what the programs link and their deployment target
+        if: "!cancelled() && steps.build.outcome == 'success'"
+        run: |
+          bin="$(opam var bin)"
+          /bin/bash scripts/release-check-macos.sh links "$bin/mesh-ptyhost" "$bin/mesh-board-mcp" "$bin/mesh-read" \
+            "$bin/mesh-platform" "$bin/mesh-history" "$bin/mesh-logout-all"
+          /bin/bash scripts/release-check-macos.sh linker-log "$RUNNER_TEMP/build.log"
+          opam exec -- /bin/bash scripts/release-check-macos.sh runtime-minos "$MACOSX_DEPLOYMENT_TARGET"
+      # Node and pytest are independent: each runs when the build succeeded, whatever the other
+      # steps did. An empty or absent list is an error, never "run everything".
+      - name: Node tests (macOS list)
+        if: "!cancelled() && steps.build.outcome == 'success'"
+        run: |
+          list="$RUNNER_TEMP/macos-node-tests.txt"
+          [ -s "$list" ] || { echo "empty or absent list: $list" >&2; exit 1; }
+          npm ci --ignore-scripts --no-audit --no-fund
+          source scripts/test-tmpdir.sh
+          export TMPDIR=/private/tmp
+          mesh_prepare_test_tmpdir
+          files=()
+          while IFS= read -r file; do files+=("$file"); done < "$list"
+          node --experimental-strip-types --test --test-concurrency=4 -- "${files[@]}"
+      - name: pytest (macOS list, without browser)
+        if: "!cancelled() && steps.build.outcome == 'success'"
+        run: |
+          list="$RUNNER_TEMP/macos-pytest-tests.txt"
+          [ -s "$list" ] || { echo "empty or absent list: $list" >&2; exit 1; }
+          source scripts/test-tmpdir.sh
+          export TMPDIR=/private/tmp
+          mesh_prepare_test_tmpdir
+          files=()
+          while IFS= read -r file; do files+=("$file"); done < "$list"
+          python -m pytest -q -m 'not browser' -- "${files[@]}"
