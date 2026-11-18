@@ -66,8 +66,22 @@ function cpuFor(raw: unknown, session: Session, now: number): Cpu | null {
  * change breaks the run. Demotion is deliberately eager, so a session can never stay marked busy: two fresh
  * windows below the threshold demote whether or not they are adjacent (the CPU baseline is shared by every
  * client, so one client can see only gapped windows), and an active session also demotes once no hot window
- * (or busy status) has been seen for more than DEMOTE_AFTER_SECONDS. */
+ * (or busy status) has been seen for more than DEMOTE_AFTER_SECONDS. Past that grace, activity is not
+ * renewed by one hot window: promotion needs two adjacent hot windows again.
+ *
+ * A window longer than MAX_HOT_WINDOW_SECONDS is never hot: it averages CPU over a pause in collection
+ * (the server derives a window when a poll arrives at least 10 s after the previous one, and the sidebar
+ * polls every 4 s), so a burst at its start would read as current work. It counts as a cold window.
+ *
+ * Limits, both failing towards "inactive", the side this ranking started from:
+ * - Codex CPU is the Codex process's own utime + stime (observability.py _read_process reads
+ *   /proc/<pid>/stat fields 14 and 15, not cutime / cstime), so a build or test run in a child process
+ *   does not count: a session whose only work is a silent child process can demote. Sampling the
+ *   process tree is a follow-up.
+ * - The CPU baseline is shared by every client. A client that misses polls may never see two adjacent hot
+ *   windows, so it does not promote a session another client shows as active. */
 const ACTIVE_CPU_PERCENT = 5;
+const MAX_HOT_WINDOW_SECONDS = 15;
 const WINDOWS_TO_PROMOTE = 2;
 const WINDOWS_TO_DEMOTE = 2;
 const DEMOTE_AFTER_SECONDS = 30;
@@ -100,14 +114,16 @@ export function update(previous: Ranking | null, rawSessions: unknown, managemen
     const recentlyHot = positiveAt !== null && now - positiveAt <= DEMOTE_AFTER_SECONDS;
     const staysActive = (count: number) => wasActive && count < WINDOWS_TO_DEMOTE && recentlyHot;
     if (known && !statusDecides(session)) {
-      const hot = cpu !== null && cpu.value >= ACTIVE_CPU_PERCENT;
+      const hot = cpu !== null && cpu.value >= ACTIVE_CPU_PERCENT
+        && cpu.windowEnd - cpu.windowStart <= MAX_HOT_WINDOW_SECONDS;
+      const stillActive = wasActive && recentlyHot;
       if (hot && freshWindow) {
         hotWindows = adjacent ? hotWindows + 1 : 1;
         zeroWindows = 0;
-        phase = wasActive || hotWindows >= WINDOWS_TO_PROMOTE ? "active" : "unknown";
+        phase = stillActive || hotWindows >= WINDOWS_TO_PROMOTE ? "active" : "unknown";
         if (phase === "active") positiveAt = now;
       } else if (hot) {
-        phase = wasActive ? "active" : "unknown";
+        phase = stillActive ? "active" : "unknown";
       } else if (cpu && freshWindow) {
         zeroWindows += 1;
         hotWindows = 0;
@@ -117,7 +133,7 @@ export function update(previous: Ranking | null, rawSessions: unknown, managemen
       } else {
         hotWindows = 0;
         zeroWindows = 0;
-        phase = wasActive && recentlyHot ? "active" : "unknown";
+        phase = stillActive ? "active" : "unknown";
       }
     }
     if (session.status === "busy") {
