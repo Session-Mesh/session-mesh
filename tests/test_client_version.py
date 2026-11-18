@@ -39,6 +39,13 @@ async def test_the_page_versions_the_checked_in_typescript_bundle(client, auth_c
     assert re.search(r'<script src="/static/session-activity\.js\?v=\d+"></script>', html)
     assert re.search(r'<script src="/static/demo-catalog\.js\?v=\d+"></script>', html)
     assert re.search(r'<script src="/static/workspace-spec\.js\?v=\d+"></script>', html)
+    assert re.search(r'<script src="/static/themes\.js\?v=\d+"></script>', html)
+    assert re.search(r'<link rel="stylesheet" href="/static/themes\.css\?v=\d+">', html)
+
+
+def test_the_version_covers_the_colour_themes():
+    names = server.client_files()
+    assert "themes.js" in names and "themes.css" in names
 
 
 @pytest.mark.parametrize("name", server.client_files())

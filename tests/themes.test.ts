@@ -69,24 +69,49 @@ describe('built-in themes', () => {
     });
   });
 
-  // WCAG 2.x AA for normal text: 4.5:1.
-  const TEXT_ON_SURFACES: [string, string[]][] = [
-    ['--fg', ['--bg', '--term', '--panel', '--panel-2']],
-    ['--fg-2', ['--panel']],
-    ['--mute', ['--bg', '--panel', '--panel-2']],
-    ['--accent', ['--panel']], ['--idle', ['--panel']], ['--busy', ['--panel']], ['--wait', ['--panel']], ['--danger', ['--panel']],
-    ['--on-accent', ['--accent']],
+  // WCAG 2.x AA for normal text: 4.5:1. Every text, accent and state colour is checked on every
+  // surface of style.css and themes.css (--bg, --panel, --panel-2 and --raise: a selected tab or
+  // button, a checked explorer row, the current project), which covers each pair actually drawn.
+  // Then the colours drawn on a coloured background: primary buttons and the "new" button
+  // (--on-accent on --accent), the menu badge (--on-accent on --wait), the mail badge and the
+  // "to bottom" button (--bg on --danger and on --accent), and the terminal text.
+  const TEXT = ['--fg', '--fg-2', '--mute', '--accent', '--idle', '--busy', '--wait', '--danger'];
+  const SURFACES = ['--bg', '--panel', '--panel-2', '--raise'];
+  const ON_COLOUR: [string, string][] = [
+    ['--on-accent', '--accent'], ['--on-accent', '--wait'], ['--bg', '--accent'], ['--bg', '--danger'], ['--fg', '--term'],
   ];
+  const PAIRS: [string, string][] = [...TEXT.flatMap((text) => SURFACES.map((surface): [string, string] => [text, surface])), ...ON_COLOUR];
+  // The default theme is today's palette and stays as it is. Its one pair under 4.5:1 is not drawn:
+  // style.css paints #1d2530 (--raise) only under --fg (the current tab, the active mode buttons);
+  // a checked explorer row is #131a22 there.
+  const NOT_DRAWN: Readonly<Record<string, readonly string[]>> = {default: ['--mute on --raise']};
   for (const theme of THEMES) {
-    test(`${theme.id}: text meets WCAG AA (4.5:1) on its surfaces`, () => {
-      for (const [text, surfaces] of TEXT_ON_SURFACES) {
-        for (const surface of surfaces) {
-          const ratio = contrastRatio(theme.colours[text]!, theme.colours[surface]!);
-          assert.ok(ratio >= 4.5, `${text} on ${surface}: ${ratio.toFixed(2)}`);
-        }
+    test(`${theme.id}: text meets WCAG AA (4.5:1) on every surface`, () => {
+      for (const [text, surface] of PAIRS) {
+        if (NOT_DRAWN[theme.id]?.includes(`${text} on ${surface}`)) continue;
+        const ratio = contrastRatio(theme.colours[text]!, theme.colours[surface]!);
+        assert.ok(ratio >= 4.5, `${text} on ${surface}: ${ratio.toFixed(2)}`);
       }
     });
   }
+
+  test('the literal colours of the light schemes meet WCAG AA on every light surface', () => {
+    const css = fs.readFileSync(path.join(ROOT, 'static', 'themes.css'), 'utf8');
+    const rules = [...css.matchAll(/^:root\[data-scheme="light"\][^{]*\{([^}]*)\}/gm)].map((m) => m[1]!);
+    const checked = rules.flatMap((body) => {
+      const colour = /(?:^|;)\s*color:\s*(#[0-9a-f]{6})/i.exec(body)?.[1];
+      if (!colour) return [];
+      const background = /background:\s*(#[0-9a-f]{6})/i.exec(body)?.[1];
+      const surfaces = background ? [background]
+        : THEMES.filter((theme) => theme.scheme === 'light').flatMap((theme) => SURFACES.map((surface) => theme.colours[surface]!));
+      for (const surface of surfaces) {
+        const ratio = contrastRatio(colour, surface);
+        assert.ok(ratio >= 4.5, `${colour} on ${surface}: ${ratio.toFixed(2)}`);
+      }
+      return [colour];
+    });
+    assert.ok(checked.length >= 8, `only ${checked.length} light-scheme colours found`);
+  });
 
   test('each has a name in every catalog', () => {
     for (const code of ['en', 'fr']) {

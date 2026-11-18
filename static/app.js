@@ -6980,7 +6980,14 @@ function setupPaletteEditor() {
   const status = $("#palette-status");
   const report = (message, bad) => { status.textContent = message; status.classList.toggle("bad", bad); };
   const show = () => { text.value = MeshThemes.formatPalette(themes.palette()); };
-  $("#palette-hint").textContent = t("theme.paletteHint", { names: MeshThemes.VARIABLES.join(" ") });
+  // Each variable name is its own <code>, never broken across lines.
+  const hint = $("#palette-hint");
+  hint.textContent = t("theme.paletteHint", { names: "" });
+  hint.append(...MeshThemes.VARIABLES.flatMap((name, i) => {
+    const code = document.createElement("code");
+    code.textContent = name;
+    return i ? [" ", code] : [code];
+  }));
   show();
   $("#palette-apply").addEventListener("click", () => {
     const result = MeshThemes.parsePalette(text.value);
@@ -7006,9 +7013,19 @@ whenTranslated(() => {
   const showPalette = setupPaletteEditor();
   renderThemeSelect(select);
   MeshThemes.runtime.onChange(() => { renderThemeSelect(select); showPalette(); });
+  // The arrow keys change a closed <select> at once. A change made by a key press on the select
+  // itself only browses: passing over "Custom palette…" does not open the dialog. Choosing that
+  // entry from the open list (pointer, or Enter in the list) does.
+  let browsing = false;
+  select.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") return;
+    browsing = true;
+    setTimeout(() => { browsing = false; }, 0);
+  });
   select.addEventListener("change", () => {
     if (select.value !== PALETTE_OPTION) { MeshThemes.runtime.use(select.value); return; }
     select.value = MeshThemes.runtime.current();
+    if (browsing) return;
     const dialog = $("#dlg-palette");
     if (!dialog.open) dialog.showModal();
     $("#palette-text").focus();

@@ -61,7 +61,8 @@
 
 /* The palette editor (the "Custom palette…" entry of the theme selector). */
 #dlg-palette { width: min(560px, calc(100vw - 32px)); }
-.palette-editor .small { font-size: 12px; overflow-wrap: anywhere; }
+.palette-editor .small { font-size: 12px; overflow-wrap: break-word; }
+.palette-editor .small code { font: 11.5px var(--mono); white-space: nowrap; }
 .palette-editor textarea { width: 100%; min-height: 9em; resize: vertical; padding: 8px 10px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 7px; font: 12px/1.5 var(--mono); }
 .palette-editor textarea:focus { outline: none; border-color: var(--accent); }
 @media (pointer: coarse) { .palette-editor textarea { font-size: 16px; } /* no zoom on focus (iOS) */ }

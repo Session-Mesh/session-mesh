@@ -92,6 +92,30 @@ describe('colour themes', {skip}, () => {
     assert.equal(await page.locator('#palette-text').inputValue(), '{}');
   });
 
+  test('arrow keys browse the closed selector without opening the palette editor', async () => {
+    const page = await open();
+    const select = page.locator('#theme-select');
+    await select.selectOption('gruvbox-dark');
+    await select.focus();
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await select.inputValue(), 'nord');
+    assert.equal(await page.evaluate(() => document.documentElement.dataset['theme']), 'nord');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.locator('#dlg-palette[open]').count(), 0, 'passing over the entry does not open the editor');
+    assert.equal(await select.inputValue(), 'nord');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'theme-select');
+  });
+
+  test('the help of the palette editor never breaks a variable name', async () => {
+    const page = await open(true);
+    await page.evaluate(() => (document.querySelector('#dlg-palette') as HTMLDialogElement).showModal());
+    const names = await page.locator('#palette-hint code').evaluateAll(codes =>
+      codes.map(code => ({name: code.textContent, lines: code.getClientRects().length})));
+    assert.ok(names.length > 30, `${names.length} names`);
+    for (const {name, lines} of names) assert.equal(lines, 1, `${name} spans ${lines} lines`);
+  });
+
   test('on a phone the selector sits in the sidebar footer without widening the page', async () => {
     const page = await open(true);
     await page.locator('#btn-menu').click();
