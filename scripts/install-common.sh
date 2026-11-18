@@ -96,7 +96,10 @@ publish_tailscale() {
   serve_refusal "nothing was published" "now publishes"
   if [[ $SERVE == empty ]]; then
     serve_error=$(mktemp "${TMPDIR:-/tmp}/mesh-serve.XXXXXXXX")
-    trap 'rm -f -- "$serve_error"' EXIT
+    # The path is written into the trap now: on an exit from a function below, the bash 3.2 of macOS
+    # runs the trap after this function's locals are gone.
+    # shellcheck disable=SC2064 # expanded now, on purpose
+    trap "rm -f -- $(printf %q "$serve_error")" EXIT
     # stderr goes to the terminal as it is written (tailscale may print a URL and wait) and to a
     # file, to recognise a missing operator right afterwards.
     if ! { tailscale serve --bg "$PORT" 2>&1 >&3 | tee "$serve_error" >&2; } 3>&1; then

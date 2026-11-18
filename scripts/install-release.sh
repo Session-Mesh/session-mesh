@@ -213,7 +213,10 @@ release_upgrade() {
   if [[ $target == "$from" ]]; then echo "Already at $from: nothing to do."; exit 0; fi
   step "Upgrade $from -> $target"
   work=$(mktemp -d "$RELEASES/.upgrade-$target.XXXXXXXX") || refuse "cannot write in $RELEASES"
-  trap 'rm -rf -- "$work"' EXIT
+  # The path is written into the trap now: on an exit from a function below, the bash 3.2 of macOS
+  # runs the trap after this function's locals are gone.
+  # shellcheck disable=SC2064 # expanded now, on purpose
+  trap "rm -rf -- $(printf %q "$work")" EXIT
   fetch_sums "$target" "$work"
   expected=$(sums_hash "$(cat "$work/SHA256SUMS")" install.sh)
   [[ -n $expected ]] || refuse "the SHA256SUMS of $target lists no install.sh; nothing was changed"
