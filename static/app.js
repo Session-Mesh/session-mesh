@@ -63,6 +63,7 @@ let data = { mesh: [], external: [], home: "" };
 // while groups/tabs are assembled so a stale target is not erased midway.
 let restoringWorkspace = false;
 let ctrlArmed = false;
+let copyOnSelectDenied = false;   // the browser refused an automatic copy: said once (see copyOnSelect)
 // An input that ends the program's line (Enter, ^C, ^D): the input lease is clean again after it.
 const completesInput = (str) => str === "\r" || str === "\x03" || str === "\x04";
 let lineDirect = null;   // phone direct writing: { pane, conn, session } (see "phone input line")
@@ -561,7 +562,7 @@ class Pane {
     // under the pointer ourselves; any other click still goes to the program.
     this.termEl.addEventListener("mousedown", (e) => {
       if (e.button !== 0 || t.modes.mouseTrackingMode === "none") return;
-      if (e.shiftKey || e.altKey) return;   // Shift(/Option)+drag forces a text selection: let it
+      if (MeshTerminalLinks.forcesSelection(e, shortcutPlatform)) return;   // Shift (Option on macOS)+drag forces a text selection: let it
       const link = this.linkAt(e);
       if (!link) return;
       e.preventDefault();
@@ -610,6 +611,7 @@ class Pane {
     t.onResize(() => this.sendSize());
     t.textarea.addEventListener("focus", () => { setActive(this); this.retakeSize(); });
     this.wireFocusReports();
+    this.wireCopyOnSelect();
     if (touch) t.textarea.setAttribute("inputmode", "none");   // phones type in the input line
     this.el.addEventListener("pointerdown", () => setActive(this), true);
 
@@ -1121,6 +1123,52 @@ class Pane {
     this.term.clearSelection();
     this.mobileSelection = "";
   }
+  // Copy on select (per-device preference "copyOnSelect", on by default). Unlike copySelection() this
+  // keeps the selection, and a refusal by the browser shows one notice per page, not one per selection.
+  // One named handler per pane: a press arms it, the release (or a blur / hidden page / disposal,
+  // as in wireFocusReports) disarms it, so a missed mouseup never stacks a second listener.
+  // A double click waits one multi-click window so a triple click writes the clipboard once.
+  wireCopyOnSelect() {
+    let forced = false, timer = 0;
+    const release = (e) => {
+      window.removeEventListener("mouseup", release, true);
+      window.removeEventListener("blur", abandon);
+      document.removeEventListener("visibilitychange", abandon);
+      // after xterm has finished the selection of this release
+      timer = setTimeout(() => { timer = 0; this.copyOnSelect(forced); }, MeshTerminalLinks.copyOnSelectDelay(e.detail));
+    };
+    const abandon = () => {
+      window.removeEventListener("mouseup", release, true);
+      window.removeEventListener("blur", abandon);
+      document.removeEventListener("visibilitychange", abandon);
+      clearTimeout(timer); timer = 0;
+    };
+    this.abandonCopyOnSelect = abandon;
+    this.termEl.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      abandon();   // a still-pending copy of the previous click is superseded
+      const bar = e.target;
+      // a press on the scrollbar selects nothing: no copy
+      if (bar.classList?.contains("xterm-viewport") && e.offsetX >= bar.clientWidth) return;
+      forced = MeshTerminalLinks.forcesSelection(e, shortcutPlatform);   // forces a selection past mouse tracking
+      window.addEventListener("mouseup", release, true);
+      window.addEventListener("blur", abandon);
+      document.addEventListener("visibilitychange", abandon);
+    }, true);
+  }
+  async copyOnSelect(forced, touchText) {
+    if (this.actionDisposed) return;   // the pane was closed since the press: its terminal is gone
+    const text = touchText ?? this.term.getSelection();
+    const { copyOnSelectEnabled, shouldCopyOnSelect, COPY_ON_SELECT_KEY } = MeshTerminalLinks;
+    if (!shouldCopyOnSelect({
+      enabled: copyOnSelectEnabled(store.get(COPY_ON_SELECT_KEY, true)), selection: text, forced,
+      visible: document.visibilityState === "visible" && this.termEl.getClientRects().length > 0,
+      mouseTracking: this.term.modes.mouseTrackingMode !== "none",
+    })) return;
+    try { await navigator.clipboard.writeText(text); } catch {
+      if (!copyOnSelectDenied) { copyOnSelectDenied = true; flash(t("clipboard.copyDenied")); }
+    }
+  }
   async pasteClipboard() {
     try { this.term.paste(await navigator.clipboard.readText()); }
     catch { flash(t("clipboard.pasteDenied")); }
@@ -1325,6 +1373,7 @@ class Pane {
         selection = null;
         lastY = null;
         this.releaseOutput();
+        this.copyOnSelect(true, this.mobileSelection);   // once, when the finger lifts
         return;
       }
       const p = e.changedTouches[0];
@@ -2026,7 +2075,7 @@ class Pane {
   }
 
   dispose() {
-    this.invalidateActionView(); this.actionDisposed = true;
+    this.invalidateActionView(); this.actionDisposed = true; this.abandonCopyOnSelect?.();
     observePaneActions(this); this.paneMenu.dispose();
     this.resetFrameHistory(); this.detach(); this.term.dispose();
   }

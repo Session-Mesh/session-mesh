@@ -3,6 +3,15 @@
 All notable changes to session-mesh. Versions follow [semantic versioning](https://semver.org/);
 before 1.0, a minor version may change behaviour.
 
+## Unreleased
+
+- **Copy on select.** Selecting text in a terminal now copies it to the clipboard when you release
+  the mouse button (or lift your finger after a long press on a phone), and the text stays
+  selected. It is on by default and is a per-browser preference (`copyOnSelect` in the page's
+  client store; `false` turns it off). Nothing is copied while a program tracks the mouse unless
+  you force the selection with `Shift`+drag (`Option`+drag on macOS). See
+  [Working in a terminal](docs/features.md#working-in-a-terminal).
+
 ## 0.1.0 (first public release)
 
 The first public release of session-mesh, an alpha. In short:
