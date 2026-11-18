@@ -18,10 +18,17 @@
 # --install-only no Python is involved.
 #
 # The switch is MESH_OPAM_SWITCH (a name or the absolute directory of a local
-# switch) when set, otherwise the current opam switch. It must already exist
-# and use OCaml 5.3:
-#   opam switch create session-mesh ocaml-base-compiler.5.3.0
+# switch) when set, otherwise the current opam switch. A missing switch is
+# created with OCaml 5.3 (OCAML_COMPILER, default ocaml-base-compiler.5.3.0)
+# from the pinned opam repository below; an existing one must use OCaml 5.3:
 #   MESH_OPAM_SWITCH=session-mesh bash scripts/bootstrap.sh --install-only
+# An existing switch must already read only that repository (or only the
+# session-mesh repository of an earlier run, whose URL follows a changed pin),
+# or be the local switch of this checkout (CI): the bootstrap does not change the repositories
+# of a switch other projects may share, the current one included, unless
+# MESH_OPAM_SELECT_PINNED=1 allows it. Unset, MESH_OPAM_SWITCH is not replaced
+# by a switch of the bootstrap's choosing, because install.sh, agentmcp.py and
+# scripts/test-local.sh look for the programs in the current switch too.
 # The server finds mesh-board-mcp in the bin directory of that same switch
 # (agentmcp.py): run it with the same MESH_OPAM_SWITCH, or inside that opam
 # environment. `bootstrap.sh --print-bin` prints that directory and installs
@@ -42,18 +49,20 @@
 #   policy, compatibility resource). The pin is versioned 0.2.0+pin so that
 #   ocaml/dune-project can require more than the released 0.2.0.
 # quint-connect (test only, the ITF replay of the ptyhost lifecycle) comes from
-# the default opam repository, as release 0.3.0 or later. It installs the
+# the pinned opam repository, as release 0.3.0 or later. It installs the
 # findlib library ocaml-quint-connect and conflicts with the opam package of
 # that name, which earlier versions of this script pinned to a Git revision: a
 # stale pin of it is removed below.
-# Everything else comes from the default opam repository.
+# Everything else comes from the opam repository at the commit fixed in
+# scripts/release-pins.sh, selected for this switch only.
+# shellcheck disable=SC1091,SC2154 # the pins file is sourced by a computed path and sets opam_repository
 set -euo pipefail
 
 dune_version="3.24.2"
 mcp_kit_pin="mcp-kit.0.2.0+pin"
 mcp_kit_source="git+https://gitlab.com/nomadic-labs/ai-harness/ocaml-mcp.git#44a8398745cc55c4e0b66e6748ad597b957dcd10"
 worktree="$(cd "$(dirname "$0")/.." && pwd -P)"
-switch="${MESH_OPAM_SWITCH:-$(opam switch show)}"
+switch="${MESH_OPAM_SWITCH:-$(opam switch show 2>/dev/null || true)}"
 
 mode="${1:-}"
 case "$#:$mode" in
@@ -67,14 +76,120 @@ if [ ! -f "$worktree/ocaml/dune-project" ]; then
   echo "bootstrap: no OCaml project under $worktree/ocaml." >&2
   exit 1
 fi
-if ! opam switch list --short | grep -Fxq -- "$switch"; then
-  echo "bootstrap: opam switch '$switch' does not exist; create it with OCaml 5.3 first." >&2
-  exit 1
-fi
+case "$switch" in
+  "")
+    echo "bootstrap: no current opam switch; name one, created if missing: MESH_OPAM_SWITCH=session-mesh bash scripts/bootstrap.sh" >&2
+    exit 1
+    ;;
+  /*) ;;
+  */*)
+    echo "bootstrap: MESH_OPAM_SWITCH must be a switch name or an absolute directory, not '$switch'." >&2
+    exit 1
+    ;;
+esac
+switch_exists=yes
+opam switch list --short | grep -Fxq -- "$switch" || switch_exists=no
 if [ "$mode" = --print-bin ]; then
+  if [ "$switch_exists" = no ]; then
+    echo "bootstrap: opam switch '$switch' does not exist; run bootstrap.sh --install-only to create it." >&2
+    exit 1
+  fi
   opam var --switch="$switch" bin
   exit 0
 fi
+
+test_python="${PYTHON:-python3}"
+if [ -z "$mode" ] && ! "$test_python" -c 'import pytest' >/dev/null 2>&1; then
+  echo "bootstrap: the OCaml tests need pytest, which '$test_python' does not provide." >&2
+  echo "bootstrap: to build and install without running them: bash scripts/bootstrap.sh --install-only" >&2
+  echo "bootstrap: to run them: scripts/test-local.sh, which prepares a Python environment." >&2
+  exit 1
+fi
+
+# Packages are read from the opam repository at the fixed commit of scripts/release-pins.sh
+# (opam_repository), the one CI and the release builds use, never from the host's repositories,
+# which may be older or newer. That repository is registered in the opam root under the name
+# session-mesh and selected for this switch only: other switches keep their own selection.
+# shellcheck source=release-pins.sh
+source "$worktree/scripts/release-pins.sh"
+pinned_repository=session-mesh
+switch_created=no
+# `opam repository list --all` prints a header line that starts with '#', then one line per
+# repository: its name, its URL as registered (git+https://...#<commit>), the switches using it.
+repository_url() {
+  opam repository list --all | awk -v name="$1" '$1 == name { print $2 }'
+}
+# When the pin has changed since an earlier run, the URL is moved and the command that restores the
+# former one is printed: every switch that reads session-mesh follows it.
+register_pinned_repository() {
+  local previous
+  previous="$(repository_url "$pinned_repository")"
+  case "$previous" in
+    "$opam_repository") ;;
+    "") opam repository add --dont-select "$pinned_repository" "$opam_repository" ;;
+    *)
+      opam repository set-url "$pinned_repository" "$opam_repository"
+      echo "bootstrap: the opam repository $pinned_repository now points at $opam_repository" >&2
+      echo "bootstrap: (to undo: opam repository set-url $pinned_repository '$previous')." >&2
+      ;;
+  esac
+}
+# The local switch of this checkout (the _opam that setup-ocaml creates in CI) serves this
+# project only, so its repositories may be changed without asking.
+is_checkout_switch() {
+  local directory
+  case "$switch" in
+    /*) directory="$(cd -- "$switch" 2>/dev/null && pwd -P)" || return 1 ;;
+    *) return 1 ;;
+  esac
+  [ "$directory" = "$worktree" ] || [ "$directory" = "$worktree/_opam" ]
+}
+refuse_shared_switch() {
+  local dedicated=session-mesh
+  [ "$switch" != "$dedicated" ] || dedicated=session-mesh-pinned
+  echo "bootstrap: the opam switch '$switch' reads the repositories '${1:-}', not only $opam_repository." >&2
+  echo "bootstrap: other projects may use that switch, so its repositories are left as they are. Either:" >&2
+  echo "bootstrap: - use a dedicated switch, created if missing: MESH_OPAM_SWITCH=$dedicated bash scripts/bootstrap.sh $mode" >&2
+  echo "bootstrap: - or make '$switch' read only that commit: MESH_OPAM_SELECT_PINNED=1 bash scripts/bootstrap.sh $mode" >&2
+  echo "bootstrap:   (the bootstrap then prints the command that restores its repositories)." >&2
+  exit 1
+}
+# A switch that already reads only the pinned commit, under any name, is left as it is. A switch
+# that reads only session-mesh was set up for this project (by an earlier bootstrap, or opted in):
+# when the pin has changed, the URL of session-mesh follows it, without asking. Another switch is
+# moved to the pinned commit only when this run created it, when it is the checkout's local switch,
+# or with MESH_OPAM_SELECT_PINNED=1; the repositories it read are printed as the undo command.
+select_pinned_repository() {
+  local selected listed
+  selected="$(opam repository list --switch="$switch" --short)"
+  case "$selected" in
+    "" | *$'\n'*) ;;
+    "$pinned_repository")
+      register_pinned_repository
+      return 0
+      ;;
+    *) [ "$(repository_url "$selected")" != "$opam_repository" ] || return 0 ;;
+  esac
+  listed="$(printf '%s' "$selected" | tr '\n' ' ')"
+  if [ "$switch_created" = no ] && [ "${MESH_OPAM_SELECT_PINNED:-}" != 1 ] && ! is_checkout_switch; then
+    refuse_shared_switch "$listed"
+  fi
+  register_pinned_repository
+  opam repository set-repos --switch="$switch" "$pinned_repository"
+  echo "bootstrap: '$switch' now reads packages only from $opam_repository" >&2
+  if [ -n "$listed" ]; then
+    echo "bootstrap: (to undo: opam repository set-repos --switch='$switch' $listed)." >&2
+  fi
+}
+if [ "$switch_exists" = no ]; then
+  register_pinned_repository
+  case "$switch" in
+    /*) mkdir -p -- "$switch" ;;
+  esac
+  opam switch create --no-switch --repos="$pinned_repository" "$switch" "${OCAML_COMPILER:-ocaml-base-compiler.5.3.0}"
+  switch_created=yes
+fi
+
 compiler="$(opam exec --switch="$switch" -- ocamlc -version)"
 # Only OCaml 5.3 is accepted: it is the compiler CI builds and tests with
 # (.github/workflows/public-ci.yml, OCAML_COMPILER). ocaml/dune-project states
@@ -86,14 +201,7 @@ case "$compiler" in
     exit 1
     ;;
 esac
-
-test_python="${PYTHON:-python3}"
-if [ -z "$mode" ] && ! "$test_python" -c 'import pytest' >/dev/null 2>&1; then
-  echo "bootstrap: the OCaml tests need pytest, which '$test_python' does not provide." >&2
-  echo "bootstrap: to build and install without running them: bash scripts/bootstrap.sh --install-only" >&2
-  echo "bootstrap: to run them: scripts/test-local.sh, which prepares a Python environment." >&2
-  exit 1
-fi
+select_pinned_repository
 
 # Pin dune's version: installing it is not enough, the dependency phase below
 # otherwise upgrades it to the newest release.
