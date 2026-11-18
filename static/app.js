@@ -6721,12 +6721,34 @@ async function openNew() {
   form.cwd.value = short(cur?.cwd || data.home).replace(/^~/, data.home);
   dlg.showModal();
   form.cwd.select();
+  folderSuggester.reset();
+  newFolderBase = sessionFolders();
+  showFolderSuggestions([]);
   try {
     const dirs = await (await requestLocal("/api/dirs")).json();
-    $("#dirs").innerHTML = dirs.map((d) => `<option value="${esc(d)}">`).join("");
+    newFolderBase = MeshFolderState.mergeFolderSuggestions(sessionFolders(), dirs);
   } catch {}
+  showFolderSuggestions(folderSuggester.latest());   // keep what was typed while /api/dirs was pending
 }
 window.openNew = openNew;
+
+// Folder suggestions: the fixed list (folders of the open sessions, then GET /api/dirs) plus, while an absolute
+// or ~/ path is typed, its sub-folders taken from the file tree's listing (POST /api/ls), filtered here.
+// They fill a native <datalist>: its look on a phone depends on the browser.
+let newFolderBase = [];
+const sessionFolders = () => [...new Set((data.mesh || []).map((s) => s.cwd).filter(Boolean))];
+function showFolderSuggestions(typedFolders) {
+  const all = MeshFolderState.mergeFolderSuggestions(typedFolders, newFolderBase);
+  $("#dirs").innerHTML = all.map((d) => `<option value="${esc(d)}">`).join("");
+}
+async function listFolderForSuggestions(path) {
+  const r = await requestLocal("/api/ls", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+  return r.ok ? r.json() : null;
+}
+const folderSuggester = MeshFolderState.createFolderSuggester({ listFolder: listFolderForSuggestions, onSuggestions: showFolderSuggestions,
+  setTimer: (callback, ms) => setTimeout(callback, ms), clearTimer: (handle) => clearTimeout(handle) });
+form.cwd.addEventListener("input", () => folderSuggester.input(form.cwd.value));
+dlg.addEventListener("close", () => folderSuggester.reset());   // no pending timer or answer after the dialog closes
 $("#btn-new").addEventListener("click", () => { if (projecting) projectsController?.create(); else openNew(); });
 form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; });
 form.addEventListener("submit", async (e) => {
