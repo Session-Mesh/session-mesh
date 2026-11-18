@@ -55,6 +55,8 @@ require_tools() {
 
 # select_python: MESH_PYTHON, otherwise .venv/, created or completed as needed.
 source scripts/test-local-python.sh
+# node_tests: every tests/**/*.test.{ts,mjs,cjs}; a failing find fails the run.
+source scripts/test-local-node.sh
 
 # The newest executable Playwright Chromium under PLAYWRIGHT_BROWSERS_PATH, in the layout of this
 # system: on macOS chrome-mac/Chromium.app (Playwright 1.56) or chrome-mac-arm64/Google Chrome for
@@ -116,15 +118,6 @@ frontend_checks() {
   npm run check:ptyhost-lifecycle
   npm ci --ignore-scripts --no-audit --no-fund --prefix demo-compiler
   npm test --prefix demo-compiler
-}
-
-node_tests() {
-  local files=() file
-  # A read loop rather than mapfile, which the bash 3.2 of macOS lacks.
-  while IFS= read -r -d '' file; do files+=("$file"); done \
-    < <(find tests -type f \( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \) \
-      -not -path '*/node_modules/*' -print0 | sort -z)
-  [ "${#files[@]}" -eq 0 ] || node --experimental-strip-types --test "${files[@]}"
 }
 
 # Builds, tests and installs the OCaml package, then makes the installed host the one
