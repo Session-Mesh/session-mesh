@@ -1,0 +1,70 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ * Copyright (c) 2026 Atacama <contact@atacama.tech>
+ */
+
+/* Colour themes (static/themes.ts sets the variables on :root and data-theme / data-scheme).
+   style.css still writes a few colours as literals tuned for the default dark palette. Under any
+   other theme the rules below route them through the theme's variables; the default theme keeps
+   style.css exactly as it is. The derived variables have their default values here. */
+
+:root {
+  --fg-2: #aab2c0;      /* secondary text: last line, quotes, messages */
+  --raise: #1d2530;     /* a selected tab or button */
+  --line-2: #3a4555;    /* a stronger border: hover, selection */
+  --on-accent: #0b0e13; /* text on an accent background */
+}
+
+#theme-select { max-width: 13em; padding-right: 4px; }
+#theme-select option { background: var(--panel-2); color: var(--fg); }
+
+:root:not([data-theme="default"]) :is(.item .last, .group.sub, .detail .quote, .msg, .detail details pre, .cmd code, .c-num) { color: var(--fg-2); }
+:root:not([data-theme="default"]) .tabs button.cur { background: var(--raise); }
+:root:not([data-theme="default"]) :is(#btn-explore.on, #btn-projects.on, #btn-management.on) { background: var(--raise); border-color: var(--line-2); }
+:root:not([data-theme="default"]) :is(.chip.on, .ex-bulk) { border-color: var(--line-2); }
+:root:not([data-theme="default"]) :is(.btn:hover, .add-folder:hover, .workspace-tab:hover, .workspace-tab-add:hover, .workspace-move-button:hover) { border-color: var(--line-2); }
+:root:not([data-theme="default"]) .btn.primary { color: var(--on-accent); }
+:root:not([data-theme="default"]) #btn-menu[data-badge]:not([data-badge=""])::after { color: var(--on-accent); }
+:root:not([data-theme="default"]) #explorer td { border-bottom-color: var(--line); }
+:root:not([data-theme="default"]) #explorer tr.ex-row:hover td { background: var(--panel-2); }
+:root:not([data-theme="default"]) #explorer tr.ex-row.checked td { background: var(--raise); }
+:root:not([data-theme="default"]) .warn { border-color: var(--line-2); background: var(--panel-2); }
+:root:not([data-theme="default"]) .drop { background: color-mix(in srgb, var(--term) 80%, transparent); }
+:root:not([data-theme="default"]) .main-modes #btn-sessions.on { background: var(--raise); color: var(--accent); border-color: var(--line-2); }
+:root:not([data-theme="default"]) .main-modes #btn-projects.on { background: var(--raise); color: var(--fg); border-color: var(--line-2); }
+:root:not([data-theme="default"]) body.projecting #btn-new { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+:root:not([data-theme="default"]) .project-nav-item[aria-current="true"] { background: var(--raise); border-color: var(--line-2); box-shadow: inset 2px 0 var(--accent); }
+:root:not([data-theme="default"]) .project-overview-tabs { color: var(--fg); }
+:root:not([data-theme="default"]) .project-save-notice { background: var(--panel-2); border-color: var(--line-2); }
+:root:not([data-theme="default"]) .project-cockpit { --cockpit-border: var(--line); --cockpit-muted: var(--mute); --cockpit-violet: var(--accent); --cockpit-green: var(--idle); color: var(--fg); }
+:root:not([data-theme="default"]) .project-cockpit :is(.cockpit-card, .cockpit-attention) { background: var(--panel); }
+:root:not([data-theme="default"]) .project-cockpit .cockpit-attention-list details { background: var(--panel-2); }
+:root:not([data-theme="default"]) .project-cockpit :is(.cockpit-source-title strong, .cockpit-tabs button[aria-current=true]) { color: var(--fg); }
+:root:not([data-theme="default"]) .project-cockpit .cockpit-actions .primary { background: var(--accent); color: var(--on-accent); }
+:root:not([data-theme="default"]) .project-cockpit .cockpit-badge { color: var(--accent); border-color: var(--line-2); }
+
+/* Light schemes: the pastel accents of the dark palette are too pale on a light background. */
+:root[data-scheme="light"] .tag.claude { color: #9a4a22; border-color: #e3c4b4; }
+:root[data-scheme="light"] :is(.tag.codex, .ex-proj) { color: #1f5f99; border-color: #bcd3ea; }
+:root[data-scheme="light"] .tag.known-agent { color: #2f6b2f; border-color: #bfd8bf; }
+:root[data-scheme="light"] .tag.web { color: #6b3fb0; border-color: #d6c6ef; }
+:root[data-scheme="light"] .tag.live { border-color: var(--line-2); }
+:root[data-scheme="light"] .contextual-diff-line.added { color: #116329; background: #dafbe1; }
+:root[data-scheme="light"] .contextual-diff-line.deleted { color: #82071e; background: #ffebe9; }
+:root[data-scheme="light"] .contextual-diff-line.file-header { color: #7d4e00; }
+:root[data-scheme="light"] .contextual-diff-line.hunk-header { color: #0550ae; background: #ddf4ff; }
+:root[data-scheme="light"] .project-roadmap-state[data-lifecycle=active] { color: #0550ae; border-color: var(--line-2); }
+:root[data-scheme="light"] .project-roadmap-state[data-lifecycle=complete] { color: var(--accent); border-color: var(--line-2); }
+:root[data-scheme="light"] :is(.project-roadmap-state[data-lifecycle=blocked], .project-roadmap-state[data-lifecycle=inconsistent]) { color: #7d4e00; border-color: var(--line-2); }
+:root[data-scheme="light"] :is(.project-roadmap > p, .project-cockpit .cockpit-attention > .cockpit-attention-warning) { color: #7d4e00; }
+:root[data-scheme="light"] dialog::backdrop { background: #0004; }
+
+/* The palette editor (the "Custom palette…" entry of the theme selector). */
+#dlg-palette { width: min(560px, calc(100vw - 32px)); }
+.palette-editor .small { font-size: 12px; overflow-wrap: anywhere; }
+.palette-editor textarea { width: 100%; min-height: 9em; resize: vertical; padding: 8px 10px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 7px; font: 12px/1.5 var(--mono); }
+.palette-editor textarea:focus { outline: none; border-color: var(--accent); }
+@media (pointer: coarse) { .palette-editor textarea { font-size: 16px; } /* no zoom on focus (iOS) */ }
+.palette-editor .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.palette-editor .palette-status { min-height: 1.4em; margin: 6px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.palette-editor .palette-status.bad { color: var(--danger); }

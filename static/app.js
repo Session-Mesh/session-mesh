@@ -83,14 +83,8 @@ const paneMenuHolds = new Set();
 const paneStopHolds = new Set();
 let paneInventoryIssue = 0;
 
-const THEME = {
-  background: "#0d1117", foreground: "#d8dee9", cursor: "#7ee0a1", cursorAccent: "#0d1117",
-  selectionBackground: "#2d3b4f",
-  black: "#1b2029", red: "#ff7b72", green: "#7ee0a1", yellow: "#f5c56b", blue: "#79b8ff",
-  magenta: "#d2a8ff", cyan: "#76e3ea", white: "#d8dee9",
-  brightBlack: "#4b5361", brightRed: "#ffa198", brightGreen: "#a5f0c0", brightYellow: "#ffdf8a",
-  brightBlue: "#a5cdff", brightMagenta: "#e2c5ff", brightCyan: "#b3f0f5", brightWhite: "#ffffff",
-};
+// The terminals' colours come from the colour theme (static/themes.ts), like the page's.
+const terminalTheme = () => MeshThemes.runtime.terminal();
 
 // ---------------------------------------------------------------- helpers
 
@@ -457,7 +451,7 @@ class Pane {
       // Option still forces a selection on macOS (Shift does elsewhere) when a program tracks the mouse
       scrollback: localMeshEffectsAllowed() ? 20000 : 0,
       disableStdin: !localMeshEffectsAllowed(),
-      macOptionIsMeta: true, macOptionClickForcesSelection: true, theme: THEME,
+      macOptionIsMeta: true, macOptionClickForcesSelection: true, theme: terminalTheme(),
       // OSC 8 hyperlinks (claude prints file paths this way): same rule as
       // plain links, file:// URLs become documents in the side panel
       linkHandler: {
@@ -6938,6 +6932,86 @@ whenTranslated(() => {
     if (!localMeshEffectsAllowed()) return;
     await MeshI18n.use(select.value || null);
     location.reload();
+  });
+});
+
+// The colour theme (footer) and the custom palette (its own dialog), kept in this browser.
+// static/themes.js applied both before the first paint; a change here or in another tab of this
+// browser repaints the page and every open terminal at once, without a reload.
+const PALETTE_OPTION = "palette";
+MeshThemes.runtime.onChange((colours) => {
+  const theme = MeshThemes.terminalTheme(colours);
+  for (const pane of panes) if (pane.term) pane.term.options.theme = theme;
+});
+
+function renderThemeSelect(select) {
+  const themes = MeshThemes.runtime;
+  const custom = Object.keys(themes.palette()).length > 0;
+  const options = MeshThemes.THEMES.map(({ id }) => {
+    const name = t(MeshThemes.themeLabelKey(id));
+    return new Option(custom && id === themes.current() ? t("theme.withPalette", { name }) : name, id);
+  });
+  select.replaceChildren(...options, new Option(t("theme.customize"), PALETTE_OPTION));
+  select.value = themes.current();
+}
+
+function paletteErrorText(result) {
+  if (result.reason === "not-json") return t("theme.paletteNotJson");
+  if (result.reason === "not-an-object") return t("theme.paletteNotObject");
+  return result.errors.slice(0, 5).map(({ key, reason }) =>
+    t(reason === "unknown-variable" ? "theme.paletteUnknown" : "theme.paletteNotColour", { key })).join(" · ");
+}
+
+function paletteStatusText(saved) {
+  const themes = MeshThemes.runtime;
+  const count = Object.keys(themes.palette()).length;
+  if (!saved) return t("theme.paletteNotSaved");
+  if (!count) return t("theme.paletteCleared");
+  const colours = themes.colours();
+  const ratio = Math.min(MeshThemes.contrastRatio(colours["--fg"], colours["--bg"]),
+    MeshThemes.contrastRatio(colours["--fg"], colours["--term"]), MeshThemes.contrastRatio(colours["--fg"], colours["--panel"]));
+  const applied = t("theme.paletteApplied", { n: count });
+  return ratio < 4.5 ? `${applied} ${t("theme.paletteLowContrast", { ratio: ratio.toFixed(1) })}` : applied;
+}
+
+function setupPaletteEditor() {
+  const themes = MeshThemes.runtime;
+  const text = $("#palette-text");
+  const status = $("#palette-status");
+  const report = (message, bad) => { status.textContent = message; status.classList.toggle("bad", bad); };
+  const show = () => { text.value = MeshThemes.formatPalette(themes.palette()); };
+  $("#palette-hint").textContent = t("theme.paletteHint", { names: MeshThemes.VARIABLES.join(" ") });
+  show();
+  $("#palette-apply").addEventListener("click", () => {
+    const result = MeshThemes.parsePalette(text.value);
+    if (!result.ok) return report(paletteErrorText(result), true);
+    const saved = themes.setPalette(result.palette);
+    show();
+    report(paletteStatusText(saved), !saved);
+  });
+  $("#palette-reset").addEventListener("click", () => {
+    const saved = themes.setPalette({});
+    show();
+    report(paletteStatusText(saved), !saved);
+  });
+  $("#palette-fill").addEventListener("click", () => {
+    text.value = MeshThemes.formatPalette(themes.colours());
+    text.focus();
+  });
+  return show;
+}
+
+whenTranslated(() => {
+  const select = $("#theme-select");
+  const showPalette = setupPaletteEditor();
+  renderThemeSelect(select);
+  MeshThemes.runtime.onChange(() => { renderThemeSelect(select); showPalette(); });
+  select.addEventListener("change", () => {
+    if (select.value !== PALETTE_OPTION) { MeshThemes.runtime.use(select.value); return; }
+    select.value = MeshThemes.runtime.current();
+    const dialog = $("#dlg-palette");
+    if (!dialog.open) dialog.showModal();
+    $("#palette-text").focus();
   });
 });
 

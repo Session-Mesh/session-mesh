@@ -26,6 +26,7 @@ static/projects.js
 static/session-activity.js
 static/shortcuts.js
 static/terminal-links.js
+static/themes.js
 static/workspace-spec.js
 static/board.html
 demo-runtime/input-codec-v1.mjs
