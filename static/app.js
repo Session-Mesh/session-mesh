@@ -525,6 +525,7 @@ class Pane {
       // While draining, xterm is still parsing output written for the previous session
       // (see attach()): its answers would land at this session's prompt.
       if (this.conn?.replaying || this.conn?.draining) return;
+      if (this.filterFocusReport(d)) return;
       paneInput.onData(this, d, () => {
         if (ctrlArmed && d.length === 1) {
           const c = d.toUpperCase().charCodeAt(0);
@@ -602,6 +603,7 @@ class Pane {
     });
     t.onResize(() => this.sendSize());
     t.textarea.addEventListener("focus", () => { setActive(this); this.retakeSize(); });
+    this.wireFocusReports();
     if (touch) t.textarea.setAttribute("inputmode", "none");   // phones type in the input line
     this.el.addEventListener("pointerdown", () => setActive(this), true);
 
@@ -1020,6 +1022,59 @@ class Pane {
     }
     c.focusRequested = false;
     return true;
+  }
+
+  // Focus reports (mode ?1004) describe the pane, not xterm's helper textarea. Claude Code
+  // ignores a click that arrives less than 400 ms after a focus-in (a "window activation
+  // click"), and xterm focuses its textarea on mousedown just before it reports the click.
+  // So a move between the textarea and the phone input line is not reported (the pane keeps
+  // the focus), a focus-in caused by a press is sent once the button is released, and only
+  // changes are reported. A report no focus event caused (xterm answering a program that
+  // turns the mode on) passes as is.
+  wireFocusReports() {
+    const textarea = this.term.textarea;
+    this.focusReported = null; this.focusCause = null; this.heldFocusIn = false; this.pressed = false;
+    this.termEl.addEventListener("focus", (e) => { if (e.target === textarea) this.focusCause = { in: true }; }, true);
+    this.termEl.addEventListener("blur", (e) => { if (e.target === textarea) this.focusCause = { in: false, to: e.relatedTarget }; }, true);
+    // xterm's own listeners, added when the terminal was opened, have run: the cause is spent
+    for (const type of ["focus", "blur"]) textarea.addEventListener(type, () => { this.focusCause = null; });
+    const release = () => {
+      this.pressed = false;
+      setTimeout(() => {   // after xterm has reported the release
+        if (!this.heldFocusIn) return;
+        this.heldFocusIn = false;
+        this.reportFocus(true);
+      });
+    };
+    this.termEl.addEventListener("mousedown", () => {
+      this.pressed = true;
+      window.addEventListener("mouseup", release, { capture: true, once: true });
+    }, true);
+  }
+  // true when xterm's focus report `d` must not reach the program
+  filterFocusReport(d) {
+    if (d !== "\x1b[I" && d !== "\x1b[O") return false;
+    const cause = this.focusCause, focusIn = d === "\x1b[I";
+    this.heldFocusIn = false;
+    if (!cause) { this.focusReported = focusIn; return false; }
+    if (focusIn) {
+      if (this.focusReported === true) return true;
+      if (this.pressed) { this.heldFocusIn = true; return true; }
+      this.focusReported = true;
+      return false;
+    }
+    if (cause.to && cause.to === $("#line-text") && active === this) return true;
+    if (this.focusReported === false) return true;
+    this.focusReported = false;
+    return false;
+  }
+  // A focus change the textarea did not cause: the pane left while the phone input line had
+  // the focus, or the browser window losing or regaining it while it had.
+  reportFocus(focused) {
+    if (this.focusReported === focused || !this.term.modes.sendFocusMode) return;
+    if (!localMeshEffectsAllowed() || this.conn?.replaying || this.conn?.draining) return;
+    this.focusReported = focused;
+    this.send(focused ? "\x1b[I" : "\x1b[O");
   }
 
   // The document path or URL under a mouse event, from the visible buffer text.
@@ -2030,6 +2085,9 @@ function openExternalLinkMenu(url, x, y) {
 document.addEventListener("pointerdown", (e) => { if (externalLinkMenu && !externalLinkMenu.contains(e.target)) closeExternalLinkMenu(); }, true);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeExternalLinkMenu(); }, true);
 window.addEventListener("blur", closeExternalLinkMenu);
+// While the phone input line holds the active pane's focus, xterm sees no window focus change.
+for (const [type, focused] of [["blur", false], ["focus", true]])
+  window.addEventListener(type, () => { if (active?.mounted && document.activeElement === $("#line-text")) active.reportFocus(focused); });
 
 // A document's URL with its line, if any: the code viewer jumps to #L<n>.
 const viewUrl = (w) => w.url + (w.line ? `#L${w.line}` : "");
@@ -2674,6 +2732,7 @@ function setActive(p, persist = false) {
     if (persist) saveLayout();
     return;
   }
+  if (active?.mounted && document.activeElement === $("#line-text")) active.reportFocus(false);   // the input line was its focus
   active = p;
   endDirectLine();   // direct writing belongs to the pane left
   if (p) p.activeAt = ++activeSeq;
