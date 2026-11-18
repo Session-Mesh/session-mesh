@@ -12,9 +12,10 @@
 import {blockOf, commandAt, expressions, githubProperties, jobBlocks, type Line, MAX_TIMEOUT_MINUTES, parseLines, permissionValues, stepOf, timeoutProblems,
   usesOf} from './public-ci-workflow-lib.ts';
 import {BACKPORT_CHECKS, checkBackportEvent, checkBackportPermissions, checkBackportSecrets, checkBackportTriggers} from './backport-workflow-checks.ts';
+import {checkRegisterEvent, checkRegisterPermissions, checkRegisterSecrets, checkRegisterTriggers, REGISTER_CHECKS} from './backport-register-workflow-checks.ts';
 import {checkReleasePermissions, checkReleaseRunners, checkReleaseTimeouts, RELEASE_CHECKS, releaseTokenLines} from './release-workflow-checks.ts';
 
-export type Profile = 'public' | 'description' | 'release' | 'site' | 'policy' | 'backport';
+export type Profile = 'public' | 'description' | 'release' | 'site' | 'policy' | 'backport' | 'register';
 
 // The one place where untrusted event text may enter an expression: the description workflow hands
 // the pull request body to its script through an environment variable.
@@ -143,7 +144,7 @@ function keepsCredentials(lines: Line[], index: number): boolean {
   return !inputs.some((input) => input.column === inputColumn && input.key === 'persist-credentials' && input.value === 'false');
 }
 
-// `keepsNoCredentials`: every checkout drops its credentials (the backport profile is the one exception).
+// `keepsNoCredentials`: every checkout drops its credentials (the backport and register profiles are the exceptions).
 function checkActions(lines: Line[], keepsNoCredentials = true): string[] {
   const problems: string[] = [];
   lines.forEach((line, index) => {
@@ -252,6 +253,9 @@ function profileChecks(profile: Profile): {runners: Check; secrets: Check; injec
     case 'backport':
       return {...shared, secrets: checkBackportSecrets, injection: checkBackportEvent, actions: (items) => checkActions(items, false),
         triggers: checkBackportTriggers, permissions: checkBackportPermissions};
+    case 'register':
+      return {...shared, secrets: checkRegisterSecrets, injection: checkRegisterEvent, actions: (items) => checkActions(items, false),
+        triggers: checkRegisterTriggers, permissions: checkRegisterPermissions};
     default:
       return shared;
   }
@@ -265,5 +269,6 @@ export function checkWorkflow(text: string, profile: Profile = 'public'): string
   if (profile !== 'release') checks.push(checkDockerImages);
   if (profile === 'release') checks.push(...RELEASE_CHECKS);
   if (profile === 'backport') checks.push(...BACKPORT_CHECKS);
+  if (profile === 'register') checks.push(...REGISTER_CHECKS);
   return checks.flatMap((check) => check(lines));
 }

@@ -3,7 +3,8 @@
 #   `semver: minor`;
 # - `release branch guard`: a pull request to a release/** branch is a backport: it carries
 #   `semver: patch` and says "Backport of #<number>" for a pull request merged to main that carries
-#   `semver: patch` too.
+#   `semver: patch` too, or, when it changes only the CLA register files, for a merged pull request
+#   that changed one of them (backport-register.yml).
 # Both run on every pull request, whatever its base, and pass when the rule is not theirs: a skipped
 # job would count as a passed required check. They run again when a label changes. The rules are
 # in tools/branch-policy/branch-policy.ts, which reads the pull request from the event file, so no

@@ -26,29 +26,29 @@ export const BACKPORT_CONDITION = "github.event.pull_request.merged == true && "
 // What the workflow may read of the event: no title, description, branch name or user.
 export const BACKPORT_EVENT_PATHS = ['pull_request.merged', 'pull_request.labels.*.name', 'pull_request.number', 'action', 'label.name'];
 export const BACKPORT_TOKEN = '${{ steps.app-token.outputs.token || github.token }}';
-const HAS_APP_TOKEN = "${{ secrets.BACKPORT_APP_ID != '' && secrets.BACKPORT_APP_PRIVATE_KEY != '' }}";
-const APP_TOKEN_ACTION = 'actions/create-github-app-token';
-const CHECKOUT_ACTION = 'actions/checkout';
+export const HAS_APP_TOKEN = "${{ secrets.BACKPORT_APP_ID != '' && secrets.BACKPORT_APP_PRIVATE_KEY != '' }}";
+export const APP_TOKEN_ACTION = 'actions/create-github-app-token';
+export const CHECKOUT_ACTION = 'actions/checkout';
 const BACKPORT_ACTION = 'korthout/backport-action';
-const SCRIPT_TOKEN_LINE = /^\s+GH_TOKEN: \$\{\{ github\.token \}\}\s*$/;
-const TOKEN_INPUT_LINE = /^\s+(?:token|github_token): \$\{\{ steps\.app-token\.outputs\.token \|\| github\.token \}\}\s*$/;
-const SECRET_LINES = new Map<RegExp, string>([
+export const SCRIPT_TOKEN_LINE = /^\s+GH_TOKEN: \$\{\{ github\.token \}\}\s*$/;
+export const TOKEN_INPUT_LINE = /^\s+(?:token|github_token): \$\{\{ steps\.app-token\.outputs\.token \|\| github\.token \}\}\s*$/;
+export const SECRET_LINES = new Map<RegExp, string>([
   [/^\s+HAS_APP_TOKEN: \$\{\{ secrets\.BACKPORT_APP_ID != '' && secrets\.BACKPORT_APP_PRIVATE_KEY != '' \}\}\s*$/, 'the job env'],
   [/^\s+app-id: \$\{\{ secrets\.BACKPORT_APP_ID \}\}\s*$/, APP_TOKEN_ACTION],
   [/^\s+private-key: \$\{\{ secrets\.BACKPORT_APP_PRIVATE_KEY \}\}\s*$/, APP_TOKEN_ACTION],
 ]);
 
-const isComment = (line: Line): boolean => /^\s*#/.test(line.raw);
-const jobLines = (lines: Line[]): Line[] => jobBlocks(lines).find((job) => job.name === BACKPORT_JOB)?.block ?? [];
+export const isComment = (line: Line): boolean => /^\s*#/.test(line.raw);
+export const jobLines = (lines: Line[], name = BACKPORT_JOB): Line[] => jobBlocks(lines).find((job) => job.name === name)?.block ?? [];
 // The action a step uses, without its version.
-const actionOf = (step: Line[]): string | undefined => step.flatMap(usesOf)[0]?.split('@')[0];
+export const actionOf = (step: Line[]): string | undefined => step.flatMap(usesOf)[0]?.split('@')[0];
 
-function steps(lines: Line[]): Line[][] {
-  return jobLines(lines).filter((line) => /^\s*-\s/.test(line.text) && line.indent === 6).map((line) => stepOf(lines, lines.indexOf(line)));
+export function steps(lines: Line[], name = BACKPORT_JOB): Line[][] {
+  return jobLines(lines, name).filter((line) => /^\s*-\s/.test(line.text) && line.indent === 6).map((line) => stepOf(lines, lines.indexOf(line)));
 }
 
 // The direct inputs of a step's `with:` block.
-function inputs(lines: Line[], step: Line[]): Map<string, Line> {
+export function inputs(lines: Line[], step: Line[]): Map<string, Line> {
   const withLine = step.find((line) => line.key === 'with');
   if (!withLine) return new Map();
   const block = blockOf(lines, lines.indexOf(withLine));
@@ -91,7 +91,7 @@ export function checkBackportSecrets(lines: Line[]): string[] {
 // The event is read for the paths of BACKPORT_EVENT_PATHS only, by dots: a title, a description, a
 // branch name or a user name never enters an expression. No part of the pull request's head is
 // named anywhere, comments aside.
-export function checkBackportEvent(lines: Line[]): string[] {
+export function checkBackportEvent(lines: Line[], allowed: string[] = BACKPORT_EVENT_PATHS): string[] {
   const problems: string[] = [];
   for (const {number, body, unparsable} of expressions(lines)) {
     if (unparsable) problems.push(`line ${number}: expression never closed (a quoted }} is not its end)`);
@@ -102,7 +102,7 @@ export function checkBackportEvent(lines: Line[]): string[] {
     if (reads.length !== properties.filter((name) => name === 'event').length) {
       problems.push(`line ${number}: github.event read in a form other than github.event.<path>`);
     }
-    for (const path of reads.filter((item) => !BACKPORT_EVENT_PATHS.includes(item))) {
+    for (const path of reads.filter((item) => !allowed.includes(item))) {
       problems.push(`line ${number}: untrusted event data in an expression (github.event.${path})`);
     }
   }
@@ -161,7 +161,7 @@ function checkCheckout(lines: Line[], step: Line[]): string[] {
   return problems;
 }
 
-function checkAppToken(lines: Line[], step: Line[]): string[] {
+export function checkAppToken(lines: Line[], step: Line[]): string[] {
   const given = [...inputs(lines, step).keys()].sort().join(', ');
   const guarded = step.some((line) => line.key === 'if' && line.value === "env.HAS_APP_TOKEN == 'true'");
   return [...(given === 'app-id, private-key' ? [] : [`line ${step[0].number}: ${APP_TOKEN_ACTION} takes app-id and private-key only (the token stays scoped to this repository), got ${given || 'none'}`]),
