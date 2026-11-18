@@ -179,11 +179,15 @@ describe('build-sqlite.sh', () => {
 });
 
 // bootstrap.sh with MESH_SQLITE_PREFIX: opam is a recorder. `opam var --switch=S lib` names $FAKE_LIB; the
-// dependency step (--deps-only) writes $FAKE_CMXA there as the binding archive when it is set.
+// dependency step (--deps-only) writes $FAKE_CMXA there as the binding archive when it is set. The
+// switch exists and already reads only the opam repository at the commit of scripts/release-pins.sh.
+const PINNED_OPAM_REPOSITORY = /^opam_repository="([^"]+)"$/m.exec(fs.readFileSync(path.join(REPO, 'scripts', 'release-pins.sh'), 'utf8'))?.[1] ?? '';
 const FAKE_OPAM = `#!/bin/sh
 printf '%s\\n' "$*" >> "$OPAM_CALLS"
 case "$*" in
-  'switch list --short') echo fake-switch ;;
+  'switch list --short'*) echo fake-switch ;;
+  'repository list --switch=fake-switch --short'*) echo default ;;
+  'repository list --all'*) echo '# Repository # Url # Switches(rank)'; echo 'default ${PINNED_OPAM_REPOSITORY} fake-switch' ;;
   *'ocamlc -version') echo 5.3.0 ;;
   'pin list --switch=fake-switch --short') ;;
   *'var --switch=fake-switch lib') echo "$FAKE_LIB" ;;
@@ -216,6 +220,7 @@ describe('bootstrap.sh with MESH_SQLITE_PREFIX', () => {
     const run = bootstrap('linked', '-L@PREFIX@/lib -lsqlite3', '-L@PREFIX@/lib -lsqlite3');
     assert.equal(run.status, 0, run.output);
     assert.ok(run.calls.some((call) => call.includes('--deps-only')), run.calls.join('\n'));
+    assert.ok(run.calls.every((call) => !/^(repository (add|set-url|set-repos)|switch create)/.test(call)), run.calls.join('\n'));
   });
 
   test('refuses, before the dependency step, a binding installed against another SQLite', () => {

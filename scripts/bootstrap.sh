@@ -87,8 +87,15 @@ case "$switch" in
     exit 1
     ;;
 esac
+# opam names a local switch by its directory, resolved: an existing directory is compared in that
+# form, a missing one is kept as written so that it can be created. A failed listing stops the
+# bootstrap instead of passing for a missing switch.
+case "$switch" in
+  /*) if [ -d "$switch" ]; then switch="$(cd -- "$switch" && pwd -P)"; fi ;;
+esac
+switches="$(opam switch list --short --color=never)"
 switch_exists=yes
-opam switch list --short | grep -Fxq -- "$switch" || switch_exists=no
+printf '%s\n' "$switches" | grep -Fxq -- "$switch" || switch_exists=no
 if [ "$mode" = --print-bin ]; then
   if [ "$switch_exists" = no ]; then
     echo "bootstrap: opam switch '$switch' does not exist; run bootstrap.sh --install-only to create it." >&2
@@ -117,7 +124,7 @@ switch_created=no
 # `opam repository list --all` prints a header line that starts with '#', then one line per
 # repository: its name, its URL as registered (git+https://...#<commit>), the switches using it.
 repository_url() {
-  opam repository list --all | awk -v name="$1" '$1 == name { print $2 }'
+  opam repository list --all --color=never | awk -v name="$1" '$1 == name { print $2 }'
 }
 # When the pin has changed since an earlier run, the URL is moved and the command that restores the
 # former one is printed: every switch that reads session-mesh follows it.
@@ -135,14 +142,15 @@ register_pinned_repository() {
   esac
 }
 # The local switch of this checkout (the _opam that setup-ocaml creates in CI) serves this
-# project only, so its repositories may be changed without asking.
+# project only, so its repositories may be changed without asking. opam names it by the checkout
+# directory; a switch named by $worktree/_opam would be another one, stored in $worktree/_opam/_opam.
 is_checkout_switch() {
   local directory
   case "$switch" in
     /*) directory="$(cd -- "$switch" 2>/dev/null && pwd -P)" || return 1 ;;
     *) return 1 ;;
   esac
-  [ "$directory" = "$worktree" ] || [ "$directory" = "$worktree/_opam" ]
+  [ "$directory" = "$worktree" ]
 }
 refuse_shared_switch() {
   local dedicated=session-mesh
@@ -150,7 +158,7 @@ refuse_shared_switch() {
   echo "bootstrap: the opam switch '$switch' reads the repositories '${1:-}', not only $opam_repository." >&2
   echo "bootstrap: other projects may use that switch, so its repositories are left as they are. Either:" >&2
   echo "bootstrap: - use a dedicated switch, created if missing: MESH_OPAM_SWITCH=$dedicated bash scripts/bootstrap.sh $mode" >&2
-  echo "bootstrap: - or make '$switch' read only that commit: MESH_OPAM_SELECT_PINNED=1 bash scripts/bootstrap.sh $mode" >&2
+  echo "bootstrap: - or make '$switch' read only that commit: MESH_OPAM_SWITCH=$(printf '%q' "$switch") MESH_OPAM_SELECT_PINNED=1 bash scripts/bootstrap.sh $mode" >&2
   echo "bootstrap:   (the bootstrap then prints the command that restores its repositories)." >&2
   exit 1
 }
@@ -161,7 +169,7 @@ refuse_shared_switch() {
 # or with MESH_OPAM_SELECT_PINNED=1; the repositories it read are printed as the undo command.
 select_pinned_repository() {
   local selected listed
-  selected="$(opam repository list --switch="$switch" --short)"
+  selected="$(opam repository list --switch="$switch" --short --color=never)"
   case "$selected" in
     "" | *$'\n'*) ;;
     "$pinned_repository")
@@ -177,9 +185,7 @@ select_pinned_repository() {
   register_pinned_repository
   opam repository set-repos --switch="$switch" "$pinned_repository"
   echo "bootstrap: '$switch' now reads packages only from $opam_repository" >&2
-  if [ -n "$listed" ]; then
-    echo "bootstrap: (to undo: opam repository set-repos --switch='$switch' $listed)." >&2
-  fi
+  echo "bootstrap: (to undo: opam repository set-repos --switch='$switch'${listed:+ $listed})." >&2
 }
 if [ "$switch_exists" = no ]; then
   register_pinned_repository
