@@ -127,11 +127,15 @@ describe('release-check-macos.sh runtime-minos', () => {
   });
 });
 
-// opam, apk and strip are recorders; `opam exec ... dune build` creates the four programs.
+// opam, apk and strip are recorders; `opam exec ... dune build` creates the four programs. The
+// switch reads only the default repository, which the script has set to the pin; the repository
+// listing has the layout of opam 2.6.
 const FAKE_OPAM = `#!/bin/sh
 printf '%s\\n' "$*" >> "$OPAM_CALLS"
 case "$*" in
   'switch list --short') echo static ;;
+  'repository list --switch=static --short') echo default ;;
+  'repository list --all') printf '# Repository # Url # Switches(rank)\\ndefault      %s <default>\\n' "$PINNED_REPOSITORY" ;;
   *'ocamlc -version') echo 5.3.0 ;;
   *'dune build'*) mkdir -p _build/install/default/bin
     for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history; do : > "_build/install/default/bin/$program"; done ;;
@@ -163,7 +167,8 @@ printf '#define SQLITE_VERSION  "3.54.1"\\n' > "$dest/sqlite-amalgamation-354010
   const tmp = path.join(scratch, name, 'tmp');
   fs.mkdirSync(tmp);
   const env = {...process.env, PATH: `${bin}:${process.env.PATH}`, OPAM_CALLS: calls, RELEASE_OPAM_ROOT: root, TMPDIR: tmp,
-    SQLITE_PIN: fs.readFileSync(path.join(REPO, 'scripts', 'bundle', 'sqlite.sha256'), 'utf8').split(' ')[0]};
+    SQLITE_PIN: fs.readFileSync(path.join(REPO, 'scripts', 'bundle', 'sqlite.sha256'), 'utf8').split(' ')[0],
+    PINNED_REPOSITORY: /^opam_repository="([^"]+)"$/m.exec(fs.readFileSync(path.join(REPO, 'scripts', 'release-pins.sh'), 'utf8'))?.[1] ?? ''};
   const result = spawnSync('bash', ['scripts/release-build-static.sh', REPO, path.join(scratch, name, 'out')],
     {cwd: REPO, env, encoding: 'utf8'});
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -181,7 +186,7 @@ describe('release-build-static.sh opam repository', () => {
 
   test('a fresh root is initialised at the pin, then set to it and updated', () => {
     const calls = buildStatic('fresh', () => {});
-    assert.deepEqual(calls.filter((line) => /^(init|repository|update|switch create)/.test(line)), [
+    assert.deepEqual(calls.filter((line) => /^(init|repository (?!list )|update|switch create)/.test(line)), [
       `init --bare --disable-sandboxing --no-setup default ${pinned}`,
       `repository set-url default ${pinned}`,
       'update default',
@@ -194,7 +199,7 @@ describe('release-build-static.sh opam repository', () => {
       fs.writeFileSync(path.join(root, 'config'), 'opam-version: "2.0"\n');
       fs.mkdirSync(path.join(root, 'static'));
     });
-    assert.deepEqual(calls.filter((line) => /^(init|repository|update|switch create)/.test(line)), [
+    assert.deepEqual(calls.filter((line) => /^(init|repository (?!list )|update|switch create)/.test(line)), [
       `repository set-url default ${pinned}`,
       'update default',
     ]);

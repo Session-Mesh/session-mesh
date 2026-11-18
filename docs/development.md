@@ -26,8 +26,10 @@ It needs Node 22.13+ or 24+, npm, git, opam, Python 3 and bubblewrap. It uses `M
 otherwise a `.venv/` it creates from `requirements-dev.txt` and `requirements-browser.txt`. Browser
 tests use `MESH_CHROMIUM`, otherwise the newest Playwright Chromium in `~/.cache/ms-playwright`,
 installed if missing. OCaml uses `MESH_OPAM_SWITCH`, otherwise the current switch, which must use
-OCaml 5.3. `scripts/bootstrap.sh` takes its dependencies from the default opam repository, except
-`mcp-kit`, pinned to a public source revision until a release has the API it needs.
+OCaml 5.3 and read only the opam repository commit of `scripts/release-pins.sh` (a missing switch is
+created that way; see [Native PTY host](install.md#native-pty-host) for an existing one).
+`scripts/bootstrap.sh` takes its dependencies from that commit, except `mcp-kit`, pinned to a public
+source revision until a release has the API it needs.
 
 The public CI (`.github/workflows/public-ci.yml`) runs the same suite in parallel jobs, plus a leak
 check of the tree and, on pull requests, the contributor license agreement check `cla`
@@ -53,8 +55,8 @@ or identities.
   which includes npm. Check that `node --version` prints 22.13 or later.
 - **OCaml.** `scripts/bootstrap.sh` needs the GMP headers and `pkg-config` from the system for one
   OCaml dependency, `zarith` (opam packages `conf-gmp` and `conf-pkg-config`): without them, opam
-  stops there. After installing opam, run `opam init`, then create the 5.3 switch shown in
-  [Native PTY host](install.md#native-pty-host).
+  stops there. After installing opam, run `opam init`; the bootstrap creates the 5.3 switch named
+  as in [Native PTY host](install.md#native-pty-host).
 - **Chromium for the browser tests.** Playwright downloads its own Chromium, but the system
   libraries it needs come from your distribution. On Debian and Ubuntu, after a first run has
   created `.venv/`, install them with `sudo .venv/bin/python -m playwright install-deps chromium`.
