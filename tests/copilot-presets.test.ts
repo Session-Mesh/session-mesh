@@ -15,6 +15,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {fakeAgentPrologue} from './helpers/fake-agent.ts';
 
 const CONVERSATION = '0cb916db-26aa-40f2-86b5-1ba81b225fd2';
 const OTHER = '11111111-2222-4333-8444-555555555555';
@@ -54,8 +55,7 @@ before(async () => {
   // The board bridge only has to exist and be executable: this test never talks MCP. The event helper is the real one.
   fs.writeFileSync(path.join(meshBin, 'mesh-board-mcp'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
   fs.symlinkSync(path.join(REPO, 'bin', 'mesh-event'), path.join(meshBin, 'mesh-event'));
-  fs.writeFileSync(path.join(bin, 'copilot'), `#!/bin/sh
-for a in "$@"; do printf '%s\\n' "$a"; done | { printf 'argv-start\\n'; cat; printf 'argv-end\\n'; } >> '${log('argv.log')}'
+  fs.writeFileSync(path.join(bin, 'copilot'), `${fakeAgentPrologue('copilot')}for a in "$@"; do printf '%s\\n' "$a"; done | { printf 'argv-start\\n'; cat; printf 'argv-end\\n'; } >> '${log('argv.log')}'
 printf '%s\\n' "$MESH_SESSION_TOKEN" >> '${log('token.log')}'
 printf '%s\\n' "$MESH_SESSION" >> '${log('session.log')}'
 printf '%s\\n' "$MESH_EVENT_BIN" >> '${log('event-bin.log')}'
@@ -218,7 +218,11 @@ describe('Copilot CLI preset', () => {
     });
     assert.deepEqual([restorable.agent, restorable.resumable], ['copilot', true]);
     const before = launches().length;
-    const restored = await post('/api/restore', {names: ['cp-main', 'cp-strict']});
+    // On Linux the fake's argv is `sh <script> ...`, a launcher Mesh cannot read (below). On macOS the fakes run
+    // with argv[0] set to the agent's name (helpers/fake-agent.ts), so Mesh reads them as it reads the real
+    // binary: that refusal can only be shown on Linux, and only cp-main is restored elsewhere.
+    const unreadableLauncher = process.platform === 'linux';
+    const restored = await post('/api/restore', {names: unreadableLauncher ? ['cp-main', 'cp-strict'] : ['cp-main']});
     const answer = await restored.json() as {results: Record<string, {ok: boolean; error?: string}>};
     assert.equal(restored.status, 200);
     await until('the restored copilot', () => launches().length > before);
@@ -230,8 +234,10 @@ describe('Copilot CLI preset', () => {
     // The fake is a shell script: its argv is `sh <script> ...`, a launcher Mesh cannot read. The saved command names
     // --deny-tool, so the restore is refused rather than restarted without it (the real binary is read: see
     // copilot-resume.test.ts and the real-binary test).
-    assert.equal(answer.results['cp-strict'].ok, false);
-    assert.match(answer.results['cp-strict'].error ?? '', /--deny-tool/);
+    if (unreadableLauncher) {
+      assert.equal(answer.results['cp-strict'].ok, false);
+      assert.match(answer.results['cp-strict'].error ?? '', /--deny-tool/);
+    }
     await new Promise(resolve => setTimeout(resolve, 500));
     assert.equal(launches().length, before + 1, 'nothing was started for the refused one');
   });
