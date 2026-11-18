@@ -57,7 +57,7 @@ function fixture(opts: {checkoutName?: string; status?: string; deny?: boolean; 
   fs.copyFileSync(path.join(SOURCE, 'install.sh'), path.join(checkout, 'install.sh'));
   fs.cpSync(path.join(SOURCE, 'systemd'), path.join(checkout, 'systemd'), {recursive: true});
   copyInstallerScripts(SOURCE, checkout);
-  for (const cmd of ['mesh-open', 'mesh-attach', 'mesh-rename', 'mesh-logout-all']) fs.writeFileSync(path.join(checkout, 'bin', cmd), '');
+  for (const cmd of ['mesh-open', 'mesh-attach', 'mesh-rename']) fs.writeFileSync(path.join(checkout, 'bin', cmd), '');
   const home = path.join(root, 'home');
   const bin = path.join(root, 'fakes');
   for (const dir of [home, bin, path.join(root, 'runtime')]) fs.mkdirSync(dir, {mode: 0o700});

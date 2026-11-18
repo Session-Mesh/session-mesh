@@ -160,7 +160,7 @@ describe('the choice between the bundle and the native programs, per platform', 
     const script = ['set -euo pipefail', 'refuse() { echo "REFUSED: $*"; exit 0; }', 'warn() { echo "WARNED: $*"; }',
       `uname() { echo '${machine}'; }`, `sw_vers() { echo '${version}'; }`, facts,
       `SYSTEM='${system}' MESH_RELEASE_TAG=v1.0.0`, "RELEASE_SUM_PATTERN='^[0-9a-f]{64}  [A-Za-z0-9._-]+$'", ...floors,
-      `MESH_RELEASE_SUMS='${sums(assets)}'`, 'RELEASE_PROGRAMS=(mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history)',
+      `MESH_RELEASE_SUMS='${sums(assets)}'`, `RELEASE_PROGRAMS=(${PROGRAMS.join(' ')})`,
       ...['sums_hash', 'bundle_asset', 'code_asset', 'release_platforms', 'release_has_programs', 'stamped_platforms', 'version_key',
         'version_at_least', 'machine_floors', 'release_kind'].map(fn),
       'release_kind', 'echo "$RELEASE_KIND $RELEASE_PLATFORM"'].join('\n');
