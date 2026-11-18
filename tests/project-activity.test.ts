@@ -8,11 +8,12 @@ import {test} from 'node:test';
 import {build} from 'esbuild';
 import {chromium} from 'playwright-core';
 import {followupCatalog, roadmapObservation, roadmapTask} from './helpers/project-followup-fixtures.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 const root=path.resolve(import.meta.dirname,'..');
 test('Chrome: recorded activity preserves source identity, partial history, keyboard focus and reading position',
  {skip:!process.env.MESH_CHROMIUM&&!process.env.MESH_REQUIRE_BROWSER?'MESH_CHROMIUM absent':false},async()=>{
  const bundle=await build({stdin:{contents:"export {ProjectCockpitView} from './static/project-cockpit-view.ts'",resolveDir:root},bundle:true,format:'iife',globalName:'ActivityProbe',write:false});
- const browser=await chromium.launch({executablePath:process.env.MESH_CHROMIUM,args:['--no-sandbox','--mute-audio']});
+ const browser=await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM, ['--no-sandbox','--mute-audio']));
  try{for(const width of [1560,390])for(const lang of ['en','fr']){
   const page=await browser.newPage({viewport:{width,height:900}});
   try{

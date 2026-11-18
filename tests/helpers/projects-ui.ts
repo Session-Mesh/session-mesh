@@ -7,6 +7,7 @@ import http from 'node:http';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { chromium, type Browser, type Page } from 'playwright-core';
+import {chromiumLaunchOptions} from './browser-launch.ts';
 
 export class ProjectsUiFixture {
   private browser!: Browser;
@@ -35,7 +36,7 @@ export class ProjectsUiFixture {
     });
     await new Promise<void>(resolve=>this.server.listen(0,'127.0.0.1',resolve));
     this.origin=`http://127.0.0.1:${(this.server.address() as AddressInfo).port}`;
-    this.browser=await chromium.launch({executablePath:process.env.MESH_CHROMIUM ?? '',args:['--no-sandbox','--mute-audio']});
+    this.browser=await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM ?? '', ['--no-sandbox','--mute-audio']));
   }
   async stop() { await this.browser?.close(); this.server?.close(); }
   async mountFollowup(page: Page, catalog: unknown, followupContext?: unknown) {

@@ -13,6 +13,7 @@ import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type BrowserContext, type Page} from 'playwright-core';
 import {type Mesh} from './mesh-server-lib.ts';
 import {AgentMesh} from './helpers/agent-mail-mesh.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const SHOTS = process.env.MESH_SHOT_DIR ?? '';
@@ -28,7 +29,7 @@ before(async () => {
   if (skip) return;
   lab = await AgentMesh.start('cfgui-', ['alpha']);
   mesh = lab.mesh;
-  browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']});
+  browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
 });
 after(async () => {
   for (const context of contexts) await context.close().catch(() => undefined);

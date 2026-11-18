@@ -14,6 +14,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type BrowserContext, type Page} from 'playwright-core';
 import {type Mesh, startMesh} from './mesh-server-lib.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const SHOTS = process.env.MESH_SHOT_DIR ?? '';
@@ -75,7 +76,7 @@ before(async () => {
   // A skipped describe does not skip this file-level hook: start nothing without a Chromium.
   if (skip) return;
   mesh = await startMesh('mgmtui-');
-  browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']});
+  browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
 });
 after(async () => {
   for (const context of contexts) {

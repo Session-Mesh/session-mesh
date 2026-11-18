@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { buildSync } from 'esbuild';
 import { chromium } from 'playwright-core';
 import { followupCatalog, roadmapObservation, roadmapTask } from './helpers/project-followup-fixtures.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const chromiumPath = process.env.MESH_CHROMIUM ?? '';
 test('cockpit task navigation crosses pages and remembered modes; config revision removes old observations',
@@ -16,7 +17,7 @@ test('cockpit task navigation crosses pages and remembered modes; config revisio
       bundle: true, format: 'iife', globalName: 'CockpitTest', write: false }).outputFiles[0]!.text;
     const catalog = followupCatalog(roadmapObservation(Array.from({ length: 61 }, (_, i) =>
       roadmapTask({ id: 'task-' + i, objective: 'Task ' + i, state: i < 50 ? 'done' : 'queued' }))));
-    const browser = await chromium.launch({ executablePath: chromiumPath, args: ['--no-sandbox', '--mute-audio'] });
+    const browser = await chromium.launch(chromiumLaunchOptions(chromiumPath, ['--no-sandbox', '--mute-audio']));
     try {
       const page = await browser.newPage();
       await page.setContent('<main id="root"><section id="host"><header><h2>Project</h2></header></section><section id="observation"><article class="projects-detail"></article></section><section id="context"></section><section id="legacy"></section></main>');

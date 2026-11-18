@@ -16,6 +16,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type Page} from 'playwright-core';
 import {type Mesh, startMesh} from './mesh-server-lib.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 // Globals of static/app.js, read inside page functions.
 declare const openWeb: unknown;
@@ -115,7 +116,7 @@ describe('a trapped file name runs no script in the mesh origin', {skip: skipBro
   let page: Page;
 
   before(async () => {
-    browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox']});
+    browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox']));
     page = await (await browser.newContext()).newPage();
     await page.goto(`${mesh.base}/login?token=${mesh.token()}`);
     // A function, not a string: the main page's CSP refuses string evaluation (no 'unsafe-eval').

@@ -10,6 +10,7 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {chromium} from 'playwright-core';
 import {REPO,scratchHome,runServer,stopServer} from './mesh-server-lib.ts';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 async function stop(child:ChildProcess){if(child.exitCode!==null||child.signalCode!==null)return;const done=once(child,'exit');child.kill('SIGTERM');const timer=setTimeout(()=>child.kill('SIGKILL'),3000);await done;clearTimeout(timer);}
 async function ready(file:string){for(let i=0;i<200;i++){const ok=await new Promise<boolean>(resolve=>{const socket=net.connect(file,()=>{socket.destroy();resolve(true);});socket.on('error',()=>resolve(false));});if(ok)return;await new Promise(resolve=>setTimeout(resolve,20));}throw Error('private native socket not ready');}
 test('complete public Roster artifact through native scope, owner HTTP and Chrome desktop/phone', {timeout:90000,skip:!process.env.MESH_REQUIRE_PROJECT_ARTIFACTS&&(!process.env.MESH_NATIVE_PTYHOST||!process.env.MESH_CHROMIUM||!process.env.MESH_PROJECT_ROSTER_PIPELINE_CLI)?'optional public Roster reader runtime not configured':false},async()=>{
@@ -32,7 +33,7 @@ test('complete public Roster artifact through native scope, owner HTTP and Chrom
     assert.equal(list.status,'ok');assert.equal(list.machine_id,fixtureMachine);assert.equal(list.total,0);assert.equal(list.complete,true);assert.deepEqual(list.projects,[]);
     const created=await call({op:'project_create',boot:caps.boot,expected_revision:list.revision,request_id:id,project:{title:'Complete reader project'}});assert.equal(created.status,'ok');
     const configured=await call({op:'project_settings',boot:caps.boot,expected_revision:created.revision,request_id:crypto.randomUUID(),project_id:id,patch:{source_changes:[{type:'put',id:'reader-source',kind:'roster',label:'Project evidence',selector:{kind:'pipeline',root,task:'reader'}}],observation:{repository:false,source_ids:['reader-source']}}});assert.equal(configured.status,'ok',JSON.stringify(configured));
-    browser=await chromium.launch({executablePath:process.env.MESH_CHROMIUM,args:['--no-sandbox','--mute-audio']});
+    browser=await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM, ['--no-sandbox','--mute-audio']));
     for(const width of [1560,390]){
       const context=await browser.newContext({viewport:{width,height:1000},locale:'en-US',hasTouch:width===390});assert.ok((await context.request.post(origin+'/login',{form:{token}})).ok());const page=await context.newPage();const reads:string[]=[];
       page.on('request',request=>{if(request.url().endsWith('/api/projects/artifacts/v1'))reads.push(request.postDataJSON().kind);});

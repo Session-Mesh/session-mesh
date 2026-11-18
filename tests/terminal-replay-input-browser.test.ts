@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {after, before, describe, test} from 'node:test';
 import type {Page} from 'playwright-core';
 import {rows, settle, skip, TerminalMesh, typeLine, waitForRow} from './terminal-browser-lib.ts';
+import {READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
 
 type MouseEvent = {col: number; row: number; x: number; y: number; button: number; action: number;
   ctrl: boolean; alt: boolean; shift: boolean};
@@ -65,7 +66,7 @@ async function waitHeld(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const w = window as unknown as TestWindow;
     return active?.conn?.ws?.readyState === 1 && !active.conn.ws.closedByTest && w.__held.length === 1 && w.__queued >= 1;
-  }, undefined, {timeout: 15000});
+  }, undefined, {timeout: READY_TIMEOUT_MS});
 }
 
 /** Close the socket; the next one keeps its replay until __held[0]() runs. */
