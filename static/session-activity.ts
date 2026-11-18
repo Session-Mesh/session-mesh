@@ -29,7 +29,7 @@ function sessionValue(raw: unknown): Session | null {
   };
 }
 
-type Cpu = { value: number; windowEnd: number };
+type Cpu = { value: number; windowStart: number; windowEnd: number };
 function cpuFor(raw: unknown, session: Session, now: number): Cpu | null {
   if (!isRecord(raw) || !Array.isArray(raw.sessions) || session.name === null || session.created === null) return null;
   const rows = raw.sessions.filter((row: unknown) => isRecord(row)
@@ -44,7 +44,7 @@ function cpuFor(raw: unknown, session: Session, now: number): Cpu | null {
       || metric.observed_at > now + 2 || now - metric.observed_at > 20
       || !isRecord(metric.window) || !finite(metric.window.start) || metric.window.start < 0
       || !finite(metric.window.end) || metric.window.end <= metric.window.start) return null;
-  return { value: metric.value, windowEnd: metric.window.end };
+  return { value: metric.value, windowStart: metric.window.start, windowEnd: metric.window.end };
 }
 
 /* Which statuses the agent itself reports, per agent (discover.py):
@@ -61,9 +61,9 @@ function cpuFor(raw: unknown, session: Session, now: number): Cpu | null {
  * The server samples /proc every 10 s and reports percent of one core. An idle Claude or Codex process
  * still burns 0-3 clock ticks per window (0-0.3 % at 100 Hz), so any positive value is noise. 5 %
  * (50 ticks per window) is well above that noise and still far below a working agent. A single hot
- * window can be a timer or garbage collection, so two consecutive fresh windows at or above the
- * threshold are needed to promote, and two fresh windows below it demote again. A missing sample or a
- * status change breaks the run. */
+ * window can be a timer or garbage collection, so two adjacent fresh windows (the second starts where
+ * the first ended) at or above the threshold are needed to promote, and two fresh windows below it
+ * demote again. A gap between windows, a missing sample or a status change breaks the run. */
 const ACTIVE_CPU_PERCENT = 5;
 const WINDOWS_TO_PROMOTE = 2;
 const WINDOWS_TO_DEMOTE = 2;
@@ -91,11 +91,12 @@ export function update(previous: Ranking | null, rawSessions: unknown, managemen
     let zeroWindows = sameStatus ? prior.zeroWindows : 0;
     let hotWindows = sameStatus ? prior.hotWindows : 0;
     let positiveAt = prior?.positiveAt ?? null;
+    const adjacent = cpu !== null && prior !== null && prior.windowEnd !== null && cpu.windowStart === prior.windowEnd;
     const wasActive = prior?.phase === "active";
     if (known && !statusDecides(session)) {
       const hot = cpu !== null && cpu.value >= ACTIVE_CPU_PERCENT;
       if (hot && freshWindow) {
-        hotWindows += 1;
+        hotWindows = adjacent ? hotWindows + 1 : 1;
         zeroWindows = 0;
         phase = wasActive || hotWindows >= WINDOWS_TO_PROMOTE ? "active" : "unknown";
         if (phase === "active") positiveAt = now;
@@ -109,6 +110,7 @@ export function update(previous: Ranking | null, rawSessions: unknown, managemen
         phase = wasActive && zeroWindows < WINDOWS_TO_DEMOTE ? "active" : "inactive";
       } else {
         hotWindows = 0;
+        zeroWindows = 0;
         phase = wasActive && positiveAt !== null && now - positiveAt <= 30 ? "active" : "unknown";
       }
     }
