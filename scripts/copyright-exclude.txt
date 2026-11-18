@@ -28,6 +28,7 @@ static/shortcuts.js
 static/terminal-links.js
 static/themes.js
 static/workspace-spec.js
+static/update-notice.js
 static/board.html
 demo-runtime/input-codec-v1.mjs
 demo-runtime/worker-protocol-v2.mjs

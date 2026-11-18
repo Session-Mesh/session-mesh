@@ -997,7 +997,10 @@ The footer of the sidebar holds:
   makes available to its users;
 - "**⟳ Reload**", which fetches the latest version of the page. When the server has a newer version,
   a "New version: reload" bar appears; the page postpones an automatic reload while you have unsent
-  text or an operation in progress;
+  text or an operation in progress. On a release install, a banner at the top also says when a
+  newer Session Mesh release is published, with its release notes and the upgrade command; × hides
+  it in this browser until the next release
+  ([Update notice](operations.md#update-notice), off with `MESH_UPDATE_CHECK=0`);
 - **⏻**: "Sign out this device", or "All devices…", which signs out every browser without changing
   the token or the sessions ([docs/operations.md](operations.md#logging-out-devices-and-replacing-the-token)).
 

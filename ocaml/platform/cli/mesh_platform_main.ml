@@ -32,13 +32,17 @@
    SIGPIPE. It then has no exit code (a shell reports 141). This is never 0,
    so a failure cannot be read as a success, but a success is reported as a
    failure. A caller that needs the codes above with such a pipe must ignore
-   SIGPIPE. *)
+   SIGPIPE.
+   [update-check] always exits 0 once its options are valid: it prints
+   {"status": ...} (see [update_check]), or with --line one English sentence
+   when an update is available and nothing otherwise. *)
 
 module P = Mesh_platform
 
 let usage =
   "usage: mesh-platform capabilities | runtime-dir | snapshot | process PID | \
-   command-line PID | require isolated-agent|demo-sandbox"
+   command-line PID | require isolated-agent|demo-sandbox | update-check \
+   [--refresh] [--cache-only] [--line] [--debug] [--release-dir DIR]"
 
 let ex_config = 78
 
@@ -229,7 +233,65 @@ let snapshot () =
       `List (List.map process_json scan.processes))
     (P.scan ())
 
+type update_options = {
+  refresh : bool;
+  cache_only : bool;
+  as_line : bool;
+  debug : bool;
+  release_dir : string option;
+}
+
+let rec update_options options = function
+  | [] -> Some options
+  | "--refresh" :: rest -> update_options { options with refresh = true } rest
+  | "--cache-only" :: rest ->
+      update_options { options with cache_only = true } rest
+  | "--line" :: rest -> update_options { options with as_line = true } rest
+  | "--debug" :: rest -> update_options { options with debug = true } rest
+  | "--release-dir" :: dir :: rest when options.release_dir = None ->
+      update_options { options with release_dir = Some dir } rest
+  | _ -> None
+
+(* The installation's release is the one this program runs from, or the
+   directory --release-dir names (for a caller that runs another copy). *)
+let update_check arguments =
+  let none =
+    { refresh = false; cache_only = false; as_line = false; debug = false; release_dir = None }
+  in
+  match update_options none arguments with
+  | None ->
+      print_error usage;
+      2
+  | Some options ->
+      let module R = Mesh_update_report in
+      let installation =
+        match options.release_dir with
+        | Some dir -> R.installation_of_release_dir dir
+        | None -> R.installation_of_executable Sys.executable_name
+      in
+      let getenv, settings_problem = R.with_settings Sys.getenv_opt in
+      let outcome, problem =
+        R.check ~getenv ~installation
+          ~request:(not options.cache_only) ~force:options.refresh
+          ~now:(Unix.gettimeofday ()) ~fetch:(R.curl_fetch_in_cache getenv)
+      in
+      let problem =
+        match settings_problem with Some _ -> settings_problem | None -> problem
+      in
+      (match problem with
+      | Some text when options.debug ->
+          print_error ("mesh-platform: update-check: " ^ text)
+      | _ -> ());
+      let home = Sys.getenv_opt "HOME" in
+      if options.as_line then
+        Option.iter
+          (fun text -> write_from Unix.stdout (text ^ "\n") 0)
+          (R.line ~home outcome)
+      else print_json (R.to_json ~home outcome);
+      0
+
 let run = function
+  | "update-check" :: options -> update_check options
   | [ "require"; name ] -> with_feature name (require_feature name)
   | [ "capabilities" ] -> report capabilities_json (Ok (P.capabilities ()))
   | [ "runtime-dir" ] -> runtime_dir_report runtime_dir_json (P.runtime_dir ())

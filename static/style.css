@@ -556,6 +556,15 @@ input.rename { width: 100%; padding: 1px 4px; background: var(--bg); color: var(
 /* a newer client is available (see "Nouvelle version" in app.js) */
 .update-bar { display: block; width: 100%; padding: 7px 12px; border: 0; border-bottom: 1px solid var(--wait); background: var(--bg); color: var(--wait); font: inherit; font-size: 13px; font-weight: 600; text-align: center; cursor: pointer; }
 .update-bar[hidden] { display: none; }
+/* A newer Session Mesh release (static/update-notice.ts); wraps on a phone, never scrolls sideways. */
+.update-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--panel); color: var(--fg); font-size: 13px; }
+.update-notice[hidden] { display: none; }
+.update-notice a { color: var(--accent); }
+.update-notice-text { font-weight: 600; }
+.update-notice-command { min-width: 0; overflow-wrap: anywhere; color: var(--mute); }
+.update-notice-command code { font-family: var(--mono); color: var(--fg); user-select: all; }
+.update-notice-close { margin-left: auto; padding: 0 6px; border: 0; background: none; color: var(--mute); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+.update-notice-close:hover, .update-notice-close:focus-visible { color: var(--fg); }
 
 /* ---------------- attachments: the menu and the capture dialog */
 #attach-menu button { display: block; width: 100%; margin-bottom: 6px; padding: 10px 12px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--fg); font: inherit; cursor: pointer; }

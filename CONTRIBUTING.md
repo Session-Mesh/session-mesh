@@ -184,6 +184,14 @@ against it by hand only when the backport workflow reports a conflict, as descri
 - **Tags.** A tag `v0.x.y` of the current line is pushed on a commit of `release/latest`; the release workflow accepts a
   tag on `main` or on `release/latest`, and publishes a version older than the
   current latest release without marking it "latest".
+- **Security releases.** A release that fixes a vulnerability carries a line `Security: yes` in its
+  release notes. Installations read it to announce the release at every notice level
+  ([Update notice](docs/operations.md#update-notice)). The release workflow writes the notes
+  without it: add the line right after publication, before owners are likely to see the release,
+  for example with `gh release edit v0.1.4 --notes-file notes.md` after appending it to the
+  published text. The marker is read from the published notes, nothing in the release process
+  checks it, and an owner who already dismissed the routine banner for that tag does not see it
+  again once the label changes.
 - **Site and changelog.** The showcase site is deployed from `main` only: a release of a
   maintenance branch is added to `site/releases.json` by a pull request to `main` (label
   `semver: minor`, since the site is not backported), with its `CHANGELOG.md` heading.

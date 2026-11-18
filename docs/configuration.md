@@ -35,6 +35,9 @@ see [macOS](operations.md#macos).
 | `MESH_PUSH` | on | `0` turns push notifications off. |
 | `MESH_ANSWER_BUTTONS` | off | `1` adds answer buttons to detailed notifications ([Answer buttons in notifications](operations.md#answer-buttons-in-notifications)). |
 | `MESH_LAUNCH_SETTINGS` | unset | Absolute path of a JSON file that restricts the folders where sessions can be created and the agents offered ([Restricting folders and agents](operations.md#restricting-folders-and-agents)). |
+| `MESH_UPDATE_CHECK` | on | Read by the PTY host, not the web server, as the default of the file `update-notice` of the configuration directory, which overrides it and applies without a restart (`check=0`, `notice=minor`...: [Update notice](operations.md#update-notice)). `0` turns the update notice off: no request to GitHub, no banner, no log line ([Update notice](operations.md#update-notice)). |
+| `MESH_UPDATE_NOTICE` | `all` | Read by the PTY host, as the default of the `update-notice` file (`notice=` line). Which newer releases the update notice announces: `all`, `minor`, `major`, `security` or `none` (no request). A security release is announced at every level but `none`; an unknown value counts as `all`. |
+| `MESH_UPDATE_DEBUG` | unset | Read by the PTY host. `1` logs why an update check failed. |
 | `MESH_CODEX_QUEUE_WAKE` | off | `1` lets the mesh wake a Codex session with `codex queue` when agent mail arrives ([Waking Codex with codex queue](operations.md#waking-codex-with-codex-queue)). |
 
 The installer itself reads `MESH_PYTHON`, `MESH_OPAM_SWITCH`, `MESH_PORT` and

@@ -63,6 +63,7 @@
   mesh_project_observation
   mesh_pty_processes
   mesh_pty_support
+  mesh_update_host
   mesh_wire
   yojson
   eio
@@ -134,3 +135,20 @@
  (name mesh_logout_all)
  (modules mesh_logout_all)
  (libraries mesh_cli yojson unix))
+
+; The "update available" notice (mesh-platform update-check). It asks GitHub's
+; public releases list through curl and never downloads or runs a release.
+
+(library
+ (name mesh_update)
+ (wrapped false)
+ (modules mesh_update_version mesh_update_check mesh_update_report)
+ (libraries yojson unix))
+
+; The PTY host's schedule of that check: one fiber, a bounded Eio child.
+
+(library
+ (name mesh_update_host)
+ (wrapped false)
+ (modules mesh_update_host)
+ (libraries mesh_update yojson eio eio.unix unix))
