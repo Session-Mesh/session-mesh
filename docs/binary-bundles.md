@@ -19,12 +19,12 @@ One archive `mesh-<os>-<arch>.tar.gz` holds one directory `mesh-<os>-<arch>/`:
 | `mesh` | the launcher: `./mesh run`, `./mesh install`, `./mesh doctor` |
 | `env.sh` | sourced by every entry point: sets `MESH_BIN_DIR` to `bin/` and names the bundled Python and Node by absolute path; it puts only `bin/` on `PATH`, so mesh sessions keep the user's own `python3` and `node` |
 | `app/` | the code of the built commit (no tests, no OCaml sources), with `install.sh` |
-| `bin/` | wrappers (`mesh-python`, `mesh-ptyhost`, `mesh-attach`, `mesh-open`, ...) and the native `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history` |
+| `bin/` | wrappers (`mesh-python`, `mesh-ptyhost`, `mesh-attach`, `mesh-open`, ...) and the native `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`, `mesh-logout-all` |
 | `libexec/` | the native PTY host `mesh-ptyhost`, which `bin/mesh-ptyhost` executes; with the optional Roster CLIs, `mesh-roster-roadmap` and `mesh-roster-pipeline`, which run them with the bundled Node |
 | `runtime/` | CPython with the locked dependencies, and Node |
 | `lib/` | the shared libraries of the native programs that the system does not provide |
 | `licenses/` | `THIRD-PARTY.md`, the index of every embedded component with its version, licence and licence text; `SOURCE`, the repository and revision of the corresponding source, and the upstream archives (with their SHA-256) of the bundled CPython runtime and of the libraries its build links; the project's licence and notice; and the texts not kept elsewhere in the bundle: `python/` (CPython and the libraries it links), `ocaml/` (the opam packages linked into the native programs), `sqlite/` (the SQLite compiled into `mesh-history`), `go/` (the Go runtime in esbuild), `crates/` (the Rust crates of the `cryptography` wheel that are not under Apache-2.0), `lib/<library>/` (each library copied into `lib/`) |
-| `bundle.json` | the source revision, the runtime versions and the SHA-256 of the five native programs |
+| `bundle.json` | the source revision, the runtime versions and the SHA-256 of the six native programs |
 
 The installer checks a bundle against its `bundle.json` before it uses it: a bundle whose native
 programs do not match is refused.
@@ -121,8 +121,8 @@ bash scripts/build-bundle.sh --output /absolute/artifacts \
 bash scripts/smoke-bundle.sh /absolute/artifacts/mesh-linux-x86_64.tar.gz
 ```
 
-The native directory must contain `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform` and
-`mesh-history` built from the intended source revision (`scripts/bootstrap.sh --install-only`
+The native directory must contain `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`,
+`mesh-history` and `mesh-logout-all` built from the intended source revision (`scripts/bootstrap.sh --install-only`
 installs them into an opam switch; `opam var bin` names its directory). Release builds set
 `MESH_SQLITE_PREFIX` to a directory dedicated to the pinned SQLite that `mesh-history` carries
 (`scripts/build-sqlite.sh` refuses a non-empty directory it did not create, and never deletes

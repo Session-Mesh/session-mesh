@@ -2,9 +2,11 @@
 # Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 # shellcheck shell=bash disable=SC2034 # SERVE and SERVED_HOST are read by the sourcing installer
-# session-mesh installer, the parts shared by Linux and macOS: port numbers, the health check and
-# the tailnet publication. Sourced by install.sh after step, warn and refuse; never run on its own.
-# PORT and ACCOUNT are set by the platform part before these functions run. Written for bash 3.2.
+# session-mesh installer, the parts shared by Linux and macOS: port numbers, the health check, the
+# tailnet publication and the mesh-logout-all link. Sourced by install.sh after step, warn and
+# refuse; never run on its own. PORT and ACCOUNT are set by the platform part before these
+# functions run; HERE, APP_ROOT, RUN_ROOT, BUNDLE_DIR, RELEASES, CURRENT and MESH_RELEASE_TAG by
+# install.sh. Written for bash 3.2.
 
 # 1-65535 without a leading zero (bash arithmetic would read one as octal). The digits are
 # listed: under a UTF-8 locale [0-9] and [[:digit:]] may also match other scripts' digits.
@@ -107,4 +109,87 @@ publish_tailscale() {
     read_serve_state
   fi
   [[ $SERVE == ours ]] || refuse "tailscale serve does not show the expected publication"
+}
+
+# What ~/.local/bin/mesh-logout-all links to: the native program of the bundle the services run
+# (RUN_ROOT: an extracted bundle, or current/ for a bundle release, so an upgrade from a release
+# whose bin/mesh-logout-all was the Python wrapper lands on the native one); current/bin's for a
+# release of native programs; for a source install, the native program scripts/bootstrap.sh
+# installs in the opam switch $1 (else the current one), as for mesh-board-mcp. Nothing when that
+# switch lacks it.
+logout_all_program() {
+  local switch=${1:-} switch_bin
+  if [[ -n $RUN_ROOT ]]; then printf '%s' "$RUN_ROOT/bin/mesh-logout-all"; return 0; fi
+  if [[ -n $MESH_RELEASE_TAG ]]; then printf '%s' "$CURRENT/bin/mesh-logout-all"; return 0; fi
+  command -v opam >/dev/null || return 0
+  [[ -n $switch ]] || switch=$(opam switch show 2>/dev/null || true)
+  [[ -n $switch ]] || return 0
+  switch_bin=$(opam var --switch="$switch" bin 2>/dev/null || true)
+  [[ -n $switch_bin && -f $switch_bin/mesh-logout-all && -x $switch_bin/mesh-logout-all ]] || return 0
+  printf '%s' "$switch_bin/mesh-logout-all"
+}
+
+# 0 when $1 is a symbolic link that names a mesh-logout-all of session-mesh, the only thing the
+# installer ever replaces at that path: its target is $2 (the program about to be linked), or
+# D/bin/mesh-logout-all where D is this install (the code, the bundle, current/, current/app, a
+# release under releases/) or another install: a code directory (server.py and install.sh), an
+# extracted bundle (env.sh and libexec/mesh-ptyhost) or an opam switch where opam installed the
+# session_mesh package (.opam-switch/install/session_mesh.install). A directory that merely holds
+# programs of the same names is not one. A file, a directory or any other link is the user's own.
+logout_all_link_ours() {
+  local target root known
+  [[ -L $1 ]] || return 1
+  target=$(readlink -- "$1") || return 1
+  if [[ -n ${2:-} && $target == "$2" ]]; then return 0; fi
+  [[ $target == /*/bin/mesh-logout-all && $target != */../* && $target != */./* ]] || return 1
+  root=${target%/bin/mesh-logout-all}
+  for known in "${HERE:-}" "${APP_ROOT:-}" "${RUN_ROOT:-}" "${BUNDLE_DIR:-}" "$CURRENT" "$CURRENT/app"; do
+    if [[ -n $known && $root == "$known" ]]; then return 0; fi
+  done
+  if [[ $root == "$RELEASES"/* ]]; then return 0; fi
+  if [[ -f $root/server.py && -f $root/install.sh ]]; then return 0; fi
+  if [[ -f $root/env.sh && -f $root/libexec/mesh-ptyhost ]]; then return 0; fi
+  [[ -f $root/.opam-switch/install/session_mesh.install ]]
+}
+
+# Points $1/mesh-logout-all at program $2. Whatever else is at that path is the user's own: it is
+# left as it is, and the warning says where the program is.
+place_logout_all() {
+  local link=$1/mesh-logout-all
+  if [[ -e $link || -L $link ]] && ! logout_all_link_ours "$link" "$2"; then
+    warn "$link was not made by this installer: it is left as it is. The mesh-logout-all of this install is $2; to use it, remove $link yourself, then: ln -s '$2' '$link'"
+    return 0
+  fi
+  ln -sfn "$2" "$link"
+}
+
+# Links mesh-logout-all in directory $1 to logout_all_program, opam switch $2. When there is none,
+# a link of session-mesh that no longer resolves (to the Python command a checkout no longer has)
+# is removed; any other thing at that path, a working command included, is left. The warning
+# names the missing program and how to build it.
+link_logout_all() {
+  local link=$1/mesh-logout-all program switch='' build='bash scripts/bootstrap.sh --install-only'
+  program=$(logout_all_program "${2:-}")
+  if [[ -n $program ]]; then place_logout_all "$1" "$program"; return 0; fi
+  if [[ ! -e $link ]] && logout_all_link_ours "$link"; then rm -f -- "$link"; fi
+  [[ -z ${2:-} ]] || { switch=" '$2'"; build="MESH_OPAM_SWITCH='$2' $build"; }
+  if [[ -e $link || -L $link ]]; then
+    warn "the native program mesh-logout-all is missing from the opam switch$switch: $link is left as it is. Build the program with $build, then rerun with MESH_OPAM_SWITCH set to that switch"
+    return 0
+  fi
+  warn "mesh-logout-all is not installed: the native program mesh-logout-all is missing from the opam switch$switch. Build it with $build, then rerun with MESH_OPAM_SWITCH set to that switch"
+}
+
+# After --rollback: an existing $1/mesh-logout-all follows the release current/ now names. A
+# release holds the command as bin/mesh-logout-all (the native program, or a 0.1.x bundle's
+# wrapper); a 0.1.x release of native programs had only the Python command app/bin/mesh-logout-all.
+relink_logout_all() {
+  local link=$1/mesh-logout-all program=$CURRENT/bin/mesh-logout-all
+  [[ -e $link || -L $link ]] || return 0
+  [[ -f $program && -x $program ]] || program=$CURRENT/app/bin/mesh-logout-all
+  if [[ ! -f $program ]]; then
+    warn "the release restored holds no mesh-logout-all: $link is left as it is"
+    return 0
+  fi
+  place_logout_all "$1" "$program"
 }

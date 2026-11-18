@@ -1,6 +1,6 @@
 # Session Mesh OCaml tools
 
-This directory is the opam package `session_mesh`. It builds five programs:
+This directory is the opam package `session_mesh`. It builds six programs:
 
 | Program | What it is | Used by |
 |---|---|---|
@@ -9,6 +9,19 @@ This directory is the opam package `session_mesh`. It builds five programs:
 | `mesh-platform` | A diagnostic CLI that prints, as JSON, what the `mesh_platform` library sees on this system: capabilities, runtime directory, process table, one process or its command line, and whether a Linux-only feature is available. | Tests and manual checks. |
 | `mesh-read` | A stdio MCP server with 2 tools, `list_sessions` and `read_transcript`, that reads local Claude and Codex transcripts under `$HOME/.claude/projects` and `$HOME/.codex/sessions`. | Not wired by the web server; an agent configuration can add it. |
 | `mesh-history` | The History index: a SQLite database (FTS5 full-text search) driven over stdin/stdout in JSON lines. | The web server (`history.py`), which feeds it the parsed conversations and reads listings and searches from it; without the program it keeps the JSON cache and ripgrep. |
+| `mesh-logout-all` | The command that signs every browser out: it asks the local mesh, with the master token, to raise the cookie generation, and raises it in `cookie-generation` itself when no mesh answers. | The user, through `~/.local/bin/mesh-logout-all`, which `./install.sh` links to the release's program (bundle or native programs) or, for a source install, to the opam switch's. It replaces the Python script `bin/mesh-logout-all`. |
+
+## mesh-logout-all
+
+It takes no argument and reads `MESH_CONF_DIR` (the token and `cookie-generation`), `MESH_CACHE_DIR`
+and `MESH_PORT` with the rules of `meshpaths.py` (`lib/mesh_paths.mli`). The request is an empty
+`POST /api/logout-all` to `127.0.0.1` with `Authorization: Bearer <token>`: no proxy whatever the
+`*_proxy` variables say, no redirection followed, one 10-second deadline for the whole exchange
+(`lib/mesh_local_http.mli`). A 2xx answer prints the new generation; any other answer is reported
+and exits 1 without touching the file; only a mesh that does not answer leads to the disk, where the
+generation is read, created, repaired and raised as `cookiegen.py` does (`lib/mesh_generation.mli`).
+The library `mesh_cli` (`mesh_paths`, `mesh_generation`, `mesh_local_http`, `mesh_python_text`) is
+shared by the native command-line programs.
 
 ## mesh-history
 
@@ -123,7 +136,8 @@ MESH_OPAM_SWITCH=session-mesh bash scripts/bootstrap.sh
 
 Without `MESH_OPAM_SWITCH` the current opam switch is used, under the same rule. The bootstrap
 installs the pins above and the package's dependencies and test dependencies, builds and tests the package, then installs
-`mesh-ptyhost`, `mesh-board-mcp`, `mesh-read` and `mesh-platform` into that switch.
+`mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history` and
+`mesh-logout-all` into that switch.
 `bash scripts/bootstrap.sh --install-only` installs the same dependencies but runs no test.
 
 Some OCaml tests drive `mesh-ptyhost` through the Python test harness `tests/ptyhost_proc.py`: the

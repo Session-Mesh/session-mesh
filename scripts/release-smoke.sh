@@ -3,11 +3,13 @@
 # Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 # Smoke check of a built release binary set before it is uploaded.
-#   release-smoke.sh <directory holding mesh-ptyhost, mesh-platform, mesh-read, mesh-board-mcp, mesh-history>
+#   release-smoke.sh <directory holding mesh-ptyhost, mesh-platform, mesh-read, mesh-board-mcp, mesh-history,
+#                     mesh-logout-all>
 # - mesh-ptyhost is started on a private runtime directory and answers a `list`
 #   request on its socket (one frame: kind C, 4-byte big-endian length, JSON);
 # - mesh-platform prints its platform facts;
-# - mesh-read and mesh-board-mcp start and exit on closed input.
+# - mesh-read and mesh-board-mcp start and exit on closed input;
+# - mesh-logout-all refuses an argument, and with no mesh on its port raises the generation on disk.
 # Needs `nc` with -U (OpenBSD netcat: the Ubuntu and macOS runners have it).
 set -euo pipefail
 
@@ -78,3 +80,22 @@ done
 
 # mesh-history, on a private database (FTS5, accent folding, a search for "cafe" finds "Café").
 bash "$(dirname "$0")/smoke-history.sh" "$bin/mesh-history" "$runtime"
+
+# mesh-logout-all: an argument gives the usage and exit 1; then, on a private configuration
+# directory and port 1 (no mesh there), it raises the generation on disk: the HTTP client and the
+# generation file both run.
+logout_conf="$runtime/logout-all"
+mkdir -m 700 "$logout_conf"
+printf 'smoke-token\n' >"$logout_conf/token"
+status=0
+"$bin/mesh-logout-all" --help >/dev/null 2>"$runtime/mesh-logout-all.err" || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^usage: mesh-logout-all' "$runtime/mesh-logout-all.err"; then
+  echo "smoke: mesh-logout-all --help exited $status without its usage" >&2
+  cat "$runtime/mesh-logout-all.err" >&2
+  exit 1
+fi
+logged_out="$(env -u MESH_CACHE_DIR MESH_CONF_DIR="$logout_conf" MESH_PORT=1 "$bin/mesh-logout-all")"
+expected_out='The mesh is not responding: generation raised on disk (1). All devices are signed out.'
+[ "$logged_out" = "$expected_out" ] || { echo "smoke: unexpected mesh-logout-all output: $logged_out" >&2; exit 1; }
+[ "$(cat "$logout_conf/cookie-generation")" = 1 ] || { echo "smoke: mesh-logout-all did not write generation 1" >&2; exit 1; }
+echo "smoke: mesh-logout-all raises the generation on disk when no mesh answers"

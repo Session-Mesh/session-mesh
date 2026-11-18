@@ -12,6 +12,7 @@
 // `gh attestation verify`; a fake systemctl keeps the unit states in a directory and derives `show`
 // from the unit files, as systemd does (the PTY unit's MainPID is FAKE_PTY_PID). Nothing reaches
 // the network or a real service manager.
+import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import fs from 'node:fs';
@@ -21,12 +22,15 @@ import {afterEach} from 'node:test';
 import {INSTALL_SCRIPTS} from './install-scripts.ts';
 
 export const SOURCE = process.env.MESH_INSTALL_SOURCE || path.resolve(import.meta.dirname, '..');
-export const PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history'];
+// The native programs of a release, and of a bundle.
+export const PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all'];
 // Where each native program sits in a bundle (scripts/build-bundle.sh).
 export const NATIVE: Record<string, string> = {'mesh-ptyhost': 'libexec/mesh-ptyhost', 'mesh-board-mcp': 'bin/mesh-board-mcp',
-  'mesh-read': 'bin/mesh-read', 'mesh-platform': 'bin/mesh-platform', 'mesh-history': 'bin/mesh-history'};
+  'mesh-read': 'bin/mesh-read', 'mesh-platform': 'bin/mesh-platform', 'mesh-history': 'bin/mesh-history',
+  'mesh-logout-all': 'bin/mesh-logout-all'};
 export const PLATFORMS = ['linux-x86_64', 'linux-arm64', 'macos-arm64'];
-export const HELPERS = ['mesh-event', 'mesh-open', 'mesh-attach', 'mesh-rename', 'mesh-logout-all'];
+// The Python commands of the code (app/bin), which a bundle runs through its wrapper (bin/).
+export const HELPERS = ['mesh-event', 'mesh-open', 'mesh-attach', 'mesh-rename'];
 export const bundleAsset = (platform: string) => `mesh-${platform}.tar.gz`;
 // The interpreter the fake bundled Python runs (the test suite's own): MESH_PYTHON, else python3
 // from PATH, as an absolute path. A bare name would find the fake runtime/python/bin/python3
@@ -249,3 +253,35 @@ export const systemctl = (calls: string) => calls.split('\n').filter((line) => l
 export const running = (fx: Fixture, name: string) => fs.writeFileSync(path.join(fx.state, name), '');
 export const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export const mode = (file: string) => fs.statSync(file).mode & 0o7777;
+
+// The fixture with its HOME a symbolic link to the real directory.
+export function linkedHome(fx: Fixture): Fixture {
+  fs.renameSync(fx.home, `${fx.home}-real`);
+  fs.symlinkSync(`${fx.home}-real`, fx.home);
+  return fx;
+}
+
+// v1.0.0 installed from its downloaded install.sh, the PTY host then running.
+export function installedV1(fx = fixture(), opts: ReleaseOptions = {}) {
+  publish(fx, 'v1.0.0', opts);
+  const first = run(fx, downloaded(fx, 'v1.0.0'));
+  assert.equal(first.status, 0, first.output);
+  running(fx, 'session-mesh-pty.service');
+  return fx;
+}
+
+// Turns the installed v1.0.0 into a 0.1.x layout, where mesh-logout-all was a Python command:
+// bin/mesh-logout-all the bundle's wrapper of app/bin/mesh-logout-all, absent from bundle.json, and
+// ~/.local/bin/mesh-logout-all naming the script directly. Returns that link.
+export function withPythonLogoutAll(fx: Fixture): string {
+  const old = path.join(fx.share, 'releases/v1.0.0');
+  fs.rmSync(path.join(old, 'bin/mesh-logout-all'));
+  fs.copyFileSync(path.join(SOURCE, 'scripts/bundle/mesh-helper'), path.join(old, 'bin/mesh-logout-all'));
+  const manifest = JSON.parse(fs.readFileSync(path.join(old, 'bundle.json'), 'utf8'));
+  delete manifest.native['bin/mesh-logout-all'];
+  fs.writeFileSync(path.join(old, 'bundle.json'), JSON.stringify(manifest, null, 2) + '\n');
+  const link = path.join(fx.home, '.local/bin/mesh-logout-all');
+  fs.rmSync(link);
+  fs.symlinkSync(`${fx.share}/current/app/bin/mesh-logout-all`, link);
+  return link;
+}

@@ -21,3 +21,9 @@
  (public_name mesh-ptyhost)
  (modules mesh_ptyhost_main)
  (libraries mesh_ptyhost))
+
+(executable
+ (name mesh_logout_all_main)
+ (public_name mesh-logout-all)
+ (modules mesh_logout_all_main)
+ (libraries mesh_logout_all unix))

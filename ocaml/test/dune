@@ -8,6 +8,32 @@
  (modules smoke)
  (libraries mesh_board_mcp mcp-kit alcotest unix))
 
+; mesh-logout-all and the mesh_cli library: MESH_PORT and the directories, the
+; cookie generation file, and the command against a fake one-shot mesh.
+
+(test
+ (name mesh_cli_paths_test)
+ (modules mesh_cli_paths_test)
+ (libraries mesh_cli alcotest))
+
+(test
+ (name mesh_generation_test)
+ (modules mesh_generation_test)
+ (libraries mesh_cli test_scratch alcotest fmt unix))
+
+(test
+ (name mesh_logout_all_test)
+ (modules mesh_logout_all_test fake_mesh)
+ (libraries mesh_logout_all mesh_cli test_scratch alcotest unix))
+
+; How a failed system call is read: errors a Linux peer cannot cause (XNU's
+; EINVAL on a torn-down socket), fed directly.
+
+(test
+ (name mesh_local_http_test)
+ (modules mesh_local_http_test)
+ (libraries mesh_cli alcotest unix))
+
 ; The served guide must be ocaml/lib/agent-guide.md, the file the generated
 ; module embeds, byte for byte.
 
