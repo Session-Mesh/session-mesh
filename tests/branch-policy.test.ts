@@ -13,7 +13,8 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {blockOf, jobBlocks, parseLines} from './public-ci-workflow-lib.ts';
 import {checkWorkflow} from './public-ci-workflow-checks.ts';
-import {factsFromEvent, githubLookup, MAX_REFERENCES, releaseGuardProblems, semverLabelProblems, type PullRequestFacts, type SourcePull}
+import {factsFromEvent, githubFilesLookup, githubLookup, MAX_REFERENCES, REGISTER_FILES, releaseGuardProblems, semverLabelProblems, type PullRequestFacts,
+  type SourcePull}
   from '../tools/branch-policy/branch-policy.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -119,6 +120,90 @@ describe('release branch guard', () => {
   });
 });
 
+describe('release branch guard: a backport of the CLA register files', () => {
+  const REGISTER_BODY = 'Backport of #20 to `release/latest`, restricted to the CLA register files.';
+  const register = (number: number | undefined, files: Record<number, string[]>, sources: Record<number, SourcePull>) =>
+    releaseGuardProblems({...pull('release/latest', [PATCH], REGISTER_BODY), ...(number === undefined ? {} : {number})},
+      async (source) => sources[source] ?? null, async (which) => files[which] ?? []);
+
+  test('accepts the register changes of a minor or unlabelled pull request that changed them', async () => {
+    for (const labels of [[MINOR], []]) {
+      assert.deepEqual(await register(30, {30: ['CLA-SIGNATORIES.md'], 20: ['src/feature.ts', 'CLA-SIGNATORIES.md']}, {20: merged(labels)}), [], labels.join());
+    }
+    assert.deepEqual(await register(30, {30: ['tools/cla-check/MAINTAINERS', 'CONTRIBUTORS.md', '.github/CODEOWNERS'],
+      20: ['tools/cla-check/MAINTAINERS', 'CONTRIBUTORS.md', '.github/CODEOWNERS']}, {20: merged([MINOR])}), []);
+  });
+
+  test('refuses a backport of a minor pull request that also changes another file', async () => {
+    const problems = await register(30, {30: ['CLA-SIGNATORIES.md', 'src/feature.ts'], 20: ['CLA-SIGNATORIES.md', 'src/feature.ts']}, {20: merged([MINOR])});
+    assert.deepEqual(problems, ['#20 does not carry the label "semver: patch"']);
+  });
+
+  test('refuses a register-only backport of a minor pull request that changed no register file', async () => {
+    const problems = await register(30, {30: ['CONTRIBUTORS.md'], 20: ['src/feature.ts']}, {20: merged([MINOR])});
+    assert.deepEqual(problems, ['#20 does not carry the label "semver: patch"']);
+  });
+
+  test('refuses it without the number of the pull request, an empty list, or a source that is not merged to main', async () => {
+    assert.equal((await register(undefined, {20: ['CONTRIBUTORS.md']}, {20: merged([MINOR])})).length, 1);
+    assert.equal((await register(30, {20: ['CONTRIBUTORS.md']}, {20: merged([MINOR])})).length, 1);
+    assert.match((await register(30, {30: ['CONTRIBUTORS.md'], 20: ['CONTRIBUTORS.md']}, {20: merged([MINOR], 'main', false)})).join(), /#20 is not merged/);
+    assert.match((await register(30, {30: ['CONTRIBUTORS.md'], 20: ['CONTRIBUTORS.md']}, {20: merged([MINOR], 'topic')})).join(), /#20 was not merged to main/);
+  });
+
+  test('a register file renamed away counts under its former name', async () => {
+    assert.deepEqual(await register(30, {30: ['CONTRIBUTORS.md'], 20: ['docs/people.md', 'CONTRIBUTORS.md']}, {20: merged([MINOR])}), []);
+    assert.equal((await register(30, {30: ['CONTRIBUTORS.md', 'docs/people.md'], 20: ['CONTRIBUTORS.md']}, {20: merged([MINOR])})).length, 1);
+  });
+
+  test('looks the files up only when a source lacks semver: patch', async () => {
+    const calls: number[] = [];
+    await releaseGuardProblems({...pull('release/latest', [PATCH], 'Backport of #12'), number: 30}, async () => merged([PATCH]),
+      async (number) => { calls.push(number); return []; });
+    assert.deepEqual(calls, []);
+  });
+
+  test('names the five register files the cla check reads', () => {
+    assert.deepEqual(REGISTER_FILES, ['CONTRIBUTORS.md', 'CLA.md', 'CLA-SIGNATORIES.md', 'tools/cla-check/MAINTAINERS', '.github/CODEOWNERS']);
+  });
+});
+
+describe('the GitHub files lookup', () => {
+  const pages = (lists: unknown[], status = 200): typeof fetch => {
+    let call = 0;
+    return (async () => new Response(JSON.stringify(lists[call++] ?? []), {status})) as unknown as typeof fetch;
+  };
+  const lookupWith = (fetchImpl: typeof fetch) => githubFilesLookup('https://api.example.test', 'owner/repo', 'token', fetchImpl)(7);
+  const full = Array.from({length: 100}, (_, index) => ({filename: `f${index}`}));
+
+  test('reads every page, a renamed file under both names, with the token', async () => {
+    const urls: string[] = [];
+    const spy = (async (url: string, init?: RequestInit) => {
+      urls.push(url);
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+      return new Response(JSON.stringify(urls.length === 1 ? full : [{filename: 'CONTRIBUTORS.md', previous_filename: 'PEOPLE.md'}]), {status: 200});
+    }) as unknown as typeof fetch;
+    const files = await lookupWith(spy);
+    assert.equal(files.length, 102);
+    assert.deepEqual(files.slice(100), ['CONTRIBUTORS.md', 'PEOPLE.md']);
+    assert.deepEqual(urls, ['https://api.example.test/repos/owner/repo/pulls/7/files?per_page=100&page=1',
+      'https://api.example.test/repos/owner/repo/pulls/7/files?per_page=100&page=2']);
+  });
+
+  test('a failure, an unexpected shape or a list longer than GitHub gives is an error, never a partial list', async () => {
+    await assert.rejects(lookupWith(pages([[]], 403)), /GitHub answered 403 for the files of pull request #7/);
+    await assert.rejects(lookupWith(pages([[{name: 'x'}]])), /unexpected answer/);
+    await assert.rejects(lookupWith(pages([{}])), /unexpected answer/);
+    await assert.rejects(lookupWith(pages(Array.from({length: 31}, () => full))), /more files than GitHub lists/);
+  });
+
+  test('the event file gives the number of the pull request when it has one', () => {
+    const event = (number: unknown) => ({pull_request: {number, base: {ref: 'release/latest'}, labels: [], body: ''}});
+    assert.equal(factsFromEvent(event(30))?.number, 30);
+    for (const bad of [undefined, '30', 0, -1, 1.5]) assert.equal(factsFromEvent(event(bad))?.number, undefined, String(bad));
+  });
+});
+
 describe('the event file', () => {
   const event = (fields: object) => ({pull_request: {base: {ref: 'main'}, labels: [{name: PATCH}], body: 'text', ...fields}});
 
@@ -170,6 +255,9 @@ describe('the command line', () => {
   const pulls: Record<string, unknown> = {
     '/repos/owner/repo/pulls/12': {merged: true, base: {ref: 'main'}, labels: [{name: PATCH}]},
     '/repos/owner/repo/pulls/13': {merged: true, base: {ref: 'main'}, labels: [{name: MINOR}]},
+    '/repos/owner/repo/pulls/13/files?per_page=100&page=1': [{filename: 'src/feature.ts'}, {filename: 'CLA-SIGNATORIES.md'}],
+    '/repos/owner/repo/pulls/40/files?per_page=100&page=1': [{filename: 'CLA-SIGNATORIES.md'}],
+    '/repos/owner/repo/pulls/41/files?per_page=100&page=1': [{filename: 'CLA-SIGNATORIES.md'}, {filename: 'src/feature.ts'}],
   };
 
   before(async () => {
@@ -218,6 +306,15 @@ describe('the command line', () => {
     const unknown = await run('release-guard', event('release/latest', [PATCH], 'Backport of #99'));
     assert.equal(unknown.status, 1);
     assert.match(unknown.output, /#99 is not a pull request of this repository/);
+  });
+
+  test('release-guard: the register files of a minor pull request pass alone, not with another file', async () => {
+    const numbered = (number: number) => ({pull_request: {...event('release/latest', [PATCH], 'Backport of #13').pull_request, number}});
+    const ok = await run('release-guard', numbered(40));
+    assert.equal(ok.status, 0, ok.output);
+    const mixed = await run('release-guard', numbered(41));
+    assert.equal(mixed.status, 1, mixed.output);
+    assert.match(mixed.output, /#13 does not carry the label "semver: patch"/);
   });
 
   test('release-guard passes on a pull request to main without token or lookup', async () => {
