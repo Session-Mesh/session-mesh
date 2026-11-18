@@ -23,7 +23,7 @@ import {createServer} from 'node:http';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 const [root] = process.argv.slice(2);
-const assets = new Set(['index.html', 'style.css', 'vendor/xterm.css',
+const assets = new Set(['index.html', 'style.css', 'themes.css', 'themes.js', 'vendor/xterm.css',
   'vendor/xterm.min.js', 'vendor/addon-fit.min.js',
   'folder-state.js', 'history-state.js', 'session-activity.js', 'demo-catalog.js',
   'pane-actions.js', 'workspace-spec.js', 'terminal-links.js', 'shortcuts.js', 'app.js', 'local-entry.js', 'i18n.js', 'i18n/languages.json', 'i18n/en.json',
