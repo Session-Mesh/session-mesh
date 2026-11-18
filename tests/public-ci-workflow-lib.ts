@@ -144,18 +144,38 @@ export function commandAt(lines: Line[], index: number): string {
   return parts.join('\n');
 }
 
+// The index of the `}}` closing the expression whose body starts at `from`, outside the
+// single-quoted strings of the expression language (`'it''s'`); -1 when it is never closed. A `}}`
+// inside a string, as in `format('}}{0}', github.event.pull_request.title)`, does not end it.
+function expressionEnd(text: string, from: number): number {
+  let quoted = false;
+  for (let index = from; index < text.length; index++) {
+    if (text[index] === "'") {
+      if (quoted && text[index + 1] === "'") index++;
+      else quoted = !quoted;
+    } else if (!quoted && text.startsWith('}}', index)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 // Every `${{ ... }}` of the raw text (comments included, possibly spanning lines), and every
 // `if:` value with its continuation lines (folded `>-` included), which GitHub evaluates as an
-// expression even without `${{ }}`.
-export function expressions(lines: Line[]): {number: number; body: string}[] {
+// expression even without `${{ }}`. `unparsable` marks an expression that never closes: the checks
+// refuse it, since what follows it cannot be told apart from its body.
+export function expressions(lines: Line[]): {number: number; body: string; unparsable: boolean}[] {
   const text = lines.map((line) => line.raw).join('\n');
-  const found: {number: number; body: string}[] = [];
-  for (const match of text.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
-    found.push({number: text.slice(0, match.index).split('\n').length, body: match[1]});
+  const found: {number: number; body: string; unparsable: boolean}[] = [];
+  for (let start = text.indexOf('${{'); start >= 0; start = text.indexOf('${{', start + 3)) {
+    const end = expressionEnd(text, start + 3);
+    found.push({number: text.slice(0, start).split('\n').length, body: text.slice(start + 3, end < 0 ? text.length : end), unparsable: end < 0});
+    if (end < 0) break;
+    start = end - 1;
   }
   lines.forEach((line, index) => {
     if (line.key !== 'if') return;
-    found.push({number: line.number, body: [line.value, ...continuation(lines, index).map((item) => item.raw)].join('\n')});
+    found.push({number: line.number, body: [line.value, ...continuation(lines, index).map((item) => item.raw)].join('\n'), unparsable: false});
   });
   return found;
 }

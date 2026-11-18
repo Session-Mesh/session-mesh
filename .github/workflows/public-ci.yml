@@ -13,7 +13,7 @@ name: public-ci
 
 on:
   push:
-    # main, and the maintenance branches (release/0.1, ...): CONTRIBUTING.md, "Branches and versions".
+    # main, and the maintenance branches (release/latest, ...): CONTRIBUTING.md, "Branches and versions".
     branches: [main, "release/**"]
   pull_request:
     # The default three, plus `edited`: a pull request whose base branch is changed is checked

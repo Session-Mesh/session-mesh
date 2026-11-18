@@ -73,7 +73,7 @@ describe('the scripts of release.yml, run', () => {
     });
   });
 
-  describe('the tag job: the tag names a commit of main or of its release branch', () => {
+  describe('the tag job: the tag names a commit of main or of release/latest', () => {
     const script = stepScript(lines, /git merge-base --is-ancestor/);
     const gitEnv = () => ({HOME: scratch, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't',
       GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid'});
@@ -99,11 +99,11 @@ describe('the scripts of release.yml, run', () => {
         commits[label] = git(clone, 'rev-parse', 'HEAD');
       }
       git(clone, 'push', '-q', 'origin', 'main');
-      // The maintenance branch of the 0.1 series: cut from an older commit of main, with a fix of its own.
-      git(clone, 'checkout', '-q', '-b', 'release/0.1', commits.first);
+      // The maintenance branch: cut from an older commit of main, with a fix of its own.
+      git(clone, 'checkout', '-q', '-b', 'release/latest', commits.first);
       git(clone, 'commit', '-q', '--allow-empty', '-m', 'patch');
       commits.patch = git(clone, 'rev-parse', 'HEAD');
-      git(clone, 'push', '-q', 'origin', 'release/0.1');
+      git(clone, 'push', '-q', 'origin', 'release/latest');
       git(clone, 'checkout', '-q', 'main');
       git(clone, 'checkout', '-q', '-b', 'topic');
       git(clone, 'commit', '-q', '--allow-empty', '-m', 'topic');
@@ -118,7 +118,7 @@ describe('the scripts of release.yml, run', () => {
       git(clone, 'tag', 'v0.1.9', commits.local);
       for (const tag of ['v0.1.1', 'v0.1.2-rc.1', 'v0.2.0', 'v3.0.0']) git(clone, 'tag', tag, commits.patch);
       git(clone, 'update-ref', '-d', 'refs/remotes/origin/main');
-      git(clone, 'update-ref', '-d', 'refs/remotes/origin/release/0.1');
+      git(clone, 'update-ref', '-d', 'refs/remotes/origin/release/latest');
     });
 
     const check = (tag: string, sha: string) => run(script, {...gitEnv(), RELEASE_TAG: tag, GITHUB_SHA: sha}, clone);
@@ -139,21 +139,13 @@ describe('the scripts of release.yml, run', () => {
       }
     });
 
-    // v0.1.1 is cut on release/0.1, a branch that main does not hold: the series of the tag, 0.1,
-    // names the branch.
-    test('accepts a tag on the release branch of its series, final or pre-release, and says so', () => {
-      for (const tag of ['v0.1.1', 'v0.1.2-rc.1']) {
+    // v0.1.1 is cut on release/latest, a branch that main does not hold. The branch is not bound to a
+    // series: after the owner moves it to v0.2.0, a v0.2.x tag names its tip the same way.
+    test('accepts a tag on release/latest, final or pre-release, of any series, and says so', () => {
+      for (const tag of ['v0.1.1', 'v0.1.2-rc.1', 'v0.2.0', 'v3.0.0']) {
         const result = check(tag, commits.patch);
         assert.equal(result.status, 0, `${tag}: ${result.output}`);
-        assert.match(result.output, /, on release\/0\.1$/m);
-      }
-    });
-
-    test('refuses a commit of release/0.1 under a tag of another series, or of a series with no branch', () => {
-      for (const tag of ['v0.2.0', 'v3.0.0']) {
-        const result = check(tag, commits.patch);
-        assert.equal(result.status, 1, tag);
-        assert.match(result.output, new RegExp(`which is not on main or on release/${tag.slice(1).replace(/\.\d+$/, '').replace(/\./g, '\\.')}: tag a commit of one of them`), tag);
+        assert.match(result.output, /, on release\/latest$/m);
       }
     });
 
@@ -163,10 +155,10 @@ describe('the scripts of release.yml, run', () => {
       assert.doesNotMatch(result.output, /release\//);
     });
 
-    test('refuses a commit of a 0.1 tag that is on neither main nor release/0.1', () => {
+    test('refuses a commit that is on neither main nor release/latest', () => {
       const result = check('v0.1.9', commits.local);
       assert.equal(result.status, 1);
-      assert.match(result.output, /which is not on main or on release\/0\.1/);
+      assert.match(result.output, /which is not on main or on release\/latest: tag a commit of one of them/);
     });
 
     test('refuses a tag that does not name the built commit, and an absent tag', () => {
@@ -253,7 +245,7 @@ esac
       ['v1.2.9', 'v1.3.0-rc.1', true],
       ['v1.4.0', 'v1.3.0', false],
       ['v1.3.0', '', false],
-      // A fix of the 0.1 line, cut on release/0.1 after v0.2.0 (or after a pre-release of it) is never the latest.
+      // A fix of the 0.1 line, cut on release/latest (the branch of the old line is no longer maintained then) after v0.2.0 (or after a pre-release of it) is never the latest.
       ['v0.1.1', 'v0.2.0', true],
       ['v0.1.10', 'v0.2.0', true],
       ['v0.1.2', 'v0.2.0-rc.1', true],
