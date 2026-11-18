@@ -94,7 +94,9 @@ The dependencies are declared in `dune-project`; `session_mesh.opam` is generate
 - **Tests only:** `alcotest`, `qcheck-core`, `quint-connect` 0.3.0 or later (the opam package that installs the `ocaml-quint-connect` library).
 
 `scripts/bootstrap.sh` pins two packages in the switch it uses; everything else comes from the
-default opam repository:
+opam repository at the commit fixed in `scripts/release-pins.sh`, which the bootstrap selects for
+that switch only (repository `session-mesh` in the opam root), whatever the host's own
+repositories hold:
 
 - `dune` to 3.24.2, so that the dependency phase does not upgrade it;
 - `mcp-kit` as `0.2.0+pin`, to a public source revision: `mesh-board-mcp` needs an API newer than
@@ -108,16 +110,19 @@ removes that stale pin because the two packages conflict.
 ## Build and local verification
 
 `scripts/test-local.sh` runs the complete local suite and calls `scripts/bootstrap.sh` for the
-OCaml part. For an OCaml-only iteration, run the bootstrap directly in an existing OCaml 5.3
-switch; it never creates a switch:
+OCaml part. For an OCaml-only iteration, run the bootstrap directly; it creates the switch with
+OCaml 5.3 from the pinned repository when it does not exist. An existing switch must use OCaml 5.3
+and already read only the pinned repository, or only the `session-mesh` repository of an earlier
+run, whose URL then follows a changed pin (the former URL is printed to undo it); the bootstrap refuses to change the repositories of
+another existing switch, unless it is the checkout's local switch `_opam/` (CI) or
+`MESH_OPAM_SELECT_PINNED=1` is set, in which case it prints the command that restores them:
 
 ```sh
-opam switch create session-mesh ocaml-base-compiler.5.3.0
 MESH_OPAM_SWITCH=session-mesh bash scripts/bootstrap.sh
 ```
 
-Without `MESH_OPAM_SWITCH` the current opam switch is used. The bootstrap installs the pins above
-and the package's dependencies and test dependencies, builds and tests the package, then installs
+Without `MESH_OPAM_SWITCH` the current opam switch is used, under the same rule. The bootstrap
+installs the pins above and the package's dependencies and test dependencies, builds and tests the package, then installs
 `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read` and `mesh-platform` into that switch.
 `bash scripts/bootstrap.sh --install-only` installs the same dependencies but runs no test.
 
