@@ -308,7 +308,8 @@ jobs:
       # re-adds the default repository on every run, then finds
       # _opam/.opam-switch/switch-config and skips the switch creation (the
       # compiler build). A restore-keys hit restores an older state that the
-      # dependency step completes.
+      # dependency step completes. The key covers scripts/release-pins.sh, the
+      # commit of the opam repository the dependencies are read from.
       - name: Restore the opam state
         id: opam-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -316,7 +317,7 @@ jobs:
           path: |
             ~/.opam
             _opam
-          key: opam-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh') }}
+          key: opam-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh', 'scripts/release-pins.sh') }}
           restore-keys: |
             opam-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-
       - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3.9.1
@@ -397,7 +398,8 @@ jobs:
   # The native PTY host, built once and handed to every test job as the artifact
   # mesh-ptyhost-linux-x86_64 (tests find it through MESH_PTYHOST_CMD). The binary is cached on
   # the hash of everything that can change it: the OCaml sources outside ocaml/test, the
-  # bootstrap script that pins the dependencies, and the compiler. A hit costs seconds (no opam,
+  # bootstrap script that pins the dependencies, the commit of the opam repository
+  # (scripts/release-pins.sh), and the compiler. A hit costs seconds (no opam,
   # no compiler); a miss builds it from the opam state of the ocaml job, only the programs
   # (`dune build -p session_mesh @install`), no tests. Only main writes the cache entry.
   # Measured on a 2-vCPU runner: binary cache hit, about 10 seconds; miss with a cold opam
@@ -420,7 +422,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: native-host
-          key: native-host-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/**', '!ocaml/test/**', '!ocaml/_build/**', 'scripts/bootstrap.sh') }}
+          key: native-host-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/**', '!ocaml/test/**', '!ocaml/_build/**', 'scripts/bootstrap.sh', 'scripts/release-pins.sh') }}
       # The same opam state, key and setup as the ocaml job (it is the one that saves it).
       - name: Restore the opam state
         if: steps.host-cache.outputs.cache-hit != 'true'
@@ -429,7 +431,7 @@ jobs:
           path: |
             ~/.opam
             _opam
-          key: opam-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh') }}
+          key: opam-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/session_mesh.opam', 'ocaml/dune-project', 'scripts/bootstrap.sh', 'scripts/release-pins.sh') }}
           restore-keys: |
             opam-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-
       - if: steps.host-cache.outputs.cache-hit != 'true'
