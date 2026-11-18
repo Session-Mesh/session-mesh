@@ -62,7 +62,7 @@ function cpuFor(raw: unknown, session: Session, now: number): Cpu | null {
  * still burns 0-3 clock ticks per window (0-0.3 % at 100 Hz), so any positive value is noise. 5 %
  * (50 ticks per window) is well above that noise and still far below a working agent. A single hot
  * window can be a timer or garbage collection, so two adjacent fresh windows (the second starts where
- * the first ended) at or above the threshold are needed to promote, and two fresh windows below it
+ * the first ended) at or above the threshold are needed to promote, and two adjacent fresh windows below it
  * demote again. A gap between windows, a missing sample or a status change breaks the run. */
 const ACTIVE_CPU_PERCENT = 5;
 const WINDOWS_TO_PROMOTE = 2;
@@ -103,7 +103,7 @@ export function update(previous: Ranking | null, rawSessions: unknown, managemen
       } else if (hot) {
         phase = wasActive ? "active" : "unknown";
       } else if (cpu && freshWindow) {
-        zeroWindows += 1;
+        zeroWindows = adjacent ? zeroWindows + 1 : 1;
         hotWindows = 0;
         phase = wasActive && zeroWindows < WINDOWS_TO_DEMOTE ? "active" : "inactive";
       } else if (cpu) {
