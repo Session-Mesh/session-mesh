@@ -247,7 +247,8 @@ The bootstrap reads packages from the opam repository at the commit fixed in
 repositories hold: no `opam update` is needed. It registers that commit in your opam root as the
 repository `session-mesh` and selects it for its switch only; your other switches and the `default`
 repository are not changed. A switch that does not exist yet is created with OCaml 5.3 from that
-repository, without becoming your current switch. An existing switch must use OCaml 5.3 and already
+repository, without changing your global current switch (a local switch, created in a directory,
+is still the current one for opam commands run inside that directory). An existing switch must use OCaml 5.3 and already
 read only that commit: the bootstrap does not change the repositories of a switch that other
 projects may use, your current switch included, and stops with a message instead. Use a dedicated
 switch, as below, which is created when missing. To let the bootstrap make an existing switch read
@@ -258,7 +259,8 @@ moves the URL of `session-mesh` to the new commit, without that variable, and pr
 `opam repository set-url` command that restores the former URL. The `session-mesh` repository
 belongs to the whole opam root: moving its URL moves every switch that reads it, and two checkouts
 with different pins (for example `main` and a release branch) move it back and forth on each run.
-Give such checkouts their own opam root (`OPAMROOT`) or their own repository-local switch. The local
+Give such checkouts their own opam root (`OPAMROOT`): a local switch is not enough, since every
+switch of a root reads the same `session-mesh` repository. The local
 switch of the checkout (`_opam/`, as in CI) is changed without that variable. `MESH_OPAM_SWITCH` may also be the absolute directory of a local
 switch. Without `MESH_OPAM_SWITCH`, the bootstrap uses your current switch and does not pick another
 one, because `install.sh` and the server also look for the programs in the current switch.

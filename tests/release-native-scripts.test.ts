@@ -133,9 +133,9 @@ describe('release-check-macos.sh runtime-minos', () => {
 const FAKE_OPAM = `#!/bin/sh
 printf '%s\\n' "$*" >> "$OPAM_CALLS"
 case "$*" in
-  'switch list --short') echo static ;;
-  'repository list --switch=static --short') echo default ;;
-  'repository list --all') printf '# Repository # Url # Switches(rank)\\ndefault      %s <default>\\n' "$PINNED_REPOSITORY" ;;
+  'switch list --short'*) echo static ;;
+  'repository list --switch=static --short'*) echo default ;;
+  'repository list --all'*) printf '# Repository # Url # Switches(rank)\\ndefault      %s <default>\\n' "$PINNED_REPOSITORY" ;;
   *'ocamlc -version') echo 5.3.0 ;;
   *'dune build'*) mkdir -p _build/install/default/bin
     for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history; do : > "_build/install/default/bin/$program"; done ;;
