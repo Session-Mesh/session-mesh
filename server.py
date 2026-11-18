@@ -3432,7 +3432,14 @@ async def api_agent_mail_messages(request):
 # dump, process argument, or path of a secret file (token, vapid.pem, push.json, request store).
 
 def _exe_name(pid):
-    """Base name of a process's executable (Linux only; never its arguments)."""
+    """Base name of a process's executable, never its arguments: /proc on Linux; elsewhere the process
+    name that the PTY host reports in its process facts."""
+    if sys.platform != "linux":
+        try:
+            stat = discover.read_stat(int(pid))
+        except (OSError, ValueError):
+            return None
+        return stat[0] if stat and stat[0] != discover.UNKNOWN_NAME else None
     try:
         return os.path.basename(os.readlink(f"/proc/{int(pid)}/exe")) or None
     except (OSError, ValueError):
@@ -3457,10 +3464,12 @@ async def _config_host():
     exe = _exe_name(identity.split(":")[0]) if identity else None
     kind = None if exe is None else _host_kind(exe)
     capabilities = set()
-    reply_valid = True
+    reply_valid = answered = True
     try:
         raw = await host({"op": "list"})
-    except web.HTTPException:   # an unreachable host is a fact to report, not an error
+    except HostNotReached:      # no process accepts connections on the socket: a fact to report
+        raw, answered = [], False
+    except web.HTTPException:   # one accepted the connection, then failed or refused the request
         raw = []
     except ValueError:          # bytes that are not JSON: the host answers, but badly
         raw, reply_valid = [], False
@@ -3471,7 +3480,9 @@ async def _config_host():
             caps = item.get("pty_capabilities") if isinstance(item, dict) else None
             if isinstance(caps, list):
                 capabilities.update(c for c in caps if isinstance(c, str) and len(c) <= 64)
-    return {"running": identity is not None, "reply_valid": reply_valid, "kind": kind, "executable": exe,
+    # Off Linux the identity comes from the host's own answer (ptyhost.host_identity), which a host
+    # answering bad bytes cannot give: that it answered at all still shows a process on the socket.
+    return {"running": identity is not None or answered, "reply_valid": reply_valid, "kind": kind, "executable": exe,
             "version": None, "capabilities": sorted(capabilities)[:32]}
 
 
