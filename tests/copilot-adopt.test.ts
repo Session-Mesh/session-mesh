@@ -18,11 +18,15 @@ function adopt(source: string | null): {outcome: string; alive: boolean} {
   const conf = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-adopt-'));
   try {
     const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', `
-import asyncio, json, subprocess, sys
+import asyncio, json, subprocess, sys, threading
 sys.path.insert(0, ${JSON.stringify(REPO)})
 import server
 from aiohttp import web
 victim = subprocess.Popen(["sleep", "60"])
+# Reaped as soon as it exits, as a real agent is by its own parent. Unreaped, the stopped child stays a
+# zombie: /proc shows it as one on Linux, but outside Linux, with no PTY host here to describe it,
+# server._wait_dead cannot tell it from a live process and gives up.
+threading.Thread(target=victim.wait, daemon=True).start()
 async def fake_host(message):
     return [] if message.get("op") == "list" else {"ok": True}
 server.host = fake_host
