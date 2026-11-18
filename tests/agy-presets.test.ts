@@ -17,12 +17,14 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {fakeAgentPrologue} from './helpers/fake-agent.ts';
 
 const CONVERSATION = '0b9a1c2e-1111-4222-8333-444455556666';
 const MARKER = 'AGY-TEST-CREDENTIAL';
 const QUIET = 4;
 let mesh: Mesh;
 let fakes: string;
+
 let host: ChildProcess | undefined;
 let pathEnv: string;
 const log = (file: string) => path.join(fakes, file);
@@ -51,8 +53,7 @@ before(async () => {
   fakes = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-agy-'));
   const bin = path.join(fakes, 'bin');
   fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, 'agy'), `#!/bin/sh
-printf 'argv:%s\\n' "$*" >> '${log('argv.log')}'
+  fs.writeFileSync(path.join(bin, 'agy'), `${fakeAgentPrologue('agy')}printf 'argv:%s\\n' "$*" >> '${log('argv.log')}'
 env | grep -c '^MESH_SESSION_TOKEN=' >> '${log('tokenpresent.log')}'
 printf '%s\\n' "$MESH_SESSION_TOKEN" >> '${log('token.log')}'
 printf '%s\\n' "$MESH_SESSION" >> '${log('session.log')}'
@@ -65,8 +66,7 @@ main=$$
   done ) &
 while IFS= read -r line; do printf '%s\\n' "$line" >> '${log('input.log')}'; done
 `, {mode: 0o755});
-  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh
-printf '%s\\n' "$MESH_SESSION_TOKEN" >> '${log('claude-token.log')}'
+  fs.writeFileSync(path.join(bin, 'claude'), `${fakeAgentPrologue('claude')}printf '%s\\n' "$MESH_SESSION_TOKEN" >> '${log('claude-token.log')}'
 printf '%s\\n' "$MESH_SESSION" >> '${log('claude-session.log')}'
 while IFS= read -r line; do printf '%s\\n' "$line" >> '${log('claude-input.log')}'; done
 `, {mode: 0o755});
