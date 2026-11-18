@@ -26,7 +26,9 @@ state="$FAKE_STATE"
 key() { printf '%s' "$1" | tr '/' '_'; }
 switch_of() { printf '%s' "$1" | sed 's/^--switch=//'; }
 case "$1 $2" in
-  'switch list') cat "$state/switches"; exit 0 ;;
+  'switch list')
+    if [ -n "$FAKE_SWITCH_LIST_FAILS" ]; then echo '[ERROR] opam root is locked' >&2; exit 15; fi
+    cat "$state/switches"; exit 0 ;;
   'switch show')
     if [ -s "$state/current" ]; then cat "$state/current"; exit 0; fi
     echo '[ERROR] No switch is currently set.' >&2; exit 50 ;;
@@ -103,6 +105,7 @@ function bootstrap(args: string[], python: string, options: {pins?: string; stat
   writeState(stateDir, {...onPin(), ...options.state});
   const env: Record<string, string | undefined> = {...process.env, PATH: `${scratch}:${process.env.PATH}`,
     OPAM_CALLS: calls, FAKE_STATE: stateDir, MESH_OPAM_SWITCH: 'fake-switch', MESH_OPAM_SELECT_PINNED: undefined,
+    OCAML_COMPILER: undefined, FAKE_SWITCH_LIST_FAILS: undefined,
     PYTHON: python, FAKE_PINS: options.pins ?? '', ...options.env};
   for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name];
   const result = spawnSync('bash', ['scripts/bootstrap.sh', ...args], {cwd: REPO, env, encoding: 'utf8'});
@@ -177,7 +180,7 @@ describe('scripts/bootstrap.sh modes', () => {
     assert.deepEqual(run.selected(name), selection);
     assert.match(run.output, /its repositories are left as they are/);
     assert.match(run.output, /MESH_OPAM_SWITCH=session-mesh bash scripts\/bootstrap\.sh --deps-only/);
-    assert.match(run.output, /MESH_OPAM_SELECT_PINNED=1 bash scripts\/bootstrap\.sh --deps-only/);
+    assert.ok(run.output.includes(`MESH_OPAM_SWITCH=${name} MESH_OPAM_SELECT_PINNED=1 bash scripts/bootstrap.sh --deps-only`), run.output);
   };
 
   test('a switch that already reads only the pinned repository is left as it is', () => {
@@ -287,6 +290,33 @@ describe('scripts/bootstrap.sh modes', () => {
       `repository set-repos --switch=${REPO} session-mesh`,
     ]);
     assert.deepEqual(run.selected(REPO), ['session-mesh']);
+  });
+
+  test('the checkout named by an unresolved path is its local switch; a switch named by its _opam is not', () => {
+    const dotted = bootstrap(['--deps-only'], withPytest, {env: {MESH_OPAM_SWITCH: `${REPO}/.`},
+      state: {...elsewhere, switches: [REPO], selected: {[REPO]: ['default']}}});
+    assert.equal(dotted.status, 0, dotted.output);
+    assert.ok(dotted.calls.every((call) => !call.startsWith('switch create')), dotted.calls.join('\n'));
+    assert.deepEqual(dotted.selected(REPO), ['session-mesh']);
+    const store = fs.mkdtempSync(path.join(scratch, 'checkout-'));
+    const opamDir = path.join(fs.realpathSync(store), '_opam');
+    fs.mkdirSync(opamDir);
+    const nested = bootstrap(['--deps-only'], withPytest, {env: {MESH_OPAM_SWITCH: opamDir},
+      state: {...elsewhere, switches: [opamDir], selected: {[opamDir]: ['default']}}});
+    refused(nested, ['default'], opamDir);
+  });
+
+  test('with the opt-in, a switch that read no repository is told how to restore that empty selection', () => {
+    const run = bootstrap(['--deps-only'], withPytest, {env: {MESH_OPAM_SELECT_PINNED: '1'},
+      state: {selected: {'fake-switch': []}}});
+    assert.equal(run.status, 0, run.output);
+    assert.match(run.output, /to undo: opam repository set-repos --switch='fake-switch'\)/);
+  });
+
+  test('a failed switch listing stops the bootstrap before any change', () => {
+    const run = bootstrap(['--install-only'], withPytest, {env: {FAKE_SWITCH_LIST_FAILS: '1'}});
+    assert.notEqual(run.status, 0, run.output);
+    assert.deepEqual(changes(run.calls), []);
   });
 
   test('a missing switch is created from the pinned repository, once, without becoming the current switch', () => {
