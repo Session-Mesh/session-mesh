@@ -1,0 +1,70 @@
+# Removes the preview of a pull request to main (see site-preview.yml) when the pull request is closed
+# or merged. It is a workflow of its own because the `paths` filter of site-preview.yml applies to the
+# whole `pull_request` trigger: a pull request that published a preview and then reverted its site
+# changes would otherwise close without a cleanup. This one has no `paths`, so it runs for every
+# closed pull request; the script finds nothing to remove for those that never had a preview.
+#
+# The job runs in the `site-preview` environment and shares its concurrency group with the publishing
+# jobs (site-preview-pr-<number>). It creates a token of the GitHub App scoped to site-staging, and
+# runs .github/scripts/site-preview.sh from a checkout of main (path base/), never from the pull
+# request's branch. A pull request from a fork or from Dependabot gets no secret (HAS_APP_TOKEN
+# false) and had no preview. The event is read for the pull request number only.
+# tests/site-preview-workflow.test.ts and tests/public-ci-workflow.test.ts enforce these rules.
+name: site-preview-cleanup
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  remove:
+    name: remove the preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    environment:
+      name: site-preview
+    concurrency:
+      group: site-preview-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      HAS_APP_TOKEN: ${{ secrets.SITE_PREVIEW_APP_ID != '' && secrets.SITE_PREVIEW_APP_PRIVATE_KEY != '' }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Create the GitHub App token
+        id: app-token
+        if: env.HAS_APP_TOKEN == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.SITE_PREVIEW_APP_ID }}
+          private-key: ${{ secrets.SITE_PREVIEW_APP_PRIVATE_KEY }}
+          owner: Session-Mesh
+          repositories: site-staging
+          permission-contents: write
+      # The script comes from main, not from the pull request.
+      - if: env.HAS_APP_TOKEN == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: base
+          persist-credentials: false
+      - if: env.HAS_APP_TOKEN == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Session-Mesh/site-staging
+          token: ${{ steps.app-token.outputs.token }}
+          path: staging
+      - name: Remove the preview
+        if: env.HAS_APP_TOKEN == 'true'
+        run: |
+          bash base/.github/scripts/site-preview.sh remove staging "$PR_NUMBER"
+          bash base/.github/scripts/site-preview.sh push staging

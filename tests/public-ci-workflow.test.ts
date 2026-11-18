@@ -24,6 +24,10 @@ const PUBLIC_WORKFLOW = 'public-ci.yml';
 const DESCRIPTION_WORKFLOW = 'pr-description.yml';
 // The site deployment: the `site` profile here, its own rules in tests/site-workflow.test.ts.
 const SITE_WORKFLOW = 'site.yml';
+// The site previews (the one `pull_request` workflow with a secret, a deploy key): the `preview` profile,
+// its own rules in tests/site-preview-workflow.test.ts.
+const PREVIEW_WORKFLOW = 'site-preview.yml';
+const PREVIEW_CLEANUP_WORKFLOW = 'site-preview-cleanup.yml';
 // The backport workflows (the `pull_request_target` workflows: the `backport` profile, tests/backport-workflow.test.ts,
 // and the `register` profile, tests/backport-register-workflow.test.ts) and the branch policy checks (the `policy` profile, tests/branch-policy.test.ts).
 const BACKPORT_WORKFLOW = 'backport.yml';
@@ -189,12 +193,13 @@ describe('public CI workflow checker', () => {
 
 describe('the public CI as committed', () => {
   test('only the public workflows exist (no private workflow left)', () => {
-    assert.deepEqual(workflowFiles(), [REGISTER_WORKFLOW, BACKPORT_WORKFLOW, POLICY_WORKFLOW, DESCRIPTION_WORKFLOW, PUBLIC_WORKFLOW, RELEASE_WORKFLOW, SITE_WORKFLOW]);
+    assert.deepEqual(workflowFiles(), [REGISTER_WORKFLOW, BACKPORT_WORKFLOW, POLICY_WORKFLOW, DESCRIPTION_WORKFLOW, PUBLIC_WORKFLOW, RELEASE_WORKFLOW, PREVIEW_CLEANUP_WORKFLOW, PREVIEW_WORKFLOW, SITE_WORKFLOW]);
   });
 
   for (const name of workflowFiles().filter((file) => file !== RELEASE_WORKFLOW)) {
-    const profiles: Record<string, Profile> = {[DESCRIPTION_WORKFLOW]: 'description', [SITE_WORKFLOW]: 'site', [BACKPORT_WORKFLOW]: 'backport',
-      [REGISTER_WORKFLOW]: 'register', [POLICY_WORKFLOW]: 'policy'};
+    const profiles: Record<string, Profile> = {[DESCRIPTION_WORKFLOW]: 'description', [SITE_WORKFLOW]: 'site', [PREVIEW_WORKFLOW]: 'preview', [PREVIEW_CLEANUP_WORKFLOW]: 'preview-cleanup', [BACKPORT_WORKFLOW]: 'backport',
+      [REGISTER_WORKFLOW]: 'register',
+      [POLICY_WORKFLOW]: 'policy'};
     const profile: Profile = profiles[name] ?? 'public';
     const text = fs.readFileSync(path.join(WORKFLOWS, name), 'utf8');
 

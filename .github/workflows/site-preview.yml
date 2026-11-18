@@ -1,0 +1,223 @@
+# Publishes a preview of the showcase site (site/) for each pull request to main that changes it, at
+# https://session-mesh.github.io/site-staging/pr-<number>/ (the repository Session-Mesh/site-staging,
+# served by GitHub Pages). The link shows on the pull request as the deployment of the
+# `site-preview` environment. A daily run (or a manual one) removes every preview not published
+# again for 14 days. The preview of a closed or merged pull request is removed by
+# site-preview-cleanup.yml, which has no `paths` filter so that it runs whatever the final diff is.
+#
+# Jobs. `build` runs the page checks and stages the site as site.yml does (no CNAME), with no secret,
+# and hands the staged files over as an artifact. The staging gate (site-csp-check.mjs) takes its
+# reference from a read-only checkout of main (path base), never from the pull request: every page
+# must start with main's home page head up to its Content-Security-Policy meta tag, and an SVG, XML
+# or XHTML file must be byte-identical to main's file of the same path (so a pull request that
+# changes site artwork or the policy is previewed only once merged). `publish` re-runs that gate from
+# base/ on the downloaded artifact before the App token exists. `publish` and `expire` run in the `site-preview`
+# environment, whose two secrets, SITE_PREVIEW_APP_ID and SITE_PREVIEW_APP_PRIVATE_KEY, belong to a
+# GitHub App installed on the staging repository only, with Contents write. Each creates a token of
+# that App scoped to site-staging (it lasts one hour and is revoked at the end of the job), checks the
+# staging repository out with it and changes it with .github/scripts/site-preview.sh, which also adds
+# a robots noindex tag. That script always comes from a checkout of main (path base/): the pull
+# request's own files are only data (the artifact), never code that runs next to the token.
+#
+# Ordering. `build`, `publish` and the removal of site-preview-cleanup.yml share the concurrency
+# group site-preview-pr-<number>. Inside it, `publish` first runs `guard`, which asks GitHub whether
+# the pull request is still open and still at the revision this run was triggered for
+# (github.event.pull_request.head.sha, a hexadecimal revision); if not, nothing is published, so a
+# run that finishes late cannot bring back a removed preview or replace a newer one. The guard step
+# is the only place the token of the run is named, read-only, with `pull-requests: read` on this job.
+# The token of the run is read-only everywhere: nothing here writes to this repository.
+#
+# Trust. `pull_request` runs the workflow of the pull request's branch, so the App's key reaches
+# anyone who can push a branch to this repository (the maintainers); it can only write site-staging.
+# The `site-preview` environment has no protection rule and no deployment branch policy, by choice
+# (this trust model); restricting it to the repository's branches is recommended once the secrets
+# exist (see site/README.md). Until they do, every run sees empty secrets (HAS_APP_TOKEN false) and
+# publishes nothing. GitHub also gives no secret to a pull request from a fork or from Dependabot:
+# those runs skip the publishing steps in the same way and get no preview. The event is read for
+# the pull request number, the action and the head revision, never for text a contributor writes.
+# All previews share the origin https://session-mesh.github.io. The policy allows `script-src
+# 'self'`, so any .js file of a pull request runs on that origin: by design, since a preview must run
+# the page's scripts. That is acceptable only because the previewed branches are the maintainers'
+# (no fork gets a preview), the origin holds no secret and sets no cookie, and no other site is
+# served from it. Do not host anything with a session or a secret on that origin.
+# tests/site-preview-workflow.test.ts and tests/public-ci-workflow.test.ts enforce these rules.
+name: site-preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - site/**
+      - .github/workflows/site-preview.yml
+      - .github/workflows/site-preview-cleanup.yml
+      - .github/scripts/site-stage.sh
+      - .github/scripts/site-csp-check.mjs
+      - .github/scripts/site-preview.sh
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: "24"
+  EXPIRY_DAYS: "14"
+
+jobs:
+  build:
+    name: build the preview
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    concurrency:
+      group: site-preview-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Read-only checkout of main, the reference of the policy gate: the pull request cannot weaken the
+      # policy it is checked against.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: base
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # The page's own checks, as site.yml runs them before a deployment.
+      - name: Check the site
+        run: |
+          node site/tools/sync-status.mjs --check
+          node site/tools/changelog-to-history.mjs --check
+          node site/tools/check-page.mjs
+      - name: Stage the publishable files (not site/tools, not site/README.md)
+        run: bash .github/scripts/site-stage.sh "$RUNNER_TEMP/site-stage" base
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-preview
+          path: ${{ runner.temp }}/site-stage
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: publish the preview
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    environment:
+      name: site-preview
+      url: ${{ steps.publish.outputs.url }}
+    # One run per pull request at a time; a newer pending run replaces an older pending one.
+    concurrency:
+      group: site-preview-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      # Only the boolean reaches the steps, never a secret.
+      HAS_APP_TOKEN: ${{ secrets.SITE_PREVIEW_APP_ID != '' && secrets.SITE_PREVIEW_APP_PRIVATE_KEY != '' }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Skip without the App credentials
+        if: env.HAS_APP_TOKEN != 'true'
+        run: echo "::notice title=site-preview::the App credentials are empty in this run, so no preview is published. Either they are not created yet in the site-preview environment, or the run comes from a fork or Dependabot, which get none."
+      # The script comes from main, not from the pull request.
+      - if: env.HAS_APP_TOKEN == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: base
+          persist-credentials: false
+      - name: Check that the pull request is open and at this revision
+        id: guard
+        if: env.HAS_APP_TOKEN == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash base/.github/scripts/site-preview.sh guard "$PR_NUMBER" "$HEAD_SHA"
+      - if: env.HAS_APP_TOKEN == 'true' && steps.guard.outputs.proceed == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site-preview
+          path: ${{ runner.temp }}/site-stage
+      # The artifact is data from the pull request: check it again, with the gate and the reference of
+      # main, before the token exists.
+      - name: Check the artifact against main
+        if: env.HAS_APP_TOKEN == 'true' && steps.guard.outputs.proceed == 'true'
+        run: node base/.github/scripts/site-csp-check.mjs base/site/index.html "$RUNNER_TEMP/site-stage" base/site
+      - name: Create the GitHub App token
+        id: app-token
+        if: env.HAS_APP_TOKEN == 'true' && steps.guard.outputs.proceed == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.SITE_PREVIEW_APP_ID }}
+          private-key: ${{ secrets.SITE_PREVIEW_APP_PRIVATE_KEY }}
+          owner: Session-Mesh
+          repositories: site-staging
+          permission-contents: write
+      - if: env.HAS_APP_TOKEN == 'true' && steps.guard.outputs.proceed == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Session-Mesh/site-staging
+          token: ${{ steps.app-token.outputs.token }}
+          path: staging
+      - name: Publish the preview
+        id: publish
+        if: env.HAS_APP_TOKEN == 'true' && steps.guard.outputs.proceed == 'true'
+        run: |
+          bash base/.github/scripts/site-preview.sh publish "$RUNNER_TEMP/site-stage" staging "$PR_NUMBER"
+          bash base/.github/scripts/site-preview.sh push staging
+          echo "url=https://session-mesh.github.io/site-staging/pr-$PR_NUMBER/" >> "$GITHUB_OUTPUT"
+
+  expire:
+    name: remove expired previews
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    environment:
+      name: site-preview
+    concurrency:
+      group: site-preview-expire
+      cancel-in-progress: false
+    env:
+      HAS_APP_TOKEN: ${{ secrets.SITE_PREVIEW_APP_ID != '' && secrets.SITE_PREVIEW_APP_PRIVATE_KEY != '' }}
+    steps:
+      - name: Create the GitHub App token
+        id: app-token
+        if: env.HAS_APP_TOKEN == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.SITE_PREVIEW_APP_ID }}
+          private-key: ${{ secrets.SITE_PREVIEW_APP_PRIVATE_KEY }}
+          owner: Session-Mesh
+          repositories: site-staging
+          permission-contents: write
+      # The script comes from main (a manual run may be started on another branch).
+      - if: env.HAS_APP_TOKEN == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: base
+          persist-credentials: false
+      - if: env.HAS_APP_TOKEN == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Session-Mesh/site-staging
+          token: ${{ steps.app-token.outputs.token }}
+          path: staging
+      - name: Remove the previews not published for EXPIRY_DAYS days
+        if: env.HAS_APP_TOKEN == 'true'
+        run: bash base/.github/scripts/site-preview.sh expire-push staging "$EXPIRY_DAYS"

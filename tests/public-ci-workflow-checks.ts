@@ -4,18 +4,21 @@
 // Invariant checks of the workflows in .github/workflows/, shared by tests/public-ci-workflow.test.ts
 // and tests/release-workflow.test.ts. No YAML parser is available without a new dependency: the checks
 // read the text line by line and refuse every construct they do not resolve (see UNPARSED).
-// Four profiles: `public` (public-ci.yml: one runner, read-only token, 15-minute jobs, docker
+// The profiles include `public` (public-ci.yml: one runner, read-only token, 15-minute jobs, docker
 // commands through digest-pinned *_IMAGE variables), `description` (the public rules plus the one
 // allowed use of the pull request body), `site` (site.yml: the public rules, except that the
-// `deploy` job alone may hold `pages: write` and `id-token: write`; no secret) and `release` (release.yml: the
-// shared rules plus the checks of tests/release-workflow-checks.ts).
+// `deploy` job alone may hold `pages: write` and `id-token: write`; no secret), `preview` (site-preview.yml:
+// the shared rules, read-only tokens, and the one deploy key of tests/site-preview-workflow-checks.ts),
+// `preview-cleanup` (site-preview-cleanup.yml: the same checks, other triggers and jobs) and
+// `release` (release.yml: the shared rules plus the checks of tests/release-workflow-checks.ts).
 import {blockOf, commandAt, expressions, githubProperties, jobBlocks, type Line, MAX_TIMEOUT_MINUTES, parseLines, permissionValues, stepOf, timeoutProblems,
   usesOf} from './public-ci-workflow-lib.ts';
 import {BACKPORT_CHECKS, checkBackportEvent, checkBackportPermissions, checkBackportSecrets, checkBackportTriggers} from './backport-workflow-checks.ts';
 import {checkRegisterEvent, checkRegisterPermissions, checkRegisterSecrets, checkRegisterTriggers, REGISTER_CHECKS} from './backport-register-workflow-checks.ts';
+import {checkCleanupTriggers, checkPreviewActions, checkPreviewEvent, checkPreviewSecrets, checkPreviewTriggers, CLEANUP_CHECKS, PREVIEW_CHECKS} from './site-preview-workflow-checks.ts';
 import {checkReleasePermissions, checkReleaseRunners, checkReleaseTimeouts, RELEASE_CHECKS, releaseTokenLines} from './release-workflow-checks.ts';
 
-export type Profile = 'public' | 'description' | 'release' | 'site' | 'policy' | 'backport' | 'register';
+export type Profile = 'public' | 'description' | 'release' | 'site' | 'preview' | 'preview-cleanup' | 'policy' | 'backport' | 'register';
 
 // The one place where untrusted event text may enter an expression: the description workflow hands
 // the pull request body to its script through an environment variable.
@@ -246,6 +249,10 @@ function profileChecks(profile: Profile): {runners: Check; secrets: Check; injec
         permissions: checkReleasePermissions, timeouts: checkReleaseTimeouts};
     case 'site':
       return {...shared, permissions: checkSitePermissions};
+    case 'preview':
+      return {...shared, secrets: checkPreviewSecrets, injection: checkPreviewEvent, actions: checkPreviewActions, triggers: checkPreviewTriggers};
+    case 'preview-cleanup':
+      return {...shared, secrets: checkPreviewSecrets, injection: checkPreviewEvent, actions: checkPreviewActions, triggers: checkCleanupTriggers};
     case 'description':
       return {...shared, injection: (items) => checkInjection(items, true)};
     case 'policy':
@@ -270,5 +277,7 @@ export function checkWorkflow(text: string, profile: Profile = 'public'): string
   if (profile === 'release') checks.push(...RELEASE_CHECKS);
   if (profile === 'backport') checks.push(...BACKPORT_CHECKS);
   if (profile === 'register') checks.push(...REGISTER_CHECKS);
+  if (profile === 'preview') checks.push(...PREVIEW_CHECKS);
+  if (profile === 'preview-cleanup') checks.push(...CLEANUP_CHECKS);
   return checks.flatMap((check) => check(lines));
 }
