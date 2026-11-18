@@ -189,6 +189,48 @@ register files first (`git diff origin/release/latest origin/main -- <register f
 `semver: patch` backport, or the cut itself, may already have carried some of them) and replay
 only what is missing.
 
+**The replay rule and its refusals.** The workflow replays the landed commits that change a register
+file onto `release/latest` by plain patches, as the first version did, and compares whole files, never
+lines. For each register file that a landed commit changed, two exact comparisons (mode and blob id)
+must hold, and any failure stops the job:
+
+1. before the replay, the file on `release/latest` is the file that `main` held before the range (at
+   the parent of the oldest landed commit);
+2. after the replay, the file is the file of `main` now.
+
+On a failure the job posts a comment on the original pull request naming the file, pushes nothing and
+fails. The cases it refuses:
+
+- a line, a revocation or a duplicated line that only `release/latest` holds (rule 1), including one
+  that the commits would add, remove and add again (a net change of another line, or `-Nora/+Nora`
+  from a pull request that merely moves a maintainer): nothing is explained away, nothing is erased or
+  reinstated;
+- a change of an earlier pull request not yet backported (rule 1), or of a later one already on `main`
+  (rule 2);
+- a removal whose line `release/latest` lacks, because the pull request that adds it is not backported
+  yet: the replayed removal is a no-op ("already has"), the file differs from what `main` held, and the
+  later backport of the addition would bring a line that `main` no longer has (rules 1 and 2);
+- a patch that does not apply (its own comment), a commit of the pull request that cannot be fetched or
+  whose change differs from its landed commit (patch id), a mode that only `release/latest` changed (a
+  mode change made on `main` is replayed like any other change), a path that is not a regular file. A
+  git error while comparing fails the job and is never read as "equal". A rerun after the backport has
+  merged also fails, with a comment that reads as drift: the addition is already there.
+
+A register file that no landed commit changed is not compared, so a difference there stays as it is.
+
+**The workflow no longer self-heals a drifted register.** An earlier version brought the touched files
+to their state on `main` when the difference was explained by the range. Three reviews each found a
+case where that judgement was wrong, so it was removed: when `release/latest` and `main` differ in a
+register file for any reason other than the commits being backported, a human resolves it.
+
+Manual path after a refusal: compare `git diff origin/release/latest origin/main -- <file>` and decide
+for each differing line whether `release/latest` or `main` is right; backport the pull request by hand
+as described below (a pull request to `release/latest` with only the register paths, each commit with
+its author, the label `semver: patch` and the line `Backport of #<number>`), and backport first any
+earlier pull request that the refusal pointed at. Backports of two pull requests that touch the same
+file in close succession are refused until the earlier one is merged to `release/latest`; rerun the
+workflow of the later one then, or backport by hand.
+
 Two cases are left to a maintainer. A pull request that lists 3000 files (the most the API returns)
 fails the read-only job with an explicit message, because its list may be cut: backport its
 register files by hand. If `release/latest` advances between the push of the backport branch and a

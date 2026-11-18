@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
 import {parseLines} from './public-ci-workflow-lib.ts';
-import {ADA, CHECKER, git, GIT_ENV, HEADER, MAINTAINER, MAINTAINERS_FILE, type Person, REGISTER_FILE, removeTempDirs, ROOT, row, tempDir, WEB}
+import {ADA, CHECKER, EVE, git, GIT_ENV, HEADER, MAINTAINER, MAINTAINERS_FILE, type Person, REGISTER_FILE, removeTempDirs, ROOT, row, tempDir, WEB}
   from './cla-check-lib.ts';
 
 const WORKFLOW = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'backport-register.yml'), 'utf8');
@@ -44,6 +44,8 @@ function fakeGh(): string {
     '  "api "*/files) [[ -n "${FAKE_GH_FAIL:-}" ]] && exit 1; cat "$FAKE_GH_FILES" ;;',
     '  "api "*/commits) cat "$FAKE_GH_COMMITS" ;;',
     'esac',
+    // `api repos/.../commits/<sha> --jq '.files | length'`: 0 for a commit of FAKE_GH_EMPTY, else 1.
+    'if [[ "$1" == api && "$2" == */commits/* ]]; then [[ " ${FAKE_GH_EMPTY:-} " == *" ${2##*/} "* ]] && echo 0 || echo 1; fi',
     '[[ "$1 $2" == "pr list" && -n "${FAKE_GH_EXISTING:-}" ]] && echo "$FAKE_GH_EXISTING"',
     '[[ "$1 $2" == "pr create" ]] && echo "https://github.com/owner/repo/pull/99"',
     'exit 0', ''].join('\n'), {mode: 0o755});
@@ -137,8 +139,10 @@ const CONTRIBUTORS_AT_CUT = '# Contributors\n\n## Maintainers\n\n- Mathias Bourg
 const CODEOWNERS_AT_CUT = '* @mathiasbourgoin\n';
 
 type Content = string | null | {link: string};
-// The landed commit id, the number of commits of the pull request, and its commits as the API lists them.
-type Merged = {landed: string; count: number; listed: string[]};
+// The landed commit id, the number of commits of the pull request, its commits as the API lists them, and
+// those of them that are empty (a rebase merge drops them), and the tip that refs/pull/<number>/head holds
+// (the last listed commit unless given; null: no such ref).
+type Merged = {landed: string; count: number; listed: string[]; empty?: string[]; head?: string | null};
 let clock = 1_800_000_000;
 
 // origin (bare) with main and release/latest, cut together; then main moves on.
@@ -170,7 +174,7 @@ class Remote {
       else fs.symlinkSync(content.link, file);
     }
     git(this.work, ['add', '-A']);
-    git(this.work, ['commit', '-q', '--no-verify', '-m', `change by ${author.name}`], {GIT_AUTHOR_NAME: author.name, GIT_AUTHOR_EMAIL: author.email,
+    git(this.work, ['commit', '-q', '--no-verify', '--allow-empty', '-m', `change by ${author.name}`], {GIT_AUTHOR_NAME: author.name, GIT_AUTHOR_EMAIL: author.email,
       GIT_AUTHOR_DATE: `@${clock++} +0200`, GIT_COMMITTER_NAME: committer.name, GIT_COMMITTER_EMAIL: committer.email});
     return git(this.work, ['rev-parse', 'HEAD']);
   }
@@ -178,7 +182,7 @@ class Remote {
   // How the API lists a commit of the pull request: its author's address and author date, in UTC.
   listed(commit: string): string {
     const [email, seconds] = git(this.work, ['show', '-s', '--format=%ae%n%at', commit]).split('\n');
-    return `${email} ${new Date(Number(seconds) * 1000).toISOString().replace('.000Z', 'Z')}`;
+    return `${commit} ${email} ${new Date(Number(seconds) * 1000).toISOString().replace('.000Z', 'Z')}`;
   }
 
   read(file: string): string {
@@ -186,11 +190,21 @@ class Remote {
   }
 
   // A pull request merged by "Rebase and merge": its commits land on main, committed by a maintainer.
-  merge(commits: [Person, Record<string, Content>][]): Merged {
+  // A commit of `emptyAt` is empty: it is listed by the API but not landed, as a rebase merge drops it.
+  merge(commits: [Person, Record<string, Content>][], emptyAt: number[] = []): Merged {
     git(this.work, ['checkout', '-q', 'main']);
-    const landed = commits.map(([author, files]) => this.commit(author, MAINTAINER, files));
+    const listed: string[] = [];
+    const empty: string[] = [];
+    let landed = '';
+    commits.forEach(([author, files], index) => {
+      const commit = this.commit(author, MAINTAINER, emptyAt.includes(index) ? {} : files);
+      listed.push(this.listed(commit));
+      if (!emptyAt.includes(index)) { landed = commit; return; }
+      empty.push(commit);
+      git(this.work, ['reset', '-q', '--hard', 'HEAD~1']);
+    });
     git(this.work, ['push', '-q', 'origin', 'main']);
-    return {landed: landed[landed.length - 1], count: commits.length, listed: landed.map((commit) => this.listed(commit))};
+    return {landed, count: commits.length, listed, empty};
   }
 
   // The job: a full clone of origin on main, then the push script. `gh` keeps the calls other than
@@ -198,10 +212,14 @@ class Remote {
   backport(number: number, merged: Merged, hasAppToken = 'true', extra: Record<string, string> = {}): Run & {api: string[]} {
     const clone = path.join(tempDir('register-clone-'), 'repo');
     git(path.dirname(clone), ['clone', '-q', this.origin, clone]);
+    const tip = merged.head === undefined ? merged.listed.at(-1)?.split(' ')[0] : merged.head;
+    if (tip && git(this.work, ['rev-parse', '--verify', '-q', `${tip}^{commit}`], {}, true)) {
+      git(this.work, ['push', '-q', '--force', 'origin', `${tip}:refs/pull/${number}/head`]);
+    }
     const commits = path.join(tempDir('commits-'), 'list');
     fs.writeFileSync(commits, merged.listed.map((line) => `${line}\n`).join(''));
     const run = runScript('Open the pull request of the register changes', clone, {NUMBER: String(number), LANDED: merged.landed,
-      COUNT: String(merged.count), HAS_APP_TOKEN: hasAppToken, FAKE_GH_COMMITS: commits, ...extra});
+      COUNT: String(merged.count), HAS_APP_TOKEN: hasAppToken, FAKE_GH_COMMITS: commits, FAKE_GH_EMPTY: (merged.empty ?? []).join(' '), ...extra});
     return {...run, gh: run.gh.filter((call) => !call.startsWith('api ')), api: run.gh.filter((call) => call.startsWith('api '))};
   }
 
@@ -221,6 +239,15 @@ class Remote {
   // "Rebase and merge" of the backport pull request, which here is a fast-forward of release/latest.
   integrate(number: number): void {
     git(this.origin, ['update-ref', 'refs/heads/release/latest', this.ref(BRANCH(number))]);
+  }
+
+  // Files changed on release/latest alone, as its owner or a maintainer would change them there.
+  releaseOnly(files: Record<string, Content>): void {
+    git(this.work, ['fetch', '-q', 'origin']);
+    git(this.work, ['checkout', '-q', '-B', 'release-work', 'origin/release/latest']);
+    this.commit(MAINTAINER, MAINTAINER, files);
+    git(this.work, ['push', '-q', 'origin', 'release-work:release/latest']);
+    git(this.work, ['checkout', '-q', 'main']);
   }
 
   // A commit of `author` on top of release/latest, as a later backport would bring it.
@@ -294,7 +321,195 @@ describe('the push job replays the register changes onto release/latest', () => 
     assert.deepEqual(result.gh, []);
   });
 
-  test('a register change that does not apply: nothing is pushed, the original pull request gets a comment, the job fails', () => {
+  // A rebase merge drops a commit without any change: COUNT then exceeds the landed commits, and an
+  // offset of COUNT from the merge commit would reach a commit already on main.
+  test('an empty commit at the head or the start of the pull request does not skew the landed range', () => {
+    for (const [emptyAt, label] of [[[1], 'head'], [[0], 'start'], [[0, 2], 'both ends']] as [number[], string][]) {
+      const remote = new Remote();
+      const signed = {[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(CAROL)}`};
+      const commits: [Person, Record<string, Content>][] = emptyAt.length === 2 ? [[CAROL, {}], [CAROL, signed], [CAROL, {}]]
+        : [[CAROL, emptyAt[0] === 0 ? {} : signed], [CAROL, emptyAt[0] === 0 ? signed : {}]];
+      const merged = remote.merge(commits, emptyAt);
+      assert.equal(merged.count - (merged.empty?.length ?? 0), 1, label);
+      const result = remote.backport(40, merged);
+      assert.equal(result.status, 0, `${label}: ${result.output}`);
+      const head = remote.ref(BRANCH(40));
+      assert.equal(git(remote.origin, ['rev-list', '--count', `release/latest..${head}`]), '1', label);
+      assert.deepEqual(git(remote.origin, ['diff', '--name-only', 'release/latest', head]).split('\n'), [REGISTER_FILE], label);
+      assert.equal(remote.cla(head), 0, label);
+    }
+  });
+
+  test('a commit with no landed commit that is not empty is refused, and the commit before the pull request is never taken', () => {
+    const remote = new Remote();
+    const merged = remote.merge([[CAROL, {[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(CAROL)}`}], [CAROL, {'notes.txt': 'x\n'}]]);
+    // The API lists a third commit that landed nowhere and is not empty: not a rebase merge.
+    const stray = `${'a'.repeat(40)} ${CAROL.email} 2026-01-01T00:00:00Z`;
+    const result = remote.backport(41, {...merged, count: 3, listed: [stray, ...merged.listed]});
+    assert.notEqual(result.status, 0);
+    assert.match(result.output, /the landed commits are not those of the pull request as a rebase merge lands them/);
+    assert.equal(remote.ref(BRANCH(41)), '');
+    assert.deepEqual(result.gh, []);
+  });
+
+  // What the exact comparison refuses: the run fails closed with one comment on the original pull request,
+  // pushes nothing and leaves release/latest as it is. A patch that does not apply is refused the same way,
+  // with its own comment.
+  const refusal = /^pr comment (\d+) --repo owner\/repo --body (Replaying the commits of this pull request does not give this register file|This register file on release\/latest is not what main held|The changes of this pull request to the CLA register files do not apply)/;
+  const diverges = (result: Run & {api: string[]}, remote: Remote, number: number, before: string, message = /the replay does not give .* as it is on main; nothing is pushed/): void => {
+    assert.notEqual(result.status, 0, result.output);
+    assert.match(result.output, message);
+    assert.equal(remote.ref(BRANCH(number)), '');
+    assert.equal(remote.ref('release/latest'), before);
+    assert.equal(result.gh.length, 1);
+    assert.match(result.gh[0], refusal);
+    assert.equal(result.gh[0].match(refusal)?.[1], String(number));
+  };
+  const compared = /the replay does not give .* as it is on main; nothing is pushed/;
+  const releaseFile = (remote: Remote, file: string): string => git(remote.origin, ['show', `release/latest:${file}`]);
+  const nora = `${NEWCOMER.name} <${NEWCOMER.email}>\n`;
+  // main lists Nora; release/latest revoked her there alone.
+  const revokedOnRelease = (): {remote: Remote; before: string; listed: string} => {
+    const remote = new Remote();
+    const listed = `${MAINTAINERS_AT_CUT}${nora}`;
+    remote.commit(MAINTAINER, MAINTAINER, {[MAINTAINERS_FILE]: listed});
+    git(remote.work, ['push', '-q', 'origin', 'main']);
+    remote.releaseOnly({[MAINTAINERS_FILE]: listed});
+    remote.releaseOnly({[MAINTAINERS_FILE]: MAINTAINERS_AT_CUT});
+    return {remote, before: remote.ref('release/latest'), listed};
+  };
+
+  test('a register file that release/latest alone changed: refused with a comment, nothing pushed', () => {
+    const remote = new Remote();
+    remote.releaseOnly({'CONTRIBUTORS.md': CONTRIBUTORS_AT_CUT.replace('# Contributors', '# Contributors of release/latest')});
+    const before = remote.ref('release/latest');
+    diverges(remote.backport(42, remote.merge([[ADA, {'CONTRIBUTORS.md': `${CONTRIBUTORS_AT_CUT}- Ada Example\n`}]])), remote, 42, before, compared);
+  });
+
+  // A signatory line added on release/latest by its owner is not on main: a maintainer's pull request that
+  // touches the register must not leave it there as a difference nobody judged.
+  test('a signatory line only release/latest holds: refused, the line is still there', () => {
+    const remote = new Remote();
+    remote.releaseOnly({[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(EVE)}`});
+    const before = remote.ref('release/latest');
+    const merged = remote.merge([[MAINTAINER, {[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(CAROL)}`}]]);
+    diverges(remote.backport(43, merged), remote, 43, before, compared);
+    assert.ok(releaseFile(remote, REGISTER_FILE).includes(row(EVE).trim()), 'the line is still there');
+  });
+
+  test('a revocation made on release/latest alone, then a pull request that adds a line: refused, the revocation stands', () => {
+    const {remote, before, listed} = revokedOnRelease();
+    const merged = remote.merge([[MAINTAINER, {[MAINTAINERS_FILE]: `${listed}${CAROL.name} <${CAROL.email}>\n`}]]);
+    diverges(remote.backport(44, merged), remote, 44, before);
+    assert.ok(!releaseFile(remote, MAINTAINERS_FILE).includes(NEWCOMER.email), 'the revocation stands');
+  });
+
+  // Probe A: +Eve, -Eve, +Carol over a release/latest that holds Eve alone. The net change of the range is +Carol.
+  test('commits that add a release-only signatory line, remove it and add another: refused, the line stays', () => {
+    const remote = new Remote();
+    const base = remote.read(REGISTER_FILE);
+    remote.releaseOnly({[REGISTER_FILE]: `${base}${row(EVE)}`});
+    const before = remote.ref('release/latest');
+    const merged = remote.merge([[MAINTAINER, {[REGISTER_FILE]: `${base}${row(EVE)}`}], [MAINTAINER, {[REGISTER_FILE]: base}],
+      [MAINTAINER, {[REGISTER_FILE]: `${base}${row(CAROL)}`}]]);
+    diverges(remote.backport(46, merged), remote, 46, before);
+    assert.ok(releaseFile(remote, REGISTER_FILE).includes(row(EVE).trim()), 'the line is still there');
+  });
+
+  // Probe B: -Nora, then +Nora and +Carol, over a release/latest that revoked Nora alone.
+  test('commits that remove a maintainer revoked on release/latest alone and add her back with another: refused, the revocation stands', () => {
+    const {remote, before, listed} = revokedOnRelease();
+    const merged = remote.merge([[MAINTAINER, {[MAINTAINERS_FILE]: MAINTAINERS_AT_CUT}],
+      [MAINTAINER, {[MAINTAINERS_FILE]: `${listed}${CAROL.name} <${CAROL.email}>\n`}]]);
+    diverges(remote.backport(47, merged), remote, 47, before);
+    assert.ok(!releaseFile(remote, MAINTAINERS_FILE).includes(NEWCOMER.email), 'the revocation stands');
+  });
+
+  // A pull request that merely moves Nora has the net change -Nora/+Nora with +Carol; and the two-commit variant.
+  test('a pull request that moves a maintainer revoked on release/latest alone, with a new one: refused, one commit or two', () => {
+    for (const [commits, label] of [[1, 'one commit'], [2, 'two commits']] as [number, string][]) {
+      const {remote, before} = revokedOnRelease();
+      const dave = `Dave Example <1006+dave@users.noreply.github.com>\n`;
+      remote.commit(MAINTAINER, MAINTAINER, {[MAINTAINERS_FILE]: `${MAINTAINERS_AT_CUT}${nora}${dave}`});
+      git(remote.work, ['push', '-q', 'origin', 'main']);
+      const carol = `${CAROL.name} <${CAROL.email}>\n`;
+      const moved = `${MAINTAINERS_AT_CUT}${dave}${nora}${carol}`;
+      const steps: [Person, Record<string, Content>][] = commits === 1 ? [[MAINTAINER, {[MAINTAINERS_FILE]: moved}]]
+        : [[MAINTAINER, {[MAINTAINERS_FILE]: `${MAINTAINERS_AT_CUT}${dave}`}], [MAINTAINER, {[MAINTAINERS_FILE]: moved}]];
+      diverges(remote.backport(48, remote.merge(steps)), remote, 48, before);
+      assert.ok(!releaseFile(remote, MAINTAINERS_FILE).includes(NEWCOMER.email), `${label}: the revocation stands`);
+    }
+  });
+
+  // A line duplicated on release/latest alone is a difference that a set of lines does not see.
+  test('a duplicated line on release/latest alone: refused', () => {
+    const remote = new Remote();
+    const base = remote.read(REGISTER_FILE);
+    remote.releaseOnly({[REGISTER_FILE]: `${base}${row(EVE)}${row(EVE)}`});
+    const before = remote.ref('release/latest');
+    diverges(remote.backport(49, remote.merge([[MAINTAINER, {[REGISTER_FILE]: `${base}${row(EVE)}`}]])), remote, 49, before, compared);
+  });
+
+  // An entry that a later pull request adds on main is not part of the range of this one.
+  test('an entry added later on main only: the backport of an earlier pull request is refused', () => {
+    const remote = new Remote();
+    const before = remote.ref('release/latest');
+    const first = remote.merge([[CAROL, {[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(CAROL)}`}]]);
+    remote.merge([[EVE, {[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(EVE)}`}]]);
+    diverges(remote.backport(45, first), remote, 45, before, compared);
+  });
+
+  // The comparison is per touched file: a release-only change in a register file that the range does not
+  // touch is kept, and the range is backported.
+  test('a release-only change in a register file that the pull request does not touch is kept', () => {
+    const remote = new Remote();
+    remote.releaseOnly({[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(EVE)}`});
+    const result = remote.backport(46, remote.merge([[ADA, {'CONTRIBUTORS.md': `${CONTRIBUTORS_AT_CUT}- Ada Example\n`}]]));
+    assert.equal(result.status, 0, result.output);
+    const head = remote.ref(BRANCH(46));
+    assert.deepEqual(git(remote.origin, ['diff', '--name-only', 'release/latest', head]).split('\n'), ['CONTRIBUTORS.md']);
+    assert.ok(git(remote.origin, ['show', `${head}:${REGISTER_FILE}`]).includes(row(EVE).trim()));
+  });
+
+  // The positive case: a clean range whose replay gives main's files opens the pull request, blob for blob.
+  test('a clean range whose replay equals main opens the pull request, the touched files identical to main', () => {
+    const remote = new Remote();
+    const merged = remote.merge([[CAROL, {[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(CAROL)}`}],
+      [MAINTAINER, {[MAINTAINERS_FILE]: `${MAINTAINERS_AT_CUT}${nora}`}]]);
+    const result = remote.backport(60, merged);
+    assert.equal(result.status, 0, result.output);
+    const head = remote.ref(BRANCH(60));
+    for (const file of [REGISTER_FILE, MAINTAINERS_FILE]) {
+      assert.equal(git(remote.origin, ['rev-parse', `${head}:${file}`]), git(remote.origin, ['rev-parse', `main:${file}`]), file);
+    }
+    assert.equal(result.gh.filter((call) => call.startsWith('pr create')).length, 1);
+  });
+
+  // A removal whose line was added by a pull request not yet backported: whichever of the two is backported
+  // first, release/latest does not hold the file as main held it before the range (removal), or the replay
+  // brings a line that main no longer has (addition). The workflow does not repair it: both are refused, with
+  // the manual path in the comment.
+  test('a removal replayed before the addition it depends on: both are refused with the manual path, in either order', () => {
+    for (const order of [['addition', 'removal'], ['removal', 'addition']]) {
+      const remote = new Remote();
+      const register = remote.read(REGISTER_FILE);
+      const addition = remote.merge([[CAROL, {[REGISTER_FILE]: `${register}${row(CAROL)}`}]]);
+      const removal = remote.merge([[MAINTAINER, {[REGISTER_FILE]: register}]]);
+      const before = remote.ref('release/latest');
+      assert.equal(remote.read(REGISTER_FILE), register, 'main ends without the line');
+      for (const [position, step] of order.entries()) {
+        const number = 50 + position;
+        const result = remote.backport(number, step === 'addition' ? addition : removal);
+        diverges(result, remote, number, before);
+        assert.match(result.gh[0], /A maintainer backports the register changes of this pull request by hand.*docs\/development\.md/);
+      }
+      assert.equal(remote.ref('release/latest'), before);
+    }
+  });
+
+  // release/latest worded CLA.md differently: the replay cannot give main's file; a patch that does not apply
+  // gets its own comment.
+  test('a register change on a file that release/latest worded differently: nothing is pushed, the original pull request gets a comment, the job fails', () => {
     const remote = new Remote();
     git(remote.work, ['checkout', '-q', '-B', 'release-work', 'origin/release/latest']);
     remote.commit(MAINTAINER, MAINTAINER, {'CLA.md': 'CLA 1.0, release wording\n'});
@@ -304,7 +519,34 @@ describe('the push job replays the register changes onto release/latest', () => 
     assert.notEqual(result.status, 0);
     assert.equal(remote.ref(BRANCH(13)), '');
     assert.equal(result.gh.length, 1);
-    assert.match(result.gh[0], /^pr comment 13 --repo owner\/repo --body The changes of this pull request to the CLA register files do not apply/);
+    assert.match(result.gh[0], /^pr comment 13 --repo owner\/repo --body (Replaying the commits of this pull request does not give this register file|This register file on release\/latest is not what main held|The changes of this pull request to the CLA register files do not apply)/);
+  });
+
+  // Author and author date can be forged on a commit of the pull request; the landed commit must carry its change.
+  test('a landed commit whose author and date match but whose change is not that of the pull request commit is refused', () => {
+    const remote = new Remote();
+    const merged = remote.merge([[CAROL, {[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(CAROL)}`}]]);
+    const [name, email, seconds] = git(remote.work, ['show', '-s', '--format=%an%n%ae%n%at', merged.landed]).split('\n');
+    const forged = git(remote.work, ['commit-tree', `${merged.landed}~1^{tree}`, '-p', `${merged.landed}~1`, '-m', 'forged'],
+      {GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: `@${seconds} +0200`, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email});
+    const result = remote.backport(47, {...merged, listed: [remote.listed(forged)], head: forged});
+    assert.notEqual(result.status, 0);
+    assert.match(result.output, /a landed commit does not carry the change of its commit of the pull request/);
+    assert.equal(remote.ref(BRANCH(47)), '');
+    assert.deepEqual(result.gh, []);
+  });
+
+  test('a commit of the pull request that this repository does not hold fails closed', () => {
+    const remote = new Remote();
+    const merged = remote.merge([[CAROL, {[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(CAROL)}`}]]);
+    const [name, email, seconds] = git(remote.work, ['show', '-s', '--format=%an%n%ae%n%at', merged.landed]).split('\n');
+    const absent = git(remote.work, ['commit-tree', `${merged.landed}~1^{tree}`, '-p', `${merged.landed}~1`, '-m', 'absent'],
+      {GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: `@${seconds} +0200`, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email});
+    const result = remote.backport(48, {...merged, listed: [remote.listed(absent)], head: null});
+    assert.notEqual(result.status, 0);
+    assert.match(result.output, /a commit of the pull request cannot be fetched; nothing is pushed/);
+    assert.equal(remote.ref(BRANCH(48)), '');
+    assert.deepEqual(result.gh, []);
   });
 
   // A first run pushed the branch and failed before the pull request was opened; the rerun rebuilds the
@@ -472,7 +714,7 @@ describe('the push job replays register paths exactly', () => {
     const squash = remote.merge([[CAROL, {[REGISTER_FILE]: `${remote.read(REGISTER_FILE)}${row(CAROL)}`}]]);
     const result = remote.backport(34, {landed: squash.landed, count: 2, listed: original});
     refused(result, remote, 34, /the landed commits are not those of the pull request as a rebase merge lands them/);
-    assert.equal(result.api.length, 1);
+    assert.equal(result.api.length, 2, 'the list of commits, then the files of the one with no landed commit');
   });
 
   test('a merge commit is refused', () => {
