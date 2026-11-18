@@ -165,7 +165,9 @@ find_native_host() {
   # shellcheck disable=SC2016 # a command for the reader to run, printed literally
   [[ -n $PTY_BINARY ]] || refuse 'the native PTY host mesh-ptyhost is missing: build it with bash scripts/bootstrap.sh --install-only (then rerun with --from-source, or pass --ptyhost "$(opam var --switch=SWITCH bin)/mesh-ptyhost"), pass a host you obtained yourself with --ptyhost /absolute/path, or install a release instead (docs/install.md, "Install a release")'
   [[ $PTY_BINARY == /* && ! $PTY_BINARY =~ [[:cntrl:]] ]] || refuse "native binary must be an absolute literal path"
-  PTY_BINARY=$(readlink -e -- "$PTY_BINARY") || refuse "native binary unavailable"
+  # readlink -f and an existence check, as readlink -e, which the BSD readlink of macOS lacks (the
+  # installer tests run this file there).
+  PTY_BINARY=$(readlink -f -- "$PTY_BINARY") && [[ -e $PTY_BINARY ]] || refuse "native binary unavailable"
   [[ -f $PTY_BINARY && -x $PTY_BINARY && ! $PTY_BINARY =~ [[:cntrl:]] ]] || refuse "native binary must be an executable regular file"
   systemd_safe_path "$PTY_BINARY" || unsupported_path native
 }
@@ -186,7 +188,7 @@ decide_pty() {
   esac
   if [[ $load == loaded && -n $fragment ]]; then
     if [[ -L $UNIT_DIR/$PTY_UNIT ]]; then
-      [[ -e $UNIT_DIR/$PTY_UNIT && $(readlink -e -- "$UNIT_DIR/$PTY_UNIT") != /dev/null ]] \
+      [[ -e $UNIT_DIR/$PTY_UNIT && $(readlink -f -- "$UNIT_DIR/$PTY_UNIT") != /dev/null ]] \
         || refuse "local PTY unit is masked or dangling"
     fi
     if [[ -n $MESH_RELEASE_TAG ]]; then release_pty_decision; return 0; fi
