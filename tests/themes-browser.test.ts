@@ -117,6 +117,16 @@ describe('colour themes', {skip}, () => {
     assert.equal(await field.getAttribute('aria-errormessage'), null);
     await otherTab('mesh.palette', '{"--bg":"#000000"}');
     assert.equal(await field.inputValue(), '{\n  "--bg": "#000000"\n}', 'a field that holds no draft follows the change');
+    assert.equal(await page.locator('#palette-status').textContent(), '', 'the status of the reset palette is gone');
+  });
+
+  test('a theme this browser refuses to keep still applies, and says so', async () => {
+    const page = await open();
+    await page.evaluate(() => { Storage.prototype.setItem = () => { throw new DOMException('full', 'QuotaExceededError'); }; });
+    await page.locator('#theme-select').selectOption('light');
+    assert.equal(await page.evaluate(() => document.documentElement.dataset['theme']), 'light');
+    await page.locator('#flash:not([hidden])').waitFor();
+    assert.match(await page.locator('#flash').textContent() ?? '', /refused|refuse/);
   });
 
   test('a custom palette applies under Default dark too, and its contrast warning never rounds up', async () => {
@@ -140,6 +150,8 @@ describe('colour themes', {skip}, () => {
     assert.match(await apply('{"--fg": "#747474", "--bg": "#000000", "--term": "#000000", "--panel": "#000000"}'), / 4[.,]4:1/);
     assert.match(await apply('{"--fg": "#fff0"}'), / 1[.,]0:1/, 'transparent text is measured as invisible');
     assert.match(await apply('{"--bg": "#00000080"}'), /translucent|translucide/);
+    // A translucent page background does not hide the failure measured on the terminal.
+    assert.match(await apply('{"--bg": "#fff8", "--term": "#d8dee9", "--fg": "#d8dee9"}'), / 1[.,]0:1.*(translucent|translucide)/);
 
     await page.locator('#palette-reset').click();
     assert.equal(await colourOf('.tabs button.cur', 'backgroundColor'), 'rgb(29, 37, 48)', 'back to style.css');
@@ -186,6 +198,8 @@ describe('colour themes', {skip}, () => {
     assert.deepEqual(errors, []);
     assert.equal(await terminalBackground(page), '#0d1117', 'the terminal uses the default theme');
     assert.equal(await bodyBackground(page), 'rgb(11, 14, 19)', 'the page keeps the default dark look');
+    assert.equal(await page.locator('.main-modes #btn-sessions.on').evaluate(element => getComputedStyle(element).backgroundColor),
+      'rgb(28, 48, 41)', 'themes.css leaves the style.css colours alone');
     assert.equal(await page.locator('#theme-select').isHidden(), true, 'no theme to choose');
   });
 

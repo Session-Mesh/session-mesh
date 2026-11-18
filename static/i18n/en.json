@@ -921,6 +921,7 @@
   "theme.nord": "Nord",
   "theme.withPalette": "{name} + custom palette",
   "theme.customize": "Custom palette…",
+  "theme.notSaved": "Theme applied, but this browser refused to keep it: the next load uses the previous one.",
   "theme.paletteTitle": "Custom palette (this browser)",
   "theme.paletteHint": "A JSON object of colour variables laid over the chosen theme, for example {\"--bg\": \"#002b36\", \"--ansi-red\": \"#dc322f\"}. Values are hexadecimal colours (#rgb, #rrggbb, with or without alpha); it is kept in this browser only. Variables: {names}",
   "theme.paletteFill": "Start from the current theme",

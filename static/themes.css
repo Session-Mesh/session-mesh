@@ -22,30 +22,30 @@
 #theme-select { max-width: 13em; padding-right: 4px; }
 #theme-select option { background: var(--panel-2); color: var(--fg); }
 
-:root:is(:not([data-theme="default"]), [data-palette]) :is(.item .last, .group.sub, .detail .quote, .msg, .detail details pre, .cmd code, .c-num) { color: var(--fg-2); }
-:root:is(:not([data-theme="default"]), [data-palette]) .tabs button.cur { background: var(--raise); }
-:root:is(:not([data-theme="default"]), [data-palette]) :is(#btn-explore.on, #btn-projects.on, #btn-management.on) { background: var(--raise); border-color: var(--line-2); }
-:root:is(:not([data-theme="default"]), [data-palette]) :is(.chip.on, .ex-bulk) { border-color: var(--line-2); }
-:root:is(:not([data-theme="default"]), [data-palette]) :is(.btn:hover, .add-folder:hover, .workspace-tab:hover, .workspace-tab-add:hover, .workspace-move-button:hover) { border-color: var(--line-2); }
-:root:is(:not([data-theme="default"]), [data-palette]) .btn.primary { color: var(--on-accent); }
-:root:is(:not([data-theme="default"]), [data-palette]) #btn-menu[data-badge]:not([data-badge=""])::after { color: var(--on-accent); }
-:root:is(:not([data-theme="default"]), [data-palette]) #explorer td { border-bottom-color: var(--line); }
-:root:is(:not([data-theme="default"]), [data-palette]) #explorer tr.ex-row:hover td { background: var(--panel-2); }
-:root:is(:not([data-theme="default"]), [data-palette]) #explorer tr.ex-row.checked td { background: var(--raise); }
-:root:is(:not([data-theme="default"]), [data-palette]) .warn { border-color: var(--line-2); background: var(--panel-2); }
-:root:is(:not([data-theme="default"]), [data-palette]) .drop { background: color-mix(in srgb, var(--term) 80%, transparent); }
-:root:is(:not([data-theme="default"]), [data-palette]) .main-modes #btn-sessions.on { background: var(--raise); color: var(--accent); border-color: var(--line-2); }
-:root:is(:not([data-theme="default"]), [data-palette]) .main-modes #btn-projects.on { background: var(--raise); color: var(--fg); border-color: var(--line-2); }
-:root:is(:not([data-theme="default"]), [data-palette]) body.projecting #btn-new { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-:root:is(:not([data-theme="default"]), [data-palette]) .project-nav-item[aria-current="true"] { background: var(--raise); border-color: var(--line-2); box-shadow: inset 2px 0 var(--accent); }
-:root:is(:not([data-theme="default"]), [data-palette]) .project-overview-tabs { color: var(--fg); }
-:root:is(:not([data-theme="default"]), [data-palette]) .project-save-notice { background: var(--panel-2); border-color: var(--line-2); }
-:root:is(:not([data-theme="default"]), [data-palette]) .project-cockpit { --cockpit-border: var(--line); --cockpit-muted: var(--mute); --cockpit-violet: var(--accent); --cockpit-green: var(--idle); color: var(--fg); }
-:root:is(:not([data-theme="default"]), [data-palette]) .project-cockpit :is(.cockpit-card, .cockpit-attention) { background: var(--panel); }
-:root:is(:not([data-theme="default"]), [data-palette]) .project-cockpit .cockpit-attention-list details { background: var(--panel-2); }
-:root:is(:not([data-theme="default"]), [data-palette]) .project-cockpit :is(.cockpit-source-title strong, .cockpit-tabs button[aria-current=true]) { color: var(--fg); }
-:root:is(:not([data-theme="default"]), [data-palette]) .project-cockpit .cockpit-actions .primary { background: var(--accent); color: var(--on-accent); }
-:root:is(:not([data-theme="default"]), [data-palette]) .project-cockpit .cockpit-badge { color: var(--accent); border-color: var(--line-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) :is(.item .last, .group.sub, .detail .quote, .msg, .detail details pre, .cmd code, .c-num) { color: var(--fg-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .tabs button.cur { background: var(--raise); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) :is(#btn-explore.on, #btn-projects.on, #btn-management.on) { background: var(--raise); border-color: var(--line-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) :is(.chip.on, .ex-bulk) { border-color: var(--line-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) :is(.btn:hover, .add-folder:hover, .workspace-tab:hover, .workspace-tab-add:hover, .workspace-move-button:hover) { border-color: var(--line-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .btn.primary { color: var(--on-accent); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) #btn-menu[data-badge]:not([data-badge=""])::after { color: var(--on-accent); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) #explorer td { border-bottom-color: var(--line); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) #explorer tr.ex-row:hover td { background: var(--panel-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) #explorer tr.ex-row.checked td { background: var(--raise); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .warn { border-color: var(--line-2); background: var(--panel-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .drop { background: color-mix(in srgb, var(--term) 80%, transparent); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .main-modes #btn-sessions.on { background: var(--raise); color: var(--accent); border-color: var(--line-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .main-modes #btn-projects.on { background: var(--raise); color: var(--fg); border-color: var(--line-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) body.projecting #btn-new { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .project-nav-item[aria-current="true"] { background: var(--raise); border-color: var(--line-2); box-shadow: inset 2px 0 var(--accent); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .project-overview-tabs { color: var(--fg); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .project-save-notice { background: var(--panel-2); border-color: var(--line-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .project-cockpit { --cockpit-border: var(--line); --cockpit-muted: var(--mute); --cockpit-violet: var(--accent); --cockpit-green: var(--idle); color: var(--fg); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .project-cockpit :is(.cockpit-card, .cockpit-attention) { background: var(--panel); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .project-cockpit .cockpit-attention-list details { background: var(--panel-2); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .project-cockpit :is(.cockpit-source-title strong, .cockpit-tabs button[aria-current=true]) { color: var(--fg); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .project-cockpit .cockpit-actions .primary { background: var(--accent); color: var(--on-accent); }
+:root:is([data-theme]:not([data-theme="default"]), [data-palette]) .project-cockpit .cockpit-badge { color: var(--accent); border-color: var(--line-2); }
 
 /* Light schemes: the pastel accents of the dark palette are too pale on a light background. */
 :root[data-scheme="light"] .tag.claude { color: #9a4a22; border-color: #e3c4b4; }

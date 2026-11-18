@@ -327,8 +327,10 @@ describe('runtime', () => {
     assert.equal('palette' in page.dataset, false);
     const css = fs.readFileSync(path.join(ROOT, 'static', 'themes.css'), 'utf8');
     assert.doesNotMatch(css, /^:root:not\(\[data-theme="default"\]\)/m, 'a rule that ignores the palette under the default theme');
-    assert.match(css, /^:root:is\(:not\(\[data-theme="default"\]\), \[data-palette\]\) \.tabs button\.cur \{ background: var\(--raise\); \}$/m);
-    assert.match(css, /^:root:is\(:not\(\[data-theme="default"\]\), \[data-palette\]\) \.btn\.primary \{ color: var\(--on-accent\); \}$/m);
+    // Without static/themes.js the root has no data-theme: the non-default branch must not match.
+    assert.doesNotMatch(css, /:root:is\(:not\(/, 'a rule that matches a page without the theme runtime');
+    assert.match(css, /^:root:is\(\[data-theme\]:not\(\[data-theme="default"\]\), \[data-palette\]\) \.tabs button\.cur \{ background: var\(--raise\); \}$/m);
+    assert.match(css, /^:root:is\(\[data-theme\]:not\(\[data-theme="default"\]\), \[data-palette\]\) \.btn\.primary \{ color: var\(--on-accent\); \}$/m);
   });
 
   test('reload follows a change made by another tab', () => {
@@ -339,5 +341,20 @@ describe('runtime', () => {
     runtime.reload();
     assert.equal(runtime.current(), 'light');
     assert.equal(page.vars.get('--fg'), '#1f2328');
+  });
+
+  test('reload of one key keeps the other in memory; no key re-reads both', () => {
+    const storage = new MemoryStorage();
+    const page = fakePage();
+    const runtime = createRuntime(page, storage);
+    writePalette(storage, {'--term': '#111111'});
+    runtime.reload(THEME_KEY);
+    assert.deepEqual(runtime.palette(), {}, 'a theme change elsewhere does not reload the palette');
+    writeThemeId(storage, 'nord');
+    runtime.reload(PALETTE_KEY);
+    assert.equal(runtime.current(), 'default', 'a palette change elsewhere does not reload the theme');
+    assert.deepEqual(runtime.palette(), {'--term': '#111111'});
+    runtime.reload(null);
+    assert.equal(runtime.current(), 'nord');
   });
 });

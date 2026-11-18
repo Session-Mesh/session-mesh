@@ -300,7 +300,7 @@ export type Runtime = {
   use(id: ThemeId): boolean;
   setPalette(palette: Colours): boolean;
   onChange(listener: Listener): void;
-  reload(): void;
+  reload(key?: string | null): void;
 };
 
 export function createRuntime(target: ApplyTarget, storage: StorageLike | null): Runtime {
@@ -334,10 +334,12 @@ export function createRuntime(target: ApplyTarget, storage: StorageLike | null):
       apply();
       return saved;
     },
-    // Re-reads both entries: another tab of this browser changed them.
-    reload(): void {
-      id = readThemeId(storage);
-      palette = readPalette(storage);
+    // Another tab of this browser changed an entry: re-reads that entry only, so a palette kept
+    // in memory after a refused write survives a theme change elsewhere. No key (a clear of the
+    // storage) re-reads both.
+    reload(key?: string | null): void {
+      if (key !== PALETTE_KEY) id = readThemeId(storage);
+      if (key !== THEME_KEY) palette = readPalette(storage);
       apply();
     },
     onChange(listener: Listener): void { listeners.push(listener); },
@@ -350,7 +352,7 @@ function install(): Runtime | null {
   try { storage = window.localStorage; } catch { /* storage blocked: the default theme */ }
   const runtime = createRuntime(window.document as unknown as ApplyTarget, storage);
   window.addEventListener('storage', (event) => {
-    if (event.key === THEME_KEY || event.key === PALETTE_KEY || event.key === null) runtime.reload();
+    if (event.key === THEME_KEY || event.key === PALETTE_KEY || event.key === null) runtime.reload(event.key);
   });
   return runtime;
 }
