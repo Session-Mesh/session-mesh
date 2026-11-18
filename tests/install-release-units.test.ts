@@ -382,7 +382,8 @@ describe('the drop-in paths systemd reports', () => {
     const files = [path.join(dir, 'my  port.conf'), path.join(dir, 'b.conf')];
     for (const file of files) fs.writeFileSync(file, '[Service]\n');
     const units = path.join(SOURCE, 'scripts/install-linux-units.sh');
-    const result = spawnSync('/bin/bash', ['-c', 'source <(sed -n "/^dropin_files()/,/^}/p" "$1"); dropin_files "$2"; printf "%s\\n" "${DROPIN_FILES[@]}"',
+    // eval rather than `source <(...)`, which the bash 3.2 of macOS reads as empty.
+    const result = spawnSync('/bin/bash', ['-c', 'eval "$(sed -n "/^dropin_files()/,/^}/p" "$1")"; dropin_files "$2"; printf "%s\\n" "${DROPIN_FILES[@]}"',
       '_', units, `${files.join(' ')} /gone/x.conf`], {encoding: 'utf8'});
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(result.stdout.trimEnd().split('\n'), [...files, '/gone/x.conf']);

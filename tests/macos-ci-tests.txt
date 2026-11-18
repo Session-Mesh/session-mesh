@@ -60,6 +60,17 @@ tests/i18n-coverage.test.ts
 tests/i18n.test.ts
 tests/idle-observable.test.ts
 tests/index-html-structure.test.ts
+tests/install-bundle.test.ts
+tests/install-local.test.ts
+tests/install-logout-all-link.test.ts
+tests/install-macos-daemons.test.ts
+tests/install-macos-runtime.test.ts
+tests/install-macos.test.ts
+tests/install-release-floors.test.ts
+tests/install-release-programs.test.ts
+tests/install-release.test.ts
+tests/install-release-units.test.ts
+tests/install-safety.test.ts
 tests/launch-line-argv.test.ts
 tests/leak-guard-allow.test.ts
 tests/leak-guard-gitleaks-adapter.test.ts
@@ -230,17 +241,6 @@ tests/test_wire_vectors.py
 #
 # Installers and release scripts written for Linux: the tests run them with a PATH that holds the
 # coreutils in /usr/bin only, with GNU find or bash 4 features, or against the Linux bundle.
-# tests/install-bundle.test.ts
-# tests/install-local.test.ts
-# tests/install-logout-all-link.test.ts
-# tests/install-macos-daemons.test.ts
-# tests/install-macos-runtime.test.ts
-# tests/install-macos.test.ts
-# tests/install-release-floors.test.ts
-# tests/install-release-programs.test.ts
-# tests/install-release.test.ts
-# tests/install-release-units.test.ts
-# tests/install-safety.test.ts
 # tests/preprod-runtime-dir.test.ts
 # tests/release-assets.test.ts
 # tests/release-native-scripts.test.ts

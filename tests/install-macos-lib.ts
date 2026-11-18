@@ -19,6 +19,7 @@ import path from 'node:path';
 import {afterEach} from 'node:test';
 import {copyInstallerScripts} from './install-scripts.ts';
 import {parsePlist} from './plist-lib.ts';
+import {linkSystemTools} from './helpers/system-tool.ts';
 
 export const SOURCE = process.env.MESH_INSTALL_SOURCE || path.resolve(import.meta.dirname, '..');
 export const REAL_TOOLS = ['dirname', 'readlink', 'mkdir', 'rm', 'rmdir', 'seq', 'sleep', 'grep', 'cat', 'ln', 'mktemp',
@@ -115,7 +116,7 @@ export function fixture(opts: {checkoutName?: string; fakes?: Record<string, str
   for (const [name, body] of Object.entries(opts.fakes ?? FAKES)) writeExecutable(path.join(bin, name), body);
   writeExecutable(path.join(bin, 'plutil'),
     `exec "${process.execPath}" --experimental-strip-types "${path.join(SOURCE, 'tests/fixtures/fake-plutil.ts')}" "$@"`);
-  for (const tool of REAL_TOOLS) fs.symlinkSync(`/usr/bin/${tool}`, path.join(bin, tool));
+  linkSystemTools(REAL_TOOLS, bin);
   return {root, checkout, home, fakes: bin, log: path.join(root, 'calls.log'), state, switchBin, daemons};
 }
 
