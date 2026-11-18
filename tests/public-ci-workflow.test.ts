@@ -95,6 +95,9 @@ describe('public CI workflow checker', () => {
   const bypasses: [string, string, RegExp][] = [
     ['event text after a # inside a run block (GitHub substitutes before bash)',
       GOOD_HEAD + '      - run: |\n          echo hello # ${{ github.event.pull_request.title }}\n', /line 11: untrusted event data/],
+    ['event text after a quoted }} in the expression',
+      GOOD_HEAD + '      - run: echo "${{ format(\'}}{0}\', github.event.pull_request.title) }}"\n', /line 10: untrusted event data/],
+    ['an expression that never closes', GOOD_HEAD + '      - run: echo "${{ format(\'}}\', github.event.pull_request.title) "\n', /line 10: expression never closed/],
     ['event text read with brackets',
       GOOD_HEAD + '      - run: echo "${{ github.event[\'pull_request\'][\'title\'] }}"\n', /line 10: untrusted event data/],
     ['the whole secrets context serialised',

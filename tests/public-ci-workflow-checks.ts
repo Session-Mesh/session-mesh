@@ -115,7 +115,8 @@ function checkSecrets(lines: Line[], allowedToken: Set<Line> = new Set()): strin
 // github context is never read whole or by a computed index, which would hide which part.
 function checkInjection(lines: Line[], allowBodyEnv = false): string[] {
   const problems: string[] = [];
-  for (const {number, body} of expressions(lines)) {
+  for (const {number, body, unparsable} of expressions(lines)) {
+    if (unparsable) problems.push(`line ${number}: expression never closed (a quoted }} is not its end)`);
     if (allowBodyEnv && body.trim() === 'github.event.pull_request.body' && BODY_ENV_LINE.test(lines[number - 1].raw)) continue;
     const properties = githubProperties(body);
     if (properties.includes(null)) problems.push(`line ${number}: github context read whole or by a computed index`);
