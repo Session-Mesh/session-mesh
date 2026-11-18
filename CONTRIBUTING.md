@@ -25,7 +25,8 @@ you have in mind. The project has strong opinions about its trust boundaries
 5. Keep the branch a straight line on top of `main`: rebase, never merge `main` into it
    ([How a pull request is merged](#how-a-pull-request-is-merged)).
 6. Wait for the required checks below, the automatic CodeRabbit review and a maintainer's review.
-   A maintainer merges with "Rebase and merge", the only merge method the repository allows. A
+   A maintainer merges with "Rebase and merge", the only merge method the repository allows, by hand or through the
+   [merge queue](#merge-queue). A
    merged `semver: patch` pull request is then backported to `release/latest` automatically, and
    so are the changes of any other merged pull request to the CLA register files.
 
@@ -233,6 +234,45 @@ on top of the tip of `main`:
   therefore shown on the commits of the pull request, not on the ones that land on `main`. (The
   committer `GitHub <noreply@github.com>` comes from a squash merge or from an edit in the web
   interface, not from "Rebase and merge".)
+
+### Merge queue
+
+Maintainers can put a pull request in GitHub's merge queue instead of merging it by hand. The
+queue builds a temporary commit of the queued pull request on top of the current tip of `main`
+(the ref `gh-readonly-queue/main/pr-<number>-<sha>`), waits for the required checks above on that
+commit, and then lands the pull request with "Rebase and merge" itself. This holds with the queue
+set to a maximum of one concurrent build and a group of one
+([docs/development.md](docs/development.md#the-merge-queue)): with more concurrent builds an entry
+is built on the entry ahead of it instead. A change that no longer passes on the tip of `main`
+leaves the queue and the pull request stays open.
+
+For a contributor nothing changes: open the pull request, keep it a straight line of commits
+and wait for the checks. On the queue's commit:
+
+- `cla` runs again, with the same checker and the same rules, over the commits the queue would land
+  (base = the commit the queue built on, which is the tip of `main` with a concurrency of one;
+  head = the queue's commit). The maintainers' list is read on that base. A commit that is not
+  linear, or by an address that is not covered, is refused there and the entry leaves the queue.
+- `semver label` and `release branch guard` read the queued pull request again (its number is in the
+  queue's branch name) and apply the same rule to its labels and base as they are when the queue
+  runs them. The labels are read once, at that point: a label removed or added after the checks
+  have read them does not rerun them and does not fail the queued entry. If GitHub's API cannot be
+  read or the branch name does not parse, the check fails rather than passes.
+- `PR description (no personal details)` reports a success without checking anything: the check is
+  warning-only and the queue's commit has no description, so a description edited after queueing
+  is not checked again.
+- The other required checks (`leak check`, OCaml, frontend, Python, browser shards) run unchanged.
+- `macos (arm64, informational)` does not run, so a macOS run never holds a queue entry.
+
+Pull requests that touch `.github/workflows/`, security-relevant code, the CLA files
+(`CLA.md`, `CLA-SIGNATORIES.md`, `tools/cla-check/`, `CONTRIBUTORS.md`, `.github/CODEOWNERS`) or
+licence files should not be queued or set to auto-merge: a maintainer other than the author reads
+them and merges them by hand. This is a maintainer discipline, not a rule GitHub enforces: the
+ruleset requires no approval and no review by the code owners, so nothing stops such a pull
+request from being queued or merged by its author (see
+[the CLA check](#the-cla-check-blocks-the-merge), which says the same). To take a pull request out of the queue, use "Remove from merge queue" on
+its page (`gh pr merge --disable-auto` only cancels an auto-merge that has not entered the queue yet); then fix and
+push or re-queue it.
 
 ## Contributor license agreement
 

@@ -51,7 +51,10 @@ function claStep(): string {
   assert.ok(job, 'no cla job');
   const all = job.block.filter((line) => line.inBlock).map((line) => line.raw).join('\n');
   // The first run block is the guard for events other than pull_request; replay the checker block.
-  const script = all.slice(all.indexOf('# pull_request checks out'));
+  // The merge queue's step follows it (tests/merge-queue-workflow.test.ts replays that one).
+  const queue = all.indexOf('head=$(git rev-parse --verify "$QUEUE_HEAD_SHA');
+  assert.ok(queue > 0, 'no merge_group step');
+  const script = all.slice(all.indexOf('# pull_request checks out'), queue);
   assert.match(script, /cla-check\.ts/);
   return script;
 }

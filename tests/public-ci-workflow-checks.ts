@@ -23,6 +23,9 @@ export type Profile = 'public' | 'description' | 'release' | 'site' | 'preview' 
 
 // The one place where untrusted event text may enter an expression: the description workflow hands
 // the pull request body to its script through an environment variable.
+// The merge queue's commit ids, which the cla job and branch-policy read from the event into an environment
+// variable: allowed in the public and policy profiles only.
+export const QUEUE_ENV_LINE = /^\s+QUEUE_(?:BASE|HEAD)_SHA: \$\{\{ github\.event\.merge_group\.(?:base|head)_sha \}\}\s*$/;
 export const BODY_ENV_LINE = /^\s+BODY: \$\{\{ github\.event\.pull_request\.body \}\}\s*$/;
 export const RUNNER = 'ubuntu-24.04';
 
@@ -120,11 +123,12 @@ function checkSecrets(lines: Line[], allowedToken: Set<Line> = new Set()): strin
 // Untrusted pull-request text (titles, branch names) never enters an expression, whether read
 // with dots or brackets (`github.event.x`, `github.event['x']`, `github['event']`), and the
 // github context is never read whole or by a computed index, which would hide which part.
-function checkInjection(lines: Line[], allowBodyEnv = false): string[] {
+function checkInjection(lines: Line[], allowBodyEnv = false, allowQueueEnv = false): string[] {
   const problems: string[] = [];
   for (const {number, body, unparsable} of expressions(lines)) {
     if (unparsable) problems.push(`line ${number}: expression never closed (a quoted }} is not its end)`);
     if (allowBodyEnv && body.trim() === 'github.event.pull_request.body' && BODY_ENV_LINE.test(lines[number - 1].raw)) continue;
+    if (allowQueueEnv && /^github\.event\.merge_group\.(base|head)_sha$/.test(body.trim()) && QUEUE_ENV_LINE.test(lines[number - 1].raw)) continue;
     const properties = githubProperties(body);
     if (properties.includes(null)) problems.push(`line ${number}: github context read whole or by a computed index`);
     if (properties.some((name) => name === 'event' || name === 'head_ref')) {
@@ -223,13 +227,13 @@ function checkLeakRules(lines: Line[]): string[] {
 }
 
 // The `policy` profile (branch-policy.yml): the public rules, and the run's token named in one place,
-// `GITHUB_TOKEN: ${{ github.token }}` in the env of a script step (no action) of the release-guard
-// job, which reads pull requests with a read-only token.
-export const POLICY_TOKEN_JOB = 'release-guard';
+// `GITHUB_TOKEN: ${{ github.token }}` in the env of a script step (no action) of the two jobs
+// (the label job only on the merge queue), which read pull requests with a read-only token.
+export const POLICY_TOKEN_JOBS = ['semver-label', 'release-guard'];
 const POLICY_TOKEN_LINE = /^\s+GITHUB_TOKEN: \$\{\{ github\.token \}\}\s*$/;
 
 function policyTokenLines(lines: Line[]): Set<Line> {
-  const job = jobBlocks(lines).find((item) => item.name === POLICY_TOKEN_JOB)?.block ?? [];
+  const job = jobBlocks(lines).filter((item) => POLICY_TOKEN_JOBS.includes(item.name)).flatMap((item) => item.block);
   const allowed = new Set<Line>();
   for (const env of job.filter((line) => line.key === 'env' && !line.inBlock)) {
     const step = stepOf(lines, lines.indexOf(env));
@@ -260,7 +264,7 @@ function profileChecks(profile: Profile): {runners: Check; secrets: Check; injec
     case 'description':
       return {...shared, injection: (items) => checkInjection(items, true)};
     case 'policy':
-      return {...shared, secrets: (items) => checkSecrets(items, policyTokenLines(items))};
+      return {...shared, injection: (items) => checkInjection(items, false, true), secrets: (items) => checkSecrets(items, policyTokenLines(items))};
     case 'backport':
       return {...shared, secrets: checkBackportSecrets, injection: checkBackportEvent, actions: (items) => checkActions(items, false),
         triggers: checkBackportTriggers, permissions: checkBackportPermissions};
@@ -269,7 +273,7 @@ function profileChecks(profile: Profile): {runners: Check; secrets: Check; injec
         triggers: checkRegisterTriggers, permissions: checkRegisterPermissions};
     case 'public':
       // public-ci.yml: the informational macOS job is the one exception (tests/public-ci-macos-checks.ts).
-      return {...shared, runners: (items) => checkRunners(items, runnerFor(items, RUNNER)),
+      return {...shared, injection: (items) => checkInjection(items, false, true), runners: (items) => checkRunners(items, runnerFor(items, RUNNER)),
         timeouts: (items) => timeoutProblems(items, (job) => timeoutCap(job, MAX_TIMEOUT_MINUTES)),
         continueOnError: (items) => checkContinueOnError(items, allowedContinueOnError(items))};
     default:

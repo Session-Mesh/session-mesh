@@ -381,6 +381,134 @@ This is an owner action, a reset of a protected branch:
 4. Check that `release/latest` and `v0.2.0` name the same commit. From here on, the backports
    go to the 0.2.x line, and the 0.2.y patches are tagged on `release/latest`.
 
+## The merge queue
+
+For maintainers. The workflows are ready for the merge queue of the forge; it is switched on in a
+ruleset, which the workflows cannot change.
+
+**Do not enable "Require merge queue" in the existing ruleset "main and release".** That ruleset targets
+both `refs/heads/main` and `refs/heads/release/**`, so the queue rule would apply to the release
+branches too. There the workflows have no `merge_group` trigger yet, and `tools/branch-policy/` is
+the old copy: on a `merge_group` event it exits with status 2. No required check would be reported,
+and every pull request to a release branch would wait in the queue until it times out (it fails
+closed, nothing lands, but the release branches are blocked until the rule is removed). A rule
+cannot be restricted to one branch inside a ruleset, so the queue is a separate ruleset that targets
+`main` only; or the workflows and the tool are backported to the release branches first.
+
+**Owner steps, in this order.**
+
+1. Merge the pull request that holds these workflows **by hand** ("Rebase and merge"), before any
+   queue exists: its own `merge_group` support cannot be tested by a queue that is not there, and the
+   pull request changes `.github/workflows/`, which is not queued (CONTRIBUTING.md, "Merge queue").
+2. If the queue is wanted on `release/latest` as well: backport it there first (the three workflows
+   and `tools/branch-policy/`, `tools/cla-check/`), merge that backport by hand, and only then
+   include `release/**` in a queue ruleset. Until then leave the release branches out.
+3. Create a **new** ruleset, targeting `refs/heads/main` only, with "Require merge queue" and the
+   settings below: merge method rebase, maximum and minimum group size 1, maximum concurrent builds 1,
+   status check timeout 60 minutes. The 12 required status checks stay in the existing ruleset "main and
+   release"; do not rename or add required names.
+4. Test with a harmless pull request (a typo in a document, `semver` label set): queue it, watch the
+   queue's checks (all 12 names must report on the queue's commit) and the landing.
+5. To disable quickly: delete the queue ruleset, or set its enforcement to "Disabled" (Settings,
+   Rules, Rulesets). Pull requests then merge by hand as before.
+
+**What the owner sets in the queue ruleset** (on `main`):
+
+- merge method: **Rebase and merge** (the only method the repository allows; the `cla` check
+  assumes it);
+- build concurrency and group size: **maximum concurrent builds = 1** and a group of 1 (maximum and
+  minimum group size 1), so each entry is judged and landed alone on the current tip of `main`.
+  Both are required: with a build concurrency above 1 the entries stack, even with a group of 1, and
+  an entry's `base_sha` is the previous entry's commit, not the tip of `main` (see the residual risk
+  of `cla` below). 2 or 3 per group is possible once the backport workflows have been seen on queued
+  merges (see below);
+- minimum time in the queue before merging: 0 for a group of 1; wait time for the minimum group
+  size otherwise;
+- status check timeout: more than the slowest required job (the jobs have a 45-minute safety
+  net; ten minutes is only a target), for example 60 minutes;
+- "Only merge non-failing pull requests" or "all entries": the first, so that a failed entry does not
+  take the entries behind it with it.
+
+The 12 required status checks stay as they are.
+
+**What runs on the queue's commit.** `public-ci.yml`, `branch-policy.yml` and `pr-description.yml` have
+the trigger `merge_group: types: [checks_requested]`; every job that produces a required check name
+runs on it, and no job that provides a required name can be skipped (see "Failed or skipped dependency" below). Details in
+[CONTRIBUTING.md](../CONTRIBUTING.md#merge-queue); the rules are pinned by
+`tests/merge-queue-workflow.test.ts`.
+
+- `cla` re-runs the checker of the base over the range `merge_group.base_sha..head_sha`. The checker
+  takes a test merge commit of (base, head); the queue has none, so the job builds one locally with
+  `git commit-tree` from the head's tree (a linear head's own tree, which is what the checker checks
+  and the check of a pull request relies on too). The maintainers' list and the checker come from
+  `base_sha`. The commit ids reach the script through environment variables, never through the
+  script text. *Residual risk*: with "maximum concurrent builds" above 1 (the documented setting is 1),
+  `base_sha` is the commit of the entry ahead in the queue, not the tip of `main`, so the maintainers'
+  list, the register and the checker are read on a commit that holds an unmerged change. Probe: entry 1
+  adds a name to `tools/cla-check/MAINTAINERS`; entry 2, by that person, fails on a base of `main` and
+  passes on a base of entry 1. If entry 1 then leaves the queue, entry 2's result is stale. Entry 1's
+  change was judged on its own entry, but entry 2 would rely on it before it is merged: keep the
+  concurrency at 1.
+- `semver label` and `release branch guard` judge the queued pull request again. The queue's commit has no
+  pull request, so the base's copy of `tools/branch-policy/branch-policy.ts` (read with `cat-file` from
+  `base_sha`, never the queued commits' copy) parses the number from `merge_group.head_ref`
+  (`gh-readonly-queue/<base>/pr-<number>-<sha>`, a strict pattern; no match is an error), reads the pull
+  request through the API with the job's read-only token (`pull-requests: read`, named only in that
+  step), requires its base to be the one the queue built on, and applies the same functions
+  (`semverLabelProblems`, `releaseGuardProblems`) as at the pull request's own event. The labels and
+  the base are read when the queue runs the checks (once per `merge_group` event); a change made
+  after that read does not rerun them and does not fail the queued entry. A label removed or
+  duplicated before the read is refused; so is a changed description of a backport. A refusal or an
+  unreadable API fails the check, so the entry leaves the queue.
+- `PR description (no personal details)` is a job whose only step on the queue echoes a line (it
+  reports its name with a success; every other step is skipped by
+  `if: github.event_name != 'merge_group'`). The description is not checked again there; the check
+  is warning-only.
+- `macos (arm64, informational)` is excluded (`if: github.event_name != 'merge_group'`).
+- The concurrency groups stay `<workflow>-${{ github.ref }}`: the queue's ref differs from the pull
+  request's, and `cancel-in-progress` is off for `merge_group`, so neither event cancels the other.
+- `backport.yml` and `backport-register.yml` run on `pull_request_target` (`closed`); that event
+  still fires when the queue merges the pull request, and `pull_request_target` workflows never run on
+  `merge_group`. `release.yml`, `site.yml`, `site-preview*.yml` have no `merge_group` trigger.
+
+**Failed or skipped dependency.** The documentation of the forge says that a required status check
+with the status `success`, `skipped` or `neutral` satisfies a rule ("Successful check statuses are
+success, skipped, and neutral"; also in "About protected branches"), so a skipped required job lets a
+merge through. `frontend and Node tests`, `ruff and pytest (without browser)` and the four browser
+shards wait for the `native PTY host (linux-x86_64)` job (`needs: native`, for the built host
+artifact), and that job is not one of the 12 required names: if it failed, the six required jobs
+would be skipped, and the queue, which has no human watching the run, would see no red check. Each
+of the six therefore has `if: "!cancelled()"` (it runs even when `native` failed or was skipped)
+and a first step that fails when `needs.native.result` is not `success`, so a failed or skipped
+`native` makes the six checks red, never skipped. What is guaranteed now: no job that provides a
+required name carries a condition that can skip it, except `!cancelled()`, and a required job that
+needs a non-required job fails when that job did not succeed (`tests/merge-queue-workflow.test.ts`).
+What is not: a cancelled run (a newer push on a pull request, a manual cancel) leaves its jobs
+cancelled, which is not a success either. The other required jobs (`cla`, `leak check`, `OCaml`, the
+two branch-policy jobs and the description job) have no `needs`.
+
+**Backports.** `backport-register.yml` replays the commits a rebase merge landed, found from the
+event's merge commit id and commit count. With a group of 1 that is the same shape as a manual
+rebase merge; with larger groups the landed commits of one pull request may not be the last ones on
+`main` when the workflow starts, and the script's checks (authors, dates, patch ids) refuse such a
+replay with a comment and push nothing. Watch the first queued merges of a `semver: patch` pull
+request and of a register change before raising the group size. A backport pull request to
+`release/latest` can be queued like any other, once the queue is enabled on `release/**` (see the owner steps above, not before): open it,
+check it, then "Merge when ready" (or `gh pr merge --auto --rebase <number>`).
+
+**Dequeue.** "Remove from merge queue" on the pull request page. `gh pr merge --disable-auto` only
+cancels an auto-merge that has not entered the queue yet; it does not take an entry out of it.
+A pull request that fails a check on the queue's commit is removed by GitHub; pushing a fix and
+queueing again starts a new entry.
+
+**Not verified offline.** The facts below come from GitHub's documentation as known to the
+author, not from a run: that a required check must report on `merge_group` (`checks_requested`) for
+an entry to proceed; the queue ref name and the event's `base_sha`, `head_sha` and `head_ref` fields;
+that the queue's temporary branch holds the entry's commits as a straight line on `base_sha` when
+the method is rebase (if it holds a merge commit instead, `cla` refuses the entry: it fails safe);
+that `pull_request_target` workflows do not start on `merge_group`; and the `merge_commit_sha` of
+a pull request merged by the queue. Also the committer identity of the commits the queue rebases (expected: GitHub <noreply@github.com>; if it differs, `cla` refuses every entry: it fails closed), and the behaviour of a required job skipped because a job it needs failed (the documentation is read, no run reproduced it). A first queued merge of a harmless pull request is the test.
+
 ## Languages
 
 The web server is written in Python, but no new Python is accepted: the project is converging on

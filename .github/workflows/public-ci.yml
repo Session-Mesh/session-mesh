@@ -20,6 +20,12 @@ on:
     # again against the new base (the cla job; tools/cla-check/SPEC.md). Every job runs on it, so
     # that no required check is left as skipped. A title or description edit also re-runs them.
     types: [opened, synchronize, reopened, edited]
+  # The merge queue (CONTRIBUTING.md, "Merge queue"): GitHub builds a temporary commit of the queued
+  # pull request(s) on the base branch and waits for every required check on it. Every required
+  # job below runs on it; the informational macOS job does not. The ref is
+  # refs/heads/gh-readonly-queue/<base>/pr-<n>-<sha>, so no other event shares its concurrency group.
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -47,9 +53,21 @@ jobs:
   frontend:
     name: frontend and Node tests
     needs: native
+    # A skipped required check counts as passing for the ruleset, and `native` is not itself required:
+    # the job runs even when `native` failed or was skipped, and its first step turns that into a red check.
+    if: "!cancelled()"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      # Required check: a failed or skipped `native` job must make this job red, never skipped.
+      - name: Fail unless the native PTY host job succeeded
+        env:
+          NATIVE_RESULT: ${{ needs.native.result }}
+        run: |
+          if [[ "$NATIVE_RESULT" != success ]]; then
+            echo "native PTY host job result: $NATIVE_RESULT (success expected)"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -151,9 +169,21 @@ jobs:
   python:
     name: ruff and pytest (without browser)
     needs: native
+    # A skipped required check counts as passing for the ruleset, and `native` is not itself required:
+    # the job runs even when `native` failed or was skipped, and its first step turns that into a red check.
+    if: "!cancelled()"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      # Required check: a failed or skipped `native` job must make this job red, never skipped.
+      - name: Fail unless the native PTY host job succeeded
+        env:
+          NATIVE_RESULT: ${{ needs.native.result }}
+        run: |
+          if [[ "$NATIVE_RESULT" != success ]]; then
+            echo "native PTY host job result: $NATIVE_RESULT (success expected)"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -204,6 +234,9 @@ jobs:
   browser:
     name: browser tests (Chromium, shard ${{ matrix.shard }} of 4)
     needs: native
+    # A skipped required check counts as passing for the ruleset, and `native` is not itself required:
+    # the job runs even when `native` failed or was skipped, and its first step turns that into a red check.
+    if: "!cancelled()"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     # The whole browser suite runs serially in about 9 minutes on a fast
@@ -216,6 +249,15 @@ jobs:
       SHARDS: 4
       SHARD: ${{ matrix.shard }}
     steps:
+      # Required check: a failed or skipped `native` job must make this job red, never skipped.
+      - name: Fail unless the native PTY host job succeeded
+        env:
+          NATIVE_RESULT: ${{ needs.native.result }}
+        run: |
+          if [[ "$NATIVE_RESULT" != success ]]; then
+            echo "native PTY host job result: $NATIVE_RESULT (success expected)"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -537,11 +579,11 @@ jobs:
     steps:
       # The job runs on every event, because a skipped job satisfies a required check: a
       # workflow_dispatch on the branch of a pull request would otherwise attach a skipped `cla`
-      # to its head commit. Outside a pull request it fails, except on main and on a maintenance
-      # branch (release/**), where the commits were integrated already, through a pull request that
-      # the check judged, and there is nothing left to judge.
-      - name: Refuse to pass outside a pull request, except on main and release branches
-        if: github.event_name != 'pull_request'
+      # to its head commit. Outside a pull request and the merge queue it fails, except on main
+      # and on a maintenance branch (release/**), where the commits were integrated already,
+      # through a pull request that the check judged, and there is nothing left to judge.
+      - name: Refuse to pass outside a pull request and the merge queue, except on main and release branches
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
         run: |
           if [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/heads/release/* ]]; then
             echo "cla: nothing verified. These commits are on ${GITHUB_REF#refs/heads/} already; the cla check judges pull requests."
@@ -549,12 +591,12 @@ jobs:
             echo "::error::the cla check only runs on pull requests (ref: $GITHUB_REF)"
             exit 1
           fi
-      - if: github.event_name == 'pull_request'
+      - if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
-      - if: github.event_name == 'pull_request'
+      - if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -569,6 +611,32 @@ jobs:
           merge=$(git rev-parse --verify 'HEAD^{commit}')
           checker="$RUNNER_TEMP/cla-check.ts"
           # The base branch always holds the checker; without it the job fails here.
+          git cat-file blob "$base:tools/cla-check/cla-check.ts" > "$checker"
+          node --experimental-strip-types "$checker" --repo . --base "$base" --head "$head" --merge "$merge"
+      # The merge queue: the temporary commit is the queued commits on top of the base, and the
+      # check judges that range again with the same checker and the same rules, so a queued commit
+      # that no longer passes (a register line withdrawn on the base in the meantime, a commit
+      # that is not linear) is refused here and the entry leaves the queue. The base is the
+      # event's `base_sha`, a commit id, never text a contributor writes; the checkout must be the
+      # event's `head_sha`. The checker is the base's copy and MAINTAINERS is read on the base.
+      # The checker wants a test merge commit of (base, head): the queue has none, so one is
+      # built here, locally, with the head's tree (the tree of a linear head, which is what the
+      # checker verifies); it is never pushed and nothing judges its identity.
+      - name: The queued commits are linear, by maintainers or CLA signatories, and change the register as allowed
+        if: github.event_name == 'merge_group'
+        env:
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          QUEUE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          head=$(git rev-parse --verify "$QUEUE_HEAD_SHA^{commit}")
+          base=$(git rev-parse --verify "$QUEUE_BASE_SHA^{commit}")
+          if [[ "$(git rev-parse --verify 'HEAD^{commit}')" != "$head" ]]; then
+            echo "::error::the checkout is not the merge group's head commit"
+            exit 1
+          fi
+          merge=$(GIT_AUTHOR_NAME=queue GIT_AUTHOR_EMAIL=queue@invalid GIT_COMMITTER_NAME=queue GIT_COMMITTER_EMAIL=queue@invalid \
+            git commit-tree "$head^{tree}" -p "$base" -p "$head" -m "test merge of the merge group")
+          checker="$RUNNER_TEMP/cla-check.ts"
           git cat-file blob "$base:tools/cla-check/cla-check.ts" > "$checker"
           node --experimental-strip-types "$checker" --repo . --base "$base" --head "$head" --merge "$merge"
 
@@ -600,6 +668,8 @@ jobs:
   # timeout stays the last safety net (docs/development.md, "The macOS job").
   macos:
     name: macos (arm64, informational)
+    # Not on the merge queue: informational, so no reason to hold a queue entry for a macOS run.
+    if: github.event_name != 'merge_group'
     runs-on: macos-15
     continue-on-error: true
     timeout-minutes: 45
