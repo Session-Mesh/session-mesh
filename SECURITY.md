@@ -18,9 +18,11 @@ loopback, `--tailscale`), what an attacker needs beforehand (a local
 account, a position on the tailnet, a document opened in the interface…) and what they obtain.
 
 session-mesh is an alpha project maintained in spare time: reports are handled on a best-effort
-basis, with no guaranteed response time. Fixes go to the `main` branch and reach users in the next
-release; there are no maintained release branches, so only the latest release (and the latest
-`main`, for a source install) is supported.
+basis, with no guaranteed response time. Fixes go to the `main` branch first. The maintenance
+branch `release/latest` follows the current published minor line (0.1.x today): fixes labelled
+`semver: patch`, security fixes among them, are backported to it and released as a patch version.
+The supported versions are the latest release of that line and the latest `main`, for a source
+install.
 
 ## Threat model
 
