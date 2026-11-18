@@ -59,10 +59,10 @@ const DEFAULT: Colours = {
 
 const LIGHT: Colours = {
   '--bg': '#eef1f5', '--term': '#ffffff', '--panel': '#f6f8fa', '--panel-2': '#eaeef2', '--line': '#d0d7de',
-  '--fg': '#1f2328', '--mute': '#59636e', '--accent': '#197a35', '--busy': '#916100', '--idle': '#197a35',
-  '--wait': '#bc4c00', '--off': '#8c959f', '--danger': '#cf222e',
+  '--fg': '#1f2328', '--mute': '#59636e', '--accent': '#177131', '--busy': '#875a00', '--idle': '#177131',
+  '--wait': '#a94400', '--off': '#8c959f', '--danger': '#c1202b',
   '--fg-2': '#3d444d', '--raise': '#dde3ea', '--line-2': '#afb8c1', '--on-accent': '#ffffff',
-  '--cursor': '#197a35', '--selection': '#b6d7ff',
+  '--cursor': '#177131', '--selection': '#b6d7ff',
   ...ansi(['#24292f', '#cf222e', '#116329', '#4d2d00', '#0969da', '#8250df', '#1b7c83', '#6e7781',
     '#57606a', '#a40e26', '#1a7f37', '#633c01', '#218bff', '#a475f9', '#3192aa', '#8c959f']),
 };
@@ -73,20 +73,20 @@ const LIGHT: Colours = {
 const SOLARIZED_ACCENTS = ['#dc322f', '#859900', '#b58900', '#268bd2', '#d33682', '#2aa198'];
 const SOLARIZED_DARK: Colours = {
   '--bg': '#002b36', '--term': '#002b36', '--panel': '#073642', '--panel-2': '#0a3a47' /* derived */,
-  '--line': '#1b4b57' /* derived */, '--fg': '#a2afaf' /* derived from base1 */, '--mute': '#93a3a5' /* derived from base0 */,
-  '--accent': '#91a319', '--busy': '#bc9519', '--idle': '#91a319' /* derived from green and yellow */,
-  '--wait': '#dc8561' /* derived from orange */, '--off': '#586e75',
-  '--danger': '#e87a78' /* derived from red */, '--fg-2': '#93a1a1', '--raise': '#0f4654' /* derived */,
+  '--line': '#1b4b57' /* derived */, '--fg': '#a2afaf' /* derived from base1 */, '--mute': '#99a9aa' /* derived from base0 */,
+  '--accent': '#9eae35', '--busy': '#c4a235', '--idle': '#9eae35' /* derived from green and yellow */,
+  '--wait': '#e09474' /* derived from orange */, '--off': '#586e75',
+  '--danger': '#eb8b8a' /* derived from red */, '--fg-2': '#9ba8a8' /* derived from base1 */, '--raise': '#0c404d' /* derived */,
   '--line-2': '#586e75', '--on-accent': '#002b36', '--cursor': '#93a1a1', '--selection': '#0f4f5f',
   ...ansi(['#073642', ...SOLARIZED_ACCENTS, '#eee8d5',
     '#586e75', '#cb4b16', '#586e75', '#657b83', '#839496', '#6c71c4', '#93a1a1', '#fdf6e3']),
 };
 const SOLARIZED_LIGHT: Colours = {
   '--bg': '#fdf6e3', '--term': '#fdf6e3', '--panel': '#eee8d5', '--panel-2': '#e6dfc9' /* derived */,
-  '--line': '#d6cfb9' /* derived */, '--fg': '#073642', '--mute': '#50646a' /* derived from base01 */,
-  '--accent': '#5a6800' /* derived from green */, '--busy': '#7d5f00' /* derived from yellow */,
-  '--idle': '#5a6800', '--wait': '#a83c10' /* derived from orange */, '--off': '#93a1a1',
-  '--danger': '#b8221f' /* derived from red */, '--fg-2': '#50646a', '--raise': '#e3dcc4' /* derived */,
+  '--line': '#d6cfb9' /* derived */, '--fg': '#073642', '--mute': '#4f6369' /* derived from base01 */,
+  '--accent': '#586600' /* derived from green */, '--busy': '#785b00' /* derived from yellow */,
+  '--idle': '#586600', '--wait': '#a83c10' /* derived from orange */, '--off': '#93a1a1',
+  '--danger': '#b8221f' /* derived from red */, '--fg-2': '#4f6369', '--raise': '#e3dcc4' /* derived */,
   '--line-2': '#93a1a1', '--on-accent': '#fdf6e3', '--cursor': '#586e75', '--selection': '#e3dcc4',
   ...ansi(['#073642', ...SOLARIZED_ACCENTS, '#eee8d5',
     '#002b36', '#cb4b16', '#586e75', '#657b83', '#839496', '#6c71c4', '#93a1a1', '#fdf6e3']),
@@ -96,8 +96,8 @@ const SOLARIZED_LIGHT: Colours = {
 const GRUVBOX_DARK: Colours = {
   '--bg': '#1d2021', '--term': '#282828', '--panel': '#32302f', '--panel-2': '#3c3836', '--line': '#504945',
   '--fg': '#ebdbb2', '--mute': '#bdae93', '--accent': '#b8bb26', '--busy': '#fabd2f', '--idle': '#b8bb26',
-  '--wait': '#fe8019', '--off': '#665c54', '--danger': '#fc7e6f' /* derived from red */,
-  '--fg-2': '#d5c4a1', '--raise': '#504945', '--line-2': '#665c54', '--on-accent': '#1d2021',
+  '--wait': '#fe9640' /* derived from orange */, '--off': '#665c54', '--danger': '#fc9386' /* derived from red */,
+  '--fg-2': '#d5c4a1', '--raise': '#46413e' /* derived */, '--line-2': '#665c54', '--on-accent': '#1d2021',
   '--cursor': '#ebdbb2', '--selection': '#504945',
   ...ansi(['#282828', '#cc241d', '#98971a', '#d79921', '#458588', '#b16286', '#689d6a', '#a89984',
     '#928374', '#fb4934', '#b8bb26', '#fabd2f', '#83a598', '#d3869b', '#8ec07c', '#ebdbb2']),
@@ -109,7 +109,7 @@ const NORD: Colours = {
   '--bg': '#272c36' /* derived */, '--term': '#2e3440', '--panel': '#2e3440', '--panel-2': '#3b4252',
   '--line': '#434c5e', '--fg': '#e5e9f0', '--mute': '#a8b0c0' /* derived */, '--accent': '#88c0d0',
   '--busy': '#ebcb8b', '--idle': '#a3be8c', '--wait': '#dba391' /* derived from nord12 */, '--off': '#4c566a',
-  '--danger': '#e0959c' /* derived from nord11 */, '--fg-2': '#d8dee9', '--raise': '#3b4252',
+  '--danger': '#e39fa5' /* derived from nord11 */, '--fg-2': '#d8dee9', '--raise': '#3b4252',
   '--line-2': '#4c566a', '--on-accent': '#2e3440', '--cursor': '#d8dee9', '--selection': '#434c5e',
   ...ansi(['#3b4252', '#bf616a', '#a3be8c', '#ebcb8b', '#81a1c1', '#b48ead', '#88c0d0', '#e5e9f0',
     '#616e88', '#bf616a', '#a3be8c', '#ebcb8b', '#81a1c1', '#b48ead', '#8fbcbb', '#eceff4']),

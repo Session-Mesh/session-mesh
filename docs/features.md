@@ -1025,5 +1025,13 @@ The interface variables are `--bg`, `--term` (terminal background), `--panel`, `
 `--ansi-black` to `--ansi-white` with their `--ansi-bright-…` forms. Only those names and only
 hexadecimal colours (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) are accepted; anything else is
 refused with the offending names, and nothing is applied. "Start from the current theme" fills the
-editor with every variable of the theme in use; "Reset" removes the overrides. The palette is kept
-in this browser only: another browser or device keeps its own.
+editor with every variable of the theme in use; "Reset" removes the overrides. The palette is
+stored in this browser's local storage (`localStorage`) only: another browser or device keeps its
+own. Keeping it in a file under `~/.config/session-mesh/`, shared by every browser, is planned for a
+later phase.
+
+In this phase the theme applies to the main page and its terminals. The sign-in page, the
+whiteboard and the code and Markdown views keep the default dark colours.
+
+The arrow keys browse the closed selector without opening the editor: "Custom palette…" opens only
+when it is chosen from the open list.
