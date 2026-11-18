@@ -51,8 +51,12 @@ after(async () => {
       }
     }
   } finally {
-    await mesh?.stop();
-    await provider.stop();
+    // Each stop runs even when the one before it rejects: either left running keeps this file alive.
+    try {
+      await mesh?.stop();
+    } finally {
+      await provider.stop();
+    }
   }
 });
 
