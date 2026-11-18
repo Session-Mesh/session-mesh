@@ -1,7 +1,7 @@
 # Contributing to session-mesh
 
 Thank you for considering a contribution. session-mesh is an alpha project developed in public by
-two maintainers, Mathias Bourgoin and Julien Tesson. This page says what a pull request needs to be
+the maintainers listed in [CONTRIBUTORS.md](CONTRIBUTORS.md#maintainers). This page says what a pull request needs to be
 merged: the technical rules, and the contributor license agreement (CLA) that every contributor
 accepts once, by adding a line to [CLA-SIGNATORIES.md](CLA-SIGNATORIES.md) in a commit of their own.
 
@@ -12,6 +12,42 @@ For a vulnerability, do not open an issue or a pull request: follow [SECURITY.md
 For anything larger than a small fix, open an issue first and describe the problem and the change
 you have in mind. The project has strong opinions about its trust boundaries
 ([SECURITY.md](SECURITY.md#threat-model)), and a short discussion avoids work that cannot be merged.
+
+## A pull request at a glance
+
+1. Branch from `main` and open the pull request against `main`, whatever it changes
+   ([Branches and versions](#branches-and-versions)).
+2. Run `scripts/test-local.sh` before pushing ([Tests](#tests)).
+3. Accept the CLA once by adding your line to [CLA-SIGNATORIES.md](CLA-SIGNATORIES.md) in a commit
+   of your own ([How to accept it](#how-to-accept-it)).
+4. Say in the description whether the change is a fix for the released line (`semver: patch`) or
+   not (`semver: minor`). A maintainer sets the label if you cannot set labels on the repository.
+5. Keep the branch a straight line on top of `main`: rebase, never merge `main` into it
+   ([How a pull request is merged](#how-a-pull-request-is-merged)).
+6. Wait for the required checks below, the automatic CodeRabbit review and a maintainer's review.
+   A maintainer merges with "Rebase and merge", the only merge method the repository allows. A
+   merged `semver: patch` pull request is then backported to `release/latest` automatically.
+
+### Required checks
+
+The rule of `main` and `release/**` requires these checks to pass. Each is the name shown on the
+pull request.
+
+| Check | Workflow | What it guards |
+| --- | --- | --- |
+| `semver label` | `branch-policy.yml` | A pull request to `main` carries exactly one `semver:` label. |
+| `release branch guard` | `branch-policy.yml` | A pull request to `release/**` is a backport of a merged `semver: patch` pull request. |
+| `cla` | `public-ci.yml` | Linear history on the tip of `main`; every author and committer is a maintainer or a signatory ([details](#the-cla-check-blocks-the-merge)). |
+| `leak check (public rules)` | `public-ci.yml` | No personal details or secrets in the files of the tree, and SPDX license headers. |
+| `PR description (no personal details)` | `pr-description.yml` | Reports personal details in the description as warnings; it fails only if the tool itself fails ([Commits and identity](#commits-and-identity)). |
+| `OCaml build, tests and native ptyhost gate` | `public-ci.yml` | The OCaml build and tests, and the conformance gate of the native PTY host. |
+| `frontend and Node tests` | `public-ci.yml` | Frontend type checks and builds, and the Node tests. |
+| `ruff and pytest (without browser)` | `public-ci.yml` | Lint and tests of the existing Python code. |
+| `browser tests (Chromium, shard N of 4)` | `public-ci.yml` | The browser tests, split over four jobs (`N` is 0 to 3). |
+
+No approving review is required by the rule; a maintainer reads every pull request before merging
+it. CodeRabbit reviews pull requests to `main` and `release/**` (settings in
+[.coderabbit.yaml](.coderabbit.yaml)); its comments are advisory.
 
 ## Technical rules
 
@@ -35,6 +71,13 @@ file is acceptable when it is needed; write its test in OCaml or TypeScript when
 
   [docs/development.md](docs/development.md) explains how it finds Python, Chromium and the opam
   switch.
+- The browser tests expect English interface text. Some of them open Chromium without setting a
+  language, so Chromium takes it from your environment. On a desktop in another language, run the
+  suite as CI does, in English:
+
+  ```sh
+  LANG=C.UTF-8 LANGUAGE=en scripts/test-local.sh
+  ```
 - The public CI (`.github/workflows/public-ci.yml`) runs the same suite on every pull request, plus a
   leak check of the tree and the [CLA check](#the-cla-check-blocks-the-merge). It must pass before a
   merge.
@@ -87,7 +130,9 @@ Without it the test is skipped, unless `MESH_REQUIRE_ITF_ADAPTER=1` is set, in w
 - The description of your pull request is checked too, with the same content rules (no personal
   e-mail address, home path, tailnet address or name, token), and the CI warns on a finding: it
   shows warnings on the check and in its summary, and does not block the merge. The comment at the
-  top of the pull request template says what to leave out. To check a description before you post
+  top of the pull request template says what to leave out. The check
+  `PR description (no personal details)` is required, but in this warning mode it passes on a
+  finding; it fails only when the tool itself cannot run. To check a description before you post
   it, save it to a file and run:
 
   ```sh
@@ -105,8 +150,8 @@ Without it the test is skipped, unless `MESH_REQUIRE_ITF_ADAPTER=1` is set, in w
 
 Every pull request targets `main`, whatever it changes. Releases of a series that is already
 published (0.1.x while `main` prepares 0.2) are cut from one moving maintenance branch, `release/latest`,
-which points at the current minor line (today the tag `v0.1.0`; the maintainers move it to the new tag at each minor release). A contributor never opens a pull request against it by
-hand for a normal fix: it is filled by backports.
+which points at the current minor line (today the tag `v0.1.0`; the maintainers move it to the new tag at each minor release). It is filled by backports: a contributor opens a pull request
+against it by hand only when the backport workflow reports a conflict, as described below.
 
 - **One label per pull request.** A pull request to `main` carries exactly one of
   `semver: patch` (a fix that the maintenance branch should also get) and `semver: minor`
@@ -138,8 +183,8 @@ pull requests to `release/**`. The maintainers' setup of the backport workflow i
 ### How a pull request is merged
 
 Pull requests are merged with **"Rebase and merge" only**: GitHub replays the commits of the pull
-request, one by one (it drops the commits that are empty), on top of `main`. The branch rule of `main` also requires the branch to be **up
-to date with `main`** before it is merged. So a pull request is a straight line of ordinary commits
+request, one by one (it drops the commits that are empty), on top of `main`. The [`cla` check](#the-cla-check-blocks-the-merge) requires the branch to
+**contain the tip of `main`** when it runs. So a pull request is a straight line of ordinary commits
 on top of the tip of `main`:
 
 - **No merge commits.** A rebase drops them, so what they change would not be what lands; the
@@ -279,7 +324,8 @@ leave on `main`, and verifies three things. Its exact rules are in
   `CONTRIBUTORS.md` or `.gitattributes`. What covers these changes is the maintainers reading
   the pull request before they merge it.
 - **The check judges the pull request as it was when the check ran.** If `main` changes
-  afterwards, the branch is no longer up to date and cannot be merged until it is rebased, which
+  afterwards, the result shown stays the one computed against the former tip: the branch rule
+  does not itself require the branch to be up to date. A maintainer may ask you to rebase, which
   runs the check again. Changing the base branch of a pull request also runs it again; until that
   run starts, the result shown is the one against the former base.
 
