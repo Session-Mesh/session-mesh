@@ -128,3 +128,28 @@ test('a status change breaks the run of hot windows', () => {
   assert.notEqual(steps(undefined, [30, ['shell', 30]]), 'active');
   assert.equal(steps(undefined, [30, ['shell', 30], 30]), 'active');
 });
+
+// Each sample as [window start, window end, CPU value], read at the window end.
+const spans = (samples: [number, number, number][]) => {
+  let ranking: Ranking | null = null;
+  for (const [start, end, value] of samples) {
+    const metrics = {cpu_percent: {state: 'derived', source: 'procfs-stat', value, observed_at: end,
+      window: {start, end}, reason: null}};
+    const raw = {sessions: [{name: 's', created: 1, source: 'mesh', lifecycle: 'active', agent_type: 'codex', metrics}]};
+    ranking = activity.update(ranking, [session('idle', 'codex')], raw, end);
+  }
+  return (ranking as unknown as Ranking).phaseById.s;
+};
+
+test('a window longer than 15 s is never hot, so it cannot promote', () => {
+  assert.notEqual(spans([[90, 100, 65], [100, 140, 10]]), 'active');
+  assert.notEqual(spans([[90, 100, 65], [100, 140, 10], [140, 150, 65]]), 'active');
+  assert.equal(spans([[90, 100, 65], [100, 140, 10], [140, 150, 65], [150, 160, 65]]), 'active');
+  assert.equal(spans([[90, 100, 65], [100, 114, 65]]), 'active');
+});
+
+test('after the 30 s grace, one hot window does not renew activity', () => {
+  assert.equal(windows('idle', [[100, 65], [110, 65], [140, 65]]), 'active');
+  assert.notEqual(windows('idle', [[100, 65], [110, 65], [150, 65]]), 'active');
+  assert.equal(windows('idle', [[100, 65], [110, 65], [150, 65], [160, 65]]), 'active');
+});
