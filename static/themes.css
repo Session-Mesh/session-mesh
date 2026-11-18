@@ -6,7 +6,8 @@
 /* Colour themes (static/themes.ts sets the variables on :root and data-theme / data-scheme).
    style.css still writes a few colours as literals tuned for the default dark palette. Under any
    other theme the rules below route them through the theme's variables; the default theme keeps
-   style.css exactly as it is. The derived variables have their default values here. */
+   style.css exactly as it is, except for the counter of the current tab below. The derived
+   variables have their default values here. */
 
 :root {
   --fg-2: #aab2c0;      /* secondary text: last line, quotes, messages */
@@ -14,6 +15,9 @@
   --line-2: #3a4555;    /* a stronger border: hover, selection */
   --on-accent: #0b0e13; /* text on an accent background */
 }
+
+/* Every theme, the default one included: --mute is under 4.5:1 on the current tab (--raise). */
+.tabs button.cur .n { color: var(--fg-2); }
 
 #theme-select { max-width: 13em; padding-right: 4px; }
 #theme-select option { background: var(--panel-2); color: var(--fg); }
