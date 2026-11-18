@@ -111,6 +111,54 @@ detects it. Two ways out, narrowest first:
 opam's own build sandbox also uses bubblewrap, so the same restriction can stop `opam switch create`;
 the same two ways apply.
 
+## The macOS job
+
+`public-ci.yml` has a job `macos (arm64, informational)` on the GitHub-hosted `macos-15` arm64
+runner (standard, free for a public repository). It is **informational**: `continue-on-error: true`,
+and its name is not in the ruleset's required checks, so a failure is visible on the pull request
+but never blocks the merge. It runs in parallel with the others and nothing waits for it. It does
+not run the browser tests. In the system bash 3.2, with the macOS 13 deployment target of the
+release programs and the pinned SQLite of `mesh-history`, it runs:
+
+- the SPDX header check (`scripts/check-copyright.sh`, with BSD `stat`);
+- `scripts/bootstrap.sh --deps-only`, then `scripts/bootstrap.sh --install-only` (`dune build` and
+  install, a step of its own), then `dune runtest` of the native tests as a separate step, so that a
+  red native test fails the job without hiding the other results. The native test "actual pure
+  validator cancellation keeps lane independent" (`ocaml/test/project_host_test.ml`) failed on the
+  first run on macOS 15 arm64 (`observation cancelled: not within 15 s`); its cause is not established
+  and it is not skipped, so the job stays red until it is fixed;
+- the release link and deployment-target checks (`scripts/release-check-macos.sh`) on the built programs;
+- the Node tests and the pytest files listed in `tests/macos-ci-tests.txt` (the allow-list below).
+  The installer tests (`tests/install-*.test.ts`, `tests/test_install_backend.py`, ...) are not in
+  the allow-list: they assume Linux coreutils paths and GNU tools (the file's comments list them).
+
+**The allow-list.** Part of the test suite assumes Linux (`/proc`, Linux process and socket
+behaviour, GNU tools); run in full, the job would stay red and hide a real macOS regression. The
+job therefore runs only the files of `tests/macos-ci-tests.txt`: one path per line, `#` starts a
+comment, blank lines are ignored; a `.py` entry is run by pytest (`-m 'not browser'`), any other
+entry by `node --test`. A workflow-structure test checks that the job reads the file and that every
+listed path exists. The job validates each line itself (`^tests/[A-Za-z0-9._/-]+\.(ts|py)$`, no
+`..`) and fails on an absent or empty list instead of running everything. The Node and pytest steps
+are independent of each other and of the native tests, and run only when the build step succeeded.
+A test that fails on the runner for a macOS-only reason is a finding: fix the code, or
+the test if it wrongly assumes Linux, and add it to the list in the same pull request.
+
+To add a file: run it on a Mac (or read the job's result on your pull request), with
+`MESH_BASH32=/bin/bash`, a free `MESH_PORT` and `MESH_SESSION_TOKEN` unset; list it only if it passes
+twice in a row. Keep the comments of the file: they say, by cause, what is not listed yet.
+
+The opam state is cached under a key of its own and saved from `main` only, like the Linux one; a
+run without a cache entry builds the compiler and may reach its 45-minute timeout, and the next
+run on `main` then starts from the saved state (a manual `workflow_dispatch` on `main` seeds it).
+
+To make it required: first let it stay green on `main` and on pull requests for a while (the
+allow-list is what makes that possible; widen it before promoting), then remove its `continue-on-error: true` and the exception for it in
+`tests/public-ci-macos-checks.ts` (the public profile then applies to it like to the other jobs, with the
+`macos-15` runner kept), have a maintainer add the check name to the ruleset (the name appears on
+pull requests; rename the job first if the label should not say "informational", and update
+`MACOS_JOB_NAME` in the same file and the table in CONTRIBUTING.md), and move its timeout to the
+other jobs' safety net if the cold build needs it.
+
 ## Backports to the maintenance branch
 
 For maintainers. The rules for contributors (target `main`, the `semver:` labels, `release/latest`)
