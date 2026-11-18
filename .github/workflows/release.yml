@@ -206,6 +206,8 @@ jobs:
             [[ "$info" == *"statically linked"* ]]
             [[ "$(LC_ALL=C ldd "$RUNNER_TEMP/out/$program" 2>&1 || true)" == *"not a dynamic executable"* ]]
           done
+      - name: Use a fast apt mirror with retries
+        run: bash .github/scripts/fast-apt-mirror.sh
       # The smoke script talks to the host's socket with nc -U.
       - name: Install netcat for the smoke check
         run: |
@@ -390,6 +392,8 @@ jobs:
         run: bash scripts/smoke-bundle.sh "$RUNNER_TEMP/out/mesh-$TARGET.tar.gz"
         env:
           MESH_SMOKE_REQUIRE_ROSTER: "1"
+      - name: Use a fast apt mirror with retries
+        run: bash .github/scripts/fast-apt-mirror.sh
       - name: Install bubblewrap for the demo compiler test
         run: |
           sudo apt-get update -q
