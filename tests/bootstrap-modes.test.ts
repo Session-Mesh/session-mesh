@@ -109,16 +109,17 @@ const lines = (file: string) => fs.existsSync(file) ? fs.readFileSync(file, 'utf
 
 let runs = 0;
 
-type Run = {status: number | null; output: string; calls: string[];
+type Run = {status: number | null; output: string; calls: string[]; stateDir: string;
   selected: (name: string) => string[]; repositories: string[]; switches: string[]};
 
+// `reuse` runs against the state an earlier run left, instead of a fresh one built from `state`.
 function bootstrap(args: string[], python: string, options: {pins?: string; state?: Partial<OpamState>;
-    env?: Record<string, string | undefined>} = {}): Run {
+    reuse?: string; env?: Record<string, string | undefined>} = {}): Run {
   const run = runs++;
   const calls = path.join(scratch, `calls-${run}`);
-  const stateDir = path.join(scratch, `state-${run}`);
+  const stateDir = options.reuse ?? path.join(scratch, `state-${run}`);
   fs.writeFileSync(calls, '');
-  writeState(stateDir, {...onPin(), ...options.state});
+  if (options.reuse === undefined) writeState(stateDir, {...onPin(), ...options.state});
   const env: Record<string, string | undefined> = {...process.env, PATH: `${scratch}:${process.env.PATH}`,
     OPAM_CALLS: calls, FAKE_STATE: stateDir, MESH_OPAM_SWITCH: 'fake-switch', MESH_OPAM_SELECT_PINNED: undefined,
     OCAML_COMPILER: undefined, FAKE_SWITCH_LIST_FAILS: undefined, FAKE_CREATE_FAILS: undefined, FAKE_NO_COMPILER: undefined,
@@ -126,7 +127,7 @@ function bootstrap(args: string[], python: string, options: {pins?: string; stat
     PYTHON: python, FAKE_PINS: options.pins ?? '', ...options.env};
   for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name];
   const result = spawnSync('bash', ['scripts/bootstrap.sh', ...args], {cwd: REPO, env, encoding: 'utf8'});
-  return {status: result.status, output: result.stdout + result.stderr, calls: lines(calls),
+  return {status: result.status, output: result.stdout + result.stderr, calls: lines(calls), stateDir,
     selected: (name) => lines(path.join(stateDir, `selected-${key(name)}`)),
     repositories: lines(path.join(stateDir, 'repositories')), switches: lines(path.join(stateDir, 'switches'))};
 }
@@ -357,12 +358,28 @@ describe('scripts/bootstrap.sh modes', () => {
     assert.equal(failed.status, 1, failed.output);
     assert.match(failed.output, /creating the opam switch 'fake-switch' failed/);
     assert.ok(failed.output.includes(removal), failed.output);
-    const rerun = bootstrap(['--install-only'], withPytest, {env: {FAKE_NO_COMPILER: 'fake-switch'},
-      state: {...elsewhere, switches: ['other', 'fake-switch'], selected: {other: ['default'], 'fake-switch': ['session-mesh']}}});
+    const rerun = bootstrap(['--install-only'], withPytest, {reuse: failed.stateDir});
     assert.equal(rerun.status, 1, rerun.output);
     assert.match(rerun.output, /no OCaml compiler runs in the opam switch 'fake-switch'/);
     assert.ok(rerun.output.includes(removal), rerun.output);
+    assert.ok(rerun.calls.every((call) => !call.startsWith('switch create')), rerun.calls.join('\n'));
     assert.ok(rerun.calls.every((call) => !/^(install|pin)\b/.test(call)), rerun.calls.join('\n'));
+  });
+
+  test('the compiler is run from the switch bin directory, not looked up on the host PATH', () => {
+    const run = bootstrap(['--install-only'], withPytest);
+    assert.equal(run.status, 0, run.output);
+    assert.ok(run.calls.includes('exec --switch=fake-switch -- /fake/bin/ocamlc -version'), run.calls.join('\n'));
+  });
+
+  test('a former session-mesh URL with credentials is replaced but not printed', () => {
+    const secret = 'git+https://user:s3cret@example.org/opam-repository.git#0000000000000000000000000000000000000000';
+    const run = bootstrap(['--deps-only'], withPytest, {
+      state: {repositories: {'session-mesh': secret}, selected: {'fake-switch': ['session-mesh']}}});
+    assert.equal(run.status, 0, run.output);
+    assert.deepEqual(run.repositories, [`session-mesh ${PINNED}`]);
+    assert.ok(!run.output.includes('s3cret'), run.output);
+    assert.match(run.output, /former URL carried credentials and is not printed/);
   });
 
   test('a failed switch listing stops the bootstrap before any change', () => {
@@ -389,7 +406,9 @@ describe('scripts/bootstrap.sh modes', () => {
   test('--print-bin and a relative switch directory create nothing', () => {
     const printBin = bootstrap(['--print-bin'], withPytest, {state: {switches: ['other']}});
     assert.equal(printBin.status, 1, printBin.output);
-    assert.match(printBin.output, /does not exist; run bootstrap\.sh --install-only to create it/);
+    assert.ok(printBin.output.includes(
+      `does not exist; to create it, run: OPAMROOT=${quoted(ROOT)} MESH_OPAM_SWITCH=fake-switch bash scripts/bootstrap.sh --install-only`),
+    printBin.output);
     assert.deepEqual(changes(printBin.calls), []);
     const relative = bootstrap(['--install-only'], withPytest, {env: {MESH_OPAM_SWITCH: 'switches/mesh'}});
     assert.equal(relative.status, 1, relative.output);
