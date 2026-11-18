@@ -20,6 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {afterEach} from 'node:test';
 import {INSTALL_SCRIPTS} from './install-scripts.ts';
+import {linkSystemTools} from './helpers/system-tool.ts';
 
 export const SOURCE = process.env.MESH_INSTALL_SOURCE || path.resolve(import.meta.dirname, '..');
 // The native programs of a release, and of a bundle.
@@ -50,8 +51,10 @@ function testPython(): string {
 const TEST_PYTHON = testPython();
 export const DOWNLOAD = 'https://github.com/Session-Mesh/session-mesh/releases/download';
 export const LATEST = 'https://api.github.com/repos/Session-Mesh/session-mesh/releases/latest';
+// shasum: what install.sh uses where sha256sum is missing (macOS).
 const REAL_TOOLS = ['bash', 'dirname', 'basename', 'readlink', 'mkdir', 'rm', 'rmdir', 'seq', 'sleep', 'grep', 'cat', 'ln',
-  'mktemp', 'chmod', 'mv', 'ls', 'cp', 'sha256sum', 'tar', 'gzip', 'sed', 'touch', 'tail', 'tee', 'env', 'find', 'sort', 'tr', 'xargs'];
+  'mktemp', 'chmod', 'mv', 'ls', 'cp', 'sha256sum', 'shasum', 'tar', 'gzip', 'sed', 'touch', 'tail', 'tee', 'env', 'find',
+  'sort', 'tr', 'xargs'];
 export const sha = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 
 export type Fixture = {root: string; home: string; fakes: string; log: string; served: string; state: string; share: string;
@@ -117,9 +120,7 @@ export function fixture(extraFakes: Record<string, string> = {}): Fixture {
   const state = path.join(root, 'state');
   for (const dir of [home, fakes, served, state, path.join(root, 'runtime')]) fs.mkdirSync(dir, {mode: 0o700});
   for (const [name, body] of Object.entries({...FAKES, ...extraFakes})) writeExecutable(path.join(fakes, name), body);
-  for (const tool of REAL_TOOLS) {
-    if (!fs.existsSync(path.join(fakes, tool))) fs.symlinkSync(`/usr/bin/${tool}`, path.join(fakes, tool));
-  }
+  linkSystemTools(REAL_TOOLS, fakes);
   const share = path.join(home, '.local/share/session-mesh');
   return {root, home, fakes, log: path.join(root, 'calls.log'), served, state, share, units: path.join(home, '.config/systemd/user')};
 }

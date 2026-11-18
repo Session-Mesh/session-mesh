@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {afterEach, describe, test} from 'node:test';
 import {copyInstallerScripts} from './install-scripts.ts';
+import {linkSystemTools} from './helpers/system-tool.ts';
 
 const SOURCE = process.env.MESH_INSTALL_SOURCE || path.resolve(import.meta.dirname, '..');
 const REAL_TOOLS = ['dirname', 'readlink', 'mkdir', 'rm', 'seq', 'sleep', 'grep', 'cat', 'ln', 'mktemp', 'sed', 'id', 'tee'];
@@ -64,7 +65,7 @@ function fixture(opts: {checkoutName?: string; status?: string; deny?: boolean; 
   for (const [name, body] of Object.entries(FAKES)) {
     if (name !== 'tailscale' || opts.tailscale !== false) writeExecutable(path.join(bin, name), body);
   }
-  for (const tool of REAL_TOOLS) fs.symlinkSync(`/usr/bin/${tool}`, path.join(bin, tool));
+  linkSystemTools(REAL_TOOLS, bin);
   const status = path.join(root, 'serve.json');
   fs.writeFileSync(status, opts.status ?? '{}\n');
   if (opts.deny) fs.writeFileSync(path.join(root, 'deny'), '');
@@ -79,7 +80,7 @@ function environment(fx: Fixture, extra: Record<string, string>): Record<string,
 }
 
 // answer === undefined: stdin is not a terminal. Otherwise the installer runs on a pseudo-terminal
-// (util-linux script) and `answer` is typed on it.
+// (script: util-linux's on Linux, BSD's on macOS) and `answer` is typed on it.
 type InstallOptions = {answer?: string; env?: Record<string, string>; unset?: string[]; timeout?: number};
 function install(fx: Fixture, args: string[], opts: InstallOptions = {}) {
   const command = [path.join(fx.checkout, 'install.sh'), ...args];
@@ -87,13 +88,27 @@ function install(fx: Fixture, args: string[], opts: InstallOptions = {}) {
   for (const name of opts.unset ?? []) delete env[name];
   const result = opts.answer === undefined
     ? spawnSync('/bin/bash', command, {env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: opts.timeout ?? 20000})
-    : spawnSync('/usr/bin/script', ['-qec', ['/bin/bash', ...command].map(shellQuote).join(' '), '/dev/null'],
-      {env, input: `${opts.answer}\n`, encoding: 'utf8', timeout: 20000});
+    : onTerminal(fx, ['/bin/bash', ...command], `${opts.answer}\n`, env);
   const calls = fs.existsSync(fx.log) ? fs.readFileSync(fx.log, 'utf8') : '';
   return {...result, calls, output: `${result.stdout}${result.stderr}`};
 }
 
 const shellQuote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
+
+// Runs `argv` on a pseudo-terminal where `answer` is typed. Linux: util-linux script, a shell command
+// with -c, -e for its exit status, the answer as stdin. Elsewhere (macOS) BSD script takes the command
+// as arguments and returns its status. Its stdin must be a pipe: it refuses Node's, a socket there, and
+// a FIFO, socket-backed there (tcgetattr: Operation not supported on socket). And it must stay open
+// while script runs: at the end of its stdin script types end-of-file on the terminal, which can reach
+// the installer before the answer. So a writer types the answer, then waits for script's end.
+const BSD_TERMINAL = '{ printf %s "$2"; until [[ -e $1 ]]; do /bin/sleep 0.1; done; } '
+  + '| { /usr/bin/script -q /dev/null "${@:3}"; status=$?; : > "$1"; exit $status; }';
+const onTerminal = (fx: Fixture, argv: string[], answer: string, env: Record<string, string>) =>
+  process.platform === 'linux'
+    ? spawnSync('/usr/bin/script', ['-qec', argv.map(shellQuote).join(' '), '/dev/null'],
+      {env, input: answer, encoding: 'utf8', timeout: 20000})
+    : spawnSync('/bin/bash', ['-c', BSD_TERMINAL, 'terminal', path.join(fx.root, 'answered'), answer, ...argv],
+      {env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 20000});
 const unitDir = (fx: Fixture) => path.join(fx.home, '.config/systemd/user');
 const sudoCalls = (calls: string) => calls.split('\n').filter((line) => line.startsWith('sudo '));
 const hasScript = fs.existsSync('/usr/bin/script');

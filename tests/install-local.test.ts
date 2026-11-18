@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {afterEach, describe, test} from 'node:test';
 import {copyInstallerScripts} from './install-scripts.ts';
+import {linkSystemTools} from './helpers/system-tool.ts';
 
 const SOURCE = process.env.MESH_INSTALL_SOURCE || path.resolve(import.meta.dirname, '..');
 const REAL_TOOLS = ['dirname', 'readlink', 'mkdir', 'rm', 'seq', 'sleep', 'grep', 'cat', 'ln', 'mktemp'];
@@ -36,7 +37,8 @@ function writeExecutable(file: string, body: string): void {
 }
 
 function fixture(checkoutName = 'checkout', fakes: Record<string, string> = FAKES): Fixture {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-install-'));
+  // Resolved, as the installer resolves the paths it writes into units (macOS: /var and /tmp are links).
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-install-')));
   fixtures.push(root);
   const checkout = path.join(root, checkoutName);
   fs.mkdirSync(path.join(checkout, 'bin'), {recursive: true});
@@ -50,7 +52,7 @@ function fixture(checkoutName = 'checkout', fakes: Record<string, string> = FAKE
   fs.mkdirSync(bin);
   fs.mkdirSync(path.join(root, 'runtime'));
   for (const [name, body] of Object.entries(fakes)) writeExecutable(path.join(bin, name), body);
-  for (const tool of REAL_TOOLS) fs.symlinkSync(`/usr/bin/${tool}`, path.join(bin, tool));
+  linkSystemTools(REAL_TOOLS, bin);
   return {root, checkout, home, fakes: bin, log: path.join(root, 'calls.log')};
 }
 
