@@ -937,6 +937,7 @@
   "theme.paletteUnknown": "Unknown variable: {key}",
   "theme.paletteNotColour": "Not a hexadecimal colour: {key}",
   "theme.paletteLowContrast": "Warning: the text contrast is {ratio}:1, below the 4.5:1 of WCAG AA.",
+  "theme.paletteContrastUnknown": "The text contrast could not be checked: a background is translucent.",
   "tree.close": "Close the file tree",
   "tree.empty": "empty",
   "tree.hidden": "Show hidden files",

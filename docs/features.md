@@ -1025,8 +1025,10 @@ The interface variables are `--bg`, `--term` (terminal background), `--panel`, `
 `--ansi-black` to `--ansi-white` with their `--ansi-bright-…` forms. Only those names and only
 hexadecimal colours (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) are accepted; anything else is
 refused with the offending names, and nothing is applied. "Start from the current theme" fills the
-editor with every variable of the theme in use; "Reset" removes the overrides. The palette is
-stored in this browser's local storage (`localStorage`) only: another browser or device keeps its
+editor with every variable of the theme in use; "Reset" removes the overrides. After "Apply", the
+editor warns when the text falls below a 4.5:1 contrast on the backgrounds, measuring a translucent
+text as it shows; with a translucent background it says the contrast could not be checked. The
+palette is stored in this browser's local storage (`localStorage`) only: another browser or device keeps its
 own. Keeping it in a file under `~/.config/session-mesh/`, shared by every browser, is planned for a
 later phase.
 

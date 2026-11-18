@@ -139,6 +139,33 @@ describe('built-in themes', () => {
     assert.equal(contrastRatio('#fff', '#000'), 21);
     assert.equal(contrastRatio('#777777', '#777777'), 1);
   });
+
+  test('the contrast ratio measures a translucent text as it shows over its background', () => {
+    assert.equal(contrastRatio('#fff0', '#000000'), 1, 'fully transparent text is invisible');
+    assert.equal(contrastRatio('#ffffff00', '#0b0e13'), 1);
+    assert.equal(contrastRatio('#ffffffff', '#000000'), 21);
+    const half = contrastRatio('#ffffff80', '#000000');
+    assert.ok(half > 4 && half < 6, `half-transparent white on black: ${half}`);
+    assert.ok(Number.isNaN(contrastRatio('#ffffff', '#00000080')), 'a translucent background cannot be checked');
+  });
+
+  // xterm.js draws ANSI colours as they are (its minimumContrastRatio is 1 by default). Black on a
+  // dark terminal and white on a light one serve mostly as backgrounds (status bars, selections):
+  // they sit close to the terminal background, as in every source palette, but never on it, or
+  // text in that colour vanishes (1:1). Every other ANSI colour stays clearly visible; 2.4:1 is the
+  // floor of the source palettes (Default's bright black, Solarized's base1).
+  for (const theme of THEMES) {
+    test(`${theme.id}: no ANSI colour disappears into the terminal background`, () => {
+      const background = theme.colours['--term']!;
+      const backgroundRole = theme.scheme === 'dark' ? ['black'] : ['white', 'brightWhite'];
+      for (const name of ANSI_NAMES) {
+        const variable = `--ansi-${name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+        const ratio = contrastRatio(theme.colours[variable]!, background);
+        const floor = backgroundRole.includes(name) ? 1.05 : 2.4;
+        assert.ok(ratio >= floor, `${name} ${theme.colours[variable]} on ${background}: ${ratio.toFixed(2)}`);
+      }
+    });
+  }
 });
 
 describe('custom palette validation', () => {
@@ -217,6 +244,17 @@ describe('storage', () => {
     assert.equal(writePalette(FAILING, {'--bg': '#000'}), false);
     assert.equal(readThemeId(null), 'default');
   });
+
+  test('no storage at all (the browser refuses it) reports every write as not kept', () => {
+    assert.equal(writeThemeId(null, 'light'), false);
+    assert.equal(writePalette(null, {'--bg': '#000'}), false);
+    assert.equal(writePalette(null, {}), false);
+    const page = fakePage();
+    const runtime = createRuntime(page, null);
+    assert.equal(runtime.setPalette({'--bg': '#123456'}), false, 'reported as not saved');
+    assert.equal(page.vars.get('--bg'), '#123456', 'still applied to this page');
+    assert.deepEqual(runtime.palette(), {'--bg': '#123456'});
+  });
 });
 
 describe('terminal mapping', () => {
@@ -276,6 +314,21 @@ describe('runtime', () => {
     assert.equal(heard.length, 2);
     assert.equal(runtime.setPalette({}), true);
     assert.equal(page.vars.get('--bg'), '#1d2021', 'reset restores the theme value');
+  });
+
+  test('data-palette marks a custom palette, so themes.css routes the default theme through it', () => {
+    const page = fakePage();
+    const runtime = createRuntime(page, new MemoryStorage());
+    assert.equal(page.dataset['palette'], undefined);
+    runtime.setPalette({'--raise': '#345678'});
+    assert.equal(page.dataset['theme'], 'default');
+    assert.equal(page.dataset['palette'], 'custom');
+    runtime.setPalette({});
+    assert.equal('palette' in page.dataset, false);
+    const css = fs.readFileSync(path.join(ROOT, 'static', 'themes.css'), 'utf8');
+    assert.doesNotMatch(css, /^:root:not\(\[data-theme="default"\]\)/m, 'a rule that ignores the palette under the default theme');
+    assert.match(css, /^:root:is\(:not\(\[data-theme="default"\]\), \[data-palette\]\) \.tabs button\.cur \{ background: var\(--raise\); \}$/m);
+    assert.match(css, /^:root:is\(:not\(\[data-theme="default"\]\), \[data-palette\]\) \.btn\.primary \{ color: var\(--on-accent\); \}$/m);
   });
 
   test('reload follows a change made by another tab', () => {

@@ -6983,7 +6983,11 @@ function paletteStatusText(saved) {
   const ratio = Math.min(meshThemes().contrastRatio(colours["--fg"], colours["--bg"]),
     meshThemes().contrastRatio(colours["--fg"], colours["--term"]), meshThemes().contrastRatio(colours["--fg"], colours["--panel"]));
   const applied = t("theme.paletteApplied", { n: count });
-  return ratio < 4.5 ? `${applied} ${t("theme.paletteLowContrast", { ratio: ratio.toFixed(1) })}` : applied;
+  // NaN: a translucent background, whose contrast depends on what shows through it.
+  if (Number.isNaN(ratio)) return `${applied} ${t("theme.paletteContrastUnknown")}`;
+  // Rounded down, so a failing 4.49 never reads as the 4.5 it misses.
+  const shown = fmtFixed(Math.floor(ratio * 10) / 10, 1);
+  return ratio < 4.5 ? `${applied} ${t("theme.paletteLowContrast", { ratio: shown })}` : applied;
 }
 
 function setupPaletteEditor() {
@@ -6991,7 +6995,16 @@ function setupPaletteEditor() {
   const text = $("#palette-text");
   const status = $("#palette-status");
   const report = (message, bad) => { status.textContent = message; status.classList.toggle("bad", bad); };
-  const show = () => { text.value = meshThemes().formatPalette(themes.palette()); };
+  // Only a JSON or validation error marks the field invalid (not a storage refusal).
+  const markInvalid = (invalid) => {
+    if (invalid) { text.setAttribute("aria-invalid", "true"); text.setAttribute("aria-errormessage", "palette-status"); }
+    else { text.removeAttribute("aria-invalid"); text.removeAttribute("aria-errormessage"); }
+  };
+  // The text last written from the saved palette: a change from another tab refreshes the field
+  // only while it still holds that text, so an unsaved draft is never replaced.
+  let rendered = "";
+  const show = () => { rendered = meshThemes().formatPalette(themes.palette()); text.value = rendered; };
+  const refresh = () => { if (text.value === rendered) show(); };
   // Each variable name is its own <code>, never broken across lines.
   const hint = $("#palette-hint");
   hint.textContent = t("theme.paletteHint", { names: "" });
@@ -7003,6 +7016,7 @@ function setupPaletteEditor() {
   show();
   $("#palette-apply").addEventListener("click", () => {
     const result = meshThemes().parsePalette(text.value);
+    markInvalid(!result.ok);
     if (!result.ok) return report(paletteErrorText(result), true);
     const saved = themes.setPalette(result.palette);
     show();
@@ -7010,23 +7024,25 @@ function setupPaletteEditor() {
   });
   $("#palette-reset").addEventListener("click", () => {
     const saved = themes.setPalette({});
+    markInvalid(false);
     show();
     report(paletteStatusText(saved), !saved);
   });
   $("#palette-fill").addEventListener("click", () => {
     text.value = meshThemes().formatPalette(themes.colours());
+    markInvalid(false);
     text.focus();
   });
-  return show;
+  return refresh;
 }
 
 whenTranslated(() => {
   const select = $("#theme-select");
   // Without static/themes.js only the default look exists: there is nothing to choose.
   if (!meshThemes()) { select.hidden = true; return; }
-  const showPalette = setupPaletteEditor();
+  const refreshPalette = setupPaletteEditor();
   renderThemeSelect(select);
-  meshThemes().runtime.onChange(() => { renderThemeSelect(select); showPalette(); });
+  meshThemes().runtime.onChange(() => { renderThemeSelect(select); refreshPalette(); });
   // The arrow keys change a closed <select> at once. A change made by a key press on the select
   // itself only browses: passing over "Custom palette…" does not open the dialog. Choosing that
   // entry from the open list (pointer, or Enter in the list) does.
