@@ -13,6 +13,11 @@ For anything larger than a small fix, open an issue first and describe the probl
 you have in mind. The project has strong opinions about its trust boundaries
 ([SECURITY.md](SECURITY.md#threat-model)), and a short discussion avoids work that cannot be merged.
 
+The text of each new issue opened by a non-maintainer is sent to a third-party model for classification
+([how](docs/development.md#automatic-issue-triage)), whatever the answer; one of the labels `bug`,
+`enhancement`, `documentation` or `question` is added only when the answer is confident. Do not paste
+secrets in an issue. A maintainer can change the label.
+
 ## A pull request at a glance
 
 1. Branch from `main` and open the pull request against `main`, whatever it changes

@@ -628,6 +628,158 @@ night, with the check named in the job summary); it ends when the pending run tu
 
 A user installs a nightly with `install.sh --upgrade --to <nightly tag>`
 ([Upgrading a release install](operations.md#upgrading-a-release-install)).
+## Automatic issue triage
+
+For maintainers. `.github/workflows/issue-triage.yml` classifies each new issue with
+Ollama's decision API (System One, model `clef`) and adds at most one label. The rules are in
+`tools/issue-triage/issue-triage.ts`; `tests/issue-triage.test.ts` (against a fake decision API and a
+fake GitHub API) and `tests/issue-triage-workflow.test.ts` (the workflow file) enforce them.
+
+What it does: on `issues: opened` it reads the issue and the repository labels through the GitHub API,
+then sends one `POST <base URL>/v1/systemone` with ONE `choice` question. The `state` is the issue as
+JSON (title cut to 200 characters, body cut to 4000, control characters removed, author association,
+labels already on the issue). The options are `other` (none of the labels) plus the labels `bug`,
+`enhancement`, `documentation` and `question` that exist in the repository, and the criteria of each
+option is the description of that label in the repository (a built-in default when the description is
+empty). Descriptions are untrusted, because a triager can edit them: they are cleaned like the issue
+text and cut to 200 characters. If fewer than two of the four labels exist, nothing is asked. The
+model has no tool and no access to the repository, the secrets or other issues. The script, not the
+model, decides: the answer must be exactly one answer for the question, with a choice among the options
+sent and probabilities in 0..1 for those options only, otherwise nothing is added. It adds the chosen
+label only when it is one of the four labels, it exists in the repository, its probability is at least
+0.7 (`PROBABILITY_THRESHOLD`, the probability of the chosen option), the `confidence` of the answer is at
+least 0.5 (`CONCENTRATION_GUARD`; `confidence` only measures how concentrated the probabilities are, it
+is not the chance of being right) and the issue has none of those four labels yet. The job summary
+gives the model, the option names sent, the chosen option, its probability, the confidence and the
+decision, or why nothing was added.
+
+What it never does: add any other label (`wontfix`, `invalid`, `duplicate`, `good first issue`,
+`help wanted`, `accessibility`, a `semver:` label), remove or replace a label, close, lock, assign,
+comment or edit. Issues filed through the bug-report template already carry the `bug` label
+(`.github/ISSUE_TEMPLATE/bug_report.yml` sets `labels: ["bug"]`), so they count as already labelled and are not
+triaged: in practice the triage covers blank issues. It skips issues opened by a bot or by an owner, member or collaborator (maintainers
+label by hand), and it never fails the job: a missing key, a timeout, an HTTP error or a garbled
+answer is a warning and no label. It runs on `issues: opened` and on a manual dispatch only: no
+`edited`, `reopened`, pull request or schedule trigger. The job token is limited to `issues: write`, `contents: read` (needed to check out the public repository) and `actions: read` (needed to count the runs of the last 24 hours, see "Abuse and cost controls").
+
+Enable it:
+
+1. In the repository settings, create the environment `issue-triage`, add the secret
+   `OLLAMA_API_KEY` to it (an Ollama API key), and restrict the environment to the branch `main` so
+   that a workflow run from another branch cannot read the key. The repository does not rely on this
+   setting alone: the job runs only when the workflow ref is the default branch (the `if:` of the job, also for a
+   dispatch) and the script refuses to run, with no model call and no label, when `GITHUB_REF` is not
+   `refs/heads/<default branch>`, so code pushed to a writer's branch is never started with the key. The
+   deployment-branch restriction to `main` stays recommended as a second layer; it is an administrator setting
+   that this repository cannot verify.
+2. Optionally set the variables `OLLAMA_MODEL` (default `clef`) and `OLLAMA_BASE_URL`. Each may be a
+   repository variable or a variable of the `issue-triage` environment: the job declares that
+   environment, so both are exposed through `vars`. The script removes a trailing `:cloud` from the
+   model name (`clef:cloud` is called as `clef`): the direct cloud API takes the plain name, and
+   `:cloud` is the tag a local Ollama uses to offload to the cloud. The documentation is ambiguous:
+   the OpenAPI cites `clef:cloud` as a model name while the direct-call example uses `clef`. With this
+   script `clef` and `clef:cloud` both call the model `clef`; a name such as `clef:27b-cloud` is
+   passed unchanged. The model actually used, and a
+   note when the variable is empty and the default is used, appear in the job summary and in the
+   warnings.
+   The base URL must be `https` on exactly `ollama.com` (no subdomain, port or credentials), otherwise nothing is sent: a variable
+   cannot redirect the key elsewhere, and the key does not depend on what Ollama hosts under its subdomains. The script calls `<base URL>/v1/systemone` with a `Bearer` key.
+3. Have a paid Ollama plan or purchased usage credits: the documentation says cloud access requires
+   one. Without them the call fails, and the job only warns (the documentation names HTTP 401 for a
+   refused key and HTTP 402 for missing credits; no other code is promised). Cost: `clef` is listed at about 0.24 USD per million input tokens (input only); an issue
+   is a few thousand tokens at most, so a triage costs a fraction of a cent. The pay-as-you-go plan
+   allows 3 concurrent requests: according to ollama.com/pricing, requests above that are queued, and an
+   HTTP 429 only happens when the queue is full. Automatic runs (new issues) execute one at a time (see "Abuse and cost controls"), so a queue
+   is unlikely; manual dispatches use per-issue groups and can run alongside them and each other, so more than 3 concurrent
+   requests need several maintainer dispatches at once; a 429 (or any failure) adds no label.
+
+Test it without changing anything: start the workflow by hand (Actions, issue-triage, Run workflow;
+it needs write access to the repository, which GitHub enforces), give an existing issue number and
+leave `dry_run` checked. The job triages that issue like a new one, except that the maintainer and
+bot skip does not apply, and writes the model, the options sent, the chosen option with its
+probability and confidence, and the label it would add to the job summary. It adds nothing. Uncheck
+`dry_run` to add the label for real.
+
+Disable it: set the variable `TRIAGE_ENABLED` to `false`, or delete the secret `OLLAMA_API_KEY` (the job then does nothing and says so), or delete the
+workflow file. Deleting the secret or setting the variable only prevents future runs: a run already in progress keeps the key it started with, so, to stop at once, also cancel the in-flight `issue-triage` runs from the Actions tab.
+
+Data: the text of each triaged issue (title and the first 4000 characters of the body), its author
+association, its existing label names and the descriptions of the four labels are sent to Ollama, a
+third party. Issues are public, but a secret pasted into an issue would be sent as well: revoke any
+secret that is pasted in an issue. Ollama states that cloud prompts are not stored or used for
+training; that is its claim, not something this repository checks.
+
+### Abuse and cost controls
+
+The issue text is written by strangers and every triage is a call to an account that has limits (3
+concurrent requests, a paid plan or credits). At about 0.24 USD per million input tokens one triage
+costs roughly 0.00024 USD, so the risk of spam is availability and quota rather than money; a burst must
+be cheap and bounded. The guards below are listed in the order they act, as the code runs them; none of
+them echoes issue text in the job summary, and all of them act before any Ollama call.
+
+- **Global concurrency (before the script starts).** All runs started by `issues: opened` share one
+  concurrency group (`issue-triage-global`, `cancel-in-progress: false`), declared on the job: a run whose job is
+  skipped by the `if:` guard (an issue of a maintainer or a bot) does not join the group, so it cannot take the
+  pending slot of someone else's run (GitHub documentation, not reproduced on a real run). According to the GitHub
+  documentation (using concurrency), at most one run is running and at most one is pending in a group, and
+  when a newer run queues, an existing pending run of the group is cancelled; the running one is never
+  cancelled. In a burst of issues, one run executes, one waits and the excess is dropped without cost. A
+  dropped run is a cancelled run: that issue is simply never triaged and stays unlabelled (nothing else
+  happens to it); a maintainer can start the workflow by hand on it (dispatch). A dispatch has its own
+  group per issue number and dry-run value (`dispatch-<issue>-<dry_run>`), so it never cancels a pending issue run, and a
+  later dry run never replaces a pending real dispatch of the same issue. Limit: an outsider who opens an issue right
+  after another one replaces the pending run of that earlier issue, which then stays unlabelled; this costs availability
+  of the label only.
+- **Kill switch (first thing the script does).** The repository (or `issue-triage` environment) variable
+  `TRIAGE_ENABLED`: the value `false` stops everything, compared after trimming whitespace and ignoring
+  case, so `False` or ` false ` also stop it (a typo must not leave the triage on). The script writes a
+  summary line, makes no request at all (GitHub or Ollama) and adds no label. `0`, `no`, `off` and any
+  other value are NOT kill values: the switch is `false`. Absent or empty means enabled. It does not touch
+  the secret.
+- **Issue read.** The script reads the issue through the API (its JSON may be up to 256 KiB; the Ollama
+  answer is capped at 64 KiB). An issue that cannot be read is not triaged.
+- **Issues that do not deserve a call.** Skipped: a pull request number, a locked issue, an empty title and
+  a body that is empty or shorter than 15 characters after trimming (all four also on a dispatch), then,
+  on the `issues` event only, an issue opened by a bot or by an owner, member or collaborator.
+- **Label already present.** An issue that already has one of the four labels is kept as it is.
+- **Account age filter (off by default).** `TRIAGE_MIN_ACCOUNT_AGE_DAYS`: a positive integer skips
+  issues whose author account is younger than that many days (`created_at` read from the users API with the
+  same token). 0, absent or invalid means off; a failure to read the account never blocks the triage. This
+  slows a naive spammer, not an organised one (accounts can be aged in advance), and it penalises real new
+  contributors, which is why it is off by default. Not applied to a dispatch.
+- **Daily cap (last guard before the model call).** On an `issues` event, the script counts the runs of
+  this workflow created in the last 24 hours (`GET /repos/{owner}/{repo}/actions/workflows/issue-triage.yml/runs?created=>=<time>&per_page=100`,
+  at most 10 pages: the API returns at most 1000 results for a filtered listing). The current run and
+  cancelled or skipped runs are not counted. When the count reaches `TRIAGE_DAILY_CAP` (repository
+  variable, default 100, an integer from 1 to 10000; anything else is the default) the call is skipped and
+  the summary says so. Because the API caps the listing, a full last page counts as the cap reached, so no
+  setting above about 1000 is ever reached. If the count cannot be made (HTTP error, unreadable answer),
+  the call is skipped with a warning and the job still exits 0: the cap is a cost control, so it fails
+  closed. A manual dispatch is not subject to the cap, because only users with write access can start one.
+  Reading the listing needs the `actions: read` permission, which is the only permission added to the job.
+  **The cap counts runs, not model calls.** A run that stops inside the script (short body, locked issue,
+  too-young account, cap already reached) concludes `success` and is counted like a run that called the
+  model. So 100 empty issues from strangers within 24 hours fill the cap and block the triage of real
+  issues for the rest of the window, although they cost nothing. This is an availability limit, not a cost
+  one; the runs of maintainers and bots, whose job is skipped by the `if:` guard, are not counted. A
+  maintainer can still triage an issue by dispatch, which is exempt from the cap.
+- **Then**: the four labels are looked up in the repository (one `GET /repos/{owner}/{repo}/labels/{name}`
+  each, a 404 meaning that the label does not exist), the model is called, and, only when the decision
+  holds, the issue is read again just before the write: if a label of the list appeared during the model
+  call (up to a minute) nothing is written. This narrows the window in which a maintainer's label and the
+  automatic one could both be set; it is not atomic. A refused write (for example HTTP 403) or a failed
+  re-read is reported as a warning.
+
+The job timeout is 8 minutes. The calls of the script time out at 15 s (GitHub) and 60 s (Ollama): in the
+worst case (issue, account, 10 run pages, 4 label lookups, Ollama, re-read, write) about 5.5 minutes, plus
+the checkout and the Node setup, so 8 leaves room without letting a stuck job run long.
+
+Stop everything at once: set `TRIAGE_ENABLED` to `false` (no redeploy, the secret is kept), or delete the
+secret `OLLAMA_API_KEY`, or delete the workflow file.
+
+Owner side, outside this repository: use prepaid credits without automatic reload, so that the worst case
+is bounded by what was bought; use an API key dedicated to this repository, so that it can be revoked or
+rate-limited without touching anything else.
 
 ## Languages
 

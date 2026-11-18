@@ -35,6 +35,8 @@ const REGISTER_WORKFLOW = 'backport-register.yml';
 const POLICY_WORKFLOW = 'branch-policy.yml';
 // The nightly pre-release: the `nightly` profile, its own rules in tests/nightly-workflow.test.ts.
 const NIGHTLY_WORKFLOW = 'nightly.yml';
+// The issue triage: the `triage` profile, its own rules in tests/issue-triage-workflow-checks.ts.
+const TRIAGE_WORKFLOW = 'issue-triage.yml';
 // Checked by tests/release-workflow.test.ts, with its own profile.
 const RELEASE_WORKFLOW = 'release.yml';
 
@@ -195,13 +197,13 @@ describe('public CI workflow checker', () => {
 
 describe('the public CI as committed', () => {
   test('only the public workflows exist (no private workflow left)', () => {
-    assert.deepEqual(workflowFiles(), [REGISTER_WORKFLOW, BACKPORT_WORKFLOW, POLICY_WORKFLOW, NIGHTLY_WORKFLOW, DESCRIPTION_WORKFLOW, PUBLIC_WORKFLOW, RELEASE_WORKFLOW, PREVIEW_CLEANUP_WORKFLOW, PREVIEW_WORKFLOW, SITE_WORKFLOW]);
+    assert.deepEqual(workflowFiles(), [REGISTER_WORKFLOW, BACKPORT_WORKFLOW, POLICY_WORKFLOW, TRIAGE_WORKFLOW, NIGHTLY_WORKFLOW, DESCRIPTION_WORKFLOW, PUBLIC_WORKFLOW, RELEASE_WORKFLOW, PREVIEW_CLEANUP_WORKFLOW, PREVIEW_WORKFLOW, SITE_WORKFLOW]);
   });
 
   for (const name of workflowFiles().filter((file) => file !== RELEASE_WORKFLOW)) {
     const profiles: Record<string, Profile> = {[DESCRIPTION_WORKFLOW]: 'description', [SITE_WORKFLOW]: 'site', [PREVIEW_WORKFLOW]: 'preview', [PREVIEW_CLEANUP_WORKFLOW]: 'preview-cleanup', [BACKPORT_WORKFLOW]: 'backport',
       [REGISTER_WORKFLOW]: 'register',
-      [POLICY_WORKFLOW]: 'policy', [NIGHTLY_WORKFLOW]: 'nightly'};
+      [POLICY_WORKFLOW]: 'policy', [NIGHTLY_WORKFLOW]: 'nightly', [TRIAGE_WORKFLOW]: 'triage'};
     const profile: Profile = profiles[name] ?? 'public';
     const text = fs.readFileSync(path.join(WORKFLOWS, name), 'utf8');
 

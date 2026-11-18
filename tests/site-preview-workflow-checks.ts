@@ -302,7 +302,7 @@ export function checkCleanupTriggers(lines: Line[]): string[] {
 }
 
 // The text of a job's concurrency group and whether it cancels runs in progress.
-function concurrencyOf(lines: Line[], block: Line[]): {group?: string; cancel?: string} {
+function concurrencyOf(lines: Line[], block: Line[]): {group?: string | undefined; cancel?: string | undefined} {
   const line = block.find((item) => item.key === 'concurrency' && !item.inBlock);
   if (!line) return {};
   const inner = blockOf(lines, lines.indexOf(line));
