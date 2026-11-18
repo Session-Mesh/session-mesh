@@ -577,6 +577,18 @@ jobs:
   # workflow header (a target of ten minutes is not a cap): a cold opam state took 15 min 20 s on
   # the first run (setup-ocaml 5.5 min, dependencies 5.5 min); main then saves the state, as the
   # ocaml job does, and later runs are warm.
+  # Step budgets, so that a hang fails the step instead of reaching the 45-minute job timeout
+  # (which cancels the job, and with it the run: push run 44388497934 ended `cancelled` after
+  # the native tests hung for 30 minutes, public issue #77). `timeout-minutes` on a step kills
+  # its process and fails the step; the later steps (`!cancelled()`) still run and the job ends
+  # in failure, which `continue-on-error` keeps from failing the run. Budgets, far above the
+  # normal durations (setup-ocaml 6 min cold, dependencies 7 min cold, whole job 15 min cold):
+  # setup-ocaml 15, opam dependencies 15, build 15, Python dependencies 10, opam repository 10,
+  # dune runtest 15, link checks 10, Node 10, pytest 10. They sum to more than the job timeout,
+  # but one hanging step is what matters: the typical durations of all the steps plus the largest
+  # overrun of one step (budget minus typical duration) fit in the 45 minutes, so that step ends
+  # on its own timeout first (tests/public-ci-macos-checks.ts, MACOS_STEP_BUDGETS). The job
+  # timeout stays the last safety net (docs/development.md, "The macOS job").
   macos:
     name: macos (arm64, informational)
     runs-on: macos-15
@@ -653,11 +665,13 @@ jobs:
           restore-keys: |
             opam-${{ runner.os }}-${{ runner.arch }}-macos15-${{ env.OCAML_COMPILER }}-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-
       - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3.9.1
+        timeout-minutes: 15
         with:
           ocaml-compiler: ${{ env.OCAML_COMPILER }}
           opam-pin: false
           cache: false
       - name: Install the test Python dependencies
+        timeout-minutes: 10
         run: |
           python -m pip install -r requirements-dev.txt
           python -c 'import aiohttp, cryptography'
@@ -665,11 +679,13 @@ jobs:
           echo "PYTHON=$(command -v python)" >> "$GITHUB_ENV"
       # The same fixed opam repository commit as every other build.
       - name: Fix the opam repository commit
+        timeout-minutes: 10
         run: |
           source scripts/release-pins.sh
           opam repository set-url default "$opam_repository"
           opam update default
       - name: Install the OCaml dependencies (scripts/bootstrap.sh --deps-only)
+        timeout-minutes: 15
         run: /bin/bash scripts/bootstrap.sh --deps-only
       # Only main writes cache entries, as in the ocaml job.
       - name: Trim the opam state before saving it
@@ -688,6 +704,7 @@ jobs:
       # check (pipefail: a failed build fails here).
       - name: Build and install (scripts/bootstrap.sh --install-only)
         id: build
+        timeout-minutes: 15
         run: |
           export TMPDIR=/private/tmp
           /bin/bash scripts/bootstrap.sh --install-only 2>&1 | tee "$RUNNER_TEMP/build.log"
@@ -704,6 +721,7 @@ jobs:
       # that is fixed or understood.
       - name: Native tests (dune runtest)
         if: "!cancelled() && steps.build.outcome == 'success'"
+        timeout-minutes: 15
         run: |
           source scripts/test-tmpdir.sh
           # macOS TMPDIR is too long for socket paths (scripts/test-local.sh, prepare_scratch).
@@ -716,6 +734,7 @@ jobs:
       # The release checks of release.yml (macos job), on the programs this pull request builds.
       - name: Check what the programs link and their deployment target
         if: "!cancelled() && steps.build.outcome == 'success'"
+        timeout-minutes: 10
         run: |
           bin="$(opam var bin)"
           /bin/bash scripts/release-check-macos.sh links "$bin/mesh-ptyhost" "$bin/mesh-board-mcp" "$bin/mesh-read" \
@@ -726,6 +745,7 @@ jobs:
       # steps did. An empty or absent list is an error, never "run everything".
       - name: Node tests (macOS list)
         if: "!cancelled() && steps.build.outcome == 'success'"
+        timeout-minutes: 10
         run: |
           list="$RUNNER_TEMP/macos-node-tests.txt"
           [ -s "$list" ] || { echo "empty or absent list: $list" >&2; exit 1; }
@@ -738,6 +758,7 @@ jobs:
           node --experimental-strip-types --test --test-concurrency=4 -- "${files[@]}"
       - name: pytest (macOS list, without browser)
         if: "!cancelled() && steps.build.outcome == 'success'"
+        timeout-minutes: 10
         run: |
           list="$RUNNER_TEMP/macos-pytest-tests.txt"
           [ -s "$list" ] || { echo "empty or absent list: $list" >&2; exit 1; }
