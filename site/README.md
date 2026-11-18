@@ -36,6 +36,82 @@ One-time setup by the repository owner:
    nobody else can claim it.
 5. Once the certificate is issued, tick "Enforce HTTPS".
 
+## Previews of pull requests
+
+`.github/workflows/site-preview.yml` publishes each pull request to `main` that changes the site at
+`https://session-mesh.github.io/site-staging/pr-<number>/`, in the repository
+`Session-Mesh/site-staging` (GitHub Pages from its `main` branch). The link shows on the pull request
+as the deployment of the `site-preview` environment. The preview carries a robots `noindex` tag; it
+is removed when the pull request is closed or merged (by `.github/workflows/site-preview-cleanup.yml`,
+which has no `paths` filter, so that a pull request that reverted its site changes is still
+cleaned up), and a daily run removes any preview not published again for 14 days.
+`.github/scripts/site-preview.sh` makes these changes. The jobs that hold the App token run that
+script from a checkout of `main` (`base/`), never from the pull request's branch, and treat the
+pull request's staged files as data. Before replacing a preview, `publish` checks with GitHub that the
+pull request is still open and its head is the revision the run was triggered for (the one place the
+token of the run is used, read-only, with `pull-requests: read`), so a run that finishes late neither
+brings back a removed preview nor replaces a newer one. `build`, `publish` and the removal share the
+concurrency group `site-preview-pr-<number>`.
+
+`.github/scripts/site-stage.sh` stages by a positional whitelist (`.github/scripts/site-csp-check.mjs`, which
+needs node and parses neither HTML nor SVG). The reference is always the checkout of `main`, never the
+pull request's own files: the `build` job takes a read-only checkout of `main` in `base/` and stages
+against it, and the token-bearing `publish` job runs the gate again, from `base/`, on the downloaded
+artifact before the App token exists. It refuses to stage: an HTML page that does not start, byte for byte,
+with the head of `main`'s `site/index.html` up to and including its Content-Security-Policy `<meta>` tag
+(so the policy is the first thing a browser reads and governs the rest of the page; that head must be plain
+ASCII); a symbolic link; a file whose extension is not in a short allow-list (so no `.htm`); a NUL byte
+in a page; any file above `MAX_FILE_BYTES` (10 MiB), a staged tree above `MAX_TOTAL_BYTES` (100 MiB) or
+more than `MAX_FILES` (5000) files and directories (GitHub Pages allows 1 GB per site and 100 MB per file; the
+caps are deliberately far below, and are decided from `lstat` before any file is read, one refusal line each);
+and any `.svg`, `.xml` or `.xhtml` file that is not byte-identical to the file at the same path
+of `main`. Such a file can be opened by a browser as a document with no policy, and a blacklist of its
+content cannot be made reliable (encodings, non-ASCII prefixes), so it is not scanned at all. Two
+consequences to know: a pull request that changes or adds site artwork in SVG cannot preview that SVG
+(the preview fails with one line naming the file; the artwork is checked after the merge), and a pull request
+that changes the Content-Security-Policy of `site/index.html` is refused in its own preview and is
+previewed only after it is merged. `site.yml`, which runs after a merge, uses its own checkout as the
+reference, so it does not refuse these. What the gate guarantees: every staged HTML page carries the policy
+of `main` before any other content, and no SVG, XML or XHTML file differs from `main`. What it does not: the
+policy is only as strict as the one in `main`, and the preview host must serve the files with the types
+their extension suggests.
+
+**Trust model of the shared origin.** The policy allows `script-src 'self'`, and every preview is served
+from the same origin, `https://session-mesh.github.io`: any `.js` file of a pull request runs there, next
+to the other previews. This is by design, because a preview must run the page's scripts. It is acceptable
+because only branches of this repository get a preview (maintainers; none for forks), the origin holds no
+secret and sets no cookie, and nothing but previews is served from it. Do not put an application with a
+session, a cookie or a secret on that origin.
+
+The workflow writes the staging repository through a GitHub App installed on
+`Session-Mesh/site-staging` only, with the Contents write permission. Its ID and private key are the
+secrets `SITE_PREVIEW_APP_ID` and `SITE_PREVIEW_APP_PRIVATE_KEY` of the `site-preview` environment;
+each run creates a token scoped to site-staging that lasts one hour. `pull_request` runs the
+workflow of the pull request's branch, so the App's key reaches whoever can push a branch to this
+repository; a pull request from a fork or from Dependabot gets no secret and no preview. The
+`site-preview` environment has no protection rule and no deployment branch policy, by choice: the
+trust model above is that anyone who can push a branch here is trusted with a key that can only write
+site-staging, and a required reviewer would make every preview wait for a person. Restricting the
+environment to the repository's branches with a deployment branch policy is recommended once the
+secrets exist; check then that the policy accepts the ref of a `pull_request` run (the pull
+request's merge ref), because the workflow itself would not change.
+Until the two secrets are created, every run publishes nothing and says so.
+
+Known limits of the previews, accepted for this first version:
+
+- GitHub does not run `pull_request` workflows for a pull request that conflicts with `main`, so the
+  preview of a pull request that closes in that state stays until the 14-day expiry.
+- A cleanup that waits in the concurrency group can be replaced by a later pending run of the same
+  group (GitHub keeps one pending run); the preview then also stays until expiry, and `publish` never
+  publishes for a closed pull request.
+- A close run that starts after the pull request was reopened and published again removes the new
+  preview; the next push publishes it again.
+- The gate compares bytes and does not review them: the page checks of `check-page.mjs` remain the
+  review of the page's content, and the scripts of a previewed branch run as described in the trust
+  model above.
+- The scripts need `perl` and `node` (on the runners and on macOS) and bash 3.2 or newer; they use no
+  GNU-only `sed` option.
+
 ## Files
 
 | File | Role |

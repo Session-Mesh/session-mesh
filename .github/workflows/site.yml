@@ -15,6 +15,7 @@ on:
       - site/**
       - .github/workflows/site.yml
       - .github/scripts/site-stage.sh
+      - .github/scripts/site-csp-check.mjs
   workflow_dispatch:
 
 permissions:
