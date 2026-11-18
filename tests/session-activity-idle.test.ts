@@ -43,12 +43,12 @@ const steps = (initial: string | undefined, values: Step[], type = 'claude') => 
 const run = (status: string | undefined, values: number[], type = 'claude') => steps(status, values, type);
 
 test('an idle claude session stays inactive through idle-process CPU noise', () => {
-  assert.notEqual(run('idle', [0.2, 0.2, 0.2]), 'active');
-  assert.notEqual(run('idle', [0, 0.3, 0.1, 0.3]), 'active');
+  assert.equal(run('idle', [0.2, 0.2, 0.2]), 'inactive');
+  assert.equal(run('idle', [0, 0.3, 0.1, 0.3]), 'inactive');
 });
 
 test('a reported claude idle or waiting status is not overridden by heavy CPU', () => {
-  assert.notEqual(run('idle', [80, 80, 80]), 'active');
+  assert.equal(run('idle', [80, 80, 80]), 'inactive');
   assert.notEqual(run('waiting', [80, 80, 80]), 'active');
 });
 
@@ -82,6 +82,26 @@ test('a missing sample breaks the run of hot windows', () => {
   assert.notEqual(steps(undefined, [30, null, 30]), 'active');
   assert.notEqual(steps('idle', [65, null, 65], 'codex'), 'active');
   assert.equal(steps('idle', [65, null, 65, 65], 'codex'), 'active');
+});
+
+// Each sample as [window end, CPU value]; the window is the 10 s before its end, read at that end.
+const windows = (status: string, samples: [number, number][], type = 'codex') => {
+  let ranking: Ranking | null = null;
+  for (const [end, value] of samples) {
+    ranking = activity.update(ranking, [session(status, type)], management(value, end, type), end);
+  }
+  return (ranking as unknown as Ranking).phaseById.s;
+};
+
+test('two hot windows promote only when the second starts where the first ended', () => {
+  assert.notEqual(windows('idle', [[100, 65], [120, 65]]), 'active');
+  assert.equal(windows('idle', [[100, 65], [120, 65], [130, 65]]), 'active');
+  assert.equal(windows('idle', [[100, 65], [110, 65]]), 'active');
+});
+
+test('a missing sample breaks the run of cold windows during the grace period', () => {
+  assert.equal(steps('idle', [65, 65, 0.2, null, 0.2], 'codex'), 'active');
+  assert.equal(steps('idle', [65, 65, 0.2, null, 0.2, 0.2], 'codex'), 'inactive');
 });
 
 test('a status change breaks the run of hot windows', () => {
