@@ -81,14 +81,28 @@ describe('built-in themes', () => {
     ['--on-accent', '--accent'], ['--on-accent', '--wait'], ['--bg', '--accent'], ['--bg', '--danger'], ['--fg', '--term'],
   ];
   const PAIRS: [string, string][] = [...TEXT.flatMap((text) => SURFACES.map((surface): [string, string] => [text, surface])), ...ON_COLOUR];
-  // The default theme is today's palette and stays as it is. Its one pair under 4.5:1 is not drawn:
-  // style.css paints #1d2530 (--raise) only under --fg (the current tab, the active mode buttons);
-  // a checked explorer row is #131a22 there.
-  const NOT_DRAWN: Readonly<Record<string, readonly string[]>> = {default: ['--mute on --raise']};
+  // The counter of the current tab (#n-live, #n-hist) is drawn on --raise in every theme: its
+  // colour comes from the unscoped rule of themes.css, which applies to the default theme too.
+  const STYLE_CSS = fs.readFileSync(path.join(ROOT, 'static', 'style.css'), 'utf8');
+  const THEMES_CSS = fs.readFileSync(path.join(ROOT, 'static', 'themes.css'), 'utf8');
+  const COUNTER = /^\.tabs button\.cur \.n \{ color: var\((--[a-z0-9-]+)\); \}$/m.exec(THEMES_CSS)?.[1];
+  test('the counter of the current tab meets WCAG AA on the current tab in every theme', () => {
+    assert.ok(COUNTER, 'no unscoped .tabs button.cur .n rule in themes.css');
+    assert.match(STYLE_CSS, new RegExp(`^\\.tabs button\\.cur \\{ background: ${THEMES[0]!.colours['--raise']};`, 'm'),
+      'the default current tab is not drawn on the default --raise');
+    for (const theme of THEMES) {
+      const ratio = contrastRatio(theme.colours[COUNTER]!, theme.colours['--raise']!);
+      assert.ok(ratio >= 4.5, `${theme.id} ${COUNTER} on --raise: ${ratio.toFixed(2)}`);
+    }
+  });
+  // In the default theme --raise is only the literal #1d2530 of style.css: the current tab and the
+  // active mode buttons, whose text is --fg, plus the counter checked above (the other themes also
+  // paint --raise under a checked explorer row and the current project, so every text is checked).
+  const drawnOnRaise = (themeId: string): readonly string[] => themeId === 'default' ? ['--fg', COUNTER ?? '--fg'] : TEXT;
   for (const theme of THEMES) {
     test(`${theme.id}: text meets WCAG AA (4.5:1) on every surface`, () => {
       for (const [text, surface] of PAIRS) {
-        if (NOT_DRAWN[theme.id]?.includes(`${text} on ${surface}`)) continue;
+        if (surface === '--raise' && !drawnOnRaise(theme.id).includes(text)) continue;
         const ratio = contrastRatio(theme.colours[text]!, theme.colours[surface]!);
         assert.ok(ratio >= 4.5, `${text} on ${surface}: ${ratio.toFixed(2)}`);
       }
