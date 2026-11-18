@@ -63,7 +63,48 @@ export function checkMacosJob(lines: Line[]): string[] {
   const permissions = directChild(block, 'permissions');
   const scopes = permissions ? blockOf(lines, lines.indexOf(permissions)).map((line) => `${line.key}: ${line.value}`) : [];
   if (scopes.length !== 1 || scopes[0] !== 'contents: read') problems.push(`job ${MACOS_JOB}: permissions must be exactly contents: read`);
-  return [...problems, ...checkMacosTests(block)];
+  return [...problems, ...checkMacosStepTimeouts(block), ...checkMacosTests(block)];
+}
+
+// The long steps carry a `timeout-minutes` of their own, so that a hang fails the step (the job then
+// ends in failure, which `continue-on-error` keeps from failing the run) instead of reaching the job
+// timeout, which cancels the job and with it the run. Matched by the start of the step's label.
+// Each entry: label, largest allowed budget, typical duration (minutes). The typical durations are
+// deliberately generous cold-cache figures: the first run took 15 min 20 s in all (setup-ocaml 5.5,
+// opam dependencies 5.5), and the warm run 44410847883 measured Node tests 125 s, pytest 82 s,
+// setup-ocaml 41 s, Python dependencies 10 s, opam repository 20 s, build 13 s, link checks 2 s.
+// `dune runtest` has no clean measurement (its one recorded run was the 15-minute hang), so 5 is
+// an estimate. Their sum (28) plus the overhead below (30) is about twice the measured cold job.
+export const MACOS_STEP_BUDGETS: [string, number, number][] = [
+  ['uses: ocaml/setup-ocaml@', 15, 6], ['name: Install the test Python dependencies', 10, 1], ['name: Fix the opam repository commit', 10, 1],
+  ['name: Install the OCaml dependencies', 15, 7], ['name: Build and install', 15, 2], ['name: Native tests', 15, 5],
+  ['name: Check what the programs link', 10, 1], ['name: Node tests', 10, 3], ['name: pytest', 10, 2],
+];
+// Checkout, setup-node/python, the header and list steps, the opam cache restore, job set-up and tear-down.
+export const MACOS_UNBUDGETED_OVERHEAD_MINUTES = 2;
+
+function checkMacosStepTimeouts(block: Line[]): string[] {
+  const body = block.map((line) => line.raw).join('\n');
+  const steps = body.split(/\n {6}- /).slice(1);
+  const problems: string[] = [];
+  let typicalTotal = MACOS_UNBUDGETED_OVERHEAD_MINUTES;
+  let worstOverrun = 0;
+  for (const [label, maximum, typical] of MACOS_STEP_BUDGETS) {
+    const step = steps.find((item) => item.startsWith(label));
+    const minutes = Number(/^ {8}timeout-minutes: (\d+)$/m.exec(step ?? '')?.[1]);
+    if (!step) problems.push(`job ${MACOS_JOB}: no step ${label}`);
+    else if (!Number.isInteger(minutes) || minutes < 1 || minutes > maximum) {
+      problems.push(`job ${MACOS_JOB}: the step ${label} has no timeout-minutes within 1..${maximum}`);
+    } else worstOverrun = Math.max(worstOverrun, minutes - typical);
+    typicalTotal += typical;
+  }
+  // One step hanging until its own budget must end that step before the job timeout cancels the job:
+  // the typical durations of all the steps, plus the largest overrun of one step, fit in the timeout.
+  const jobTimeout = Number(directChild(block, 'timeout-minutes')?.value);
+  if (problems.length === 0 && typicalTotal + worstOverrun > jobTimeout) {
+    problems.push(`job ${MACOS_JOB}: typical ${typicalTotal} min + largest step overrun ${worstOverrun} min exceeds the ${jobTimeout}-minute job timeout`);
+  }
+  return problems;
 }
 
 // The test steps: they run the allow-list of tests/macos-ci-tests.txt and nothing else (the other

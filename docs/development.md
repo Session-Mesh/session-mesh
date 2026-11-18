@@ -151,6 +151,21 @@ The opam state is cached under a key of its own and saved from `main` only, like
 run without a cache entry builds the compiler and may reach its 45-minute timeout, and the next
 run on `main` then starts from the saved state (a manual `workflow_dispatch` on `main` seeds it).
 
+**Step budgets.** The job keeps its 45-minute timeout, but a job timeout cancels the job and the
+workflow run then ends `cancelled` (push run 44388497934 on `main`, after the native tests hung for
+30 minutes; issue #77). Each long step therefore has a `timeout-minutes` of its own, well above its
+normal duration (cold cache: `setup-ocaml` 6 min, dependencies 7 min, whole job 15 min; warm cache:
+Node tests 2 min, pytest 1.5 min): `setup-ocaml` 15, opam dependencies 15, build 15, Python
+dependencies 10, opam repository 10, `dune runtest` 15, link checks 10, Node tests 10, pytest 10
+minutes. A step that exceeds its budget is killed and fails; the later steps (`!cancelled()`) still
+run, the job ends in failure and `continue-on-error` keeps the run's conclusion `success`. The
+budgets add up to more than 45 minutes, but only one step hangs at a time: the checker requires
+that the typical durations of all the steps (generous figures, with 2 minutes for the unbudgeted
+ones) plus the largest overrun of one step (its budget minus its typical duration) fit in the job
+timeout, so a hanging step always fails on its own timeout before the job is cancelled; the job
+timeout remains the last safety net. `tests/public-ci-macos-checks.ts` (`MACOS_STEP_BUDGETS`)
+requires the budgets and the invariant.
+
 To make it required: first let it stay green on `main` and on pull requests for a while (the
 allow-list is what makes that possible; widen it before promoting), then remove its `continue-on-error: true` and the exception for it in
 `tests/public-ci-macos-checks.ts` (the public profile then applies to it like to the other jobs, with the

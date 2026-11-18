@@ -12,7 +12,7 @@ import path from 'node:path';
 import {describe, test} from 'node:test';
 import {jobBlocks, parseLines, usesOf} from './public-ci-workflow-lib.ts';
 import {checkWorkflow} from './public-ci-workflow-checks.ts';
-import {MACOS_JOB, MACOS_JOB_NAME, MACOS_LIST_PATH,MACOS_RUNNER, MACOS_TIMEOUT_MINUTES} from './public-ci-macos-checks.ts';
+import {MACOS_JOB, MACOS_JOB_NAME, MACOS_LIST_PATH,MACOS_RUNNER, MACOS_STEP_BUDGETS, MACOS_TIMEOUT_MINUTES} from './public-ci-macos-checks.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const text = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'public-ci.yml'), 'utf8');
@@ -45,6 +45,17 @@ describe('the informational macOS job', () => {
     assert.match(body, new RegExp(`^ {4}timeout-minutes: ${MACOS_TIMEOUT_MINUTES}$`, 'm'));
     assert.match(body, /^ {4}permissions:\n {6}contents: read\n/m);
     assert.doesNotMatch(body, /^ {4}(?:needs|if):/m, 'the job runs alone, on every event');
+  });
+
+  test('every long step has a timeout of its own below the job timeout, so a hang fails the step instead of cancelling the job', () => {
+    const steps = macosBody().split(/\n {6}- /).slice(1);
+    for (const [label, maximum] of MACOS_STEP_BUDGETS) {
+      const step = steps.find((item) => item.startsWith(label));
+      assert.ok(step, `${label} missing`);
+      const minutes = Number(/^ {8}timeout-minutes: (\d+)$/m.exec(step)?.[1]);
+      assert.ok(minutes >= 1 && minutes <= maximum && maximum < MACOS_TIMEOUT_MINUTES, `${label}: ${minutes}`);
+    }
+    assert.match(macosBody(), /^ {4}continue-on-error: true$/m);
   });
 
   test('pins every action by SHA, builds with the release toolchain and runs no browser', () => {
@@ -91,6 +102,13 @@ describe('the informational macOS job', () => {
       ['a step ignores its failure', '      - name: pytest (macOS list, without browser)\n', '      - name: pytest (macOS list, without browser)\n        continue-on-error: true\n',
         /continue-on-error other than false/],
       ['the timeout exceeds the 45-minute safety net', 'timeout-minutes: 45', 'timeout-minutes: 46', /timeout-minutes 46 outside 1\.\.45/],
+      ['the native tests lose their step timeout', '        timeout-minutes: 15\n        run: |\n          source scripts/test-tmpdir.sh', '        run: |\n          source scripts/test-tmpdir.sh', /step name: Native tests has no timeout-minutes/],
+      ['the native tests get a step timeout above their budget', 'timeout-minutes: 15\n        run: |\n          source scripts/test-tmpdir.sh', 'timeout-minutes: 30\n        run: |\n          source scripts/test-tmpdir.sh', /step name: Native tests has no timeout-minutes within 1\.\.15/],
+      ['setup-ocaml loses its step timeout', '        timeout-minutes: 15\n', '', /step uses: ocaml\/setup-ocaml@ has no timeout-minutes/],
+      ['the Node step loses its step timeout', '- name: Node tests (macOS list)\n        if: "!cancelled() && steps.build.outcome == \'success\'"\n        timeout-minutes: 10\n',
+        '- name: Node tests (macOS list)\n        if: "!cancelled() && steps.build.outcome == \'success\'"\n', /has no timeout-minutes within 1\.\.10/],
+      ['the job timeout is shortened below the worst case of one hanging step', '    timeout-minutes: 45\n', '    timeout-minutes: 40\n',
+        /exceeds the 40-minute job timeout/],
       ['the token may write', '      contents: read\n', '      contents: write\n', /permission contents: write is not read-only/],
       ['the job permissions are not explicit', '    permissions:\n      contents: read\n', '', /permissions must be exactly contents: read/],
       ['the job takes another scope', '      contents: read\n', '      contents: read\n      id-token: read\n', /permissions must be exactly/],
@@ -103,7 +121,7 @@ describe('the informational macOS job', () => {
       ['the Node step discovers its tests', 'list="$RUNNER_TEMP/macos-node-tests.txt"', 'list="$(find tests -name \'*.test.ts\')"',
         /discovers tests|do not both read/],
       ['the pytest step ignores the list', 'list="$RUNNER_TEMP/macos-pytest-tests.txt"', 'list=/dev/null', /do not both read/],
-      ['the pytest step runs although the build failed', "        if: \"!cancelled() && steps.build.outcome == 'success'\"\n        run: |\n          list=\"$RUNNER_TEMP/macos-pytest-tests.txt\"", "        if: '!cancelled()'\n        run: |\n          list=\"$RUNNER_TEMP/macos-pytest-tests.txt\"",
+      ['the pytest step runs although the build failed', "        if: \"!cancelled() && steps.build.outcome == 'success'\"\n        timeout-minutes: 10\n        run: |\n          list=\"$RUNNER_TEMP/macos-pytest-tests.txt\"", "        if: '!cancelled()'\n        timeout-minutes: 10\n        run: |\n          list=\"$RUNNER_TEMP/macos-pytest-tests.txt\"",
         /pytest step does not run on the build outcome only/],
       ['the native tests no longer run on the build outcome', "- name: Native tests (dune runtest)\n        if: \"!cancelled() && steps.build.outcome == 'success'\"\n", '- name: Native tests (dune runtest)\n',
         /Native tests step does not run on the build outcome only/],
