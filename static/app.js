@@ -6980,14 +6980,16 @@ function paletteStatusText(saved) {
   if (!saved) return t("theme.paletteNotSaved");
   if (!count) return t("theme.paletteCleared");
   const colours = themes.colours();
-  const ratio = Math.min(meshThemes().contrastRatio(colours["--fg"], colours["--bg"]),
-    meshThemes().contrastRatio(colours["--fg"], colours["--term"]), meshThemes().contrastRatio(colours["--fg"], colours["--panel"]));
-  const applied = t("theme.paletteApplied", { n: count });
-  // NaN: a translucent background, whose contrast depends on what shows through it.
-  if (Number.isNaN(ratio)) return `${applied} ${t("theme.paletteContrastUnknown")}`;
+  const ratios = ["--bg", "--term", "--panel"].map((surface) => meshThemes().contrastRatio(colours["--fg"], colours[surface]));
+  // NaN: a translucent background, whose contrast depends on what shows through it. A failure
+  // measured on another surface is still reported.
+  const measured = ratios.filter(Number.isFinite);
+  const ratio = Math.min(...measured);
+  const notes = [t("theme.paletteApplied", { n: count })];
   // Rounded down, so a failing 4.49 never reads as the 4.5 it misses.
-  const shown = fmtFixed(Math.floor(ratio * 10) / 10, 1);
-  return ratio < 4.5 ? `${applied} ${t("theme.paletteLowContrast", { ratio: shown })}` : applied;
+  if (ratio < 4.5) notes.push(t("theme.paletteLowContrast", { ratio: fmtFixed(Math.floor(ratio * 10) / 10, 1) }));
+  if (measured.length < ratios.length) notes.push(t("theme.paletteContrastUnknown"));
+  return notes.join(" ");
 }
 
 function setupPaletteEditor() {
@@ -7004,7 +7006,12 @@ function setupPaletteEditor() {
   // only while it still holds that text, so an unsaved draft is never replaced.
   let rendered = "";
   const show = () => { rendered = meshThemes().formatPalette(themes.palette()); text.value = rendered; };
-  const refresh = () => { if (text.value === rendered) show(); };
+  // A status about the palette the field held no longer applies once another one replaces it.
+  const refresh = () => {
+    if (text.value !== rendered || meshThemes().formatPalette(themes.palette()) === rendered) return;
+    show();
+    report("", false);
+  };
   // Each variable name is its own <code>, never broken across lines.
   const hint = $("#palette-hint");
   hint.textContent = t("theme.paletteHint", { names: "" });
@@ -7053,7 +7060,11 @@ whenTranslated(() => {
     setTimeout(() => { browsing = false; }, 0);
   });
   select.addEventListener("change", () => {
-    if (select.value !== PALETTE_OPTION) { meshThemes().runtime.use(select.value); return; }
+    if (select.value !== PALETTE_OPTION) {
+      // Applied either way; a refused write only means the next load forgets it.
+      if (!meshThemes().runtime.use(select.value)) flashLong(t("theme.notSaved"));
+      return;
+    }
     select.value = meshThemes().runtime.current();
     if (browsing) return;
     const dialog = $("#dlg-palette");

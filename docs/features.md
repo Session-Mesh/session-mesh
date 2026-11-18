@@ -1027,7 +1027,9 @@ hexadecimal colours (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) are accepted; anyt
 refused with the offending names, and nothing is applied. "Start from the current theme" fills the
 editor with every variable of the theme in use; "Reset" removes the overrides. After "Apply", the
 editor warns when the text falls below a 4.5:1 contrast on the backgrounds, measuring a translucent
-text as it shows; with a translucent background it says the contrast could not be checked. The
+text as it shows; a translucent background cannot be measured, so it says so, and still reports a
+failure measured on the other backgrounds. Choosing a theme that this browser refuses to store
+still applies it, with a notice that the next load will not keep it. The
 palette is stored in this browser's local storage (`localStorage`) only: another browser or device keeps its
 own. Keeping it in a file under `~/.config/session-mesh/`, shared by every browser, is planned for a
 later phase.

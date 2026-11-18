@@ -930,6 +930,7 @@
   "theme.nord": "Nord",
   "theme.withPalette": "{name} + palette personnalisée",
   "theme.customize": "Palette personnalisée…",
+  "theme.notSaved": "Thème appliqué, mais ce navigateur refuse de le conserver : le prochain chargement reprend le précédent.",
   "theme.paletteTitle": "Palette personnalisée (ce navigateur)",
   "theme.paletteHint": "Un objet JSON de variables de couleur appliquées par-dessus le thème choisi, par exemple {\"--bg\": \"#002b36\", \"--ansi-red\": \"#dc322f\"}. Les valeurs sont des couleurs hexadécimales (#rgb, #rrggbb, avec ou sans transparence) ; la palette reste dans ce navigateur. Variables : {names}",
   "theme.paletteFill": "Partir du thème actuel",
