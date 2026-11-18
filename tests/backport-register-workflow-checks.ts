@@ -23,7 +23,7 @@ export const REGISTER_EVENT_PATHS = ['pull_request.merged', 'pull_request.labels
   'pull_request.merge_commit_sha', 'pull_request.commits'];
 // What each job's script may run: these git and gh subcommands, nothing else.
 export const FILES_COMMANDS = ['gh api'];
-export const PUSH_COMMANDS = ['git merge-base', 'git switch', 'git rev-list', 'git diff', 'git apply', 'git commit', 'git ls-files', 'git ls-remote', 'git fetch', 'git rev-parse', 'git push', 'gh api', 'gh pr'];
+export const PUSH_COMMANDS = ['git merge-base', 'git switch', 'git rev-list', 'git diff', 'git apply', 'git commit', 'git ls-files', 'git ls-remote', 'git fetch', 'git rev-parse', 'git push', 'git log', 'git ls-tree', 'git diff-tree', 'git patch-id', 'gh api', 'gh pr'];
 // The only push: the backport branch, named from the pull request number.
 export const BRANCH_LINE = 'branch="backport-$NUMBER-cla-register-to-release/latest"';
 export const PUSH_LINE = 'git push --quiet origin "HEAD:refs/heads/$branch"';
@@ -40,10 +40,23 @@ export const FILES_REQUIRED = ['files=$(gh api --paginate "repos/$GITHUB_REPOSIT
   '[[ "$(jq -n \'[inputs | .[]] | length\' <<< "$files")" -lt 3000 ]] || { echo "::error::the pull request lists 3000 files, the most the API returns; its register changes are backported by hand"; exit 1; }',
   'changed=$(jq -n \'[inputs | if type == "array" then .[] else error("not a file list") end | .filename, ' +
   '(.previous_filename // empty)] | any(IN($ARGS.positional[]))\' --args "${paths[@]}" <<< "$files")'];
-// The push job's one API call, a read of the commits of the pull request.
-export const COMMITS_LINE = 'pr_commits=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/commits" --jq \'.[] | "\\(.commit.author.email) \\(.commit.author.date)"\')';
+// The push job's two API calls: a read of the commits of the pull request, and, for a commit of it that has
+// no landed commit, a read of its files (it must have none: a rebase merge drops only empty commits).
+export const COMMITS_LINE = 'pr_commits=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/commits" --jq \'.[] | "\\(.sha) \\(.commit.author.email) \\(.commit.author.date)"\')';
+export const EMPTY_LINE = 'changed_files=$(gh api "repos/$GITHUB_REPOSITORY/commits/${pr_shas[$index]}" --jq \'.files | length\')';
 export const PUSH_REQUIRED = [
-  '[[ "$pr_commits" == "$landed_commits" ]] || { echo "::error::the landed commits are not those of the pull request as a rebase merge lands them"; exit 1; }',
+  '[[ "$changed_files" == 0 ]] || { echo "::error::the landed commits are not those of the pull request as a rebase merge lands them"; exit 1; }',
+  '[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::unexpected commit list"; exit 1; }',
+  '[[ "${#pr_shas[@]}" -eq "$COUNT" ]] || { echo "::error::the commit list is not the number of commits of the event"; exit 1; }',
+  'git fetch --quiet --no-tags origin "${landed_pr[$index]}" || { echo "::error::a commit of the pull request cannot be fetched; nothing is pushed"; exit 1; }',
+  '[[ -n "$landed_id" && "$landed_id" == "$(patch_id "${landed_pr[$index]}")" ]] || { echo "::error::a landed commit does not carry the change of its commit of the pull request"; exit 1; }',
+  'replayed=$(git ls-tree HEAD -- "$path")',
+  'on_main=$(git ls-tree origin/main -- "$path")',
+  '[[ "$replayed" == "$on_main" ]] || refuse_register "$path" "$replay_message"',
+  'on_release=$(git ls-tree origin/release/latest -- "$path")',
+  'before_range=$(git ls-tree "$range_base" -- "$path")',
+  '[[ "$on_release" == "$before_range" ]] || refuse_register "$path" "$base_message"',
+  'chain=$(git rev-list --first-parent --max-count="$COUNT" "$LANDED")',
   'git diff --binary --no-renames "$commit^" "$commit" -- "${paths[@]}" > "$patch"',
   'git diff --name-only -z --no-renames "$@" > "$RUNNER_TEMP/backported"',
   'check_register_paths origin/release/latest HEAD',
@@ -220,7 +233,7 @@ function checkPushJob(lines: Line[]): string[] {
     // The local suite runs these scripts with the Bash 3.2 of macOS, which has no mapfile or readarray.
     if (script.some((line) => /\b(?:mapfile|readarray)\b/.test(line))) problems.push(`job ${PUSH_JOB}: no mapfile or readarray (Bash 3.2)`);
     const calls = script.filter((line) => /\bgh\s+api\b/.test(line));
-    if (calls.length !== 1 || calls[0] !== COMMITS_LINE) problems.push(`job ${PUSH_JOB}: the one API call must be ${COMMITS_LINE}`);
+    if (calls.length !== 2 || calls[0] !== COMMITS_LINE || calls[1] !== EMPTY_LINE) problems.push(`job ${PUSH_JOB}: the two API calls must be ${COMMITS_LINE} then ${EMPTY_LINE}`);
     if (!script.includes(BRANCH_LINE)) problems.push(`job ${PUSH_JOB}: the branch must be set by ${BRANCH_LINE}`);
     const pushes = script.filter((line) => /\bgit push\b/.test(line));
     if (pushes.length !== 1 || pushes[0] !== PUSH_LINE) problems.push(`job ${PUSH_JOB}: the one push must be ${PUSH_LINE}`);
