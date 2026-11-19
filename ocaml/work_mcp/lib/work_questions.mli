@@ -18,7 +18,9 @@
     - [answer]: same [task] as its question; fields [question], [text] and
       [by], the identity of the answerer, plus the [agent] and [session] of
       the process that wrote it when it has one (an agent relaying the
-      owner's words).
+      owner's words). The owner-authenticated writer ([work-write], behind
+      the web server's owner sign-in) writes no [agent] and no [session],
+      [by] = [owner] and [via] = [owner-web] instead.
 
     The worklog library ignores unknown event types with a warning, so [wl]
     keeps working and does not display them. The fold of these two types lives
@@ -27,8 +29,8 @@
     Agents ask with {!ask} (behind [work_ask]). {!answer_once} records one
     answer; it decides nothing about who may answer: that is the caller's
     concern. [work_answer] calls it to relay the owner's words given in an
-    agent session's conversation; an owner-only writer of the interface is meant to call
-    the same function. *)
+    agent session's conversation; the owner-only writer [work-write] calls
+    it with [~owner_web:true]. *)
 
 type answer = {
   answer_text : string;
@@ -36,6 +38,11 @@ type answer = {
   answered_at : int;
   relay_agent : string option;  (** [agent] of the answer event, if any *)
   relay_session : string option;  (** [session] of the answer event, if any *)
+  owner_web : bool;
+      (** written by the owner-authenticated writer: [via] is {!owner_web_via},
+          [by] is {!owner_by}, and the event has no [agent] and no [session].
+          A provenance marker in the log, not a signature: a process of the
+          same user that writes the log directly can forge it. *)
 }
 
 type question = {
@@ -51,6 +58,12 @@ type question = {
   asked_at : int;
   answers : answer list;  (** oldest first *)
 }
+
+val owner_by : string
+(** ["owner"]. *)
+
+val owner_web_via : string
+(** ["owner-web"], the [via] of an owner-authenticated answer. *)
 
 val max_text : int
 (** 2000. *)
@@ -134,18 +147,30 @@ type recorded =
 val answer_once :
   Mesh_worklog.Ctx.t ->
   ?session:Mesh_worklog.Session.t ->
+  ?owner_web:bool ->
   question:string ->
   text:string ->
   by:string ->
   unit ->
   (recorded, Mesh_worklog.Err.t) result
-(** Record the first answer to the question with this exact id. The same
+(** Record an answer to the question with this exact id. The same
     validation as {!answer} ([Usage] for a bad text or [by], [Not_found] for
     an unknown id). The lookup and the write happen under the repository
-    lock, so of two concurrent writers exactly one records an answer. With a
-    [session], its [agent] and [session] are stored on the event (who relayed
-    the answer, not who gave it). No authority check: the caller decides who
-    may answer. The checks do not rely on the MCP schema: a [text] over 2000
-    characters, a control, invisible or bidirectional character in [text] or
-    [by] are [Usage] here too. An answer is never replaced or retracted; a
-    later owner-only writer will need a way to supersede a relayed one. *)
+    lock, so of two concurrent writers exactly one records an answer. No
+    authority check: the caller decides who may answer. The checks do not
+    rely on the MCP schema: a [text] over 2000 characters, a control,
+    invisible or bidirectional character in [text] or [by] are [Usage] here
+    too.
+
+    Relayed (the default): the first answer wins. With a [session], its
+    [agent] and [session] are stored on the event (who relayed the answer,
+    not who gave it). An answer already there with the same text and [by] is
+    [Same_answer]; any other answer, relayed or owner-authenticated, makes
+    it [Already_answered].
+
+    [~owner_web:true], for the owner-authenticated writer only: [by] must be
+    {!owner_by} and no [session] is given ([Usage] otherwise); the event gets
+    [via] = {!owner_web_via}. Only earlier owner-authenticated answers count:
+    one with the same text is [Same_answer], another is [Already_answered].
+    Relayed answers do not block it: the owner's answer supersedes them. They
+    stay in the log, unchanged; the readers mark them as superseded. *)

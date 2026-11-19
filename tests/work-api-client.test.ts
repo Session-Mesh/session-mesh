@@ -60,6 +60,9 @@ describe('outcomes', () => {
     [502, { error: { code: 'output_too_large', message: 'big' } }, 'failed', true],
     [504, 'work-read took too long', 'timeout', true],
     [500, '', 'failed', true],
+    [409, { error: { code: 'already_answered', message: 'x' } }, 'conflict', false],
+    [401, '401: Unauthorized', 'auth', true],
+    [403, '403: Forbidden', 'auth', true],
   ];
   for (const [status, body, kind, retry] of failing) {
     test(`HTTP ${status} ${typeof body === 'string' ? body : JSON.stringify(body)} is ${kind}`, async () => {
@@ -87,6 +90,20 @@ describe('outcomes', () => {
       const result = await api.projects();
       assert.equal(result.ok, false, JSON.stringify(body));
       if (!result.ok) assert.equal(result.error.kind, 'shape');
+    }
+  });
+
+  test('an answer is the write op with the question and the text, and its receipt must claim owner verification', async () => {
+    const calls: Call[] = [];
+    const { api } = fake(200, { schema: 1, command: 'answer', id: 'N-0000a001', state: 'answered', owner_verified: true, duplicate: true }, calls);
+    const result = await api.answer('N-0000a001', 'Use <b>8443</b>');
+    assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), { op: 'answer', args: { question: 'N-0000a001', text: 'Use <b>8443</b>' } });
+    assert.equal(calls[0]!.init.credentials, 'same-origin');
+    assert.deepEqual(result, { ok: true, value: { id: 'N-0000a001', duplicate: true } });
+    for (const body of [{ id: 'N-0000a001' }, { id: 'N-0000a001', owner_verified: 'true' }, { owner_verified: true }, []]) {
+      const reply = await fake(200, body).api.answer('N-0000a001', 'x');
+      assert.equal(reply.ok, false, JSON.stringify(body));
+      if (!reply.ok) assert.equal(reply.error.kind, 'shape');
     }
   });
 

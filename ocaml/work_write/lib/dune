@@ -1,0 +1,9 @@
+; The owner-only writer of the Projects view: one JSON request on standard
+; input, one JSON document on standard output. Its authority is the web
+; server's owner sign-in in front of it; it reuses the validation and the
+; locked write of Work_questions.answer_once and the bounded request reader of
+; work_read.
+
+(library
+ (name work_write)
+ (libraries mesh_worklog work_mcp work_read yojson unix))

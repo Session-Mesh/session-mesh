@@ -11,7 +11,7 @@ open E
 let max_bytes = 4096
 let ops = [ "products"; "projects"; "project"; "task"; "resume"; "sessions-of" ]
 
-let read channel =
+let read ?(max_bytes = max_bytes) channel =
   let buffer = Buffer.create 512 and chunk = Bytes.create 1024 in
   let rec go () =
     if Buffer.length buffer > max_bytes then Error (invalid "the request is longer than %d bytes" max_bytes)

@@ -193,7 +193,10 @@ let project_json (row : W.Query.project_row) =
 
 let max_answers = 5
 
-let answer_json (a : Work_questions.answer) =
+(* [owner_verified]: written through the owner-authenticated writer;
+   [superseded]: a relayed answer of a question that has an owner-authenticated
+   one. *)
+let answer_json ~verified_exists (a : Work_questions.answer) =
   `Assoc
     ([
        ("text", `String (trunc_chars ~max:Work_questions.max_text a.answer_text));
@@ -201,7 +204,9 @@ let answer_json (a : Work_questions.answer) =
        ("at", ts a.answered_at);
      ]
     @ opt_tstr ~max:100 "relayed_by_agent" a.relay_agent
-    @ opt_tstr ~max:100 "relayed_by_session" a.relay_session)
+    @ opt_tstr ~max:100 "relayed_by_session" a.relay_session
+    @ (if a.owner_web then [ ("owner_verified", `Bool true) ] else [])
+    @ if verified_exists && not a.owner_web then [ ("superseded", `Bool true) ] else [])
 
 (* The newest [n] items of a list in time order; [<key>_omitted] counts the
    older ones left out. *)
@@ -214,7 +219,8 @@ let capped_newest key n items =
    (characters): a line written by [wl], by hand or by a later interface is
    not. Of many answers the newest ones are kept. *)
 let question_json (q : Work_questions.question) =
-  let answers = capped_newest "answers" max_answers (List.map answer_json q.answers) in
+  let verified_exists = List.exists (fun (a : Work_questions.answer) -> a.owner_web) q.answers in
+  let answers = capped_newest "answers" max_answers (List.map (answer_json ~verified_exists) q.answers) in
   `Assoc
     ([
        ("id", tstr ~max:40 q.id);

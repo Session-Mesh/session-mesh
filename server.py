@@ -1816,9 +1816,11 @@ async def api_projects(request):
     return web.json_response(await host(body), headers={"Cache-Control": "no-store"})
 
 
-# The Projects view's read path: `work-read --request`, which checks the request itself. No logic here.
+# The Projects view's relay: `work-read --request`, or `work-write --request` for a write op, which only the
+# owner's signed-in browser may send. The programs check the request themselves. No other logic here.
 WORK_SLOTS, WORK_TIMEOUT = asyncio.Semaphore(4), os.environ.get("MESH_WORK_READ_TIMEOUT", "5").strip()
 WORK_TIMEOUT = (float(WORK_TIMEOUT) if re.fullmatch(r"\d{1,5}(\.\d+)?", WORK_TIMEOUT) else 0) or 5.0  # bad: 5 s
+WORK_WRITE_OPS, WORK_MAX_BODY = frozenset(("answer",)), 16384
 
 
 def work_error(status, code, message):
@@ -1826,24 +1828,35 @@ def work_error(status, code, message):
                              headers={"Cache-Control": "no-store"})
 
 
-def work_read_command():
-    """MESH_WORK_READ_CMD (absolute, else none), else bin/work-read, else (no MESH_BIN_DIR) the switch's."""
-    if (explicit := os.environ.get("MESH_WORK_READ_CMD")) is not None:
+def work_command(program):
+    """MESH_WORK_READ_CMD / MESH_WORK_WRITE_CMD (absolute, else none), else bin/<program>, else the switch's."""
+    if (explicit := os.environ.get(f"MESH_{program.upper().replace('-', '_')}_CMD")) is not None:
         return explicit if os.path.isabs(explicit) and os.path.isfile(explicit) else None
     dirs = [agentmcp.runtime_bin()] + ([] if os.environ.get("MESH_BIN_DIR") else [agentmcp.switch_bin()])
-    return next((str(d / "work-read") for d in dirs if (d / "work-read").is_file()), None)
+    return next((str(d / program) for d in dirs if (d / program).is_file()), None)
+
+
+def work_program(request, body):
+    """work-write for a write op, with the owner's browser cookie only (never a bearer); else work-read."""
+    try:
+        write = json.loads(body).get("op") in WORK_WRITE_OPS
+    except (ValueError, AttributeError, TypeError, RecursionError):  # the program refuses it
+        write = False
+    if write:
+        _require_owner_cookie(request)
+    return "work-write" if write else "work-read"
 
 
 async def api_work(request):
-    """The request body (4 KiB at most) is the standard input of work-read, its one JSON line the reply:
+    """The request body (16 KiB at most) is the standard input of the program, its one JSON line the reply:
     a timeout, a 2 MiB line cap, a private process group and at most four programs at once."""
-    body, proc = b"", None  # read at most 4097 bytes: a larger body is refused unread
-    while len(body) <= 4096 and (chunk := await request.content.read(4097 - len(body))):
+    body, proc = b"", None  # read at most one byte over the cap: a larger body is refused unread
+    while len(body) <= WORK_MAX_BODY and (chunk := await request.content.read(WORK_MAX_BODY + 1 - len(body))):
         body += chunk
-    if len(body) > 4096 or not body.lstrip().startswith(b"{"):  # the program checks the rest
-        return work_error(400, "invalid_input", "a JSON object of at most 4096 bytes is expected")
-    if (command := work_read_command()) is None:
-        return work_error(503, "not_available", "work-read is not installed")
+    if len(body) > WORK_MAX_BODY or not body.lstrip().startswith(b"{"):  # the program checks the rest
+        return work_error(400, "invalid_input", f"a JSON object of at most {WORK_MAX_BODY} bytes is expected")
+    if (command := work_command(program := work_program(request, body))) is None:
+        return work_error(503, "not_available", f"{program} is not installed")
     if WORK_SLOTS.locked():  # no await between this check and the acquire
         return work_error(503, "busy", "too many work requests")
     async with WORK_SLOTS:
@@ -1854,15 +1867,16 @@ async def api_work(request):
                 env={k: os.environ[k] for k in ("HOME", "WL_HOME") if k in os.environ})
             proc.stdin.write(body)
             proc.stdin.close()
-            out, code = await asyncio.wait_for(asyncio.gather(proc.stdout.readline(), proc.wait()), WORK_TIMEOUT)
+            limit = WORK_TIMEOUT if program == "work-read" else max(WORK_TIMEOUT, 30.0)  # a write may wait for the lock and git
+            out, code = await asyncio.wait_for(asyncio.gather(proc.stdout.readline(), proc.wait()), limit)
             if code < 0 or not out.endswith(b"\n"):  # killed by a signal, or no complete line
-                return work_error(502, "internal", "work-read gave no complete answer")
+                return work_error(502, "internal", f"{program} gave no complete answer")
         except asyncio.TimeoutError:
-            return work_error(504, "timeout", "work-read took too long")
+            return work_error(504, "timeout", f"{program} took too long")
         except ValueError:  # the line is over the cap
-            return work_error(502, "output_too_large", "work-read output too large")
+            return work_error(502, "output_too_large", f"{program} output too large")
         except OSError:
-            return work_error(503, "not_available", "work-read could not start")
+            return work_error(503, "not_available", f"{program} could not start")
         finally:
             if proc is not None:
                 with contextlib.suppress(ProcessLookupError):
@@ -1870,7 +1884,7 @@ async def api_work(request):
                 proc._transport.close()  # unread output would keep wait() pending (Python 3.11, 3.12)
                 with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(proc.wait(), 5)
-    return web.Response(body=out, status={0: 200, 2: 400, 3: 404}.get(code, 502),
+    return web.Response(body=out, status={0: 200, 2: 400, 3: 404, 8: 409}.get(code, 502),
                         content_type="application/json", headers={"Cache-Control": "no-store"})
 
 

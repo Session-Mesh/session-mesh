@@ -10,6 +10,28 @@ before 1.0, a minor version may change behaviour.
   sessions sidebar, so the text went into a hidden field and the result showed only after
   reopening the list. A resize that changes only the height (the keyboard, the browser's toolbar)
   now leaves the sidebar open; a change of width (a rotation, a resized window) still closes it.
+- **The owner answers an agent's question from the task sheet.** Under an open question of the
+  Projects view's task sheet, and under one answered only by an agent's relayed answer, a form
+  ("Your answer", "Send answer") records the owner's answer. It is the view's only write: the
+  browser sends `{"op": "answer", ...}` to `POST /api/work/v1`, and the web server runs the new
+  OCaml program `work-write` for that op, only for the owner's browser cookie with no
+  `Authorization` header (the master token and an agent's session token are 401, another origin
+  is 403). `work-write` records the answer through `Work_questions.answer_once`, which gains an
+  owner mode: the event has `by: "owner"`, no `agent` or `session`, and `via: "owner-web"`. The
+  readers return such an answer with `owner_verified: true` and the sheet shows it as "answered by
+  the owner in this view (signed in)". An owner answer supersedes relayed answers, so a forged
+  first answer no longer locks the owner out: the relayed ones stay in the log and read as
+  replaced (`superseded: true`). A second, different owner answer is refused (409
+  `already_answered`). The marker is provenance, not a signature: a process of the same user
+  that writes the log directly can imitate it. Releases ship `work-write` like `work-read`:
+  bundles hold `bin/work-write`, and the native release assets gain `work-write-<platform>` for
+  the three platforms (33 release files with the macOS bundle, 32 without; 30 and 29 before);
+  `install.sh` checks nine programs and links `app/bin/work-write` for a release installed from
+  its native programs. Without `work-write` the form gives way to a note. The relay's body bound grows from 4096 to
+  16 384 bytes (`work-read` keeps its own 4096-byte bound). `work_answer`'s description, the
+  server instructions and the agent guide now tell agents that the owner can answer in the view
+  and that they record the owner's words only when told in the conversation. See
+  [docs/work-mcp.md](docs/work-mcp.md#answering-from-the-projects-view).
 - **An agent records the owner's answer to its question.** `mesh-work` gains an 18th tool,
   `work_answer` (`question`, `text`, optional `answered_by`, default `owner`). The owner answers a
   question asked with `work_ask` in an agent session (the asking one or another), and the agent

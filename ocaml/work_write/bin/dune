@@ -1,0 +1,5 @@
+(executable
+ (name work_write_main)
+ (public_name work-write)
+ (modules work_write_main)
+ (libraries work_write))

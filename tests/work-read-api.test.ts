@@ -126,7 +126,8 @@ describe('POST /api/work/v1 with the real program', { skip }, () => {
       assert.equal(reply.status, 400, JSON.stringify(body));
       assert.equal(reply.json().error.code, 'invalid_input', JSON.stringify(body));
     }
-    // A body over 4096 bytes is refused after at most 4097 bytes are read, a 2 MiB one included.
+    // A body over 4096 bytes is refused: by work-read up to the relay cap (16 KiB), by the relay beyond it after at most
+    // 16385 bytes are read, a 2 MiB one included.
     for (const raw of ['not json', '[1]', ...[5000, 2 * 1024 * 1024].map(n => JSON.stringify({ op: 'products' }) + ' '.repeat(n))]) {
       const reply = await call(server, null, null, raw);
       assert.equal(reply.status, 400, raw.slice(0, 40));
