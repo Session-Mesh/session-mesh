@@ -401,6 +401,16 @@ export interface Options {
   words: boolean;
 }
 
+// Past this many lines, the diff is not rendered: the page says so and links to the plain text
+// (?raw=1). The byte limit (view.py: 4 MiB) alone would let a diff of a million short lines through.
+export const MAX_DIFF_LINES = 50_000;
+
+export function countLines(text: string): number {
+  let count = 0;
+  for (let at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) count += 1;
+  return text.endsWith('\n') || text === '' ? count : count + 1;
+}
+
 // Rows built at a time, per file ("show more" builds the next ones).
 export const ROW_CHUNK = 2_000;
 // Rows built when the page opens: the files past them start folded and are built when unfolded.
@@ -601,6 +611,8 @@ class Viewer {
       words: button('words', options.words, () => this.set({words: !this.options.words})),
     };
     const modes = el('span', 'seg');
+    modes.setAttribute('role', 'group');
+    modes.setAttribute('aria-label', 'view');
     modes.append(this.buttons.unified, this.buttons.split);
     bar.append(count, modes, this.buttons.words);
     root.append(bar);
@@ -629,8 +641,23 @@ class Viewer {
   }
 }
 
-// Renders `text` into `root`, with its toolbar. Returns the parsed diff (for tests and callers).
-export function mount(root: HTMLElement, text: string, initial: Partial<Options> = {}): ParsedDiff {
+// The page for a diff past MAX_DIFF_LINES: a short notice and the way to its plain text.
+function tooLarge(root: HTMLElement, lines: number): void {
+  const note = el('p', 'note large', `This diff has ${lines} lines, more than the diff viewer shows (${MAX_DIFF_LINES}). `);
+  const link = el('a', '', 'Open it as plain text');
+  link.href = '?raw=1';
+  note.append(link, document.createTextNode('.'));
+  root.replaceChildren(note);
+}
+
+// Renders `text` into `root`, with its toolbar. Returns the parsed diff (for tests and callers),
+// or null when the diff has too many lines to be rendered.
+export function mount(root: HTMLElement, text: string, initial: Partial<Options> = {}): ParsedDiff | null {
+  const lines = countLines(text);
+  if (lines > MAX_DIFF_LINES) {
+    tooLarge(root, lines);
+    return null;
+  }
   const parsed = parseUnifiedDiff(text);
   new Viewer(root, parsed, {mode: initial.mode ?? 'unified', words: initial.words ?? true});
   return parsed;

@@ -143,8 +143,10 @@ them first with `git add --intent-to-add <file>` (it stages no content), or appe
 
 Without `MESH_SESSION_TOKEN`, print the file's path instead: the owner clicks it and it opens in
 the same viewer. To follow changes as you work, open it with `mesh-open --watch` and write the
-diff to the same file again. A diff over 4 MiB is shown as plain text, and `changes.diff:42`
-opens the plain text at that line of the file.
+diff to the same file again. A diff over 4 MiB is shown as plain text, one of more than 50,000
+lines gets a notice with a link to its plain text (show a narrower diff instead, for example one
+path: `git diff --no-color HEAD -- <path>`), and `changes.diff:42` opens the plain text at that
+line of the file.
 
 ### Whiteboard and demos
 

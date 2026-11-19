@@ -39,13 +39,14 @@ new file mode 100644
 type Rendered = {page: string; csp: string; own: string[]; ext: string[]; served: string};
 
 // Runs `code` with view.py importable and a throwaway HOME (exposed to it as HOME_DIR);
-// returns what it prints, parsed as JSON.
-function python(code: string): unknown {
+// `input` is its standard input; returns what it prints, parsed as JSON.
+function python(code: string, input = ''): unknown {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'diff-view-page-'));
   try {
     const prelude = `import sys, json\nsys.path.insert(0, ${JSON.stringify(REPO)})\nHOME_DIR = ${JSON.stringify(home)}\n`;
     const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', prelude + code],
-      {cwd: REPO, env: {PATH: process.env.PATH, HOME: home, MESH_CONF_DIR: path.join(home, 'conf')}, encoding: 'utf8'});
+      {cwd: REPO, env: {PATH: process.env.PATH, HOME: home, MESH_CONF_DIR: path.join(home, 'conf'), PYTHONIOENCODING: 'utf-8'}, encoding: 'utf8', input,
+        maxBuffer: 64 * 1024 * 1024});
     return JSON.parse(output);
   } finally {
     fs.rmSync(home, {recursive: true, force: true});
@@ -55,9 +56,9 @@ function python(code: string): unknown {
 function render(name: string, text: string): Rendered {
   return python(`from pathlib import Path
 import view
-print(json.dumps({"page": view.diff_page(Path(${JSON.stringify(name)}), ${JSON.stringify(text)}, ${JSON.stringify(NONCE)}),
+print(json.dumps({"page": view.diff_page(Path(${JSON.stringify(name)}), sys.stdin.read(), ${JSON.stringify(NONCE)}),
                   "csp": view.markdown_csp(${JSON.stringify(NONCE)}), "own": sorted(view.VIEWLIB_OWN),
-                  "ext": sorted(view.DIFF_EXT), "served": str(view.STATIC)}))`) as Rendered;
+                  "ext": sorted(view.DIFF_EXT), "served": str(view.STATIC)}))`, text) as Rendered;
 }
 
 // What view._respond answers for a file of `content` (a Python bytes literal), with a 64-byte
@@ -226,6 +227,22 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
     await page.waitForURL(/source=1/);
     assert.ok(seen.includes('/view/big.diff?dt=t&source=1'), seen.join(' '));
     assert.match(page.url(), /#L3$/);
+    await page.close();
+  });
+
+  test('past the line limit, says so and links to the plain text instead of rendering', async () => {
+    const page = await open(added('many', 50_001));
+    await page.waitForSelector('.note.large');
+    assert.match(await page.locator('.note.large').textContent() ?? '', /^This diff has 50004 lines, more than the diff viewer shows \(50000\)\. Open it as plain text\.$/);
+    assert.equal(await page.locator('.note.large a').getAttribute('href'), '?raw=1');
+    assert.equal(await page.locator('tr, button').count(), 0);
+    await page.close();
+  });
+
+  test('names the group of view buttons', async () => {
+    const page = await open(DIFF);
+    await page.waitForSelector('details.file');
+    assert.equal(await page.getByRole('group', {name: 'view'}).getByRole('button').count(), 2);
     await page.close();
   });
 });
