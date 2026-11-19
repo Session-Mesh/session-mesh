@@ -60,8 +60,13 @@ module type ADAPTER = sig
       this adapter's type that were described in time, in the order they
       ended. It returns, by session name, the complete new fields of the
       sessions it corrects (a rule over several sessions, such as one conversation id claimed
-      by two sessions); the other rows stay as they are. Called in a system
-      thread with the setup deadline; [no_check] is the default. *)
+      by two sessions); the other rows stay as they are. For a [describe]
+      request, the rows also hold the last round's rows of the sessions not
+      requested whose agent process is still in the table (with that
+      round's [process]), so that a session described alone is checked
+      against the others; only the corrections of the requested sessions
+      are used. Called in a system thread with the setup deadline;
+      [no_check] is the default. *)
 end
 
 val no_check : 'state -> Mesh_agent_round.t -> described list -> (string * fields) list

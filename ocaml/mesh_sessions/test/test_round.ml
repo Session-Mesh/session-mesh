@@ -10,37 +10,7 @@
    frames, and a 300-session round. Rounds run under Eio_main with the real
    clock, since rows run in system threads. *)
 
-module Round = Mesh_sessions_round
-module U = Yojson.Safe.Util
-
-let session ?(activity = 0.) ?(busy = false) name pid =
-  `Assoc [ ("name", `String name); ("created", `Float 1.5); ("pid", `Int pid); ("activity", `Float activity); ("busy", `Bool busy) ]
-
-let request ?(focus = []) ?(full = false) ?(avoid = []) sessions =
-  let names = List.map (fun name -> `String name) in
-  match
-    Mesh_sessions_request.parse
-      [ ("sessions", `List sessions); ("focus", `List (names focus)); ("full", `Bool full); ("avoid", `List (names avoid)) ]
-  with
-  | Ok parsed -> parsed
-  | Error message -> Alcotest.fail message
-
-let with_engine ?(config = Round.config ()) ?(home = "/nonexistent") ?(registry = Fake.registry home) platform f =
-  Eio_main.run (fun env -> f (Round.create ~clock:(Eio.Stdenv.clock env) config platform registry))
-
-(* Run a round and return its events (in order) and final fields. *)
-let round engine parsed =
-  let events = ref [] in
-  let emit name fields =
-    events := (name, `Assoc fields) :: !events;
-    Ok ()
-  in
-  let final = Round.round engine parsed ~emit in
-  (List.rev_map snd !events, `Assoc final)
-
-let names events = List.map (fun event -> U.to_string (U.member "name" event)) events
-let state_of name events = U.to_string (U.member "state" (List.find (fun e -> U.member "name" e = `String name) events))
-let shells count = List.init count (fun index -> Fake.process ~pid:(100 + index) ~sid:(100 + index) ~argv:[ "sh" ] "sh")
+open Round_support
 
 let test_order () =
   let parsed =
@@ -124,9 +94,6 @@ let test_saturation () =
       let events, final = round engine (request [ session "s0" 100 ]) in
       Alcotest.(check bool) "no table" true (U.member "reason" (List.hd events) = `String "no_process_table");
       Alcotest.(check bool) "incomplete" true (U.member "complete" final = `Bool false))
-
-let has_row event = U.member "row" event <> `Null
-let is_same event = U.member "same" event = `Bool true
 
 let test_same_rows () =
   with_engine (Fake.platform (shells 3)) (fun engine ->
@@ -225,27 +192,6 @@ let test_describe_keeps_cache () =
           Alcotest.(check int) "first round decodes each transcript" 40 decoded;
           Alcotest.(check int) "no transcript decoded again" decoded (counters ()).restarted;
           Alcotest.(check bool) "all same" true (List.for_all is_same events)))
-
-(* A codex adapter that sees the session it describes and, across sessions,
-   keeps a shared id on the oldest session only. *)
-module Checked = struct
-  type t = unit
-
-  let kind = "codex"
-  let create _ = ()
-  let prepare () _ = ()
-  let resize () ~sessions:_ = ()
-
-  let describe () _ (session : Mesh_agent.session) _ =
-    [ ("session_id", `String "shared"); ("seen", `String session.name); ("created_seen", `Float session.created) ]
-
-  let check () _ (rows : Mesh_agent.described list) =
-    match List.sort (fun (a : Mesh_agent.described) b -> compare a.session.created b.session.created) rows with
-    | [] -> []
-    | _ :: newer ->
-        let without_id (row : Mesh_agent.described) = ("session_id", `Null) :: List.remove_assoc "session_id" row.fields in
-        List.map (fun (row : Mesh_agent.described) -> (row.session.name, without_id row)) newer
-end
 
 let test_check () =
   let table = [ Fake.process ~pid:100 ~sid:100 "codex"; Fake.process ~pid:101 ~sid:101 "codex" ] in

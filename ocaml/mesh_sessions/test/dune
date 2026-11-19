@@ -14,6 +14,34 @@
   yojson
   unix))
 
+; The helpers of the round tests: requests, an engine, a round's events, and
+; the Checked adapter (a cross-session check).
+
+(library
+ (name mesh_sessions_round_support)
+ (wrapped false)
+ (modules round_support)
+ (libraries
+  mesh_sessions_test_support
+  mesh_sessions
+  mesh_agent
+  eio
+  eio_main
+  yojson))
+
+(test
+ (name test_round_check)
+ (modules test_round_check)
+ (libraries
+  mesh_sessions_round_support
+  mesh_sessions_test_support
+  mesh_sessions
+  mesh_agent
+  mesh_pty_processes
+  alcotest
+  yojson
+  unix))
+
 (test
  (name test_parity)
  (modules test_parity)
@@ -46,6 +74,7 @@
  (name test_round)
  (modules test_round)
  (libraries
+  mesh_sessions_round_support
   mesh_sessions_test_support
   mesh_sessions
   mesh_agent

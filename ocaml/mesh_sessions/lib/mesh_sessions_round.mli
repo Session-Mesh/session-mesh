@@ -9,7 +9,9 @@
     described in the order of service with bounded concurrency and a deadline
     each, each row reported as soon as it ends (docs/sessions-protocol.md,
     [round] and [describe]). The state kept across rounds is the last row sent
-    per session (for [same]), the backoff, and the system threads. *)
+    per session (for [same]), the last correction of each session and the
+    last round's rows (for the checks, {!Mesh_sessions_corrections}), the
+    backoff, and the system threads. *)
 
 type config = {
   deadline : float;  (** Seconds per row (2). *)
