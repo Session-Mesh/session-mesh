@@ -158,6 +158,15 @@ three groups: "Waiting for you" (a question or a permission), "Finished, unread"
 session on this device) and "Active". Below come the other terminals of the machine, grouped by
 origin (SSH, tmux, terminal emulators). "Filter…" narrows the list.
 
+The page does not wait for the list. While the server prepares it, for example after a restart, the
+terminals of the saved layout attach at once. The sidebar shows the sessions this browser knew at its
+last visit, marked "loading". A line above the list says where things stand: the list is loading,
+the server is unreachable and when the next attempt is (with "Retry now"), the server restarted, or
+the terminal host is not answering. That line is empty when the list is complete. Each tab asks for
+the list one request at a time, and after a slow answer it waits at least as long as that answer took, so open tabs
+do not pile requests onto a slow server. Long lists render only the rows near the visible part. See
+[sessions-loading.md](sessions-loading.md).
+
 Those other terminals can be seen but not read from the browser: their own emulator owns the
 terminal. Clicking one shows what runs in it and, for a recognized agent whose conversation the mesh knows, offers to move it
 into the mesh: "Restart now" stops the agent and resumes the conversation in a mesh session.

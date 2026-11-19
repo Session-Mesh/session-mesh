@@ -142,6 +142,17 @@ before 1.0, a minor version may change behaviour.
   silent PTY host leaves the last list on screen (`host: "silent"`). The answer gains
   `generation`, `since` (only the changed rows and the `removed` names), `full`, `complete`,
   `counts` and `instance`; see [docs/sessions-api.md](docs/sessions-api.md).
+- **The session list loads progressively.** After a server restart, the terminals of the saved
+  layout attach without waiting for the session list. Until the list arrives, the sidebar shows the
+  sessions this browser knew, marked "loading", and a status line says what is happening: loading,
+  server unreachable with the time of the next attempt, server restarted, or terminal host silent.
+  Each tab polls `/api/sessions` one request at a time and never faster than the server answers, so
+  several tabs no longer pile requests onto a slow server; a hidden tab polls at most every 30 s.
+  The sidebar updates only the rows that changed, at most once per frame, and renders only the
+  visible rows of a list longer than 200, keeping the focused, renamed or dragged row. A line sent
+  from the phone's field before the list names its session waits for it, up to 5 s, and is never
+  sent to another session; Cancel ends the wait and the text is kept. See
+  [docs/sessions-loading.md](docs/sessions-loading.md).
 - **Copy on select.** Selecting text in a terminal now copies it to the clipboard when you release
   the mouse button (or lift your finger after a long press on a phone), and the text stays
   selected. It is on by default and is a per-browser preference (`copyOnSelect` in the page's
