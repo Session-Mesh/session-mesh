@@ -19,6 +19,7 @@ type process = {
   cwd : string option;
   files : ((int * string) list, Mesh_platform.error) result;
   zombie : bool;
+  uid : int;
 }
 
 type built = { platform : Mesh_pty_processes.platform; home : string; root : string; labels : (string * int) list }
@@ -102,6 +103,7 @@ let files spec scenario ~home ~work entry =
   match U.to_string_option (U.member "fd_state" entry) with
   | Some "unreadable" -> Error (Mesh_platform.Malformed "fd")
   | Some "vanished" -> Error Mesh_platform.Not_found
+  | Some "denied" -> Error Mesh_platform.Denied
   | _ ->
       let rollouts = U.to_list (U.member "rollouts" scenario) in
       let target name =
@@ -128,6 +130,7 @@ let process_of spec scenario ~home ~work ~now entry =
     cwd = Option.map (expand spec ~work) (U.to_string_option (U.member "cwd" entry));
     files = files spec scenario ~home ~work entry;
     zombie = U.member "zombie" entry = `Bool true;
+    uid = Unix.getuid ();
   }
 
 (* A helper is in its parent Codex's session, as in a terminal; others lead their own. *)
@@ -142,7 +145,7 @@ let to_platform ~btime p : Mesh_platform.process =
     ppid = p.ppid;
     pgrp = p.sid;
     sid = p.sid;
-    tpgid = -1;
+    tpgid = p.sid;
     comm = p.comm;
     state = (if p.zombie then 'Z' else 'S');
     incarnation = Int64.of_float ((p.start -. btime) *. 100.);
@@ -157,6 +160,7 @@ let platform ~btime processes : Mesh_pty_processes.platform =
     command_line = lookup (fun p -> Ok p.argv);
     working_directory = lookup (fun p -> Option.to_result ~none:Mesh_platform.Not_found p.cwd);
     open_file_paths = lookup (fun p -> p.files);
+    process_owner = lookup (fun p -> Ok p.uid);
   }
 
 let build spec name ~root ~now =

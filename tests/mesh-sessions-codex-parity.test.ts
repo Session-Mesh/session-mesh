@@ -11,6 +11,10 @@
 // in a new user and mount namespace (`unshare -rm`) for the Python process only: no real process is
 // started or read. The listing's clock is fixed to the scenario's time. Everything lives in a
 // temporary directory. MESH_SESSIONS_PARITY_WRITE=1 rewrites golden.json instead of comparing.
+//
+// A second test needs no namespace, so that it runs wherever MESH_PYTHON is set (CI included): the
+// Codex option table of resumeargs._CODEX must equal fixtures/codex/options.json, which the OCaml
+// test (test_codex.ml, "option table") compares with Mesh_agent_codex_argv's table.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -31,7 +35,7 @@ interface RolloutSpec {
 }
 interface ProcessSpec {
   pid: number; comm: string; ppid: number; age: number; cwd?: string | null; argv: Word[]; fds?: string[];
-  fd_state?: 'ok' | 'unreadable' | 'vanished'; zombie?: boolean;
+  fd_state?: 'ok' | 'unreadable' | 'vanished' | 'denied'; zombie?: boolean;
 }
 interface Scenario {
   name: string; labels: Record<string, number>; rollouts: RolloutSpec[]; processes: ProcessSpec[];
@@ -108,7 +112,8 @@ function writeProcess(proc: string, entry: ProcessSpec, scenario: Scenario, home
   fs.writeFileSync(path.join(dir, 'cmdline'), Buffer.concat(words(entry.argv, work).map(word => Buffer.concat([word, Buffer.from([0])]))));
   if (entry.cwd !== null && entry.cwd !== undefined) fs.symlinkSync(expand(entry.cwd, work), path.join(dir, 'cwd'));
   const state = entry.fd_state ?? 'ok';
-  if (state === 'unreadable') fs.writeFileSync(path.join(dir, 'fd'), '');
+  // Denied: unreadable, and /proc/<pid> is owned by this user (the namespace's only one).
+  if (state === 'unreadable' || state === 'denied') fs.writeFileSync(path.join(dir, 'fd'), '');
   if (state !== 'ok') return;
   fs.mkdirSync(path.join(dir, 'fd'));
   (entry.fds ?? []).forEach((name, index) => {
@@ -176,4 +181,27 @@ test('the Python listing gives the committed Codex identities and rows', { skip 
   const golden = JSON.parse(fs.readFileSync(GOLDEN, 'utf8')) as Record<string, unknown>;
   for (const scenario of spec.scenarios) assert.deepEqual(answers[scenario.name], golden[scenario.name], scenario.name);
   assert.deepEqual(Object.keys(golden).sort(), spec.scenarios.map(scenario => scenario.name).sort());
+});
+
+const OPTIONS = [
+  'import json, sys',
+  'sys.path.insert(0, sys.argv[1])',
+  'import resumeargs',
+  'table = resumeargs._CODEX',
+  'print(json.dumps({"categories": sorted(table), "takes_value": sorted(table["keep_value"] | table["drop_value"]),',
+  '                  "flags": sorted(table["keep_flag"] | table["drop_flag"])}))',
+].join('\n');
+
+// Skipped only without MESH_PYTHON outside CI: in CI a missing interpreter fails the test.
+const noPython = !PYTHON && !process.env.CI ? 'MESH_PYTHON is required' : false;
+
+test('the Codex option table equals resumeargs._CODEX', { skip: noPython }, () => {
+  assert.ok(PYTHON, 'MESH_PYTHON must be set in CI');
+  const run = spawnSync(PYTHON, ['-I', '-B', '-c', OPTIONS, ROOT], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  const python = JSON.parse(run.stdout) as { categories: string[]; takes_value: string[]; flags: string[] };
+  const fixture = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'options.json'), 'utf8')) as typeof python;
+  assert.deepEqual(python.categories, fixture.categories, 'a new kind of Codex option needs the OCaml reader too');
+  assert.deepEqual(python.takes_value, [...fixture.takes_value].sort());
+  assert.deepEqual(python.flags, [...fixture.flags].sort());
 });

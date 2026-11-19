@@ -13,6 +13,7 @@ type platform = {
   command_line : int -> (string list, P.error) result;
   working_directory : int -> (string, P.error) result;
   open_file_paths : int -> ((int * string) list, P.error) result;
+  process_owner : int -> (int, P.error) result;
 }
 
 let live =
@@ -22,6 +23,7 @@ let live =
     command_line = P.command_line;
     working_directory = P.working_directory;
     open_file_paths = P.open_file_paths;
+    process_owner = P.process_owner;
   }
 
 type request = Table | Selected of int list

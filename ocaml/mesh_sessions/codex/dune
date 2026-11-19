@@ -1,17 +1,23 @@
 ; The Codex adapter of the session listing (docs/sessions-protocol.md): the
-; command-line reading, the rollout walk and header cache, the process view,
-; the identity rules, the rollout fold (pure), and the adapter.
+; command-line reading, the rollout walk and header cache (its file key read
+; by mesh_agent_codex_stat_stubs.c, an lstat with nanoseconds), the process
+; view, the identity rules, the rollout fold (pure), and the adapter.
 
 (library
  (name mesh_agent_codex)
  (wrapped false)
  (modules
   mesh_agent_codex_argv
+  mesh_agent_codex_stat
   mesh_agent_codex_rollouts
   mesh_agent_codex_fold
   mesh_agent_codex_view
   mesh_agent_codex_identity
   mesh_agent_codex)
+ (foreign_stubs
+  (language c)
+  (names mesh_agent_codex_stat_stubs)
+  (flags :standard -Wall -Wextra))
  (libraries
   mesh_agent
   mesh_agent_transcripts
@@ -21,6 +27,7 @@
   mesh_jsonl
   mesh_jsonl_tail
   mesh_safe_file
+  uucp
   yojson
   unix
   threads.posix))

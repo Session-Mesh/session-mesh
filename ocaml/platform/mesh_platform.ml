@@ -87,6 +87,7 @@ let snapshot () = Result.map (fun found -> found.processes) (scan ())
 let command_line = Backend.command_line
 let working_directory = Backend.working_directory
 let open_file_paths = Backend.open_file_paths
+let process_owner = Backend.process_owner
 let foreground_process_group = Backend.foreground_process_group
 let unix_socket_bound = Backend.unix_socket_bound
 

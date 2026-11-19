@@ -16,9 +16,12 @@
     - an incomplete process table counts at least two Codex in any folder and
       lets any conversation be named by another Codex;
     - a Codex whose open files cannot be read holds unknown rollouts (every
-      rule that needs them then gives nothing), unless it exited
-      ([Not_found]) or belongs to another user ([Denied]): it then holds none,
-      since only this user's Codex write in this user's [~/.codex];
+      rule that needs them then gives nothing). On Linux there are two
+      exceptions, where it holds none: it exited ([Not_found]), or its owner
+      ({!Mesh_agent_round.owner}) is positively another user, since only this
+      user's Codex write in this user's [~/.codex]. [Denied] alone is not
+      enough: a non-dumpable process of this user is [Denied] too. An owner
+      that cannot be read counts as this user;
     - a Codex's own helpers are not "another" Codex. *)
 
 type t
@@ -27,9 +30,6 @@ val read : Mesh_agent_round.t -> t
 (** Reads the command line, folder and open files of each Codex process. *)
 
 val round : t -> Mesh_agent_round.t
-
-val codex_pids : t -> int list
-(** Every Codex process, by ascending pid. *)
 
 val top_level : t -> int -> bool
 
@@ -49,4 +49,7 @@ val held_by_others : t -> int -> (string, unit) Hashtbl.t option
 val named_by_others : t -> int -> string option -> bool
 (** Whether another top-level Codex may have been launched on this
     conversation ({!Mesh_agent_codex_argv.may_name}); [true] when the table is
-    incomplete or the id is not a string ([None]). *)
+    incomplete. A conversation whose id is not a string ([None]) is named
+    only by a launch whose [resume] id cannot be read. (Python calls
+    [str.lower] on that missing id and fails as soon as another top-level
+    Codex runs.) *)

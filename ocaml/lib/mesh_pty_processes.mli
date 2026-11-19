@@ -54,8 +54,10 @@ type platform = {
   command_line : int -> (string list, Mesh_platform.error) result;
   working_directory : int -> (string, Mesh_platform.error) result;
   open_file_paths : int -> ((int * string) list, Mesh_platform.error) result;
+  process_owner : int -> (int, Mesh_platform.error) result;
 }
-(** The facts the operation reads; tests pass their own. *)
+(** The facts the operation reads; tests pass their own. The [processes]
+    reply does not use [process_owner]; the session listing does. *)
 
 val live : platform
 (** {!Mesh_platform} itself. *)

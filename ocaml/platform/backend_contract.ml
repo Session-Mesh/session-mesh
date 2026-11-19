@@ -14,6 +14,7 @@ module type S = sig
   val command_line : int -> (string list, Types.error) result
   val working_directory : int -> (string, Types.error) result
   val open_file_paths : int -> ((int * string) list, Types.error) result
+  val process_owner : int -> (int, Types.error) result
   val foreground_process_group : int -> (int, Types.error) result
   val unix_socket_bound : string -> (bool, Types.error) result
   val capabilities : unit -> Types.capabilities

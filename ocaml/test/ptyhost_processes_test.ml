@@ -51,6 +51,7 @@ let fake ?(failing = []) ?(skipped = 0) ?(snapshot = Ok []) () =
     open_file_paths =
       (fun pid ->
         read pid [ (0, "/dev/ttys001"); (9, "/h/.codex/sessions/r.jsonl") ]);
+    process_owner = (fun pid -> read pid 1000);
   }
 
 let table ?budget facts =

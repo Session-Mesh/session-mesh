@@ -83,6 +83,10 @@ let foreground_process_group pid =
   let* found = process pid in
   Parse.foreground_group found.tpgid
 
+(* Not read on macOS yet: callers treat the owner as unknown. *)
+let process_owner _pid =
+  Error (Unsupported "process owner inspection is not implemented on macOS")
+
 let scan () =
   let* pids = lift "process table" (Darwin_stubs.list_pids ()) in
   Support.collect_scan (Array.to_list pids |> List.map string_of_int) process
