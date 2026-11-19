@@ -86,6 +86,45 @@ let test_truncation_and_rewrite () =
       Alcotest.check outcome "content changed: restarted" Tail.Restarted how;
       check_seen "whole file again" [ {|{"d":1}|}; {|{"e":1}|} ] rewritten)
 
+(* Rewrites that keep the bytes before the cursor are seen by the first
+   bytes of the file. *)
+let test_rewrite_of_the_head () =
+  Support.with_directory (fun directory ->
+      let path = Filename.concat directory "t.jsonl" in
+      let body = "{\"a\":1}\n" ^ String.concat "" (List.init 40 (fun i -> Printf.sprintf "{\"n\":%03d}\n" i)) in
+      Support.write_file path body;
+      let first, _ = update ~limits:(Tail.limits ~max_line_bytes:64 ~max_depth:4 ()) path None in
+      let later = (Tail.signature first).mtime +. 10. in
+      let rewrite contents =
+        Support.write_file path contents;
+        Unix.utimes path later later;
+        update ~limits:(Tail.limits ~max_line_bytes:64 ~max_depth:4 ()) path (Some first)
+      in
+      let same_size = "{\"a\":7}" ^ String.sub body 7 (String.length body - 7) in
+      let _, how = rewrite same_size in
+      Alcotest.check outcome "same size, first line changed: restarted" Tail.Restarted how;
+      let t, how = rewrite (same_size ^ "{\"z\":1}\n") in
+      Alcotest.check outcome "first line changed and a line appended: restarted" Tail.Restarted how;
+      Alcotest.(check string) "the new first line" {|{"a":7}|} (List.hd (seen t));
+      Support.write_file path (body ^ "{\"z\":1}\n");
+      Unix.utimes path 1. 1.;
+      let _, how = update path (Some first) in
+      Alcotest.check outcome "time went back: restarted" Tail.Restarted how)
+
+(* More than a window appended: one call skips to the window and is complete,
+   since max_read is above the window; the state before is kept. *)
+let test_large_append () =
+  Support.with_directory (fun directory ->
+      let path = Filename.concat directory "t.jsonl" in
+      let limits = Tail.limits ~max_line_bytes:64 ~max_depth:4 ~window:1024 ~max_read:2048 () in
+      Support.write_file path "{\"a\":1}\n";
+      let first, _ = update ~limits path None in
+      Support.append_file path (String.make 5000 'x' ^ "\n{\"z\":1}\n");
+      let t, how = update ~limits path (Some first) in
+      Alcotest.check outcome "appended" Tail.Appended how;
+      Alcotest.(check bool) "complete in one call" true (Tail.complete t);
+      check_seen "state kept, the window's line folded" [ {|{"a":1}|}; {|{"z":1}|} ] t)
+
 let test_inode_change () =
   Support.with_directory (fun directory ->
       let path = Filename.concat directory "t.jsonl" in
@@ -275,6 +314,8 @@ let () =
           Alcotest.test_case "dropped lines" `Quick test_dropped_lines;
           Alcotest.test_case "truncation and rewrite" `Quick test_truncation_and_rewrite;
           Alcotest.test_case "inode change" `Quick test_inode_change;
+          Alcotest.test_case "rewrite of the head" `Quick test_rewrite_of_the_head;
+          Alcotest.test_case "large append" `Quick test_large_append;
           Alcotest.test_case "tail window" `Quick test_window;
           Alcotest.test_case "bounded reads" `Quick test_max_read;
           Alcotest.test_case "FIFO and link refused" `Quick test_refusals;

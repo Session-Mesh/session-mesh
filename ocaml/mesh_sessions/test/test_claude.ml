@@ -69,6 +69,20 @@ let test_no_decoding_when_unchanged () =
 
 let prompt text = Printf.sprintf {|{"type":"user","message":{"role":"user","content":"%s"}}|} text ^ "\n"
 
+(* A 100 MB line (a hole: nothing is written) then an answer: the next
+   description already reports the answer. *)
+let test_large_append () =
+  with_home (fun home ->
+      let path = transcript_path home in
+      Support.write_file path (prompt "before");
+      let adapter = fresh home in
+      ignore (describe adapter);
+      let descriptor = Unix.openfile path [ Unix.O_WRONLY ] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close descriptor) (fun () ->
+          Unix.ftruncate descriptor ((Unix.fstat descriptor).st_size + 100_000_000));
+      Support.append_file path ("\n" ^ prompt "after the 100 MB line");
+      Alcotest.(check bool) "up to date at once" true (field "last" (describe adapter) = `String "after the 100 MB line"))
+
 let test_hostile_lines () =
   with_home (fun home ->
       let huge = {|{"type":"user","message":{"content":"|} ^ String.make 2_000_000 'x' ^ "\"}}\n" in
@@ -156,6 +170,7 @@ let () =
           Alcotest.test_case "pieces equal a cold read" `Quick test_cache_equals_cold;
           Alcotest.test_case "unchanged is not decoded" `Quick test_no_decoding_when_unchanged;
           Alcotest.test_case "concurrent appends" `Quick test_concurrent_appends;
+          Alcotest.test_case "100 MB append" `Quick test_large_append;
         ] );
       ( "hostile",
         [
