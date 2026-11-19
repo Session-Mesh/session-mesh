@@ -38,6 +38,66 @@ let test_corrections_settle () =
       Alcotest.(check int) "withdrawn: sent again" 2 (List.length events);
       Alcotest.(check bool) "withdrawn: the id comes back" true (session_id (last "new" events) = `String "shared"))
 
+(* A codex adapter whose rows change every round (a [tick], as [updated] or
+   [said] do for a busy session) and whose ids are set by the test; its
+   check withdraws the oldest session's id from the newer sessions that
+   share it. *)
+let tick = Atomic.make 0
+let ids = Atomic.make [ ("old", "shared"); ("new", "shared") ]
+
+module Moving = struct
+  include Checked
+
+  let prepare () _ = Atomic.incr tick
+
+  let describe () _ (session : Mesh_agent.session) _ =
+    let id = List.assoc session.name (Atomic.get ids) in
+    (* [session_id] last: the check puts it first, in another order. *)
+    [ ("tick", `Int (Atomic.get tick)); ("session_id", `String id) ]
+
+  let check () _ (rows : Mesh_agent.described list) =
+    match List.sort (fun (a : Mesh_agent.described) b -> compare a.session.created b.session.created) rows with
+    | [] -> []
+    | oldest :: newer ->
+        let id = List.assoc "session_id" oldest.fields in
+        List.filter_map
+          (fun (row : Mesh_agent.described) ->
+            if List.assoc "session_id" row.fields = id then
+              let fields = List.remove_assoc "session_id" row.fields in
+              Some (row.session.name, ("session_id", `Null) :: ("withdrawn", `Bool true) :: fields)
+            else None)
+          newer
+end
+
+let moving = Mesh_agent.Registry.create [ Mesh_agent.adapter (module Moving) (Mesh_agent_roots.of_home "/x") ]
+let events_of name events = List.filter (fun event -> U.member "name" event = `String name) events
+
+(* The events of [new] in one round: their [session_id]s, marked with a [+]
+   when the row has the key the check added. *)
+let new_ids engine sessions =
+  let id event =
+    let value = match session_id event with `Null -> "null" | json -> U.to_string json in
+    if U.member "withdrawn" (agent event) = `Bool true then value ^ "+" else value
+  in
+  List.map id (events_of "new" (fst (round engine (request sessions))))
+
+(* A remembered correction is applied while the keys it changed still hold
+   the values it changed, though the rest of the row changes every round;
+   it is forgotten once the check no longer makes it, and is kept to its
+   session's incarnation. *)
+let test_corrections_settle_changing_rows () =
+  with_engine ~registry:moving (Fake.platform codex_table) (fun engine ->
+      let ids_in label expected sessions = Alcotest.(check (list string)) label expected (new_ids engine sessions) in
+      ids_in "round 1: sent, then corrected" [ "shared"; "null+" ] [ older; newer ];
+      ids_in "round 2: one corrected event" [ "null+" ] [ older; newer ];
+      ids_in "round 3: one corrected event" [ "null+" ] [ older; newer ];
+      Atomic.set ids [ ("old", "shared"); ("new", "own") ];
+      ids_in "own id: the correction does not apply" [ "own" ] [ older; newer ];
+      Atomic.set ids [ ("old", "shared"); ("new", "shared") ];
+      ids_in "shared again: the correction was forgotten" [ "shared"; "null+" ] [ older; newer ];
+      let reborn = `Assoc [ ("name", `String "new"); ("created", `Float 0.5); ("pid", `Int 101) ] in
+      ids_in "another incarnation: no correction applied" [ "shared" ] [ older; reborn ])
+
 (* A [describe] of one session checks it against the other sessions of the
    last round: it returns the id the round gives, not the one it withdraws. *)
 let test_describe_sees_the_round () =
@@ -131,6 +191,7 @@ let () =
       ( "corrections",
         [
           Alcotest.test_case "settle after one round" `Quick test_corrections_settle;
+          Alcotest.test_case "settle on rows that change" `Quick test_corrections_settle_changing_rows;
           Alcotest.test_case "describe sees the round" `Quick test_describe_sees_the_round;
           Alcotest.test_case "refused correction counted" `Quick test_correction_too_large_counted;
         ] );
