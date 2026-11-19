@@ -50,8 +50,13 @@ let step registry json =
       let keep = Yojson.Safe.Util.to_list (member "prune" json) |> List.filter_map I.incarnation_of_json in
       I.prune registry ~keep ~now
   | claim -> (
+      let listed =
+        match member "listed" json with
+        | `Null -> None
+        | l -> Some (Yojson.Safe.Util.to_list l |> List.filter_map I.incarnation_of_json)
+      in
       match I.claim_of_json ~formats claim with
-      | Some c -> I.merge ~formats registry c ~now
+      | Some c -> I.merge ?listed ~formats registry c ~now
       | None -> registry)
 
 let resolution_json = function

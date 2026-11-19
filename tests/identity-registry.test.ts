@@ -53,7 +53,8 @@ for case in vectors["cases"]:
     registry, _ = respawn._parse_identities(json.dumps({"version": 1, **case["start"]}))
     for step in case["steps"]:
         if "claim" in step:
-            registry = respawn.merge_identity(registry, step["claim"], step["now"])
+            listed = [k for k in map(respawn._valid_incarnation, step["listed"]) if k] if "listed" in step else None
+            registry = respawn.merge_identity(registry, step["claim"], step["now"], listed)
         else:
             keep = [k for k in map(respawn._valid_incarnation, step["prune"]) if k]
             registry = respawn.prune_identities(registry, keep, step["now"])
@@ -336,5 +337,46 @@ respawn.update([listed("a", 1.0, "codex", A, "open_rollout")], True, now=1010.0,
 print(json.dumps([refused, respawn.identity_file().stat().st_mode & 0o777, len(registry()["entries"])]))
 `);
     assert.deepEqual(out, [[], 0o600, 1]);
+  });
+
+  test('a lost offer holding a conversation loses it to the listed session that runs it, by listing or by hook', () => {
+    const out = python(`
+x = {"name": "x", "created": 1.0, "nonce": NONCE}
+respawn.update([listed("x", 1.0, "claude", None, None)], True, now=1000.0, host="1:1", nonces={("x", 1.0): NONCE})
+respawn.claim_identity(x, "claude", A, "hook", "hook:Stop")            # x's Claude reported A
+respawn.update([], True, now=1010.0, host="2:2")                         # the PTY host restarted: x is an offer
+# A shell z where the owner typed claude --resume A: a listing reads A in Claude's pid file.
+respawn.update([listed("z", 50.0, "claude", A, "pid_metadata", started=51.0)], True, now=1020.0, host="2:2")
+by_listing = sorted((e["session"]["name"], e["state"]) for e in registry()["entries"])
+# The same with B, reported by z's own hook after a listing that names z and not y.
+respawn.claim_identity({"name": "y", "created": 2.0, "nonce": None}, "claude", B, "hook", "hook:Stop")
+respawn.claim_identity({"name": "z", "created": 50.0, "nonce": None}, "claude", B, "hook", "hook:Stop")
+by_hook = sorted((e["session"]["name"], e["state"], e["id"]) for e in registry()["entries"])
+print(json.dumps([by_listing, by_hook, respawn.restore_identity(respawn.lost_entry("x"))[1]]))
+`);
+    assert.deepEqual(out, [[['x', 'contested'], ['z', 'active']],
+      [['x', 'contested', null], ['y', 'contested', null], ['z', 'active', B]], 'contested'],
+    'the offer restores as a shell; the live session keeps the conversation it runs');
+  });
+
+  test('a directory at the registry path reads as empty: listings go on, a launch claim fails safely', () => {
+    const out = python(`
+import contextlib, io
+respawn.identity_file().mkdir()
+log = io.StringIO()
+with contextlib.redirect_stdout(log):
+    offers = respawn.update([listed("a", 1.0, "codex", A, "open_rollout")], True, now=1000.0, host="1:1")
+    respawn.update([], True, now=1010.0, host="2:2")
+    read = respawn.identities()
+    try:
+        respawn.claim_identity({"name": "n", "created": None, "nonce": NONCE}, "codex", B, "chosen", "launch:x",
+                               live=[], required=True)
+        refused = False
+    except OSError:
+        refused = True
+print(json.dumps([offers, read, refused, respawn.identity_file().is_dir(), len(log.getvalue().splitlines()) > 0,
+                  A in log.getvalue()]))
+`);
+    assert.deepEqual(out, [[], {generation: 0, entries: []}, true, true, true, false]);
   });
 });

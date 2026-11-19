@@ -103,14 +103,18 @@ val merge :
     incarnation's own entry, another agent counts only from a process started
     after that entry, another id from a process started before the entry's
     agent is a late report, ignored, and an [Observed] claim never replaces a
-    [Hook] or [Chosen] id unless its process started after that entry; the
+    [Hook] or [Chosen] id unless its process started after that entry (a
+    refused claim still fills in the entry's missing [created] or [nonce]); the
     same id of the same agent refreshes the entry (the stronger source,
     [holds_open] once seen, the start time of a later process); another id
-    replaces it (the newest fact wins). Among incarnations one id has one
+    replaces it (the newest fact wins; a claim with no start time keeps the
+    one known for the same agent). Among incarnations one id has one
     holder: the stronger (chosen > hook > observed, then the one that holds
     the rollout open) keeps it and the other is [Contested]; when equal, the
-    current holder keeps it. When the cap drops entries, those of
-    incarnations not in [listed] (the ones the PTY host lists) go first. *)
+    current holder keeps it. A holder whose incarnation is not in [listed]
+    (the ones the PTY host lists; unknown when absent) loses to any claim of
+    a listed incarnation. When the cap drops entries, those of incarnations
+    not in [listed] go first. *)
 
 val prune : registry -> keep:incarnation list -> now:float -> registry
 (** Without the entries of incarnations not in [keep] and older than

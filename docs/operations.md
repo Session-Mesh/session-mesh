@@ -458,7 +458,8 @@ click, so an agent launched with permissive options never comes back on its own.
    computed the same way, so an offer shown as resumable is one the restore resumes. A file written
    by a newer version, whatever its content, is read as empty and left untouched. A file that cannot
    be used (not valid JSON, nested too deeply, not a private regular file, too large) is read as empty
-   and replaced by the next write; the server log then has one line saying so, without ids or paths.
+   and replaced by the next write (a directory in its place is read as empty too, and each write fails
+   and is logged; a launch then starts nothing); the server log then has one line saying so, without ids or paths.
 
    The mesh records `chosen` ids before the agent starts: a new Claude session is launched with
    `claude --session-id <uuid>` (a random UUID the mesh picks), and a restore or a resume from the
@@ -477,7 +478,17 @@ click, so an agent launched with permissive options never comes back on its own.
    When two sessions claim one conversation, the stronger source keeps it: `chosen` over `hook` over
    `observed`, then the session that holds the rollout open, and when they are equal the session that
    held it first. The other session is *contested*: it has no conversation until it reports another
-   one or the holder goes.
+   one or the holder goes. A holder the PTY host no longer lists (a lost offer, a session that ended)
+   loses to any claim of a session it lists, whatever the sources, as it is no holder for a launch
+   either; for a hook report, the last listing says which sessions are listed.
+
+   One id has one active holder among the sessions a merge compares. A launch over a lost offer may
+   leave two `active` entries of one id (the offer's entry is set aside for the launch, then kept as
+   it was); no case runs two agents on it, because a launch and a restore are refused while a listed
+   session holds the id. Two limits remain, as before the registry. A live session that is contested
+   but still runs the conversation (an idle Codex that closed its rollout) does not hold it, so a
+   restore may start a second agent on it. A restore that races the first hook report of a live
+   session nobody could identify starts a second agent, and that session then becomes contested.
 
    An agent is never relaunched on a conversation that is contested, unknown, or no longer on disk
    (no Claude transcript, no Codex rollout of that id, looked for under `$CLAUDE_CONFIG_DIR` and

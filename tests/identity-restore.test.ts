@@ -65,6 +65,16 @@ test('a conversation the registry names but that no longer exists is restored as
     {identities: [alphaIdentity(OTHER)], intercept: host.intercept});
 });
 
+test('a transcript that is a dangling link counts as gone: restored as a shell', TIMEOUT, () => {
+  const host = newRequests();
+  return withLab(lab => {
+    const folder = path.join(lab.mesh.home, '.claude', 'projects', '-home-x');
+    fs.mkdirSync(folder, {recursive: true});
+    fs.symlinkSync(path.join(folder, 'deleted.jsonl'), path.join(folder, `${OTHER}.jsonl`));
+    return restoredAsShell(lab, host.sent, /Conversation not found/, /no longer exists/);
+  }, {identities: [alphaIdentity(OTHER)], intercept: host.intercept});
+});
+
 test('an agent whose conversation is unknown is restored as a shell that says so', TIMEOUT, () => {
   const host = newRequests();
   return withLab(async lab => {
@@ -93,6 +103,30 @@ test('a guarded restore of a contested conversation is refused and creates nothi
   assert.match(answer.json.error, /claimed by another session/);
   assert.deepEqual(await lab.listed(), []);
 }, {identities: [alphaIdentity(null)]}));
+
+test('a guarded retry completes the session it created, although the transcript was deleted in between', TIMEOUT, () =>
+  withLab(async lab => {
+    const lock = path.join(lab.mesh.confDir, 'board.json.lock');
+    fs.mkdirSync(lock);   // board.transfer cannot take its lock: the session exists, the completion fails
+    const failed = await lab.exact(lab.offers.alpha);
+    assert.equal(failed.json.code, 'completion-failed', failed.text);
+    fs.rmdirSync(lock);
+    fs.rmSync(path.join(lab.mesh.home, '.claude', 'projects', '-home-x', `${SID}.jsonl`));
+    const retried = await lab.exact(lab.offers.alpha);
+    assert.equal(retried.json.ok, true, retried.text);
+    assert.equal((await lab.listed()).length, 1, 'no second session');
+    assert.deepEqual(lab.snapshotLost().map(e => e.name), ['bravo'], 'the offer is gone');
+  }));
+
+test('a guarded restore of a conversation gone from disk is refused as not resumable and creates nothing', TIMEOUT, () =>
+  withLab(async lab => {
+    const answer = await lab.exact({...lab.offers.alpha, resume_id: OTHER});   // the registry's id, no transcript
+    assert.deepEqual([answer.json.ok, answer.json.code, answer.json.phase], [false, 'not-resumable', 'not-started'],
+      JSON.stringify(answer.json));
+    assert.match(answer.json.error, /^Conversation not found: /);
+    assert.deepEqual(await lab.listed(), []);
+    assert.equal(lab.starts(), 0);
+  }, {identities: [alphaIdentity(OTHER)]}));
 
 test('a guarded restore that expects no conversation does not resume the one the registry names', TIMEOUT, () =>
   withLab(async lab => {

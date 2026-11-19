@@ -556,6 +556,18 @@
     "key": "server.restoreNotFound"
   },
   {
+    "pattern": "^Unknown conversation ID: restarted as a plain shell$",
+    "key": "server.restoreNoteUnknownConversation"
+  },
+  {
+    "pattern": "^Conversation claimed by another session: restarted as a plain shell$",
+    "key": "server.restoreNoteConversationClaimed"
+  },
+  {
+    "pattern": "^Conversation not found: restarted as a plain shell$",
+    "key": "server.restoreNoteConversationNotFound"
+  },
+  {
     "pattern": "^This conversation is claimed by another session: nothing was started$",
     "key": "server.launchConversationClaimed"
   },
