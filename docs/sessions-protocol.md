@@ -181,11 +181,13 @@ terminal session whose agent is Codex are resolved and checked together (`Mesh_s
 rules of `discover.drop_duplicate_guessed_ids`: a guessed id that another session also reports exactly, or
 that two sessions guess, is withdrawn (`session_id` and `identity_source` `null`); an id read from launch
 arguments is withdrawn from every session that shares it; exact ids that collide only with each other are
-kept. The web server still applies its own pass over all agents until it uses this program.
+kept. These rows are final when sent: the Codex `check` step corrects none of them. The web server still
+applies its own pass over all agents until it uses this program.
 
 **The identity registry** is not read by this version. The Codex adapter has the hook where it plugs in
-(`Mesh_agent_codex.config.registry_lookup`): a session it answers for takes the registered id with no
-heuristic (`identity_source` `chosen`, `hook` or `observed`), and a duplicated id then follows decision I4:
+(`Mesh_agent_codex.config.registry_lookup`, keyed by the listed session's `name` and `created`): a session
+it answers for takes the registered id with no heuristic (`identity_source` `chosen`, `hook` or
+`observed`). The Codex `check` step then applies decision I4 to an id that a registered identity shares:
 the strongest source keeps it (`chosen`, then `hook`, then an observation), a tie is broken by holding the
 rollout open, the other exact claims are `contested` and the guesses are withdrawn.
 

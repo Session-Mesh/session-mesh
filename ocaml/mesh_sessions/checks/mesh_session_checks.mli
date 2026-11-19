@@ -5,8 +5,7 @@
 (*                                                                            *)
 (******************************************************************************)
 
-(** The checks between the sessions of one round, run after every identity of
-    the round is known and before any row is sent: a conversation id that
+(** The checks between the sessions of one round: a conversation id that
     several sessions report is kept by at most one of them.
 
     Two rule sets, both pure:
@@ -35,9 +34,6 @@ type source =
   | Open  (** Observed now: the agent holds the conversation's file open. *)
   | Launch  (** Read from the launch arguments: where it started, maybe stale. *)
   | Guessed  (** Inferred (the one agent of its folder). *)
-
-type session = { sid : int; agent_pid : int }
-(** A terminal session (its session id, the leader's pid) and its agent. *)
 
 type 'key claim = { key : 'key; id : string; source : source; holds_open : bool }
 (** [holds_open]: the agent holds the conversation's file open. *)
