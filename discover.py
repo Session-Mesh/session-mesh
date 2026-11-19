@@ -563,7 +563,13 @@ def _stored_meta():
         if _meta_stored is None:
             try:
                 # Not blocking, not through a link, a regular file only: a FIFO there is no cache, not a hang.
-                with open(os.open(META_FILE, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as fh:
+                fd = os.open(META_FILE, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+                try:
+                    fh = open(fd, "rb")  # refuses a directory, and then leaves the descriptor open
+                except OSError:
+                    os.close(fd)
+                    raise
+                with fh:
                     data = fh.read(8_000_001) if stat.S_ISREG(os.fstat(fh.fileno()).st_mode) else b""
                 raw = json.loads(data.decode() if len(data) <= 8_000_000 else "null")
                 rows = raw["files"].items() if raw.get("v") == META_FILE_VERSION else ()

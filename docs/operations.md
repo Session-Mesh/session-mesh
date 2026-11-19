@@ -919,8 +919,13 @@ replies and are rebuilt from the transcripts, so removing them loses nothing. It
 rollout (at most 8 192, no transcript text), so that the first session listing after a restart does
 not read every rollout again. A row is used only while its rollout keeps the same device, inode,
 size and modification time; a rollout whose first line was rewritten in place with its size and
-modification time kept would keep its old id even across restarts of the web server; deleting this file, then restarting the web server, clears it. Removing it
-loses nothing: it is rebuilt at the next listing.
+modification time kept would keep its old id even across restarts of the web server. To clear such
+a row, stop the web server, delete this file, then start the web server: deleting it while the
+server runs does not help (the server keeps the row in memory and writes it back at the next
+listing that reads a new rollout), nor does deleting it after the restart (it is read once per
+process). Removing it loses nothing: it is rebuilt at the next listing. A transcript that exists
+but cannot be opened (permission, descriptor limit) no longer aborts the listing: that one session
+shows `updated` 0 and, for Codex, idle, until it can be read.
 
 - **Helper stopped.** The log line `history: database helper stopped: <reason>` means the helper
   failed (timeout, locked or corrupt file). The in-memory index and ripgrep answer meanwhile, and

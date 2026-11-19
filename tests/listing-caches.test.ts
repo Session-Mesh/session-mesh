@@ -332,6 +332,19 @@ del opened[:]`), {found: ['rollout-0000.jsonl', '', 'rollout-0007.jsonl'], opene
       assert.deepEqual(listing(home), {found: want, opened: 20}, 'a FIFO is not waited on');
       assert.ok(fs.lstatSync(cache).isFile());
 
+      // A directory is no cache either, and reading it must not leave a descriptor open.
+      fs.rmSync(cache);
+      fs.mkdirSync(cache);
+      const leak = python(`
+import json, os, discover
+count = lambda: len(os.listdir("/proc/self/fd"))
+start = count()
+rows = discover._stored_meta()
+print(json.dumps({"rows": len(rows), "leaked": count() - start}))
+`, home);
+      assert.deepEqual(leak, {rows: 0, leaked: 0}, 'a directory at the cache path leaks no descriptor');
+      fs.rmdirSync(cache);
+
       // Another file renamed in between the path's stat and the open, then the first put back: the row
       // holds the stamp of the file read, so the next process reads the first line again.
       rollout(30);
