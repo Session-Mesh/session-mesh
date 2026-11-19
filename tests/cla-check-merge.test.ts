@@ -8,8 +8,9 @@ import {spawnSync} from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {afterEach, describe, test} from 'node:test';
-import {ADA, BOB, CHECKER, EVE, GIT_ENV, HEADER, MAINTAINER, Repo, ROOT, git, removeTempDirs, row, tempDir} from './cla-check-lib.ts';
-import {SCENARIOS} from './cla-check-scenarios.ts';
+import {parseRegister} from '../tools/cla-check/cla-check.ts';
+import {ADA, BOB, CHECKER, EVE, GIT_ENV, HEADER, MAINTAINER, REGISTER_FILE as REG, Repo, ROOT, git, removeTempDirs, row, tempDir} from './cla-check-lib.ts';
+import {MALLORY, SCENARIOS, addsThenRemovesMallory} from './cla-check-scenarios.ts';
 import {jobBlocks, parseLines} from './public-ci-workflow-lib.ts';
 
 afterEach(removeTempDirs);
@@ -41,6 +42,35 @@ describe('what Rebase and merge lands', () => {
     git(repo.dir, ['rebase', '-q', '--force-rebase', repo.base], {GIT_COMMITTER_NAME: 'GitHub', GIT_COMMITTER_EMAIL: 'noreply@github.com'});
     assert.notEqual(repo.head(), git(repo.dir, ['rev-parse', 'pr']), 'the commits were rewritten');
     assert.equal(repo.tree(), repo.tree(merge));
+  });
+
+  // SPEC.md, "Why a branch behind the base is accepted only when it leaves the register alone".
+  const replay = (repo: Repo): void => {
+    git(repo.dir, ['checkout', '-q', '-b', 'landed']);
+    git(repo.dir, ['rebase', '-q', '--force-rebase', repo.base], {GIT_COMMITTER_NAME: 'GitHub', GIT_COMMITTER_EMAIL: 'noreply@github.com'});
+  };
+  const registerBlob = (repo: Repo, commit: string): string => git(repo.dir, ['rev-parse', `${commit}:${REG}`]);
+
+  test('B: a branch behind main that leaves the register alone lands the base\'s register', () => {
+    const repo = new Repo(HEADER + row(ADA));
+    repo.commit(ADA, {'f': 'code\n'});
+    repo.commit(ADA, {'f': 'code2\n'});
+    repo.commitOnMain(BOB, {[REG]: HEADER + row(ADA) + row(BOB), 'g': 'main\n'});
+    const merge = repo.testMerge();
+    replay(repo);
+    assert.equal(registerBlob(repo, 'HEAD'), registerBlob(repo, repo.base));
+    assert.equal(registerBlob(repo, merge), registerBlob(repo, repo.base));
+  });
+
+  test('B3: behind main, the replay lands a line the test merge does not hold', () => {
+    const repo = new Repo(HEADER + row(EVE));
+    addsThenRemovesMallory(repo);
+    repo.commitOnMain(BOB, {[REG]: HEADER + row(EVE) + row(BOB)});
+    const merge = repo.testMerge();
+    const emails = (text: string) => parseRegister(text).map((item) => item.email).sort();
+    assert.deepEqual(emails(git(repo.dir, ['cat-file', 'blob', `${merge}:${REG}`])), [BOB.email, EVE.email].sort());
+    replay(repo);
+    assert.ok(emails(repo.register()).includes(MALLORY.email), repo.register());
   });
 });
 
@@ -81,6 +111,16 @@ describe('the cla step of the CI, replayed', () => {
     const repo = new Repo(HEADER, checkerAtBase);
     repo.commit(EVE, {'feature.txt': 'code\n', 'tools/cla-check/cla-check.ts': 'process.stdout.write("PWNED\\n");\n',
       'tools/cla-check/MAINTAINERS': `Eve Example <${EVE.email}>\n`});
+    const step = runStep(repo);
+    assert.equal(step.status, 1, step.output);
+    assert.doesNotMatch(step.output, /PWNED/);
+    assert.match(step.output, new RegExp(`- ${EVE.email.replace('+', '\\+')} \\(author, committer\\)`));
+  });
+
+  test('a branch behind main that rewrites the checker is still judged by the base\'s copy', () => {
+    const repo = new Repo(HEADER, checkerAtBase);
+    repo.commit(EVE, {'feature.txt': 'code\n', 'tools/cla-check/cla-check.ts': 'process.stdout.write("PWNED\\n");\n'});
+    repo.commitOnMain(MAINTAINER, {'g': 'main\n'});
     const step = runStep(repo);
     assert.equal(step.status, 1, step.output);
     assert.doesNotMatch(step.output, /PWNED/);

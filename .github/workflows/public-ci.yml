@@ -579,9 +579,9 @@ jobs:
       - name: SPDX license and copyright headers
         run: bash scripts/check-copyright.sh
 
-  # A pull request is a straight line of commits on main (it is integrated by "Rebase and merge"),
-  # every commit is by a maintainer or by a CLA signatory, and changes the register only as its
-  # author may (CONTRIBUTING.md). The base and head come from GitHub's test
+  # A pull request is a straight line of commits (it is integrated by "Rebase and merge"), on the
+  # tip of main when it changes the register, every commit is by a maintainer or by a CLA
+  # signatory, and changes the register only as its author may (CONTRIBUTING.md). The base and head come from GitHub's test
   # merge commit, never from the event payload, and the checker is the base branch's copy, so a
   # pull request cannot loosen it by editing the script. `name: cla` is the check name that
   # CONTRIBUTING.md cites.
