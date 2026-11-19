@@ -4853,7 +4853,12 @@ syncMobileChrome();
     document.body.classList.add('drawer');
   }, { capture: true, passive: false });
   for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) document.addEventListener(name, event => { pointers.delete(event.pointerId); reset(); }, { capture: true });
-  window.addEventListener('resize', () => { reset(); document.body.classList.remove('drawer'); });
+  let drawerWidth = innerWidth;
+  window.addEventListener('resize', () => {
+    reset();
+    if (MeshPaneActions.drawerClosesOnResize(drawerWidth, innerWidth)) document.body.classList.remove('drawer');
+    drawerWidth = innerWidth;
+  });
 }
 $("#main").addEventListener("click", (e) => {
   if (document.body.classList.contains("drawer") && !e.target.closest("#btn-menu")) document.body.classList.remove("drawer");
