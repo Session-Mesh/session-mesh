@@ -1575,7 +1575,9 @@ def work_read_command():
 async def api_work(request):
     """The request body (4 KiB at most) is the standard input of work-read, its one JSON line the reply:
     a timeout, a 2 MiB line cap, a private process group and at most four programs at once."""
-    body, proc = await request.read(), None
+    body, proc = b"", None  # read at most 4097 bytes: a larger body is refused unread
+    while len(body) <= 4096 and (chunk := await request.content.read(4097 - len(body))):
+        body += chunk
     if len(body) > 4096 or not body.lstrip().startswith(b"{"):  # the program checks the rest
         return work_error(400, "invalid_input", "a JSON object of at most 4096 bytes is expected")
     if (command := work_read_command()) is None:
@@ -1603,7 +1605,9 @@ async def api_work(request):
             if proc is not None:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(proc.pid, signal.SIGKILL)
-                await proc.wait()
+                proc._transport.close()  # unread output would keep wait() pending (Python 3.11, 3.12)
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(proc.wait(), 5)
     return web.Response(body=out, status={0: 200, 2: 400, 3: 404}.get(code, 502),
                         content_type="application/json", headers={"Cache-Control": "no-store"})
 

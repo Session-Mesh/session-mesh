@@ -40,9 +40,9 @@ let copy_fixture () =
   { home; wl_home }
 
 let append_events repo lines =
-  write_file
+  Out_channel.with_open_gen [ Open_wronly; Open_creat; Open_append; Open_binary ] 0o644
     (Filename.concat (Filename.concat repo.wl_home "events") "2026-11.hostc.jsonl")
-    (String.concat "\n" lines ^ "\n")
+    (fun oc -> output_string oc (String.concat "\n" lines ^ "\n"))
 
 let run ?(env = []) ?input repo args =
   let base =

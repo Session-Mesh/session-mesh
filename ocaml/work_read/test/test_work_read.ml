@@ -92,6 +92,7 @@ let test_closed_task_dependency () =
   append_events repo [ {|{"ts":"2026-11-09T11:00:00Z","task":"T-3c4d","type":"set","field":"status","to":"done"}|} ];
   let after = row (ok repo [ "project"; "P-5e6f" ]) in
   Alcotest.(check string) "the task is closed" "done" (U.to_string (U.member "status" after));
+  Alcotest.check slist "the dependency is still there" [ "T-1a2b" ] (str_list (U.member "blocked_by" after));
   Alcotest.(check bool) "a closed task does not wait" false (U.to_bool (U.member "dependency_open" after))
 
 let test_project () =
@@ -267,9 +268,14 @@ let test_cleaned_text () =
   Alcotest.(check int) "exit" 0 r.code;
   let notes = U.to_string (U.member "notes" (json r)) in
   Alcotest.(check bool) "notes kept" true (contains notes "hidden");
+  (* The JSON escapes control bytes, so they are looked for in the decoded value; bidi,
+     zero-width and invalid bytes would appear as they are in the output. *)
+  List.iter
+    (fun (name, bad) -> Alcotest.(check bool) name false (contains notes bad))
+    [ ("bell", "\x07"); ("escape", "\x1b"); ("bidi", "\xe2\x80\xae"); ("zero width", "\xe2\x80\x8b") ];
   List.iter
     (fun (name, bad) -> Alcotest.(check bool) name false (contains r.out bad))
-    [ ("bidi", "\xe2\x80\xae"); ("bell", "\x07"); ("escape", "\x1b"); ("zero width", "\xe2\x80\x8b"); ("raw invalid byte", "\xff") ]
+    [ ("bidi", "\xe2\x80\xae"); ("zero width", "\xe2\x80\x8b"); ("raw invalid byte", "\xff") ]
 
 let test_caps () =
   let repo = copy_fixture () in

@@ -126,7 +126,8 @@ describe('POST /api/work/v1 with the real program', { skip }, () => {
       assert.equal(reply.status, 400, JSON.stringify(body));
       assert.equal(reply.json().error.code, 'invalid_input', JSON.stringify(body));
     }
-    for (const raw of ['not json', '[1]', JSON.stringify({ op: 'products' }) + ' '.repeat(5000)]) {
+    // A body over 4096 bytes is refused after at most 4097 bytes are read, a 2 MiB one included.
+    for (const raw of ['not json', '[1]', ...[5000, 2 * 1024 * 1024].map(n => JSON.stringify({ op: 'products' }) + ' '.repeat(n))]) {
       const reply = await call(server, null, null, raw);
       assert.equal(reply.status, 400, raw.slice(0, 40));
       assert.equal(reply.json().error.code, 'invalid_input');
@@ -244,6 +245,28 @@ describe('POST /api/work/v1 limits', { skip }, () => {
     assert.ok(statuses.filter(s => s === 504).length <= 4, `statuses: ${statuses}`);
     const later = await call(server, { op: 'resume', args: {} });
     assert.equal(later.status, 200);
+  });
+});
+
+describe('POST /api/work/v1 with a program that floods its output', { skip }, () => {
+  let server: Running;
+  let dir: string;
+  before(async () => {
+    // One line, then more output than the relay buffers: the program blocks on a full pipe.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-work-flood-'));
+    const flood = path.join(dir, 'flood-work-read');
+    fs.writeFileSync(flood, "#!/bin/sh\nread -r body\necho '{\"ok\":true}'\nexec head -c 20000000 /dev/zero\n", { mode: 0o755 });
+    server = await start({ MESH_WORK_READ_CMD: flood, MESH_WORK_READ_TIMEOUT: '1' });
+  });
+  after(async () => { await server?.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  test('each request ends with a timeout and frees its slot, so a fifth one is not busy', { timeout: 90000 }, async () => {
+    for (let i = 0; i < 5; i++) {
+      const started = Date.now();
+      const reply = await call(server, { op: 'products' });
+      assert.equal(reply.status, 504, `request ${i}: ${reply.text}`);
+      assert.ok(Date.now() - started < 15000, `request ${i} took ${Date.now() - started} ms`);
+    }
   });
 });
 
