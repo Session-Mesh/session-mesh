@@ -1,0 +1,576 @@
+{
+  "b2": {
+    "A": {
+      "type": "codex"
+    },
+    "B": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "B",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "b2_notheld": {
+    "A": {
+      "type": "codex"
+    },
+    "B": {
+      "type": "codex"
+    }
+  },
+  "same_second": {
+    "A": {
+      "type": "codex"
+    },
+    "B": {
+      "type": "codex"
+    }
+  },
+  "b_exited": {
+    "A": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "B",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "exec_finished": {
+    "A": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "E",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "npm_wrapper": {
+    "C": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "C",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "helper_child": {
+    "C": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "C",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "subfolder": {
+    "A": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "A",
+      "status": "idle",
+      "type": "codex",
+      "updated": -20
+    },
+    "S": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "S",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "trailing_slash": {
+    "A": {
+      "type": "codex"
+    }
+  },
+  "unreadable_neighbour": {
+    "A": {
+      "type": "codex"
+    }
+  },
+  "vanished_neighbour": {
+    "A": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "A",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "app_server_daemon": {
+    "A": {
+      "type": "codex"
+    }
+  },
+  "exact_resumed": {
+    "A": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "A",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    },
+    "B": {
+      "type": "codex"
+    }
+  },
+  "idle_resumed": {
+    "A": {
+      "cwd": null,
+      "identity_source": "argv_resume",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -86400
+    }
+  },
+  "two_resumed_same_folder": {
+    "A": {
+      "identity_source": "argv_resume",
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "type": "codex"
+    },
+    "B": {
+      "identity_source": "argv_resume",
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a02",
+      "type": "codex"
+    }
+  },
+  "b2_uuid": {
+    "A": {
+      "identity_source": "argv_resume",
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "type": "codex"
+    },
+    "B": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a02",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "npm_resumed": {
+    "A": {
+      "identity_source": "argv_resume",
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "type": "codex"
+    }
+  },
+  "duplicate_argv": {
+    "P1": {
+      "type": "codex"
+    },
+    "P2": {
+      "type": "codex"
+    }
+  },
+  "duplicate_one_holds": {
+    "P1": {
+      "type": "codex"
+    },
+    "P2": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "argv_vs_open": {
+    "P": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a02",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "not_an_id": {
+    "flags_before": {
+      "type": "codex"
+    },
+    "last": {
+      "type": "codex"
+    },
+    "upper": {
+      "type": "codex"
+    }
+  },
+  "stale_new_lone": {
+    "P": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a02",
+      "status": "idle",
+      "type": "codex",
+      "updated": -30
+    }
+  },
+  "stale_new_lone_both": {
+    "P": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a02",
+      "status": "idle",
+      "type": "codex",
+      "updated": -30
+    }
+  },
+  "stale_new_held": {
+    "P": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a02",
+      "status": "busy",
+      "type": "codex",
+      "updated": -1
+    }
+  },
+  "stale_steal": {
+    "S1": {
+      "type": "codex"
+    },
+    "S2": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -60
+    }
+  },
+  "contest_option_after": {
+    "S1": {
+      "type": "codex"
+    },
+    "S2": {
+      "type": "codex"
+    }
+  },
+  "contest_upper": {
+    "S1": {
+      "type": "codex"
+    },
+    "S2": {
+      "type": "codex"
+    }
+  },
+  "contest_unknown_opt": {
+    "S1": {
+      "type": "codex"
+    },
+    "S2": {
+      "type": "codex"
+    }
+  },
+  "helper_same_argv": {
+    "P": {
+      "cwd": null,
+      "identity_source": "argv_resume",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -86400
+    }
+  },
+  "helper_holds": {
+    "P": {
+      "cwd": null,
+      "identity_source": "argv_resume",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "app_server_resumed": {
+    "P": {
+      "cwd": null,
+      "identity_source": "argv_resume",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -86400
+    }
+  },
+  "zombie_neighbour": {
+    "P": {
+      "cwd": null,
+      "identity_source": "argv_resume",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -86400
+    }
+  },
+  "b_exited_uuid": {
+    "P": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a02",
+      "status": "busy",
+      "type": "codex",
+      "updated": -10
+    }
+  },
+  "value_forms": {
+    "c_attached": {
+      "type": "codex"
+    },
+    "c_eq": {
+      "type": "codex"
+    },
+    "c_value_id": {
+      "type": "codex"
+    },
+    "cd_resume": {
+      "type": "codex"
+    },
+    "dashdash": {
+      "type": "codex"
+    }
+  },
+  "nonutf8_id": {
+    "P": {
+      "type": "codex"
+    }
+  },
+  "later_named_elsewhere": {
+    "S1": {
+      "cwd": null,
+      "identity_source": "argv_resume",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -86400
+    },
+    "S2": {
+      "cwd": null,
+      "identity_source": "argv_resume",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a02",
+      "status": "idle",
+      "type": "codex",
+      "updated": -30
+    }
+  },
+  "later_held_by_other": {
+    "S1": {
+      "cwd": null,
+      "identity_source": "argv_resume",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -86400
+    },
+    "S2": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a02",
+      "status": "busy",
+      "type": "codex",
+      "updated": -1
+    }
+  },
+  "stale_new_shared": {
+    "S1": {
+      "type": "codex"
+    },
+    "S2": {
+      "type": "codex"
+    }
+  },
+  "vf_cd_resume": {
+    "P": {
+      "identity_source": "argv_resume",
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "type": "codex"
+    }
+  },
+  "vf_c_eq": {
+    "P": {
+      "identity_source": "argv_resume",
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "type": "codex"
+    }
+  },
+  "vf_c_attached": {
+    "P": {
+      "identity_source": "argv_resume",
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "type": "codex"
+    }
+  },
+  "vf_dashdash": {
+    "P": {
+      "type": "codex"
+    }
+  },
+  "vf_c_value_id": {
+    "P": {
+      "type": "codex"
+    }
+  },
+  "transcript_open": {
+    "P": {
+      "cwd": "/work/two",
+      "identity_source": "open_rollout",
+      "last": "caf time",
+      "said": "Done: the parser is fixed.",
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "busy",
+      "type": "codex",
+      "updated": -5
+    }
+  },
+  "transcript_versions": {
+    "P": {
+      "cwd": null,
+      "identity_source": "argv_resume",
+      "last": "Tell me a long story about parsers, lexers, grammars and the people who write them, with every detail you can think of, the history of each tool, the bugs they had, the fixes, the people again, and a moral at the end that sums it all up in…",
+      "said": "Once upon a time a parser met a lexer. They argued about tokens for years, then about whitespace, then about comments, then about the meaning of a newline inside a string, and in the end they agreed that the grammar was the real author of …",
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a02",
+      "status": "idle",
+      "type": "codex",
+      "updated": -300
+    }
+  },
+  "guess_vs_exact": {
+    "E": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -20
+    },
+    "G": {
+      "cwd": null,
+      "identity_source": null,
+      "last": null,
+      "said": "guessed",
+      "session_id": null,
+      "status": "idle",
+      "type": "codex",
+      "updated": -30
+    }
+  },
+  "two_hold_same": {
+    "P1": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -40
+    },
+    "P2": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -40
+    }
+  },
+  "subagent_rollout": {
+    "P": {
+      "cwd": null,
+      "identity_source": "cwd_unique",
+      "last": null,
+      "said": null,
+      "session_id": "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a01",
+      "status": "idle",
+      "type": "codex",
+      "updated": -60
+    }
+  },
+  "old_directory": {
+    "P": {
+      "type": "codex"
+    }
+  },
+  "header_without_id": {
+    "P": {
+      "cwd": null,
+      "identity_source": "open_rollout",
+      "last": null,
+      "said": null,
+      "session_id": null,
+      "status": "idle",
+      "type": "codex",
+      "updated": -50
+    }
+  }
+}
