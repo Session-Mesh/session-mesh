@@ -35,13 +35,15 @@ type stats = { lines : int; dropped : int; resets : int }
 type outcome = Unchanged | Appended | Restarted
 
 (* The cursor: reading resumes at [offset] in mode [start]; [tail] holds the
-   (at most [fingerprint_bytes]) bytes of the file that end at [offset], to
-   recognise a rewrite that kept or grew the size. *)
+   (at most [fingerprint_bytes]) bytes of the file that end at [offset], and
+   [head] the (at most [fingerprint_bytes]) bytes that start the file, below
+   [offset], to recognise a rewrite that kept or grew the size. *)
 type 's t = {
   state : 's;
   offset : int;
   start : Mesh_jsonl_lines.start;
   tail : string;
+  head : string;
   signature : Signature.t;
   complete : bool;
   stats : stats;
@@ -63,6 +65,8 @@ let tail_at fd offset =
   let length = min offset fingerprint_bytes in
   Mesh_safe_file.read_range fd ~offset:(offset - length) ~length
 
+let head_at fd offset = Mesh_safe_file.read_range fd ~offset:0 ~length:(min offset fingerprint_bytes)
+
 let unchanged previous (current : Signature.t) =
   previous.complete && Signature.equal previous.signature current
 
@@ -72,7 +76,9 @@ let rewritten fd previous (current : Signature.t) =
   || before.device <> current.device
   || before.inode <> current.inode
   || current.size < previous.offset
+  || current.mtime < before.mtime
   || not (String.equal (tail_at fd previous.offset) previous.tail)
+  || not (String.equal (Mesh_safe_file.read_range fd ~offset:0 ~length:(String.length previous.head)) previous.head)
 
 (* Where a fold from an empty state starts: the whole file, or the window at
    its end without the partial line it begins with. *)
@@ -87,6 +93,7 @@ let fresh_cursor limits fold signature resets =
     offset;
     start;
     tail = "";
+    head = "";
     signature;
     complete = false;
     stats = { lines = 0; dropped = 0; resets };
@@ -149,9 +156,18 @@ let advance limits fold fd cursor =
     offset;
     start;
     tail = tail_at fd offset;
+    head = head_at fd offset;
     complete = hit_end || stop >= size;
     stats = { cursor.stats with lines; dropped };
   }
+
+(* More than a window appended: skip to the window at the end, as a first
+   read does, keeping the state, so that one read brings the result up to
+   date instead of several stale ones. *)
+let catch_up limits cursor =
+  let size = cursor.signature.Signature.size in
+  if size - cursor.offset <= limits.window then cursor
+  else { cursor with offset = size - limits.window; start = Mesh_jsonl_lines.Skip_first_line }
 
 let update_open limits fold path previous fd stats =
   let current = signature_of path stats in
@@ -160,7 +176,7 @@ let update_open limits fold path previous fd stats =
   | Some previous when not (rewritten fd previous current) ->
       (* The steps work on a copy: the previous result keeps its state. *)
       let cursor = { previous with state = fold.copy previous.state; signature = current } in
-      (advance limits fold fd cursor, Appended)
+      (advance limits fold fd (catch_up limits cursor), Appended)
   | Some previous ->
       (advance limits fold fd (fresh_cursor limits fold current (previous.stats.resets + 1)), Restarted)
   | None -> (advance limits fold fd (fresh_cursor limits fold current 0), Restarted)

@@ -19,10 +19,19 @@
     - the first read of a file larger than [window] starts [window] bytes
       before its end and drops the bytes up to and including the first
       newline there, as Python's [seek] then [readline()] does;
+    - when more than [window] bytes were appended since the cursor, the read
+      skips to the window at the end (dropping its partial first line, as a
+      first read does) and keeps the state: the lines skipped are not
+      folded, as Python, which reads only the window, never sees them either;
+      one call then brings the result up to date when [max_read >= window];
     - the file counts as rewritten, and is folded again from an empty state,
       when its device or inode changed, when it is shorter than the cursor,
-      or when the (at most 256) bytes that end at the cursor changed. Python
-      checks those bytes for one agent only; this module always does;
+      when its modification time went back, or when the (at most 256) bytes
+      that end at the cursor or the (at most 256) bytes that start the file
+      changed. Python checks the bytes before the cursor for one agent only;
+      this module always does. A rewrite that keeps the size or grows the
+      file and changes neither of these two blocks nor the time order is
+      read as an append;
     - a line longer than [max_line_bytes] is dropped without being held in
       memory, a line nested deeper than [max_depth] is dropped before it is
       parsed, and a line that is not strict JSON is dropped. They are counted
