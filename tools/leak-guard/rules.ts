@@ -13,7 +13,8 @@ export type Gate = 'content' | 'filename' | 'message' | 'identity';
 export type Finding = {gate: Gate; path: string; line: number; rule: string; excerpt: string; match?: string; treePath?: string};
 export type PrivateRule = {id: string; literal: string; caseInsensitive: boolean};
 export type PublicRules = {
-  email: {allowedAddresses: string[]; allowedDomains: string[]; allowedTopLevels: string[]};
+  // `registers`: files whose signatory rows publish a commit address on purpose (see registerAddress).
+  email: {allowedAddresses: string[]; allowedDomains: string[]; allowedTopLevels: string[]; registers?: string[]};
   homeTemplates: string[];
   tailnetIpv6Groups: string[];
   tailnetExampleLabels: string[];
@@ -188,6 +189,18 @@ function vendorExempt(rules: PublicRules, file: string, rule: string): boolean {
 
 export type ScanTarget = {gate: Gate; path: string};
 
+// A signatory row of the CLA register: | Public name | Commit e-mail | CLA version | YYYY-MM-DD |,
+// the address optionally in backquotes (tools/cla-check reads the same form).
+const REGISTER_ROW = /^\|[^|]+\|\s*`?([^|\s`]+)`?\s*\|\s*\d+\.\d+\s*\|\s*\d{4}-\d{2}-\d{2}\s*\|\s*$/d;
+
+// Lifts the email rule only, only in the content of a register file, only for a hit that is exactly
+// the address cell of a signatory row: free text, other cells and every other rule are still checked.
+function registerAddress(rules: PublicRules, target: ScanTarget, line: string, rule: string, hit: Hit): boolean {
+  if (rule !== 'email' || target.gate !== 'content' || !(rules.email.registers ?? []).includes(target.path)) return false;
+  const row = REGISTER_ROW.exec(line);
+  return row !== null && row.indices?.[1]?.[0] === hit.index && row[1] === hit.text;
+}
+
 // Only file content and file names can be authorized, like reviewed exceptions.
 function allowedPrivateHit(ruleSet: RuleSet, target: ScanTarget, line: string, rule: string, hit: Hit): boolean {
   if (target.gate !== 'content' && target.gate !== 'filename') return false;
@@ -204,6 +217,7 @@ export function scanLines(ruleSet: RuleSet, target: ScanTarget, lines: string[],
     const hits = [...genericHits(ruleSet.publicRules, line), ...privateHits(ruleSet.privateRules, line)];
     for (const {rule, hit} of hits) {
       if (vendorExempt(ruleSet.publicRules, target.path, rule)) continue;
+      if (registerAddress(ruleSet.publicRules, target, line, rule, hit)) continue;
       if (allowedPrivateHit(ruleSet, target, line, rule, hit)) continue;
       findings.push({gate: target.gate, path: target.path, line: lineNumber, rule, excerpt: excerpt(line, hit), match: hit.text});
     }
