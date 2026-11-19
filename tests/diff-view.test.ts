@@ -5,7 +5,7 @@
 // changed lines and cutting them into changed words.
 import assert from 'node:assert/strict';
 import {describe, test} from 'node:test';
-import {displayPath, fileSegments, gitHeaderPaths, hunkRows, parseUnifiedDiff, readQuoted, tokenize, wordDiff, WORD_DIFF_LIMIT} from '../static/diff-view.ts';
+import {countLines, displayPath, fileSegments, gitHeaderPaths, hunkRows, parseUnifiedDiff, readQuoted, tokenize, wordDiff, WORD_DIFF_LIMIT} from '../static/diff-view.ts';
 
 const GIT = `commit 0123456789abcdef
 Author: Someone <someone@example.invalid>
@@ -238,5 +238,11 @@ describe('wordDiff', () => {
     const [left, right] = wordDiff(long, long + 'y');
     assert.deepEqual(left, [{text: long, changed: true}]);
     assert.deepEqual(right, [{text: long + 'y', changed: true}]);
+  });
+});
+
+describe('countLines', () => {
+  test('counts lines with or without a final newline', () => {
+    assert.deepEqual(['', 'a', 'a\n', 'a\nb', 'a\nb\n'].map(countLines), [0, 1, 1, 2, 2]);
   });
 });
