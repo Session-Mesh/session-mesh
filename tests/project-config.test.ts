@@ -107,6 +107,26 @@ test('two real writer processes conflict explicitly and fresh intent preserves b
   });
 });
 
+test('a lock released between the exclusive create and its inspection still refuses busy', async () => {
+  const editor = await api();
+  await fixture(async (path, dir) => {
+    const before = await editor.readProjectConfigState(path), bytes = await fs.readFile(path);
+    const lock = join(dir, `.mesh-project-config-${createHash('sha256').update(path).digest('hex')}.lock`);
+    await fs.writeFile(lock, '', { mode: 0o600 });
+    // Another writer holds the lock at our O_EXCL create and releases it before we inspect it.
+    const lstat = fs.lstat.bind(fs);
+    const released = mock.method(fs, 'lstat', async (...args: Parameters<typeof fs.lstat>) => {
+      if (args[0] === lock) await fs.unlink(lock);
+      return lstat(...args);
+    });
+    let outcome: unknown;
+    try { outcome = await editor.editProjectConfig(path, request(before.revision, { type: 'project.describe', title: 'Changed' })); }
+    finally { released.mock.restore(); }
+    assert.deepEqual(outcome, { status: 'refused', code: 'busy' });
+    assert.deepEqual(await fs.readFile(path), bytes);
+  });
+});
+
 test('participation identity is immutable and known channel identity permits only declared enrichment', async () => {
   const editor = await api();
   await fixture(async path => {
