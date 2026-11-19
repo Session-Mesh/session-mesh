@@ -8,6 +8,7 @@
 
 import { STATUSES, progressPercent } from './work-derive.ts';
 import type { Counts } from './work-types.ts';
+import type { AnswerSender } from './work-answer-form.ts';
 
 export type Translate = (key: string, params?: Record<string, string | number>) => string;
 
@@ -17,6 +18,8 @@ export type ViewContext = Readonly<{
   nowMs: () => number;
   selectedTask: () => string | null;
   selectTask: (id: string) => void;
+  /** Sends the owner's answer to an open question; null where the view offers no answer form. */
+  answers: AnswerSender | null;
 }>;
 
 export type Child = Node | string | null | undefined;

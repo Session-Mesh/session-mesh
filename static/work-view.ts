@@ -7,6 +7,8 @@
  * and nothing else of the page; the old workspace is not touched.
  */
 
+import { failureOfKind } from './work-answer-form.ts';
+import type { AnswerFailure } from './work-answer-form.ts';
 import { createWorkApi } from './work-api.ts';
 import type { WorkApi, WorkError, WorkFetch } from './work-api.ts';
 import { entryTree } from './work-derive.ts';
@@ -35,6 +37,8 @@ export type WorkViewController = Readonly<{ open: () => void; close: () => void;
 
 type EntryData = Readonly<{ products: ProductsDoc; projects: ProjectsDoc }>;
 type OpenProject = Readonly<{ id: string; view: ProjectView }>;
+/** After an answer: the question to focus once the task is read again, and the message to announce. */
+type AfterAnswer = Readonly<{ question: string; notice: string }>;
 
 function markSelected(scope: HTMLElement, id: string | null): void {
   for (const node of scope.querySelectorAll<HTMLElement>('[data-task]')) {
@@ -62,16 +66,21 @@ class WorkView implements WorkViewController {
   private controller: AbortController | null = null;
   private detailController: AbortController | null = null;
   private detailSequence = 0;
+  private writeUnavailable = false;
+  private readonly announcer = el('p', 'sr-only work-announcer');
   private readonly onEscape = (event: KeyboardEvent): void => this.closeDetailOnEscape(event);
 
   constructor(private readonly options: WorkViewOptions) {
     this.t = options.translate;
     this.api = createWorkApi(options.request);
     this.ctx = { t: this.t, locale: options.locale ?? (document.documentElement.lang || undefined),
-      nowMs: options.now ?? (() => Date.now()), selectedTask: () => this.selected, selectTask: id => void this.selectTask(id) };
+      nowMs: options.now ?? (() => Date.now()), selectedTask: () => this.selected, selectTask: id => void this.selectTask(id),
+      answers: { available: () => !this.writeUnavailable, submit: (question, answerText) => this.submitAnswer(question, answerText) } };
     const refresh = button('btn work-refresh', this.t('work.refresh'), () => void this.reload());
+    this.announcer.setAttribute('role', 'status');
+    this.announcer.setAttribute('aria-live', 'polite');
     options.root.classList.add('work-root');
-    options.root.replaceChildren(el('div', 'work-toolbar', refresh), this.content);
+    options.root.replaceChildren(el('div', 'work-toolbar', refresh), this.content, this.announcer);
   }
 
   open = (): void => void this.reload();
@@ -171,12 +180,31 @@ class WorkView implements WorkViewController {
     return this.content.querySelector<HTMLElement>('.work-entry-toggle') ?? this.content.querySelector<HTMLElement>('.work-entry-category-name');
   }
 
-  private async selectTask(id: string): Promise<void> {
+  /** Send the owner's answer; on success or "already answered", read the task again so the answer shows as recorded. */
+  private async submitAnswer(question: string, answerText: string): Promise<AnswerFailure | null> {
+    const task = this.selected;
+    const result = await this.api.answer(question, answerText);
+    if (!result.ok && result.error.kind !== 'conflict') {
+      if (result.error.kind === 'not-available') this.writeUnavailable = true;
+      return failureOfKind(result.error.kind);
+    }
+    const notice = this.t(result.ok ? 'work.answer.sent' : 'work.answer.already');
+    if (task !== null && task === this.selected) await this.selectTask(task, { question, notice });
+    else this.announce(notice);
+    return null;
+  }
+
+  private announce(message: string): void {
+    this.announcer.textContent = '';
+    setTimeout(() => { this.announcer.textContent = message; }, 50);   // a new text node, so the same message is read again
+  }
+
+  private async selectTask(id: string, after?: AfterAnswer): Promise<void> {
     if (!this.project) return;
     const view = this.project.view;
     this.selected = id;
     markSelected(view.root, id);
-    view.detailSlot.replaceChildren(this.closeButton(view), loadingBlock(this.t));
+    if (!after) view.detailSlot.replaceChildren(this.closeButton(view), loadingBlock(this.t));
     view.showDetail(true);
     document.addEventListener('keydown', this.onEscape, true);
     const token = this.generation, sequence = ++this.detailSequence;
@@ -184,13 +212,15 @@ class WorkView implements WorkViewController {
     this.detailController = new AbortController();
     const result = await this.api.task(id, this.detailController.signal);
     if (token !== this.generation || sequence !== this.detailSequence || this.selected !== id) return;
+    if (after) this.announce(after.notice);
     if (!result.ok) {
       view.detailSlot.replaceChildren(this.closeButton(view), errorBlock(this.t, result.error, { retry: () => void this.selectTask(id) }));
       return;
     }
     const body = renderDetail(this.ctx, result.value);
     view.detailSlot.replaceChildren(this.closeButton(view), body);
-    focusFirst(body.querySelector<HTMLElement>('.work-detail-heading'));
+    const question = after ? body.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(after.question)}"]`) : null;
+    focusFirst(question ?? body.querySelector<HTMLElement>('.work-detail-heading'));
   }
 
   private closeButton(view: ProjectView): HTMLElement {

@@ -144,17 +144,19 @@ describe('parseTask', () => {
       task: row('T-3c4d'),
       questions: [
         { id: 'N-0000a001', text: 'Which port?', state: 'answered', answers: [
-          { text: '8443', by: 'owner', at: '2026-11-19T10:00:00Z', relayed_by_session: 's-1', relayed_by_agent: 'claude' },
-          { text: 'later', by: 7, relayed_by_agent: 'codex' }, { by: 'owner' }, 'nonsense'] },
+          { text: '8443', by: 'owner', at: '2026-11-19T10:00:00Z', relayed_by_session: 's-1', relayed_by_agent: 'claude', superseded: true },
+          { text: 'later', by: 7, relayed_by_agent: 'codex', owner_verified: 'yes' }, { by: 'owner' }, 'nonsense',
+          { text: '8080', by: 'owner', at: '2026-11-19T11:00:00Z', owner_verified: true }] },
         { id: 'N-0000a002', text: 'Open?', state: 'open', answers: 'nonsense' },
       ],
     });
     assert.ok(detail);
     const [answered, open] = detail.questions;
     assert.deepEqual(answered!.answers, [
-      { text: '8443', by: 'owner', at: '2026-11-19T10:00:00Z', relayedBy: 's-1' },
-      // The agent kind is not a session: without a relaying session, none is named.
-      { text: 'later', by: null, at: null, relayedBy: null },
+      { text: '8443', by: 'owner', at: '2026-11-19T10:00:00Z', relayedBy: 's-1', ownerVerified: false, superseded: true },
+      // The agent kind is not a session: without a relaying session, none is named. Only true marks verification.
+      { text: 'later', by: null, at: null, relayedBy: null, ownerVerified: false, superseded: false },
+      { text: '8080', by: 'owner', at: '2026-11-19T11:00:00Z', relayedBy: null, ownerVerified: true, superseded: false },
     ]);
     assert.equal(open!.open, true);
     assert.deepEqual(open!.answers, []);

@@ -177,7 +177,8 @@ const events = (value: unknown): TimelineEvent[] => objects(value).map(parseEven
 function parseAnswer(source: Obj): Answer | null {
   const body = text(source.text);
   if (body === null) return null;
-  return { text: body, by: text(source.by), at: text(source.at), relayedBy: text(source.relayed_by_session) };
+  return { text: body, by: text(source.by), at: text(source.at), relayedBy: text(source.relayed_by_session),
+    ownerVerified: source.owner_verified === true, superseded: source.superseded === true };
 }
 
 function parseQuestion(source: Obj): Question | null {

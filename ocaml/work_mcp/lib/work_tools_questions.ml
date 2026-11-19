@@ -103,13 +103,14 @@ let answer args =
 let answer_tool =
   T.make ~name:"work_answer"
     ~description:
-      "Relay the OWNER's answer to a question recorded with work_ask: when the owner answers in \
-       this conversation, record the owner's words here (question: the N-... id from work_ask, \
-       work_list_questions or work_get; text: what the owner said). answered_by defaults to \
-       owner. Never use it to answer a question yourself, yours or another agent's, without \
-       the owner: an unanswered question stays open. A question has one answer: a second, \
-       different one is refused with already_answered; repeating the same answer returns \
-       duplicate=true and writes nothing."
+      "Relay the OWNER's answer to a question recorded with work_ask, only when the owner tells \
+       you the answer in this conversation: record the owner's words here (question: the N-... \
+       id from work_ask, work_list_questions or work_get; text: what the owner said). \
+       answered_by defaults to owner. The owner can also answer in the Projects view; such an \
+       answer is marked owner_verified and is not yours to write. Never use it to answer a \
+       question yourself, yours or another agent's, without the owner: an unanswered question \
+       stays open. A question has one answer: a second, different one is refused with \
+       already_answered; repeating the same answer returns duplicate=true and writes nothing."
     ~input_schema:
       (T.object_ ~required:[ "question"; "text" ]
          [

@@ -13,6 +13,7 @@ type answer = {
   answered_at : int;
   relay_agent : string option;
   relay_session : string option;
+  owner_web : bool;
 }
 
 type question = {
@@ -37,6 +38,8 @@ let question_type = "question"
 let answer_type = "answer"
 
 let id_digits = 8
+let owner_by = "owner"
+let owner_web_via = "owner-web"
 
 (* Eight hex digits are drawn; the six-digit ids of the first version are
    still read. *)
@@ -75,15 +78,14 @@ let of_answer_event (ev : W.Event.t) =
   match (W.Event.get_string ev "question", W.Event.get_string ev "text") with
   | Some qid, Some text ->
       let by = Option.value ~default:"unknown" (W.Event.get_string ev "by") in
-      Some
-        ( qid,
-          {
-            answer_text = text;
-            by;
-            answered_at = ev.ts;
-            relay_agent = W.Event.get_string ev "agent";
-            relay_session = W.Event.get_string ev "session";
-          } )
+      let relay_agent = W.Event.get_string ev "agent" and relay_session = W.Event.get_string ev "session" in
+      (* The marker of the owner-authenticated writer, on an event that names
+         no relaying agent or session and whose [by] is [owner]. *)
+      let owner_web =
+        W.Event.get_string ev "via" = Some owner_web_via && by = owner_by
+        && W.Event.get ev "agent" = None && W.Event.get ev "session" = None
+      in
+      Some (qid, { answer_text = text; by; answered_at = ev.ts; relay_agent; relay_session; owner_web })
   | _ -> None
 
 let collision_warning id =
@@ -235,8 +237,9 @@ let find_question (tx : W.Txn.t) question =
   | None -> W.Err.not_found "no question %s" question
   | Some q -> q
 
-let write_answer tx q ~text ~by =
+let write_answer ?via tx q ~text ~by =
   let fields = [ ("question", `String q.id); ("text", `String text); ("by", `String by) ] in
+  let fields = match via with Some v -> fields @ [ ("via", `String v) ] | None -> fields in
   W.Txn.append tx [ (q.event_task, answer_type, fields) ];
   W.Txn.commit tx ~cmd:"answer" ~subject:(Some q.id)
 
@@ -249,15 +252,32 @@ let answer ctx ~question ~text ~by () =
 
 type recorded = Recorded of string | Same_answer of string | Already_answered of string
 
+(* The relayed path: the first answer wins, any other is refused. *)
+let relayed_outcome tx q ~text ~by =
+  if List.exists (fun a -> a.answer_text = text && a.by = by) q.answers then Same_answer q.id
+  else if q.answers <> [] then Already_answered q.id
+  else begin
+    write_answer tx q ~text ~by;
+    Recorded q.id
+  end
+
+(* The owner-authenticated path: only an earlier owner-authenticated answer
+   counts; relayed answers are superseded (kept, never rewritten). *)
+let owner_outcome tx q ~text =
+  let verified = List.filter (fun a -> a.owner_web) q.answers in
+  if List.exists (fun a -> a.answer_text = text) verified then Same_answer q.id
+  else if verified <> [] then Already_answered q.id
+  else begin
+    write_answer ~via:owner_web_via tx q ~text ~by:owner_by;
+    Recorded q.id
+  end
+
 (* The check and the write run under the one repository lock: of two writers
    racing on an open question, the second sees the first answer. *)
-let answer_once ctx ?session ~question ~text ~by () =
+let answer_once ctx ?session ?(owner_web = false) ~question ~text ~by () =
   W.Txn.run ctx ?session (fun tx ->
       let text = validate_answer ~text ~by in
+      if owner_web && (by <> owner_by || session <> None) then
+        W.Err.usage "an owner-authenticated answer is by owner and names no session";
       let q = find_question tx question in
-      if List.exists (fun a -> a.answer_text = text && a.by = by) q.answers then Same_answer q.id
-      else if q.answers <> [] then Already_answered q.id
-      else begin
-        write_answer tx q ~text ~by;
-        Recorded q.id
-      end)
+      if owner_web then owner_outcome tx q ~text else relayed_outcome tx q ~text ~by)

@@ -3,6 +3,7 @@
 
 /** The detail pane of a task (`task` operation): fields, blockers, sessions (plain text), notes, typed events, questions. */
 
+import { answerForm, unavailableNote } from './work-answer-form.ts';
 import { el, formatDate, formatDateTime, omittedNote, priorityTag, statusBadge } from './work-dom.ts';
 import type { ViewContext } from './work-dom.ts';
 import type { Answer, Blocker, LinkedSession, Question, TargetRef, TaskDetail, TimelineEvent } from './work-types.ts';
@@ -67,10 +68,17 @@ function eventItem(ctx: ViewContext, event: TimelineEvent): HTMLElement {
 }
 
 /**
- * An agent session relays the answer and writes `by` freely: nothing here is verified, so the provenance always reads
- * as a relayed claim, and a `by` other than `owner` appears only as the stated answerer.
+ * An answer written through the owner's signed-in browser (work-write) reads as the owner's. Any other answer was
+ * relayed by an agent session that writes `by` freely: it reads as a relayed claim, a `by` other than `owner`
+ * appears only as the stated answerer, and one that the owner's answer replaces says so.
  */
 function provenance(ctx: ViewContext, answer: Answer): string {
+  if (answer.ownerVerified) return ctx.t('work.answer.verified');
+  const relayed = relayedProvenance(ctx, answer);
+  return answer.superseded ? `${relayed} · ${ctx.t('work.answer.superseded')}` : relayed;
+}
+
+function relayedProvenance(ctx: ViewContext, answer: Answer): string {
   const session = answer.relayedBy;
   if (answer.by === null || answer.by === 'owner') {
     return session ? ctx.t('work.answer.relayed', { session }) : ctx.t('work.answer.unrelayed');
@@ -80,23 +88,39 @@ function provenance(ctx: ViewContext, answer: Answer): string {
 
 function answerItem(ctx: ViewContext, answer: Answer): HTMLElement {
   const meta = [provenance(ctx, answer), answer.at ? formatDateTime(answer.at, ctx.locale) : null].filter((part): part is string => !!part);
-  return el('li', 'work-answer', el('p', 'work-answer-text', answer.text), el('p', 'work-mute work-answer-meta', meta.join(' · ')));
+  const state = answer.ownerVerified ? ' work-answer-verified' : answer.superseded ? ' work-answer-superseded' : '';
+  return el('li', `work-answer${state}`, el('p', 'work-answer-text', answer.text), el('p', 'work-mute work-answer-meta', meta.join(' · ')));
+}
+
+/** The hint of a question the owner can still answer: open, or answered only by relayed (unverified) answers. */
+function answerHint(ctx: ViewContext, question: Question, form: boolean): string {
+  if (!question.open) return ctx.t('work.question.supersedeHint');
+  return ctx.t(form ? 'work.question.answerHintForm' : 'work.question.answerHint');
+}
+
+/** The reply slot `[data-work-answer-slot]`: the owner's answer form, the note that work-write is missing, or (no
+ *  sender) empty and hidden. */
+function answerSlot(ctx: ViewContext, question: Question): { slot: HTMLElement; form: boolean } {
+  const slot = el('div', 'work-answer-slot');
+  slot.dataset.workAnswerSlot = question.id;
+  const sender = ctx.answers;
+  if (!sender) slot.hidden = true;
+  else slot.append(sender.available() ? answerForm(ctx, sender, question.id) : unavailableNote(ctx));
+  return { slot, form: !!sender && sender.available() };
 }
 
 /**
- * The answer area of a question, kept apart from the question text: the answers given, or for an open question
- * a hint (the owner answers in an agent session, which relays the words) and an empty, hidden slot `[data-work-answer-slot]` reserved for
- * a later reply control. Nothing here sends anything.
+ * The answer area of a question, kept apart from the question text: the answers given, then, while the owner has
+ * not answered it here (open, or answered only by relayed answers), a hint and the reply slot.
  */
 function answerArea(ctx: ViewContext, question: Question): HTMLElement {
   const area = el('div', 'work-answer-area');
   area.dataset.workAnswerFor = question.id;
   if (question.answers.length > 0) area.append(el('ul', 'work-answer-list', ...question.answers.map(answer => answerItem(ctx, answer))));
-  if (question.open) {
-    const slot = el('div', 'work-answer-slot');
-    slot.dataset.workAnswerSlot = question.id;
-    slot.hidden = true;
-    area.append(el('p', 'work-answer-hint work-mute', ctx.t('work.question.answerHint')), slot);
+  const verified = question.answers.some(answer => answer.ownerVerified);
+  if (question.open || (!verified && ctx.answers)) {
+    const { slot, form } = answerSlot(ctx, question);
+    area.append(el('p', 'work-answer-hint work-mute', answerHint(ctx, question, form)), slot);
   }
   return area;
 }

@@ -59,9 +59,12 @@ export type TimelineEvent = Readonly<{
 
 /**
  * An answer as recorded: `by` is who it names as the answerer (free text written by the relaying agent, not
- * authenticated), `relayedBy` the session that wrote it (null when the event names none).
+ * authenticated), `relayedBy` the session that wrote it (null when the event names none). `ownerVerified`: written
+ * through the owner's signed-in browser (work-write); `superseded`: a relayed answer that such an answer replaces.
  */
-export type Answer = Readonly<{ text: string; by: string | null; at: string | null; relayedBy: string | null }>;
+export type Answer = Readonly<{
+  text: string; by: string | null; at: string | null; relayedBy: string | null; ownerVerified: boolean; superseded: boolean;
+}>;
 
 export type Question = Readonly<{
   id: string; open: boolean; text: string; options: readonly string[]; about: string | null;

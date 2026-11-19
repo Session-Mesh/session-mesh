@@ -14,8 +14,9 @@
 val max_bytes : int
 (** 4096: a longer request is [invalid_input]. *)
 
-val read : in_channel -> (string, Work_mcp.Work_err.t) result
-(** The whole channel, at most {!max_bytes} bytes. *)
+val read : ?max_bytes:int -> in_channel -> (string, Work_mcp.Work_err.t) result
+(** The whole channel, at most [max_bytes] bytes (default {!max_bytes});
+    reading stops once the bound is passed. *)
 
 val parse : string -> (string list, Work_mcp.Work_err.t) result
 (** The command-line words of a request: [op] (one of the subcommands) first;

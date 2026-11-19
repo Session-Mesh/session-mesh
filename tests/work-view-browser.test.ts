@@ -5,9 +5,10 @@
 // program on a fictional tracker (a copy of the worklog fixture plus a hostile task and a dependency). Nothing
 // here uses the default port or a real data directory: free MESH_PORT, temporary home and MESH_CONF_DIR, WL_HOME
 // in a temporary directory.
-// Needs MESH_CHROMIUM=<chromium>, MESH_PYTHON, MESH_WORK_READ_CMD=<built work-read> (default: the dune build output) and
-// MESH_PTYHOST_CMD=<ptyhost>; skipped without a Chromium (MESH_REQUIRE_BROWSER=1 makes that a failure) or without the
-// reader (MESH_REQUIRE_WORK_READ=1 makes that a failure). MESH_SHOT_DIR=<dir> saves screenshots.
+// Needs MESH_CHROMIUM=<chromium>, MESH_PYTHON, MESH_WORK_READ_CMD=<built work-read> and MESH_WORK_WRITE_CMD=<built
+// work-write> (default: the dune build outputs) and MESH_PTYHOST_CMD=<ptyhost>; skipped without a Chromium
+// (MESH_REQUIRE_BROWSER=1 makes that a failure) or without the programs (MESH_REQUIRE_WORK_READ=1 makes that a
+// failure). MESH_SHOT_DIR=<dir> saves screenshots.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -21,11 +22,12 @@ const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const SHOTS = process.env.MESH_SHOT_DIR ?? '';
 const READER = process.env.MESH_WORK_READ_CMD
   || path.join(REPO, 'ocaml/_build/default/work_read/bin/work_read_main.exe');   // never an empty value: the server reads that as "no program"
+const WRITER = process.env.MESH_WORK_WRITE_CMD || path.join(REPO, 'ocaml/_build/default/work_write/bin/work_write_main.exe');
 // MESH_REQUIRE_BROWSER=1 makes a missing Chromium a failure; MESH_REQUIRE_WORK_READ=1 does the same for the reader
 // (public CI builds no work-read, so there the file skips instead of failing).
 const skip = (!CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM is required' : false)
-  || (!fs.existsSync(READER) && !process.env.MESH_REQUIRE_WORK_READ
-    ? 'a built work-read is required (dune build work_read/bin/work_read_main.exe, or MESH_WORK_READ_CMD)' : false);
+  || ((!fs.existsSync(READER) || !fs.existsSync(WRITER)) && !process.env.MESH_REQUIRE_WORK_READ
+    ? 'built work-read and work-write are required (dune build work_read/bin/work_read_main.exe work_write/bin/work_write_main.exe)' : false);
 const FIXTURE = path.join(REPO, 'ocaml/worklog/test/fixture');
 const LONG_WORD = 'W'.repeat(120);
 const HOSTILE_TITLE = `<img src=x onerror=window.__pwn=1><script>window.__pwn=2</script> evil ${LONG_WORD}`;   // bidi controls cannot enter the data (the library refuses control characters); they are covered by the unit tests
@@ -64,7 +66,8 @@ function temporaryTracker(): string {
 }
 
 const baseEnv = (extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
-  ({ WL_HOST: 'testhost', WL_NOW: '2026-11-10T00:00:00Z', MESH_WORK_READ_CMD: READER, MESH_WORK_READ_TIMEOUT: '90', ...extra });
+  ({ WL_HOST: 'testhost', WL_NOW: '2026-11-10T00:00:00Z', MESH_WORK_READ_CMD: READER, MESH_WORK_WRITE_CMD: WRITER,
+    MESH_WORK_READ_TIMEOUT: '90', ...extra });
 
 async function start(prefix: string, extra: NodeJS.ProcessEnv): Promise<Mesh> {
   const mesh = await startMesh(prefix, baseEnv(extra));
@@ -269,7 +272,7 @@ for (const width of WIDTHS) {
       await pane.locator('.work-detail-heading').waitFor();
       assert.ok((await pane.textContent())!.includes('hostile-session'), 'the session name is shown');
       assert.ok((await pane.textContent())!.includes('<b>hostile-session</b>'), 'as text, not as markup');
-      assert.equal(await pane.locator('a, button:not(.work-detail-close)').count(), 0, 'sessions are plain text, not clickable');
+      assert.equal(await pane.locator('a, button:not(.work-detail-close):not(.work-answer-send)').count(), 0, 'sessions are plain text, not clickable');
       assert.ok(await pane.locator('.work-event-inferred').count() >= 1, 'an inferred event is marked');
       assert.ok(await pane.locator('.work-prov-inferred').count() >= 1, 'with a word as well as a style');
       assert.ok(await pane.locator('.work-dep-state').count() >= 1, 'blocked_by shows the state of its target');
@@ -279,16 +282,18 @@ for (const width of WIDTHS) {
       assert.ok(meta.includes("owner's answer as relayed by asking-session, not verified"), `a relayed, unverified claim: ${meta}`);
       assert.ok(!meta.includes('answered by') && !meta.includes('stated answerer'), `no bare attribution, no label for owner: ${meta}`);
       assert.equal(await answered.locator('.work-answer-meta *').count(), 0, 'the provenance is text only');
-      assert.equal(await answered.locator('[data-work-answer-slot]').count(), 0, 'an answered question has no reply slot');
+      assert.equal(await answered.locator('.work-answer-hint').textContent(), 'This answer was relayed by an agent and is not verified. You can give your own answer here; it replaces the relayed one.',
+        'a question answered only by a relay can still be answered by the owner');
+      assert.equal(await answered.locator('[data-work-answer-slot] form.work-answer-form').count(), 1);
       const forged = (await pane.locator('[data-question-id="N-0000a0a3"] .work-answer-meta').textContent())!;
       assert.ok(forged.startsWith('answer as relayed by other-session, not verified'), `a claimed verification stays a relayed claim: ${forged}`);
       assert.ok(forged.includes('stated answerer: Owner (verified, in person)') && !forged.includes("owner's answer"), `the label is shown as stated, not as fact: ${forged}`);
       const open = pane.locator('.work-question-open[data-question-id="N-0000a0a1"]');
-      assert.match((await open.locator('.work-answer-hint').textContent())!, /in an agent session with mesh-work \(the asking session or another\)/, 'an open question says where to answer');
+      assert.equal(await open.locator('.work-answer-hint').textContent(), 'Answer below, or in an agent session with mesh-work.', 'an open question says where to answer');
       const slot = open.locator('.work-answer-area[data-work-answer-for="N-0000a0a1"] [data-work-answer-slot="N-0000a0a1"]');
-      assert.equal(await slot.count(), 1, 'the reply slot is reserved');
-      assert.equal(await slot.isVisible(), false, 'hidden for now');
-      assert.equal(await slot.innerHTML(), '', 'and empty');
+      assert.equal(await slot.count(), 1, 'the reply slot is there');
+      assert.equal(await slot.getByLabel('Your answer').count(), 1, 'with a labelled field');
+      assert.equal(await slot.getByRole('button', { name: 'Send answer' }).count(), 1, 'and a send button');
       assert.equal(await page.evaluate(() => (window as unknown as { __pwn?: number }).__pwn), undefined, 'the answer text stays inert');
       await noOverflow(page);
       await shot(page, `detail-${width}`);
