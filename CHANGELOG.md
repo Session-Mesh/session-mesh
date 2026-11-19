@@ -5,6 +5,21 @@ before 1.0, a minor version may change behaviour.
 
 ## Unreleased
 
+- **An idle Codex is no longer given the conversation of a Codex started later.** When a Codex
+  session holds no rollout file open, its conversation was inferred from the newest rollout of its
+  folder, and a single candidate was accepted even when several Codex ran there: an idle resumed
+  Codex could be given the conversation of one started later, and a restore would then resume the
+  wrong one. The inferred id is now accepted only when exactly one Codex runs in the folder, no other
+  Codex holds that rollout open and the process table could be read; an inferred id that another
+  session also reports is dropped. This holds while the later Codex is still running. Two cases are
+  not covered and remain: a Codex that already exited after writing its rollout, and a finished
+  `codex exec` run (its rollout `source` is the plain string `exec`, which is not recognised as a
+  sub-agent). In both, the idle Codex can still be given that rollout's conversation; closing them
+  needs the conversation registry planned as a later change. A Codex of another user that cannot be
+  inspected is skipped (it cannot hold this user's rollouts); one of the same user that cannot be
+  inspected keeps the id unknown. Effect: some idle Codex sessions are now restored as a plain shell
+  instead of possibly the wrong conversation. Exact ids are unchanged. See
+  [Restoring sessions](docs/operations.md#restoring-sessions-after-a-pty-host-restart).
 - **The session list no longer falls minutes behind on a busy machine.** Each `GET /api/sessions`
   ran its own listing, one after the other; when a listing took longer than the page's 4-second
   poll (after a web server restart on a loaded machine), requests queued faster than they were

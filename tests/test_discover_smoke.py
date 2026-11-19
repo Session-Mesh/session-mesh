@@ -62,6 +62,7 @@ def test_malformed_transcript_lines_are_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(discover, "recent_rollouts", lambda days=30: [str(rollout)])
     monkeypatch.setattr(discover, "cwd", lambda pid: "/w")
     monkeypatch.setattr(discover, "proc_start", lambda pid: 0)
+    monkeypatch.setattr(discover, "_codex_count", lambda d: 1)   # a lone codex: its candidate is accepted
     monkeypatch.setattr(os, "listdir", lambda p: [])
     info = discover.codex_info(os.getpid())
     assert info["session_id"] == "A" and info["said"] == "done" and info["cwd"] is None

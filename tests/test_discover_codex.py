@@ -39,11 +39,133 @@ def test_a_lone_codex_with_two_rollouts_takes_the_newest(tmp_path, monkeypatch):
     assert discover.codex_info(os.getpid()).get("session_id") == "B"
 
 
-def test_one_candidate_is_used(tmp_path, monkeypatch):
-    a = tmp_path / "rollout-a.jsonl"
-    _rollout(a, "/w", "A")
-    monkeypatch.setattr(discover, "recent_rollouts", lambda days=30: [str(a)])
-    monkeypatch.setattr(discover, "cwd", lambda pid: "/w")
+def _host(monkeypatch, codex, cwds, held, listing_fails=False):
+    """A fake process table: pids in ``codex`` are codex agents, ``cwds`` their folders, ``held`` the rollouts
+    each holds open (None: unreadable)."""
+    def snapshot():
+        if listing_fails:
+            raise PermissionError("/proc")
+        return {pid: ("codex", 0, 1) for pid in codex}
+    monkeypatch.setattr(discover, "snapshot", snapshot)
+    monkeypatch.setattr(discover, "read_stat", lambda pid: None)
+    monkeypatch.setattr(discover, "cwd", lambda pid: cwds[pid])
     monkeypatch.setattr(discover, "proc_start", lambda pid: time.time() - 100)
-    monkeypatch.setattr(os, "listdir", lambda p: [])
-    assert discover.codex_info(os.getpid()).get("session_id") == "A"
+    monkeypatch.setattr(discover, "_open_rollouts", lambda pid: held[pid])
+
+
+def _rollouts(tmp_path, monkeypatch, **ids):
+    paths = {}
+    for name, sid in ids.items():
+        paths[name] = tmp_path / f"rollout-{name}.jsonl"
+        _rollout(paths[name], "/w", sid)
+    monkeypatch.setattr(discover, "recent_rollouts", lambda days=30: [str(p) for p in paths.values()])
+    return paths
+
+
+def test_one_candidate_is_used_only_by_the_one_codex_of_the_folder(tmp_path, monkeypatch):
+    """A single candidate is accepted only when exactly one codex runs in the folder (B2: the count was
+    skipped, so an idle resumed codex A took the rollout of a codex B started later in the same folder)."""
+    _rollouts(tmp_path, monkeypatch, a="A")
+    _host(monkeypatch, [100], {100: "/w"}, {100: []})
+    assert discover.codex_info(100).get("session_id") == "A"
+
+
+def test_b2_idle_resumed_codex_does_not_take_a_later_codexs_rollout(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch, b="B")        # only B has written since A started
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/w"}, {100: [], 200: [str(tmp_path / "rollout-b.jsonl")]})
+    assert discover.codex_info(100).get("session_id") is None      # A
+    assert discover.codex_info(200)["session_id"] == "B"           # B: exact, holds it open
+    assert discover.codex_info(200)["identity_source"] == "open_rollout"
+
+
+def test_a_rollout_held_by_a_codex_elsewhere_is_not_taken(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch, b="B")
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/other"}, {100: [], 200: [str(tmp_path / "rollout-b.jsonl")]})
+    assert discover.codex_info(100).get("session_id") is None
+
+
+def test_an_unreadable_neighbour_fails_closed(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch, a="A")
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/other"}, {100: [], 200: None})
+    monkeypatch.setattr(discover, "_fds_gone", lambda pid: False)       # it exists, its files are unreadable
+    monkeypatch.setattr(discover, "_same_user", lambda pid: True)       # and it is this user's
+    assert discover.codex_info(100).get("session_id") is None
+
+
+def test_a_neighbour_that_exited_while_listed_holds_nothing(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch, a="A")
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/other"}, {100: [], 200: None})
+    monkeypatch.setattr(discover, "_fds_gone", lambda pid: True)
+    assert discover.codex_info(100).get("session_id") == "A"
+
+
+def test_an_unreadable_codex_of_another_user_is_skipped(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch, a="A")
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/other"}, {100: [], 200: None})
+    monkeypatch.setattr(discover, "_fds_gone", lambda pid: False)
+    monkeypatch.setattr(discover, "_same_user", lambda pid: False)
+    assert discover.codex_info(100).get("session_id") == "A"
+
+
+def test_a_codex_helper_of_another_codex_is_not_counted(tmp_path, monkeypatch):
+    _host(monkeypatch, [100, 101], {100: "/w", 101: "/w"}, {100: [], 101: []})
+    monkeypatch.setattr(discover, "snapshot", lambda: {100: ("codex", 0, 1), 101: ("codex", 0, 100)})
+    monkeypatch.setattr(discover, "read_stat", lambda pid: ("codex", 0, 1) if pid == 100 else None)
+    assert discover._codex_count("/w") == 1
+
+
+def test_a_listing_scans_the_codex_processes_once(tmp_path, monkeypatch):
+    paths = [tmp_path / f"rollout-{n}.jsonl" for n in "abc"]
+    for path, folder, sid in zip(paths, ("/w", "/x", "/y"), "ABC"):
+        _rollout(path, folder, sid)
+    monkeypatch.setattr(discover, "recent_rollouts", lambda days=30: [str(p) for p in paths])
+    _host(monkeypatch, [100, 200, 300], {100: "/w", 200: "/x", 300: "/y"}, {100: [], 200: [], 300: []})
+    scans, reads = [], []
+    real_snapshot, real_open = discover.snapshot, discover._open_rollouts
+    monkeypatch.setattr(discover, "snapshot", lambda: scans.append(1) or real_snapshot())
+    monkeypatch.setattr(discover, "_open_rollouts", lambda pid: reads.append(pid) or real_open(pid))
+    with discover.listing_scope():
+        results = [discover.codex_info(pid).get("session_id") for pid in (100, 200, 300)]
+    assert results == ["A", "B", "C"]
+    assert len(scans) == 1 and sorted(reads) == [100, 100, 200, 200, 300, 300]   # own check, and neighbours once
+    assert discover._codex_view() is not discover._codex_view()           # nothing outlives the listing
+
+
+def test_an_unreadable_process_table_fails_closed(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch, a="A")
+    _host(monkeypatch, [100], {100: "/w"}, {100: []}, listing_fails=True)
+    assert discover._codex_count("/w") == 2
+    assert discover.codex_info(100).get("session_id") is None
+
+
+def test_an_exact_open_rollout_is_never_degraded(tmp_path, monkeypatch):
+    paths = _rollouts(tmp_path, monkeypatch, a="A", b="B")
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/w"}, {100: [str(paths["a"])], 200: []})
+    info = discover.codex_info(100)
+    assert (info["session_id"], info["identity_source"]) == ("A", "open_rollout")
+
+
+def _described(source, sid):
+    return {"agent": {"type": "codex", "session_id": sid, "identity_source": source}}
+
+
+def test_a_guess_duplicating_an_exact_id_is_dropped(tmp_path):
+    guessed, exact = _described("cwd_unique", "X"), _described("open_rollout", "X")
+    discover.drop_duplicate_guessed_ids([guessed, exact])
+    assert guessed["agent"]["session_id"] is None and guessed["agent"]["identity_source"] is None
+    assert exact["agent"] == {"type": "codex", "session_id": "X", "identity_source": "open_rollout"}
+
+
+def test_two_guesses_of_one_id_are_both_dropped_and_distinct_ones_kept():
+    one, two, other = (_described("cwd_unique", "X"), _described("unique_pi_transcript", "X"),
+                       _described("cwd_unique", "Y"))
+    discover.drop_duplicate_guessed_ids([one, two, other, {"agent": None}])
+    assert one["agent"]["session_id"] is None and two["agent"]["session_id"] is None
+    assert other["agent"]["session_id"] == "Y"
+
+
+def test_many_guesses_of_one_id_are_all_dropped_in_one_pass():
+    guesses = [_described("cwd_unique", "X") for _ in range(2000)] + [_described("cwd_unique", "Y")]
+    discover.drop_duplicate_guessed_ids(guesses)
+    assert all(g["agent"]["session_id"] is None for g in guesses[:-1])
+    assert guesses[-1]["agent"]["session_id"] == "Y"

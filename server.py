@@ -800,6 +800,11 @@ def _session_notice(raw):
 
 
 def list_sessions(mesh_raw, listed=True):
+    with discover.listing_scope():      # one codex process scan for the whole listing
+        return _list_sessions(mesh_raw, listed)
+
+
+def _list_sessions(mesh_raw, listed):
     procs = discover.snapshot()
     for s in mesh_raw:
         if s["pid"] in procs:
@@ -821,6 +826,7 @@ def list_sessions(mesh_raw, listed=True):
     mesh.sort(key=lambda d: (d["rank"] is not None, d["rank"] if d["rank"] is not None else -d["created"]))
     term = discover.external_sessions(procs, exclude_parents={os.getpid(), *HOST_PIDS})
     term.sort(key=lambda d: -((d["agent"] or {}).get("updated") or 0))
+    discover.drop_duplicate_guessed_ids(mesh + term)
     for t in term:
         t["pending"] = t["pid"] in PENDING
     data_folders = org["folders"]

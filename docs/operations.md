@@ -400,6 +400,21 @@ click, so an agent launched with permissive options never comes back on its own.
    (`claude --resume <id>` or `codex resume <id>`, with its options); other programs (an editor, a
    build) come back as a plain shell. "Ignore" dismisses the offer.
 
+   A Codex session that holds no rollout file open has no certain conversation: the server infers it
+   from the newest rollout written in the folder, and only when exactly one Codex runs in that folder,
+   no other Codex of the host holds that rollout open, and the process table could be read. In any
+   other case (two Codex in one folder, an unreadable process table or file list of a Codex of the
+   same user, the same inferred id reported by two sessions) the session has no conversation id and
+   is restored as a plain shell rather than possibly resuming another session's conversation. A
+   conversation id observed exactly (rollout held open, named in the launch arguments, reported by a
+   hook) is never dropped this way.
+
+   Limits: the rule protects an idle Codex only while the other Codex is still running. If that
+   other Codex has already exited after writing its rollout, or if a `codex exec` run in the same
+   folder has finished (its rollout `source` is the plain string `exec`, not recognised as a
+   sub-agent), the idle Codex can still be given that rollout's conversation. Closing these cases
+   needs the conversation registry planned as a later change.
+
 ### Restoring exactly one offer (for tools)
 
 A tool that must never restore twice, or from an outdated offer, first reads `restore_guard` in
