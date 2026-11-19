@@ -81,8 +81,9 @@ function headingOf(options: CutOptions): string {
 function checkIntro(intro: string | undefined): string[] {
   if (intro === undefined || intro.trim() === '') return [];
   const lines = intro.replace(/\n+$/, '').split('\n');
-  // No heading, list item, heading underline or rule: the intro must not open a section of its own.
-  if (lines.some((line) => /^\s*(?:#|[-*+] |=+\s*$|(?:[-*_]\s*){3,}$)/.test(line) || line.trim() === '')) {
+  // No heading, list item, heading underline, rule or code fence: the intro must not open a block
+  // of its own (an unclosed fence would swallow the release and every section below it).
+  if (lines.some((line) => /^\s*(?:#|[-*+] |=+\s*$|(?:[-*_]\s*){3,}$|```|~~~)/.test(line) || line.trim() === '')) {
     throw new Error('the intro is one paragraph: no blank line, heading or bullet');
   }
   return lines;

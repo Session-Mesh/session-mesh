@@ -99,9 +99,12 @@ deletes those fragments and adds `## 0.1.2` right below the "Unreleased" section
 
 If a minor cut on `main` already deleted a fragment that `release/latest` still holds (a fix
 backported before the minor cut, released in a patch after it), `cut` refuses its name as "not a
-fragment of changelog.d/" and writes nothing. Restore it first with
-`git checkout origin/release/latest -- changelog.d/<name>`, or cut the patch release before the
-minor one.
+fragment of changelog.d/" and writes nothing. Cut the patch release before the minor one, or
+restore it first with `git checkout origin/release/latest -- changelog.d/<name>`. A restored
+fragment is then absent from `main` both before and after the cut commit, so that commit carries
+no deletion of it, and a backport does not delete it on `release/latest`: delete it there by hand,
+in the backport or in the `release/latest` pull request, next to the new section. The fragments
+that `main` still had are deleted by the cut commit and need nothing more.
 
 `release/latest` then needs the same section and the same deletions. How depends on the line:
 

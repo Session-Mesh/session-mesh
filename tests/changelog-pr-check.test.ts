@@ -28,6 +28,8 @@ describe('a pull request to main', () => {
     ['the opt-out with CRLF', pull([CODE], 'x\r\nChangelog: none: release cut\r\n')],
     ['the opt-out after a closed fence', pull([CODE], '```\ncode\n```\n\nChangelog: none: tests only\n')],
     ['the opt-out after a closed HTML comment', pull([CODE], '<!-- a\nnote -->\nChangelog: none: tests only\n')],
+    ['the opt-out after a comment marker in a code span', pull([CODE], 'Document the `<!--` marker.\nChangelog: none: docs only\n')],
+    ['the opt-out after a comment marker in a fence', pull([CODE], '```html\n<!--\n```\nChangelog: none: docs only\n')],
     ['a base that is not main', pull([CODE], '', [PATCH], 'release/latest')],
     ['no semver label (judged by the semver label check)', pull([CODE], '', [])],
   ];
@@ -134,7 +136,7 @@ describe('the changes of a pull request after a release cut on main', () => {
     assert.equal(judge(diff).ok, true);
   });
   test('the recipe in the tool header and the docs is the merge-base diff', () => {
-    for (const file of ['tools/changelog/changelog.ts', 'docs/changelog-fragments.md']) {
+    for (const file of ['tools/changelog/changelog.ts', 'tools/changelog/pr-check.ts', 'docs/changelog-fragments.md']) {
       const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
       assert.match(text, /git diff --name-status --no-renames "\$BASE_SHA"\.\.\."\$HEAD_SHA"/, file);
       assert.doesNotMatch(text, /--no-renames\s+(?:\/\/\s*)?(?:<base>\s+<head>|"\$BASE_SHA"\s+"\$HEAD_SHA")/, file);

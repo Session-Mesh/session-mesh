@@ -55,6 +55,9 @@ function parseArgs(argv: string[]): Args {
     if (listFlag !== null && VERSION.test(arg)) listFlag = null;
     if (VALUE_FLAGS.has(arg)) {
       if (index + 1 >= argv.length) throw new UsageError(`${arg} needs a value`);
+      // `--intro --dry-run` is a forgotten value, never an intro of "--dry-run".
+      const value = argv[index + 1];
+      if (value === '--only' || VALUE_FLAGS.has(value) || BOOLEAN_FLAGS.has(value)) throw new UsageError(`${arg} needs a value, not the option ${value}`);
       if (flags.has(arg)) throw new UsageError(`${arg} is given twice`);
       flags.set(arg, [argv[index + 1]]);
       index += 1;
@@ -131,13 +134,17 @@ function commandCut(root: string, args: Args, io: Io): number {
   const remaining = deleteFragments(root, selected);
   if (remaining.files.length > 0) {
     io.err(`changelog: CHANGELOG.md now has "## ${options.version}", but ${remaining.files.length} fragment(s) it moved could not be deleted (${remaining.codes.join(', ')}): ${remaining.files.join(' ')}\n` +
-      `Delete exactly these files by hand and nothing else: rm ${remaining.files.join(' ')}\n` +
+      // Absolute paths under --root: the command deletes the right files from any directory. A
+      // fragment name holds no quote (FRAGMENT_NAME), and the root's quotes are escaped.
+      `Delete exactly these files by hand and nothing else: rm -- ${remaining.files.map((file) => shellQuote(path.join(root, file))).join(' ')}\n` +
       'Do not run cut again before that: their entries are already in CHANGELOG.md, and another cut would list them twice.\n');
     return 1;
   }
   io.err(`CHANGELOG.md: "## ${options.version}" with ${selected.length} fragment(s); the fragments are deleted\n`);
   return 0;
 }
+
+const shellQuote = (text: string): string => `'${text.replace(/'/g, `'\\''`)}'`;
 
 // Deletes the fragments a cut moved, every one it can; returns those left, as changelog.d/<name>.
 function deleteFragments(root: string, fragments: Fragment[]): {files: string[]; codes: string[]} {
