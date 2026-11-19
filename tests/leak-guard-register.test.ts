@@ -6,8 +6,8 @@
 // other rule is lifted there.
 import assert from 'node:assert/strict';
 import {after, describe, test} from 'node:test';
-import {loadPublicRules, type Gate, type RuleSet, scanText} from '../tools/leak-guard/rules.ts';
-import {ALLOWED, FAKE, git, initRepo, remove, runCli, write} from './leak-guard-fixtures.ts';
+import {loadPublicRules, type Gate, type RuleSet, scanLines, scanText} from '../tools/leak-guard/rules.ts';
+import {ALLOWED, FAKE, git, initRepo, remove, runCli, VARIANT, write} from './leak-guard-fixtures.ts';
 import path from 'node:path';
 
 const REGISTER = 'CLA-SIGNATORIES.md';
@@ -18,6 +18,8 @@ const row = (address: string, name = 'Jane Doe') => `| ${name} | ${address} | 1.
 describe('CLA register: the address cell of a signatory row', () => {
   test('a real address in a register row passes', () => assert.deepEqual(rulesIn(row(FAKE.email), REGISTER), []));
   test('a backquoted address in a register row passes', () => assert.deepEqual(rulesIn(row('`' + FAKE.email + '`'), REGISTER), []));
+  // cla-check compares addresses in ASCII lower case, as Git authors may write them in any case.
+  test('an address with capitals in a register row passes', () => assert.deepEqual(rulesIn(row(FAKE.email.toUpperCase()), REGISTER), []));
   test('the GitHub noreply form passes in the register and elsewhere, as before', () => {
     assert.deepEqual(rulesIn(row(ALLOWED.noreply), REGISTER), []);
     assert.deepEqual(rulesIn(row(ALLOWED.noreply), 'README.md'), []);
@@ -37,6 +39,46 @@ describe('CLA register: the scope of the exclusion', () => {
   test('a row without a version and a date is reported', () => assert.deepEqual(rulesIn(`| Jane Doe | ${FAKE.email} | | |`, REGISTER), ['email']));
   test('other rules still apply to the address cell of a row', () => assert.deepEqual(rulesIn(row(FAKE.tailscaleKey), REGISTER), ['tailscale-key']));
   test('other rules still apply to the rest of a row', () => assert.deepEqual(rulesIn(row(FAKE.email, `Jane ${FAKE.tailnetHost}`), REGISTER), ['tailnet-host']));
+  test('a private literal in the address cell is still reported', () => {
+    const withPrivate: RuleSet = {...ruleSet, privateRules: [
+      {id: 'host', literal: FAKE.privateHost, caseInsensitive: false},
+      {id: 'addr', literal: FAKE.email, caseInsensitive: true},
+    ]};
+    const privateIn = (address: string) => scanText(withPrivate, {gate: 'content', path: REGISTER}, row(address)).map(f => f.rule);
+    assert.deepEqual(privateIn(`jane@${FAKE.privateHost}.org`), ['private:host']);
+    // The literal is the whole address cell: only the email hit is lifted.
+    assert.deepEqual(privateIn(FAKE.email), ['private:addr']);
+  });
+  test('fullwidth and U+2223 pipes do not make a row', () => {
+    assert.deepEqual(rulesIn(row(FAKE.email).replaceAll('|', '｜'), REGISTER), ['email']);
+    assert.deepEqual(rulesIn(row(FAKE.email).replaceAll('|', '∣'), REGISTER), ['email']);
+  });
+  test('rows with CRLF line ends pass', () => assert.deepEqual(rulesIn(`${row(FAKE.email)}\r\n${row(FAKE.email, 'Joe')}\r\n`, REGISTER), []));
+});
+
+// A row is lifted only when tools/cla-check counts it as a signature, since only then does the
+// required `cla` check tie the address to a commit authored with it.
+describe('CLA register: only rows cla-check counts', () => {
+  const variant = (version: string, date: string, name = 'Jane Doe', address = FAKE.email) => `| ${name} | ${address} | ${version} | ${date} |`;
+  test('another CLA version is reported', () => assert.deepEqual(rulesIn(variant('9.9', '2026-11-19'), REGISTER), ['email']));
+  test('an impossible date is reported', () => assert.deepEqual(rulesIn(variant('1.0', '2026-13-45'), REGISTER), ['email']));
+  test('a blank name cell is reported', () => assert.deepEqual(rulesIn(variant('1.0', '2026-11-19', '  '), REGISTER), ['email']));
+  test('an unpaired backquote is reported', () => {
+    assert.deepEqual(rulesIn(row('`' + FAKE.email), REGISTER), ['email']);
+    assert.deepEqual(rulesIn(row(FAKE.email + '`'), REGISTER), ['email']);
+  });
+  test('a %40-encoded address is reported', () => assert.deepEqual(rulesIn(row(VARIANT.encodedEmail), REGISTER), ['email']));
+  test('a row inside an HTML comment is reported', () => {
+    assert.deepEqual(rulesIn(`<!--\n${row(FAKE.email)}\n-->\n${row(FAKE.email, 'Joe')}`, REGISTER), ['email']);
+  });
+  test('a row inside a fenced block is reported', () => {
+    assert.deepEqual(rulesIn(`~~~\n${row(FAKE.email)}\n~~~\n${row(FAKE.email, 'Joe')}`, REGISTER), ['email']);
+    assert.deepEqual(rulesIn(`\`\`\`md\n${row(FAKE.email)}\n\`\`\``, REGISTER), ['email']);
+  });
+  // Known limit (README): added lines alone (`staged`, `commits`) carry no fence or comment state.
+  test('an added line alone is judged as a row', () => {
+    assert.deepEqual(scanLines(ruleSet, {gate: 'content', path: REGISTER}, [row(FAKE.email)], [2]), []);
+  });
 });
 
 describe('CLA register through the CLI', () => {
@@ -51,6 +93,14 @@ describe('CLA register through the CLI', () => {
     assert.equal(run.status, 1, run.output);
     assert.match(run.stdout, /^README\.md:1 {2}\[content\] email/m);
     assert.ok(!run.stdout.includes(`${REGISTER}:`), run.stdout);
+  });
+  test('worktree reports a row inside an HTML comment of the register', () => {
+    write(root, REGISTER, `${row(FAKE.email, 'Joe')}\n<!--\n${row(FAKE.email)}\n-->\n`);
+    write(root, 'README.md', 'nothing\n');
+    const run = runCli(root, ['worktree']);
+    assert.equal(run.status, 1, run.output);
+    assert.match(run.stdout, new RegExp(`^${REGISTER.replace('.', '\\.')}:3 {2}\\[content\\] email`, 'm'));
+    assert.ok(!run.stdout.includes(`${REGISTER}:1 `), run.stdout);
   });
   test('a token in the register is still a secret', {skip: !haveGitleaks && 'gitleaks is not installed: secret scanning tests skipped'}, () => {
     write(root, REGISTER, `${row(FAKE.email)}\ntoken = "${FAKE.token}"\n`);
