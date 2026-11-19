@@ -29,6 +29,9 @@ tests/bootstrap-modes.test.ts
 tests/branch-policy.test.ts
 tests/bundle-licenses.test.ts
 tests/bundle-python-download-url.test.ts
+tests/changelog-cut.test.ts
+tests/changelog-fragments.test.ts
+tests/changelog-pr-check.test.ts
 tests/check-copyright.test.ts
 tests/cla-check-maintainers.test.ts
 tests/cla-check-merge.test.ts

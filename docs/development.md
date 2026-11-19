@@ -404,14 +404,27 @@ that the changes are the same.
 (`changelog.d/`, [Changelog fragments](changelog-fragments.md)), which their backports bring to
 `release/latest` as new files. Once the backports of the fixes are merged, the changelog of the
 release is prepared as a pull request to `main`, labelled `semver: patch`, made by
-`tools/changelog/changelog.ts cut 0.x.y --only <the fragments present on release/latest>`: it adds
-the heading of the release and its entries to `CHANGELOG.md`, deletes those fragments, and changes
-nothing else. Merged to `main`, it is backported to `release/latest` like any fix. If its
-cherry-pick conflicts (the lines around the new heading differ between the two branches), the
-workflow comments with the commands to do it by hand: resolve it so that `release/latest` only
-holds the entries of its own line. Then:
+`tools/changelog/changelog.ts cut 0.x.y --only $(git ls-tree --name-only
+origin/release/latest:changelog.d | grep -vx README.md)` (the fragments present on
+`release/latest`, as bare file names): it adds the heading of the release and its entries to
+`CHANGELOG.md`, deletes those fragments, and changes nothing else. `release/latest` gets the same
+change in one of two ways
+([Changelog fragments, "A patch release"](changelog-fragments.md#cutting-a-release)):
 
-1. Merge the backports of the fixes, and the backport of the changelog pull request.
+- **From the 0.2 line on**, the changelog pull request is backported like any fix; its cherry-pick
+  applies cleanly while the "Unreleased" section of `main` holds its preamble alone.
+- **On the 0.1 line**, whose `CHANGELOG.md` has no "Unreleased" section, that backport always
+  conflicts on `CHANGELOG.md`. Either resolve it with `git checkout --ours CHANGELOG.md` and insert
+  the new section by hand right above `## 0.1.1`, or skip the backport and open a second pull
+  request to `release/latest` that adds the section and deletes the same fragments. 0.1.1 was
+  released the second way (one commit on `main`, one on `release/latest`, no backport).
+
+A fix backported to `release/latest` before fragments existed has its bullet under "Unreleased" in
+`main`'s `CHANGELOG.md`, not a fragment, so `--only` cannot take it: move that bullet from
+"Unreleased" into the patch section by hand, in the same pull request. Then:
+
+1. Merge the backports of the fixes, and the backport (or the `release/latest` pull request) of the
+   changelog.
 2. Tag the tip of `release/latest` `v0.x.y` (a tag of a commit that `release/latest` holds):
    `release.yml` publishes it, and as a version older than the latest release it is not marked
    latest once a newer minor exists.

@@ -11,12 +11,34 @@ import {FRAGMENT_DIR, NON_FRAGMENTS} from './fragments.ts';
 export const MAIN_BRANCH = 'main';
 export const SEMVER_LABELS = ['semver: patch', 'semver: minor'];
 // "Changelog: none: tests only" or "Changelog: none (CI only)", at the start of a line: the reason
-// after the separator is at least two words.
-const OPT_OUT_LINE = /^Changelog: none\b(.*)$/gm;
+// after the separator is at least two words, and not the template's placeholder "<reason>".
+const OPT_OUT_LINE = /^Changelog: none\b(.*)$/;
+
+// The lines of a description that GitHub renders as text: HTML comments (closed or not) and fenced
+// code blocks (``` or ~~~, closed or not) are dropped, so an example of the opt-out line does not
+// count as one.
+function renderedLines(body: string): string[] {
+  const lines = body.replace(/\r/g, '').replace(/<!--[\s\S]*?(?:-->|$)/g, '').split('\n');
+  const kept: string[] = [];
+  let fence: string | null = null;
+  for (const line of lines) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence === null) {
+      if (marker === undefined) kept.push(line);
+      else fence = marker;
+    } else if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length && /^ {0,3}[`~]+\s*$/.test(line)) {
+      fence = null;
+    }
+  }
+  return kept;
+}
 
 export function hasOptOut(body: string): boolean {
-  for (const match of body.replace(/\r/g, '').matchAll(OPT_OUT_LINE)) {
+  for (const line of renderedLines(body)) {
+    const match = OPT_OUT_LINE.exec(line);
+    if (!match) continue;
     const reason = match[1].replace(/^[ \t]*[:(—-]?[ \t]*/, '').replace(/[ \t)]*$/, '');
+    if (/<[^>]*>/.test(reason)) continue;
     if (/^[^\s:(—-]\S*[ \t]+\S/.test(reason)) return true;
   }
   return false;
