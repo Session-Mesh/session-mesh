@@ -5,6 +5,17 @@ before 1.0, a minor version may change behaviour.
 
 ## Unreleased
 
+- **A new Projects view over the project tracker.** The Projects mode now opens on a read-only
+  view of the tracker that agents write with `mesh-work`: the products and their active projects
+  with progress and blocker counts, a project in four tabs ("Pick up", "Board", "Timeline",
+  "Dependencies") and a task sheet with its blockers, dependencies, sessions, notes, events and open
+  questions. The browser reads it through `POST /api/work/v1`, which runs `work-read` with the web
+  server's `HOME` and `WL_HOME`. The data is a local git repository, `WL_HOME` or else
+  `~/worklog-data` (or an older `~/worklog`), created by an agent's first `work_*` call. Nothing is
+  written from the view, questions cannot be answered there yet, and `work_open_view` still answers
+  that the view is not available. The previous workspace stays behind the "Old view" button, and
+  is shown once per page load when `work-read` is not installed. See
+  [The Projects view and the project tracker](docs/features.md#the-projects-view-and-the-project-tracker).
 - **An idle Codex started as `codex resume <id>` gets its conversation id from its launch
   arguments.** Such a session that holds no rollout file open had no conversation id, so a PTY host
   restart brought it back as a plain shell. The id is now read from the launch arguments of the
