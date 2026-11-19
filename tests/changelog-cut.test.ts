@@ -149,6 +149,8 @@ Pointer to changelog.d.
     ['February 29 of a common year', {version: '0.2.0', date: '2026-02-29'}, /is not a calendar date/],
     ['day 0', {version: '0.2.0', date: '2026-03-00'}, /is not a calendar date/],
     ['an intro that underlines a heading', {version: '0.2.0', intro: 'Text\n---'}, /one paragraph/],
+    ['an intro that opens a code fence', {version: '0.2.0', intro: 'Summary\n```'}, /one paragraph/],
+    ['an intro that opens a tilde fence', {version: '0.2.0', intro: '~~~ sh'}, /one paragraph/],
     ['an intro with a bullet', {version: '0.2.0', intro: '- **Sneaky.**'}, /one paragraph/],
     ['an intro with a heading', {version: '0.2.0', intro: 'Text\n## 9.9.9'}, /one paragraph/],
   ];
@@ -200,6 +202,16 @@ describe('the command line on a copy of a repository', () => {
       assert.equal(result.out, '');
     });
   }
+  test('an option where a value is needed is a usage error, and nothing is written', () => {
+    const before = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+    for (const argv of [['cut', '0.2.0', '--intro', '--dry-run'], ['cut', '0.2.0', '--date', '--dry-run'], ['cut', '0.2.0', '--intro', '--only', '3-fix.md']]) {
+      const result = call(...argv);
+      assert.equal(result.status, 2, argv.join(' '));
+      assert.match(result.err, /needs a value, not the option/);
+    }
+    assert.equal(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'), before);
+    assert.equal(fs.readdirSync(path.join(root, 'changelog.d')).length, 4);
+  });
   test('--only accepts the version after the file names', () => {
     const result = call('cut', '--only', '3-fix.md', '9-sec.md', '0.1.2', '--dry-run');
     assert.equal(result.status, 0, result.err);
@@ -232,7 +244,9 @@ describe('the command line on a copy of a repository', () => {
     assert.match(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'), /\n## 0\.2\.0\n/);
     assert.deepEqual(fs.readdirSync(path.join(root, 'changelog.d')).sort(), ['9-sec.md', 'README.md']);
     assert.match(result.err, /CHANGELOG\.md now has "## 0\.2\.0", but 1 fragment\(s\) it moved could not be deleted \(EACCES\): changelog\.d\/9-sec\.md\n/);
-    assert.match(result.err, /Delete exactly these files by hand and nothing else: rm changelog\.d\/9-sec\.md\n/);
+    // The command names the files in the repository of --root, whatever the current directory.
+    const quoted = `'${path.join(root, 'changelog.d', '9-sec.md')}'`;
+    assert.ok(result.err.includes(`Delete exactly these files by hand and nothing else: rm -- ${quoted}\n`), result.err);
     assert.match(result.err, /Do not run cut again/);
     // The recovery the message gives leaves nothing unreleased twice.
     fs.unlinkSync(path.join(root, 'changelog.d', '9-sec.md'));
