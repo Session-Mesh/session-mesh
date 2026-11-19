@@ -35,6 +35,7 @@ async function socketReady(file: string) {
   throw Error('isolated native host did not listen');
 }
 async function enter(page: Page, mobile: boolean) {
+  await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');await page.evaluate('store.set("projects.legacy", true)');
   if (mobile) {
     await page.locator('#btn-mobile-actions').click();
     await page.locator('[data-mobile-action="btn-projects"]').click();

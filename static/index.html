@@ -122,9 +122,12 @@
 
     <section id="projects" hidden aria-labelledby="projects-title">
       <header class="projects-head"><h1 id="projects-title" data-i18n="projects.title">Projects</h1>
-        <button id="projects-return" class="btn" type="button" data-i18n="projects.return">Back to Sessions</button></header>
+        <div class="projects-head-actions"><button id="projects-view-switch" class="btn" type="button" data-i18n="work.oldView">Old view</button>
+        <button id="projects-return" class="btn" type="button" data-i18n="projects.return">Back to Sessions</button></div></header>
+      <p id="projects-fallback-notice" class="work-mute" role="status" hidden data-i18n="work.fallbackNotice">The tracker reader is not installed here, so the old view is shown.</p>
       <p id="projects-module-status" role="status"></p>
       <button id="projects-module-retry" class="btn" type="button" hidden data-i18n="projects.retry">Retry Projects</button>
+      <div id="work-root" hidden></div>
       <div id="projects-root"></div>
     </section>
 

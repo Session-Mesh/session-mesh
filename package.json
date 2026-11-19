@@ -40,10 +40,11 @@
     "build:demo-input": "node tools/build-demo-input.mjs",
     "check:demo-input": "tsc --project tsconfig.demo-input.json && node tools/build-demo-input.mjs --check && node tools/test-demo-input.mjs && node demo-runtime/test-input-schema-vectors.mjs",
     "check:issue-triage": "tsc --project tsconfig.issue-triage.json && node --experimental-strip-types --test tests/issue-triage.test.ts tests/issue-triage-workflow.test.ts",
-    "check": "npm run lint:js && npm run check:terminal-links && npm run check:update-notice && npm run check:themes && npm run check:third-party && npm run check:bridge-quality && npm run check:board && npm run check:demo-runtime && npm run check:demo-catalog && npm run check:demo-view && npm run check:demo-input && npm run check:projects && npm run check:issue-triage",
+    "check": "npm run lint:js && npm run check:terminal-links && npm run check:update-notice && npm run check:themes && npm run check:third-party && npm run check:bridge-quality && npm run check:board && npm run check:demo-runtime && npm run check:demo-catalog && npm run check:demo-view && npm run check:demo-input && npm run check:projects && npm run check:work-view && npm run check:issue-triage",
     "build:projects": "node tools/build-projects.mjs",
     "typecheck:projects": "tsc --project tsconfig.projects.json",
     "check:projects": "tsc --project tsconfig.projects.json && node tools/build-projects.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/project*.test.ts",
+    "check:work-view": "tsc --project tsconfig.projects.json && node tools/build-projects.mjs --check && node --experimental-strip-types --test tests/work-model.test.ts tests/work-api-client.test.ts",
     "snapshot:projects": "node --experimental-strip-types tools/project-snapshot.ts"
   },
   "dependencies": {

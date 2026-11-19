@@ -142,6 +142,7 @@ describe('native Projects isolation with mounted Sessions', {skip}, () => {
     return {page,input,sockets:()=>sockets,inventories:()=>inventories,output:(value:string)=>output(value)};
   }
   async function enter(page:Page,mobile=false) {
+    await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');await page.evaluate('store.set("projects.legacy", true)');
     if(mobile){await page.locator('#btn-mobile-actions').click();await page.locator('[data-mobile-action="btn-projects"]').click();}
     else await page.locator('#btn-projects').click();
     await page.locator('#projects').waitFor({state:'visible'});

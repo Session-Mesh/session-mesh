@@ -90,7 +90,12 @@ export class ProjectsUiFixture {
     assert.deepEqual(projectRequests,[], 'Sessions boot does not load Projects module or artifact');
     return {page,input,sockets:()=>sockets,inventories:()=>inventories,output:(value:string)=>output(value)};
   }
+  /** The new Projects view is the default; tests driving the old workspace opt out of it first. */
+  async optIntoLegacy(page:Page) {
+    await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');await page.evaluate('store.set("projects.legacy", true)');
+  }
   async enter(page:Page,mobile=false) {
+    await this.optIntoLegacy(page);
     if(mobile){await page.locator('#btn-mobile-actions').click();await page.locator('[data-mobile-action="btn-projects"]').click();}
     else await page.locator('#btn-projects').click();
     await page.locator('#projects').waitFor({state:'visible'});

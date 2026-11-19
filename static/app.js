@@ -5299,6 +5299,68 @@ async function loadProjectsModule() {
     if (projecting && issue === projectsGeneration) { status.textContent = t("projects.unavailable"); retry.hidden = false; }
   } finally { clearTimeout(timer); }
 }
+// Projects has two presentations: the work view (default, static/work-view.ts) and the previous workspace,
+// reachable through a persisted display preference until it is removed. Each has its own root element.
+let workGeneration = 0;
+let workController = null;
+// legacyForced: the work view found no reader program, so the old view is shown for this page load only; the stored
+// preference is not touched, and the fallback happens once (a second failure shows the error with its buttons).
+let legacyForced = false;
+let legacyFallbackUsed = false;
+const legacyProjects = () => legacyForced || store.get("projects.legacy", false) === true;
+function applyProjectsPresentation() {
+  const legacy = legacyProjects();
+  $("#projects-fallback-notice").hidden = !legacyForced;
+  $("#work-root").hidden = legacy;
+  $("#projects-root").hidden = !legacy;
+  $("#project-navigation").hidden = !projecting || !legacy;
+  const key = legacy ? "work.newView" : "work.oldView";
+  $("#projects-view-switch").setAttribute("data-i18n", key);
+  $("#projects-view-switch").textContent = t(key);
+}
+function setLegacyProjects(on, automatic = false) {
+  legacyForced = automatic && on;
+  if (!automatic) store.set("projects.legacy", on);
+  if (!projecting) return;
+  projectsGeneration++; workGeneration++;
+  projectsController?.close(); workController?.close();
+  $("#projects-module-status").textContent = ""; $("#projects-module-retry").hidden = true;
+  applyProjectsPresentation();
+  openProjectsPresentation();
+}
+// Called by the work view when the reader program is missing: true when the old view takes over (once per page load).
+function fallBackToLegacyProjects() {
+  if (!projecting || legacyProjects() || legacyFallbackUsed) return false;
+  legacyFallbackUsed = true;
+  setLegacyProjects(true, true);
+  return true;
+}
+function openProjectsPresentation() {
+  if (legacyProjects()) {
+    if (projectsController) projectsController.open();
+    else void loadProjectsModule();
+  } else void loadWorkView();
+}
+async function loadWorkView() {
+  const issue = ++workGeneration;
+  const status = $("#projects-module-status");
+  const retry = $("#projects-module-retry");
+  status.textContent = t("projects.loading"); retry.hidden = true;
+  let timer;
+  try {
+    const module = await Promise.race([
+      import(`/static/work-view.js?v=${encodeURIComponent($("meta[name=client-version]").content)}&attempt=${issue}`),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), 5000); }),
+    ]);
+    if (!projecting || issue !== workGeneration || legacyProjects() || !localMeshEffectsAllowed()) return;
+    workController ||= module.mountWorkView({ root: $("#work-root"), request: requestLocal, translate: t,
+      onLegacy: () => setLegacyProjects(true), onNotAvailable: fallBackToLegacyProjects });
+    workController.open();
+    status.textContent = "";
+  } catch {
+    if (projecting && issue === workGeneration) { status.textContent = t("projects.unavailable"); retry.hidden = false; }
+  } finally { clearTimeout(timer); }
+}
 function setProjects(on) {
   if (on && localActionUnavailable()) return;
   endDirectLine();   // a change of view ends direct writing
@@ -5309,7 +5371,7 @@ function setProjects(on) {
   store.set("primaryView", on ? "projects" : "sessions");
   document.body.classList.toggle("projecting", on);
   $("#projects").hidden = !on;
-  $("#project-navigation").hidden = !on;
+  applyProjectsPresentation();
   $("#btn-projects").classList.toggle("on", on);
   $("#btn-projects").setAttribute("aria-pressed", String(on));
   $("#btn-sessions").classList.toggle("on", !on);
@@ -5322,11 +5384,10 @@ function setProjects(on) {
   if (on) {
     document.body.classList.remove("drawer");
     $("#projects-return").focus();
-    if (projectsController) projectsController.open();
-    else void loadProjectsModule();
+    openProjectsPresentation();
   } else {
-    projectsGeneration++;
-    projectsController?.close();
+    projectsGeneration++; workGeneration++;
+    projectsController?.close(); workController?.close();
     for (const pane of panes) pane.refit();
     if (projectsReturnFocus instanceof HTMLElement && projectsReturnFocus.isConnected && !projectsReturnFocus.closest("#projects,#side")) projectsReturnFocus.focus({ preventScroll: true });
     else active?.focus();
@@ -5339,8 +5400,9 @@ $("#btn-sessions").addEventListener("click", () => {
   setProjects(false);
 });
 $("#project-refresh").addEventListener("click", () => { if (projecting) projectsController?.open(); });
+$("#projects-view-switch").addEventListener("click", () => setLegacyProjects(!legacyProjects()));
 $("#projects-return").addEventListener("click", () => setProjects(false));
-$("#projects-module-retry").addEventListener("click", () => { if (projecting) void loadProjectsModule(); });
+$("#projects-module-retry").addEventListener("click", () => { if (projecting) openProjectsPresentation(); });
 
 // ---- management: bounded facts already received with the owner snapshot
 //
@@ -7282,8 +7344,8 @@ async function startMesh(context) {
     refresh,
     dispose() {
       meshStopped = true;
-      projectsGeneration++;
-      projectsController?.close();
+      projectsGeneration++; workGeneration++;
+      projectsController?.close(); workController?.close();
       if (meshRefreshTimer !== null) clearInterval(meshRefreshTimer);
       navigator.serviceWorker?.removeEventListener("message", handleLocalServiceWorkerMessage);
       for (const pane of panes) pane.detach();

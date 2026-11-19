@@ -8,5 +8,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"], "allowImportingTsExtensions": true
   },
-  "include": ["static/project-catalog.ts", "static/projects.ts", "tools/project-snapshot.ts", "tools/project-observation.ts"]
+  "include": ["static/project-catalog.ts", "static/projects.ts", "static/work-*.ts", "tools/project-snapshot.ts", "tools/project-observation.ts"]
 }
