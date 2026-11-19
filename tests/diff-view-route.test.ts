@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,20 +42,27 @@ function freePort(): Promise<number> {
 
 const token = (): string => fs.readFileSync(path.join(confDir, 'token'), 'utf8').trim();
 
-// Ready when an authenticated request succeeds: the token is the one this child wrote under the
-// throwaway HOME, so another listener that took the port in the meantime cannot answer it.
+// Ready only on proof that the listener is this server: it refuses a wrong token, and with the
+// token this child wrote under the throwaway HOME it describes the file placed there (whose path
+// holds the random name of the scratch directory). A listener that answers 200 to anything, or
+// that took the port in the meantime, fails one of the two.
 async function ownsPort(port: number): Promise<boolean> {
+  const ready = path.join(home, 'ready.diff');
+  const ask = (bearer: string): Promise<Response> => fetch(`http://127.0.0.1:${port}/api/view`, {
+    method: 'POST',
+    headers: {'Authorization': `Bearer ${bearer}`, 'Content-Type': 'application/json'},
+    body: JSON.stringify({target: ready}),
+    // a listener that accepts and never answers must not hold the startup loop
+    signal: AbortSignal.timeout(1000),
+  });
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/view`, {
-      method: 'POST',
-      headers: {'Authorization': `Bearer ${token()}`, 'Content-Type': 'application/json'},
-      body: JSON.stringify({target: path.join(home, 'ready.diff')}),
-      // a listener that accepts and never answers must not hold the startup loop
-      signal: AbortSignal.timeout(1000),
-    });
-    return response.status === 200;
+    if ((await ask('not-the-token')).status !== 401) return false;
+    const response = await ask(token());
+    if (response.status !== 200) return false;
+    const described = await response.json() as {target?: unknown; url?: unknown};
+    return described.target === ready && typeof described.url === 'string' && described.url.startsWith('/view/');
   } catch {
-    return false;    // not listening yet, no token written yet, or no answer in time
+    return false;    // not listening yet, no token written yet, no answer in time, or not JSON
   }
 }
 
@@ -129,6 +137,21 @@ describe('the diff viewer through the server routes', () => {
       await closed;
     }
     fs.rmSync(scratch, {recursive: true, force: true});
+  });
+
+  test('the readiness check does not take another listener for the server', async () => {
+    // a listener that answers 200 with JSON to every request, whatever the token
+    const impostor = http.createServer((_request, response) => {
+      response.writeHead(200, {'Content-Type': 'application/json'});
+      response.end(JSON.stringify({target: path.join(home, 'ready.diff'), url: '/view/x'}));
+    });
+    await new Promise<void>(resolve => impostor.listen(0, '127.0.0.1', resolve));
+    try {
+      assert.equal(await ownsPort((impostor.address() as net.AddressInfo).port), false);
+      assert.equal(await ownsPort(Number(new URL(base).port)), true);
+    } finally {
+      await new Promise(resolve => impostor.close(resolve));
+    }
   });
 
   test('.diff and .patch files open in the diff page, under the rendered-Markdown policy', async () => {
