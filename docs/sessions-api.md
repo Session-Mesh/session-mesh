@@ -18,8 +18,9 @@ run at once, so the requests that arrive during a round share the next one. A ro
    never offered for restore while it runs. A description made from an older host list than the one
    already recorded is not written over it.
 
-A request also asks for a read of the host's `list` apart from the rounds; requests that arrive
-while one runs share the next. Each read of the host's list, by a round or for a request, is published
+A request without `since` also asks for a read of the host's `list` apart from the rounds; requests
+that arrive while one runs share the next. A request with `since` asks only for a round. Reads are
+ordered by when they started, on a monotonic clock: a step of the wall clock changes nothing. Each read of the host's list, by a round or for a request, is published
 at once: a session it newly lists gets a row with `ready: false`, built from the host's list, the
 organisation (`mesh.json`) and the restart snapshot only, without reading `/proc` or any transcript, and
 the sessions it no longer lists are removed. A round then describes the new rows. After the web server
@@ -35,14 +36,19 @@ round, each on its own: one that fails keeps its last value and stops neither th
 | Parameter | Meaning |
 |---|---|
 | `since` | A `generation` from an earlier answer: the answer then holds only what changed after it (below). Decimal, at most 16 digits; any other value, or a generation this server does not know, gives a full answer, never an error. |
-| `focus` | Up to 64 session names, comma-separated, most wanted first (the panes on screen, pinned conversations, visible rows). Names that are not session names, repeats, names the host does not list, and everything after the 64th are dropped; a value longer than 4096 bytes is ignored. The accepted names are echoed in the answer's `focus`. The current round describes every session at once, so `focus` does not change its order yet. |
+
+Other parameters are ignored. A client may send `focus` (the sessions it wants described first): the
+current round describes every session at once and does not read it.
 
 A request **with** `since` answers at once. A request **without** `since` (a page load, or a client
-that expects a session it just created to be listed) waits for the round it asked for, at most
-`MESH_SESSIONS_WAIT` seconds (default 2). Before the first round's description it waits only for the
-skeleton, and it stops waiting once the host is silent. A session the host lists before the request
-arrives is in its answer, with `ready: false` when no round has described it yet, however long rounds
-last: the read of the host's list a request asks for takes milliseconds.
+that expects a session it just created to be listed) waits until a read of the host's list that started
+after it is published, or until the round it asked for ends, at most `MESH_SESSIONS_WAIT` seconds
+(default 2); it does not wait while the host is known to be silent (its last read failed). A session
+the host lists before the request arrives is therefore in its answer, with `ready: false` when no
+round has described it yet, however long rounds last, except:
+
+- when the host's `list` takes longer than `MESH_SESSIONS_WAIT`, or the host is known to be silent;
+- with `MESH_SESSIONS_WAIT=0`, where every request answers from the list as it is.
 
 ## Answer
 
@@ -64,10 +70,9 @@ Every answer has `now` (the time of the answer, in seconds), `update`, `sessionR
 | `generation` | integer | Grows by one each time a row's content changes, a session ends, or `external` changes. It starts from the server's start time in milliseconds, so it never goes back when the web server restarts. Send it back as `since`. It does not change when only the other fields change (`folders`, `management`, `restorable`, `portfolio`, `opens`, `signals`, the fields read beside the list): those are in every answer, a delta included, so a client must read every answer, also one whose `generation` did not change. |
 | `full` | boolean | `true`: `mesh` holds every session. `false`: the answer to `since` holds only the changed rows. |
 | `removed` | names | Only when `full` is `false`: sessions that ended after `since`. Kept 10 minutes; an older `since` gets a full answer. |
-| `complete` | boolean | `false` while rows are not described yet (`ready: false`), or before the first listing. A client may poll sooner then. |
+| `complete` | boolean | `false` while rows are not described yet (`ready: false`), or before the first listing. A client may poll sooner then. After a start with a silent host, the first round publishes an empty list with `complete: true` and `host: "silent"`. |
 | `counts` | `{total, ready}` | Sessions listed, and those described. |
-| `host` | `"ok"`, `"silent"`, `"restarted"` | `"silent"`: the PTY host did not answer the last `list` (or has not for 1 s); the rows are the last ones known. `"restarted"`: the host's identity changed since the previous round. |
-| `focus` | names | Only when the request had a `focus`: the names accepted. |
+| `host` | `"ok"`, `"silent"`, `"restarted"` | `"silent"`: the PTY host did not answer the last `list` read, or a read started since has been pending for over 1 s; the rows are the last ones known. Any successful read ends it. `"restarted"`: the host's identity changed since the previous round. |
 
 In an answer to `since`, `external` (terminals outside the mesh) is present only when it changed after
 `since`; a full answer always has it.
@@ -90,5 +95,9 @@ A row's `agent.argv` is unchanged in this version.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MESH_SESSIONS_WAIT` | `2` | Seconds a request without `since` waits for the round it asked for. `0`: every request answers from the list as it is. |
-| `MESH_TEST_SESSIONS_COMPLETE` | unset | Tests only, never in production: `1` makes a request without `since` wait for the whole round it asked for (at most `MESH_SESSIONS_WAIT`), also before the first listing and while the host is silent, for tests that read a complete listing right after a change. |
+| `MESH_SESSIONS_WAIT` | `2` | The most seconds a request without `since` waits (above). `0`: every request answers from the list as it is. A value that is not a finite number of seconds, 0 or more, is replaced by 2, with one line in the log. |
+
+The test harnesses (`tests/conftest.py`, `tests/mesh-server-lib.ts`) also set
+`MESH_TEST_SESSIONS_COMPLETE=1`, never set in production: a request without `since` then waits for the
+whole round it asked for (at most `MESH_SESSIONS_WAIT`), also before the first listing and while the host
+is silent, for tests that read a complete description right after a change.

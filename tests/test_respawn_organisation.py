@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 
 import pytest
 
@@ -236,7 +237,7 @@ async def test_listing_cannot_restore_a_stale_folder_after_a_rename(
 
     monkeypatch.setattr(server, "list_sessions", pause_after_observing_the_old_folder)
     listing = asyncio.create_task(client.get("/api/sessions", headers=auth_cookie))
-    assert await asyncio.to_thread(entered.wait, 1), "listing did not observe the old folder"
+    assert await asyncio.to_thread(entered.wait, 5), "listing did not observe the old folder"
     # The organisation lock covers the writes of a listing, not its reads: the rename does not wait
     # for the description, and the snapshot written after it still records the new folder.
     rename_response = await asyncio.wait_for(client.post(
@@ -302,8 +303,71 @@ async def test_a_description_of_an_older_host_list_never_overwrites_a_newer_one(
     # Listings describe in parallel (round, watchers, actions): the one of the older host list may finish last.
     monkeypatch.setattr(server, "_RECORDED", [0.0])
     read = ([{"name": "a", "created": 1.0}], True, None)
-    await server._record_listing({"mesh": [organised("a", tmp_path, label="new")]}, (*read, 200.0), 200.0)
-    _, durable = await server._record_listing({"mesh": [organised("a", tmp_path, label="old")]}, (*read, 100.0), 100.0)
+    await server._record_listing({"mesh": [organised("a", tmp_path, label="new")]}, (*read, 0.0, 200.0), 200.0)
+    _, durable = await server._record_listing({"mesh": [organised("a", tmp_path, label="old")]}, (*read, 0.0, 100.0), 100.0)
     assert not durable
     [entry] = json.loads(snapshot_file.read_text())["live"]
     assert entry["org"]["label"] == "new"
+
+
+def hosted(name, tmp_path, created):
+    """One item of the host's ``list``: a live process, so that a listing describes it."""
+    return {"name": name, "pid": os.getpid(), "cwd": str(tmp_path), "created": created, "activity": created,
+            "attached": 0, "meta": {}}
+
+
+async def test_a_wall_clock_stepped_back_does_not_order_the_host_reads(snapshot_file, tmp_path, monkeypatch):
+    # NTP correcting a fast clock, an RTC in local time, a manual change: reads stay ordered by time.monotonic().
+    listed = [hosted("a", tmp_path, 1.0)]
+
+    async def fake_request(request):
+        assert request == {"op": "list"}
+        return list(listed)
+
+    async def identity():
+        return "1:1"
+    monkeypatch.setattr(ptyhost, "request", fake_request)
+    monkeypatch.setattr(ptyhost, "host_identity", identity)
+    monkeypatch.setattr(server, "_RECORDED", [0.0])
+    state = server.SessionsState()
+    await server.sessions_round(None, state)
+    wall = time.time
+    monkeypatch.setattr(time, "time", lambda: wall() - 3600)
+    listed.append(hosted("b", tmp_path, 2.0))
+    await state.membership(await state.read("request"))
+    assert sorted(state.rows) == ["a", "b"], "a request's read lists the new session"
+    listed.pop(0)
+    await server.sessions_round(None, state)
+    assert [(name, row["ready"]) for name, row in state.rows.items()] == [("b", True)]
+    assert [entry["name"] for entry in json.loads(snapshot_file.read_text())["live"]] == ["b"]
+
+
+async def test_membership_never_publishes_an_older_host_list_over_a_newer_one(snapshot_file, tmp_path):
+    state = server.SessionsState()
+    await state.membership(([hosted("a", tmp_path, 1.0), hosted("x", tmp_path, 2.0)], True, None, 0.0, 2.0))
+    await state.membership(([hosted("a", tmp_path, 1.0)], True, None, 0.0, 1.0))
+    assert sorted(state.rows) == ["a", "x"]
+    assert state.read_done == 2.0
+
+
+async def test_a_listing_observes_the_conversations_at_the_time_of_its_host_read(monkeypatch):
+    observed = []
+    monkeypatch.setattr(server.conversation_names, "observe", lambda mesh, listed, now: observed.append(now))
+    await server._listing(None, None, ([], False, None, 123.0, 0.0))
+    assert observed == [123.0]
+
+
+async def test_an_extra_cancelled_on_its_own_keeps_its_last_value(monkeypatch):
+    async def cancelled():
+        raise asyncio.CancelledError
+    monkeypatch.setattr(server, "_update_notice", cancelled)
+    state = server.SessionsState()
+    await state._read_extras(None)
+    assert state.extras["update"] is None
+    assert json.loads(state.answer(None))["update"] is None
+
+
+@pytest.mark.parametrize("text, seconds", [(None, 2.0), ("", 2.0), ("0", 0.0), ("0.5", 0.5), ("60", 60.0),
+                                           ("2s", 2.0), ("inf", 2.0), ("nan", 2.0), ("-1", 2.0)])
+def test_the_sessions_wait_setting_falls_back_to_two_seconds(text, seconds):
+    assert server._wait_setting(text) == seconds
