@@ -119,4 +119,9 @@
  (modules ptyhost_lifecycle_itf)
  (build_if %{lib-available:ocaml-quint-connect})
  (libraries mesh_wire mesh_platform ocaml-quint-connect alcotest unix yojson)
- (deps ptyhost_lifecycle.qnt ptyhost_lifecycle.itf.json))
+ ; The same harness and host as ptyhost_interop: depend on the host too, or the
+ ; replay can run while this build replaces it.
+ (deps
+  ptyhost_lifecycle.qnt
+  ptyhost_lifecycle.itf.json
+  ../../bin/mesh_ptyhost_main.exe))
