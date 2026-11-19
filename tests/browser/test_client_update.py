@@ -36,7 +36,7 @@ async def announce(tab, version):
         body = await response.json()
         body["client_version"] = version
         await route.fulfill(response=response, body=json.dumps(body))
-    await tab.route("**/api/sessions", reply)
+    await tab.route("**/api/sessions*", reply)
 
 
 async def reloaded(tab, action, timeout=4000):
@@ -104,7 +104,7 @@ async def test_close_after_routes_waits_for_an_active_route_handler(browser, mes
 
     closing_context = ClosingContext()
     try:
-        await tab.route("**/api/sessions", delayed_reply)
+        await tab.route("**/api/sessions*", delayed_reply)
         refresh = asyncio.create_task(tab.evaluate(REFRESH))
         await asyncio.wait_for(handler_started.wait(), timeout=5)
         close_task = asyncio.create_task(_close_after_routes(RoutedPage(), closing_context))

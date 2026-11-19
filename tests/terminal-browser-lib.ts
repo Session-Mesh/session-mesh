@@ -93,6 +93,21 @@ export class TerminalMesh {
     await this.waitUntil('the new PTY host', () => accepts({path: this.socketPath}));
   }
 
+  /** Stop server.py (SIGTERM: it closes the pages' sockets with 1012) and start it again on the same port. */
+  async restartServer(downMs = 0): Promise<void> {
+    const old = this.children[1];
+    const closed = new Promise(resolve => old.on('close', resolve));
+    old.kill('SIGTERM');
+    await closed;
+    await new Promise(resolve => setTimeout(resolve, downMs));
+    const index = this.children.length;
+    this.spawn([PYTHON, 'server.py'], this.hostEnv);
+    const [fresh] = this.children.splice(index, 1);
+    this.children[1] = fresh;
+    const port = Number(new URL(this.base).port);
+    await this.waitUntil('server.py again', () => accepts({host: '127.0.0.1', port}));
+  }
+
   async stop(): Promise<void> {
     await this.browser?.close();
     for (const child of this.children.reverse()) {
@@ -164,6 +179,14 @@ export class TerminalMesh {
 }
 
 declare const active: PaneView | null;
+
+/** A listing URL without `since`: the server then answers every session (`full: true`), not only the
+ * rows changed since. For a route that rewrites rows, which a delta answer may not carry. */
+export function withoutSince(url: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.delete('since');
+  return parsed.toString();
+}
 
 /** The replay is parsed and the automatic redraw (and the program's answer to it) is over. */
 export async function settle(page: Page): Promise<void> {

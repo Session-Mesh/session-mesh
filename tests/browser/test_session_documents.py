@@ -956,7 +956,7 @@ async def test_a_conversation_running_in_the_mesh_is_shown_without_taking_the_ke
             if s.get("name") == "sa":
                 s["agent"] = {**(s.get("agent") or {}), "type": "claude", "session_id": SID}
         await route.fulfill(response=response, json=body)
-    await page.route("**/api/sessions", sessions)
+    await page.route("**/api/sessions*", sessions)
     doc = docs.write(home_dir, "p4b/goto/live.md", f"[live](#{HID})\n")
     await show_layout(page, mesh, [""])
     await page.wait_for_function("(sid) => liveOf(sid, 'claude')?.id === 'sa'", arg=SID)

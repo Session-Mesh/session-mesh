@@ -50,6 +50,7 @@
       <div id="tree-body" class="tree-body" role="tree"></div>
       <div class="tree-hint mute" data-i18n="tree.hint">click: open · right-click (HTML, Markdown): the source</div>
     </section>
+    <div id="sessions-status" class="sessions-status idle"></div>
     <div id="list" class="list"></div>
     <div id="hlist" class="list" hidden></div>
     <footer class="side-foot"><span id="foot"></span><label id="push-detail-row" class="push-detail" hidden title="By default a notification only carries the session name and the kind of event. Checked: it also carries the agent's text, the command or URL at stake and the choices (visible on this device's lock screen)." data-i18n-title="foot.pushDetailTitle"><input type="checkbox" id="push-detail"> <span data-i18n="foot.pushDetail">details</span></label><button id="btn-shortcuts" type="button" class="btn ghost sm" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" data-i18n-title="shortcuts.open" data-i18n-aria-label="shortcuts.title">?</button><select id="lang-select" class="btn ghost sm" title="Interface language" aria-label="Interface language" data-i18n-title="foot.language" data-i18n-aria-label="foot.language"></select><select id="theme-select" class="btn ghost sm" title="Colour theme" aria-label="Colour theme" data-i18n-title="theme.select" data-i18n-aria-label="theme.select"></select><a id="source-link" class="btn ghost sm" href="https://github.com/Session-Mesh/session-mesh" target="_blank" rel="noopener noreferrer" title="The source code of this interface (AGPL-3.0-or-later)" data-i18n-title="foot.sourceTitle" data-i18n="foot.source">Source code</a><button id="btn-reload" class="btn ghost sm" title="Reload the app (fetches the latest version)" data-i18n-title="foot.reloadTitle" data-i18n="foot.reload">⟳ Reload</button><button id="btn-push" class="btn ghost sm" hidden></button><button class="btn ghost sm" popovertarget="logout-pop" title="Sign out" aria-label="Sign out" data-i18n-title="foot.logout" data-i18n-aria-label="foot.logout">⏻</button><div id="logout-pop" popover><button id="btn-logout" class="btn sm" data-i18n="foot.logoutDevice">Sign out this device</button> <button id="btn-logout-all" class="btn sm" title="The token and the sessions do not change" data-i18n-title="foot.logoutAllTitle" data-i18n="foot.logoutAll">All devices…</button></div></footer>
@@ -413,6 +414,7 @@
 <script src="/static/terminal-links.js"></script>
 <script src="/static/shortcuts.js"></script>
 <script src="/static/update-notice.js"></script>
+<script src="/static/sessions-progress.js"></script>
 <script src="/static/app.js"></script>
 <!-- mesh:local-entry:start -->
 <script src="/static/local-entry.js"></script>

@@ -35,7 +35,8 @@ async def phone(browser, mesh, home_dir, plain_transport_shell):
         await context.add_cookies([{"name": server.COOKIE, "value": server.cookie_value(), "url": mesh.origin}])
         tab = await context.new_page()
         await goto(tab, mesh.origin + "/")
-        await tab.wait_for_function("data?.mesh?.length >= 1", timeout=10000)
+        # The sidebar is drawn on the frame after a listing is applied: wait for the drawn row.
+        await tab.wait_for_function(f"document.querySelector('#list .item[data-id=\"{name}\"]') !== null", timeout=10000)
         await tab.evaluate(f"document.querySelector('#list .item[data-id=\"{name}\"]').click()")
         await tab.wait_for_function("active?.conn?.ws?.readyState === 1", timeout=10000)
         await tab.evaluate("(c) => active.send(c)", command)

@@ -80,7 +80,8 @@ async def attach_mesh(mesh, home_dir):
         tab.uploads = []
         tab.on("request", lambda r: tab.uploads.append(r) if "/api/upload" in r.url else None)
         await goto(tab, mesh.origin + "/")
-        await tab.wait_for_function("data?.mesh?.length >= 1", timeout=10000)
+        # The sidebar is drawn on the frame after a listing is applied: wait for the drawn row.
+        await tab.wait_for_function("document.querySelector('#list .item[data-id=\"att\"]') !== null", timeout=10000)
         if options.get("is_mobile"):
             await tab.evaluate("document.querySelector('#list .item[data-id=\"att\"]').click()")
         else:

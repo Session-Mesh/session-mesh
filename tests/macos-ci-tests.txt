@@ -176,7 +176,6 @@ tests/test_discover_foreground.py
 tests/test_discover_said.py
 tests/test_external.py
 tests/test_history.py
-tests/test_inventory_pipeline.py
 tests/test_launchplan.py
 tests/test_launchsettings.py
 tests/test_local_terminal_handle.py

@@ -99,7 +99,7 @@ async def test_failed_listing_does_not_reuse_a_cached_diff_selector(page, mesh, 
             await route.fulfill(json={"mesh": [], "external": [], "portfolio": {"mesh_sessions": {"state": "observed", "directories": {}}}})
         else:
             await route.fulfill(status=503, body="")
-    await page.route("**/api/sessions", failed_listing)
+    await page.route("**/api/sessions*", failed_listing)
     await page.locator(".contextual-diff-refresh").click()
     await page.wait_for_function(DIFF_TEXT, arg=ui("diff.state.unavailable"), timeout=3000)
     assert calls == 1

@@ -183,6 +183,8 @@ async def test_v1_state_is_client_local_bounded_and_resets_on_revision(
             await client.context.add_cookies([{"name": server.COOKIE,
                 "value": server.cookie_value(), "url": mesh.origin}])
             await goto(client, f"{mesh.origin}/#{name}")
+            # The hash shows a provisional row at once; the first listing gives it its identity.
+            await client.evaluate("localMesh.then(() => undefined)")
             await client.wait_for_function(
                 f"data.mesh.some((session) => session.id === {json.dumps(name)})")
         for client in pages:

@@ -27,7 +27,7 @@ async def prepare_history(page, mesh, monkeypatch):
         body["external"] = []
         body["mesh"] = []
         await route.fulfill(response=response, json=body)
-    await page.route("**/api/sessions", sessions)
+    await page.route("**/api/sessions*", sessions)
     async def history(route):
         await route.fulfill(json={"gen": 1, "full": True, "sessions": [TRANSCRIPT],
                                   "gone": [], "indexing": False})

@@ -10,6 +10,7 @@ for (const [id, path, ask] of [["btn-logout", "/api/logout", null],
   document.getElementById(id).addEventListener("click", async () => {
     if (!localMeshEffectsAllowed()) return;
     if (ask && !confirm(ask())) return;
+    MeshUI.forgetKnownSessions();   // the sessions this browser kept for its next start
     try { await requestLocal(path, {method: "POST"}); } catch {}
     if (!localMeshEffectsAllowed()) return;
     location.href = "/login";

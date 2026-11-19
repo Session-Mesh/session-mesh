@@ -75,7 +75,7 @@ async def board(browser, mesh):
         tab = await context.new_page()
         sessions = Sessions(gate)
         sessions.specs = specs
-        await tab.route("**/api/sessions", sessions.reply)
+        await tab.route("**/api/sessions*", sessions.reply)
         await goto(tab, mesh.origin + "/")
         if gate is not None:
             gate.ready_started.set()

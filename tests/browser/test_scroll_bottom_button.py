@@ -113,6 +113,8 @@ async def mesh_page(browser, mesh, home_dir, plain_transport_shell):
         await goto(tab, mesh.origin + "/")
         await wait_for_inventory(tab, mesh.origin, evidence)
         if options.get("is_mobile"):
+            # The sidebar is drawn on the frame after a listing is applied: wait for the drawn row.
+            await tab.wait_for_function(f"document.querySelector('#list .item[data-id=\"{name}\"]') !== null", timeout=10000)
             await tab.evaluate(f"document.querySelector('#list .item[data-id=\"{name}\"]').click()")
         else:
             await tab.click(f'#list .item[data-id="{name}"]')

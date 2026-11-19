@@ -17,7 +17,6 @@ const whenTranslated = (init) => { translatedInits.push(init); };
 // disposal) no local request or transport is permitted.
 let meshContext = null;
 let meshStopped = false;
-let meshRefreshTimer = null;
 function localMeshEffectsAllowed() { return meshContext !== null && !meshStopped; }
 function requireLocalMesh() {
   if (!localMeshEffectsAllowed()) throw new Error(t("mesh.localStopped"));
@@ -59,6 +58,15 @@ const store = {
 };
 
 let data = { mesh: [], external: [], home: "" };
+// The session list's progressive loading (static/sessions-progress.ts). Until the server's first
+// answer, `data` holds the sessions this device knew at its last listing, marked provisional.
+const Progress = globalThis.MeshSessionsProgress;
+let inventoryLoaded = false;   // a listing from the server has been applied
+let lastListing = null;   // the last listing applied, as the server sent it (merged when incremental)
+let inventoryPoller = null;
+let pageSignals = null;
+const hostSilence = Progress.createHostSilence();   // rows kept on screen while the PTY host is silent
+const shownMesh = () => hostSilence.shown(data.mesh);
 // Restoration only rehydrates browser-local panes.  Suppress incidental writes
 // while groups/tabs are assembled so a stale target is not erased midway.
 let restoringWorkspace = false;
@@ -128,7 +136,7 @@ const activityPhase = (s) => activityRanking?.entries[s.id]?.identity === JSON.s
   ? activityRanking.phaseById[s.id] : null;
 function state(s) {
   const a = s.agent;
-  if (!a) return "";
+  if (!a || s.provisional) return "";
   if (a.status === "busy") return "busy";
   if (a.status === "waiting") return "wait";
   if (activityPhase(s) === "active") return "busy";
@@ -400,7 +408,8 @@ function openLocalTerminal(name, { rows, cols }, observer) {
     const geometry = replayGeometry(event.data);
     if (geometry) observer.replayGeometry(handle, geometry);
   };
-  socket.onclose = () => {
+  socket.onclose = (event) => {
+    if (event?.code === 1012) inventoryPoller?.noteRestart();   // the server closes its sockets as it restarts
     if (current()) return observer.closed(handle);
   };
   return handle;
@@ -3137,7 +3146,7 @@ async function runPaneAction(action, target) {
 
 async function closeSession(id) {
   const s = find(id);
-  if (!s || !Number.isFinite(s.created)
+  if (!s || !Number.isFinite(s.created) || !rowAuthoritative(s)
       || !confirm(t("stop.confirmSession", { name: s.name }))) return;
   const shown = panes.filter((pane) => pane.id === s.id)
     .map((pane) => ({ pane, view: pane.actionView }));
@@ -3146,6 +3155,7 @@ async function closeSession(id) {
     body: JSON.stringify({ created: s.created }),
   });
   if (!response.ok) { flash(t("stop.refusedHttp", { status: response.status })); return; }
+  hostSilence.noteClosed(s.name);
   await refresh();
   const current = find(s.id);
   if (!current || current.created === s.created) {
@@ -3351,25 +3361,36 @@ function itemHtml(s, opts = {}) {
   // A Mesh-launched CLI can be known even when it has no transcript/status or
   // safe resume contract. Keep that identity distinct from `agent`: the latter
   // remains the discovered, resumable Claude/Codex shape.
-  const tag = a ? `<span class="tag ${a.type}">${a.type}</span>`
+  const tag = a ? `<span class="tag ${esc(a.type)}">${esc(a.type)}</span>`
     : s.known_agent ? `<span class="tag known-agent" title="${esc(t("list.knownAgentTitle"))}">${esc(s.known_agent)}</span>`
     : `<span class="tag">${esc((s.cmd || "").split(" ")[0].split("/").pop())}</span>`;
   const where = s.kind === "mesh" ? `${s.name} · ${short(s.cwd)}` : `${short(s.cwd)} · ${s.tty.replace("/dev/", "")}`;
   const shown = panes.some((p) => p.id === s.id), here = active?.id === s.id;
-  const drag = s.kind === "mesh" ? ` draggable="true" title="${esc(t("list.itemDragTitle"))}"` : "";
+  const sure = rowAuthoritative(s), rowSt = s.kind === "mesh" ? Progress.rowState(s, hostSilence.silent()) : "ready";
+  const drag = s.kind === "mesh" && sure ? ` draggable="true" title="${esc(t("list.itemDragTitle"))}"` : "";
   const st = state(s), mine = st === "wait" || st === "unread";
   const stText = STATE_TEXT[st] ? `<span class="st ${st}">${esc(t(STATE_TEXT[st]))}${st === "wait" && a.since ? ` · ${esc(ago(a.since))}` : ""}</span> · ` : "";
   const changed = s.kind === "mesh" && boardModified.has(s.id);
   // what needs me shows what the agent said or asks; otherwise the last prompt
   const preview = mine ? a.said || a.last : a?.last;
-  return `<button class="item ${here ? "sel" : shown ? "shown" : ""}${s.folder ? " in-folder" : ""}${mine ? ` ${st}` : ""}" data-id="${esc(s.id)}"${opts.todo ? "" : drag}>
-    <div class="top"><span class="dot ${st}" aria-hidden="true"></span><span class="name">${esc(label(s))}</span>${changed ? `<span class="board-badge" aria-label="${esc(t("list.boardModified"))}" title="${esc(t("list.boardModified"))}"></span>` : ""}${s.pending ? `<span class="tag" title="${esc(t("list.pendingRestart"))}">⏳</span>` : ""}${s.wake_unconfirmed === true ? `<span class="tag wake-unconfirmed" role="img" aria-label="${esc(t("list.wakeUnconfirmed"))}" title="${esc(t("list.wakeUnconfirmed"))}">✉?</span>` : ""}${tag}<span class="ago">${esc(ago(lastSeen(s)))}</span></div>
-    <div class="meta">${stText}${esc(where)}</div>
+  const rowBadge = rowSt === "ready" ? "" : `<span class="row-state ${rowSt}">${esc(t(`sessions.row.${rowSt}`))}</span>`;
+  const row = `<button class="item ${here ? "sel" : shown ? "shown" : ""}${s.folder ? " in-folder" : ""}${mine ? ` ${st}` : ""}${rowSt === "ready" ? "" : ` row-${rowSt}`}" data-id="${esc(s.id)}"${opts.todo ? "" : drag}>
+    <div class="top"><span class="dot ${rowSt === "ready" ? st : "pending"}" aria-hidden="true"></span><span class="name">${esc(label(s))}</span>${changed ? `<span class="board-badge" aria-label="${esc(t("list.boardModified"))}" title="${esc(t("list.boardModified"))}"></span>` : ""}${s.pending ? `<span class="tag" title="${esc(t("list.pendingRestart"))}">⏳</span>` : ""}${s.wake_unconfirmed === true ? `<span class="tag wake-unconfirmed" role="img" aria-label="${esc(t("list.wakeUnconfirmed"))}" title="${esc(t("list.wakeUnconfirmed"))}">✉?</span>` : ""}${tag}<span class="ago">${esc(ago(lastSeen(s)))}</span></div>
+    <div class="meta">${rowBadge}${stText}${esc(where)}</div>
     ${s.notice === "opencode-unsupported" ? `<div class="last">${esc(t("list.opencodeUnsupportedNotice"))}</div>` : ""}
     ${s.notice === "opencode-unreadable" ? `<div class="last">${esc(t("list.opencodeUnreadableNotice"))}</div>` : ""}
     ${preview ? `<div class="last">${esc(preview)}</div>` : ""}
   </button>`;
+  if (!Progress.RETRYABLE.has(rowSt)) return row;
+  const retry = t("sessions.row.retry", { name: label(s) });
+  return `<div class="row-wrap" data-id="${esc(s.id)}">${row}<button type="button" class="row-retry" data-retry="${esc(s.id)}" aria-label="${esc(retry)}" title="${esc(retry)}">↻</button></div>`;
 }
+
+// Whether a row may be acted on as observed fact (closed, filed, dragged): not a provisional row, a
+// row the server has not described yet, a row of a skeleton listing, or any row while the PTY host is
+// silent (static/sessions-contract.ts, host-silence.ts).
+const rowAuthoritative = (s) => s?.kind !== "mesh"
+  || Progress.authoritative(s, s.provisional ? null : lastListing, hostSilence.silent());
 
 // outside terminals grouped by what owns them
 function groups(list) {
@@ -3388,7 +3409,12 @@ function groupHtml(key, title, list, emptyHtml = "") {
   return `<button class="group ${f ? "folded" : ""}" data-group="${esc(key)}">
       <span class="chev">▾</span><span>${esc(title)}</span>
       <span class="count">${busy ? `<span class="dot busy"></span> ` : ""}${list.length}</span></button>` +
-    (f ? "" : list.map(itemHtml).join("") || emptyHtml);
+    (f ? "" : rowsHtml(`group:${key}`, list) || emptyHtml);
+}
+// The rows of one run (a status section, a folder, the loose sessions, a group of outside terminals),
+// windowed in a long list (static/list-window.ts).
+function rowsHtml(runKey, list, opts = {}) {
+  return listWindow.runHtml(runKey, list, (s) => s.id, (s) => itemHtml(s, opts));
 }
 
 // ---- mesh folders, names and order (stored on the server, organize.py)
@@ -3417,7 +3443,7 @@ function folderHtml(name, list) {
         <button type="button" class="folder-action folder-delete" data-folder-del="${esc(name)}" aria-label="${esc(t("folder.deleteLabel", { name }))}" title="${esc(t("folder.deleteTitle"))}">✕</button>
       </span>
     </div>
-    ${f ? "" : list.map(itemHtml).join("") || `<div class="meta folder-empty">${esc(t("folder.empty"))}</div>`}
+    ${f ? "" : rowsHtml(key, list) || `<div class="meta folder-empty">${esc(t("folder.empty"))}</div>`}
   </div>`;
 }
 
@@ -3433,8 +3459,8 @@ function meshHtml(mesh) {
   const loose = mesh.filter((s) => !s.folder || !folders.includes(s.folder));
   return head +
     folders.map((name) => folderHtml(name, inFolder(name))).join("") +
-    `<div class="loose" data-root="1">${loose.map(itemHtml).join("") ||
-      (mesh.length ? "" : `<div class="meta" style="margin:4px 10px 10px">${esc(t("list.meshEmpty"))}</div>`)}</div>` +
+    `<div class="loose" data-root="1">${rowsHtml("loose", loose) ||
+      (mesh.length ? "" : `<div class="meta" style="margin:4px 10px 10px">${esc(t(inventoryLoaded ? "list.meshEmpty" : "sessions.row.loadingList"))}</div>`)}</div>` +
     `<button class="add-folder" data-add-folder="1">${esc(t("folder.add"))}</button>`;
 }
 
@@ -3525,7 +3551,7 @@ function statusHtml(st, list) {
   return `<div class="todo ${st}-section"><button class="group status-head ${st} ${f ? "folded" : ""}" data-group="${key}" title="${esc(help)}">
       <span class="chev">▾</span><span>${esc(title)}</span><span class="help" data-help="${st}" role="button" aria-label="${esc(t("list.status.helpLabel"))}" title="${esc(help)}">?</span>
       <span class="count">${list.length}</span></button>` +
-    (f ? "" : list.map((session) => itemHtml(session, { todo: true })).join("")) + `</div>`;
+    (f ? "" : rowsHtml(key, list, { todo: true })) + `</div>`;
 }
 
 let listBusy = false;   // dragging or renaming: don't re-render under the pointer
@@ -3547,10 +3573,45 @@ document.addEventListener("pointerup", () => { listPointerHeld = false; releaseL
 document.addEventListener("pointercancel", () => { listPointerHeld = false; releaseListReorder(); });
 $("#list").addEventListener("focusout", releaseListReorder);
 
+// ---- drawing the list: keyed updates, one render per frame, a window over long lists
+// (static/keyed-render.ts, static/list-window.ts). The model is what the list last drew from: a
+// scroll redraws it (moving the window) and never publishes newer data under the owner's focus or
+// pointer (renderList defers those).
+let listModel = null;
+// A folder's toolbar holds its inline rename editor: kept like a row while the editor is open.
+const listWindow = Progress.createListWindow({ box: $("#list"), rowSelector: ".item", holderSelector: ".item, .pin-row, .row-wrap, .folder-toolbar",
+  editingSelector: "input.rename", idOf: (el) => el.getAttribute("data-id"), escape: esc });
+const LIST_MORPH = { keyAttributes: ["data-id", "data-group", "data-folder", "data-folder-head", "data-retry", "data-unpin-id",
+  "data-add-folder", ...Progress.WINDOW_KEY_ATTRIBUTES], isLeaf: (el) => el.tagName === "BUTTON" || el.matches(".pin-row, .row-wrap") };
+const frames = { request: (run) => requestAnimationFrame(run), cancel: (handle) => cancelAnimationFrame(handle) };
+const listBatch = Progress.createFrameBatcher(() => renderLists(), frames);
+const listScroll = Progress.createFrameBatcher(() => { if (listWindow.windowed()) drawList(true); }, frames);
+$("#list").addEventListener("scroll", () => listScroll.request(), { passive: true });
+$("#list").addEventListener("focusin", () => { if (listWindow.windowed()) listScroll.request(); });
+new ResizeObserver(() => { if (listWindow.windowed()) listScroll.request(); }).observe($("#list"));
+
+function drawList(fromScroll = false) {
+  const model = listModel;
+  if (!model) return;
+  const runs = [["st:wait", model.waiting], ["st:unread", model.unread], ["st:busy", model.working], ["mesh", model.mesh], ["", model.external]];
+  listWindow.setRowCount(Progress.shownRowCount(runs.map(([key, list]) => ({ size: list.length, folded: folded.has(key) }))));
+  const next = document.createElement("div");
+  next.innerHTML = pinnedHtml(model.q) +
+    statusHtml("wait", model.waiting) + statusHtml("unread", model.unread) + statusHtml("busy", model.working) +
+    meshHtml(model.mesh) + portfolioHtml(data.portfolio) +
+    groups(model.external).map(([host, list]) => groupHtml(host, host, list)).join("");
+  // A scroll leaves the held rows (focus, inline rename, drag) exactly as they are.
+  Progress.morphChildren($("#list"), next, fromScroll ? { ...LIST_MORPH, keep: listWindow.keep } : LIST_MORPH);
+  listWindow.measure();
+  // A run above changed height (folded, rows added): the windows below were placed at its old offsets.
+  if (!fromScroll && listWindow.offsetsMoved()) listScroll.request();
+}
+
 function renderList(completedDrop = false) {
   const provenanceFocus = document.activeElement?.matches("#list .portfolio-provenance summary");
   const focusedRow = document.activeElement?.closest?.("#list .item, #list .pin-remove");
   const restoreFocusId = completedDrop ? focusedRow?.dataset.id : null;
+  const retriedId = document.activeElement?.closest?.("#list .row-retry")?.dataset.retry;   // its row may lose the button
   if (listBusy || listPointerHeld || (focusedRow && !completedDrop)) {
     pendingListRender = true;
     return;
@@ -3565,12 +3626,10 @@ function renderList(completedDrop = false) {
   const working = (activityRanking?.activeIds || []).map((id) => activeById.get(id)).filter(Boolean);
   for (const session of activeById.values()) if (!working.includes(session)) working.push(session);
   const activeOrder = working.map((s) => s.id).join("\0");
-  $("#list").innerHTML =
-    pinnedHtml(q) +
-    statusHtml("wait", waiting.filter(match)) + statusHtml("unread", unread.filter(match)) + statusHtml("busy", working.filter(match)) +
-    meshHtml(data.mesh.filter(match)) +
-    portfolioHtml(data.portfolio) +
-    groups(data.external.filter(match)).map(([host, list]) => groupHtml(host, host, list)).join("");
+  const batchOwed = listBatch.cancel();   // the batched render it replaces also drew history and explorer
+  listModel = { q, waiting: waiting.filter(match), unread: unread.filter(match), working: working.filter(match),
+    mesh: shownMesh().filter(match), external: data.external.filter(match) };
+  drawList();
   if (tab === "live") {
     const parts = [t("list.foot.sessions", { n: all.length }), t("list.foot.active", { n: working.length })];
     if (waiting.length) parts.push(t("list.foot.waiting", { n: waiting.length }));
@@ -3589,7 +3648,9 @@ function renderList(completedDrop = false) {
   pendingListRender = false;
   renderedActiveOrder = activeOrder;
   if (restoreFocusId) listItem(restoreFocusId)?.focus({ preventScroll: true });
+  if (retriedId && !$("#list").contains(document.activeElement)) listItem(retriedId)?.focus({ preventScroll: true });
   if (provenanceFocus) $(".portfolio-provenance summary")?.focus({ preventScroll: true });
+  if (batchOwed) { renderHistList(); if (exploring) renderExplorer(); }
 }
 
 // the count of sessions needing me, where it is seen without opening the menu
@@ -3625,7 +3686,7 @@ function mergeStored() {
   return stored;
 }
 // gone from the listing for a day (not at once: a failed listing shows none)
-const stale = (id, t) => data.mesh.length + data.external.length > 0 && !find(id) && serverNow() - t > 86400;
+const stale = (id, t) => inventoryLoaded && data.mesh.length + data.external.length > 0 && !find(id) && serverNow() - t > 86400;
 function saveSeen() {
   const stored = mergeStored();
   for (const [id, t] of Object.entries(seen)) if (stale(id, t)) delete seen[id];
@@ -3690,6 +3751,7 @@ function editInline(el, value, save) {
 function renameSession(id, el) {
   if (localActionUnavailable()) return;
   const s = find(id);
+  if (s?.kind === "mesh" && !rowAuthoritative(s)) return;   // a session not listed as observed fact yet
   if (s?.kind === "mesh") editInline(el, label(s), (v) => organize({ op: "rename", id, label: v }, (result) => {
     const agent = s.agent?.type, sid = s.agent?.session_id;
     const pins = pinnedSessions();
@@ -3761,6 +3823,8 @@ async function onListClick(e) {
   if (e.target.closest(".rename") || $("#list input.rename")) return;
   const unpin = e.target.closest("[data-unpin-agent]");
   if (unpin) return togglePin(unpin.dataset.unpinAgent, unpin.dataset.unpinId, "");
+  const retry = e.target.closest("[data-retry]")?.dataset.retry;
+  if (retry) { e.stopPropagation(); retryFocus = retry; return void refresh(); }   // that row first in the next `focus`
   const selector = e.target.closest("[data-portfolio-diff]")?.dataset.portfolioDiff;
   if (selector) {
     e.stopPropagation();
@@ -3885,6 +3949,7 @@ function openSession(id, opts = {}) {
     if (!dragged) return;
     if (ctxMenu) { dragged = null; return e.preventDefault(); }   // a long press on a phone is the menu, not a drag
     listBusy = true;
+    listWindow.setDragged(dragged.kind === "session" ? dragged.id : null);
     clearInterval(scroller);
     scroller = setInterval(scrollStep, 16);
     e.dataTransfer.effectAllowed = "move";
@@ -3906,6 +3971,7 @@ function openSession(id, opts = {}) {
     stopScroll();
     dragged = null;
     listBusy = false;
+    listWindow.setDragged(null);
     listPointerHeld = false;
     if (!t) return renderList(true);
     if (d.kind === "folder") await organize({ op: "folder-move", name: d.id, before: t.before });
@@ -3913,7 +3979,7 @@ function openSession(id, opts = {}) {
                           order: data.mesh.map((s) => s.id) });   // the order shown, never-moved sessions included
     renderList(true);   // publish the explicit drop result, then restore row focus
   });
-  list.addEventListener("dragend", () => { clearMarks(); if (dragged) { dragged = null; listBusy = false; renderList(); } });
+  list.addEventListener("dragend", () => { clearMarks(); listWindow.setDragged(null); if (dragged) { dragged = null; listBusy = false; renderList(); } });
 }
 
 // ---- the menu of a session in the sidebar: right click, long press on a phone,
@@ -4001,6 +4067,11 @@ function menuEntries(id) {
   const s = find(id);
   if (!localMeshEffectsAllowed()) return [];
   const pin = s?.kind === "mesh" ? pinIdentity(s) : null;
+  // A session not yet observed by the server is offered nothing that changes or ends it.
+  if (s?.kind === "mesh" && !rowAuthoritative(s)) return [
+    { label: t("menu.openInColumn"), run: () => openInNewColumn(id) },
+    { label: t("menu.redraw"), run: () => redrawSession(id) },
+  ];
   if (s?.kind === "mesh") return [
     ...(pin ? [{ label: isPinned(pin.agent, pin.id) ? t("pin.unpin") : t("pin.pinHere"),
       run: () => togglePin(pin.agent, pin.id, label(s), pin.guessed) }] : []),
@@ -4233,7 +4304,7 @@ function renderReloadStatus() {
       button.addEventListener("click", () => { callback(); renderReloadStatus(); });
       row.append(" ", button);
     };
-    if (hold.kind === "line-pending") action(t("reload.action.cancelEnter"), () => hold.owner.operation?.cancel());
+    if (hold.kind === "line-pending") action(t("reload.action.cancelEnter"), () => cancelLinePending(hold.owner));
     else if (hold.kind === "compose-pending") action(t("reload.action.cancelEnter"), () => hold.owner.operation?.cancel());
     else if (hold.kind === "upload-pending")
       action(t("reload.action.cancelResult"), () => abandonUploadRecord(hold.owner));
@@ -4293,6 +4364,7 @@ document.addEventListener("input", () => queueMicrotask(renderReloadStatus), { c
 $("#btn-reload").addEventListener("click", requestReload);
 
 let lastOpen = null;   // seq of the last mesh-open request handled
+const pageStartedAt = Date.now() / 1000;   // opens after it are handled (static/open-replay.ts)
 function sessionRequestTabNonce() {
   const key = "mesh-session-request-tab";
   try {
@@ -4435,19 +4507,56 @@ const configPanel = MeshPaneActions.createConfigPanel({ dialog: $("#dlg-config")
 }, () => MeshI18n.locale());
 $("#btn-config").addEventListener("click", () => configPanel.open());
 
-// Local transport owns local account navigation. Future loaders must return a
-// result explicitly; unavailable/refused is never an observed empty snapshot.
-/** @typedef {{state: "loaded", value: unknown} | {state: "unavailable" | "refused"}} InventoryLoadResult */
-/** @returns {Promise<InventoryLoadResult>} */
-async function loadLocalInventory() {
-  const response = await requestLocal("/api/sessions");
-  if (!localMeshEffectsAllowed()) return { state: "unavailable" };
+// Local transport owns local account navigation. A loader returns a LoadOutcome
+// (static/single-flight-poller.ts); a failure or a refusal is never an observed empty snapshot.
+// A server that numbers its listings gets `since` and `focus` (docs/sessions-loading.md); the
+// answer is merged into the last listing here, so the rest of the page always sees a whole one. A
+// requested load (refresh() after a change) sends no `since`, so its answer holds that change.
+async function loadLocalInventory(signal, attempt) {
+  const { url, since } = Progress.inventoryUrl("/api/sessions", lastListing, focusNames(), attempt?.requested === true);
+  const response = await requestLocal(url, { signal });
+  if (!localMeshEffectsAllowed()) return { kind: "failed", status: null };
   if (response.status === 401) {
+    forgetKnownSessions();
     location.href = "/login";
-    return { state: "refused" };
+    return { kind: "refused" };
   }
-  if (!response.ok) return { state: "unavailable" };
-  return { state: "loaded", value: await response.json() };
+  if (!response.ok) return { kind: "failed", status: response.status };
+  const dropped = (row) => console.debug("session-mesh: a listing row without an id was dropped", row);
+  return { kind: "loaded", value: Progress.mergeListing(lastListing, await response.json(), since, dropped) };
+}
+
+// The sessions this page wants described first (`focus`, static/sessions-priority.ts).
+let retryFocus = null;   // a row whose retry button was pressed: first in the next request's `focus`
+function focusNames() {
+  const names = Progress.focusRequest({ retry: retryFocus, active: active?.id, panes: panes.map((p) => p.id),
+    pinned: pinnedSessions().map((p) => liveOf(p.id, p.agent)?.id), rows: data.mesh,
+    visible: listWindow.visibleIds(Progress.PRIORITY_LIMIT, (id) => !isHist(id)), isSession: (id) => find(id)?.kind === "mesh" });
+  retryFocus = null;
+  return names;
+}
+
+// What this device knew at its last observed listing (static/known-sessions.ts): shown, as
+// loading, before the server answers. Forgotten on sign-out and on a refused listing.
+const KNOWN_KEY = "knownSessions";
+let knownWritten = "";
+let knownForgotten = false;
+const SIGNED_OUT_KEY = "signedOutAt";   // set by a sign-out in any tab of this browser
+function rememberKnownSessions(listing) {
+  const known = Progress.knownFrom(listing);
+  if (!known || knownForgotten || !Progress.mayRemember(store.get(SIGNED_OUT_KEY, null), pageStartedAt * 1000)) return;
+  const text = JSON.stringify(known);
+  if (text === knownWritten) return;
+  knownWritten = text;
+  store.set(KNOWN_KEY, known);
+}
+function forgetKnownSessions() {
+  knownForgotten = true;
+  const prefix = meshContext?.storagePrefix ?? "mesh";
+  try {
+    localStorage.removeItem(`${prefix}.${KNOWN_KEY}`);
+    localStorage.setItem(`${prefix}.${SIGNED_OUT_KEY}`, JSON.stringify(Date.now()));
+  } catch {}
 }
 
 // Preserve the existing local DTO and management-observation distinction.
@@ -4467,27 +4576,65 @@ function validateInventorySnapshot(next) {
   return { next, identities };
 }
 
-/** @param {() => Promise<InventoryLoadResult>} loadInventory */
-async function refreshInventory(loadInventory) {
-  if (!meshContext || meshStopped) return;
-  const context = meshContext;
-  const issue = ++paneInventoryIssue;
-  let snapshot;
-  try {
-    const result = await loadInventory();
-    if (meshStopped || meshContext !== context) return;
-    if (result?.state !== "loaded") return;
-    snapshot = validateInventorySnapshot(result.value);
-  } catch {
-    return;
-  }
-  if (!snapshot) return;
-  return applyInventorySnapshot(issue, snapshot);
+// One listing request at a time per tab (static/single-flight-poller.ts): refresh() joins the request
+// in flight, or the single follow-up that starts after it; the poll waits as long as the server took
+// to answer (1 s base while the server says its listing is incomplete, 4 s otherwise, at least 30 s
+// while the tab is hidden); becoming visible or getting the network back asks at once.
+function startInventory(context) {
+  inventoryPoller = Progress.createPoller({
+    load: (signal, attempt) => context.inventory(signal, attempt),
+    apply: (value) => {
+      if (meshStopped || meshContext !== context) return undefined;
+      if (Progress.holdKnownRows(value, data)) { lastListing = value; sessionsStatus.render(); return undefined; }
+      const snapshot = validateInventorySnapshot(value);
+      return snapshot ? applyInventorySnapshot(++paneInventoryIssue, snapshot) : undefined;
+    },
+    clock: { now: () => Date.now(), setTimeout: (run, ms) => setTimeout(run, ms), clearTimeout: (handle) => clearTimeout(handle) },
+    baseIntervalMs: () => (Progress.complete(lastListing) ? 4000 : 1000),
+    minDelayMs: () => pageSignals?.minDelayMs() ?? 0,
+    onChange: () => sessionsStatus.render(),
+    onApplyError: (error) => console.error("session-mesh: the session list could not be applied", error),
+  });
+  pageSignals = Progress.watchPageSignals({ win: window, doc: document, wake: () => void refresh(), changed: () => sessionsStatus.render() });
+  return inventoryPoller.start();
 }
 
+// "Where are we": the status line above the list (static/sessions-status.ts, status-line-view.ts).
+const statusTime = (at) => new Date(at).toLocaleTimeString(MeshI18n.locale(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const sessionsStatus = Progress.createStatusView({ box: $("#sessions-status"), translate: t, onRetry: () => void refresh(),
+  now: () => Date.now(), timers: window, read: (now) => {
+    if (!inventoryPoller) return { line: null, ticking: false };
+    const poller = inventoryPoller.state();
+    const line = Progress.statusLine({ poller, listing: lastListing, rows: shownMesh(), now, formatTime: statusTime,
+      offline: pageSignals?.offline() ?? false, hostSilent: hostSilence.silent() });
+    return { line, ticking: Progress.statusTicks(line, poller) };
+  } });
+
 function refresh() {
-  if (!meshContext || meshStopped) return Promise.resolve();
-  return refreshInventory(meshContext.inventory);
+  if (!meshContext || meshStopped || !inventoryPoller) return Promise.resolve();
+  return inventoryPoller.request();
+}
+
+// The first observed listing settles the panes restored before it (`provisional` holds the session
+// each was restored to): a session it does not list is shown as unavailable, its place in the layout
+// kept, as a restore without the list would have. A pane that shows something else by then (a
+// history card, another session) is left as it is.
+let inventoryObserved = false;   // an observed listing has been applied
+function settleProvisionalPanes() {
+  for (const p of panes) {
+    const restored = p.provisional;
+    if (!restored) continue;
+    p.provisional = false;
+    if (p.id === restored && !find(restored)) p.showUnavailable("missing-target", restored, "terminal");
+  }
+}
+// A pane just restored to a session the server has not listed yet (`unlisted`: the provisional
+// rows at boot). Marked at once, so a listing that arrives while a later pane is still being restored
+// settles it; settled at once when an observed listing has already arrived.
+function markProvisional(p, unlisted) {
+  if (!p?.id || !unlisted.has(p.id)) return;
+  p.provisional = p.id;
+  if (inventoryObserved) settleProvisionalPanes();
 }
 
 function applyInventorySnapshot(issue, { next, identities }) {
@@ -4497,7 +4644,11 @@ function applyInventorySnapshot(issue, { next, identities }) {
       if (!paneTargets.applyInventory(issue, identities)) return;
       observedInventory = true;
     }
+    lastListing = next;
+    inventoryLoaded = true;
+    hostSilence.update(next, data.mesh, observedInventory);   // `data` is still the previous listing here
     data = next;
+    if (observedInventory) rememberKnownSessions(next);
     if (localMeshEffectsAllowed()) {
       void sessionRequestGate.consider(next.sessionRequests);
       mailboxPanel.note(next.agentMailConsent);
@@ -4513,9 +4664,33 @@ function applyInventorySnapshot(issue, { next, identities }) {
   directLineAlive();   // the agent may have left the foreground
   markSeen();   // before the panes and the list are drawn
   invalidateReplacedDemoPanes();
-  const opens = localMeshEffectsAllowed() ? data.opens || [] : [];
-  if (lastOpen === null) lastOpen = opens.at(-1)?.seq ?? 0;  // don't replay old requests on load
-  for (const o of opens) if (o.seq > lastOpen) { lastOpen = o.seq; handleOpen(o); }
+  consumeOpens();
+  syncPanesWithListing(observedInventory);
+  if (observedInventory) { inventoryObserved = true; settleProvisionalPanes(); }
+  if (localMeshEffectsAllowed()) checkDemoSceneUpdates();
+  listBatch.request();   // one sidebar render per frame, however many answers arrive in it
+  sessionsStatus.render();
+  if (localMeshEffectsAllowed()) {
+    if (managing) renderManagement();
+    renderRestore();
+    pollWatched();
+    pollHistory();
+  }
+  return { portfolio: data.portfolio };
+}
+
+// Requests to open a pane (the listing's `opens`) are handled once the saved panes are restored: met
+// during the restore, a request could find its anchor pane not restored yet and be lost. Requests made
+// before the page started are not replayed (static/open-replay.ts).
+function consumeOpens() {
+  if (restoringWorkspace) return;
+  const opens = localMeshEffectsAllowed() ? data.opens : [];
+  lastOpen = Progress.replayCutoff(lastOpen, opens, pageStartedAt + clockOffset);
+  for (const o of Array.isArray(opens) ? opens : []) if (o.seq > lastOpen) { lastOpen = o.seq; handleOpen(o); }
+}
+
+// The panes after a listing: an adopted session followed, an ended terminal attached again, headers redrawn.
+function syncPanesWithListing(observedInventory) {
   for (const p of panes) {
     if (p.back && data.moved?.[p.back]) p.back = data.moved[p.back];   // adopted: back to its new id
     if (!p.id || isAdjacentPane(p.id)) { p.header(); continue; }
@@ -4534,15 +4709,6 @@ function applyInventorySnapshot(issue, { next, identities }) {
       if (s.kind === "external") p.renderDetail(s);
     }
   }
-  if (localMeshEffectsAllowed()) checkDemoSceneUpdates();
-  renderLists();
-  if (localMeshEffectsAllowed()) {
-    if (managing) renderManagement();
-    renderRestore();
-    pollWatched();
-    pollHistory();
-  }
-  return { portfolio: data.portfolio };
 }
 
 // ---------------------------------------------------------------- restore after a ptyhost restart
@@ -5050,7 +5216,7 @@ function histItemHtml(d) {
   const here = active && (active.id === key || (live && active.id === live.id));
   const where = live ? (live.kind === "mesh" ? t("history.inMesh") : live.host) : t("history.messageCount", { n: d.n_user + d.n_assistant });
   return `<button class="item hitem ${here ? "sel" : shown ? "shown" : ""}" data-id="${esc(key)}">
-    <div class="top"><span class="dot ${live ? state(live) : "hist"}"></span><span class="name">${esc(histTitle(d))}</span><span class="tag ${d.agent}">${d.agent}</span><span class="ago">${esc(ago(d.updated))}</span></div>
+    <div class="top"><span class="dot ${live ? state(live) : "hist"}"></span><span class="name">${esc(histTitle(d))}</span><span class="tag ${esc(d.agent)}">${esc(d.agent)}</span><span class="ago">${esc(ago(d.updated))}</span></div>
     <div class="meta">${d.branch ? `<span class="br">${esc(d.branch)}</span> · ` : ""}${esc(where)}</div>
     ${d.recap || d.last_user ? `<div class="last">${esc(d.recap || d.last_user)}</div>` : ""}
   </button>`;
@@ -5154,7 +5320,7 @@ function histCardHtml(d, live) {
   const canDelete = localMeshEffectsAllowed() && d.deletable !== false;
   return `<div class="card hist">
     <h2>${esc(histTitle(d))}</h2>
-    <div class="sub"><span class="tag ${d.agent}">${d.agent}</span>${d.branch ? `<span class="br">${esc(d.branch)}</span>` : ""}
+    <div class="sub"><span class="tag ${esc(d.agent)}">${esc(d.agent)}</span>${d.branch ? `<span class="br">${esc(d.branch)}</span>` : ""}
       <span>${esc(short(d.cwd))}</span><span>· ${esc(ago(d.updated))}</span>${d.name && d.title ? `<span>· ${esc(d.title)}</span>` : ""}</div>
     ${live ? `<div class="warn">${esc(live.kind === "mesh" ? t("history.card.runningInMesh") : t("history.card.runningIn", { host: live.host }))}</div>` : ""}
     ${pinnedSessions().some(p => p.guessed && p.agent === d.agent && p.id === d.id) ? `<div class="warn">${esc(t("history.card.pinGuessed"))}</div>` : ""}
@@ -5181,7 +5347,7 @@ function histCardHtml(d, live) {
     </div>
     ${d.last_user || d.last_assistant ? `<div class="lbl">${esc(t("history.card.lastExchanges"))}</div>
       ${d.last_user ? `<div class="msg"><b>${esc(t("history.card.you"))}</b> · ${esc(d.last_user)}</div>` : ""}
-      ${d.last_assistant ? `<div class="msg"><b>${d.agent}</b> · ${esc(d.last_assistant)}</div>` : ""}` : ""}
+      ${d.last_assistant ? `<div class="msg"><b>${esc(d.agent)}</b> · ${esc(d.last_assistant)}</div>` : ""}` : ""}
     ${d.summary ? `<details><summary>${esc(t("history.card.compactionSummary"))}</summary><pre>${esc(d.summary)}</pre></details>` : ""}
     <div class="actions">
       <button class="btn" data-hact="pin">${esc(isPinned(d.agent, d.id) ? t("pin.unpin") : t("pin.pinHere"))}</button>
@@ -5658,7 +5824,7 @@ function renderExplorer(force) {
       <td><div class="ex-title"><button class="ex-open" data-open="${esc(k)}">${esc(histTitle(d))}</button>${lv ? `<span class="tag live">● ${esc(lv.kind === "mesh" ? "mesh" : lv.host)}</span>` : ""}${d.source === "exec" ? `<span class="tag">${esc(t("explorer.row.execTag"))}</span>` : ""}</div>
         ${d.recap || d.first ? `<div class="ex-sub">${esc(d.recap || d.first)}</div>` : ""}</td>
       <td class="c-proj"><div class="ex-proj"><bdi>${esc(short(d.cwd))}</bdi></div>${d.branch ? `<div class="br">${esc(d.branch)}</div>` : ""}</td>
-      <td class="c-agent"><span class="tag ${d.agent}">${d.agent}</span></td>
+      <td class="c-agent"><span class="tag ${esc(d.agent)}">${esc(d.agent)}</span></td>
       <td class="c-num">${d.n_user + d.n_assistant}</td><td class="c-num">${esc(fmtN(tokens(d)))}</td><td class="c-num">${esc(fmtBytes(d.bytes))}</td>
     </tr>`;
   }).join("");
@@ -5823,10 +5989,10 @@ function renderLineStatus() {
   line.readOnly = !!linePending || !!lineRecovery;
   if (linePending) {
     const text = document.createElement("span");
-    text.textContent = `${t("line.pending")} `;
+    text.textContent = `${t(linePending.hold ? "line.waitingList" : "line.pending")} `;
     const cancel = document.createElement("button");
     cancel.type = "button"; cancel.textContent = t("compose.cancelPendingEnter");
-    cancel.addEventListener("click", () => linePending?.operation?.cancel());
+    cancel.addEventListener("click", () => { if (linePending) cancelLinePending(linePending); });
     lineStatus.append(text, cancel);
   }
   if (lineRecovery) {
@@ -6043,17 +6209,52 @@ async function pasteClipboardDirect() {   // the key bar's Paste while writing d
   pasteDirect(text, MeshPaneActions.directInput(text, "insertFromPaste"));
 }
 lineDirectChip.addEventListener("click", () => { endDirectLine("line.directLeft"); line.focus(); });
-function sendLine() {
+// Enter pressed before the session list has named the pane's session (its terminal attaches by name
+// first): the line is held, read-only, until a listing names it (static/held-line.ts). It goes only
+// to the pane and view Enter was pressed in, within LINE_HOLD_MS, and Cancel ends the wait. Otherwise
+// nothing is sent, the text stays in the field and a message says why. Null when nothing is to be sent.
+const LINE_HOLD_MS = 5000;
+async function heldLineTarget(pane, pending) {
+  const id = pane.id, view = pane.actionView;
+  const hold = MeshPaneActions.holdLineForTarget({
+    capture: () => { observePaneActions(pane); return paneTargets.capture(pane); },
+    waiting: () => !inventoryLoaded || !!pane.provisional,
+    same: () => active === pane && pane.id === id && pane.actionView === view,
+    listed: () => refresh(),
+    timers: window, limitMs: LINE_HOLD_MS, pauseMs: 250,
+  });
+  pending.hold = hold.waits ? hold : null;
+  linePending = pending;
+  renderLineStatus();
+  const end = await hold.settled;
+  pending.hold = null;
+  if (end.kind === "target" && linePending === pending) return end.target;
+  if (end.kind === "target") paneTargets.release(end.target);
+  if (linePending === pending) linePending = null;
+  renderLineStatus();
+  const why = { missing: "line.noTarget", moved: "line.heldMoved", late: "line.heldLate" }[end.kind];
+  if (why) flash(t(why), 6000);
+  return null;
+}
+// Cancel of a pending line: its Enter once the text is sent, or the wait before it (text kept).
+function cancelLinePending(owner) {
+  if (owner.operation) { owner.operation.cancel(); return; }
+  if (!owner.hold?.cancel()) return;
+  if (linePending === owner) linePending = null;
+  renderLineStatus();
+  line.focus();
+}
+async function sendLine() {
   if (linePending || lineRecovery || !active?.conn) return;
   const pane = active;
   if (residueHolds(pane)) return;   // once: the next Enter sends
-  observePaneActions(pane);
-  const target = paneTargets.capture(pane);
-  if (!target) { flash(t("line.noTarget")); return; }
-  const binding = paneInput.capture(pane, target);
-  if (!binding) { paneTargets.release(target); flash(t("line.noConnection")); return; }
   const text = line.value;
-  const pending = { operation: null, done: false };
+  const pending = { operation: null, done: false, hold: null };
+  const target = await heldLineTarget(pane, pending);
+  if (!target) return;
+  linePending = null;
+  const binding = paneInput.capture(pane, target);
+  if (!binding) { paneTargets.release(target); renderLineStatus(); flash(t("line.noConnection")); return; }
   linePending = pending;
   renderLineStatus();
   pending.operation = paneInput.deliver(binding, text, true, (result) => {
@@ -7117,55 +7318,88 @@ function hashPaneIds(hash) {
   });
 }
 
-async function bootMesh() {
-  setTab(tab);
-  await refresh();
-  restoringWorkspace = true;
-  // restore columns: from the URL hash (shareable) or the last layout. A link
-  // can carry any hash: a document pane in it must name an absolute path or be
-  // in this browser's own layout (a crafted #web:https://… link opens nothing;
-  // /api/view refuses web pages in any case).
-  const saved = store.get("layout", []);
+// The sessions shown before the server's first answer: this device's last listing, plus the mesh
+// sessions its saved layout names (a terminal attaches by name alone: /ws/{name}; a board names the
+// session it belongs to).
+function layoutSessionNames() {
+  const v2 = MeshWorkspaceSpec.readV2(store.get("workspace.v2", null));
+  const targets = [...(v2?.columns ?? []).flatMap((column) => column.tabs.map((tab) => tab.target)),
+    ...store.get("layout", []).map((w) => w?.id), ...hashPaneIds(location.hash)];
+  return targets.map((id) => (isBoardPane(id) ? id.slice(6) : id))
+    .filter((id) => typeof id === "string" && id && !isAdjacentPane(id) && !isHist(id) && !/^t\d+$/.test(id));
+}
+function showKnownSessions() {
+  data = Progress.provisionalListing(Progress.readKnown(store.get(KNOWN_KEY, null)), layoutSessionNames());
+}
+
+// Returns once the saved panes are restored, with the first listing still on its way: terminals attach
+// without waiting for it (`firstListing` settles when it has been applied or has failed).
+// The panes a link's hash names, or null. A link can carry any hash: a document pane in it must name
+// an absolute path or be in this browser's own layout (a crafted #web:https://… link opens nothing;
+// /api/view refuses web pages in any case).
+function hashWantedPanes(saved) {
   const known = new Set(saved.map((w) => w.id));
   const fromHash = hashPaneIds(location.hash)
     .filter((id) => localMeshEffectsAllowed() || find(id)?.kind === "mesh")
     .filter((id) => !isWebPane(id) || id.startsWith("web:/") || known.has(id))
     .filter((id) => !isDemoPane(id))
     .filter((id) => !isBoardPane(id) || !!data.mesh.find((s) => s.id === id.slice(6)));
-  const wanted = fromHash.some(Boolean) ? fromHash.map((id) => ({ id, back: saved.find((w) => w.id === id)?.back })) : null;
-  const workspace = wanted && location.hash !== store.get("workspace.hash", null) ? null : savedWorkspace();
-  if (workspace) {
-    for (const column of workspace.columns) {
-      const [first, ...rest] = column.tabs;
-      const p = addPane(isAdjacentPane(first.target) ? null : first.target);
-      if (!p) break;
-      await restorePane(p, { ...first, grow: column.grow });
-      for (const tab of rest) {
-        const q = addTab(p.group, isAdjacentPane(tab.target) ? null : tab.target);
-        await restorePane(q, tab);
-      }
-      p.group.select(p.group.tabs[Math.max(0, Math.min(p.group.tabs.length - 1, column.active || 0))], false);
-    }
-  } else {
-    const flat = (wanted || saved).slice(0, narrow() ? 1 : MAX_PANES);
+  return fromHash.some(Boolean) ? fromHash.map((id) => ({ id, back: saved.find((w) => w.id === id)?.back })) : null;
+}
+
+// Restores the saved columns and tabs in order (or the flat list of a link or an older layout). Each
+// pane restored to a session the server has not listed yet is marked provisional at once.
+async function restoreSavedPanes(workspace, flatList) {
+  const unlisted = new Set(data.mesh.filter((s) => s.provisional).map((s) => s.id));
+  if (!workspace) {
+    const flat = flatList.slice(0, narrow() ? 1 : MAX_PANES);
     if (!flat.length) flat.push({ id: null });
     for (const w of flat) {
       const p = addPane(isAdjacentPane(w.id) ? null : w.id);
       await restorePane(p, w);
+      markProvisional(p, unlisted);
     }
+    return;
   }
+  for (const column of workspace.columns) {
+    const [first, ...rest] = column.tabs;
+    const p = addPane(isAdjacentPane(first.target) ? null : first.target);
+    if (!p) break;
+    await restorePane(p, { ...first, grow: column.grow });
+    markProvisional(p, unlisted);
+    for (const tab of rest) {
+      const q = addTab(p.group, isAdjacentPane(tab.target) ? null : tab.target);
+      await restorePane(q, tab);
+      markProvisional(q, unlisted);
+    }
+    p.group.select(p.group.tabs[Math.max(0, Math.min(p.group.tabs.length - 1, column.active || 0))], false);
+  }
+}
+
+async function bootMesh() {
+  showKnownSessions();
+  setTab(tab);
+  const firstListing = startInventory(meshContext);
+  restoringWorkspace = true;
+  // restore columns: from the URL hash (shareable) or the last layout
+  const saved = store.get("layout", []);
+  const wanted = hashWantedPanes(saved);
+  const workspace = wanted && location.hash !== store.get("workspace.hash", null) ? null : savedWorkspace();
+  await restoreSavedPanes(workspace, wanted || saved);
   layout();   // apply (and normalize) the restored widths
   const initial = (workspace?.active && workspaceGroups[workspace.active.column]?.tabs[workspace.active.tab]) || workspaceGroups[0]?.selected || panes[0];
   setActive(initial);
   restoringWorkspace = false;
-  // opened from a notification: that session
+  consumeOpens();   // requests to open a pane that arrived during the restore
+  // opened from a notification: that session (once listed, if it was not known here)
   const opened = new URLSearchParams(location.search).get("open");
   if (opened) {
     history.replaceState(null, "", (localMeshEffectsAllowed() ? "/" : location.pathname) + location.hash);
     if (find(opened)) openSession(opened);
+    else void firstListing.then(() => { if (find(opened)) openSession(opened); });
   }
   if (localMeshEffectsAllowed()) syncPush().finally(renderPush);
-  if (!meshStopped) meshRefreshTimer = setInterval(refresh, 4000);
+  return { firstListing };
 }
 
 function startLocalMesh() {
@@ -7346,19 +7580,23 @@ async function startMesh(context) {
   // the current primary view, independently of the saved terminal layout.
   const openFromNotification = new URLSearchParams(location.search).has("open");
   const restoreProjects = store.get("primaryView", "sessions") === "projects";
-  await bootMesh();
+  const { firstListing } = await bootMesh();
   if (!meshStopped && localMeshEffectsAllowed() && restoreProjects && !openFromNotification) setProjects(true);
+  await firstListing;
   return Object.freeze({
     refresh,
     dispose() {
       meshStopped = true;
       projectsGeneration++; workGeneration++;
       projectsController?.close(); workController?.close();
-      if (meshRefreshTimer !== null) clearInterval(meshRefreshTimer);
+      inventoryPoller?.stop();
+      listBatch.cancel();
+      sessionsStatus.dispose();
+      pageSignals?.dispose();
       navigator.serviceWorker?.removeEventListener("message", handleLocalServiceWorkerMessage);
       for (const pane of panes) pane.detach();
     },
   });
 }
 
-globalThis.MeshUI = Object.freeze({ startLocalMesh });
+globalThis.MeshUI = Object.freeze({ startLocalMesh, forgetKnownSessions });

@@ -46,7 +46,7 @@ async def test_recent_mesh_conversation_names_and_resume(page, mesh, width, agen
           "tty": "/dev/pts/9", "agent": {"type": other, "session_id": SID,
                                        "status": "idle", "updated": 100}}]
         await route.fulfill(response=response, json=body)
-    await page.route("**/api/sessions", sessions_reply)
+    await page.route("**/api/sessions*", sessions_reply)
     await goto(page, mesh.origin + "/")
     await page.wait_for_function("typeof data.now === 'number'")
     await page.evaluate("setTab('hist'); document.body.classList.add('drawer')")
