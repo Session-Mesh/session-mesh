@@ -89,10 +89,12 @@ bounded() {
 # The packages to install: the required ones, plus each --if-available one the package index knows
 # (the test setup-ocaml applies to its optional packages, with apt-cache show).
 select_packages() {
-  local package
+  local package shown
   selected=("${packages[@]}")
   for package in "${optional[@]}"; do
-    if apt-cache show --no-all-versions "$package" 2>/dev/null | grep -qx "Package: $package"; then
+    # Read the whole output first: `grep -q` closing the pipe early would fail the pipeline (SIGPIPE, pipefail).
+    shown="$(apt-cache show --no-all-versions "$package" 2>/dev/null)"
+    if [[ $'\n'"$shown"$'\n' == *$'\nPackage: '"$package"$'\n'* ]]; then
       selected+=("$package")
     else
       say "skipping $package: not in the package index"
