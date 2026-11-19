@@ -27,6 +27,14 @@ let number = function
   | `Float value when Float.is_finite value -> Some value
   | _ -> None
 
+let agent_session (session : session) =
+  { Mesh_agent.name = session.name; created = Option.value ~default:0. (number session.created); pid = session.pid }
+
+let retain_listed table sessions =
+  let listed = Hashtbl.create (List.length sessions) in
+  List.iter (fun session -> Hashtbl.replace listed session.name ()) sessions;
+  Hashtbl.filter_map_inplace (fun name value -> if Hashtbl.mem listed name then Some value else None) table
+
 let field fields key = List.assoc_opt key fields
 
 let identity get =

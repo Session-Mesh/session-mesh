@@ -25,8 +25,8 @@ let request ?(focus = []) ?(full = false) ?(avoid = []) sessions =
   | Ok parsed -> parsed
   | Error message -> Alcotest.fail message
 
-let with_engine ?(config = Round.config ()) ?(home = "/nonexistent") platform f =
-  Eio_main.run (fun env -> f (Round.create ~clock:(Eio.Stdenv.clock env) config platform (Fake.registry home)))
+let with_engine ?(config = Round.config ()) ?(home = "/nonexistent") ?(registry = Fake.registry home) platform f =
+  Eio_main.run (fun env -> f (Round.create ~clock:(Eio.Stdenv.clock env) config platform registry))
 
 (* Run a round and return its events (in order) and final fields. *)
 let round engine parsed =
@@ -153,32 +153,108 @@ let test_frames () =
   Alcotest.(check bool) "row event" true
     (List.exists (fun f -> U.member "req" f = `Int 4 && U.member "event" f = `String "row") replies)
 
+(* [count] Claude sessions in [home], each with a transcript of [lines]
+   400-byte prompts; the fake process table that runs them. *)
+let claude_sessions ~home ~lines count =
+  let transcript =
+    String.concat "" (List.init lines (fun i -> Printf.sprintf {|{"type":"user","message":{"content":"prompt %d %s"}}|} i (String.make 400 'p') ^ "\n"))
+  in
+  List.init count (fun i ->
+      let pid = 10_000 + i in
+      let id = Printf.sprintf "00000000-0000-4000-8000-%012d" i in
+      Fake.claude_home ~home ~pid ~metadata:(`Assoc [ ("sessionId", `String id); ("status", `String "idle") ])
+        ~project:(Printf.sprintf "-p%d" (i mod 40)) ~transcript ();
+      Fake.process ~pid ~sid:pid ~cwd:"/w" "claude")
+
+let claude_request count = request (List.init count (fun i -> session ~activity:(float i) (Printf.sprintf "s%d" i) (10_000 + i)))
+
 (* 300 Claude sessions, each with a 60 kB transcript. The bounds are generous
    (loaded CI machines); the times are printed. *)
 let test_scale () =
   Support.with_directory (fun home ->
-      let transcript =
-        String.concat "" (List.init 120 (fun i -> Printf.sprintf {|{"type":"user","message":{"content":"prompt %d %s"}}|} i (String.make 400 'p') ^ "\n"))
-      in
-      let table =
-        List.init 300 (fun i ->
-            let pid = 10_000 + i in
-            let id = Printf.sprintf "00000000-0000-4000-8000-%012d" i in
-            Fake.claude_home ~home ~pid ~metadata:(`Assoc [ ("sessionId", `String id); ("status", `String "idle") ])
-              ~project:(Printf.sprintf "-p%d" (i mod 40)) ~transcript ();
-            Fake.process ~pid ~sid:pid ~cwd:"/w" "claude")
-      in
+      let table = claude_sessions ~home ~lines:120 300 in
       let config = Round.config ~deadline:30. ~setup_deadline:30. () in
       with_engine ~config ~home (Fake.platform table) (fun engine ->
-          let parsed = request (List.init 300 (fun i -> session ~activity:(float i) (Printf.sprintf "s%d" i) (10_000 + i))) in
+          let parsed = claude_request 300 in
           let timed () = let started = Unix.gettimeofday () in let result = round engine parsed in (result, Unix.gettimeofday () -. started) in
           let (cold, _), cold_seconds = timed () in
           let (warm, _), warm_seconds = timed () in
           Printf.printf "300 sessions: cold round %.3f s, warm round %.3f s\n%!" cold_seconds warm_seconds;
+          Alcotest.(check int) "cold: a row per session" 300 (List.length cold);
+          Alcotest.(check int) "warm: a row per session" 300 (List.length warm);
           Alcotest.(check bool) "all ready" true (List.for_all (fun e -> U.member "state" e = `String "ready") cold);
           Alcotest.(check bool) "warm: all same" true (List.for_all is_same warm);
           Alcotest.(check bool) "cold under 60 s" true (cold_seconds < 60.);
           Alcotest.(check bool) "warm under 10 s" true (warm_seconds < 10.)))
+
+(* The Claude adapter of a registry, kept to read its counters. *)
+let counted_claude home =
+  let state = ref None in
+  let module Counted = struct
+    include Mesh_agent_claude
+
+    let create roots =
+      let created = create roots in
+      state := Some created;
+      created
+  end in
+  let registry = Mesh_agent.Registry.create [ Mesh_agent.adapter (module Counted) (Mesh_agent_roots.of_home home) ] in
+  (registry, fun () -> Mesh_agent_claude.counters (Option.get !state))
+
+(* A describe of one session keeps the round's transcripts cached. *)
+let test_describe_keeps_cache () =
+  Support.with_directory (fun home ->
+      let table = claude_sessions ~home ~lines:20 40 in
+      let registry, counters = counted_claude home in
+      let config = Round.config ~deadline:30. ~setup_deadline:30. () in
+      with_engine ~config ~registry (Fake.platform table) (fun engine ->
+          let parsed = claude_request 40 in
+          ignore (round engine parsed);
+          let decoded = (counters ()).restarted in
+          ignore (Round.describe engine { parsed with sessions = [ List.hd parsed.sessions ] });
+          let events, _ = round engine parsed in
+          Alcotest.(check int) "first round decodes each transcript" 40 decoded;
+          Alcotest.(check int) "no transcript decoded again" decoded (counters ()).restarted;
+          Alcotest.(check bool) "all same" true (List.for_all is_same events)))
+
+(* A codex adapter that sees the session it describes and, across sessions,
+   keeps a shared id on the oldest session only. *)
+module Checked = struct
+  type t = unit
+
+  let kind = "codex"
+  let create _ = ()
+  let prepare () _ = ()
+  let resize () ~sessions:_ = ()
+
+  let describe () _ (session : Mesh_agent.session) _ =
+    [ ("session_id", `String "shared"); ("seen", `String session.name); ("created_seen", `Float session.created) ]
+
+  let check () _ (rows : Mesh_agent.described list) =
+    match List.sort (fun (a : Mesh_agent.described) b -> compare a.session.created b.session.created) rows with
+    | [] -> []
+    | _ :: newer ->
+        let without_id (row : Mesh_agent.described) = ("session_id", `Null) :: List.remove_assoc "session_id" row.fields in
+        List.map (fun (row : Mesh_agent.described) -> (row.session.name, without_id row)) newer
+end
+
+let test_check () =
+  let table = [ Fake.process ~pid:100 ~sid:100 "codex"; Fake.process ~pid:101 ~sid:101 "codex" ] in
+  let registry = Mesh_agent.Registry.create [ Mesh_agent.adapter (module Checked) (Mesh_agent_roots.of_home "/x") ] in
+  let older = `Assoc [ ("name", `String "old"); ("created", `Float 1.); ("pid", `Int 100) ] in
+  let newer = `Assoc [ ("name", `String "new"); ("created", `Float 2.); ("pid", `Int 101) ] in
+  let agent event = U.member "row" event |> U.member "agent" in
+  with_engine ~registry (Fake.platform table) (fun engine ->
+      let events, final = round engine (request [ older; newer ]) in
+      let last name = List.find (fun e -> U.member "name" e = `String name) (List.rev events) in
+      Alcotest.(check int) "the corrected row is sent again" 3 (List.length events);
+      Alcotest.(check bool) "describe sees the session" true (U.member "seen" (agent (last "old")) = `String "old");
+      Alcotest.(check bool) "and its creation" true (U.member "created_seen" (agent (last "new")) = `Float 2.);
+      Alcotest.(check bool) "oldest keeps the id" true (U.member "session_id" (agent (last "old")) = `String "shared");
+      Alcotest.(check bool) "newer loses it" true (U.member "session_id" (agent (last "new")) = `Null);
+      Alcotest.(check bool) "counted once" true (U.member "counts" final |> U.member "ready" = `Int 2);
+      let rows = Round.describe engine (request [ older; newer ]) |> List.assoc "rows" |> U.to_list in
+      Alcotest.(check bool) "describe: corrected" true (U.member "session_id" (agent (List.nth rows 1)) = `Null))
 
 let () =
   Alcotest.run "mesh_sessions_round"
@@ -192,6 +268,11 @@ let () =
           Alcotest.test_case "saturation" `Quick test_saturation;
         ] );
       ( "protocol",
-        [ Alcotest.test_case "same rows" `Quick test_same_rows; Alcotest.test_case "frames" `Quick test_frames ] );
+        [
+          Alcotest.test_case "same rows" `Quick test_same_rows;
+          Alcotest.test_case "frames" `Quick test_frames;
+          Alcotest.test_case "describe keeps the cache" `Quick test_describe_keeps_cache;
+          Alcotest.test_case "cross-session check" `Quick test_check;
+        ] );
       ("scale", [ Alcotest.test_case "300 sessions" `Quick test_scale ]);
     ]

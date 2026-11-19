@@ -77,7 +77,9 @@ consecutive rounds is reported `error` with reason `backoff` and described again
 ready description clears its count. Rows are described in system threads, at most 16 in flight, abandoned
 ones included; when every thread is taken, the remaining rows are reported `error` with reason `saturated`.
 
-**Events.** One `row` event per session:
+**Events.** One `row` event per session, and a second one for a session whose row an adapter's
+cross-session check corrected after every row had ended (see "Adding an agent"); the later event replaces
+the earlier:
 
 ```json
 {"event": "row", "name": "api", "created": 1763500000.25, "priority": 0, "state": "ready",
@@ -197,9 +199,17 @@ transcript fold), `mesh_lru` (bounded caches), `mesh_safe_file` and `mesh_jsonl_
 
 ## Adding an agent
 
-An adapter is a module of signature `Mesh_agent.ADAPTER`: its `kind` (the agent type), `create`, `prepare`
-(once per round, for what every session of that agent shares, such as one walk of a rollout directory),
-`resize` (the cache bound, twice the number of sessions) and `describe` (the agent fields of one process).
+An adapter is a module of signature `Mesh_agent.ADAPTER`:
+
+| Function | Called | Role |
+|---|---|---|
+| `kind` | | The agent type. |
+| `create` | Once, at start | The adapter's state, from the agents' roots. |
+| `prepare` | Once per round and per `describe` request, before any row | What every session of that agent shares, such as one walk of a rollout directory. |
+| `resize` | Once per `round` (never for `describe`) | The cache bound: twice the number of listed sessions. |
+| `describe` | Once per row, in several system threads | The agent fields of one process. It receives the listed session (`Mesh_agent.session`: `name`, `created`, `pid`), which keys an identity registry by incarnation. |
+| `check` | Once per round and per `describe` request, after every row has ended | The cross-session step. It receives the rows of its type described in time (`Mesh_agent.described`: session, process, fields) and returns, by session name, the complete new fields of the rows it corrects (one conversation id claimed by two sessions, for instance). Each corrected row is sent again as a second `row` event before the final frame and counted once. It runs in a system thread with the setup deadline; one that raises or overruns corrects nothing. `Mesh_agent.no_check`, which corrects nothing, is the default (the Claude adapter uses it). |
+
 It is registered by adding it to the list the program passes to `Mesh_agent.Registry.create`; neither the
 round nor the protocol changes. Detection of the agent type stays in `Mesh_agent_session`, shared by all.
 

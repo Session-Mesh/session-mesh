@@ -62,8 +62,5 @@ module Backoff = struct
     Hashtbl.replace backoff session.name { current with strikes; waiting };
     if waiting > 0 then `Backoff else `Slow
 
-  let retain backoff sessions =
-    let listed = Hashtbl.create (List.length sessions) in
-    List.iter (fun (session : Request.session) -> Hashtbl.replace listed session.name ()) sessions;
-    Hashtbl.filter_map_inplace (fun name entry -> if Hashtbl.mem listed name then Some entry else None) backoff
+  let retain backoff sessions = Request.retain_listed backoff sessions
 end

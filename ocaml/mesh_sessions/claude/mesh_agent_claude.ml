@@ -158,7 +158,9 @@ let metadata_fields metadata =
     ("waiting_for", if status = `String "waiting" then Py.get "waitingFor" metadata else `Null);
   ]
 
-let describe adapter _round (process : Mesh_agent_round.process) =
+let check = Mesh_agent.no_check
+
+let describe adapter _round (_ : Mesh_agent.session) (process : Mesh_agent_round.process) =
   match read_metadata adapter process.pid with
   | None -> []
   | Some metadata ->

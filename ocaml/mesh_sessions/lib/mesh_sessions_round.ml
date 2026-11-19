@@ -39,7 +39,7 @@ let create ~clock config platform registry =
   }
 
 (* How one session ended. *)
-type result = Ready of Yojson.Safe.t | Unsupported of Yojson.Safe.t | Slow | Error of string
+type result = Row of Describe.t | Slow | Error of string
 
 (* A blocking call in a system thread, within the setup deadline; [None] on failure. *)
 let setup engine f =
@@ -54,60 +54,92 @@ let setup engine f =
 let read_table engine =
   Option.bind (setup engine (fun () -> Mesh_agent_round.read engine.platform)) Result.to_option
 
-let prepare_adapters engine round ~sessions =
-  List.iter
-    (fun adapter ->
-      Mesh_agent.resize adapter ~sessions;
-      ignore (setup engine (fun () -> Mesh_agent.prepare adapter round)))
-    (Mesh_agent.Registry.adapters engine.registry)
+let adapters engine = Mesh_agent.Registry.adapters engine.registry
+
+let prepare_adapters engine round =
+  List.iter (fun adapter -> ignore (setup engine (fun () -> Mesh_agent.prepare adapter round))) (adapters engine)
 
 let settle engine (session : Request.session) ~backoff outcome =
   match (outcome : Describe.t Mesh_deadline_pool.outcome) with
-  | Ready described ->
+  | Ready row ->
       if backoff then Backoff.ready engine.backoff session;
-      (match described with Described row -> Ready row | Unsupported row -> Unsupported row)
+      Row row
   | Slow when backoff -> ( match Backoff.slow engine.backoff session with `Slow -> Slow | `Backoff -> Error "backoff")
   | Slow -> Slow
   | Failed Blocking.Saturated -> Error "saturated"
-  | Failed _ -> Error "failed"
+  | Failed _ ->
+      (* Described, though it failed: the slow rounds are no longer consecutive. *)
+      if backoff then Backoff.ready engine.backoff session;
+      Error "failed"
+
+(* The rows of one adapter's type, with what the adapter described. *)
+let rows_of_kind kind ended =
+  List.filter_map
+    (fun (session, row) ->
+      match Describe.agent row with
+      | Some (row_kind, described) when row_kind = kind -> Some (session, row, described)
+      | _ -> None)
+    ended
+
+(* An adapter's cross-session check; a check that fails or overruns corrects nothing. *)
+let check_adapter engine round adapter ended =
+  match rows_of_kind (Mesh_agent.kind adapter) ended with
+  | [] -> []
+  | mine ->
+      let described = List.map (fun (_, _, described) -> described) mine in
+      let check () = match Mesh_agent.check adapter round described with changed -> changed | exception _ -> [] in
+      let changed = Option.value ~default:[] (setup engine check) in
+      List.filter_map
+        (fun ((session : Request.session), row, _) ->
+          Option.map (fun fields -> (session, Describe.with_fields row fields)) (List.assoc_opt session.name changed))
+        mine
+
+(* The rows the adapters' cross-session checks replace. *)
+let corrections engine round ended = List.concat_map (fun adapter -> check_adapter engine round adapter ended) (adapters engine)
+
+let admitted engine ~backoff ~on_row order =
+  let pending = ref order in
+  let rec next () =
+    match !pending with
+    | [] -> None
+    | session :: rest ->
+        pending := rest;
+        if (not backoff) || Backoff.admit engine.backoff session then Some session
+        else (on_row session (Error "backoff"); next ())
+  in
+  next
 
 (* Describe every session of the request; [on_row] receives each as it ends.
-   The result says whether the process table was complete. *)
+   Returns the round's table and the corrected rows, [None] without a table. *)
 let run engine (request : Request.t) ~backoff ~on_row =
   let order = Mesh_sessions_order.service request in
   match read_table engine with
   | None ->
       List.iter (fun session -> on_row session (Error "no_process_table")) order;
-      false
+      None
   | Some round ->
-      prepare_adapters engine round ~sessions:(List.length request.sessions);
-      let pending = ref order in
-      let rec next () =
-        match !pending with
-        | [] -> None
-        | session :: rest ->
-            pending := rest;
-            if (not backoff) || Backoff.admit engine.backoff session then Some session
-            else (on_row session (Error "backoff"); next ())
-      in
+      prepare_adapters engine round;
+      let ended = ref [] in
       let work (session : Request.session) =
-        Blocking.call engine.blocking (fun () -> Describe.row engine.registry round ~sid:session.pid)
+        Blocking.call engine.blocking (fun () -> Describe.row engine.registry round (Request.agent_session session))
+      in
+      let report session outcome =
+        let result = settle engine session ~backoff outcome in
+        (match result with Row row -> ended := (session, row) :: !ended | Slow | Error _ -> ());
+        on_row session result
       in
       Mesh_deadline_pool.run ~clock:engine.clock ~max_concurrency:engine.config.concurrency
-        ~deadline:engine.config.deadline ~next ~work
-        ~report:(fun session outcome -> on_row session (settle engine session ~backoff outcome))
-        ();
-      Mesh_agent_round.complete round
+        ~deadline:engine.config.deadline ~next:(admitted engine ~backoff ~on_row order) ~work ~report ();
+      Some (round, corrections engine round (List.rev !ended))
 
 let state_name = function
-  | Ready _ -> "ready"
-  | Unsupported _ -> "unsupported"
+  | Row row -> if Describe.supported row then "ready" else "unsupported"
   | Slow -> "slow"
   | Error _ -> "error"
 
 (* The fields that say how a session ended: [row], [same] or [reason]. *)
 let outcome_fields = function
-  | Ready row | Unsupported row -> [ ("row", row) ]
+  | Row row -> [ ("row", Describe.json row) ]
   | Slow -> []
   | Error reason -> [ ("reason", `String reason) ]
 
@@ -126,10 +158,10 @@ let deduplicate engine (session : Request.session) ~full fields =
 type counts = { mutable ready : int; mutable unsupported : int; mutable slow : int; mutable error : int }
 
 let count counts = function
-  | Ready _ -> counts.ready <- counts.ready + 1
-  | Unsupported _ -> counts.unsupported <- counts.unsupported + 1
-  | Slow -> counts.slow <- counts.slow + 1
-  | Error _ -> counts.error <- counts.error + 1
+  | "ready" -> counts.ready <- counts.ready + 1
+  | "unsupported" -> counts.unsupported <- counts.unsupported + 1
+  | "slow" -> counts.slow <- counts.slow + 1
+  | _ -> counts.error <- counts.error + 1
 
 let counts_json counts ~total =
   `Assoc
@@ -147,27 +179,23 @@ let priorities (request : Request.t) =
     (Mesh_sessions_order.service request);
   table
 
+(* Emit the row event of a session; returns the state it was sent with. *)
 let row_event engine request priorities ~emit (session : Request.session) result =
   let head =
     [
       ("name", `String session.name);
       ("created", session.created);
       ("priority", `Int (Hashtbl.find priorities session.name));
-      ("state", `String (state_name result));
     ]
   in
+  let state = state_name result in
   let body = deduplicate engine session ~full:request.Request.full (outcome_fields result) in
-  match emit "row" (head @ body) with
-  | Ok () -> ()
+  match emit "row" (head @ (("state", `String state) :: body)) with
+  | Ok () -> state
   | Error _ ->
       Hashtbl.remove engine.sent session.name;
-      let head = List.filter (fun (key, _) -> key <> "state") head in
-      ignore (emit "row" (head @ [ ("state", `String "error"); ("reason", `String "too_large") ]))
-
-let retain_sent engine (request : Request.t) =
-  let listed = Hashtbl.create (List.length request.sessions) in
-  List.iter (fun (session : Request.session) -> Hashtbl.replace listed session.name ()) request.sessions;
-  Hashtbl.filter_map_inplace (fun name sent -> if Hashtbl.mem listed name then Some sent else None) engine.sent
+      ignore (emit "row" (head @ [ ("state", `String "error"); ("reason", `String "too_large") ]));
+      "error"
 
 let degraded engine slow_names =
   let abandoned = Blocking.abandoned engine.blocking in
@@ -179,31 +207,44 @@ let degraded engine slow_names =
           [ ("abandoned", `Int abandoned); ("avoid", `List (List.map (fun name -> `String name) slow_names)) ] );
     ]
 
-let round engine (request : Request.t) ~emit =
-  engine.rounds <- engine.rounds + 1;
-  Backoff.avoid engine.backoff request.sessions request.avoid;
-  let priorities = priorities request in
-  let counts = { ready = 0; unsupported = 0; slow = 0; error = 0 } and slow_names = ref [] in
-  let on_row (session : Request.session) result =
-    count counts result;
-    (match result with Slow | Error "backoff" -> slow_names := session.name :: !slow_names | _ -> ());
-    row_event engine request priorities ~emit session result
-  in
-  let table_complete = run engine request ~backoff:true ~on_row in
-  Backoff.retain engine.backoff request.sessions;
-  retain_sent engine request;
-  let total = List.length request.sessions in
+let resize_adapters engine (request : Request.t) =
+  List.iter (fun adapter -> Mesh_agent.resize adapter ~sessions:(List.length request.sessions)) (adapters engine)
+
+let final_fields engine ~counts ~total ~table_complete ~slow_names =
   [
     ("round", `Int engine.rounds);
     ("complete", `Bool (counts.ready + counts.unsupported = total));
     ("counts", counts_json counts ~total);
     ("table", `Assoc [ ("complete", `Bool table_complete) ]);
   ]
-  @ degraded engine (List.rev !slow_names)
+  @ degraded engine (List.rev slow_names)
+
+let round engine (request : Request.t) ~emit =
+  engine.rounds <- engine.rounds + 1;
+  (* Only a round, which lists every session, bounds the adapters' caches. *)
+  resize_adapters engine request;
+  Backoff.avoid engine.backoff request.sessions request.avoid;
+  let priorities = priorities request in
+  let counts = { ready = 0; unsupported = 0; slow = 0; error = 0 } and slow_names = ref [] in
+  let on_row (session : Request.session) result =
+    (match result with Slow | Error "backoff" -> slow_names := session.name :: !slow_names | _ -> ());
+    count counts (row_event engine request priorities ~emit session result)
+  in
+  let ran = run engine request ~backoff:true ~on_row in
+  (* A corrected row is sent again; it was counted when first sent. *)
+  let corrected = match ran with Some (_, corrected) -> corrected | None -> [] in
+  List.iter (fun (session, row) -> ignore (row_event engine request priorities ~emit session (Row row))) corrected;
+  Backoff.retain engine.backoff request.sessions;
+  Request.retain_listed engine.sent request.sessions;
+  let table_complete = match ran with Some (round, _) -> Mesh_agent_round.complete round | None -> false in
+  final_fields engine ~counts ~total:(List.length request.sessions) ~table_complete ~slow_names:!slow_names
 
 let describe engine (request : Request.t) =
   let results = Hashtbl.create (List.length request.sessions) in
-  ignore (run engine request ~backoff:false ~on_row:(fun session result -> Hashtbl.replace results session.name result));
+  let on_row (session : Request.session) result = Hashtbl.replace results session.name result in
+  (match run engine request ~backoff:false ~on_row with
+  | Some (_, corrected) -> List.iter (fun ((session : Request.session), row) -> on_row session (Row row)) corrected
+  | None -> ());
   let row (session : Request.session) =
     let result = Option.value ~default:(Error "failed") (Hashtbl.find_opt results session.name) in
     `Assoc

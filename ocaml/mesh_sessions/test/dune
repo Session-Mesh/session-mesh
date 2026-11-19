@@ -47,6 +47,7 @@
   mesh_sessions_test_support
   mesh_sessions
   mesh_agent
+  mesh_agent_claude
   mesh_platform
   generic_test_support
   alcotest

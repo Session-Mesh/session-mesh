@@ -30,3 +30,10 @@ val parse : Mesh_jsonl_rpc_envelope.fields -> (t, string) result
 (** The message of an error names the field at fault, never its value. *)
 
 val valid_name : string -> bool
+
+val retain_listed : (string, 'a) Hashtbl.t -> session list -> unit
+(** Remove from a table keyed by session name the names these sessions do
+    not have. *)
+
+val agent_session : session -> Mesh_agent.session
+(** The session as an adapter receives it. *)
