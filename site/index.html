@@ -33,7 +33,7 @@
     </nav>
     <div class="tabs js-only" role="tablist" aria-label="Sidebar">
       <button id="tab-live" class="cur" type="button" role="tab" aria-selected="true" aria-controls="list"><span class="dot unread" aria-hidden="true"></span>Live <span class="n" data-session-count>8</span></button>
-      <button id="tab-hist" type="button" role="tab" aria-selected="false" aria-controls="hlist" tabindex="-1">History <span class="n">1</span></button>
+      <button id="tab-hist" type="button" role="tab" aria-selected="false" aria-controls="hlist" tabindex="-1">History <span class="n">2</span></button>
     </div>
     <label class="sr-only" for="filter" id="filter-label">Filter the sessions</label>
     <input id="filter" class="filter js-only" type="search" placeholder="Filter…" autocomplete="off" spellcheck="false">
@@ -82,8 +82,11 @@
     <nav id="hlist" class="list js-only" aria-label="History" hidden>
       <p class="hlist-intro">In session-mesh this tab lists your past conversations; on this page it lists the releases.</p>
       <!-- history-sidebar:begin -->
-      <p class="group"><span>Releases</span><span class="count">1</span></p>
+      <p class="group"><span>Releases</span><span class="count">2</span></p>
       <ul class="items">
+        <li><a class="item hitem" href="#history/v0.1.1" data-hist="v0.1.1">
+          <span class="top"><span class="dot hist" aria-hidden="true"></span><span class="name">v0.1.1 — patch release</span></span>
+          <span class="last">A patch release of the 0.1 line: fixes, a native mesh-logout-all, and documentation.</span></a></li>
         <li><a class="item hitem" href="#history/v0.1.0" data-hist="v0.1.0">
           <span class="top"><span class="dot hist" aria-hidden="true"></span><span class="name">v0.1.0 — first public release</span></span>
           <span class="last">The first public release of session-mesh, an alpha.</span></a></li>
@@ -513,6 +516,7 @@ bash install.sh</code></pre>
         <p class="doc-h1">Releases</p>
         <ul class="doc-list doc-toc">
 <!-- history-toc:begin -->
+          <li><a href="#history/v0.1.1">v0.1.1 — patch release</a></li>
           <li><a href="#history/v0.1.0">v0.1.0 — first public release</a></li><!-- history-toc:end -->
         </ul>
         <p class="doc-link"><a class="gh-changelog" href="https://github.com/Session-Mesh/session-mesh/blob/main/CHANGELOG.md">Full changelog on GitHub →</a></p>
@@ -522,6 +526,23 @@ bash install.sh</code></pre>
   </figure>
   <div class="hist-version">
 <!-- history-entries:begin -->
+    <article class="hentry" id="history/v0.1.1" data-slug="v0.1.1" aria-labelledby="ht-v0.1.1">
+      <p class="hmeta"><span class="tag">release</span></p>
+      <h3 class="htitle" id="ht-v0.1.1">v0.1.1 — patch release</h3>
+      <div class="hbody">
+        <p>A patch release of the 0.1 line: fixes, a native mesh-logout-all, and documentation.</p>
+        <ul class="highlights">
+          <li>Idle Claude Code and Codex sessions are no longer listed as working in the sidebar; a question or permission prompt is still always shown.</li>
+          <li>Clicks reach full-screen programs such as Claude Code that ignore a click right after a focus-in, on desktop and on a phone.</li>
+          <li data-requires="projects">In Projects on a phone, the Kanban, Gantt and dependency views scroll sideways by touch, and the Kanban becomes vertical sections at 640 px or less.</li>
+          <li><code>mesh-logout-all</code> is now a native program that needs no Python interpreter and ships with every release and install mode, including an upgrade from 0.1.0.</li>
+          <li>The bootstrap script installs the OCaml dependencies from the pinned opam repository, so it no longer fails on a host whose repository is older.</li>
+          <li>On macOS, the Configuration dialog reports the PTY host as running, as on Linux, and the local test and copyright scripts run there.</li>
+        </ul>
+        <p><a class="gh-changelog" href="https://github.com/Session-Mesh/session-mesh/blob/main/CHANGELOG.md">Full changelog on GitHub</a></p>
+      </div>
+      <p class="hnav js-only"><a class="hnav-prev" href="#history"><span aria-hidden="true">←</span> All releases</a></p>
+    </article>
     <article class="hentry" id="history/v0.1.0" data-slug="v0.1.0" aria-labelledby="ht-v0.1.0">
       <p class="hmeta"><span class="tag">release</span></p>
       <h3 class="htitle" id="ht-v0.1.0">v0.1.0 — first public release</h3>
