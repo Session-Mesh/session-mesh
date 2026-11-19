@@ -41,6 +41,21 @@
   yojson))
 
 (test
+ (name test_round)
+ (modules test_round)
+ (libraries
+  mesh_sessions_test_support
+  mesh_sessions
+  mesh_agent
+  mesh_platform
+  generic_test_support
+  alcotest
+  eio
+  eio_main
+  yojson
+  unix))
+
+(test
  (name test_claude)
  (modules test_claude)
  (libraries
