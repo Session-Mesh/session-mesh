@@ -16,7 +16,7 @@ type t
 
 val of_environment : (string -> string option) -> (t, string) result
 (** From an environment lookup ([Sys.getenv_opt]). [Error] when [HOME] is
-    unset or empty. *)
+    unset, empty or relative. *)
 
 val of_home : string -> t
 (** Tests: the roots of a fixture home. *)
