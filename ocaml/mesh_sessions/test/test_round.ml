@@ -109,7 +109,16 @@ let test_saturation () =
       let events, final = round engine parsed in
       let reason = U.member "reason" (List.find (fun e -> U.member "name" e = `String "s2") events) in
       Alcotest.(check bool) "no thread left" true (reason = `String "saturated");
-      Alcotest.(check bool) "abandoned threads reported" true (U.member "degraded" final |> U.member "abandoned" <> `Null));
+      Alcotest.(check bool) "abandoned threads reported" true (U.member "degraded" final |> U.member "abandoned" <> `Null);
+      Alcotest.(check bool) "restart asked" true (U.member "degraded" final |> U.member "restart" = `Bool true);
+      (* Every thread is still blocked: the next round has none for its table. *)
+      let events, final = round engine parsed in
+      let reasons = List.map (fun e -> U.member "reason" e) events in
+      Alcotest.(check bool) "saturated, not a missing table" true (List.for_all (( = ) (`String "saturated")) reasons);
+      Alcotest.(check int) "counted as errors" 3 (U.member "counts" final |> U.member "error" |> U.to_int);
+      Alcotest.(check bool) "earlier slow names still avoided" true
+        (U.member "degraded" final |> U.member "avoid" = `List [ `String "s0"; `String "s1" ]);
+      Alcotest.(check bool) "restart still asked" true (U.member "degraded" final |> U.member "restart" = `Bool true));
   let failing = { (Fake.platform []) with scan = (fun () -> Error Mesh_platform.Denied) } in
   with_engine failing (fun engine ->
       let events, final = round engine (request [ session "s0" 100 ]) in

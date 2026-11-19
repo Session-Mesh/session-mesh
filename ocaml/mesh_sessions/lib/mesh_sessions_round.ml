@@ -24,6 +24,7 @@ type t = {
   backoff : Backoff.t;
   sent : (string, Yojson.Safe.t * Digest.t) Hashtbl.t;  (* last row sent, by name *)
   mutable rounds : int;
+  mutable avoiding : string list;  (* [degraded.avoid] of the last round *)
 }
 
 let create ~clock config platform registry =
@@ -36,23 +37,29 @@ let create ~clock config platform registry =
     backoff = Backoff.create ();
     sent = Hashtbl.create 64;
     rounds = 0;
+    avoiding = [];
   }
 
 (* How one session ended. *)
 type result = Row of Describe.t | Slow | Error of string
 
-(* A blocking call in a system thread, within the setup deadline; [None] on failure. *)
+(* A blocking call in a system thread, within the setup deadline. *)
 let setup engine f =
   match
     Eio.Time.with_timeout engine.clock engine.config.setup_deadline (fun () ->
         Ok (Blocking.call engine.blocking f))
   with
-  | Ok value -> Some value
-  | Error `Timeout -> None
-  | exception (Blocking.Saturated | Unix.Unix_error _ | Sys_error _ | Failure _) -> None
+  | Ok value -> Ok value
+  | Error `Timeout -> Error `Failed
+  | exception Blocking.Saturated -> Error `Saturated
+  | exception (Unix.Unix_error _ | Sys_error _ | Failure _) -> Error `Failed
 
+(* The process table, or the reason every row of the round is an error. *)
 let read_table engine =
-  Option.bind (setup engine (fun () -> Mesh_agent_round.read engine.platform)) Result.to_option
+  match setup engine (fun () -> Mesh_agent_round.read engine.platform) with
+  | Ok (Ok round) -> Ok round
+  | Error `Saturated -> Error "saturated"
+  | Ok (Error _) | Error `Failed -> Error "no_process_table"
 
 let adapters engine = Mesh_agent.Registry.adapters engine.registry
 
@@ -88,7 +95,7 @@ let check_adapter engine round adapter ended =
   | mine ->
       let described = List.map (fun (_, _, described) -> described) mine in
       let check () = match Mesh_agent.check adapter round described with changed -> changed | exception _ -> [] in
-      let changed = Option.value ~default:[] (setup engine check) in
+      let changed = Result.value ~default:[] (setup engine check) in
       List.filter_map
         (fun ((session : Request.session), row, _) ->
           Option.map (fun fields -> (session, Describe.with_fields row fields)) (List.assoc_opt session.name changed))
@@ -114,10 +121,10 @@ let admitted engine ~backoff ~on_row order =
 let run engine (request : Request.t) ~backoff ~on_row =
   let order = Mesh_sessions_order.service request in
   match read_table engine with
-  | None ->
-      List.iter (fun session -> on_row session (Error "no_process_table")) order;
+  | Error reason ->
+      List.iter (fun session -> on_row session (Error reason)) order;
       None
-  | Some round ->
+  | Ok round ->
       prepare_adapters engine round;
       let ended = ref [] in
       let work (session : Request.session) =
@@ -197,27 +204,35 @@ let row_event engine request priorities ~emit (session : Request.session) result
       ignore (emit "row" (head @ [ ("state", `String "error"); ("reason", `String "too_large") ]));
       "error"
 
-let degraded engine slow_names =
+(* While threads stay blocked, the names to avoid accumulate: this round's
+   slow names, after the earlier ones still listed. *)
+let update_avoiding engine (request : Request.t) slow_names =
+  if Blocking.abandoned engine.blocking = 0 then engine.avoiding <- []
+  else
+    let listed name = List.exists (fun (session : Request.session) -> session.name = name) request.sessions in
+    let earlier = List.filter (fun name -> listed name && not (List.mem name slow_names)) engine.avoiding in
+    engine.avoiding <- earlier @ slow_names
+
+(* [restart]: no thread is left for the next round, or this round lacked one. *)
+let degraded engine ~saturated =
   let abandoned = Blocking.abandoned engine.blocking in
   if abandoned = 0 then []
   else
-    [
-      ( "degraded",
-        `Assoc
-          [ ("abandoned", `Int abandoned); ("avoid", `List (List.map (fun name -> `String name) slow_names)) ] );
-    ]
+    let restart = saturated || Blocking.saturated engine.blocking in
+    let avoid = `List (List.map (fun name -> `String name) engine.avoiding) in
+    [ ("degraded", `Assoc [ ("abandoned", `Int abandoned); ("avoid", avoid); ("restart", `Bool restart) ]) ]
 
 let resize_adapters engine (request : Request.t) =
   List.iter (fun adapter -> Mesh_agent.resize adapter ~sessions:(List.length request.sessions)) (adapters engine)
 
-let final_fields engine ~counts ~total ~table_complete ~slow_names =
+let final_fields engine ~counts ~total ~table_complete ~saturated =
   [
     ("round", `Int engine.rounds);
     ("complete", `Bool (counts.ready + counts.unsupported = total));
     ("counts", counts_json counts ~total);
     ("table", `Assoc [ ("complete", `Bool table_complete) ]);
   ]
-  @ degraded engine (List.rev slow_names)
+  @ degraded engine ~saturated
 
 let round engine (request : Request.t) ~emit =
   engine.rounds <- engine.rounds + 1;
@@ -225,9 +240,12 @@ let round engine (request : Request.t) ~emit =
   resize_adapters engine request;
   Backoff.avoid engine.backoff request.sessions request.avoid;
   let priorities = priorities request in
-  let counts = { ready = 0; unsupported = 0; slow = 0; error = 0 } and slow_names = ref [] in
+  let counts = { ready = 0; unsupported = 0; slow = 0; error = 0 } and slow_names = ref [] and saturated = ref false in
   let on_row (session : Request.session) result =
-    (match result with Slow | Error "backoff" -> slow_names := session.name :: !slow_names | _ -> ());
+    (match result with
+    | Slow | Error "backoff" -> slow_names := session.name :: !slow_names
+    | Error "saturated" -> saturated := true
+    | Row _ | Error _ -> ());
     count counts (row_event engine request priorities ~emit session result)
   in
   let ran = run engine request ~backoff:true ~on_row in
@@ -237,7 +255,8 @@ let round engine (request : Request.t) ~emit =
   Backoff.retain engine.backoff request.sessions;
   Request.retain_listed engine.sent request.sessions;
   let table_complete = match ran with Some (round, _) -> Mesh_agent_round.complete round | None -> false in
-  final_fields engine ~counts ~total:(List.length request.sessions) ~table_complete ~slow_names:!slow_names
+  update_avoiding engine request (List.rev !slow_names);
+  final_fields engine ~counts ~total:(List.length request.sessions) ~table_complete ~saturated:!saturated
 
 let describe engine (request : Request.t) =
   let results = Hashtbl.create (List.length request.sessions) in
