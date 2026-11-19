@@ -5,15 +5,20 @@ before 1.0, a minor version may change behaviour.
 
 ## Unreleased
 
-- **A Codex started as `codex resume <id>` is restored with that exact conversation.** Such a
-  session that holds no rollout file open (an idle Codex) had no conversation id, so a PTY host
+- **An idle Codex started as `codex resume <id>` gets its conversation id from its launch
+  arguments.** Such a session that holds no rollout file open had no conversation id, so a PTY host
   restart brought it back as a plain shell. The id is now read from the launch arguments of the
-  running Codex process (the word after the `resume` subcommand, a lowercase UUID; `--last`, other
-  values and an unreadable option before `resume` give none), recorded as an exact identity in the
-  snapshot and used by the restore. A rollout the Codex holds open still wins when the two differ
-  (after `/new`), and is noted once in the web server log. Two running Codex started on the same
-  conversation are both left without this id, unless one holds its rollout open; no id is then
-  inferred from the folder for them either. See
+  running Codex process: the word after the `resume` subcommand, a lowercase UUID; `--last`, other
+  values and an option before `resume` that is not in Codex's option table give none. The launch
+  arguments say where the session started: after `/new` or `/resume` inside Codex they can name an
+  older conversation. When the session's folder has a later conversation (a rollout of another id
+  written since the process started, which no other running Codex holds open or was launched on),
+  the id is withheld and the existing folder rule applies, as before this change. A `/resume` of a
+  conversation of another folder is not detected: the restore then reopens the launch conversation.
+  The id is also withheld when another running Codex may run the same conversation (it names that
+  id in any form, was started as `codex resume` without a readable id, or holds that rollout open),
+  and dropped together with any other session that reports the same id. A rollout the Codex holds
+  open is used instead while it is open, and a difference is noted once in the web server log. See
   [Restoring sessions](docs/operations.md#restoring-sessions-after-a-pty-host-restart).
 - **An idle Codex is no longer given the conversation of a Codex started later.** When a Codex
   session holds no rollout file open, its conversation was inferred from the newest rollout of its

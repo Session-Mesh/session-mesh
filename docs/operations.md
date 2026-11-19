@@ -400,13 +400,26 @@ click, so an agent launched with permissive options never comes back on its own.
    (`claude --resume <id>` or `codex resume <id>`, with its options); other programs (an editor, a
    build) come back as a plain shell. "Ignore" dismisses the offer.
 
-   A Codex session started as `codex resume <id>` (every Codex the mesh restores or resumes) is
-   restored with that exact conversation, even when it holds no rollout file open: the id is read
-   from the launch arguments of the Codex process while it runs and kept in the snapshot. A rollout
-   file the Codex holds open still wins over its arguments (after `/new` inside Codex, the open
-   rollout is the current conversation; the web server log says so once per process). When two
-   running Codex were started on the same conversation, the one holding its rollout open keeps it;
-   if neither does, neither gets an id and both are restored as a plain shell.
+   A Codex session started as `codex resume <id>` (every Codex the mesh restores or resumes) that
+   holds no rollout file open gets its conversation id from its launch arguments, read from the
+   running process. The launch arguments say where the session started, not always what it runs
+   now: after `/new` or `/resume` inside Codex they can name an older conversation. So the id is
+   withheld when the session's folder has a later conversation: a rollout of another id written
+   since the process started and after the named one, which no other running Codex holds open or
+   was launched on. The session then gets the folder rule below (an id only for the one Codex of the
+   folder). A `/resume` of a conversation of another folder leaves no such trace, and the restore
+   then reopens the conversation the session was launched on. While the Codex holds a rollout open,
+   that rollout is used (the web server log says once per process when it differs from the
+   arguments). Each listing of the sessions reads the id again, so the snapshot keeps what the last
+   listing saw.
+
+   An id read from the launch arguments is withheld, and no id is inferred from the folder either,
+   when another running Codex may run the same conversation: one of its arguments is that id (case
+   ignored), it was started as `codex resume` with no readable id (the picker, `--last`, an option
+   that is not in Codex's option table), or it holds that rollout open. A helper process of the same
+   Codex is not another Codex. When another session reports the same id from any source, both lose
+   it. The snapshot marks this id `argv`, but for Codex that changes nothing: the restore reopens it
+   exactly like an id from an open rollout or from the folder rule.
 
    A Codex session that holds no rollout file open and was not started as `codex resume <id>` has no
    certain conversation: the server infers it
@@ -415,8 +428,8 @@ click, so an agent launched with permissive options never comes back on its own.
    other case (two Codex in one folder, an unreadable process table or file list of a Codex of the
    same user, the same inferred id reported by two sessions) the session has no conversation id and
    is restored as a plain shell rather than possibly resuming another session's conversation. A
-   conversation id observed exactly (rollout held open, named in the launch arguments, reported by a
-   hook) is never dropped this way.
+   conversation id observed exactly (rollout held open, reported by a hook) is never dropped this
+   way, except when it collides with an id read from launch arguments.
 
    Limits: the rule protects an idle Codex only while the other Codex is still running. If that
    other Codex has already exited after writing its rollout, or if a `codex exec` run in the same

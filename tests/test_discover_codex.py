@@ -230,7 +230,8 @@ def test_the_rollout_of_the_named_conversation_describes_it(tmp_path, monkeypatc
     paths = _rollouts(tmp_path, monkeypatch, a=ID, b=ID2)
     _host(monkeypatch, [100], {100: "/w"}, {100: []})
     _launched(monkeypatch, {100: ["codex", "resume", ID]})
-    os.utime(paths["a"], (time.time() - 50, time.time() - 50))      # the other one is newer: not taken
+    os.utime(paths["a"], (time.time() - 50, time.time() - 50))
+    os.utime(paths["b"], (time.time() - 200, time.time() - 200))    # before the process started: not a /new
     info = discover.codex_info(100)
     assert (info["session_id"], info["identity_source"], info["status"]) == (ID, "argv_resume", "idle")
 
@@ -295,10 +296,89 @@ def test_an_unreadable_process_table_names_no_conversation_by_argument(tmp_path,
     assert discover.codex_info(100).get("session_id") is None
 
 
-def test_an_argument_id_is_exact_against_a_guess_of_another_session():
-    guessed, named = _described("cwd_unique", ID), _described("argv_resume", ID)
-    discover.drop_duplicate_guessed_ids([guessed, named])
-    assert guessed["agent"]["session_id"] is None and named["agent"]["session_id"] == ID
+@pytest.mark.parametrize("other", ["cwd_unique", "open_rollout", "argv_resume", None])
+def test_an_argument_id_shared_with_another_session_is_dropped_with_it(other):
+    """A launch argument can be stale (/resume inside Codex): when another session reports its id, from any
+    source, neither keeps it (S1 launched on A then resumed C, S2 runs A opened from the picker)."""
+    named, shared = _described("argv_resume", ID), _described(other, ID)
+    discover.drop_duplicate_guessed_ids([named, shared])
+    assert named["agent"]["session_id"] is None and shared["agent"]["session_id"] is None
+
+
+def test_an_argument_id_alone_and_observed_collisions_are_kept():
+    named, one, two = _described("argv_resume", ID), _described("open_rollout", ID2), _described(None, ID2)
+    discover.drop_duplicate_guessed_ids([named, one, two])
+    assert [d["agent"]["session_id"] for d in (named, one, two)] == [ID, ID2, ID2]
+
+
+def test_a_conversation_begun_after_the_launch_overrides_the_argument(tmp_path, monkeypatch):
+    """/new inside a codex launched on ID: the folder's newer rollout is its conversation now (the guess)."""
+    paths = _rollouts(tmp_path, monkeypatch, a=ID, b=ID2)
+    _host(monkeypatch, [100], {100: "/w"}, {100: []})
+    _launched(monkeypatch, {100: ["codex", "resume", ID, *MESH_TAIL]})
+    os.utime(paths["a"], (time.time() - 50, time.time() - 50))
+    info = discover.codex_info(100)
+    assert (info["session_id"], info["identity_source"]) == (ID2, "cwd_unique")
+
+
+def test_a_later_conversation_with_another_codex_in_the_folder_gives_none(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch, b=ID2)
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/w"}, {100: [], 200: []})
+    _launched(monkeypatch, {100: ["codex", "resume", ID], 200: ["codex"]})
+    with discover.listing_scope():
+        assert discover.codex_info(100).get("session_id") is None
+
+
+def test_a_later_conversation_another_codex_was_launched_on_is_not_evidence(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch, b=ID2)
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/other"}, {100: [], 200: []})
+    _launched(monkeypatch, {100: ["codex", "resume", ID], 200: ["codex", "resume", ID2]})
+    with discover.listing_scope():
+        info = discover.codex_info(100)
+    assert (info["session_id"], info["identity_source"]) == (ID, "argv_resume")
+
+
+@pytest.mark.parametrize("other", [
+    ["codex", "resume", "--yolo", ID],              # valid for codex, refused by the strict parser
+    ["codex", "resume", ID.upper()],
+    ["codex", "--brand-new-option", "resume", ID],
+    ["codex", "resume"],                            # the picker: any conversation
+    ["codex", "resume", "--last"],
+])
+def test_another_codex_that_may_run_the_conversation_contests_it(tmp_path, monkeypatch, other):
+    _rollouts(tmp_path, monkeypatch)
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/other"}, {100: [], 200: []})
+    _launched(monkeypatch, {100: ["codex", "resume", ID], 200: other})
+    with discover.listing_scope():
+        assert discover.codex_info(100).get("session_id") is None
+
+
+@pytest.mark.parametrize("other", [["codex"], ["codex", "resume", ID2], ["codex", "--yolo", "fix it"]])
+def test_another_codex_on_another_conversation_does_not_contest(tmp_path, monkeypatch, other):
+    _rollouts(tmp_path, monkeypatch)
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/other"}, {100: [], 200: []})
+    _launched(monkeypatch, {100: ["codex", "resume", ID], 200: other})
+    with discover.listing_scope():
+        assert discover.codex_info(100).get("session_id") == ID
+
+
+def test_a_helper_of_the_codex_holding_its_rollout_is_not_another_claim(tmp_path, monkeypatch):
+    paths = _rollouts(tmp_path, monkeypatch, a=ID)
+    os.utime(paths["a"], (time.time() - 500, time.time() - 500))
+    _host(monkeypatch, [100, 101], {100: "/w", 101: "/w"}, {100: [], 101: [str(paths["a"])]})
+    monkeypatch.setattr(discover, "snapshot", lambda: {100: ("codex", 0, 1), 101: ("codex", 0, 100)})
+    monkeypatch.setattr(discover, "read_stat", lambda pid: ("codex", 0, 1) if pid == 100 else None)
+    _launched(monkeypatch, {100: ["codex", "resume", ID], 101: ["codex", "helper"]})
+    info = discover.codex_info(100)
+    assert (info["session_id"], info["identity_source"]) == (ID, "argv_resume")
+
+
+def test_a_byte_that_is_not_utf8_inside_the_id_is_not_dropped(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch)
+    _host(monkeypatch, [100], {100: "/w"}, {100: []})
+    broken = ID[:-2].encode() + b"\xff" + ID[-2:].encode()
+    monkeypatch.setattr(discover, "cmdline", lambda pid: [b"codex", b"resume", broken])
+    assert discover.codex_info(100).get("session_id") is None
 
 
 def test_the_named_conversation_survives_a_host_restart(tmp_path, monkeypatch, snapshot_file):
