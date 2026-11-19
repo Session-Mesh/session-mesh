@@ -11,6 +11,7 @@ import glob
 import json
 import os
 import re
+import stat
 import sys
 import threading
 import time
@@ -342,13 +343,14 @@ _cache = {}
 
 def _tail_lines(path, max_bytes=1_500_000):
     try:
-        st = os.stat(path)
+        fh = open(path, "rb")
     except OSError:
         return [], 0
-    key = (path, st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
-    if key in _cache:
-        return _cache[key], st.st_mtime
-    with open(path, "rb") as fh:
+    with fh:
+        st = os.fstat(fh.fileno())      # the key of the file read, not of the one at the path a moment before
+        key = (path, st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+        if key in _cache:
+            return _cache[key], st.st_mtime
         if st.st_size > max_bytes:
             fh.seek(st.st_size - max_bytes)
             fh.readline()
@@ -515,7 +517,7 @@ _meta_cache = {}
 # used only for a file with the same four numbers. Ids and folders only, never transcript text.
 META_FILE = meshpaths.CACHE_DIR / "codex-rollout-meta.json"
 META_FILE_VERSION = 1
-META_FILE_MAX = 4096
+META_FILE_MAX = 8192
 _meta_stamp = {}        # path -> [dev, ino, size, mtime_ns] when its _meta_cache entry was made
 _meta_stored = None     # META_FILE as read once, {} when missing, unreadable or of another version
 _meta_dirty = False
@@ -530,7 +532,7 @@ def _rollout_meta(path):
             st = os.stat(path)
             stamp = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
             stored = _stored_meta().get(path)
-            meta = tuple(stored[4:]) if stored and stored[:4] == stamp else _read_rollout_meta(path)
+            stamp, meta = (stamp, tuple(stored[4:])) if stored and stored[:4] == stamp else _read_rollout_meta(path)
         except OSError:
             return (None, True, None)
         if meta is None:
@@ -542,14 +544,16 @@ def _rollout_meta(path):
 
 
 def _read_rollout_meta(path):
-    """(cwd, is_subagent, id) of the first line of a rollout, or None when it is not a JSON object."""
+    """(the stamp of the file read, (cwd, is_subagent, id) of its first line or None when not a JSON object)."""
     with open(path, "rb") as stream:
+        st = os.fstat(stream.fileno())
         first = _json_line(stream.readline())
+    stamp = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
     if not isinstance(first, dict):
-        return None
+        return stamp, None
     p = first.get("payload")
     p = p if isinstance(p, dict) else {}
-    return (p.get("cwd"), isinstance(p.get("source"), dict), p.get("id"))
+    return stamp, (p.get("cwd"), isinstance(p.get("source"), dict), p.get("id"))
 
 
 def _stored_meta():
@@ -558,7 +562,10 @@ def _stored_meta():
     with _meta_lock:
         if _meta_stored is None:
             try:
-                raw = json.loads(fsutil.read_bounded(META_FILE, 8_000_000) or "null")
+                # Not blocking, not through a link, a regular file only: a FIFO there is no cache, not a hang.
+                with open(os.open(META_FILE, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as fh:
+                    data = fh.read(8_000_001) if stat.S_ISREG(os.fstat(fh.fileno()).st_mode) else b""
+                raw = json.loads(data.decode() if len(data) <= 8_000_000 else "null")
                 rows = raw["files"].items() if raw.get("v") == META_FILE_VERSION else ()
                 _meta_stored = {path: row for path, row in rows if _valid_meta_row(row)}
             except (OSError, UnicodeError, ValueError, RecursionError, AttributeError, KeyError, TypeError):
@@ -833,6 +840,7 @@ def _lone_codex_candidates(pid, here, started):
     """The rollouts this codex may own when it holds none open: the top-level rollouts of its folder written
     since it started, but only when it is the one codex running there and no other codex holds them open
     (a later codex's rollout would otherwise be taken for this one's). Empty when any of that is unknown."""
+    # One rollout list per listing: a rollout created during this listing is seen by the next one.
     candidates = [p for p in _codex_view().rollouts()
                   if _rollout_meta(p)[0] == here and not _rollout_meta(p)[1]
                   and os.path.getmtime(p) >= started]
@@ -882,6 +890,7 @@ def _later_conversation(pid, named, named_path):
     named one's, that no other codex holds open or may have been launched on. True when that cannot be known."""
     started, here = proc_start(pid), cwd(pid)
     named_at = os.path.getmtime(named_path) if named_path else None
+    # One rollout list per listing: a rollout created during this listing is seen by the next one.
     later = [p for p in _codex_view().rollouts() if _rollout_meta(p)[0] == here and not _rollout_meta(p)[1]
              and _rollout_meta(p)[2] != named and os.path.getmtime(p) >= started
              and (named_at is None or os.path.getmtime(p) > named_at)]

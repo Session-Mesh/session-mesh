@@ -904,17 +904,23 @@ systemctl --user daemon-reload
 rm ~/.local/bin/mesh-open ~/.local/bin/mesh-attach ~/.local/bin/mesh-rename ~/.local/bin/mesh-logout-all
 rm -r ~/.config/session-mesh                          # token, snapshot, names
 rm -r ~/.local/share/session-mesh                     # the installed releases, if any
-if [ -d ~/.cache/session-mesh ]; then rm -r ~/.cache/session-mesh; fi   # uploads, history index
+if [ -d ~/.cache/session-mesh ]; then rm -r ~/.cache/session-mesh; fi   # uploads, history index, rollout cache
 ```
 
 The web server creates `~/.cache/session-mesh` when it first saves the history index, which it
 builds right after starting as soon as a conversation of any of the eight History agents (Claude
-Code, Codex, Pi, OpenCode, Gemini, Antigravity, Copilot, Vibe) exists, or when a file is uploaded;
-hence the test in the last line.
+Code, Codex, Pi, OpenCode, Gemini, Antigravity, Copilot, Vibe) exists, when a file is uploaded, or
+at the first session listing that reads a Codex rollout to identify a session; hence the test in the last line.
 
 That directory holds the index in two forms: `history.json` (the cache of the parse state) and
 `history.sqlite` (the full-text database kept by the `mesh-history` helper). Both hold prompts and
-replies and are rebuilt from the transcripts, so removing them loses nothing.
+replies and are rebuilt from the transcripts, so removing them loses nothing. It also holds
+`codex-rollout-meta.json`: the folder and conversation id from the first line of each recent Codex
+rollout (at most 8 192, no transcript text), so that the first session listing after a restart does
+not read every rollout again. A row is used only while its rollout keeps the same device, inode,
+size and modification time; a rollout whose first line was rewritten in place with its size and
+modification time kept would keep its old id even across restarts of the web server; deleting this file, then restarting the web server, clears it. Removing it
+loses nothing: it is rebuilt at the next listing.
 
 - **Helper stopped.** The log line `history: database helper stopped: <reason>` means the helper
   failed (timeout, locked or corrupt file). The in-memory index and ripgrep answer meanwhile, and
