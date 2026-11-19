@@ -14,22 +14,36 @@ export const SEMVER_LABELS = ['semver: patch', 'semver: minor'];
 // after the separator is at least two words, and not the template's placeholder "<reason>".
 const OPT_OUT_LINE = /^Changelog: none\b(.*)$/;
 
+// A line outside code with its HTML comments removed (code spans first, so a "<!--" inside one
+// opens nothing), and whether a comment it opens is still open at its end.
+function stripComments(line: string): {text: string; open: boolean} {
+  const text = line.replace(/(`+)[^`][\s\S]*?\1/g, '').replace(/<!--[\s\S]*?-->/g, '');
+  const start = text.indexOf('<!--');
+  return start < 0 ? {text, open: false} : {text: text.slice(0, start), open: true};
+}
+
+// A closing fence: the opening character only, at least as many, then spaces or tabs alone.
+const closesFence = (line: string, fence: string): boolean =>
+  new RegExp(`^ {0,3}${fence[0] === '`' ? '`' : '~'}{${fence.length},}[ \\t]*$`).test(line);
+
 // The lines of a description that GitHub renders as text: fenced code blocks (``` or ~~~, closed
-// or not) and HTML comment blocks (a line that starts with "<!--", up to the line holding "-->",
-// closed or not) are dropped, so an example of the opt-out line does not count as one. A "<!--"
-// inside a code span or a fence opens nothing, as in CommonMark.
+// or not) and HTML comments (inline or as a block, across lines, closed or not) are dropped, so an
+// example of the opt-out line does not count as one. A "<!--" inside a code span or a fence opens
+// nothing, as in CommonMark.
 function renderedLines(body: string): string[] {
   const kept: string[] = [];
   let block: {fence: string} | {comment: true} | null = null;
   for (const line of body.replace(/\r/g, '').split('\n')) {
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
     if (block === null) {
-      if (marker !== undefined) block = {fence: marker};
-      else if (/^ {0,3}<!--/.test(line)) block = line.includes('-->', line.indexOf('<!--') + 4) ? null : {comment: true};
-      else kept.push(line);
+      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+      if (marker !== undefined) { block = {fence: marker}; continue; }
+      const stripped = stripComments(line);
+      kept.push(stripped.text);
+      if (stripped.open) block = {comment: true};
     } else if ('comment' in block) {
+      // The line that closes a comment is not kept: an opt-out line starts its own line.
       if (line.includes('-->')) block = null;
-    } else if (marker !== undefined && marker[0] === block.fence[0] && marker.length >= block.fence.length && /^ {0,3}[`~]+\s*$/.test(line)) {
+    } else if (closesFence(line, block.fence)) {
       block = null;
     }
   }
