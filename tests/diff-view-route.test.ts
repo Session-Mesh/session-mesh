@@ -42,11 +42,41 @@ function freePort(): Promise<number> {
 
 const token = (): string => fs.readFileSync(path.join(confDir, 'token'), 'utf8').trim();
 
-// Ready only on proof that the listener is this server: it refuses a wrong token, and with the
-// token this child wrote under the throwaway HOME it describes the file placed there (whose path
-// holds the random name of the scratch directory). A listener that answers 200 to anything, or
-// that took the port in the meantime, fails one of the two.
-async function ownsPort(port: number): Promise<boolean> {
+// Where /proc lists sockets (Linux, the CI): whether the socket listening on `port` is one of the
+// descriptors of process `pid`. null where /proc cannot tell.
+const PROC = fs.existsSync('/proc/net/tcp');
+function listensFrom(pid: number, port: number): boolean | null {
+  if (!PROC) return null;
+  const local = `:${port.toString(16).toUpperCase().padStart(4, '0')}`;
+  const inodes = new Set<string>();
+  for (const table of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let text = '';
+    try { text = fs.readFileSync(table, 'utf8'); } catch { continue; }
+    for (const row of text.split('\n').slice(1)) {
+      const fields = row.trim().split(/\s+/);
+      // local address, state 0A (LISTEN), inode
+      if (fields[1]?.endsWith(local) && fields[3] === '0A' && fields[9]) inodes.add(fields[9]);
+    }
+  }
+  if (inodes.size === 0) return false;
+  let descriptors: string[] = [];
+  try { descriptors = fs.readdirSync(`/proc/${pid}/fd`); } catch { return false; }
+  return descriptors.some(fd => {
+    try {
+      const socket = /^socket:\[(\d+)\]$/.exec(fs.readlinkSync(`/proc/${pid}/fd/${fd}`));
+      return socket?.[1] !== undefined && inodes.has(socket[1]);
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Ready only on proof that the listener is the child `pid`. Where /proc tells, the listening
+// socket must be one of its descriptors, checked before any request, so the token is never sent
+// to another listener. In any case it must refuse a wrong token (401) and, with the token this
+// child wrote under the throwaway HOME, describe the file placed there.
+async function ownsPort(port: number, pid: number): Promise<boolean> {
+  if (listensFrom(pid, port) === false) return false;
   const ready = path.join(home, 'ready.diff');
   const ask = (bearer: string): Promise<Response> => fetch(`http://127.0.0.1:${port}/api/view`, {
     method: 'POST',
@@ -79,7 +109,7 @@ async function startServer(env: NodeJS.ProcessEnv): Promise<boolean> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     if (failure) throw new Error(`${PYTHON} could not be started: ${String(failure)}`);
     if (child.exitCode !== null || child.signalCode !== null) return false;
-    if (await ownsPort(port)) {
+    if (child.pid !== undefined && await ownsPort(port, child.pid)) {
       base = `http://127.0.0.1:${port}`;
       return true;
     }
@@ -139,16 +169,30 @@ describe('the diff viewer through the server routes', () => {
     fs.rmSync(scratch, {recursive: true, force: true});
   });
 
-  test('the readiness check does not take another listener for the server', async () => {
-    // a listener that answers 200 with JSON to every request, whatever the token
-    const impostor = http.createServer((_request, response) => {
-      response.writeHead(200, {'Content-Type': 'application/json'});
-      response.end(JSON.stringify({target: path.join(home, 'ready.diff'), url: '/view/x'}));
+  // A listener that mimics the server: it refuses the wrong token it is first sent, then echoes the
+  // target it is asked about with a /view/ URL. Only the check of the listening process tells it
+  // from the server, so the test needs /proc.
+  test('the readiness check does not take another listener for the server', {skip: PROC ? false : 'no /proc/net/tcp'}, async () => {
+    let tokens: string[] = [];
+    const impostor = http.createServer((request, response) => {
+      const bearer = request.headers.authorization ?? '';
+      tokens.push(bearer);
+      if (bearer === 'Bearer not-the-token') { response.writeHead(401).end(); return; }
+      let body = '';
+      request.on('data', chunk => { body += chunk; });
+      request.on('end', () => {
+        const {target} = JSON.parse(body || '{}') as {target?: string};
+        response.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({target, url: '/view/x'}));
+      });
     });
     await new Promise<void>(resolve => impostor.listen(0, '127.0.0.1', resolve));
     try {
-      assert.equal(await ownsPort((impostor.address() as net.AddressInfo).port), false);
-      assert.equal(await ownsPort(Number(new URL(base).port)), true);
+      const pid = server?.pid;
+      assert.ok(pid !== undefined);
+      assert.equal(await ownsPort((impostor.address() as net.AddressInfo).port, pid), false);
+      assert.deepEqual(tokens, []);      // nothing, the token least of all, was sent to it
+      tokens = [];
+      assert.equal(await ownsPort(Number(new URL(base).port), pid), true);
     } finally {
       await new Promise(resolve => impostor.close(resolve));
     }
