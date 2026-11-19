@@ -178,8 +178,8 @@ project tracker that agents write through `mesh-work`, read only:
   each project's progress (done tasks over all tasks) and its number of blockers.
 - **A project, in four tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent
   activity, open questions, milestones, risks), "Board" (columns to do, in progress, blocked or
-  waiting, done, and "Other" for any other status, shown only when it holds tasks), "Timeline" (a bar from creation to done or today, with due dates and estimates) and
-  "Dependencies" (the tasks by dependency level, cycles labelled). The French interface names them
+  waiting, done, and "Other" for any other status, shown only when it holds tasks), "Timeline"
+  (a bar from creation to done or today, with due dates and estimates) and "Dependencies" (the tasks by dependency level, cycles labelled). The French interface names them
   "Reprise", "Tableau", "Frise" and "Dépendances".
 - **A task.** Selecting a task opens its sheet: blockers, dependencies, the sessions that worked on
   it, its notes, its events and its open questions. The sheet is read only: nothing in the view
@@ -198,9 +198,13 @@ sessions, otherwise the view and the agents use different repositories (a `~/` p
 each process's own `HOME`). The web server takes it from its service environment
 ([configuration.md](configuration.md#environment-variables)). Sessions do not inherit it from the
 web server or the PTY host: a session's shell receives only a fixed list of variables (`HOME`,
-`PATH`, the locale and a few others) and starts as a login shell, so set `WL_HOME` in your login
-shell's startup file, for example `~/.profile`. Nothing is pushed anywhere; the data
-format is in [worklog-format.md](worklog-format.md).
+`PATH`, the locale and a few others) and starts as a login shell, so set `WL_HOME` in the
+startup file your login shell reads (for example `~/.profile`, `~/.bash_profile` or `~/.zprofile`).
+A change of `WL_HOME` for the view takes effect after the web server restarts. Two cases keep the
+view empty: a non-empty directory that is not a tracker (it holds no
+`taxonomy.yaml`) cannot be initialised by an agent, and if the web server has `WL_HOME` but the
+sessions do not, agents create `~/worklog-data`, which the view never reads. Nothing is pushed
+anywhere; the data format is in [worklog-format.md](worklog-format.md).
 
 **First use.** On a new installation there is no repository, and the view shows "No tracker found"
 with "Try again" and "Use the old view". The repository is created by the first `work_*` tool call
