@@ -1128,9 +1128,15 @@ class Pane {
   async copySelection() {
     const sel = this.term.getSelection() || this.mobileSelection;
     if (!sel) return;
-    try { await navigator.clipboard.writeText(sel); flash(t("clipboard.copied")); } catch { flash(t("clipboard.copyDenied")); }
+    try { await navigator.clipboard.writeText(this.clipboardText(sel)); flash(t("clipboard.copied")); } catch { flash(t("clipboard.copyDenied")); }
     this.term.clearSelection();
     this.mobileSelection = "";
+  }
+  // What the usual copies write: the text, or its "copy as shell command" form when the per-device
+  // preference "copyAsShell" (off by default) is on. The rewrite is MeshTerminalLinks.copiedText.
+  clipboardText(text) {
+    const { copiedText, copyAsShellEnabled, COPY_AS_SHELL_KEY } = MeshTerminalLinks;
+    return copiedText(this.term, text, copyAsShellEnabled(store.get(COPY_AS_SHELL_KEY, false)));
   }
   // Copy on select (per-device preference "copyOnSelect", on by default). Unlike copySelection() this
   // keeps the selection, and a refusal by the browser shows one notice per page, not one per selection.
@@ -1174,7 +1180,7 @@ class Pane {
       visible: document.visibilityState === "visible" && this.termEl.getClientRects().length > 0,
       mouseTracking: this.term.modes.mouseTrackingMode !== "none",
     })) return;
-    try { await navigator.clipboard.writeText(text); } catch {
+    try { await navigator.clipboard.writeText(this.clipboardText(text)); } catch {
       if (!copyOnSelectDenied) { copyOnSelectDenied = true; flash(t("clipboard.copyDenied")); }
     }
   }

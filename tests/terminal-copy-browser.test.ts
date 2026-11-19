@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-// What copying a terminal selection puts on the clipboard. The pane's copySelection() writes
-// term.getSelection() unchanged: a hard line break stays a plain newline (no `\` is added), a
+// What copying a terminal selection puts on the clipboard. By default the pane's copySelection()
+// writes term.getSelection() unchanged (with the "copyAsShell" preference on, the usual copies and
+// copy on select write the Ctrl+Shift+X form instead): a hard line break stays a plain newline (no `\` is added), a
 // trailing `\` the program printed is kept, and the rows of one soft-wrapped line are joined
 // without a newline. The text is written into the terminal buffer directly, so the test depends
 // on xterm's selection and on copySelection() only, not on a shell.
@@ -20,8 +21,9 @@ declare const active: PaneView & {
   copySelection(): Promise<void>;
   term: {buffer: {active: {length: number; getLine(y: number): {translateToString(trim?: boolean): string} | undefined}};
     reset(): void; write(data: string, done: () => void): void; selectLines(start: number, end: number): void;
-    getSelection(): string; hasSelection(): boolean};
+    getSelection(): string; hasSelection(): boolean; element: HTMLElement};
 };
+declare const store: {set(key: string, value: unknown): void};
 
 /** The page's clipboard is a list of what was written to it: nothing reaches the machine's clipboard. */
 function recordClipboard(): void {
@@ -113,5 +115,65 @@ describe('copying a terminal selection', {skip}, () => {
       return window.__clipboard.slice();
     }, `${long}\r\n  --image-tag x\r\n\r\nnext command\r\n`);
     assert.deepEqual(clipboard, [`${long} \\\n  --image-tag x\n\nnext command`]);
+  });
+
+  // The per-device preference "copyAsShell": off by default, the usual copies give the shell-command form when on.
+  const command = 'octez-client transfer 1 from alice to bob\r\n  --burn-cap 0.1\r\n  --fee 0.001\r\n';
+  const plain = 'octez-client transfer 1 from alice to bob\n  --burn-cap 0.1\n  --fee 0.001';
+  const asShell = 'octez-client transfer 1 from alice to bob \\\n  --burn-cap 0.1 \\\n  --fee 0.001';
+
+  /** Print `text`, select every row that has text, press Ctrl+Shift+C in the terminal; returns the clipboard. */
+  async function pressCopy(page: Page, text: string): Promise<string[]> {
+    return page.evaluate(async text => {
+      active.term.reset();
+      await new Promise<void>(done => active.term.write(text, done));
+      const buffer = active.term.buffer.active;
+      let last = buffer.length - 1;
+      while (last > 0 && buffer.getLine(last)!.translateToString(true) === '') last -= 1;
+      active.term.selectLines(0, last);
+      (active.term as unknown as {textarea: HTMLElement}).textarea.dispatchEvent(
+        new KeyboardEvent('keydown', {key: 'C', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true}));
+      await new Promise(done => setTimeout(done, 200));
+      return window.__clipboard.slice();
+    }, text);
+  }
+
+  test('copyAsShell off by default: Ctrl+Shift+C copies the rows as they are', async () => {
+    const page = await open('as-shell-default');
+    assert.deepEqual(await pressCopy(page, command), [plain]);
+  });
+
+  test('copyAsShell on: Ctrl+Shift+C and right-click copy the shell-command form; separate commands stay apart', async () => {
+    const page = await open('as-shell-keys');
+    await page.evaluate(() => store.set('copyAsShell', true));
+    assert.deepEqual(await pressCopy(page, command), [asShell]);
+    const right = await page.evaluate(async () => {
+      active.term.selectLines(0, 2);
+      active.term.element.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true, button: 2}));
+      await new Promise(done => setTimeout(done, 200));
+      return window.__clipboard.slice(1);
+    });
+    assert.deepEqual(right, [asShell]);
+    const separate = await pressCopy(page, 'ls\r\npwd\r\n');
+    assert.deepEqual(separate.slice(2), ['ls\npwd']);
+  });
+
+  test('copyAsShell on: copy on select (a mouse drag over the rows) writes the shell-command form', async () => {
+    const page = await open('as-shell-select');
+    await page.evaluate(() => store.set('copyAsShell', true));
+    const box = await page.evaluate(async text => {
+      active.term.reset();
+      await new Promise<void>(done => active.term.write(text, done));
+      const screen = document.querySelector('.xterm-screen')!.getBoundingClientRect();
+      const cell = {width: screen.width / active.term.cols, height: screen.height / active.term.rows};
+      return {x: screen.left, y: screen.top + cell.height / 2, ...cell};
+    }, command);
+    await page.mouse.move(box.x + 1, box.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 30, box.y + box.height * 2, {steps: 6});
+    await page.mouse.up();
+    await page.waitForFunction(() => window.__clipboard.length > 0);
+    assert.deepEqual(await page.evaluate(() => window.__clipboard.slice()), [asShell]);
+    assert.equal(await page.evaluate(() => active.term.getSelection()), plain, 'the selection itself is unchanged');
   });
 });

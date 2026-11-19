@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 // "Copy as shell command": rewrite the rows of a terminal selection so that pasting them into
-// bash or zsh runs one multi-line command as one command. Pure text in, text out; the default
-// copy (the selection unchanged) never goes through here.
+// bash or zsh runs one multi-line command as one command. Pure text in, text out; the usual
+// copies go through here only when the per-device preference "copyAsShell" (off by default) is on.
 //
 // The rules are deliberately few. Whenever the text is not clearly shell, the result is the
 // selection unchanged (rows joined by newlines, soft-wrapped rows joined without a break):
@@ -230,4 +230,20 @@ export function shellCommandOfSelection(term: SelectionTerminal): string | null 
   }
   if (strip(joinWrapped(rows, wrapped).join("\n")) !== strip(term.getSelection())) return null;
   return toShellCommand(rows, wrapped);
+}
+
+// ---- the per-device "copyAsShell" preference (client store), off by default
+
+export const COPY_AS_SHELL_KEY = "copyAsShell";
+/** Only an explicit `true` turns it on: a missing, malformed or older value keeps the plain copy. */
+export const copyAsShellEnabled = (stored: unknown): boolean => stored === true;
+
+/**
+ * What a usual copy (copy keys, right-click, copy on select) writes. With the preference off, when
+ * `text` is not the terminal's current selection (a phone selection kept after the terminal cleared
+ * its own), or when the rows cannot be rebuilt: `text` itself. Otherwise its shell-command form.
+ */
+export function copiedText(term: SelectionTerminal & { hasSelection(): boolean }, text: string, asShell: boolean): string {
+  if (!asShell || !term.hasSelection() || term.getSelection() !== text) return text;
+  return shellCommandOfSelection(term) ?? text;
 }

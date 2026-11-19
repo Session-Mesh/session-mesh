@@ -360,4 +360,4 @@ export function shouldCopyOnSelect(state: CopyOnSelectState): boolean {
   return !state.mouseTracking || state.forced;
 }
 
-export { toShellCommand, shellCommandOfSelection } from "./shell-copy.ts";
+export { toShellCommand, shellCommandOfSelection, copiedText, copyAsShellEnabled, COPY_AS_SHELL_KEY } from "./shell-copy.ts";
