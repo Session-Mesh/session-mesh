@@ -1134,7 +1134,9 @@ class SessionsState:
     async def _members(self, raw, order):
         self.listed = order, {(s["name"], s["created"]) for s in raw}
         new = [s for s in raw if self.rows.get(s["name"], {}).get("created") != s["created"]]
-        if self.top is not None and not new and len(self.rows) == len(raw):
+        attached = [dict(row, attached=s["attached"]) for s in raw if (row := self.rows.get(s["name"]))   # the host's count
+                    and row["created"] == s["created"] and row.get("attached") != s["attached"]]
+        if self.top is not None and not new and not attached and len(self.rows) == len(raw):
             return
         org = await asyncio.to_thread(organize.view, raw, False)
         known = await asyncio.to_thread(respawn.provisional)
@@ -1147,7 +1149,7 @@ class SessionsState:
                          "cwd": s["cwd"], "cmd": entry["cmd"] or "", "attached": s["attached"], "activity": s["activity"],
                          "known_agent": kind if kind in AGENT_TYPES else None, "notice": notice, "agent": agent or None,
                          "ready": False, **org["sessions"][s["name"]]})
-        self.publish(self.live([*self.rows.values(), *rows]), self.top or {
+        self.publish(self.live([*attached, *self.rows.values(), *rows]), self.top or {
             "external": [], "folders": org["folders"], "home": str(Path.home()), "restorable": [],
             "management": {"state": "pending"}, "ptyhost": True,
             "opens": opens.snapshot({s["name"]: s["created"] for s in raw})})
