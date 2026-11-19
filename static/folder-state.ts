@@ -10,6 +10,8 @@
  * app.js while the PWA split is incremental.
  */
 
+export * from "./folder-suggest.ts";
+
 export type FolderRename = Readonly<{
   old: string;
   new: string;
@@ -90,14 +92,11 @@ export function matchingFolders(typed: TypedPath, names: readonly string[], limi
     .map((name) => typed.directory + name);
 }
 
-/** Folders in order, the first occurrence of each kept: the typed path's folders, then the fixed list. */
-export function mergeFolderSuggestions(...lists: readonly (readonly string[])[]): string[] {
-  return [...new Set(lists.flat())];
-}
-
 export type FolderSuggesterOptions = Readonly<{
-  /** The listing answer of a folder, or null when it was refused or not found; throws on a network failure. */
-  listFolder: (directory: string) => Promise<unknown>;
+  /** The listing answer of a folder, or null when it was refused or not found; throws on a network failure or an abort. */
+  listFolder: (directory: string, signal?: unknown) => Promise<unknown>;
+  /** A fresh AbortController (or alike): the listing for an older text is aborted when a newer text is typed. */
+  createAbort?: () => Readonly<{ signal: unknown; abort: () => void }>;
   /** Receives the suggestions for the latest text only. */
   onSuggestions: (folders: string[]) => void;
   delayMs?: number;
@@ -110,8 +109,6 @@ export type FolderSuggesterOptions = Readonly<{
 export type FolderSuggester = Readonly<{
   input: (typed: string) => void;
   reset: () => void;
-  /** The suggestions last given to onSuggestions for the typed text (empty after a reset). */
-  latest: () => string[];
 }>;
 
 const CACHE_LIMIT = 30;
@@ -126,13 +123,21 @@ export function createFolderSuggester(options: FolderSuggesterOptions): FolderSu
   let timer: unknown = null;
   let generation = 0;
   let resets = 0;
-  let latest: string[] = [];
+  let pending: Readonly<{ abort: () => void }> | null = null;
+
+  const abortPending = (): void => {
+    pending?.abort();
+    pending = null;
+  };
 
   const namesOf = async (directory: string): Promise<string[]> => {
     const hit = cache.get(directory);
     if (hit && now() - hit.at < ttlMs) return hit.names;
     const resetsBefore = resets;
-    const answer = await options.listFolder(directory);
+    const controller = options.createAbort?.() ?? null;
+    pending = controller;
+    const answer = await (controller ? options.listFolder(directory, controller.signal) : options.listFolder(directory));
+    if (pending === controller) pending = null;
     const names = listingFolderNames(answer);
     // not kept: asked before a reset, or refused / not found (null); a thrown network error never reaches here
     if (resetsBefore !== resets || answer === null) return names;
@@ -152,7 +157,7 @@ export function createFolderSuggester(options: FolderSuggesterOptions): FolderSu
         folders = [];
       }
     }
-    if (mine === generation) { latest = folders; options.onSuggestions(folders); }
+    if (mine === generation) options.onSuggestions(folders);
   };
 
   const cancelTimer = (): void => {
@@ -165,16 +170,16 @@ export function createFolderSuggester(options: FolderSuggesterOptions): FolderSu
       generation += 1;
       const mine = generation;
       cancelTimer();
-      if (!splitTypedPath(typed)) { latest = []; options.onSuggestions([]); return; }
+      abortPending();
+      if (!splitTypedPath(typed)) { options.onSuggestions([]); return; }
       timer = setTimer(() => { timer = null; void run(typed, mine); }, delayMs);
     },
     reset() {
       generation += 1;
       resets += 1;
       cancelTimer();
+      abortPending();
       cache.clear();
-      latest = [];
     },
-    latest: () => latest,
   };
 }

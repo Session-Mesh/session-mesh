@@ -7047,32 +7047,98 @@ async function openNew() {
   dlg.showModal();
   form.cwd.select();
   folderSuggester.reset();
-  newFolderBase = sessionFolders();
-  showFolderSuggestions([]);
-  try {
-    const dirs = await (await requestLocal("/api/dirs")).json();
-    newFolderBase = MeshFolderState.mergeFolderSuggestions(sessionFolders(), dirs);
-  } catch {}
-  showFolderSuggestions(folderSuggester.latest());   // keep what was typed while /api/dirs was pending
+  Object.assign(folderField, { known: [], roots: [], walked: [], pristine: true, combo: { open: false, active: -1, count: 0 } });
+  folderField.known = knownFoldersFrom([], []);
+  renderFolderList();
+  const [dirs, config] = await Promise.allSettled([readJson("/api/dirs"), readJson("/api/config", { cache: "no-store" })]);
+  folderField.roots = config.status === "fulfilled" ? MeshFolderState.workspaceRoots(config.value) : [];
+  folderField.known = knownFoldersFrom(dirs.status === "fulfilled" && Array.isArray(dirs.value) ? dirs.value : [], folderField.roots);
+  renderFolderList();   // keeps what was typed while the requests were pending
 }
 window.openNew = openNew;
 
-// Folder suggestions: the fixed list (folders of the open sessions, then GET /api/dirs) plus, while an absolute
-// or ~/ path is typed, its sub-folders taken from the file tree's listing (POST /api/ls), filtered here.
-// They fill a native <datalist>: its look on a phone depends on the browser.
-let newFolderBase = [];
+// The folder field is a combobox. Its list: while an absolute or ~/ path is typed, the sub-folders of the folder typed
+// up to its last "/" (the file tree's listing, POST /api/ls), then the known folders ranked for the text: the allowed
+// work folders (GET /api/config), the recent folders of this browser, the folders of the open sessions, GET /api/dirs.
+// static/folder-suggest.ts holds the logic; this is the page side. Text only: no markup is built from a path.
+const folderList = $("#new-folder-list");
+const folderField = { known: [], roots: [], walked: [], shown: [], pristine: true, combo: { open: false, active: -1, count: 0 } };
 const sessionFolders = () => [...new Set((data.mesh || []).map((s) => s.cwd).filter(Boolean))];
-function showFolderSuggestions(typedFolders) {
-  const all = MeshFolderState.mergeFolderSuggestions(typedFolders, newFolderBase);
-  $("#dirs").innerHTML = all.map((d) => `<option value="${esc(d)}">`).join("");
+async function readJson(url, options) {
+  const response = await requestLocal(url, options);
+  if (!response.ok) throw new Error(String(response.status));
+  return response.json();
 }
-async function listFolderForSuggestions(path) {
-  const r = await requestLocal("/api/ls", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+const knownFoldersFrom = (listed, roots) => MeshFolderState.knownFolderList({ roots, recent: MeshFolderState.recentFolders(store.get("recentFolders", [])),
+  sessions: sessionFolders(), listed: listed.filter((d) => typeof d === "string") }, data.home);
+function renderFolderList() {
+  const typed = folderField.pristine ? "" : form.cwd.value;   // the folder the dialog opened with: the whole known list
+  folderField.shown = MeshFolderState.folderSuggestions(typed, folderField.known, folderField.walked, folderField.roots, data.home);
+  const count = folderField.shown.length;
+  // open: wanted open, shown once there is an option; a new list has no chosen option (its index would name another folder)
+  folderField.combo = { open: folderField.combo.open, active: -1, count };
+  folderList.replaceChildren(...folderField.shown.map((folder, index) => {
+    const option = document.createElement("li");
+    option.id = `new-folder-${index}`;
+    option.setAttribute("role", "option");
+    option.dataset.index = String(index);
+    option.textContent = folder;
+    return option;
+  }));
+  syncFolderList();
+}
+function syncFolderList() {
+  const { active: chosen } = folderField.combo;
+  const open = folderField.combo.open && folderField.combo.count > 0;
+  folderList.hidden = !open;
+  form.cwd.setAttribute("aria-expanded", String(open));
+  for (const option of folderList.children) option.setAttribute("aria-selected", String(option.dataset.index === String(chosen)));
+  if (open && chosen >= 0) {
+    form.cwd.setAttribute("aria-activedescendant", `new-folder-${chosen}`);
+    folderList.children[chosen]?.scrollIntoView({ block: "nearest" });
+  } else form.cwd.removeAttribute("aria-activedescendant");
+}
+function acceptFolder(index) {
+  const folder = folderField.shown[index];
+  if (folder === undefined) return;
+  form.cwd.value = folder;   // type "/" next to go one level down
+  folderField.pristine = false;
+  folderField.combo = { ...folderField.combo, open: false, active: -1 };
+  syncFolderList();
+}
+function openFolderList() {
+  folderField.combo = { ...folderField.combo, open: true };   // also before the known folders arrive
+  syncFolderList();
+}
+async function listFolderForSuggestions(path, signal) {
+  const r = await requestLocal("/api/ls", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }), signal });
   return r.ok ? r.json() : null;
 }
-const folderSuggester = MeshFolderState.createFolderSuggester({ listFolder: listFolderForSuggestions, onSuggestions: showFolderSuggestions,
+const folderSuggester = MeshFolderState.createFolderSuggester({ listFolder: listFolderForSuggestions,
+  onSuggestions: (walked) => { folderField.walked = walked; renderFolderList(); },
+  createAbort: () => new AbortController(),
   setTimer: (callback, ms) => setTimeout(callback, ms), clearTimer: (handle) => clearTimeout(handle) });
-form.cwd.addEventListener("input", () => folderSuggester.input(form.cwd.value));
+form.cwd.addEventListener("input", () => {
+  folderField.pristine = false;
+  folderField.combo = { open: true, active: -1, count: folderField.combo.count };
+  renderFolderList();
+  folderSuggester.input(form.cwd.value);
+});
+form.cwd.addEventListener("keydown", (e) => {
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.isComposing) return;
+  const action = MeshFolderState.comboboxKey(folderField.combo, e.key);
+  folderField.combo = action.state;
+  if (action.accept !== null) acceptFolder(action.accept);
+  syncFolderList();
+  if (action.handled) { e.preventDefault(); e.stopPropagation(); }   // Escape closes the list, not the dialog
+});
+form.cwd.addEventListener("click", openFolderList);   // a tap on a phone shows the list
+form.cwd.addEventListener("blur", () => { folderField.combo = { ...folderField.combo, open: false, active: -1 }; syncFolderList(); });
+folderList.addEventListener("mousedown", (e) => e.preventDefault());   // the field keeps the focus (a tap too)
+folderList.addEventListener("click", (e) => {
+  const option = e.target.closest('[role="option"]');
+  if (option) acceptFolder(Number(option.dataset.index));
+});
 dlg.addEventListener("close", () => folderSuggester.reset());   // no pending timer or answer after the dialog closes
 $("#btn-new").addEventListener("click", () => { if (projecting) projectsController?.create(); else openNew(); });
 form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; });
@@ -7084,6 +7150,7 @@ form.addEventListener("submit", async (e) => {
   const { id } = await r.json();
   store.set("preset", body.preset);
   if (body.preset === "custom") store.set("command", body.command || "");
+  store.set("recentFolders", MeshFolderState.rememberFolder(store.get("recentFolders", []), body.cwd, data.home));
   dlg.close();
   await refresh();
   active.show(id, false, { focusTerminal: true });
