@@ -5,6 +5,10 @@ before 1.0, a minor version may change behaviour.
 
 ## Unreleased
 
+The entries of changes merged since the move to changelog fragments are the files of
+[changelog.d/](changelog.d/) until the next release is cut; see
+[docs/changelog-fragments.md](docs/changelog-fragments.md).
+
 - **The sessions filter stays in sight while you type on a phone.** Tapping the filter opens the
   soft keyboard, which shrinks the window's height and fires a resize; every resize closed the
   sessions sidebar, so the text went into a hidden field and the result showed only after

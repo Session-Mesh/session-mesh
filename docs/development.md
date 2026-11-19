@@ -400,12 +400,16 @@ which the `cla` job accepts. The `release branch guard` only checks that the des
 to a merged `semver: patch` pull request: the review of the backport pull request is what checks
 that the changes are the same.
 
-**Cutting a patch release (0.x.y).** The changelog entry of the release is prepared as a pull
-request to `main`, labelled `semver: patch`, that adds the heading of the release and its entries
-to `CHANGELOG.md` and nothing else: merged to `main`, it is backported to `release/latest` like any
-fix. If its cherry-pick conflicts (the `main` changelog may carry entries of the next minor
-version above the release heading), the workflow comments with the commands to do it by hand:
-resolve it so that `release/latest` only holds the entries of its own line. Then:
+**Cutting a patch release (0.x.y).** The entries of the fixes are changelog fragments
+(`changelog.d/`, [Changelog fragments](changelog-fragments.md)), which their backports bring to
+`release/latest` as new files. Once the backports of the fixes are merged, the changelog of the
+release is prepared as a pull request to `main`, labelled `semver: patch`, made by
+`tools/changelog/changelog.ts cut 0.x.y --only <the fragments present on release/latest>`: it adds
+the heading of the release and its entries to `CHANGELOG.md`, deletes those fragments, and changes
+nothing else. Merged to `main`, it is backported to `release/latest` like any fix. If its
+cherry-pick conflicts (the lines around the new heading differ between the two branches), the
+workflow comments with the commands to do it by hand: resolve it so that `release/latest` only
+holds the entries of its own line. Then:
 
 1. Merge the backports of the fixes, and the backport of the changelog pull request.
 2. Tag the tip of `release/latest` `v0.x.y` (a tag of a commit that `release/latest` holds):

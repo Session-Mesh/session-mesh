@@ -140,7 +140,7 @@ OpenCode being the most recent, appears.
   criterion 8 trial has been done on a real session). An agent on none of these paths is never woken: its messages wait in the
   inbox until it reads them (Copilot CLI and Antigravity today).
 - **The pane menu and the catalogues** under `static/` when the agent needs an action of its own.
-- **Documentation**: `docs/features.md`, `docs/agents.md` (the agent table) and the README agent list, `CHANGELOG.md`, `SECURITY.md` when a
+- **Documentation**: `docs/features.md`, `docs/agents.md` (the agent table) and the README agent list, a changelog fragment under `changelog.d/`, `SECURITY.md` when a
   boundary changes, and the agent's section of
   [agent-wake-mechanisms.md](agent-wake-mechanisms.md).
 
