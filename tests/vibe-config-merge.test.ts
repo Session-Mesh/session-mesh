@@ -67,7 +67,7 @@ provider = "fakeprov"
 alias = "fake"
 ${userServers}`);
   const code = `import json, agentmcp
-limits = agentmcp.vibe_board_limits(${JSON.stringify(project)})
+limits = {"mesh-board": agentmcp.vibe_user_limits(${JSON.stringify(project)})}
 before, after = agentmcp.vibe_mcp_value({"MESH_PORT": "7777", "MESH_CONF_DIR": "/c"}, limits)
 print(before + "tok" + after)`;
   const value = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', `import sys; sys.path.insert(0, ${JSON.stringify(REPO)})\n${code}`], {

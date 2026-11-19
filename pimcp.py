@@ -66,12 +66,10 @@ def prepare(config_dir):
         else:
             payload = {}
         servers = dict(payload.get("mcpServers", {}))
-        servers[agentmcp.SERVER_NAME] = {
-            "command": str(board), "args": agentmcp.BOARD_MCP_ARGS,
-            "env": {}, "exposure": "direct", "enabled": True,
-        }
-        if work := agentmcp.work_server("pi"):
-            servers[agentmcp.WORK_SERVER_NAME] = {**work, "exposure": "direct", "enabled": True}
+        for server in agentmcp.mesh_servers("pi", bridge=str(board)):     # the user's "enabled": false stays
+            off = isinstance(servers.get(server.name), dict) and servers[server.name].get("enabled") is False
+            servers[server.name] = {"command": server.command, "args": server.args,
+                                    "env": server.env, "exposure": "direct", "enabled": not off}
         payload["mcpServers"] = servers
         root = Path(config_dir) / "pi-agent-overlays"
         root.mkdir(mode=0o700, parents=True, exist_ok=True)

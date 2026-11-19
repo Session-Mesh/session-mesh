@@ -73,30 +73,40 @@ def runtime_bin(environ=os.environ):
     return Path(os.path.abspath(__file__)).parent / "bin"
 
 
-def board_executable(environ=os.environ, name="mesh-board-mcp"):
+def mesh_executable(name, environ=os.environ):
     bundled = runtime_bin(environ) / name
     if environ.get("MESH_BIN_DIR") or bundled.is_file():
         return bundled
     return switch_bin(environ) / name
 
 
+def board_executable(environ=os.environ):
+    return mesh_executable("mesh-board-mcp", environ)
+
+
 SWITCH_BIN = str(switch_bin())  # Development fallback, not the distribution layout.
 BOARD_MCP = str(board_executable())
-# The project tracker (docs/work-mcp.md), found like the board.  Optional: an installation without it
-# launches agents without it, silently.  Its entry names the agent kind (WL_AGENT); the session name
-# (MESH_SESSION) and a WL_HOME the user set are inherited, never written into a configuration.
-WORK_MCP = str(board_executable(name="work-mcp"))
-WORK_SERVER_NAME = "mesh-work"
-WORK_ENV_VARS = ["MESH_SESSION", "WL_HOME"]    # Codex's allow-list: names, never values
-SESSION_MARK = "@@mesh-session@@"
 BOARD_MCP_ARGS = []
 SERVER_NAME = "mesh-board"
 # Codex deliberately filters the process environment of stdio MCP servers.
 # This is an allow-list of *names*, never token values.
 CODEX_ENV_VARS = ["MESH_SESSION_TOKEN", "MESH_PORT", "MESH_RUNNER_DEMO_CAP"]
+# The project tracker (docs/work-mcp.md), found like the board.  Its entry names the agent kind (WL_AGENT);
+# the session name (MESH_SESSION) and a WL_HOME the user set come from the agent's environment.
+WORK_MCP = str(mesh_executable("work-mcp"))
+WORK_SERVER_NAME = "mesh-work"
+WORK_ENV_VARS = ["MESH_SESSION", "WL_HOME"]
+# Reserved names.  Whatever a command, a snapshot or a user's configuration defines under one of them, the
+# definition (command, arguments, environment) is Mesh's, and the user's restrictions on it (server turned
+# off, tools disabled, approvals required) are kept.  The recognisers and the removal on resume use this list.
+MESH_SERVER_NAMES = (SERVER_NAME, WORK_SERVER_NAME)
 
 
 _missing_board_reported = False
+
+
+def _is_executable(path):
+    return os.path.isfile(path) and os.access(path, os.X_OK)
 
 
 def board_available():
@@ -106,7 +116,7 @@ def board_available():
     A configured bundle or development switch expects the bridge: its absence
     is reported once on stderr instead of silently disabling the board."""
     global _missing_board_reported
-    available = os.path.isfile(BOARD_MCP) and os.access(BOARD_MCP, os.X_OK)
+    available = _is_executable(BOARD_MCP)
     setting = "MESH_BIN_DIR" if os.environ.get("MESH_BIN_DIR") else "MESH_OPAM_SWITCH"
     if not available and os.environ.get(setting) and not _missing_board_reported:
         _missing_board_reported = True
@@ -117,19 +127,53 @@ def board_available():
 
 
 def work_available():
-    return os.path.isfile(WORK_MCP) and os.access(WORK_MCP, os.X_OK)
+    return _is_executable(WORK_MCP)
 
 
-def work_server(kind):
-    """The tracker's stdio entry for an agent of ``kind``, or None when work-mcp is not installed."""
-    return {"command": WORK_MCP, "args": [], "env": {"WL_AGENT": kind}} if work_available() else None
+class MeshServer(NamedTuple):
+    """One stdio MCP server Mesh adds to an agent it launches (see mesh_servers).
+
+    ``env`` holds literal values only, never a credential or the session's name.  The server reads
+    ``env_names`` from the agent's environment (Codex's allow-list).  ``identity_env``, a part of them,
+    carries the session's identity or data place: a client that filters its servers' environment
+    receives these names as a reference (Gemini) or a launch-time expansion (Vibe), never as values."""
+    name: str
+    command: str
+    args: list
+    env: dict
+    env_names: list
+    identity_env: list
 
 
-def _claude_config(board=True):
-    servers = {SERVER_NAME: {"command": BOARD_MCP, "args": BOARD_MCP_ARGS}} if board else {}
-    if work := work_server("claude"):
-        servers[WORK_SERVER_NAME] = work
-    return json.dumps({"mcpServers": servers}, separators=(",", ":")) if servers else None
+def mesh_servers(kind, reach=None, bridge=None):
+    """The servers Mesh injects into an agent of ``kind``, in order.  Each agent adapter only shapes them.
+
+    One rule for every agent: no server without the board bridge (``bridge``, by default the installed
+    one), and the tracker beside the board when work-mcp is installed.  ``reach`` (MESH_PORT, MESH_CONF_DIR,
+    never a credential) goes in the board's own environment block when the caller gives it."""
+    installed = board_available() if bridge is None else _is_executable(bridge)
+    return _with_board(kind, reach, bridge) if installed else []
+
+
+def _with_board(kind, reach=None, bridge=None):
+    """mesh_servers once the board bridge is known to be installed."""
+    servers = [MeshServer(SERVER_NAME, BOARD_MCP if bridge is None else bridge, list(BOARD_MCP_ARGS),
+                          dict(reach or {}), CODEX_ENV_VARS, ["MESH_SESSION_TOKEN"])]
+    if work_available():
+        servers.append(MeshServer(WORK_SERVER_NAME, WORK_MCP, [], {"WL_AGENT": kind}, WORK_ENV_VARS, WORK_ENV_VARS))
+    return servers
+
+
+def _stdio_entry(server):
+    """The common ``command``/``args``/``env`` shape (Claude, Copilot, agy, Pi); an empty ``env`` is left out."""
+    return {"command": server.command, "args": server.args, **({"env": server.env} if server.env else {})}
+
+
+def _claude_config(servers=None):
+    """Claude's --mcp-config value: ``servers``, by default those of an installation with the board."""
+    servers = _with_board("claude") if servers is None else servers
+    return (json.dumps({"mcpServers": {server.name: _stdio_entry(server) for server in servers}},
+                       separators=(",", ":")) if servers else None)
 
 
 # OpenCode reads an inline JSON configuration from OPENCODE_CONFIG_CONTENT and merges it
@@ -230,17 +274,18 @@ def opencode_config(plugin=OPENCODE_PLUGIN, reach=None):
     own environment block: a project's opencode.json merges below this one, so it cannot point the
     bridge, which sends the session token, at another local port."""
     config = {}
-    if board_available():       # without the bridge an entry would only fail at every launch
-        server = {"type": "local", "command": [BOARD_MCP, *BOARD_MCP_ARGS]}
-        if reach:
-            server["environment"] = dict(reach)
-        config["mcp"] = {SERVER_NAME: server}
-    if work := work_server("opencode"):
-        config.setdefault("mcp", {})[WORK_SERVER_NAME] = {"type": "local", "command": [work["command"]],
-                                                          "environment": work["env"]}
+    if servers := _opencode_servers(reach):     # without the bridge an entry would only fail at every launch
+        config["mcp"] = servers
     if Path(plugin).is_file():
         config["plugin"] = [Path(plugin).as_uri()]
     return json.dumps(config, separators=(",", ":"))
+
+
+def _opencode_servers(reach, disabled=()):
+    """The OpenCode (1 and 2) shape of mesh_servers, without the ``disabled`` names."""
+    return {server.name: {"type": "local", "command": [server.command, *server.args],
+                          **({"environment": server.env} if server.env else {})}
+            for server in mesh_servers("opencode", reach) if server.name not in disabled}
 
 
 def _opencode_config_sources(executable, cwd, environ):
@@ -263,17 +308,12 @@ def _opencode_config_sources(executable, cwd, environ):
     return sources if isinstance(sources, list) else None
 
 
-def opencode_user_disables_board(cwd, environ=os.environ):
-    disabled = opencode_user_disabled_servers(cwd, environ)
-    return None if disabled is None else SERVER_NAME in disabled
-
-
 def opencode_user_disabled_servers(cwd, environ=os.environ):
-    """Which Mesh servers (board, tracker) the user's own OpenCode 2 configuration (global, project, inline) turns off.
+    """Which of MESH_SERVER_NAMES the user's own OpenCode 2 configuration (global, project, inline) turns off.
 
     OpenCode 2 replaces a server's whole object with the injected one, so a ``disabled: true`` (v1:
-    ``enabled: false``) the user set on ``mesh-board`` would be lost: Mesh reads the documents and does not
-    inject the server when any of them disables it (the stricter choice wins, whatever the precedence).
+    ``enabled: false``) the user set on a Mesh server would be lost: Mesh reads the documents and does not
+    inject a server when any of them disables it (the stricter choice wins, whatever the precedence).
     None when the configuration cannot be read; the caller then injects no server either."""
     executable = _opencode_executable(environ)
     sources = _opencode_config_sources(executable, cwd, environ) if executable else None
@@ -284,30 +324,24 @@ def opencode_user_disabled_servers(cwd, environ=os.environ):
         info = source.get("info") if isinstance(source, dict) else None
         mcp = info.get("mcp") if isinstance(info, dict) else None
         servers = mcp.get("servers") if isinstance(mcp, dict) else None
-        for name in (SERVER_NAME, WORK_SERVER_NAME):
+        for name in MESH_SERVER_NAMES:
             entry = servers.get(name) if isinstance(servers, dict) else None
             if isinstance(entry, dict) and entry.get("disabled") is True:
                 disabled.add(name)
     return disabled
 
 
-def opencode_config_v2(plugin=OPENCODE_PLUGIN_V2, reach=None, board=True, work=True):
-    """The inline OpenCode 2 configuration that adds the board server and the Mesh event plugin.
+def opencode_config_v2(plugin=OPENCODE_PLUGIN_V2, reach=None, disabled=()):
+    """The inline OpenCode 2 configuration that adds the Mesh servers and the Mesh event plugin.
 
     Same rules as opencode_config, in the v2 shape: ``mcp.servers`` and ``plugins`` (a list of
     ``{"package": <folder>}``, concatenated with the user's).  The inline document has the highest
     precedence, so a project's opencode.json cannot point the bridge, which inherits the session token,
-    at another command.  ``board`` is False when the user disabled the server or the configuration could
-    not be read (see opencode_user_disables_board): only the plugin is injected."""
+    at another command.  ``disabled`` names the servers the user turned off, or all of them when the
+    configuration could not be read (see opencode_user_disabled_servers): those are not injected."""
     config = {}
-    if board and board_available():
-        server = {"type": "local", "command": [BOARD_MCP, *BOARD_MCP_ARGS]}
-        if reach:
-            server["environment"] = dict(reach)
-        config["mcp"] = {"servers": {SERVER_NAME: server}}
-    if work and (entry := work_server("opencode")):
-        config.setdefault("mcp", {}).setdefault("servers", {})[WORK_SERVER_NAME] = {
-            "type": "local", "command": [entry["command"]], "environment": entry["env"]}
+    if servers := _opencode_servers(reach, disabled):
+        config["mcp"] = {"servers": servers}
     if (Path(plugin) / "index.ts").is_file():
         config["plugins"] = [{"package": str(plugin)}]
     return json.dumps(config, separators=(",", ":"))
@@ -401,16 +435,16 @@ def _refuse_constant(name):
 
 
 def gemini_settings(user, reach=None):
-    """The user's settings (a dict) with the board server and the state hooks added."""
+    """The user's settings (a dict) with the Mesh servers and the state hooks added.  A server's
+    identity_env is written as ``$NAME`` references, which Gemini resolves from its own environment."""
     settings = json.loads(json.dumps(user))
-    if board_available():
+    if mesh := mesh_servers("gemini", reach):
         servers = settings.setdefault("mcpServers", {})
         if not isinstance(servers, dict):
             raise ValueError("Gemini settings: mcpServers is not an object")
-        servers[SERVER_NAME] = {"command": BOARD_MCP, "args": list(BOARD_MCP_ARGS),
-                                "env": {"MESH_SESSION_TOKEN": "$MESH_SESSION_TOKEN", **(reach or {})}}
-    if (work := work_server("gemini")) and isinstance(settings.setdefault("mcpServers", {}), dict):
-        settings["mcpServers"][WORK_SERVER_NAME] = work
+        for server in mesh:
+            servers[server.name] = {"command": server.command, "args": server.args,
+                                    "env": {**{name: f"${name}" for name in server.identity_env}, **server.env}}
     hooks = settings.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         raise ValueError("Gemini settings: hooks is not an object")
@@ -511,10 +545,8 @@ def agy_plugin_files(bridge=None, event=None):
         "hooks.json": {AGY_PLUGIN_NAME: {
             hook: [{"command": f"{shlex.quote(event)} agy {hook}", "timeout": 5}] for hook in AGY_HOOKS}},
     }
-    if bridge and os.path.isfile(bridge) and os.access(bridge, os.X_OK):
-        files["mcp_config.json"] = {"mcpServers": {SERVER_NAME: {"command": bridge, "args": BOARD_MCP_ARGS}}}
-        if work := work_server("agy"):
-            files["mcp_config.json"]["mcpServers"][WORK_SERVER_NAME] = work
+    if bridge and (servers := mesh_servers("agy", bridge=bridge)):
+        files["mcp_config.json"] = {"mcpServers": {server.name: _stdio_entry(server) for server in servers}}
     return {name: json.dumps(value, indent=2) + "\n" for name, value in files.items()}
 
 
@@ -537,7 +569,7 @@ def write_agy_plugin(directory):
 # Mistral Vibe merges the VIBE_MCP_SERVERS environment variable (a JSON list of servers) over its
 # user and project configuration, entry by entry *by name*: an entry of the same name replaces the
 # whole configured one, so what the user set on the board (``disabled``, ``disabled_tools``) is read
-# back and repeated in the injected entry (vibe_board_limits).  Vibe starts a stdio server with only
+# back and repeated in the injected entry (vibe_user_limits).  Vibe starts a stdio server with only
 # the environment its entry lists, so unlike Claude and OpenCode the bridge does not inherit the
 # session token: the entry carries it, but never in a file or an argument.  The command line holds
 # the word ``"$MESH_SESSION_TOKEN"`` inside the script of an ``sh -c`` that execs Vibe: that inner shell expands
@@ -547,7 +579,9 @@ VIBE_MCP_ENV = "VIBE_MCP_SERVERS"
 VIBE_HOOKS_DIRNAME = "mesh-vibe-hooks"
 _VIBE_HOOK_EVENTS = (("session_start", "session-start"), ("pre_agent", "prompt"), ("pre_tool", "tool"),
                      ("post_tool", "tool-done"), ("notification", "notify"))
-_TOKEN_MARK = "@@mesh-session-token@@"
+_VIBE_MARK = "@@mesh-env:{}@@"
+_VIBE_MARKS = re.compile(r"@@mesh-env:([A-Z_]+)@@")
+_TOKEN_MARK = _VIBE_MARK.format("MESH_SESSION_TOKEN")
 _VIBE_LIMITS_MAX = 256
 
 
@@ -592,9 +626,9 @@ def _read_vibe_config(path):
         os.close(fd)
 
 
-def _board_limits_in(path, name=SERVER_NAME):
-    """(disabled, disabled_tools) a Vibe configuration file sets on the board; nothing when there is no
-    file or it is not valid TOML (Vibe reports that itself).  VibeRefused for a file Mesh must not read."""
+def _limits_in(path, name):
+    """(disabled, disabled_tools) a Vibe configuration file sets on the server ``name``; nothing when there
+    is no file or it is not valid TOML (Vibe reports that itself).  VibeRefused for a file Mesh must not read."""
     data = _read_vibe_config(path)
     if data is None:
         return False, []
@@ -613,12 +647,12 @@ def _board_limits_in(path, name=SERVER_NAME):
     return disabled, tools
 
 
-def vibe_board_limits(cwd, environ=os.environ, name=SERVER_NAME):
-    """What the user's Vibe configuration (user and project) restricts on the board: the injected
-    entry replaces theirs by name, so these are repeated in it and a stricter choice stays in force."""
+def vibe_user_limits(cwd, environ=os.environ, name=SERVER_NAME):
+    """What the user's Vibe configuration (user and project) restricts on the Mesh server ``name``: the
+    injected entry replaces theirs by name, so these are repeated in it and a stricter choice stays in force."""
     disabled, tools = False, set()
     for path in (vibe_home(environ) / "config.toml", Path(cwd) / ".vibe" / "config.toml"):
-        off, names = _board_limits_in(path, name)
+        off, names = _limits_in(path, name)
         disabled, tools = disabled or off, tools | set(names)
     if len(tools) > _VIBE_LIMITS_MAX:       # cutting the list would silently re-enable the tools cut
         raise VibeRefused(f"the configuration disables {len(tools)} tools of {name} "
@@ -634,22 +668,30 @@ def _with_limits(entry, limits):
     return entry
 
 
-def vibe_mcp_value(reach, limits=None, work_limits=None):
+def vibe_mcp_value(reach, limits=None):
     """The VIBE_MCP_SERVERS value as the two texts around the session token, or None without a bridge.
     ``reach`` (MESH_PORT, MESH_CONF_DIR) is set in the entry itself: a project configuration merges
-    below the environment, so it cannot point the bridge, which sends the token, elsewhere.  The tracker's
-    entry, when installed, comes after the token; its MESH_SESSION is SESSION_MARK, which the launch
-    script replaces with an expansion of the variable, as for the token."""
-    if not board_available():
+    below the environment, so it cannot point the bridge, which sends the token, elsewhere.  ``limits``
+    maps a server's name to what vibe_user_limits found.  Every other identity_env variable (the tracker's
+    MESH_SESSION and WL_HOME) stays a mark in the second text, which vibe_shell_words turns into an
+    expansion; an unset WL_HOME expands to an empty value, which the tracker treats as unset."""
+    servers = mesh_servers("vibe", reach)
+    if not servers:
         return None
-    entries = [_with_limits({"name": SERVER_NAME, "transport": "stdio", "command": BOARD_MCP,
-                             "args": list(BOARD_MCP_ARGS),
-                             "env": {**(reach or {}), "MESH_SESSION_TOKEN": _TOKEN_MARK}}, limits)]
-    if work := work_server("vibe"):
-        entries.append(_with_limits({"name": WORK_SERVER_NAME, "transport": "stdio", **work,
-                                     "env": {**work["env"], "MESH_SESSION": SESSION_MARK}}, work_limits))
+    entries = [_with_limits({"name": server.name, "transport": "stdio", "command": server.command,
+                             "args": server.args,
+                             "env": {**server.env, **{name: _VIBE_MARK.format(name) for name in server.identity_env}}},
+                            (limits or {}).get(server.name)) for server in servers]
     before, after = json.dumps(entries, separators=(",", ":")).split(_TOKEN_MARK)
     return before, after
+
+
+def vibe_shell_words(text):
+    """``text`` as one shell word of the launch script: quoted, with each mark an expansion ``"$NAME"``
+    by the inner shell, so no value is written on the line.  A value holding a double quote or a
+    backslash (a WL_HOME so named) would break the JSON, and Vibe would then refuse its configuration."""
+    parts = _VIBE_MARKS.split(text)
+    return "".join(shlex.quote(part) if index % 2 == 0 else f'"${part}"' for index, part in enumerate(parts))
 
 
 _VIBE_LAUNCH_ID = re.compile(r"[A-Za-z0-9_-]{8,80}")
@@ -758,20 +800,18 @@ def purge_vibe_hooks(conf_dir, keep=(), grace=0):
     return removed
 
 
-def _codex_config():
-    # Codex's ``-c`` accepts a TOML key/value override.  Keep this an additive
-    # override: existing user/project MCP configuration remains in effect.
-    return [f"mcp_servers.{SERVER_NAME}.command={json.dumps(BOARD_MCP)}",
-            f"mcp_servers.{SERVER_NAME}.args={json.dumps(BOARD_MCP_ARGS, separators=(',', ':'))}",
-            f"mcp_servers.{SERVER_NAME}.env_vars={json.dumps(CODEX_ENV_VARS, separators=(',', ':'))}"]
-
-
-def _codex_work_config():
-    if not work_available():
-        return []
-    key = f"mcp_servers.{WORK_SERVER_NAME}"
-    return [f"{key}.command={json.dumps(WORK_MCP)}", f"{key}.args=[]",
-            f"{key}.env_vars={json.dumps(WORK_ENV_VARS, separators=(',', ':'))}", f'{key}.env={{WL_AGENT="codex"}}']
+def _codex_config(servers=None):
+    """The ``-c`` items of ``servers``, by default those of an installation with the board.
+    Codex's ``-c`` accepts a TOML key/value override.  Keep this an additive
+    override: existing user/project MCP configuration remains in effect."""
+    items = []
+    for server in _with_board("codex") if servers is None else servers:
+        key = f"mcp_servers.{server.name}"
+        items += [f"{key}.command={json.dumps(server.command)}",
+                  f"{key}.args={json.dumps(server.args, separators=(',', ':'))}",
+                  f"{key}.env_vars={json.dumps(server.env_names, separators=(',', ':'))}",
+                  *([f"{key}.env={_toml_inline(server.env)}"] if server.env else [])]
+    return items
 
 
 # A recorded command may come from a snapshot written by another installation,
@@ -794,7 +834,7 @@ def _codex_work_config():
 _BOARD_SUFFIX = "-board"
 _SWITCH_ARG = "--switch="
 _CODEX_BOARD_KEYS = {"command", "args", "env_vars"}
-# What a user's snapshot may keep under the current board's name.  Codex merges the
+# What a user's snapshot may keep under a Mesh server's name (MESH_SERVER_NAMES).  Codex merges the
 # overrides of one server key by key with Mesh's injected block, which sets none of
 # these keys, so a kept value must itself be the restrictive one: a tool list (it
 # only narrows what the board offers), ``enabled`` only when false, and the approval
@@ -835,8 +875,8 @@ def _starts_board_executable(name, command, args):
 
 
 def _is_board_server(name, server, codex=False):
-    if name in (SERVER_NAME, WORK_SERVER_NAME):
-        # Always the board (or the tracker); for Codex only the board's _USER_BOARD_LIMITS survive.
+    if name in MESH_SERVER_NAMES:
+        # Always Mesh's; for Codex only the user's _USER_BOARD_LIMITS on it survive.
         return True
     if not (isinstance(server, dict) and isinstance(name, str)):
         return False
@@ -1032,7 +1072,7 @@ def _write_override(token, key, value):
 
 
 def _current_board_words(token):
-    """The words of an override of the current board that may stay: a
+    """The words of an override of a Mesh server that may stay: a
     user's limit (see _USER_BOARD_LIMITS), nothing else."""
     name, key, value = token.override
     if key is not None:
@@ -1050,16 +1090,16 @@ def _current_board_words(token):
 def _codex_token_without_board(token, board):
     """A token's words without the board servers it configures: none when it
     configures only board servers, a rewritten override when it mixes them or
-    carries a user's limit on the current board."""
+    carries a user's limit on a Mesh server."""
     if token.override is None:
         return token.words
     name, _, value = token.override
-    if name == SERVER_NAME:
+    if name in MESH_SERVER_NAMES:
         return _current_board_words(token)
     if name is not None:
         return [] if name in board else token.words
-    kept = {server: _user_board_limits(table) if server == SERVER_NAME else table
-            for server, table in value.items() if server not in board or server == SERVER_NAME}
+    kept = {server: _user_board_limits(table) if server in MESH_SERVER_NAMES else table
+            for server, table in value.items() if server not in board or server in MESH_SERVER_NAMES}
     kept = {server: table for server, table in kept.items() if table is not None}
     if kept == value:
         return token.words
@@ -1158,7 +1198,7 @@ def without_free_codex_config(argv):
     servers (see strip_board), which Mesh injects again, and _FREE_CODEX_KEYS.
     Every other configuration item is kept, as is any item whose value holds a
     control character.  Everything under a board's name is free except the
-    current board's _USER_BOARD_LIMITS, which restrict and are kept."""
+    user's _USER_BOARD_LIMITS on a Mesh server, which restrict and are kept."""
     plain, unreadable = [], []
     for words, value in codex_config_items(list(argv)):
         (unreadable if _has_control_character(value) else plain).extend(words)
@@ -1166,7 +1206,7 @@ def without_free_codex_config(argv):
 
 
 def inject(kind, argv):
-    """Return an interactive agent argv with the local board bridge added.
+    """Return an interactive agent argv with the Mesh servers (mesh_servers) added.
 
     This only changes Mesh-launched Claude/Codex/Pi invocations. Claude does not
     receive ``--strict-mcp-config``: that would silently hide its other MCP
@@ -1178,16 +1218,15 @@ def inject(kind, argv):
     Any board configuration already in argv (from this or another
     installation, see strip_board) is replaced by exactly the current one.
     Without an installed bridge (board_available), Claude and Codex keep their
-    argv without any board entry.
+    argv without any Mesh server entry.
     """
     if kind == "claude":
         kept = strip_board(kind, argv)
-        config = _claude_config(board_available())
+        config = _claude_config(mesh_servers(kind))
         return [*kept, "--mcp-config", config] if config else kept
     if kind == "codex":
         kept = strip_board(kind, argv)
-        items = [*(_codex_config() if board_available() else []), *_codex_work_config()]
-        return [*kept, *(word for item in items for word in ("-c", item))]
+        return [*kept, *(word for item in _codex_config(mesh_servers(kind)) for word in ("-c", item))]
     if kind in ("opencode", "gemini", "agy", "vibe"):
         # The configuration travels in the environment (opencode_config, gemini_home, vibe_mcp_value), not in argv;
         # agy has none per session: its plugin holds it (agy_plugin_files).
@@ -1221,15 +1260,10 @@ def copilot_args(plugin=COPILOT_PLUGIN, reach=None):
     ``reach`` (MESH_PORT and MESH_CONF_DIR, never a credential) goes in the server's own ``env``
     block, which wins over the process environment: a project's .mcp.json cannot point the bridge,
     which sends the session token, at another local port."""
-    args, servers = [], {}
-    if board_available():       # without the bridge an entry would only fail at every launch
-        servers[SERVER_NAME] = {"type": "local", "command": BOARD_MCP, "args": list(BOARD_MCP_ARGS)}
-        if reach:
-            servers[SERVER_NAME]["env"] = dict(reach)
-    if work := work_server("copilot"):
-        servers[WORK_SERVER_NAME] = {"type": "local", **work}
-    if servers:
-        args += ["--additional-mcp-config", json.dumps({"mcpServers": servers}, separators=(",", ":"))]
+    args = []
+    if servers := mesh_servers("copilot", reach):      # without the bridge an entry would only fail at every launch
+        entries = {server.name: {"type": "local", **_stdio_entry(server)} for server in servers}
+        args += ["--additional-mcp-config", json.dumps({"mcpServers": entries}, separators=(",", ":"))]
     if (Path(plugin) / "hooks" / "hooks.json").is_file():
         args += ["--plugin-dir", str(plugin)]
     return args
@@ -1237,13 +1271,14 @@ def copilot_args(plugin=COPILOT_PLUGIN, reach=None):
 
 def _is_copilot_board_config(value):
     """``value`` is exactly what copilot_args writes (of this or another installation): a JSON object
-    whose only server is the board. A user's configuration, which may hold other servers, is not."""
+    whose only servers are Mesh's (reserved names, see MESH_SERVER_NAMES). A user's configuration, which
+    may hold other servers, is not."""
     try:
         parsed = json.loads(value)
     except (TypeError, ValueError):
         return False
     return (isinstance(parsed, dict) and set(parsed) == {"mcpServers"} and isinstance(parsed["mcpServers"], dict)
-            and parsed["mcpServers"] and set(parsed["mcpServers"]) <= {SERVER_NAME, WORK_SERVER_NAME})
+            and parsed["mcpServers"] and set(parsed["mcpServers"]) <= set(MESH_SERVER_NAMES))
 
 
 def _is_mesh_copilot_plugin(directory):

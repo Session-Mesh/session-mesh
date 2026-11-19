@@ -87,7 +87,7 @@ describe('the board limits of the session folder', () => {
     const value = py(path.join(scratch, 'v', 'conf'), `
 reach = {"MESH_PORT": "7777", "MESH_CONF_DIR": "/c"}
 def parse(limits):
-    before, after = agentmcp.vibe_mcp_value(reach, limits)
+    before, after = agentmcp.vibe_mcp_value(reach, {"mesh-board": limits})
     return json.loads(before + "tok" + after)[0]
 print(json.dumps({"off": parse({"disabled": True, "disabled_tools": []}), "plain": parse({"disabled": False, "disabled_tools": []}), "none": parse(None)}))`);
     assert.equal(value.off.disabled, true);
