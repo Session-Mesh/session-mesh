@@ -15,7 +15,7 @@ const REPO = path.resolve(import.meta.dirname, '..');
 function python(code: string, home: string): any {
   const output = execFileSync(process.env.MESH_PYTHON || 'python3',
     ['-I', '-c', `import sys; sys.path.insert(0, ${JSON.stringify(REPO)})\n${code}`],
-    {cwd: REPO, encoding: 'utf8', env: {
+    {cwd: REPO, encoding: 'utf8', timeout: 120_000, env: {   // a hang fails instead of stalling the run
       PATH: process.env.PATH, HOME: home,
       MESH_CONF_DIR: path.join(home, 'conf'), MESH_CACHE_DIR: path.join(home, 'cache'),
     }});
@@ -119,6 +119,29 @@ os.symlink(b, link)
 out["link_b"] = read(link)
 discover.time.time = lambda real=time.time: real() + 100
 out["later"] = read(link)
+read(b)
+st = os.stat(b)
+with open(b, "a") as more:
+    more.write(line("user", "eleven"))
+os.utime(b, ns=(st.st_atime_ns, st.st_mtime_ns))
+out["grown_same_mtime"] = read(b)
+# Another file renamed in between the path's stat and the open, then the first put back.
+c, d = (os.path.join(discover.HOME, n) for n in ("c.jsonl", "d.jsonl"))
+write(c, line("user", "cee"))
+write(d, line("user", "dee"))
+def swapping(file, *args, **kwargs):
+    if file != c:
+        return open(file, *args, **kwargs)
+    os.rename(c, c + ".aside")
+    os.rename(d, c)
+    handle = open(file, *args, **kwargs)
+    os.rename(c, d)
+    os.rename(c + ".aside", c)
+    return handle
+discover.open = swapping
+out["swapped"] = read(c)[0]
+del discover.open
+out["put_back"] = read(c)[0]
 discover.PARSED_MAX = 2
 for path in (a, b, link):
     discover._codex_transcript(path)
@@ -134,6 +157,8 @@ print(json.dumps(out))
       assert.deepEqual(result.link_a, ['two', 'reply one', 'busy', 3]);
       assert.deepEqual(result.link_b, ['ten', 'reply six', 'busy', 3]);
       assert.deepEqual(result.later, ['ten', 'reply six', 'idle', 0], 'the state follows the clock, from the cache');
+      assert.deepEqual(result.grown_same_mtime, ['eleven', 'reply six', 'idle', 4], 'grown, mtime_ns set back: a miss');
+      assert.deepEqual([result.swapped, result.put_back], ['dee', 'cee'], 'cached under the stamp of the file read');
       assert.equal(result.bounded, 2);
     } finally {
       fs.rmSync(home, {recursive: true, force: true});
@@ -236,7 +261,7 @@ print(json.dumps({"read": sorted(read), "rss": [r["metrics"]["rss_bytes"]["value
 
 describe('the first line of each rollout is read once, across restarts', () => {
   // One fresh Python process per call: what a restart of the web server starts from.
-  const listing = (home: string, before = '') => python(`
+  const listing = (home: string, before = '', ids = '0, 7, 99') => python(`
 import json, os, sys, discover
 opened = []
 sys.addaudithook(lambda event, args: event == "open" and os.path.basename(str(args[0])).startswith("rollout-")
@@ -244,7 +269,7 @@ sys.addaudithook(lambda event, args: event == "open" and os.path.basename(str(ar
 day = os.path.join(discover.HOME, ".codex", "sessions", "2026", "11", "19")
 ${before}
 with discover.listing_scope():
-    found = [os.path.basename(discover._rollout_of(f"abcdefgh-{i:04d}") or "") for i in (0, 7, 99)]
+    found = [os.path.basename(discover._rollout_of(f"abcdefgh-{i:04d}") or "") for i in (${ids})]
 print(json.dumps({"found": found, "opened": len(opened)}))
 `, home);
 
@@ -271,6 +296,12 @@ print(json.dumps({"found": found, "opened": len(opened)}))
       assert.deepEqual(listing(home), {found: want, opened: 0}, 'after a restart: nothing read');
       assert.equal(fs.statSync(cache).mtimeMs, before, 'nothing learned: not written again');
 
+      // Only the row's mtime_ns differs from the file (edited in Python: JSON numbers past 2**53 lose digits in JS).
+      assert.deepEqual(listing(home, `
+rows = json.loads(discover.META_FILE.read_text())
+rows["files"][os.path.join(day, "rollout-0005.jsonl")][3] += 1
+discover.META_FILE.write_text(json.dumps(rows))`), {found: want, opened: 1}, 'a row of another mtime_ns is read again');
+
       fs.appendFileSync(path.join(day, 'rollout-0003.jsonl'), '{"type":"event_msg","payload":{}}\n');
       assert.deepEqual(listing(home), {found: want, opened: 1}, 'a grown file is read again');
 
@@ -291,6 +322,35 @@ del opened[:]`), {found: ['rollout-0000.jsonl', '', 'rollout-0007.jsonl'], opene
         assert.deepEqual(listing(home), {found: want, opened: 20}, `ignored: ${bad}`);
         assert.equal(JSON.parse(fs.readFileSync(cache, 'utf8')).v, 1, 'rewritten whole');
       }
+
+      // A link to a valid cache and a FIFO are no cache: not followed, not waited on; replaced by a file.
+      fs.renameSync(cache, `${cache}.real`);
+      fs.symlinkSync(`${cache}.real`, cache);
+      assert.deepEqual(listing(home), {found: want, opened: 20}, 'a link is not followed');
+      fs.rmSync(cache);
+      execFileSync('mkfifo', [cache]);
+      assert.deepEqual(listing(home), {found: want, opened: 20}, 'a FIFO is not waited on');
+      assert.ok(fs.lstatSync(cache).isFile());
+
+      // Another file renamed in between the path's stat and the open, then the first put back: the row
+      // holds the stamp of the file read, so the next process reads the first line again.
+      rollout(30);
+      fs.writeFileSync(path.join(home, 'decoy.jsonl'),
+        JSON.stringify({type: 'session_meta', payload: {id: 'abcdefgh-0031', cwd: '/w'}}) + '\n');
+      const swapped = listing(home, `
+target, decoy, real_open = os.path.join(day, "rollout-0030.jsonl"), os.path.join(discover.HOME, "decoy.jsonl"), open
+def swapping(file, *args, **kwargs):
+    if file != target:
+        return real_open(file, *args, **kwargs)
+    os.rename(target, target + ".aside")
+    os.rename(decoy, target)
+    handle = real_open(file, *args, **kwargs)
+    os.rename(target, decoy)
+    os.rename(target + ".aside", target)
+    return handle
+discover.open = swapping`, '30, 31');
+      assert.deepEqual(swapped.found, ['', 'rollout-0030.jsonl'], 'the decoy was read');
+      assert.deepEqual(listing(home, '', '30, 31'), {found: ['rollout-0030.jsonl', ''], opened: 1});
     } finally {
       fs.rmSync(home, {recursive: true, force: true});
     }
