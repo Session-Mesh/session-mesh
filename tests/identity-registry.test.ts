@@ -79,17 +79,23 @@ print(json.dumps(out))
 });
 
 describe('the registry file', () => {
-  test('a first listing migrates the snapshot: its ids as observed, nothing guessed; the file is private', () => {
+  test('a first listing migrates the snapshot: only its exact ids, never argv or a guess; the file is private', () => {
     const out = python(`
-respawn.update([listed("w", 1.0, "codex", A, "cwd_unique"), listed("v", 2.0, "copilot", B, "copilot_hooks")],
+C, D = "0e6c0000-1111-4222-8333-666666666666", "0e6c0000-1111-4222-8333-777777777777"
+respawn.update([listed("w", 1.0, "codex", A, "cwd_unique"), listed("v", 2.0, "copilot", B, "copilot_hooks"),
+                listed("c", 3.0, "claude", C, "pid_metadata"), listed("r", 4.0, "codex", D, "argv_resume")],
                True, now=1000.0, host="1:1")
 respawn.identity_file().unlink()        # as before an upgrade: a snapshot, no registry
-respawn.update([listed("w", 1.0, "codex", None, None), listed("v", 2.0, "copilot", B, "argv_session")],
+respawn.update([listed("w", 1.0, "codex", None, None), listed("v", 2.0, "copilot", B, "argv_session"),
+                listed("c", 3.0, "claude", None, None), listed("r", 4.0, "codex", None, None)],
                True, now=1010.0, host="1:1")
 mode = respawn.identity_file().stat().st_mode & 0o777
-print(json.dumps([mode, [(e["session"]["name"], e["id"], e["source"], e["evidence"]) for e in registry()["entries"]]]))
+print(json.dumps([mode, [(e["session"]["name"], e["id"], e["source"], e["evidence"]) for e in registry()["entries"]],
+                  [respawn.restore_identity(respawn.entry_of(listed(n, t, k, s, src)))[0]["agent"]["session_id"]
+                   for n, t, k, s, src in [("w", 1.0, "codex", A, "cwd_unique"), ("r", 4.0, "codex", D, "argv_resume")]]]))
 `);
-    assert.deepEqual(out, [0o600, [['v', B, 'observed', 'migrated:hooks'], ['w', A, 'observed', 'migrated:legacy']]]);
+    assert.deepEqual(out, [0o600, [['c', '0e6c0000-1111-4222-8333-666666666666', 'observed', 'migrated:pid_metadata'], ['v', B, 'observed', 'migrated:hooks']],
+      [A, '0e6c0000-1111-4222-8333-777777777777']], 'what is not imported still restores from the snapshot');
   });
 
   test('a listing records only what it saw exactly: an open rollout, a pid file; never argv or a guess', () => {
@@ -201,7 +207,124 @@ respawn.forget_identity(other)
 invalid = respawn.claim_identity(new, "codex", "-x", "chosen", "launch:restore")
 print(json.dumps([over_lost, over_live, invalid, sorted((e["session"]["name"], e["state"]) for e in registry()["entries"])]))
 `);
-    assert.deepEqual(out, ['active', 'contested', null, [['live', 'active'], ['new', 'active'], ['old', 'active']]]);
+    assert.deepEqual(out, ['active', 'held', null, [['live', 'active'], ['new', 'active'], ['old', 'active']]]);
+  });
+
+  test('a launch is refused while a live session holds the conversation, whatever its source', () => {
+    const out = python(`
+x = {"name": "x", "created": 1.0, "nonce": NONCE}
+respawn.update([listed("x", 1.0, "codex", A, "open_rollout")], True, now=1000.0, host="1:1", nonces={("x", 1.0): NONCE})
+respawn.update([listed("x", 1.0, "codex", None, None)], True, now=1010.0, host="1:1", nonces={("x", 1.0): NONCE})
+y = {"name": "y", "created": None, "nonce": "e" * 32}
+over_observed = respawn.claim_identity(y, "codex", A, "chosen", "launch:history", live=[x], required=True)
+h = {"name": "h", "created": 2.0, "nonce": "d" * 32}
+respawn.claim_identity(h, "claude", B, "hook", "hook:Stop")
+z = {"name": "z", "created": None, "nonce": "c" * 32}
+over_hook = respawn.claim_identity(z, "claude", B, "chosen", "launch:restore", live=[x, h], required=True)
+own = respawn.claim_identity(h, "claude", B, "chosen", "launch:restore", live=[x, h], required=True)
+print(json.dumps([over_observed, over_hook, own,
+                  sorted((e["session"]["name"], e["state"], e["id"]) for e in registry()["entries"])]))
+`);
+    assert.deepEqual(out, ['held', 'held', 'active', [['h', 'active', B], ['x', 'active', A]]],
+      'the holders keep their conversation; the session itself may relaunch its own');
+  });
+
+  test('a newer version is never overwritten, whatever the shape of its entries', () => {
+    const out = python(`
+kept = []
+for text in ('{"version": 2, "entries": {}}', '{"version": 2}', '{"version": 3, "entries": "x"}'):
+    respawn.identity_file().write_text(text)
+    respawn.identity_file().chmod(0o600)
+    respawn.update([listed("a", 1.0, "codex", A, "open_rollout")], True, now=1000.0, host="1:1")
+    try:
+        respawn.claim_identity({"name": "n", "created": None, "nonce": NONCE}, "codex", B, "chosen", "launch:x",
+                               live=[], required=True)
+        refused = False
+    except OSError:
+        refused = True
+    kept.append([respawn.identity_file().read_text() == text, refused])
+print(json.dumps(kept))
+`);
+    assert.deepEqual(out, [[true, true], [true, true], [true, true]]);
+  });
+
+  test('a corrupt or too deeply nested registry never breaks a listing: it is replaced, with one line logged', () => {
+    const out = python(`
+import contextlib, io
+results = []
+for text in ("[" * 200000 + "]" * 200000, "{not json", '{"version": 1, "entries": {}}'):
+    respawn.identity_file().write_text(text)
+    respawn.identity_file().chmod(0o600)
+    log = io.StringIO()
+    with contextlib.redirect_stdout(log):
+        respawn.update([listed("a", 1.0, "codex", A, "open_rollout")], True, now=1000.0, host="1:1")
+        respawn.update([listed("a", 1.0, "codex", A, "open_rollout")], True, now=1010.0, host="1:1")
+    lines = log.getvalue().splitlines()
+    results.append([len(lines), [e["id"] for e in registry()["entries"]],
+                    any(A in line or str(home) in line for line in lines)])
+print(json.dumps(results))
+`);
+    for (const [lines, ids, leaks] of out) {
+      assert.equal(lines, 1, 'one line, at the replacement');
+      assert.deepEqual(ids, [A], 'replaced by the next write');
+      assert.equal(leaks, false, 'no id and no path in the line');
+    }
+  });
+
+  test('the restore offer says what the restore does: the registry first, the snapshot after', () => {
+    const out = python(`
+respawn.update([listed("a", 1.0, "codex", A, "open_rollout"), listed("b", 2.0, "codex", A, "open_rollout"),
+                listed("c", 3.0, "claude", None, None)], True, now=1000.0, host="1:1")
+respawn.claim_identity({"name": "c", "created": 3.0, "nonce": None}, "claude", B, "hook", "hook:Stop")
+offers = respawn.update([], True, now=1010.0, host="2:2")
+print(json.dumps(sorted((o["name"], o["resumable"]) for o in offers)))
+`);
+    assert.deepEqual(out, [['a', true], ['b', false], ['c', true]],
+      'b is contested although its snapshot names A; c has only a hook id, which the snapshot lacks');
+  });
+
+  test("pruning keys on the PTY host's list (seen), not on the sessions the listing described", () => {
+    const out = python(`
+respawn.update([listed("a", 1.0, "codex", A, "open_rollout"), listed("b", 2.0, "claude", B, "pid_metadata")],
+               True, now=1000.0, host="1:1")
+late = 1000.0 + respawn.IDENTITY_GRACE + 1
+respawn.record([listed("a", 1.0, "codex", A, "open_rollout")], True, now=late, host="1:1",
+               seen={("a", 1.0), ("b", 2.0)})
+with_seen = sorted(e["session"]["name"] for e in registry()["entries"])
+respawn.record([listed("a", 1.0, "codex", A, "open_rollout")], True, now=late + 1, host="1:1")
+print(json.dumps([with_seen, sorted(e["session"]["name"] for e in registry()["entries"])]))
+`);
+    assert.deepEqual(out, [['a', 'b'], ['a']], 'b is kept while the host lists it; without seen, as before');
+  });
+
+  test('at the cap, the entries of sessions the host no longer lists go first', () => {
+    const out = python(`
+registry = respawn._empty_identities()
+for i in range(respawn.IDENTITY_MAX_ENTRIES):
+    sid = "0e6c0000-1111-4222-8333-%012d" % i
+    registry = respawn.merge_identity(registry, {"session": {"name": "s%d" % i, "created": float(i + 1), "nonce": None},
+        "agent": "codex", "id": sid, "source": "observed", "evidence": "observed:open_rollout"}, float(i + 1))
+oldest = {"name": "s0", "created": 1.0, "nonce": None}
+after = respawn.merge_identity(registry, {"session": {"name": "new", "created": 9999.0, "nonce": None}, "agent": "codex",
+    "id": "0e6c0000-1111-4222-8333-999999999999", "source": "observed", "evidence": "observed:open_rollout"}, 9999.0,
+    listed=[oldest])
+names = {e["session"]["name"] for e in after["entries"]}
+print(json.dumps([len(names), "s0" in names, "s1" in names, "new" in names]))
+`);
+    assert.deepEqual(out, [400, true, false, true]);
+  });
+
+  test("Gemini, Antigravity and Vibe hooks only fill in a missing conversation; Claude's replace it", () => {
+    const out = python(`
+g = {"name": "g", "created": 1.0, "nonce": NONCE}
+first = respawn.claim_identity(g, "gemini", A, "hook", "hook:AfterAgent", fill_only=True)
+respawn.claim_identity(g, "gemini", B, "hook", "hook:AfterAgent", fill_only=True)
+c = {"name": "c", "created": 2.0, "nonce": "e" * 32}
+respawn.claim_identity(c, "claude", A, "hook", "hook:Stop")
+respawn.claim_identity(c, "claude", B, "hook", "hook:Stop")
+print(json.dumps([first, sorted((e["session"]["name"], e["id"]) for e in registry()["entries"])]))
+`);
+    assert.deepEqual(out, ['active', [['c', B], ['g', A]]]);
   });
 
   test('a world-readable registry is refused (read as empty) and rewritten private', () => {

@@ -152,6 +152,9 @@ let world_readable _ path valid = write_file path valid 0o644
 let truncated _ path valid = write_file path (String.sub valid 0 (String.length valid / 2)) 0o600
 let too_large _ path _ = write_file path (String.make (I.max_bytes + 1) ' ') 0o600
 
+let deeply_nested _ path _ =
+  write_file path (String.make 200_000 '[' ^ String.make 200_000 ']') 0o600
+
 let symlink dir path valid =
   let target = Filename.concat dir "elsewhere.json" in
   write_file target valid 0o600;
@@ -166,6 +169,52 @@ let test_newer_version_kept () =
   | Error _ -> ());
   let kept = In_channel.with_open_bin path In_channel.input_all in
   Alcotest.(check string) "left alone" text kept
+
+let long_entry i : I.entry =
+  {
+    session = { name = Printf.sprintf "s%d" i; created = Some (float_of_int i); nonce = None };
+    agent = "codex";
+    id = Some (String.make 2000 'a');
+    source = Observed;
+    evidence = "observed:open_rollout";
+    agent_started = None;
+    observed_at = 10.;
+    generation = 1;
+    state = Active;
+    holds_open = false;
+  }
+
+(* Ids of a caller's format can make the file larger than a reader accepts:
+   such a result is never written. *)
+let test_oversized_not_written () =
+  let path = Filename.concat (fresh_dir ()) "session-identities.json" in
+  ignore (I.update ~formats path (add "x" 1. id_a));
+  let huge _ = { I.counter = 1; entries = List.init I.max_entries long_entry } in
+  (match I.update ~formats path huge with
+  | Ok _ -> Alcotest.fail "a file over max_bytes was written"
+  | Error _ -> ());
+  Alcotest.(check int) "the file is left alone" 1 (entries path)
+
+(* At the cap, an incarnation the PTY host still lists is kept over older
+   entries of ones it does not. *)
+let test_cap_keeps_listed () =
+  let id i = Printf.sprintf "0e6c0000-1111-4222-8333-%012d" i in
+  let full =
+    List.init I.max_entries (fun i ->
+        I.merge ~formats I.empty
+          (claim (Printf.sprintf "s%d" i) (float_of_int (i + 1)) (id i))
+          ~now:(float_of_int (i + 1)))
+    |> List.concat_map (fun (r : I.registry) -> r.entries)
+  in
+  let registry = { I.counter = I.max_entries; entries = full } in
+  let oldest = (List.hd full).session in
+  let after =
+    I.merge ~listed:[ oldest ] ~formats registry (claim "new" 9999. (id 9999)) ~now:9999.
+  in
+  let names = List.map (fun (e : I.entry) -> e.session.name) after.entries in
+  Alcotest.(check int) "capped" I.max_entries (List.length names);
+  Alcotest.(check bool) "the listed oldest stays" true (List.mem "s0" names);
+  Alcotest.(check bool) "the oldest unlisted goes" false (List.mem "s1" names)
 
 (* Two processes, each adding its own entries one update at a time: with the
    lock, none is lost. *)
@@ -197,8 +246,12 @@ let () =
           Alcotest.test_case "a world-readable file is refused" `Quick (refused_as_empty world_readable);
           Alcotest.test_case "a truncated file reads as empty" `Quick (refused_as_empty truncated);
           Alcotest.test_case "a too large file is refused" `Quick (refused_as_empty too_large);
+          Alcotest.test_case "a deeply nested file reads as empty" `Quick
+            (refused_as_empty deeply_nested);
           Alcotest.test_case "a symbolic link is not followed" `Quick (refused_as_empty symlink);
           Alcotest.test_case "a newer version is not replaced" `Quick test_newer_version_kept;
           Alcotest.test_case "two concurrent writers lose nothing" `Quick test_concurrent_writers;
+          Alcotest.test_case "a result over max_bytes is not written" `Quick test_oversized_not_written;
+          Alcotest.test_case "the cap drops unlisted entries first" `Quick test_cap_keeps_listed;
         ] );
     ]

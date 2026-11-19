@@ -710,7 +710,9 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
 async def _send_launch(request, conversation):
     """Send a `new` request. With ``conversation`` (agent, id, evidence), the id is first recorded as
     ``chosen`` in the identity registry (I2), durably: when it cannot be, or another live session holds
-    that conversation, nothing is sent. A refusal that is final drops the record again."""
+    that conversation in the registry (whatever the source: the listing may not show it), nothing is
+    sent. A refusal that is final drops the record again; a cancellation or an unknown outcome keeps it
+    (the session may still appear)."""
     agent, sid, evidence = conversation or (None, None, None)
     pattern = respawn.CONVERSATION_RE.get(agent)
     if not (pattern and isinstance(sid, str) and pattern.fullmatch(sid)):   # an id of another form is not recorded
@@ -724,16 +726,29 @@ async def _send_launch(request, conversation):
     except OSError as exc:
         print(f"new: conversation of {request['name']} not recorded: {exc!r}", flush=True)
         raise web.HTTPConflict(text="The conversation could not be recorded: nothing was started") from exc
+    if state == "held":
+        raise web.HTTPConflict(text=CONVERSATION_RUNNING_REFUSAL)
     if state != "active":
-        await asyncio.to_thread(respawn.forget_identity, session)
+        await _forget_launch(session)
         raise web.HTTPConflict(text="This conversation is claimed by another session: nothing was started")
     try:
         await _send_new(request)
-    except CreationUncertain:   # the session may still appear: its record stays
+    except (CreationUncertain, asyncio.CancelledError):   # the session may still appear: its record stays
         raise
     except BaseException:
-        await asyncio.to_thread(respawn.forget_identity, session)
+        await _forget_launch(session)
         raise
+
+
+CONVERSATION_RUNNING_REFUSAL = "This conversation is already running (another session): nothing was started"
+
+
+async def _forget_launch(session):
+    """Drop the record of a launch refused for good; a failure is logged, never raised over the refusal."""
+    try:
+        await asyncio.to_thread(respawn.forget_identity, session)
+    except OSError as exc:
+        print(f"new: conversation record of {session['name']} not dropped: {exc!r}", flush=True)
 
 
 async def _prepared_launch(known_agent, command, cwd):
@@ -1794,10 +1809,15 @@ async def api_event(request):
     return web.json_response({"ok": True, "applied": True})
 
 
+HOOK_FILLS_ONLY = ("gemini", "agy", "vibe")
+
+
 async def _claim_reported_conversation(name, nonce, created, agent, detail):
     """The conversation a hook of the session's own agent reported (``detail.session``), into the identity
     registry as ``hook`` (I5). The session comes from the token, never from the body; an id of another
-    form, or of another agent, is ignored. Best effort: the next report tries again."""
+    form, or of another agent, is ignored. Best effort: the next report tries again. As in
+    _apply_reported_state, the hooks of Gemini, Antigravity and Vibe only fill in a missing conversation:
+    they never replace the one the registry holds for the session."""
     sid = (detail or {}).get("session")
     if agent is None or not isinstance(sid, str):
         return
@@ -1805,7 +1825,7 @@ async def _claim_reported_conversation(name, nonce, created, agent, detail):
     evidence = f"hook:{hook}" if isinstance(hook, str) and respawn.EVIDENCE_RE.fullmatch(f"hook:{hook}") else "hook:report"
     try:
         await asyncio.to_thread(respawn.claim_identity, {"name": name, "created": created, "nonce": nonce},
-                                agent, sid, "hook", evidence)
+                                agent, sid, "hook", evidence, fill_only=agent in HOOK_FILLS_ONLY)
     except OSError as exc:
         print(f"event: conversation of {name} not recorded: {exc!r}", flush=True)
 
@@ -2103,13 +2123,19 @@ def _not_relaunched_line(agent, reason):
 
 def _conversation_missing(kind, sid):
     """Whether the conversation is known to be gone: no Claude transcript, no Codex rollout of that id.
-    Pi and OpenCode are checked when their launch line is built; the others are not checked."""
-    home = glob.escape(discover.HOME)
-    if kind == "claude":
-        return not glob.glob(os.path.join(home, ".claude", "projects", "*", f"{sid}.jsonl"))
-    if kind == "codex":
-        return not glob.glob(os.path.join(home, ".codex", "sessions", "*", "*", "*", f"rollout-*-{sid}.jsonl"))
-    return False
+    Pi and OpenCode are checked when their launch line is built; the others are not checked. Claude's and
+    Codex's data folders are looked for in ``$CLAUDE_CONFIG_DIR`` and ``$CODEX_HOME`` (absolute) and in
+    the home folder; with none of them present, nothing is known to be gone."""
+    layout = {"claude": ("CLAUDE_CONFIG_DIR", ".claude", "projects", ("*", f"{sid}.jsonl")),
+              "codex": ("CODEX_HOME", ".codex", "sessions", ("*", "*", "*", f"rollout-*-{sid}.jsonl"))}.get(kind)
+    if layout is None:
+        return False
+    variable, default, data, pattern = layout
+    configured = os.environ.get(variable) or ""
+    roots = [configured] if os.path.isabs(configured) else []
+    folders = [os.path.join(root, data) for root in [*roots, os.path.join(discover.HOME, default)]]
+    present = [folder for folder in folders if os.path.isdir(folder)]
+    return bool(present) and not any(glob.glob(os.path.join(glob.escape(folder), *pattern)) for folder in present)
 
 
 def _restored_conversation(agent):
@@ -4581,31 +4607,31 @@ async def restore_exact(app, expected):
             entry = await asyncio.to_thread(respawn.lost_entry, name)
             if entry is None:
                 return _result("not-found", "not-started", "Not found, already restored or folder gone")
-            differs = respawn.offer_mismatch(entry, expected)
-            if differs:
+            differs = [key for key in respawn.offer_mismatch(entry, expected) if key != "resume_id"]
+            if differs:   # the conversation is compared below, with the one the restore would resume
                 return _result("expected-mismatch", "not-started", "The offer is not the expected one",
                                mismatched=differs)
+            entry, refusal = await _exact_identity(entry, expected)
+            if refusal is not None:
+                return refusal
             marker = entry.get("restoring")
             if marker is None:
-                entry, refusal = await _exact_identity(entry, expected)
-                if refusal is None:
-                    refusal, marker = await _start_exact(app, name, entry, running)
+                refusal, marker = await _start_exact(app, name, entry, running)
                 if refusal is not None:
                     return refusal
             return await _complete_exact(name, entry, marker)
 
 
 async def _exact_identity(entry, expected):
-    """(the offer with the registry's conversation, a refusal or None): a guarded restore resumes exactly
-    the expected conversation, never one that is contested or gone, and never turns it into a shell."""
+    """(the offer with the conversation the restore resumes: the registry's first, a refusal or None): a
+    guarded restore resumes exactly the expected conversation, never one that is contested or gone, never
+    turns an expected one into a shell, and never resumes one when it expected none."""
     resolved, reason = await asyncio.to_thread(_restore_identity, entry)
     agent = resolved["agent"]
-    if not (agent and expected["resume_id"]):
-        return resolved, None
-    if reason:
+    if agent and expected["resume_id"] and reason in ("contested", "not found"):
         why = NOT_RELAUNCHED[reason][0].split(":")[0]
         return resolved, _result("not-resumable", "not-started", f"{why}: a guarded restore does not start a plain shell")
-    if agent["session_id"] != expected["resume_id"]:
+    if (agent["session_id"] if agent else None) != expected["resume_id"]:
         return resolved, _result("expected-mismatch", "not-started", "The offer is not the expected one",
                                  mismatched=["resume_id"])
     return resolved, None

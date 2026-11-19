@@ -95,20 +95,27 @@ val same_incarnation : incarnation -> incarnation -> bool
 (** Same name, [created] and [nonce] equal wherever both know them, and at
     least one of the two known on both sides. *)
 
-val merge : formats:formats -> registry -> Claim.t -> now:float -> registry
+val merge :
+  ?listed:incarnation list -> formats:formats -> registry -> Claim.t -> now:float -> registry
 (** The registry after one claim. In order: an invalid claim changes
-    nothing; on the incarnation's own entry, another agent counts only from a
-    process started after that entry, and another id from a process started
-    before the entry's agent is a late report, ignored; the same id refreshes
-    the entry (the stronger source, [holds_open] once seen, a start time);
-    another id replaces it (the newest fact wins). Among incarnations one id
-    has one holder: the stronger (chosen > hook > observed, then the one that
-    holds the rollout open) keeps it and the other is [Contested]; when equal,
-    the current holder keeps it. *)
+    nothing; entries the claim shows to be one incarnation (one keyed by
+    [created], one by [nonce]) become one, the newest by generation; on the
+    incarnation's own entry, another agent counts only from a process started
+    after that entry, another id from a process started before the entry's
+    agent is a late report, ignored, and an [Observed] claim never replaces a
+    [Hook] or [Chosen] id unless its process started after that entry; the
+    same id of the same agent refreshes the entry (the stronger source,
+    [holds_open] once seen, the start time of a later process); another id
+    replaces it (the newest fact wins). Among incarnations one id has one
+    holder: the stronger (chosen > hook > observed, then the one that holds
+    the rollout open) keeps it and the other is [Contested]; when equal, the
+    current holder keeps it. When the cap drops entries, those of
+    incarnations not in [listed] (the ones the PTY host lists) go first. *)
 
 val prune : registry -> keep:incarnation list -> now:float -> registry
 (** Without the entries of incarnations not in [keep] and older than
-    {!grace}; a kept entry takes the [created] or [nonce] it lacks. *)
+    {!grace}; a kept entry takes the [created] or [nonce] it lacks, and two
+    entries that become one incarnation keep the newest. *)
 
 type resolution = No_entry | Resolved of string | Contested_entry
 
@@ -123,9 +130,9 @@ val incarnation_of_json : Yojson.Safe.t -> incarnation option
 
 val of_json : formats:formats -> Yojson.Safe.t -> registry * bool
 (** The registry and whether this version may replace the file. A newer
-    version reads as empty and not writable; other malformed content reads as
-    empty; each entry is checked, the first {!max_entries} only, and a
-    repeated incarnation is dropped. *)
+    version, whatever its shape, reads as empty and not writable; other
+    malformed content reads as empty; each entry is checked, the first
+    {!max_entries} only, and a repeated incarnation is dropped. *)
 
 val to_json : registry -> Yojson.Safe.t
 
@@ -144,4 +151,5 @@ val update :
 (** Under the file lock: read (empty when missing), apply, and replace the
     file when the result differs or there was none (temporary file, fsync,
     rename, fsync of the directory). [Error] when a newer version holds the
-    file or the write failed. *)
+    file, the result is larger than {!max_bytes} (nothing written), or the
+    write failed. *)

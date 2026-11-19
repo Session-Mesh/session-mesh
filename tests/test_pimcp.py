@@ -126,7 +126,7 @@ def test_pi_resume_requires_unique_existing_v3_transcript(tmp_path, monkeypatch)
 
 async def test_missing_pi_transcript_does_not_abort_restore_batch(tmp_path, monkeypatch):
     sid = "123e4567-e89b-12d3-a456-426614174000"
-    entry = {"cwd": str(tmp_path), "created": 1.0, "agent": {"type": "pi", "session_id": sid}}
+    entry = {"name": "missing-pi", "cwd": str(tmp_path), "created": 1.0, "agent": {"type": "pi", "session_id": sid}}
     monkeypatch.setattr(server.respawn, "lost_entry", lambda _name: entry)
     monkeypatch.setattr(discover, "pi_session_path", lambda _sid: None)
     result = await server.restore_one("missing-pi", set(), asyncio.Lock())

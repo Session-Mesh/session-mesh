@@ -143,9 +143,24 @@ let started_before (c : Claim.t) (e : entry) =
   | Some s, Some t -> s < t -. slack
   | _ -> false
 
+(* An observation never replaces a hook or chosen id of the same process: a
+   listing is sampled before it is recorded, so it may be older than the
+   report. Only one of a later process does. *)
 let refused (mine : entry) (c : Claim.t) =
   if mine.agent <> c.agent then not (started_after c mine)
-  else mine.id <> Some c.id && started_before c mine
+  else if mine.id = Some c.id then false
+  else if started_before c mine then true
+  else
+    c.source = Observed && mine.source <> Observed && mine.state = Active
+    && not (started_after c mine)
+
+(* The start time an entry keeps: the claim's when none is known, or when it
+   is a later process. *)
+let later known seen =
+  match (known, seen) with
+  | None, s -> s
+  | Some k, Some s when s > k +. slack -> Some s
+  | k, _ -> k
 
 let refreshed registry (mine : entry) (c : Claim.t) =
   let stronger = rank c.source > rank mine.source in
@@ -154,7 +169,7 @@ let refreshed registry (mine : entry) (c : Claim.t) =
       mine with
       session = bound mine.session c.session;
       holds_open = mine.holds_open || c.holds_open;
-      agent_started = (match mine.agent_started with None -> c.agent_started | s -> s);
+      agent_started = later mine.agent_started c.agent_started;
       source = (if stronger then c.source else mine.source);
       evidence = (if stronger then c.evidence else mine.evidence);
     }
@@ -167,14 +182,20 @@ let same_fact (a : entry) (b : entry) =
   && a.evidence = b.evidence && a.agent_started = b.agent_started && a.state = b.state
   && a.holds_open = b.holds_open
 
-(* At most [max_entries], the oldest observed dropped first (file order when
+(* At most [max_entries]: the entries of incarnations not in [listed] (when
+   known) are dropped first, then the oldest observed (file order when
    equal). *)
-let bounded entries =
+let bounded ?listed entries =
   let excess = List.length entries - max_entries in
   if excess <= 0 then entries
   else
-    let order = List.mapi (fun i (e : entry) -> (e.observed_at, i)) entries |> List.sort compare in
-    let dropped = List.filteri (fun k _ -> k < excess) order |> List.map snd in
+    let live (e : entry) =
+      match listed with Some l -> List.exists (same_incarnation e.session) l | None -> false
+    in
+    let order =
+      List.mapi (fun i (e : entry) -> (live e, e.observed_at, i)) entries |> List.sort compare
+    in
+    let dropped = List.filteri (fun k _ -> k < excess) order |> List.map (fun (_, _, i) -> i) in
     List.filteri (fun i _ -> not (List.mem i dropped)) entries
 
 let candidate_of (c : Claim.t) session ~generation ~now =
@@ -191,7 +212,7 @@ let candidate_of (c : Claim.t) session ~generation ~now =
     holds_open = c.holds_open;
   }
 
-let placed registry (mine : entry option) (c : Claim.t) ~now =
+let placed ?listed registry (mine : entry option) (c : Claim.t) ~now =
   let generation = registry.counter + 1 in
   let session = match mine with Some m -> bound m.session c.session | None -> c.session in
   let candidate = candidate_of c session ~generation ~now in
@@ -219,16 +240,46 @@ let placed registry (mine : entry option) (c : Claim.t) ~now =
             else Some e)
           registry.entries
       in
-      { counter = generation; entries = bounded (kept @ [ candidate ]) }
+      { counter = generation; entries = bounded ?listed (kept @ [ candidate ]) }
 
-let merge ~formats registry (c : Claim.t) ~now =
+(* The incarnation's entry; when several entries are that incarnation (one
+   keyed by its birth date, one by its nonce), only the newest stays. *)
+let joined registry session =
+  match List.filter (fun e -> same_incarnation e.session session) registry.entries with
+  | [] -> (registry, None)
+  | [ m ] -> (registry, Some m)
+  | first :: rest as matches ->
+      let mine =
+        List.fold_left (fun m e -> if e.generation > m.generation then e else m) first rest
+      in
+      let entries =
+        List.filter (fun e -> e == mine || not (List.memq e matches)) registry.entries
+      in
+      ({ registry with entries }, Some mine)
+
+let merge ?listed ~formats registry (c : Claim.t) ~now =
   if not (valid_claim ~formats c) then registry
   else
-    let mine = List.find_opt (fun e -> same_incarnation e.session c.session) registry.entries in
+    let registry, mine = joined registry c.session in
     match mine with
     | Some m when refused m c -> registry
-    | Some m when m.state = Active && m.id = Some c.id -> refreshed registry m c
-    | _ -> placed registry mine c ~now
+    | Some m when m.state = Active && m.id = Some c.id && m.agent = c.agent ->
+        refreshed registry m c
+    | _ -> placed ?listed registry mine c ~now
+
+(* Of the entries that are one incarnation, the newest (by generation; the
+   first when equal). *)
+let newest_only entries =
+  let superseded e =
+    List.exists
+      (fun o -> o != e && same_incarnation o.session e.session && o.generation > e.generation)
+      entries
+  in
+  let kept = List.filter (fun e -> not (superseded e)) entries in
+  let earlier i = List.filteri (fun j _ -> j < i) kept in
+  List.filteri
+    (fun i e -> not (List.exists (fun o -> same_incarnation o.session e.session) (earlier i)))
+    kept
 
 let prune registry ~keep ~now =
   let entries =
@@ -238,6 +289,7 @@ let prune registry ~keep ~now =
         | Some seen -> Some { e with session = bound e.session seen }
         | None -> if now -. e.observed_at < grace then Some e else None)
       registry.entries
+    |> newest_only
   in
   if entries = registry.entries then registry else { registry with entries }
 
@@ -344,9 +396,13 @@ let deduplicated entries =
     (fun kept e -> if List.exists (fun k -> same_incarnation e.session k.session) kept then kept else kept @ [ e ])
     [] entries
 
+(* The version is read before the shape: a newer version, whatever its
+   shape, is never replaced. *)
 let of_json ~formats json =
   match (field json "version", field json "entries") with
-  | Some (`Int v), Some (`List items) when v = version ->
+  | Some (`Int v), _ when v <> version -> (empty, v < version)
+  | Some (`Intlit s), _ -> (empty, String.length s > 0 && s.[0] = '-')
+  | Some (`Int _), Some (`List items) ->
       let entries = List.filteri (fun i _ -> i < max_entries) items |> List.filter_map (entry_of_json ~formats) in
       let entries = deduplicated entries in
       let counter =
@@ -355,8 +411,6 @@ let of_json ~formats json =
         | _ -> List.fold_left (fun m e -> max m e.generation) 0 entries
       in
       ({ counter; entries }, true)
-  | Some (`Int v), Some (`List _) -> (empty, v < version)
-  | Some (`Intlit s), Some (`List _) -> (empty, String.length s > 0 && s.[0] = '-')
   | _ -> (empty, true)
 
 let optional f = function None -> `Null | Some v -> f v
@@ -399,7 +453,7 @@ type read_result = Missing | Read of registry * bool
 let parse ~formats text =
   match Yojson.Safe.from_string text with
   | json -> of_json ~formats json
-  | exception Yojson.Json_error _ -> (empty, true)
+  | exception (Yojson.Json_error _ | Stack_overflow | Out_of_memory) -> (empty, true)
 
 let read ~formats path =
   let contents fd (stats : Unix.stats) =
@@ -458,8 +512,14 @@ let update ~formats path change =
     if not writable then Error "identity registry of a newer version: not replaced"
     else
       let next = change current in
-      if missing || next <> current then write_atomic path (Yojson.Safe.pretty_to_string (to_json next));
-      Ok next
+      if not (missing || next <> current) then Ok next
+      else
+        let text = Yojson.Safe.pretty_to_string (to_json next) in
+        if String.length text > max_bytes then
+          Error "identity registry over its size limit: not written"
+        else (
+          write_atomic path text;
+          Ok next)
   in
   try with_lock path apply
   with Unix.Unix_error (err, call, _) -> Error (call ^ ": " ^ Unix.error_message err)
