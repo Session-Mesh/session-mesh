@@ -8,7 +8,7 @@
 // the built bundle. The browser part needs a Chromium: MESH_CHROMIUM=<path>; skipped without it
 // (MESH_REQUIRE_BROWSER=1 makes the absence a failure).
 import assert from 'node:assert/strict';
-import {type ChildProcess, spawn} from 'node:child_process';
+import {type ChildProcess, spawn, spawnSync} from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -42,11 +42,19 @@ function freePort(): Promise<number> {
 
 const token = (): string => fs.readFileSync(path.join(confDir, 'token'), 'utf8').trim();
 
-// Where /proc lists sockets (Linux, the CI): whether the socket listening on `port` is one of the
-// descriptors of process `pid`. null where /proc cannot tell.
-const PROC = fs.existsSync('/proc/net/tcp');
-function listensFrom(pid: number, port: number): boolean | null {
-  if (!PROC) return null;
+// Whether the socket listening on `port` is one of the descriptors of process `pid`: read from
+// /proc where it lists sockets (Linux, the CI), otherwise asked of lsof (macOS has it). Without
+// either, nothing can tell, and the suite is skipped rather than trusting any listener.
+// MESH_TEST_OWNER=lsof forces lsof, to test that path on Linux.
+const PROC = process.env.MESH_TEST_OWNER !== 'lsof' && fs.existsSync('/proc/net/tcp');
+const LSOF = !PROC && spawnSync('lsof', ['-v'], {stdio: 'ignore'}).error === undefined;
+const OWNER_CHECK = PROC || LSOF;
+function listensFrom(pid: number, port: number): boolean {
+  if (!PROC) {
+    // -a: the conditions together; -t: the PIDs only. Exit status 1 when nothing matches.
+    const found = spawnSync('lsof', ['-nP', '-a', '-p', String(pid), `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {encoding: 'utf8'});
+    return found.status === 0 && found.stdout.split('\n').includes(String(pid));
+  }
   const local = `:${port.toString(16).toUpperCase().padStart(4, '0')}`;
   const inodes = new Set<string>();
   for (const table of ['/proc/net/tcp', '/proc/net/tcp6']) {
@@ -71,12 +79,12 @@ function listensFrom(pid: number, port: number): boolean | null {
   });
 }
 
-// Ready only on proof that the listener is the child `pid`. Where /proc tells, the listening
-// socket must be one of its descriptors, checked before any request, so the token is never sent
-// to another listener. In any case it must refuse a wrong token (401) and, with the token this
-// child wrote under the throwaway HOME, describe the file placed there.
+// Ready only on proof that the listener is the child `pid`: the listening socket must be one of its
+// descriptors, checked before any request, so the token is never sent to another listener. Then
+// it must refuse a wrong token (401) and, with the token this child wrote under the throwaway
+// HOME, describe the file placed there.
 async function ownsPort(port: number, pid: number): Promise<boolean> {
-  if (listensFrom(pid, port) === false) return false;
+  if (!listensFrom(pid, port)) return false;
   const ready = path.join(home, 'ready.diff');
   const ask = (bearer: string): Promise<Response> => fetch(`http://127.0.0.1:${port}/api/view`, {
     method: 'POST',
@@ -142,7 +150,7 @@ async function load(url: string, dest = 'iframe'): Promise<{type: string; body: 
     csp: response.headers.get('content-security-policy') ?? ''};
 }
 
-describe('the diff viewer through the server routes', () => {
+describe('the diff viewer through the server routes', {skip: OWNER_CHECK ? false : 'neither /proc/net/tcp nor lsof: the listening process cannot be checked'}, () => {
   before(async () => {
     const runtime = path.join(scratch, 'run');
     fs.mkdirSync(runtime, {recursive: true, mode: 0o700});
@@ -171,8 +179,8 @@ describe('the diff viewer through the server routes', () => {
 
   // A listener that mimics the server: it refuses the wrong token it is first sent, then echoes the
   // target it is asked about with a /view/ URL. Only the check of the listening process tells it
-  // from the server, so the test needs /proc.
-  test('the readiness check does not take another listener for the server', {skip: PROC ? false : 'no /proc/net/tcp'}, async () => {
+  // from the server.
+  test('the readiness check does not take another listener for the server', async () => {
     let tokens: string[] = [];
     const impostor = http.createServer((request, response) => {
       const bearer = request.headers.authorization ?? '';
