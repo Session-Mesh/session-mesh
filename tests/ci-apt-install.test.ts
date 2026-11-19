@@ -32,6 +32,10 @@ case "$1" in
         case "$*" in *--error-on=any*) echo "E: Some index files failed to download."; exit 100;; esac;;
       mirror) echo "Err:5 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease"; echo "W: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease"
         case "$*" in *--error-on=any*) echo "E: Some index files failed to download."; exit 100;; esac;;
+      # The hosted runner's own source, which apt names by its list and not by a host.
+      mirrorfile) echo "Err:2 mirror+file:/etc/apt/apt-mirrors.txt noble-updates InRelease"; echo "  Could not resolve 'azure.archive.ubuntu.com'"
+        echo "W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-updates/InRelease  Could not resolve 'azure.archive.ubuntu.com'"
+        case "$*" in *--error-on=any*) echo "E: Some index files failed to download."; exit 100;; esac;;
     esac
     exit 0;;
   install)
@@ -47,11 +51,34 @@ case "$1" in
               echo "E: Failed to fetch http://security.ubuntu.com/ubuntu/pool/main/f/fonts-ipafont/fonts-ipafont-gothic_00303-21_all.deb  503  Service Unavailable"
               echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?"
               exit 100;;
+            # Lines of hosted runner logs during an outage of the image's mirror list.
+            mirrorfile)
+              echo "Err:2 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/main amd64 bzip2-doc all 1.0.8-5.1build0.1"
+              echo "  Temporary failure resolving 'azure.archive.ubuntu.com'"
+              echo "E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/b/bzip2/bzip2-doc_1.0.8-5.1build0.1_all.deb  Temporary failure resolving 'azure.archive.ubuntu.com'"
+              echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?"
+              exit 100;;
+            mirrorlist503)
+              echo "Err:2 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/main amd64 bzip2-doc all 1.0.8-5.1build0.1"
+              echo "  503  Service Unavailable [IP: 1.2.3.4 80]"
+              echo "E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/b/bzip2/bzip2-doc_1.0.8-5.1build0.1_all.deb  503  Service Unavailable"
+              exit 100;;
+            # A 503, then apt's usual warning about its download sandbox: still a mirror error.
+            503perm)
+              echo "Err:7 http://security.ubuntu.com/ubuntu noble-security/main amd64 fonts-ipafont-gothic all 00303-21"
+              echo "  503  Service Unavailable [IP: 1.2.3.4 80]"
+              echo "W: Download is performed unsandboxed as root as file '/var/cache/apt/archives/partial/fonts-ipafont-gothic_00303-21_all.deb' couldn't be accessed by user '_apt'. - pkgAcquire::Run (13: Permission denied)"
+              echo "E: Failed to fetch http://security.ubuntu.com/ubuntu/pool/main/f/fonts-ipafont/fonts-ipafont-gothic_00303-21_all.deb  503  Service Unavailable"
+              exit 100;;
             azure) echo "E: Failed to fetch http://azure.archive.ubuntu.com/x.deb  503  Service Unavailable"; exit 100;;
             diskfull) echo "Err:7 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 rsync amd64 1"; echo "  Write error - write (28: No space left on device)"; echo "E: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/pool/main/r/rsync.deb  Write error - write (28: No space left on device)"; exit 100;;
+            # The same, with the reason only on the indented line under Err:.
+            diskfullerr) echo "Err:7 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 rsync amd64 1"; echo "  Write error - write (28: No space left on device)"; echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?"; exit 100;;
             typo) echo "E: Unable to locate package bubblewrapp"; exit 100;;
             locate) echo "E: Unable to locate package nope"; exit 100;;
             hang) exec env PATH=/usr/bin:/bin sleep 30;;
+            # Ignores the TERM of timeout, so only the KILL after the grace period ends it.
+            hangterm) trap '' TERM; exec env PATH=/usr/bin:/bin sleep 30;;
           esac
         fi
         exit 0;;
@@ -151,6 +178,56 @@ describe('apt-install.sh', () => {
     assert.match(result.stdout, /::error title=Package mirror unavailable::/);
   });
 
+  test('a hung download that ignores TERM is killed after the grace period (status 137) and still counts as the time bound', () => {
+    const started = Date.now();
+    const result = run(['musl-tools'], {FAKE_FAILURES: '9', FAKE_KIND: 'hangterm', CI_APT_DOWNLOAD_SECONDS: '1', CI_APT_KILL_GRACE: '1', CI_APT_ATTEMPTS: '1'});
+    assert.equal(result.status, 1);
+    assert.ok(Date.now() - started < 20_000, 'the KILL must end the hung download');
+    assert.match(result.stdout, /failed with a mirror error \(status 137\)/);
+    assert.match(result.stdout, /::error title=Package mirror unavailable::/);
+    assert.match(calls('sudo')[1], /^sudo timeout -k 1 1 apt-get install/);
+  });
+
+  test('an outage of the runner image\'s mirror list (mirror+file:) during the download is retried, then names the list and the host', () => {
+    const result = run(['bzip2-doc'], {FAKE_FAILURES: '9', FAKE_KIND: 'mirrorfile'});
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stdout, /::error title=Package mirror unavailable::.*\(errors from azure\.archive\.ubuntu\.com, mirror\+file:\/etc\/apt\/apt-mirrors\.txt\)/);
+    assert.equal(calls('apt-get update').length, 3);
+    assert.deepEqual(calls('mirror'), ['mirror --fallback']);
+  });
+
+  test('a mirror+file: error that names no host is a mirror error too, and recovers on the fallback', () => {
+    const result = run(['bzip2-doc'], {FAKE_FAILURES: '2', FAKE_KIND: 'mirrorlist503'});
+    assert.equal(result.status, 0, result.stdout);
+    assert.match(result.stdout, /attempt 1 of 3 failed with a mirror error from mirror\+file:\/etc\/apt\/apt-mirrors\.txt \(status 100\)/);
+    assert.deepEqual(calls('mirror'), ['mirror --fallback']);
+    assert.match(result.stdout, /installed on attempt 3 of 3/);
+  });
+
+  test('an update that fails on the mirror+file: list fails the attempt, so --if-available never skips on a partial index', () => {
+    const result = run(['rsync', '--if-available', 'darcs'], {FAKE_UPDATE_KIND: 'mirrorfile', FAKE_MISSING: 'darcs', CI_APT_ATTEMPTS: '2'});
+    assert.equal(result.status, 1, result.stdout);
+    assert.doesNotMatch(result.stdout, /hosts this script does not manage|skipping darcs/);
+    assert.match(result.stdout, /::error title=Package mirror unavailable::.*errors from azure\.archive\.ubuntu\.com, mirror\+file:/);
+    assert.equal(calls('apt-get install').length, 0);
+  });
+
+  test('apt\'s _apt sandbox warning (Permission denied) next to a real 503 does not hide the mirror error', () => {
+    const result = run(['fonts-ipafont-gothic'], {FAKE_FAILURES: '1', FAKE_KIND: '503perm'});
+    assert.equal(result.status, 0, result.stdout);
+    assert.match(result.stdout, /attempt 1 of 3 failed with a mirror error from security\.ubuntu\.com/);
+    assert.match(result.stdout, /installed on attempt 2 of 3/);
+  });
+
+  test('a mirror error in attempt 1 does not make an unknown package in attempt 2 look like a mirror error', () => {
+    const result = run(['nope'], {FAKE_FAILURES: '9', FAKE_KIND: '503,locate'});
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /attempt 1 of 3 failed with a mirror error/);
+    assert.match(result.stdout, /::error title=apt-get failed::apt-get failed with status 100 and no mirror error/);
+    assert.equal(calls('apt-get update').length, 2);
+    assert.deepEqual(calls('sleep'), ['sleep 30']);
+  });
+
   test('an error that is not the mirror (an unknown package) fails at once, without retry and without blaming the mirror', () => {
     const result = run(['nope'], {FAKE_FAILURES: '9', FAKE_KIND: 'locate'});
     assert.equal(result.status, 1);
@@ -176,14 +253,16 @@ describe('apt-install.sh', () => {
     assert.match(result.stdout, /installed on attempt 1 of 3/);
   });
 
-  test('a full disk during the download is not blamed on the mirror host it names', () => {
-    const result = run(['rsync'], {FAKE_FAILURES: '9', FAKE_KIND: 'diskfull'});
-    assert.equal(result.status, 1);
-    assert.match(result.stdout, /::error title=apt-get failed::/);
-    assert.doesNotMatch(result.stdout.split('\n').filter((line) => line.startsWith('::error')).join('\n'), /mirror unavailable|azure/);
-    assert.equal(calls('apt-get update').length, 1);
-    assert.deepEqual(calls('sleep'), []);
-  });
+  for (const kind of ['diskfull', 'diskfullerr']) {
+    test(`a full disk during the download is not blamed on the mirror host it names (${kind})`, () => {
+      const result = run(['rsync'], {FAKE_FAILURES: '9', FAKE_KIND: kind});
+      assert.equal(result.status, 1);
+      assert.match(result.stdout, /::error title=apt-get failed::/);
+      assert.doesNotMatch(result.stdout.split('\n').filter((line) => line.startsWith('::error')).join('\n'), /mirror unavailable|azure/);
+      assert.equal(calls('apt-get update').length, 1);
+      assert.deepEqual(calls('sleep'), []);
+    });
+  }
 
   test('a mirror error that apt only warns about during update fails the attempt (--error-on=any), so --if-available never skips on a partial index', () => {
     const result = run(['rsync', '--if-available', 'darcs'], {FAKE_UPDATE_KIND: 'mirror', FAKE_MISSING: 'darcs', CI_APT_ATTEMPTS: '2'});
