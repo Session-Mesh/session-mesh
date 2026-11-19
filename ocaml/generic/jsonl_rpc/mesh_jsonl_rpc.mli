@@ -13,7 +13,13 @@
     [max_request_bytes] is dropped without being held in memory and answered
     with [bad_request]; a final response over [max_response_bytes] is replaced
     by a [too_large] error; an oversized event is refused to the handler.
-    Nesting is bounded before parsing ({!Mesh_jsonl_value}).
+    Nesting is bounded before parsing, and request text must be strict JSON
+    in UTF-8 ({!Mesh_jsonl_value}).
+
+    Every request line gets a final frame, and no input line stops the
+    server: a [req] with no strict JSON form is refused without being echoed,
+    and a response that cannot be written (a non-finite float or a non-UTF-8
+    string from the handler) is replaced by an [internal] error.
 
     Several requests may be in progress at once (up to [max_in_flight]): each
     is answered in its own fibre, every frame carries the request's [req],
@@ -37,8 +43,10 @@ val config :
     progress.
     @raise Invalid_argument if a value is below 1. *)
 
-type emit = string -> Mesh_jsonl_rpc_envelope.fields -> (unit, [ `Too_large ]) result
-(** Send an event of the current request: [emit name fields]. *)
+type emit =
+  string -> Mesh_jsonl_rpc_envelope.fields -> (unit, [ `Too_large | `Not_json ]) result
+(** Send an event of the current request: [emit name fields]. [`Not_json]:
+    the event has no strict JSON form, and nothing was sent. *)
 
 type handler =
   Mesh_jsonl_rpc_envelope.request ->
@@ -69,6 +77,7 @@ module Writer : sig
 
   val create : max_line_bytes:int -> _ Eio.Flow.sink -> t
 
-  val write : t -> Yojson.Safe.t -> (unit, [ `Too_large ]) result
-  (** Write the frame and a newline, or nothing when it is too large. *)
+  val write : t -> Yojson.Safe.t -> (unit, [ `Too_large | `Not_json ]) result
+  (** Write the frame and a newline, or nothing when it is too large or has
+      no strict JSON form ({!Mesh_jsonl_value.encode}). *)
 end

@@ -5,15 +5,21 @@
 (*                                                                            *)
 (******************************************************************************)
 
-type 's fold = { init : unit -> 's; step : 's -> Yojson.Safe.t -> 's }
+type 's fold = { init : unit -> 's; copy : 's -> 's; step : 's -> Yojson.Safe.t -> 's }
 
-type limits = { max_line_bytes : int; max_depth : int; window : int; max_read : int }
+type limits = {
+  max_line_bytes : int;
+  max_depth : int;
+  window : int;
+  max_read : int;
+  invalid_utf8 : Mesh_jsonl_value.invalid_utf8;
+}
 
 let limits ?(max_line_bytes = 1024 * 1024) ?(max_depth = 128) ?(window = 8 * 1024 * 1024)
-    ?(max_read = 64 * 1024 * 1024) () =
+    ?(max_read = 64 * 1024 * 1024) ?(invalid_utf8 = Mesh_jsonl_value.Reject) () =
   if max_line_bytes < 1 || max_depth < 1 || window < 1 || max_read < 1 then
     invalid_arg "Mesh_jsonl_tail.limits";
-  { max_line_bytes; max_depth; window; max_read }
+  { max_line_bytes; max_depth; window; max_read; invalid_utf8 }
 
 module Signature = struct
   type t = { path : string; device : int; inode : int; size : int; mtime : float }
@@ -106,7 +112,11 @@ let read_span limits fold fd cursor ~stop =
     Mesh_jsonl_lines.create ~start:cursor.start ~max_line_bytes:limits.max_line_bytes ()
   in
   let value_limits =
-    { Mesh_jsonl_value.max_bytes = limits.max_line_bytes; max_depth = limits.max_depth }
+    {
+      Mesh_jsonl_value.max_bytes = limits.max_line_bytes;
+      max_depth = limits.max_depth;
+      invalid_utf8 = limits.invalid_utf8;
+    }
   in
   let acc = ref (cursor.state, cursor.stats.lines, cursor.stats.dropped) in
   let buffer = Bytes.create chunk_bytes in
@@ -148,16 +158,31 @@ let update_open limits fold path previous fd stats =
   match previous with
   | Some previous when unchanged previous current -> (previous, Unchanged)
   | Some previous when not (rewritten fd previous current) ->
-      (advance limits fold fd { previous with signature = current }, Appended)
+      (* The steps work on a copy: the previous result keeps its state. *)
+      let cursor = { previous with state = fold.copy previous.state; signature = current } in
+      (advance limits fold fd cursor, Appended)
   | Some previous ->
       (advance limits fold fd (fresh_cursor limits fold current (previous.stats.resets + 1)), Restarted)
   | None -> (advance limits fold fd (fresh_cursor limits fold current 0), Restarted)
 
+(* An [lstat] of a regular file gives the same signature as the [fstat] after
+   opening it: when it matches a complete previous result, the file is not
+   opened at all. Anything else goes through the safe open. *)
+let unchanged_by_lstat path = function
+  | Some previous when previous.complete -> (
+      match Unix.lstat path with
+      | stats -> stats.st_kind = Unix.S_REG && unchanged previous (signature_of path stats)
+      | exception Unix.Unix_error _ -> false)
+  | _ -> false
+
 let update limits fold path previous =
-  match Mesh_safe_file.with_regular path (update_open limits fold path previous) with
-  | result -> result
-  | exception Unix.Unix_error (error, _, _) ->
-      Error (Mesh_safe_file.Unreadable (Unix.error_message error))
+  match previous with
+  | Some result when unchanged_by_lstat path previous -> Ok (result, Unchanged)
+  | _ -> (
+      match Mesh_safe_file.with_regular path (update_open limits fold path previous) with
+      | result -> result
+      | exception Unix.Unix_error (error, _, _) ->
+          Error (Mesh_safe_file.Unreadable (Unix.error_message error)))
 
 let state t = t.state
 let signature t = t.signature

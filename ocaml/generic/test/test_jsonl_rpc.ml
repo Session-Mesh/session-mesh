@@ -33,7 +33,13 @@ let echo : Mesh_jsonl_rpc.handler =
   | "big-event" -> (
       match emit "row" [ ("blob", `String (String.make 200 'b')) ] with
       | Error `Too_large -> Ok [ ("refused", `Bool true) ]
-      | Ok () -> Ok [ ("refused", `Bool false) ])
+      | Error `Not_json | Ok () -> Ok [ ("refused", `Bool false) ])
+  | "nan-event" -> (
+      match emit "row" [ ("x", `Float Float.nan) ] with
+      | Error `Not_json -> Ok [ ("refused", `Bool true) ]
+      | Error `Too_large | Ok () -> Ok [ ("refused", `Bool false) ])
+  | "nan" -> Ok [ ("x", `Float Float.nan) ]
+  | "not-utf8" -> Ok [ ("s", `String "\xff") ]
   | "raise" -> failwith "/private/path"
   | "busy" -> Error { Envelope.code = Code "busy"; message = "later" }
   | other -> Error { Envelope.code = Unknown_op; message = other }
@@ -123,6 +129,45 @@ let test_bounds () =
         (fields = [ ("refused", `Bool true) ])
   | _ -> Alcotest.fail "unexpected frame"
 
+(* No input line stops the server: each gets a final frame, and the request
+   after it is still answered. *)
+let test_hostile_lines () =
+  let deep_behind_comment = {|/*"*/{"req":7,"op":"echo","x":[[[[[[[[1]]]]]]]]}|} in
+  let input =
+    String.concat "\n"
+      [
+        deep_behind_comment;
+        {|{"req":NaN,"op":"x"}|};
+        {|{"req":Infinity}|};
+        {|{"req":1,"op":"nan"}|};
+        {|{"req":2,"op":"not-utf8"}|};
+        {|{"req":3,"op":"nan-event"}|};
+        "{\"req\":4,\"op\":\"echo\",\"s\":\"\xff\"}";
+        "{\"req\":5,\"op\":\"echo\",\"s\":\"\001\"}";
+        {|{"req":6,"op":"echo"}|};
+      ]
+  in
+  let config = Mesh_jsonl_rpc.config ~max_depth:4 ~max_in_flight:1 () in
+  let frames = exchange ~config echo input in
+  Alcotest.check summaries "an error frame each, then service goes on"
+    [
+      ("bad_request", None);
+      ("bad_request", None);
+      ("bad_request", None);
+      ("internal", Some "1");
+      ("internal", Some "2");
+      ("ok", Some "3");
+      ("bad_request", None);
+      ("bad_request", None);
+      ("ok", Some "6");
+    ]
+    (summary frames);
+  match snd (List.nth frames 5) with
+  | Final { result = Ok fields; _ } ->
+      Alcotest.(check bool) "a non-finite event refused to the handler" true
+        (fields = [ ("refused", `Bool true) ])
+  | _ -> Alcotest.fail "unexpected frame"
+
 let test_last_line_without_newline () =
   let frames = exchange echo {|{"req":1,"op":"echo"}|} in
   Alcotest.check summaries "answered" [ ("ok", Some "1") ] (summary frames)
@@ -164,6 +209,7 @@ let () =
           Alcotest.test_case "requests and errors" `Quick test_requests_and_errors;
           Alcotest.test_case "streamed events" `Quick test_stream;
           Alcotest.test_case "line bounds" `Quick test_bounds;
+          Alcotest.test_case "hostile lines" `Quick test_hostile_lines;
           Alcotest.test_case "last line without newline" `Quick test_last_line_without_newline;
           Alcotest.test_case "requests in parallel" `Quick test_concurrent_requests;
           Alcotest.test_case "envelope round trip" `Quick test_envelope_round_trip;

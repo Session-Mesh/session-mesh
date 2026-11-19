@@ -68,21 +68,67 @@ let test_chunking_property () =
       let pieces, splitter = split ~max_line_bytes:5 ~cuts text in
       whole = pieces && Lines.resume whole_splitter = Lines.resume splitter)
 
+
+let scan ?(max_depth = 1) text =
+  match Value.prescan ~max_depth text with
+  | Ok () -> "ok"
+  | Error Value.Too_deep -> "deep"
+  | Error Value.Too_large -> "large"
+  | Error (Value.Invalid _) -> "invalid"
+
 let test_depth () =
-  Alcotest.(check bool) "flat" true (Value.depth_within ~max_depth:1 {|{"a":1}|});
-  Alcotest.(check bool) "two levels" false (Value.depth_within ~max_depth:1 {|{"a":[1]}|});
-  Alcotest.(check bool) "brackets in strings" true
-    (Value.depth_within ~max_depth:1 {|{"a":"[[[{{{\"[[["}|});
+  Alcotest.(check string) "flat" "ok" (scan {|{"a":1}|});
+  Alcotest.(check string) "two levels" "deep" (scan {|{"a":[1]}|});
+  Alcotest.(check string) "brackets in strings" "ok" (scan {|{"a":"[[[{{{\"[[["}|});
   let deep = String.make 200 '[' ^ String.make 200 ']' in
   let limits = { Value.default_limits with max_depth = 128 } in
   Alcotest.(check bool) "deep refused" true (Value.decode limits deep = Error Value.Too_deep);
   let ok = String.make 128 '[' ^ String.make 128 ']' in
   Alcotest.(check bool) "at the bound" true (Result.is_ok (Value.decode limits ok))
 
+(* Yojson accepts comments; a quote inside one would hide every bracket after
+   it from a scan that does not know about comments. *)
+let test_comments () =
+  let limits = { Value.default_limits with max_depth = 4 } in
+  let invalid text = match Value.decode limits text with Error (Value.Invalid _) -> true | _ -> false in
+  Alcotest.(check bool) "quote in a block comment" true (invalid {|/*"*/[[[[[[[[1]]]]]]]]|});
+  Alcotest.(check bool) "block comment" true (invalid "/* c */ 1");
+  Alcotest.(check bool) "line comment" true (invalid "1 // c");
+  Alcotest.(check bool) "slash in a string" true
+    (Value.decode limits {|{"path":"a/b","c":"/*"}|}
+    = Ok (`Assoc [ ("path", `String "a/b"); ("c", `String "/*") ]))
+
+let utf8 policy = { Value.default_limits with invalid_utf8 = policy }
+
+let test_utf8_and_controls () =
+  let invalid limits text = match Value.decode limits text with Error (Value.Invalid _) -> true | _ -> false in
+  Alcotest.(check bool) "not UTF-8, rejected" true (invalid (utf8 Reject) "{\"a\":\"\xff\xfe\"}");
+  Alcotest.(check bool) "not UTF-8, dropped" true
+    (Value.decode (utf8 Drop) "{\"a\":\"x\xff\xe2\x82y\xe2\x82\xac\"}"
+    = Ok (`Assoc [ ("a", `String "xy\xe2\x82\xac") ]));
+  Alcotest.(check string) "maximal subparts" "Ax"
+    (Value.drop_invalid_utf8 "\xe2A\xf0\x80\x80x\xed\xa0\x80");
+  Alcotest.(check bool) "raw NUL in a string" true (invalid (utf8 Reject) "{\"a\":\"\000\"}");
+  Alcotest.(check bool) "raw 0x01 in a string" true (invalid (utf8 Drop) "{\"a\":\"\001\"}");
+  Alcotest.(check bool) "escaped control accepted" true
+    (Value.decode (utf8 Reject) {|{"a":"\u0001"}|} = Ok (`Assoc [ ("a", `String "\001") ]))
+
+let test_non_finite () =
+  let limits = Value.default_limits in
+  Alcotest.(check bool) "NaN decoded, as Python does" true
+    (match Value.decode limits {|{"x":NaN}|} with Ok (`Assoc [ ("x", `Float f) ]) -> Float.is_nan f | _ -> false);
+  let refused json = match Value.encode ~max_bytes:100 json with Error (Value.Invalid _) -> true | _ -> false in
+  Alcotest.(check bool) "NaN not encoded" true (refused (`List [ `Float Float.nan ]));
+  Alcotest.(check bool) "Infinity not encoded" true (refused (`Float Float.infinity));
+  Alcotest.(check bool) "invalid UTF-8 not encoded" true (refused (`String "\xff"));
+  Alcotest.(check bool) "newline in a literal not encoded" true (refused (`Intlit "1\n2"));
+  Alcotest.(check (result string reject)) "controls escaped" (Ok {|"\u0001\u007f"|})
+    (Result.map_error ignore (Value.encode ~max_bytes:100 (`String "\001\127")))
+
 let json = Alcotest.testable Yojson.Safe.pp Yojson.Safe.equal
 
 let test_decode () =
-  let limits = { Value.max_bytes = 40; max_depth = 8 } in
+  let limits = { Value.max_bytes = 40; max_depth = 8; invalid_utf8 = Reject } in
   Alcotest.(check (result json reject))
     "last duplicate wins, at the first place"
     (Ok (`Assoc [ ("a", `Int 3); ("b", `Assoc [ ("c", `Int 2) ]) ]))
@@ -112,6 +158,9 @@ let () =
       ( "value",
         [
           Alcotest.test_case "depth pre-scan" `Quick test_depth;
+          Alcotest.test_case "comments refused" `Quick test_comments;
+          Alcotest.test_case "UTF-8 and control characters" `Quick test_utf8_and_controls;
+          Alcotest.test_case "non-finite numbers" `Quick test_non_finite;
           Alcotest.test_case "decode and encode" `Quick test_decode;
         ] );
     ]

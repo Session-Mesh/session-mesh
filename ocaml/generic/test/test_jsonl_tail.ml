@@ -13,6 +13,7 @@ module Tail = Mesh_jsonl_tail
 let fold =
   {
     Tail.init = (fun () -> []);
+    copy = Fun.id;
     step =
       (fun seen json ->
         if Yojson.Safe.Util.member "bad" json = `Bool true then
@@ -145,6 +146,68 @@ let test_refusals () =
       Alcotest.(check bool) "fifo, without blocking" true (refused fifo);
       Alcotest.(check bool) "symbolic link" true (refused link))
 
+(* A mutable state: the previous result keeps its own, thanks to [copy]. *)
+let test_mutable_state () =
+  let counts =
+    {
+      Tail.init = (fun () -> Hashtbl.create 8);
+      copy = Hashtbl.copy;
+      step =
+        (fun table json ->
+          Hashtbl.replace table (Yojson.Safe.to_string json) ();
+          table);
+    }
+  in
+  let update previous path =
+    match Tail.update limits counts path previous with
+    | Ok (result, _) -> result
+    | Error error -> Alcotest.fail (Mesh_safe_file.error_message error)
+  in
+  Support.with_directory (fun directory ->
+      let path = Filename.concat directory "t.jsonl" in
+      Support.write_file path "{\"a\":1}\n";
+      let first = update None path in
+      Support.append_file path "{\"b\":2}\n";
+      let second = update (Some first) path in
+      Alcotest.(check int) "the new result has both" 2 (Hashtbl.length (Tail.state second));
+      Alcotest.(check int) "the previous result kept its state" 1 (Hashtbl.length (Tail.state first)))
+
+(* An unchanged file is recognised by lstat and not opened: once it cannot be
+   read, the complete previous result is still returned. A change makes the
+   update open the file, which then fails. *)
+let test_unchanged_not_opened () =
+  Support.with_directory (fun directory ->
+      let path = Filename.concat directory "t.jsonl" in
+      Support.write_file path "{\"a\":1}\n";
+      let first, _ = update path None in
+      Unix.chmod path 0o000;
+      let outcome_now = Tail.update limits fold path (Some first) in
+      Unix.chmod path 0o600;
+      (match outcome_now with
+      | Ok (again, how) ->
+          Alcotest.check outcome "unchanged" Tail.Unchanged how;
+          Alcotest.(check bool) "same result" true (again == first)
+      | Error error -> Alcotest.fail (Mesh_safe_file.error_message error));
+      if Unix.geteuid () <> 0 then begin
+        Support.append_file path "{\"b\":2}\n";
+        Unix.chmod path 0o000;
+        let changed = Tail.update limits fold path (Some first) in
+        Unix.chmod path 0o600;
+        Alcotest.(check bool) "a changed file is opened" true
+          (match changed with Error (Mesh_safe_file.Unreadable _) -> true | _ -> false)
+      end)
+
+let test_invalid_utf8 () =
+  Support.with_directory (fun directory ->
+      let path = Filename.concat directory "t.jsonl" in
+      Support.write_file path "{\"a\":\"x\xffy\"}\n{\"b\":1}\n";
+      let rejected, _ = update path None in
+      check_seen "dropped, as history._feed" [ {|{"b":1}|} ] rejected;
+      Alcotest.(check int) "counted" 1 (Tail.stats rejected).dropped;
+      let limits = Tail.limits ~max_line_bytes:64 ~max_depth:4 ~invalid_utf8:Drop () in
+      let stripped, _ = update ~limits path None in
+      check_seen "stripped, as discover._tail_lines" [ {|{"a":"xy"}|}; {|{"b":1}|} ] stripped)
+
 (* A8 (b): folding a file appended in arbitrary pieces, with an update after
    each piece and arbitrary read bounds, gives the state of one fold of the
    whole file. *)
@@ -215,6 +278,9 @@ let () =
           Alcotest.test_case "tail window" `Quick test_window;
           Alcotest.test_case "bounded reads" `Quick test_max_read;
           Alcotest.test_case "FIFO and link refused" `Quick test_refusals;
+          Alcotest.test_case "mutable state copied" `Quick test_mutable_state;
+          Alcotest.test_case "unchanged file not opened" `Quick test_unchanged_not_opened;
+          Alcotest.test_case "invalid UTF-8 policy" `Quick test_invalid_utf8;
           Alcotest.test_case "pieces fold like the whole (property)" `Quick test_chunked_equals_whole;
         ] );
     ]

@@ -25,8 +25,12 @@
       checks those bytes for one agent only; this module always does;
     - a line longer than [max_line_bytes] is dropped without being held in
       memory, a line nested deeper than [max_depth] is dropped before it is
-      parsed, and a line that is not JSON is dropped. They are counted in
-      {!stats};
+      parsed, and a line that is not strict JSON is dropped. They are counted
+      in {!stats};
+    - the input policy is {!Mesh_jsonl_value}'s: comments and raw control
+      characters in strings are refused; a line that is not UTF-8 is dropped
+      ([invalid_utf8 = Reject], as [history._feed]) or stripped of its
+      invalid bytes ([Drop], as [discover._tail_lines]);
     - a duplicated object key keeps its last value ({!Mesh_jsonl_value});
     - a call reads at most [max_read] bytes (but at least [max_line_bytes + 1]
       when the file has them, so that every call makes progress), so that
@@ -38,28 +42,43 @@
     reads of a regular file: a caller with a deadline runs {!update} in a
     system thread ([Mesh_deadline_pool.Blocking]).
 
-    A result is immutable: {!update} returns a new one, and the previous one
-    stays valid. A cache of results is a [Mesh_lru] keyed by path; the
-    {!Signature} of a result tells whether the file changed. *)
+    {!update} returns a new result and never changes the previous one, which
+    stays valid (its state, cursor and signature agree) provided the fold's
+    [copy] is right: the steps of an [Appended] read run on [copy] of the
+    previous state, as Python [deepcopy]s the entry. A cache of results is a
+    [Mesh_lru] keyed by path; the {!Signature} of a result tells whether the
+    file changed. When an [lstat] of the path matches the signature of a
+    complete previous result, the file is not opened ([Unchanged]). *)
 
-type 's fold = { init : unit -> 's; step : 's -> Yojson.Safe.t -> 's }
-(** [step] may raise [Yojson.Safe.Util.Type_error], [Not_found], [Failure] or
+type 's fold = { init : unit -> 's; copy : 's -> 's; step : 's -> Yojson.Safe.t -> 's }
+(** [copy] gives a state that later steps may change without changing its
+    argument: [Fun.id] for a persistent (immutable) state, a deep copy for a
+    mutable one ([Hashtbl.copy] when the values are immutable).
+
+    [step] may raise [Yojson.Safe.Util.Type_error], [Not_found], [Failure] or
     [Invalid_argument] on a line of a shape it does not expect: the line is
     then dropped and the state before it kept, as Python's readers do with
     their [_BAD_LINE] exceptions. Other exceptions propagate. A mutable state
-    changed by a step that then raises keeps that change. *)
+    changed by a step that then raises keeps that change (in the copy). *)
 
 type limits = {
   max_line_bytes : int;
   max_depth : int;
   window : int;  (** The bytes the first read of a file covers at most. *)
   max_read : int;  (** The bytes one {!update} reads at most. *)
+  invalid_utf8 : Mesh_jsonl_value.invalid_utf8;
 }
 
 val limits :
-  ?max_line_bytes:int -> ?max_depth:int -> ?window:int -> ?max_read:int -> unit -> limits
+  ?max_line_bytes:int ->
+  ?max_depth:int ->
+  ?window:int ->
+  ?max_read:int ->
+  ?invalid_utf8:Mesh_jsonl_value.invalid_utf8 ->
+  unit ->
+  limits
 (** Defaults: 1 MiB lines, depth 128, a window of 8 MiB (the Codex window of
-    the Python reader; Claude's is 1.5 MB), and 64 MiB per call.
+    the Python reader; Claude's is 1.5 MB), 64 MiB per call, and [Reject].
     @raise Invalid_argument if a value is below 1. *)
 
 module Signature : sig

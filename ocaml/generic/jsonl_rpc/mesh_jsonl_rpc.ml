@@ -20,7 +20,7 @@ let config ?(max_request_bytes = 1024 * 1024) ?(max_response_bytes = 4 * 1024 * 
     invalid_arg "Mesh_jsonl_rpc.config";
   { max_request_bytes; max_response_bytes; max_depth; max_in_flight }
 
-type emit = string -> Envelope.fields -> (unit, [ `Too_large ]) result
+type emit = string -> Envelope.fields -> (unit, [ `Too_large | `Not_json ]) result
 
 type handler =
   Envelope.request -> emit:emit -> (Envelope.fields, Envelope.error) result
@@ -84,7 +84,8 @@ module Writer = struct
 
   let write t frame =
     match Mesh_jsonl_value.encode ~max_bytes:t.max_line_bytes frame with
-    | Error _ -> Error `Too_large
+    | Error Mesh_jsonl_value.Too_large -> Error `Too_large
+    | Error (Mesh_jsonl_value.Too_deep | Invalid _) -> Error `Not_json
     | Ok text ->
         Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
             Eio.Flow.copy_string (text ^ "\n") t.sink);
@@ -96,15 +97,20 @@ let internal_error = { Envelope.code = Envelope.Internal; message = "internal er
 let too_large_error =
   { Envelope.code = Envelope.Too_large; message = "the response exceeds the output bound" }
 
-(* A response that cannot exceed any sane bound: its [req] is dropped if even
-   that is too large. *)
+let not_json_error =
+  { Envelope.code = Envelope.Internal; message = "the response has no strict JSON form" }
+
+(* A final frame is always written: when the frame cannot be, an error frame
+   with the [req], and when even that cannot be (a [req] too large, or one
+   with no JSON form), an error frame without it, which always can. *)
 let write_final writer req frame =
   match Writer.write writer frame with
   | Ok () -> ()
-  | Error `Too_large -> (
-      match Writer.write writer (Envelope.error req too_large_error) with
+  | Error reason -> (
+      let problem = match reason with `Too_large -> too_large_error | `Not_json -> not_json_error in
+      match Writer.write writer (Envelope.error req problem) with
       | Ok () -> ()
-      | Error `Too_large -> ignore (Writer.write writer (Envelope.error None too_large_error)))
+      | Error _ -> ignore (Writer.write writer (Envelope.error None problem)))
 
 let answer handler writer (request : Envelope.request) =
   let emit name fields = Writer.write writer (Envelope.event request.req name fields) in
@@ -128,7 +134,11 @@ let serve config handler source sink =
   let reader = Reader.create ~max_line_bytes:config.max_request_bytes source in
   let writer = Writer.create ~max_line_bytes:config.max_response_bytes sink in
   let limits =
-    { Mesh_jsonl_value.max_bytes = config.max_request_bytes; max_depth = config.max_depth }
+    {
+      Mesh_jsonl_value.max_bytes = config.max_request_bytes;
+      max_depth = config.max_depth;
+      invalid_utf8 = Reject;
+    }
   in
   let slots = Eio.Semaphore.make config.max_in_flight in
   Eio.Switch.run @@ fun switch ->
