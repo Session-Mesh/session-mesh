@@ -118,7 +118,7 @@ the agent's context in every session, a cost accepted so that an agent knows the
 it needs them rather than never discovering them.
 
 An agent that receives `mesh-board` also receives the project tracker, `mesh-work` (the `work-mcp`
-program, 17 `work_*` tools over the tracker the Projects view reads), when the installation holds
+program, 18 `work_*` tools over the tracker the Projects view reads), when the installation holds
 it; an older installation launches agents without it. The server's instructions say how to use it,
 and the agent guide's "Track your work" section says which system to use for what: the tracker
 for the agent's own work, the Projects view's projects for the owner's configuration, Roster's
@@ -182,8 +182,10 @@ project tracker that agents write through `mesh-work`, read only:
   (a bar from creation to done or today, with due dates and estimates) and "Dependencies" (the tasks by dependency level, cycles labelled). The French interface names them
   "Reprise", "Tableau", "Frise" and "Dépendances".
 - **A task.** Selecting a task opens its sheet: blockers, dependencies, the sessions that worked on
-  it, its notes, its events and its open questions. The sheet is read only: nothing in the view
-  writes to the tracker, and a question an agent asked cannot be answered from it yet.
+  it, its notes, its events and its questions. An answered question shows its answer, who gave it
+  (`by`, free text), when, and which session recorded it; an open question says to answer it in
+  the terminal of the agent that asked it. The sheet is read only: nothing in the view writes to
+  the tracker. Answering from a button in the sheet comes in a later change.
 - **The old view.** The "Old view" button in the Projects header shows the previous Projects
   workspace (next section) and "New view" comes back; the choice is remembered by the browser.
 
@@ -215,13 +217,24 @@ is an empty directory or does not exist and its parent does. It starts with one 
 then shows it.
 
 **How agents write.** Every agent started by the mesh that receives `mesh-board` also receives
-`mesh-work`, the `work-mcp` program with 17 tools ([work-mcp.md](work-mcp.md#tools)): reading
+`mesh-work`, the `work-mcp` program with 18 tools ([work-mcp.md](work-mcp.md#tools)): reading
 (`work_resume`, `work_list_products`, `work_list_projects`, `work_list_tasks`, `work_get`), writing
 (`work_add_product`, `work_add_project`, `work_add_task`, `work_update`, `work_log`, `work_block`,
 `work_unblock`), sessions (`work_find_sessions`, `work_get_session`) and questions (`work_ask`,
-`work_list_questions`, `work_open_view`). The "Track your work" section of the
+`work_answer`, `work_list_questions`, `work_open_view`). The "Track your work" section of the
 [agent guide](agent-guide.md) gives the agent its rule in short: `work_resume` at the start,
 `work_log` as it goes and before it stops, `work_ask` for a question that does not block it.
+
+**Answering an agent's question.** `work_ask` does not wait: the agent records the question with
+the assumption it adopts and carries on. You answer in the agent's session terminal, in the
+conversation, and the agent records your words with `work_answer` (`answered_by` defaults to
+`owner`). The question then shows as answered in `work_resume`, `work_list_questions`, `work_get`
+and the task sheet. A question has one answer: a different second answer is refused, the same one
+repeated is accepted without writing again. The agent is told to relay only what you said; nothing
+checks that the words are yours, and the answer records which session wrote it
+([work-mcp.md](work-mcp.md#answering-a-question)). An answer button in the task sheet is planned
+for a later change; it will record answers through the same library function.
+
 `work_open_view` does not open anything yet: it checks its target and answers that the view is not
 available.
 

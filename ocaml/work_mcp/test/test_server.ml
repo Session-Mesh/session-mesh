@@ -125,6 +125,7 @@ let () =
           Alcotest.test_case "no token, no folder in outputs" `Quick test_no_leaks;
         ] );
       ("questions", Test_questions.tests);
+      ("answer", Test_answer.tests);
       ("hardening", Test_hardening.tests);
       ("requests", Test_requests.tests);
       ("review2", Test_review2.tests);

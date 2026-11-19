@@ -8,7 +8,7 @@
  */
 
 import type {
-  Blocker, Category, ColumnKey, Columns, Counts, Dependency, DependencyState, LinkedSession, NoProject, Omitted, Product,
+  Answer, Blocker,Category, ColumnKey, Columns, Counts, Dependency, DependencyState, LinkedSession, NoProject, Omitted, Product,
   ProductsDoc, ProjectDoc, ProjectHead, ProjectsDoc, ProjectSummary, Provenance, Question, Reprise, TargetRef, TaskDetail,
   TaskRow, TimelineEvent,
 } from './work-types.ts';
@@ -174,11 +174,18 @@ function parseEvent(source: Obj): TimelineEvent | null {
 
 const events = (value: unknown): TimelineEvent[] => objects(value).map(parseEvent).filter((e): e is TimelineEvent => e !== null);
 
+function parseAnswer(source: Obj): Answer | null {
+  const body = text(source.text);
+  if (body === null) return null;
+  return { text: body, by: text(source.by), at: text(source.at), relayedBy: text(source.relayed_by_session) ?? text(source.relayed_by_agent) };
+}
+
 function parseQuestion(source: Obj): Question | null {
   const id = text(source.id), body = text(source.text);
   if (!id || body === null) return null;
+  const answers = objects(source.answers).map(parseAnswer).filter((a): a is Answer => a !== null);
   return { id, open: source.state !== 'answered', text: body, options: strings(source.options), about: text(source.about),
-    askedBy: text(source.asked_by_session) ?? text(source.asked_by_agent), askedAt: text(source.asked_at) };
+    askedBy: text(source.asked_by_session) ?? text(source.asked_by_agent), askedAt: text(source.asked_at), answers };
 }
 
 const questions = (value: unknown): Question[] => objects(value).map(parseQuestion).filter((q): q is Question => q !== null);

@@ -9,6 +9,7 @@
   test_tools
   test_server
   test_questions
+  test_answer
   test_hardening
   test_requests
   test_review2

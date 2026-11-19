@@ -29,6 +29,7 @@ const skip = (!CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM is
 const FIXTURE = path.join(REPO, 'ocaml/worklog/test/fixture');
 const LONG_WORD = 'W'.repeat(120);
 const HOSTILE_TITLE = `<img src=x onerror=window.__pwn=1><script>window.__pwn=2</script> evil ${LONG_WORD}`;   // bidi controls cannot enter the data (the library refuses control characters); they are covered by the unit tests
+const HOSTILE_ANSWER = '<img src=x onerror=window.__pwn=4> port 8443';
 const WIDTHS = [390, 1440] as const;
 
 const HOSTILE_EVENTS = [
@@ -38,6 +39,10 @@ const HOSTILE_EVENTS = [
   { ts: '2026-11-07T09:03:00Z', task: 'T-8e8e', type: 'progress', text: '<script>window.__pwn=3</script> noted', prov: 'inferred' },
   { ts: '2026-11-08T08:00:00Z', task: 'T-3c4d', type: 'add', field: 'blocked_by', value: 'T-1a2b' },
   { ts: '2026-11-08T08:01:00Z', task: 'T-8e8e', type: 'add', field: 'blocked_by', value: 'T-3c4d' },
+  // Two questions (work_ask), one answered (work_answer relaying the owner's words, with a hostile text).
+  { ts: '2026-11-08T09:00:00Z', task: 'T-8e8e', type: 'question', id: 'N-0000a0a1', text: 'Keep the old endpoint?', agent: 'claude', session: 'asking-session' },
+  { ts: '2026-11-08T09:01:00Z', task: 'T-8e8e', type: 'question', id: 'N-0000a0a2', text: 'Which port?', agent: 'claude', session: 'asking-session' },
+  { ts: '2026-11-08T10:00:00Z', task: 'T-8e8e', type: 'answer', question: 'N-0000a0a2', text: HOSTILE_ANSWER, by: 'owner', agent: 'claude', session: 'asking-session' },
 ];
 
 let browser: Browser;
@@ -265,6 +270,18 @@ for (const width of WIDTHS) {
       assert.ok(await pane.locator('.work-event-inferred').count() >= 1, 'an inferred event is marked');
       assert.ok(await pane.locator('.work-prov-inferred').count() >= 1, 'with a word as well as a style');
       assert.ok(await pane.locator('.work-dep-state').count() >= 1, 'blocked_by shows the state of its target');
+      const answered = pane.locator('.work-question-answered[data-question-id="N-0000a0a2"]');
+      assert.equal(await answered.locator('.work-answer-text').textContent(), HOSTILE_ANSWER, 'the answer is shown, as text');
+      const meta = (await answered.locator('.work-answer-meta').textContent())!;
+      assert.ok(meta.includes('answered by owner') && meta.includes('recorded by asking-session'), `who answered and who recorded it: ${meta}`);
+      assert.equal(await answered.locator('[data-work-answer-slot]').count(), 0, 'an answered question has no reply slot');
+      const open = pane.locator('.work-question-open[data-question-id="N-0000a0a1"]');
+      assert.match((await open.locator('.work-answer-hint').textContent())!, /terminal of the agent/, 'an open question says where to answer');
+      const slot = open.locator('.work-answer-area[data-work-answer-for="N-0000a0a1"] [data-work-answer-slot="N-0000a0a1"]');
+      assert.equal(await slot.count(), 1, 'the reply slot is reserved');
+      assert.equal(await slot.isVisible(), false, 'hidden for now');
+      assert.equal(await slot.innerHTML(), '', 'and empty');
+      assert.equal(await page.evaluate(() => (window as unknown as { __pwn?: number }).__pwn), undefined, 'the answer text stays inert');
       await noOverflow(page);
       await shot(page, `detail-${width}`);
       assert.equal(await page.locator('#work-panel-board').isVisible(), width > 760, 'a phone shows the detail in place of the board');

@@ -139,6 +139,26 @@ describe('parseTask', () => {
     assert.deepEqual(detail.omitted, { timeline: 3 });
   });
 
+  test('parses the answers of a question: text, who, when, relaying session; drops malformed ones', () => {
+    const detail = parseTask({
+      task: row('T-3c4d'),
+      questions: [
+        { id: 'N-0000a001', text: 'Which port?', state: 'answered', answers: [
+          { text: '8443', by: 'owner', at: '2026-11-19T10:00:00Z', relayed_by_session: 's-1', relayed_by_agent: 'claude' },
+          { text: 'later', by: 7, relayed_by_agent: 'codex' }, { by: 'owner' }, 'nonsense'] },
+        { id: 'N-0000a002', text: 'Open?', state: 'open', answers: 'nonsense' },
+      ],
+    });
+    assert.ok(detail);
+    const [answered, open] = detail.questions;
+    assert.deepEqual(answered!.answers, [
+      { text: '8443', by: 'owner', at: '2026-11-19T10:00:00Z', relayedBy: 's-1' },
+      { text: 'later', by: null, at: null, relayedBy: 'codex' },
+    ]);
+    assert.equal(open!.open, true);
+    assert.deepEqual(open!.answers, []);
+  });
+
   test('refuses a document with no task', () => {
     for (const bad of [null, {}, { task: 'x' }, { task: {} }]) assert.equal(parseTask(bad), null);
   });

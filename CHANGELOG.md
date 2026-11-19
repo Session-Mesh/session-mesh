@@ -5,6 +5,20 @@ before 1.0, a minor version may change behaviour.
 
 ## Unreleased
 
+- **An agent records the owner's answer to its question.** `mesh-work` gains an 18th tool,
+  `work_answer` (`question`, `text`, optional `answered_by`, default `owner`). The owner answers a
+  question asked with `work_ask` in the agent's session terminal, and the agent records those
+  words; the tool description, the server instructions and the agent guide say that it relays the
+  owner's answer and is never used to answer without the owner. A question has one answer: the
+  same answer repeated returns `duplicate: true` and writes nothing, a different one is refused
+  with the new error code `already_answered`; two writers racing on one question record exactly
+  one answer. The data format is unchanged (the `answer` event already existed); the event now
+  also carries the relaying session's `agent` and `session`, returned as `relayed_by_agent` and
+  `relayed_by_session` with each answer. The recording logic is the library function
+  `Work_questions.answer_once`, which a later answer button in the Projects view is meant to call
+  as well. The task sheet now shows each answer with who gave it, when and which session recorded
+  it, and tells the owner to answer an open question in the agent's terminal; answering from a
+  button comes later. See [docs/work-mcp.md](docs/work-mcp.md#answering-a-question).
 - **A new Projects view over the project tracker.** The Projects mode now opens on a read-only
   view of the tracker that agents write with `mesh-work`: the products and their active projects
   with progress and blocker counts, a project in four tabs ("Pick up", "Board", "Timeline",

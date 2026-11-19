@@ -11,7 +11,7 @@ let expected_tools =
   [
     "work_resume"; "work_list_tasks"; "work_get"; "work_list_projects"; "work_list_products";
     "work_add_task"; "work_add_project"; "work_add_product"; "work_update"; "work_log";
-    "work_block"; "work_unblock"; "work_find_sessions"; "work_get_session"; "work_ask";
+    "work_block"; "work_unblock"; "work_find_sessions"; "work_get_session"; "work_ask"; "work_answer";
     "work_list_questions"; "work_open_view";
   ]
 
@@ -29,7 +29,7 @@ let test_handshake () =
   let listed = rpc c "tools/list" (`Assoc []) in
   let tools = items (member "result" listed) "tools" in
   let names = List.map (fun t -> str t "name") tools in
-  Alcotest.(check (list string)) "the 17 tools" (List.sort compare expected_tools) (List.sort compare names);
+  Alcotest.(check (list string)) "the 18 tools" (List.sort compare expected_tools) (List.sort compare names);
   List.iter
     (fun t ->
       let schema = member "inputSchema" t in

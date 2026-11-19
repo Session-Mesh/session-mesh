@@ -16,17 +16,27 @@
       characters) and [assumption] (at most 1000 characters), plus the
       [agent] and [session] of the asker.
     - [answer]: same [task] as its question; fields [question], [text] and
-      [by], the identity of the answerer.
+      [by], the identity of the answerer, plus the [agent] and [session] of
+      the process that wrote it when it has one (an agent relaying the
+      owner's words).
 
     The worklog library ignores unknown event types with a warning, so [wl]
     keeps working and does not display them. The fold of these two types lives
     here only.
 
-    Agents can ask ({!ask}, behind [work_ask]) but no tool of the server
-    writes an [answer]: {!answer} is meant for the interface, which calls it
-    with the owner's identity. *)
+    Agents ask with {!ask} (behind [work_ask]). {!answer_once} records one
+    answer; it decides nothing about who may answer: that is the caller's
+    concern. [work_answer] calls it to relay the owner's words given in the
+    agent's terminal; an owner-only writer of the interface is meant to call
+    the same function. *)
 
-type answer = { answer_text : string; by : string; answered_at : int }
+type answer = {
+  answer_text : string;
+  by : string;
+  answered_at : int;
+  relay_agent : string option;  (** [agent] of the answer event, if any *)
+  relay_session : string option;  (** [session] of the answer event, if any *)
+}
 
 type question = {
   id : string;
@@ -109,6 +119,30 @@ val answer :
   (string, Mesh_worklog.Err.t) result
 (** Record an answer ([text] at most 2000 characters, [by] a single-line label
     of at most 100 characters) to the question with this exact id and return
-    the id; unknown is [Not_found]. Not exposed by any tool: only code that
-    links this library can call it. A question can receive several answers;
-    all are kept. *)
+    the id; unknown is [Not_found]. A question can receive several answers
+    this way; all are kept. Used by the tests to seed data; writers that face
+    a person or an agent use {!answer_once}. *)
+
+type recorded =
+  | Recorded of string  (** the answer was written; the question id *)
+  | Same_answer of string
+      (** the question already has an answer with the same text and [by]:
+          nothing was written (a retried call) *)
+  | Already_answered of string
+      (** the question has another answer: nothing was written *)
+
+val answer_once :
+  Mesh_worklog.Ctx.t ->
+  ?session:Mesh_worklog.Session.t ->
+  question:string ->
+  text:string ->
+  by:string ->
+  unit ->
+  (recorded, Mesh_worklog.Err.t) result
+(** Record the first answer to the question with this exact id. The same
+    validation as {!answer} ([Usage] for a bad text or [by], [Not_found] for
+    an unknown id). The lookup and the write happen under the repository
+    lock, so of two concurrent writers exactly one records an answer. With a
+    [session], its [agent] and [session] are stored on the event (who relayed
+    the answer, not who gave it). No authority check: the caller decides who
+    may answer. *)

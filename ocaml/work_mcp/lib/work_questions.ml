@@ -7,7 +7,13 @@
 
 module W = Mesh_worklog
 
-type answer = { answer_text : string; by : string; answered_at : int }
+type answer = {
+  answer_text : string;
+  by : string;
+  answered_at : int;
+  relay_agent : string option;
+  relay_session : string option;
+}
 
 type question = {
   id : string;
@@ -69,7 +75,15 @@ let of_answer_event (ev : W.Event.t) =
   match (W.Event.get_string ev "question", W.Event.get_string ev "text") with
   | Some qid, Some text ->
       let by = Option.value ~default:"unknown" (W.Event.get_string ev "by") in
-      Some (qid, { answer_text = text; by; answered_at = ev.ts })
+      Some
+        ( qid,
+          {
+            answer_text = text;
+            by;
+            answered_at = ev.ts;
+            relay_agent = W.Event.get_string ev "agent";
+            relay_session = W.Event.get_string ev "session";
+          } )
   | _ -> None
 
 let collision_warning id =
@@ -199,16 +213,41 @@ let ask ctx ?session ~text ?(options = []) ?assumption ?about ?request_id () =
       | Some q -> (q.id, true)
       | None -> (write_question tx ~text ~options ~assumption ~about ~request_id, false))
 
+let validate_answer ~text ~by =
+  let text = validate_text "answer" max_text text in
+  (match W.Textcheck.text_error ~field:"by" ~limit:max_option by with
+  | Some why -> W.Err.usage "%s" why
+  | None -> ());
+  text
+
+let find_question (tx : W.Txn.t) question =
+  match List.find_opt (fun q -> q.id = question) (of_events tx.loaded.events) with
+  | None -> W.Err.not_found "no question %s" question
+  | Some q -> q
+
+let write_answer tx q ~text ~by =
+  let fields = [ ("question", `String q.id); ("text", `String text); ("by", `String by) ] in
+  W.Txn.append tx [ (q.event_task, answer_type, fields) ];
+  W.Txn.commit tx ~cmd:"answer" ~subject:(Some q.id)
+
 let answer ctx ~question ~text ~by () =
   W.Txn.run ctx (fun tx ->
-      let text = validate_text "answer" max_text text in
-      (match W.Textcheck.text_error ~field:"by" ~limit:max_option by with
-      | Some why -> W.Err.usage "%s" why
-      | None -> ());
-      match List.find_opt (fun q -> q.id = question) (of_events tx.loaded.events) with
-      | None -> W.Err.not_found "no question %s" question
-      | Some q ->
-          let fields = [ ("question", `String q.id); ("text", `String text); ("by", `String by) ] in
-          W.Txn.append tx [ (q.event_task, answer_type, fields) ];
-          W.Txn.commit tx ~cmd:"answer" ~subject:(Some q.id);
-          q.id)
+      let text = validate_answer ~text ~by in
+      let q = find_question tx question in
+      write_answer tx q ~text ~by;
+      q.id)
+
+type recorded = Recorded of string | Same_answer of string | Already_answered of string
+
+(* The check and the write run under the one repository lock: of two writers
+   racing on an open question, the second sees the first answer. *)
+let answer_once ctx ?session ~question ~text ~by () =
+  W.Txn.run ctx ?session (fun tx ->
+      let text = validate_answer ~text ~by in
+      let q = find_question tx question in
+      if List.exists (fun a -> a.answer_text = text && a.by = by) q.answers then Same_answer q.id
+      else if q.answers <> [] then Already_answered q.id
+      else begin
+        write_answer tx q ~text ~by;
+        Recorded q.id
+      end)

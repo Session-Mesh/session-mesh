@@ -53,9 +53,9 @@ let ask_tool =
     ~description:
       "Record a non-blocking question and carry on: state in assumption what you adopt meanwhile. \
        Optional task (T-... or P-...) the question is about, and options (answer choices). The \
-       owner answers later from the interface; read the answer with work_resume or \
-       work_list_questions. For a question that truly blocks (a permission, an irreversible \
-       action) ask directly instead."
+       owner answers later, in this session's conversation: record that answer with \
+       work_answer. Read answers with work_resume or work_list_questions. For a question that \
+       truly blocks (a permission, an irreversible action) ask directly instead."
     ~input_schema:
       (T.object_ ~required:[ "text" ]
          [
@@ -66,6 +66,54 @@ let ask_tool =
            ("request_id", T.string ~max:Work_request.max_length ~description:"Optional retry key (A-Z a-z 0-9 _ . : -): a repeated call of the same session with the same request_id on the same task returns the first question with duplicate=true." ());
          ])
     ask
+
+let max_by = Work_questions.max_option
+
+let answer_result = function
+  | Work_questions.Recorded qid -> Ok (`Assoc [ ("id", `String qid); ("state", `String "answered") ])
+  | Work_questions.Same_answer qid ->
+      Ok (`Assoc [ ("id", `String qid); ("state", `String "answered"); ("duplicate", `Bool true) ])
+  | Work_questions.Already_answered qid ->
+      Error
+        (make "already_answered"
+           (Printf.sprintf
+              "question %s already has a different answer; an answer is never replaced. If the owner \
+               changed their mind, record it with work_log or ask a new question"
+              qid))
+
+let answer args =
+  let* question = Work_args.string args "question" in
+  let* text = Work_args.string args "text" in
+  let* by = Work_args.opt_string args "answered_by" in
+  let* () =
+    if Work_questions.valid_id question then Ok ()
+    else Error (invalid "question must be a question id: N- and 8 lowercase hex digits")
+  in
+  let* ctx = Work_repo.context () in
+  let id = Work_identity.current () in
+  Work_identity.warn_if_unresolved id;
+  let by = Option.value ~default:"owner" by in
+  let* outcome = lift (Work_questions.answer_once ctx ?session:id.session ~question ~text ~by ()) in
+  answer_result outcome
+
+let answer_tool =
+  T.make ~name:"work_answer"
+    ~description:
+      "Relay the OWNER's answer to a question recorded with work_ask: when the owner answers in \
+       this conversation, record the owner's words here (question: the N-... id from work_ask, \
+       work_list_questions or work_get; text: what the owner said). answered_by defaults to \
+       owner. Never use it to answer a question yourself, yours or another agent's, without \
+       the owner: an unanswered question stays open. A question has one answer: a second, \
+       different one is refused with already_answered; repeating the same answer returns \
+       duplicate=true and writes nothing."
+    ~input_schema:
+      (T.object_ ~required:[ "question"; "text" ]
+         [
+           ("question", T.string ~max:40 ());
+           ("text", T.string ~max:Work_questions.max_text ());
+           ("answered_by", T.string ~max:max_by ~description:"Who gave the answer; default owner." ());
+         ])
+    answer
 
 let normalise_about ctx about =
   let* snap = lift (W.Reader.snapshot ctx) in
@@ -163,4 +211,4 @@ let open_view_tool =
          [ ("target", T.string ~max:100 ()); ("view", T.enum views) ])
     open_view
 
-let tools = [ ask_tool; list_questions_tool; open_view_tool ]
+let tools = [ ask_tool; answer_tool; list_questions_tool; open_view_tool ]

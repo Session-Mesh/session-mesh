@@ -42,7 +42,7 @@ let test_lifecycle () =
   check_str "asker session" "probe-session" (str q "asked_by_session");
   let on_task = ok c "work_get" (`Assoc [ ("id", `String task) ]) in
   Alcotest.(check int) "visible on the task" 1 (List.length (items on_task "questions"));
-  (* The owner's interface answers through the library, not through a tool. *)
+  (* Seeded through the library here; work_answer is tested in Test_answer. *)
   let answered =
     W.Err.unwrap
       (Work_mcp.Work_questions.answer (library_ctx wl_home) ~question:qid ~text:"gRPC, internal only" ~by:"owner" ())
@@ -88,7 +88,9 @@ let test_question_limits () =
   Alcotest.(check int) "nothing written" before (List.length (event_lines wl_home));
   stop c
 
-let test_no_answer_tool () =
+(* work_answer is the one route that writes an answer: no other tool, kind or
+   field produces an [answer] event. *)
+let test_only_work_answer_answers () =
   let home, wl_home = fresh () in
   let c = connect ~wl_home ~home () in
   let task = seed_task c in
@@ -96,17 +98,18 @@ let test_no_answer_tool () =
   let names =
     items (member "result" (rpc c "tools/list" (`Assoc []))) "tools" |> List.map (fun t -> str t "name")
   in
-  Alcotest.(check bool) "no tool named like an answer" true
-    (List.for_all (fun n -> not (contains n "answer" || contains n "reply" || contains n "respond")) names);
+  Alcotest.(check (list string)) "work_answer is the only tool named like an answer" [ "work_answer" ]
+    (List.filter (fun n -> contains n "answer" || contains n "reply" || contains n "respond") names);
   Alcotest.(check bool) "no write tool takes an event type" true
     (List.for_all (fun n -> n <> "work_event" && n <> "work_append") names);
-  (* Every route an agent has: unknown tools, forged kinds and fields. *)
+  (* Every other route an agent has: unknown tools, forged kinds and fields. *)
   List.iter
     (fun (name, args) ->
       let r = call c name (`Assoc args) in
       Alcotest.(check bool) (name ^ " cannot answer") true r.is_error)
     [
-      ("work_answer", [ ("question", `String qid); ("text", `String "yes") ]);
+      ("work_answer", [ ("question", `String qid); ("text", `String "yes"); ("type", `String "answer") ]);
+      ("work_answer", [ ("question", `String task); ("text", `String "yes") ]);
       ("work_answer_question", [ ("question", `String qid); ("text", `String "yes") ]);
       ("work_log", [ ("id", `String task); ("kind", `String "answer"); ("text", `String "yes") ]);
       ("work_log", [ ("id", `String task); ("kind", `String "question"); ("text", `String "yes") ]);
@@ -142,6 +145,6 @@ let tests =
     Alcotest.test_case "question lifecycle" `Quick test_lifecycle;
     Alcotest.test_case "question without a task" `Quick test_question_without_task;
     Alcotest.test_case "question limits" `Quick test_question_limits;
-    Alcotest.test_case "no tool answers" `Quick test_no_answer_tool;
+    Alcotest.test_case "only work_answer answers" `Quick test_only_work_answer_answers;
     Alcotest.test_case "bounded output" `Quick test_output_bound;
   ]
