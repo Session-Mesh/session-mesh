@@ -244,9 +244,7 @@ jobs:
         run: bash .github/scripts/fast-apt-mirror.sh
       # The smoke script talks to the host's socket with nc -U.
       - name: Install netcat for the smoke check
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends netcat-openbsd
+        run: bash .github/scripts/apt-install.sh netcat-openbsd
       - name: Smoke check on the runner
         run: bash scripts/release-smoke.sh "$RUNNER_TEMP/out"
       - name: Name the assets
@@ -429,9 +427,7 @@ jobs:
       - name: Use a fast apt mirror with retries
         run: bash .github/scripts/fast-apt-mirror.sh
       - name: Install bubblewrap for the demo compiler test
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends bubblewrap
+        run: bash .github/scripts/apt-install.sh bubblewrap
       # The test build-bundle.sh leaves to the caller in a container (--skip-compiler-test).
       - name: Test the bundle's demo compiler in bubblewrap, on the runner
         run: |

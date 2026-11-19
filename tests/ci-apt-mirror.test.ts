@@ -1,24 +1,98 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-// The shared apt step of the workflows (.github/scripts/fast-apt-mirror.sh): every Ubuntu job that
-// installs packages runs it first, and the script itself, run with a fake sudo, apt-get and uname
-// on PATH, keeps its promises: retries written, mirror switched, original restored when the mirror
-// does not answer, idempotent, a no-op off Linux, and never a failing exit status.
+// The shared apt steps of the workflows: every package installation goes through
+// .github/scripts/apt-install.sh (no bare apt-get, no playwright --with-deps, setup-ocaml's packages
+// installed first), every Ubuntu job that installs packages runs .github/scripts/fast-apt-mirror.sh
+// first, and that script, run with a fake sudo, apt-get and uname on PATH, keeps its promises:
+// retries written, mirror switched, original restored when the mirror does not answer, the
+// --fallback mode, idempotent, a no-op off Linux, and never a failing exit status.
+// tests/ci-apt-install.test.ts covers apt-install.sh itself.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {afterEach, beforeEach, describe, test} from 'node:test';
-import {jobBlocks, parseLines} from './public-ci-workflow-lib.ts';
+import {jobBlocks, parseLines, stepOf} from './public-ci-workflow-lib.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const SCRIPT = path.join(ROOT, '.github', 'scripts', 'fast-apt-mirror.sh');
 const WORKFLOWS = ['public-ci.yml', 'release.yml'];
+const WORKFLOW_DIR = path.join(ROOT, '.github', 'workflows');
+const ALL_WORKFLOWS = fs.readdirSync(WORKFLOW_DIR).filter((file) => /\.ya?ml$/.test(file));
 const MIRROR_STEP = /fast-apt-mirror\.sh/;
-// What installs packages: apt-get itself, setup-ocaml (29 packages through apt-get), playwright --with-deps.
-const APT_USERS = /apt-get install|ocaml\/setup-ocaml|playwright install --with-deps/;
+// What installs packages: the retrying installer, and setup-ocaml (apt-get install for its packages).
+const APT_USERS = /apt-install\.sh|ocaml\/setup-ocaml/;
+// Package installs that bypass .github/scripts/apt-install.sh (no retries, no clear failure message).
+const BARE_APT = /\bapt-get\b|\bapt\s+(?:install|update)\b|--with-deps|playwright\s+install-deps|\baptitude\b/;
+// What setup-ocaml installs with a plain `apt-get --yes install` (packages/setup-ocaml/src/system-packages.ts
+// at the pinned commit): bubblewrap, musl-tools, rsync, and darcs, g++-multilib, gcc-multilib and
+// mercurial when apt knows them. A new pin must be checked against that file and this list updated.
+const SETUP_OCAML_SHA = 'ff66428f72b64472e749b22e0ad4dded4b2ddca6';
+const SETUP_OCAML_PACKAGES = 'run: bash .github/scripts/apt-install.sh bubblewrap musl-tools rsync darcs g++-multilib gcc-multilib mercurial';
+
+describe('every package installation of the workflows goes through apt-install.sh', () => {
+  for (const file of ALL_WORKFLOWS) {
+    test(`${file} runs no bare apt-get, apt or playwright --with-deps`, () => {
+      const lines = parseLines(fs.readFileSync(path.join(WORKFLOW_DIR, file), 'utf8'));
+      // Comments may name the commands; executed text may not (block scalars are read raw, minus shell comments).
+      const offending = lines.filter((line) => BARE_APT.test(line.inBlock ? line.raw.replace(/(^|\s)#.*$/, '') : line.text));
+      assert.deepEqual(offending.map((line) => `line ${line.number}: ${line.raw.trim()}`), []);
+    });
+  }
+
+  test('the check itself catches the forms it is meant to refuse', () => {
+    for (const bad of ['sudo apt-get install -y foo', 'sudo apt-get update -q', 'sudo apt install foo',
+      'python -m playwright install --with-deps chromium', 'npx playwright install-deps chromium']) {
+      assert.match(bad, BARE_APT, bad);
+    }
+    assert.doesNotMatch('bash .github/scripts/apt-install.sh --playwright-deps chromium', BARE_APT);
+    assert.doesNotMatch('python -m playwright install chromium', BARE_APT);
+  });
+
+  test('every Ubuntu setup-ocaml step is the reviewed pin, preceded by its packages installed with retries', () => {
+    let seen = 0;
+    for (const file of WORKFLOWS) {
+      const lines = parseLines(fs.readFileSync(path.join(WORKFLOW_DIR, file), 'utf8'));
+      for (const {name, block} of jobBlocks(lines)) {
+        const runsOn = block.find((line) => line.key === 'runs-on')?.value ?? '';
+        if (runsOn.includes('macos')) continue;
+        const ocaml = block.findIndex((line) => /ocaml\/setup-ocaml@/.test(line.text));
+        if (ocaml < 0) continue;
+        seen++;
+        assert.ok(block[ocaml].text.includes(`ocaml/setup-ocaml@${SETUP_OCAML_SHA}`),
+          `${file} job ${name}: a new setup-ocaml pin, check its system-packages.ts against SETUP_OCAML_PACKAGES`);
+        const packages = block.findIndex((line) => line.text.trim() === SETUP_OCAML_PACKAGES);
+        assert.ok(packages >= 0 && packages < ocaml, `${file} job ${name}: setup-ocaml's packages must be installed first`);
+        // The two steps run under the same condition (the native job skips both on a cache hit).
+        const conditionOf = (index: number) => stepOf(block, index).find((line) => line.key === 'if')?.value ?? '';
+        assert.equal(conditionOf(packages), conditionOf(ocaml), `${file} job ${name}: different conditions`);
+      }
+    }
+    assert.ok(seen >= 2, 'the ocaml and native jobs run setup-ocaml');
+  });
+
+  test('the browser job installs Chromium without --with-deps and its system packages with retries', () => {
+    const text = fs.readFileSync(path.join(WORKFLOW_DIR, 'public-ci.yml'), 'utf8');
+    assert.ok(text.includes('python -m playwright install chromium\n'));
+    assert.ok(text.includes('run: bash .github/scripts/apt-install.sh --playwright-deps chromium\n'));
+    assert.match(text, /path: ~\/\.cache\/ms-playwright\n\s+key: playwright-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\('requirements-browser\.txt'\) \}\}/);
+    assert.match(fs.readFileSync(path.join(ROOT, 'requirements-browser.txt'), 'utf8'), /^playwright==\d+\.\d+\.\d+$/m,
+      'the cache key covers the Playwright version only if requirements-browser.txt pins it');
+  });
+
+  test('no step hides an installation failure', () => {
+    for (const file of ALL_WORKFLOWS) {
+      const lines = parseLines(fs.readFileSync(path.join(WORKFLOW_DIR, file), 'utf8'));
+      lines.forEach((line, index) => {
+        if (!/apt-install\.sh/.test(line.text) || line.text.trimStart().startsWith('#')) return;
+        assert.ok(!stepOf(lines, index).some((other) => other.key === 'continue-on-error'), `${file} line ${line.number}`);
+        assert.doesNotMatch(line.raw, /\|\|\s*true|;\s*true\b/, `${file} line ${line.number}`);
+      });
+    }
+  });
+});
 
 describe('workflows run the apt mirror step before any package installation', () => {
   for (const file of WORKFLOWS) {
@@ -88,8 +162,8 @@ describe('fast-apt-mirror.sh', () => {
   const backup = () => path.join(dir, 'ubuntu.sources.ci-original');
   const log = () => (fs.existsSync(path.join(dir, 'log')) ? fs.readFileSync(path.join(dir, 'log'), 'utf8') : '');
 
-  function run(env: Record<string, string> = {}) {
-    return spawnSync('bash', [SCRIPT], {
+  function run(env: Record<string, string> = {}, args: string[] = []) {
+    return spawnSync('bash', [SCRIPT, ...args], {
       encoding: 'utf8',
       env: {
         PATH: `${path.join(dir, 'bin')}:${process.env.PATH}`, HOME: dir, FAKE_LOG: path.join(dir, 'log'),
@@ -99,28 +173,30 @@ describe('fast-apt-mirror.sh', () => {
     });
   }
 
-  test('writes retries and timeouts, switches the archive stanza only, and checks it with a bounded update', () => {
+  test('writes retries and timeouts, switches the archive and security stanzas, and checks them with a bounded update', () => {
     const result = run();
     assert.equal(result.status, 0, result.stderr);
     const written = fs.readFileSync(conf(), 'utf8');
     for (const setting of ['Acquire::Retries "3";', 'Acquire::http::Timeout "20";', 'Acquire::https::Timeout "20";']) {
       assert.ok(written.includes(setting), setting);
     }
-    assert.ok(sources().includes('URIs: http://azure.archive.ubuntu.com/ubuntu/\n'));
-    assert.ok(sources().includes('URIs: http://security.ubuntu.com/ubuntu/\n'), 'the security stanza keeps its URI');
+    assert.ok(sources().includes('URIs: http://azure.archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates noble-backports'));
+    assert.ok(sources().includes('URIs: http://azure.archive.ubuntu.com/ubuntu/\nSuites: noble-security'), 'security.ubuntu.com is moved too');
     assert.ok(!sources().includes('apt-mirrors.txt'));
+    assert.ok(!sources().includes('security.ubuntu.com'));
     assert.match(log(), /apt-get update .*Dir::Etc::sourcelist=.*ubuntu\.sources .*Dir::Etc::sourceparts=-/);
     assert.equal(fs.readFileSync(backup(), 'utf8'), original);
     assert.match(log(), /apt-get update .*APT::Get::List-Cleanup=0/, 'the check must not clean the lists');
   });
 
-  test('only the archive URIs line changes: signatures, suites, components, types and the security stanza stay', () => {
+  test('only the two URIs lines change: signatures, suites, components and types stay', () => {
     assert.equal(run().status, 0);
     const before = original.split('\n');
     const after = sources().split('\n');
     assert.equal(after.length, before.length);
     const changed = before.flatMap((line, index) => (line === after[index] ? [] : [[line, after[index]]]));
-    assert.deepEqual(changed, [['URIs: mirror+file:/etc/apt/apt-mirrors.txt', 'URIs: http://azure.archive.ubuntu.com/ubuntu/']]);
+    assert.deepEqual(changed, [['URIs: mirror+file:/etc/apt/apt-mirrors.txt', 'URIs: http://azure.archive.ubuntu.com/ubuntu/'],
+      ['URIs: http://security.ubuntu.com/ubuntu/', 'URIs: http://azure.archive.ubuntu.com/ubuntu/']]);
     assert.equal(after.filter((line) => line === keyring).length, 2, 'both stanzas keep Signed-By');
     assert.ok(!/trusted|allowinsecure|allow-unauthenticated/i.test(sources()));
   });
@@ -157,17 +233,49 @@ describe('fast-apt-mirror.sh', () => {
     assert.match(run().stdout, /already switched/);
   });
 
-  test('a security stanza on the mirror+file list is not moved to the new mirror, and a second run changes nothing', () => {
+  test('a security stanza on the mirror+file list moves as well, and a second run changes nothing', () => {
     const bothOnList = original.replace('URIs: http://security.ubuntu.com/ubuntu/', 'URIs: mirror+file:/etc/apt/apt-mirrors.txt');
     fs.writeFileSync(path.join(dir, 'ubuntu.sources'), bothOnList);
     assert.equal(run().status, 0);
     const after = sources();
     assert.ok(after.includes('URIs: http://azure.archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates noble-backports'));
-    assert.ok(after.includes('URIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble-security'), 'the security stanza keeps its URI');
+    assert.ok(after.includes('URIs: http://azure.archive.ubuntu.com/ubuntu/\nSuites: noble-security'));
     assert.equal(after.split('\n').length, bothOnList.split('\n').length);
     assert.equal(fs.readFileSync(backup(), 'utf8'), bothOnList);
     assert.match(run().stdout, /already switched/);
     assert.equal(sources(), after);
+  });
+
+  test('a URI that is not Ubuntu\'s (a third-party repository) is left alone', () => {
+    const withOther = `${original}\nTypes: deb\nURIs: https://packages.example.org/apt/\nSuites: stable\nComponents: main\n`;
+    fs.writeFileSync(path.join(dir, 'ubuntu.sources'), withOther);
+    assert.equal(run().status, 0);
+    assert.ok(sources().includes('URIs: https://packages.example.org/apt/\n'));
+    assert.equal(run({}, ['--fallback']).status, 0);
+    assert.ok(sources().includes('URIs: https://packages.example.org/apt/\n'));
+  });
+
+  test('--fallback points every Ubuntu URI at archive.ubuntu.com, keeps the backup, and exits 0', () => {
+    assert.equal(run().status, 0);
+    const updates = log().split('\n').filter((line) => line.startsWith('apt-get')).length;
+    const result = run({}, ['--fallback']);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /fallback: the Ubuntu URIs now name http:\/\/archive\.ubuntu\.com\/ubuntu\//);
+    const after = sources();
+    assert.equal(after.split('\n').filter((line) => line === 'URIs: http://archive.ubuntu.com/ubuntu/').length, 2);
+    assert.ok(!after.includes('azure'));
+    assert.equal(fs.readFileSync(backup(), 'utf8'), original, 'the original stays in the backup');
+    assert.equal(log().split('\n').filter((line) => line.startsWith('apt-get')).length, updates, 'no check of its own: the caller updates next');
+  });
+
+  test('--fallback also works on the runner\'s own sources (after a restore) and is a no-op off x86_64 or Linux', () => {
+    assert.equal(run({}, ['--fallback']).status, 0);
+    assert.ok(!sources().includes('apt-mirrors.txt') && !sources().includes('security.ubuntu.com'));
+    fs.writeFileSync(path.join(dir, 'ubuntu.sources'), original);
+    assert.equal(run({FAKE_ARCH: 'aarch64'}, ['--fallback']).status, 0);
+    assert.equal(run({FAKE_OS: 'Darwin'}, ['--fallback']).status, 0);
+    assert.equal(run({CI_APT_MIRROR_DISABLE: '1'}, ['--fallback']).status, 0);
+    assert.equal(sources(), original);
   });
 
   test('replaces a regional archive host as well', () => {
