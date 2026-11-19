@@ -69,6 +69,123 @@ print(json.dumps({"first": first, "unchanged": unchanged, "seen": seen, "changed
   });
 });
 
+describe('a transcript is parsed again only when its file changed', () => {
+  test('codex: same answer, no line decoded on an unchanged file; a write, a replace or a moved link is a miss', () => {
+    const home = tempHome();
+    try {
+      const result = python(`
+import json, os, time, discover
+decoded = []
+real_line = discover._json_line
+def counted(line):
+    decoded.append(1)
+    return real_line(line)
+discover._json_line = counted
+def line(role, text):
+    return json.dumps({"type": "response_item", "payload": {"type": "message", "role": role,
+                       "content": [{"type": "text", "text": text}]}}) + "\\n"
+def write(path, *lines):
+    with open(path, "w") as out:
+        out.writelines(lines)
+def read(path):
+    del decoded[:]
+    found = discover._codex_transcript(path)
+    return [found["last"], found["said"], found["status"], len(decoded)]
+def uncached(path):
+    discover._parsed.clear()
+    discover._cache.clear()
+    return read(path)[:3]
+a, b, link = (os.path.join(discover.HOME, n) for n in ("a.jsonl", "b.jsonl", "link.jsonl"))
+write(a, line("user", "one"), line("assistant", "reply one"))
+out = {"first": read(a), "again": read(a)}
+out["uncached"] = uncached(a)
+with open(a, "a") as more:
+    more.write(line("user", "two"))
+out["appended"] = read(a)
+st = os.stat(a)
+write(b, line("user", "six"), line("assistant", "reply six"), line("user", "ten"))   # same size as a
+os.utime(b, ns=(st.st_atime_ns, st.st_mtime_ns))
+out["same_stat"] = [os.stat(b).st_size == st.st_size, os.stat(b).st_mtime_ns == st.st_mtime_ns]
+os.replace(b, a)
+out["replaced"] = read(a)
+write(b, line("user", "six"), line("assistant", "reply six"), line("user", "ten"))
+os.utime(b, ns=(st.st_atime_ns, st.st_mtime_ns))
+write(a, line("user", "one"), line("assistant", "reply one"), line("user", "two"))
+os.utime(a, ns=(st.st_atime_ns, st.st_mtime_ns))
+os.symlink(a, link)
+out["link_a"] = read(link)
+os.unlink(link)
+os.symlink(b, link)
+out["link_b"] = read(link)
+discover.time.time = lambda real=time.time: real() + 100
+out["later"] = read(link)
+discover.PARSED_MAX = 2
+for path in (a, b, link):
+    discover._codex_transcript(path)
+out["bounded"] = len(discover._parsed)
+print(json.dumps(out))
+`, home);
+      assert.deepEqual(result.first, ['one', 'reply one', 'busy', 2]);
+      assert.deepEqual(result.again, ['one', 'reply one', 'busy', 0]);
+      assert.deepEqual(result.uncached, result.first.slice(0, 3));
+      assert.deepEqual(result.appended, ['two', 'reply one', 'busy', 3]);
+      assert.deepEqual(result.same_stat, [true, true]);
+      assert.deepEqual(result.replaced, ['ten', 'reply six', 'busy', 3]);
+      assert.deepEqual(result.link_a, ['two', 'reply one', 'busy', 3]);
+      assert.deepEqual(result.link_b, ['ten', 'reply six', 'busy', 3]);
+      assert.deepEqual(result.later, ['ten', 'reply six', 'idle', 0], 'the state follows the clock, from the cache');
+      assert.equal(result.bounded, 2);
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
+  });
+
+  test('claude: same answer, no line decoded on an unchanged file, the choices are not shared', () => {
+    const home = tempHome();
+    try {
+      const result = python(`
+import json, os, discover
+decoded = []
+real_line = discover._json_line
+def counted(line):
+    decoded.append(1)
+    return real_line(line)
+discover._json_line = counted
+sid = "abcdefgh-1111-2222-3333-444455556666"
+os.makedirs(os.path.join(discover.HOME, ".claude", "sessions"))
+os.makedirs(os.path.join(discover.HOME, ".claude", "projects", "w"))
+with open(os.path.join(discover.HOME, ".claude", "sessions", "42.json"), "w") as out:
+    json.dump({"sessionId": sid, "status": "waiting"}, out)
+ask = {"type": "tool_use", "id": "toolu_1", "name": "AskUserQuestion", "input": {"questions": [
+    {"question": "Which?", "options": [{"label": "Left"}, {"label": "Right"}]}]}}
+with open(os.path.join(discover.HOME, ".claude", "projects", "w", sid + ".jsonl"), "w") as out:
+    out.write(json.dumps({"type": "user", "cwd": "/w", "message": {"content": "hello"}}) + "\\n")
+    out.write(json.dumps({"type": "assistant", "cwd": "/w", "message": {"id": "m1", "content": [ask]}}) + "\\n")
+first = discover.claude_info(42)
+first_decoded = len(decoded)
+del decoded[:]
+second = discover.claude_info(42)
+second_decoded = len(decoded)
+discover._parsed.clear()
+discover._cache.clear()
+third = discover.claude_info(42)
+print(json.dumps({"same": first == second == third, "decoded": [first_decoded, second_decoded],
+                  "shared": first["choices"] is second["choices"], "keys": list(second),
+                  "choices": second["choices"], "last": second["last"]}))
+`, home);
+      assert.equal(result.same, true);
+      assert.deepEqual(result.decoded, [2, 0]);
+      assert.equal(result.shared, false);
+      assert.deepEqual(result.choices, ['Left', 'Right']);
+      assert.equal(result.last, 'hello');
+      assert.deepEqual(result.keys, ['type', 'session_id', 'identity_source', 'name', 'status', 'since', 'waiting_for',
+        'title', 'last', 'updated', 'cwd', 'said', 'choices', 'ask_id']);
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
+  });
+});
+
 describe('codex rollouts are listed once per listing', () => {
   test('inside listing_scope the glob runs once and every rule sees the same rollouts', () => {
     const home = tempHome();

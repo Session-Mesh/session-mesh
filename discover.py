@@ -343,7 +343,7 @@ def _tail_lines(path, max_bytes=1_500_000):
         st = os.stat(path)
     except OSError:
         return [], 0
-    key = (path, st.st_mtime_ns, st.st_size)
+    key = (path, st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
     if key in _cache:
         return _cache[key], st.st_mtime
     with open(path, "rb") as fh:
@@ -355,6 +355,28 @@ def _tail_lines(path, max_bytes=1_500_000):
         del _cache[k]
     _cache[key] = data
     return data, st.st_mtime
+
+
+_parsed = collections.OrderedDict()     # (parser, path) -> (the line list it parsed, its result)
+_parsed_lock = threading.Lock()
+PARSED_MAX = 256
+
+
+def _parsed_tail(parse, path, max_bytes):
+    """parse(lines, mtime) of the end of ``path``, computed again only when _tail_lines read the file again: a
+    file of another device, inode, size or mtime_ns (written, renamed over, a symlink moved) is a miss."""
+    lines, mtime = _tail_lines(path, max_bytes)
+    key = (parse, path)
+    with _parsed_lock:
+        hit = _parsed.get(key)
+    if hit is None or hit[0] is not lines:
+        hit = (lines, parse(lines, mtime))
+    with _parsed_lock:
+        _parsed[key] = hit
+        _parsed.move_to_end(key)
+        while len(_parsed) > PARSED_MAX:
+            _parsed.popitem(last=False)
+    return hit[1]
 
 
 def _json_line(line):
@@ -388,7 +410,13 @@ def claude_info(pid):
     paths = glob.glob(f"{HOME}/.claude/projects/*/{sid}.jsonl") if sid else []
     if not paths:
         return info
-    lines, mtime = _tail_lines(paths[0])
+    found = _parsed_tail(_claude_transcript, paths[0], 1_500_000)
+    info.update(found, choices=list(found["choices"]) if found["choices"] else None)
+    return info
+
+
+def _claude_transcript(lines, mtime):
+    """What a Claude transcript says of the conversation: title, last prompt, reply, folder, pending question."""
     title = last = here = said = ask = ask_msg = None
     msg_tools = []
     for line in lines:
@@ -423,9 +451,8 @@ def claude_info(pid):
     # question) could be on screen first and take the answer keys
     if ask and msg_tools != ["AskUserQuestion"]:
         ask = None
-    info.update(title=title, last=_clip(last) if last else None, updated=mtime, cwd=here,
+    return dict(title=title, last=_clip(last) if last else None, updated=mtime, cwd=here,
                 said=_clip(said) if said else None, choices=ask[1] if ask else None, ask_id=ask[0] if ask else None)
-    return info
 
 
 def _claude_ask(content):
@@ -831,7 +858,13 @@ def _codex_conversation(pid, rollouts):
 
 def _codex_transcript(path):
     """What the rollout says of the conversation: the last user message, the reply, the folder, the state."""
-    lines, mtime = _tail_lines(path, 8_000_000)
+    found = dict(_parsed_tail(_codex_rollout, path, 8_000_000))
+    found["status"] = "busy" if time.time() - found["updated"] < 20 else "idle"   # the clock moves: not cached
+    return found
+
+
+def _codex_rollout(lines, mtime):
+    """The parse of a rollout for _codex_transcript, without the state, which depends on the clock."""
     last = here = said = None
     for line in lines:
         d = _json_line(line)
@@ -846,7 +879,7 @@ def _codex_transcript(path):
             if t and not t.startswith("<") and not t.startswith("# AGENTS"):
                 last = t
     return {"last": _clip(last) if last else None, "updated": mtime, "cwd": here,
-            "status": "busy" if time.time() - mtime < 20 else "idle", "said": _clip(said) if said else None}
+            "status": None, "said": _clip(said) if said else None}
 
 
 def codex_info(pid):
