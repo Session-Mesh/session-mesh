@@ -91,6 +91,9 @@ let test_hostile_lines () =
       let described = cold home in
       Alcotest.(check bool) "invalid bytes dropped, deep and huge lines skipped" true
         (field "last" described = `String "ab");
+      Support.write_file (transcript_path home) (prompt "lone \\ud800 surrogate");
+      Alcotest.(check bool) "an escaped lone surrogate is U+FFFD" true
+        (field "last" (cold home) = `String "lone \xef\xbf\xbd surrogate");
       Support.write_file (transcript_path home) (prompt "only" ^ String.make 100 '{');
       Alcotest.(check bool) "partial last line waits" true (field "last" (cold home) = `String "only"))
 

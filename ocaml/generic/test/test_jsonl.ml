@@ -127,6 +127,22 @@ let test_non_finite () =
 
 let json = Alcotest.testable Yojson.Safe.pp Yojson.Safe.equal
 
+(* Python reads an escaped lone surrogate; it becomes U+FFFD here. *)
+let test_lone_surrogates () =
+  let decoded text =
+    match Value.decode Value.default_limits text with
+    | Ok (`String value) -> value
+    | Ok _ -> Alcotest.fail "not a string"
+    | Error error -> Alcotest.fail (Value.error_message error)
+  in
+  let replacement = "\xef\xbf\xbd" in
+  Alcotest.(check string) "high half alone" ("lone " ^ replacement ^ " surrogate") (decoded {|"lone \ud800 surrogate"|});
+  Alcotest.(check string) "low half alone, at the end" ("x" ^ replacement) (decoded {|"x\uDC00"|});
+  Alcotest.(check string) "two high halves" (replacement ^ replacement) (decoded {|"\ud83d\ud83d"|});
+  Alcotest.(check string) "a pair is kept" "\xf0\x9f\x98\x80" (decoded {|"\ud83d\ude00"|});
+  Alcotest.(check string) "an escaped backslash is no escape" {|\ud800|} (decoded {|"\\ud800"|});
+  Alcotest.(check string) "other escapes untouched" "a\nb\xc3\xa9" (decoded {|"a\nb\u00e9"|})
+
 let test_decode () =
   let limits = { Value.max_bytes = 40; max_depth = 8; invalid_utf8 = Reject } in
   Alcotest.(check (result json reject))
@@ -162,5 +178,6 @@ let () =
           Alcotest.test_case "UTF-8 and control characters" `Quick test_utf8_and_controls;
           Alcotest.test_case "non-finite numbers" `Quick test_non_finite;
           Alcotest.test_case "decode and encode" `Quick test_decode;
+          Alcotest.test_case "lone surrogates" `Quick test_lone_surrogates;
         ] );
     ]
