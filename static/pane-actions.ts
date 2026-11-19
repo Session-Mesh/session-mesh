@@ -847,15 +847,24 @@ type AgentMailConsentRequest = Readonly<{
   target: Readonly<{ id: string; created: number; agent: string }>;
 }>;
 
-/** Ask about peer metadata only; message text stays behind the server gate. */
+/** Ask about peer metadata only; message text stays behind the server gate.
+ *
+ * Every viewer of the mesh is asked. The server keeps the first answer; a
+ * request that leaves the pending list while this viewer still shows it was
+ * answered elsewhere, so `withdraw` closes the prompt and `choose` then
+ * resolves "withdrawn". An answer the server no longer accepts ("stale") is
+ * reported through `answeredElsewhere`. */
 export function createAgentMailConsentGate(ports: Readonly<{
-  choose: (request: AgentMailConsentRequest) => Promise<"no" | "yes" | "always" | "later" | null>;
+  choose: (request: AgentMailConsentRequest) => Promise<"no" | "yes" | "always" | "later" | "withdrawn" | null>;
   decide: (id: string, decision: "no" | "yes" | "always") => Promise<"settled" | "stale" | "retry">;
+  withdraw?: (id: string) => void;
+  answeredElsewhere?: () => void;
   now?: () => number;
   deferMs?: number;
 }>) {
   const handled = new Set<string>();
   const deferredUntil = new Map<string, number>();
+  let shown: string | null = null;
   const now = ports.now ?? Date.now;
   const deferMs = Math.max(1, ports.deferMs ?? 60_000);
   const valid = (value: unknown): value is AgentMailConsentRequest => {
@@ -871,14 +880,20 @@ export function createAgentMailConsentGate(ports: Readonly<{
   return {
     async consider(values: unknown): Promise<void> {
       if (!Array.isArray(values)) return;
+      if (shown !== null && !values.some((value) => valid(value) && value.id === shown)) {
+        ports.withdraw?.(shown);
+      }
       for (const value of values) {
         if (!valid(value) || handled.has(value.id)) continue;
         const deferred = deferredUntil.get(value.id);
         if (deferred !== undefined && now() < deferred) continue;
         deferredUntil.delete(value.id);
         handled.add(value.id);
-        const decision = await ports.choose(value);
-        if (decision === null) { handled.delete(value.id); continue; }
+        shown = value.id;
+        let decision;
+        try { decision = await ports.choose(value); } finally { shown = null; }
+        // A withdrawn prompt may come back if a later list still has it pending.
+        if (decision === null || decision === "withdrawn") { handled.delete(value.id); continue; }
         // Closing or deferring the Mesh dialog is not a refusal.  In
         // particular, mobile browsers may dismiss a dialog while the PWA is
         // backgrounded; only an explicit "no" may destroy a message.
@@ -887,7 +902,9 @@ export function createAgentMailConsentGate(ports: Readonly<{
           handled.delete(value.id);
           continue;
         }
-        if (await ports.decide(value.id, decision) === "retry") handled.delete(value.id);
+        const outcome = await ports.decide(value.id, decision);
+        if (outcome === "retry") handled.delete(value.id);
+        else if (outcome === "stale") ports.answeredElsewhere?.();
       }
     },
   };

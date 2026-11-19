@@ -31,6 +31,12 @@ before 1.0, a minor version may change behaviour.
   from the first line of each recent Codex rollout are also kept in `codex-rollout-meta.json` in
   the cache directory (mode 0600, ids and folders only), so the first listing after a restart of
   the web server does not read every rollout again. The listed data are unchanged.
+- **A message approval answered in one window closes in the others.** The "Message from another
+  agent" question opens in every window of the mesh. Once one window answers it, the others close
+  it at their next refresh of the session list instead of leaving it open; a window that still
+  answers in between gets "Message request decided elsewhere; your choice changed nothing." The
+  server already kept only the first answer. See
+  [Messages and requests from agents](docs/features.md#messages-and-requests-from-agents).
 - **An idle Codex started as `codex resume <id>` gets its conversation id from its launch
   arguments.** Such a session that holds no rollout file open had no conversation id, so a PTY host
   restart brought it back as a plain shell. The id is now read from the launch arguments of the

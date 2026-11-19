@@ -1,4 +1,5 @@
 {
+  "agentMail.answeredElsewhere": "Demande de message décidée ailleurs ; votre choix n’a rien modifié.",
   "agentMail.consentDescription": "La session Mesh exacte « {source} » ({agent}, démarrée {started}) a envoyé un message à « {target} ». Autoriser sa lecture ?",
   "attach.camera": "📷 Appareil photo",
   "attach.file": "📄 Fichier",
