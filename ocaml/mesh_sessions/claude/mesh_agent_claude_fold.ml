@@ -40,7 +40,7 @@ let init =
     tools = no_tools;
   }
 
-let non_blank text = if strip text = "" then None else Some (strip text)
+let non_blank text = match strip text with "" -> None | stripped -> Some stripped
 
 (* What a value of a tool's input that Python prints with [str] becomes. *)
 let tool_arguments = [ "command"; "file_path"; "path"; "pattern"; "url"; "query"; "description"; "prompt" ]
@@ -82,7 +82,7 @@ let labels question =
   | `List options -> List.filter_map (fun option -> if Py.is_object option then Some (Py.get "label" option) else None) options
   | _ -> []
 
-let usable_label = function `String text -> strip text <> "" | _ -> false
+let usable_label = function `String text -> not (Mesh_python_text.is_blank text) | _ -> false
 
 (* [_claude_choices]: one single-choice question that ends the message. *)
 let choices_of block =
@@ -150,8 +150,9 @@ let prompt_text = function
   | _ -> None
 
 let is_prompt text =
-  strip text <> ""
-  && (not (String.starts_with ~prefix:"<" (Mesh_python_text.unicode_lstrip text)))
+  let start = Mesh_python_text.lstrip_index text in
+  start < String.length text
+  && text.[start] <> '<'
   && not (String.starts_with ~prefix:"This session is being continued" text)
 
 let titles = [ "summary"; "custom-title"; "ai-title" ]

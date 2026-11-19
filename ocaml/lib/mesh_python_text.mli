@@ -36,6 +36,13 @@ val unicode_strip : string -> string
 val unicode_lstrip : string -> string
 (** [str.lstrip()]. *)
 
+val is_blank : string -> bool
+(** [not text.strip()], without building the stripped text. *)
+
+val lstrip_index : string -> int
+(** The byte index where [text.lstrip()] starts: [text.lstrip().startswith(p)]
+    is [String.starts_with ~prefix:p] at that index, for an ASCII [p]. *)
+
 val collapse_spaces : string -> string
 (** [" ".join(text.split())]. *)
 
