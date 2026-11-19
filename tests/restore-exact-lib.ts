@@ -33,7 +33,7 @@ export function writeClaudeTranscript(home: string, id: string, cwd: string): vo
 export type Offer = {name: string; created: number; agent_kind: string; resume_id: string | null; cwd: string};
 export type Listed = {name: string; created: number};
 export type LabOptions = {marker?: string; twin?: boolean; bare?: boolean; pi?: boolean; intercept?: Intercept;
-  env?: NodeJS.ProcessEnv; identities?: object[]; claudeLines?: string[]};
+  env?: NodeJS.ProcessEnv; identities?: object[]; noRegistry?: boolean; claudeLines?: string[]};
 
 export class Lab {
   readonly mesh: Mesh;
@@ -115,8 +115,11 @@ export class Lab {
       // An identity registry that knows none of these offers (no migration from the snapshot): a restore
       // resumes the snapshot's conversation, so a twin offer reaches the hold of a running conversation.
       // tests/identity-restore.test.ts covers what the registry itself decides.
-      fs.writeFileSync(path.join(where.confDir, 'session-identities.json'),
-        JSON.stringify({version: 1, generation: 0, entries: options.identities ?? []}), {mode: 0o600});
+      // `noRegistry`: no file at all, so the first listing migrates the snapshot (identity-restore.test.ts).
+      if (!options.noRegistry) {
+        fs.writeFileSync(path.join(where.confDir, 'session-identities.json'),
+          JSON.stringify({version: 1, generation: 0, entries: options.identities ?? []}), {mode: 0o600});
+      }
       fs.writeFileSync(path.join(where.confDir, 'sessions-snapshot.json'),
         JSON.stringify({version: 1, host: null, live: [], lost}));
     });

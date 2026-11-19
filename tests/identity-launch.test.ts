@@ -35,11 +35,21 @@ function recordedAtNew() {
   }};
 }
 
-async function newClaude(lab: Lab, name: string): Promise<void> {
-  const response = await fetch(`${lab.mesh.base}/api/new`, {method: 'POST',
+function postNew(lab: Lab, name: string, cwd = lab.offers.alpha.cwd): Promise<Response> {
+  return fetch(`${lab.mesh.base}/api/new`, {method: 'POST',
     headers: {Authorization: `Bearer ${lab.mesh.token()}`, Origin: lab.mesh.base, 'Content-Type': 'application/json'},
-    body: JSON.stringify({preset: 'claude', cwd: lab.offers.alpha.cwd, name})});
+    body: JSON.stringify({preset: 'claude', cwd, name})});
+}
+
+async function newClaude(lab: Lab, name: string, cwd = lab.offers.alpha.cwd): Promise<void> {
+  const response = await postNew(lab, name, cwd);
   assert.equal(response.status, 200, await response.text());
+}
+
+function hookReporting(conversation: string): string {
+  const python = process.env.MESH_PYTHON || 'python3';
+  const payload = JSON.stringify({hook_event_name: 'UserPromptSubmit', prompt_id: 'p1', session_id: conversation});
+  return `printf '%s' '${payload}' | '${python}' -I '${path.join(REPO, 'bin', 'mesh-event')}' claude`;
 }
 
 function argvAfter(lab: Lab, flag: string): string | undefined {
@@ -66,18 +76,14 @@ test('a new Claude gets the conversation id the mesh chose, recorded before the 
   }, {intercept: at.intercept});
 });
 
-test("the session's own Claude hook reports another conversation (a /clear): the registry follows it", TIMEOUT, () => {
-  const python = process.env.MESH_PYTHON || 'python3';
-  const payload = JSON.stringify({hook_event_name: 'UserPromptSubmit', prompt_id: 'p1', session_id: CLEARED});
-  const hook = `printf '%s' '${payload}' | '${python}' -I '${path.join(REPO, 'bin', 'mesh-event')}' claude`;
-  return withLab(async lab => {
+test("the session's own Claude hook reports another conversation (a /clear): the registry follows it", TIMEOUT, () =>
+  withLab(async lab => {
     await newClaude(lab, 'cleared');
     await waitFor('the hook report was recorded', 15000, () =>
       registry(lab).some(e => e.session.name === 'cleared' && e.id === CLEARED));
     const entry = registry(lab).find(e => e.session.name === 'cleared');
     assert.deepEqual([entry.source, entry.evidence, entry.state], ['hook', 'hook:UserPromptSubmit', 'active']);
-  }, {claudeLines: [hook]});
-});
+  }, {claudeLines: [hookReporting(CLEARED)]}));
 
 test('a restore records the conversation it resumes as chosen before the agent starts', TIMEOUT, () => {
   const at = recordedAtNew();
@@ -88,4 +94,54 @@ test('a restore records the conversation it resumes as chosen before the agent s
     const {entry} = at.seen.alpha;
     assert.deepEqual([entry.id, entry.source, entry.evidence, entry.state], [SID, 'chosen', 'launch:restore', 'active']);
   }, {intercept: at.intercept});
+});
+
+test('a restore is refused while a live session holds the conversation in the registry, unseen by the listing', TIMEOUT, () =>
+  withLab(async lab => {
+    // `holder` runs in another folder; its hook reported SID, which no listing shows (no pid file, no history guess).
+    await newClaude(lab, 'holder', lab.offers.bravo.cwd);
+    await waitFor('the hook report was recorded', 15000, () =>
+      registry(lab).some(e => e.session.name === 'holder' && e.id === SID && e.source === 'hook'));
+    const answer = await lab.post({names: ['alpha']});
+    const result = answer.json.results.alpha;
+    assert.equal(result.ok, false, answer.text);
+    assert.match(result.error, /already running \(another session\): nothing was started/);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    assert.equal(lab.starts(), 1, 'no second agent on the conversation');
+    assert.deepEqual((await lab.listed()).map(s => s.name), ['holder']);
+    const holder = registry(lab).find(e => e.session.name === 'holder');
+    assert.deepEqual([holder.id, holder.state], [SID, 'active'], 'the holder keeps it');
+  }, {claudeLines: [hookReporting(SID)]}));
+
+test('a launch the host refuses for good drops its record', TIMEOUT, () => {
+  const at = recordedAtNew();
+  return withLab(async lab => {
+    at.setConf(lab.mesh.confDir);
+    const response = await postNew(lab, 'refused');
+    assert.notEqual(response.status, 200, await response.text());
+    assert.equal(at.seen.refused.entry?.source, 'chosen', 'recorded before the request');
+    assert.equal(registry(lab).find(e => e.session.nonce === at.seen.refused.nonce), undefined, 'dropped after the refusal');
+  }, {intercept: request => {
+    const seen = at.intercept(request);
+    return request.op === 'new' ? {reply: {error: 'refused for the test'}} : seen;
+  }});
+});
+
+test('a launch cancelled after its request was sent keeps its record: the session may still appear', TIMEOUT, () => {
+  const at = recordedAtNew();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  return withLab(async lab => {
+    at.setConf(lab.mesh.confDir);
+    const pending = postNew(lab, 'slow').catch(() => null);
+    await waitFor('the creation was sent', 10000, () => Boolean(at.seen.slow));
+    await lab.mesh.halt(true);   // a second SIGTERM: the handler is cancelled while its `new` is in flight
+    await pending;
+    const kept = registry(lab).find(e => e.session.nonce === at.seen.slow.nonce);
+    assert.deepEqual([kept?.source, kept?.state], ['chosen', 'active']);
+    release();
+  }, {intercept: request => {
+    at.intercept(request);
+    return request.op === 'new' ? {wait: gate} : undefined;
+  }});
 });

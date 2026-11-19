@@ -444,18 +444,35 @@ click, so an agent launched with permissive options never comes back on its own.
    (`observed`: the rollout a Codex holds open, the file Claude writes for its process). A guess is
    never written there. The snapshot is rebuilt from each listing; the registry is not: a Codex that
    held its rollout open once keeps that id after it closes it. A later exact fact for the same
-   session replaces the earlier one (`/clear`, `/new`, an agent started again in the terminal). When
-   the file is created, the ids already in the snapshot are copied into it as `observed`. A restore
-   reads the registry first, and the snapshot's id only for a session the registry does not know. A
-   file written by a newer version is read as empty and left untouched.
+   session replaces the earlier one (`/clear`, `/new`, an agent started again in the terminal), with
+   two exceptions. A listing never replaces an id that a hook reported or the mesh chose for the same
+   agent process, because it may have been read before that report; a listing of a process started
+   later does. A late report from a process older than the one recorded is ignored. When the
+   400-entry cap is reached, the entries of sessions the PTY host no longer lists are dropped first.
+
+   When the file is created, the exact ids already in the snapshot are copied into it as `observed`:
+   the ones a hook reported, and a Claude id, which only Claude's process file gives. A launch argument
+   and a Codex id stored without a source (possibly the pick of the lone Codex in a folder) are not
+   copied. A restore reads the registry first, and the snapshot's id only for a session the registry
+   does not know, so these sessions still restore as before. The restore offers on the page are
+   computed the same way, so an offer shown as resumable is one the restore resumes. A file written
+   by a newer version, whatever its content, is read as empty and left untouched. A file that cannot
+   be used (not valid JSON, nested too deeply, not a private regular file, too large) is read as empty
+   and replaced by the next write; the server log then has one line saying so, without ids or paths.
 
    The mesh records `chosen` ids before the agent starts: a new Claude session is launched with
    `claude --session-id <uuid>` (a random UUID the mesh picks), and a restore or a resume from the
-   History records the conversation it reopens. When that record cannot be written, or a running
-   session already holds the conversation, nothing is started. The Claude hooks the mesh installs
-   send the conversation id each hook carries, so the registry follows a `/clear`; the hooks of
-   OpenCode, Gemini, Antigravity, Copilot and Vibe send theirs already. No Codex hook is installed: a
-   Codex's id comes from its launch or from a rollout seen open.
+   History records the conversation it reopens. Nothing is started when that record cannot be written,
+   or when another running session holds the conversation, in the listing or in the registry, whatever
+   the source of its entry. The registry also covers a session that no listing can identify, such as
+   an idle Codex that has closed its rollout. The refusal reads `This conversation is already running
+   (another session): nothing was started`. A launch refused by the PTY host drops its record; a
+   launch whose outcome is unknown, or which was cancelled after its request was sent, keeps it,
+   because the session may still appear. The Claude hooks the mesh installs send the conversation id
+   each hook carries, so the registry follows a `/clear`. The hooks of OpenCode, Gemini, Antigravity,
+   Copilot and Vibe send theirs already. As in the session list, those of Gemini, Antigravity and Vibe
+   only fill in a missing id and never replace the one the registry holds. No Codex hook is installed:
+   a Codex's id comes from its launch or from a rollout seen open.
 
    When two sessions claim one conversation, the stronger source keeps it: `chosen` over `hook` over
    `observed`, then the session that holds the rollout open, and when they are equal the session that
@@ -463,12 +480,14 @@ click, so an agent launched with permissive options never comes back on its own.
    one or the holder goes.
 
    An agent is never relaunched on a conversation that is contested, unknown, or no longer on disk
-   (no Claude transcript, no Codex rollout of that id): the session comes back as a plain shell in its
+   (no Claude transcript, no Codex rollout of that id, looked for under `$CLAUDE_CONFIG_DIR` and
+   `$CODEX_HOME` as well as in the home folder; when none of these folders exists, nothing is taken
+   to be gone): the session comes back as a plain shell in its
    folder, with one line typed there that says why, for example `Session Mesh: codex not relaunched:
    its conversation is claimed by another session (contested)`; the restore result carries the same
    reason. A new conversation is never started in its place. A guarded restore (below) refuses such an
    offer instead (`not-resumable`), and refuses with `expected-mismatch` when the registry names
-   another conversation than the expected one.
+   another conversation than the expected one, or names one when the offer expected none.
 
 ### Restoring exactly one offer (for tools)
 

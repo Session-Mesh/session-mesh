@@ -62,8 +62,9 @@ before 1.0, a minor version may change behaviour.
 - **A new Claude session starts with a conversation id the mesh chose.** It is launched with
   `claude --session-id <uuid>`, and the id is recorded in the identity registry before the agent
   starts; restores and History resumes record the conversation they reopen the same way. Nothing
-  starts when the record cannot be written or a running session holds that conversation. The Claude
-  hooks report the conversation id they carry, so the registry follows a `/clear`.
+  starts when the record cannot be written or another running session holds that conversation, in
+  the listing or in the registry (an idle Codex that closed its rollout included). The Claude hooks
+  report the conversation id they carry, so the registry follows a `/clear`.
 - **A session identity registry keeps the conversation of each session once it is known exactly.**
   `~/.config/session-mesh/session-identities.json` (0600, atomic, bounded) records, per session, the
   conversation id with its source: `chosen` by the mesh at launch, reported by a `hook`, or `observed`
@@ -71,8 +72,10 @@ before 1.0, a minor version may change behaviour.
   recorded. A restore reads it before the snapshot, so a Codex that closed its rollout keeps its id.
   When two sessions claim one conversation, the stronger source keeps it and the other is contested.
   A restored agent whose conversation is contested, unknown or no longer on disk comes back as a plain
-  shell with one line saying why, never on a new or a contested conversation. The first run copies
-  the snapshot's ids into it. The same schema and rules are an OCaml library (`ocaml/identity`), checked
+  shell with one line saying why, never on a new or a contested conversation. The restore offers say
+  what a restore will do. The first run copies the snapshot's exact ids into it (hook reports, Claude
+  process files), never a launch argument or a Codex folder pick. A corrupt file is replaced, with one
+  line logged. The same schema and rules are an OCaml library (`ocaml/identity`), checked
   against shared vectors. See
   [Restoring sessions](docs/operations.md#restoring-sessions-after-a-pty-host-restart).
 - **An idle Codex started as `codex resume <id>` gets its conversation id from its launch

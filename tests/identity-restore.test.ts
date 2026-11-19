@@ -6,16 +6,28 @@
 // line typed there saying why. Real server.py, real PTY host, a fake `claude` that logs its argv.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {test} from 'node:test';
-import {ALPHA_CREATED, type Lab, SID, withLab, writeClaudeTranscript} from './restore-exact-lib.ts';
+import {waitFor} from './ptyhost-wire-lib.ts';
+import {ALPHA_CREATED, type Lab, type Offer, SID, withLab, writeClaudeTranscript} from './restore-exact-lib.ts';
 
 const TIMEOUT = {timeout: 120000};
 const OTHER = '0e6c0000-1111-4222-8333-555555555555';
+const BARE_CREATED = ALPHA_CREATED + 9;   // restore-exact-lib's `bare` offer: an agent with no conversation id
 
-function alphaIdentity(id: string | null): object {
-  return {session: {name: 'alpha', created: ALPHA_CREATED, nonce: null}, agent: 'claude', id,
+function identity(name: string, created: number, id: string | null): object {
+  return {session: {name, created, nonce: null}, agent: 'claude', id,
     source: id ? 'hook' : 'observed', evidence: id ? 'hook:Stop' : 'observed:pid_metadata', agent_started: null,
     observed_at: Date.now() / 1000, generation: 1, state: id ? 'active' : 'contested', holds_open: false};
+}
+
+function alphaIdentity(id: string | null): object {
+  return identity('alpha', ALPHA_CREATED, id);
+}
+
+function registryEntries(lab: Lab): any[] {
+  return JSON.parse(fs.readFileSync(path.join(lab.mesh.confDir, 'session-identities.json'), 'utf8')).entries;
 }
 
 /** The `new` requests the server sends to the host, by session name. */
@@ -81,3 +93,46 @@ test('a guarded restore of a contested conversation is refused and creates nothi
   assert.match(answer.json.error, /claimed by another session/);
   assert.deepEqual(await lab.listed(), []);
 }, {identities: [alphaIdentity(null)]}));
+
+test('a guarded restore that expects no conversation does not resume the one the registry names', TIMEOUT, () =>
+  withLab(async lab => {
+    writeClaudeTranscript(lab.mesh.home, OTHER, lab.offers.alpha.cwd);
+    const listed = (await lab.sessionsJson()).json.restorable.find((o: any) => o.name === 'bare');
+    assert.equal(listed.resumable, true, 'the offer shows what the restore would do');
+    const bare: Offer = {name: 'bare', created: BARE_CREATED, agent_kind: 'claude', resume_id: null,
+      cwd: path.join(lab.mesh.home, 'bare-dir')};
+    const answer = await lab.exact(bare);
+    assert.deepEqual([answer.json.ok, answer.json.code, answer.json.mismatched], [false, 'expected-mismatch', ['resume_id']],
+      JSON.stringify(answer.json));
+    assert.deepEqual(await lab.listed(), []);
+    assert.equal(lab.starts(), 0);
+  }, {bare: true, identities: [identity('bare', BARE_CREATED, OTHER)]}));
+
+test('a conversation kept under $CLAUDE_CONFIG_DIR is found: it is resumed, not called gone', TIMEOUT, () => {
+  const config = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-config-'));
+  const folder = path.join(config, 'projects', '-elsewhere');
+  fs.mkdirSync(folder, {recursive: true});
+  fs.writeFileSync(path.join(folder, `${OTHER}.jsonl`), '{}\n');
+  return withLab(async lab => {
+    const answer = await lab.post({names: ['alpha']});
+    assert.equal(answer.json.results.alpha.resumed, true, answer.text);
+    await waitFor('the fake claude started', 10000, () => lab.starts() >= 1);
+    const argv = fs.readFileSync(lab.argvLog, 'utf8').split('\n');
+    assert.equal(argv[argv.indexOf('--resume') + 1], OTHER);
+  }, {identities: [alphaIdentity(OTHER)], env: {CLAUDE_CONFIG_DIR: config}})
+    .finally(() => fs.rmSync(config, {recursive: true, force: true}));
+});
+
+test('with no registry, a restore migrates the snapshot: the first holder resumes, its twin is contested', TIMEOUT, () =>
+  withLab(async lab => {
+    const first = await lab.post({names: ['alpha']});
+    assert.equal(first.json.results.alpha.resumed, true, first.text);
+    const migrated = registryEntries(lab).find(e => e.session.name === 'alpha' && e.session.created === ALPHA_CREATED);
+    assert.deepEqual([migrated.id, migrated.evidence], [SID, 'migrated:pid_metadata']);
+    const twin = await lab.post({names: ['twin']});
+    assert.equal(twin.json.results.twin.resumed, false, twin.text);
+    assert.match(twin.json.results.twin.note, /claimed by another session/);
+    await waitFor('the fake claude started', 10000, () => lab.starts() >= 1);
+    await new Promise(resolve => setTimeout(resolve, 1000));   // a second agent would have started by now
+    assert.equal(lab.starts(), 1, 'one agent on the conversation');
+  }, {noRegistry: true, twin: true}));
