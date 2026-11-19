@@ -31,18 +31,33 @@ and no caller yet; the session listing program is meant to be built on them. Eac
 | Library | What it is |
 |---|---|
 | `mesh_lru` | A map bounded by entry count and optionally by a caller-measured weight, evicting the least recently used entry; O(1) operations. |
-| `mesh_priority` | A keyed work queue without duplicates: bumped items first, then a focus list in its order, then tiers (`Focus`, `Pinned`, `Recent`, `Visible`, `Rest`) by rank. |
+| `mesh_priority` | A keyed work queue without duplicates: bumped items first, then a leading list in its order, then the caller's own ordered tiers, by rank within a tier. The session listing is expected to name its tiers (focused, pinned, recent, visible, the rest) in its own module. |
 | `mesh_deadline_pool` | Items run under Eio with bounded concurrency and a deadline each, ending `Ready`, `Slow` or `Failed`; blocking calls in abandonable system threads, with a bound on threads; a no-progress watchdog for rounds. |
-| `mesh_jsonl` | Bounded JSON lines: a line splitter that never holds more than the line bound, and a decoder that checks length and nesting depth before parsing and keeps the last value of a duplicated key, as Python does. |
+| `mesh_jsonl` | Bounded JSON lines: a line splitter that never holds more than the line bound, and a decoder that checks length and nesting depth before parsing, refuses comments and raw control characters in strings, rejects or strips invalid UTF-8, and keeps the last value of a duplicated key, as Python does. Its encoder never raises and only writes strict JSON in UTF-8. |
 | `mesh_safe_file` | Opening a file written by another program without following a link or blocking on a FIFO (`lstat`, `O_NONBLOCK`, then `fstat` of the same file), and positioned reads. |
 | `mesh_jsonl_tail` | An incremental fold over an append-only JSON-lines file: reads only appended bytes, waits for a partial last line, starts again on truncation, inode change or changed bytes before the cursor, and bounds each call's reads. It ports the History index's Python reader. |
 | `mesh_jsonl_rpc` | A JSON-lines request protocol over Eio flows, with the frames of `mesh-history` (`req` echo, `ok`, `error.code`), a version on every frame, streamed events, and lines bounded in both directions. |
 
 **Independence rule.** A generic library depends only on other generic libraries and on `unix`,
-`threads.posix`, `yojson`, `eio` and `cstruct`. `generic/test/dependency_guard.ml`, run by
-`dune runtest`, reads their dune files and fails on any other dependency, and on a directory of
-`generic/` that it does not list. Adding a generic library, or an allowed external dependency,
-means editing its lists on purpose.
+`threads.posix`, `yojson`, `eio` and `cstruct`. `generic/test/generic_guard.ml`, run by
+`dune runtest`, reads their dune files with an allow list: one `(library ...)` stanza per
+directory with known fields only, `libraries` (including `select` and `re_export`) naming only
+allowed packages, no preprocessor, no `rule`, `copy_files` or `include_subdirs`, no nested
+directory and no directory it does not list. `test_generic_guard` injects each of these
+violations into a temporary copy and checks that the guard refuses it. Adding a generic library,
+or an allowed external dependency, means editing its lists on purpose.
+
+### Follow-up: converge the safe-open copies
+
+The same "open a file another program wrote, without following a link or blocking" logic exists
+in five places: `worklog/lib/safefs.ml`, `lib/mesh_update_report.ml`, `lib/mesh_read.ml`,
+`lib/mesh_agent_resume_preset.ml` and `generic/safe_file` (`Mesh_safe_file`). The next slice
+moves `mesh_read`'s `with_regular_contents` onto `Mesh_safe_file.open_regular`. It currently calls
+`lstat` and then `open_in_bin` without `O_NONBLOCK`, so a FIFO swapped in between the two calls
+blocks the read. That slice adds a test showing that such a FIFO is answered in under 100 ms.
+`mesh_update_report` and `mesh_agent_resume_preset` can then keep their extra owner, permission
+and identity checks on top of `open_regular`. `Safefs` stays separate: it belongs to the worklog
+library, opens files for writing and checks the path again after opening.
 
 ## work-mcp
 

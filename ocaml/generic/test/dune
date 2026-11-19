@@ -60,11 +60,17 @@
 
 ; The independence rule of the generic libraries (ocaml/README.md, "Generic
 ; libraries"): their dune files may name only each other and an allowed list
-; of general-purpose packages.
+; of general-purpose packages. The self-test injects each kind of violation in
+; a temporary copy of generic/ and expects the guard to refuse it.
+
+(library
+ (name generic_guard)
+ (modules generic_guard))
 
 (executable
  (name dependency_guard)
- (modules dependency_guard))
+ (modules dependency_guard)
+ (libraries generic_guard))
 
 (rule
  (alias runtest)
@@ -72,3 +78,12 @@
   (glob_files_rec ../dune))
  (action
   (run %{exe:dependency_guard.exe} ..)))
+
+(test
+ (name test_generic_guard)
+ (modules test_generic_guard)
+ (libraries generic_guard generic_test_support alcotest unix)
+ (deps
+  (glob_files_rec ../dune))
+ (action
+  (run %{test} ..)))
