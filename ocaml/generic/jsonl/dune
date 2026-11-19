@@ -1,0 +1,10 @@
+; Bounded JSON lines: a line splitter with a length bound, and a JSON decoder
+; with a length and depth bound and Python's last-duplicate-key rule. Shared by
+; mesh_jsonl_tail and mesh_jsonl_rpc so that both bound their input the same
+; way. Generic (ocaml/README.md, "Generic libraries").
+
+(library
+ (name mesh_jsonl)
+ (wrapped false)
+ (modules mesh_jsonl_lines mesh_jsonl_value)
+ (libraries yojson))

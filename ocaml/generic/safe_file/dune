@@ -1,0 +1,7 @@
+; Opening a file written by another program without following a link or
+; blocking on a FIFO, and positioned reads. Generic (ocaml/README.md, "Generic
+; libraries").
+
+(library
+ (name mesh_safe_file)
+ (libraries unix))
