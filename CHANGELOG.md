@@ -132,6 +132,11 @@ before 1.0, a minor version may change behaviour.
   instead of 24 (29 instead of 23 without the macOS bundle). A release install therefore answers
   `/api/work/v1` instead of a 503; a release installed from its native programs links
   `app/bin/work-read` to its own. See [docs/work-read.md](docs/work-read.md).
+- **Diff viewer.** A `.diff` or `.patch` file opened in the side panel is rendered as a diff: one
+  block per file with its status and line counts, line numbers on both sides, changed words
+  highlighted, unified or side-by-side views. The agent guide asks agents to show diffs this way
+  when the owner asks for one. See
+  [Documents beside the terminals](docs/features.md#documents-beside-the-terminals).
 - **Agents get the project tracker.** Every agent that receives `mesh-board` (Claude Code, Codex,
   Pi, OpenCode, Gemini CLI, Copilot CLI and Mistral Vibe started by the mesh, and Antigravity
   through its plugin, once installed again) now also receives a second MCP server, `mesh-work`

@@ -406,6 +406,14 @@ Source files (for example `src/app.py`, `lib/a.ml:42`, `x.ts:10-20`) open read-o
 code viewer, with syntax highlighting, search (`Ctrl+F`), folding, and a jump to the highlighted
 line or range. Files over 4 MiB are served as plain text.
 
+Unified diffs (`.diff` and `.patch` files, as written by `git diff`, `git show`,
+`git format-patch` or `diff -u`) open in a diff viewer: one block per file, folded with a click,
+with its status (renamed, new, deleted, binary) and its count of added and removed lines; line
+numbers on both sides; the changed words of each modified line highlighted; and "unified" and
+"split" buttons to switch between one column and two columns side by side. A commit message
+before the first file is shown above it. "source" shows the plain text; diffs over 4 MiB are
+served as plain text. The agent guide asks agents to show a diff this way when you ask for one.
+
 **Following a document as it changes.** "Watch the file" in the "More" menu of a document reloads
 it whenever the file changes on disk, keeping the reading position for Markdown and source files.
 The last choice becomes the default for documents opened afterwards in this browser.
@@ -418,9 +426,9 @@ open only documents you trust ([SECURITY.md](../SECURITY.md#documents-that-send-
 files can be served, and how long a document link lasts, are described in
 [docs/operations.md](operations.md#documents-opened-with-mesh-open).
 
-The few labels of the Markdown and code viewers ("source", "↩ wrap", "N lines") and of demo scenes
-stay in English whatever the interface language: these pages run in the sandbox, which has no
-access to the interface's language catalogs.
+The few labels of the Markdown, code and diff viewers ("source", "↩ wrap", "N lines", "split")
+and of demo scenes stay in English whatever the interface language: these pages run in the
+sandbox, which has no access to the interface's language catalogs.
 
 ## Browsing files
 
