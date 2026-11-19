@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-// GET /api/sessions under a burst of requests: the requests that arrive while a listing runs share the next
-// one instead of each queueing its own behind the organisation lock. A page polls every 4 s; on a loaded
-// machine one listing takes longer than that, and one listing per request made the wait grow without bound.
-// The `now` of a reply is the time its listing was made: shared listings answer the same value.
-// A request sent after a change is answered by a listing that began after it.
+// GET /api/sessions under a burst of requests, with the native PTY host: the requests are answered from the
+// background state, which one round at a time keeps current; no request runs a listing of its own. A page
+// polls every 4 s; on a loaded machine one listing takes longer than that, and one listing per request made
+// the wait grow without bound. The `now` of a reply is the time its listing was made: shared listings answer
+// the same value. A change is listed within one round. (tests/sessions-state.test.ts: the bounds.)
 import assert from 'node:assert/strict';
 import {after, before, test} from 'node:test';
 import {type ChildProcess, spawn} from 'node:child_process';
@@ -79,10 +79,9 @@ function names(body: Listing): string[] {
   return (body.mesh as {name: string}[]).map(session => session.name);
 }
 
-test('a request sent after a change is never answered by a listing that began before the change', async () => {
-  // Pollers keep a listing running all the time. A session is created while one runs; every request sent
-  // once the creation has returned must show it. Returning the listing already in flight to a new request
-  // would hand some of them a listing that began before the creation.
+test('a session created while pages poll is listed within one round', async () => {
+  // Pollers keep rounds running all the time. A session is created while one runs: the round that starts
+  // after the creation lists it, so a poll a few rounds later always shows it.
   let polling = true;
   const pollers = Array.from({length: 3}, async () => { while (polling) await listing(); });
   try {
@@ -91,10 +90,7 @@ test('a request sent after a change is never answered by a listing that began be
       await new Promise(resolve => setTimeout(resolve, 100));
       const made = await post('/api/new', {preset: 'shell', cwd: mesh.home, name});
       assert.equal(made.status, 200, await made.text());
-      const replies = await Promise.all(Array.from({length: 6}, () => listing()));
-      for (const {body} of replies) {
-        assert.ok(names(body).includes(name), `a reply sent after the creation of ${name} does not list it`);
-      }
+      await waitFor(`${name} listed`, 30000, async () => names((await listing()).body).includes(name));
     }
   } finally {
     polling = false;

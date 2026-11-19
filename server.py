@@ -801,6 +801,11 @@ def _session_notice(raw):
     return notice if notice in (agentmcp.OPENCODE_UNSUPPORTED_NOTICE, agentmcp.OPENCODE_UNREADABLE_NOTICE) else None
 
 
+def _mesh_order(d):
+    """Sessions created since the last move first (newest on top), then the owner's order."""
+    return d["rank"] is not None, d["rank"] if d["rank"] is not None else -d["created"]
+
+
 def list_sessions(mesh_raw, listed=True):
     with discover.listing_scope():      # one codex process scan for the whole listing
         return _list_sessions(mesh_raw, listed)
@@ -824,8 +829,7 @@ def _list_sessions(mesh_raw, listed):
         if d["notice"]:     # launched bare: no state, no conversation, nothing to resume or restore
             d["agent"] = None
         mesh.append(d)
-    # sessions created since the last move first (newest on top), then the owner's order
-    mesh.sort(key=lambda d: (d["rank"] is not None, d["rank"] if d["rank"] is not None else -d["created"]))
+    mesh.sort(key=_mesh_order)
     term = discover.external_sessions(procs, exclude_parents={os.getpid(), *HOST_PIDS})
     term.sort(key=lambda d: -((d["agent"] or {}).get("updated") or 0))
     discover.drop_duplicate_guessed_ids(mesh + term)
@@ -843,65 +847,80 @@ def _list_sessions(mesh_raw, listed):
 _LIVE_EVENT_STATE = None
 
 
+async def _read_host():
+    """The host's listing, whether it succeeded, and the host's identity on both sides of it."""
+    listed = True
+    # The host's identity on both sides of the listing: a restart in between leaves it unknown.
+    host_before = await ptyhost.host_identity()
+    try:
+        raw = await ptyhost.request({"op": "list"})
+    except (OSError, asyncio.IncompleteReadError, asyncio.TimeoutError, json.JSONDecodeError,
+            UnicodeDecodeError, RecursionError):
+        raw, listed = [], False   # ptyhost slow or gone: show nothing, forget nothing
+    else:
+        # A delivered JSON value can still be a malformed list reply.  It has
+        # no authority to stand in for an empty observed inventory, and is not
+        # an excuse to mask unrelated programming errors with a broad catch.
+        if not _valid_ptyhost_list(raw):
+            raw, listed = [], False
+    return raw, listed, host_before if host_before == await ptyhost.host_identity() else None
+
+
+async def _record_listing(data, read):
+    """The writes of a listing: the recovery snapshot, and the prune of the organisation when
+    ``read`` is None (``read``: the host's listing the rows come from, already pruned).
+
+    The two files are deliberately separate, but their *meaning* is one transition: a recovery
+    entry must not retain a folder name that the live mesh view has already replaced.  Callers
+    which can race an organisation mutation run this under the organisation lock, which also
+    covers folder rename and recovery assignment; the reads of the listing stay outside it.
+    Those read the host again here, inside the lock: a listing read before a restore created a
+    session, and pruned after the restore wrote that session's organisation, would not know the
+    session and would forget its label, folder and rank. Every session the host lists is
+    ``seen`` by the snapshot, also one the listing did not describe: its previous entry is
+    kept, it is never taken for a lost one."""
+    raw, listed, host = read or await _read_host()
+    if not listed:
+        return [], False
+    seen = {(s["name"], s["created"]) for s in raw}
+    if read is None:
+        org = await asyncio.to_thread(organize.view, raw, True)
+        data["mesh"] = [d for d in data["mesh"] if (d["name"], d["created"]) in seen]
+        for d in data["mesh"]:
+            d.update(org["sessions"][d["name"]])
+        data["mesh"].sort(key=_mesh_order)
+        data["folders"] = org["folders"]
+    return await asyncio.to_thread(respawn.record, data["mesh"], True, host=host, seen=seen)
+
+
 async def sessions(event_state=None, organisation_lock=None):
+    return (await _listing(event_state, organisation_lock))[0]
+
+
+async def _listing(event_state=None, organisation_lock=None, read=None):
+    """One full listing, and whether the host listed. ``read``: the host's listing, already read."""
     if event_state is None:
         event_state = _LIVE_EVENT_STATE
-    async def read_host():
-        """The host's listing, whether it succeeded, and the host's identity on both sides of it."""
-        listed = True
-        # The host's identity on both sides of the listing: a restart in between leaves it unknown.
-        host_before = await ptyhost.host_identity()
-        try:
-            raw = await ptyhost.request({"op": "list"})
-        except (OSError, asyncio.IncompleteReadError, asyncio.TimeoutError, json.JSONDecodeError,
-                UnicodeDecodeError, RecursionError):
-            raw, listed = [], False   # ptyhost slow or gone: show nothing, forget nothing
-        else:
-            # A delivered JSON value can still be a malformed list reply.  It has
-            # no authority to stand in for an empty observed inventory, and is not
-            # an excuse to mask unrelated programming errors with a broad catch.
-            if not _valid_ptyhost_list(raw):
-                raw, listed = [], False
-        return raw, listed, host_before if host_before == await ptyhost.host_identity() else None
-
-    async def listed_snapshot():
-        """Read one organization view and persist the matching recovery view.
-
-        The two files are deliberately separate, but their *meaning* is one
-        transition: a recovery entry must not retain a folder name that the
-        live mesh view has already replaced.  Callers which can race an
-        organization mutation pass the app-wide lock around this pair.
-        """
-        # ``list_sessions`` does CPU/filesystem discovery in a worker.  Keep
-        # the mutable open queue on the event-loop thread: pruning it from the
-        # worker could race a newly authenticated board-open request.
-        observed_at = time.time()
-        data = await asyncio.to_thread(list_sessions, raw, listed)
-        if event_state is not None and listed:
-            # Before the recovery snapshot below: the conversation an OpenCode plugin reported is
-            # what a restart restores.
-            _apply_hook_state(event_state, data["mesh"], raw, history_identity=False)
-            await run_history_identity(_apply_history_identity, data["mesh"])   # reads the index: off the loop, and off HISTORY_READS
-        await asyncio.to_thread(conversation_names.observe, data["mesh"], listed=listed, now=observed_at)
-        await asyncio.to_thread(conversation_names.active_aliases, data["mesh"])
-        data["restorable"], durable = await asyncio.to_thread(respawn.record, data["mesh"], listed, host=host)
-        if durable:   # the list was read and the offers are on disk: agent mail may be pruned again
-            agentmail.release_pruning()
-        return data
-
-    if organisation_lock is None:
-        raw, listed, host = await read_host()
-        data = await listed_snapshot()
-    else:
-        # This same lock also covers folder rename and recovery assignment.
-        # Without it, an old listing can overwrite a newly migrated snapshot.
-        # The host is read INSIDE it: a listing read before a restore created a session, and
-        # pruned after the restore wrote that session's organisation, would not know the
-        # session and would forget its label, folder and rank.  (Lock order: restore_lock, then
-        # organisation_lock; this function takes only the latter, and never while holding it.)
-        async with organisation_lock:
-            raw, listed, host = await read_host()
-            data = await listed_snapshot()
+    read = read or await _read_host()
+    raw, listed, _ = read
+    # ``list_sessions`` does CPU/filesystem discovery in a worker.  With a lock, it only reads: the
+    # prune of the organisation is a write, made under the lock (_record_listing).  Keep the mutable
+    # open queue on the event-loop thread: pruning it from the worker could race a board-open request.
+    observed_at = time.time()
+    data = await asyncio.to_thread(list_sessions, raw, listed and organisation_lock is None)
+    if event_state is not None and listed:
+        # Before the recovery snapshot below: the conversation an OpenCode plugin reported is
+        # what a restart restores.
+        _apply_hook_state(event_state, data["mesh"], raw, history_identity=False)
+        await run_history_identity(_apply_history_identity, data["mesh"])   # reads the index: off the loop, and off HISTORY_READS
+    await asyncio.to_thread(conversation_names.observe, data["mesh"], listed=listed, now=observed_at)
+    await asyncio.to_thread(conversation_names.active_aliases, data["mesh"])
+    data["restorable"], durable = [], False
+    if listed:   # lock order: restore_lock, then organisation_lock; only the latter is taken here
+        async with organisation_lock or contextlib.AsyncExitStack():
+            data["restorable"], durable = await _record_listing(data, None if organisation_lock else read)
+    if durable:   # the list was read and the offers are on disk: agent mail may be pruned again
+        agentmail.release_pruning()
     # A failed listing says nothing about which live session identities exist.
     # In particular it must not turn an ordinary ptyhost hiccup into a purge of
     # every shadow hint, dedup window and rate bucket.
@@ -940,7 +959,7 @@ async def sessions(event_state=None, organisation_lock=None):
     # A snapshot is intentionally non-consuming: another logged-in browser
     # must not lose its local hint because this one happened to refresh first.
     data["signals"] = SIGNALS.snapshot()
-    return data
+    return data, listed
 
 
 async def _update_notice():
@@ -954,55 +973,192 @@ async def _update_notice():
         return None
 
 
-class SharedListing:
-    """The listing of GET /api/sessions: at most one of these runs and one waits, and every request is answered
-    by a listing that began after it arrived. The wait of /api/sessions requests no longer grows with the
-    number of polling pages; the background loops (snapshot, push, idle) still run their own listings under
-    the same lock.
+# How long a request without ``since`` (a page load, or a client that does not number its listings and
+# expects a session it just created to be listed) waits for the round it asks for, before it answers from
+# the state as it is. A request with ``since`` never waits: a round reads /proc and the agents'
+# transcripts, seconds on a loaded machine. Unset, the skeleton is answered at once, before the first
+# listing; set, the wait holds then too (a test that reads a complete listing right after a change).
+SESSIONS_WAIT = float(os.environ.get("MESH_SESSIONS_WAIT") or 2)
+SKELETON_AT_ONCE = not os.environ.get("MESH_SESSIONS_WAIT")
+HOST_SILENT_AFTER = 0.25    # a host list pending longer: answers say host "silent"
+REMOVED_KEEP = 600          # seconds a removal stays answerable to ``since``
+FOCUS_MAX, FOCUS_BYTES = 64, 4096
 
-    A listing runs under the organisation lock and can take seconds on a loaded machine (it reads /proc and
-    the agents' transcripts). With one listing per request, a page polling every 4 s queued requests faster
-    than they were answered, and the wait grew without bound (minutes after a web restart). Here the
-    requests that arrive while a listing runs all share the next one."""
 
-    def __init__(self, run):
-        self._run = run
-        self._running = None
-        self._next = None
+class SessionsState:
+    """What GET /api/sessions answers: the session list kept by the one background round
+    (snapshot_loop), never a listing per request. Until the first listing it holds a skeleton:
+    rows with ``ready: false`` built from the host's list, mesh.json and the recovery snapshot.
+    ``generation`` grows when a row's public content changes; it starts from the start time in
+    ms, so that it never goes back across a restart. See docs/sessions-api.md."""
 
-    def __call__(self):
-        if self._next is None:
-            self._next = asyncio.ensure_future(self._after(self._running))
-            self._next.add_done_callback(self._settled)
-        # A request that goes away does not cancel a listing other requests share.
-        return asyncio.shield(self._next)
+    def __init__(self):
+        self.generation = self.floor = int(time.time() * 1000)
+        self.rows, self.marks, self.removed = {}, {}, {}   # name -> row, (generation, print), (generation, time)
+        self.top, self.external_mark, self.ready = None, (self.generation, None), 0
+        self.texts = {"external": "[]", "folders": "[]", "management": '{"state": "pending"}'}   # top's, encoded
+        self.host, self.identity, self.reading = "ok", None, None
+        self.extras = {"update": None, "sessionRequests": [], "agentMailConsent": []}
+        self.focus, self.started, self.finished = [], 0, 0
+        self.wanted, self._tick, self._update = asyncio.Event(), asyncio.Event(), None
 
-    def _settled(self, task):
-        if self._next is task:    # cancelled or failed before it started: the next request starts afresh
-            self._next = None
-        # Read its outcome even when every request that waited for it has gone away.
-        task.cancelled() or task.exception()
+    def changed(self):
+        self._tick.set()
+        self._tick = asyncio.Event()
 
-    async def _after(self, previous):
-        if previous is not None:
-            await asyncio.wait([previous])
-        self._running, self._next = self._next, None
-        return await self._run()
+    def silent(self):
+        return self.host == "silent" or self.reading is not None and time.monotonic() - self.reading > HOST_SILENT_AFTER
+
+    async def wait(self, seconds):
+        """Ask for a round and wait for it, at most ``seconds``. With SKELETON_AT_ONCE, also stop
+        waiting at the skeleton, at a silent host, or HOST_SILENT_AFTER with nothing to answer yet."""
+        self.wanted.set()
+        ticket, start = self.started + 1, time.monotonic()   # the next round to start begins after this request
+
+        def answered():
+            waited = time.monotonic() - start
+            if self.finished >= ticket or waited > seconds:
+                return True
+            if not SKELETON_AT_ONCE:
+                return False
+            if self.top is None:
+                return waited > HOST_SILENT_AFTER
+            return self.ready < len(self.rows) or self.silent()
+        while not answered():
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._tick.wait(), 0.05)
+
+    def publish(self, rows, top):
+        """Take the rows of a listing and its other fields; one generation for every changed row."""
+        now, fresh, changed = time.time(), {}, []
+        for row in rows:
+            fresh[row["name"]] = row
+            mark = json.dumps(row, sort_keys=True, default=str)
+            if self.marks.get(row["name"], (0, None))[1] != mark:
+                changed.append((row["name"], mark))
+        gone = [name for name in self.rows if name not in fresh]
+        external = json.dumps(top.get("external"), sort_keys=True, default=str)
+        if changed or gone or external != self.external_mark[1]:
+            self.generation += 1
+        for name, mark in changed:
+            self.marks[name] = self.generation, mark
+            self.removed.pop(name, None)
+        for name in gone:
+            del self.marks[name]
+            self.removed[name] = self.generation, now
+        if external != self.external_mark[1]:
+            self.external_mark = self.generation, external
+        for name, (generation, at) in list(self.removed.items()):
+            if now - at > REMOVED_KEEP:    # older ``since`` values get a full answer
+                del self.removed[name]
+                self.floor = max(self.floor, generation)
+        self.rows, self.top = fresh, top
+        self.texts = {key: json.dumps(value, default=str) for key, value in top.items()}
+        self.ready = sum(row["ready"] for row in fresh.values())
+        self.changed()
+
+    def answer(self, since, **fields):
+        """The JSON text of an answer: the rows changed after ``since`` (a generation) and the names
+        removed since, or every row (``full``) when ``since`` is absent or unknown here. The listing's
+        texts are encoded once, by publish, not again for each of the pages that poll."""
+        delta = self.top is not None and since is not None and self.floor <= since <= self.generation
+        texts = self.texts
+        rows = [self.marks[name][1] for name in self.rows if not delta or self.marks[name][0] > since]
+        if delta:
+            fields["removed"] = [name for name, (generation, _) in self.removed.items() if generation > since]
+            if self.external_mark[0] <= since:
+                texts = {key: text for key, text in texts.items() if key != "external"}
+        fields.update(self.extras, client_version=client_version(), restore_guard=RESTORE_GUARD,
+                      generation=self.generation, full=not delta, counts={"total": len(self.rows), "ready": self.ready},
+                      complete=self.top is not None and self.ready == len(self.rows),
+                      host="silent" if self.silent() else self.host)
+        parts = [f"{json.dumps(key)}: {text}" for key, text in texts.items()]
+        return "{" + ", ".join([*parts, json.dumps(fields)[1:-1], f'"mesh": [{",".join(rows)}]']) + "}"
+
+    async def skeleton(self, raw):
+        """Rows from the host's list, mesh.json and the recovery snapshot only: no /proc, no transcript."""
+        org = await asyncio.to_thread(organize.view, raw, False)
+        known = await asyncio.to_thread(respawn.provisional)
+        rows = []
+        for s in raw:
+            entry = known.get((s["name"], s["created"])) or {"agent": None, "cmd": None}
+            notice, kind = _session_notice(s), (s.get("meta") or {}).get("known_agent")
+            agent = entry["agent"] and not notice and dict(entry["agent"], provisional=True)
+            rows.append({"id": s["name"], "name": s["name"], "kind": "mesh", "created": s["created"], "pid": s["pid"],
+                         "cwd": s["cwd"], "cmd": entry["cmd"] or "", "attached": s["attached"], "activity": s["activity"],
+                         "known_agent": kind if kind in AGENT_TYPES else None, "notice": notice, "agent": agent or None,
+                         "ready": False, **org["sessions"][s["name"]]})
+        self.publish(sorted(rows, key=_mesh_order), {
+            "external": [], "folders": org["folders"], "home": str(Path.home()), "now": time.time(), "restorable": [],
+            "management": {"state": "pending"}, "ptyhost": True})
+
+    async def read_extras(self, app):
+        """The fields of the answer that are not the listing's; the PTY host's update notice in a
+        task of its own, so that a silent host never holds a round or an answer."""
+        if self._update is None or self._update.done():
+            async def update():
+                self.extras["update"] = await _update_notice()
+            self._update = asyncio.ensure_future(update())
+        if app:
+            self.extras["sessionRequests"] = await asyncio.to_thread(app["session_requests"].pending)
+            self.extras["agentMailConsent"] = (await asyncio.to_thread(agentmail.consent_projection))["requests"]
+
+
+async def produce_round(app, read):
+    """The rows of one round, given the host's list: today the full listing of this process. This is
+    the one place a native producer replaces."""
+    return await _listing(app["event_state"] if app else None, app["organisation_lock"] if app else None, read)
+
+
+async def sessions_round(app, state):
+    """One round of the background state: the host's list, the skeleton before the first listing,
+    then the listing. A host that does not list leaves the state and the snapshot as they are
+    (with no state yet, the state is the listing of no session)."""
+    state.reading = time.monotonic()
+    try:
+        read = await _read_host()
+    finally:
+        state.reading = None
+    _, listed, identity = read
+    if listed:
+        state.host = "restarted" if None not in (identity, state.identity) and identity != state.identity else "ok"
+        state.identity = identity or state.identity
+        if state.top is None:
+            await state.skeleton(read[0])
+    else:
+        state.host = "silent"
+    await state.read_extras(app)
+    if not listed and state.top is not None:
+        return
+    data, listed = await produce_round(app, read)
+    if listed or state.top is None:
+        # A wake line nobody followed: shown on the session, never typed (claudewake).
+        unconfirmed = app["claude_wakes"].unconfirmed() | app["codex_wakes"].unconfirmed() if app else set()
+        rows = [dict(row, ready=True, **({"wake_unconfirmed": True} if (row["name"], row["created"]) in unconfirmed else {}))
+                for row in data.pop("mesh")]
+        state.publish(rows, data)
+
+
+def _focus(raw, known):
+    """The ``focus`` of a request: up to FOCUS_MAX distinct session names, in order, that the host
+    lists; None when absent or longer than FOCUS_BYTES."""
+    if raw is None or len(raw.encode(errors="replace")) > FOCUS_BYTES:
+        return None
+    names = list(dict.fromkeys(name for name in raw.split(",") if NAME_RE.fullmatch(name)))[:FOCUS_MAX]
+    return [name for name in names if name in known]
 
 
 async def api_sessions(request):
-    # A shallow copy: the listing is shared with the other requests that waited for it.
-    result = dict(await request.app["listing"]())
-    result["sessionRequests"] = request.app["session_requests"].pending()
-    result["update"] = await _update_notice()
-    consent = await asyncio.to_thread(agentmail.consent_projection)
-    result["agentMailConsent"] = consent["requests"]
-    # A wake line nobody followed: shown on the session, never typed (claudewake).
-    unconfirmed = request.app["claude_wakes"].unconfirmed() | request.app["codex_wakes"].unconfirmed()
-    result["mesh"] = [dict(session, wake_unconfirmed=True)
-                      if (session.get("name"), session.get("created")) in unconfirmed else session
-                      for session in result.get("mesh", [])]
-    return web.json_response(result)
+    """The session list from the background state (SessionsState): a request never runs a listing."""
+    state = request.app["sessions_state"]
+    focus = _focus(request.query.get("focus"), state.rows)
+    if focus is not None:
+        state.focus = focus    # kept for a producer that orders its work; this one describes every row at once
+    since = request.query.get("since", "")
+    since = int(since) if re.fullmatch(r"[0-9]{1,16}", since) else None
+    await state.wait(SESSIONS_WAIT if since is None else 0)
+    text = state.answer(since, **({} if focus is None else {"focus": focus}))
+    return web.Response(text=text, content_type="application/json")
 
 
 async def api_portfolio_diff(request):
@@ -4280,16 +4436,25 @@ async def api_restore_discard(request):
 
 
 async def snapshot_loop(app):
-    """Keep the snapshot current with no page open: the page's own refresh is not enough when
-    nobody is looking at the mesh."""
+    """The one background round (sessions_round): it keeps the state GET /api/sessions answers from
+    and the recovery snapshot current, also with no page open. A round starts when a request asks
+    for one, or SNAPSHOT_EVERY after the last; never two at once, so the requests that arrive
+    during a round share the next."""
+    state = app["sessions_state"] if app else SessionsState()
     while True:
-        await asyncio.sleep(SNAPSHOT_EVERY)
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(state.wanted.wait(), SNAPSHOT_EVERY)
+        state.wanted.clear()
+        state.started += 1
         try:
             # With the hook state: the conversation a Copilot (or OpenCode) plugin reported is what the
             # snapshot keeps, also while no page is open.
-            await sessions(app["event_state"] if app else None, app["organisation_lock"] if app else None)
+            await sessions_round(app, state)
         except Exception as e:   # one bad round must not end the loop
             print(f"snapshot loop: {e!r}", flush=True)
+        finally:
+            state.finished += 1
+            state.changed()
 
 
 async def start_snapshot(app):
@@ -4662,7 +4827,7 @@ def make_app(*, session_request_path=None):
     app["contextual_diff_semaphore"] = asyncio.Semaphore(MAX_CONTEXTUAL_DIFF_PROCESSES)
     global _LIVE_EVENT_STATE
     app["event_state"] = _LIVE_EVENT_STATE = EventState()
-    app["listing"] = SharedListing(lambda: sessions(app["event_state"], app["organisation_lock"]))
+    app["sessions_state"] = SessionsState()
     try:
         app["session_requests"] = sessionrequests.Requests(
             SESSION_REQUESTS_FILE if session_request_path is None else session_request_path)

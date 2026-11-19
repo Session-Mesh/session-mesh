@@ -237,13 +237,12 @@ async def test_listing_cannot_restore_a_stale_folder_after_a_rename(
     monkeypatch.setattr(server, "list_sessions", pause_after_observing_the_old_folder)
     listing = asyncio.create_task(client.get("/api/sessions", headers=auth_cookie))
     assert await asyncio.to_thread(entered.wait, 1), "listing did not observe the old folder"
-    rename = asyncio.create_task(client.post("/api/organize",
-                                              json={"op": "folder-rename", "old": "projects", "new": "projets"},
-                                              headers=auth_cookie))
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(asyncio.shield(rename), 0.05)
+    # The organisation lock covers the writes of a listing, not its reads: the rename does not wait
+    # for the description, and the snapshot written after it still records the new folder.
+    rename_response = await asyncio.wait_for(client.post(
+        "/api/organize", json={"op": "folder-rename", "old": "projects", "new": "projets"}, headers=auth_cookie), 5)
     release.set()
-    listing_response, rename_response = await asyncio.gather(listing, rename)
+    listing_response = await listing
     assert listing_response.status == rename_response.status == 200
     assert next(entry for entry in respawn._load()["live"] if entry["name"] == "a")["org"]["folder"] == "projets"
 
