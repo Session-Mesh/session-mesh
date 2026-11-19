@@ -60,6 +60,10 @@ def compact_detail(detail):
     return detail
 
 
+# The conversation id every Claude hook carries (``session_id``), the one `claude --resume` takes.
+CLAUDE_SESSION = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
 def claude_event(payload, at):
     if not isinstance(payload, dict) or "agent_id" in payload:
         return None
@@ -90,6 +94,9 @@ def claude_event(payload, at):
     error = text(payload.get("error"))
     if hook == "StopFailure" and error is not None:
         detail["error"] = error
+    session = payload.get("session_id")   # the conversation: the server records it for a restore
+    if isinstance(session, str) and CLAUDE_SESSION.fullmatch(session):
+        detail["session"] = session
     event = {"type": kind, "at": at, "detail": compact_detail(detail)}
     ident = event_id(hook, ident)
     if ident is not None:

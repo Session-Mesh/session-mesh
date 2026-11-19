@@ -29,6 +29,7 @@ import signal
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import NamedTuple
 
@@ -661,7 +662,7 @@ async def _send_new(request):
 
 
 async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, pi_runtime=None,
-                      notice=None, vibe=None, opencode=None, exact=False, nonce=None):
+                      notice=None, vibe=None, opencode=None, exact=False, nonce=None, conversation=None):
     """Start a session. Every way to start one ends here ("New session", a
     conversation resumed from the history, a restored session, an agent moved
     in from another terminal, a restart), so workspace_roots is applied here.
@@ -670,7 +671,8 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
     ``opencode`` is the (command, notice) pair ``_opencode_command`` returned earlier, for the same reason:
     its probe (``opencode debug config``) is run once per launch.
     ``exact``: the name is ``base`` or nothing (409 when taken), never a suffixed one.
-    ``nonce``: the session nonce, when the caller recorded it before the creation (exact restore)."""
+    ``nonce``: the session nonce, when the caller recorded it before the creation (exact restore).
+    ``conversation``: (agent, id, evidence) of the conversation the command launches (_send_launch)."""
     if not LAUNCH_SETTINGS.allows_cwd(cwd):
         raise web.HTTPForbidden(text=OUTSIDE_WORKSPACE_ROOTS)
     if known_agent == "gemini" and _is_home_directory(cwd):
@@ -700,8 +702,38 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
     meta = {"agent": agent, "known_agent": known_agent, "nonce": nonce, **({"notice": notice} if notice else {})}
     if vibe and vibe.hooks:
         meta["vibe_hooks"] = vibe.hooks
-    await _send_new({"op": "new", "name": name, "cwd": cwd, "command": command, "env": env, "meta": meta})
+    await _send_launch({"op": "new", "name": name, "cwd": cwd, "command": command, "env": env, "meta": meta},
+                       conversation)
     return name
+
+
+async def _send_launch(request, conversation):
+    """Send a `new` request. With ``conversation`` (agent, id, evidence), the id is first recorded as
+    ``chosen`` in the identity registry (I2), durably: when it cannot be, or another live session holds
+    that conversation, nothing is sent. A refusal that is final drops the record again."""
+    agent, sid, evidence = conversation or (None, None, None)
+    pattern = respawn.CONVERSATION_RE.get(agent)
+    if not (pattern and isinstance(sid, str) and pattern.fullmatch(sid)):   # an id of another form is not recorded
+        return await _send_new(request)
+    session = {"name": request["name"], "created": None, "nonce": request["meta"]["nonce"]}
+    live = [{"name": s["name"], "created": s["created"], "nonce": s["meta"].get("nonce")}
+            for s in await host({"op": "list"})]
+    try:
+        state = await asyncio.to_thread(respawn.claim_identity, session, agent, sid, "chosen", evidence,
+                                        live=live, required=True)
+    except OSError as exc:
+        print(f"new: conversation of {request['name']} not recorded: {exc!r}", flush=True)
+        raise web.HTTPConflict(text="The conversation could not be recorded: nothing was started") from exc
+    if state != "active":
+        await asyncio.to_thread(respawn.forget_identity, session)
+        raise web.HTTPConflict(text="This conversation is claimed by another session: nothing was started")
+    try:
+        await _send_new(request)
+    except CreationUncertain:   # the session may still appear: its record stays
+        raise
+    except BaseException:
+        await asyncio.to_thread(respawn.forget_identity, session)
+        raise
 
 
 async def _prepared_launch(known_agent, command, cwd):
@@ -1754,11 +1786,28 @@ async def api_event(request):
     previous = state.current_type(name, nonce)
     if not state.apply(name, nonce, event):
         return web.json_response({"ok": True, "applied": False, "reason": "stale"})
+    await _claim_reported_conversation(name, nonce, request["mesh_session_created"], agent, event["detail"])
     if event["type"] == "done" and "agent_wakes" in request.app:
         request.app["agent_wakes"].trigger()   # a deferred wake may now be typed
     elif previous == "done":
         await _cancel_pending_notice(name, request["mesh_session_created"])
     return web.json_response({"ok": True, "applied": True})
+
+
+async def _claim_reported_conversation(name, nonce, created, agent, detail):
+    """The conversation a hook of the session's own agent reported (``detail.session``), into the identity
+    registry as ``hook`` (I5). The session comes from the token, never from the body; an id of another
+    form, or of another agent, is ignored. Best effort: the next report tries again."""
+    sid = (detail or {}).get("session")
+    if agent is None or not isinstance(sid, str):
+        return
+    hook = (detail or {}).get("hook")
+    evidence = f"hook:{hook}" if isinstance(hook, str) and respawn.EVIDENCE_RE.fullmatch(f"hook:{hook}") else "hook:report"
+    try:
+        await asyncio.to_thread(respawn.claim_identity, {"name": name, "created": created, "nonce": nonce},
+                                agent, sid, "hook", evidence)
+    except OSError as exc:
+        print(f"event: conversation of {name} not recorded: {exc!r}", flush=True)
 
 
 async def _cancel_pending_notice(name, created):
@@ -1967,10 +2016,23 @@ async def api_new(request):
     if name and not NAME_RE.fullmatch(name):
         raise web.HTTPBadRequest(text="Invalid name (letters, digits, - and _)")
     agent = launchplan.agent_type(kind) if kind in AGENT_PRESETS else None
+    conversation = None
+    if agent:
+        argv, conversation = _chosen_launch(agent, AGENT_PRESETS[kind])
+        command = shlex.join(argv)
     name = await new_session(name or f"{Path(cwd).name}-{kind if kind != 'custom' else 'cmd'}",
                              cwd, command, agent if agent in RESUMABLE_AGENT_PRESETS else None,
-                             agent)
+                             agent, conversation=conversation)
     return web.json_response({"id": name})
+
+
+def _chosen_launch(agent, argv):
+    """(argv, conversation) of a new agent. A new Claude is given the conversation id the mesh chooses (I2:
+    ``--session-id`` with a UUIDv4), recorded before it starts; the other agents choose their own."""
+    if agent != "claude":
+        return argv, None
+    sid = str(uuid.uuid4())
+    return [*argv, "--session-id", sid], ("claude", sid, "launch:session_id")
 
 
 def _resume_argv(info):
@@ -2022,6 +2084,11 @@ def _conversation_missing(kind, sid):
     if kind == "codex":
         return not glob.glob(os.path.join(home, ".codex", "sessions", "*", "*", "*", f"rollout-*-{sid}.jsonl"))
     return False
+
+
+def _restored_conversation(agent):
+    """The conversation a restore launches, recorded as chosen before it starts (new_session)."""
+    return agent["type"], agent["session_id"], "launch:restore"
 
 
 def _restore_identity(entry):
@@ -2548,10 +2615,12 @@ async def _resume_history(agent, sid):
         if path is None:
             raise web.HTTPNotFound(text="Pi transcript missing or ambiguous")
         name = await new_session(f"{Path(cwd).name}-pi", cwd,
-                                 shlex.join(["pi", "--session", str(path)]), known_agent="pi")
+                                 shlex.join(["pi", "--session", str(path)]), known_agent="pi",
+                                 conversation=(agent, sid, "launch:history"))
         return await _with_last_label(name, agent, sid)
     argv = agentmcp.inject(agent, resumeargs.resume_argv(agent, [], sid))
-    name = await new_session(f"{Path(cwd).name}-{agent}", cwd, shlex.join(argv), agent, agent)
+    name = await new_session(f"{Path(cwd).name}-{agent}", cwd, shlex.join(argv), agent, agent,
+                             conversation=(agent, sid, "launch:history"))
     return await _with_last_label(name, agent, sid)
 
 
@@ -3623,11 +3692,12 @@ async def _execute_session_action(item):
     if item["action"] == "create":
         if item["preset"] not in AGENT_PRESETS:
             raise web.HTTPConflict(text=f"Agent {item['preset']} is disabled in the configuration")
-        argv = _model_argv(AGENT_PRESETS[item["preset"]], item["model"])
         agent = launchplan.agent_type(item["preset"])
+        argv, conversation = _chosen_launch(agent, _model_argv(AGENT_PRESETS[item["preset"]], item["model"]))
         name = await new_session(item["name"] or f"{Path(raw['cwd']).name}-{item['preset']}",
                                  raw["cwd"], shlex.join(argv),
-                                 agent if agent in RESUMABLE_AGENT_PRESETS else None, agent)
+                                 agent if agent in RESUMABLE_AGENT_PRESETS else None, agent,
+                                 conversation=conversation)
         return {"id": name}
 
     described = await asyncio.to_thread(_describe_with_hooks, listed)
@@ -4247,7 +4317,8 @@ async def _create_restored(name, entry, running, reason=None):
     try:
         command = shlex.join(_resume_argv(agent)) if resumable else _not_relaunched_line(agent, reason)
         new = await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
-                                agent["type"] if resumable else None, keep=48)
+                                agent["type"] if resumable else None, keep=48,
+                                conversation=_restored_conversation(agent) if resumable else None)
     except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, GeminiSettingsRefused) as e:
         return None, {"ok": False, "error": e.text}
     except (CreationUncertain, asyncio.CancelledError):   # sent, outcome unknown: the agent may still start
@@ -4401,7 +4472,8 @@ async def _create_exact(name, entry, nonce):
     try:
         command = shlex.join(_resume_argv(agent)) if resumable else None
         await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
-                          agent["type"] if resumable else None, keep=48, exact=True, nonce=nonce)
+                          agent["type"] if resumable else None, keep=48, exact=True, nonce=nonce,
+                          conversation=_restored_conversation(agent) if resumable else None)
     except CreationUncertain:
         raise
     except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, web.HTTPServiceUnavailable) as e:

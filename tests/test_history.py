@@ -339,7 +339,7 @@ def test_history_scan_survives_startup_loop_teardown(monkeypatch):
 def resume_env(hist, monkeypatch):
     started = []
 
-    async def fake_new_session(base, cwd, command=None, agent=None, known_agent=None):
+    async def fake_new_session(base, cwd, command=None, agent=None, known_agent=None, conversation=None):
         started.append((base, cwd, command, agent, known_agent))
         return f"mesh-{len(started)}"
 
@@ -615,7 +615,7 @@ async def test_pi_resume_resolves_existing_unique_transcript_before_launch(clien
     response = await client.post('/api/history/resume', json={'agent': 'pi', 'id': SID}, headers=auth_cookie)
     assert response.status == 200, await response.text()
     assert shlex.split(calls[0][0][2]) == ['pi', '--session', str(transcript)]
-    assert calls[0][1] == {'known_agent': 'pi'}
+    assert calls[0][1] == {'known_agent': 'pi', 'conversation': ('pi', SID, 'launch:history')}
     server.HIST_RESUMING.discard(('pi', SID))
     client.app['recent_conversations'].clear()   # a successful resume also holds the conversation for 120 s
     # A stale pin must not cause Pi to silently create a new conversation.

@@ -59,6 +59,11 @@ before 1.0, a minor version may change behaviour.
   decided elsewhere; your choice changed nothing." The server already kept only the first answer.
   See
   [Messages and requests from agents](docs/features.md#messages-and-requests-from-agents).
+- **A new Claude session starts with a conversation id the mesh chose.** It is launched with
+  `claude --session-id <uuid>`, and the id is recorded in the identity registry before the agent
+  starts; restores and History resumes record the conversation they reopen the same way. Nothing
+  starts when the record cannot be written or a running session holds that conversation. The Claude
+  hooks report the conversation id they carry, so the registry follows a `/clear`.
 - **A session identity registry keeps the conversation of each session once it is known exactly.**
   `~/.config/session-mesh/session-identities.json` (0600, atomic, bounded) records, per session, the
   conversation id with its source: `chosen` by the mesh at launch, reported by a `hook`, or `observed`

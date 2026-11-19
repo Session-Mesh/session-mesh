@@ -33,7 +33,7 @@ export function writeClaudeTranscript(home: string, id: string, cwd: string): vo
 export type Offer = {name: string; created: number; agent_kind: string; resume_id: string | null; cwd: string};
 export type Listed = {name: string; created: number};
 export type LabOptions = {marker?: string; twin?: boolean; bare?: boolean; pi?: boolean; intercept?: Intercept;
-  env?: NodeJS.ProcessEnv; identities?: object[]};
+  env?: NodeJS.ProcessEnv; identities?: object[]; claudeLines?: string[]};
 
 export class Lab {
   readonly mesh: Mesh;
@@ -56,7 +56,8 @@ export class Lab {
   }
 
   // `marker`: alpha's offer already carries this restore nonce; `twin`: a third offer shares alpha's conversation;
-  // `pi`: one more offer, a Pi agent with its transcript; `intercept`: the host is reached through a proxy that may delay, answer or react to a request.
+  // `pi`: one more offer, a Pi agent with its transcript; `identities`: the registry's entries; `claudeLines`: shell
+  // lines the fake `claude` runs after logging its argv; `intercept`: the host is reached through a proxy that may delay, answer or react to a request.
   static async start(options: LabOptions = {}): Promise<Lab> {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'rcas-bin-'));
     const argvLog = path.join(bin, 'argv.log');
@@ -64,6 +65,7 @@ export class Lab {
       '#!/bin/sh',
       'if [ "$1" = "--version" ]; then exit 0; fi',   // the server's launch probe (claudewake) is not an agent
       `{ echo "--- start"; for a in "$@"; do echo "$a"; done; } >> "${argvLog}"`,
+      ...options.claudeLines ?? [],   // what the fake agent does once started (a hook report, say)
       'while IFS= read -r line; do :; done',
       '',
     ].join('\n'), {mode: 0o755});
