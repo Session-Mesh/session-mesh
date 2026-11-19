@@ -38,22 +38,44 @@ new file mode 100644
 
 type Rendered = {page: string; csp: string; own: string[]; ext: string[]; served: string};
 
-function render(name: string, text: string): Rendered {
+// Runs `code` with view.py importable and a throwaway HOME (exposed to it as HOME_DIR);
+// returns what it prints, parsed as JSON.
+function python(code: string): unknown {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'diff-view-page-'));
   try {
-    const code = `import sys, json
-sys.path.insert(0, ${JSON.stringify(REPO)})
-from pathlib import Path
-import view
-print(json.dumps({"page": view.diff_page(Path(${JSON.stringify(name)}), ${JSON.stringify(text)}, ${JSON.stringify(NONCE)}),
-                  "csp": view.markdown_csp(${JSON.stringify(NONCE)}), "own": sorted(view.VIEWLIB_OWN),
-                  "ext": sorted(view.DIFF_EXT), "served": str(view.STATIC)}))`;
-    const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', code],
+    const prelude = `import sys, json\nsys.path.insert(0, ${JSON.stringify(REPO)})\nHOME_DIR = ${JSON.stringify(home)}\n`;
+    const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', prelude + code],
       {cwd: REPO, env: {PATH: process.env.PATH, HOME: home, MESH_CONF_DIR: path.join(home, 'conf')}, encoding: 'utf8'});
-    return JSON.parse(output) as Rendered;
+    return JSON.parse(output);
   } finally {
     fs.rmSync(home, {recursive: true, force: true});
   }
+}
+
+function render(name: string, text: string): Rendered {
+  return python(`from pathlib import Path
+import view
+print(json.dumps({"page": view.diff_page(Path(${JSON.stringify(name)}), ${JSON.stringify(text)}, ${JSON.stringify(NONCE)}),
+                  "csp": view.markdown_csp(${JSON.stringify(NONCE)}), "own": sorted(view.VIEWLIB_OWN),
+                  "ext": sorted(view.DIFF_EXT), "served": str(view.STATIC)}))`) as Rendered;
+}
+
+// What view._respond answers for a file of `content` (a Python bytes literal), with a 64-byte
+// limit standing for the 4 MiB one: the type served.
+function served(content: string, query = ''): string {
+  return python(`import asyncio, os
+from pathlib import Path
+from aiohttp.test_utils import make_mocked_request
+import view
+view.DIFF_MAX_BYTES = 64
+path = Path(HOME_DIR) / "x.diff"
+path.write_bytes(${content})
+handle = open(path, "rb")
+request = make_mocked_request("GET", "/view/x.diff${query}", headers={"Sec-Fetch-Dest": "iframe"})
+response = asyncio.run(view._respond(request, path, handle))
+kind = (response.headers.get("Content-Type") or response.content_type).split(";")[0]
+handle.close()
+print(json.dumps(kind))`) as string;
 }
 
 describe('the diff page', () => {
@@ -77,6 +99,26 @@ describe('the diff page', () => {
     assert.equal(rendered.page.match(new RegExp(`nonce="${NONCE}"`, 'g'))?.length, 2);
     assert.match(rendered.csp, /^sandbox allow-scripts allow-downloads; /);
     assert.ok(rendered.csp.includes(`script-src 'nonce-${NONCE}'`) && rendered.csp.includes("connect-src 'none'"));
+  });
+});
+
+describe('the diff page is served', () => {
+  test('rendered when it is text within the limit', () => {
+    assert.equal(served(String.raw`b"--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"`), 'text/html');
+  });
+
+  test('as plain text past the limit, read bounded (a growing file is not read whole)', () => {
+    assert.equal(served(String.raw`b"+" * 65`), 'text/plain');
+    assert.equal(served(String.raw`b"+" * 64`), 'text/html');
+  });
+
+  test('as plain text when it holds a NUL byte, like the code viewer', () => {
+    assert.equal(served(String.raw`b"--- a/x\n\x00"`), 'text/plain');
+  });
+
+  test('as plain text with ?raw=1, and in the code viewer with ?source=1 (line targets)', () => {
+    assert.equal(served(String.raw`b"+a\n"`, '?raw=1'), 'text/plain');
+    assert.equal(served(String.raw`b"+a\n"`, '?source=1'), 'text/html');
   });
 });
 
@@ -118,6 +160,72 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
 
     assert.deepEqual(dialogs, []);
     assert.deepEqual(violations, []);
+    await page.close();
+  });
+
+  // A page serving `text` as the diff, routed like the one above; `seen` collects the URLs loaded.
+  async function open(text: string, hash = '', seen: string[] = []) {
+    const {page: html, csp} = render('big.diff', text);
+    const page = await browser.newPage();
+    await page.route('http://mesh.test/**', route => {
+      const url = new URL(route.request().url());
+      seen.push(url.pathname + url.search);
+      if (url.pathname === '/viewlib/diff-view.js') {
+        return route.fulfill({contentType: 'text/javascript', body: fs.readFileSync(path.join(REPO, 'static', 'diff-view.js'))});
+      }
+      return route.fulfill({contentType: 'text/html', body: html, headers: {'Content-Security-Policy': csp}});
+    });
+    await page.goto(`http://mesh.test/view/big.diff?dt=t${hash}`);
+    return page;
+  }
+
+  const added = (name: string, count: number): string =>
+    `--- /dev/null\n+++ b/${name}\n@@ -0,0 +1,${count} @@\n${Array.from({length: count}, (_, k) => `+line ${k}\n`).join('')}`;
+
+  test('builds a large diff in parts, and the files past the first screens folded', async () => {
+    const page = await open(added('one', 4500) + added('two', 3000) + added('three', 10));
+    await page.waitForSelector('details.file');
+    const files = page.locator('details.file');
+    assert.deepEqual(await files.evaluateAll(nodes => nodes.map(node => (node as HTMLDetailsElement).open)), [true, true, false]);
+    // one hunk header and 1999 lines: the first chunk of 2000 rows
+    assert.equal(await files.nth(0).locator('tr').count(), 2000);
+    assert.equal(await files.nth(2).locator('tr').count(), 0);
+    await files.nth(0).getByRole('button', {name: /^show 2000 more lines \(2501 left\)$/}).click();
+    assert.equal(await files.nth(0).locator('tr').count(), 4000);
+    // a view change rebuilds the rows already shown, no more
+    await page.getByRole('button', {name: 'split'}).click();
+    assert.equal(await files.nth(0).locator('tr').count(), 4000);
+    await files.nth(2).locator('summary').click();
+    assert.equal(await files.nth(2).locator('tr').count(), 11);
+    await page.close();
+  });
+
+  test('keeps the keyboard focus on the toolbar across view changes', async () => {
+    const page = await open(DIFF);
+    await page.waitForSelector('details.file');
+    await page.getByRole('button', {name: 'split'}).focus();
+    await page.keyboard.press('Space');
+    assert.equal(await page.locator('table.split').count(), 2);
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'split');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Space');
+    assert.equal(await page.getByRole('button', {name: 'words'}).getAttribute('aria-pressed'), 'false');
+    await page.close();
+  });
+
+  test('shows a carriage return that belongs to the file', async () => {
+    const page = await open('--- a/x\n+++ b/x\n@@ -1 +1 @@\n-line\r\n+line\n');
+    await page.waitForSelector('details.file');
+    assert.deepEqual(await page.locator('td.del .w').allTextContents(), ['␍']);
+    await page.close();
+  });
+
+  test('sends a line target to the code viewer of the same document', async () => {
+    const seen: string[] = [];
+    const page = await open(DIFF, '#L3', seen);
+    await page.waitForURL(/source=1/);
+    assert.ok(seen.includes('/view/big.diff?dt=t&source=1'), seen.join(' '));
+    assert.match(page.url(), /#L3$/);
     await page.close();
   });
 });

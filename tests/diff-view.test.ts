@@ -5,7 +5,7 @@
 // changed lines and cutting them into changed words.
 import assert from 'node:assert/strict';
 import {describe, test} from 'node:test';
-import {displayPath, hunkRows, parseUnifiedDiff, tokenize, wordDiff, WORD_DIFF_LIMIT} from '../static/diff-view.ts';
+import {displayPath, fileSegments, gitHeaderPaths, hunkRows, parseUnifiedDiff, readQuoted, tokenize, wordDiff, WORD_DIFF_LIMIT} from '../static/diff-view.ts';
 
 const GIT = `commit 0123456789abcdef
 Author: Someone <someone@example.invalid>
@@ -117,14 +117,70 @@ describe('parseUnifiedDiff', () => {
 
   test('stops at a malformed hunk instead of swallowing what follows', () => {
     const broken = parseUnifiedDiff('--- a/x\n+++ b/x\n@@ -1,5 +1,5 @@\n a\n?garbage\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-1\n+2\n');
-    assert.deepEqual(broken.files.map(file => file.newPath), ['x', 'y']);
+    assert.deepEqual(broken.files.map(file => file.newPath), ['b/x', 'b/y']);
     assert.equal(broken.files[1]?.added, 1);
+  });
+
+  test('a hunk cut short gives back the header pair of the next file', () => {
+    const cut = parseUnifiedDiff('--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n a\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-1\n+2\n');
+    assert.deepEqual(cut.files.map(file => [file.newPath, file.added, file.deleted]), [['b/x', 0, 0], ['b/y', 1, 1]]);
+    assert.deepEqual(cut.files[0]?.hunks[0]?.lines.map(line => line.text), ['a']);
+  });
+
+  test('a complete hunk keeps lines that look like file headers', () => {
+    const kept = parseUnifiedDiff('--- x\n+++ x\n@@ -1,2 +1,2 @@\n a\n--- before/y\n+++ after/y\n');
+    assert.equal(kept.files.length, 1);
+    assert.deepEqual(kept.files[0]?.hunks[0]?.lines.map(line => [line.kind, line.text]),
+      [['context', 'a'], ['del', '-- before/y'], ['add', '++ after/y']]);
   });
 
   test('finds nothing in a text that is not a diff', () => {
     const none = parseUnifiedDiff('just some notes\n');
     assert.equal(none.files.length, 0);
     assert.deepEqual(none.preamble, ['just some notes']);
+  });
+});
+
+describe('path names', () => {
+  test('a plain diff -u keeps its a/ and b/ directories; a Git diff drops them', () => {
+    const plain = parseUnifiedDiff('--- a/x\n+++ b/x\n@@ -1 +1 @@\n-1\n+2\n');
+    assert.deepEqual([plain.files[0]?.oldPath, plain.files[0]?.newPath], ['a/x', 'b/x']);
+    const git = parseUnifiedDiff('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-1\n+2\n');
+    assert.deepEqual([git.files[0]?.oldPath, git.files[0]?.newPath], ['x', 'x']);
+  });
+
+  test('decodes the quoted names Git writes for non-ASCII bytes', () => {
+    assert.deepEqual(readQuoted('"a/caf\\303\\251 \\"x\\".sh"'), ['a/café "x".sh', 24]);
+    const text = [
+      'diff --git "a/caf\\303\\251.sh" "b/caf\\303\\251.sh"', 'old mode 100644', 'new mode 100755',
+      'diff --git "a/\\303\\251t\\303\\251.png" "b/\\303\\251t\\303\\251.png"', 'Binary files "a/\\303\\251t\\303\\251.png" and "b/\\303\\251t\\303\\251.png" differ',
+      'diff --git "a/na\\303\\257ve.txt" "b/na\\303\\257ve.txt"', '--- "a/na\\303\\257ve.txt"', '+++ "b/na\\303\\257ve.txt"', '@@ -1 +1 @@', '-a', '+b',
+      'diff --git a/plain name.txt b/plain name.txt', '--- a/plain name.txt', '+++ b/plain name.txt', '@@ -1 +1 @@', '-a', '+b',
+      'diff --git a/old.txt b/new.txt', 'rename from "\\303\\240.txt"', 'rename to new.txt',
+    ].join('\n');
+    assert.deepEqual(parseUnifiedDiff(text).files.map(file => [file.status, displayPath(file)]), [
+      ['modified', 'café.sh'],
+      ['binary', 'été.png'],
+      ['modified', 'naïve.txt'],
+      ['modified', 'plain name.txt'],
+      ['renamed', 'à.txt → new.txt'],
+    ]);
+  });
+
+  test('splits an unquoted header with spaces where both names agree', () => {
+    assert.deepEqual(gitHeaderPaths('diff --git a/x y b/x y'), ['x y', 'x y']);
+    assert.deepEqual(gitHeaderPaths('diff --git a/x "b/\\303\\251"'), ['x', 'é']);
+    assert.equal(gitHeaderPaths('diff --git nonsense'), null);
+  });
+});
+
+describe('carriage returns', () => {
+  test('in an LF patch, a CR that belongs to the file is kept: a CRLF to LF change shows', () => {
+    const parsed = parseUnifiedDiff('--- a/x\n+++ b/x\n@@ -1 +1 @@\n-line\r\n+line\n');
+    assert.deepEqual(parsed.files[0]?.hunks[0]?.lines.map(line => line.text), ['line\r', 'line']);
+    const [left, right] = wordDiff('line\r', 'line');
+    assert.deepEqual(left, [{text: 'line', changed: false}, {text: '\r', changed: true}]);
+    assert.deepEqual(right, [{text: 'line', changed: false}]);
   });
 });
 
@@ -153,6 +209,28 @@ describe('wordDiff', () => {
 
   test('keeps accented words whole', () => {
     assert.deepEqual(tokenize('déjà vu'), ['déjà', ' ', 'vu']);
+  });
+
+  test('does not align a line against an empty one', () => {
+    assert.deepEqual(wordDiff('', 'a b c'), [[], [{text: 'a b c', changed: true}]]);
+    assert.deepEqual(wordDiff('a b', ''), [[{text: 'a b', changed: true}], []]);
+  });
+
+  test('charges a document budget, and marks lines whole once it is spent', () => {
+    const budget = {cells: 9};
+    assert.deepEqual(wordDiff('a b', 'a c', budget)[1], [{text: 'a ', changed: false}, {text: 'c', changed: true}]);
+    assert.equal(budget.cells, 0);
+    assert.deepEqual(wordDiff('a b', 'a c', budget)[1], [{text: 'a c', changed: true}]);
+  });
+
+  test('aligns the paired lines of a file once', () => {
+    const parsed = parseUnifiedDiff('--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-a b\n-c\n+a d\n+e\n');
+    const file = parsed.files[0];
+    assert.ok(file);
+    const budget = {cells: 100};
+    const segments = fileSegments(file, budget);
+    assert.equal(segments.size, 4);
+    assert.equal(budget.cells, 100 - 9 - 1);
   });
 
   test('gives up on very long lines and marks them whole', () => {

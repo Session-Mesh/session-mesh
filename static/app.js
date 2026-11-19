@@ -2086,9 +2086,9 @@ function webLabel(s) {
   return s.source ? t("web.sourceLabel", { name }) : name;
 }
 
-// The source view of a rendered document (HTML, Markdown, SVG) in the code viewer:
+// The source view of a rendered document (HTML, Markdown, SVG, a diff) in the code viewer:
 // its own pane entry, the same signed URL with ?source=1.
-const SOURCE_EXT = /\.(html?|md|markdown|svg)$/i;
+const SOURCE_EXT = /\.(html?|md|markdown|svg|diff|patch)$/i;
 function sourceEntry(w) {
   const id = `${w.id}#source`;
   const previous = webs.get(id) || {};
