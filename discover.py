@@ -648,38 +648,66 @@ class _CodexView:
         return count if known_complete(procs) else max(count, 2)
 
     def held_by_others(self, pid):
-        """The rollouts the codex processes other than ``pid`` hold open, or None when one cannot be known."""
+        """The rollouts the codex processes other than ``pid`` and its own helpers hold open, or None when one
+        cannot be known."""
         procs = self._table()
         if procs is None:
             return None
         if self._held is None:
             self._held = {other: _neighbour_rollouts(other) for other, st in procs.items()
                           if st[0] == "codex" and is_agent(other, st) == "codex"}
-        others = [r for other, r in self._held.items() if other != pid]
+        others = [r for other, r in self._held.items() if other != pid and not _descends_from(other, pid, procs)]
         return None if any(r is None for r in others) else set().union(*others)
 
-    def claimed_by_others(self, pid, sid):
-        """Whether conversation ``sid`` is another codex's too: another top-level codex was launched on it
-        (``codex resume <sid>``) or another codex holds its rollout open. True when that cannot be known."""
+    def named_by_others(self, pid, sid):
+        """Whether another top-level codex may have been launched on conversation ``sid``: one of its arguments
+        is ``sid`` (case ignored), it has a ``resume`` whose id cannot be read, or its arguments are unknown.
+        Lenient on purpose, since it only withdraws an id. True when the process table is unknown or incomplete."""
         procs = self._table()
         if procs is None or not known_complete(procs):
             return True
         if self._launched is None:
-            self._launched = {other: _launch_id(other, procs) for other, st in procs.items()
+            self._launched = {other: _launch_words(other, procs) for other, st in procs.items()
                               if _is_top_level_codex(other, st)}
-        if any(other != pid and named in (sid, UNKNOWN_NAME) for other, named in self._launched.items()):
+        return any(other != pid and _may_name(words, sid) for other, words in self._launched.items())
+
+    def claimed_by_others(self, pid, sid):
+        """Whether conversation ``sid`` is another codex's too: another top-level codex may have been launched
+        on it, or another codex holds its rollout open. True when that cannot be known."""
+        if self.named_by_others(pid, sid):
             return True
         held = self.held_by_others(pid)
         return held is None or any(_rollout_meta(path)[2] == sid for path in held)
 
 
-def _launch_id(pid, procs):
-    """The conversation a codex was launched on (resumeargs.resumed_codex_id), None, or UNKNOWN_NAME when its
-    arguments are unknown (outside Linux, a row without argv)."""
+def _descends_from(pid, ancestor, procs):
+    """Whether ``pid`` is a descendant of ``ancestor`` in the process table (a helper of that codex)."""
+    seen = set()
+    while pid in procs and pid not in seen:
+        seen.add(pid)
+        pid = procs[pid][2]
+        if pid == ancestor:
+            return True
+    return False
+
+
+def _words(argv):
+    """Process arguments as text; a byte that is not UTF-8 stays an escape that matches nothing, never dropped."""
+    return [a.decode("utf-8", "surrogateescape") for a in argv]
+
+
+def _launch_words(pid, procs):
+    """The arguments a codex was launched with, as text, or None when they are unknown (outside Linux, a row
+    without argv)."""
     argv = _argv_of(procs.rows.get(pid)) if isinstance(procs, HostProcesses) else cmdline(pid)
-    if argv is None:
-        return UNKNOWN_NAME
-    return resumeargs.resumed_codex_id([a.decode(errors="ignore") for a in argv])
+    return None if argv is None else _words(argv)
+
+
+def _may_name(words, sid):
+    """Whether launch arguments may name conversation ``sid`` (see _CodexView.named_by_others)."""
+    if words is None or sid.lower() in (w.lower() for w in words):
+        return True
+    return "resume" in words and resumeargs.resumed_codex_id(words) is None
 
 
 _LISTING_VIEW = contextvars.ContextVar("codex_listing_view", default=None)
@@ -751,18 +779,39 @@ def _note_argv_conflict(pid):
           "the open rollout is used", flush=True)
 
 
+def _later_conversation(pid, named, named_path):
+    """Whether the folder of this codex shows a conversation newer than the one it was launched on (a /new or
+    a /resume inside Codex): a top-level rollout of another id, written since the process started and after the
+    named one's, that no other codex holds open or may have been launched on. True when that cannot be known."""
+    started, here = proc_start(pid), cwd(pid)
+    named_at = os.path.getmtime(named_path) if named_path else None
+    later = [p for p in recent_rollouts() if _rollout_meta(p)[0] == here and not _rollout_meta(p)[1]
+             and _rollout_meta(p)[2] != named and os.path.getmtime(p) >= started
+             and (named_at is None or os.path.getmtime(p) > named_at)]
+    if not later:
+        return False
+    view = _codex_view()
+    held = view.held_by_others(pid)
+    return held is None or any(p not in held and not view.named_by_others(pid, _rollout_meta(p)[2]) for p in later)
+
+
 def _codex_conversation(pid, rollouts):
     """(rollout or None, id, source) of the conversation of this codex, or None. In order: the rollout it
-    holds open (open_rollout, exact); the id it was launched on, ``codex resume <id>`` (argv_resume, exact at
-    launch), unless another codex claims that id too (then none: contested); the lone-codex guess (cwd_unique)."""
-    named = resumeargs.resumed_codex_id([a.decode(errors="ignore") for a in cmdline(pid)])
+    holds open (open_rollout, exact); the id it was launched on, ``codex resume <id>`` (argv_resume: where it
+    started, not always what it runs now), unless another codex may claim that id too (then none: contested)
+    or its folder shows a later conversation (then the guess below); the lone-codex guess (cwd_unique)."""
+    named = resumeargs.resumed_codex_id(_words(cmdline(pid)))
     held = _newest_top_level(rollouts)
     if held:
         if named and held[1] != named:
             _note_argv_conflict(pid)
         return (*held, "open_rollout")
     if named:
-        return None if _codex_view().claimed_by_others(pid, named) else (_rollout_of(named), named, "argv_resume")
+        if _codex_view().claimed_by_others(pid, named):
+            return None
+        named_path = _rollout_of(named)
+        if not _later_conversation(pid, named, named_path):
+            return (named_path, named, "argv_resume")
     # Codex does not always keep its rollout open: fall back to the most
     # recent top-level rollout for this cwd written since the process started.
     # A lone codex may have written several (/new): its newest is the right one. With another codex
@@ -812,15 +861,22 @@ def _guessed_source(source):
     return source in GUESSED_ID_SOURCES or (isinstance(source, str) and source.startswith("unique_"))
 
 
+LAUNCH_ID_SOURCES = ("argv_resume",)
+
+
 def drop_duplicate_guessed_ids(descriptions):
-    """Remove a guessed conversation id (see GUESSED_ID_SOURCES) that another session also reports: an
-    exact id of another session wins, and two guesses of one id are both dropped. Exact ids are never touched."""
+    """Remove a conversation id that another session also reports, when one of them is not observed: a guess
+    (see GUESSED_ID_SOURCES) loses to an observed id, two guesses of one id are both dropped, and an id read
+    from launch arguments (LAUNCH_ID_SOURCES, possibly stale) is dropped with every session sharing it.
+    Observed ids that collide only with each other are not touched."""
     agents = [d["agent"] for d in descriptions if isinstance(d.get("agent"), dict) and d["agent"].get("session_id")]
+    reported = collections.Counter(a["session_id"] for a in agents)
+    launched = {a["session_id"] for a in agents if a.get("identity_source") in LAUNCH_ID_SOURCES}
     exact = {a["session_id"] for a in agents if not _guessed_source(a.get("identity_source"))}
-    guesses = [a for a in agents if _guessed_source(a.get("identity_source"))]
-    seen = collections.Counter(a["session_id"] for a in guesses)
-    for a in guesses:
-        if a["session_id"] in exact or seen[a["session_id"]] > 1:
+    guessed = collections.Counter(a["session_id"] for a in agents if _guessed_source(a.get("identity_source")))
+    for a in agents:
+        sid, guess = a["session_id"], _guessed_source(a.get("identity_source"))
+        if guess and (sid in exact or guessed[sid] > 1) or sid in launched and reported[sid] > 1:
             a["session_id"] = None
             a["identity_source"] = None
 
