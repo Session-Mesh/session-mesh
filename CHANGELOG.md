@@ -33,7 +33,8 @@ before 1.0, a minor version may change behaviour.
   the web server does not read every rollout again. The listed data are unchanged.
 - **A message approval answered in one window closes in the others.** The "Message from another
   agent" question opens in every window of the mesh. Once one window answers it, the others close
-  it at their next refresh of the session list instead of leaving it open; a window that still
+  it at their next refresh of the session list instead of leaving it open, announce the closing to
+  screen readers, and then show the next pending request, if any; a window that still
   answers in between gets "Message request decided elsewhere; your choice changed nothing." The
   server already kept only the first answer. See
   [Messages and requests from agents](docs/features.md#messages-and-requests-from-agents).

@@ -4344,24 +4344,18 @@ const sessionRequestGate = MeshPaneActions.createSessionRequestGate({
 });
 const agentMailConsentDialog = $("#dlg-agent-mail-consent");
 const agentMailConsentDescription = $("#agent-mail-consent-description");
-const chooseAgentMailConsent = (request) => new Promise(resolve => {
-  if (document.querySelector("dialog:modal")) { resolve(null); return; }
-  const started = new Date(request.source.created * 1000).toLocaleString(MeshI18n.locale());
-  agentMailConsentDescription.textContent = t("agentMail.consentDescription",
-    { source: request.source.id, agent: request.source.agent, started, target: request.target.id });
-  const settle = () => {
-    const decision = agentMailConsentDialog.returnValue;
-    resolve(["no", "yes", "always", "later", "withdrawn"].includes(decision) ? decision : "later");
-  };
-  agentMailConsentDialog.addEventListener("close", settle, { once: true });
-  agentMailConsentDialog.returnValue = "later";
-  try { agentMailConsentDialog.showModal(); }
-  catch { agentMailConsentDialog.removeEventListener("close", settle); resolve(null); }
+const agentMailConsentPrompt = MeshPaneActions.createAgentMailConsentPrompt(agentMailConsentDialog, {
+  blocked: () => document.querySelector("dialog:modal") !== null,
+  describe: (request) => {
+    const started = new Date(request.source.created * 1000).toLocaleString(MeshI18n.locale());
+    agentMailConsentDescription.textContent = t("agentMail.consentDescription",
+      { source: request.source.id, agent: request.source.agent, started, target: request.target.id });
+  },
+  withdrawn: () => flash(t("agentMail.withdrawn")),
 });
 const agentMailConsentGate = MeshPaneActions.createAgentMailConsentGate({
-  choose: chooseAgentMailConsent,
-  // Answered in another window: the gate calls this only while its own prompt is open.
-  withdraw: () => { if (agentMailConsentDialog.open) agentMailConsentDialog.close("withdrawn"); },
+  choose: agentMailConsentPrompt.choose,
+  withdraw: agentMailConsentPrompt.withdraw,
   answeredElsewhere: () => flash(t("agentMail.answeredElsewhere")),
   decide: async (id, decision) => {
     try {

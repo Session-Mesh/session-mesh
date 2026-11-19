@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import {describe, test} from 'node:test';
 import {createAgentMailConsentGate} from '../static/pane-actions.ts';
+import {FakeDialog, settle} from './helpers/fake-dialog.ts';
 
 type Choice = 'no' | 'yes' | 'always' | 'later' | 'withdrawn' | null;
 
@@ -103,5 +104,77 @@ describe('agent-mail consent gate across viewers', () => {
     await open;
     assert.equal(h.elsewhere(), 0);
     assert.deepEqual(h.withdrawn, []);
+  });
+});
+
+/** The gate over one modal dialog whose `close` event fires in a later task, as in a browser.
+ * The prompt settles only on that event, so these cases hold for the plainest dialog wiring. */
+function dialogHarness() {
+  const dialog = new FakeDialog();
+  const shown: string[] = [];
+  const decided: string[] = [];
+  const answers = ['no', 'yes', 'always', 'later', 'withdrawn'];
+  const gate = createAgentMailConsentGate({
+    choose: (value) => new Promise<Choice>((resolve) => {
+      if (dialog.open) { resolve(null); return; }
+      shown.push(value.id);
+      dialog.shows = value.id;
+      dialog.addEventListener('close', () => resolve(
+        (answers.includes(dialog.returnValue) ? dialog.returnValue : 'later') as Choice), {once: true});
+      dialog.returnValue = 'later';
+      dialog.showModal();
+    }),
+    decide: async (id, decision) => { decided.push(`${id}:${decision}`); return 'settled'; },
+    withdraw: () => { if (dialog.open) dialog.close('withdrawn'); },
+  });
+  return {gate, dialog, shown, decided};
+}
+
+describe('agent-mail consent gate with two pending requests', () => {
+  test('the prompt shown stays tracked across refreshes and is withdrawn when decided elsewhere', async () => {
+    const h = dialogHarness();
+    const run = h.gate.consider([request('r1')]);
+    assert.equal(h.dialog.shows, 'r1');
+    await h.gate.consider([request('r1'), request('r2')]);
+    await h.gate.consider([request('r2')]);
+    await settle();
+    assert.deepEqual([h.dialog.open, h.dialog.shows], [true, 'r2'], 'r1 closed, r2 asked');
+    h.dialog.click('no');
+    await run;
+    assert.deepEqual(h.decided, ['r2:no']);
+  });
+
+  test('an answer to the next prompt is not lost to the close event of the withdrawn one', async () => {
+    const h = dialogHarness();
+    const run = h.gate.consider([request('r1'), request('r2')]);
+    assert.equal(h.dialog.shows, 'r1');
+    await h.gate.consider([request('r2')]);
+    await settle();
+    assert.deepEqual([h.dialog.open, h.dialog.shows], [true, 'r2']);
+    h.dialog.click('no');
+    await run;
+    assert.deepEqual(h.decided, ['r2:no'], 'the refusal reached the server');
+  });
+
+  test('a request that left the newest list is not opened after a withdraw', async () => {
+    const h = dialogHarness();
+    const run = h.gate.consider([request('r1'), request('r2')]);
+    await h.gate.consider([]);
+    await run;
+    assert.deepEqual(h.shown, ['r1']);
+    assert.equal(h.dialog.open, false);
+    assert.deepEqual(h.decided, []);
+  });
+
+  test('a request added while a prompt is open is asked after it', async () => {
+    const h = dialogHarness();
+    const run = h.gate.consider([request('r1')]);
+    await h.gate.consider([request('r1'), request('r2')]);
+    h.dialog.click('yes');
+    await settle();
+    assert.deepEqual([h.dialog.open, h.dialog.shows], [true, 'r2']);
+    h.dialog.click('later');
+    await run;
+    assert.deepEqual(h.decided, ['r1:yes']);
   });
 });
