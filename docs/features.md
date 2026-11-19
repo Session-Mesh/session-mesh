@@ -415,7 +415,7 @@ before the first file is shown above it. A large diff is built in parts: "show m
 next lines of a file, and the files past the first screens start folded. "source" shows the plain
 text; a line target such as `changes.diff:42` opens the code viewer at that line of the patch
 (up to 4 MiB). Diffs over 4 MiB, or holding a NUL byte, are served as plain text; a diff of more
-than 50,000 lines is not rendered: the page says so and links to its plain text. The agent guide
+than 50,000 lines or 2,000 files is not rendered: the page says so and links to its plain text. The agent guide
 asks agents to show a diff this way when you ask for one.
 
 **Following a document as it changes.** "Watch the file" in the "More" menu of a document reloads

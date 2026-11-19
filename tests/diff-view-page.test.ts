@@ -108,6 +108,29 @@ describe('the diff page is served', () => {
     assert.equal(served(String.raw`b"--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"`), 'text/html');
   });
 
+  test('reads at most one byte past the limit when the file grew after its size was checked', () => {
+    const result = python(`import asyncio
+from pathlib import Path
+from aiohttp.test_utils import make_mocked_request
+import view
+view.DIFF_MAX_BYTES = 64
+path = Path(HOME_DIR) / "grown.diff"
+path.write_bytes(b"+" * 1000)
+view._size = lambda handle: 10           # the size seen before the file grew
+reads = []
+to_thread = asyncio.to_thread
+async def recorded(function, *args):
+    reads.append(list(args))
+    return await to_thread(function, *args)
+view.asyncio.to_thread = recorded
+handle = open(path, "rb")
+request = make_mocked_request("GET", "/view/grown.diff", headers={"Sec-Fetch-Dest": "iframe"})
+response = asyncio.run(view._respond(request, path, handle))
+handle.close()
+print(json.dumps({"type": response.headers.get("Content-Type", "").split(";")[0], "reads": reads}))`) as {type: string; reads: number[][]};
+    assert.deepEqual(result, {type: 'text/plain', reads: [[65]]});
+  });
+
   test('as plain text past the limit, read bounded (a growing file is not read whole)', () => {
     assert.equal(served(String.raw`b"+" * 65`), 'text/plain');
     assert.equal(served(String.raw`b"+" * 64`), 'text/html');
@@ -263,6 +286,42 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
     await page.close();
   });
 
+  test('keeps the keyboard focus on "show more", then on the first row of the last chunk', async () => {
+    const page = await open(added('one', 4500));
+    await page.waitForSelector('details.file');
+    await page.locator('button.more').focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement?.className), 'more');
+    assert.equal(await page.locator('button.more').textContent(), 'show 501 more lines (501 left)');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.locator('button.more').count(), 0);
+    assert.equal(await page.evaluate(() => document.activeElement?.querySelector('td.ln.add[data-n]')?.getAttribute('data-n')), '4000');
+    await page.close();
+  });
+
+  test('past the file limit, says so and links to the plain text instead of rendering', async () => {
+    const modes = Array.from({length: 2001}, (_, k) => `diff --git a/f${k} b/f${k}\nold mode 100644\nnew mode 100755\n`).join('');
+    const page = await open(modes);
+    await page.waitForSelector('.note.large');
+    assert.equal(await page.locator('.note.large').textContent(),
+      'This diff has 2001 files, more than the diff viewer shows (2000). Open it as plain text.');
+    assert.equal(await page.locator('details').count(), 0);
+    await page.close();
+  });
+
+  test('counts each file block against the initial limit', async () => {
+    const git = (name: string, count: number): string => `diff --git a/${name} b/${name}\n${added(name, count)}`;
+    const modes = Array.from({length: 1997}, (_, k) => `diff --git a/f${k} b/f${k}\nold mode 100644\nnew mode 100755\n`).join('');
+    // 4000 - (1 + 2000) - 1997 blocks = 2 left: the next file opens, the one after starts folded
+    // (without the blocks counted, it would open too)
+    const page = await open(git('big', 3000) + modes + git('next', 10) + git('after', 10));
+    await page.waitForSelector('details.file');
+    const unfolded = await page.locator('details.file').evaluateAll(nodes => nodes.map(node => (node as HTMLDetailsElement).open));
+    assert.equal(unfolded.length, 2000);
+    assert.deepEqual(unfolded.slice(-2), [true, false]);
+    await page.close();
+  });
+
   test('counts hunk headers against the limits', async () => {
     const page = await open(`--- a/x\n+++ b/x\n${'@@ -1,0 +1,0 @@\n'.repeat(5000)}`);
     await page.waitForSelector('details.file');
@@ -272,8 +331,8 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
   });
 
   test('shares the lines of the first screens out over the files, in order', async () => {
-    // 2000 and 1999 positions (a hunk header each): one position is left for the third file
-    const page = await open(added('a', 1999) + added('b', 1998) + added('c', 10) + added('d', 10));
+    // a block and 2000 positions, then a block and 1997: one position is left for the third file
+    const page = await open(added('a', 1999) + added('b', 1996) + added('c', 10) + added('d', 10));
     await page.waitForSelector('details.file');
     const files = page.locator('details.file');
     assert.deepEqual(await files.evaluateAll(nodes => nodes.map(node => (node as HTMLDetailsElement).open)), [true, true, true, false]);
@@ -298,10 +357,10 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
     const page = await open(added('one', 4500) + added('two', 3000) + added('three', 10));
     await page.waitForSelector('details.file');
     const rows = page.locator('details.file tr:not(.hunk)');
-    assert.equal(await rows.count(), 2 * 1999);
+    assert.equal(await rows.count(), 1999 + 1998);
     // what the "scrollto" message of the mesh does (diff.html), for a position past the rows built
     await page.evaluate('page.growTo(document.documentElement.scrollHeight + 50000)');
-    assert.ok(await rows.count() > 2 * 1999);
+    assert.ok(await rows.count() > 1999 + 1998);
     await page.close();
   });
 

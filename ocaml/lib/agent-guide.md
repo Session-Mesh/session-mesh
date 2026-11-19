@@ -148,17 +148,18 @@ viewer does not read the combined `@@@` diffs Git shows by default), `diff -u ol
 `--no-color --no-ext-diff`: a `color.diff=always` setting would put colour codes in the file
 even when it is redirected, and a `diff.external` tool would write its own output, or none.
 `diff -u` and `git diff --no-index` exit with status 1 when the files differ, so do not chain
-`mesh-open` after them with `&&`:
+`mesh-open` after them with `&&`; keep that status out of `set -e` too:
 
 ```sh
-diff -u old new > "$d/changes.diff"; [ $? -le 1 ] && mesh-open "$d/changes.diff"
+status=0; diff -u old new > "$d/changes.diff" || status=$?
+[ "$status" -le 1 ] && mesh-open "$d/changes.diff"
 ```
 
 Without `MESH_SESSION_TOKEN`, print the file's path instead: the owner clicks it and it opens in
 the same viewer. To follow changes as you work, open it with `mesh-open --watch` and write the
 diff to the same file again. A diff over 4 MiB is shown as plain text; one of more than 50,000
-lines gets a notice with a link to its plain text (show a narrower diff instead, for example one
-path: `git diff --no-color --no-ext-diff HEAD -- <path>`). A line target such as
+lines or 2,000 files gets a notice with a link to its plain text (show a narrower diff instead,
+for example one path: `git diff --no-color --no-ext-diff HEAD -- <path>`). A line target such as
 `changes.diff:42` opens the code viewer at that line of the patch file, for a diff of 4 MiB or
 less; a larger one opens as plain text, at its start.
 
