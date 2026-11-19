@@ -46,16 +46,28 @@ let decode_version fields =
   | Some (`Int _) -> Error (fail Unsupported_version (Printf.sprintf "this peer speaks version %d" version))
   | Some _ -> Error (fail Bad_request "v must be an integer")
 
+(* A [req] is echoed in every frame: one that has no strict JSON form (a NaN,
+   which the decoder accepts as Python does) is refused at once, and answered
+   without it. *)
+let echoable = function
+  | None -> Ok ()
+  | Some req -> (
+      match Mesh_jsonl_value.encode ~max_bytes:max_int req with
+      | Ok _ -> Ok ()
+      | Error problem ->
+          Error (fail Bad_request ("req cannot be echoed: " ^ Mesh_jsonl_value.error_message problem)))
+
 let decode_request limits line =
   match Mesh_jsonl_value.decode limits line with
   | Error problem -> Error (None, fail Bad_request (Mesh_jsonl_value.error_message problem))
   | Ok (`Assoc fields) -> (
       let req = List.assoc_opt "req" fields in
-      match (decode_version fields, List.assoc_opt "op" fields) with
-      | Error problem, _ -> Error (req, problem)
-      | Ok request_version, Some (`String op) when op <> "" ->
+      match (echoable req, decode_version fields, List.assoc_opt "op" fields) with
+      | Error problem, _, _ -> Error (None, problem)
+      | Ok (), Error problem, _ -> Error (req, problem)
+      | Ok (), Ok request_version, Some (`String op) when op <> "" ->
           Ok { req; op; request_version; fields }
-      | Ok _, _ -> Error (req, fail Bad_request "op must be a non-empty string"))
+      | Ok (), Ok _, _ -> Error (req, fail Bad_request "op must be a non-empty string"))
   | Ok _ -> Error (None, fail Bad_request "request must be a JSON object")
 
 let head req = ("v", `Int version) :: (match req with Some value -> [ ("req", value) ] | None -> [])
