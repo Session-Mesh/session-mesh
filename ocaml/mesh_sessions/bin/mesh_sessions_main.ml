@@ -8,7 +8,8 @@
 (* mesh-sessions: describes the sessions the web server lists, over
    stdin/stdout in JSON lines (docs/sessions-protocol.md). Read-only. *)
 
-let adapters roots = [ Mesh_agent.adapter (module Mesh_agent_claude) roots ]
+let adapters roots =
+  [ Mesh_agent.adapter (module Mesh_agent_claude) roots; Mesh_agent.adapter (module Mesh_agent_codex) roots ]
 
 let () =
   ignore (Unix.umask 0o077);

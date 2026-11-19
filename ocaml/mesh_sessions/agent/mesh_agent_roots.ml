@@ -16,3 +16,4 @@ let of_environment getenv =
 
 let home roots = roots.home
 let claude roots = Filename.concat roots.home ".claude"
+let codex roots = Filename.concat roots.home ".codex"

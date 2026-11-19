@@ -29,6 +29,9 @@ val complete : t -> bool
 val size : t -> int
 val find : t -> int -> process option
 
+val processes : t -> process list
+(** Every process of the table, by ascending pid. *)
+
 val session : t -> int -> process list
 (** The processes of a session (by session id), by ascending pid. *)
 
@@ -38,3 +41,8 @@ val argv : t -> int -> string list
 
 val cwd : t -> int -> string option
 (** The working directory; [None] when it cannot be read. *)
+
+val open_files : t -> int -> ((int * string) list, Mesh_platform.error) result
+(** The open descriptors that have a path ({!Mesh_platform.open_file_paths}).
+    The error says why they are unknown: [Not_found] (the process exited) and
+    [Denied] (another user's process) are told apart from the others. *)
