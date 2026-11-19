@@ -26,3 +26,4 @@ in this form:
 
 | Public name | Commit e-mail | CLA version | Date |
 |---|---|---|---|
+| Pierrick Couderc | pierrick@thrim.me | 1.0 | 2026-11-19 |
