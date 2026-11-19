@@ -58,16 +58,11 @@ let test_outcomes_and_bound () =
   Alcotest.(check int) "nothing left running" 0 !running
 
 let test_pull_order_follows_queue () =
-  let module Queue = Mesh_priority.Make (struct
-    type t = string
-
-    let equal = String.equal
-    let hash = Hashtbl.hash
-  end) in
+  let module Queue = Mesh_priority.Make (String) (Int) in
   Eio_mock.Backend.run_full @@ fun env ->
   let clock = env#clock in
   let queue = Queue.create () in
-  List.iter (fun key -> Queue.add queue key (Mesh_priority.priority Rest) ()) [ "a"; "b"; "c"; "d" ];
+  List.iter (fun key -> Queue.add queue key (Queue.priority 0) ()) [ "a"; "b"; "c"; "d" ];
   let started = ref [] in
   Pool.run ~clock ~max_concurrency:1 ~deadline:5.
     ~next:(fun () -> Option.map fst (Queue.pop queue))
@@ -167,6 +162,32 @@ let test_blocking_abandoned () =
   Alcotest.(check int) "returned thread no longer abandoned" 0 (Pool.Blocking.abandoned blocking);
   Alcotest.(check int) "usable again" 3 (Pool.Blocking.call blocking (fun () -> 3))
 
+(* A fibre already cancelled starts no thread: the thread would block on the
+   held mutex, so a started one would still be in flight at the check. *)
+let test_blocking_cancelled_first () =
+  Eio_mock.Backend.run @@ fun () ->
+  let blocking = Pool.Blocking.create ~max_threads:1 in
+  let held = Mutex.create () in
+  Mutex.lock held;
+  let started = Atomic.make false in
+  let cancelled =
+    match
+      Eio.Cancel.sub (fun context ->
+          Eio.Cancel.cancel context Exit;
+          Pool.Blocking.call blocking (fun () ->
+              Atomic.set started true;
+              Mutex.lock held;
+              Mutex.unlock held))
+    with
+    | () -> false
+    | exception Eio.Cancel.Cancelled _ -> true
+  in
+  let in_flight = Pool.Blocking.in_flight blocking in
+  Mutex.unlock held;
+  Alcotest.(check bool) "the call is cancelled" true cancelled;
+  Alcotest.(check int) "no thread started" 0 in_flight;
+  Alcotest.(check bool) "the function never ran" false (Atomic.get started)
+
 let test_arguments () =
   Alcotest.check_raises "concurrency" (Invalid_argument "Mesh_deadline_pool.run: max_concurrency < 1")
     (fun () ->
@@ -190,5 +211,6 @@ let () =
         [
           Alcotest.test_case "results and exceptions" `Quick test_blocking_results;
           Alcotest.test_case "abandoned at the deadline" `Quick test_blocking_abandoned;
+          Alcotest.test_case "cancelled before starting" `Quick test_blocking_cancelled_first;
         ] );
     ]

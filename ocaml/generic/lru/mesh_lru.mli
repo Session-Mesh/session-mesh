@@ -23,14 +23,7 @@
     The map is not safe for concurrent use from several domains or system
     threads; Eio fibres of one domain may share it. *)
 
-module type KEY = sig
-  type t
-
-  val equal : t -> t -> bool
-  val hash : t -> int
-end
-
-module Make (Key : KEY) : sig
+module Make (Key : Hashtbl.HashedType) : sig
   type 'v t
 
   type 'v weight = { limit : int; measure : 'v -> int }

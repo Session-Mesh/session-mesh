@@ -53,6 +53,8 @@ module Blocking = struct
     if Atomic.compare_and_set state Waiting Abandoned then Atomic.incr t.abandoned
 
   let call t fn =
+    (* A fibre already cancelled starts nothing. *)
+    Eio.Fiber.check ();
     reserve t;
     let state = Atomic.make Waiting in
     let promise, resolver = Eio.Promise.create () in
