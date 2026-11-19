@@ -26,6 +26,10 @@
       [json.loads] on bytes raises), or first stripped of its invalid bytes
       ({!Drop}, as [discover._tail_lines], which decodes with
       [errors="ignore"]);
+    - an escaped lone surrogate ([\ud800] without its low half, or a low
+      half alone), which Yojson refuses and Python reads into a string that
+      is not valid Unicode, is read as U+FFFD ({!replace_lone_surrogates}):
+      the line is kept, the value stays valid UTF-8;
     - [NaN], [Infinity] and [-Infinity] are accepted, as Python does: they are
       values a fold may count or ignore. {!encode} refuses to write them.
 
@@ -60,12 +64,16 @@ val drop_invalid_utf8 : string -> string
 (** The text without its invalid UTF-8 sequences; valid text is returned as
     it is. *)
 
+val replace_lone_surrogates : string -> string
+(** The text with each escaped lone surrogate replaced by the escape of
+    U+FFFD; an escaped pair is kept. Text without one is returned as it is. *)
+
 val keep_last_keys : Yojson.Safe.t -> Yojson.Safe.t
 (** Recursively remove duplicated object keys, keeping the last value at the
     place of the first occurrence. *)
 
 val decode : limits -> string -> (Yojson.Safe.t, error) result
-(** Length bound, UTF-8 policy, {!prescan}, then [Yojson.Safe.from_string],
+(** Length bound, UTF-8 policy, {!prescan}, {!replace_lone_surrogates}, then [Yojson.Safe.from_string],
     then {!keep_last_keys}. Never raises. *)
 
 val encode : max_bytes:int -> Yojson.Safe.t -> (string, error) result

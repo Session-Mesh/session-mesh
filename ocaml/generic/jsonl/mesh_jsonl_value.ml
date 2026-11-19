@@ -65,6 +65,44 @@ let drop_invalid_utf8 text =
     loop 0;
     Buffer.contents out
 
+let is_hex = function '0' .. '9' | 'a' .. 'f' | 'A' .. 'F' -> true | _ -> false
+
+(* The UTF-16 code unit of the escape [\uXXXX] at [index], if there is one. *)
+let escape_at text index =
+  if index + 6 <= String.length text && text.[index] = '\\' && text.[index + 1] = 'u'
+     && is_hex text.[index + 2] && is_hex text.[index + 3] && is_hex text.[index + 4] && is_hex text.[index + 5]
+  then Some (int_of_string ("0x" ^ String.sub text (index + 2) 4))
+  else None
+
+let is_high unit = unit >= 0xD800 && unit <= 0xDBFF
+let is_low unit = unit >= 0xDC00 && unit <= 0xDFFF
+let low_at text index = match escape_at text index with Some unit -> is_low unit | None -> false
+
+(* Walk the escapes; [copied] is where the text not yet in [out] starts. A
+   backslash always takes the next byte with it, so [\\u] is no escape. *)
+let rec replace_from text out index copied =
+  match if index >= String.length text then None else String.index_from_opt text index '\\' with
+  | None -> copied
+  | Some at -> (
+      match escape_at text at with
+      | Some unit when is_high unit && low_at text (at + 6) -> replace_from text out (at + 12) copied
+      | Some unit when is_high unit || is_low unit ->
+          Buffer.add_substring out text copied (at - copied);
+          Buffer.add_string out "\\uFFFD";
+          replace_from text out (at + 6) (at + 6)
+      | _ -> replace_from text out (at + 2) copied)
+
+let replace_lone_surrogates text =
+  if not (String.contains text '\\') then text
+  else
+    let out = Buffer.create (String.length text) in
+    let copied = replace_from text out 0 0 in
+    if copied = 0 then text
+    else begin
+      Buffer.add_substring out text copied (String.length text - copied);
+      Buffer.contents out
+    end
+
 let rec keep_last_keys (json : Yojson.Safe.t) : Yojson.Safe.t =
   match json with
   | `List items -> `List (List.map keep_last_keys items)
@@ -102,7 +140,7 @@ let decode limits text =
   if String.length text > limits.max_bytes then Error Too_large
   else
     Result.bind (utf8_text limits text) (fun text ->
-        Result.bind (prescan ~max_depth:limits.max_depth text) (fun () -> parse text))
+        Result.bind (prescan ~max_depth:limits.max_depth text) (fun () -> parse (replace_lone_surrogates text)))
 
 let encode ~max_bytes json =
   match Yojson.Safe.to_string json with
