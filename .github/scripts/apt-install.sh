@@ -4,7 +4,10 @@
 
 # Install Ubuntu packages on a CI runner, surviving a package mirror that fails for a few minutes.
 #   bash .github/scripts/apt-install.sh PACKAGE...
+#   bash .github/scripts/apt-install.sh PACKAGE... --if-available PACKAGE...
 #   bash .github/scripts/apt-install.sh --playwright-deps BROWSER
+# The packages after --if-available are installed only when the package index knows them (setup-ocaml
+# installs darcs, g++-multilib, gcc-multilib and mercurial on that condition; Ubuntu 24.04 has no darcs).
 # The second form installs the system packages Playwright needs for BROWSER, the list taken from
 # `python -m playwright install-deps --dry-run BROWSER` (what `playwright install --with-deps` runs).
 # Every workflow job installs its Ubuntu packages through this script, after
@@ -67,10 +70,26 @@ bounded() {
   return "${PIPESTATUS[0]}"
 }
 
+# The packages to install: the required ones, plus each --if-available one the package index knows
+# (the test setup-ocaml applies to its optional packages, with apt-cache show).
+select_packages() {
+  local package
+  selected=("${packages[@]}")
+  for package in "${optional[@]}"; do
+    if apt-cache show --no-all-versions "$package" 2>/dev/null | grep -qx "Package: $package"; then
+      selected+=("$package")
+    else
+      say "skipping $package: not in the package index"
+    fi
+  done
+}
+
 attempt() {
   : >"$output"
   bounded "$update_seconds" update -q || return
-  bounded "$download_seconds" install -y -q --no-install-recommends --download-only -o "$lock_option" "${packages[@]}"
+  select_packages
+  [ "${#selected[@]}" -gt 0 ] || return 0
+  bounded "$download_seconds" install -y -q --no-install-recommends --download-only -o "$lock_option" "${selected[@]}"
 }
 
 failing_hosts() {
@@ -78,24 +97,37 @@ failing_hosts() {
 }
 
 packages=()
+optional=()
+selected=()
 if [ "${1:-}" = "--playwright-deps" ]; then
   [ $# -eq 2 ] || fail "apt-install usage" "usage: apt-install.sh --playwright-deps BROWSER"
   playwright_packages "$2" || fail "apt-install could not list packages" "playwright install-deps --dry-run $2 printed no apt-get install line"
 else
-  packages=("$@")
+  while [ $# -gt 0 ] && [ "$1" != "--if-available" ]; do
+    packages+=("$1")
+    shift
+  done
+  if [ $# -gt 0 ]; then
+    shift
+    optional=("$@")
+  fi
 fi
-[ "${#packages[@]}" -gt 0 ] || fail "apt-install usage" "no package to install"
-for package in "${packages[@]}"; do
+[ $((${#packages[@]} + ${#optional[@]})) -gt 0 ] || fail "apt-install usage" "no package to install"
+for package in "${packages[@]}" "${optional[@]}"; do
   [[ "$package" =~ ^[a-z0-9][a-z0-9.+:-]*$ ]] || fail "apt-install refused a package name" "not a package name: $package"
 done
-say "installing ${#packages[@]} packages: ${packages[*]}"
+say "installing ${#packages[@]} packages: ${packages[*]}${optional[*]:+, and if available: ${optional[*]}}"
 
 hosts=""
 for ((number = 1; number <= attempts; number++)); do
   attempt
   status=$?
   if [ "$status" -eq 0 ]; then
-    if sudo apt-get install -y -q --no-install-recommends -o "$lock_option" "${packages[@]}"; then
+    if [ "${#selected[@]}" -eq 0 ]; then
+      say "none of the packages is available, nothing to install"
+      exit 0
+    fi
+    if sudo apt-get install -y -q --no-install-recommends -o "$lock_option" "${selected[@]}"; then
       say "installed on attempt $number of $attempts"
       exit 0
     fi

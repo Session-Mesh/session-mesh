@@ -30,7 +30,7 @@ const BARE_APT = /\bapt-get\b|\bapt\s+(?:install|update)\b|--with-deps|playwrigh
 // at the pinned commit): bubblewrap, musl-tools, rsync, and darcs, g++-multilib, gcc-multilib and
 // mercurial when apt knows them. A new pin must be checked against that file and this list updated.
 const SETUP_OCAML_SHA = 'ff66428f72b64472e749b22e0ad4dded4b2ddca6';
-const SETUP_OCAML_PACKAGES = 'run: bash .github/scripts/apt-install.sh bubblewrap musl-tools rsync darcs g++-multilib gcc-multilib mercurial';
+const SETUP_OCAML_PACKAGES = 'run: bash .github/scripts/apt-install.sh bubblewrap musl-tools rsync --if-available darcs g++-multilib gcc-multilib mercurial';
 
 describe('every package installation of the workflows goes through apt-install.sh', () => {
   for (const file of ALL_WORKFLOWS) {
