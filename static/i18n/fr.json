@@ -1540,6 +1540,7 @@
   "shortcuts.openPage": "Ouvrir une page à côté",
   "shortcuts.copy": "Copier la sélection, ou envoyer ^C s’il n’y en a pas",
   "shortcuts.copyAlways": "Copier la sélection",
+  "shortcuts.copyAsShell": "Copier la sélection comme commande shell (ajoute les antislashs d’une commande sur plusieurs lignes)",
   "shortcuts.paste": "Coller",
   "shortcuts.newline": "Nouvelle ligne sans envoyer",
   "shortcuts.newlineAlt": "Nouvelle ligne sans envoyer",

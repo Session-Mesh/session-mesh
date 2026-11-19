@@ -1525,6 +1525,7 @@
   "shortcuts.openPage": "Open a page alongside",
   "shortcuts.copy": "Copy the selection, or send ^C when nothing is selected",
   "shortcuts.copyAlways": "Copy the selection",
+  "shortcuts.copyAsShell": "Copy the selection as a shell command (adds the backslashes of a multi-line command)",
   "shortcuts.paste": "Paste",
   "shortcuts.newline": "New line without sending",
   "shortcuts.newlineAlt": "New line without sending",

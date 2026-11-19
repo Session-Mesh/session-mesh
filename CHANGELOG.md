@@ -11,6 +11,12 @@ before 1.0, a minor version may change behaviour.
   client store; `false` turns it off). Nothing is copied while a program tracks the mouse unless
   you force the selection with `Shift`+drag (`Option`+drag on macOS). See
   [Working in a terminal](docs/features.md#working-in-a-terminal).
+- **Copy as shell command.** `Ctrl+Shift+X` (`Cmd+Shift+X` on macOS) in a terminal copies the
+  selection with the `\` continuations of a multi-line command: rows the terminal soft-wrapped are
+  rejoined, and a trailing `\` is added only before an indented option row (`-x`, `--long`) when
+  every row after the first in the block is such a row. A continuation that does not start with
+  an option is not joined, nothing is guessed from indentation, and separate commands, heredocs,
+  quoted strings and comments are left unchanged. The usual copy is unchanged.
 
 ## 0.1.1
 
