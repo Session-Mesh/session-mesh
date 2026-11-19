@@ -8,7 +8,7 @@
  */
 
 import type {
-  Answer, Blocker,Category, ColumnKey, Columns, Counts, Dependency, DependencyState, LinkedSession, NoProject, Omitted, Product,
+  Answer, Blocker, Category, ColumnKey, Columns, Counts, Dependency, DependencyState, LinkedSession, NoProject, Omitted, Product,
   ProductsDoc, ProjectDoc, ProjectHead, ProjectsDoc, ProjectSummary, Provenance, Question, Reprise, TargetRef, TaskDetail,
   TaskRow, TimelineEvent,
 } from './work-types.ts';
@@ -177,7 +177,7 @@ const events = (value: unknown): TimelineEvent[] => objects(value).map(parseEven
 function parseAnswer(source: Obj): Answer | null {
   const body = text(source.text);
   if (body === null) return null;
-  return { text: body, by: text(source.by), at: text(source.at), relayedBy: text(source.relayed_by_session) ?? text(source.relayed_by_agent) };
+  return { text: body, by: text(source.by), at: text(source.at), relayedBy: text(source.relayed_by_session) };
 }
 
 function parseQuestion(source: Obj): Question | null {

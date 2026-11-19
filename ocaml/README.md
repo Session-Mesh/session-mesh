@@ -66,8 +66,9 @@ library, opens files for writing and checks the path again after opening.
 the worklog library. It uses `mcp-kit` like `mesh-board-mcp` but does not talk to the Mesh. It
 reads `WL_HOME` (the data repository, created at first use through the library's `init`, never
 overwritten), `MESH_SESSION` (the session name) and the agent markers of the environment; it
-never reads the session token. There is no tool that answers a question: `Work_questions.answer`
-is a library function for the interface. The web server registers it, as `mesh-work`, with every
+never reads the session token. `work_answer` relays the owner's answer to a question (unverified,
+it needs a session identity); it calls the library function `Work_questions.answer_once`, which a
+later owner-only writer for the interface is meant to call too. The web server registers it, as `mesh-work`, with every
 agent it starts with `mesh-board` (`agentmcp.py`). See [docs/work-mcp.md](../docs/work-mcp.md); tests: `dune runtest work_mcp`.
 By hand: `WL_HOME=/tmp/demo MESH_SESSION=demo ./_build/default/work_mcp/bin/work_mcp_main.exe`.
 

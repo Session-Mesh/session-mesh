@@ -26,8 +26,8 @@
 
     Agents ask with {!ask} (behind [work_ask]). {!answer_once} records one
     answer; it decides nothing about who may answer: that is the caller's
-    concern. [work_answer] calls it to relay the owner's words given in the
-    agent's terminal; an owner-only writer of the interface is meant to call
+    concern. [work_answer] calls it to relay the owner's words given in an
+    agent session's conversation; an owner-only writer of the interface is meant to call
     the same function. *)
 
 type answer = {
@@ -145,4 +145,7 @@ val answer_once :
     lock, so of two concurrent writers exactly one records an answer. With a
     [session], its [agent] and [session] are stored on the event (who relayed
     the answer, not who gave it). No authority check: the caller decides who
-    may answer. *)
+    may answer. The checks do not rely on the MCP schema: a [text] over 2000
+    characters, a control, invisible or bidirectional character in [text] or
+    [by] are [Usage] here too. An answer is never replaced or retracted; a
+    later owner-only writer will need a way to supersede a relayed one. *)

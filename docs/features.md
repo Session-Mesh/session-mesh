@@ -182,9 +182,11 @@ project tracker that agents write through `mesh-work`, read only:
   (a bar from creation to done or today, with due dates and estimates) and "Dependencies" (the tasks by dependency level, cycles labelled). The French interface names them
   "Reprise", "Tableau", "Frise" and "Dépendances".
 - **A task.** Selecting a task opens its sheet: blockers, dependencies, the sessions that worked on
-  it, its notes, its events and its questions. An answered question shows its answer, who gave it
-  (`by`, free text), when, and which session recorded it; an open question says to answer it in
-  the terminal of the agent that asked it. The sheet is read only: nothing in the view writes to
+  it, its notes, its events and its questions. An answered question shows its answer as the
+  owner's answer relayed by the session that recorded it, not verified (relayed, not verified until
+  the owner-only answer button exists), with when it was recorded; a `by` other than `owner` (free
+  text) appears only as the stated answerer. An open question says to answer it in an agent
+  session with `mesh-work`, the asking one or another. The sheet is read only: nothing in the view writes to
   the tracker. Answering from a button in the sheet comes in a later change.
 - **The old view.** The "Old view" button in the Projects header shows the previous Projects
   workspace (next section) and "New view" comes back; the choice is remembered by the browser.
@@ -226,13 +228,15 @@ then shows it.
 `work_log` as it goes and before it stops, `work_ask` for a question that does not block it.
 
 **Answering an agent's question.** `work_ask` does not wait: the agent records the question with
-the assumption it adopts and carries on. You answer in the agent's session terminal, in the
-conversation, and the agent records your words with `work_answer` (`answered_by` defaults to
+the assumption it adopts and carries on. You answer in an agent session with `mesh-work` (the
+asking session or another), in the conversation, and the agent records your words with
+`work_answer`, which needs a session identity (`answered_by` defaults to
 `owner`). The question then shows as answered in `work_resume`, `work_list_questions`, `work_get`
 and the task sheet. A question has one answer: a different second answer is refused, the same one
 repeated is accepted without writing again. The agent is told to relay only what you said; nothing
 checks that the words are yours, and the answer records which session wrote it
-([work-mcp.md](work-mcp.md#answering-a-question)). An answer button in the task sheet is planned
+([work-mcp.md](work-mcp.md#answering-a-question)). An answer is therefore shown as relayed, not
+verified until the owner-only answer button exists. An answer button in the task sheet is planned
 for a later change; it will record answers through the same library function.
 
 `work_open_view` does not open anything yet: it checks its target and answers that the view is not

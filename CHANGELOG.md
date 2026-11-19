@@ -7,18 +7,22 @@ before 1.0, a minor version may change behaviour.
 
 - **An agent records the owner's answer to its question.** `mesh-work` gains an 18th tool,
   `work_answer` (`question`, `text`, optional `answered_by`, default `owner`). The owner answers a
-  question asked with `work_ask` in the agent's session terminal, and the agent records those
-  words; the tool description, the server instructions and the agent guide say that it relays the
-  owner's answer and is never used to answer without the owner. A question has one answer: the
+  question asked with `work_ask` in an agent session (the asking one or another), and the agent
+  records those words; the tool description, the server instructions and the agent guide say that
+  it relays the owner's answer and is never used to answer without the owner. Nothing verifies
+  that the words are the owner's. The tool refuses to write without a session identity
+  (`MESH_SESSION`), so every answer it records names its relaying session. A question has one answer: the
   same answer repeated returns `duplicate: true` and writes nothing, a different one is refused
   with the new error code `already_answered`; two writers racing on one question record exactly
   one answer. The data format is unchanged (the `answer` event already existed); the event now
   also carries the relaying session's `agent` and `session`, returned as `relayed_by_agent` and
   `relayed_by_session` with each answer. The recording logic is the library function
   `Work_questions.answer_once`, which a later answer button in the Projects view is meant to call
-  as well. The task sheet now shows each answer with who gave it, when and which session recorded
-  it, and tells the owner to answer an open question in the agent's terminal; answering from a
-  button comes later. See [docs/work-mcp.md](docs/work-mcp.md#answering-a-question).
+  as well; it refuses control, invisible and bidirectional characters itself, not only through
+  the tool's argument check. The task sheet now shows each answer as the owner's answer relayed
+  by a named session and not verified (an `answered_by` other than `owner` appears only as the
+  stated answerer), and tells the owner to answer an open question in an agent session with
+  `mesh-work`; answering from a button comes later. See [docs/work-mcp.md](docs/work-mcp.md#answering-a-question).
 - **A new Projects view over the project tracker.** The Projects mode now opens on a read-only
   view of the tracker that agents write with `mesh-work`: the products and their active projects
   with progress and blocker counts, a project in four tabs ("Pick up", "Board", "Timeline",
@@ -102,7 +106,7 @@ before 1.0, a minor version may change behaviour.
 - **Agents get the project tracker.** Every agent that receives `mesh-board` (Claude Code, Codex,
   Pi, OpenCode, Gemini CLI, Copilot CLI and Mistral Vibe started by the mesh, and Antigravity
   through its plugin, once installed again) now also receives a second MCP server, `mesh-work`
-  (`work-mcp`, 17 `work_*` tools), with the agent kind as `WL_AGENT`. The session name and
+  (`work-mcp`, 18 `work_*` tools), with the agent kind as `WL_AGENT`. The session name and
   `WL_HOME` come from the agent's environment; no token, session name or data directory is written
   into a configuration or a command line. One list of servers and one rule serve every agent:
   without the board bridge, no server; without `work-mcp`, the launch is unchanged. `mesh-board`

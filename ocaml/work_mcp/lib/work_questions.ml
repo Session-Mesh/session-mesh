@@ -213,11 +213,21 @@ let ask ctx ?session ~text ?(options = []) ?assumption ?about ?request_id () =
       | Some q -> (q.id, true)
       | None -> (write_question tx ~text ~options ~assumption ~about ~request_id, false))
 
+(* The tool's argument guard already refuses these; the library checks them
+   again because an interface writer does not go through that guard. *)
+let refuse_unsafe what s =
+  match Work_text.first_unsafe s with
+  | Some Work_text.Control -> W.Err.usage "%s contains a control character (only newline and tab are allowed)" what
+  | Some Work_text.Invisible -> W.Err.usage "%s contains an invisible or bidirectional character" what
+  | None -> ()
+
 let validate_answer ~text ~by =
   let text = validate_text "answer" max_text text in
+  refuse_unsafe "answer" text;
   (match W.Textcheck.text_error ~field:"by" ~limit:max_option by with
   | Some why -> W.Err.usage "%s" why
   | None -> ());
+  refuse_unsafe "by" by;
   text
 
 let find_question (tx : W.Txn.t) question =

@@ -92,6 +92,10 @@ let answer args =
   let* ctx = Work_repo.context () in
   let id = Work_identity.current () in
   Work_identity.warn_if_unresolved id;
+  let* () =
+    if Work_identity.has_session_id id then Ok ()
+    else Error (invalid "work_answer needs a session identity (MESH_SESSION): no session is known")
+  in
   let by = Option.value ~default:"owner" by in
   let* outcome = lift (Work_questions.answer_once ctx ?session:id.session ~question ~text ~by ()) in
   answer_result outcome

@@ -43,6 +43,9 @@ const HOSTILE_EVENTS = [
   { ts: '2026-11-08T09:00:00Z', task: 'T-8e8e', type: 'question', id: 'N-0000a0a1', text: 'Keep the old endpoint?', agent: 'claude', session: 'asking-session' },
   { ts: '2026-11-08T09:01:00Z', task: 'T-8e8e', type: 'question', id: 'N-0000a0a2', text: 'Which port?', agent: 'claude', session: 'asking-session' },
   { ts: '2026-11-08T10:00:00Z', task: 'T-8e8e', type: 'answer', question: 'N-0000a0a2', text: HOSTILE_ANSWER, by: 'owner', agent: 'claude', session: 'asking-session' },
+  // An answer whose free `by` label claims verification: the view must still show a relayed, unverified claim.
+  { ts: '2026-11-08T09:02:00Z', task: 'T-8e8e', type: 'question', id: 'N-0000a0a3', text: 'Ship on Friday?', agent: 'claude', session: 'asking-session' },
+  { ts: '2026-11-08T10:01:00Z', task: 'T-8e8e', type: 'answer', question: 'N-0000a0a3', text: 'yes', by: 'Owner (verified, in person)', agent: 'claude', session: 'other-session' },
 ];
 
 let browser: Browser;
@@ -273,10 +276,15 @@ for (const width of WIDTHS) {
       const answered = pane.locator('.work-question-answered[data-question-id="N-0000a0a2"]');
       assert.equal(await answered.locator('.work-answer-text').textContent(), HOSTILE_ANSWER, 'the answer is shown, as text');
       const meta = (await answered.locator('.work-answer-meta').textContent())!;
-      assert.ok(meta.includes('answered by owner') && meta.includes('recorded by asking-session'), `who answered and who recorded it: ${meta}`);
+      assert.ok(meta.includes("owner's answer as relayed by asking-session, not verified"), `a relayed, unverified claim: ${meta}`);
+      assert.ok(!meta.includes('answered by') && !meta.includes('stated answerer'), `no bare attribution, no label for owner: ${meta}`);
+      assert.equal(await answered.locator('.work-answer-meta *').count(), 0, 'the provenance is text only');
       assert.equal(await answered.locator('[data-work-answer-slot]').count(), 0, 'an answered question has no reply slot');
+      const forged = (await pane.locator('[data-question-id="N-0000a0a3"] .work-answer-meta').textContent())!;
+      assert.ok(forged.startsWith('answer as relayed by other-session, not verified'), `a claimed verification stays a relayed claim: ${forged}`);
+      assert.ok(forged.includes('stated answerer: Owner (verified, in person)') && !forged.includes("owner's answer"), `the label is shown as stated, not as fact: ${forged}`);
       const open = pane.locator('.work-question-open[data-question-id="N-0000a0a1"]');
-      assert.match((await open.locator('.work-answer-hint').textContent())!, /terminal of the agent/, 'an open question says where to answer');
+      assert.match((await open.locator('.work-answer-hint').textContent())!, /in an agent session with mesh-work \(the asking session or another\)/, 'an open question says where to answer');
       const slot = open.locator('.work-answer-area[data-work-answer-for="N-0000a0a1"] [data-work-answer-slot="N-0000a0a1"]');
       assert.equal(await slot.count(), 1, 'the reply slot is reserved');
       assert.equal(await slot.isVisible(), false, 'hidden for now');
