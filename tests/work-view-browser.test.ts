@@ -302,7 +302,10 @@ for (const width of WIDTHS) {
       const empty = page.locator('.work-error[data-kind="no-tracker"]');
       await empty.waitFor();
       assert.equal((await empty.locator('.work-error-title').textContent())?.trim(), 'No tracker found');
-      assert.ok((await empty.locator('.work-error-text').textContent())!.length > 20);
+      const advice = (await empty.locator('.work-error-text').textContent()) ?? '';
+      assert.match(advice, /mesh-work/, 'the empty state says which tools start the tracker');
+      assert.match(advice, /work_add_project/);
+      assert.equal(await empty.getByRole('button', { name: 'Try again' }).count(), 1, 'the advice names a button that is there');
       await noOverflow(page);
       await shot(page, `empty-${width}`);
       await empty.getByRole('button', { name: 'Use the old view' }).click();
@@ -375,5 +378,7 @@ describe('Projects view in French', { skip }, () => {
     await enterProjects(none.page, 390);
     await none.page.locator('.work-error[data-kind="no-tracker"]').waitFor();
     assert.equal((await none.page.locator('.work-error-title').textContent())?.trim(), 'Aucun suivi trouvé');
+    assert.match((await none.page.locator('.work-error-text').textContent()) ?? '', /outils mesh-work/);
+    assert.equal(await none.page.getByRole('button', { name: 'Réessayer' }).count(), 1);
   });
 });
