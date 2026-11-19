@@ -103,12 +103,16 @@ val merge :
     incarnation's own entry, another agent counts only from a process started
     after that entry, another id from a process started before the entry's
     agent is a late report, ignored, and an [Observed] claim never replaces a
-    [Hook] or [Chosen] id unless its process started after that entry (a
-    refused claim still fills in the entry's missing [created] or [nonce]); the
-    same id of the same agent refreshes the entry (the stronger source,
+    [Hook] or [Chosen] id unless its process started after that entry
+    ("after the entry": more than two seconds after the entry's
+    [agent_started] when it has one, else after its [observed_at]; a refused
+    claim still fills in the entry's missing [created] or [nonce]); the same
+    id of the same agent refreshes the entry (the stronger source,
     [holds_open] once seen, the start time of a later process); another id
-    replaces it (the newest fact wins; a claim with no start time keeps the
-    one known for the same agent). Among incarnations one id has one
+    replaces it (the newest fact wins; a claim with no start time leaves the
+    entry with none, as it does not say which process sent it, so the next
+    observation is compared with the time the entry was written). Among
+    incarnations one id has one
     holder: the stronger (chosen > hook > observed, then the one that holds
     the rollout open) keeps it and the other is [Contested]; when equal, the
     current holder keeps it. A holder whose incarnation is not in [listed]

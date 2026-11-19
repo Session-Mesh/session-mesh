@@ -951,7 +951,7 @@ async def _record_listing(data, read, order):
     _RECORDED[0] = order
     nonces = {(s["name"], s["created"]): (s.get("meta") or {}).get("nonce") for s in raw}   # binds identities
     return await asyncio.to_thread(respawn.record, data["mesh"], True, host=host, seen=seen,
-                                   nonces=nonces)
+                                   nonces=nonces, order=order)
 
 
 async def sessions(event_state=None, organisation_lock=None):

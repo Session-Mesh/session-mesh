@@ -310,18 +310,20 @@ def update(mesh, listed, now=None, host=None, nonces=None):
     return record(mesh, listed, now, host, nonces)[0]
 
 
-def record(mesh, listed, now=None, host=None, nonces=None, seen=None):
+def record(mesh, listed, now=None, host=None, nonces=None, seen=None, order=None):
     """Record the mesh sessions (the dicts of list_sessions); return (the restorable entries,
     whether the snapshot file holds the recorded state: False when ptyhost did not answer or the
     write failed). ``host`` is the identity of the ptyhost that listed them
     (ptyhost.host_identity), None when unknown. ``seen``: the (name, created) of every session
     the host listed, when ``mesh`` describes only some of them (the others keep their entry).
     ``nonces``: {(name, created): nonce} of the listed sessions, which binds the identity registry's
-    entries written before their session was listed. Does nothing while ptyhost did not answer
-    (``listed`` false)."""
+    entries written before their session was listed. ``order``: time.monotonic() when the host was read
+    (by default, now). Does nothing while ptyhost did not answer (``listed`` false)."""
     if not listed:
         return [], False
+    order = time.monotonic() if order is None else order
     now = time.time() if now is None else now
+    read_at = now - (time.monotonic() - order)      # the wall clock of the read: entries written later
     seen = {(s.get("name"), s.get("created")) for s in mesh} if seen is None else seen
     live = [e for e in map(entry_of, mesh) if e]
     with _lock:
@@ -329,7 +331,7 @@ def record(mesh, listed, now=None, host=None, nonces=None, seen=None):
         _keep_hooked_conversation(old, live)
         new = _advance(old, seen, live, now, _valid_host(host))
         durable = _store(old, new)
-    registry = _record_identities(mesh, nonces or {}, old, new, now, seen)
+    registry = _record_identities(mesh, nonces or {}, old, new, now, seen, order, read_at)
     return public(new["lost"], registry), durable
 
 
@@ -595,7 +597,9 @@ EVIDENCE_RE = re.compile(r"[a-z]{1,16}:[A-Za-z0-9_.-]{1,48}")
 OBSERVED_SOURCES = ("open_rollout", "pid_metadata")     # what discover reads exactly from the process
 _FACT_KEYS = ("session", "agent", "id", "source", "evidence", "agent_started", "state", "holds_open")
 _identity_lock = threading.Lock()
-_LAST_LISTED = [None]   # the incarnations of the last host listing recorded: what a hook claim compares with
+_LAST_LISTED = [None]   # (order, read_at, incarnations) of the newest host list recorded: what a hook compares with
+_last_listed_lock = threading.Lock()
+LISTED_FRESH = 25.0     # seconds (two snapshot rounds and some) after which a hook compares with no host list
 
 
 def identity_file():
@@ -687,11 +691,15 @@ def merge_identity(registry, raw_claim, now, listed=None):
        entry, and another id from a process started before the entry's agent is a late report: ignored;
        an observation never replaces a ``hook`` or ``chosen`` id of the same process (a listing is
        sampled before it is recorded: it may be older than the report), only one of a later process; a
-       refused claim still binds the entry's missing created or nonce;
+       refused claim still binds the entry's missing created or nonce. "Started after the entry": more
+       than _SAME_PROCESS_SLACK after the entry's agent_started when it has one, else after its
+       observed_at (_started_after);
     3. the same id of the same agent refreshes the entry (the stronger source, holds_open once seen, the
        later start time);
     4. another id replaces the entry (/clear, /new, an agent started again): the newest fact wins; a
-       claim with no start time keeps the one known for the same agent;
+       claim with no start time leaves the entry with none, as it does not say which process sent it
+       (the agent may have been started again since the known start), so the next observation is
+       compared with the time the entry was written (S1);
     5. one id has one holder among incarnations (I4): the stronger (_strength) keeps it and the other
        is ``contested``, with no id; when equal, the current holder keeps it. A holder the PTY host does
        not list (a lost offer, a session that ended) loses to any claim of a listed incarnation, as it
@@ -759,8 +767,6 @@ def _placed(registry, mine, claim, now, listed=None):
     generation = registry["generation"] + 1
     candidate = {**claim, "session": _bound(mine["session"], claim["session"]) if mine else claim["session"],
                  "observed_at": now, "generation": generation, "state": "active"}
-    if mine is not None and mine["agent"] == claim["agent"] and claim["agent_started"] is None:
-        candidate["agent_started"] = mine["agent_started"]   # an untimed report of the same process keeps its start
     holder = next((e for e in registry["entries"] if e is not mine and e["state"] == "active"
                    and e["agent"] == claim["agent"] and e["id"] == claim["id"]), None)
     if holder is not None and _strength(candidate) <= _strength(holder) and not _outlisted(candidate, holder, listed):
@@ -973,21 +979,50 @@ def _listing_claims(mesh, nonces):
     return claims
 
 
-def _record_identities(mesh, nonces, before, after, now, seen):
+def _keep_listed(listed, order, read_at):
+    """Keep a recorded host list for the hook claims that follow, unless a newer read is kept: listings
+    run in worker threads and may finish out of order."""
+    with _last_listed_lock:
+        if _LAST_LISTED[0] is None or order >= _LAST_LISTED[0][0]:
+            _LAST_LISTED[0] = (order, read_at, listed)
+
+
+def _recent_listed():
+    """(incarnations, read_at) of the newest host list recorded, or (None, None) when there is none or it
+    is older than LISTED_FRESH (a silent host): a hook then compares with no list, and I4 holds."""
+    with _last_listed_lock:
+        kept = _LAST_LISTED[0]
+    if kept is None or time.monotonic() - kept[0] > LISTED_FRESH:
+        return None, None
+    return kept[2], kept[1]
+
+
+def _listed_since(registry, listed, read_at):
+    """``listed`` and the incarnations whose entry was written after the host list was read (a session
+    launched since): that list cannot show them, so they are never taken for unlisted."""
+    if listed is None or read_at is None:
+        return listed
+    return listed + [e["session"] for e in registry["entries"] if e["observed_at"] > read_at]
+
+
+def _record_identities(mesh, nonces, before, after, now, seen, order, read_at):
     """One listing into the registry: its exact observations, then the entries of incarnations neither
     listed by the PTY host (``seen``, which may name sessions ``mesh`` does not describe) nor offered
-    dropped. The listed incarnations are kept for the hook claims that follow (claim_identity). ``before``: the snapshot state the migration reads when there is no file. Returns the
-    registry the file holds, None when it could not be updated."""
+    dropped. The listed incarnations are kept for the hook claims that follow (claim_identity), with
+    ``order`` (time.monotonic() of the read) and ``read_at`` (its wall clock). ``before``: the snapshot
+    state the migration reads when there is no file. Returns the registry the file holds, None when it
+    could not be updated."""
     listed = [k for k in (_valid_incarnation({"name": name, "created": created, "nonce": nonces.get((name, created))})
                           for name, created in seen) if k]
-    _LAST_LISTED[0] = listed
+    _keep_listed(listed, order, read_at)
     keep = listed + [k for k in (_valid_incarnation({"name": e["name"], "created": e["created"], "nonce": None})
                                  for e in after["lost"]) if k]
     claims = _listing_claims(mesh, nonces)
 
     def change(registry):
+        compared = _listed_since(registry, listed, read_at)
         for claim in claims:
-            registry = merge_identity(registry, claim, now, listed)
+            registry = merge_identity(registry, claim, now, compared)
         return prune_identities(registry, keep, now)
 
     try:
@@ -1004,17 +1039,19 @@ def claim_identity(session, agent, sid, source, evidence, *, live=None, required
     ``live``: a launch; the incarnations the PTY host lists. An active entry of another of them holding
     the id, whatever its source, refuses the launch: that session may run the conversation although no
     listing shows it (an idle Codex that closed its rollout). An entry holding the id whose session is not
-    listed (a lost offer, a session that ended) is no holder. Without ``live`` (a hook), the last listing
-    recorded says which incarnations are listed (merge_identity). ``required``: raise OSError when the claim
+    listed (a lost offer, a session that ended) is no holder. Without ``live`` (a hook), the newest host
+    list recorded says which incarnations are listed (merge_identity), with the ones whose entry was
+    written after it was read; one older than LISTED_FRESH says nothing. ``required``: raise OSError when the claim
     is not written (a launch then starts nothing). ``fill_only``: the claim never replaces an id the
     incarnation already has (the hooks of Gemini, Antigravity and Vibe only fill in a missing one)."""
     claim = {"session": session, "agent": agent, "id": sid, "source": source, "evidence": evidence}
     if _valid_claim(claim) is None:
         return None
     held = []
-    listed = live if live is not None else _LAST_LISTED[0]
+    listed, read_at = (live, None) if live is not None else _recent_listed()
 
     def change(registry):
+        listed_now = _listed_since(registry, listed, read_at)
         others = [e for e in registry["entries"] if e["agent"] == agent and e["id"] == sid
                   and not same_incarnation(e["session"], session)]
         if live is not None and any(e["state"] == "active" and _among(e, live) for e in others):
@@ -1024,8 +1061,8 @@ def claim_identity(session, agent, sid, source, evidence, *, live=None, required
             return registry
         aside = [] if live is None else [e for e in others if not _among(e, live)]
         kept = {**registry, "entries": [e for e in registry["entries"] if all(e is not a for a in aside)]}
-        merged = merge_identity(kept, claim, time.time(), listed)
-        return registry if merged is kept else {**merged, "entries": _bounded([*aside, *merged["entries"]], listed)}
+        merged = merge_identity(kept, claim, time.time(), listed_now)
+        return registry if merged is kept else {**merged, "entries": _bounded([*aside, *merged["entries"]], listed_now)}
 
     after = update_identities(change, required=required)
     if held:
