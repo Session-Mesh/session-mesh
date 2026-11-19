@@ -341,15 +341,17 @@ print(json.dumps([refused, respawn.identity_file().stat().st_mode & 0o777, len(r
 
   test('a lost offer holding a conversation loses it to the listed session that runs it, by listing or by hook', () => {
     const out = python(`
+import time
 x = {"name": "x", "created": 1.0, "nonce": NONCE}
-respawn.update([listed("x", 1.0, "claude", None, None)], True, now=1000.0, host="1:1", nonces={("x", 1.0): NONCE})
+respawn.update([listed("x", 1.0, "claude", None, None)], True, now=time.time(), host="1:1", nonces={("x", 1.0): NONCE})
 respawn.claim_identity(x, "claude", A, "hook", "hook:Stop")            # x's Claude reported A
-respawn.update([], True, now=1010.0, host="2:2")                         # the PTY host restarted: x is an offer
+respawn.update([], True, now=time.time(), host="2:2")                    # the PTY host restarted: x is an offer
 # A shell z where the owner typed claude --resume A: a listing reads A in Claude's pid file.
-respawn.update([listed("z", 50.0, "claude", A, "pid_metadata", started=51.0)], True, now=1020.0, host="2:2")
+respawn.update([listed("z", 50.0, "claude", A, "pid_metadata", started=51.0)], True, now=time.time(), host="2:2")
 by_listing = sorted((e["session"]["name"], e["state"]) for e in registry()["entries"])
-# The same with B, reported by z's own hook after a listing that names z and not y.
+# The same with B, reported by z's own hook after a listing that names z and not y (y's entry is older).
 respawn.claim_identity({"name": "y", "created": 2.0, "nonce": None}, "claude", B, "hook", "hook:Stop")
+respawn.update([listed("z", 50.0, "claude", A, "pid_metadata", started=51.0)], True, now=time.time(), host="2:2")
 respawn.claim_identity({"name": "z", "created": 50.0, "nonce": None}, "claude", B, "hook", "hook:Stop")
 by_hook = sorted((e["session"]["name"], e["state"], e["id"]) for e in registry()["entries"])
 print(json.dumps([by_listing, by_hook, respawn.restore_identity(respawn.lost_entry("x"))[1]]))
@@ -357,6 +359,54 @@ print(json.dumps([by_listing, by_hook, respawn.restore_identity(respawn.lost_ent
     assert.deepEqual(out, [[['x', 'contested'], ['z', 'active']],
       [['x', 'contested', null], ['y', 'contested', null], ['z', 'active', B]], 'contested'],
     'the offer restores as a shell; the live session keeps the conversation it runs');
+  });
+
+  test('a holder launched after the last listing is not taken for unlisted, by hook or by listing', () => {
+    const out = python(`
+import time
+h, l = {"name": "h", "created": 60.0, "nonce": None}, {"name": "l", "created": 50.0, "nonce": None}
+respawn.update([listed("l", 50.0, "claude", None, None)], True, now=time.time() - 1, host="1:1")
+respawn.claim_identity(h, "claude", A, "chosen", "launch:session_id", live=[l, h])   # h launched since
+by_hook = respawn.claim_identity(l, "claude", A, "hook", "hook:Stop")                 # l reports A itself
+# The listing path: that listing's own list, read before h's entry was written.
+respawn.forget_identity(l)
+respawn.record([listed("l", 50.0, "claude", A, "pid_metadata", started=51.0)], True, now=time.time(), host="1:1",
+               order=time.monotonic() - 1)
+by_listing = sorted((e["session"]["name"], e["state"]) for e in registry()["entries"])
+print(json.dumps([by_hook, by_listing]))
+`);
+    assert.deepEqual(out, ['contested', [['h', 'active'], ['l', 'contested']]], 'I4: the launched holder keeps it');
+  });
+
+  test('a hook compares with no list once the last listing recorded is stale', () => {
+    const out = python(`
+import time
+x, z = {"name": "x", "created": 1.0, "nonce": None}, {"name": "z", "created": 50.0, "nonce": None}
+respawn.claim_identity(x, "claude", A, "hook", "hook:Stop")
+# x's entry predates the stale read (40 s, inside the prune's grace): only the age keeps x from losing.
+respawn.update_identities(lambda r: {**r, "entries": [{**e, "observed_at": e["observed_at"] - 40} for e in r["entries"]]})
+respawn.record([listed("z", 50.0, "claude", None, None)], True, now=time.time(), host="1:1",
+               order=time.monotonic() - respawn.LISTED_FRESH - 1)
+stale = respawn.claim_identity(z, "claude", A, "hook", "hook:Stop")
+respawn.record([listed("z", 50.0, "claude", None, None)], True, now=time.time(), host="1:1")
+fresh = respawn.claim_identity(z, "claude", A, "hook", "hook:Stop")
+print(json.dumps([stale, fresh]))
+`);
+    assert.deepEqual(out, ['contested', 'active'], 'a stale list says nothing; a fresh one outlists x');
+  });
+
+  test('of two listings recorded out of order, a hook compares with the newer host list', () => {
+    const out = python(`
+import time
+x, z = {"name": "x", "created": 1.0, "nonce": None}, {"name": "z", "created": 50.0, "nonce": None}
+respawn.claim_identity(x, "claude", A, "hook", "hook:Stop")
+newer = time.monotonic()
+respawn.record([listed("z", 50.0, "claude", None, None)], True, now=time.time(), host="1:1", order=newer)
+respawn.record([listed("x", 1.0, "claude", None, None), listed("z", 50.0, "claude", None, None)], True,
+               now=time.time(), host="1:1", order=newer - 1)    # read before, recorded after
+print(json.dumps(respawn.claim_identity(z, "claude", A, "hook", "hook:Stop")))
+`);
+    assert.equal(out, 'active', 'the newer list does not name x: z takes the conversation');
   });
 
   test('a directory at the registry path reads as empty: listings go on, a launch claim fails safely', () => {

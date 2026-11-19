@@ -215,14 +215,9 @@ let candidate_of (c : Claim.t) session ~generation ~now =
 let placed ?listed registry (mine : entry option) (c : Claim.t) ~now =
   let generation = registry.counter + 1 in
   let session = match mine with Some m -> bound m.session c.session | None -> c.session in
+  (* An untimed claim leaves no start time: it does not say which process sent
+     it, so the next observation is compared with [now] (started_after, S1). *)
   let candidate = candidate_of c session ~generation ~now in
-  (* An untimed report of the same agent keeps the start of its process. *)
-  let candidate =
-    match mine with
-    | Some m when m.agent = c.agent && c.agent_started = None ->
-        { candidate with agent_started = m.agent_started }
-    | _ -> candidate
-  in
   let is_mine e = match mine with Some m -> e == m | None -> false in
   let holder =
     List.find_opt

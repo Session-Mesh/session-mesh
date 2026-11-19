@@ -447,7 +447,11 @@ click, so an agent launched with permissive options never comes back on its own.
    session replaces the earlier one (`/clear`, `/new`, an agent started again in the terminal), with
    two exceptions. A listing never replaces an id that a hook reported or the mesh chose for the same
    agent process, because it may have been read before that report; a listing of a process started
-   later does. A late report from a process older than the one recorded is ignored. When the
+   later does. "Later" means more than two seconds after the start time the entry holds, or, when it
+   holds none, after the entry was written. A report that carries no start time (a hook) leaves the
+   entry with none: it does not say which process sent it, since the agent may have been started
+   again in the terminal since the known start. A late report from a process older than the one
+   recorded is ignored. When the
    400-entry cap is reached, the entries of sessions the PTY host no longer lists are dropped first.
 
    When the file is created, the exact ids already in the snapshot are copied into it as `observed`:
@@ -480,7 +484,9 @@ click, so an agent launched with permissive options never comes back on its own.
    held it first. The other session is *contested*: it has no conversation until it reports another
    one or the holder goes. A holder the PTY host no longer lists (a lost offer, a session that ended)
    loses to any claim of a session it lists, whatever the sources, as it is no holder for a launch
-   either; for a hook report, the last listing says which sessions are listed.
+   either. A listing compares with the host list it read; a hook report compares with the newest host
+   list recorded, or with none when that list is more than 25 seconds old (a silent host). Either way,
+   a session whose entry was written after that list was read (one launched since) counts as listed.
 
    One id has one active holder among the sessions a merge compares. A launch over a lost offer may
    leave two `active` entries of one id (the offer's entry is set aside for the launch, then kept as
