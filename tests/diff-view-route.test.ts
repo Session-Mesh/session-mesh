@@ -49,10 +49,12 @@ async function ownsPort(port: number): Promise<boolean> {
       method: 'POST',
       headers: {'Authorization': `Bearer ${token()}`, 'Content-Type': 'application/json'},
       body: JSON.stringify({target: path.join(home, 'ready.diff')}),
+      // a listener that accepts and never answers must not hold the startup loop
+      signal: AbortSignal.timeout(1000),
     });
     return response.status === 200;
   } catch {
-    return false;    // not listening yet, or no token written yet
+    return false;    // not listening yet, no token written yet, or no answer in time
   }
 }
 

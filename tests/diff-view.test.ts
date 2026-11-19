@@ -174,6 +174,23 @@ describe('path names', () => {
       [['copied', 'src.c → dst.c', 0], ['copied', 'x → y', 1]]);
   });
 
+  test('keeps the status of a copied or renamed file whose change is binary', () => {
+    const parsed = parseUnifiedDiff('diff --git a/logo.png b/copy.png\nsimilarity index 90%\ncopy from logo.png\ncopy to copy.png\n'
+      + 'Binary files a/logo.png and b/copy.png differ\ndiff --git a/x.bin b/x.bin\nBinary files a/x.bin and b/x.bin differ\n');
+    assert.deepEqual(parsed.files.map(file => [file.status, file.binary, displayPath(file)]),
+      [['copied', true, 'logo.png → copy.png'], ['binary', true, 'x.bin']]);
+  });
+
+  test('reads the names of a header without prefixes (diff.noprefix) when they agree', () => {
+    assert.deepEqual(gitHeaderPaths('diff --git run.sh run.sh'), ['run.sh', 'run.sh']);
+    assert.deepEqual(gitHeaderPaths('diff --git my file my file'), ['my file', 'my file']);
+    assert.equal(gitHeaderPaths('diff --git x y'), null);
+    const mode = parseUnifiedDiff('diff --git run.sh run.sh\nold mode 100644\nnew mode 100755\n');
+    const [file] = mode.files;
+    assert.ok(file);
+    assert.equal(displayPath(file), 'run.sh');
+  });
+
   test('splits an unquoted header with spaces where both names agree', () => {
     assert.deepEqual(gitHeaderPaths('diff --git a/x y b/x y'), ['x y', 'x y']);
     assert.deepEqual(gitHeaderPaths('diff --git a/x "b/\\303\\251"'), ['x', 'é']);

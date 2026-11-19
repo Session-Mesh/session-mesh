@@ -132,23 +132,24 @@ file under the home directory or `/tmp`, then open it.
 # /tmp, not $TMPDIR (which may not be served); the staged changes, then the unstaged ones
 # (this works before the first commit too, when HEAD does not exist yet)
 d="$(mktemp -d /tmp/mesh-diff.XXXXXXXX)" &&
-  { git diff --no-color --no-ext-diff --cached &&
-    git diff --no-color --no-ext-diff; } > "$d/changes.diff" &&
+  { git diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ --cached &&
+    git diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/; } > "$d/changes.diff" &&
   mesh-open "$d/changes.diff"   # under the same condition as above: MESH_SESSION_TOKEN is set
 ```
 
 A file changed both in the index and in the working tree then appears twice, staged first.
 
-Other diffs: `git diff --no-color --no-ext-diff main...HEAD` (a branch),
-`git show --no-color --no-ext-diff <commit>` (for a merge, add `--diff-merges=first-parent`: the
-viewer does not read the combined `@@@` diffs Git shows by default), `diff -u old new`.
-`git diff` leaves out untracked files: when the owner wants them too, mark them first with
-`git add --intent-to-add <file>` (it stages no content), or append
-`git diff --no-color --no-ext-diff --no-index /dev/null <file>` for each. Always pass
-`--no-color --no-ext-diff`: a `color.diff=always` setting would put colour codes in the file
-even when it is redirected, and a `diff.external` tool would write its own output, or none.
-`diff -u` and `git diff --no-index` exit with status 1 when the files differ, so do not chain
-`mesh-open` after them with `&&`; keep that status out of `set -e` too:
+Pass `--no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/` to every Git command that writes
+the viewer's input. Settings could change its output otherwise: `color.diff=always` puts colour
+codes in the file even when it is redirected, a `diff.external` tool writes its own output, or
+none, and `diff.noprefix` or `diff.mnemonicPrefix` change the `a/` and `b/` the viewer reads.
+With those options: `git diff main...HEAD` (a branch), `git show <commit>` (for a merge, add
+`--diff-merges=first-parent`: the viewer does not read the combined `@@@` diffs Git shows by
+default), and `diff -u old new` for files outside Git. `git diff` leaves out untracked files: when
+the owner wants them too, mark them first with `git add --intent-to-add <file>` (it stages no
+content), or append `git diff --no-index /dev/null <file>` for each. `diff -u` and
+`git diff --no-index` exit with status 1 when the files differ, so do not chain `mesh-open` after
+them with `&&`; keep that status out of `set -e` too:
 
 ```sh
 status=0; diff -u old new > "$d/changes.diff" || status=$?
@@ -157,11 +158,12 @@ status=0; diff -u old new > "$d/changes.diff" || status=$?
 
 Without `MESH_SESSION_TOKEN`, print the file's path instead: the owner clicks it and it opens in
 the same viewer. To follow changes as you work, open it with `mesh-open --watch` and write the
-diff to the same file again. A diff over 4 MiB is shown as plain text; one of more than 50,000
-lines or 2,000 files gets a notice with a link to its plain text (show a narrower diff instead,
-for example one path: `git diff --no-color --no-ext-diff HEAD -- <path>`). A line target such as
-`changes.diff:42` opens the code viewer at that line of the patch file, for a diff of 4 MiB or
-less; a larger one opens as plain text, at its start.
+diff to the same file again. A diff over 4 MiB, or holding a NUL byte, is shown as plain text; one
+of more than 50,000 lines or 2,000 files gets a notice with a link to its plain text (show a
+narrower diff instead, for example one path: `git diff HEAD -- <path>`, with the options above).
+A line target such as `changes.diff:42` opens the code viewer at that line of the patch file only
+when the viewer opens it, that is up to 4 MiB and without a NUL byte; otherwise it opens as plain
+text, at its start.
 
 ### Whiteboard and demos
 
