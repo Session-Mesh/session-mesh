@@ -946,17 +946,54 @@ async def _update_notice():
         return None
 
 
+class SharedListing:
+    """The listing of GET /api/sessions: at most one of these runs and one waits, and every request is answered
+    by a listing that began after it arrived. The wait of /api/sessions requests no longer grows with the
+    number of polling pages; the background loops (snapshot, push, idle) still run their own listings under
+    the same lock.
+
+    A listing runs under the organisation lock and can take seconds on a loaded machine (it reads /proc and
+    the agents' transcripts). With one listing per request, a page polling every 4 s queued requests faster
+    than they were answered, and the wait grew without bound (minutes after a web restart). Here the
+    requests that arrive while a listing runs all share the next one."""
+
+    def __init__(self, run):
+        self._run = run
+        self._running = None
+        self._next = None
+
+    def __call__(self):
+        if self._next is None:
+            self._next = asyncio.ensure_future(self._after(self._running))
+            self._next.add_done_callback(self._settled)
+        # A request that goes away does not cancel a listing other requests share.
+        return asyncio.shield(self._next)
+
+    def _settled(self, task):
+        if self._next is task:    # cancelled or failed before it started: the next request starts afresh
+            self._next = None
+        # Read its outcome even when every request that waited for it has gone away.
+        task.cancelled() or task.exception()
+
+    async def _after(self, previous):
+        if previous is not None:
+            await asyncio.wait([previous])
+        self._running, self._next = self._next, None
+        return await self._run()
+
+
 async def api_sessions(request):
-    result = await sessions(request.app["event_state"], request.app["organisation_lock"])
+    # A shallow copy: the listing is shared with the other requests that waited for it.
+    result = dict(await request.app["listing"]())
     result["sessionRequests"] = request.app["session_requests"].pending()
     result["update"] = await _update_notice()
     consent = await asyncio.to_thread(agentmail.consent_projection)
     result["agentMailConsent"] = consent["requests"]
     # A wake line nobody followed: shown on the session, never typed (claudewake).
     unconfirmed = request.app["claude_wakes"].unconfirmed() | request.app["codex_wakes"].unconfirmed()
-    for session in result.get("mesh", []):
-        if (session.get("name"), session.get("created")) in unconfirmed:
-            session["wake_unconfirmed"] = True
+    result["mesh"] = [dict(session, wake_unconfirmed=True)
+                      if (session.get("name"), session.get("created")) in unconfirmed else session
+                      for session in result.get("mesh", [])]
     return web.json_response(result)
 
 
@@ -4617,6 +4654,7 @@ def make_app(*, session_request_path=None):
     app["contextual_diff_semaphore"] = asyncio.Semaphore(MAX_CONTEXTUAL_DIFF_PROCESSES)
     global _LIVE_EVENT_STATE
     app["event_state"] = _LIVE_EVENT_STATE = EventState()
+    app["listing"] = SharedListing(lambda: sessions(app["event_state"], app["organisation_lock"]))
     try:
         app["session_requests"] = sessionrequests.Requests(
             SESSION_REQUESTS_FILE if session_request_path is None else session_request_path)
