@@ -400,7 +400,16 @@ click, so an agent launched with permissive options never comes back on its own.
    (`claude --resume <id>` or `codex resume <id>`, with its options); other programs (an editor, a
    build) come back as a plain shell. "Ignore" dismisses the offer.
 
-   A Codex session that holds no rollout file open has no certain conversation: the server infers it
+   A Codex session started as `codex resume <id>` (every Codex the mesh restores or resumes) is
+   restored with that exact conversation, even when it holds no rollout file open: the id is read
+   from the launch arguments of the Codex process while it runs and kept in the snapshot. A rollout
+   file the Codex holds open still wins over its arguments (after `/new` inside Codex, the open
+   rollout is the current conversation; the web server log says so once per process). When two
+   running Codex were started on the same conversation, the one holding its rollout open keeps it;
+   if neither does, neither gets an id and both are restored as a plain shell.
+
+   A Codex session that holds no rollout file open and was not started as `codex resume <id>` has no
+   certain conversation: the server infers it
    from the newest rollout written in the folder, and only when exactly one Codex runs in that folder,
    no other Codex of the host holds that rollout open, and the process table could be read. In any
    other case (two Codex in one folder, an unreadable process table or file list of a Codex of the

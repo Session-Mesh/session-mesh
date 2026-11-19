@@ -7,7 +7,13 @@ import json
 import os
 import time
 
+import pytest
+
 import discover
+import respawn
+import resumeargs
+import server
+from respawn_helpers import mesh_item, snapshot_file  # noqa: F401  (a fixture)
 
 
 def _rollout(path, cwd, sid):
@@ -169,3 +175,143 @@ def test_many_guesses_of_one_id_are_all_dropped_in_one_pass():
     discover.drop_duplicate_guessed_ids(guesses)
     assert all(g["agent"]["session_id"] is None for g in guesses[:-1])
     assert guesses[-1]["agent"]["session_id"] == "Y"
+
+
+# ---------------------------------------------------------------- the conversation named by `codex resume <id>`
+
+ID = "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a1b"
+ID2 = "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a2c"
+CODEX_JS = "/usr/lib/node_modules/@openai/codex/bin/codex.js"
+MESH_TAIL = ["--no-alt-screen", "-c", "tui.raw_output_mode=false", "-c", "mcp_servers.mesh-board.args=[]"]
+
+
+@pytest.mark.parametrize("argv", [
+    ["codex", "resume", ID],
+    ["codex", "resume", ID, *MESH_TAIL],                                         # what the mesh launches
+    ["/usr/local/bin/codex", "resume", ID, "--yolo", *MESH_TAIL],
+    ["node", CODEX_JS, "resume", ID, "--yolo"],                                  # the npm launcher
+    ["npx", "-y", "@openai/codex", "resume", ID],
+    ["codex", "--cd", "/w", "-c", "model=o3", "-mgpt", "--config=x=1",
+     "--dangerously-bypass-approvals-and-sandbox", "resume", ID, "--last"],     # options before, anything after
+])
+def test_the_id_after_resume_is_read(argv):
+    assert resumeargs.resumed_codex_id(argv) == ID
+
+
+@pytest.mark.parametrize("argv", [
+    ["codex"], ["codex", "--yolo"], ["codex", "resume"],
+    ["codex", "resume", "--last"], ["codex", "resume", "--all"], ["codex", "resume", "--yolo", ID],
+    ["codex", "resume", ID.upper()], ["codex", "resume", ID[:-1]], ["codex", "resume", f"{ID}x"],
+    ["codex", "resume", "-" + ID[1:]],
+    ["codex", "-c", "resume", ID],                    # "resume" is the value of -c, ID a prompt
+    ["codex", "--unknown-option", "resume", ID],      # its arity cannot be read
+    ["codex", "exec", "resume", ID], ["codex", "fix it", "resume", ID], ["codex", "--", "resume", ID],
+    ["/bin/sh", "-c", f"codex resume {ID}"], ["node", "/tmp/codex.js", "resume", ID], [],
+])
+def test_no_id_is_read_from_other_shapes(argv):
+    assert resumeargs.resumed_codex_id(argv) is None
+
+
+def _launched(monkeypatch, argvs):
+    """The launch arguments of the fake host's processes (pid -> words)."""
+    monkeypatch.setattr(discover, "cmdline", lambda pid: [w.encode() for w in argvs.get(pid, [])])
+
+
+def test_an_idle_codex_launched_on_a_conversation_gets_it(tmp_path, monkeypatch):
+    """The common case: a resumed codex that holds no rollout open had no id (restored as a shell)."""
+    _rollouts(tmp_path, monkeypatch)                 # no rollout written since it started
+    _host(monkeypatch, [100], {100: "/w"}, {100: []})
+    _launched(monkeypatch, {100: ["codex", "resume", ID, *MESH_TAIL]})
+    info = discover.codex_info(100)
+    assert (info["session_id"], info["identity_source"]) == (ID, "argv_resume")
+
+
+def test_the_rollout_of_the_named_conversation_describes_it(tmp_path, monkeypatch):
+    paths = _rollouts(tmp_path, monkeypatch, a=ID, b=ID2)
+    _host(monkeypatch, [100], {100: "/w"}, {100: []})
+    _launched(monkeypatch, {100: ["codex", "resume", ID]})
+    os.utime(paths["a"], (time.time() - 50, time.time() - 50))      # the other one is newer: not taken
+    info = discover.codex_info(100)
+    assert (info["session_id"], info["identity_source"], info["status"]) == (ID, "argv_resume", "idle")
+
+
+def test_an_open_rollout_that_agrees_stays_open_rollout(tmp_path, monkeypatch):
+    paths = _rollouts(tmp_path, monkeypatch, a=ID)
+    _host(monkeypatch, [100], {100: "/w"}, {100: [str(paths["a"])]})
+    _launched(monkeypatch, {100: ["codex", "resume", ID]})
+    info = discover.codex_info(100)
+    assert (info["session_id"], info["identity_source"]) == (ID, "open_rollout")
+
+
+def test_an_open_rollout_that_disagrees_wins_and_is_noted_once(tmp_path, monkeypatch, capsys):
+    """After /new inside codex the open rollout is the conversation; the argument names the old one."""
+    paths = _rollouts(tmp_path, monkeypatch, b=ID2)
+    _host(monkeypatch, [100], {100: "/w"}, {100: [str(paths["b"])]})
+    _launched(monkeypatch, {100: ["codex", "resume", ID]})
+    monkeypatch.setattr(discover, "_argv_conflicts_noted", set())
+    first, second = discover.codex_info(100), discover.codex_info(100)
+    assert (first["session_id"], first["identity_source"]) == (ID2, "open_rollout") and first == second
+    noted = capsys.readouterr().out
+    assert noted.count("the open rollout is used") == 1 and ID not in noted and ID2 not in noted
+
+
+def test_two_codex_launched_on_one_conversation_are_both_contested(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch, a=ID)
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/other"}, {100: [], 200: []})
+    _launched(monkeypatch, {100: ["codex", "resume", ID], 200: ["node", CODEX_JS, "resume", ID]})
+    with discover.listing_scope():
+        found = [discover.codex_info(pid).get("session_id") for pid in (100, 200)]
+    assert found == [None, None]       # no folder guess either: the rollout of ID is in /w, where 100 runs
+
+
+def test_of_two_codex_on_one_conversation_the_one_holding_it_open_keeps_it(tmp_path, monkeypatch):
+    paths = _rollouts(tmp_path, monkeypatch, a=ID)
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/w"}, {100: [], 200: [str(paths["a"])]})
+    _launched(monkeypatch, {100: ["codex", "resume", ID], 200: ["codex", "resume", ID]})
+    assert discover.codex_info(100).get("session_id") is None
+    assert (discover.codex_info(200)["session_id"], discover.codex_info(200)["identity_source"]) == (ID, "open_rollout")
+
+
+def test_a_conversation_another_codex_holds_open_is_not_claimed_by_argument(tmp_path, monkeypatch):
+    paths = _rollouts(tmp_path, monkeypatch, a=ID)
+    _host(monkeypatch, [100, 200], {100: "/w", 200: "/other"}, {100: [], 200: [str(paths["a"])]})
+    _launched(monkeypatch, {100: ["codex", "resume", ID], 200: ["codex"]})
+    assert discover.codex_info(100).get("session_id") is None
+
+
+def test_a_codex_helper_with_the_same_arguments_is_not_a_second_claim(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch)
+    _host(monkeypatch, [100, 101], {100: "/w", 101: "/w"}, {100: [], 101: []})
+    monkeypatch.setattr(discover, "snapshot", lambda: {100: ("codex", 0, 1), 101: ("codex", 0, 100)})
+    monkeypatch.setattr(discover, "read_stat", lambda pid: ("codex", 0, 1) if pid == 100 else None)
+    _launched(monkeypatch, {100: ["codex", "resume", ID], 101: ["codex", "resume", ID]})
+    assert discover.codex_info(100)["session_id"] == ID
+
+
+def test_an_unreadable_process_table_names_no_conversation_by_argument(tmp_path, monkeypatch):
+    _rollouts(tmp_path, monkeypatch)
+    _host(monkeypatch, [100], {100: "/w"}, {100: []}, listing_fails=True)
+    _launched(monkeypatch, {100: ["codex", "resume", ID]})
+    assert discover.codex_info(100).get("session_id") is None
+
+
+def test_an_argument_id_is_exact_against_a_guess_of_another_session():
+    guessed, named = _described("cwd_unique", ID), _described("argv_resume", ID)
+    discover.drop_duplicate_guessed_ids([guessed, named])
+    assert guessed["agent"]["session_id"] is None and named["agent"]["session_id"] == ID
+
+
+def test_the_named_conversation_survives_a_host_restart(tmp_path, monkeypatch, snapshot_file):
+    """Observed while the codex runs, stored in the snapshot, resumed after the host and its process are gone."""
+    _rollouts(tmp_path, monkeypatch)
+    _host(monkeypatch, [100], {100: str(tmp_path)}, {100: []})
+    argv = ["codex", "resume", ID, "--yolo", *MESH_TAIL]
+    _launched(monkeypatch, {100: argv})
+    agent = {**discover.codex_info(100), "pid": 100, "argv": argv}
+    respawn.update([mesh_item("c", tmp_path, 7.0, agent)], listed=True, host="host-1")
+    stored = json.loads(snapshot_file.read_text())["live"][0]["agent"]
+    assert (stored["session_id"], stored["identity_source"]) == (ID, "argv")
+    offer = respawn.update([], listed=True, host="host-2")      # a new host: the session is lost
+    assert offer[0]["resumable"] is True
+    lost = json.loads(snapshot_file.read_text())["lost"][0]["agent"]
+    assert server._resume_argv(lost)[:4] == ["codex", "resume", ID, "--yolo"]
