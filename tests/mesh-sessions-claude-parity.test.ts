@@ -120,6 +120,20 @@ function normalize(value: unknown, root: string, ids: Map<number, string>): unkn
   return value;
 }
 
+// Python cuts cmd at 160 code points with the real root in it: compare the golden cmd cut the same way
+// at this run's root, so that a long temporary directory does not change the result.
+const MAX_CMD = 160;
+const cut = (text: string) => [...text].slice(0, MAX_CMD).join('');
+
+function goldenAtRoot(golden: Record<string, Record<string, unknown>>, root: string, ids: Map<number, string>) {
+  const out: Record<string, unknown> = {};
+  for (const [label, row] of Object.entries(golden)) {
+    const cmd = typeof row.cmd === 'string' ? normalize(cut(row.cmd.replaceAll('$ROOT', root)), root, ids) : row.cmd;
+    out[label] = { ...row, cmd };
+  }
+  return out;
+}
+
 const DESCRIBE = 'import json, sys\nimport discover\nprocs = discover.snapshot()\n'
   + 'print(json.dumps({pid: discover.describe(procs, int(pid)) for pid in sys.argv[1:]}))';
 
@@ -153,8 +167,11 @@ test('the Python listing gives the committed Claude rows', { skip }, async () =>
   for (const [pid, row] of Object.entries(rows)) byLabel[labels.get(Number(pid)) ?? pid] = normalize(row, temp, ids);
   const sorted = normalize(byLabel, temp, ids);
   if (process.env.MESH_SESSIONS_PARITY_WRITE === '1') {
+    for (const row of Object.values(rows) as Record<string, unknown>[]) {
+      assert.ok([...String(row.cmd)].length < MAX_CMD, 'a cmd was cut: write golden.json with a shorter TMPDIR');
+    }
     fs.writeFileSync(GOLDEN, JSON.stringify(sorted, null, 2) + '\n');
     return;
   }
-  assert.deepEqual(sorted, JSON.parse(fs.readFileSync(GOLDEN, 'utf8')));
+  assert.deepEqual(sorted, goldenAtRoot(JSON.parse(fs.readFileSync(GOLDEN, 'utf8')), temp, ids));
 });
