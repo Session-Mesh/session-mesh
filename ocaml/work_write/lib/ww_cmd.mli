@@ -25,8 +25,11 @@ val run : ?getenv:(string -> string option) -> Ww_request.t -> (Yojson.Safe.t, W
 (** Execute a parsed request: [answer] records the owner's answer with
     {!Work_mcp.Work_questions.answer_once} [~owner_web:true ~by:"owner"].
     The document is [{schema, command: "answer", id, state: "answered",
-    owner_verified: true, duplicate}]; another owner-authenticated answer
-    already there is the error [already_answered]. *)
+    owner_verified: true, duplicate}], plus [uncommitted: true] when the
+    worklog's git commit was skipped or failed (the answer is recorded all
+    the same; the reason goes to standard error); another
+    owner-authenticated answer already there is the error
+    [already_answered]. *)
 
 val exit_code : Work_mcp.Work_err.t -> int
 (** The codes of work-read ([invalid_input] 2, [not_found] 3,

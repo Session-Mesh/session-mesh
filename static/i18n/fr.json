@@ -1712,6 +1712,7 @@
   "work.answer.send": "Envoyer la réponse",
   "work.answer.sending": "Envoi…",
   "work.answer.sent": "Réponse enregistrée.",
+  "work.answer.sentUncommitted": "Réponse enregistrée dans les fichiers de données, mais le commit git du dépôt de données a échoué ou n'a pas eu lieu : elle n'est pas encore dans l'historique git.",
   "work.answer.already": "Cette question a déjà une réponse de votre part ; elle est affichée telle qu’enregistrée.",
   "work.answer.empty": "Écrivez d’abord une réponse.",
   "work.answer.tooLong": "La réponse dépasse 2000 caractères.",

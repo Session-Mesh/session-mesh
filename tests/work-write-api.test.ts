@@ -5,25 +5,29 @@
 // temporary MESH_CONF_DIR and a fictional tracker (a copy of the worklog fixture). The write is for the owner's
 // signed-in browser only: the cookie, never a master Bearer token, never a session token, never a foreign Origin.
 // The default Mesh port and the owner's data directories are never used.
-// Needs MESH_PYTHON and the built programs (MESH_WORK_WRITE_CMD / MESH_WORK_READ_CMD, default: the dune build
-// output); MESH_REQUIRE_WORK_READ=1 makes a missing one a failure. The real session-token case also needs a PTY
-// host (MESH_PTYHOST_CMD).
+// The credential suites need MESH_PYTHON only: every refusal happens before a program runs, so they use stand-ins
+// (tests/helpers/placeholder-program.ts) and run in public CI, which builds no OCaml in the frontend job. The
+// end-to-end suite needs the built programs (MESH_WORK_WRITE_CMD / MESH_WORK_READ_CMD, default: the dune build
+// output); MESH_REQUIRE_WORK_READ=1 makes a missing one a failure. The real session-token case also needs a PTY host
+// (MESH_PTYHOST_CMD).
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
-import { after, before, describe, test } from 'node:test';
+import { after, before, beforeEach, describe, test } from 'node:test';
 import { startMesh as startHarness, type Mesh as HarnessMesh } from './http-harness.ts';
+import { placeholderProgram, type Placeholder } from './helpers/placeholder-program.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PYTHON = process.env.MESH_PYTHON ?? '';
 const WRITER = process.env.MESH_WORK_WRITE_CMD || path.join(ROOT, 'ocaml/_build/default/work_write/bin/work_write_main.exe');
 const READER = process.env.MESH_WORK_READ_CMD || path.join(ROOT, 'ocaml/_build/default/work_read/bin/work_read_main.exe');
 const FIXTURE = path.join(ROOT, 'ocaml/worklog/test/fixture');
+const credentialSkip = PYTHON ? false : 'MESH_PYTHON is required';
 const skip = (!PYTHON || !fs.existsSync(WRITER) || !fs.existsSync(READER)) && !process.env.MESH_REQUIRE_WORK_READ
   ? 'MESH_PYTHON and built work-write and work-read are required' : false;
 const QUESTIONS = ['N-0000a0b1', 'N-0000a0b2', 'N-0000a0b3', 'N-0000a0b4'];
@@ -48,44 +52,68 @@ function tracker(temp: string): string {
   return wl;
 }
 
-async function start(extra: Record<string, string>): Promise<Running> {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-work-write-'));
-  const port = await freePort();
-  const conf = path.join(temp, 'conf'), runtime = path.join(temp, 'run'), wl = tracker(temp);
-  fs.mkdirSync(conf, { mode: 0o700 });
-  fs.mkdirSync(runtime, { mode: 0o700 });
-  const env = {
-    PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: temp, XDG_CONFIG_HOME: path.join(temp, 'config'),
-    XDG_CACHE_HOME: path.join(temp, 'cache'), XDG_DATA_HOME: path.join(temp, 'data'), XDG_RUNTIME_DIR: runtime,
-    MESH_CONF_DIR: conf, MESH_CACHE_DIR: path.join(temp, 'cache'), MESH_RUNTIME_DIR: runtime,
-    MESH_HOST: '127.0.0.1', MESH_PORT: String(port), MESH_AUTH_MODE: 'legacy', PYTHONDONTWRITEBYTECODE: '1',
-    WL_HOME: wl, MESH_WORK_READ_CMD: READER, MESH_WORK_WRITE_CMD: WRITER,
-    MESH_WORK_READ_TIMEOUT: process.env.MESH_WORK_READ_TIMEOUT ?? '30', ...extra,
-  };
-  let diagnostics = '';
-  const child: ChildProcess = spawn(PYTHON, ['server.py'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  for (const stream of [child.stdout, child.stderr]) stream?.on('data', data => { diagnostics = (diagnostics + data).slice(-8000); });
-  const origin = `http://127.0.0.1:${port}`;
-  let ready = false;
-  for (let i = 0; i < 400 && !ready; i++) {
-    assert.equal(child.exitCode, null, `server exited: ${diagnostics}`);
-    try { ready = (await fetch(origin + '/login')).ok; } catch { await new Promise(r => setTimeout(r, 50)); }
+/** Make the tracker a git repository with one commit, as a real one is. */
+function gitInit(wl: string): void {
+  for (const args of [['init', '-q'], ['add', '-A'], ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'init']]) {
+    assert.equal(spawnSync('git', ['-C', wl, ...args], { stdio: 'ignore' }).status, 0, `git ${args.join(' ')}`);
   }
-  assert.ok(ready, `server did not start: ${diagnostics}`);
-  const token = fs.readFileSync(path.join(conf, 'token'), 'utf8').trim();
-  // The owner cookie at generation 0 (the contract tests/http-harness.ts also relies on).
-  const cookie = `mesh_auth=${createHmac('sha256', token).update('session-mesh').digest('hex')}`;
-  const stop = async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      const exited = once(child, 'exit');
-      child.kill('SIGTERM');
-      const timer = setTimeout(() => child.kill('SIGKILL'), 3000);
-      await exited;
-      clearTimeout(timer);
+}
+
+const commits = (wl: string): number =>
+  Number(spawnSync('git', ['-C', wl, 'rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).stdout.trim());
+
+async function stopChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, 'exit');
+  child.kill('SIGTERM');
+  const timer = setTimeout(() => child.kill('SIGKILL'), 3000);
+  await exited;
+  clearTimeout(timer);
+}
+
+/** A server on a free port with its own temporary home; `prepare` sees the tracker before the server starts.
+ *  A failed start stops the child and removes the directory before it throws. */
+async function start(extra: Record<string, string>, prepare?: (wl: string) => void): Promise<Running> {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-work-write-'));
+  let child: ChildProcess | null = null;
+  try {
+    const port = await freePort();
+    const conf = path.join(temp, 'conf'), runtime = path.join(temp, 'run'), wl = tracker(temp);
+    prepare?.(wl);
+    fs.mkdirSync(conf, { mode: 0o700 });
+    fs.mkdirSync(runtime, { mode: 0o700 });
+    const env = {
+      PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: temp, XDG_CONFIG_HOME: path.join(temp, 'config'),
+      XDG_CACHE_HOME: path.join(temp, 'cache'), XDG_DATA_HOME: path.join(temp, 'data'), XDG_RUNTIME_DIR: runtime,
+      MESH_CONF_DIR: conf, MESH_CACHE_DIR: path.join(temp, 'cache'), MESH_RUNTIME_DIR: runtime,
+      MESH_HOST: '127.0.0.1', MESH_PORT: String(port), MESH_AUTH_MODE: 'legacy', PYTHONDONTWRITEBYTECODE: '1',
+      WL_HOME: wl, MESH_WORK_READ_CMD: READER, MESH_WORK_WRITE_CMD: WRITER,
+      MESH_WORK_READ_TIMEOUT: process.env.MESH_WORK_READ_TIMEOUT ?? '30', ...extra,
+    };
+    let diagnostics = '';
+    const spawned: ChildProcess = spawn(PYTHON, ['server.py'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawned;
+    for (const stream of [spawned.stdout, spawned.stderr]) stream?.on('data', data => { diagnostics = (diagnostics + data).slice(-8000); });
+    const origin = `http://127.0.0.1:${port}`;
+    let ready = false;
+    for (let i = 0; i < 400 && !ready; i++) {
+      assert.equal(spawned.exitCode, null, `server exited: ${diagnostics}`);
+      try { ready = (await fetch(origin + '/login')).ok; } catch { await new Promise(r => setTimeout(r, 50)); }
     }
+    assert.ok(ready, `server did not start: ${diagnostics}`);
+    const token = fs.readFileSync(path.join(conf, 'token'), 'utf8').trim();
+    // The owner cookie at generation 0 (the contract tests/http-harness.ts also relies on).
+    const cookie = `mesh_auth=${createHmac('sha256', token).update('session-mesh').digest('hex')}`;
+    const stop = async () => {
+      await stopChild(spawned);
+      fs.rmSync(temp, { recursive: true, force: true });
+    };
+    return { origin, token, cookie, wl, stop };
+  } catch (error) {
+    if (child) await stopChild(child);
     fs.rmSync(temp, { recursive: true, force: true });
-  };
-  return { origin, token, cookie, wl, stop };
+    throw error;
+  }
 }
 
 type Reply = { status: number; text: string; json: () => any };
@@ -106,43 +134,106 @@ function answerEvents(wl: string): Record<string, unknown>[] {
     .filter(event => event !== null && event.type === 'answer');
 }
 
-describe('POST /api/work/v1 write op with the real work-write', { skip }, () => {
-  let server: Running;
-  let owner: Record<string, string>;
-  before(async () => { server = await start({}); owner = { cookie: server.cookie, origin: server.origin }; });
-  after(async () => { await server?.stop(); });
+// The PATH the relay hands its child: the absolute entries of its own (an empty or relative entry would search the
+// working directory).
+const SERVER_PATH = `${process.env.PATH ?? ''}::relative/bin`;
+const CHILD_PATH = SERVER_PATH.split(':').filter(entry => entry.startsWith('/')).join(':');
 
-  test('the master Bearer token, a session token, both together with the cookie, and no credential are refused; nothing is written', async () => {
+describe('POST /api/work/v1 write op credentials (stand-in programs, no build needed)', { skip: credentialSkip }, () => {
+  let server: Running;
+  let writer: Placeholder;
+  const programs = credentialSkip ? '' : fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-work-write-stand-ins-'));
+  before(async () => {
+    writer = placeholderProgram(programs, 'work-write');
+    const reader = placeholderProgram(programs, 'work-read');
+    server = await start({ MESH_WORK_WRITE_CMD: writer.command, MESH_WORK_READ_CMD: reader.command, PATH: SERVER_PATH });
+  });
+  beforeEach(() => writer.reset());
+  after(async () => { await server?.stop(); fs.rmSync(programs, { recursive: true, force: true }); });
+
+  test('the master Bearer token, a session token, both together with the cookie, and no credential are refused before the writer runs', async () => {
     for (const headers of [
       { authorization: `Bearer ${server.token}` },
       { authorization: 'MeshSession not-a-real-token' },
       { cookie: server.cookie, authorization: `Bearer ${server.token}` },
       { cookie: server.cookie, authorization: 'MeshSession not-a-real-token' },
+      { origin: server.origin },
       {},
     ]) {
       const reply = await post(server.origin, answer(QUESTIONS[0]!, 'yes'), headers);
       assert.equal(reply.status, 401, JSON.stringify(Object.keys(headers)));
     }
-    assert.equal(answerEvents(server.wl).length, 1, 'only the seeded relayed answer');
+    assert.equal(writer.ran(), false, 'the writer never ran');
   });
 
   test('a foreign Origin is refused even with the owner cookie', async () => {
     const reply = await post(server.origin, answer(QUESTIONS[0]!, 'yes'), { cookie: server.cookie, origin: 'https://evil.example' });
     assert.equal(reply.status, 403);
-    assert.equal(answerEvents(server.wl).length, 1);
+    assert.equal(writer.ran(), false);
   });
 
-  test('the owner cookie records the answer as owner-verified; work-read then shows it', async () => {
+  test('a write op that is not sent as application/json is 415, after the credential check', async () => {
+    for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data; boundary=x']) {
+      const reply = await post(server.origin, answer(QUESTIONS[0]!, 'yes'), { cookie: server.cookie, origin: server.origin, 'content-type': type });
+      assert.equal(reply.status, 415, type);
+      const anonymous = await post(server.origin, answer(QUESTIONS[0]!, 'yes'), { 'content-type': type });
+      assert.equal(anonymous.status, 401, `${type} without a credential`);
+    }
+    assert.equal(writer.ran(), false);
+  });
+
+  test('the owner cookie reaches the writer, which gets the absolute entries of the server\'s PATH and nothing else', async () => {
+    const reply = await post(server.origin, answer(QUESTIONS[0]!, 'yes'), { cookie: server.cookie, origin: server.origin });
+    assert.equal(reply.status, 200, reply.text);
+    assert.deepEqual(reply.json(), { schema: 1, placeholder: true });
+    assert.equal(writer.pathSeen(), CHILD_PATH);
+  });
+
+  test('a read op still works with the master token', async () => {
+    assert.equal((await post(server.origin, { op: 'products' }, { authorization: `Bearer ${server.token}` })).status, 200);
+    assert.equal(writer.ran(), false, 'a read op never runs the writer');
+  });
+});
+
+describe('POST /api/work/v1 write op without work-write', { skip: credentialSkip }, () => {
+  let server: Running;
+  const programs = credentialSkip ? '' : fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-work-write-stand-ins-'));
+  before(async () => {
+    server = await start({ MESH_WORK_WRITE_CMD: path.join(os.tmpdir(), 'no-such-work-write'),
+      MESH_WORK_READ_CMD: placeholderProgram(programs, 'work-read').command });
+  });
+  after(async () => { await server?.stop(); fs.rmSync(programs, { recursive: true, force: true }); });
+
+  test('the owner gets 503 not_available; reads still work; the credential check comes first', async () => {
+    const reply = await post(server.origin, answer(QUESTIONS[0]!, 'yes'), { cookie: server.cookie, origin: server.origin });
+    assert.equal(reply.status, 503);
+    assert.deepEqual([reply.json().error.code, reply.json().error.message], ['not_available', 'work-write is not installed']);
+    assert.equal((await post(server.origin, answer(QUESTIONS[0]!, 'yes'), { authorization: `Bearer ${server.token}` })).status, 401);
+    assert.equal((await post(server.origin, { op: 'products' }, { cookie: server.cookie })).status, 200);
+  });
+});
+
+describe('POST /api/work/v1 write op with the real work-write', { skip }, () => {
+  let server: Running;
+  let owner: Record<string, string>;
+  before(async () => { server = await start({}, gitInit); owner = { cookie: server.cookie, origin: server.origin }; });
+  after(async () => { await server?.stop(); });
+
+  test('the owner cookie records the answer as owner-verified and committed; work-read then shows it', async () => {
+    const before = commits(server.wl);
     const reply = await post(server.origin, answer(QUESTIONS[0]!, 'Use <b>8443</b>'), owner);
     assert.equal(reply.status, 200, reply.text);
     assert.deepEqual(reply.json(), { schema: 1, command: 'answer', id: QUESTIONS[0], state: 'answered', owner_verified: true, duplicate: false });
-    const written = answerEvents(server.wl).at(-1)!;
-    assert.deepEqual([written.by, written.via, written.agent, written.session], ['owner', 'owner-web', undefined, undefined]);
+    assert.equal(commits(server.wl), before + 1, 'committed with only HOME, WL_HOME and PATH in its environment');
+    const written = answerEvents(server.wl).filter(event => event.question === QUESTIONS[0]);
+    assert.equal(written.length, 1);
+    assert.deepEqual([written[0]!.by, written[0]!.via, written[0]!.agent, written[0]!.session], ['owner', 'owner-web', undefined, undefined]);
     // Reads keep working with the master token, as before.
     const task = await post(server.origin, { op: 'task', args: { id: 'T-3c4d' } }, { authorization: `Bearer ${server.token}` });
     assert.equal(task.status, 200);
     const question = task.json().questions.find((q: { id: string }) => q.id === QUESTIONS[0]);
     assert.equal(question.state, 'answered');
+    assert.equal(question.owner_answered, true);
     assert.equal(question.answers[0].owner_verified, true);
     assert.equal(question.answers[0].text, 'Use <b>8443</b>');
   });
@@ -187,43 +278,49 @@ describe('POST /api/work/v1 write op with the real work-write', { skip }, () => 
   });
 });
 
-describe('POST /api/work/v1 write op without work-write', { skip }, () => {
+describe('POST /api/work/v1 write op on a tracker that is not a git repository', { skip }, () => {
   let server: Running;
-  before(async () => { server = await start({ MESH_WORK_WRITE_CMD: path.join(os.tmpdir(), 'no-such-work-write') }); });
+  before(async () => { server = await start({}); });
   after(async () => { await server?.stop(); });
 
-  test('the owner gets 503 not_available; reads still work; the credential check comes first', async () => {
+  test('the answer is recorded and the reply says that it is not committed', async () => {
     const reply = await post(server.origin, answer(QUESTIONS[0]!, 'yes'), { cookie: server.cookie, origin: server.origin });
-    assert.equal(reply.status, 503);
-    assert.deepEqual([reply.json().error.code, reply.json().error.message], ['not_available', 'work-write is not installed']);
-    assert.equal((await post(server.origin, answer(QUESTIONS[0]!, 'yes'), { authorization: `Bearer ${server.token}` })).status, 401);
-    assert.equal((await post(server.origin, { op: 'products' }, { cookie: server.cookie })).status, 200);
+    assert.equal(reply.status, 200, reply.text);
+    assert.equal(reply.json().uncommitted, true);
+    assert.equal(answerEvents(server.wl).filter(event => event.question === QUESTIONS[0]).length, 1);
   });
 });
 
-// A real session token, as an agent in a Mesh session holds it (MESH_SESSION_TOKEN): refused for the write op.
-const sessionSkip = skip || (process.env.MESH_PTYHOST_CMD ? false : 'a PTY host (MESH_PTYHOST_CMD) is required for a real session token');
+// A real session token, as an agent in a Mesh session holds it (MESH_SESSION_TOKEN): refused for the write op before
+// the writer (a stand-in here) runs.
+const sessionSkip = credentialSkip || (process.env.MESH_PTYHOST_CMD ? false : 'a PTY host (MESH_PTYHOST_CMD) is required for a real session token');
 
 describe('POST /api/work/v1 write op with a real session token', { skip: sessionSkip }, () => {
   let mesh: HarnessMesh;
   let scratch: string;
-  const saved = process.env.WL_HOME;
+  let writer: Placeholder;
+  const saved = { WL_HOME: process.env.WL_HOME, MESH_WORK_WRITE_CMD: process.env.MESH_WORK_WRITE_CMD };
   before(async () => {
     scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-work-write-session-'));
-    process.env.WL_HOME = tracker(scratch);   // the harness passes the environment on: never the owner's data
+    writer = placeholderProgram(scratch, 'work-write');
+    // The harness passes the environment on: never the owner's data, and the stand-in as the writer.
+    process.env.WL_HOME = tracker(scratch);
+    process.env.MESH_WORK_WRITE_CMD = writer.command;
     mesh = await startHarness({ session: true });
   });
   after(async () => {
     await mesh?.stop();
-    if (saved === undefined) delete process.env.WL_HOME; else process.env.WL_HOME = saved;
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
     fs.rmSync(scratch, { recursive: true, force: true });
   });
 
-  test('an agent session token is 401 and nothing is written', { timeout: 120000 }, async () => {
+  test('an agent session token is 401 and the writer never runs', { timeout: 120000 }, async () => {
     assert.ok(mesh.sessionToken, 'the harness started an agent session');
     const reply = await post(mesh.base, answer(QUESTIONS[0]!, 'agent says yes'),
       { authorization: `MeshSession ${mesh.sessionToken}`, origin: mesh.base });
     assert.equal(reply.status, 401);
-    assert.equal(answerEvents(process.env.WL_HOME!).length, 1);
+    assert.equal(writer.ran(), false);
   });
 });

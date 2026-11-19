@@ -99,7 +99,12 @@ describe('outcomes', () => {
     const result = await api.answer('N-0000a001', 'Use <b>8443</b>');
     assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), { op: 'answer', args: { question: 'N-0000a001', text: 'Use <b>8443</b>' } });
     assert.equal(calls[0]!.init.credentials, 'same-origin');
-    assert.deepEqual(result, { ok: true, value: { id: 'N-0000a001', duplicate: true } });
+    assert.deepEqual(result, { ok: true, value: { id: 'N-0000a001', duplicate: true, uncommitted: false } });
+    // A write whose git commit was skipped or failed is still recorded, and says so; only true counts.
+    for (const [flag, expected] of [[true, true], ['true', false]] as const) {
+      const reply = await fake(200, { id: 'N-0000a001', owner_verified: true, duplicate: false, uncommitted: flag }).api.answer('N-0000a001', 'x');
+      assert.deepEqual(reply, { ok: true, value: { id: 'N-0000a001', duplicate: false, uncommitted: expected } });
+    }
     for (const body of [{ id: 'N-0000a001' }, { id: 'N-0000a001', owner_verified: 'true' }, { owner_verified: true }, []]) {
       const reply = await fake(200, body).api.answer('N-0000a001', 'x');
       assert.equal(reply.ok, false, JSON.stringify(body));

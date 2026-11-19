@@ -51,13 +51,14 @@ function parseBody<T>(parse: (body: unknown) => T | null, body: unknown, status:
   } catch { return fail('shape', status); }
 }
 
-/** The reply of an answer written by work-write: the question id, and whether the same answer was already there. */
-export type AnswerReceipt = Readonly<{ id: string; duplicate: boolean }>;
+/** The reply of an answer written by work-write: the question id, whether the same answer was already there, and
+ *  whether the data repository's git commit was skipped or failed (the answer is recorded all the same). */
+export type AnswerReceipt = Readonly<{ id: string; duplicate: boolean; uncommitted: boolean }>;
 
 function parseReceipt(body: unknown): AnswerReceipt | null {
   if (!isObj(body) || body.owner_verified !== true) return null;
   const id = text(body.id);
-  return id ? { id, duplicate: body.duplicate === true } : null;
+  return id ? { id, duplicate: body.duplicate === true, uncommitted: body.uncommitted === true } : null;
 }
 
 export type WorkApi = Readonly<{

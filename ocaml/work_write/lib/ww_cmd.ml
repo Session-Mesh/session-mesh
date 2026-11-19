@@ -32,27 +32,35 @@ let outside_agent_session getenv =
           agents relay the owner's words with work_answer")
   else Ok ()
 
-let answered qid ~duplicate =
+let answered qid ~duplicate ~uncommitted =
   `Assoc
-    [
-      ("schema", `Int schema_version);
-      ("command", `String "answer");
-      ("id", `String qid);
-      ("state", `String "answered");
-      ("owner_verified", `Bool true);
-      ("duplicate", `Bool duplicate);
-    ]
+    ([
+       ("schema", `Int schema_version);
+       ("command", `String "answer");
+       ("id", `String qid);
+       ("state", `String "answered");
+       ("owner_verified", `Bool true);
+       ("duplicate", `Bool duplicate);
+     ]
+    @ if uncommitted then [ ("uncommitted", `Bool true) ] else [])
 
-let outcome = function
-  | Q.Recorded qid -> Ok (answered qid ~duplicate:false)
-  | Q.Same_answer qid -> Ok (answered qid ~duplicate:true)
+let outcome ~uncommitted = function
+  | Q.Recorded qid -> Ok (answered qid ~duplicate:false ~uncommitted)
+  | Q.Same_answer qid -> Ok (answered qid ~duplicate:true ~uncommitted)
   | Q.Already_answered qid ->
       Error (E.make "already_answered" (Printf.sprintf "question %s already has another answer from the owner" qid))
 
+(* The worklog reports a commit that was skipped or failed through [warn],
+   after the event is durable: the answer stands, and the reply says that it
+   is not committed (the reason, which may name paths, goes to standard
+   error only). *)
 let run ?(getenv = Sys.getenv_opt) (Ww_request.Answer { question; text }) =
-  let* ctx = Result.map_error of_worklog (W.Ctx.of_env ~getenv ~warn:ignore ()) in
+  let problems = ref [] in
+  let warn why = problems := why :: !problems in
+  let* ctx = Result.map_error of_worklog (W.Ctx.of_env ~getenv ~warn ()) in
   let* recorded = lift (Q.answer_once ctx ~owner_web:true ~question ~text ~by:Q.owner_by ()) in
-  outcome recorded
+  List.iter (fun why -> prerr_endline ("work-write: " ^ E.safe_text why)) (List.rev !problems);
+  outcome ~uncommitted:(!problems <> []) recorded
 
 let exit_code (e : E.t) =
   match e.code with

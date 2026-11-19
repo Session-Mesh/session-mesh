@@ -59,7 +59,9 @@ type Parts = Readonly<{ form: HTMLFormElement; input: HTMLTextAreaElement; send:
 function parts(ctx: ViewContext, questionId: string): Parts {
   const suffix = questionId.replace(/[^A-Za-z0-9-]/g, '_');
   const input = el('textarea', 'work-answer-input');
-  Object.assign(input, { id: `work-answer-input-${suffix}`, rows: 3, maxLength: MAX_ANSWER, spellcheck: true });
+  // maxLength counts UTF-16 units: twice the bound lets 2000 characters outside the BMP (emoji) in; localFailure
+  // then checks the bound in characters, as the writer does.
+  Object.assign(input, { id: `work-answer-input-${suffix}`, rows: 3, maxLength: 2 * MAX_ANSWER, spellcheck: true });
   const status = el('p', 'work-answer-status');
   Object.assign(status, { id: `work-answer-status-${suffix}` });
   status.setAttribute('role', 'status');

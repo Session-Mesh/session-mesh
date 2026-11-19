@@ -1837,14 +1837,26 @@ def work_command(program):
 
 
 def work_program(request, body):
-    """work-write for a write op, with the owner's browser cookie only (never a bearer); else work-read."""
+    """work-write for a write op, with the owner's browser cookie only (never a bearer) and a JSON content type,
+    as the config routes ask; else work-read."""
     try:
         write = json.loads(body).get("op") in WORK_WRITE_OPS
     except (ValueError, AttributeError, TypeError, RecursionError):  # the program refuses it
         write = False
     if write:
         _require_owner_cookie(request)
+        if request.content_type != "application/json":
+            raise web.HTTPUnsupportedMediaType(text="Content-Type must be application/json")
     return "work-write" if write else "work-read"
+
+
+def work_child_env():
+    """HOME and WL_HOME, and the absolute entries of PATH so that work-write finds git where the owner has it (an
+    empty or relative entry would search the server's working directory). No token or session variable."""
+    env = {k: os.environ[k] for k in ("HOME", "WL_HOME") if k in os.environ}
+    if path := os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep) if os.path.isabs(p)):
+        env["PATH"] = path  # without one, the libc default path
+    return env
 
 
 async def api_work(request):
@@ -1864,7 +1876,7 @@ async def api_work(request):
             proc = await asyncio.create_subprocess_exec(
                 command, "--request", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL, limit=2 * 1024 * 1024, start_new_session=True,
-                env={k: os.environ[k] for k in ("HOME", "WL_HOME") if k in os.environ})
+                env=work_child_env())
             proc.stdin.write(body)
             proc.stdin.close()
             limit = WORK_TIMEOUT if program == "work-read" else max(WORK_TIMEOUT, 30.0)  # a write may wait for the lock and git

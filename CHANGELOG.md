@@ -28,7 +28,12 @@ before 1.0, a minor version may change behaviour.
   the three platforms (33 release files with the macOS bundle, 32 without; 30 and 29 before);
   `install.sh` checks nine programs and links `app/bin/work-write` for a release installed from
   its native programs. Without `work-write` the form gives way to a note. The relay's body bound grows from 4096 to
-  16 384 bytes (`work-read` keeps its own 4096-byte bound). `work_answer`'s description, the
+  16 384 bytes (`work-read` keeps its own 4096-byte bound); the write op also needs
+  `Content-Type: application/json` (415 otherwise), and the programs get the absolute entries of
+  the server's `PATH`, so that `work-write` finds `git`. A commit that fails or is skipped no
+  longer passes silently: the reply carries `uncommitted: true` and the sheet says the answer is
+  not in the git history yet. The five answers shown for a question always include the owner's
+  latest one, and `owner_answered: true` marks a question the owner answered. `work_answer`'s description, the
   server instructions and the agent guide now tell agents that the owner can answer in the view
   and that they record the owner's words only when told in the conversation. See
   [docs/work-mcp.md](docs/work-mcp.md#answering-from-the-projects-view).
@@ -44,12 +49,12 @@ before 1.0, a minor version may change behaviour.
   one answer. The data format is unchanged (the `answer` event already existed); the event now
   also carries the relaying session's `agent` and `session`, returned as `relayed_by_agent` and
   `relayed_by_session` with each answer. The recording logic is the library function
-  `Work_questions.answer_once`, which a later answer button in the Projects view is meant to call
-  as well; it refuses control, invisible and bidirectional characters itself, not only through
+  `Work_questions.answer_once`, which the Projects view's answer form also calls (through
+  `work-write`); it refuses control, invisible and bidirectional characters itself, not only through
   the tool's argument check. The task sheet now shows each answer as the owner's answer relayed
   by a named session and not verified (an `answered_by` other than `owner` appears only as the
-  stated answerer), and tells the owner to answer an open question in an agent session with
-  `mesh-work`; answering from a button comes later. See [docs/work-mcp.md](docs/work-mcp.md#answering-a-question).
+  stated answerer), and offers the owner to answer an open question there or in an agent session
+  with `mesh-work` (see the entry on answering from the task sheet). See [docs/work-mcp.md](docs/work-mcp.md#answering-a-question).
 - **A new Projects view over the project tracker.** The Projects mode now opens on a read-only
   view of the tracker that agents write with `mesh-work`: the products and their active projects
   with progress and blocker counts, a project in four tabs ("Pick up", "Board", "Timeline",

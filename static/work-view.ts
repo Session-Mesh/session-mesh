@@ -182,13 +182,15 @@ class WorkView implements WorkViewController {
 
   /** Send the owner's answer; on success or "already answered", read the task again so the answer shows as recorded. */
   private async submitAnswer(question: string, answerText: string): Promise<AnswerFailure | null> {
-    const task = this.selected;
+    const task = this.selected, token = this.generation;
     const result = await this.api.answer(question, answerText);
     if (!result.ok && result.error.kind !== 'conflict') {
       if (result.error.kind === 'not-available') this.writeUnavailable = true;
       return failureOfKind(result.error.kind);
     }
-    const notice = this.t(result.ok ? 'work.answer.sent' : 'work.answer.already');
+    // The write stands whatever happened meanwhile; a view closed (or reloaded) since shows nothing and reads nothing.
+    if (token !== this.generation) return null;
+    const notice = this.t(!result.ok ? 'work.answer.already' : result.value.uncommitted ? 'work.answer.sentUncommitted' : 'work.answer.sent');
     if (task !== null && task === this.selected) await this.selectTask(task, { question, notice });
     else this.announce(notice);
     return null;
