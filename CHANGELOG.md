@@ -16,6 +16,11 @@ before 1.0, a minor version may change behaviour.
   that the view is not available. The previous workspace stays behind the "Old view" button, and
   is shown once per page load when `work-read` is not installed. See
   [The Projects view and the project tracker](docs/features.md#the-projects-view-and-the-project-tracker).
+- **A project configuration edit that meets another writer's lock reports `busy`, never
+  `invalid-config`.** When the other writer released its lock between the failed exclusive create
+  and the inspection of the lock file, the vanished lock was reported as a missing configuration.
+  The edit now refuses `busy`, and the caller retries with a fresh revision as for any other busy
+  lock.
 - **An idle Codex started as `codex resume <id>` gets its conversation id from its launch
   arguments.** Such a session that holds no rollout file open had no conversation id, so a PTY host
   restart brought it back as a plain shell. The id is now read from the launch arguments of the
