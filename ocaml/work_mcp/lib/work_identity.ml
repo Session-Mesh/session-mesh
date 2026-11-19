@@ -14,9 +14,9 @@ let non_empty getenv name = match getenv name with Some "" | None -> None | Some
 let first_set getenv pairs =
   List.find_map (fun (name, agent) -> Option.map (fun _ -> agent) (non_empty getenv name)) pairs
 
-(* The agent kind. The Mesh sets no variable for it, so it is read from the
-   markers the agents leave in their own environment; WL_AGENT (read by the
-   library) wins when set. *)
+(* The agent kind. An agent the Mesh starts gets WL_AGENT (read by the
+   library) in the server entry, which wins when set; otherwise it is read from
+   the markers the agents leave in their own environment. *)
 let agent_kind getenv =
   if non_empty getenv "WL_AGENT" <> None then None
   else
