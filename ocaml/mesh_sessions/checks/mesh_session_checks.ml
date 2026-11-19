@@ -7,7 +7,6 @@
 
 type registry_source = Chosen | Hook | Observed
 type source = Registry of registry_source | Open | Launch | Guessed
-type session = { sid : int; agent_pid : int }
 type 'key claim = { key : 'key; id : string; source : source; holds_open : bool }
 type verdict = Keep | Drop | Contested
 

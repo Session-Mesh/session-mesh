@@ -51,3 +51,9 @@ val header : id:string -> cwd:string -> string
 (** A [session_meta] first line (with its newline). *)
 
 val replace_all : sub:string -> by:string -> string -> string
+
+val session : int -> Mesh_agent.session
+(** The listed session of the agent of this pid, named [s<pid>]. *)
+
+val describe : Mesh_agent_codex.t -> Mesh_agent_round.t -> int -> Mesh_agent.fields
+(** Describe the process of this pid for {!session}. *)

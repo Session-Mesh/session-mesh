@@ -85,12 +85,23 @@ let codex ?(ppid = 50) ?(argv = [ "codex" ]) ?(cwd = Some "/w") ?(files = Ok [])
 
 let shell = { (codex 50) with comm = "bash"; ppid = 1 }
 
-(* The fields of each process after one prepared round. *)
+(* The fields of each process after one round: prepare, describe, then the
+   corrections of the cross-session check. *)
 let describe ?(config = Fake_codex.config ~btime ~now) home processes pids =
   let round = Result.get_ok (Mesh_agent_round.read (Fake_codex.platform ~btime (shell :: processes))) in
   let adapter = Mesh_agent_codex.create_with config (Mesh_agent_roots.of_home home) in
   Mesh_agent_codex.prepare adapter round;
-  List.map (fun pid -> Mesh_agent_codex.describe adapter round (Option.get (Mesh_agent_round.find round pid))) pids
+  let described =
+    List.map
+      (fun pid ->
+        let process = Option.get (Mesh_agent_round.find round pid) in
+        { Mesh_agent.session = Fake_codex.session pid; process; fields = Fake_codex.describe adapter round pid })
+      pids
+  in
+  let corrected = Mesh_agent_codex.check adapter round described in
+  List.map
+    (fun (row : Mesh_agent.described) -> Option.value ~default:row.fields (List.assoc_opt row.session.name corrected))
+    described
 
 let source fields = List.assoc_opt "identity_source" fields
 
@@ -108,15 +119,15 @@ let test_fail_closed () =
       let adapter = Mesh_agent_codex.create_with (Fake_codex.config ~btime ~now) (Mesh_agent_roots.of_home home) in
       Mesh_agent_codex.prepare adapter round;
       Alcotest.(check bool) "incomplete table: no guess" true
-        (Mesh_agent_codex.describe adapter round (Option.get (Mesh_agent_round.find round 100)) = []);
+        (Fake_codex.describe adapter round 100 = []);
       let other = Result.get_ok (Mesh_agent_round.read (Fake_codex.platform ~btime [ shell; codex 100 ])) in
       Alcotest.(check bool) "unprepared round: no identity" true
-        (Mesh_agent_codex.describe adapter other (Option.get (Mesh_agent_round.find other 100)) = []))
+        (Fake_codex.describe adapter other 100 = []))
 
 let test_registry_hook () =
   Support.with_directory (fun home ->
       let held = Fake_codex.write_rollout ~home ~name:"a" ~mtime:(now -. 10.) (first_line id_a) in
-      let registry (session : Checks.session) = if session.agent_pid = 100 then Some (id_a, Checks.Chosen) else None in
+      let registry (session : Mesh_agent.session) = if session.name = "s100" then Some (id_a, Checks.Chosen) else None in
       let config = { (Fake_codex.config ~btime ~now) with registry_lookup = registry } in
       let rows = describe ~config home [ codex 100; codex ~ppid:1 ~cwd:(Some "/") ~files:(Ok [ (3, held) ]) 200 ] [ 100; 200 ] in
       Alcotest.(check bool) "registered id, no heuristic" true
@@ -132,7 +143,7 @@ let test_incremental () =
       let processes = [ codex ~files:(Ok [ (3, path) ]) 100 ] in
       let round = Result.get_ok (Mesh_agent_round.read (Fake_codex.platform ~btime (shell :: processes))) in
       let adapter = Mesh_agent_codex.create_with (Fake_codex.config ~btime ~now) (Mesh_agent_roots.of_home home) in
-      let rows () = Mesh_agent_codex.prepare adapter round; Mesh_agent_codex.describe adapter round (Option.get (Mesh_agent_round.find round 100)) in
+      let rows () = Mesh_agent_codex.prepare adapter round; Fake_codex.describe adapter round 100 in
       for i = 1 to 5 do
         Support.append_file path (message i);
         ignore (rows ())

@@ -24,7 +24,7 @@ let limits =
 type config = {
   now : unit -> float;
   boot_time : unit -> float option;
-  registry_lookup : Checks.session -> (string * Checks.registry_source) option;
+  registry_lookup : Mesh_agent.session -> (string * Checks.registry_source) option;
 }
 
 let read_boot_time () =
@@ -81,7 +81,6 @@ let start_time config (process : Round.process) =
   | Macos -> Int64.to_float process.incarnation /. 1e6
   | Other _ -> 0.
 
-let session (process : Round.process) = { Checks.sid = process.sid; agent_pid = process.pid }
 
 (* The agent of each terminal session that runs a Codex process, when it is Codex. *)
 let participants round codex_pids =
@@ -100,11 +99,11 @@ let claims identities =
       | _ -> None)
     identities
 
-let resolve adapter context round =
+(* The heuristic identities of the round, with Python's duplicate-id rules. *)
+let resolve context round =
   let identities =
     List.map
-      (fun (process : Round.process) ->
-        (process.pid, Identity.conversation context ~registered:(adapter.config.registry_lookup (session process)) process))
+      (fun (process : Round.process) -> (process.pid, Identity.conversation context ~registered:None process))
       (participants round (Mesh_agent_codex_view.codex_pids context.view))
   in
   let verdicts = Checks.check (claims identities) in
@@ -126,15 +125,18 @@ let prepare adapter round =
       start_time = start_time adapter.config;
     }
   in
-  let prepared = { round; context; outcomes = resolve adapter context round } in
+  let prepared = { round; context; outcomes = resolve context round } in
   Mutex.protect adapter.lock (fun () ->
       adapter.prepared <- List.filteri (fun index _ -> index < 4) (prepared :: adapter.prepared))
 
-let identity_fields { identity; verdict } =
+let verdict_fields verdict (id, source) =
   match verdict with
-  | Checks.Keep -> [ ("session_id", identity.id); ("identity_source", `String (Identity.source_name identity.source)) ]
+  | Checks.Keep -> [ ("session_id", id); ("identity_source", source) ]
   | Drop -> [ ("session_id", `Null); ("identity_source", `Null) ]
   | Contested -> [ ("session_id", `Null); ("identity_source", `String "contested") ]
+
+let identity_fields { identity; verdict } =
+  verdict_fields verdict (identity.id, `String (Identity.source_name identity.source))
 
 (* [_codex_transcript]; an unreadable rollout gives Python's empty answer. *)
 let transcript_fields adapter path =
@@ -146,21 +148,65 @@ let transcript_fields adapter path =
         ("said", Fold.said state) ]
   | None -> [ ("last", `Null); ("updated", `Int 0); ("cwd", `Null); ("status", `String "idle"); ("said", `Null) ]
 
-let outcome adapter prepared (process : Round.process) =
-  match Hashtbl.find_opt prepared.outcomes process.pid with
-  | Some outcome -> outcome
-  | None ->
-      (* A Codex the kernel does not name [codex]: described alone, without the checks. *)
-      Identity.conversation prepared.context ~registered:(adapter.config.registry_lookup (session process)) process
-      |> Option.map (fun identity -> { identity; verdict = Checks.Keep })
+(* A registered identity first; else the round's; else (a Codex the kernel does
+   not name [codex]) the heuristic alone, without the checks. *)
+let outcome adapter prepared session (process : Round.process) =
+  let alone registered =
+    Identity.conversation prepared.context ~registered process |> Option.map (fun identity -> { identity; verdict = Checks.Keep })
+  in
+  match (adapter.config.registry_lookup session, Hashtbl.find_opt prepared.outcomes process.pid) with
+  | (Some _ as registered), _ -> alone registered
+  | None, Some outcome -> outcome
+  | None, None -> alone None
 
-let describe adapter round process =
-  let prepared = Mutex.protect adapter.lock (fun () -> List.find_opt (fun p -> p.round == round) adapter.prepared) in
-  match Option.bind prepared (fun prepared -> outcome adapter prepared process) with
+let prepared_for adapter round =
+  Mutex.protect adapter.lock (fun () -> List.find_opt (fun p -> p.round == round) adapter.prepared)
+
+let describe adapter round session process =
+  match Option.bind (prepared_for adapter round) (fun prepared -> outcome adapter prepared session process) with
   | None -> []
   | Some outcome ->
       identity_fields outcome
       @ (match outcome.identity.path with Some path -> transcript_fields adapter path | None -> [])
+
+let claim_source = function
+  | `String "open_rollout" -> Some Checks.Open
+  | `String "argv_resume" -> Some Checks.Launch
+  | `String "cwd_unique" -> Some Checks.Guessed
+  | `String "chosen" -> Some (Checks.Registry Chosen)
+  | `String "hook" -> Some (Checks.Registry Hook)
+  | `String "observed" -> Some (Checks.Registry Observed)
+  | _ -> None
+
+let holds prepared pid id =
+  List.exists
+    (fun path ->
+      match prepared.context.describe_path path with Some r -> r.header.id = `String id | None -> false)
+    (Option.value ~default:[] (Mesh_agent_codex_view.open_rollouts prepared.context.view pid))
+
+(* Decision I4 on the ids a registered identity shares; the other duplicates
+   were settled in [prepare], before any row was described. *)
+let check adapter round (described : Mesh_agent.described list) =
+  match prepared_for adapter round with
+  | None -> []
+  | Some prepared ->
+      let field key (row : Mesh_agent.described) = Option.value ~default:`Null (List.assoc_opt key row.fields) in
+      let claims =
+        List.filter_map
+          (fun (row : Mesh_agent.described) ->
+            match (field "session_id" row, claim_source (field "identity_source" row)) with
+            | `String id, Some source when id <> "" ->
+                Some { Checks.key = row; id; source; holds_open = holds prepared row.process.pid id }
+            | _ -> None)
+          described
+      in
+      let registered = List.filter_map (fun (c : _ Checks.claim) -> match c.source with Registry _ -> Some c.id | _ -> None) claims in
+      Checks.check (List.filter (fun (c : _ Checks.claim) -> List.mem c.id registered) claims)
+      |> List.filter_map (fun ((row : Mesh_agent.described), verdict) ->
+             if verdict = Checks.Keep then None
+             else
+               let replaced = verdict_fields verdict (`Null, `Null) in
+               Some (row.session.name, List.map (fun (key, value) -> (key, Option.value ~default:value (List.assoc_opt key replaced))) row.fields))
 
 let with_config config : (module Mesh_agent.ADAPTER with type t = t) =
   (module struct
@@ -171,4 +217,5 @@ let with_config config : (module Mesh_agent.ADAPTER with type t = t) =
     let prepare = prepare
     let resize = resize
     let describe = describe
+    let check = check
   end)

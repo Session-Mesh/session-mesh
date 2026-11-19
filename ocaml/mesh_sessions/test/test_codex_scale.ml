@@ -79,7 +79,7 @@ let test_warm_round () =
       let describe_all () =
         let round = Result.get_ok (Mesh_agent_round.read platform) in
         Mesh_agent_codex.prepare adapter round;
-        List.init sessions (fun i -> Mesh_agent_codex.describe adapter round (Option.get (Mesh_agent_round.find round (10_000 + i))))
+        List.init sessions (fun i -> Fake_codex.describe adapter round (10_000 + i))
       in
       let first = describe_all () in
       let before = Mesh_agent_codex.counters adapter in

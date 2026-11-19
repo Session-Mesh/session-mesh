@@ -15,24 +15,25 @@
     read ({!Mesh_agent_codex_view}), the recent rollouts are walked once
     ({!Mesh_agent_codex_rollouts}, headers cached across rounds), the
     conversation of every terminal session whose agent is Codex is resolved,
-    and the checks between sessions run on them ({!Mesh_session_checks}):
-    a duplicated id is withdrawn before any row is described. {!describe}
+    and Python's duplicate-id rules run on them ({!Mesh_session_checks}):
+    such a duplicate is withdrawn before any row is described. {!describe}
     then folds the rollout, from the previous cursor when it grew
     ({!Mesh_agent_transcripts}). A round whose preparation did not finish
     gives Codex rows without an identity.
 
     {b The identity registry} is not read yet: {!config.registry_lookup} is
     where it plugs in. A session it answers for takes the registered id with
-    no heuristic, and the checks apply decision I4 to it. *)
+    no heuristic in {!describe}, and {!check}, after every row of the round,
+    applies decision I4 to the ids a registered identity shares. *)
 
 type config = {
   now : unit -> float;  (** Seconds since the epoch ([Unix.gettimeofday]). *)
   boot_time : unit -> float option;
       (** Linux: the boot time ([btime] of [/proc/stat]), from which a process's
           start time is computed; read once. *)
-  registry_lookup :
-    Mesh_session_checks.session -> (string * Mesh_session_checks.registry_source) option;
-      (** The registered conversation of a session; [fun _ -> None] for now. *)
+  registry_lookup : Mesh_agent.session -> (string * Mesh_session_checks.registry_source) option;
+      (** The registered conversation of a listed session (keyed by its
+          [name] and [created]); [fun _ -> None] for now. *)
 }
 
 val default_config : config

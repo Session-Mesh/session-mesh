@@ -42,7 +42,7 @@ let rows spec name =
       Mesh_agent_codex.prepare adapter round;
       List.map
         (fun (label, pid) ->
-          let fields = Mesh_agent_codex.describe adapter round (Option.get (Mesh_agent_round.find round pid)) in
+          let fields = Fake_codex.describe adapter round pid in
           (label, normalize ~root ~now (`Assoc (("type", `String "codex") :: fields))))
         built.labels)
 

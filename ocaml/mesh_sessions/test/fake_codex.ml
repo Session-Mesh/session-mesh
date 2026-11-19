@@ -170,5 +170,10 @@ let build spec name ~root ~now =
   let labels = List.map (fun (label, pid) -> (label, U.to_int pid)) (U.to_assoc (U.member "labels" scenario)) in
   { platform = platform ~btime:(btime spec) processes; home; root; labels }
 
+let session pid = { Mesh_agent.name = Printf.sprintf "s%d" pid; created = 1.5; pid }
+
+let describe adapter round pid =
+  Mesh_agent_codex.describe adapter round (session pid) (Option.get (Mesh_agent_round.find round pid))
+
 let config ~btime ~now =
   { Mesh_agent_codex.now = (fun () -> now); boot_time = (fun () -> Some btime); registry_lookup = (fun _ -> None) }
