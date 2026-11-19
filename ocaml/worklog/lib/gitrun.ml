@@ -188,10 +188,15 @@ let in_progress_markers =
   [ ("rebase-merge", "rebase"); ("rebase-apply", "rebase"); ("MERGE_HEAD", "merge");
     ("CHERRY_PICK_HEAD", "cherry-pick"); ("REVERT_HEAD", "revert") ]
 
-let is_own_toplevel root =
+(* Exit code 127 is a git that could not be started (not found on PATH); git
+   itself exits 128 outside a repository. *)
+let own_toplevel root =
   match run ~dir:root [ "rev-parse"; "--show-toplevel" ] with
-  | 0, top -> (try Unix.realpath (first_line top) = Unix.realpath root with Unix.Unix_error _ -> false)
-  | _ -> false
+  | 0, top ->
+      if (try Unix.realpath (first_line top) = Unix.realpath root with Unix.Unix_error _ -> false) then Ok ()
+      else Error "auto-commit skipped: the data repository is not a git repository"
+  | 127, _ -> Error "auto-commit skipped: git was not found"
+  | _ -> Error "auto-commit skipped: the data repository is not a git repository"
 
 let operation_in_progress root =
   match run ~dir:root [ "rev-parse"; "--absolute-git-dir" ] with
@@ -237,8 +242,9 @@ let stage_and_commit root rel message =
 
 let commit_paths ~root ~paths ~message =
   if paths = [] then Ok false
-  else if not (is_own_toplevel root) then Error "auto-commit skipped: the data repository is not a git repository"
   else
+    let ( let* ) = Result.bind in
+    let* () = own_toplevel root in
     match operation_in_progress root with
     | Some busy -> Error (Printf.sprintf "auto-commit skipped: a %s is in progress" busy)
     | None -> stage_and_commit root (List.map (relative root) paths) message

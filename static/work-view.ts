@@ -46,6 +46,24 @@ function markSelected(scope: HTMLElement, id: string | null): void {
   }
 }
 
+/** The unsent text under each question but `except` (the one just answered), by question id. */
+function unsentDrafts(scope: HTMLElement, except: string): Map<string, string> {
+  const drafts = new Map<string, string>();
+  for (const slot of scope.querySelectorAll<HTMLElement>('[data-work-answer-slot]')) {
+    const id = slot.dataset.workAnswerSlot, input = slot.querySelector<HTMLTextAreaElement>('.work-answer-input');
+    if (id && id !== except && input?.value) drafts.set(id, input.value);
+  }
+  return drafts;
+}
+
+/** Put the drafts back under the questions that still offer the form. */
+function restoreDrafts(scope: HTMLElement, drafts: ReadonlyMap<string, string>): void {
+  for (const slot of scope.querySelectorAll<HTMLElement>('[data-work-answer-slot]')) {
+    const draft = drafts.get(slot.dataset.workAnswerSlot ?? ''), input = slot.querySelector<HTMLTextAreaElement>('.work-answer-input');
+    if (draft !== undefined && input) input.value = draft;
+  }
+}
+
 function focusFirst(node: HTMLElement | null): void {
   if (!node) return;
   if (!node.matches('button, a, input, select, textarea, [tabindex]')) node.tabIndex = -1;
@@ -220,6 +238,8 @@ class WorkView implements WorkViewController {
       return;
     }
     const body = renderDetail(this.ctx, result.value);
+    // The reload after an answer keeps what the owner was typing under the other questions.
+    if (after) restoreDrafts(body, unsentDrafts(view.detailSlot, after.question));
     view.detailSlot.replaceChildren(this.closeButton(view), body);
     const question = after ? body.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(after.question)}"]`) : null;
     focusFirst(question ?? body.querySelector<HTMLElement>('.work-detail-heading'));

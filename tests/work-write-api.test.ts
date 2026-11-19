@@ -178,6 +178,10 @@ describe('POST /api/work/v1 write op credentials (stand-in programs, no build ne
       assert.equal(reply.status, 415, type);
       const anonymous = await post(server.origin, answer(QUESTIONS[0]!, 'yes'), { 'content-type': type });
       assert.equal(anonymous.status, 401, `${type} without a credential`);
+      // The master token passes the auth middleware: only the handler's credential check, made before the
+      // content-type check, gives 401 here.
+      const bearer = await post(server.origin, answer(QUESTIONS[0]!, 'yes'), { authorization: `Bearer ${server.token}`, 'content-type': type });
+      assert.equal(bearer.status, 401, `${type} with the master token`);
     }
     assert.equal(writer.ran(), false);
   });
@@ -187,6 +191,8 @@ describe('POST /api/work/v1 write op credentials (stand-in programs, no build ne
     assert.equal(reply.status, 200, reply.text);
     assert.deepEqual(reply.json(), { schema: 1, placeholder: true });
     assert.equal(writer.pathSeen(), CHILD_PATH);
+    // The server's own environment holds MESH_* and XDG_* variables (and, in real use, tokens): none reaches the child.
+    assert.deepEqual(writer.envNamesSeen(), ['HOME', 'PATH', 'WL_HOME']);
   });
 
   test('a read op still works with the master token', async () => {

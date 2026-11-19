@@ -61,9 +61,22 @@ let keep_tail n items =
   let total = List.length items in
   List.filteri (fun i _ -> i >= total - n) items
 
+let owner_verified = function `Assoc m -> List.assoc_opt "owner_verified" m = Some (`Bool true) | _ -> false
+
+(* The newest [n] answers, except that the last owner-verified one is always
+   kept (then with the newest [n - 1]), as [Work_render.capped_answers] does:
+   [owner_answered] must keep pointing at an answer in the list. *)
+let keep_answers n items =
+  let total = List.length items in
+  let owner = List.fold_left (fun (i, found) a -> (i + 1, if owner_verified a then Some i else found)) (0, None) items |> snd in
+  match owner with
+  | Some o when o < total - n -> List.filteri (fun i _ -> i = o || i > total - n) items
+  | _ -> keep_tail n items
+
 (* One list halved, keeping the head or the tail: [<key>_omitted] counts the
    items cut, over the earlier cuts. Lists are newest first, except
-   [answers], which is in time order and keeps its newest (last) items. *)
+   [answers], which is in time order and keeps its newest (last) items and
+   the owner's answer. *)
 let halve_list ~keep fields key items =
   let kept = keep (List.length items / 2) items in
   let cut = List.length items - List.length kept in
@@ -91,7 +104,7 @@ let halve_questions fields items =
 let halve fields key items =
   match key with
   | "my_questions" -> halve_questions fields items
-  | "answers" -> halve_list ~keep:keep_tail fields key items
+  | "answers" -> halve_list ~keep:keep_answers fields key items
   | _ -> halve_list ~keep:keep_head fields key items
 
 let largest_first pairs =
