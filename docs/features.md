@@ -50,7 +50,7 @@ button) and none of `Ctrl`, `Meta` or `Alt` is held.
 | Terminal | `Shift+Enter` or `Alt+Enter` | New line without sending. The mesh sends what the agent expects: a line feed for Codex, `Esc` then `Enter` (Meta+Enter) for the others. |
 | Terminal | `Ctrl+C` | Copies when text is selected; otherwise sends `^C`. |
 | Terminal | `Ctrl+Shift+C` | Always copies the selection. |
-| Terminal | `Ctrl+Shift+X` (`Cmd+Shift+X` on macOS) | Copies the selection as a shell command, so that pasting it into bash or zsh runs it as one command. Rows the terminal soft-wrapped are joined with no break; a line break gets a trailing `\` only when the next row is indented and starts with an option (`-x`, `--long`), and every row after the first one in the same block of non-blank rows is such an option row (or follows a row that already ends in `\`). A continuation row that does not start with an option is not joined, and nothing is ever guessed from indentation: when unsure, the text is copied as it is. A row that already ends in `\`, separate commands, comments, heredocs, quoted multi-line strings and rows ending in an operator are left as they are. A selection that starts with a prompt, or ends inside a quote or heredoc, is copied unchanged. When the rows cannot be rebuilt (a column selection) the plain selection is copied. The usual copy is not affected. |
+| Terminal | `Ctrl+Shift+X` (`Cmd+Shift+X` on macOS) | Copies the selection as a shell command, so that pasting it into bash or zsh runs it as one command. Rows the terminal soft-wrapped are joined with no break; a line break gets a trailing `\` only when the next row is indented and starts with an option (`-x`, `--long`), and every row after the first one in the same block of non-blank rows is such an option row (or follows a row that already ends in `\`). A continuation row that does not start with an option is not joined, and nothing is ever guessed from indentation: when unsure, the text is copied as it is. A row that already ends in `\`, separate commands, comments, heredocs, quoted multi-line strings and rows ending in an operator are left as they are. A selection that starts with a prompt, or ends inside a quote or heredoc, is copied unchanged. When the rows cannot be rebuilt (a column selection) the plain selection is copied. The usual copy is not affected, unless the `copyAsShell` preference is on (see [Working in a terminal](#working-in-a-terminal)). |
 | Terminal | `Ctrl+V` | Pastes text; when the program in the terminal supports bracketed paste, multi-line text arrives in one block. Pasting a file or an image uploads it instead (see [Working in a terminal](#working-in-a-terminal)). |
 | Terminal | Right-click on a selection | Copies it. |
 | Terminal | `Shift`+drag (`Option`+drag on macOS) | Selects text even when the program in the terminal captures the mouse. |
@@ -384,6 +384,13 @@ session had before this browser attached, then rewrapped to the browser's width.
   user gesture in a secure context (HTTPS or localhost); when the browser refuses, the page says
   so once and keeps working. `Ctrl+C`, `Ctrl+Shift+C`, right-click and the phone "Copy" button
   still copy as before, and clear the selection afterwards.
+- **Copy as shell command for every copy.** A per-browser preference, off by default, kept in the
+  client store under the key `copyAsShell` (only `true` turns it on; the Configuration dialog has
+  no control for it yet). When it is on, `Ctrl+C`, `Ctrl+Shift+C`, right-click, the phone "Copy"
+  button and copy on select write what `Ctrl+Shift+X` writes (see the shortcut table): soft-wrapped
+  rows joined, and a trailing `\` added only before an indented option row. The selection itself
+  is not changed. Whenever the rows cannot be rebuilt from the terminal (a column selection, a
+  phone selection the terminal no longer holds), the text is copied as it is.
 - **Garbled display.** "Redraw the terminal" (pane "More" menu or session menu) briefly changes the
   terminal size so the program redraws itself. When several browsers show the same session, the
   session has the size of the one that sent it last, and output drawn for another width can
