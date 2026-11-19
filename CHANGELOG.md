@@ -17,6 +17,12 @@ before 1.0, a minor version may change behaviour.
   every row after the first in the block is such a row. A continuation that does not start with
   an option is not joined, nothing is guessed from indentation, and separate commands, heredocs,
   quoted strings and comments are left unchanged. The usual copy is unchanged.
+- **Releases ship `work-read` and `work-mcp`.** Every bundle now holds `bin/work-read` and
+  `bin/work-mcp`, and a release publishes both programs for `linux-x86_64`, `linux-aarch64`
+  (static executables) and `macos-arm64`, checksummed and attested like the others: 30 files
+  instead of 24 (29 instead of 23 without the macOS bundle). A release install therefore answers
+  `/api/work/v1` instead of a 503; a release installed from its native programs links
+  `app/bin/work-read` to its own. See [docs/work-read.md](docs/work-read.md).
 
 ## 0.1.1
 

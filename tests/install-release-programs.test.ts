@@ -32,6 +32,8 @@ describe('a release without a bundle for this platform', () => {
     }
     assert.equal(fs.readFileSync(path.join(release, 'app/server.py'), 'utf8'), '# server of v1.0.0\n');
     assert.equal(fs.readlinkSync(path.join(release, 'app/bin/mesh-board-mcp')), '../../bin/mesh-board-mcp', 'agents find the release\'s board');
+    assert.equal(fs.readlinkSync(path.join(release, 'app/bin/work-read')), '../../bin/work-read', 'the web server finds the release\'s work-read');
+    assert.equal(fs.readFileSync(path.join(release, 'app/bin/work-read'), 'utf8'), 'v1.0.0 work-read');
     assert.equal(mode(release) & 0o022, 0);
     assert.deepEqual(releases(fx), ['v1.0.0'], 'no staging directory is left');
     const share = escape(fx.share);

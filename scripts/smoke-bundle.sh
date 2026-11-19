@@ -128,6 +128,12 @@ try {
       repository: {url: 'https://example.invalid/bundle-project', local_path: repository, primary_ref: 'refs/heads/bundle-main'},
       observation: {repository: true, source_ids: rosterSources.map(source => source.id)}}],
   }), {mode: 0o600});
+  // A worklog data repository where work-read finds it by default (~/worklog-data), holding only a
+  // taxonomy: /api/work/v1 below must run the bundle's own bin/work-read.
+  const worklog = path.join(env.HOME, 'worklog-data');
+  fs.mkdirSync(worklog, {mode: 0o700});
+  fs.writeFileSync(path.join(worklog, 'taxonomy.yaml'),
+    'categories:\n  smoke:\n    name: Smoke\n    products:\n      - bundle-product\n');
   app = spawn(path.join(bundle, 'mesh'), ['run'], {env, stdio: ['ignore', 'pipe', 'pipe']});
   for (const stream of [app.stdout, app.stderr]) stream.on('data', chunk => logs.push(chunk.toString()));
   await until('HTTP server', async () => {
@@ -161,6 +167,16 @@ try {
   }
   const token = fs.readFileSync(path.join(env.MESH_CONF_DIR, 'token'), 'utf8').trim();
   assert.ok(token);
+  // The Projects view's read path: a 503 here would mean that the bundle has no bin/work-read.
+  const work = await fetch(`http://127.0.0.1:${port}/api/work/v1`, {
+    method: 'POST', headers: {'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json'},
+    body: JSON.stringify({op: 'products', args: {}}),
+  });
+  const workText = await work.text();
+  assert.equal(work.status, 200, workText);
+  const products = JSON.parse(workText);
+  assert.equal(products.command, 'products', workText);
+  assert.equal(products.categories[0].products[0].id, 'bundle-product', workText);
   const tokenFile = path.join(env.HOME, 'session-token');
   const script = path.join(env.HOME, 'smoke-session.sh');
   fs.writeFileSync(script, `#!/bin/sh\nprintf '%s' "$MESH_SESSION_TOKEN" > '${tokenFile}'\nexec /bin/sleep 300\n`, {mode: 0o700});
@@ -230,7 +246,7 @@ try {
   assert.ok(listed.result?.tools?.some(tool => tool.name === 'agent_inbox'), JSON.stringify(listed));
   console.log(JSON.stringify({ok: true, platform: process.platform, arch: process.arch,
     http: true, nativePty: true, projectObservation: true, rosterObservation: rosterSources.length > 0,
-    sessionCredential: true, mcpInitialize: true, mcpTools: listed.result.tools.length}));
+    workRead: true, sessionCredential: true, mcpInitialize: true, mcpTools: listed.result.tools.length}));
 } catch (error) {
   // Runtime diagnostics can contain session tokens: redact before CI output.
   console.error(logs.join('').replace(/ms1\.[A-Za-z0-9._-]+/g, '[redacted]'));

@@ -33,7 +33,7 @@ command -v zstd >/dev/null || { echo 'bundle: zstd is a build dependency (CPytho
 if [[ $(uname -s) == Linux ]]; then
   command -v patchelf >/dev/null || { echo 'bundle: patchelf is a Linux build dependency' >&2; exit 2; }
 fi
-for name in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all; do
+for name in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp; do
   [[ -f $NATIVE/$name && -x $NATIVE/$name ]] || { echo "bundle: missing executable $name" >&2; exit 2; }
 done
 case $(uname -s) in Linux) OS=linux ;; Darwin) OS=macos ;; *) echo 'bundle: unsupported OS' >&2; exit 2 ;; esac
@@ -94,8 +94,9 @@ for name in mesh-event mesh-open mesh-attach mesh-rename; do
   [[ ! -f $ROOT/bin/$name ]] || cp -p "$BUNDLE/bin/mesh-helper" "$BUNDLE/bin/$name"
 done
 cp -p "$NATIVE/mesh-ptyhost" "$BUNDLE/libexec/mesh-ptyhost"
-# mesh-logout-all is native: no wrapper, no Python.
-for name in mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all; do cp -p "$NATIVE/$name" "$BUNDLE/bin/$name"; done
+# mesh-logout-all, work-read and work-mcp are native: no wrapper, no Python. work-read must be
+# bin/work-read: the web server runs it from MESH_BIN_DIR for /api/work/v1 (docs/work-read.md).
+for name in mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp; do cp -p "$NATIVE/$name" "$BUNDLE/bin/$name"; done
 if [[ -z $NODE ]]; then
   NODE_OS=$OS
   [[ $OS != macos ]] || NODE_OS=darwin
@@ -187,7 +188,8 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 const root=process.env.MESH_BUNDLE_ROOT;
 const native={};
-for(const path of ['libexec/mesh-ptyhost','bin/mesh-board-mcp','bin/mesh-read','bin/mesh-platform','bin/mesh-history','bin/mesh-logout-all'])
+for(const path of ['libexec/mesh-ptyhost','bin/mesh-board-mcp','bin/mesh-read','bin/mesh-platform','bin/mesh-history','bin/mesh-logout-all',
+    'bin/work-read','bin/work-mcp'])
   native[path]=createHash('sha256').update(readFileSync(`${root}/${path}`)).digest('hex');
 writeFileSync(`${root}/bundle.json`,JSON.stringify({kind:'mesh-binary-bundle',version:1,
   source_revision:process.env.MESH_BUNDLE_SOURCE_REV,

@@ -253,11 +253,12 @@ check_stamp_in_sums() {
 # The bundle archive of a platform, as scripts/build-bundle.sh names it: one top directory
 # mesh-<os>-<arch>/ with the launcher, the code (app/), the wrappers and native programs (bin/,
 # libexec/), the Python and Node runtimes (runtime/) and bundle.json, which records the SHA-256 of
-# the six native programs.
+# the eight native programs.
 bundle_asset() { printf 'mesh-%s.tar.gz' "$1"; }
 BUNDLE_FILES=(mesh env.sh bundle.json app/install.sh app/server.py bin/mesh-python bin/mesh-ptyhost
-  libexec/mesh-ptyhost bin/mesh-board-mcp bin/mesh-read bin/mesh-platform bin/mesh-history bin/mesh-logout-all)
-BUNDLE_NATIVE='^ *"((bin|libexec)/mesh-[a-z-]+)": "([0-9a-f]{64})",?$'
+  libexec/mesh-ptyhost bin/mesh-board-mcp bin/mesh-read bin/mesh-platform bin/mesh-history bin/mesh-logout-all
+  bin/work-read bin/work-mcp)
+BUNDLE_NATIVE='^ *"((bin|libexec)/(mesh|work)-[a-z-]+)": "([0-9a-f]{64})",?$'
 
 # 0 when directory $1 holds a bundle whose native programs have the hashes of its bundle.json.
 bundle_intact() {
@@ -267,10 +268,10 @@ bundle_intact() {
     [[ $line =~ $BUNDLE_NATIVE ]] || continue
     file=${BASH_REMATCH[1]}
     actual=$(file_sha256 "$dir/$file") || return 1
-    [[ $actual == "${BASH_REMATCH[3]}" ]] || return 1
+    [[ $actual == "${BASH_REMATCH[4]}" ]] || return 1
     count=$((count + 1))
   done < "$dir/bundle.json"
-  ((count == 6))
+  ((count == 8))
 }
 
 # Bundle: builds the release in a staging directory: the archive is checked before it is unpacked,
@@ -307,11 +308,12 @@ check_installed_bundle() {
 }
 
 # Native programs (a release without a bundle for this platform): the code archive
-# session-mesh-<tag>.tar.gz and the six programs <program>-<os>-<arch>, each checked against the
+# session-mesh-<tag>.tar.gz and the eight programs <program>-<os>-<arch>, each checked against the
 # stamp before anything is unpacked, laid out as releases/<tag>/app (the code) and
 # releases/<tag>/bin (the programs); app/bin/mesh-board-mcp links to the release's own, where the
-# agents' board configuration looks for it. The services then run this machine's Python.
-RELEASE_PROGRAMS=(mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all)
+# agents' board configuration looks for it, and app/bin/work-read likewise, where the web server
+# looks for it (/api/work/v1). The services then run this machine's Python.
+RELEASE_PROGRAMS=(mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp)
 code_asset() { printf 'session-mesh-%s.tar.gz' "$MESH_RELEASE_TAG"; }
 stage_programs() {
   local tag=$MESH_RELEASE_TAG program release
@@ -328,6 +330,7 @@ stage_programs() {
     || stage_abort "the code archive does not hold session-mesh-$tag/."
   { mv -- "$STAGE/session-mesh-$tag" "$release/app" && mkdir -p "$release/app/bin" \
     && ln -s ../../bin/mesh-board-mcp "$release/app/bin/mesh-board-mcp" \
+    && ln -s ../../bin/work-read "$release/app/bin/work-read" \
     && code_manifest "$release/app" > "$release/app.manifest" \
     && cp -- "$INSTALLER" "$release/install.sh" && chmod 0755 "$release/install.sh" && chmod -R go-w "$release"; } \
     || stage_abort "cannot unpack the code archive."
@@ -374,7 +377,7 @@ release_platforms() {
   esac
 }
 
-# 0 when this installer records the code archive and the six programs of platform $1.
+# 0 when this installer records the code archive and the eight programs of platform $1.
 release_has_programs() {
   local program
   [[ -n $1 && -n $(sums_hash "$MESH_RELEASE_SUMS" "$(code_asset)") ]] || return 1

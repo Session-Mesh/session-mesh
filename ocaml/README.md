@@ -1,6 +1,8 @@
 # Session Mesh OCaml tools
 
-This directory is the opam package `session_mesh`. It builds six programs:
+This directory is the opam package `session_mesh`. It builds eight programs, all of them shipped
+in every release (bundles and native release assets): the six of this table, and `work-mcp` and
+`work-read`, which have their own sections below.
 
 | Program | What it is | Used by |
 |---|---|---|
@@ -39,7 +41,9 @@ Projects view: one subcommand per run (`products`, `projects`, `project`, `task`
 `sessions-of`), one bounded JSON document on standard output. It is read-only (no write, no lock,
 no repository creation) and reuses the text cleaning, renderers and question fold of `work_mcp`.
 The server starts it through `POST /api/work/v1`. It is built and installed with the package
-(`public_name work-read`, like `work-mcp`); it is not yet in the release assets. See
+(`public_name work-read`, like `work-mcp`), and a release ships both: `bin/work-read` and
+`bin/work-mcp` of a bundle, and the release assets `work-read-<platform>` and
+`work-mcp-<platform>`. See
 [docs/work-read.md](../docs/work-read.md); tests: `dune runtest work_read`.
 By hand: `WL_HOME=/tmp/demo ./_build/default/work_read/bin/work_read_main.exe products`.
 
@@ -168,8 +172,8 @@ MESH_OPAM_SWITCH=session-mesh bash scripts/bootstrap.sh
 
 Without `MESH_OPAM_SWITCH` the current opam switch is used, under the same rule. The bootstrap
 installs the pins above and the package's dependencies and test dependencies, builds and tests the package, then installs
-`mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history` and
-`mesh-logout-all` into that switch.
+`mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`,
+`mesh-logout-all`, `work-read` and `work-mcp` into that switch.
 `bash scripts/bootstrap.sh --install-only` installs the same dependencies but runs no test.
 
 Some OCaml tests drive `mesh-ptyhost` through the Python test harness `tests/ptyhost_proc.py`: the

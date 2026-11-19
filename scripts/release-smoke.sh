@@ -4,12 +4,14 @@
 
 # Smoke check of a built release binary set before it is uploaded.
 #   release-smoke.sh <directory holding mesh-ptyhost, mesh-platform, mesh-read, mesh-board-mcp, mesh-history,
-#                     mesh-logout-all>
+#                     mesh-logout-all, work-read, work-mcp>
 # - mesh-ptyhost is started on a private runtime directory and answers a `list`
 #   request on its socket (one frame: kind C, 4-byte big-endian length, JSON);
 # - mesh-platform prints its platform facts;
 # - mesh-read and mesh-board-mcp start and exit on closed input;
-# - mesh-logout-all refuses an argument, and with no mesh on its port raises the generation on disk.
+# - mesh-logout-all refuses an argument, and with no mesh on its port raises the generation on disk;
+# - work-read answers a request on a private worklog data repository and refuses an unknown
+#   operation; work-mcp answers initialize and lists its work_* tools.
 # Needs `nc` with -U (OpenBSD netcat: the Ubuntu and macOS runners have it).
 set -euo pipefail
 
@@ -99,3 +101,36 @@ expected_out='The mesh is not responding: generation raised on disk (1). All dev
 [ "$logged_out" = "$expected_out" ] || { echo "smoke: unexpected mesh-logout-all output: $logged_out" >&2; exit 1; }
 [ "$(cat "$logout_conf/cookie-generation")" = 1 ] || { echo "smoke: mesh-logout-all did not write generation 1" >&2; exit 1; }
 echo "smoke: mesh-logout-all raises the generation on disk when no mesh answers"
+
+# work-read, on a private worklog data repository (WL_HOME) that holds only a taxonomy: a request on
+# standard input, as the web server sends it for /api/work/v1, gives the products document (exit 0);
+# an unknown operation gives an invalid_input document and exit 2.
+work_home="$runtime/worklog"
+mkdir -m 700 "$work_home"
+printf 'categories:\n  smoke:\n    name: Smoke\n    products:\n      - smoke-product\n' >"$work_home/taxonomy.yaml"
+work_out="$(printf '{"op":"products","args":{}}' | env -i HOME="$runtime" WL_HOME="$work_home" "$bin/work-read" --request)" \
+  || { echo "smoke: work-read --request failed: $work_out" >&2; exit 1; }
+case "$work_out" in
+  '{"schema":1,"command":"products",'*'"id":"smoke-product"'*) ;;
+  *) echo "smoke: unexpected work-read products document: $work_out" >&2; exit 1 ;;
+esac
+status=0
+work_out="$(printf '{"op":"nope"}' | env -i HOME="$runtime" WL_HOME="$work_home" "$bin/work-read" --request)" || status=$?
+if [ "$status" -ne 2 ] || [[ "$work_out" != '{"error":{"code":"invalid_input",'* ]]; then
+  echo "smoke: work-read refused an unknown operation with exit $status and $work_out" >&2
+  exit 1
+fi
+echo "smoke: work-read answers a request and refuses an unknown operation"
+
+# work-mcp: initialize, then tools/list, on standard input; it answers both and names its work_* tools.
+mcp_out="$(printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"release-smoke","version":"1"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' |
+  env -i HOME="$runtime" WL_HOME="$work_home" "$bin/work-mcp" 2>"$runtime/work-mcp.err")" \
+  || { echo "smoke: work-mcp exited with an error" >&2; cat "$runtime/work-mcp.err" >&2; exit 1; }
+if ! grep -q '"name":"work-mcp"' <<<"$mcp_out" || ! grep -q '"name":"work_' <<<"$mcp_out"; then
+  echo "smoke: work-mcp did not answer initialize and tools/list: $mcp_out" >&2
+  exit 1
+fi
+echo "smoke: work-mcp answers initialize and lists its work_* tools"

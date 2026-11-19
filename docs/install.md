@@ -91,13 +91,13 @@ skip that line ([what you are trusting](operations.md#prebuilt-binaries)).
 Each release's `install.sh` carries that release's tag and the SHA-256 of every other file of the
 release except `SHA256SUMS`. It downloads the bundle of your platform for that tag only
 (`mesh-linux-x86_64.tar.gz`, `mesh-linux-arm64.tar.gz` or `mesh-macos-arm64.tar.gz`: the code, its
-own Python and Node runtimes with their locked dependencies, and the six native programs
-`mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history` and
-`mesh-logout-all`), checks it
+own Python and Node runtimes with their locked dependencies, and the eight native programs
+`mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`,
+`mesh-logout-all`, `work-read` and `work-mcp`), checks it
 against that hash, and extracts it into `~/.local/share/session-mesh/releases/<tag>/`. An archive
 that does not match, or whose native programs do not match its own manifest, stops the install, and
 nothing of the release is kept. The installer then points `~/.local/share/session-mesh/current` at
-that release. A release also publishes the six native programs of each platform (static
+that release. A release also publishes the eight native programs of each platform (static
 executables on Linux) and the code archive: for a platform without a bundle in the release, the
 installer installs those instead and runs the web server with your Python
 ([Installing a release](operations.md#installing-a-release)).
@@ -223,10 +223,11 @@ uses `python3` from your `PATH`.
 ## Native PTY host
 
 The PTY host, which owns the terminals and so the sessions, is the native program `mesh-ptyhost`,
-written in OCaml, on Linux and macOS. A release bundle brings it with the five other native
+written in OCaml, on Linux and macOS. A release bundle brings it with the seven other native
 programs: the board MCP server `mesh-board-mcp` that agents use for messages, requests and the
 whiteboard, `mesh-read`, `mesh-platform`, `mesh-history`, which keeps the History full-text
-database, and the command `mesh-logout-all`. A release install needs no OCaml.
+database, the command `mesh-logout-all`, `work-read`, the read path of the Projects view
+(`/api/work/v1`), and the project-tracking MCP server `work-mcp`. A release install needs no OCaml.
 
 A source install takes the host from the first of these that applies:
 
@@ -239,8 +240,8 @@ another architecture, such as an Intel Mac: use a source install there.
 
 **Build.** `scripts/bootstrap.sh --install-only` installs the OCaml dependencies into the opam
 switch named by `MESH_OPAM_SWITCH` (otherwise the current switch), then builds and installs
-`mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history` and
-`mesh-logout-all` into that switch. It needs an initialised opam (`opam init`), a C compiler, the
+`mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`,
+`mesh-logout-all`, `work-read` and `work-mcp` into that switch. It needs an initialised opam (`opam init`), a C compiler, the
 GMP and SQLite (with FTS5) headers and `pkg-config` (the OCaml part of
 [Test tools on a fresh machine](development.md#test-tools-on-a-fresh-machine)), and no Python test
 environment. SQLite 3.27 or newer is needed for accent folding in the full-text index; with an
