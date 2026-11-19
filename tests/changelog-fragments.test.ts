@@ -163,17 +163,23 @@ describe('a changelog.d directory', () => {
 // introduced. Every change since then is a fragment: a pull request that adds a bullet to that
 // section by hand fails here. The list is never extended; after the next minor cut the section has none.
 const FROZEN_UNRELEASED_LEADS = [
+  'The sessions filter stays in sight while you type on a phone.',
+  'The owner answers an agent\'s question from the task sheet.',
   'An agent records the owner\'s answer to its question.',
   'A new Projects view over the project tracker.',
   'A project configuration edit that meets another writer\'s lock reports `busy`, never `invalid-config`.',
   'The session list is computed with less repeated work.',
   'A message approval answered in one window closes in the others.',
+  'A new Claude session starts with a conversation id the mesh chose.',
+  'A session identity registry keeps the conversation of each session once it is known exactly.',
   'An idle Codex started as `codex resume <id>` gets its conversation id from its launch arguments.',
   'An idle Codex is no longer given the conversation of a Codex started later.',
   'The session list no longer falls minutes behind on a busy machine.',
+  'The session list loads progressively.',
   'Copy on select.',
   'Copy as shell command.',
   'Releases ship `work-read` and `work-mcp`.',
+  'Diff viewer.',
   'Agents get the project tracker.',
 ];
 const POINTER_PREAMBLE = [

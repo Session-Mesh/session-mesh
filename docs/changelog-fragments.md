@@ -35,7 +35,10 @@ A pull request opened before fragments added its bullet to `CHANGELOG.md`. At it
 1. Take `main`'s side of `CHANGELOG.md`: resolve the conflict that way, or run
    `git checkout origin/main -- CHANGELOG.md` after the rebase.
 2. Move the bullet (or bullets) into `changelog.d/<number>-<slug>.md`, one bullet per file,
-   re-wrapped to 100 columns with two-space continuation lines.
+   re-wrapped to 100 columns with two-space continuation lines. `CHANGELOG.md` has no width
+   rule, so a bullet moved verbatim may have longer lines and fail `check`: for example the
+   second bullet of #123 ("A session identity registry keeps the conversation of each session
+   once it is known exactly.") has four lines over 100 columns.
 3. Run `npm run check:changelog`, then commit.
 
 `tests/changelog-fragments.test.ts` fails on a bullet added by hand under "Unreleased" (it compares

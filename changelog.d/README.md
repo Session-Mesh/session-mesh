@@ -29,7 +29,8 @@ kind: fixed
   second bullet. A continuation line does not start with a list marker (`-`, `*`, `+`, `1.`), a
   code fence, or a run of `-`, `=` or `*` alone: wrap the line elsewhere.
 - Lines are at most 100 columns; a Markdown link target does not count. Links are written as from
-  the repository root, as in `CHANGELOG.md`.
+  the repository root, as in `CHANGELOG.md`. `CHANGELOG.md` has no such limit: a bullet moved
+  from it verbatim (for example the second bullet of #123) may need re-wrapping.
 - UTF-8 with LF line endings, no trailing space, at most 8 KiB. The characters are letters, marks,
   numbers, punctuation, symbols and spaces of any script; anything else is refused: tabs and
   other controls, and invisible characters (bidirectional controls, zero-width characters, the
