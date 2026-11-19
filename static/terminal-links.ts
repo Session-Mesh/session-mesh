@@ -359,3 +359,5 @@ export function shouldCopyOnSelect(state: CopyOnSelectState): boolean {
   if (!state.enabled || !state.visible || state.selection.trim() === "") return false;
   return !state.mouseTracking || state.forced;
 }
+
+export { toShellCommand, shellCommandOfSelection } from "./shell-copy.ts";

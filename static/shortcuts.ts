@@ -97,6 +97,7 @@ export const SHORTCUTS: readonly Binding[] = [
   {id: 'sessionSearch', chord: chord('k', {mod: true}), context: 'outside-terminal', action: 'sessions.search'},
   {id: 'sessionSearchAnywhere', chord: chord('k', {mod: true, shift: true}), context: 'anywhere', action: 'sessions.search'},
   {id: 'help', chord: chord('?', {shift: 'any'}), context: 'outside-terminal', action: 'shortcuts.help'},
+  {id: 'copyAsShell', chord: chord('x', {mod: true, shift: true}), context: 'terminal-captured', action: 'terminal.copyAsShell'},
   {id: 'newSession', chord: chord('n'), context: 'outside-terminal', external: true},
   {id: 'openPage', chord: chord('o'), context: 'outside-terminal', external: true},
   {id: 'copy', chord: chord('c', {ctrl: true}), context: 'terminal-captured', external: true},

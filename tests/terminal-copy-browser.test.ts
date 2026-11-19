@@ -95,4 +95,23 @@ describe('copying a terminal selection', {skip}, () => {
     const clipboard = await copyRows(page, `${long}\r\n  image:tag\r\n`);
     assert.deepEqual(clipboard, [`${long}\n  image:tag`]);
   });
+
+  test('Ctrl+Shift+X copies the selection as a shell command', async () => {
+    const page = await open('as-shell');
+    const cols = await page.evaluate(() => active.term.cols);
+    const long = `docker run ${'--flag-with-a-long-name '.repeat(Math.ceil(cols / 22) + 1)}`.trim();
+    const clipboard = await page.evaluate(async text => {
+      active.term.reset();
+      await new Promise<void>(done => active.term.write(text, done));
+      const buffer = active.term.buffer.active;
+      let last = buffer.length - 1;
+      while (last > 0 && buffer.getLine(last)!.translateToString(true) === '') last -= 1;
+      active.term.selectLines(0, last);
+      (active.term as unknown as {textarea: HTMLElement}).textarea.dispatchEvent(
+        new KeyboardEvent('keydown', {key: 'X', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true}));
+      await new Promise(done => setTimeout(done, 200));
+      return window.__clipboard.slice();
+    }, `${long}\r\n  --image-tag x\r\n\r\nnext command\r\n`);
+    assert.deepEqual(clipboard, [`${long} \\\n  --image-tag x\n\nnext command`]);
+  });
 });

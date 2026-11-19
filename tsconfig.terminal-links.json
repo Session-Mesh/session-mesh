@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "exactOptionalPropertyTypes": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
@@ -16,5 +17,5 @@
     "target": "ES2022",
     "verbatimModuleSyntax": true
   },
-  "files": ["static/terminal-links.ts"]
+  "files": ["static/terminal-links.ts", "static/shell-copy.ts"]
 }

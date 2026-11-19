@@ -6885,7 +6885,22 @@ function openShortcutHelp() {
 }
 $("#btn-shortcuts").addEventListener("click", openShortcutHelp);
 
-const SHORTCUT_ACTIONS = { "sessions.search": openSessionSearch, "shortcuts.help": openShortcutHelp };
+// "Copy as shell command" (opt-in; the usual copy is unchanged). The rewrite is MeshTerminalLinks.shellCommandOfSelection;
+// where the rows cannot be rebuilt it returns null and the selection is copied as it is.
+async function copySelectionAsShell() {
+  const pane = active;
+  const sel = pane && (pane.term.getSelection() || pane.mobileSelection);
+  if (!sel) return;   // nothing selected: silent, like copySelection()
+  try {
+    const rewritten = pane.term.hasSelection() ? MeshTerminalLinks.shellCommandOfSelection(pane.term) : null;
+    await navigator.clipboard.writeText(rewritten ?? sel);
+    flash(t("clipboard.copied"));
+  } catch { flash(t("clipboard.copyDenied")); }
+  pane.term.clearSelection();
+  pane.mobileSelection = "";
+}
+
+const SHORTCUT_ACTIONS = { "sessions.search": openSessionSearch, "shortcuts.help": openShortcutHelp, "terminal.copyAsShell": copySelectionAsShell };
 
 document.addEventListener("keydown", (e) => {
   const binding = MeshShortcuts.resolve(MeshShortcuts.SHORTCUTS, e, shortcutFocusKind(e.target), shortcutPlatform);
