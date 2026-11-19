@@ -43,11 +43,13 @@ current round describes every session at once and does not read it.
 A request **with** `since` answers at once. A request **without** `since` (a page load, or a client
 that expects a session it just created to be listed) waits until a read of the host's list that started
 after it is published, or until the round it asked for ends, at most `MESH_SESSIONS_WAIT` seconds
-(default 2); it does not wait while the host is known to be silent (its last read failed). A session
-the host lists before the request arrives is therefore in its answer, with `ready: false` when no
-round has described it yet, however long rounds last, except:
+(default 2); while the host is known to be silent (its last read failed), at most 1 second. A read of
+a host that is gone fails at once, so a session created as the host comes back is in the answer. A
+session the host lists before the request arrives is therefore in its answer, with `ready: false` when
+no round has described it yet, however long rounds last, except:
 
-- when the host's `list` takes longer than `MESH_SESSIONS_WAIT`, or the host is known to be silent;
+- when the host's `list` takes longer than `MESH_SESSIONS_WAIT`, or longer than 1 second while the host
+  is known to be silent;
 - with `MESH_SESSIONS_WAIT=0`, where every request answers from the list as it is.
 
 ## Answer
@@ -67,7 +69,8 @@ Every answer has `now` (the time of the answer, in seconds), `update`, `sessionR
 
 | Field | Type | Meaning |
 |---|---|---|
-| `generation` | integer | Grows by one each time a row's content changes, a session ends, or `external` changes. It starts from the server's start time in milliseconds, so it never goes back when the web server restarts. Send it back as `since`. It does not change when only the other fields change (`folders`, `management`, `restorable`, `portfolio`, `opens`, `signals`, the fields read beside the list): those are in every answer, a delta included, so a client must read every answer, also one whose `generation` did not change. |
+| `generation` | integer | Grows by one each time a row's content changes, a session ends, or `external` changes. It starts from the server's start time in milliseconds, so it does not go back when the web server restarts, unless the wall clock did (see `instance`). Send it back as `since`. It does not change when only the other fields change (`folders`, `management`, `restorable`, `portfolio`, `opens`, `signals`, the fields read beside the list): those are in every answer, a delta included, so a client must read every answer, also one whose `generation` did not change. |
+| `instance` | string | 16 hexadecimal digits drawn at random when the web server process starts. `generation` values are meaningful only within one instance: when the wall clock went back across a restart by more than the earlier process ran, an old `generation` can fall inside the new process's range, and a `since` from it would get a delta of another list. A client that keeps a list across answers should drop it, and send no `since`, when `instance` changes. The server itself does not check it (a `since` carries no instance). |
 | `full` | boolean | `true`: `mesh` holds every session. `false`: the answer to `since` holds only the changed rows. |
 | `removed` | names | Only when `full` is `false`: sessions that ended after `since`. Kept 10 minutes; an older `since` gets a full answer. |
 | `complete` | boolean | `false` while rows are not described yet (`ready: false`), or before the first listing. A client may poll sooner then. After a start with a silent host, the first round publishes an empty list with `complete: true` and `host: "silent"`. |
@@ -95,7 +98,7 @@ A row's `agent.argv` is unchanged in this version.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MESH_SESSIONS_WAIT` | `2` | The most seconds a request without `since` waits (above). `0`: every request answers from the list as it is. A value that is not a finite number of seconds, 0 or more, is replaced by 2, with one line in the log. |
+| `MESH_SESSIONS_WAIT` | `2` | The most seconds a request without `since` waits (above). `0`: every request answers from the list as it is. A value that is not a decimal number of seconds (digits, an optional point and decimals: `1e1`, `inf` or ` 1.5 ` are not) is replaced by 2, with one line in the log. |
 
 The test harnesses (`tests/conftest.py`, `tests/mesh-server-lib.ts`) also set
 `MESH_TEST_SESSIONS_COMPLETE=1`, never set in production: a request without `since` then waits for the

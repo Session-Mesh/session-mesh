@@ -15,7 +15,7 @@ import {type FakeHost, type FakeSession, sleepers, startFakeHost} from './fake-p
 import {removeScratch, runServer, scratchHome, stopServer, type Scratch} from './mesh-server-lib.ts';
 
 type Row = {name: string; ready: boolean; label?: string | null; agent?: Record<string, unknown> | null};
-type Answer = {mesh: Row[]; generation: number; now: number; opens?: unknown[]; full: boolean; complete: boolean; counts: {total: number; ready: number};
+type Answer = {mesh: Row[]; generation: number; instance: string; now: number; opens?: unknown[]; full: boolean; complete: boolean; counts: {total: number; ready: number};
   host: string; removed?: string[]; external?: unknown[]; restorable: unknown[];
   management: {state?: string}; update: unknown; sessionRequests: unknown; agentMailConsent: unknown};
 
@@ -237,6 +237,8 @@ describe('300 sessions', () => {
     assert.ok((await get(mesh, `?since=${full.generation}`)).ms < 500, 'a request with since never waits for a round');
     assert.equal(delta.full, false);
     assert.ok(delta.generation > full.generation);
+    assert.match(full.instance, /^[0-9a-f]{16}$/);
+    assert.equal(delta.instance, full.instance, 'one process, one instance');
     assert.ok(delta.mesh.length < N / 2, `${delta.mesh.length} rows in a delta`);
     assert.ok(!delta.mesh.some(row => row.name === 'fresh'));
     assert.deepEqual(delta.counts, {total: N, ready: N});
@@ -269,10 +271,10 @@ describe('a silent host', () => {
     assert.ok(ms < 3000, `answer in ${Math.round(ms)} ms`);
     assert.equal(body.host, 'silent');
     assert.equal(body.complete, false);
-    // Past the host's request timeout (5 s): the round gave up, the answers still come at once.
+    // Past the host's request timeout (5 s): the round gave up; an answer waits at most 1 s for a read.
     await new Promise(resolve => setTimeout(resolve, 6000));
     const later = await get(mesh);
-    assert.ok(later.ms < 500, `answer in ${Math.round(later.ms)} ms`);
+    assert.ok(later.ms < 2500, `answer in ${Math.round(later.ms)} ms`);
     assert.equal(later.body.host, 'silent');
     assert.ok(mesh.host.ops().includes('list'), 'the round asked the host');
     assert.deepEqual(fs.readFileSync(mesh.snapshot), before);
@@ -337,6 +339,18 @@ describe('slow rounds, with the default wait', () => {
     assert.equal((await get(mesh, '?since=0')).body.host, 'silent');
     mesh.host.control({sessions: current});
     await until(mesh, 'a complete listing', 30_000, answer => answer.complete && answer.host === 'ok');
+  });
+
+  test('a session created as the host comes back is in the next answer without since', async () => {
+    await quiet(mesh);
+    await mesh.host.stop();   // the PTY host restarts: its socket refuses, the reads fail at once
+    await until(mesh, 'the host known silent', 30_000, answer => answer.host === 'silent');
+    const listed = [...current, {...sessions[0]!, name: 'back', created: 1_800_000_200}];
+    await mesh.host.restart({sessions: listed});   // then POST /api/new creates a session, and the page refreshes
+    const {ms, body} = await get(mesh);
+    assert.ok(body.mesh.some(row => row.name === 'back'), `the new session is listed (answer in ${Math.round(ms)} ms, host ${body.host})`);
+    current = listed;
+    await until(mesh, 'the new session described', 30_000, answer => answer.mesh.some(row => row.name === 'back' && row.ready));
   });
 
   test('8 tabs polling with since ask the host for no list of their own', async () => {

@@ -87,8 +87,8 @@ before 1.0, a minor version may change behaviour.
   Renames and moves no longer wait for a listing, and a restore, which still runs a listing of its
   own, no longer waits behind another one: the organisation lock now covers only the writes. A
   silent PTY host leaves the last list on screen (`host: "silent"`). The answer gains
-  `generation`, `since` (only the changed rows and the `removed` names), `full`, `complete` and
-  `counts`; see [docs/sessions-api.md](docs/sessions-api.md).
+  `generation`, `since` (only the changed rows and the `removed` names), `full`, `complete`,
+  `counts` and `instance`; see [docs/sessions-api.md](docs/sessions-api.md).
 - **Copy on select.** Selecting text in a terminal now copies it to the clipboard when you release
   the mouse button (or lift your finger after a long press on a phone), and the text stays
   selected. It is on by default and is a per-browser preference (`copyOnSelect` in the page's
