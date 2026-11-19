@@ -275,6 +275,25 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
     await page.close();
   });
 
+  test('builds one chunk at a time after a view change, however far the pairs reach', async () => {
+    const page = await open(replaced('long', 20_000));
+    await page.waitForSelector('details.file');
+    const rows = page.locator('details.file tr:not(.hunk)');
+    await page.getByRole('button', {name: 'split'}).click();
+    assert.equal(await rows.count(), 1999);            // the pairs of the 1999 deleted lines shown
+    await page.getByRole('button', {name: 'words'}).click();
+    assert.equal(await rows.count(), 1999);            // a rebuild in the same view builds the same rows
+    assert.equal(await page.locator('button.more').textContent(), 'show 2000 more lines (36002 left)');
+    await page.locator('button.more').click();
+    assert.equal(await rows.count(), 3999);            // one chunk more
+    assert.equal(await page.locator('button.more').textContent(), 'show 2000 more lines (32002 left)');
+    // back to unified: the added lines split showed are 18000 positions ahead, more than two
+    // chunks, so the unified view shows the deleted lines up to the cursor
+    await page.getByRole('button', {name: 'unified'}).click();
+    assert.equal(await rows.count(), 3999);
+    await page.close();
+  });
+
   test('keeps a file fully loaded in split fully shown in unified', async () => {
     const page = await open(replaced('pairs', 3000));
     await page.waitForSelector('details.file');

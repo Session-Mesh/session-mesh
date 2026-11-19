@@ -434,9 +434,11 @@ export function countLines(text: string): number {
 }
 
 // What is loaded is counted in positions of the diff: each hunk header and each line has one, in
-// the order of the diff. A file loads up to a position, whatever the view, so that switching views
-// shows at least the lines shown before (a split row may add the line paired with them); hunk
-// headers count like lines, so empty hunks cannot get around the limits.
+// the order of the diff (hunk headers count like lines, so empty hunks cannot get around the
+// limits). A file builds the rows whose first position is before its cursor, in either view, and
+// "show more" moves the cursor by a chunk. A split row may show a later line (the added line paired
+// with a deleted one): switching to the unified view then extends the cursor to those lines too,
+// so that they stay in view, when that costs at most two chunks more.
 //
 // Positions built at a time, per file ("show more" builds the next ones).
 export const ROW_CHUNK = 2_000;
@@ -586,10 +588,11 @@ function button(label: string, pressed: boolean, onClick: () => void): HTMLButto
 class FileView {
   readonly details = el('details', 'file');
   private readonly body = el('div', 'body');
-  // the rows built are those whose first position is before `loaded` (the same in every view)
-  private loaded: number;
-  // the view the body was built for ('' before it is built)
+  // the rows built are those whose first position is before this cursor (the same in every view)
+  private cursor: number;
+  // the view the body was built for ('' before it is built), and its mode
   private builtFor = '';
+  private builtMode: Mode | null = null;
   private segments: Map<DiffLine, Segment[]> | null = null;
   private positions: Map<Hunk | DiffLine, number> | null = null;
   private readonly file: FileDiff;
@@ -597,13 +600,13 @@ class FileView {
   private table: HTMLTableElement | null = null;
   private items: Item[] = [];
   private next = 0;          // the first item not built yet
-  private reach = 0;         // one past the last position shown
+  private reach = 0;         // one past the last position shown (past the cursor in split)
   private shown = 0;         // the diff lines shown
 
   constructor(file: FileDiff, view: Viewer, open: boolean, loaded: number) {
     this.file = file;
     this.view = view;
-    this.loaded = loaded;
+    this.cursor = loaded;
     const summary = el('summary');
     summary.append(el('span', 'path', displayPath(file)));
     if (STATUS_LABEL[file.status]) summary.append(el('span', `badge ${file.status}`, STATUS_LABEL[file.status]));
@@ -629,6 +632,12 @@ class FileView {
   // (Re)builds the rows of what is loaded, in the current view: when unfolded with a view it was
   // not built for, and on a view change.
   render(): void {
+    const {mode} = this.view.options;
+    // from split to unified, keep the later lines split showed, unless they are too far ahead
+    if (this.builtMode === 'split' && mode === 'unified' && this.reach > this.cursor && this.reach - this.cursor <= 2 * ROW_CHUNK) {
+      this.cursor = this.reach;
+    }
+    this.builtMode = mode;
     this.builtFor = this.view.key();
     this.body.replaceChildren();
     this.table = null;
@@ -637,7 +646,6 @@ class FileView {
       this.items = [];
       return;
     }
-    const {mode} = this.view.options;
     this.positions ??= positionsOf(this.file);
     this.items = fileItems(this.file, mode);
     this.next = 0;
@@ -653,12 +661,11 @@ class FileView {
 
   // Builds the next chunk ("show more").
   more(): void {
-    this.loaded = this.reach + ROW_CHUNK;
+    this.cursor += ROW_CHUNK;
     this.extend();
   }
 
-  // Builds the rows that start before `loaded`; then `loaded` covers every position they show,
-  // so that another view shows them all again.
+  // Builds the rows that start before the cursor.
   private extend(): void {
     const table = this.table;
     const positions = this.positions;
@@ -669,7 +676,7 @@ class FileView {
     while (this.next < this.items.length) {
       const item = this.items[this.next] as Item;
       const [first, last] = itemSpan(item, positions);
-      if (first >= this.loaded && this.next > 0) break;
+      if (first >= this.cursor && this.next > 0) break;
       const row = itemRow(item, mode, segments);
       firstNew ??= row;
       table.append(row);
@@ -677,7 +684,6 @@ class FileView {
       this.shown += itemLines(item);
       this.next += 1;
     }
-    this.loaded = Math.max(this.loaded, this.reach);
     // The button is kept while there is more to show, so that it keeps the keyboard focus; after
     // the last chunk, the focus goes to the first row it revealed.
     const existing = this.body.querySelector<HTMLButtonElement>('button.more');
