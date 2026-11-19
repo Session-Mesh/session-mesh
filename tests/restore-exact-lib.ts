@@ -18,10 +18,22 @@ export const ALPHA_CREATED = 1700000000.25;
 export const BRAVO_CREATED = 1700000001.5;
 export const PI_SID = '0a1b2c3d-5555-6666-7777-888888888888';
 
+/** A Claude transcript of conversation `id` in `cwd` under `home`, as the history index reads it. */
+export function writeClaudeTranscript(home: string, id: string, cwd: string): void {
+  const folder = path.join(home, '.claude', 'projects', '-home-x');
+  fs.mkdirSync(folder, {recursive: true});
+  const lines = [
+    {type: 'user', timestamp: '2026-10-01T10:00:00Z', cwd, gitBranch: 'main', version: '2.0', message: {content: 'hello there'}},
+    {type: 'assistant', timestamp: '2026-10-01T10:00:05Z', message: {id: 'm1', model: 'claude-x',
+      content: [{type: 'text', text: 'hello'}], usage: {input_tokens: 3, output_tokens: 4}}},
+  ];
+  fs.writeFileSync(path.join(folder, `${id}.jsonl`), lines.map(line => JSON.stringify(line) + '\n').join(''));
+}
+
 export type Offer = {name: string; created: number; agent_kind: string; resume_id: string | null; cwd: string};
 export type Listed = {name: string; created: number};
 export type LabOptions = {marker?: string; twin?: boolean; bare?: boolean; pi?: boolean; intercept?: Intercept;
-  env?: NodeJS.ProcessEnv};
+  env?: NodeJS.ProcessEnv; identities?: object[]};
 
 export class Lab {
   readonly mesh: Mesh;
@@ -96,7 +108,13 @@ export class Lab {
         fs.writeFileSync(path.join(transcripts, 'a.jsonl'),
           JSON.stringify({type: 'session', version: 3, id: PI_SID, cwd: piDir}) + '\n');
       }
+      writeClaudeTranscript(where.home, SID, dirs.alpha);   // the offered conversation exists: a restore checks it
       fs.mkdirSync(where.confDir, {recursive: true, mode: 0o700});
+      // An identity registry that knows none of these offers (no migration from the snapshot): a restore
+      // resumes the snapshot's conversation, so a twin offer reaches the hold of a running conversation.
+      // tests/identity-restore.test.ts covers what the registry itself decides.
+      fs.writeFileSync(path.join(where.confDir, 'session-identities.json'),
+        JSON.stringify({version: 1, generation: 0, entries: options.identities ?? []}), {mode: 0o600});
       fs.writeFileSync(path.join(where.confDir, 'sessions-snapshot.json'),
         JSON.stringify({version: 1, host: null, live: [], lost}));
     });
@@ -188,14 +206,7 @@ export class Lab {
 
   /** A Claude transcript of conversation `id` in `cwd`, as the history index reads it. */
   writeTranscript(id: string, cwd: string): void {
-    const folder = path.join(this.mesh.home, '.claude', 'projects', '-home-x');
-    fs.mkdirSync(folder, {recursive: true});
-    const lines = [
-      {type: 'user', timestamp: '2026-10-01T10:00:00Z', cwd, gitBranch: 'main', version: '2.0', message: {content: 'hello there'}},
-      {type: 'assistant', timestamp: '2026-10-01T10:00:05Z', message: {id: 'm1', model: 'claude-x',
-        content: [{type: 'text', text: 'hello'}], usage: {input_tokens: 3, output_tokens: 4}}},
-    ];
-    fs.writeFileSync(path.join(folder, `${id}.jsonl`), lines.map(line => JSON.stringify(line) + '\n').join(''));
+    writeClaudeTranscript(this.mesh.home, id, cwd);
   }
 
   async newShell(name: string): Promise<void> {

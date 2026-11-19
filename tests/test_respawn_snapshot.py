@@ -34,7 +34,8 @@ def test_the_file_is_private_and_leaves_no_temporary_file(snapshot_file, tmp_pat
     for n in range(5):
         respawn.update([mesh_item("a", tmp_path, 1.0, claude(sid=f"{n}abcdefgh"))], listed=True)
     assert stat.S_IMODE(os.stat(snapshot_file).st_mode) == 0o600
-    assert [p.name for p in snapshot_file.parent.iterdir()] == [snapshot_file.name]
+    registry = {respawn.IDENTITY_NAME, f"{respawn.IDENTITY_NAME}.lock"}     # the identity registry, its lock
+    assert sorted(p.name for p in snapshot_file.parent.iterdir() if p.name not in registry) == [snapshot_file.name]
     assert json.loads(snapshot_file.read_text())["live"][0]["agent"]["session_id"] == "4abcdefgh"
 
 

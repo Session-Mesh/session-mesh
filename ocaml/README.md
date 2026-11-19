@@ -22,6 +22,17 @@ with `dune runtest worklog` and use a fictional fixture in `worklog/test/fixture
 outputs, in `worklog/test/golden`. Two C functions (`flock_stubs.c`) take the same BSD `flock(2)`
 lock as `wl` and read the monotonic clock.
 
+## Library: identity
+
+`identity/` is a library only (`mesh_identity`, no program): the schema of the session identity
+registry `session-identities.json`, its merge and conflict rules, and its store (fcntl lock, atomic
+replacement, a private regular file of bounded size, a newer version left untouched). The web server
+implements the same rules in `respawn.py` and writes the file today; this library is for the session
+listing program. Nothing in it knows an agent: each agent's id format is passed in. Its tests run
+with `dune runtest identity`; the vectors in `identity/test/vectors` are also run through
+`respawn.py` by `tests/identity-registry.test.ts`, so the two implementations cannot drift apart.
+See [Restoring sessions](../docs/operations.md#restoring-sessions-after-a-pty-host-restart).
+
 ## Generic libraries
 
 `generic/` holds small libraries that know nothing of sessions or agents. They have no program

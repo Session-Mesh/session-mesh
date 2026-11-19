@@ -37,10 +37,13 @@ once; the snapshot is where the owner's arrangement survives until restore (or "
 it with the entry). Each field is validated on read; a bad one is dropped, the session is still offered.
 """
 
+import contextlib
+import fcntl
 import json
 import math
 import os
 import re
+import stat
 import threading
 import time
 
@@ -299,18 +302,20 @@ def _advance(state, seen, live, now, host=None):
             "live": sorted(live + carried, key=lambda e: e["name"]), "lost": kept}
 
 
-def update(mesh, listed, now=None, host=None):
+def update(mesh, listed, now=None, host=None, nonces=None):
     """The restorable entries after ``record``; see there."""
-    return record(mesh, listed, now, host)[0]
+    return record(mesh, listed, now, host, nonces)[0]
 
 
-def record(mesh, listed, now=None, host=None, seen=None):
+def record(mesh, listed, now=None, host=None, nonces=None, seen=None):
     """Record the mesh sessions (the dicts of list_sessions); return (the restorable entries,
     whether the snapshot file holds the recorded state: False when ptyhost did not answer or the
     write failed). ``host`` is the identity of the ptyhost that listed them
     (ptyhost.host_identity), None when unknown. ``seen``: the (name, created) of every session
     the host listed, when ``mesh`` describes only some of them (the others keep their entry).
-    Does nothing while ptyhost did not answer (``listed`` false)."""
+    ``nonces``: {(name, created): nonce} of the listed sessions, which binds the identity registry's
+    entries written before their session was listed. Does nothing while ptyhost did not answer
+    (``listed`` false)."""
     if not listed:
         return [], False
     now = time.time() if now is None else now
@@ -321,7 +326,8 @@ def record(mesh, listed, now=None, host=None, seen=None):
         _keep_hooked_conversation(old, live)
         new = _advance(old, seen, live, now, _valid_host(host))
         durable = _store(old, new)
-        return public(new["lost"]), durable
+    _record_identities(mesh, nonces or {}, old, new, now)
+    return public(new["lost"]), durable
 
 
 # The agents whose hooks (or plugin) report the conversation they are in: a listing that has not heard a
@@ -552,3 +558,365 @@ def forget_live(name, created=None):
         old = _load()
         _store(old, {**old, "live": [e for e in old["live"]
                                      if e["name"] != name or (created is not None and e["created"] != created)]})
+
+
+# ---------------------------------------------------------------- identity registry
+#
+# session-identities.json, next to the snapshot (0600, replaced atomically under a lock): the
+# conversation of each session incarnation, written when it becomes known and never guessed.
+#
+#     {"version": 1, "generation": int, "entries": [identity]}
+#     identity = {"session": {"name", "created": float | None, "nonce": str | None},
+#                 "agent", "id": str | None, "source": "chosen" | "hook" | "observed",
+#                 "evidence": "<kind>:<detail>", "agent_started": float | None,
+#                 "observed_at": float, "generation": int, "state": "active" | "contested",
+#                 "holds_open": bool}
+#
+# ``chosen``: Mesh named the conversation before the agent started; ``hook``: the agent's hook
+# reported it; ``observed``: a listing saw it exactly (the rollout a Codex holds open, the pid file
+# Claude writes). The snapshot is rebuilt from every listing; this file keeps what was known, and a
+# server that does not know it leaves it alone. ocaml/identity (Mesh_identity) implements the same
+# rules; both are checked against the vectors in ocaml/identity/test/vectors.
+
+IDENTITY_NAME = "session-identities.json"
+IDENTITY_VERSION = 1
+IDENTITY_MAX_ENTRIES, IDENTITY_MAX_BYTES = 2 * MAX_ENTRIES, 512 * 1024
+IDENTITY_GRACE = 60.0       # an entry outlives an unlisted session this long: it may be written just before
+IDENTITY_RANK = {"observed": 1, "hook": 2, "chosen": 3}
+IDENTITY_STATES = ("active", "contested")
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+CONVERSATION_RE = {**dict.fromkeys(("claude", "codex", "pi", "gemini", "copilot", "vibe"), _UUID_RE),
+                   "opencode": re.compile(r"ses_[0-9A-Za-z]{8,60}"),
+                   "agy": re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{7,63}")}
+EVIDENCE_RE = re.compile(r"[a-z]{1,16}:[A-Za-z0-9_.-]{1,48}")
+OBSERVED_SOURCES = ("open_rollout", "pid_metadata")     # what discover reads exactly from the process
+_FACT_KEYS = ("session", "agent", "id", "source", "evidence", "agent_started", "state", "holds_open")
+_identity_lock = threading.Lock()
+
+
+def identity_file():
+    """The registry's path, next to the snapshot (a test that moves one moves both)."""
+    return FILE.with_name(IDENTITY_NAME)
+
+
+def _valid_incarnation(raw):
+    """{name, created, nonce} with created or nonce known (both when the listing gave both), or None."""
+    if not isinstance(raw, dict):
+        return None
+    name, created, nonce = raw.get("name"), raw.get("created"), raw.get("nonce")
+    ok = (isinstance(name, str) and NAME_RE.fullmatch(name)
+          and (created is None or _number(created))
+          and (nonce is None or (isinstance(nonce, str) and NONCE_RE.fullmatch(nonce)))
+          and (created is not None or nonce is not None))
+    return {"name": name, "created": created, "nonce": nonce} if ok else None
+
+
+def _optional_time(value):
+    return value is None or (_number(value) and value > 0)
+
+
+def _valid_identity(raw):
+    """An identity entry with every field checked, or None."""
+    if not isinstance(raw, dict):
+        return None
+    session, agent, sid = _valid_incarnation(raw.get("session")), raw.get("agent"), raw.get("id")
+    state, generation, evidence = raw.get("state"), raw.get("generation"), raw.get("evidence")
+    ok = (session is not None and isinstance(agent, str) and agent in CONVERSATION_RE
+          and isinstance(raw.get("source"), str) and raw["source"] in IDENTITY_RANK and state in IDENTITY_STATES
+          and (sid is None if state == "contested" else isinstance(sid, str) and CONVERSATION_RE[agent].fullmatch(sid))
+          and isinstance(evidence, str) and EVIDENCE_RE.fullmatch(evidence)
+          and _optional_time(raw.get("agent_started")) and _number(raw.get("observed_at"))
+          and isinstance(generation, int) and not isinstance(generation, bool) and generation >= 0
+          and isinstance(raw.get("holds_open"), bool))
+    if not ok:
+        return None
+    return {"session": session, "agent": agent, "id": sid, "source": raw["source"], "evidence": evidence,
+            "agent_started": raw.get("agent_started"), "observed_at": raw["observed_at"],
+            "generation": generation, "state": state, "holds_open": raw["holds_open"]}
+
+
+def _valid_claim(raw):
+    """A claim {session, agent, id, source, evidence, agent_started?, holds_open?}, checked as an entry."""
+    if not isinstance(raw, dict):
+        return None
+    return _valid_identity({**raw, "observed_at": 0, "generation": 0, "state": "active",
+                            "holds_open": raw.get("holds_open", False)})
+
+
+def same_incarnation(a, b):
+    """Whether two incarnations are one: same name, created and nonce equal wherever both know them,
+    and at least one of the two known on both sides."""
+    if a["name"] != b["name"]:
+        return False
+    shared = [key for key in ("created", "nonce") if a[key] is not None and b[key] is not None]
+    return bool(shared) and all(a[key] == b[key] for key in shared)
+
+
+def _bound(known, seen):
+    """``known`` with the fields it lacks taken from ``seen`` (the same incarnation)."""
+    return {key: seen[key] if known[key] is None else known[key] for key in ("name", "created", "nonce")}
+
+
+def _strength(entry):
+    """I4: chosen > hook > observed, then the one that holds the rollout open."""
+    return IDENTITY_RANK[entry["source"]], entry["holds_open"]
+
+
+def _started_after(claim, entry):
+    """Whether the claim's agent process started after the entry was made: the agent was quit and
+    started again in the terminal."""
+    before = entry["agent_started"] if entry["agent_started"] is not None else entry["observed_at"]
+    return claim["agent_started"] is not None and claim["agent_started"] > before + _SAME_PROCESS_SLACK
+
+
+def _started_before(claim, entry):
+    """Whether the claim's agent process started before the entry's: a late report of one that quit."""
+    return (claim["agent_started"] is not None and entry["agent_started"] is not None
+            and claim["agent_started"] < entry["agent_started"] - _SAME_PROCESS_SLACK)
+
+
+def merge_identity(registry, raw_claim, now):
+    """The registry after one claim (pure; the same object when nothing changes). In order:
+    1. an invalid claim changes nothing;
+    2. on the incarnation's own entry, another agent counts only from a process started after that
+       entry, and another id from a process started before the entry's agent is a late report: ignored;
+    3. the same id refreshes the entry (the stronger source, holds_open once seen, a start time);
+    4. another id replaces the entry (/clear, /new, an agent started again): the newest fact wins;
+    5. one id has one holder among incarnations (I4): the stronger (_strength) keeps it and the other
+       is ``contested``, with no id; when equal, the current holder keeps it."""
+    claim = _valid_claim(raw_claim)
+    if claim is None:
+        return registry
+    mine = next((e for e in registry["entries"] if same_incarnation(e["session"], claim["session"])), None)
+    if mine is not None and _refused(mine, claim):
+        return registry
+    if mine is not None and mine["state"] == "active" and mine["id"] == claim["id"]:
+        return _refreshed(registry, mine, claim)
+    return _placed(registry, mine, claim, now)
+
+
+def _refused(mine, claim):
+    if mine["agent"] != claim["agent"]:
+        return not _started_after(claim, mine)
+    return mine["id"] != claim["id"] and _started_before(claim, mine)
+
+
+def _refreshed(registry, mine, claim):
+    stronger = IDENTITY_RANK[claim["source"]] > IDENTITY_RANK[mine["source"]]
+    updated = {**mine, "session": _bound(mine["session"], claim["session"]),
+               "holds_open": mine["holds_open"] or claim["holds_open"],
+               "agent_started": claim["agent_started"] if mine["agent_started"] is None else mine["agent_started"]}
+    if stronger:
+        updated.update(source=claim["source"], evidence=claim["evidence"])
+    if updated == mine:
+        return registry
+    return {**registry, "entries": [updated if e is mine else e for e in registry["entries"]]}
+
+
+def _placed(registry, mine, claim, now):
+    generation = registry["generation"] + 1
+    candidate = {**claim, "session": _bound(mine["session"], claim["session"]) if mine else claim["session"],
+                 "observed_at": now, "generation": generation, "state": "active"}
+    holder = next((e for e in registry["entries"] if e is not mine and e["state"] == "active"
+                   and e["agent"] == claim["agent"] and e["id"] == claim["id"]), None)
+    if holder is not None and _strength(candidate) <= _strength(holder):
+        candidate.update(state="contested", id=None)
+        holder = None
+    if mine is not None and holder is None and all(mine[key] == candidate[key] for key in _FACT_KEYS):
+        return registry
+    entries = [{**e, "state": "contested", "id": None, "generation": generation} if e is holder else e
+               for e in registry["entries"] if e is not mine]
+    return {"generation": generation, "entries": _bounded([*entries, candidate])}
+
+
+def _bounded(entries):
+    """At most IDENTITY_MAX_ENTRIES, the oldest observed dropped first (in file order when equal)."""
+    excess = len(entries) - IDENTITY_MAX_ENTRIES
+    if excess <= 0:
+        return entries
+    dropped = set(sorted(range(len(entries)), key=lambda i: (entries[i]["observed_at"], i))[:excess])
+    return [e for i, e in enumerate(entries) if i not in dropped]
+
+
+def prune_identities(registry, keep, now):
+    """The registry without the entries of incarnations that are neither in ``keep`` (the listed ones and
+    the ones offered for restore) nor younger than IDENTITY_GRACE; a kept entry takes the created or nonce
+    it lacks from the listing."""
+    entries = []
+    for entry in registry["entries"]:
+        seen = next((k for k in keep if same_incarnation(entry["session"], k)), None)
+        if seen is not None:
+            entries.append({**entry, "session": _bound(entry["session"], seen)})
+        elif now - entry["observed_at"] < IDENTITY_GRACE:
+            entries.append(entry)
+    return registry if entries == registry["entries"] else {**registry, "entries": entries}
+
+
+def resolve_identity(registry, name, created, agent):
+    """(state, id) for the incarnation (name, created) running ``agent``: state "none" (no entry),
+    "active" or "contested" (id None)."""
+    query = {"name": name, "created": created, "nonce": None}
+    entry = next((e for e in registry["entries"]
+                  if same_incarnation(e["session"], query) and e["agent"] == agent), None)
+    return ("none", None) if entry is None else (entry["state"], entry["id"])
+
+
+def _empty_identities():
+    return {"generation": 0, "entries": []}
+
+
+def _parse_identities(text):
+    """(registry, writable): a newer version is read as empty and never replaced by this server; any
+    other malformed content reads as empty; each entry is checked, and a repeated incarnation dropped."""
+    try:
+        raw = json.loads(text)
+    except ValueError:
+        raw = None
+    version = raw.get("version") if isinstance(raw, dict) else None
+    if not isinstance(version, int) or isinstance(version, bool) or not isinstance(raw.get("entries"), list):
+        return _empty_identities(), True
+    if version != IDENTITY_VERSION:
+        return _empty_identities(), version < IDENTITY_VERSION
+    entries = []
+    for entry in map(_valid_identity, raw["entries"][:IDENTITY_MAX_ENTRIES]):
+        if entry and not any(same_incarnation(entry["session"], e["session"]) for e in entries):
+            entries.append(entry)
+    generation = raw.get("generation")
+    if not (isinstance(generation, int) and not isinstance(generation, bool) and generation >= 0):
+        generation = max((e["generation"] for e in entries), default=0)
+    return {"generation": generation, "entries": entries}, True
+
+
+def _read_identities():
+    """(registry, writable), registry None when there is no file. Never follows a link; a file that is not
+    a private regular one, or is too large, reads as empty (and is replaced by the next write)."""
+    try:
+        fd = os.open(identity_file(), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None, True
+    except OSError as exc:
+        print(f"respawn: identity registry not read: {exc!r}", flush=True)
+        return _empty_identities(), True
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        private = stat.S_ISREG(info.st_mode) and not info.st_mode & 0o077
+        data = handle.read(IDENTITY_MAX_BYTES + 1) if private else b""
+    if not private or len(data) > IDENTITY_MAX_BYTES:
+        print("respawn: identity registry refused: not a private regular file, or too large", flush=True)
+        return _empty_identities(), True
+    try:
+        return _parse_identities(data.decode("utf-8"))
+    except UnicodeDecodeError:
+        return _empty_identities(), True
+
+
+@contextlib.contextmanager
+def _identity_locked():
+    """The registry's thread lock, then its file lock (``<file>.lock``, an fcntl lock as OCaml's lockf)."""
+    with _identity_lock:
+        path = identity_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(f"{path}.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            fcntl.lockf(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+
+def _migrated_identities(state, now):
+    """What a first run starts from: each snapshot entry's conversation as ``observed`` (evidence
+    ``migrated:<hooks|argv|legacy>``). A history guess is never in the snapshot; a lone Codex's pick of
+    its folder may be, which no older snapshot told apart from what it held open."""
+    registry = _empty_identities()
+    for entry in state["live"] + state["lost"]:
+        agent = entry["agent"]
+        if agent and agent["session_id"]:
+            registry = merge_identity(registry, {
+                "session": {"name": entry["name"], "created": entry["created"], "nonce": None},
+                "agent": agent["type"], "id": agent["session_id"], "source": "observed",
+                "evidence": f"migrated:{agent.get('identity_source') or 'legacy'}",
+                "agent_started": agent.get("started")}, now)
+    return registry
+
+
+def _snapshot_state():
+    with _lock:
+        return _load()
+
+
+def identities():
+    """The registry as it is on disk (read only; with no file yet, what the migration would start from)."""
+    registry, _ = _read_identities()
+    return registry if registry is not None else _migrated_identities(_snapshot_state(), time.time())
+
+
+def update_identities(change, *, snapshot=None, required=False):
+    """Apply ``change`` (registry -> registry, pure) under the locks; write the result when it differs, or
+    when there was no file (migrated from ``snapshot``, the snapshot state, read when None). A file of a
+    newer version is never replaced. ``required``: raise OSError when the result is not written."""
+    with _identity_locked():
+        registry, writable = _read_identities()
+        missing = registry is None
+        if missing:
+            registry = _migrated_identities(snapshot if snapshot is not None else _snapshot_state(), time.time())
+        changed = change(registry)
+        if not writable and required:
+            raise OSError("identity registry of a newer version: not replaced")
+        if writable and (missing or changed is not registry):
+            text = json.dumps({"version": IDENTITY_VERSION, **changed}, indent=1)
+            try:
+                fsutil.atomic_write(identity_file(), text, sync_dir=required)
+            except OSError as exc:
+                print(f"respawn: identity registry not written: {exc!r}", flush=True)
+                if required:
+                    raise
+        return changed
+
+
+def _listing_claims(mesh, nonces):
+    """The conversations a listing observed exactly (OBSERVED_SOURCES), as claims."""
+    claims = []
+    for session in mesh:
+        agent = session.get("agent") or {}
+        source = agent.get("identity_source")
+        if source in OBSERVED_SOURCES and agent.get("session_id"):
+            key = (session.get("name"), session.get("created"))
+            claims.append({"session": {"name": key[0], "created": key[1], "nonce": nonces.get(key)},
+                           "agent": agent.get("type"), "id": agent["session_id"], "source": "observed",
+                           "evidence": f"observed:{source}", "agent_started": agent.get("started"),
+                           "holds_open": source == "open_rollout"})
+    return claims
+
+
+def _record_identities(mesh, nonces, before, after, now):
+    """One listing into the registry: its exact observations, then the entries of incarnations neither
+    listed nor offered dropped. ``before``: the snapshot state the migration reads when there is no file."""
+    keep = [{"name": s.get("name"), "created": s.get("created"), "nonce": nonces.get((s.get("name"), s.get("created")))}
+            for s in mesh] + [{"name": e["name"], "created": e["created"], "nonce": None} for e in after["lost"]]
+    keep = [k for k in map(_valid_incarnation, keep) if k]
+    claims = _listing_claims(mesh, nonces)
+
+    def change(registry):
+        for claim in claims:
+            registry = merge_identity(registry, claim, now)
+        return prune_identities(registry, keep, now)
+
+    try:
+        update_identities(change, snapshot=before)
+    except OSError as exc:      # the lock file: a read-only config dir must not break the session list
+        print(f"respawn: identity registry not updated: {exc!r}", flush=True)
+
+
+def restore_identity(entry):
+    """(the lost ``entry`` with the conversation to resume, why there is none or None). The registry's
+    entry wins: a contested incarnation resumes nothing (I4, I6). Without one, the snapshot's id, as before
+    the registry existed (a newer or unreadable registry reads as having none)."""
+    agent = entry["agent"]
+    if not agent:
+        return entry, None
+    state, sid = resolve_identity(identities(), entry["name"], entry["created"], agent["type"])
+    if state == "none":
+        sid = agent["session_id"]
+    reason = "contested" if state == "contested" else None if sid else "unknown"
+    return {**entry, "agent": {**agent, "session_id": sid}}, reason

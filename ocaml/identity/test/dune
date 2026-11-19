@@ -1,0 +1,9 @@
+; The registry vectors (shared with tests/identity-registry.test.ts, which runs
+; them through respawn.py), and the store: atomic replacement, refused files,
+; a newer version left alone, concurrent writers.
+
+(test
+ (name test_identity)
+ (libraries mesh_identity alcotest yojson unix)
+ (deps
+  (glob_files vectors/*.json)))

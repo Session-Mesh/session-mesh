@@ -1,0 +1,8 @@
+; The session identity registry (session-identities.json): its schema, its
+; merge and conflict rules, and its locked atomic store. The web server
+; implements the same rules in respawn.py; both run the vectors of test/vectors.
+; Generic over agents: the id format of each agent is passed in.
+
+(library
+ (name mesh_identity)
+ (libraries yojson unix mesh_safe_file))

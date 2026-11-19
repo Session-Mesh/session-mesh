@@ -26,9 +26,11 @@ pytestmark = pytest.mark.usefixtures("plain_transport_shell")
 
 
 def fake_claude_script(log):
-    """What the agent does: tell claude's session registry its conversation id, record its argv, stay up."""
+    """What the agent does: tell claude's session registry its conversation id, keep a transcript (a restore
+    checks it exists), record its argv, stay up."""
     return ("#!/bin/sh\n"
-            'mkdir -p "$HOME/.claude/sessions"\n'
+            'mkdir -p "$HOME/.claude/sessions" "$HOME/.claude/projects/e2e"\n'
+            f': >> "$HOME/.claude/projects/e2e/{SID}.jsonl"\n'
             f'printf \'{{"sessionId":"{SID}","status":"idle"}}\' > "$HOME/.claude/sessions/$$.json"\n'
             f'{{ echo "--- start"; for a in "$@"; do echo "$a"; done; }} >> "{log}"\n'
             "while :; do sleep 1; done\n")

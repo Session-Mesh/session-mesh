@@ -1,0 +1,262 @@
+{
+ "comment": "Identity registry vectors, run by ocaml/identity/test (Mesh_identity) and by tests/identity-registry.test.ts (respawn.py). Each case starts from a registry, applies its steps (a claim, or a prune with the incarnations to keep) and compares the result; resolve asks what a restore would read. Each file is a registry file's text and what reading it gives.",
+ "ids": {
+  "A": "0e6c0000-1111-4222-8333-444444444444",
+  "B": "0e6c0000-1111-4222-8333-555555555555",
+  "C": "0e6c0000-1111-4222-8333-666666666666",
+  "N1": "0123456789abcdef0123456789abcdef"
+ },
+ "cases": [
+  {
+   "name": "a first claim is inserted",
+   "start": {"generation": 0, "entries": []},
+   "steps": [
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 100, "holds_open": true}}
+   ],
+   "expect": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 100, "observed_at": 10, "generation": 1, "state": "active", "holds_open": true}
+   ]},
+   "resolve": [
+    {"name": "x", "created": 1, "agent": "codex", "expect": ["active", "0e6c0000-1111-4222-8333-444444444444"]},
+    {"name": "x", "created": 1, "agent": "claude", "expect": ["none", null]},
+    {"name": "x", "created": 2, "agent": "codex", "expect": ["none", null]},
+    {"name": "y", "created": 1, "agent": "codex", "expect": ["none", null]}
+   ]
+  },
+  {
+   "name": "the same id from a stronger source upgrades the entry; the generation stays",
+   "start": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:pid_metadata", "agent_started": 100, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false}
+   ]},
+   "steps": [
+    {"now": 20, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "hook", "evidence": "hook:Stop", "agent_started": null}}
+   ],
+   "expect": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "hook", "evidence": "hook:Stop", "agent_started": 100, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false}
+   ]}
+  },
+  {
+   "name": "a weaker report of the same id changes nothing",
+   "start": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": null, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:session_id", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false}
+   ]},
+   "steps": [
+    {"now": 30, "claim": {"session": {"name": "x", "created": null, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "hook", "evidence": "hook:Stop"}}
+   ],
+   "expect": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": null, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:session_id", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false}
+   ]}
+  },
+  {
+   "name": "a listing binds the created of a chosen entry and fills its start time; holds_open is never taken back",
+   "start": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": null, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:resume", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false}
+   ]},
+   "steps": [
+    {"now": 20, "claim": {"session": {"name": "x", "created": 7, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 100, "holds_open": true}},
+    {"now": 30, "claim": {"session": {"name": "x", "created": 7, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 101, "holds_open": false}}
+   ],
+   "expect": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 7, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:resume", "agent_started": 100, "observed_at": 10, "generation": 1, "state": "active", "holds_open": true}
+   ]},
+   "resolve": [
+    {"name": "x", "created": 7, "agent": "codex", "expect": ["active", "0e6c0000-1111-4222-8333-444444444444"]}
+   ]
+  },
+  {
+   "name": "another id replaces the entry: the newest fact wins, whatever its source (a /clear)",
+   "start": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:session_id", "agent_started": 100, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false}
+   ]},
+   "steps": [
+    {"now": 50, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-555555555555", "source": "observed", "evidence": "observed:pid_metadata", "agent_started": 100}}
+   ],
+   "expect": {"generation": 2, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-555555555555", "source": "observed", "evidence": "observed:pid_metadata", "agent_started": 100, "observed_at": 50, "generation": 2, "state": "active", "holds_open": false}
+   ]}
+  },
+  {
+   "name": "a late report of a process that has quit is ignored",
+   "start": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 1000, "observed_at": 1010, "generation": 1, "state": "active", "holds_open": true}
+   ]},
+   "steps": [
+    {"now": 1020, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-555555555555", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 500, "holds_open": true}}
+   ],
+   "expect": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 1000, "observed_at": 1010, "generation": 1, "state": "active", "holds_open": true}
+   ]}
+  },
+  {
+   "name": "another agent counts only from a process started after the entry",
+   "start": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:pid_metadata", "agent_started": 100, "observed_at": 110, "generation": 1, "state": "active", "holds_open": false}
+   ]},
+   "steps": [
+    {"now": 200, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-555555555555", "source": "observed", "evidence": "observed:open_rollout", "agent_started": null}},
+    {"now": 200, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-555555555555", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 101}},
+    {"now": 600, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-555555555555", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 500}}
+   ],
+   "expect": {"generation": 2, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-555555555555", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 500, "observed_at": 600, "generation": 2, "state": "active", "holds_open": false}
+   ]},
+   "resolve": [
+    {"name": "x", "created": 1, "agent": "claude", "expect": ["none", null]},
+    {"name": "x", "created": 1, "agent": "codex", "expect": ["active", "0e6c0000-1111-4222-8333-555555555555"]}
+   ]
+  },
+  {
+   "name": "I4: a stronger source takes the conversation, the holder is contested",
+   "start": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 100, "observed_at": 10, "generation": 1, "state": "active", "holds_open": true}
+   ]},
+   "steps": [
+    {"now": 20, "claim": {"session": {"name": "y", "created": null, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:resume"}}
+   ],
+   "expect": {"generation": 2, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": null, "source": "observed", "evidence": "observed:open_rollout", "agent_started": 100, "observed_at": 10, "generation": 2, "state": "contested", "holds_open": true},
+    {"session": {"name": "y", "created": null, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:resume", "agent_started": null, "observed_at": 20, "generation": 2, "state": "active", "holds_open": false}
+   ]},
+   "resolve": [
+    {"name": "x", "created": 1, "agent": "codex", "expect": ["contested", null]}
+   ]
+  },
+  {
+   "name": "I4: a weaker claim is contested and the holder keeps the conversation",
+   "start": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:resume", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false}
+   ]},
+   "steps": [
+    {"now": 20, "claim": {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 15, "holds_open": true}}
+   ],
+   "expect": {"generation": 2, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:resume", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false},
+    {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "codex", "id": null, "source": "observed", "evidence": "observed:open_rollout", "agent_started": 15, "observed_at": 20, "generation": 2, "state": "contested", "holds_open": true}
+   ]},
+   "resolve": [
+    {"name": "x", "created": 1, "agent": "codex", "expect": ["active", "0e6c0000-1111-4222-8333-444444444444"]},
+    {"name": "y", "created": 2, "agent": "codex", "expect": ["contested", null]}
+   ]
+  },
+  {
+   "name": "I4: equal sources, the one that holds the rollout open wins",
+   "start": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "migrated:legacy", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false}
+   ]},
+   "steps": [
+    {"now": 20, "claim": {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 15, "holds_open": true}}
+   ],
+   "expect": {"generation": 2, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": null, "source": "observed", "evidence": "migrated:legacy", "agent_started": null, "observed_at": 10, "generation": 2, "state": "contested", "holds_open": false},
+    {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 15, "observed_at": 20, "generation": 2, "state": "active", "holds_open": true}
+   ]}
+  },
+  {
+   "name": "I4: equal sources and neither holds it: the current holder keeps it; a repeated claim changes nothing",
+   "start": {"generation": 1, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "vibe", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "hook", "evidence": "hook:session_start", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false}
+   ]},
+   "steps": [
+    {"now": 20, "claim": {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "vibe", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "hook", "evidence": "hook:pre_agent"}},
+    {"now": 30, "claim": {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "vibe", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "hook", "evidence": "hook:pre_agent"}}
+   ],
+   "expect": {"generation": 2, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "vibe", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "hook", "evidence": "hook:session_start", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false},
+    {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "vibe", "id": null, "source": "hook", "evidence": "hook:pre_agent", "agent_started": null, "observed_at": 20, "generation": 2, "state": "contested", "holds_open": false}
+   ]}
+  },
+  {
+   "name": "the contest ends when the holder is gone and the session claims the conversation again",
+   "start": {"generation": 2, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:resume", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false},
+    {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "codex", "id": null, "source": "observed", "evidence": "observed:open_rollout", "agent_started": 15, "observed_at": 20, "generation": 2, "state": "contested", "holds_open": true}
+   ]},
+   "steps": [
+    {"now": 100, "prune": [{"name": "y", "created": 2, "nonce": null}]},
+    {"now": 100, "claim": {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 15, "holds_open": true}}
+   ],
+   "expect": {"generation": 3, "entries": [
+    {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 15, "observed_at": 100, "generation": 3, "state": "active", "holds_open": true}
+   ]}
+  },
+  {
+   "name": "two agents may name the same id string: no contest",
+   "start": {"generation": 0, "entries": []},
+   "steps": [
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:pid_metadata"}},
+    {"now": 11, "claim": {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "gemini", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "hook", "evidence": "hook:AfterAgent"}}
+   ],
+   "expect": {"generation": 2, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:pid_metadata", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false},
+    {"session": {"name": "y", "created": 2, "nonce": null}, "agent": "gemini", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "hook", "evidence": "hook:AfterAgent", "agent_started": null, "observed_at": 11, "generation": 2, "state": "active", "holds_open": false}
+   ]}
+  },
+  {
+   "name": "prune keeps the listed and the young entries, binds the listing's created, drops the rest",
+   "start": {"generation": 3, "entries": [
+    {"session": {"name": "z", "created": null, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:session_id", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false},
+    {"session": {"name": "w", "created": 3, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-555555555555", "source": "observed", "evidence": "observed:open_rollout", "agent_started": null, "observed_at": 10, "generation": 2, "state": "active", "holds_open": true},
+    {"session": {"name": "v", "created": 4, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-666666666666", "source": "observed", "evidence": "observed:open_rollout", "agent_started": null, "observed_at": 90, "generation": 3, "state": "active", "holds_open": true}
+   ]},
+   "steps": [
+    {"now": 100, "prune": [{"name": "z", "created": 7, "nonce": "0123456789abcdef0123456789abcdef"}, {"name": "w", "created": 9, "nonce": null}]}
+   ],
+   "expect": {"generation": 3, "entries": [
+    {"session": {"name": "z", "created": 7, "nonce": "0123456789abcdef0123456789abcdef"}, "agent": "claude", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "chosen", "evidence": "launch:session_id", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false},
+    {"session": {"name": "v", "created": 4, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-666666666666", "source": "observed", "evidence": "observed:open_rollout", "agent_started": null, "observed_at": 90, "generation": 3, "state": "active", "holds_open": true}
+   ]},
+   "resolve": [
+    {"name": "z", "created": 7, "agent": "claude", "expect": ["active", "0e6c0000-1111-4222-8333-444444444444"]},
+    {"name": "w", "created": 3, "agent": "codex", "expect": ["none", null]}
+   ]
+  },
+  {
+   "name": "invalid claims change nothing",
+   "start": {"generation": 0, "entries": []},
+   "steps": [
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0E6C0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout"}},
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "agy", "id": "-dangerous-option", "source": "hook", "evidence": "hook:Stop"}},
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "opencode", "id": "ses_short", "source": "hook", "evidence": "hook:idle"}},
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "emacs", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "hook", "evidence": "hook:x"}},
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "guessed", "evidence": "observed:cwd_unique"}},
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "Observed:open_rollout"}},
+    {"now": 10, "claim": {"session": {"name": "x y", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout"}},
+    {"now": 10, "claim": {"session": {"name": "x", "created": null, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout"}},
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": "ABC"}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout"}},
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "holds_open": null}},
+    {"now": 10, "claim": {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": 0}},
+    {"now": 10, "claim": {"session": {"name": "x", "created": true, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout"}}
+   ],
+   "expect": {"generation": 0, "entries": []}
+  },
+  {
+   "name": "the agents' id formats",
+   "start": {"generation": 0, "entries": []},
+   "steps": [
+    {"now": 10, "claim": {"session": {"name": "a", "created": 1, "nonce": null}, "agent": "opencode", "id": "ses_0123456789AbCd", "source": "hook", "evidence": "hook:idle"}},
+    {"now": 11, "claim": {"session": {"name": "b", "created": 1, "nonce": null}, "agent": "agy", "id": "conv_01-x", "source": "hook", "evidence": "hook:Stop"}},
+    {"now": 12, "claim": {"session": {"name": "c", "created": 1, "nonce": null}, "agent": "pi", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:transcript"}}
+   ],
+   "expect": {"generation": 3, "entries": [
+    {"session": {"name": "a", "created": 1, "nonce": null}, "agent": "opencode", "id": "ses_0123456789AbCd", "source": "hook", "evidence": "hook:idle", "agent_started": null, "observed_at": 10, "generation": 1, "state": "active", "holds_open": false},
+    {"session": {"name": "b", "created": 1, "nonce": null}, "agent": "agy", "id": "conv_01-x", "source": "hook", "evidence": "hook:Stop", "agent_started": null, "observed_at": 11, "generation": 2, "state": "active", "holds_open": false},
+    {"session": {"name": "c", "created": 1, "nonce": null}, "agent": "pi", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:transcript", "agent_started": null, "observed_at": 12, "generation": 3, "state": "active", "holds_open": false}
+   ]}
+  }
+ ],
+ "files": [
+  {"name": "a newer version is read as empty and is not replaced", "text": "{\"version\": 2, \"generation\": 9, \"entries\": []}", "writable": false, "expect": {"generation": 0, "entries": []}},
+  {"name": "an older version is read as empty", "text": "{\"version\": 0, \"entries\": []}", "writable": true, "expect": {"generation": 0, "entries": []}},
+  {"name": "a truncated file is read as empty", "text": "{\"version\": 1, \"entries\": [", "writable": true, "expect": {"generation": 0, "entries": []}},
+  {"name": "not an object", "text": "[]", "writable": true, "expect": {"generation": 0, "entries": []}},
+  {"name": "a boolean version", "text": "{\"version\": true, \"entries\": []}", "writable": true, "expect": {"generation": 0, "entries": []}},
+  {"name": "entries without a list", "text": "{\"version\": 1, \"entries\": {}}", "writable": true, "expect": {"generation": 0, "entries": []}},
+  {"name": "bad entries and a repeated incarnation are dropped; a missing generation is the highest entry's",
+   "text": "{\"version\": 1, \"entries\": [{\"session\": {\"name\": \"x\", \"created\": 1, \"nonce\": null}, \"agent\": \"codex\", \"id\": \"0e6c0000-1111-4222-8333-444444444444\", \"source\": \"observed\", \"evidence\": \"observed:open_rollout\", \"agent_started\": null, \"observed_at\": 10, \"generation\": 3, \"state\": \"active\", \"holds_open\": true}, {\"session\": {\"name\": \"q\", \"created\": 1, \"nonce\": null}, \"agent\": \"codex\", \"id\": \"0e6c0000-1111-4222-8333-555555555555\", \"source\": \"observed\", \"evidence\": \"observed:open_rollout\", \"agent_started\": null, \"observed_at\": 10, \"generation\": 3, \"state\": \"weird\", \"holds_open\": true}, {\"session\": {\"name\": \"x\", \"created\": 1, \"nonce\": null}, \"agent\": \"codex\", \"id\": \"0e6c0000-1111-4222-8333-555555555555\", \"source\": \"observed\", \"evidence\": \"observed:open_rollout\", \"agent_started\": null, \"observed_at\": 10, \"generation\": 5, \"state\": \"active\", \"holds_open\": true}, {\"session\": {\"name\": \"r\", \"created\": 1, \"nonce\": null}, \"agent\": \"codex\", \"id\": \"0e6c0000-1111-4222-8333-555555555555\", \"source\": \"observed\", \"evidence\": \"observed:open_rollout\", \"agent_started\": null, \"observed_at\": 10, \"generation\": 4, \"state\": \"contested\", \"holds_open\": false}, {\"session\": {\"name\": \"s\", \"created\": 1, \"nonce\": null}, \"agent\": \"codex\", \"id\": null, \"source\": \"observed\", \"evidence\": \"observed:open_rollout\", \"agent_started\": null, \"observed_at\": 10, \"generation\": 4, \"state\": \"contested\", \"holds_open\": false}]}",
+   "writable": true,
+   "expect": {"generation": 4, "entries": [
+    {"session": {"name": "x", "created": 1, "nonce": null}, "agent": "codex", "id": "0e6c0000-1111-4222-8333-444444444444", "source": "observed", "evidence": "observed:open_rollout", "agent_started": null, "observed_at": 10, "generation": 3, "state": "active", "holds_open": true},
+    {"session": {"name": "s", "created": 1, "nonce": null}, "agent": "codex", "id": null, "source": "observed", "evidence": "observed:open_rollout", "agent_started": null, "observed_at": 10, "generation": 4, "state": "contested", "holds_open": false}
+   ]}}
+ ]
+}
