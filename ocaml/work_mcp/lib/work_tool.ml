@@ -130,9 +130,9 @@ let with_truncated = function
 
 (* The serialised result is a true bound: strings and lists are cut at every
    depth until it fits, and the result says so with [truncated]. *)
-let fit json =
+let fit ?(max_bytes = max_output_bytes) json =
   let rec go json shrunk =
-    if size json <= max_output_bytes then Some (if shrunk then with_truncated json else json)
+    if size json <= max_bytes then Some (if shrunk then with_truncated json else json)
     else Option.bind (shrink json) (fun smaller -> go smaller true)
   in
   go json false

@@ -1,0 +1,40 @@
+(******************************************************************************)
+(*                                                                            *)
+(* SPDX-License-Identifier: AGPL-3.0-or-later                                 *)
+(* Copyright (c) 2026 Atacama <contact@atacama.tech>                          *)
+(*                                                                            *)
+(******************************************************************************)
+
+module E = Work_mcp.Work_err
+open E
+
+let dispatch loaded = function
+  | Wr_args.Products -> Wr_products.run loaded
+  | Wr_args.Projects { product; all } -> Wr_projects.list loaded ~product ~all
+  | Wr_args.Project_detail id -> Wr_projects.detail loaded id
+  | Wr_args.Task_detail id -> Wr_task.run loaded id
+  | Wr_args.Resume { product; project; all } -> Wr_resume.run loaded ~product ~project ~all
+  | Wr_args.Sessions_of target -> Wr_sessions.run loaded target
+
+let run ?getenv args =
+  Wr_out.reset ();
+  let* command = Wr_args.parse args in
+  let* loaded = Wr_load.load ?getenv () in
+  dispatch loaded command
+
+let of_request () =
+  let* text = Wr_request.read stdin in
+  Wr_request.parse text
+
+(* Every exception, whatever it is, becomes an [internal] error (exit 7): an
+   uncaught one would make the runtime exit with 2, the code of
+   [invalid_input]. *)
+let main args =
+  let result =
+    try
+      match args with
+      | [ "--request" ] -> Result.bind (of_request ()) (fun words -> run words)
+      | args -> run args
+    with _ -> Error (E.internal "unexpected exception")
+  in
+  try Wr_out.finish result with _ -> 7

@@ -1,0 +1,8 @@
+; The read-only reader of the Projects view: one JSON document on stdout per
+; subcommand, built on the worklog library. It reuses the text cleaning, the
+; bounded renderers and the question fold of the work_mcp library (no cycle:
+; work_mcp does not know this library, and nothing here writes).
+
+(library
+ (name work_read)
+ (libraries mesh_worklog work_mcp yojson unix))

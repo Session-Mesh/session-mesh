@@ -1554,6 +1554,60 @@ async def api_projects(request):
     return web.json_response(await host(body), headers={"Cache-Control": "no-store"})
 
 
+# The Projects view's read path: `work-read --request`, which checks the request itself. No logic here.
+WORK_SLOTS, WORK_TIMEOUT = asyncio.Semaphore(4), os.environ.get("MESH_WORK_READ_TIMEOUT", "5").strip()
+WORK_TIMEOUT = (float(WORK_TIMEOUT) if re.fullmatch(r"\d{1,5}(\.\d+)?", WORK_TIMEOUT) else 0) or 5.0  # bad: 5 s
+
+
+def work_error(status, code, message):
+    return web.json_response({"error": {"code": code, "message": message}}, status=status,
+                             headers={"Cache-Control": "no-store"})
+
+
+def work_read_command():
+    """MESH_WORK_READ_CMD (absolute, else none), else bin/work-read, else (no MESH_BIN_DIR) the switch's."""
+    if (explicit := os.environ.get("MESH_WORK_READ_CMD")) is not None:
+        return explicit if os.path.isabs(explicit) and os.path.isfile(explicit) else None
+    dirs = [agentmcp.runtime_bin()] + ([] if os.environ.get("MESH_BIN_DIR") else [agentmcp.switch_bin()])
+    return next((str(d / "work-read") for d in dirs if (d / "work-read").is_file()), None)
+
+
+async def api_work(request):
+    """The request body (4 KiB at most) is the standard input of work-read, its one JSON line the reply:
+    a timeout, a 2 MiB line cap, a private process group and at most four programs at once."""
+    body, proc = await request.read(), None
+    if len(body) > 4096 or not body.lstrip().startswith(b"{"):  # the program checks the rest
+        return work_error(400, "invalid_input", "a JSON object of at most 4096 bytes is expected")
+    if (command := work_read_command()) is None:
+        return work_error(503, "not_available", "work-read is not installed")
+    if WORK_SLOTS.locked():  # no await between this check and the acquire
+        return work_error(503, "busy", "too many work requests")
+    async with WORK_SLOTS:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                command, "--request", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL, limit=2 * 1024 * 1024, start_new_session=True,
+                env={k: os.environ[k] for k in ("HOME", "WL_HOME") if k in os.environ})
+            proc.stdin.write(body)
+            proc.stdin.close()
+            out, code = await asyncio.wait_for(asyncio.gather(proc.stdout.readline(), proc.wait()), WORK_TIMEOUT)
+            if code < 0 or not out.endswith(b"\n"):  # killed by a signal, or no complete line
+                return work_error(502, "internal", "work-read gave no complete answer")
+        except asyncio.TimeoutError:
+            return work_error(504, "timeout", "work-read took too long")
+        except ValueError:  # the line is over the cap
+            return work_error(502, "output_too_large", "work-read output too large")
+        except OSError:
+            return work_error(503, "not_available", "work-read could not start")
+        finally:
+            if proc is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                await proc.wait()
+    return web.Response(body=out, status={0: 200, 2: 400, 3: 404}.get(code, 502),
+                        content_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 # ---------------------------------------------------------------- actions
 
 # Codex uses the normal terminal buffer with rich rendering. ``codex_args`` keeps these
@@ -4637,6 +4691,7 @@ def make_app(*, session_request_path=None):
     app.router.add_post("/api/event", api_event)
     app.router.add_get("/api/dirs", api_dirs)
     app.router.add_post("/api/projects/v1", api_projects)
+    app.router.add_post("/api/work/v1", api_work)
     app.router.add_post("/api/projects/artifacts/v1", api_project_artifacts)
     app.router.add_post("/api/projects/issues/v1", api_project_issues)
     app.router.add_post("/api/new", api_new)

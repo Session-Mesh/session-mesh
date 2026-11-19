@@ -120,6 +120,7 @@ const ACCEPTED_STATUS = `
   GET /api/portfolio/diff/{selector} 404
   GET /api/dirs 200
   POST /api/projects/v1 400
+  POST /api/work/v1 400
   POST /api/projects/artifacts/v1 400
   POST /api/projects/issues/v1 400
   GET /api/docs 200

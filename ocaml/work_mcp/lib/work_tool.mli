@@ -20,9 +20,10 @@ val max_output_bytes : int
     cannot shrink any further (not reached by stored data) is an
     [output_too_large] error. *)
 
-val fit : Yojson.Safe.t -> Yojson.Safe.t option
-(** The result bounded to {!max_output_bytes} as described above; [None] only
-    when nothing is left to cut. Exposed for the tests. *)
+val fit : ?max_bytes:int -> Yojson.Safe.t -> Yojson.Safe.t option
+(** The result bounded to [max_bytes] (default {!max_output_bytes}) as
+    described above; [None] only when nothing is left to cut. Exposed for the
+    tests and for the [work-read] program, whose bound is larger. *)
 
 val string : ?description:string -> ?max:int -> unit -> Mcp_kit.Schema.t
 (** A non-empty string of at most [max] bytes (default 200). *)

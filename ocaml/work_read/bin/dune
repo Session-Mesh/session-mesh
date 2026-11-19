@@ -1,0 +1,5 @@
+(executable
+ (name work_read_main)
+ (public_name work-read)
+ (modules work_read_main)
+ (libraries work_read))
