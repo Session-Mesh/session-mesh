@@ -14,7 +14,7 @@ export type Gate = 'content' | 'filename' | 'message' | 'identity';
 export type Finding = {gate: Gate; path: string; line: number; rule: string; excerpt: string; match?: string; treePath?: string};
 export type PrivateRule = {id: string; literal: string; caseInsensitive: boolean};
 export type PublicRules = {
-  // `registers`: files whose signatory rows publish a commit address on purpose (see registerAddress).
+  // `registers`: files whose signatory rows publish a commit address on purpose (see registerRow).
   email: {allowedAddresses: string[]; allowedDomains: string[]; allowedTopLevels: string[]; registers?: string[]};
   homeTemplates: string[];
   tailnetIpv6Groups: string[];
