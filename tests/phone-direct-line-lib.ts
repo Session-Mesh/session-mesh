@@ -18,6 +18,7 @@ declare global {
   var lineDirect: unknown;
   var linePending: unknown;
   var refresh: () => Promise<void>;
+  var data: {management?: {state?: string}};
   var setExplorer: (on: boolean) => void;
   var addPane: (id?: string) => PaneView | null;
   var setActive: (pane: PaneView) => void;
@@ -155,6 +156,9 @@ export function useMesh(): {
         {phone: true, routes: asAgent(name)});
       pages.push(page);
       await page.waitForFunction(() => document.activeElement === document.querySelector('#line-text'));
+      // Right after the server starts, the list is a skeleton (management "pending"): a paste then has no
+      // observed target. Wait for the first described listing, as a page does at its next poll.
+      await page.waitForFunction(() => data.management?.state === 'observed', null, {timeout: 15000});
       await forget(page);
       return page;
     },
