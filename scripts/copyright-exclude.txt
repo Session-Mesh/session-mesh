@@ -18,6 +18,7 @@ tests/fixtures/*
 # compares the bytes (the sources carry the header).
 static/demo-catalog.js
 static/demo-view.js
+static/diff-view.js
 static/folder-state.js
 static/history-state.js
 static/pane-actions.js

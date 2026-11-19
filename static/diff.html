@@ -1,0 +1,95 @@
+<!doctype html>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+  Copyright (c) 2026 Atacama <contact@atacama.tech>
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{title}}</title>
+<style>
+  :root { color-scheme: light dark;
+    --bg: #ffffff; --fg: #1f2328; --mute: #59636e; --line: #d1d9e0; --head: #f6f8fa;
+    --add: #e6ffec; --add-ln: #ccffd8; --add-w: #abf2bc; --add-fg: #1a7f37;
+    --del: #ffebe9; --del-ln: #ffd7d5; --del-w: #ff818266; --del-fg: #cf222e;
+    --hunk: #ddf4ff; --hunk-fg: #0550ae; --empty: #f6f8fa; --accent: #0969da; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d1117; --fg: #d8dee9; --mute: #8b949e; --line: #30363d; --head: #161b22;
+      --add: #12261e; --add-ln: #1a3a2a; --add-w: #2ea04366; --add-fg: #3fb950;
+      --del: #25171c; --del-ln: #3c1e24; --del-w: #f8514966; --del-fg: #f85149;
+      --hunk: #121d2f; --hunk-fg: #79c0ff; --empty: #0d1117; --accent: #4493f8; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 -apple-system, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+  .bar { position: sticky; top: 0; display: flex; justify-content: space-between; gap: 12px; padding: 6px 16px; font: 12px ui-monospace, monospace; color: var(--mute); background: var(--bg); border-bottom: 1px solid var(--line); z-index: 2; }
+  .bar a { color: var(--mute); }
+  main { padding: 12px 16px 60px; }
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; font: 12px ui-monospace, monospace; }
+  .toolbar .summary { margin-right: auto; color: var(--mute); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  .seg button { border: 0; border-radius: 0; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .stat .a { color: var(--add-fg); } .stat .d { color: var(--del-fg); }
+  pre.preamble { margin: 0 0 12px; padding: 10px 12px; background: var(--head); border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace; }
+  details.file { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; overflow: hidden; }
+  details.file > summary { display: flex; align-items: center; gap: 10px; padding: 7px 12px; background: var(--head); cursor: pointer; font: 13px ui-monospace, monospace; }
+  details.file[open] > summary { border-bottom: 1px solid var(--line); }
+  summary .path { overflow-wrap: anywhere; }
+  summary .stat { margin-left: auto; white-space: nowrap; }
+  .badge { font-size: 11px; padding: 0 6px; border-radius: 10px; border: 1px solid var(--line); color: var(--mute); }
+  .badge.added { color: var(--add-fg); border-color: var(--add-fg); }
+  .badge.deleted { color: var(--del-fg); border-color: var(--del-fg); }
+  .note { margin: 0; padding: 10px 12px; color: var(--mute); font-size: 13px; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; font: 12px/20px ui-monospace, "JetBrains Mono", Menlo, monospace; }
+  td { padding: 0 8px; vertical-align: top; }
+  td.code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  col.ln { width: 52px; }
+  td.ln { padding: 0 6px; text-align: right; color: var(--mute); user-select: none; }
+  td.ln::before { content: attr(data-n); }
+  table.unified td.code::before { display: inline-block; width: 1.2em; margin-left: -4px; color: var(--mute); user-select: none; content: " "; }
+  table.unified td.code.add::before { content: "+"; color: var(--add-fg); }
+  table.unified td.code.del::before { content: "−"; color: var(--del-fg); }
+  td.sep { border-left: 1px solid var(--line); }
+  td.add { background: var(--add); } td.ln.add { background: var(--add-ln); }
+  td.del { background: var(--del); } td.ln.del { background: var(--del-ln); }
+  td.empty { background: var(--empty); }
+  td.add .w { background: var(--add-w); border-radius: 2px; }
+  td.del .w { background: var(--del-w); border-radius: 2px; }
+  .eof { color: var(--mute); }
+  td.hunk { background: var(--hunk); color: var(--hunk-fg); padding: 2px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<!-- English on purpose: this page runs in a sandboxed frame without access to the interface's
+     language catalogs (static/i18n/). Keep its few labels short and lower-case, like code.html.
+     See docs/features.md, "Documents beside the terminals". -->
+<div class="bar"><span>{{title}}</span><a href="?raw=1">source</a></div>
+<main id="doc"></main>
+<script type="application/json" id="src">{{src}}</script>
+<script nonce="{{nonce}}" src="/viewlib/diff-view.js"></script>
+<script nonce="{{nonce}}">
+  // static/diff-view.ts renders the diff; the diff is only ever written as text
+  MeshDiffView.mount(document.getElementById("doc"), JSON.parse(document.getElementById("src").textContent));
+  // The mesh's panel reloads this page when the file changes (mesh-open --watch): report the
+  // scroll position, and take back the one the mesh remembers. Numbers only, and the mesh is the
+  // only sender listened to (the same exchange as markdown.html).
+  const MESH_TOKEN = new URLSearchParams(location.search).get("dt");
+  if (window.parent !== window) {
+    let queued = false;
+    addEventListener("scroll", () => {
+      if (queued) return;
+      queued = true;
+      setTimeout(() => { queued = false; window.parent.postMessage({ smesh: "scroll", y: scrollY, token: MESH_TOKEN }, "*"); }, 100);
+    }, { passive: true });
+    addEventListener("message", (e) => {
+      if (e.source !== window.parent || e.data?.smesh !== "scrollto" || !Number.isFinite(e.data.y)) return;
+      scrollTo(0, e.data.y);
+    });
+  }
+</script>
+</body>
+</html>

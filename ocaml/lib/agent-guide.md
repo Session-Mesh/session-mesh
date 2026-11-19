@@ -116,6 +116,29 @@ which renders tables, highlighted code and Mermaid diagrams. `mesh-open` takes a
 (no `:line` suffix) and refuses web URLs. Remote images, styles and scripts do not load and scripts
 cannot fetch, but the panel is a display, not an isolation boundary.
 
+### Show a diff: `.diff` and `.patch` files
+
+The panel has a diff viewer. A file whose name ends in `.diff` or `.patch` and holds a unified
+diff (`git diff`, `git show`, `git format-patch`, `diff -u`) opens rendered: one block per file,
+with its renamed, new, deleted or binary status and its count of added and removed lines, line
+numbers on both sides, the changed words of each modified line highlighted, and a switch between
+unified and side-by-side views. Its "source" link shows the plain text.
+
+When the owner asks to see a diff (your changes, a commit, a branch against `main`, two versions
+of a file), show it in this viewer rather than printing it in the terminal: write it to a `.diff`
+file under the home directory or `/tmp`, then open it.
+
+```sh
+f="$(mktemp -d)/changes.diff"
+git diff > "$f"                # or: git diff main...HEAD, git show <commit>, diff -u old new
+mesh-open "$f"                 # under the same condition as above: MESH_SESSION_TOKEN is set
+```
+
+Without `MESH_SESSION_TOKEN`, print the file's path instead: the owner clicks it and it opens in
+the same viewer. To follow changes as you work, open it with `mesh-open --watch` and write the
+diff to the same file again. Write diffs without colour codes (`git diff` adds none when its
+output is a file; never pass `--color=always`). A diff over 4 MiB is shown as plain text.
+
 ### Whiteboard and demos
 
 The whiteboard tools give your session one Excalidraw board, shared with the owner: read it, write

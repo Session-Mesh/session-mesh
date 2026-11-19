@@ -212,6 +212,8 @@ def _now():
 # ---------------------------------------------------------------- policy (single source of truth)
 
 MD_EXT = {".md", ".markdown"}
+# unified diffs and patches, rendered by the diff viewer (static/diff.html, static/diff-view.ts)
+DIFF_EXT = {".diff", ".patch"}
 # types whose page loads relative subresources: the only ones given a directory scope
 DIR_SCOPE_EXT = {".html", ".htm", ".svg"} | MD_EXT
 # The only types served without a sandbox, so that the browser's own viewer can
@@ -223,6 +225,8 @@ _INERT_TYPE_SET = frozenset(INERT_TYPES.values())
 mimetypes.init()
 VIEWLIB = {"marked.min.js", "mermaid.min.js", "highlight.min.js", "purify.min.js",
            "hljs-github-dark.min.css", "hljs-github.min.css"}
+# The renderers built from the repository's own sources (static/*.ts), next to the vendored ones.
+VIEWLIB_OWN = {"diff-view.js"}
 
 # Frame flags for local documents; the response's CSP sandbox uses the same
 # string. No allow-forms / allow-modals: no phishing forms or dialogs over the mesh.
@@ -954,6 +958,14 @@ async def _respond(request, path, handle):
     if ext in MD_EXT:      # ?raw=1, or too large to render: the bytes, streamed
         return _DescriptorResponse(handle, "text/plain; charset=utf-8",
                                    {**headers, "Content-Security-Policy": active_csp()})
+    if (ext in DIFF_EXT and "raw" not in request.query and _is_navigation(request)
+            and _size(handle) <= DIFF_MAX_BYTES):
+        with handle:
+            text = (await asyncio.to_thread(handle.read)).decode("utf-8", errors="replace")
+        nonce = secrets.token_urlsafe(16)
+        # the same policy as rendered Markdown: only this page's own scripts run
+        return web.Response(text=diff_page(path, text, nonce), content_type="text/html",
+                            headers={**headers, "Content-Security-Policy": markdown_csp(nonce)})
     language = codeview.language_for(path)
     if language and _is_navigation(request):
         return await _code_response(request, path, handle, headers, language)
@@ -1089,6 +1101,7 @@ def _frame_named_tag_end(first, start, name):
 
 
 MD_MAX_BYTES = 4 * 1024 * 1024    # larger Markdown is served as plain text
+DIFF_MAX_BYTES = 4 * 1024 * 1024  # a larger diff goes to the code viewer, or as plain text
 
 
 def _size(handle):
@@ -1123,17 +1136,28 @@ def markdown_page(path, text, nonce):
     return PLACEHOLDER_RE.sub(lambda match: values[match[1]], MD_TEMPLATE)
 
 
+def diff_page(path, text, nonce):
+    """Self-contained page that renders a unified diff in the browser
+    (static/diff-view.ts). The diff is embedded as JSON, like markdown_page."""
+    src = (json.dumps(text).replace("</", "<\\/").replace("<!--", "<\\u0021--"))
+    values = {"title": html_escape(path.name), "src": src, "nonce": nonce}
+    return PLACEHOLDER_RE.sub(lambda match: values[match[1]], DIFF_TEMPLATE)
+
+
 def html_escape(text):
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 MD_TEMPLATE = (STATIC / "markdown.html").read_text()
+DIFF_TEMPLATE = (STATIC / "diff.html").read_text()
 PLACEHOLDER_RE = re.compile(r"\{\{(title|src|nonce)\}\}")
 
 
 async def viewlib(request):
     """The renderer's libraries, for sandboxed documents (which carry no cookie)."""
     name = request.match_info["name"]
+    if name in VIEWLIB_OWN:
+        return web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
     if name not in VIEWLIB:
         raise web.HTTPNotFound()
     return web.FileResponse(STATIC / "vendor" / name, headers={"Cache-Control": "max-age=86400"})
