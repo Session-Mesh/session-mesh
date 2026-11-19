@@ -161,22 +161,22 @@ let advance limits fold fd cursor =
     stats = { cursor.stats with lines; dropped };
   }
 
-(* More than a window appended: skip to the window at the end, as a first
-   read does, keeping the state, so that one read brings the result up to
-   date instead of several stale ones. *)
-let catch_up limits cursor =
-  let size = cursor.signature.Signature.size in
-  if size - cursor.offset <= limits.window then cursor
-  else { cursor with offset = size - limits.window; start = Mesh_jsonl_lines.Skip_first_line }
+(* More than a window appended since the cursor. *)
+let skips limits previous (current : Signature.t) = current.size - previous.offset > limits.window
 
 let update_open limits fold path previous fd stats =
   let current = signature_of path stats in
   match previous with
   | Some previous when unchanged previous current -> (previous, Unchanged)
-  | Some previous when not (rewritten fd previous current) ->
+  | Some previous when skips limits previous current && not (rewritten fd previous current) ->
+      (* Read as a first read: from an empty state, over the window at the
+         end. Keeping the state would lose the transitions in the skipped
+         bytes (a new title, a question answered) and mix the rest. *)
+      (advance limits fold fd (fresh_cursor limits fold current previous.stats.resets), Restarted)
+  | Some previous when (not (skips limits previous current)) && not (rewritten fd previous current) ->
       (* The steps work on a copy: the previous result keeps its state. *)
       let cursor = { previous with state = fold.copy previous.state; signature = current } in
-      (advance limits fold fd (catch_up limits cursor), Appended)
+      (advance limits fold fd cursor, Appended)
   | Some previous ->
       (advance limits fold fd (fresh_cursor limits fold current (previous.stats.resets + 1)), Restarted)
   | None -> (advance limits fold fd (fresh_cursor limits fold current 0), Restarted)
