@@ -1,0 +1,122 @@
+[
+  {
+    "id": "T-316b",
+    "title": "Invoice export",
+    "project": "billing",
+    "category": "platform",
+    "status": "todo",
+    "priority": "P1",
+    "due": "2026-11-30",
+    "tags": [],
+    "links": [],
+    "blocked_by": [],
+    "product": "billing",
+    "project_id": null,
+    "project_title": null,
+    "track": null,
+    "owner": "me",
+    "eta": null,
+    "size": null,
+    "origin": null,
+    "also": [],
+    "linear": []
+  },
+  {
+    "id": "T-5c6c",
+    "title": "Design the token endpoint",
+    "project": "gateway-api",
+    "category": "platform",
+    "status": "in_progress",
+    "priority": "P1",
+    "due": null,
+    "tags": [
+      "api"
+    ],
+    "links": [
+      "https://example.org/spec"
+    ],
+    "blocked_by": [],
+    "product": "gateway-api",
+    "project_id": "P-8f80",
+    "project_title": "Gateway rollout",
+    "track": "auth",
+    "owner": "me",
+    "eta": null,
+    "size": null,
+    "origin": null,
+    "also": [],
+    "linear": []
+  },
+  {
+    "id": "T-e86c",
+    "title": "Enrol authenticator apps",
+    "project": "2fa",
+    "category": "platform",
+    "status": "in_progress",
+    "priority": "P1",
+    "due": "2026-11-12",
+    "tags": [],
+    "links": [],
+    "blocked_by": [],
+    "product": "2fa",
+    "project_id": "P-8e63",
+    "project_title": "Second factor",
+    "track": null,
+    "owner": "me",
+    "eta": null,
+    "size": null,
+    "origin": null,
+    "also": [],
+    "linear": []
+  },
+  {
+    "id": "T-d8fa",
+    "title": "Build the login screen",
+    "project": "gateway-ui",
+    "category": "platform",
+    "status": "in_progress",
+    "priority": "P2",
+    "due": null,
+    "tags": [],
+    "links": [],
+    "blocked_by": [],
+    "product": "gateway-ui",
+    "project_id": "P-8f80",
+    "project_title": "Gateway rollout",
+    "track": null,
+    "owner": "me",
+    "eta": null,
+    "size": null,
+    "origin": null,
+    "also": [],
+    "linear": []
+  },
+  {
+    "id": "T-e917",
+    "title": "Rate limiting",
+    "project": "gateway-api",
+    "category": "platform",
+    "status": "todo",
+    "priority": "P2",
+    "due": null,
+    "tags": [
+      "perf"
+    ],
+    "links": [],
+    "blocked_by": [
+      "T-5c6c"
+    ],
+    "product": "gateway-api",
+    "project_id": null,
+    "project_title": null,
+    "track": null,
+    "owner": "me",
+    "eta": null,
+    "size": null,
+    "origin": null,
+    "also": [
+      "billing"
+    ],
+    "linear": []
+  }
+]

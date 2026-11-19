@@ -1,0 +1,13 @@
+categories:
+  platform:
+    name: Platform
+    products:
+      - gateway:
+          - gateway-api
+          - gateway-ui
+      - 2fa
+      - billing
+  research:
+    name: Research
+    products:
+      - notebook

@@ -1,0 +1,25 @@
+{"ts":"2026-11-02T08:00:00Z","task":"T-1a2b","type":"set","field":"priority","to":"P2"}
+{"ts":"2026-11-03T09:00:00Z","task":"T-1a2b","type":"set","field":"project","to":"P-5e6f"}
+{"ts":"2026-11-03T09:00:00Z","task":"T-3c4d","type":"set","field":"project","to":"P-5e6f"}
+{"ts":"2026-11-03T09:01:00Z","task":"T-3c4d","type":"set","field":"product","to":"relay-edge","category":"platform"}
+{"ts":"2026-11-03T09:02:00Z","task":"T-3c4d","type":"session_linked","agent":"claude","session":"s-old","cwd":"/work/relay","host":"hosta","repo":null,"branch":null}
+{"ts":"2026-11-03T09:03:00Z","task":"T-3c4d","type":"blocker","id":"B-0c0ffe","kind":"external","on":"harbour office","text":"waiting for slot confirmation"}
+{"ts":"2026-11-04T07:00:00Z","task":"T-7a8b","type":"note","text":"copied by a merge"}
+{"ts":"2026-11-04T07:30:00Z","task":"T-1a2b","type":"progress","text":"van loaded"}
+{"ts":"2026-11-04T07:30:00Z","task":"T-1a2b","type":"progress","text":"van loaded"}
+{"ts":"2026-11-05T10:00:00Z","task":"T-1a2b","type":"decision","text":"ship by road, not by rail","prov":"inferred"}
+{"ts":"2026-11-05T10:01:00Z","task":"T-1a2b","type":"shipped","text":"first pallet delivered","date":"2026-11-05"}
+{"ts":"2026-11-05T10:02:00Z","task":"T-1a2b","type":"learning","text":"labels fade in the rain"}
+{"ts":"2026-11-05T10:03:00Z","task":"T-1a2b","type":"forecast","text":"unknown type"}
+{"ts":"2026-11-05T10:04:00Z","task":"T-1a2b","type":"progress","text":"extra field","mood":"calm"}
+this line is not json
+{"ts":"2026-11-06T10:00:00Z","task":"T-1a2b","type":"blocker","id":"B-aa0001","kind":"review","text":"needs sign-off"}
+{"ts":"2026-11-06T11:00:00Z","task":"T-1a2b","type":"unblocked","blocker":"B-aa0001","text":"signed"}
+{"ts":"2026-11-07T08:00:00Z","task":"T-9c0d","type":"created","title":"Archive old labels","project":"supplies","category":"office","priority":"P3","status":"done"}
+{"ts":"2026-11-07T09:00:00Z","task":"T-8d9e","type":"created","title":"Print the new labels","project":"gateway","category":"platform","priority":"P1","status":"blocked"}
+{"ts":"2026-11-07T09:00:00Z","task":"T-8d9e","type":"add","field":"blocked_by","value":"T-9c0d"}
+{"ts":"2026-11-03T08:00:00Z","task":"T-7a8b","type":"created","title":"Label the pallets (copy)","project":"gateway","category":"platform","priority":"P3","status":"todo"}
+{"ts":"2026-11-08T08:00:00Z","task":"T-2d3e","type":"created","title":"Renew harbour permit","project":"relay-core","category":"platform","priority":"P2","status":"todo"}
+{"ts":"2026-11-08T08:00:00Z","task":"T-2d3e","type":"set","field":"due","to":"2026-11-12"}
+{"ts":"2026-11-09T08:00:00Z","task":"T-6b7c","type":"created","title":"Draft the route plan","project":"relay-edge","category":"platform","priority":"P2","status":"in_progress"}
+{"ts":"2026-11-09T08:01:00Z","task":"T-6b7c","type":"session_linked","agent":"claude","session":"s-here","cwd":"/work/other","host":"hosta","repo":"/work/other","branch":"main"}

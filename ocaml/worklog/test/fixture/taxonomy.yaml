@@ -1,0 +1,13 @@
+# Fictional taxonomy of the test fixture: one tree category, one legacy category.
+categories:
+  platform:
+    name: Platform
+    products:
+      - gateway
+      - relay:
+          - relay-core
+          - relay-edge
+  office:
+    name: Office
+    projects:
+      - supplies
