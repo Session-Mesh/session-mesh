@@ -409,6 +409,38 @@ print(json.dumps(respawn.claim_identity(z, "claude", A, "hook", "hook:Stop")))
     assert.equal(out, 'active', 'the newer list does not name x: z takes the conversation');
   });
 
+  test('the server records a listing at the time its host list was read, not the time it is recorded', () => {
+    // server._record_listing passes the read's order to respawn.record: the list's age and what it can show.
+    const record = (rows: string, names: string, order: string) =>
+      `asyncio.run(server._record_listing({"mesh": [${rows}]}, ([{"name": n, "created": c, "meta": {}} for n, c in ${names}], True, "1:1", time.time(), ${order}), ${order}))`;
+    const launched = python(`
+import asyncio, time
+import server
+h, l = {"name": "h", "created": 60.0, "nonce": None}, {"name": "l", "created": 50.0, "nonce": None}
+read = time.monotonic() - 2                                                          # the host list is read
+respawn.claim_identity(h, "claude", A, "chosen", "launch:session_id", live=[l, h])   # then h is launched
+${record('listed("l", 50.0, "claude", A, "pid_metadata", started=51.0)', '[("l", 50.0)]', 'read')}
+by_listing = sorted((e["session"]["name"], e["state"]) for e in registry()["entries"])
+print(json.dumps([by_listing, respawn.claim_identity(l, "claude", A, "hook", "hook:Stop")]))
+`);
+    assert.deepEqual(launched, [[['h', 'active'], ['l', 'contested']], 'contested'],
+      'h was written after the read: listed, it keeps the conversation');
+    const ordered = python(`
+import asyncio, time
+import server
+x, z = {"name": "x", "created": 1.0, "nonce": None}, {"name": "z", "created": 50.0, "nonce": None}
+respawn.claim_identity(x, "claude", A, "hook", "hook:Stop")
+respawn.update_identities(lambda r: {**r, "entries": [{**e, "observed_at": e["observed_at"] - 40} for e in r["entries"]]})
+stale, newer = time.monotonic() - respawn.LISTED_FRESH - 1, time.monotonic()
+${record('listed("z", 50.0, "claude", None, None)', '[("z", 50.0)]', 'stale')}
+by_stale = respawn.claim_identity(z, "claude", A, "hook", "hook:Stop")
+${record('listed("z", 50.0, "claude", None, None)', '[("z", 50.0)]', 'newer')}
+${record('listed("x", 1.0, "claude", None, None), listed("z", 50.0, "claude", None, None)', '[("x", 1.0), ("z", 50.0)]', 'newer - 1')}
+print(json.dumps([by_stale, respawn.claim_identity(z, "claude", A, "hook", "hook:Stop")]))
+`);
+    assert.deepEqual(ordered, ['contested', 'active'], 'a list read 26 s ago is stale; the newer read is kept');
+  });
+
   test('a directory at the registry path reads as empty: listings go on, a launch claim fails safely', () => {
     const out = python(`
 import contextlib, io

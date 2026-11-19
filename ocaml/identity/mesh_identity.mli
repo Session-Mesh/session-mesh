@@ -118,7 +118,15 @@ val merge :
     current holder keeps it. A holder whose incarnation is not in [listed]
     (the ones the PTY host lists; unknown when absent) loses to any claim of
     a listed incarnation. When the cap drops entries, those of incarnations
-    not in [listed] go first. *)
+    not in [listed] go first.
+
+    The caller builds [listed], and an incomplete list takes a conversation
+    from a live holder. It must hold the incarnations of one host list read
+    at most 25 s ago (older: pass none, and the current holder keeps the
+    id), the newest such read when several are recorded, plus every
+    incarnation whose entry was written after that read (a session launched
+    since, which the list cannot show). respawn.py does this with
+    [LISTED_FRESH], [_keep_listed] and [_listed_since]. *)
 
 val prune : registry -> keep:incarnation list -> now:float -> registry
 (** Without the entries of incarnations not in [keep] and older than
