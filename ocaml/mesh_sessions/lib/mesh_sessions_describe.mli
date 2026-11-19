@@ -24,6 +24,9 @@ val supported : t -> bool
 (** [false] when the session runs an agent no adapter is registered for: the
     row then lacks the adapter's fields ([unsupported]). *)
 
+val kind : t -> string option
+(** The agent's type, supported or not; [None] without an agent. *)
+
 val agent : t -> (string * Mesh_agent.described) option
 (** The agent's type and what its adapter described, for a supported agent. *)
 

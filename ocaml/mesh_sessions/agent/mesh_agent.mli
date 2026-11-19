@@ -42,7 +42,9 @@ module type ADAPTER = sig
   val prepare : t -> Mesh_agent_round.t -> unit
   (** Called once at the start of each round, before any {!describe} of that
       round, in a system thread: the place for work that every session of
-      this agent shares (one walk of a directory of conversations). *)
+      this agent shares (one walk of a directory of conversations). If it
+      raises, the round reports this agent's sessions [failed] and does not
+      call {!describe} for them. *)
 
   val resize : t -> sessions:int -> unit
   (** Bound the caches for this many listed sessions (twice as many entries,

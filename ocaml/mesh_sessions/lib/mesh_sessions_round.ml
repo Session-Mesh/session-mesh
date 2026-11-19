@@ -48,28 +48,37 @@ let create ~clock config platform registry =
 (* How one session ended. *)
 type result = Row of Describe.t | Slow | Error of string
 
-(* A blocking call in a system thread, within the setup deadline. *)
+exception Adapter_not_prepared
+
+(* A blocking call in a system thread, within the setup deadline. Any
+   exception of [f] is [`Failed]; a cancellation of the round propagates. *)
 let setup engine f =
   match
     Eio.Time.with_timeout engine.clock engine.config.setup_deadline (fun () ->
         Ok (Blocking.call engine.blocking f))
   with
   | Ok value -> Ok value
-  | Error `Timeout -> Error `Failed
+  | Error `Timeout -> Error `Timeout
   | exception Blocking.Saturated -> Error `Saturated
-  | exception (Unix.Unix_error _ | Sys_error _ | Failure _) -> Error `Failed
+  | exception (Eio.Cancel.Cancelled _ as cancelled) -> raise cancelled
+  | exception _ -> Error `Failed
 
 (* The process table, or the reason every row of the round is an error. *)
 let read_table engine =
   match setup engine (fun () -> Mesh_agent_round.read engine.platform) with
   | Ok (Ok round) -> Ok round
   | Error `Saturated -> Error "saturated"
-  | Ok (Error _) | Error `Failed -> Error "no_process_table"
+  | Ok (Error _) | Error (`Failed | `Timeout) -> Error "no_process_table"
 
 let adapters engine = Mesh_agent.Registry.adapters engine.registry
 
+(* Prepare each adapter for the round; returns the registry of the adapters
+   whose preparation did not raise, and the types of those whose did. One
+   that overran or found no thread is kept: its rows are still described. *)
 let prepare_adapters engine round =
-  List.iter (fun adapter -> ignore (setup engine (fun () -> Mesh_agent.prepare adapter round))) (adapters engine)
+  let raised adapter = setup engine (fun () -> Mesh_agent.prepare adapter round) = Error `Failed in
+  let failed, prepared = List.partition raised (adapters engine) in
+  (Mesh_agent.Registry.create prepared, List.map Mesh_agent.kind failed)
 
 let settle engine (session : Request.session) ~backoff outcome =
   match (outcome : Describe.t Mesh_deadline_pool.outcome) with
@@ -115,11 +124,15 @@ let run engine (request : Request.t) ~backoff ~on_row =
       List.iter (fun session -> on_row session (Error reason)) order;
       None
   | Ok round ->
-      prepare_adapters engine round;
+      let registry, failed = prepare_adapters engine round in
       let ended = ref [] in
-      let work (session : Request.session) =
-        Blocking.call engine.blocking (fun () -> Describe.row engine.registry round (Request.agent_session session))
+      (* A row of an adapter whose preparation raised fails: that adapter is
+         not in [registry], so it is not asked to describe. *)
+      let describe session =
+        let row = Describe.row registry round (Request.agent_session session) in
+        match Describe.kind row with Some kind when List.mem kind failed -> raise Adapter_not_prepared | _ -> row
       in
+      let work (session : Request.session) = Blocking.call engine.blocking (fun () -> describe session) in
       let report session outcome =
         let result = settle engine session ~backoff outcome in
         (match result with Row row -> ended := (session, row) :: !ended | Slow | Error _ -> ());
