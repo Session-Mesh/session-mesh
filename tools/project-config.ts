@@ -151,7 +151,11 @@ async function openConfigLock(path: string, parentInfo: Stats, nonce: string): P
   try { handle = await openPrivateProjectFile(path); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    privateProjectFile(await fs.lstat(path)); throw new Refusal('busy');
+    let held: Stats;
+    // The holder may release the lock between our exclusive create and this lstat: still busy, not a missing config.
+    try { held = await fs.lstat(path); }
+    catch (gone) { if ((gone as NodeJS.ErrnoException).code === 'ENOENT') throw new Refusal('busy'); throw gone; }
+    privateProjectFile(held); throw new Refusal('busy');
   }
   return { path, handle, info: await handle.stat(), parentInfo, nonce, initialized: false };
 }
