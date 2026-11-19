@@ -104,7 +104,7 @@ describe('build-bundle.sh: the Node archive', () => {
     const log = path.join(dir, 'curl.log');
     fs.writeFileSync(path.join(fakes, 'curl'), `#!/bin/bash\necho "$*" >> '${log}'\nwhile (($#)); do [[ $1 == -o ]] && printf other > "$2"; shift; done\n`, {mode: 0o755});
     for (const name of ['uv', 'patchelf']) fs.writeFileSync(path.join(fakes, name), '#!/bin/sh\nexit 97\n', {mode: 0o755});
-    for (const name of ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp']) fs.writeFileSync(path.join(native, name), '', {mode: 0o755});
+    for (const name of ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp', 'work-write']) fs.writeFileSync(path.join(native, name), '', {mode: 0o755});
     const result = spawnSync('bash', [path.join(REPO, 'scripts', 'build-bundle.sh'), '--output', path.join(dir, 'out'), '--native-bin', native],
       {env: {...process.env, PATH: `${fakes}:/usr/bin:/bin`, TMPDIR: dir, MESH_BUNDLE_NODE_VERSION: nodeVersion}, encoding: 'utf8', timeout: 60000});
     return {...result, curl: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''};

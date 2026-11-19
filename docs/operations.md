@@ -1619,7 +1619,7 @@ refused, with the floors named: install from a clone there.
 | File | Content |
 |---|---|
 | `install.sh` | the installer of that release, with the release tag and the SHA-256 of every other file written into it |
-| `mesh-<platform>.tar.gz` | the bundle of a platform: the code of the tagged commit, its own CPython and Node runtimes with the locked Python dependencies, and the native programs `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`, `mesh-logout-all`, `work-read` and `work-mcp`; `mesh-macos-arm64.tar.gz` only when its build passed (the release notes say whether it is there) |
+| `mesh-<platform>.tar.gz` | the bundle of a platform: the code of the tagged commit, its own CPython and Node runtimes with the locked Python dependencies, and the native programs `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`, `mesh-logout-all`, `work-read`, `work-mcp` and `work-write`; `mesh-macos-arm64.tar.gz` only when its build passed (the release notes say whether it is there) |
 | `<program>-<platform>` | each of the eight native programs alone, for `linux-x86_64`, `linux-aarch64` and `macos-arm64` |
 | `session-mesh-<tag>.tar.gz` | the code of the tagged commit (`git archive`), which the native programs run with |
 | `SHA256SUMS` | the SHA-256 of every file above, `install.sh` included |
@@ -1778,7 +1778,7 @@ attestation) before anything is unpacked, then laid out as `releases/<tag>/app` 
 `releases/<tag>/bin` (the programs). The web unit then runs this machine's Python
 (`MESH_PYTHON`, else `python3` on `PATH`, checked as for a source install) on
 `current/app/server.py`, the PTY unit runs `current/bin/mesh-ptyhost`, the native program
-itself, `~/.local/bin/mesh-logout-all` links to `current/bin/mesh-logout-all`, and the release's `app/bin/work-read` links to its `bin/work-read`, where the web server looks for it (`/api/work/v1`). Such a release is reused, upgraded and rolled back like any other; an upgrade may move
+itself, `~/.local/bin/mesh-logout-all` links to `current/bin/mesh-logout-all`, and the release's `app/bin/work-read` and `app/bin/work-write` link to its `bin/work-read` and `bin/work-write`, where the web server looks for them (`/api/work/v1`). Such a release is reused, upgraded and rolled back like any other; an upgrade may move
 between the two kinds.
 
 #### Where the native programs are found
@@ -1795,7 +1795,8 @@ for a release install). The web server finds `work-read`, which answers `/api/wo
 places: `MESH_WORK_READ_CMD` when set, otherwise `bin/work-read` of `MESH_BIN_DIR` or beside the
 code (`app/bin/work-read` of a release installed from its native programs links to the release's
 own), otherwise, only when `MESH_BIN_DIR` is not set, the opam switch's
-([work-read.md](work-read.md)). `mesh-read`, `mesh-platform` and `work-mcp` are commands you run, or
+([work-read.md](work-read.md)). It finds `work-write`, which records the owner's answers from the
+Projects view, the same way, with `MESH_WORK_WRITE_CMD`. `mesh-read`, `mesh-platform` and `work-mcp` are commands you run, or
 that you add to an agent's configuration, by their path in one of these places.
 
 Building from source with `scripts/bootstrap.sh` ([install.md](install.md#native-pty-host)) remains

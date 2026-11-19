@@ -27,6 +27,7 @@ export const NATIVE_TARGETS = {
   'bin/mesh_read_main.exe': 'mesh-read', 'platform/cli/mesh_platform_main.exe': 'mesh-platform',
   'bin/mesh_history_main.exe': 'mesh-history', 'bin/mesh_logout_all_main.exe': 'mesh-logout-all',
   'work_read/bin/work_read_main.exe': 'work-read', 'work_mcp/bin/work_mcp_main.exe': 'work-mcp',
+  'work_write/bin/work_write_main.exe': 'work-write',
 };
 
 // ---- OCaml: the opam packages linked into each native program, from dune's link rules.
@@ -307,7 +308,7 @@ export function sourceStatement(options) {
 ${local ? `\n${local.trim()}\n` : ''}
 app/ holds the files of that revision except tests/, .github/ and ocaml/. The native programs
 libexec/mesh-ptyhost, bin/mesh-board-mcp, bin/mesh-read, bin/mesh-platform, bin/mesh-history,
-bin/mesh-logout-all, bin/work-read and bin/work-mcp are built from ocaml/
+bin/mesh-logout-all, bin/work-read, bin/work-mcp and bin/work-write are built from ocaml/
 at that revision, with the opam packages listed in THIRD-PARTY.md, and bin/mesh-history contains the
 SQLite amalgamation whose URL and SHA-256 are in scripts/bundle/sqlite.sha256 of the repository
 (built by scripts/build-sqlite.sh). The corresponding source is the repository at that revision:

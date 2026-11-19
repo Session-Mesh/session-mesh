@@ -1,8 +1,8 @@
 # Session Mesh OCaml tools
 
-This directory is the opam package `session_mesh`. It builds eight programs, all of them shipped
-in every release (bundles and native release assets): the six of this table, and `work-mcp` and
-`work-read`, which have their own sections below.
+This directory is the opam package `session_mesh`. It builds nine programs, all of them shipped
+in every release (bundles and native release assets): the six of this table, and `work-mcp`,
+`work-read` and `work-write`, which have their own sections below.
 
 | Program | What it is | Used by |
 |---|---|---|
@@ -67,8 +67,8 @@ the worklog library. It uses `mcp-kit` like `mesh-board-mcp` but does not talk t
 reads `WL_HOME` (the data repository, created at first use through the library's `init`, never
 overwritten), `MESH_SESSION` (the session name) and the agent markers of the environment; it
 never reads the session token. `work_answer` relays the owner's answer to a question (unverified,
-it needs a session identity); it calls the library function `Work_questions.answer_once`, which a
-later owner-only writer for the interface is meant to call too. The web server registers it, as `mesh-work`, with every
+it needs a session identity); it calls the library function `Work_questions.answer_once`, which
+`work-write` calls too, in its owner mode (see below). The web server registers it, as `mesh-work`, with every
 agent it starts with `mesh-board` (`agentmcp.py`). See [docs/work-mcp.md](../docs/work-mcp.md); tests: `dune runtest work_mcp`.
 By hand: `WL_HOME=/tmp/demo MESH_SESSION=demo ./_build/default/work_mcp/bin/work_mcp_main.exe`.
 
@@ -98,6 +98,18 @@ not wired into the web server and not shipped in the release bundles yet. See
 (parity with the Python listing on shared fixtures, the caches, hostile files, deadlines, a 300-session round
 and 300 Codex sessions). `Mesh_python_text` is a library of its own (`mesh_python_text`) so that it
 does not link cohttp.
+
+## work-write
+
+`work_write/` holds the `work_write` library and the program `work-write`, the one write path of
+the Projects view: `work-write --request` reads `{"op": "answer", "args": {"question", "text"}}`
+on standard input and records the owner's answer through `Work_questions.answer_once` in its
+owner mode (`by` = `owner`, no session, `via` = `owner-web`), printing one JSON line. It decides
+nothing about authority: the web server runs it for `POST /api/work/v1` only for the owner's
+signed-in browser, and it refuses to run in an agent session's environment. A release ships it as
+`bin/work-write` of a bundle and the release assets `work-write-<platform>`. See
+[docs/work-mcp.md](../docs/work-mcp.md#answering-from-the-projects-view); tests:
+`dune runtest work_write`.
 
 ## mesh-logout-all
 
@@ -225,7 +237,7 @@ MESH_OPAM_SWITCH=session-mesh bash scripts/bootstrap.sh
 Without `MESH_OPAM_SWITCH` the current opam switch is used, under the same rule. The bootstrap
 installs the pins above and the package's dependencies and test dependencies, builds and tests the package, then installs
 `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`,
-`mesh-logout-all`, `work-read` and `work-mcp` into that switch.
+`mesh-logout-all`, `work-read`, `work-mcp` and `work-write` into that switch.
 `bash scripts/bootstrap.sh --install-only` installs the same dependencies but runs no test.
 
 Some OCaml tests drive `mesh-ptyhost` through the Python test harness `tests/ptyhost_proc.py`: the

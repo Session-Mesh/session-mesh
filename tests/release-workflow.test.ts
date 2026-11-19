@@ -359,7 +359,7 @@ describe('release.yml as committed', () => {
     inOrder([at('linux', /"\$ALPINE_IMAGE"/), at('linux', /exec bash \/src\/scripts\/release-build-static\.sh \/src \/out/),
       at('linux', /"statically linked"/), at('linux', /not a dynamic executable/), at('linux', /bash scripts\/release-smoke\.sh "\$RUNNER_TEMP\/out"/),
       at('linux', /release-assets\.sh name "\$RUNNER_TEMP\/out" "\$\{\{ matrix\.target \}\}"/), at('linux', /actions\/upload-artifact@/)]);
-    assert.match(raw('linux'), /for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp; do/);
+    assert.match(raw('linux'), /for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp work-write; do/);
     assert.match(raw('linux'), /name: programs-\$\{\{ matrix\.target \}\}\n/);
   });
 
@@ -372,10 +372,10 @@ describe('release.yml as committed', () => {
       at('macos', /opam exec -- bash scripts\/release-check-macos\.sh runtime-minos "\$MACOSX_DEPLOYMENT_TARGET"/),
       at('macos', /release-smoke\.sh/), at('macos', /actions\/upload-artifact@/)]);
     const linked = scriptOf(lines, links);
-    for (const program of ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp']) {
+    for (const program of ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp', 'work-write']) {
       assert.match(linked, new RegExp(`"\\$RUNNER_TEMP/out/${program}"`), `links check misses ${program}`);
     }
-    assert.match(raw('macos'), /for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp; do/);
+    assert.match(raw('macos'), /for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp work-write; do/);
     assert.equal(job('macos').find((line) => line.key === 'MACOSX_DEPLOYMENT_TARGET')?.value, '13.0');
     assert.match(raw('macos'), /run: test "\$MACOSX_DEPLOYMENT_TARGET" = "\$\(bash scripts\/release-floor\.sh macos-programs\)"/);
     assert.match(job('macos').find((line) => line.key === 'key')?.value ?? '', /^release-opam-macos-arm64-.*\$\{\{ env\.MACOSX_DEPLOYMENT_TARGET \}\}/);
@@ -429,7 +429,7 @@ describe('release.yml as committed', () => {
       at('macos-bundle', /release-check-macos\.sh bundle "\$RUNNER_TEMP\/out\/mesh-\$TARGET\.tar\.gz" "\$\(bash scripts\/release-floor\.sh macos-bundle\)"/),
       at('macos-bundle', /bash scripts\/smoke-bundle\.sh/), at('macos-bundle', /actions\/upload-artifact@/)]);
     const bundleLinks = scriptOf(lines, at('macos-bundle', /release-check-macos\.sh links\b/));
-    for (const program of ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp']) {
+    for (const program of ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp', 'work-write']) {
       assert.match(bundleLinks, new RegExp(`"\\$bin/${program}"`), `links check misses ${program}`);
     }
     assert.match(job('macos-bundle').find((line) => line.key === 'key')?.value ?? '', /\$\{\{ env\.MACOSX_DEPLOYMENT_TARGET \}\}/);
@@ -514,7 +514,7 @@ describe('release.yml as committed', () => {
     const publish = raw(RELEASE_WRITE_JOB);
     assert.match(publish, /download-artifact@[0-9a-f]{40} # [^\n]*\n\s+with:\n\s+name: release-files\n\s+path: dist\n/);
     assert.match(publish, /sha256sum --check --strict SHA256SUMS/);
-    assert.match(publish, /test "\$\{#present\[@\]\}" -eq 29 \|\| test "\$\{#present\[@\]\}" -eq 30/);
+    assert.match(publish, /test "\$\{#present\[@\]\}" -eq 32 \|\| test "\$\{#present\[@\]\}" -eq 33/);
     assert.match(publish, /expected=\(install\.sh SHA256SUMS "session-mesh-\$RELEASE_TAG\.tar\.gz" mesh-linux-x86_64\.tar\.gz mesh-linux-arm64\.tar\.gz\)/);
     assert.match(publish, /if \[ -e mesh-macos-arm64\.tar\.gz \]; then expected\+=\(mesh-macos-arm64\.tar\.gz\); fi\n\s+test "\$\(printf '%s\\n' "\$\{present\[@\]\}"\)" = "\$\(printf '%s\\n' "\$\{expected\[@\]\}" \| LC_ALL=C sort\)"/);
   });

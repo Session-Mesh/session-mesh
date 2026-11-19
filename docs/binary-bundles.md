@@ -19,7 +19,7 @@ One archive `mesh-<os>-<arch>.tar.gz` holds one directory `mesh-<os>-<arch>/`:
 | `mesh` | the launcher: `./mesh run`, `./mesh install`, `./mesh doctor` |
 | `env.sh` | sourced by every entry point: sets `MESH_BIN_DIR` to `bin/` and names the bundled Python and Node by absolute path; it puts only `bin/` on `PATH`, so mesh sessions keep the user's own `python3` and `node` |
 | `app/` | the code of the built commit (no tests, no OCaml sources), with `install.sh` |
-| `bin/` | wrappers (`mesh-python`, `mesh-ptyhost`, `mesh-attach`, `mesh-open`, ...) and the native `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`, `mesh-logout-all`, `work-read` (which the web server runs for `/api/work/v1`), `work-mcp` |
+| `bin/` | wrappers (`mesh-python`, `mesh-ptyhost`, `mesh-attach`, `mesh-open`, ...) and the native `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`, `mesh-logout-all`, `work-read` and `work-write` (which the web server runs for `/api/work/v1`), `work-mcp` |
 | `libexec/` | the native PTY host `mesh-ptyhost`, which `bin/mesh-ptyhost` executes; with the optional Roster CLIs, `mesh-roster-roadmap` and `mesh-roster-pipeline`, which run them with the bundled Node |
 | `runtime/` | CPython with the locked dependencies, and Node |
 | `lib/` | the shared libraries of the native programs that the system does not provide |
@@ -122,7 +122,7 @@ bash scripts/smoke-bundle.sh /absolute/artifacts/mesh-linux-x86_64.tar.gz
 ```
 
 The native directory must contain `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`,
-`mesh-history`, `mesh-logout-all`, `work-read` and `work-mcp` built from the intended source revision (`scripts/bootstrap.sh --install-only`
+`mesh-history`, `mesh-logout-all`, `work-read`, `work-mcp` and `work-write` built from the intended source revision (`scripts/bootstrap.sh --install-only`
 installs them into an opam switch; `opam var bin` names its directory). Release builds set
 `MESH_SQLITE_PREFIX` to a directory dedicated to the pinned SQLite that `mesh-history` carries
 (`scripts/build-sqlite.sh` refuses a non-empty directory it did not create, and never deletes

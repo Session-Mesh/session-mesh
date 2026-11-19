@@ -211,7 +211,7 @@ jobs:
         run: |
           bin="$(opam var bin)"
           /bin/bash scripts/release-check-macos.sh links "$bin/mesh-ptyhost" "$bin/mesh-board-mcp" "$bin/mesh-read" \
-            "$bin/mesh-platform" "$bin/mesh-history" "$bin/mesh-logout-all" "$bin/work-read" "$bin/work-mcp"
+            "$bin/mesh-platform" "$bin/mesh-history" "$bin/mesh-logout-all" "$bin/work-read" "$bin/work-mcp" "$bin/work-write"
           /bin/bash scripts/release-check-macos.sh linker-log "$RUNNER_TEMP/build.log"
           opam exec -- /bin/bash scripts/release-check-macos.sh runtime-minos "$MACOSX_DEPLOYMENT_TARGET"
       # Node and pytest are independent: each runs when the build succeeded, whatever the other
