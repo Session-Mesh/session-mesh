@@ -67,6 +67,8 @@ let json row =
 
 let supported row = match row.agent with Some { described = None; _ } -> false | _ -> true
 
+let kind row = Option.map (fun agent -> agent.kind) row.agent
+
 let agent row =
   match row.agent with
   | Some { kind; described = Some described; _ } -> Some (kind, described)

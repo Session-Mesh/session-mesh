@@ -117,6 +117,39 @@ let test_describe_sees_the_round () =
       Alcotest.(check bool) "a session whose process is gone is no context" true
         (session_id (List.hd rows) = `String "shared"))
 
+(* A pi adapter whose preparation raises an exception the round does not
+   expect; it records whether it was asked to describe. *)
+let broken_described = Atomic.make false
+
+module Broken = struct
+  include Checked
+
+  let kind = "pi"
+  let prepare () _ = raise Not_found
+
+  let describe () _ _ _ =
+    Atomic.set broken_described true;
+    []
+
+  let check = Mesh_agent.no_check
+end
+
+(* Its sessions are [failed], the other adapters' rows are described. *)
+let test_prepare_raises () =
+  let roots = Mesh_agent_roots.of_home "/x" in
+  let registry =
+    Mesh_agent.Registry.create [ Mesh_agent.adapter (module Checked) roots; Mesh_agent.adapter (module Broken) roots ]
+  in
+  let table = List.map (fun (pid, comm) -> Fake.process ~pid ~sid:pid comm) [ (100, "codex"); (101, "pi"); (102, "sh") ] in
+  with_engine ~registry (Fake.platform table) (fun engine ->
+      let events, final = round engine (request [ session "s0" 100; session "s1" 101; session "s2" 102 ]) in
+      let reason name = Option.value ~default:"" (U.to_string_option (U.member "reason" (event_of name events))) in
+      let outcome name = state_of name events ^ reason name in
+      Alcotest.(check (list string)) "pi failed, the others described" [ "ready"; "errorfailed"; "ready" ]
+        (List.map outcome [ "s0"; "s1"; "s2" ]);
+      Alcotest.(check bool) "the broken adapter is not asked to describe" false (Atomic.get broken_described);
+      Alcotest.(check bool) "counted" true (U.member "counts" final |> U.member "error" = `Int 1))
+
 (* Session 100 is slow in rounds 1, 2 and 4 and raises in round 3. *)
 let test_failed_resets_backoff () =
   let mode = Atomic.make `Slow in
@@ -198,6 +231,7 @@ let () =
       ( "counts",
         [
           Alcotest.test_case "a failure resets the backoff" `Quick test_failed_resets_backoff;
+          Alcotest.test_case "an adapter's preparation raises" `Quick test_prepare_raises;
           Alcotest.test_case "too large counted as error" `Quick test_too_large_counted;
           Alcotest.test_case "restart when no thread is left" `Quick test_restart_no_thread_left;
           Alcotest.test_case "round number" `Quick test_round_number;

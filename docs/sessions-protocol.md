@@ -26,15 +26,19 @@ into the web server yet.
 Each line on standard input is one request, each line on standard output one frame of an answer. The
 framing is that of `Mesh_jsonl_rpc` (the `mesh-history` convention):
 
-- a request is `{"v": 1, "req": <any JSON, echoed>, "op": "<name>", ...}`; `v` may be omitted;
+- a request is `{"v": 1, "req": <any JSON, echoed>, "op": "<name>", ...}`; `v` and `req` may be omitted
+  (the frames of a request without `req` carry none);
 - an answer is any number of event frames `{"v": 1, "req": ..., "event": "<name>", ...}` followed by one
   final frame, `{"v": 1, "req": ..., "ok": true, ...}` or
   `{"v": 1, "req": ..., "ok": false, "error": {"code": "...", "message": "..."}}`;
 - a request line is at most 4 MiB and nested at most 64 levels; a final frame is at most 8 MiB. A longer
   request is answered `bad_request`; a longer final frame is replaced by a `too_large` error;
-- up to 4 requests may be in progress; every frame carries its request's `req`, as it was sent (an
-  escaped lone surrogate in it, which the other fields read as U+FFFD, is echoed unchanged). The web
-  server is expected to run one `round` at a time and may send `describe` or `hello` beside it.
+- up to 4 requests may be in progress; every frame carries its request's `req`, as it was sent: an
+  escaped lone surrogate in a string value of `req`, which the other fields read as U+FFFD, is echoed
+  unchanged. Two exceptions: a `req` holding `NaN` or an infinity has no strict JSON form and is answered
+  `bad_request` without `req`; a lone surrogate in an object key of `req` is echoed as U+FFFD. Every frame
+  is strict JSON. The web server is expected to run one `round` at a time and may send `describe` or
+  `hello` beside it.
 
 Error codes: `bad_request`, `unsupported_version`, `unknown_op`, `too_large`, `internal` (the message is
 fixed: it never names a path).
@@ -83,11 +87,15 @@ thread left for its process table.
 
 **Events.** One `row` event per session, and a second one for a session whose row an adapter's
 cross-session check changed after every row had ended (see "Adding an agent"); the later event replaces
-the earlier. The program remembers each session's last correction (by `name` and `created`, with the row
-it was made for): while the session and its row stay the same, the next rounds send the corrected row in
-the first event, so a correction is sent as a second event once, then the row is `same`. A second event
-comes again only when the check's verdict changes, including when a correction no longer holds (the row
-is then sent corrected first, then as described):
+the earlier. The program remembers each session's last correction (by `name` and `created`) as the keys
+the check changed, each with its value before and after. While the session has the same `created` and
+each of those keys still holds its value before, the next rounds send the row with the correction applied
+in the first event, whatever else changed in the row (a busy session's `updated` or `said`): a correction
+is sent as a second event once, then the row is sent corrected at once (`same` when nothing else changed).
+A second event comes again only when the correction changes: when it no longer holds (the row is then sent
+corrected first, then as described), or when a key it changes no longer holds its value before, or the
+check changes it otherwise (the row is then sent as described, or with the earlier correction, then with
+the new one):
 
 ```json
 {"event": "row", "name": "api", "created": 1763500000.25, "priority": 0, "state": "ready",
@@ -98,7 +106,7 @@ is then sent corrected first, then as described):
 |---|---|
 | `priority` | The row's place in the order of service, 0 first. |
 | `state` | `ready`: described. `unsupported`: the session runs an agent this build has no adapter for; `row` holds what does not depend on the agent (below) and `agent.type`, and the web server completes it. `slow`: past its deadline. `error`: not described (`reason`). |
-| `reason` | With `error` only: `backoff`, `saturated` (no system thread was left to describe it), `failed` (the description raised), `too_large` (the row exceeds the frame bound), or `no_process_table` (the process table could not be read; every row of the round then has it). |
+| `reason` | With `error` only: `backoff`, `saturated` (no system thread was left to describe it), `failed` (the description raised, or the preparation of the session's agent adapter for this round raised; the other adapters' rows are still described), `too_large` (the row exceeds the frame bound), or `no_process_table` (the process table could not be read; every row of the round then has it). |
 | `row` | With `ready` and `unsupported`, unless `same` is set. |
 | `same` | `true` instead of `row` when the row is exactly the one sent for this session (same `name` and `created`) in an earlier round of this run, and `full` was not asked. The web server then keeps the row it has and does not change its generation. |
 
@@ -184,6 +192,12 @@ lost). Four report a different value; they are marked **differs**.
   returns; this program takes the most recently modified one at the time of the search. The search is made
   again when a project directory changes (a transcript created, removed or renamed in it); in between, a
   copy elsewhere that is only modified does not replace the one found.
+- **A transcript not found yet (differs).** A search that found no transcript is not made again until the
+  list of project directories or the modification time of one of them changes. On a file
+  system with coarse directory times (whole seconds or more), a transcript created within the same tick
+  as the round that searched for it leaves that time unchanged, and the session is reported without its
+  transcript fields until another change in those directories. Python searches at every listing. On local
+  Linux file systems, whose directory times are fine-grained, this does not arise in practice.
 - **Escaped lone surrogates (differs).** A transcript string holding half of a UTF-16 surrogate pair as an
   escape (`\ud800`) is read with U+FFFD in its place; Python reads the lone surrogate into its string.
 - **Command line without a final NUL (differs).** A process that rewrote its command line without the
@@ -247,10 +261,10 @@ An adapter is a module of signature `Mesh_agent.ADAPTER`:
 |---|---|---|
 | `kind` | | The agent type. |
 | `create` | Once, at start | The adapter's state, from the agents' roots. |
-| `prepare` | Once per round and per `describe` request, before any row | What every session of that agent shares, such as one walk of a rollout directory. |
+| `prepare` | Once per round and per `describe` request, before any row | What every session of that agent shares, such as one walk of a rollout directory. If it raises, that request's rows of this agent are `error` with reason `failed` and the adapter is not asked to describe them; one that overruns the setup deadline does not stop them from being described. |
 | `resize` | Once per `round` (never for `describe`) | The cache bound: twice the number of listed sessions. |
 | `describe` | Once per row, in several system threads | The agent fields of one process. It receives the listed session (`Mesh_agent.session`: `name`, `created`, `pid`), which keys an identity registry by incarnation. |
-| `check` | Once per round and per `describe` request, after every row has ended | The cross-session step. It receives the rows of its type described in time (`Mesh_agent.described`: session, process, fields) and returns, by session name, the complete new fields of the rows it corrects (one conversation id claimed by two sessions, for instance). In a round, a row whose final form differs from the one sent first is sent again as a second `row` event before the final frame, and counted with the state it was last sent with; a correction is remembered and applied to the next round's first event while the session and its described row are unchanged (see "Events"). In a `describe`, it also receives the last round's rows of the sessions not requested whose agent process is still in the table (their `process` is from that round's table); only the requested rows' corrections are used. It runs in a system thread with the setup deadline; one that raises or overruns changes nothing in that request: the rows keep the form they were first sent with, and the remembered corrections are kept. `Mesh_agent.no_check`, which corrects nothing, is the default (the Claude adapter uses it). |
+| `check` | Once per round and per `describe` request, after every row has ended | The cross-session step. It receives the rows of its type described in time (`Mesh_agent.described`: session, process, fields) and returns, by session name, the complete new fields of the rows it corrects (one conversation id claimed by two sessions, for instance). In a round, a row whose final form differs from the one sent first is sent again as a second `row` event before the final frame, and counted with the state it was last sent with; a correction is remembered as the keys it changed and applied to the next rounds' first event while the session is unchanged and those keys hold their values before (see "Events"). In a `describe`, it also receives the last round's rows of the sessions not requested whose agent process is still in the table (their `process` is from that round's table); only the requested rows' corrections are used. It runs in a system thread with the setup deadline; one that raises or overruns changes nothing in that request: the rows keep the form they were first sent with, and the remembered corrections are kept. `Mesh_agent.no_check`, which corrects nothing, is the default (the Claude adapter uses it). |
 
 It is registered by adding it to the list the program passes to `Mesh_agent.Registry.create`; neither the
 round nor the protocol changes. Detection of the agent type stays in `Mesh_agent_session`, shared by all.
