@@ -595,6 +595,7 @@ EVIDENCE_RE = re.compile(r"[a-z]{1,16}:[A-Za-z0-9_.-]{1,48}")
 OBSERVED_SOURCES = ("open_rollout", "pid_metadata")     # what discover reads exactly from the process
 _FACT_KEYS = ("session", "agent", "id", "source", "evidence", "agent_started", "state", "holds_open")
 _identity_lock = threading.Lock()
+_LAST_LISTED = [None]   # the incarnations of the last host listing recorded: what a hook claim compares with
 
 
 def identity_file():
@@ -685,19 +686,24 @@ def merge_identity(registry, raw_claim, now, listed=None):
     2. on the incarnation's own entry, another agent counts only from a process started after that
        entry, and another id from a process started before the entry's agent is a late report: ignored;
        an observation never replaces a ``hook`` or ``chosen`` id of the same process (a listing is
-       sampled before it is recorded: it may be older than the report), only one of a later process;
+       sampled before it is recorded: it may be older than the report), only one of a later process; a
+       refused claim still binds the entry's missing created or nonce;
     3. the same id of the same agent refreshes the entry (the stronger source, holds_open once seen, the
        later start time);
-    4. another id replaces the entry (/clear, /new, an agent started again): the newest fact wins;
+    4. another id replaces the entry (/clear, /new, an agent started again): the newest fact wins; a
+       claim with no start time keeps the one known for the same agent;
     5. one id has one holder among incarnations (I4): the stronger (_strength) keeps it and the other
-       is ``contested``, with no id; when equal, the current holder keeps it.
-    ``listed``: the incarnations the PTY host lists, kept before the others when the cap drops entries."""
+       is ``contested``, with no id; when equal, the current holder keeps it. A holder the PTY host does
+       not list (a lost offer, a session that ended) loses to any claim of a listed incarnation, as it
+       is no holder for a launch (claim_identity).
+    ``listed``: the incarnations the PTY host lists (None when unknown), kept before the others when the
+    cap drops entries."""
     claim = _valid_claim(raw_claim)
     if claim is None:
         return registry
     registry, mine = _joined(registry, claim["session"])
-    if mine is not None and _refused(mine, claim):
-        return registry
+    if mine is not None and _refused(mine, claim):    # the claim still says which incarnation the entry is
+        return _rebound(registry, mine, claim["session"])
     if (mine is not None and mine["state"] == "active" and mine["id"] == claim["id"]
             and mine["agent"] == claim["agent"]):
         return _refreshed(registry, mine, claim)
@@ -712,6 +718,13 @@ def _joined(registry, session):
         return registry, (matches[0] if matches else None)
     mine = max(matches, key=lambda e: e["generation"])
     return {**registry, "entries": [e for e in registry["entries"] if e is mine or all(e is not m for m in matches)]}, mine
+
+
+def _rebound(registry, mine, session):
+    bound = _bound(mine["session"], session)
+    if bound == mine["session"]:
+        return registry
+    return {**registry, "entries": [{**e, "session": bound} if e is mine else e for e in registry["entries"]]}
 
 
 def _refused(mine, claim):
@@ -746,9 +759,11 @@ def _placed(registry, mine, claim, now, listed=None):
     generation = registry["generation"] + 1
     candidate = {**claim, "session": _bound(mine["session"], claim["session"]) if mine else claim["session"],
                  "observed_at": now, "generation": generation, "state": "active"}
+    if mine is not None and mine["agent"] == claim["agent"] and claim["agent_started"] is None:
+        candidate["agent_started"] = mine["agent_started"]   # an untimed report of the same process keeps its start
     holder = next((e for e in registry["entries"] if e is not mine and e["state"] == "active"
                    and e["agent"] == claim["agent"] and e["id"] == claim["id"]), None)
-    if holder is not None and _strength(candidate) <= _strength(holder):
+    if holder is not None and _strength(candidate) <= _strength(holder) and not _outlisted(candidate, holder, listed):
         candidate.update(state="contested", id=None)
         holder = None
     if mine is not None and holder is None and all(mine[key] == candidate[key] for key in _FACT_KEYS):
@@ -756,6 +771,11 @@ def _placed(registry, mine, claim, now, listed=None):
     entries = [{**e, "state": "contested", "id": None, "generation": generation} if e is holder else e
                for e in registry["entries"] if e is not mine]
     return {"generation": generation, "entries": _bounded([*entries, candidate], listed)}
+
+
+def _outlisted(candidate, holder, listed):
+    """Whether the PTY host lists the candidate's incarnation and not the holder's (``listed`` known)."""
+    return listed is not None and _among(candidate, listed) and not _among(holder, listed)
 
 
 def _bounded(entries, listed=None):
@@ -845,10 +865,16 @@ def _read_identities():
         return None, True, None
     except OSError:
         return _empty_identities(), True, "unreadable"
-    with os.fdopen(fd, "rb") as handle:
-        info = os.fstat(handle.fileno())
-        private = stat.S_ISREG(info.st_mode) and not info.st_mode & 0o077
-        data = handle.read(IDENTITY_MAX_BYTES + 1) if private else b""
+    try:    # a directory opens too: a failure from here reads as empty, as a file that cannot be opened
+        info = os.fstat(fd)
+        private, data = stat.S_ISREG(info.st_mode) and not info.st_mode & 0o077, b""
+        if private:
+            with os.fdopen(fd, "rb", closefd=False) as handle:
+                data = handle.read(IDENTITY_MAX_BYTES + 1)
+    except OSError:
+        return _empty_identities(), True, "unreadable"
+    finally:
+        os.close(fd)
     if not private or len(data) > IDENTITY_MAX_BYTES:
         return _empty_identities(), True, "not a private regular file, or too large"
     try:
@@ -950,10 +976,11 @@ def _listing_claims(mesh, nonces):
 def _record_identities(mesh, nonces, before, after, now, seen):
     """One listing into the registry: its exact observations, then the entries of incarnations neither
     listed by the PTY host (``seen``, which may name sessions ``mesh`` does not describe) nor offered
-    dropped. ``before``: the snapshot state the migration reads when there is no file. Returns the
+    dropped. The listed incarnations are kept for the hook claims that follow (claim_identity). ``before``: the snapshot state the migration reads when there is no file. Returns the
     registry the file holds, None when it could not be updated."""
     listed = [k for k in (_valid_incarnation({"name": name, "created": created, "nonce": nonces.get((name, created))})
                           for name, created in seen) if k]
+    _LAST_LISTED[0] = listed
     keep = listed + [k for k in (_valid_incarnation({"name": e["name"], "created": e["created"], "nonce": None})
                                  for e in after["lost"]) if k]
     claims = _listing_claims(mesh, nonces)
@@ -977,13 +1004,15 @@ def claim_identity(session, agent, sid, source, evidence, *, live=None, required
     ``live``: a launch; the incarnations the PTY host lists. An active entry of another of them holding
     the id, whatever its source, refuses the launch: that session may run the conversation although no
     listing shows it (an idle Codex that closed its rollout). An entry holding the id whose session is not
-    listed (a lost offer, a session that ended) is no holder. ``required``: raise OSError when the claim
+    listed (a lost offer, a session that ended) is no holder. Without ``live`` (a hook), the last listing
+    recorded says which incarnations are listed (merge_identity). ``required``: raise OSError when the claim
     is not written (a launch then starts nothing). ``fill_only``: the claim never replaces an id the
     incarnation already has (the hooks of Gemini, Antigravity and Vibe only fill in a missing one)."""
     claim = {"session": session, "agent": agent, "id": sid, "source": source, "evidence": evidence}
     if _valid_claim(claim) is None:
         return None
     held = []
+    listed = live if live is not None else _LAST_LISTED[0]
 
     def change(registry):
         others = [e for e in registry["entries"] if e["agent"] == agent and e["id"] == sid
@@ -995,8 +1024,8 @@ def claim_identity(session, agent, sid, source, evidence, *, live=None, required
             return registry
         aside = [] if live is None else [e for e in others if not _among(e, live)]
         kept = {**registry, "entries": [e for e in registry["entries"] if all(e is not a for a in aside)]}
-        merged = merge_identity(kept, claim, time.time(), live)
-        return registry if merged is kept else {**merged, "entries": _bounded([*aside, *merged["entries"]], live)}
+        merged = merge_identity(kept, claim, time.time(), listed)
+        return registry if merged is kept else {**merged, "entries": _bounded([*aside, *merged["entries"]], listed)}
 
     after = update_identities(change, required=required)
     if held:

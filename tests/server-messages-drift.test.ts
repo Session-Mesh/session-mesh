@@ -221,6 +221,19 @@ describe('server message table', () => {
     }
   });
 
+  // The note of a session restored as a shell (I6) comes from a dict (NOT_RELAUNCHED in server.py), not
+  // from a literal in a message position: require a row for each note by hand.
+  test('every note of a session restored as a shell has a row', () => {
+    const source = fs.readFileSync(path.join(ROOT, 'server.py'), 'utf8');
+    const block = /^NOT_RELAUNCHED = \{\n([\s\S]*?)^\}/m.exec(source);
+    assert.ok(block, 'NOT_RELAUNCHED read from server.py');
+    const notes = literals(block[1]!).filter(literal => literal.text.endsWith(': restarted as a plain shell'));
+    assert.equal(notes.length, 3, JSON.stringify(notes));
+    for (const note of notes) {
+      assert.ok(rows.some(row => trimmedMatch(row, note.text)), `restore note without a row: ${note.text}`);
+    }
+  });
+
   test('a catch-all row, a row taking another message pattern and an unlisted message are all caught', () => {
     const pair = [{pattern: '^Alpha failed$', key: 'a'}, {pattern: '^Beta failed$', key: 'b'}];
     const corpus = ['Alpha failed', 'Beta failed', 'x', 'y', 'z', 'w', 'v'];

@@ -64,7 +64,7 @@ export class Lab {
     fs.writeFileSync(path.join(bin, 'claude'), [
       '#!/bin/sh',
       'if [ "$1" = "--version" ]; then exit 0; fi',   // the server's launch probe (claudewake) is not an agent
-      `{ echo "--- start"; for a in "$@"; do echo "$a"; done; } >> "${argvLog}"`,
+      `{ echo "--- start"; for a in "$@"; do echo "$a"; done; echo "--- end"; } >> "${argvLog}"`,
       ...options.claudeLines ?? [],   // what the fake agent does once started (a hook report, say)
       'while IFS= read -r line; do :; done',
       '',
@@ -193,7 +193,8 @@ export class Lab {
   }
 
   starts(): number {
-    return fs.existsSync(this.argvLog) ? fs.readFileSync(this.argvLog, 'utf8').split('--- start').length - 1 : 0;
+    // An agent counts once its whole argv is logged: a reader after waitFor never sees a partial one.
+    return fs.existsSync(this.argvLog) ? fs.readFileSync(this.argvLog, 'utf8').split('--- end').length - 1 : 0;
   }
 
   snapshotLost(): Record<string, any>[] {

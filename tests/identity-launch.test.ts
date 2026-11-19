@@ -113,6 +113,70 @@ test('a restore is refused while a live session holds the conversation in the re
     assert.deepEqual([holder.id, holder.state], [SID, 'active'], 'the holder keeps it');
   }, {claudeLines: [hookReporting(SID)]}));
 
+test('a live session known by its nonce only (launched, not yet bound by a listing) blocks a restore', TIMEOUT, () => {
+  // Each host listing would bind the entry's birth date: at every `list` request (the last one is the launch's own
+  // check), the registry is put back with the live session's entry keyed by its nonce only.
+  const unbound = {file: '', text: ''};
+  const rewrite = () => {
+    fs.writeFileSync(`${unbound.file}.test`, unbound.text, {mode: 0o600});
+    fs.renameSync(`${unbound.file}.test`, unbound.file);
+  };
+  return withLab(async lab => {
+    await lab.newShell('fresh');
+    const fresh = (await lab.listed() as any[]).find(s => s.name === 'fresh')!;
+    assert.match(fresh.meta?.nonce ?? '', /^[0-9a-f]{32}$/, 'the host lists the nonce');
+    unbound.file = path.join(lab.mesh.confDir, 'session-identities.json');
+    unbound.text = JSON.stringify({version: 1, generation: 5, entries: [{
+      session: {name: 'fresh', created: null, nonce: fresh.meta.nonce}, agent: 'claude', id: SID, source: 'chosen',
+      evidence: 'launch:history', agent_started: null, observed_at: Date.now() / 1000, generation: 5, state: 'active',
+      holds_open: false}]});
+    rewrite();
+    const answer = await lab.post({names: ['alpha']});
+    assert.match(answer.json.results.alpha.error ?? '', /already running \(another session\): nothing was started/,
+      answer.text);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    assert.equal(lab.starts(), 0, 'no agent on the conversation');
+  }, {intercept: request => {
+    if (request.op === 'list' && unbound.text) rewrite();
+    return undefined;
+  }});
+});
+
+function hookStop(): string {
+  const python = process.env.MESH_PYTHON || 'python3';
+  const payload = JSON.stringify({hook_event_name: 'Stop', prompt_id: 'p0', background_tasks: []});
+  return `printf '%s' '${payload}' | '${python}' -I '${path.join(REPO, 'bin', 'mesh-event')}' claude`;
+}
+
+test("a turn after a finished one withdraws the notice's Enter before its conversation is recorded", TIMEOUT, () => {
+  const at: {confDir: string; recordedAtCancel: boolean[]} = {confDir: '', recordedAtCancel: []};
+  return withLab(async lab => {
+    at.confDir = lab.mesh.confDir;
+    await newClaude(lab, 'turns');
+    await waitFor('the hook report was recorded', 15000, () =>
+      registry(lab).some(e => e.session.name === 'turns' && e.id === CLEARED));
+    assert.deepEqual(at.recordedAtCancel, [false],
+      'the withdrawal is sent first: a newer finished turn applied during the record keeps its Enter');
+  }, {claudeLines: [hookStop(), hookReporting(CLEARED)], intercept: request => {
+    if (request.op === 'cancel_submit' && at.confDir) {
+      const file = path.join(at.confDir, 'session-identities.json');
+      at.recordedAtCancel.push(JSON.parse(fs.readFileSync(file, 'utf8')).entries.some((e: any) => e.id === CLEARED));
+    }
+    return undefined;
+  }});
+});
+
+test('a launch whose record fails after the file was replaced drops that record and starts nothing', TIMEOUT, () =>
+  withLab(async lab => {
+    lab.denyDirectoryRead(true);   // the registry is replaced, the flush of its folder fails
+    let response: Response;
+    try { response = await postNew(lab, 'unflushed'); } finally { lab.denyDirectoryRead(false); }
+    assert.equal(response.status, 409);
+    assert.match(await response.text(), /could not be recorded: nothing was started/);
+    assert.equal(registry(lab).find(e => e.session.name === 'unflushed'), undefined, 'no record of a launch never sent');
+    assert.deepEqual((await lab.listed()).map(s => s.name), []);
+  }));
+
 test('a launch the host refuses for good drops its record', TIMEOUT, () => {
   const at = recordedAtNew();
   return withLab(async lab => {

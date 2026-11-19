@@ -711,7 +711,8 @@ async def _send_launch(request, conversation):
     """Send a `new` request. With ``conversation`` (agent, id, evidence), the id is first recorded as
     ``chosen`` in the identity registry (I2), durably: when it cannot be, or another live session holds
     that conversation in the registry (whatever the source: the listing may not show it), nothing is
-    sent. A refusal that is final drops the record again; a cancellation or an unknown outcome keeps it
+    sent (a record that failed after its file was replaced is dropped again). A refusal that is final
+    drops the record again; a cancellation or an unknown outcome keeps it
     (the session may still appear)."""
     agent, sid, evidence = conversation or (None, None, None)
     pattern = respawn.CONVERSATION_RE.get(agent)
@@ -723,8 +724,9 @@ async def _send_launch(request, conversation):
     try:
         state = await asyncio.to_thread(respawn.claim_identity, session, agent, sid, "chosen", evidence,
                                         live=live, required=True)
-    except OSError as exc:
+    except OSError as exc:   # the file may hold the record although its folder was not flushed: nothing is sent
         print(f"new: conversation of {request['name']} not recorded: {exc!r}", flush=True)
+        await _forget_launch(session)
         raise web.HTTPConflict(text="The conversation could not be recorded: nothing was started") from exc
     if state == "held":
         raise web.HTTPConflict(text=CONVERSATION_RUNNING_REFUSAL)
@@ -1801,11 +1803,12 @@ async def api_event(request):
     previous = state.current_type(name, nonce)
     if not state.apply(name, nonce, event):
         return web.json_response({"ok": True, "applied": False, "reason": "stale"})
-    await _claim_reported_conversation(name, nonce, request["mesh_session_created"], agent, event["detail"])
     if event["type"] == "done" and "agent_wakes" in request.app:
         request.app["agent_wakes"].trigger()   # a deferred wake may now be typed
     elif previous == "done":
         await _cancel_pending_notice(name, request["mesh_session_created"])
+    # Last: a newer finished turn applied while the record is written keeps its notice's Enter.
+    await _claim_reported_conversation(name, nonce, request["mesh_session_created"], agent, event["detail"])
     return web.json_response({"ok": True, "applied": True})
 
 
@@ -2135,7 +2138,8 @@ def _conversation_missing(kind, sid):
     roots = [configured] if os.path.isabs(configured) else []
     folders = [os.path.join(root, data) for root in [*roots, os.path.join(discover.HOME, default)]]
     present = [folder for folder in folders if os.path.isdir(folder)]
-    return bool(present) and not any(glob.glob(os.path.join(glob.escape(folder), *pattern)) for folder in present)
+    return bool(present) and not any(os.path.isfile(match) for folder in present   # a dangling link is no transcript
+                                     for match in glob.glob(os.path.join(glob.escape(folder), *pattern)))
 
 
 def _restored_conversation(agent):
@@ -4625,8 +4629,11 @@ async def restore_exact(app, expected):
 async def _exact_identity(entry, expected):
     """(the offer with the conversation the restore resumes: the registry's first, a refusal or None): a
     guarded restore resumes exactly the expected conversation, never one that is contested or gone, never
-    turns an expected one into a shell, and never resumes one when it expected none."""
-    resolved, reason = await asyncio.to_thread(_restore_identity, entry)
+    turns an expected one into a shell, and never resumes one when it expected none. The retry of a restore
+    whose session was created (``restoring``) does not look for the conversation on disk again: that session
+    runs it already, and the retry only completes it."""
+    marked = entry.get("restoring") is not None
+    resolved, reason = await asyncio.to_thread(respawn.restore_identity if marked else _restore_identity, entry)
     agent = resolved["agent"]
     if agent and expected["resume_id"] and reason in ("contested", "not found"):
         why = NOT_RELAUNCHED[reason][0].split(":")[0]

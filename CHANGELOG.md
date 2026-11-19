@@ -103,8 +103,8 @@ before 1.0, a minor version may change behaviour.
   conversation id with its source: `chosen` by the mesh at launch, reported by a `hook`, or `observed`
   exactly by a listing (a rollout a Codex holds open, Claude's process file). Guesses are never
   recorded. A restore reads it before the snapshot, so a Codex that closed its rollout keeps its id.
-  When two sessions claim one conversation, the stronger source keeps it and the other is contested.
-  A restored agent whose conversation is contested, unknown or no longer on disk comes back as a plain
+  When two sessions claim one conversation, the stronger source keeps it and the other is contested;
+  a session the PTY host no longer lists (a lost offer) loses it to a listed session. A restored agent whose conversation is contested, unknown or no longer on disk comes back as a plain
   shell with one line saying why, never on a new or a contested conversation. The restore offers say
   what a restore will do. The first run copies the snapshot's exact ids into it (hook reports, Claude
   process files), never a launch argument or a Codex folder pick. A corrupt file is replaced, with one

@@ -216,15 +216,29 @@ let placed ?listed registry (mine : entry option) (c : Claim.t) ~now =
   let generation = registry.counter + 1 in
   let session = match mine with Some m -> bound m.session c.session | None -> c.session in
   let candidate = candidate_of c session ~generation ~now in
+  (* An untimed report of the same agent keeps the start of its process. *)
+  let candidate =
+    match mine with
+    | Some m when m.agent = c.agent && c.agent_started = None ->
+        { candidate with agent_started = m.agent_started }
+    | _ -> candidate
+  in
   let is_mine e = match mine with Some m -> e == m | None -> false in
   let holder =
     List.find_opt
       (fun e -> (not (is_mine e)) && e.state = Active && e.agent = c.agent && e.id = Some c.id)
       registry.entries
   in
+  (* A holder the PTY host does not list loses to a claim of a listed incarnation. *)
+  let listed_has (s : incarnation) =
+    match listed with Some l -> List.exists (same_incarnation s) l | None -> false
+  in
+  let outlisted (h : entry) =
+    listed <> None && listed_has candidate.session && not (listed_has h.session)
+  in
   let candidate, holder =
     match holder with
-    | Some h when compare (strength candidate) (strength h) <= 0 ->
+    | Some h when (not (outlisted h)) && compare (strength candidate) (strength h) <= 0 ->
         ({ candidate with state = Contested; id = None }, None)
     | h -> (candidate, h)
   in
@@ -257,12 +271,19 @@ let joined registry session =
       in
       ({ registry with entries }, Some mine)
 
+(* A refused claim still says which incarnation the entry is: its missing
+   [created] or [nonce] is filled in. *)
+let rebound registry (m : entry) session =
+  let session = bound m.session session in
+  if session = m.session then registry
+  else { registry with entries = List.map (fun e -> if e == m then { e with session } else e) registry.entries }
+
 let merge ?listed ~formats registry (c : Claim.t) ~now =
   if not (valid_claim ~formats c) then registry
   else
     let registry, mine = joined registry c.session in
     match mine with
-    | Some m when refused m c -> registry
+    | Some m when refused m c -> rebound registry m c.session
     | Some m when m.state = Active && m.id = Some c.id && m.agent = c.agent ->
         refreshed registry m c
     | _ -> placed ?listed registry mine c ~now
