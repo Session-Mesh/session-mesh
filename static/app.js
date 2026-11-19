@@ -3571,7 +3571,12 @@ $("#list").addEventListener("pointerdown", (event) => {
 });
 document.addEventListener("pointerup", () => { listPointerHeld = false; releaseListReorder(); });
 document.addEventListener("pointercancel", () => { listPointerHeld = false; releaseListReorder(); });
-$("#list").addEventListener("focusout", releaseListReorder);
+// The focus leaving a row for another one (Tab, the arrows) keeps the render held back: run between the
+// two, it would replace the row about to get the focus, and the focus would fall to the page.
+$("#list").addEventListener("focusout", (event) => {
+  if (event.relatedTarget?.closest?.("#list .item, #list .pin-remove")) return;
+  releaseListReorder();
+});
 
 // ---- drawing the list: keyed updates, one render per frame, a window over long lists
 // (static/keyed-render.ts, static/list-window.ts). The model is what the list last drew from: a

@@ -19,6 +19,8 @@ import {TerminalMesh, skip, withoutSince} from './terminal-browser-lib.ts';
 const VIEW = {width: 1280, height: 800};
 const ROWS = 300;
 const FOLDER = 'zz-filed';
+declare const data: {mesh: {id: string; label?: string}[]};
+declare function renderList(): void;
 let mesh: TerminalMesh;
 let page: Page;
 const errors: string[] = [];
@@ -134,6 +136,24 @@ describe('windowed session list', {skip}, () => {
     }
     await page.evaluate(() => (document.activeElement as HTMLElement).blur());
     await scrollList(page, 0);
+  });
+
+  test('a render held back by the focused row does not run while Tab moves to the next row', async () => {
+    // A listing that arrives while a row has the focus is drawn later (renderList defers it). Tab
+    // moves the focus out of the row and into the next one; drawn in between, the render replaced
+    // the row that was about to get the focus, and the focus fell to the page.
+    await scrollList(page, 0);
+    await page.locator('#list .item[data-id="synthetic-3"]').focus();
+    await page.evaluate(() => {
+      const row = data.mesh.find((session) => session.id === 'synthetic-4');
+      if (row) row.label = 'synthetic-4 renamed';
+      renderList();   // deferred: a row has the focus
+    });
+    await page.keyboard.press('Tab');
+    await frames(page);
+    assert.equal(await focusedId(page), 'synthetic-4');
+    await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+    await frames(page);
   });
 
   test('Tab reaches every row past the edge of the window', async () => {
