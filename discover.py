@@ -628,6 +628,7 @@ class _CodexView:
 
     def __init__(self):
         self._procs, self._read, self._dirs, self._held, self._launched = None, False, None, None, None
+        self._rollouts = None
 
     def _table(self):
         if not self._read:
@@ -637,6 +638,12 @@ class _CodexView:
             except OSError:
                 self._procs = None      # unreadable: callers stay ambiguous
         return self._procs
+
+    def rollouts(self):
+        """The recent rollouts, listed once per view: once per listing inside listing_scope."""
+        if self._rollouts is None:
+            self._rollouts = recent_rollouts()
+        return self._rollouts
 
     def count(self, directory):
         procs = self._table()
@@ -715,7 +722,8 @@ _LISTING_VIEW = contextvars.ContextVar("codex_listing_view", default=None)
 
 @contextlib.contextmanager
 def listing_scope():
-    """Share one codex process scan between all the sessions of one listing (not kept afterwards)."""
+    """Share one codex process scan and one rollout listing between all the sessions of one listing (not kept
+    afterwards)."""
     token = _LISTING_VIEW.set(_CodexView())
     try:
         yield
@@ -736,7 +744,7 @@ def _lone_codex_candidates(pid, here, started):
     """The rollouts this codex may own when it holds none open: the top-level rollouts of its folder written
     since it started, but only when it is the one codex running there and no other codex holds them open
     (a later codex's rollout would otherwise be taken for this one's). Empty when any of that is unknown."""
-    candidates = [p for p in recent_rollouts()
+    candidates = [p for p in _codex_view().rollouts()
                   if _rollout_meta(p)[0] == here and not _rollout_meta(p)[1]
                   and os.path.getmtime(p) >= started]
     if not candidates or _codex_count(here) != 1:
@@ -760,7 +768,7 @@ def _newest_top_level(paths):
 
 def _rollout_of(sid):
     """The recent top-level rollout of conversation sid, or None (an older one is not searched)."""
-    found = _newest_top_level(p for p in recent_rollouts() if _rollout_meta(p)[2] == sid)
+    found = _newest_top_level(p for p in _codex_view().rollouts() if _rollout_meta(p)[2] == sid)
     return found[0] if found else None
 
 
@@ -785,7 +793,7 @@ def _later_conversation(pid, named, named_path):
     named one's, that no other codex holds open or may have been launched on. True when that cannot be known."""
     started, here = proc_start(pid), cwd(pid)
     named_at = os.path.getmtime(named_path) if named_path else None
-    later = [p for p in recent_rollouts() if _rollout_meta(p)[0] == here and not _rollout_meta(p)[1]
+    later = [p for p in _codex_view().rollouts() if _rollout_meta(p)[0] == here and not _rollout_meta(p)[1]
              and _rollout_meta(p)[2] != named and os.path.getmtime(p) >= started
              and (named_at is None or os.path.getmtime(p) > named_at)]
     if not later:
