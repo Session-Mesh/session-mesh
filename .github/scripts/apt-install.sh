@@ -16,13 +16,17 @@
 # Each attempt runs `apt-get update`, then `apt-get install --download-only`, each bounded by
 # `timeout` (killing a download is safe, apt resumes it on the next attempt). Once every package is in
 # the local archive, the real install runs without a bound and without the network. An attempt that
-# fails with a mirror error (a failed fetch, a 5xx, a connection or name resolution error, a hash
-# mismatch, or the time bound) is retried after a pause; before the last attempt
-# `fast-apt-mirror.sh --fallback` points the Ubuntu URIs at a second host. Any other failure (an
-# unknown package, a dependency conflict) fails at once: retrying would not help.
+# fails with a mirror error is retried after a pause: the time bound, or a failed fetch (a 5xx, a
+# connection or name resolution error, a hash mismatch) from a host the script manages (*.ubuntu.com and
+# the hosts of fast-apt-mirror.sh). Only the output of the failing command counts. Before the last attempt
+# `fast-apt-mirror.sh --fallback` points the Ubuntu URIs at a second host (not when CI_APT_MIRROR_DISABLE=1
+# is set in this step's environment). Any other failure (an unknown package, a dependency conflict, a
+# full disk, a lock, an error from another host) fails at once: retrying would not help. `apt-get update`
+# runs with --error-on=any: a fetch error from a managed host fails the attempt, so --if-available never
+# skips a package because the index is incomplete; an error from another host only warns.
 # When every attempt failed, the job fails with an `::error` annotation titled
 # "Package mirror unavailable" that names the hosts in the errors.
-# Worst case with the defaults: 3 x (120 s + 600 s) + 30 s + 60 s = 37.5 min if every attempt
+# Worst case with the defaults: 3 x (120 s + 600 s + 2 x 30 s kill grace) + 30 s + 60 s = 40.5 min if every attempt
 # runs into the time bounds; a mirror that refuses or errors fails each attempt in seconds, and the
 # whole run then costs about the pauses, 1.5 min, plus apt's own retries.
 # Settings (the tests shorten them): CI_APT_ATTEMPTS (3), CI_APT_PAUSES ("30 60", seconds, one per
@@ -37,6 +41,16 @@ download_seconds="${CI_APT_DOWNLOAD_SECONDS:-600}"
 mirror_script="${CI_APT_MIRROR_SCRIPT:-$(dirname "${BASH_SOURCE[0]}")/fast-apt-mirror.sh}"
 python="${CI_APT_PYTHON:-python}"
 lock_option='DPkg::Lock::Timeout=120'
+kill_grace=30
+# The hosts this script manages: the Ubuntu hosts (any *.ubuntu.com) and the mirror and fallback hosts
+# fast-apt-mirror.sh is configured with. Only errors from these count as a mirror outage.
+managed_hosts="[A-Za-z0-9.-]+\\.ubuntu\\.com"
+for uri in "${CI_APT_MIRROR_URI:-}" "${CI_APT_FALLBACK_URI:-}"; do
+  uri="${uri#*://}"
+  [ -z "${uri%%/*}" ] || managed_hosts="$managed_hosts|${uri%%/*}"
+done
+# Local failures that name a mirror URL in apt's output without the mirror being at fault.
+local_errors='No space left on device|Write error|Read-only file system|Permission denied|Could not get lock|Unable to lock|Unable to acquire the dpkg|Could not open file|Input/output error|Cannot allocate memory'
 mirror_errors='Failed to fetch|^Err:|Could not connect|Could not resolve|Temporary failure resolving|Connection failed|Connection timed out|Unable to connect|Unable to fetch some archives|Hash Sum mismatch|File has unexpected size|Mirror sync in progress|Service Unavailable|Bad Gateway|Gateway Time-?out|Internal Server Error|Undetermined Error|Some index files failed to download'
 
 say() { echo "apt-install: $*"; }
@@ -62,11 +76,13 @@ playwright_packages() {
   read -r -a packages <<<"${rest//$'\n'/ }"
 }
 
-# Runs one apt-get command as root under a time bound, keeping its output for the classification.
+# Runs one apt-get command as root under a time bound (killed outright ${kill_grace} s after the
+# TERM), keeping its output, and only its output, for the classification of its failure.
 bounded() {
   local seconds="$1"
   shift
-  sudo timeout "$seconds" apt-get "$@" 2>&1 | tee -a "$output"
+  : >"$output"
+  sudo timeout -k "$kill_grace" "$seconds" apt-get "$@" 2>&1 | tee "$output"
   return "${PIPESTATUS[0]}"
 }
 
@@ -84,16 +100,40 @@ select_packages() {
   done
 }
 
+# The managed hosts named by a failed fetch in the output of the last command, one per line.
+failing_hosts() {
+  grep -E '(^Err:|Failed to fetch)' "$output" | grep -oE 'https?://[^/ :]+' | sed -E 's#^https?://##' \
+    | grep -E "^($managed_hosts)$" | sort -u
+}
+
+# Succeeds when the last command failed with status $1 because of a package mirror: the time bound, or
+# a failed fetch from a host this script manages. A local error (full disk, lock) or an error from
+# any other host is not one.
+is_mirror_failure() {
+  [ "$1" -eq 124 ] && return 0
+  grep -Eq "$local_errors" "$output" && return 1
+  grep -Eq "$mirror_errors" "$output" && [ -n "$(failing_hosts)" ]
+}
+
+# apt-get update runs with --error-on=any so that a failed index fetch fails the command (apt's
+# default turns it into a warning with status 0, and a package could then look unknown). A failure
+# that names no managed host (a third-party repository) is reported and does not stop the attempt.
+update_index() {
+  local status
+  bounded "$update_seconds" update -q --error-on=any -o "$lock_option"
+  status=$?
+  [ "$status" -ne 0 ] || return 0
+  if is_mirror_failure "$status" || grep -Eq "$local_errors" "$output"; then
+    return "$status"
+  fi
+  say "apt-get update reported errors only from hosts this script does not manage (status $status), continuing"
+}
+
 attempt() {
-  : >"$output"
-  bounded "$update_seconds" update -q || return
+  update_index || return
   select_packages
   [ "${#selected[@]}" -gt 0 ] || return 0
   bounded "$download_seconds" install -y -q --no-install-recommends --download-only -o "$lock_option" "${selected[@]}"
-}
-
-failing_hosts() {
-  grep -E "$mirror_errors" "$output" | grep -oE 'https?://[^/ ]+' | sed -E 's#^https?://##' | sort -u | paste -sd, - | sed 's/,/, /g'
 }
 
 packages=()
@@ -133,17 +173,18 @@ for ((number = 1; number <= attempts; number++)); do
     fi
     fail "apt-get install failed" "the packages were downloaded but apt-get install failed: not a mirror outage"
   fi
-  if [ "$status" -ne 124 ] && ! grep -Eq "$mirror_errors" "$output"; then
+  if ! is_mirror_failure "$status"; then
     fail "apt-get failed" "apt-get failed with status $status and no mirror error in its output: not retried (see the log above)"
   fi
-  hosts="$(failing_hosts)"
-  say "attempt $number of $attempts failed with a mirror error${hosts:+ from $hosts} (status $status)"
+  seen="$(failing_hosts)"
+  hosts="$(printf '%s\n%s\n' "$hosts" "$seen" | grep . | sort -u)"
+  say "attempt $number of $attempts failed with a mirror error${seen:+ from $(paste -sd, - <<<"$seen" | sed 's/,/, /g')} (status $status)"
   [ "$number" -lt "$attempts" ] || break
-  if [ "$number" -eq $((attempts - 1)) ]; then
+  if [ "$number" -eq $((attempts - 1)) ] && [ "${CI_APT_MIRROR_DISABLE:-0}" != "1" ]; then
     bash "$mirror_script" --fallback || true
   fi
   pause="${pauses[number - 1]:-${pauses[${#pauses[@]} - 1]}}"
   say "retrying in $pause s"
   sleep "$pause"
 done
-fail "Package mirror unavailable" "package mirror unavailable: ${#packages[@]} packages could not be downloaded in $attempts attempts${hosts:+ (errors from $hosts)}. Not a code failure: re-run the job."
+fail "Package mirror unavailable" "package mirror unavailable: ${#packages[@]} packages could not be downloaded in $attempts attempts${hosts:+ (errors from $(paste -sd, - <<<"$hosts" | sed "s/,/, /g"))}. Probably not a code failure: re-run the job."

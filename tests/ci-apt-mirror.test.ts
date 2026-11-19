@@ -25,7 +25,30 @@ const MIRROR_STEP = /fast-apt-mirror\.sh/;
 // What installs packages: the retrying installer, and setup-ocaml (apt-get install for its packages).
 const APT_USERS = /apt-install\.sh|ocaml\/setup-ocaml/;
 // Package installs that bypass .github/scripts/apt-install.sh (no retries, no clear failure message).
-const BARE_APT = /\bapt-get\b|\bapt\s+(?:install|update)\b|--with-deps|playwright\s+install-deps|\baptitude\b/;
+// An option may sit before the verb (`apt -y install`), and dpkg -i installs a .deb without the retries.
+const BARE_APT = /\bapt-get\b|(?<![\w.-])apt\s+(?:-\S+\s+)*(?:install|update)\b|\bdpkg\s+(?:-\S+\s+)*(?:-i|--install)\b|--with-deps|playwright\s+install-deps|\baptitude\b/;
+// The helper scripts a workflow runs, and the scripts those call: none may install packages by itself.
+const SCRIPT_REFERENCE = /(?:\.github\/)?scripts\/[\w.-]+\.(?:sh|bash)/g;
+// A message that tells the reader how to fetch a source package (scripts/bundle-native-libs.sh), not a command.
+const PRINTED_ONLY = /printf '.*\(apt-get source %s=%s\)/;
+const OWN_SCRIPTS = new Set(['.github/scripts/apt-install.sh', '.github/scripts/fast-apt-mirror.sh']);
+function executedLines(text: string) {
+  return text.split('\n').filter((line) => !/^\s*#/.test(line)).map((line) => line.replace(/(^|\s)#.*$/, ''));
+}
+function helperScripts() {
+  const found = new Set<string>();
+  const queue: string[] = [];
+  for (const file of ALL_WORKFLOWS) queue.push(...executedLines(fs.readFileSync(path.join(WORKFLOW_DIR, file), 'utf8')).flatMap((line) => line.match(SCRIPT_REFERENCE) ?? []));
+  while (queue.length > 0) {
+    const script = queue.pop() as string;
+    const resolved = script;
+    if (found.has(resolved) || OWN_SCRIPTS.has(resolved) || !fs.existsSync(path.join(ROOT, resolved))) continue;
+    found.add(resolved);
+    queue.push(...executedLines(fs.readFileSync(path.join(ROOT, resolved), 'utf8')).flatMap((line) => line.match(SCRIPT_REFERENCE) ?? []));
+  }
+  return [...found].sort();
+}
+
 // What setup-ocaml installs with a plain `apt-get --yes install` (packages/setup-ocaml/src/system-packages.ts
 // at the pinned commit): bubblewrap, musl-tools, rsync, and darcs, g++-multilib, gcc-multilib and
 // mercurial when apt knows them. A new pin must be checked against that file and this list updated.
@@ -42,8 +65,17 @@ describe('every package installation of the workflows goes through apt-install.s
     });
   }
 
+  test('no helper script that a workflow runs (directly or through another script) installs packages itself', () => {
+    const scripts = helperScripts();
+    assert.ok(scripts.length >= 5, `found only ${scripts.join(', ')}`);
+    for (const script of scripts) {
+      const offending = executedLines(fs.readFileSync(path.join(ROOT, script), 'utf8')).filter((line) => BARE_APT.test(line) && !PRINTED_ONLY.test(line));
+      assert.deepEqual(offending, [], script);
+    }
+  });
+
   test('the check itself catches the forms it is meant to refuse', () => {
-    for (const bad of ['sudo apt-get install -y foo', 'sudo apt-get update -q', 'sudo apt install foo',
+    for (const bad of ['sudo apt -y install foo', 'sudo apt --yes install foo', 'sudo dpkg -i x.deb', 'sudo dpkg --install x.deb', 'sudo apt-get install -y foo', 'sudo apt-get update -q', 'sudo apt install foo',
       'python -m playwright install --with-deps chromium', 'npx playwright install-deps chromium']) {
       assert.match(bad, BARE_APT, bad);
     }
