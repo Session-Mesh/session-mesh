@@ -4,6 +4,9 @@
 """Discover terminal sessions (mesh, Terminator tabs, SSH logins…) and describe
 the Claude / Codex agent running in each one."""
 
+import collections
+import contextlib
+import contextvars
 import glob
 import json
 import os
@@ -522,26 +525,27 @@ def proc_start(pid):
 def _codex_count(directory):
     """How many codex agents run with this working directory; at least two when
     the process table is not known complete, so that the caller stays ambiguous."""
-    count = 0
-    procs = snapshot()
-    for pid, st in procs.items():
-        if st[0] == "codex" and is_agent(pid, st) == "codex" and _may_run_in(pid, directory, procs):
-            parent = read_stat(st[2])   # an unknown parent is not "codex": counted
-            if not (parent and parent[0] == "codex"):    # not a codex helper of another one
-                count += 1
-    return count if known_complete(procs) else max(count, 2)
+    return _codex_view().count(directory)
+
+
+def _run_dir(pid, procs):
+    """The working directory of this process, or None when unknown. Outside Linux the cwd is
+    the one of the snapshot procs, not of a later answer."""
+    if isinstance(procs, HostProcesses):
+        here = procs.rows.get(pid, {}).get("cwd")
+        return here if isinstance(here, str) else None
+    return cwd(pid)
+
+
+def _runs_in(here, directory):
+    """Whether a process whose cwd is ``here`` may run in ``directory``: the same folder, or,
+    outside Linux, a cwd the host did not report."""
+    return here == directory or (here is None and sys.platform != "linux")
 
 
 def _may_run_in(pid, directory, procs):
-    """Whether this process may run in this directory: its cwd is that one, or,
-    outside Linux, the host did not report it. Outside Linux the cwd is the one
-    of the snapshot procs, not of a later answer."""
-    if isinstance(procs, HostProcesses):
-        here = procs.rows.get(pid, {}).get("cwd")
-        here = here if isinstance(here, str) else None
-    else:
-        here = cwd(pid)
-    return here == directory or (here is None and sys.platform != "linux")
+    """Whether this process may run in this directory."""
+    return _runs_in(_run_dir(pid, procs), directory)
 
 
 def _may_be_pi(pid, st, procs):
@@ -576,6 +580,117 @@ def _open_rollouts(pid):
     return rollouts
 
 
+def _fds_gone(pid):
+    """Whether the process exited: its fd directory no longer exists (as opposed to being unreadable)."""
+    try:
+        os.listdir(f"/proc/{pid}/fd")
+    except (FileNotFoundError, ProcessLookupError):
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _same_user(pid):
+    """Whether the process belongs to this user; True when that cannot be told (fail closed)."""
+    try:
+        return os.stat(f"/proc/{pid}").st_uid == os.getuid()
+    except OSError:
+        return True
+
+
+def _neighbour_rollouts(pid):
+    """The rollouts a neighbouring codex holds open, or None when they cannot be known. A neighbour
+    that exited meanwhile holds nothing, and neither does one of another user whose files cannot be
+    read: the candidates come from this user's ~/.codex, where only this user's codex writes."""
+    rollouts = _open_rollouts(pid)
+    if rollouts is not None:
+        return set(rollouts)
+    if sys.platform == "linux" and (_fds_gone(pid) or not _same_user(pid)):
+        return set()
+    return None
+
+
+def _is_top_level_codex(pid, st):
+    """A codex agent that is not a helper process of another codex."""
+    if st[0] != "codex" or is_agent(pid, st) != "codex":
+        return False
+    parent = read_stat(st[2])   # an unknown parent is not "codex": counted
+    return not (parent and parent[0] == "codex")
+
+
+class _CodexView:
+    """What the codex identity rules need to know about the host's codex processes, read once from one
+    process table: the folder of each top-level codex and the rollouts each codex holds open."""
+
+    def __init__(self):
+        self._procs, self._read, self._dirs, self._held = None, False, None, None
+
+    def _table(self):
+        if not self._read:
+            self._read = True
+            try:
+                self._procs = snapshot()
+            except OSError:
+                self._procs = None      # unreadable: callers stay ambiguous
+        return self._procs
+
+    def count(self, directory):
+        procs = self._table()
+        if procs is None:
+            return 2
+        if self._dirs is None:
+            self._dirs = [_run_dir(pid, procs) for pid, st in procs.items() if _is_top_level_codex(pid, st)]
+        count = sum(1 for here in self._dirs if _runs_in(here, directory))
+        return count if known_complete(procs) else max(count, 2)
+
+    def held_by_others(self, pid):
+        """The rollouts the codex processes other than ``pid`` hold open, or None when one cannot be known."""
+        procs = self._table()
+        if procs is None:
+            return None
+        if self._held is None:
+            self._held = {other: _neighbour_rollouts(other) for other, st in procs.items()
+                          if st[0] == "codex" and is_agent(other, st) == "codex"}
+        others = [r for other, r in self._held.items() if other != pid]
+        return None if any(r is None for r in others) else set().union(*others)
+
+
+_LISTING_VIEW = contextvars.ContextVar("codex_listing_view", default=None)
+
+
+@contextlib.contextmanager
+def listing_scope():
+    """Share one codex process scan between all the sessions of one listing (not kept afterwards)."""
+    token = _LISTING_VIEW.set(_CodexView())
+    try:
+        yield
+    finally:
+        _LISTING_VIEW.reset(token)
+
+
+def _codex_view():
+    return _LISTING_VIEW.get() or _CodexView()
+
+
+def _held_by_other_codex(pid):
+    """The rollouts another codex process of the host holds open, or None when one cannot be known."""
+    return _codex_view().held_by_others(pid)
+
+
+def _lone_codex_candidates(pid, here, started):
+    """The rollouts this codex may own when it holds none open: the top-level rollouts of its folder written
+    since it started, but only when it is the one codex running there and no other codex holds them open
+    (a later codex's rollout would otherwise be taken for this one's). Empty when any of that is unknown."""
+    candidates = [p for p in recent_rollouts()
+                  if _rollout_meta(p)[0] == here and not _rollout_meta(p)[1]
+                  and os.path.getmtime(p) >= started]
+    if not candidates or _codex_count(here) != 1:
+        return []
+    held = _held_by_other_codex(pid)
+    return [] if held is None else [p for p in candidates if p not in held]
+
+
 def codex_info(pid):
     info = {"type": "codex"}
     rollouts = _open_rollouts(pid)
@@ -585,14 +700,10 @@ def codex_info(pid):
     if not rollouts:
         # Codex does not always keep its rollout open: fall back to the most
         # recent top-level rollout for this cwd written since the process started.
-        here, started = cwd(pid), proc_start(pid)
-        candidates = [p for p in recent_rollouts()
-                      if _rollout_meta(p)[0] == here and not _rollout_meta(p)[1]
-                      and os.path.getmtime(p) >= started]
-        # Two codex in one directory: the newest rollout may be the other one's, and
-        # resuming it would kill this codex to reopen a conversation running elsewhere.
-        # A lone codex may have written several (/new): its newest is the right one.
-        rollouts = candidates if len(candidates) == 1 or _codex_count(here) == 1 else []
+        # A lone codex may have written several (/new): its newest is the right one. With another codex
+        # in the folder the newest may be that one's, and resuming it would kill this codex to reopen a
+        # conversation running elsewhere, so the answer is then none (fail-closed).
+        rollouts = _lone_codex_candidates(pid, cwd(pid), proc_start(pid))
     best = None
     for path in set(rollouts):
         rcwd, sub, rid = _rollout_meta(path)
@@ -620,6 +731,26 @@ def codex_info(pid):
     info.update(session_id=best[2], identity_source=identity_source, last=_clip(last) if last else None, updated=mtime, cwd=here,
                 status="busy" if time.time() - mtime < 20 else "idle", said=_clip(said) if said else None)
     return info
+
+
+GUESSED_ID_SOURCES = ("cwd_unique", "history_cwd")
+
+
+def _guessed_source(source):
+    return source in GUESSED_ID_SOURCES or (isinstance(source, str) and source.startswith("unique_"))
+
+
+def drop_duplicate_guessed_ids(descriptions):
+    """Remove a guessed conversation id (see GUESSED_ID_SOURCES) that another session also reports: an
+    exact id of another session wins, and two guesses of one id are both dropped. Exact ids are never touched."""
+    agents = [d["agent"] for d in descriptions if isinstance(d.get("agent"), dict) and d["agent"].get("session_id")]
+    exact = {a["session_id"] for a in agents if not _guessed_source(a.get("identity_source"))}
+    guesses = [a for a in agents if _guessed_source(a.get("identity_source"))]
+    seen = collections.Counter(a["session_id"] for a in guesses)
+    for a in guesses:
+        if a["session_id"] in exact or seen[a["session_id"]] > 1:
+            a["session_id"] = None
+            a["identity_source"] = None
 
 
 def _text_blocks(blocks):
