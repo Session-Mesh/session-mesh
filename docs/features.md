@@ -411,8 +411,11 @@ Unified diffs (`.diff` and `.patch` files, as written by `git diff`, `git show`,
 with its status (renamed, new, deleted, binary) and its count of added and removed lines; line
 numbers on both sides; the changed words of each modified line highlighted; and "unified" and
 "split" buttons to switch between one column and two columns side by side. A commit message
-before the first file is shown above it. "source" shows the plain text; diffs over 4 MiB are
-served as plain text. The agent guide asks agents to show a diff this way when you ask for one.
+before the first file is shown above it. A large diff is built in parts: "show more" adds the
+next lines of a file, and the files past the first screens start folded. "source" shows the plain
+text, and so does a line target such as `changes.diff:42`, at that line; diffs over 4 MiB, or
+holding a NUL byte, are served as plain text. The agent guide asks agents to show a diff this way
+when you ask for one.
 
 **Following a document as it changes.** "Watch the file" in the "More" menu of a document reloads
 it whenever the file changes on disk, keeping the reading position for Markdown and source files.

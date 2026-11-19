@@ -129,15 +129,22 @@ of a file), show it in this viewer rather than printing it in the terminal: writ
 file under the home directory or `/tmp`, then open it.
 
 ```sh
-f="$(mktemp -d)/changes.diff"
-git diff > "$f"                # or: git diff main...HEAD, git show <commit>, diff -u old new
-mesh-open "$f"                 # under the same condition as above: MESH_SESSION_TOKEN is set
+# /tmp, not $TMPDIR (which may not be served); HEAD: staged and unstaged changes to tracked files
+d="$(mktemp -d /tmp/mesh-diff.XXXXXXXX)" &&
+  git diff --no-color HEAD > "$d/changes.diff" &&
+  mesh-open "$d/changes.diff"   # under the same condition as above: MESH_SESSION_TOKEN is set
 ```
+
+Other diffs: `git diff --no-color main...HEAD` (a branch), `git show --no-color <commit>`,
+`diff -u old new`. `git diff` leaves out untracked files: when the owner wants them too, mark
+them first with `git add --intent-to-add <file>` (it stages no content), or append
+`git diff --no-color --no-index /dev/null <file>` for each. Always pass `--no-color`: a
+`color.diff=always` setting would put colour codes in the file even when it is redirected.
 
 Without `MESH_SESSION_TOKEN`, print the file's path instead: the owner clicks it and it opens in
 the same viewer. To follow changes as you work, open it with `mesh-open --watch` and write the
-diff to the same file again. Write diffs without colour codes (`git diff` adds none when its
-output is a file; never pass `--color=always`). A diff over 4 MiB is shown as plain text.
+diff to the same file again. A diff over 4 MiB is shown as plain text, and `changes.diff:42`
+opens the plain text at that line of the file.
 
 ### Whiteboard and demos
 

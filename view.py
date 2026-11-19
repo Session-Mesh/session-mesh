@@ -941,7 +941,8 @@ class _DescriptorResponse(web.FileResponse):
 
 
 # Rendered types whose source can be asked for instead (?source=1): shown in Monaco.
-SOURCE_LANG = {".md": "markdown", ".markdown": "markdown", ".html": "html", ".htm": "html", ".svg": "xml"}
+SOURCE_LANG = {".md": "markdown", ".markdown": "markdown", ".html": "html", ".htm": "html", ".svg": "xml",
+               ".diff": "plaintext", ".patch": "plaintext"}
 
 
 async def _respond(request, path, handle):
@@ -958,13 +959,20 @@ async def _respond(request, path, handle):
     if ext in MD_EXT:      # ?raw=1, or too large to render: the bytes, streamed
         return _DescriptorResponse(handle, "text/plain; charset=utf-8",
                                    {**headers, "Content-Security-Policy": active_csp()})
-    if (ext in DIFF_EXT and "raw" not in request.query and _is_navigation(request)
-            and _size(handle) <= DIFF_MAX_BYTES):
-        with handle:
-            text = (await asyncio.to_thread(handle.read)).decode("utf-8", errors="replace")
+    if ext in DIFF_EXT and "raw" not in request.query and _is_navigation(request):
+        # At most one byte past the limit, whatever the size was when checked (a watched patch
+        # may grow meanwhile). Too large, or not text (a NUL byte, as codeview.is_text): the
+        # whole file is streamed as plain text from the same descriptor, which aiohttp reopens
+        # from its start.
+        data = await asyncio.to_thread(handle.read, DIFF_MAX_BYTES + 1)
+        if len(data) > DIFF_MAX_BYTES or not codeview.is_text(data):
+            return _DescriptorResponse(handle, "text/plain; charset=utf-8",
+                                       {**headers, "Content-Security-Policy": active_csp()})
+        handle.close()
         nonce = secrets.token_urlsafe(16)
         # the same policy as rendered Markdown: only this page's own scripts run
-        return web.Response(text=diff_page(path, text, nonce), content_type="text/html",
+        return web.Response(text=diff_page(path, data.decode("utf-8", errors="replace"), nonce),
+                            content_type="text/html",
                             headers={**headers, "Content-Security-Policy": markdown_csp(nonce)})
     language = codeview.language_for(path)
     if language and _is_navigation(request):
@@ -1101,7 +1109,7 @@ def _frame_named_tag_end(first, start, name):
 
 
 MD_MAX_BYTES = 4 * 1024 * 1024    # larger Markdown is served as plain text
-DIFF_MAX_BYTES = 4 * 1024 * 1024  # a larger diff goes to the code viewer, or as plain text
+DIFF_MAX_BYTES = 4 * 1024 * 1024  # a larger diff is served as plain text
 
 
 def _size(handle):
