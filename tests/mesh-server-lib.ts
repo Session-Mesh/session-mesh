@@ -77,7 +77,7 @@ export async function scratchHome(prefix: string, extraEnv: NodeJS.ProcessEnv = 
     MESH_PORT: String(port),
     // GET /api/sessions answers from the background state, waiting at most 2 s for the round it asks for; these
     // tests read it right after a change, on loaded machines too. tests/sessions-state.test.ts keeps the default.
-    MESH_SESSIONS_WAIT: '60',
+    MESH_SESSIONS_WAIT: '60', MESH_TEST_SESSIONS_COMPLETE: '1',
     ...extraEnv};
   delete env.MESH_HOST;
   delete env.MESH_ALLOW_NON_LOOPBACK;

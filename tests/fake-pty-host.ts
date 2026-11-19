@@ -9,7 +9,7 @@
 //
 // The control file is read at every request, so a test changes the host's behaviour by rewriting it:
 //   sessions    the `list` reply (FakeSession[])
-//   firstList   names: the first `list` this process answers holds only these sessions
+//   firstList   names: the first two `list` replies of this process (a request's read and a round's) hold only these
 //   silent      accept requests and never answer
 //   slowFrom    the `list` requests from this number on (1 is the first) wait `delayMs` before the reply
 //   update      the update notice (null: none)
@@ -50,7 +50,7 @@ function serve(socketPath: string, controlPath: string): void {
       let delay = 0;
       if (request.op === 'list') {
         lists += 1;
-        const first = lists === 1 && control.firstList ? new Set(control.firstList) : null;
+        const first = lists <= 2 && control.firstList ? new Set(control.firstList) : null;
         reply = first ? control.sessions.filter(session => first.has(session.name)) : control.sessions;
         if (control.slowFrom !== undefined && lists >= control.slowFrom) delay = control.delayMs ?? 1000;
       } else if (request.op === 'update_notice') {

@@ -42,6 +42,7 @@ os.environ["MESH_CONF_DIR"] = str(TEST_HOME / ".config" / "session-mesh")
 # GET /api/sessions answers from the background state; these tests read it right after a change,
 # so each request waits for the round it asks for (tests/sessions-state.test.ts covers the bound).
 os.environ["MESH_SESSIONS_WAIT"] = "60"
+os.environ["MESH_TEST_SESSIONS_COMPLETE"] = "1"
 os.environ["MESH_CACHE_DIR"] = str(TEST_HOME / ".cache" / "session-mesh")
 # Transport/restore conformance uses a real interactive shell without machine
 # login profiles. Tests specifically exercising another shell retain their

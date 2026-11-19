@@ -4,8 +4,8 @@
 // GET /api/sessions under a burst of requests, with the native PTY host: the requests are answered from the
 // background state, which one round at a time keeps current; no request runs a listing of its own. A page
 // polls every 4 s; on a loaded machine one listing takes longer than that, and one listing per request made
-// the wait grow without bound. The `now` of a reply is the time its listing was made: shared listings answer
-// the same value. A change is listed within one round. (tests/sessions-state.test.ts: the bounds.)
+// the wait grow without bound. The `now` of a reply is the time of the reply, not of the round it answers from.
+// A change is listed within one round. (tests/sessions-state.test.ts counts the host lists of a burst.) (tests/sessions-state.test.ts: the bounds.)
 import assert from 'node:assert/strict';
 import {after, before, test} from 'node:test';
 import {type ChildProcess, spawn} from 'node:child_process';
@@ -57,17 +57,15 @@ async function listing(): Promise<{sentAt: number; body: Listing}> {
   return {sentAt, body: await response.json() as Listing};
 }
 
-test('a burst of requests shares the listings and every one is answered', async () => {
+test('a burst of requests is answered, each with the time of its reply', async () => {
   await listing();   // the first listing of a fresh server warms its caches
   const burst = 16;
   const replies = await Promise.all(Array.from({length: burst}, () => listing()));
-  for (const {body} of replies) {
+  const answered = Date.now() / 1000;
+  for (const {sentAt, body} of replies) {
     assert.ok(Array.isArray(body.mesh) && Array.isArray(body.external), 'a complete listing');
+    assert.ok(body.now >= sentAt - 1 && body.now <= answered + 1, `now ${body.now} outside [${sentAt}, ${answered}]`);
   }
-  const made = new Set(replies.map(({body}) => body.now));
-  // Far fewer listings than requests (one each before the change gives 16); the exact count depends on how
-  // the requests spread over the listing's duration.
-  assert.ok(made.size < burst / 2, `${made.size} listings were made for ${burst} simultaneous requests`);
 });
 
 async function post(route: string, body: unknown): Promise<Response> {
