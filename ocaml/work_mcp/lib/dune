@@ -1,0 +1,7 @@
+; The work_* MCP server above the worklog library (docs/work-mcp.md). Library
+; only; the stdio executable is in ../bin. No new opam dependency: mcp-kit,
+; yojson and unix are already used by the other Mesh MCP programs.
+
+(library
+ (name work_mcp)
+ (libraries mesh_worklog mcp-kit mcp-kit.stdio yojson unix))
