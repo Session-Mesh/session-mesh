@@ -139,7 +139,7 @@ install.
   trust a project's or a plugin's hooks and servers more than the agent that runs them. The
   tracker server the mesh adds beside the board (`mesh-work`, the `work-mcp` program) never reads
   the token and empties it in its own process at start, so the `git` it runs does not inherit it;
-  Codex and Vibe do not pass it to that server at all ([docs/work-mcp.md](docs/work-mcp.md#registration)).
+  Codex, Gemini CLI and Vibe do not pass it to that server at all ([docs/work-mcp.md](docs/work-mcp.md#registration)).
 - **Documents written by agents.** HTML, Markdown and source files shown in the interface are served
   from an opaque-origin sandbox with a restrictive Content Security Policy. A document cannot read
   the login cookie, drive the terminals or call the mesh's API. Its script cannot use `fetch`, XHR,

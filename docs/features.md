@@ -112,18 +112,17 @@ mesh's MCP server, `mesh-board`, without losing their other MCP servers (Antigra
 whiteboard, demos and agent messages described below. Its `agent_guide_read` tool, whose
 description tells the agent that it runs in session-mesh, returns the
 [agent guide](agent-guide.md): what the agent can show you and how, in one read. The server's
-instructions ask the agent to call it once, unconditionally: that read costs about 4,500 tokens of
+instructions ask the agent to call it once, unconditionally: that read costs about 3,500 tokens of
 the agent's context in every session, a cost accepted so that an agent knows these features before
 it needs them rather than never discovering them.
 
-The same agents also receive the project tracker, `mesh-work` (the `work-mcp` program, 17 `work_*`
-tools over the tracker the Projects view reads, data in `~/worklog-data`), when the installation
-holds it; an older installation launches them without it. The agent guide's "Track your work"
-section tells them when to use it: `work_resume` at the start, a task found or created for the
-work, decisions, blockers and progress logged as they go, non-blocking questions recorded with
-`work_ask` instead of stopping, and a task closed with its evidence. The tracker adds its tool
-declarations (about 4,000 tokens) and its server instructions (about 1,000) to an agent's context.
-See [work-mcp.md](work-mcp.md#registration).
+An agent that receives `mesh-board` also receives the project tracker, `mesh-work` (the `work-mcp`
+program, 17 `work_*` tools over the tracker the Projects view reads), when the installation holds
+it; an older installation launches agents without it. The server's instructions say how to use it,
+and the agent guide's "Track your work" section says which system to use for what: the tracker
+for the agent's own work, the Projects view's projects for the owner's configuration, Roster's
+commands for a Roster pipeline. The tracker adds its tool declarations (about 4,000 tokens) and its
+server instructions (about 1,000) to an agent's context. See [work-mcp.md](work-mcp.md#registration).
 
 The "Folder" field of the "New session" dialog starts with the folder of the session you are
 looking at (the home folder when there is none) and offers suggestions through the browser's own

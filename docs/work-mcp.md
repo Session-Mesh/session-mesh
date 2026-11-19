@@ -6,22 +6,42 @@ The server is a separate program from `mesh-board-mcp` and does not talk to the 
 
 ## Registration
 
-Wherever the web server gives an agent the `mesh-board` server, it also gives it this one, under the server name `mesh-work`, in the same per-session configuration and without changing the user's own files. The program is found like `mesh-board-mcp`: `$MESH_BIN_DIR/work-mcp` in a bundle, `app/bin/work-mcp` (a link to the release's own) in a release installed from its native programs, else the `bin` of the opam switch. When it is not there (an installation older than this server) the entry is left out and the launch is unchanged.
+The web server gives this server, under the name `mesh-work`, to every agent that receives the `mesh-board` server, in the same per-session configuration and without changing the user's own files. One function, `agentmcp.mesh_servers`, lists the servers an agent receives, in order, and each agent's adapter only writes them in that agent's format. One rule applies to every agent:
 
-| Agent | How the entry reaches it |
+- without the board bridge (`mesh-board-mcp`), an agent receives neither server, and Pi is not launched, as before;
+- with the board, the tracker is added when `work-mcp` is installed. The program is found like `mesh-board-mcp`: `$MESH_BIN_DIR/work-mcp` in a bundle, `app/bin/work-mcp` (a link to the release's own) in a release installed from its native programs, else the `bin` of the opam switch. Without it (an installation older than this server), the launch is byte for byte what it was before.
+
+The entry is the program with no argument and one written value, `WL_AGENT`, the agent kind (`claude`, `codex`, `pi`, `opencode`, `gemini`, `copilot`, `vibe`, `agy`). The session name (`MESH_SESSION`) and a `WL_HOME` the user set are never written into a configuration or a command line as values. Without `WL_HOME`, the data repository is `~/worklog-data`, or an older `~/worklog` (the library refuses when both exist), created at first use.
+
+| Agent | Where the entry goes | How `MESH_SESSION` and `WL_HOME` reach the server |
+|---|---|---|
+| Claude Code | the same `--mcp-config` value as `mesh-board` | inherited from the agent's environment; observed |
+| Codex | `-c mcp_servers.mesh-work.*` overrides | listed by name in `env_vars`, Codex's environment filter; observed |
+| Pi | the private `mcp.json` of its per-session agent directory (`pi-agent-overlays/session-*`) | inherited, like the board's token; not observed |
+| OpenCode 1 and 2 | `OPENCODE_CONFIG_CONTENT` | inherited; observed with OpenCode 1 |
+| Gemini CLI | the settings of its private `GEMINI_CLI_HOME` | `$MESH_SESSION` and `$WL_HOME` references, which Gemini resolves from its environment (an unset `WL_HOME` becomes empty, which the library reads as unset); observed |
+| GitHub Copilot CLI | the same `--additional-mcp-config` value as `mesh-board` | inherited; observed |
+| Mistral Vibe | `VIBE_MCP_SERVERS` | Vibe passes only the variables an entry lists: the launch script's own shell expands `"$MESH_SESSION"` and `"$WL_HOME"` into the entry, as it does the session token for `mesh-board` |
+| Antigravity | the plugin `scripts/agy-setup.sh` installs | inherited, like the board's token; not observed |
+
+"Observed" means a stand-in `work-mcp` recorded the environment it received when the real client started it from a Mesh configuration (Claude Code 2.1.328, Codex 0.170.0, Copilot CLI 1.0.114, OpenCode 1.18.35, Gemini CLI 0.68.0). Pi and Antigravity were not observed: they need a signed-in account before they start a server. Claude Code, Copilot CLI and OpenCode also pass the session token to the server, which empties it at start (see below); Codex, Gemini CLI and Vibe do not pass it.
+
+Antigravity reads the plugin only at installation: a plugin installed before `work-mcp` was there has no `mesh-work` entry until it is installed again with `scripts/agy-setup.sh`.
+
+**Reserved names and the user's own settings.** `mesh-board` and `mesh-work` are reserved (`agentmcp.MESH_SERVER_NAMES`). A definition the user writes under one of them (a command, arguments, an environment) is replaced by Mesh's, at launch and when a saved command is restored or resumed; an older `mesh-work` entry in a saved command is removed and the current one written once. A restriction the user sets on either server is kept:
+
+| Agent | Restriction kept |
 |---|---|
-| Claude Code | in the same `--mcp-config` value as `mesh-board` |
-| Codex | `-c mcp_servers.mesh-work.*` overrides; `env_vars` lets `MESH_SESSION` and `WL_HOME` through Codex's environment filter |
-| Pi | the private `mcp.json` of its per-session agent directory (`pi-agent-overlays/session-*`) |
-| OpenCode 1 and 2 | `OPENCODE_CONFIG_CONTENT`; with OpenCode 2, not injected when the user's configuration disables `mesh-work` or cannot be read |
-| Gemini CLI | the settings of its private `GEMINI_CLI_HOME` |
-| GitHub Copilot CLI | the same `--additional-mcp-config` value as `mesh-board` |
-| Mistral Vibe | `VIBE_MCP_SERVERS`, only beside `mesh-board`; a `disabled` or `disabled_tools` the user set on `mesh-work` is repeated |
-| Antigravity | the plugin `scripts/agy-setup.sh` installs, when `work-mcp` is there at install time |
+| Claude Code | options of the command such as `--disallowedTools mcp__mesh-work__...` |
+| Codex | `enabled=false`, `enabled_tools`, `disabled_tools`, and the approval modes `prompt` and `writes`, in any `-c` form |
+| Pi | `"enabled": false` in the user's `mcp.json` |
+| OpenCode 1 | `enabled: false`, merged by OpenCode with the injected entry |
+| OpenCode 2 | `disabled: true` in any of its configuration documents: the server is not injected, nor when they cannot be read |
+| Gemini CLI | the settings `mcp.excluded` and `mcp.allowed`, copied as they are |
+| GitHub Copilot CLI | `--disable-mcp-server mesh-work` and the user's other options; an `--additional-mcp-config` that holds only reserved names is Mesh's and is replaced |
+| Mistral Vibe | `disabled` and `disabled_tools`, repeated in the injected entry |
 
-The entry is the program with no argument and one environment value, `WL_AGENT`, the agent kind (`claude`, `codex`, `pi`, `opencode`, `gemini`, `copilot`, `vibe`, `agy`). The session name (`MESH_SESSION`) and a `WL_HOME` the user set reach the server through the agent's environment; neither is written into a configuration or a command line (Vibe, which starts a server with only the variables its entry lists, gets `"$MESH_SESSION"` expanded by the launch script's own shell, as the session token is for `mesh-board`). The session token is not passed: Codex and Vibe do not list it for this server, and an agent that passes its whole environment hands it to a server that empties it at start (see below). Without `WL_HOME` the data repository is `~/worklog-data`, created at first use.
-
-A command restored or resumed from a snapshot gets the current entry once: an older `mesh-work` entry in the saved command is removed like an older board entry.
+**Not in this change.** The start prompt of a session does not carry a resume point from the tracker: that is a separate, later change. There is no setting to turn the tracker off for every agent of a kind; the agent's own restriction above is the way to turn it off.
 
 ## What it reads from the environment
 
@@ -29,7 +49,7 @@ A command restored or resumed from a snapshot gets the current entry once: an ol
 |---|---|
 | `WL_HOME` | The data repository. Without it: `~/worklog-data`, else the older `~/worklog` (the library's discovery). |
 | `MESH_SESSION` | The session name the Mesh gives each session. It becomes the `session` of every event the server writes. A value the library refuses (allowed: `A-Z a-z 0-9 _ . : -`, not starting with `-`) is ignored and the session is recorded as unknown: nothing is linked or attributed, and the server does not fall back to `WL_SESSION` or `CLAUDE_CODE_SESSION_ID`. The same holds when the library refuses the identity for another reason (for example an invalid `WL_AGENT`). Every write made that way carries a `write_warnings` entry saying that the identity was not resolved, so the caller learns that its write has no session and no agent. When `MESH_SESSION` is unset or empty, the library's own variables apply (`WL_SESSION`, `CLAUDE_CODE_SESSION_ID`, `OPENCODE_SESSION_ID`). |
-| `WL_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `OPENCODE_SESSION_ID`, `CODEX_THREAD_ID` | The agent kind (`claude`, `opencode`, `codex`, ...). An agent the Mesh starts gets `WL_AGENT` set to its kind in the server entry (see "Registration" below); otherwise the server reads the markers the agents leave. `WL_AGENT` is the explicit override and wins. A configuration variable such as `CODEX_HOME` or `OPENCODE` is not a marker, because users export them without running that agent. With a session but no marker the agent is `agent`. |
+| `WL_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `OPENCODE_SESSION_ID`, `CODEX_THREAD_ID` | The agent kind (`claude`, `opencode`, `codex`, ...). An agent the Mesh starts gets `WL_AGENT` set to its kind in the server entry (see "Registration" above); otherwise the server reads the markers the agents leave. `WL_AGENT` is the explicit override and wins. A configuration variable such as `CODEX_HOME` or `OPENCODE` is not a marker, because users export them without running that agent. With a session but no marker the agent is `agent`. |
 | `WL_HOST`, `WL_NOW`, `WL_LOCK_TIMEOUT` | Read by the library as `wl` does. |
 
 The Mesh session token is never read, logged, stored or returned. The library runs `git` with the whole environment, so the server also empties `MESH_SESSION_TOKEN` in its own process at start: no `git` child inherits it (the tests run a stand-in `git` that logs its environment and check this).
