@@ -12,6 +12,7 @@ import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {type FakeHost, type FakeSession, sleepers, startFakeHost} from './fake-pty-host.ts';
+import {assertLoopAnswers} from './loop-heartbeat.ts';
 import {removeScratch, runServer, scratchHome, stopServer, type Scratch} from './mesh-server-lib.ts';
 
 type Row = {name: string; ready: boolean; label?: string | null; agent?: Record<string, unknown> | null};
@@ -202,32 +203,13 @@ describe('300 sessions', () => {
   });
 
   test('the event loop keeps answering during bursts and rounds', async () => {
-    // The heartbeat runs in a process of its own, so that this one decoding the bursts' answers does not
-    // delay it: every 20 ms an unauthenticated request, which the server refuses on its event loop.
-    const heartbeat = spawn(process.execPath, ['-e', `
-      const lags = []; const end = Date.now() + 5000;
-      (async () => {
-        while (Date.now() < end) {
-          const sent = performance.now();
-          if ((await fetch(process.argv[1])).status !== 401) process.exit(2);
-          lags.push(performance.now() - sent);
-          await new Promise(resolve => setTimeout(resolve, 20));
-        }
-        console.log(JSON.stringify(lags));
-      })();`, `${mesh.base}/api/sessions`], {stdio: ['ignore', 'pipe', 'inherit']});
-    let output = '';
-    heartbeat.stdout!.on('data', chunk => { output += chunk; });
-    const done = new Promise(resolve => heartbeat.on('close', resolve));
-    const until = performance.now() + 5000;   // bursts that ask for rounds, while rounds run
-    while (performance.now() < until) {
-      await Promise.all(Array.from({length: 16}, () => get(mesh)));
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    assert.equal(await done, 0);
-    const lags = JSON.parse(output) as number[];
-    const worst = Math.max(...lags);
-    console.log(`heartbeat: ${lags.length} probes, worst ${Math.round(worst)} ms`);
-    assert.ok(worst < Number(process.env.MESH_TEST_LOOP_STALL_MS || 100), `the event loop stalled ${Math.round(worst)} ms`);
+    // Bursts that ask for rounds, while rounds run (tests/loop-heartbeat.ts: the probes, the bound).
+    await assertLoopAnswers(`${mesh.base}/api/sessions`, 5000, async end => {
+      while (performance.now() < end) {
+        await Promise.all(Array.from({length: 16}, () => get(mesh)));
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    });
   });
 
   test('a new session and a rename are visible within one round', async () => {
