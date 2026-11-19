@@ -27,9 +27,13 @@ secrets in an issue. A maintainer can change the label.
    of your own ([How to accept it](#how-to-accept-it)).
 4. Say in the description whether the change is a fix for the released line (`semver: patch`) or
    not (`semver: minor`). A maintainer sets the label if you cannot set labels on the repository.
-5. Keep the branch a straight line on top of `main`: rebase, never merge `main` into it
+5. Describe a change users notice in one new file `changelog.d/<number>-<slug>.md`, never by
+   editing `CHANGELOG.md` ([changelog.d/README.md](changelog.d/README.md)). A change no user sees
+   (tests, CI, internal documentation) needs none: say `Changelog: none: <reason>` on a line of
+   the description.
+6. Keep the branch a straight line on top of `main`: rebase, never merge `main` into it
    ([How a pull request is merged](#how-a-pull-request-is-merged)).
-6. Wait for the required checks below, the automatic CodeRabbit review and a maintainer's review.
+7. Wait for the required checks below, the automatic CodeRabbit review and a maintainer's review.
    A maintainer merges with "Rebase and merge", the only merge method the repository allows, by hand or through the
    [merge queue](#merge-queue). A
    merged `semver: patch` pull request is then backported to `release/latest` automatically, and

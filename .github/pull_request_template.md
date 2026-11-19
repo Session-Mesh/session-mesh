@@ -48,6 +48,6 @@ scripts/test-local.sh
 - [ ] No new Python: new code and tests are in OCaml or TypeScript ([CONTRIBUTING.md](https://github.com/Session-Mesh/session-mesh/blob/main/CONTRIBUTING.md#no-new-python)).
 - [ ] User-visible changes are in [docs/features.md](https://github.com/Session-Mesh/session-mesh/blob/main/docs/features.md) or [docs/operations.md](https://github.com/Session-Mesh/session-mesh/blob/main/docs/operations.md), and new interface text is in both language catalogues.
 - [ ] A trust-boundary change (authentication, `/view`, session tokens, the route table, sandboxes) is stated in "How", and [SECURITY.md](https://github.com/Session-Mesh/session-mesh/blob/main/SECURITY.md) is updated if its threat model changes.
-- [ ] [CHANGELOG.md](https://github.com/Session-Mesh/session-mesh/blob/main/CHANGELOG.md) has an entry for a user-visible change or a fix.
+- [ ] A user-visible change or a fix adds one changelog fragment, `changelog.d/<number>-<slug>.md` ([format](https://github.com/Session-Mesh/session-mesh/blob/main/changelog.d/README.md)), and does not edit `CHANGELOG.md`; otherwise this description has a line `Changelog: none: <reason>`.
 - [ ] My line is in [CLA-SIGNATORIES.md](https://github.com/Session-Mesh/session-mesh/blob/main/CLA-SIGNATORIES.md), in a commit of my own (first contribution only).
 - [ ] This description and my commits contain no personal or machine-specific details (see the comment at the top), and `node --experimental-strip-types tools/leak-guard/cli.ts worktree` is clean.

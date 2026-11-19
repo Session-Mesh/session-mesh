@@ -11,6 +11,7 @@
 | [binary-bundles.md](binary-bundles.md) | The contents of a release bundle and how it is built |
 | [development.md](development.md) | Running the test suite and preparing a development machine |
 | [sessions-api.md](sessions-api.md) | The `GET /api/sessions` contract: background rounds, `since`, `generation`, skeleton rows |
+| [changelog-fragments.md](changelog-fragments.md) | Changelog entries as one file per pull request, and how a release is cut |
 | [agent-integration.md](agent-integration.md) | Adding support for another agent |
 | [sessions-protocol.md](sessions-protocol.md) | `mesh-sessions`, the native program that describes sessions for the session list, and its protocol (not wired into the web server yet) |
 | [agent-wake-mechanisms.md](agent-wake-mechanisms.md) | What each agent offers natively for receiving an external message, and what the mesh does with it |
