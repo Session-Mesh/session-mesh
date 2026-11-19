@@ -514,6 +514,7 @@ input.rename { width: 100%; padding: 1px 4px; background: var(--bg); color: var(
 .pane-body .term.over-link .xterm-screen { cursor: pointer; }
 .btn.sm.on { border-color: var(--accent); color: var(--accent); }
 .agent-mail-consent-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+#agent-mail-consent-status:empty { margin: 0; }
 @media (max-width: 600px) {
   #dlg-agent-mail-consent { width: calc(100vw - 24px); box-sizing: border-box; }
   .agent-mail-consent-actions { flex-direction: column; }
