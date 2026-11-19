@@ -11,23 +11,28 @@
 //                           print the Unreleased section as it reads with the fragments merged in
 //                           (its preamble, its bullets, then the fragments by kind and number);
 //                           --entries-only prints the bullets alone
-//   cut VERSION [--date YYYY-MM-DD] [--intro TEXT] [--only FILE..] [--dry-run]
+//   cut VERSION [--date YYYY-MM-DD] [--intro TEXT] [--only NAME..] [--dry-run]
 //                           move the unreleased entries under "## VERSION" below the Unreleased
 //                           section of CHANGELOG.md and delete the fragments it used; --only takes
-//                           the named fragments alone and leaves the bullets under Unreleased in
-//                           place (a patch release cut on main); --dry-run prints the new
-//                           CHANGELOG.md and changes nothing
+//                           the named fragments alone (file names of changelog.d/, not paths; a
+//                           version ends the list, so VERSION may also follow them) and leaves the
+//                           bullets under Unreleased in place (a patch release cut on main);
+//                           --dry-run prints the new CHANGELOG.md and changes nothing. If a
+//                           fragment cannot be deleted once CHANGELOG.md is written, cut names it
+//                           and exits 1: delete those files by hand, do not cut again.
 //   check-pr --event FILE --changes FILE
 //                           the changelog rule of a pull request (pr-check.ts): FILE of --event is
-//                           a GitHub pull_request event, FILE of --changes the output of
-//                           `git diff --name-status --no-renames <base> <head>`
+//                           a GitHub pull_request event, FILE of --changes the output of the
+//                           merge-base diff (three dots, never two: a two-dot diff lists the
+//                           fragments a later cut deleted on main as added by the pull request)
+//                           git diff --name-status --no-renames "$BASE_SHA"..."$HEAD_SHA"
 // --root is the repository root (default: the current directory).
 // Exit status: 0 success, 1 refused (an invalid fragment, a pull request without a fragment, a
 // version already in CHANGELOG.md, nothing to cut), 2 usage error or a file that cannot be read.
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {assemble, cut, type CutOptions} from './changelog-file.ts';
+import {assemble, cut, VERSION, type CutOptions} from './changelog-file.ts';
 import {FRAGMENT_DIR, parseFragment, readFragmentDir, compareFragments, type Fragment} from './fragments.ts';
 import {judgePull, parseNameStatus} from './pr-check.ts';
 
@@ -46,6 +51,8 @@ function parseArgs(argv: string[]): Args {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--only') { listFlag = arg; flags.set(arg, flags.get(arg) ?? []); continue; }
+    // A version is never a fragment name: it ends the list of --only.
+    if (listFlag !== null && VERSION.test(arg)) listFlag = null;
     if (VALUE_FLAGS.has(arg)) {
       if (index + 1 >= argv.length) throw new UsageError(`${arg} needs a value`);
       if (flags.has(arg)) throw new UsageError(`${arg} is given twice`);
@@ -93,10 +100,11 @@ function commandCheck(root: string, args: Args, io: Io): number {
 function selectFragments(all: Fragment[], only: string[] | undefined): Fragment[] {
   if (only === undefined) return all;
   if (only.length === 0) throw new UsageError('--only needs at least one fragment');
-  const names = only.map((file) => path.basename(file));
-  const missing = names.filter((name) => !all.some((fragment) => fragment.name === name));
+  const paths = only.filter((name) => /[/\\]/.test(name));
+  if (paths.length > 0) throw new UsageError(`--only takes file names of ${FRAGMENT_DIR}/, not paths: ${paths.join(', ')}`);
+  const missing = only.filter((name) => !all.some((fragment) => fragment.name === name));
   if (missing.length > 0) throw new UsageError(`not a fragment of ${FRAGMENT_DIR}/: ${missing.join(', ')}`);
-  return all.filter((fragment) => names.includes(fragment.name)).sort(compareFragments);
+  return all.filter((fragment) => only.includes(fragment.name)).sort(compareFragments);
 }
 
 function writeAtomically(file: string, text: string): void {
@@ -120,9 +128,29 @@ function commandCut(root: string, args: Args, io: Io): number {
   const updated = cut(readFile(changelogPath).toString('utf8'), selected, options);
   if (args.flags.has('--dry-run')) { io.out(updated); return 0; }
   writeAtomically(changelogPath, updated);
-  for (const fragment of selected) fs.unlinkSync(path.join(root, FRAGMENT_DIR, fragment.name));
+  const remaining = deleteFragments(root, selected);
+  if (remaining.files.length > 0) {
+    io.err(`changelog: CHANGELOG.md now has "## ${options.version}", but ${remaining.files.length} fragment(s) it moved could not be deleted (${remaining.codes.join(', ')}): ${remaining.files.join(' ')}\n` +
+      `Delete exactly these files by hand and nothing else: rm ${remaining.files.join(' ')}\n` +
+      'Do not run cut again before that: their entries are already in CHANGELOG.md, and another cut would list them twice.\n');
+    return 1;
+  }
   io.err(`CHANGELOG.md: "## ${options.version}" with ${selected.length} fragment(s); the fragments are deleted\n`);
   return 0;
+}
+
+// Deletes the fragments a cut moved, every one it can; returns those left, as changelog.d/<name>.
+function deleteFragments(root: string, fragments: Fragment[]): {files: string[]; codes: string[]} {
+  const files: string[] = [];
+  const codes = new Set<string>();
+  for (const fragment of fragments) {
+    try { fs.unlinkSync(path.join(root, FRAGMENT_DIR, fragment.name)); }
+    catch (error) {
+      files.push(`${FRAGMENT_DIR}/${fragment.name}`);
+      codes.add((error as NodeJS.ErrnoException).code ?? 'error');
+    }
+  }
+  return {files, codes: [...codes]};
 }
 
 function commandCheckPr(args: Args, io: Io): number {

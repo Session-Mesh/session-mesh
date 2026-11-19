@@ -64,16 +64,25 @@ export type CutOptions = {
   fragmentsOnly?: boolean;
 };
 
+// A YYYY-MM-DD string that names a day of the Gregorian calendar (no 2026-02-30, no month 13).
+function isCalendarDate(date: string): boolean {
+  const [year, month, day] = date.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+}
+
 function headingOf(options: CutOptions): string {
   if (!VERSION.test(options.version)) throw new Error(`"${options.version}" is not a version such as 0.2.0 or 0.2.0-rc.1`);
   if (options.date !== undefined && !DATE.test(options.date)) throw new Error(`"${options.date}" is not a date YYYY-MM-DD`);
+  if (options.date !== undefined && !isCalendarDate(options.date)) throw new Error(`"${options.date}" is not a calendar date`);
   return options.date === undefined ? `## ${options.version}` : `## ${options.version} (${options.date})`;
 }
 
 function checkIntro(intro: string | undefined): string[] {
   if (intro === undefined || intro.trim() === '') return [];
   const lines = intro.replace(/\n+$/, '').split('\n');
-  if (lines.some((line) => /^\s*(?:#|- )/.test(line) || line.trim() === '')) {
+  // No heading, list item, heading underline or rule: the intro must not open a section of its own.
+  if (lines.some((line) => /^\s*(?:#|[-*+] |=+\s*$|(?:[-*_]\s*){3,}$)/.test(line) || line.trim() === '')) {
     throw new Error('the intro is one paragraph: no blank line, heading or bullet');
   }
   return lines;

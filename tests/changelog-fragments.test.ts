@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
+import {cut, splitUnreleased} from '../tools/changelog/changelog-file.ts';
 import {compareFragments, parseFragment, readFragmentDir, type Fragment} from '../tools/changelog/fragments.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -60,9 +61,17 @@ describe('one fragment', () => {
     ['a tab', '1-a.md', '- **Lead.**\tText\n', /control/],
     ['a NUL byte', '1-a.md', '- **Lead.** Te\u0000xt\n', /control/],
     ['an escape sequence', '1-a.md', '- **Lead.** \u001b[31mred\n', /control/],
-    ['a bidirectional override', '1-a.md', '- **Lead.** abc‮dcba\n', /bidirectional/],
-    ['a zero-width space', '1-a.md', '- **Lead.** a​b\n', /zero-width/],
-    ['a byte order mark', '1-a.md', `﻿${BULLET}`, /byte-order-mark/],
+    ['a bidirectional override', '1-a.md', '- **Lead.** abc\u202edcba\n', /bidirectional/],
+    ['a zero-width space', '1-a.md', '- **Lead.** a\u200bb\n', /zero-width/],
+    ['a byte order mark', '1-a.md', `\ufeff${BULLET}`, /byte-order-mark/],
+    ['an empty bold lead', '1-a.md', '- **** Text.\n', /bold lead of the bullet is empty/],
+    ['a blank bold lead', '1-a.md', '- ** ** Text.\n', /bold lead of the bullet is empty/],
+    ['a nested bullet', '1-a.md', '- **Lead.** Text\n  - **Second.** Text\n', /list marker/],
+    ['a nested star bullet', '1-a.md', '- **Lead.** Text\n    * item\n', /list marker/],
+    ['a nested numbered item', '1-a.md', '- **Lead.** Text\n  1. item\n', /list marker/],
+    ['a setext underline', '1-a.md', '- **Lead.** Text\n  ---\n', /heading underline or rule/],
+    ['a setext "=" underline', '1-a.md', '- **Lead.** Text\n  ===\n', /heading underline or rule/],
+    ['a code fence', '1-a.md', '- **Lead.** Text\n  ```sh\n', /code fence/],
   ];
   for (const [label, name, text, problem] of refused) {
     test(`refused: ${label}`, () => {
@@ -82,6 +91,33 @@ describe('one fragment', () => {
   });
   test('the width counts characters, not bytes', () => {
     assert.deepEqual(parse('1-a.md', `- **Lead.** ${'é'.repeat(88)}\n`).problems, []);
+  });
+  // Invisible or reordering characters beyond the list above: format characters (Cf), line and
+  // paragraph separators, private use, unassigned, variation selectors and other default-ignorable
+  // code points.
+  const invisible: [string, number][] = [
+    ['ARABIC LETTER MARK', 0x061c], ['LINE SEPARATOR', 0x2028], ['PARAGRAPH SEPARATOR', 0x2029],
+    ['SOFT HYPHEN', 0x00ad], ['TAG LATIN CAPITAL LETTER A', 0xe0041], ['CANCEL TAG', 0xe007f],
+    ['LANGUAGE TAG', 0xe0001], ['WORD JOINER', 0x2060], ['INVISIBLE TIMES', 0x2062],
+    ['MONGOLIAN VOWEL SEPARATOR', 0x180e], ['HANGUL FILLER', 0x3164], ['COMBINING GRAPHEME JOINER', 0x034f],
+    ['VARIATION SELECTOR-16', 0xfe0f], ['VARIATION SELECTOR-17', 0xe0100], ['INTERLINEAR ANNOTATION ANCHOR', 0xfff9],
+    ['MUSICAL SYMBOL BEGIN BEAM', 0x1d173], ['private use U+E000', 0xe000], ['unassigned U+0378', 0x0378],
+    ['NEXT LINE (C1)', 0x0085], ['ARABIC NUMBER SIGN', 0x0600],
+  ];
+  for (const [label, codePoint] of invisible) {
+    test(`refused: ${label}`, () => {
+      const hex = codePoint.toString(16).toUpperCase().padStart(4, '0');
+      const parsed = parse('1-a.md', `- **Lead.** a${String.fromCodePoint(codePoint)}b\n`);
+      assert.equal(parsed.fragment, null);
+      assert.match(parsed.problems.join('\n'), new RegExp(`U\\+${hex} on line 1`));
+    });
+  }
+  test('accepted: letters, marks, numbers, punctuation, symbols and spaces of any script', () => {
+    const text = '- **Lead.** Éé é «guillemets»  espace insécable — 3½ € ✓ \u{1f642} 日本語 ١٢٣.\n';
+    assert.deepEqual(parse('1-a.md', text).problems, []);
+  });
+  test('accepted: wrapped prose with a hyphen or a number inside a line', () => {
+    assert.deepEqual(parse('1-a.md', '- **Lead.** Text, not a list -\n  well-formed, 1.5 times faster.\n').problems, []);
   });
 });
 
@@ -123,9 +159,53 @@ describe('a changelog.d directory', () => {
   });
 });
 
+// The bold leads of the bullets that were under "## Unreleased" in CHANGELOG.md when fragments were
+// introduced. Every change since then is a fragment: a pull request that adds a bullet to that
+// section by hand fails here. The list is never extended; after the next minor cut the section has none.
+const FROZEN_UNRELEASED_LEADS = [
+  'An agent records the owner\'s answer to its question.',
+  'A new Projects view over the project tracker.',
+  'A project configuration edit that meets another writer\'s lock reports `busy`, never `invalid-config`.',
+  'The session list is computed with less repeated work.',
+  'A message approval answered in one window closes in the others.',
+  'An idle Codex started as `codex resume <id>` gets its conversation id from its launch arguments.',
+  'An idle Codex is no longer given the conversation of a Codex started later.',
+  'The session list no longer falls minutes behind on a busy machine.',
+  'Copy on select.',
+  'Copy as shell command.',
+  'Releases ship `work-read` and `work-mcp`.',
+  'Agents get the project tracker.',
+];
+const POINTER_PREAMBLE = [
+  'The entries of changes merged since the move to changelog fragments are the files of',
+  '[changelog.d/](changelog.d/) until the next release is cut; see',
+  '[docs/changelog-fragments.md](docs/changelog-fragments.md).',
+];
+
+// The bold lead of every bullet of an entries block, continuation lines joined.
+function boldLeads(entries: string[]): string[] {
+  const bullets = entries.join('\n').split(/\n(?=- )/).filter((bullet) => bullet.startsWith('- '));
+  return bullets.map((bullet) => /^- \*\*([\s\S]+?)\*\*/.exec(bullet)?.[1].replace(/\n\s+/g, ' ') ?? bullet);
+}
+
 describe('this repository', () => {
+  const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
   test('every fragment of changelog.d/ is valid', () => {
     const report = readFragmentDir(path.join(ROOT, 'changelog.d'));
     assert.deepEqual(report.problems, []);
+  });
+  test('no bullet is added by hand under "## Unreleased": changes go to changelog.d/', () => {
+    const unexpected = boldLeads(splitUnreleased(changelog).entries).filter((lead) => !FROZEN_UNRELEASED_LEADS.includes(lead));
+    assert.deepEqual(unexpected, [], 'move these bullets of CHANGELOG.md into changelog.d/<number>-<slug>.md');
+  });
+  test('the "## Unreleased" preamble is the fixed pointer to changelog.d/', () => {
+    assert.deepEqual(splitUnreleased(changelog).preamble, POINTER_PREAMBLE);
+  });
+  test('after a cut, "## Unreleased" holds its preamble alone', () => {
+    const {fragments} = readFragmentDir(path.join(ROOT, 'changelog.d'));
+    const marker: Fragment = {name: '1-marker.md', number: 1, kind: 'fixed', bullet: '- **Marker.**'};
+    const section = splitUnreleased(cut(changelog, [...fragments, marker], {version: '99.0.0'}));
+    assert.deepEqual(section.preamble, POINTER_PREAMBLE);
+    assert.deepEqual(section.entries, []);
   });
 });

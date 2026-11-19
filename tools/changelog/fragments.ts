@@ -23,9 +23,15 @@ export const NON_FRAGMENTS = ['README.md'];
 export type Fragment = {name: string; number: number | null; kind: Kind; bullet: string};
 export type Parsed = {fragment: Fragment | null; problems: string[]};
 
-// C0 and C1 controls except the line feed, bidirectional controls, zero-width characters and
-// the byte order mark: they hide or reorder text in a rendered changelog.
-const FORBIDDEN_CHARS = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f​-‏‪-‮⁠-⁩﻿]/u;
+// The characters a fragment may hold besides the line feed: letters, marks, numbers, punctuation,
+// symbols and space separators (an allowlist of printable categories, as Work_questions does on the
+// OCaml side). Everything else is refused: controls (Cc), format characters (Cf: bidirectional
+// controls, zero-width characters, the byte order mark, the soft hyphen, tag characters), line and
+// paragraph separators, private use and unassigned code points. Default-ignorable code points that
+// are letters or marks (variation selectors, the Hangul fillers, the combining grapheme joiner) are
+// refused too: all of them hide or reorder text in a rendered changelog.
+const ALLOWED_CHAR = /[\n\p{L}\p{M}\p{N}\p{P}\p{S}\p{Zs}]/u;
+const INVISIBLE_CHAR = /\p{Default_Ignorable_Code_Point}/u;
 
 function widthOf(line: string): number {
   // A link target cannot be wrapped: it does not count against the width.
@@ -54,20 +60,52 @@ function parseFrontMatter(lines: string[], problems: string[]): {kind: Kind; bod
   return {kind, bodyStart: end + 1};
 }
 
+// The first refused character of a text, as "U+XXXX on line N", or null.
+function firstRefusedChar(text: string): string | null {
+  let line = 1;
+  for (const char of text) {
+    if (char === '\n') { line += 1; continue; }
+    if (ALLOWED_CHAR.test(char) && !INVISIBLE_CHAR.test(char)) continue;
+    return `U+${(char.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')} on line ${line}`;
+  }
+  return null;
+}
+
+function leadProblem(body: string[]): string | null {
+  if (!body[0].startsWith('- **')) return 'the bullet starts with "- **" and a bold lead: "- **What changed.** Details"';
+  const rest = body.join('\n').slice(4);
+  const close = rest.indexOf('**');
+  if (close < 0) return 'the bold lead of the bullet is never closed with "**"';
+  if (rest.slice(0, close).trim() === '') return 'the bold lead of the bullet is empty';
+  return null;
+}
+
+// What Markdown would read in a continuation line as something other than wrapped text of the
+// bullet: a heading, a nested list, a heading underline or rule, a code fence.
+function continuationProblem(line: string): string | null {
+  if (/^\s*#/.test(line)) return 'starts with "#"';
+  if (/^\s*(?:[-*+]|[0-9]{1,9}[.)])(?:\s|$)/.test(line)) return 'starts with a list marker ("-", "*", "+", "1."): wrap the line elsewhere';
+  if (/^\s*(?:=+|(?:[-*_]\s*){2,})$/.test(line)) return 'is a heading underline or rule ("---", "===", "***")';
+  if (/^\s*(?:```|~~~)/.test(line)) return 'opens a code fence';
+  return null;
+}
+
+function lineProblems(line: string, index: number): string[] {
+  const where = `line ${index + 1} of the bullet`;
+  const problems: string[] = [];
+  if (line.trim() === '') problems.push(`${where} is blank: a fragment is one bullet, one paragraph`);
+  else if (index > 0 && !/^ {2}\S/.test(line) && !/^ {4,}\S/.test(line)) problems.push(`${where} is not indented by two spaces under the bullet`);
+  const continuation = index > 0 ? continuationProblem(line) : null;
+  if (continuation !== null) problems.push(`${where} ${continuation}`);
+  if (/\s$/.test(line)) problems.push(`${where} ends with a space`);
+  if (widthOf(line) > MAX_WIDTH) problems.push(`${where} is wider than ${MAX_WIDTH} columns (link targets not counted)`);
+  return problems;
+}
+
 function bodyProblems(body: string[]): string[] {
   if (body.every((line) => line.trim() === '')) return ['the fragment has no bullet'];
-  const problems: string[] = [];
-  if (!body[0].startsWith('- **')) problems.push('the bullet starts with "- **" and a bold lead: "- **What changed.** Details"');
-  else if (!body.join('\n').slice(4).includes('**')) problems.push('the bold lead of the bullet is never closed with "**"');
-  body.forEach((line, index) => {
-    const where = `line ${index + 1} of the bullet`;
-    if (line.trim() === '') problems.push(`${where} is blank: a fragment is one bullet, one paragraph`);
-    else if (index > 0 && !/^ {2}\S/.test(line) && !/^ {4,}\S/.test(line)) problems.push(`${where} is not indented by two spaces under the bullet`);
-    if (index > 0 && /^\s*#/.test(line)) problems.push(`${where} starts with "#"`);
-    if (/\s$/.test(line)) problems.push(`${where} ends with a space`);
-    if (widthOf(line) > MAX_WIDTH) problems.push(`${where} is wider than ${MAX_WIDTH} columns (link targets not counted)`);
-  });
-  return problems;
+  const lead = leadProblem(body);
+  return [...(lead === null ? [] : [lead]), ...body.flatMap(lineProblems)];
 }
 
 // Validates one fragment from its file name and bytes. A fragment with problems is not returned.
@@ -82,7 +120,11 @@ export function parseFragment(name: string, bytes: Uint8Array): Parsed {
   try { text = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(bytes); }
   catch { return {fragment: null, problems: ['the file is not valid UTF-8']}; }
   if (text.includes('\r')) problems.push('the file has carriage returns: use LF line endings');
-  if (FORBIDDEN_CHARS.test(text.replace(/\r/g, ''))) problems.push('the file holds a control, bidirectional, zero-width or byte-order-mark character');
+  const refused = firstRefusedChar(text.replace(/\r/g, ''));
+  if (refused !== null) {
+    problems.push(`the file holds ${refused}: a control, bidirectional, zero-width, byte-order-mark, separator, tag or other ` +
+      'invisible character (allowed: letters, marks, numbers, punctuation, symbols, spaces)');
+  }
   const lines = text.replace(/\r/g, '').replace(/\n+$/, '').split('\n');
   const {kind, bodyStart} = parseFrontMatter(lines, problems);
   problems.push(...bodyProblems(lines.slice(bodyStart)));

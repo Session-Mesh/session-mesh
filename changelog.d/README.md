@@ -24,12 +24,19 @@ kind: fixed
 - `kind` is one of `security`, `added`, `changed`, `fixed`, `docs`, `internal`; without a front
   matter it is `changed`. It orders the entries (in that order, then by pull request number); it
   is not printed.
-- The bullet starts with `- **` and a bold lead, the sentence a reader scans; continuation lines
-  are indented by two spaces. One paragraph: no blank line, no heading, no second bullet.
+- The bullet starts with `- **` and a non-empty bold lead, the sentence a reader scans;
+  continuation lines are indented by two spaces. One paragraph: no blank line, no heading, no
+  second bullet. A continuation line does not start with a list marker (`-`, `*`, `+`, `1.`), a
+  code fence, or a run of `-`, `=` or `*` alone: wrap the line elsewhere.
 - Lines are at most 100 columns; a Markdown link target does not count. Links are written as from
   the repository root, as in `CHANGELOG.md`.
-- UTF-8 with LF line endings, no tab, no trailing space, no control, bidirectional or zero-width
-  character, at most 8 KiB.
+- UTF-8 with LF line endings, no trailing space, at most 8 KiB. The characters are letters, marks,
+  numbers, punctuation, symbols and spaces of any script; anything else is refused: tabs and
+  other controls, and invisible characters (bidirectional controls, zero-width characters, the
+  byte order mark, the soft hyphen, tag characters, line and paragraph separators, variation
+  selectors). `check` names the first one found as `U+XXXX on line N`.
+- A pull request with several bullets adds several files with its number:
+  `412-idle-codex.md`, `412-idle-claude.md`.
 
 Check a fragment with:
 

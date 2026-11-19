@@ -143,12 +143,21 @@ Pointer to changelog.d.
     ['a version that is not semver', {version: 'v0.2.0'}, /is not a version/],
     ['a version with a newline', {version: '0.2.0\n## x'}, /is not a version/],
     ['a bad date', {version: '0.2.0', date: '20-11-2026'}, /is not a date/],
+    ['a month 13', {version: '0.2.0', date: '2026-13-01'}, /is not a calendar date/],
+    ['a day 45', {version: '0.2.0', date: '2026-01-45'}, /is not a calendar date/],
+    ['February 30', {version: '0.2.0', date: '2026-02-30'}, /is not a calendar date/],
+    ['February 29 of a common year', {version: '0.2.0', date: '2026-02-29'}, /is not a calendar date/],
+    ['day 0', {version: '0.2.0', date: '2026-03-00'}, /is not a calendar date/],
+    ['an intro that underlines a heading', {version: '0.2.0', intro: 'Text\n---'}, /one paragraph/],
     ['an intro with a bullet', {version: '0.2.0', intro: '- **Sneaky.**'}, /one paragraph/],
     ['an intro with a heading', {version: '0.2.0', intro: 'Text\n## 9.9.9'}, /one paragraph/],
   ];
   for (const [label, options, error] of refusals) {
     test(`refused: ${label}`, () => assert.throws(() => cut(CHANGELOG, FRAGMENTS, options), error));
   }
+  test('a leap day is a date', () => {
+    assert.match(cut(CHANGELOG, FRAGMENTS, {version: '0.2.0', date: '2028-02-29'}), /\n## 0\.2\.0 \(2028-02-29\)\n/);
+  });
 });
 
 describe('the command line on a copy of a repository', () => {
@@ -177,13 +186,27 @@ describe('the command line on a copy of a repository', () => {
   test('usage errors exit 2, refusals 1', () => {
     assert.equal(call('cut').status, 2);
     assert.equal(call('cut', '0.2.0', '--only').status, 2);
-    assert.equal(call('cut', '0.2.0', '--only', 'changelog.d/77-none.md').status, 2);
+    assert.equal(call('cut', '0.2.0', '--only', '77-none.md').status, 2);
     assert.equal(call('cut', '0.1.1').status, 1);
     assert.equal(call('frobnicate').status, 2);
     assert.equal(call('assemble', '--bogus').status, 2);
   });
+  // --only takes file names of changelog.d/ only: a path is refused, never reduced to its last part.
+  for (const given of ['changelog.d/3-fix.md', '/tmp/x/3-fix.md', '../changelog.d/3-fix.md', 'changelog.d\\3-fix.md', './3-fix.md']) {
+    test(`--only refuses the path ${given}`, () => {
+      const result = call('cut', '0.1.2', '--only', given, '--dry-run');
+      assert.equal(result.status, 2);
+      assert.match(result.err, /--only takes file names of changelog\.d\/, not paths: /);
+      assert.equal(result.out, '');
+    });
+  }
+  test('--only accepts the version after the file names', () => {
+    const result = call('cut', '--only', '3-fix.md', '9-sec.md', '0.1.2', '--dry-run');
+    assert.equal(result.status, 0, result.err);
+    assert.equal(result.out, cut(CHANGELOG, [FRAGMENTS[0], FRAGMENTS[2]], {version: '0.1.2', fragmentsOnly: true}));
+  });
   test('a patch cut with --only deletes the named fragment alone', () => {
-    const result = call('cut', '0.1.2', '--only', 'changelog.d/3-fix.md');
+    const result = call('cut', '0.1.2', '--only', '3-fix.md');
     assert.equal(result.status, 0, result.err);
     assert.deepEqual(fs.readdirSync(path.join(root, 'changelog.d')).sort(), ['12-new.md', '9-sec.md', 'README.md']);
     assert.match(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'), /- \*\*Second old entry\.\*\*\n\n## 0\.1\.2\n\n- \*\*Bug fix\.\*\* Three\.\n\n## 0\.1\.1\n/);
@@ -196,5 +219,23 @@ describe('the command line on a copy of a repository', () => {
     assert.match(result.err, /40-bad\.md: the bullet starts with/);
     assert.equal(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'), before);
     fs.unlinkSync(path.join(root, 'changelog.d', '40-bad.md'));
+  });
+  test('a fragment that cannot be deleted after the write is named, with the recovery', (context) => {
+    const realUnlink = fs.unlinkSync;
+    context.mock.method(fs, 'unlinkSync', (file: fs.PathLike) => {
+      if (String(file).endsWith('9-sec.md')) throw Object.assign(new Error('EACCES: permission denied, unlink'), {code: 'EACCES'});
+      realUnlink(file);
+    });
+    const result = call('cut', '0.2.0');
+    context.mock.restoreAll();
+    assert.equal(result.status, 1);
+    assert.match(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'), /\n## 0\.2\.0\n/);
+    assert.deepEqual(fs.readdirSync(path.join(root, 'changelog.d')).sort(), ['9-sec.md', 'README.md']);
+    assert.match(result.err, /CHANGELOG\.md now has "## 0\.2\.0", but 1 fragment\(s\) it moved could not be deleted \(EACCES\): changelog\.d\/9-sec\.md\n/);
+    assert.match(result.err, /Delete exactly these files by hand and nothing else: rm changelog\.d\/9-sec\.md\n/);
+    assert.match(result.err, /Do not run cut again/);
+    // The recovery the message gives leaves nothing unreleased twice.
+    fs.unlinkSync(path.join(root, 'changelog.d', '9-sec.md'));
+    assert.equal(call('assemble').out, 'Pointer to changelog.d.\n');
   });
 });
