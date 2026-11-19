@@ -188,19 +188,54 @@ let test_concurrent_writers () =
   stop a;
   stop b
 
-(* The library function the interface is meant to call, without the tool. *)
+(* The library function the interface is meant to call, without the tool. Its
+   own checks are tested here directly: the future owner writer does not go
+   through the MCP schema. *)
 let test_library_answer_once () =
   let _home, wl_home = fresh () in
   let ctx = W.Ctx.make ~root:wl_home ~host:"owner-ui" ~commit:false () in
   let qid, _ = W.Err.unwrap (Q.ask ctx ~text:"Library?" ()) in
+  let usage what text by =
+    Alcotest.(check bool) (what ^ ": refused as usage") true
+      (match Q.answer_once ctx ~question:qid ~text ~by () with
+      | Error { kind = W.Err.Usage; _ } -> true
+      | _ -> false)
+  in
+  usage "text over 2000" (String.make 2001 'x') "owner";
+  usage "blank text" "   " "owner";
+  usage "a NUL in the text" "yes\000no" "owner";
+  usage "a bidi override in the text" "yes \xE2\x80\xAE on" "owner";
+  usage "an escape sequence in the text" "yes\027[2J" "owner";
+  usage "a bidi override in by" "yes" "own\xE2\x80\xAEer";
+  usage "a zero-width space in by" "yes" "own\xE2\x80\x8Ber";
+  usage "a zero-width space in the text" "y\xE2\x80\x8Bes" "owner";
+  usage "by over 100" "yes" (String.make 101 'b');
+  usage "by on two lines" "yes" "owner\nadmin";
+  usage "an escape in by" "yes" "own\027[2Jer";
+  usage "a NUL in by" "yes" "own\000er";
+  usage "blank by" "yes" " ";
   let once text by = W.Err.unwrap (Q.answer_once ctx ~question:qid ~text ~by ()) in
-  Alcotest.(check bool) "recorded" true (once "yes" "owner" = Q.Recorded qid);
-  Alcotest.(check bool) "same answer" true (once "yes" "owner" = Q.Same_answer qid);
+  Alcotest.(check bool) "2000 characters recorded" true (once (String.make 2000 'x') "owner" = Q.Recorded qid);
+  Alcotest.(check bool) "same answer" true (once (String.make 2000 'x') "owner" = Q.Same_answer qid);
   Alcotest.(check bool) "another answer" true (once "no" "owner" = Q.Already_answered qid);
   Alcotest.(check bool) "unknown question" true
     (match Q.answer_once ctx ~question:"N-00000000" ~text:"x" ~by:"owner" () with
     | Error { kind = W.Err.Not_found; _ } -> true
     | _ -> false)
+
+(* Without a session identity nothing names the relaying session: refused,
+   like request_id without a session. *)
+let test_needs_session () =
+  let home, wl_home = fresh () in
+  let c = connect ~wl_home ~home () in
+  let qid = ask c "Session?" in
+  stop c;
+  let anonymous = connect ~session:"" ~wl_home ~home () in
+  let r = call anonymous "work_answer" (answer_args qid "yes") in
+  Alcotest.(check bool) "refused" true r.is_error;
+  check_str "code" "invalid_input" (error_code r);
+  Alcotest.(check int) "nothing written" 0 (List.length (answer_events wl_home));
+  stop anonymous
 
 let tests =
   [
@@ -213,4 +248,5 @@ let tests =
     Alcotest.test_case "nesting guard" `Quick test_deep_request_is_refused;
     Alcotest.test_case "two processes answering at once" `Quick test_concurrent_writers;
     Alcotest.test_case "library answer_once" `Quick test_library_answer_once;
+    Alcotest.test_case "a session identity is required" `Quick test_needs_session;
   ]

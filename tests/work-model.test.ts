@@ -153,7 +153,8 @@ describe('parseTask', () => {
     const [answered, open] = detail.questions;
     assert.deepEqual(answered!.answers, [
       { text: '8443', by: 'owner', at: '2026-11-19T10:00:00Z', relayedBy: 's-1' },
-      { text: 'later', by: null, at: null, relayedBy: 'codex' },
+      // The agent kind is not a session: without a relaying session, none is named.
+      { text: 'later', by: null, at: null, relayedBy: null },
     ]);
     assert.equal(open!.open, true);
     assert.deepEqual(open!.answers, []);

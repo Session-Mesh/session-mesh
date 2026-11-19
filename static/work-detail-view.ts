@@ -66,15 +66,26 @@ function eventItem(ctx: ViewContext, event: TimelineEvent): HTMLElement {
   return item;
 }
 
+/**
+ * An agent session relays the answer and writes `by` freely: nothing here is verified, so the provenance always reads
+ * as a relayed claim, and a `by` other than `owner` appears only as the stated answerer.
+ */
+function provenance(ctx: ViewContext, answer: Answer): string {
+  const session = answer.relayedBy;
+  if (answer.by === null || answer.by === 'owner') {
+    return session ? ctx.t('work.answer.relayed', { session }) : ctx.t('work.answer.unrelayed');
+  }
+  return session ? ctx.t('work.answer.relayedOther', { session, by: answer.by }) : ctx.t('work.answer.unrelayedOther', { by: answer.by });
+}
+
 function answerItem(ctx: ViewContext, answer: Answer): HTMLElement {
-  const meta = [answer.by ? ctx.t('work.answer.by', { by: answer.by }) : null, answer.at ? formatDateTime(answer.at, ctx.locale) : null,
-    answer.relayedBy ? ctx.t('work.answer.relayedBy', { session: answer.relayedBy }) : null].filter((part): part is string => !!part);
-  return el('li', 'work-answer', el('p', 'work-answer-text', answer.text), meta.length ? el('p', 'work-mute work-answer-meta', meta.join(' · ')) : null);
+  const meta = [provenance(ctx, answer), answer.at ? formatDateTime(answer.at, ctx.locale) : null].filter((part): part is string => !!part);
+  return el('li', 'work-answer', el('p', 'work-answer-text', answer.text), el('p', 'work-mute work-answer-meta', meta.join(' · ')));
 }
 
 /**
  * The answer area of a question, kept apart from the question text: the answers given, or for an open question
- * a hint (the owner answers in the agent's terminal) and an empty, hidden slot `[data-work-answer-slot]` reserved for
+ * a hint (the owner answers in an agent session, which relays the words) and an empty, hidden slot `[data-work-answer-slot]` reserved for
  * a later reply control. Nothing here sends anything.
  */
 function answerArea(ctx: ViewContext, question: Question): HTMLElement {

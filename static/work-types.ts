@@ -57,7 +57,10 @@ export type TimelineEvent = Readonly<{
   fields: readonly (readonly [string, string])[]; prov: Provenance | null;
 }>;
 
-/** An answer as recorded: `by` is who gave it (free text, not authenticated), `relayedBy` the session that wrote it. */
+/**
+ * An answer as recorded: `by` is who it names as the answerer (free text written by the relaying agent, not
+ * authenticated), `relayedBy` the session that wrote it (null when the event names none).
+ */
 export type Answer = Readonly<{ text: string; by: string | null; at: string | null; relayedBy: string | null }>;
 
 export type Question = Readonly<{
