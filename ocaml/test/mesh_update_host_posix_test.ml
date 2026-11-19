@@ -48,23 +48,35 @@ let reaped pid =
   | () -> false
   | exception Unix.Unix_error (Unix.ESRCH, _, _) -> true
 
-(* In the forked process: cancel a running request after 0.5 s. Exit code 0
-   when the call returned within 5 s and the child is gone and reaped. *)
+(* Waits, at most 10 s, until the fake request runs (it has written its pid):
+   on a loaded machine it may not have started after a fixed delay. *)
+let rec wait_for_child ~mono ~root tries =
+  if read_pid root = None && tries > 0 then (
+    Eio.Time.Mono.sleep mono 0.05;
+    wait_for_child ~mono ~root (tries - 1))
+
+(* In the forked process: cancel a running request. Exit code 0 when the call
+   returned within 5 s of the cancellation and the child is gone and reaped;
+   3 when it was not reaped, 4 when it returned late, 6 when the request never
+   started. *)
 let cancel_under_posix ~curl ~root =
   Eio_posix.run @@ fun env ->
   let mono = Eio.Stdenv.mono_clock env in
-  let started = Unix.gettimeofday () in
+  let started = ref infinity in
   Eio.Fiber.first
     (fun () ->
       ignore
         (Mesh_update_host.run_curl ~mgr:(Eio.Stdenv.process_mgr env)
            ~clock:mono ~seconds:60. [ curl; "-q" ]))
-    (fun () -> Eio.Time.Mono.sleep mono 0.5);
-  let prompt = Unix.gettimeofday () -. started < 5. in
+    (fun () ->
+      wait_for_child ~mono ~root 200;
+      started := Unix.gettimeofday ());
+  let prompt = Unix.gettimeofday () -. !started < 5. in
   match read_pid root with
-  | Some pid when prompt && reaped pid -> 0
-  | Some _ when prompt -> 3
-  | Some _ | None -> 4
+  | None -> 6
+  | Some _ when not prompt -> 4
+  | Some pid when reaped pid -> 0
+  | Some _ -> 3
 
 let watchdog = 20.
 
@@ -104,6 +116,10 @@ let test_cancellation_returns_promptly () =
           | Some (Unix.WEXITED 0) -> ()
           | Some (Unix.WEXITED 3) ->
               Alcotest.fail "the request child was not reaped"
+          | Some (Unix.WEXITED 4) ->
+              Alcotest.fail "run_curl returned more than 5 s after the cancellation"
+          | Some (Unix.WEXITED 6) ->
+              Alcotest.fail "the fake request did not start within 10 s"
           | Some (Unix.WEXITED code) ->
               Alcotest.failf "the cancelled run failed (code %d)" code
           | Some (Unix.WSIGNALED signal | Unix.WSTOPPED signal) ->
