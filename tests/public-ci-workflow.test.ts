@@ -21,6 +21,9 @@ import {gitleaksAvailable} from '../tools/leak-guard/gitleaks.ts';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const WORKFLOWS = path.join(ROOT, '.github', 'workflows');
 const PUBLIC_WORKFLOW = 'public-ci.yml';
+// The informational macOS job, alone in its workflow: the `macos` profile, its own rules in
+// tests/public-ci-workflow-macos.test.ts.
+const MACOS_WORKFLOW = 'public-ci-macos.yml';
 const DESCRIPTION_WORKFLOW = 'pr-description.yml';
 // The site deployment: the `site` profile here, its own rules in tests/site-workflow.test.ts.
 const SITE_WORKFLOW = 'site.yml';
@@ -197,13 +200,13 @@ describe('public CI workflow checker', () => {
 
 describe('the public CI as committed', () => {
   test('only the public workflows exist (no private workflow left)', () => {
-    assert.deepEqual(workflowFiles(), [REGISTER_WORKFLOW, BACKPORT_WORKFLOW, POLICY_WORKFLOW, TRIAGE_WORKFLOW, NIGHTLY_WORKFLOW, DESCRIPTION_WORKFLOW, PUBLIC_WORKFLOW, RELEASE_WORKFLOW, PREVIEW_CLEANUP_WORKFLOW, PREVIEW_WORKFLOW, SITE_WORKFLOW]);
+    assert.deepEqual(workflowFiles(), [REGISTER_WORKFLOW, BACKPORT_WORKFLOW, POLICY_WORKFLOW, TRIAGE_WORKFLOW, NIGHTLY_WORKFLOW, DESCRIPTION_WORKFLOW, MACOS_WORKFLOW, PUBLIC_WORKFLOW, RELEASE_WORKFLOW, PREVIEW_CLEANUP_WORKFLOW, PREVIEW_WORKFLOW, SITE_WORKFLOW]);
   });
 
   for (const name of workflowFiles().filter((file) => file !== RELEASE_WORKFLOW)) {
     const profiles: Record<string, Profile> = {[DESCRIPTION_WORKFLOW]: 'description', [SITE_WORKFLOW]: 'site', [PREVIEW_WORKFLOW]: 'preview', [PREVIEW_CLEANUP_WORKFLOW]: 'preview-cleanup', [BACKPORT_WORKFLOW]: 'backport',
       [REGISTER_WORKFLOW]: 'register',
-      [POLICY_WORKFLOW]: 'policy', [NIGHTLY_WORKFLOW]: 'nightly', [TRIAGE_WORKFLOW]: 'triage'};
+      [POLICY_WORKFLOW]: 'policy', [NIGHTLY_WORKFLOW]: 'nightly', [TRIAGE_WORKFLOW]: 'triage', [MACOS_WORKFLOW]: 'macos'};
     const profile: Profile = profiles[name] ?? 'public';
     const text = fs.readFileSync(path.join(WORKFLOWS, name), 'utf8');
 

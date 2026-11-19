@@ -28,7 +28,7 @@ const REQUIRED: Record<string, string[]> = {
   'branch-policy.yml': ['semver label', 'release branch guard'],
   'pr-description.yml': ['PR description (no personal details)'],
 };
-const NO_MERGE_GROUP = ['backport.yml', 'backport-register.yml', 'release.yml', 'site.yml', 'site-preview.yml', 'site-preview-cleanup.yml'];
+const NO_MERGE_GROUP = ['public-ci-macos.yml', 'backport.yml', 'backport-register.yml', 'release.yml', 'site.yml', 'site-preview.yml', 'site-preview-cleanup.yml'];
 
 function jobOf(workflow: string, checkName: string): string {
   const job = jobBlocks(parseLines(read(workflow))).find((item) => item.block.some((line) => line.raw === `    name: ${checkName}`));
@@ -157,7 +157,7 @@ describe('merge queue: every required check name is reported', () => {
 
   test('a job that reports no required name is a known one: a new job is a decision about the ruleset', () => {
     const reportedNames = new Set(Object.values(REQUIRED).flat());
-    const informational = new Set(['macos (arm64, informational)', 'native PTY host (linux-x86_64)']);
+    const informational = new Set(['native PTY host (linux-x86_64)']);
     for (const workflow of Object.keys(REQUIRED)) {
       for (const job of jobBlocks(parseLines(read(workflow)))) {
         const name = /^ {4}name: (.*)$/m.exec(job.block.map((line) => line.raw).join('\n'))?.[1] ?? '';
@@ -166,9 +166,9 @@ describe('merge queue: every required check name is reported', () => {
     }
   });
 
-  test('the informational macOS job is excluded from the merge group', () => {
-    const body = jobOf('public-ci.yml', 'macos (arm64, informational)');
-    assert.match(body, /^ {4}if: github\.event_name != 'merge_group'$/m);
+  test('the informational macOS job is excluded from the merge group: it is in a workflow without merge_group', () => {
+    assert.ok(jobOf('public-ci-macos.yml', 'macos (arm64, informational)'));
+    for (const workflow of Object.keys(REQUIRED)) assert.doesNotMatch(read(workflow), /^ {4}name: macos \(arm64, informational\)$/m, workflow);
   });
 
   test('no required job of public-ci needs the macOS job, so the queue never waits for it', () => {

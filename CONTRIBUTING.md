@@ -53,7 +53,8 @@ pull request.
 | `browser tests (Chromium, shard N of 4)` | `public-ci.yml` | The browser tests, split over four jobs (`N` is 0 to 3). |
 
 One more check runs on every pull request and is **not** required: `macos (arm64, informational)`
-(`public-ci.yml`). It builds and tests the native programs on a macOS arm64 runner and runs the
+(`public-ci-macos.yml`, a workflow of its own, so that the `public-ci` run never waits for the macOS
+runner). It builds and tests the native programs on a macOS arm64 runner and runs the
 tests listed in `tests/macos-ci-tests.txt` (an allow-list of the Node and pytest files known to
 pass on macOS; add yours there when it passes), so that a macOS-only breakage shows on the pull
 request. Its failure never blocks a merge, but read it when your change touches the installers,
@@ -267,7 +268,8 @@ and wait for the checks. On the queue's commit:
   warning-only and the queue's commit has no description, so a description edited after queueing
   is not checked again.
 - The other required checks (`leak check`, OCaml, frontend, Python, browser shards) run unchanged.
-- `macos (arm64, informational)` does not run, so a macOS run never holds a queue entry.
+- `macos (arm64, informational)` does not run (`public-ci-macos.yml` has no `merge_group` trigger),
+  so a macOS run never holds a queue entry.
 
 Pull requests that touch `.github/workflows/`, security-relevant code, the CLA files
 (`CLA.md`, `CLA-SIGNATORIES.md`, `tools/cla-check/`, `CONTRIBUTORS.md`, `.github/CODEOWNERS`) or

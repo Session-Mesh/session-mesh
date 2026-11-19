@@ -1,40 +1,76 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-// The informational macOS job of public-ci.yml: its structure, and the mutations that the public
-// profile of tests/public-ci-workflow-checks.ts must reject (a paid runner, a blocking job, a
-// write token, an unpinned action, a longer timeout, a dependency on another job). The one
-// exception to the profile's single runner and its no-`continue-on-error` rule is in
-// tests/public-ci-macos-checks.ts.
+// The informational macOS job, alone in public-ci-macos.yml: its structure, and the mutations that the
+// `macos` profile of tests/public-ci-workflow-checks.ts must reject (a paid runner, a blocking job, a
+// write token, an unpinned action, a longer timeout, a dependency on another job, a merge queue
+// trigger, a shared concurrency group). The one exception to the public rules' single runner and
+// their no-`continue-on-error` rule is in tests/public-ci-macos-checks.ts; public-ci.yml (the public
+// profile) must not hold the job.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {describe, test} from 'node:test';
-import {jobBlocks, parseLines, usesOf} from './public-ci-workflow-lib.ts';
+import {blockOf, jobBlocks, type Line, parseLines, usesOf} from './public-ci-workflow-lib.ts';
 import {checkWorkflow} from './public-ci-workflow-checks.ts';
-import {MACOS_JOB, MACOS_JOB_NAME, MACOS_LIST_PATH,MACOS_RUNNER, MACOS_STEP_BUDGETS, MACOS_TIMEOUT_MINUTES} from './public-ci-macos-checks.ts';
+import {MACOS_CONCURRENCY, MACOS_JOB, MACOS_JOB_NAME, MACOS_LIST_PATH, MACOS_RUNNER, MACOS_STEP_BUDGETS, MACOS_TIMEOUT_MINUTES,
+  MACOS_WORKFLOW} from './public-ci-macos-checks.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const text = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'public-ci.yml'), 'utf8');
+const WORKFLOWS = path.join(ROOT, '.github', 'workflows');
+const text = fs.readFileSync(path.join(WORKFLOWS, MACOS_WORKFLOW), 'utf8');
+const publicText = fs.readFileSync(path.join(WORKFLOWS, 'public-ci.yml'), 'utf8');
 
 function macosBody(): string {
   const job = jobBlocks(parseLines(text)).find((item) => item.name === MACOS_JOB);
-  assert.ok(job, 'no macos job in public-ci.yml');
+  assert.ok(job, `no macos job in ${MACOS_WORKFLOW}`);
   return job.block.map((line) => line.raw).join('\n');
 }
 
 // The workflow with `from` replaced by `to` once, inside the macOS job only.
 function mutated(from: string, to: string): string {
   const start = text.indexOf('\n  macos:\n');
-  assert.ok(start >= 0, 'no macos job in public-ci.yml');
+  assert.ok(start >= 0, `no macos job in ${MACOS_WORKFLOW}`);
   const job = text.slice(start);
   assert.ok(job.includes(from), `${from} not found in the macos job`);
   return text.slice(0, start) + job.replace(from, () => to);
 }
 
+// The trigger lines of a workflow (comments and blank lines dropped), without merge_group and its types.
+function triggerLines(workflow: string): string[] {
+  const lines = parseLines(workflow);
+  const onIndex = lines.findIndex((line) => line.indent === 0 && line.key === 'on');
+  assert.ok(onIndex >= 0, 'no on: block');
+  const block = blockOf(lines, onIndex);
+  const queue = block.find((line) => line.key === 'merge_group');
+  const dropped = new Set<Line>(queue ? [queue, ...blockOf(lines, lines.indexOf(queue))] : []);
+  return block.filter((line) => !dropped.has(line) && line.text.trim() !== '').map((line) => line.text.trim());
+}
+
 describe('the informational macOS job', () => {
-  test('is the exception, and nothing else of the workflow changes: the committed file satisfies every invariant', () => {
-    assert.deepEqual(checkWorkflow(text), []);
+  test('is the exception, and nothing else of its workflow changes: the committed file satisfies every invariant', () => {
+    assert.deepEqual(checkWorkflow(text, 'macos'), []);
+  });
+
+  test('public-ci.yml no longer holds it and no job there needs it, so the public-ci run never waits for macOS', () => {
+    assert.deepEqual(checkWorkflow(publicText, 'public'), []);
+    assert.ok(!jobBlocks(parseLines(publicText)).some((job) => job.name === MACOS_JOB));
+    assert.ok(!publicText.includes(`name: ${MACOS_JOB_NAME}`));
+  });
+
+  test('runs on the triggers of public-ci.yml but the merge queue, with the same concurrency rule under its own group', () => {
+    assert.deepEqual(triggerLines(text), triggerLines(publicText));
+    assert.match(triggerLines(publicText).join('\n'), /^push:\nbranches: \[main, "release\/\*\*"\]\npull_request:\ntypes: \[/);
+    assert.doesNotMatch(text.replace(/^\s*#.*$/gm, ''), /merge_group/);
+    assert.ok(text.includes(`\n${MACOS_CONCURRENCY}`), 'concurrency group');
+    // public-ci.yml's group is public-ci-${{ github.ref }}, with the same cancel-in-progress.
+    assert.ok(publicText.includes(`\n${MACOS_CONCURRENCY.replace('public-ci-macos-', 'public-ci-')}`), 'public-ci.yml concurrency changed');
+    assert.match(text, /^permissions:\n {2}contents: read\n/m);
+    // The environment its tests had inside public-ci.yml.
+    for (const variable of ['MESH_LEAK_PRIVATE_RULES', 'PYTHON_VERSION', 'NODE_VERSION']) {
+      const line = new RegExp(`^ {2}${variable}: .*$`, 'm');
+      assert.equal(line.exec(text)?.[0], line.exec(publicText)?.[0], variable);
+    }
   });
 
   test('has the pinned name, an arm64 runner, continue-on-error, a 45-minute timeout and a read-only token', () => {
@@ -45,7 +81,7 @@ describe('the informational macOS job', () => {
     assert.match(body, new RegExp(`^ {4}timeout-minutes: ${MACOS_TIMEOUT_MINUTES}$`, 'm'));
     assert.match(body, /^ {4}permissions:\n {6}contents: read\n/m);
     assert.doesNotMatch(body, /^ {4}needs:/m, 'the job runs alone');
-    assert.match(body, /^ {4}if: github\.event_name != 'merge_group'$/m, 'on every event but the merge queue');
+    assert.doesNotMatch(body, /^ {4}if:/m, 'the workflow triggers decide where it runs');
   });
 
   test('every long step has a timeout of its own below the job timeout, so a hang fails the step instead of cancelling the job', () => {
@@ -92,7 +128,7 @@ describe('the informational macOS job', () => {
   });
 
   describe('is rejected when', () => {
-    const wf = (from: string, to: string): string[] => checkWorkflow(mutated(from, to));
+    const wf = (from: string, to: string): string[] => checkWorkflow(mutated(from, to), 'macos');
     const mutations: [string, string, string, RegExp][] = [
       ['it runs on a Linux runner', 'runs-on: macos-15', 'runs-on: ubuntu-24.04', /is not macos-15/],
       ['it runs on a larger paid runner', 'runs-on: macos-15', 'runs-on: macos-15-xlarge', /is not macos-15/],
@@ -116,7 +152,7 @@ describe('the informational macOS job', () => {
       ['an action is pinned by tag', 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1', 'actions/setup-node@v4',
         /actions\/setup-node@v4 not pinned/],
       ['the job waits for another job', '    timeout-minutes: 45\n', '    timeout-minutes: 45\n    needs: native\n', /needs another job/],
-      ['the job is conditional on another event', '    if: github.event_name != \'merge_group\'\n', '    if: github.event_name == \'push\'\n', /job-level condition/],
+      ['the job is conditional on an event', '    runs-on: macos-15\n', '    if: github.event_name == \'push\'\n    runs-on: macos-15\n', /job-level condition/],
       ['the job is renamed', 'name: macos (arm64, informational)', 'name: macos (arm64)', /name is not/],
       ['the allow-list is not read', 'list=tests/macos-ci-tests.txt', 'list=/dev/null', /does not read tests\/macos-ci-tests\.txt/],
       ['the Node step discovers its tests', 'list="$RUNNER_TEMP/macos-node-tests.txt"', 'list="$(find tests -name \'*.test.ts\')"',
@@ -140,26 +176,50 @@ describe('the informational macOS job', () => {
       });
     }
 
-    test('another job takes a macOS runner', () => {
-      const problems = checkWorkflow(text.replace('runs-on: ubuntu-24.04', 'runs-on: macos-15'));
-      assert.ok(problems.some((problem) => /runner macos-15 is not ubuntu-24\.04/.test(problem)), problems.join('\n'));
-    });
+    // Mutations of the workflow around the job.
+    const around: [string, string, string, RegExp][] = [
+      ['it runs on the merge queue', '  workflow_dispatch:\n', '  merge_group:\n    types: [checks_requested]\n  workflow_dispatch:\n', /no merge_group/],
+      ['it shares the concurrency group of public-ci.yml', 'group: public-ci-macos-', 'group: public-ci-', /concurrency is not/],
+      ['a push run is cancelled too', "cancel-in-progress: ${{ github.event_name == 'pull_request' }}", 'cancel-in-progress: true', /concurrency is not/],
+      ['the workflow is renamed', 'name: public-ci-macos\n', 'name: public-ci\n', /workflow name is not public-ci-macos/],
+      ['another job joins it', 'jobs:\n', `jobs:\n  lint:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    steps:\n      - run: 'true'\n`,
+        /holds the macos job alone/],
+    ];
+    for (const [label, from, to, pattern] of around) {
+      test(label, () => {
+        assert.ok(text.includes(from), `${from} not found`);
+        const problems = checkWorkflow(text.replace(from, () => to), 'macos');
+        assert.ok(problems.some((problem) => pattern.test(problem)), `not reported:\n${problems.join('\n')}`);
+      });
+    }
 
-    test('another job ignores its failure', () => {
-      const problems = checkWorkflow(text.replace('  leaks:\n    name: leak check (public rules)\n',
-        '  leaks:\n    name: leak check (public rules)\n    continue-on-error: true\n'));
+    test('it moves back into public-ci.yml', () => {
+      const problems = checkWorkflow(`${publicText}${text.slice(text.indexOf('\n  macos:\n') + 1)}`, 'public');
+      assert.ok(problems.some((problem) => /belongs in public-ci-macos\.yml/.test(problem)), problems.join('\n'));
+      assert.ok(problems.some((problem) => /runner macos-15 is not ubuntu-24\.04/.test(problem)), problems.join('\n'));
       assert.ok(problems.some((problem) => /continue-on-error other than false/.test(problem)), problems.join('\n'));
     });
 
-    test('another job needs the macOS job', () => {
-      const problems = checkWorkflow(text.replace('  leaks:\n    name: leak check (public rules)\n',
-        '  leaks:\n    name: leak check (public rules)\n    needs: macos\n'));
+    test('a public-ci job takes a macOS runner', () => {
+      const problems = checkWorkflow(publicText.replace('runs-on: ubuntu-24.04', 'runs-on: macos-15'), 'public');
+      assert.ok(problems.some((problem) => /runner macos-15 is not ubuntu-24\.04/.test(problem)), problems.join('\n'));
+    });
+
+    test('a public-ci job ignores its failure', () => {
+      const problems = checkWorkflow(publicText.replace('  leaks:\n    name: leak check (public rules)\n',
+        '  leaks:\n    name: leak check (public rules)\n    continue-on-error: true\n'), 'public');
+      assert.ok(problems.some((problem) => /continue-on-error other than false/.test(problem)), problems.join('\n'));
+    });
+
+    test('a public-ci job needs the macOS job', () => {
+      const problems = checkWorkflow(publicText.replace('  leaks:\n    name: leak check (public rules)\n',
+        '  leaks:\n    name: leak check (public rules)\n    needs: macos\n'), 'public');
       assert.ok(problems.some((problem) => /job leaks: needs the informational macOS job/.test(problem)), problems.join('\n'));
     });
   });
 
-  test('the exception is the public profile only: other profiles refuse a macOS runner and continue-on-error', () => {
-    for (const profile of ['description', 'site', 'policy'] as const) {
+  test('the exception is the macos profile only: other profiles refuse a macOS runner and continue-on-error', () => {
+    for (const profile of ['public', 'description', 'site', 'policy'] as const) {
       const problems = checkWorkflow(text, profile);
       assert.ok(problems.some((problem) => /runner macos-15 is not ubuntu-24\.04/.test(problem)), `${profile}: ${problems.join('\n')}`);
       assert.ok(problems.some((problem) => /continue-on-error other than false/.test(problem)), profile);
@@ -181,7 +241,7 @@ describe('the informational macOS job', () => {
       for (const entry of entries) {
         assert.match(entry, /^tests\/[A-Za-z0-9._\/-]+\.(?:test\.(?:ts|mjs|cjs)|py)$/, `${entry} is neither a Node test nor a pytest file of tests/`);
         assert.doesNotMatch(entry, /browser/, `${entry} drives a browser`);
-        // The job refuses anything else (public-ci.yml, "Read the macOS test list").
+        // The job refuses anything else (public-ci-macos.yml, "Read the macOS test list").
         assert.match(entry, /^tests\/[A-Za-z0-9._/-]+\.(?:ts|py)$/);
         assert.doesNotMatch(entry, /\.\./);
       }
