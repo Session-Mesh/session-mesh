@@ -423,6 +423,9 @@ export interface Options {
 // Past this many lines, the diff is not rendered: the page says so and links to the plain text
 // (?raw=1). The byte limit (view.py: 4 MiB) alone would let a diff of a million short lines through.
 export const MAX_DIFF_LINES = 50_000;
+// Past this many files, the diff is not rendered either: every file gets a block, even one without
+// hunks (a mode change), so the line limit alone would let tens of thousands of blocks through.
+export const MAX_DIFF_FILES = 2_000;
 
 export function countLines(text: string): number {
   let count = 0;
@@ -662,24 +665,40 @@ class FileView {
     if (!table || !positions) return;
     const segments = this.wordSegments();
     const {mode} = this.view.options;
+    let firstNew: HTMLTableRowElement | null = null;
     while (this.next < this.items.length) {
       const item = this.items[this.next] as Item;
       const [first, last] = itemSpan(item, positions);
       if (first >= this.loaded && this.next > 0) break;
-      table.append(itemRow(item, mode, segments));
+      const row = itemRow(item, mode, segments);
+      firstNew ??= row;
+      table.append(row);
       this.reach = Math.max(this.reach, last + 1);
       this.shown += itemLines(item);
       this.next += 1;
     }
     this.loaded = Math.max(this.loaded, this.reach);
-    this.body.querySelector('button.more')?.remove();
+    // The button is kept while there is more to show, so that it keeps the keyboard focus; after
+    // the last chunk, the focus goes to the first row it revealed.
+    const existing = this.body.querySelector<HTMLButtonElement>('button.more');
     const left = fileLines(this.file) - this.shown;
     if (this.next < this.items.length) {
       const label = left > 0 ? `show ${Math.min(left, ROW_CHUNK)} more lines (${left} left)` : 'show more';
-      const more = button(label, false, () => this.more());
-      more.className = 'more';
-      more.removeAttribute('aria-pressed');
-      this.body.append(more);
+      if (existing) {
+        existing.textContent = label;
+      } else {
+        const more = button(label, false, () => this.more());
+        more.className = 'more';
+        more.removeAttribute('aria-pressed');
+        this.body.append(more);
+      }
+    } else if (existing) {
+      const focused = document.activeElement === existing;
+      existing.remove();
+      if (focused && firstNew) {
+        firstNew.tabIndex = -1;
+        firstNew.focus();
+      }
     }
   }
 }
@@ -721,12 +740,13 @@ class Viewer {
       root.append(el('pre', 'preamble', parsed.preamble.join('\n').replace(/\s+$/, '')));
     }
     if (parsed.files.length === 0) root.append(el('p', 'note', 'no unified diff found in this file'));
-    // INITIAL_ROWS positions are shared out over the first files, in order; the others start folded
+    // INITIAL_ROWS positions are shared out over the first files, in order (a file's block counts
+    // as one, so that files without hunks use it up too); the others start folded
     let left = INITIAL_ROWS;
     for (const file of parsed.files) {
       const open = left > 0;
       const loaded = open ? Math.min(ROW_CHUNK, left) : ROW_CHUNK;
-      if (open) left -= Math.min(filePositions(file), loaded);
+      if (open) left -= 1 + Math.min(filePositions(file), loaded);
       const view = new FileView(file, this, open, loaded);
       this.files.push(view);
       root.append(view.details);
@@ -761,9 +781,10 @@ class Viewer {
   }
 }
 
-// The page for a diff past MAX_DIFF_LINES: a short notice and the way to its plain text.
-function tooLarge(root: HTMLElement, lines: number): void {
-  const note = el('p', 'note large', `This diff has ${lines} lines, more than the diff viewer shows (${MAX_DIFF_LINES}). `);
+// The page for a diff past MAX_DIFF_LINES or MAX_DIFF_FILES: a short notice and the way to its
+// plain text.
+function tooLarge(root: HTMLElement, count: number, what: 'lines' | 'files', limit: number): void {
+  const note = el('p', 'note large', `This diff has ${count} ${what}, more than the diff viewer shows (${limit}). `);
   const link = el('a', '', 'Open it as plain text');
   link.href = '?raw=1';
   note.append(link, document.createTextNode('.'));
@@ -775,10 +796,14 @@ function tooLarge(root: HTMLElement, lines: number): void {
 export function mount(root: HTMLElement, text: string, initial: Partial<Options> = {}): DiffPage | null {
   const lines = countLines(text);
   if (lines > MAX_DIFF_LINES) {
-    tooLarge(root, lines);
+    tooLarge(root, lines, 'lines', MAX_DIFF_LINES);
     return null;
   }
   const parsed = parseUnifiedDiff(text);
+  if (parsed.files.length > MAX_DIFF_FILES) {
+    tooLarge(root, parsed.files.length, 'files', MAX_DIFF_FILES);
+    return null;
+  }
   const viewer = new Viewer(root, parsed, {mode: initial.mode ?? 'unified', words: initial.words ?? true});
   return {parsed, growTo: height => viewer.growTo(height)};
 }
