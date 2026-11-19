@@ -75,6 +75,9 @@ export async function scratchHome(prefix: string, extraEnv: NodeJS.ProcessEnv = 
     XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'),
     MESH_CONF_DIR: confDir, MESH_CACHE_DIR: path.join(home, '.cache', 'session-mesh'),
     MESH_PORT: String(port),
+    // GET /api/sessions answers from the background state, waiting at most 2 s for the round it asks for; these
+    // tests read it right after a change, on loaded machines too. tests/sessions-state.test.ts keeps the default.
+    MESH_SESSIONS_WAIT: '60',
     ...extraEnv};
   delete env.MESH_HOST;
   delete env.MESH_ALLOW_NON_LOOPBACK;

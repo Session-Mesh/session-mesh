@@ -190,6 +190,15 @@ def public(entries):
             for e in entries if usable(e)]
 
 
+def provisional():
+    """What the snapshot knows of each live session, by (name, created), before a listing describes
+    it: the agent's type and conversation, or the command it ran. Never the argv."""
+    with _lock:
+        live = _load()["live"]
+    return {_key(e): {"agent": e["agent"] and {"type": e["agent"]["type"], "session_id": e["agent"]["session_id"]},
+                      "cmd": e["cmd"]} for e in live}
+
+
 def management_lost(now=None):
     """The sealed restart-recovery facts which the management inventory may show.
 
@@ -289,16 +298,17 @@ def update(mesh, listed, now=None, host=None):
     return record(mesh, listed, now, host)[0]
 
 
-def record(mesh, listed, now=None, host=None):
+def record(mesh, listed, now=None, host=None, seen=None):
     """Record the mesh sessions (the dicts of list_sessions); return (the restorable entries,
     whether the snapshot file holds the recorded state: False when ptyhost did not answer or the
     write failed). ``host`` is the identity of the ptyhost that listed them
-    (ptyhost.host_identity), None when unknown. Does nothing while ptyhost did not answer
-    (``listed`` false)."""
+    (ptyhost.host_identity), None when unknown. ``seen``: the (name, created) of every session
+    the host listed, when ``mesh`` describes only some of them (the others keep their entry).
+    Does nothing while ptyhost did not answer (``listed`` false)."""
     if not listed:
         return [], False
     now = time.time() if now is None else now
-    seen = {(s.get("name"), s.get("created")) for s in mesh}
+    seen = {(s.get("name"), s.get("created")) for s in mesh} if seen is None else seen
     live = [e for e in map(entry_of, mesh) if e]
     with _lock:
         old = _load()

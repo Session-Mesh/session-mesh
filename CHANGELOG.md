@@ -74,9 +74,15 @@ before 1.0, a minor version may change behaviour.
 - **The session list no longer falls minutes behind on a busy machine.** Each `GET /api/sessions`
   ran its own listing, one after the other; when a listing took longer than the page's 4-second
   poll (after a web server restart on a loaded machine), requests queued faster than they were
-  answered and the list could stay empty for minutes. Requests that arrive while a listing runs now
-  share the next one, so the wait of `/api/sessions` requests no longer grows with the number of
-  polling pages; the background loops still run their own listings under the same lock.
+  answered and the list could stay empty for minutes. `GET /api/sessions` now answers from a list
+  the server keeps in memory, which one background round at a time brings up to date; a request
+  never runs a listing, and waits at most 2 seconds (`MESH_SESSIONS_WAIT`) for the round it asks
+  for. After a start, the first answer lists every session at once from the PTY host's list, the
+  folders and the restart snapshot (rows marked `ready: false`), before the agents are described.
+  Renames, moves and restores no longer wait for a listing: the organisation lock now covers only
+  the writes. A silent PTY host leaves the last list on screen (`host: "silent"`). The answer gains
+  `generation`, `since` (only the changed rows and the `removed` names), `full`, `complete`,
+  `counts` and `focus`; see [docs/sessions-api.md](docs/sessions-api.md).
 - **Copy on select.** Selecting text in a terminal now copies it to the clipboard when you release
   the mouse button (or lift your finger after a long press on a phone), and the text stays
   selected. It is on by default and is a per-browser preference (`copyOnSelect` in the page's
