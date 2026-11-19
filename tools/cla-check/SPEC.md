@@ -2,17 +2,49 @@
 
 `cla-check.ts` decides whether a pull request may be merged with respect to the
 [Contributor License Agreement](../../CLA.md). Pull requests are integrated by **"Rebase and merge"
-only**. The branch rule of `main` does not require a branch to be up to date before merging; the
-check itself requires, when it runs, the base to be an ancestor of the head. It therefore accepts
-only a **linear pull request**: a straight line of ordinary commits on top of the
-tip of the base. For such a pull request, the tree GitHub's test merge holds is the head's tree, and
-it is also the tree the rebase lands as long as the base has not moved; the check judges that
-tree (see "Re-running the check" when the base moves).
+only**. The branch rule of `main` does not require a branch to be up to date before merging. The
+check accepts only a **linear pull request**: a straight line of ordinary commits. When the branch
+contains the tip of the base, the tree GitHub's test merge holds is the head's tree, and it is also
+the tree the rebase lands as long as the base has not moved; the check judges that tree. A branch
+that does not contain the tip of the base is accepted only when **no commit of it changes the
+register**: the register that lands is then the base's, whatever the rebase does to the other
+files, and the check judges that register (see "Why a branch behind the base is accepted only when
+it leaves the register alone", and "Re-running the check" when the base moves).
 
 Why linear: a rebase replays ordinary commits and drops merge commits. If a merge commit of the pull
 request undid, in the judged tree, what an ordinary commit did to the register, the check would see
 one register and `main` would receive another. For example, a commit removes Bob's line and a merge
 commit puts it back: the judged tree keeps Bob's line, and the rebase lands its removal.
+
+## Why a branch behind the base is accepted only when it leaves the register alone
+
+What the check depends on is: the commits the rebase replays and their author and committer
+addresses, the register that lands, and `MAINTAINERS` on the base. For a linear pull request the
+first is the same whether or not the branch contains the tip of the base: the rebase replays the
+commits of `base..head`, which are the commits of the pull request, keeps their authors, and makes
+the integrator their committer. The register is what differs.
+
+- **The pull request changes the register.** The rebase replays its commits one by one, each with a
+  three-way merge (and the union driver of `.gitattributes` on the register when a commit conflicts
+  with the base); GitHub's test merge applies the whole pull request in one three-way merge. The two
+  can disagree on the register. Example: Eve adds a line for Mallory at the end of the table in one
+  commit and removes it in the next; meanwhile `main` gained Carol's line at the end. The test
+  merge sees no change from Eve and keeps `main`'s register; the replay of the first commit
+  conflicts with Carol's line and the union driver keeps both, the replay of the second conflicts
+  again and the union driver keeps Mallory's line. Mallory's line would land without any commit of
+  Mallory's and without the check seeing it. So a pull request that changes the register must
+  contain the tip of the base, as before: then the test merge, the head and the rebase hold the same
+  tree.
+- **No commit of the pull request changes the register.** The entry of `CLA-SIGNATORIES.md` (its
+  mode and object, or its absence) is the same in every commit of `base..head` as in its parent.
+  The replay of such a commit leaves the register as it finds it, so the register that lands is the
+  base's; and the test merge, in which only the base's side changed it, holds the base's register
+  too (the checker verifies it). Rule 2 has nothing to judge; rule 1 judges every commit against
+  the base's register, which is the one that lands. What the rebase does to the other files does
+  not enter the verdict.
+
+In both cases the verdict is about the base the check ran on; when `main` moves afterwards, see
+"Re-running the check" and "The merge queue".
 
 ## Inputs
 
@@ -39,11 +71,14 @@ Checked first; when it fails, the other rules are not evaluated.
 - Every commit of `base..head` has exactly one parent. A commit with more than one parent is
   refused: "rebase your branch on main; merge commits are not allowed in a pull request". A commit
   without parent is refused too.
-- The base is an ancestor of the head. Otherwise the branch is behind `main` and is refused with a
-  request to update it by rebasing it on `main`.
+- The base is an ancestor of the head, **or** the range `base..head` is not empty and none of its
+  commits changes the entry of `CLA-SIGNATORIES.md` against its parent (mode and object id, or
+  absence, compared as `git ls-tree` gives them). Otherwise the branch is behind `main` and is
+  refused with a request to update it by rebasing it on `main`.
 
-When both hold, the tree of the test merge commit must equal the head's tree (exit 2 otherwise:
-GitHub builds no other).
+When the base is an ancestor of the head, the tree of the test merge commit must equal the head's
+tree. When it is not, the entry of `CLA-SIGNATORIES.md` in the test merge commit must equal the
+base's. Either mismatch is exit 2: GitHub builds no other.
 
 ## The register
 
@@ -121,8 +156,11 @@ The workflow runs on the `pull_request` types `opened`, `synchronize`, `reopened
 - **`main` moves after the check ran.** The check does not run again, and the branch rule does not
   require an up-to-date branch, so the earlier verdict stays on the pull request. The rebase then
   lands the same commits on a tree the check did not judge: a register line removed from `main` in
-  the meantime is not seen. A maintainer who wants a verdict on the current `main` rebases the
-  branch (or asks for it), which pushes new commits and runs the check again.
+  the meantime is not seen. Any later event of the pull request (a push, a change of base, an edit
+  of its title or description, closing and reopening it) runs the check against the current `main`;
+  a pull request that does not change the register passes it without being rebased. "Re-run jobs"
+  re-runs on the test merge commit of the original event, so on the former base. The merge queue,
+  when it is enabled, judges what lands on the current `main` (see "The merge queue").
 - **The base branch of the pull request is changed.** That is an `edited` event: the check runs
   again against the new base. Every job of the workflow runs on it, since a job skipped by a
   condition would count as a passed required check; editing the title or the description of a pull
@@ -134,7 +172,9 @@ On the `merge_group` event the workflow runs this same checker over the queued c
 event's `base_sha`, `--head` its `head_sha` (the checked-out commit), and `--merge` a local commit of
 (base, head) with the head's tree, built by the job because the queue provides none. Rule 0 refuses a
 head that is not a straight line on the base, so the check fails safe when the queue's commit is
-not one. The checker and `MAINTAINERS` are the base's copies.
+not one. The checker and `MAINTAINERS` are the base's copies. The queue's commits are built on the
+base, so the base is always an ancestor of the head there: the relaxation for a branch behind the
+base never applies, and the run judges the exact commits and tree that land.
 
 ## Known limits
 
@@ -153,5 +193,11 @@ not one. The checker and `MAINTAINERS` are the base's copies.
 - **The check assumes "Rebase and merge".** For a linear, up-to-date pull request, a squash merge
   or a merge commit would land the same tree as the one judged, but under other commits (a squash
   keeps one author only). The project uses neither.
+- **A rename on `main` into the register.** For a branch behind the base that does not change the
+  register, the argument above assumes that no commit of `main` since the branch point renamed
+  another file to `CLA-SIGNATORIES.md` (rename detection could then carry the pull request's change
+  of that file into the register). The checker refuses with exit 2 when the test merge's register
+  differs from the base's; the rebase's own rename detection is not observed. Such a rename on
+  `main` would itself be a reviewed change of the CLA files.
 - Markup that hides a line in the rendered page without a code block or an HTML comment (for
   example a `<details>` element) is not detected; the raw file is what counts.

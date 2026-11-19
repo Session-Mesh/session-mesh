@@ -3,10 +3,11 @@
 
 // CLA check of a pull request integrated by "Rebase and merge", judged on what would land on the
 // base branch. The specification is tools/cla-check/SPEC.md; in short:
-// 0. History: base..head is a straight line of ordinary commits on top of the base (no merge
-//    commit, no commit without parent, the base an ancestor of the head; exit 2 when the test
-//    merge tree differs from the head tree). A rebase drops merge
-//    commits, so only then is the tree that lands the tree judged here.
+// 0. History: base..head is a straight line of ordinary commits (no merge commit, no commit
+//    without parent). A rebase drops merge commits, so only then is what lands what is judged
+//    here. The base is an ancestor of the head (exit 2 when the test merge tree differs from the
+//    head tree), or no commit of the range changes the register (exit 2 when the test merge's
+//    register differs from the base's): the register that lands is then the base's.
 // 1. Identities: every commit of base..head has an author address, and a committer address, that
 //    is a maintainer's or has a line in CLA-SIGNATORIES.md as the test merge commit holds it.
 //    GitHub's own committer identity (web edits) is accepted as committer only.
@@ -250,17 +251,37 @@ function isAncestor(repo: string, ancestor: string, descendant: string): boolean
   }
 }
 
-// Rule 0: the commits "Rebase and merge" would replay are the whole pull request, on the tip of the
-// base. A merge commit is dropped by the rebase while its content counts in the test merge.
-function historyProblems(repo: string, base: string, head: string, commits: Commit[]): HistoryProblem[] {
+// The register's entry at a commit as the tree records it (mode, type and object id), '' when absent.
+function registerEntry(repo: string, commit: string): string {
+  return git(repo, ['ls-tree', '-z', commit, '--', REGISTER]).split('\0')[0].split('\t')[0];
+}
+
+// Rule 0: the commits "Rebase and merge" would replay are the whole pull request. A merge commit is
+// dropped by the rebase while its content counts in the test merge. A branch behind the base is
+// replayed commit by commit, which can land another register than the test merge holds (SPEC.md):
+// it is accepted only when none of its commits changes the register.
+function historyProblems(repo: string, head: string, commits: Commit[], upToDate: boolean): HistoryProblem[] {
   const problems: HistoryProblem[] = commits.filter((commit) => commit.parents.length !== 1)
     .map((commit) => ({commit: commit.id, problem: commit.parents.length === 0 ? 'root' : 'merge'}));
-  if (problems.length === 0 && !isAncestor(repo, base, head)) problems.push({commit: head, problem: 'behind'});
-  return problems;
+  if (problems.length > 0 || upToDate) return problems;
+  const leavesRegister = (commit: Commit) => registerEntry(repo, commit.id) === registerEntry(repo, commit.parents[0]);
+  if (commits.length > 0 && commits.every(leavesRegister)) return problems;
+  return [{commit: head, problem: 'behind'}];
 }
 
 function treeOf(repo: string, commit: string): string {
   return git(repo, ['rev-parse', '--verify', `${commit}^{tree}`]).trim();
+}
+
+// What the test merge holds is what the rest of the check relies on: the head's tree for a branch on
+// the tip of the base, the base's register for a branch behind it that leaves the register alone.
+function verifyTestMerge(repo: string, base: string, head: string, merge: string, upToDate: boolean): void {
+  if (upToDate && treeOf(repo, merge) !== treeOf(repo, head)) {
+    throw new CheckError('the merge commit does not hold the tree of the head');
+  }
+  if (!upToDate && registerEntry(repo, merge) !== registerEntry(repo, base)) {
+    throw new CheckError('the merge commit does not hold the register of the base');
+  }
 }
 
 // `merge` is the test merge commit of the pull request: its parents are the base, then the head.
@@ -275,10 +296,10 @@ export function checkPullRequest(repo: string, base: string, head: string, merge
   const maintainers = maintainersAt(repo, base);
   const ids = git(repo, ['rev-list', '--reverse', `${base}..${head}`]).split('\n').filter(Boolean);
   const commits = ids.map((id) => readCommit(repo, id));
-  const history = historyProblems(repo, base, head, commits);
+  const upToDate = isAncestor(repo, base, head);
+  const history = historyProblems(repo, head, commits, upToDate);
   if (history.length > 0) return {history, offenders: [], violations: []};
-  // On a straight line from the base, merging the head changes nothing in its tree.
-  if (treeOf(repo, merge) !== treeOf(repo, head)) throw new CheckError('the merge commit does not hold the tree of the head');
+  verifyTestMerge(repo, base, head, merge, upToDate);
   const merged = rowsAt(repo, merge);
   const violations = registerViolations(rowsAt(repo, base), merged, registerChanges(repo, commits), maintainers);
   const accepted = new Set([...maintainers, ...[...merged.values()].map((row) => row.email)]);
@@ -333,7 +354,7 @@ const HISTORY_TEXT: Record<HistoryProblem['problem'], {headline: string; item: s
   merge: {headline: 'rebase your branch on main; merge commits are not allowed in a pull request',
     item: 'is a merge commit'},
   root: {headline: 'commits without a parent are not allowed in a pull request', item: 'has no parent'},
-  behind: {headline: 'the pull request branch is not up to date with main: update it by rebasing it on main',
+  behind: {headline: `the pull request changes ${REGISTER} (or has no commit of its own) and its branch is not up to date with main: update it by rebasing it on main`,
     item: 'does not contain the tip of main'},
 };
 
@@ -345,7 +366,8 @@ function historyReport(history: HistoryProblem[]): string[] {
       .map((item) => `  - commit ${item.commit.slice(0, 12)} ${HISTORY_TEXT[kind].item}`),
     '',
     'Pull requests are integrated with "Rebase and merge", which replays ordinary commits and drops',
-    'merge commits: the check judges only a straight line of commits on top of main. Run',
+    'merge commits: the check judges only a straight line of commits, on top of main when it',
+    `changes ${REGISTER}. Run`,
     '`git rebase main` (or use "Update with rebase" on the pull request), then push with',
     `--force-with-lease. The agreement is ${CLA_URL}; the procedure is ${CONTRIBUTING_URL}`,
     '',

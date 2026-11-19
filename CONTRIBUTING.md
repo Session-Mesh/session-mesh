@@ -44,7 +44,7 @@ pull request.
 | --- | --- | --- |
 | `semver label` | `branch-policy.yml` | A pull request to `main` carries exactly one `semver:` label. |
 | `release branch guard` | `branch-policy.yml` | A pull request to `release/**` is a backport of a merged `semver: patch` pull request, or the CLA register changes of another merged pull request. |
-| `cla` | `public-ci.yml` | Linear history on the tip of `main`; every author and committer is a maintainer or a signatory ([details](#the-cla-check-blocks-the-merge)). |
+| `cla` | `public-ci.yml` | Linear history (on the tip of `main` when it changes the register); every author and committer is a maintainer or a signatory ([details](#the-cla-check-blocks-the-merge)). |
 | `leak check (public rules)` | `public-ci.yml` | No personal details or secrets in the files of the tree, and SPDX license headers. |
 | `PR description (no personal details)` | `pr-description.yml` | Reports personal details in the description as warnings; it fails only if the tool itself fails ([Commits and identity](#commits-and-identity)). |
 | `OCaml build, tests and native ptyhost gate` | `public-ci.yml` | The OCaml build and tests, and the conformance gate of the native PTY host. |
@@ -218,9 +218,10 @@ pull requests to `release/**`. The maintainers' setup of the backport workflow i
 ### How a pull request is merged
 
 Pull requests are merged with **"Rebase and merge" only**: GitHub replays the commits of the pull
-request, one by one (it drops the commits that are empty), on top of `main`. The [`cla` check](#the-cla-check-blocks-the-merge) requires the branch to
-**contain the tip of `main`** when it runs. So a pull request is a straight line of ordinary commits
-on top of the tip of `main`:
+request, one by one (it drops the commits that are empty), on top of `main`. So a pull request is a
+straight line of ordinary commits. It need not be rebased each time `main` moves, except when it
+changes `CLA-SIGNATORIES.md` (for example to add your signature): the [`cla` check](#the-cla-check-blocks-the-merge)
+then requires the branch to **contain the tip of `main`** when it runs.
 
 - **No merge commits.** A rebase drops them, so what they change would not be what lands; the
   [CLA check](#the-cla-check-blocks-the-merge) refuses a pull request that contains one.
@@ -346,10 +347,11 @@ The public CI runs the check `cla` on every pull request, and the branch rule of
 leave on `main`, and verifies three things. Its exact rules are in
 [tools/cla-check/SPEC.md](tools/cla-check/SPEC.md).
 
-1. **A straight line on `main`.** The pull request has no merge commit and no commit without a
-   parent, and its branch contains the tip of `main`. Otherwise the check asks you to rebase your
-   branch on `main` ([how](#how-a-pull-request-is-merged)). Only then is what the check judges what
-   "Rebase and merge" lands.
+1. **A straight line.** The pull request has no merge commit and no commit without a parent. If
+   one of its commits changes `CLA-SIGNATORIES.md`, its branch must also contain the tip of `main`.
+   Otherwise the check asks you to rebase your branch on `main` ([how](#how-a-pull-request-is-merged)).
+   Only then is what the check judges what "Rebase and merge" lands: a branch behind `main` that
+   leaves the register alone lands the register of `main`, which is the one the check reads.
 2. **Identities.** For each commit of the pull request, the author address, and the committer
    address, must be a maintainer's or have a line in `CLA-SIGNATORIES.md` as the pull request would
    leave it.

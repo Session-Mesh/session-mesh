@@ -186,7 +186,10 @@ const MERGES: Scenario[] = [
       repo.rebaseOnMain(ADA);
       return built(repo);
     }},
-  {id: 'S19', title: 'a branch from before a maintainer removed the author\'s line', expected: 1, reason: BEHIND,
+  // Accepted behind main since it leaves the register alone, the branch is judged against the
+  // register of the current base: the author's line is gone there.
+  {id: 'S19', title: 'a branch from before a maintainer removed the author\'s line', expected: 1,
+    reason: /- 1003\+eve@users\.noreply\.github\.com \(author, committer\)/,
     build: () => {
       const repo = new Repo(HEADER + row(EVE));
       repo.commit(EVE, {'f': 'code\n'});
@@ -207,6 +210,76 @@ const MERGES: Scenario[] = [
       const repo = new Repo(HEADER);
       git(repo.dir, ['checkout', '-q', '--orphan', 'alien']);
       return built(repo, repo.commit(EVE, {[REG]: HEADER + row(EVE), 'alien.txt': 'x\n'}));
+    }},
+];
+
+export const MALLORY: Person = {name: 'Mallory Example', email: 'mallory@example.com'};
+
+// A branch made from `main`, then `main` moves with `onMain` (by a maintainer unless `holder`).
+function behindMain(registerAtBase: string, branch: (repo: Repo) => void, onMain: Record<string, string>,
+  holder: Person = MAINTAINER): () => Built {
+  return () => {
+    const repo = new Repo(registerAtBase);
+    branch(repo);
+    repo.commitOnMain(holder, onMain);
+    return built(repo);
+  };
+}
+
+// Eve adds a line for Mallory and removes it in the next commit, while main gains Bob's line at the
+// same place: the test merge sees no change of Eve's, the replay of her commits keeps Mallory's
+// line (tests/cla-check-merge.test.ts shows it). A branch behind main that changes the register is
+// therefore refused, whatever its net change.
+export function addsThenRemovesMallory(repo: Repo): void {
+  repo.commit(EVE, {'f': 'code\n', [REG]: HEADER + row(EVE) + row(MALLORY)});
+  repo.commit(EVE, {'g': 'code\n', [REG]: HEADER + row(EVE)});
+}
+
+// SPEC.md, "Why a branch behind the base is accepted only when it leaves the register alone".
+const BEHIND_BASE: Scenario[] = [
+  {id: 'B1', title: 'control: a signatory\'s branch behind main that leaves the register alone', expected: 0,
+    build: behindMain(HEADER + row(ADA), (repo) => repo.commit(ADA, {'f': 'code\n'}), {'g': 'main\n', [REG]: HEADER + row(ADA) + row(BOB)}, BOB)},
+  {id: 'B2', title: 'behind main, register untouched, an unsigned commit in the range', expected: 1,
+    reason: /- 1003\+eve@users\.noreply\.github\.com \(author, committer\)/,
+    build: behindMain(HEADER + row(ADA), (repo) => {
+      repo.commit(ADA, {'f': 'code\n'});
+      repo.commit(EVE, {'f': 'code2\n'});
+    }, {'g': 'main\n'})},
+  {id: 'B3', title: 'behind main, a commit adds a line and a later one removes it', expected: 1, reason: BEHIND,
+    build: behindMain(HEADER + row(EVE), addsThenRemovesMallory, {[REG]: HEADER + row(EVE) + row(BOB)}, BOB)},
+  {id: 'B4', title: 'behind main, the author signs in the pull request', expected: 1, reason: BEHIND,
+    build: behindMain(HEADER, (repo) => repo.commit(ADA, {'f': 'code\n', [REG]: HEADER + row(ADA)}), {'g': 'main\n'})},
+  {id: 'B5', title: 'behind main, a commit changes only the mode of the register', expected: 1, reason: BEHIND,
+    build: behindMain(HEADER + row(ADA), (repo) => {
+      fs.chmodSync(path.join(repo.dir, REG), 0o755);
+      repo.commit(ADA, {'f': 'code\n'});
+    }, {'g': 'main\n'})},
+  {id: 'B6', title: 'behind main, a merge commit in the range', expected: 1, reason: MERGE_COMMIT,
+    build: () => {
+      const repo = new Repo(HEADER + row(ADA));
+      repo.commit(ADA, {'f': 'code\n'});
+      repo.mergeSideBranch(ADA, HEADER + row(ADA));
+      repo.commitOnMain(MAINTAINER, {'g': 'main\n'});
+      return built(repo);
+    }},
+  {id: 'B7', title: 'an unsigned commit below the branch point is on main already and not judged', expected: 0,
+    build: () => {
+      const repo = new Repo(HEADER + row(ADA));
+      repo.commitOnMain(EVE, {'e': 'merged earlier\n'});
+      repo.restartFromMain();
+      repo.commit(ADA, {'f': 'code\n'});
+      repo.commitOnMain(MAINTAINER, {'g': 'main\n'});
+      return built(repo);
+    }},
+  {id: 'B8', title: 'a force-pushed branch behind main that dropped its signing commit', expected: 1,
+    reason: /- 1001\+ada@users\.noreply\.github\.com \(author, committer\)/,
+    build: () => {
+      const repo = new Repo(HEADER);
+      repo.commit(ADA, {'f': 'code\n', [REG]: HEADER + row(ADA)});
+      git(repo.dir, ['reset', '-q', '--hard', repo.base]);
+      repo.commit(ADA, {'f': 'code\n'});
+      repo.commitOnMain(MAINTAINER, {'g': 'main\n'});
+      return built(repo);
     }},
 ];
 
@@ -268,4 +341,4 @@ const HEADERS: Scenario[] = [
     build: simple(HEADER + row(BOB), (repo) => repo.commit({...MAINTAINER, name: 'Not Mathias'}, {'f': 'code\n', [REG]: HEADER}))},
 ];
 
-export const SCENARIOS: Scenario[] = [...REGISTER_CHANGES, ...MERGES, ...HEADERS];
+export const SCENARIOS: Scenario[] = [...REGISTER_CHANGES, ...MERGES, ...BEHIND_BASE, ...HEADERS];

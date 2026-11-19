@@ -139,6 +139,37 @@ describe('CLA check', () => {
     assert.deepEqual(result(repo).history, [{commit: repo.head(), problem: 'behind'}]);
   });
 
+  test('accepts a branch behind the base branch when none of its commits changes the register', () => {
+    const repo = new Repo(HEADER + row(ADA));
+    repo.commit(ADA, {'feature.txt': 'code\n'});
+    repo.commitOnMain(BOB, {'other.txt': 'main\n', 'CLA-SIGNATORIES.md': HEADER + row(ADA) + row(BOB)});
+    assert.deepEqual(result(repo), {history: [], offenders: [], violations: []});
+  });
+
+  const asWeb = {GIT_AUTHOR_NAME: WEB.name, GIT_AUTHOR_EMAIL: WEB.email, GIT_COMMITTER_NAME: WEB.name, GIT_COMMITTER_EMAIL: WEB.email};
+
+  // A head that main already contains: nothing of its own would land, and no tree was judged.
+  test('refuses an empty range: a head that the base branch already contains', () => {
+    const repo = new Repo(HEADER + row(ADA));
+    const old: string = repo.base;
+    repo.commitOnMain(ADA, {'feature.txt': 'code\n'});
+    const merge = git(repo.dir, ['commit-tree', '-p', repo.base, '-p', old, '-m', 'test merge', repo.tree(repo.base)], asWeb);
+    assert.deepEqual(checkPullRequest(repo.dir, repo.base, old, merge).history, [{commit: old, problem: 'behind'}]);
+  });
+
+  test('refuses, as unreadable, a test merge whose register is not the base\'s for a branch behind it', () => {
+    const repo = new Repo(HEADER + row(ADA));
+    repo.commit(ADA, {'feature.txt': 'code\n'});
+    repo.commitOnMain(MAINTAINER, {'other.txt': 'main\n'});
+    git(repo.dir, ['checkout', '-q', '-b', 'forged', repo.base]);
+    const forgedTree = repo.tree(repo.commit(MAINTAINER, {'CLA-SIGNATORIES.md': HEADER + row(ADA) + row(BOB)}));
+    const merge = git(repo.dir, ['commit-tree', '-p', repo.base, '-p', git(repo.dir, ['rev-parse', 'pr']), '-m', 'test merge', forgedTree], asWeb);
+    const outcome = spawnSync(process.execPath, ['--experimental-strip-types', CHECKER, '--repo', repo.dir, '--base', repo.base,
+      '--head', git(repo.dir, ['rev-parse', 'pr']), '--merge', merge], {env: GIT_ENV, encoding: 'utf8'});
+    assert.equal(outcome.status, 2, outcome.stdout + outcome.stderr);
+    assert.match(outcome.stderr, /does not hold the register of the base/);
+  });
+
   test('reads only printable ASCII addresses in the register', () => {
     const rows = parseRegister(HEADER + row({name: 'K', email: 'Kay@example.com'}) + row({name: 'Z', email: 'z​@example.com'}) +
       row({name: 'N', email: 'n x@example.com'}) + row(ADA));
