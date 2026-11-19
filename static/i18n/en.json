@@ -1,6 +1,7 @@
 {
   "agentMail.answeredElsewhere": "Message request decided elsewhere; your choice changed nothing.",
   "agentMail.consentDescription": "The exact Mesh session “{source}” ({agent}, started {started}) sent a message to “{target}”. Allow reading it?",
+  "agentMail.withdrawn": "Message request decided elsewhere; the prompt was closed.",
   "attach.camera": "📷 Camera",
   "attach.file": "📄 File",
   "attach.gallery": "🖼 Gallery",

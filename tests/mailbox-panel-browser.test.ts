@@ -340,21 +340,61 @@ describe('the pane mailbox', {skip}, () => {
     return {messageId, requestId: request.id};
   }
   const prompt = (page: Page) => page.locator('#dlg-agent-mail-consent');
+  /** Click an answer of the open prompt and wait for the decision request it sends for `requestId`. */
+  async function answer(page: Page, value: string, requestId: string): Promise<number> {
+    const decided = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/agent-mail/consent/${requestId}/decision`, {timeout: 10_000});
+    await prompt(page).locator(`button[value="${value}"]`).click();
+    return (await decided).status();
+  }
+  /** Record every text the polite status region shows, however briefly. */
+  async function recordStatus(page: Page): Promise<() => Promise<string[]>> {
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      (window as unknown as {statusSeen: string[]}).statusSeen = seen;
+      const region = document.querySelector('#flash')!;
+      new MutationObserver(() => { if (region.textContent) seen.push(region.textContent); })
+        .observe(region, {childList: true, characterData: true, subtree: true});
+    });
+    return () => page.evaluate(() => (window as unknown as {statusSeen: string[]}).statusSeen);
+  }
 
   test('an approval prompt answered in one window closes in the other', async () => {
     for (const pending of (await lab.consent()).requests) await lab.decide(pending.id, 'no');
     const first = await signedIn('en-US');
     const second = await signedIn('en-US');
-    const {messageId} = await awaitingApproval('seen by two viewers');
+    const {messageId, requestId} = await awaitingApproval('seen by two viewers');
     for (const {page} of [first, second]) {
       await page.evaluate(() => refresh());
       await prompt(page).locator('button[value="yes"]').waitFor();
     }
-    await prompt(first.page).locator('button[value="yes"]').click();
-    await prompt(first.page).waitFor({state: 'hidden'});
+    assert.equal(await answer(first.page, 'yes', requestId), 200);
     await second.page.evaluate(() => refresh());
     await prompt(second.page).waitFor({state: 'hidden'});
     assert.equal((await lab.readAs(beta, messageId)).status, 200, 'the first answer was kept');
+    assert.deepEqual([...first.errors, ...second.errors], []);
+  });
+
+  test('with two requests pending, the next prompt after one decided elsewhere takes the answer', async () => {
+    for (const pending of (await lab.consent()).requests) await lab.decide(pending.id, 'no');
+    const first = await signedIn('en-US');
+    const second = await signedIn('en-US');
+    const r1 = await awaitingApproval('first of two');
+    const r2 = await awaitingApproval('second of two');
+    for (const {page} of [first, second]) {
+      await page.evaluate(() => refresh());
+      await prompt(page).locator('button[value="yes"]').waitFor();
+    }
+    const statusSeen = await recordStatus(second.page);
+    assert.equal(await answer(first.page, 'yes', r1.requestId), 200);
+    // The second window still shows r1; this refresh lists only r2.
+    await second.page.evaluate(() => refresh());
+    await prompt(second.page).locator('button[value="no"]').waitFor();
+    assert.equal(await answer(second.page, 'no', r2.requestId), 200, 'the refusal of r2 was sent');
+    assert.ok(!(await lab.consent()).requests.some(item => item.id === r2.requestId), 'r2 is no longer pending');
+    assert.ok(!(await lab.inbox(beta)).includes(r2.messageId), 'the refused message was dropped');
+    assert.ok((await statusSeen()).includes('Message request decided elsewhere; the prompt was closed.'),
+      'the withdrawal was announced');
     assert.deepEqual([...first.errors, ...second.errors], []);
   });
 

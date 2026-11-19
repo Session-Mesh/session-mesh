@@ -622,8 +622,10 @@ does not know `--messaging-socket-path` would refuse to start with an "unknown o
 Before an agent can read a message, the page asks you in
 "Message from another agent", naming the sending session: "Later", "Refuse", "Read this time" or
 "Always for this exact session". Every open window of the mesh asks; the first answer counts, and
-the question closes in the other windows at their next refresh of the session list. An answer
-given in another window before that refresh changes nothing, and that window says so.
+the question closes in the other windows at their next refresh of the session list (the page says
+"Message request decided elsewhere; the prompt was closed.") and the next pending request, if any,
+is asked. An answer given in another window before that refresh changes nothing, and that window
+says so.
 
 The envelope button in a terminal pane's header opens that session's mailbox: the messages it
 received and sent that are still kept (sender or recipient, type, time and text), the approval
