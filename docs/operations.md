@@ -449,6 +449,14 @@ click, so an agent launched with permissive options never comes back on its own.
    reads the registry first, and the snapshot's id only for a session the registry does not know. A
    file written by a newer version is read as empty and left untouched.
 
+   The mesh records `chosen` ids before the agent starts: a new Claude session is launched with
+   `claude --session-id <uuid>` (a random UUID the mesh picks), and a restore or a resume from the
+   History records the conversation it reopens. When that record cannot be written, or a running
+   session already holds the conversation, nothing is started. The Claude hooks the mesh installs
+   send the conversation id each hook carries, so the registry follows a `/clear`; the hooks of
+   OpenCode, Gemini, Antigravity, Copilot and Vibe send theirs already. No Codex hook is installed: a
+   Codex's id comes from its launch or from a rollout seen open.
+
    When two sessions claim one conversation, the stronger source keeps it: `chosen` over `hook` over
    `observed`, then the session that holds the rollout open, and when they are equal the session that
    held it first. The other session is *contested*: it has no conversation until it reports another

@@ -187,6 +187,23 @@ print("{}")
     }
   });
 
+  test('a launch claim: a lost offer holding the conversation is no holder, a live session is', () => {
+    const out = python(`
+respawn.update([listed("old", 1.0, "codex", A, "open_rollout"), listed("live", 2.0, "codex", B, "open_rollout")],
+               True, now=1000.0, host="1:1")
+listed_now = [{"name": "live", "created": 2.0, "nonce": None}]          # "old" is no longer listed
+new = {"name": "new", "created": None, "nonce": NONCE}
+over_lost = respawn.claim_identity(new, "codex", A, "chosen", "launch:restore", live=listed_now, required=True)
+other = {"name": "other", "created": None, "nonce": "f" * 32}
+respawn.claim_identity({"name": "live", "created": 2.0, "nonce": None}, "codex", B, "chosen", "launch:history")
+over_live = respawn.claim_identity(other, "codex", B, "chosen", "launch:history", live=listed_now, required=True)
+respawn.forget_identity(other)
+invalid = respawn.claim_identity(new, "codex", "-x", "chosen", "launch:restore")
+print(json.dumps([over_lost, over_live, invalid, sorted((e["session"]["name"], e["state"]) for e in registry()["entries"])]))
+`);
+    assert.deepEqual(out, ['active', 'contested', null, [['live', 'active'], ['new', 'active'], ['old', 'active']]]);
+  });
+
   test('a world-readable registry is refused (read as empty) and rewritten private', () => {
     const out = python(`
 respawn.update([listed("a", 1.0, "codex", A, "open_rollout")], True, now=1000.0, host="1:1")

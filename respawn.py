@@ -908,6 +908,36 @@ def _record_identities(mesh, nonces, before, after, now):
         print(f"respawn: identity registry not updated: {exc!r}", flush=True)
 
 
+def claim_identity(session, agent, sid, source, evidence, *, live=None, required=False):
+    """Record what the mesh (``chosen``) or a hook (``hook``) says of an incarnation's conversation; its
+    state after that: "active", "contested", or None when the claim is invalid or changed nothing.
+    ``live``: the incarnations the PTY host lists; another entry holding the id whose session is not among
+    them (a lost offer, a session that ended) is no holder: the mesh checked, before this launch, that no
+    live session runs that conversation. ``required``: raise OSError when the claim is not written (a
+    launch then starts nothing)."""
+    claim = {"session": session, "agent": agent, "id": sid, "source": source, "evidence": evidence}
+    if _valid_claim(claim) is None:
+        return None
+
+    def change(registry):
+        aside = [] if live is None else [
+            e for e in registry["entries"] if e["agent"] == agent and e["id"] == sid
+            and not same_incarnation(e["session"], session) and not any(same_incarnation(e["session"], k) for k in live)]
+        kept = {**registry, "entries": [e for e in registry["entries"] if all(e is not a for a in aside)]}
+        merged = merge_identity(kept, claim, time.time())
+        return registry if merged is kept else {**merged, "entries": _bounded([*aside, *merged["entries"]])}
+
+    after = update_identities(change, required=required)
+    mine = next((e for e in after["entries"] if same_incarnation(e["session"], session)), None)
+    return mine["state"] if mine is not None and mine["id"] in (sid, None) else None
+
+
+def forget_identity(session):
+    """Drop the entry of an incarnation that will never run (its launch was refused for good)."""
+    update_identities(lambda registry: {**registry, "entries": [
+        e for e in registry["entries"] if not same_incarnation(e["session"], session)]})
+
+
 def restore_identity(entry):
     """(the lost ``entry`` with the conversation to resume, why there is none or None). The registry's
     entry wins: a contested incarnation resumes nothing (I4, I6). Without one, the snapshot's id, as before

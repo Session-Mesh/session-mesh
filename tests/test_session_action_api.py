@@ -175,10 +175,11 @@ async def test_request_is_exactly_incarnation_bound(client, mesh_listing):
 async def test_owner_approval_uses_current_directory_closed_preset_and_model(
         client, mesh_listing, auth_cookie, monkeypatch):
     headers = agent(mesh_listing)
-    calls = []
+    calls, chosen = [], []
 
-    async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32):
+    async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, conversation=None):
         calls.append((base, cwd, shlex.split(command), agent, known_agent, keep))
+        chosen.append(conversation)
         return "review-codex"
 
     monkeypatch.setattr(server, "new_session", new_session)
@@ -203,10 +204,11 @@ async def test_owner_approval_uses_current_directory_closed_preset_and_model(
 async def test_claude_opus_baker_unlock_uses_the_exact_catalogue_argv(
         client, mesh_listing, auth_cookie, monkeypatch):
     headers = agent(mesh_listing)
-    calls = []
+    calls, chosen = [], []
 
-    async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32):
+    async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, conversation=None):
         calls.append((base, cwd, shlex.split(command), agent, known_agent, keep))
+        chosen.append(conversation)
         return "baker-unlock"
 
     monkeypatch.setattr(server, "new_session", new_session)
@@ -221,8 +223,9 @@ async def test_claude_opus_baker_unlock_uses_the_exact_catalogue_argv(
                                  headers=auth_cookie,
                                  json={"approve": True, "claim_nonce": claim_nonce})
     assert approved.status == 200
+    [(_, sid, _)] = chosen      # a new Claude: the conversation id the mesh chose, appended to the catalogue argv
     assert calls == [("baker-unlock", str(Path.home()),
-                      server._model_argv(server.AGENT_PRESETS["claude"], "opus"),
+                      [*server._model_argv(server.AGENT_PRESETS["claude"], "opus"), "--session-id", sid],
                       "claude", "claude", 32)]
 
 
