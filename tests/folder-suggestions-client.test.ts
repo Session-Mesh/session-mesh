@@ -10,9 +10,10 @@ import {test} from 'node:test';
 import vm from 'node:vm';
 
 type Typed = {directory: string; prefix: string};
-type Suggester = {input: (typed: string) => void; reset: () => void; latest: () => string[]};
+type Suggester = {input: (typed: string) => void; reset: () => void};
 type Options = {
-  listFolder: (directory: string) => Promise<unknown>;
+  listFolder: (directory: string, signal?: unknown) => Promise<unknown>;
+  createAbort?: () => {signal: unknown; abort: () => void};
   onSuggestions: (folders: string[]) => void;
   now: () => number;
   setTimer: (callback: () => void, ms: number) => unknown;
@@ -22,7 +23,6 @@ type State = {
   splitTypedPath: (typed: string) => Typed | null;
   listingFolderNames: (response: unknown) => string[];
   matchingFolders: (typed: Typed, names: string[], limit?: number) => string[];
-  mergeFolderSuggestions: (...lists: string[][]) => string[];
   createFolderSuggester: (options: Options) => Suggester;
 };
 const context: {MeshFolderState?: State} = {};
@@ -60,10 +60,6 @@ test('matching: case-insensitive prefix, written as typed, dotfolders only for a
   assert.deepEqual(match('/h/q', names), []);
   assert.equal(match('/h/', Array.from({length: 500}, (_, i) => `d${i}`)).length, 50);
   assert.equal(match('/h/', ['a', 'b', 'c'], 2).length, 2);
-});
-
-test('merged lists keep the order and the first occurrence', () => {
-  assert.deepEqual(plain(bundle.mergeFolderSuggestions(['/a/x', '/a/y'], ['/h', '/a/x'], [])), ['/a/x', '/a/y', '/h']);
 });
 
 type Harness = {
@@ -196,21 +192,30 @@ test('the cache keeps at most 30 folders: the oldest is listed again, a recent o
   assert.equal(h.asked[31], '/d0/');
 });
 
-test('latest() gives the typed suggestions to merge with a fixed list that arrives later', async () => {
-  const h = harness();
-  assert.deepEqual(plain(h.suggester.latest()), []);
-  h.suggester.input('/a/x'); h.advance(150);
-  answer(h, '/a/', {entries: [dir('xray')]});
+test('a newer text or a reset aborts the pending listing; the signal reaches the listing', async () => {
+  const aborted: number[] = [];
+  const signals: unknown[] = [];
+  let made = 0;
+  const timers: (() => void)[] = [];
+  const suggester = bundle.createFolderSuggester({
+    listFolder: (_directory, signal) => { signals.push(signal); return new Promise(() => {}); },
+    onSuggestions: () => {},
+    createAbort: () => { const id = ++made; return {signal: `signal-${id}`, abort: () => aborted.push(id)}; },
+    now: () => 0,
+    setTimer: callback => { timers.push(callback); return timers.length; },
+    clearTimer: () => {},
+  });
+  suggester.input('/a/x'); timers.shift()?.();
   await settle();
-  assert.deepEqual(plain(h.suggester.latest()), ['/a/xray']);
-  const fixedListArrivedLater = ['/home/u', '/a/xray'];
-  assert.deepEqual(plain(bundle.mergeFolderSuggestions(plain(h.suggester.latest()), fixedListArrivedLater)), ['/a/xray', '/home/u']);
-  h.suggester.input('dev/');                               // unusable text clears them
-  assert.deepEqual(plain(h.suggester.latest()), []);
-  h.suggester.input('/a/x'); h.advance(150);
+  assert.deepEqual(signals, ['signal-1']);
+  suggester.input('/a/xy');
+  assert.deepEqual(aborted, [1]);
+  timers.shift()?.();
   await settle();
-  h.suggester.reset();
-  assert.deepEqual(plain(h.suggester.latest()), []);
+  suggester.reset();
+  assert.deepEqual(aborted, [1, 2]);
+  suggester.input('/b/');                                // nothing pending: nothing more to abort
+  assert.deepEqual(aborted, [1, 2]);
 });
 
 test('reset drops a pending listing and empties the cache', async () => {

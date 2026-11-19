@@ -264,9 +264,10 @@
   <form method="dialog" id="form-new">
     <h2 data-i18n="new.title">New session</h2>
     <label><span data-i18n="new.folder">Folder</span>
-      <input name="cwd" list="dirs" required autocomplete="off">
-      <datalist id="dirs"></datalist>
+      <input name="cwd" required autocomplete="off" autocapitalize="off" spellcheck="false" role="combobox"
+        aria-autocomplete="list" aria-expanded="false" aria-controls="new-folder-list">
     </label>
+    <ul id="new-folder-list" class="folder-list" role="listbox" hidden aria-label="Folder suggestions" data-i18n-aria-label="new.folderSuggestions"></ul>
     <fieldset class="presets">
       <legend data-i18n="new.launch">Launch</legend>
       <label><input type="radio" name="preset" value="shell"> shell</label>

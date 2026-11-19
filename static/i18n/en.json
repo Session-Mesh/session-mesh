@@ -475,6 +475,7 @@
   "new.command": "command",
   "new.custom": "other",
   "new.folder": "Folder",
+  "new.folderSuggestions": "Folder suggestions",
   "new.launch": "Launch",
   "new.name": "Name",
   "new.optional": "(optional)",

@@ -311,6 +311,12 @@ dialog h2 { margin: 0 0 14px; font-size: 15px; }
 dialog label { display: block; margin-bottom: 12px; color: var(--mute); font-size: 12px; }
 dialog input:not([type=radio]) { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; color: var(--fg); font: inherit; font-size: 13px; }
 dialog input:focus { outline: none; border-color: var(--accent); }
+/* the folder suggestions of the New session dialog: in the flow (nothing clipped by the dialog), scrolled when long */
+.folder-list { list-style: none; margin: -6px 0 12px; padding: 4px; max-height: min(40vh, 280px); overflow-y: auto; overscroll-behavior: contain; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; }
+.folder-list[hidden] { display: none; }
+.folder-list li { display: flex; align-items: center; min-height: 34px; padding: 6px 10px; border-radius: 5px; color: var(--fg); font-size: 13px; overflow-wrap: anywhere; cursor: pointer; }
+.folder-list li:hover, .folder-list li[aria-selected="true"] { background: var(--panel-2); color: var(--accent); }
+@media (hover: none) { .folder-list li { min-height: 44px; } }
 .presets { border: 0; padding: 0; margin: 0 0 10px; display: flex; flex-wrap: wrap; gap: 6px; }
 .presets legend { color: var(--mute); font-size: 12px; margin-bottom: 6px; }
 .presets label { margin: 0; color: var(--fg); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; cursor: pointer; font-size: 12px; }

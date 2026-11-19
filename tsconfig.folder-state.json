@@ -14,7 +14,8 @@
     "noUnusedParameters": true,
     "strict": true,
     "target": "ES2022",
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true
   },
-  "files": ["static/folder-state.ts", "static/history-state.ts", "static/session-activity.ts"]
+  "files": ["static/folder-state.ts", "static/folder-suggest.ts", "static/history-state.ts", "static/session-activity.ts"]
 }

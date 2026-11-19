@@ -126,31 +126,43 @@ commands for a Roster pipeline. The tracker adds its tool declarations (about 4,
 server instructions (about 1,000) to an agent's context. See [work-mcp.md](work-mcp.md#registration).
 
 The "Folder" field of the "New session" dialog starts with the folder of the session you are
-looking at (the home folder when there is none) and offers suggestions through the browser's own
-drop-down list (a native `<datalist>`):
+looking at (the home folder when there is none). It is a combobox: its list of suggestions opens
+when you type, press the down arrow or tap the field.
 
-- **When the dialog opens:** the folders of your open sessions, then your home folder and the 80
-  most recently modified folders directly under `~/dev`, newest first, without folders whose name
-  starts with a dot (`GET /api/dirs`, read each time the dialog opens). If that request fails, the
-  field keeps the folders of your open sessions only.
-- **While you type:** once the text is an absolute path or starts with `~/`, the page lists the
+- **Known folders:** the allowed work folders when they are configured ([Restricting folders and
+  agents](operations.md#restricting-folders-and-agents), read from `GET /api/config`), then the 8
+  folders in which this browser last started a session, the folders of your open sessions, then
+  your home folder and the 80 most recently modified folders directly under `~/dev`, newest first,
+  without folders whose name starts with a dot (`GET /api/dirs`). Both requests are sent each time
+  the dialog opens; if one fails, the list goes on without what it would have given. Until you
+  type, the list holds them all; once you type, it holds those that match the text, best first:
+  the path starts with it, then the folder name does, then the path contains it, then the path
+  holds its letters in order (`dvap` finds `~/dev/alpha`). Case is ignored and `~` stands for
+  your home folder.
+- **While you type a path:** once the text is an absolute path or starts with `~/`, the page lists the
   folder you have typed up to its last `/` with the same listing as the file tree (`POST /api/ls`,
-  no dedicated route) and suggests its sub-folders whose name starts with the text after that `/`,
+  no dedicated route) and suggests first its sub-folders whose name starts with the text after that `/`,
   case-insensitively. The folder part of a suggestion is written as you typed it, the folder
   name keeps its casing on disk (`~/al` gives `~/Alpha`). Type a `/` after a suggestion to go one level
-  down. The request is sent 150 ms after the last key, the listing of a folder is reused for 5
-  seconds (a refused or failed listing is not reused), an answer to an older text is dropped, at most 50 folders are suggested, and folders
-  whose name starts with a dot only when you type the dot.
+  down. The request is sent 150 ms after the last key, a request for an older text is cancelled and its
+  answer dropped, the listing of a folder is reused for 5 seconds (a refused or failed listing is not
+  reused), at most 50 folders are suggested, and folders whose name starts with a dot only when you type the dot.
+- **Keys:** the up and down arrows move in the list, Enter or Tab puts the chosen folder in the
+  field (the dialog stays open), Escape closes the list (a second Escape closes the dialog). With no
+  folder chosen, Enter opens the session and Tab moves on, as without the list. On a phone, tap a folder.
+- **Allowed work folders:** when they are configured, the list leaves out a known folder outside
+  them, and a listed sub-folder unless it is inside one of them or on the way to one (`~/` still
+  offers `~/work` when `~/work` is allowed). This is a comparison of the paths as written: a
+  link inside an allowed folder that leads outside it can still be suggested.
 - **What is never listed:** what the file tree refuses: a folder outside your home folder and
   `/tmp`, a protected one (`~/.ssh`, the mesh's own configuration), or one that does not exist or
   cannot be read; these give no suggestion. The listing returns at most 2000 entries, files
   included, so in a folder with more entries some sub-folders may be missing from the suggestions.
-- **Limits:** the suggestions do not follow the allowed work folders ([Restricting folders and
-  agents](operations.md#restricting-folders-and-agents)) and do not check that a folder is usable
-  for the agent you choose. This is the current behaviour: the folder is checked when you start the
-  session, as before. It must exist, and when work folders are configured it must be inside one of
-  them, otherwise the server refuses it ("Folder outside the allowed workspace roots"), even if it
-  was suggested. How the drop-down looks and filters, notably on a phone, depends on the browser.
+- **Limits:** the suggestions do not check that a folder is usable for the agent you choose. The
+  folder is checked when you start the session, as before: it must exist, and when work folders are
+  configured it must be inside one of them, otherwise the server refuses it ("Folder outside the
+  allowed workspace roots"), even if it was suggested. The recent folders are kept in this browser
+  only.
 
 The "Live" tab of the sidebar lists the mesh's own sessions under "Mesh — interactive", with each
 conversation's title, last prompt and state. Sessions that need you are also repeated at the top in

@@ -484,6 +484,7 @@
   "new.command": "commande",
   "new.custom": "autre",
   "new.folder": "Dossier",
+  "new.folderSuggestions": "Suggestions de dossiers",
   "new.launch": "Lancer",
   "new.name": "Nom",
   "new.optional": "(optionnel)",
