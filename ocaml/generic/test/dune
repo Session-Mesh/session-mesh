@@ -18,3 +18,25 @@
  (name test_priority)
  (modules test_priority)
  (libraries mesh_priority generic_test_support alcotest qcheck-core))
+
+(test
+ (name test_jsonl)
+ (modules test_jsonl)
+ (libraries mesh_jsonl generic_test_support alcotest qcheck-core yojson))
+
+(test
+ (name test_safe_file)
+ (modules test_safe_file)
+ (libraries mesh_safe_file generic_test_support alcotest unix))
+
+(test
+ (name test_jsonl_tail)
+ (modules test_jsonl_tail)
+ (libraries
+  mesh_jsonl_tail
+  mesh_safe_file
+  generic_test_support
+  alcotest
+  qcheck-core
+  yojson
+  unix))

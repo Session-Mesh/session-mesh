@@ -1,0 +1,8 @@
+; An incremental fold over an append-only JSON-lines file: a byte cursor, a
+; tail window, rewrite detection, bounded lines. Port of the History index's
+; Python reader (history._parse, _feed, _rewritten). Generic (ocaml/README.md,
+; "Generic libraries").
+
+(library
+ (name mesh_jsonl_tail)
+ (libraries mesh_jsonl mesh_safe_file yojson unix))
