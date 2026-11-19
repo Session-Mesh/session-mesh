@@ -13,12 +13,19 @@
 // 50 ms and one in ten waited 118 to 136 ms or more; a loop held once per window held a probe 450 to 620 ms.
 // A window is stalled when a probe waited STALL_MS or more, or when one probe in ten waited BUSY_P90_MS or
 // more. A stalled window is measured once more, and only two stalled windows in a row fail: a busy moment
-// of the machine passes, a loop held at every round stalls every window.
+// of the machine passes, a loop held at every round stalls every window. A probe that waited FREEZE_MS or
+// more fails at once, without a second window: the slowest probe seen without the regression waited
+// 397 ms (20 runs in parallel with 32 busy processes on 32 threads), so a freeze that long is not noise.
+//
+// Limits: a probe arrives while a hold is under way and waits less than the hold, so a bound of N ms
+// catches holds from about N + 20 ms. Holds shorter than about 420 ms pass unless one probe in ten is
+// slowed by 60 ms or more; holds from about 420 ms to about 1.5 s pass when only one window sees them.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 
 export const STALL_MS = Number(process.env.MESH_TEST_LOOP_STALL_MS || 400);
 export const BUSY_P90_MS = 60;
+export const FREEZE_MS = 1500;
 
 const PROBE = `
   const lags = []; const end = performance.now() + Number(process.argv[2]);
@@ -58,7 +65,8 @@ export function judge(lags: number[], stallMs = STALL_MS): Window {
   return {probes: lags.length, p90, worst, stalled};
 }
 
-/** Fails when a window of load is stalled and so is the next one; else the windows measured. */
+/** Fails when a probe waited FREEZE_MS or more, or when a window of load is stalled and so is the next
+ * one; else the windows measured. */
 export async function assertLoopAnswers(url: string, windowMs: number, load: (end: number) => Promise<void>,
   stallMs = STALL_MS): Promise<Window[]> {
   const windows: Window[] = [];
@@ -67,6 +75,7 @@ export async function assertLoopAnswers(url: string, windowMs: number, load: (en
     windows.push(window);
     console.log(`heartbeat: ${window.probes} probes, p90 ${window.p90} ms, worst ${window.worst} ms`
       + (window.stalled ? `: stalled, ${window.stalled}` : ''));
+    if (window.worst >= FREEZE_MS) assert.fail(`the event loop froze: a probe waited ${window.worst} ms (bound ${FREEZE_MS} ms)`);
     if (!window.stalled) return windows;
   }
   assert.fail(`the event loop stalled: ${windows.map(window => window.stalled).join('; then ')}`);
