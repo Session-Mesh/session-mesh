@@ -268,7 +268,7 @@ describe('the public CI as committed', () => {
         assert.ok(at(needle) >= 0 && at(needle) < at(limit), `${needle} missing before ${limit} in job ${job.name}`);
       for (const needle of ['actions/setup-python@', 'pip install -r requirements-dev.txt', "python -c 'import aiohttp, cryptography'",
         'MESH_PYTHON=$(command -v python)" >> "$GITHUB_ENV"']) before(needle, runner);
-      for (const needle of ['apt-get install -y -q --no-install-recommends bubblewrap apparmor-profiles',
+      for (const needle of ['bash .github/scripts/apt-install.sh bubblewrap apparmor-profiles',
         'apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict', '/usr/bin/bwrap --unshare-all']) {
         before(needle, 'npm test --prefix demo-compiler');
       }

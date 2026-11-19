@@ -1,0 +1,204 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+// .github/scripts/apt-install.sh, run with a fake sudo, apt-get, python, sleep and mirror script on
+// PATH: a mirror error is retried with apt-get update between attempts and the fallback mirror
+// before the last one, any other apt error fails at once, the real install only runs once every
+// package is downloaded, and when every attempt fails the job fails with one annotation naming
+// the package mirror outage and the hosts in the errors.
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {afterEach, beforeEach, describe, test} from 'node:test';
+
+const ROOT = path.resolve(import.meta.dirname, '..');
+const SCRIPT = path.join(ROOT, '.github', 'scripts', 'apt-install.sh');
+
+// What apt prints on 2026-11-19's failure: a 503 from security.ubuntu.com for a font package.
+const FAKE_APT_GET = `
+echo "apt-get $*" >> "$FAKE_LOG"
+case "$1" in
+  update)
+    if [ "\${FAKE_UPDATE_FAIL:-0}" = 1 ]; then
+      echo "Err:1 http://azure.archive.ubuntu.com/ubuntu noble InRelease"
+      echo "  Could not connect to azure.archive.ubuntu.com:80 (1.2.3.4), connection timed out"
+      exit 100
+    fi
+    exit 0;;
+  install)
+    case "$*" in
+      *--download-only*)
+        count=$(cat "$FAKE_COUNT" 2>/dev/null || echo 0); count=$((count + 1)); echo "$count" > "$FAKE_COUNT"
+        if [ "$count" -le "\${FAKE_FAILURES:-0}" ]; then
+          case "\${FAKE_KIND:-503}" in
+            503)
+              echo "Err:7 http://security.ubuntu.com/ubuntu noble-security/main amd64 fonts-ipafont-gothic all 00303-21"
+              echo "  503  Service Unavailable [IP: 1.2.3.4 80]"
+              echo "E: Failed to fetch http://security.ubuntu.com/ubuntu/pool/main/f/fonts-ipafont/fonts-ipafont-gothic_00303-21_all.deb  503  Service Unavailable"
+              echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?"
+              exit 100;;
+            locate) echo "E: Unable to locate package nope"; exit 100;;
+            hang) exec env PATH=/usr/bin:/bin sleep 30;;
+          esac
+        fi
+        exit 0;;
+      *)
+        [ "\${FAKE_INSTALL_FAIL:-0}" = 1 ] && { echo "E: Sub-process /usr/bin/dpkg returned an error code (1)"; exit 100; }
+        exit 0;;
+    esac;;
+esac
+exit 0`;
+
+describe('apt-install.sh', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apt-install-'));
+    fs.mkdirSync(path.join(dir, 'bin'));
+    const fake = (name: string, body: string) => fs.writeFileSync(path.join(dir, 'bin', name), `#!/usr/bin/env bash\n${body}\n`, {mode: 0o755});
+    fake('sudo', 'echo "sudo $*" >> "$FAKE_LOG"; exec "$@"');
+    fake('apt-get', FAKE_APT_GET);
+    fake('sleep', 'echo "sleep $*" >> "$FAKE_LOG"');
+    fake('python', 'echo "python $*" >> "$FAKE_LOG"; printf "%s\\n" "$FAKE_DRY_RUN"');
+    fs.writeFileSync(path.join(dir, 'mirror.sh'), 'echo "mirror $*" >> "$FAKE_LOG"\n');
+  });
+  afterEach(() => fs.rmSync(dir, {recursive: true, force: true}));
+
+  const log = () => (fs.existsSync(path.join(dir, 'log')) ? fs.readFileSync(path.join(dir, 'log'), 'utf8') : '');
+  const calls = (prefix: string) => log().split('\n').filter((line) => line.startsWith(prefix));
+
+  function run(args: string[], env: Record<string, string> = {}) {
+    return spawnSync('bash', [SCRIPT, ...args], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: {
+        PATH: `${path.join(dir, 'bin')}:${process.env.PATH}`, HOME: dir, FAKE_LOG: path.join(dir, 'log'),
+        FAKE_COUNT: path.join(dir, 'count'), CI_APT_MIRROR_SCRIPT: path.join(dir, 'mirror.sh'), ...env,
+      },
+    });
+  }
+
+  test('a healthy mirror: update, download, then the real install, once, with no pause and no fallback', () => {
+    const result = run(['bubblewrap', 'apparmor-profiles']);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const apt = calls('apt-get');
+    assert.deepEqual(apt.map((line) => line.split(' ').slice(0, 2).join(' ')), ['apt-get update', 'apt-get install', 'apt-get install']);
+    assert.match(apt[1], /--download-only .*bubblewrap apparmor-profiles$/);
+    assert.match(apt[2], /^apt-get install -y -q --no-install-recommends -o DPkg::Lock::Timeout=120 bubblewrap apparmor-profiles$/);
+    assert.match(calls('sudo')[0], /^sudo timeout 120 apt-get update/);
+    assert.match(calls('sudo')[1], /^sudo timeout 600 apt-get install/);
+    assert.deepEqual(calls('sleep'), []);
+    assert.deepEqual(calls('mirror'), []);
+    assert.match(result.stdout, /installed on attempt 1 of 3/);
+  });
+
+  test('a mirror that fails twice: retried with an update each time, the pauses in order, the fallback before the last attempt', () => {
+    const result = run(['fonts-ipafont-gothic'], {FAKE_FAILURES: '2'});
+    assert.equal(result.status, 0, result.stdout);
+    const order = log().split('\n').filter(Boolean).filter((line) => !line.startsWith('sudo'))
+      .map((line) => (line.includes('--download-only') ? 'apt-get install --download-only' : line.replace(/^(apt-get \w+).*$/, '$1')));
+    assert.deepEqual(order, [
+      'apt-get update', 'apt-get install --download-only', 'sleep 30',
+      'apt-get update', 'apt-get install --download-only', 'mirror --fallback', 'sleep 60',
+      'apt-get update', 'apt-get install --download-only', 'apt-get install',
+    ]);
+    assert.match(result.stdout, /attempt 1 of 3 failed with a mirror error from security\.ubuntu\.com/);
+    assert.match(result.stdout, /installed on attempt 3 of 3/);
+    assert.doesNotMatch(result.stdout, /::error/);
+  });
+
+  test('a mirror that never answers: one error annotation that names the outage and the host, exit 1, no real install', () => {
+    const result = run(['fonts-ipafont-gothic', 'unifont'], {FAKE_FAILURES: '9'});
+    assert.equal(result.status, 1);
+    const errors = result.stdout.split('\n').filter((line) => line.startsWith('::error'));
+    assert.deepEqual(errors.length, 1);
+    assert.match(errors[0], /^::error title=Package mirror unavailable::package mirror unavailable: 2 packages could not be downloaded in 3 attempts \(errors from security\.ubuntu\.com\)\. Not a code failure: re-run the job\.$/);
+    assert.equal(calls('apt-get install').filter((line) => !line.includes('--download-only')).length, 0);
+    assert.equal(calls('apt-get update').length, 3);
+    assert.deepEqual(calls('mirror'), ['mirror --fallback']);
+    assert.deepEqual(calls('sleep'), ['sleep 30', 'sleep 60']);
+  });
+
+  test('an update that cannot connect is a mirror error too', () => {
+    const result = run(['rsync'], {FAKE_UPDATE_FAIL: '1', CI_APT_ATTEMPTS: '2'});
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /::error title=Package mirror unavailable::.*errors from azure\.archive\.ubuntu\.com/);
+    assert.equal(calls('apt-get install').length, 0, 'no download after a failed update');
+    assert.equal(calls('apt-get update').length, 2);
+  });
+
+  test('a download that exceeds its time bound is retried, then reported as a mirror outage', () => {
+    const started = Date.now();
+    const result = run(['musl-tools'], {FAKE_FAILURES: '9', FAKE_KIND: 'hang', CI_APT_DOWNLOAD_SECONDS: '1', CI_APT_ATTEMPTS: '2'});
+    assert.equal(result.status, 1);
+    assert.ok(Date.now() - started < 20_000, 'the bound must end the hung download');
+    assert.match(result.stdout, /\(status 124\)/);
+    assert.match(result.stdout, /::error title=Package mirror unavailable::/);
+  });
+
+  test('an error that is not the mirror (an unknown package) fails at once, without retry and without blaming the mirror', () => {
+    const result = run(['nope'], {FAKE_FAILURES: '9', FAKE_KIND: 'locate'});
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /::error title=apt-get failed::apt-get failed with status 100 and no mirror error/);
+    assert.doesNotMatch(result.stdout, /mirror unavailable/);
+    assert.equal(calls('apt-get update').length, 1);
+    assert.deepEqual(calls('sleep'), []);
+  });
+
+  test('a failure of the real install after the download is reported as such', () => {
+    const result = run(['bubblewrap'], {FAKE_INSTALL_FAIL: '1'});
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /::error title=apt-get install failed::.*not a mirror outage/);
+  });
+
+  test('one attempt only: no pause and no fallback', () => {
+    const result = run(['bubblewrap'], {FAKE_FAILURES: '9', CI_APT_ATTEMPTS: '1'});
+    assert.equal(result.status, 1);
+    assert.deepEqual(calls('sleep'), []);
+    assert.deepEqual(calls('mirror'), []);
+  });
+
+  test('the last pause repeats when there are more retries than pauses', () => {
+    const result = run(['bubblewrap'], {FAKE_FAILURES: '9', CI_APT_ATTEMPTS: '4', CI_APT_PAUSES: '5'});
+    assert.equal(result.status, 1);
+    assert.deepEqual(calls('sleep'), ['sleep 5', 'sleep 5', 'sleep 5']);
+    assert.deepEqual(calls('mirror'), ['mirror --fallback']);
+    assert.equal(log().split('\n').findIndex((line) => line === 'mirror --fallback'),
+      log().split('\n').findLastIndex((line) => line === 'sleep 5') - 1, 'the fallback comes before the last attempt');
+  });
+
+  test('--playwright-deps installs the packages of playwright install-deps --dry-run', () => {
+    const dryRun = 'sudo -- sh -c "apt-get update&& apt-get install -y --no-install-recommends libasound2t64 fonts-ipafont-gothic xvfb"';
+    const result = run(['--playwright-deps', 'chromium'], {FAKE_DRY_RUN: dryRun});
+    assert.equal(result.status, 0, result.stdout);
+    assert.deepEqual(calls('python'), ['python -m playwright install-deps --dry-run chromium']);
+    assert.match(calls('apt-get install').at(-1) ?? '', / libasound2t64 fonts-ipafont-gothic xvfb$/);
+    assert.match(result.stdout, /installing 3 packages/);
+  });
+
+  test('--playwright-deps refuses an output without the apt-get install line, and a bad package name', () => {
+    const missing = run(['--playwright-deps', 'chromium'], {FAKE_DRY_RUN: 'BEWARE: your OS is not officially supported'});
+    assert.equal(missing.status, 1);
+    assert.match(missing.stdout, /::error title=apt-install could not list packages::/);
+    const bad = run(['--playwright-deps', 'chromium'], {FAKE_DRY_RUN: 'sh -c "apt-get install -y --no-install-recommends ok; rm"'});
+    assert.equal(bad.status, 1);
+    assert.match(bad.stdout, /not a package name: ok;/);
+    assert.deepEqual(calls('apt-get'), []);
+  });
+
+  test('refuses no package, an option in place of a package, and a malformed call', () => {
+    for (const args of [[], ['-o', 'APT::Get::AllowUnauthenticated=true'], ['--playwright-deps']]) {
+      const result = run(args);
+      assert.equal(result.status, 1, args.join(' '));
+      assert.match(result.stdout, /^::error /m);
+    }
+    assert.deepEqual(calls('apt-get'), []);
+  });
+
+  test('never weakens signature checking', () => {
+    const text = fs.readFileSync(SCRIPT, 'utf8').replace(/^#.*$/gm, '');
+    assert.doesNotMatch(text, /trusted|allowinsecure|allow-unauthenticated|AllowUnauthenticated|--force-yes|allow-downgrades/i);
+  });
+});

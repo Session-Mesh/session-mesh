@@ -180,12 +180,12 @@ pull requests; rename the job first if the label should not say "informational",
 `MACOS_JOB_NAME` in the same file and the table in CONTRIBUTING.md), and move its timeout to the
 other jobs' safety net if the cold build needs it.
 
-## The apt mirror step of the Ubuntu jobs
+## The apt steps of the Ubuntu jobs
 
-Every job on an Ubuntu runner that installs packages (`apt-get`, `ocaml/setup-ocaml`, which runs
-`apt-get install` for 29 packages, and `playwright install --with-deps`) first runs
-`bash .github/scripts/fast-apt-mirror.sh`, in `public-ci.yml` and in the two `apt-get` steps of
-`release.yml`.
+Every job on an Ubuntu runner that installs packages first runs
+`bash .github/scripts/fast-apt-mirror.sh` (mirror and apt retries), then installs every package through
+`bash .github/scripts/apt-install.sh` (bounded retries, a clear failure), in `public-ci.yml` and in the
+two install steps of `release.yml`. No workflow runs `apt-get` itself or `playwright install --with-deps`.
 
 Why: the hosted images read `/etc/apt/sources.list.d/ubuntu.sources` with
 `URIs: mirror+file:/etc/apt/apt-mirrors.txt`, and the mirror that list gives varies from job to job.
@@ -199,8 +199,9 @@ runs were read from step durations only. Compare the first runs after the change
 
 What the script does: it writes `/etc/apt/apt.conf.d/zzz-ci-retries` (`Acquire::Retries "3"`, and a 20 s
 `Acquire::http::Timeout` and `Acquire::https::Timeout`, which bound a stalled transfer, not a whole
-download); then, on x86_64 with a DEB822 `ubuntu.sources`, it points the archive URIs at
-`azure.archive.ubuntu.com` (the security stanza keeps `security.ubuntu.com`) and checks that with an
+download); then, on x86_64 with a DEB822 `ubuntu.sources`, it points every Ubuntu URI (the archive
+stanza and the security stanza, which named `security.ubuntu.com`) at `azure.archive.ubuntu.com`, which
+carries the `-security` suites too, and checks that with an
 `apt-get update` limited to `ubuntu.sources`, bounded to 120 s and run with `--error-on=any` (without it a failed fetch is only a warning and the dead mirror would be kept). If that fails, the original file is
 restored and the job goes on with the runner's own mirror. `Acquire::ForceIPv4` is not set: nothing in the
 logs points to IPv6. It never fails the job, apt still verifies every signature, and it does nothing off
@@ -208,6 +209,38 @@ Linux, nothing to the mirror on a runner without that file (the 22.04 and arm ru
 the retries only), and nothing on a second run. To disable it, remove the step or set
 `CI_APT_MIRROR_DISABLE: "1"` in its `env`. `tests/ci-apt-mirror.test.ts` checks the step order of every
 job and the script with a fake `sudo`, `apt-get` and `uname`.
+
+Why the second script: on 2026-11-19 a mirror outage turned at least six jobs red with no code failure:
+`security.ubuntu.com` answered 503 for a dozen font packages of the Playwright install, and
+`azure.archive.ubuntu.com` refused connections during setup-ocaml's `apt-get install`. apt's own
+retries are a few seconds apart; such outages last minutes.
+
+What `apt-install.sh PACKAGE...` does: up to 3 attempts, each an `apt-get update` (bounded to 120 s) and
+an `apt-get install --download-only` (bounded to 600 s; killing a download is safe and the next attempt
+resumes it). Once everything is downloaded, the real install runs from the local archive, without a
+bound and without the network. A failed attempt whose output shows a mirror error (failed fetch, 5xx,
+connection or name resolution error, hash mismatch, or the time bound) is retried after 30 s, then 60 s;
+before the last attempt `fast-apt-mirror.sh --fallback` points the Ubuntu URIs at `archive.ubuntu.com`,
+a second host. Any other apt error (an unknown package, a conflict) fails at once. When every attempt
+fails, the step fails with one annotation, `Package mirror unavailable`, naming the hosts in the errors:
+re-run the job. `apt-install.sh --playwright-deps chromium` installs the list printed by
+`playwright install-deps --dry-run chromium`; the Chromium download itself is `playwright install
+chromium`, kept by the cache keyed on `requirements-browser.txt` (which pins Playwright).
+`ocaml/setup-ocaml` installs `bubblewrap musl-tools rsync darcs g++-multilib gcc-multilib mercurial` with
+a plain `apt-get install` that cannot be wrapped; the `ocaml` and `native` jobs install that list through
+`apt-install.sh` just before it, so its own install has nothing left to fetch (its `apt-get update` still
+runs, in apt's default mode where a transient fetch error is a warning). A new setup-ocaml pin must be
+checked against its `src/system-packages.ts`: `tests/ci-apt-mirror.test.ts` pins the SHA and the list.
+
+Cost: nothing when the mirror answers (the update and download that `apt-get install` did anyway, split
+in two). A mirror that errors fails each attempt in seconds: about 1.5 min of pauses plus apt's own
+retries before the job fails. The bound case, every attempt hanging until its timeouts, is
+3 x (120 + 600) + 90 s = 37.5 min, under the 45 min job timeout. The settings are environment
+variables (`CI_APT_ATTEMPTS`, `CI_APT_PAUSES`, `CI_APT_UPDATE_SECONDS`, `CI_APT_DOWNLOAD_SECONDS`).
+`tests/ci-apt-install.test.ts` runs the script with a fake `apt-get` on `PATH` that fails a given number
+of times with the 503 output of that day, hangs, or reports an unknown package; the same fake is the
+way to simulate an outage locally. `tests/ci-apt-mirror.test.ts` refuses a bare `apt-get`, `apt
+install`, `--with-deps` or `install-deps` in any workflow.
 
 ## Backports to the maintenance branch
 
