@@ -15,7 +15,7 @@ import {type FakeHost, type FakeSession, sleepers, startFakeHost} from './fake-p
 import {removeScratch, runServer, scratchHome, stopServer, type Scratch} from './mesh-server-lib.ts';
 
 type Row = {name: string; ready: boolean; label?: string | null; agent?: Record<string, unknown> | null};
-type Answer = {mesh: Row[]; generation: number; full: boolean; complete: boolean; counts: {total: number; ready: number};
+type Answer = {mesh: Row[]; generation: number; now: number; opens?: unknown[]; full: boolean; complete: boolean; counts: {total: number; ready: number};
   host: string; removed?: string[]; external?: unknown[]; focus?: string[]; restorable: unknown[];
   management: {state?: string}; update: unknown; sessionRequests: unknown; agentMailConsent: unknown};
 
@@ -37,7 +37,7 @@ function earlierSnapshot(file: string, sessions: FakeSession[], count: number): 
 }
 
 async function start(prefix: string, sessions: (where: Scratch) => FakeSession[], hostMode: object, seed: number): Promise<Mesh> {
-  const where = await scratchHome(prefix, {MESH_SESSIONS_WAIT: ''});   // the server's default wait
+  const where = await scratchHome(prefix, {MESH_SESSIONS_WAIT: '', MESH_TEST_SESSIONS_COMPLETE: ''});   // the server's default wait
   const snapshot = path.join(where.confDir, 'sessions-snapshot.json');
   const listed = sessions(where);
   earlierSnapshot(snapshot, listed, seed);
@@ -59,11 +59,44 @@ function token(mesh: Mesh): string {
   return fs.readFileSync(path.join(mesh.where.confDir, 'token'), 'utf8').trim();
 }
 
+/** JSON.parse, refusing a duplicate key in any object as a strict parser does. */
+function strictParse(text: string): unknown {
+  let at = 0;
+  const space = () => { while (/\s/.test(text[at] ?? '')) at += 1; };
+  const string = (): string => {
+    const start = at;
+    for (at += 1; text[at] !== '"'; at += text[at] === '\\' ? 2 : 1);
+    return JSON.parse(text.slice(start, ++at)) as string;
+  };
+  const value = (): void => {
+    space();
+    const open = text[at];
+    if (open !== '{' && open !== '[') { if (open === '"') string(); else while (at < text.length && !/[,\]}\s]/.test(text[at]!)) at += 1; return; }
+    const keys = new Set<string>();
+    for (at += 1, space(); text[at] !== (open === '{' ? '}' : ']'); space()) {
+      if (open === '{') {
+        space();
+        const key = string();
+        assert.ok(!keys.has(key), `duplicate key ${key}`);
+        keys.add(key);
+        space();
+        at += 1;   // the colon
+      }
+      value();
+      space();
+      if (text[at] === ',') at += 1;
+    }
+    at += 1;
+  };
+  value();
+  return JSON.parse(text);
+}
+
 async function get(mesh: Mesh, query = ''): Promise<{ms: number; body: Answer}> {
   const sent = performance.now();
   const response = await fetch(`${mesh.base}/api/sessions${query}`, {headers: {Authorization: `Bearer ${token(mesh)}`, Origin: mesh.base}});
   assert.equal(response.status, 200);
-  const body = await response.json() as Answer;
+  const body = strictParse(await response.text()) as Answer;
   return {ms: performance.now() - sent, body};
 }
 
@@ -79,14 +112,10 @@ async function until(mesh: Mesh, what: string, timeoutMs: number, done: (body: A
 
 const lists = (mesh: Mesh) => mesh.host.ops().filter(op => op === 'list').length;
 
-/**
- * Until no round runs: the host has not been asked to list for a second and, when only rounds have listed
- * since `base`, every round has made both of its lists (one to describe, one under the organisation lock
- * before it writes). The number of lists then.
- */
-async function quiet(mesh: Mesh, base?: number): Promise<number> {
+/** Until the host has not been asked to list for two seconds (no round, no read runs); the number of lists then. */
+async function quiet(mesh: Mesh): Promise<number> {
   let seen = lists(mesh);
-  for (let calm = 0; calm < 4 || (base !== undefined && (seen - base) % 2 !== 0); calm += 1) {
+  for (let calm = 0; calm < 8; calm += 1) {
     await new Promise(resolve => setTimeout(resolve, 250));
     if (lists(mesh) !== seen) { seen = lists(mesh); calm = 0; }
   }
@@ -98,13 +127,13 @@ describe('300 sessions', () => {
   let mesh: Mesh;
   let processes: ReturnType<typeof sleepers>;
   let sessions: FakeSession[];
-  let base: number;   // the lists the server made at start; from then on, until the rename, only rounds list
   before(async () => {
     processes = sleepers(N);
     mesh = await start('sessions-state-', where => (sessions = rows(processes.pids, where.home)), {}, 10);
-    // The second list of the first round (the one it reads under the organisation lock, before it writes
-    // the snapshot) waits 3 s: meanwhile the state holds the skeleton.
-    base = await quiet(mesh);
+    // From the second list on (the first request asks for a read and a round at once; the round reads again
+    // under the organisation lock, before it writes the snapshot) each waits 3 s: meanwhile the state holds
+    // the skeleton.
+    const base = await quiet(mesh);
     mesh.host.control({sessions, slowFrom: base + 2, delayMs: 3000});
   });
   after(async () => { await stop(mesh); processes?.kill(); });
@@ -124,6 +153,7 @@ describe('300 sessions', () => {
     assert.deepEqual(known.agent, {type: 'claude', session_id: 'conversation-s000', provisional: true});
     assert.ok(!JSON.stringify(body).includes('argv-never-shown'), 'never the stored argv');
     assert.ok('update' in body && 'sessionRequests' in body && 'agentMailConsent' in body);
+    assert.ok(Array.isArray(body.opens), 'the skeleton carries the open requests (a client sets its replay cutoff from them)');
     assert.deepEqual(fs.readFileSync(mesh.snapshot), before, 'the skeleton does not write the snapshot');
     console.log(`first answer: ${Math.round(ms)} ms for ${N} sessions`);
   });
@@ -139,22 +169,21 @@ describe('300 sessions', () => {
   });
 
   test('16 simultaneous requests share the rounds: no host list per request', async () => {
-    const before = await quiet(mesh, base);
+    const before = await quiet(mesh);
     const replies = await Promise.all(Array.from({length: 16}, () => get(mesh)));
     for (const {body} of replies) assert.equal(body.mesh.length, N);
-    const made = await quiet(mesh, base) - before;
-    // A round lists twice (once to describe, once under the organisation lock to write): the burst asked
-    // for one round, and at most one more (a timed one) may have started meanwhile.
-    assert.ok(made <= 4, `${made} host lists for 16 requests`);
+    const made = await quiet(mesh) - before;
+    // A round lists twice (once to describe, once under the organisation lock to write) and a read once: the
+    // burst asked for one of each, and at most one more of each may have started meanwhile.
+    assert.ok(made <= 6, `${made} host lists for 16 requests`);
   });
 
   test('a host restart while half the sessions are not described offers none of them for restore', async () => {
-    // The new host's first list (the one the round describes) names half of the sessions; the list read
-    // under the lock, before the snapshot is written, names them all. The other half are seen, not
-    // described: their entries are kept, never taken for lost ones.
-    await quiet(mesh, base);   // no round in flight reads the old host first
+    // The new host's first two lists (a request's read, and the one the round describes) name half of the
+    // sessions; the list read under the lock, before the snapshot is written, names them all. The other half
+    // are seen, not described: their entries are kept, never taken for lost ones.
+    await quiet(mesh);   // no round in flight reads the old host first
     await mesh.host.restart({sessions, firstList: sessions.slice(0, N / 2).map(s => s.name)});
-    base = lists(mesh);
     await until(mesh, 'the restarted host', 30_000, body => body.host === 'restarted');
     await until(mesh, 'a listing of every session', 30_000, body => body.mesh.length === N && body.host === 'ok');
     const written = JSON.parse(fs.readFileSync(mesh.snapshot, 'utf8')) as {live: unknown[]; lost: unknown[]};
@@ -242,11 +271,11 @@ describe('a silent host', () => {
   });
   after(async () => { await stop(mesh); });
 
-  test('answers under 500 ms with host "silent", and leaves the snapshot as it was', async () => {
+  test('answers within the silent threshold (1 s) with host "silent", then at once, and leaves the snapshot as it was', async () => {
     const before = fs.readFileSync(mesh.snapshot);
     const mtime = fs.statSync(mesh.snapshot).mtimeMs;
     const {ms, body} = await get(mesh);
-    assert.ok(ms < 500, `answer in ${Math.round(ms)} ms`);
+    assert.ok(ms < 1500, `answer in ${Math.round(ms)} ms`);
     assert.equal(body.host, 'silent');
     assert.equal(body.complete, false);
     // Past the host's request timeout (5 s): the round gave up, the answers still come at once.
@@ -257,5 +286,56 @@ describe('a silent host', () => {
     assert.ok(mesh.host.ops().includes('list'), 'the round asked the host');
     assert.deepEqual(fs.readFileSync(mesh.snapshot), before);
     assert.equal(fs.statSync(mesh.snapshot).mtimeMs, mtime);
+  });
+});
+
+describe('slow rounds, with the default wait', () => {
+  let mesh: Mesh;
+  let processes: ReturnType<typeof sleepers>;
+  let sessions: FakeSession[];
+  before(async () => {
+    processes = sleepers(4);
+    mesh = await start('sessions-slow-', where => (sessions = rows(processes.pids, where.home)), {}, 1);
+    await until(mesh, 'a complete listing', 60_000, answer => answer.complete);
+  });
+  after(async () => { await stop(mesh); processes?.kill(); });
+
+  test('a session created, or ended, while a round runs is in the next answer, and now is the answer\'s time', async () => {
+    // A round's listing records the conversations it saw under this file lock: held, every round lasts 8 s.
+    const lock = path.join(mesh.where.confDir, 'conversation-names.lock');
+    const holder = spawn('flock', [lock, 'sleep', '8'], {stdio: 'ignore'});
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await get(mesh, '?since=0');   // starts a round, which stops at the lock
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    mesh.host.control({sessions: [...sessions.slice(1), {...sessions[0]!, name: 'fresh', created: 1_800_000_000}]});
+    const {ms, body} = await get(mesh);   // what the page does right after POST /api/new, before it opens the pane
+    const fresh = body.mesh.find(row => row.name === 'fresh');
+    assert.ok(fresh, `the new session is listed (answer in ${Math.round(ms)} ms)`);
+    assert.equal(fresh.ready, false);
+    assert.ok(!body.mesh.some(row => row.name === sessions[0]!.name), 'the ended session is not listed');
+    assert.ok(ms < 2500, `answer in ${Math.round(ms)} ms`);
+    assert.ok(Math.abs(body.now * 1000 - Date.now()) < 1000, 'now is the time of the answer, not of the last round');
+    holder.kill('SIGKILL');
+    await until(mesh, 'the new session described', 30_000, answer => answer.mesh.some(row => row.name === 'fresh' && row.ready));
+  });
+});
+
+describe('a failing extra', () => {
+  let mesh: Mesh;
+  before(async () => {
+    mesh = await start('sessions-extra-', where => {
+      // The agent-mail lock cannot be opened: reading the consent requests fails at every round.
+      fs.mkdirSync(path.join(where.confDir, 'agent-mail.json.lock'), {recursive: true});
+      return rows([process.pid], where.home);
+    }, {}, 0);
+  });
+  after(async () => { await stop(mesh); });
+
+  test('neither stops the listing nor the restart snapshot', async () => {
+    const body = await until(mesh, 'a complete listing', 30_000, answer => answer.complete);
+    assert.deepEqual(body.agentMailConsent, []);
+    assert.ok(Array.isArray(body.sessionRequests));
+    const written = JSON.parse(fs.readFileSync(mesh.snapshot, 'utf8')) as {live: unknown[]};
+    assert.equal(written.live.length, 1, 'the round recorded the snapshot');
   });
 });

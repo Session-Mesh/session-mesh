@@ -863,10 +863,14 @@ async def _read_host():
         # an excuse to mask unrelated programming errors with a broad catch.
         if not _valid_ptyhost_list(raw):
             raw, listed = [], False
-    return raw, listed, host_before if host_before == await ptyhost.host_identity() else None
+    at = time.time()    # when the host listed them: what a listing of these rows observed (conversation_names)
+    return raw, listed, host_before if host_before == await ptyhost.host_identity() else None, at
 
 
-async def _record_listing(data, read):
+_RECORDED = [0.0]   # when the host listed the sessions of the description the snapshot last recorded
+
+
+async def _record_listing(data, read, at):
     """The writes of a listing: the recovery snapshot, and the prune of the organisation when
     ``read`` is None (``read``: the host's listing the rows come from, already pruned).
 
@@ -878,8 +882,9 @@ async def _record_listing(data, read):
     session, and pruned after the restore wrote that session's organisation, would not know the
     session and would forget its label, folder and rank. Every session the host lists is
     ``seen`` by the snapshot, also one the listing did not describe: its previous entry is
-    kept, it is never taken for a lost one."""
-    raw, listed, host = read or await _read_host()
+    kept, it is never taken for a lost one. A description of an older host list (``at``) than the
+    one already recorded is never written over it."""
+    raw, listed, host, _ = read or await _read_host()
     if not listed:
         return [], False
     seen = {(s["name"], s["created"]) for s in raw}
@@ -890,6 +895,9 @@ async def _record_listing(data, read):
             d.update(org["sessions"][d["name"]])
         data["mesh"].sort(key=_mesh_order)
         data["folders"] = org["folders"]
+    if at < _RECORDED[0]:
+        return await asyncio.to_thread(respawn.restorable), False
+    _RECORDED[0] = at
     return await asyncio.to_thread(respawn.record, data["mesh"], True, host=host, seen=seen)
 
 
@@ -902,11 +910,10 @@ async def _listing(event_state=None, organisation_lock=None, read=None):
     if event_state is None:
         event_state = _LIVE_EVENT_STATE
     read = read or await _read_host()
-    raw, listed, _ = read
+    raw, listed, _, observed_at = read
     # ``list_sessions`` does CPU/filesystem discovery in a worker.  With a lock, it only reads: the
     # prune of the organisation is a write, made under the lock (_record_listing).  Keep the mutable
     # open queue on the event-loop thread: pruning it from the worker could race a board-open request.
-    observed_at = time.time()
     data = await asyncio.to_thread(list_sessions, raw, listed and organisation_lock is None)
     if event_state is not None and listed:
         # Before the recovery snapshot below: the conversation an OpenCode plugin reported is
@@ -918,7 +925,7 @@ async def _listing(event_state=None, organisation_lock=None, read=None):
     data["restorable"], durable = [], False
     if listed:   # lock order: restore_lock, then organisation_lock; only the latter is taken here
         async with organisation_lock or contextlib.AsyncExitStack():
-            data["restorable"], durable = await _record_listing(data, None if organisation_lock else read)
+            data["restorable"], durable = await _record_listing(data, None if organisation_lock else read, observed_at)
     if durable:   # the list was read and the offers are on disk: agent mail may be pruned again
         agentmail.release_pruning()
     # A failed listing says nothing about which live session identities exist.
@@ -954,8 +961,6 @@ async def _listing(event_state=None, organisation_lock=None, read=None):
     # same CWD was observed as a repository.  It binds that directory to one
     # current session incarnation; it is not a path API.
     portfolio.attach_diff_selectors(data["portfolio"], key=DIFF_SELECTOR_KEY, now=data["now"])
-    data["client_version"] = client_version()
-    data["restore_guard"] = RESTORE_GUARD
     # A snapshot is intentionally non-consuming: another logged-in browser
     # must not lose its local hint because this one happened to refresh first.
     data["signals"] = SIGNALS.snapshot()
@@ -973,58 +978,56 @@ async def _update_notice():
         return None
 
 
-# How long a request without ``since`` (a page load, or a client that does not number its listings and
-# expects a session it just created to be listed) waits for the round it asks for, before it answers from
-# the state as it is. A request with ``since`` never waits: a round reads /proc and the agents'
-# transcripts, seconds on a loaded machine. Unset, the skeleton is answered at once, before the first
-# listing; set, the wait holds then too (a test that reads a complete listing right after a change).
+# How long a request without ``since`` (a page load, or a client that expects a session it just created to be
+# listed) waits for the round it asks for, before it answers from the state as it is. It asks for a read of
+# the host's list too, apart from the rounds: a session created before the request is listed (ready: false)
+# however long a round lasts. A request with ``since`` never waits: a round reads /proc and the transcripts.
 SESSIONS_WAIT = float(os.environ.get("MESH_SESSIONS_WAIT") or 2)
-SKELETON_AT_ONCE = not os.environ.get("MESH_SESSIONS_WAIT")
-HOST_SILENT_AFTER = 0.25    # a host list pending longer: answers say host "silent"
+# Tests only: such a request waits for its whole round, also before the first listing and past a silent host.
+WAIT_COMPLETE = os.environ.get("MESH_TEST_SESSIONS_COMPLETE") == "1"
+HOST_SILENT_AFTER = 1.0     # a host list pending longer: answers say host "silent"
 REMOVED_KEEP = 600          # seconds a removal stays answerable to ``since``
 FOCUS_MAX, FOCUS_BYTES = 64, 4096
 
 
 class SessionsState:
     """What GET /api/sessions answers: the session list kept by the one background round
-    (snapshot_loop), never a listing per request. Until the first listing it holds a skeleton:
-    rows with ``ready: false`` built from the host's list, mesh.json and the recovery snapshot.
-    ``generation`` grows when a row's public content changes; it starts from the start time in
-    ms, so that it never goes back across a restart. See docs/sessions-api.md."""
+    (snapshot_loop), never a listing per request. Each read of the host's list is published at once
+    (membership): a session it newly lists is a row with ``ready: false`` built from the host's list,
+    mesh.json and the recovery snapshot until a round describes it; before the first listing, every row
+    is (the skeleton). ``generation`` grows when a row's public content changes; it starts from the start
+    time in ms, so that it never goes back across a restart. See docs/sessions-api.md."""
 
     def __init__(self):
         self.generation = self.floor = int(time.time() * 1000)
         self.rows, self.marks, self.removed = {}, {}, {}   # name -> row, (generation, print), (generation, time)
         self.top, self.external_mark, self.ready = None, (self.generation, None), 0
         self.texts = {"external": "[]", "folders": "[]", "management": '{"state": "pending"}'}   # top's, encoded
-        self.host, self.identity, self.reading = "ok", None, None
+        self.host, self.identity, self.reading, self.listed = "ok", None, {}, (0.0, set())
         self.extras = {"update": None, "sessionRequests": [], "agentMailConsent": []}
-        self.focus, self.started, self.finished = [], 0, 0
-        self.wanted, self._tick, self._update = asyncio.Event(), asyncio.Event(), None
+        self.focus, self.started, self.finished, self.described = [], 0, 0, False
+        self.wanted, self.read_wanted, self._tick, self._extras = asyncio.Event(), asyncio.Event(), asyncio.Event(), None
 
     def changed(self):
         self._tick.set()
         self._tick = asyncio.Event()
 
     def silent(self):
-        return self.host == "silent" or self.reading is not None and time.monotonic() - self.reading > HOST_SILENT_AFTER
+        now = time.monotonic()
+        return self.host == "silent" or any(now - began > HOST_SILENT_AFTER for began in self.reading.values())
 
     async def wait(self, seconds):
-        """Ask for a round and wait for it, at most ``seconds``. With SKELETON_AT_ONCE, also stop
-        waiting at the skeleton, at a silent host, or HOST_SILENT_AFTER with nothing to answer yet."""
+        """Ask for a round and a read of the host's list, and wait for the round, at most ``seconds``.
+        Unless WAIT_COMPLETE, stop at a silent host and, before the first listing, at the skeleton."""
         self.wanted.set()
+        self.read_wanted.set()
         ticket, start = self.started + 1, time.monotonic()   # the next round to start begins after this request
 
         def answered():
-            waited = time.monotonic() - start
-            if self.finished >= ticket or waited > seconds:
+            if self.finished >= ticket or time.monotonic() - start > seconds:
                 return True
-            if not SKELETON_AT_ONCE:
-                return False
-            if self.top is None:
-                return waited > HOST_SILENT_AFTER
-            return self.ready < len(self.rows) or self.silent()
-        while not answered():
+            return not WAIT_COMPLETE and (self.silent() or not self.described and self.top is not None)
+        while seconds > 0 and not answered():
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._tick.wait(), 0.05)
 
@@ -1053,14 +1056,15 @@ class SessionsState:
                 del self.removed[name]
                 self.floor = max(self.floor, generation)
         self.rows, self.top = fresh, top
-        self.texts = {key: json.dumps(value, default=str) for key, value in top.items()}
+        self.texts = {key: json.dumps(value, default=str) for key, value in top.items() if key != "now"}
         self.ready = sum(row["ready"] for row in fresh.values())
         self.changed()
 
     def answer(self, since, **fields):
         """The JSON text of an answer: the rows changed after ``since`` (a generation) and the names
         removed since, or every row (``full``) when ``since`` is absent or unknown here. The listing's
-        texts are encoded once, by publish, not again for each of the pages that poll."""
+        texts are encoded once, by publish, not again for each of the pages that poll; ``now`` is the
+        answer's time."""
         delta = self.top is not None and since is not None and self.floor <= since <= self.generation
         texts = self.texts
         rows = [self.marks[name][1] for name in self.rows if not delta or self.marks[name][0] > since]
@@ -1068,19 +1072,54 @@ class SessionsState:
             fields["removed"] = [name for name, (generation, _) in self.removed.items() if generation > since]
             if self.external_mark[0] <= since:
                 texts = {key: text for key, text in texts.items() if key != "external"}
-        fields.update(self.extras, client_version=client_version(), restore_guard=RESTORE_GUARD,
+        fields.update(self.extras, client_version=client_version(), restore_guard=RESTORE_GUARD, now=time.time(),
                       generation=self.generation, full=not delta, counts={"total": len(self.rows), "ready": self.ready},
                       complete=self.top is not None and self.ready == len(self.rows),
                       host="silent" if self.silent() else self.host)
         parts = [f"{json.dumps(key)}: {text}" for key, text in texts.items()]
         return "{" + ", ".join([*parts, json.dumps(fields)[1:-1], f'"mesh": [{",".join(rows)}]']) + "}"
 
-    async def skeleton(self, raw):
-        """Rows from the host's list, mesh.json and the recovery snapshot only: no /proc, no transcript."""
+    async def read(self, key):
+        """The host's list (_read_host); while it is pending, ``reading[key]`` says since when."""
+        self.reading[key] = time.monotonic()
+        try:
+            return await _read_host()
+        finally:
+            del self.reading[key]
+
+    async def read_loop(self):
+        """Read the host's list whenever a request asks, apart from the rounds, and publish it."""
+        while True:
+            await self.read_wanted.wait()
+            self.read_wanted.clear()
+            try:
+                await self.membership(await self.read("request"))
+            except Exception as e:   # one bad read must not end the loop
+                print(f"sessions: host read: {e!r}", flush=True)
+
+    def live(self, rows):
+        """The first row of each session of the latest host list among ``rows``, in the listing's order."""
+        kept = {}
+        for row in rows:
+            if (row["name"], row["created"]) in self.listed[1]:
+                kept.setdefault(row["name"], row)
+        return sorted(kept.values(), key=_mesh_order)
+
+    async def membership(self, read):
+        """Publish a host list at once: the sessions it newly lists as rows with ``ready: false``, from the
+        host's list, mesh.json and the recovery snapshot only (no /proc, no transcript), and without the
+        sessions it no longer lists. A list older than the latest one published changes nothing."""
+        raw, listed, _, at = read
+        if not listed or at < self.listed[0]:
+            return
+        self.listed = at, {(s["name"], s["created"]) for s in raw}
+        new = [s for s in raw if self.rows.get(s["name"], {}).get("created") != s["created"]]
+        if self.top is not None and not new and len(self.rows) == len(raw):
+            return
         org = await asyncio.to_thread(organize.view, raw, False)
         known = await asyncio.to_thread(respawn.provisional)
         rows = []
-        for s in raw:
+        for s in new:
             entry = known.get((s["name"], s["created"])) or {"agent": None, "cmd": None}
             notice, kind = _session_notice(s), (s.get("meta") or {}).get("known_agent")
             agent = entry["agent"] and not notice and dict(entry["agent"], provisional=True)
@@ -1088,20 +1127,28 @@ class SessionsState:
                          "cwd": s["cwd"], "cmd": entry["cmd"] or "", "attached": s["attached"], "activity": s["activity"],
                          "known_agent": kind if kind in AGENT_TYPES else None, "notice": notice, "agent": agent or None,
                          "ready": False, **org["sessions"][s["name"]]})
-        self.publish(sorted(rows, key=_mesh_order), {
-            "external": [], "folders": org["folders"], "home": str(Path.home()), "now": time.time(), "restorable": [],
-            "management": {"state": "pending"}, "ptyhost": True})
+        self.publish(self.live([*self.rows.values(), *rows]), self.top or {
+            "external": [], "folders": org["folders"], "home": str(Path.home()), "restorable": [],
+            "management": {"state": "pending"}, "ptyhost": True,
+            "opens": opens.snapshot({s["name"]: s["created"] for s in raw})})
 
-    async def read_extras(self, app):
-        """The fields of the answer that are not the listing's; the PTY host's update notice in a
-        task of its own, so that a silent host never holds a round or an answer."""
-        if self._update is None or self._update.done():
-            async def update():
-                self.extras["update"] = await _update_notice()
-            self._update = asyncio.ensure_future(update())
+    def read_extras(self, app):
+        """Start reading the answer's fields that are not the listing's, unless a read still runs."""
+        if self._extras is None or self._extras.done():
+            self._extras = asyncio.ensure_future(self._read_extras(app))
+        return self._extras
+
+    async def _read_extras(self, app):
+        """Each field on its own: one that fails keeps its last value and never stops a listing."""
+        reads = {"update": _update_notice()}
         if app:
-            self.extras["sessionRequests"] = await asyncio.to_thread(app["session_requests"].pending)
-            self.extras["agentMailConsent"] = (await asyncio.to_thread(agentmail.consent_projection))["requests"]
+            reads |= {"sessionRequests": asyncio.to_thread(app["session_requests"].pending),
+                      "agentMailConsent": asyncio.to_thread(lambda: agentmail.consent_projection()["requests"])}
+        for key, value in zip(reads, await asyncio.gather(*reads.values(), return_exceptions=True)):
+            if isinstance(value, Exception):
+                print(f"sessions: {key}: {value!r}", flush=True)
+            else:
+                self.extras[key] = value
 
 
 async def produce_round(app, read):
@@ -1111,23 +1158,17 @@ async def produce_round(app, read):
 
 
 async def sessions_round(app, state):
-    """One round of the background state: the host's list, the skeleton before the first listing,
-    then the listing. A host that does not list leaves the state and the snapshot as they are
-    (with no state yet, the state is the listing of no session)."""
-    state.reading = time.monotonic()
-    try:
-        read = await _read_host()
-    finally:
-        state.reading = None
-    _, listed, identity = read
+    """One round of the background state: the host's list, published at once (membership), then the
+    listing. A host that does not list leaves the state and the snapshot as they are (with no state
+    yet, the state is the listing of no session)."""
+    read = await state.read("round")
+    _, listed, identity, _ = read
     if listed:
         state.host = "restarted" if None not in (identity, state.identity) and identity != state.identity else "ok"
         state.identity = identity or state.identity
-        if state.top is None:
-            await state.skeleton(read[0])
+        await state.membership(read)
     else:
         state.host = "silent"
-    await state.read_extras(app)
     if not listed and state.top is not None:
         return
     data, listed = await produce_round(app, read)
@@ -1136,7 +1177,8 @@ async def sessions_round(app, state):
         unconfirmed = app["claude_wakes"].unconfirmed() | app["codex_wakes"].unconfirmed() if app else set()
         rows = [dict(row, ready=True, **({"wake_unconfirmed": True} if (row["name"], row["created"]) in unconfirmed else {}))
                 for row in data.pop("mesh")]
-        state.publish(rows, data)
+        state.described = True
+        state.publish(state.live([*rows, *state.rows.values()]), data)
 
 
 def _focus(raw, known):
@@ -4441,20 +4483,26 @@ async def snapshot_loop(app):
     for one, or SNAPSHOT_EVERY after the last; never two at once, so the requests that arrive
     during a round share the next."""
     state = app["sessions_state"] if app else SessionsState()
-    while True:
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(state.wanted.wait(), SNAPSHOT_EVERY)
-        state.wanted.clear()
-        state.started += 1
-        try:
-            # With the hook state: the conversation a Copilot (or OpenCode) plugin reported is what the
-            # snapshot keeps, also while no page is open.
-            await sessions_round(app, state)
-        except Exception as e:   # one bad round must not end the loop
-            print(f"snapshot loop: {e!r}", flush=True)
-        finally:
-            state.finished += 1
-            state.changed()
+    reader = asyncio.ensure_future(state.read_loop())
+    try:
+        while True:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(state.wanted.wait(), SNAPSHOT_EVERY)
+            state.wanted.clear()
+            state.started += 1
+            extras = state.read_extras(app)   # beside the round: a slow or failing one never holds it
+            try:
+                # With the hook state: the conversation a Copilot (or OpenCode) plugin reported is what the
+                # snapshot keeps, also while no page is open.
+                await sessions_round(app, state)
+                await asyncio.wait([extras], timeout=HOST_SILENT_AFTER)
+            except Exception as e:   # one bad round must not end the loop
+                print(f"snapshot loop: {e!r}", flush=True)
+            finally:
+                state.finished += 1
+                state.changed()
+    finally:
+        reader.cancel()
 
 
 async def start_snapshot(app):

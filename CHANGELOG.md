@@ -95,10 +95,11 @@ before 1.0, a minor version may change behaviour.
   answered and the list could stay empty for minutes. `GET /api/sessions` now answers from a list
   the server keeps in memory, which one background round at a time brings up to date; a request
   never runs a listing, and waits at most 2 seconds (`MESH_SESSIONS_WAIT`) for the round it asks
-  for. After a start, the first answer lists every session at once from the PTY host's list, the
+  for; a session the PTY host lists before the request is in the answer whatever the round lasts.
+  After a start, the first answer lists every session at once from the PTY host's list, the
   folders and the restart snapshot (rows marked `ready: false`), before the agents are described.
-  Renames, moves and restores no longer wait for a listing: the organisation lock now covers only
-  the writes. A silent PTY host leaves the last list on screen (`host: "silent"`). The answer gains
+  Renames and moves no longer wait for a listing, and a restore, which still runs a listing of its
+  own, no longer waits behind another one: the organisation lock now covers only the writes. A silent PTY host leaves the last list on screen (`host: "silent"`). The answer gains
   `generation`, `since` (only the changed rows and the `removed` names), `full`, `complete`,
   `counts` and `focus`; see [docs/sessions-api.md](docs/sessions-api.md).
 - **Copy on select.** Selecting text in a terminal now copies it to the clipboard when you release

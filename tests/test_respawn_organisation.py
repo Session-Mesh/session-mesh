@@ -296,3 +296,14 @@ async def test_ignoring_a_lost_session_drops_its_organisation(client, auth_cooki
     _, body = await restore(client, auth_cookie, "a")
     assert not body["results"]["a"]["ok"]
     assert "Alpha" not in json.dumps(await api_get(client, auth_cookie))
+
+
+async def test_a_description_of_an_older_host_list_never_overwrites_a_newer_one(snapshot_file, tmp_path, monkeypatch):
+    # Listings describe in parallel (round, watchers, actions): the one of the older host list may finish last.
+    monkeypatch.setattr(server, "_RECORDED", [0.0])
+    read = ([{"name": "a", "created": 1.0}], True, None)
+    await server._record_listing({"mesh": [organised("a", tmp_path, label="new")]}, (*read, 200.0), 200.0)
+    _, durable = await server._record_listing({"mesh": [organised("a", tmp_path, label="old")]}, (*read, 100.0), 100.0)
+    assert not durable
+    [entry] = json.loads(snapshot_file.read_text())["live"]
+    assert entry["org"]["label"] == "new"

@@ -32,7 +32,8 @@ see [macOS](operations.md#macos).
 | `MESH_CONF_DIR` | `~/.config/session-mesh` | Token, cookie generation, session snapshot, names and folders, projects. Absolute path. The command-line tools read the token there, so when you move it, export the same value in the shell where you run them outside a mesh session. |
 | `MESH_CACHE_DIR` | `~/.cache/session-mesh` | Uploads and the history index, including the full-text database; the folder and id of recent Codex rollouts (`codex-rollout-meta.json`). Absolute path. |
 | `MESH_OPAM_SWITCH` | written by the installer | Switch where agents find `mesh-board-mcp` in a source install. Unset, the server uses `OPAM_SWITCH_PREFIX`, then `_opam/` in the checkout ([Native PTY host](install.md#native-pty-host)). |
-| `MESH_SESSIONS_WAIT` | `2` | Seconds a `GET /api/sessions` without `since` waits for the background round it asks for before it answers from the list as it is; `0` never waits. Set, it also holds before the first listing, which then answers no skeleton early ([The session list](sessions-api.md)). |
+| `MESH_SESSIONS_WAIT` | `2` | Seconds a `GET /api/sessions` without `since` waits for the background round it asks for before it answers from the list as it is; `0` never waits ([The session list](sessions-api.md)). |
+| `MESH_TEST_SESSIONS_COMPLETE` | unset | Test-only, never set in production. `1`: a `GET /api/sessions` without `since` waits for its whole round, also before the first listing and while the PTY host is silent. |
 | `MESH_PUSH` | on | `0` turns push notifications off. |
 | `MESH_ANSWER_BUTTONS` | off | `1` adds answer buttons to detailed notifications ([Answer buttons in notifications](operations.md#answer-buttons-in-notifications)). |
 | `MESH_LAUNCH_SETTINGS` | unset | Absolute path of a JSON file that restricts the folders where sessions can be created and the agents offered ([Restricting folders and agents](operations.md#restricting-folders-and-agents)). |

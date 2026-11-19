@@ -199,6 +199,12 @@ def provisional():
                       "cmd": e["cmd"]} for e in live}
 
 
+def restorable():
+    """The restorable entries of the snapshot as it is (what ``record`` returns), without writing it."""
+    with _lock:
+        return public(_load()["lost"])
+
+
 def management_lost(now=None):
     """The sealed restart-recovery facts which the management inventory may show.
 
