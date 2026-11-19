@@ -12,6 +12,7 @@ Interface labels are quoted as they appear in the English interface.
 
 - [Keyboard and mouse shortcuts](#keyboard-and-mouse-shortcuts)
 - [Starting and finding sessions](#starting-and-finding-sessions)
+- [The Projects view and the project tracker](#the-projects-view-and-the-project-tracker)
 - [Projects and recorded Roster state](#projects-and-recorded-roster-state)
 - [Organising the sidebar](#organising-the-sidebar)
 - [Observed directories](#observed-directories)
@@ -168,7 +169,62 @@ hooks to report its conversation, so no restart is offered for it
 From any shell, `mesh-attach` opens a mesh session in the current terminal and `mesh-attach NAME`
 joins an existing one; see the [command-line tools](configuration.md#command-line-tools).
 
+## The Projects view and the project tracker
+
+**Projects**, the main mode beside **Sessions**, opens on the Projects view by default. It shows the
+project tracker that agents write through `mesh-work`, read only:
+
+- **Products and projects.** The first screen lists the products and their active projects, with
+  each project's progress (done tasks over all tasks) and its number of blockers.
+- **A project, in four tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent
+  activity, open questions, milestones, risks), "Board" (columns to do, in progress, blocked,
+  done), "Timeline" (a bar from creation to done or today, with due dates and estimates) and
+  "Dependencies" (the tasks by dependency level, cycles labelled). The French interface names them
+  "Reprise", "Tableau", "Frise" and "Dépendances".
+- **A task.** Selecting a task opens its sheet: blockers, dependencies, the sessions that worked on
+  it, its notes, its events and its open questions. The sheet is read only: nothing in the view
+  writes to the tracker, and a question an agent asked cannot be answered from it yet.
+- **The old view.** The "Old view" button in the Projects header shows the previous Projects
+  workspace (next section) and "New view" comes back; the choice is remembered by the browser.
+
+**Where the data lives.** The tracker is a local git repository: `WL_HOME` when it is set (a
+leading `~/` is expanded), else `~/worklog-data`, else an older `~/worklog`; when both
+`~/worklog-data` and `~/worklog` are repositories, nothing is read and `WL_HOME` must choose. The
+view reads it through `POST /api/work/v1`, which runs the `work-read` program with only the web
+server's `HOME` and `WL_HOME` in its environment; the browser never reads a file
+([work-read.md](work-read.md)). An agent's `work-mcp` uses the `HOME` and `WL_HOME` of the agent's
+own environment. If you set `WL_HOME`, set the same value for the web server and for the sessions,
+otherwise the view and the agents use different repositories. Nothing is pushed anywhere; the data
+format is in [worklog-format.md](worklog-format.md).
+
+**First use.** On a new installation there is no repository, and the view shows "No tracker found"
+with "Try again" and "Use the old view". The repository is created by the first `work_*` tool call
+of an agent started by the mesh, when the place it looks first (`WL_HOME`, else `~/worklog-data`)
+is an empty directory or does not exist and its parent does. It starts with one product,
+`general`. To see a first project, ask an agent in a mesh session to create it, for example with
+`work_add_product` then `work_add_project`, and to add tasks with `work_add_task`; "Try again"
+then shows it.
+
+**How agents write.** Every agent started by the mesh that receives `mesh-board` also receives
+`mesh-work`, the `work-mcp` program with 17 tools ([work-mcp.md](work-mcp.md#tools)): reading
+(`work_resume`, `work_list_products`, `work_list_projects`, `work_list_tasks`, `work_get`), writing
+(`work_add_product`, `work_add_project`, `work_add_task`, `work_update`, `work_log`, `work_block`,
+`work_unblock`), sessions (`work_find_sessions`, `work_get_session`) and questions (`work_ask`,
+`work_list_questions`, `work_open_view`). The "Track your work" section of the
+[agent guide](agent-guide.md) gives the agent its rule in short: `work_resume` at the start,
+`work_log` as it goes and before it stops, `work_ask` for a question that does not block it.
+`work_open_view` does not open anything yet: it checks its target and answers that the view is not
+available.
+
+**What a release needs.** Release bundles, nightly ones included, ship `work-read` and
+`work-mcp`. Without `work-read`, Projects shows the old view once per page load with the notice
+"The tracker reader is not installed here, so the old view is shown."; without `work-mcp`, agents
+start without `mesh-work`.
+
 ## Projects and recorded Roster state
+
+The rest of this section describes the previous Projects workspace, which the "Old view" button
+shows.
 
 **Projects** is a main mode beside **Sessions**, with its own project sidebar and **+ New**
 action. Create a project by name, then add repository and source settings when needed.
@@ -940,6 +996,10 @@ terminal has been silent for 30 seconds since the last report (see
 [Antigravity sessions](#antigravity-sessions)), and its question is not told apart from a permission.
 
 ## Projects
+
+The Projects mode opens on the Projects view, described in
+[The Projects view and the project tracker](#the-projects-view-and-the-project-tracker); this
+section describes the old view.
 
 **Projects** sits beside **Sessions** as a main mode. Its sidebar lists projects and **+ New**
 asks for a name. Settings add optional local folders, a repository and source references;
