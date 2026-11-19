@@ -26,19 +26,30 @@ case "$1" in
       echo "  Could not connect to azure.archive.ubuntu.com:80 (1.2.3.4), connection timed out"
       exit 100
     fi
+    # A fetch error that apt only reports as a warning unless --error-on=any is given.
+    case "\${FAKE_UPDATE_KIND:-}" in
+      thirdparty) echo "Err:4 https://packages.microsoft.com/repos noble InRelease"; echo "  Could not connect to packages.microsoft.com:443"; echo "W: Failed to fetch https://packages.microsoft.com/repos/dists/noble/InRelease"
+        case "$*" in *--error-on=any*) echo "E: Some index files failed to download."; exit 100;; esac;;
+      mirror) echo "Err:5 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease"; echo "W: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease"
+        case "$*" in *--error-on=any*) echo "E: Some index files failed to download."; exit 100;; esac;;
+    esac
     exit 0;;
   install)
     case "$*" in
       *--download-only*)
         count=$(cat "$FAKE_COUNT" 2>/dev/null || echo 0); count=$((count + 1)); echo "$count" > "$FAKE_COUNT"
         if [ "$count" -le "\${FAKE_FAILURES:-0}" ]; then
-          case "\${FAKE_KIND:-503}" in
+          kind=$(echo "\${FAKE_KIND:-503}" | cut -d, -f"$count"); [ -n "$kind" ] || kind=$(echo "\${FAKE_KIND:-503}" | awk -F, '{print $NF}')
+          case "$kind" in
             503)
               echo "Err:7 http://security.ubuntu.com/ubuntu noble-security/main amd64 fonts-ipafont-gothic all 00303-21"
               echo "  503  Service Unavailable [IP: 1.2.3.4 80]"
               echo "E: Failed to fetch http://security.ubuntu.com/ubuntu/pool/main/f/fonts-ipafont/fonts-ipafont-gothic_00303-21_all.deb  503  Service Unavailable"
               echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?"
               exit 100;;
+            azure) echo "E: Failed to fetch http://azure.archive.ubuntu.com/x.deb  503  Service Unavailable"; exit 100;;
+            diskfull) echo "Err:7 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 rsync amd64 1"; echo "  Write error - write (28: No space left on device)"; echo "E: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/pool/main/r/rsync.deb  Write error - write (28: No space left on device)"; exit 100;;
+            typo) echo "E: Unable to locate package bubblewrapp"; exit 100;;
             locate) echo "E: Unable to locate package nope"; exit 100;;
             hang) exec env PATH=/usr/bin:/bin sleep 30;;
           esac
@@ -89,8 +100,8 @@ describe('apt-install.sh', () => {
     assert.deepEqual(apt.map((line) => line.split(' ').slice(0, 2).join(' ')), ['apt-get update', 'apt-get install', 'apt-get install']);
     assert.match(apt[1], /--download-only .*bubblewrap apparmor-profiles$/);
     assert.match(apt[2], /^apt-get install -y -q --no-install-recommends -o DPkg::Lock::Timeout=120 bubblewrap apparmor-profiles$/);
-    assert.match(calls('sudo')[0], /^sudo timeout 120 apt-get update/);
-    assert.match(calls('sudo')[1], /^sudo timeout 600 apt-get install/);
+    assert.match(calls('sudo')[0], /^sudo timeout -k 30 120 apt-get update/);
+    assert.match(calls('sudo')[1], /^sudo timeout -k 30 600 apt-get install/);
     assert.deepEqual(calls('sleep'), []);
     assert.deepEqual(calls('mirror'), []);
     assert.match(result.stdout, /installed on attempt 1 of 3/);
@@ -116,7 +127,7 @@ describe('apt-install.sh', () => {
     assert.equal(result.status, 1);
     const errors = result.stdout.split('\n').filter((line) => line.startsWith('::error'));
     assert.deepEqual(errors.length, 1);
-    assert.match(errors[0], /^::error title=Package mirror unavailable::package mirror unavailable: 2 packages could not be downloaded in 3 attempts \(errors from security\.ubuntu\.com\)\. Not a code failure: re-run the job\.$/);
+    assert.match(errors[0], /^::error title=Package mirror unavailable::package mirror unavailable: 2 packages could not be downloaded in 3 attempts \(errors from security\.ubuntu\.com\)\. Probably not a code failure: re-run the job\.$/);
     assert.equal(calls('apt-get install').filter((line) => !line.includes('--download-only')).length, 0);
     assert.equal(calls('apt-get update').length, 3);
     assert.deepEqual(calls('mirror'), ['mirror --fallback']);
@@ -147,6 +158,61 @@ describe('apt-install.sh', () => {
     assert.doesNotMatch(result.stdout, /mirror unavailable/);
     assert.equal(calls('apt-get update').length, 1);
     assert.deepEqual(calls('sleep'), []);
+  });
+
+  test('a third-party warning during update followed by a real typo fails at once as a non-mirror error, no retry', () => {
+    const result = run(['bubblewrapp'], {FAKE_UPDATE_KIND: 'thirdparty', FAKE_FAILURES: '9', FAKE_KIND: 'typo'});
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /::error title=apt-get failed::apt-get failed with status 100 and no mirror error/);
+    assert.match(result.stdout, /only from hosts this script does not manage/);
+    assert.doesNotMatch(result.stdout, /mirror unavailable|packages\.microsoft\.com\)/);
+    assert.equal(calls('apt-get update').length, 1);
+    assert.deepEqual(calls('sleep'), []);
+  });
+
+  test('a third-party update warning alone does not stop a healthy install', () => {
+    const result = run(['rsync'], {FAKE_UPDATE_KIND: 'thirdparty'});
+    assert.equal(result.status, 0, result.stdout);
+    assert.match(result.stdout, /installed on attempt 1 of 3/);
+  });
+
+  test('a full disk during the download is not blamed on the mirror host it names', () => {
+    const result = run(['rsync'], {FAKE_FAILURES: '9', FAKE_KIND: 'diskfull'});
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /::error title=apt-get failed::/);
+    assert.doesNotMatch(result.stdout.split('\n').filter((line) => line.startsWith('::error')).join('\n'), /mirror unavailable|azure/);
+    assert.equal(calls('apt-get update').length, 1);
+    assert.deepEqual(calls('sleep'), []);
+  });
+
+  test('a mirror error that apt only warns about during update fails the attempt (--error-on=any), so --if-available never skips on a partial index', () => {
+    const result = run(['rsync', '--if-available', 'darcs'], {FAKE_UPDATE_KIND: 'mirror', FAKE_MISSING: 'darcs', CI_APT_ATTEMPTS: '2'});
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /::error title=Package mirror unavailable::.*errors from azure\.archive\.ubuntu\.com/);
+    assert.doesNotMatch(result.stdout, /skipping darcs/);
+    assert.ok(calls('apt-get update').every((line) => line.includes('--error-on=any')));
+    assert.equal(calls('apt-get install').length, 0);
+  });
+
+  test('the final annotation keeps every failing host seen across attempts, each once, even when the last attempt names none', () => {
+    // Attempt 1: security.ubuntu.com; attempt 2: azure; attempt 3: a hang, which names no host.
+    const result = run(['fonts-ipafont-gothic'], {FAKE_FAILURES: '9', FAKE_KIND: '503,azure,hang', CI_APT_DOWNLOAD_SECONDS: '1'});
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stdout, /\(errors from azure\.archive\.ubuntu\.com, security\.ubuntu\.com\)/);
+    assert.equal(result.stdout.split('\n').filter((line) => line.startsWith('::error')).length, 1);
+  });
+
+  test('apt-get is force-killed after its time bound, and the update takes the lock timeout too', () => {
+    run(['rsync']);
+    for (const line of calls('sudo').filter((entry) => !entry.startsWith('sudo apt-get install -y'))) assert.match(line, /^sudo timeout -k 30 \d+ apt-get /);
+    assert.match(calls('apt-get update')[0], /-o DPkg::Lock::Timeout=120/);
+  });
+
+  test('CI_APT_MIRROR_DISABLE=1 also disables the fallback mirror', () => {
+    const result = run(['bubblewrap'], {FAKE_FAILURES: '9', CI_APT_MIRROR_DISABLE: '1'});
+    assert.equal(result.status, 1);
+    assert.deepEqual(calls('mirror'), []);
+    assert.equal(calls('apt-get update').length, 3);
   });
 
   test('a failure of the real install after the download is reported as such', () => {

@@ -201,13 +201,14 @@ What the script does: it writes `/etc/apt/apt.conf.d/zzz-ci-retries` (`Acquire::
 `Acquire::http::Timeout` and `Acquire::https::Timeout`, which bound a stalled transfer, not a whole
 download); then, on x86_64 with a DEB822 `ubuntu.sources`, it points every Ubuntu URI (the archive
 stanza and the security stanza, which named `security.ubuntu.com`) at `azure.archive.ubuntu.com`, which
-carries the `-security` suites too, and checks that with an
+carries the `-security` suites too (CI runners therefore get security updates from that mirror, which can lag
+`security.ubuntu.com` by a few hours; signatures still verify), and checks that with an
 `apt-get update` limited to `ubuntu.sources`, bounded to 120 s and run with `--error-on=any` (without it a failed fetch is only a warning and the dead mirror would be kept). If that fails, the original file is
 restored and the job goes on with the runner's own mirror. `Acquire::ForceIPv4` is not set: nothing in the
 logs points to IPv6. It never fails the job, apt still verifies every signature, and it does nothing off
 Linux, nothing to the mirror on a runner without that file (the 22.04 and arm runners of `release.yml` get
 the retries only), and nothing on a second run. To disable it, remove the step or set
-`CI_APT_MIRROR_DISABLE: "1"` in its `env`. `tests/ci-apt-mirror.test.ts` checks the step order of every
+`CI_APT_MIRROR_DISABLE: "1"` in its `env` (and in the `env` of the `apt-install.sh` steps, or at job level, to disable the fallback too). `tests/ci-apt-mirror.test.ts` checks the step order of every
 job and the script with a fake `sudo`, `apt-get` and `uname`.
 
 Why the second script: on 2026-11-19 a mirror outage turned at least six jobs red with no code failure:
@@ -218,10 +219,14 @@ retries are a few seconds apart; such outages last minutes.
 What `apt-install.sh PACKAGE...` does: up to 3 attempts, each an `apt-get update` (bounded to 120 s) and
 an `apt-get install --download-only` (bounded to 600 s; killing a download is safe and the next attempt
 resumes it). Once everything is downloaded, the real install runs from the local archive, without a
-bound and without the network. A failed attempt whose output shows a mirror error (failed fetch, 5xx,
-connection or name resolution error, hash mismatch, or the time bound) is retried after 30 s, then 60 s;
-before the last attempt `fast-apt-mirror.sh --fallback` points the Ubuntu URIs at `archive.ubuntu.com`,
-a second host. Any other apt error (an unknown package, a conflict) fails at once. When every attempt
+bound and without the network. A failed attempt is retried after 30 s, then 60 s when it hit the time bound or a
+failed fetch (5xx, connection or name resolution error, hash mismatch) from an Ubuntu host (`*.ubuntu.com`) or the
+mirror hosts of `fast-apt-mirror.sh`; only the output of the failing command counts, and `apt-get update` runs
+with `--error-on=any`, so an incomplete index fails the attempt instead of making `--if-available` skip a package.
+Before the last attempt `fast-apt-mirror.sh --fallback` points the Ubuntu URIs at `archive.ubuntu.com`, a second
+host (not when `CI_APT_MIRROR_DISABLE=1` is set in the environment of the `apt-install.sh` step). Any other error
+(an unknown package, a conflict, a full disk, a lock, an error from another repository) fails at once. Each
+command runs under `timeout -k 30` and takes `DPkg::Lock::Timeout=120`. When every attempt
 fails, the step fails with one annotation, `Package mirror unavailable`, naming the hosts in the errors:
 re-run the job. `apt-install.sh --playwright-deps chromium` installs the list printed by
 `playwright install-deps --dry-run chromium`; the Chromium download itself is `playwright install
@@ -229,14 +234,15 @@ chromium`, kept by the cache keyed on `requirements-browser.txt` (which pins Pla
 `ocaml/setup-ocaml` installs `bubblewrap musl-tools rsync`, and `darcs g++-multilib gcc-multilib mercurial`
 when `apt-cache show` finds them (Ubuntu 24.04 has no `darcs`), with a plain `apt-get install` that cannot
 be wrapped; the `ocaml` and `native` jobs install the same list, the second part after `--if-available`,
-through `apt-install.sh` just before it, so its own install has nothing left to fetch (its `apt-get update` still
-runs, in apt's default mode where a transient fetch error is a warning). A new setup-ocaml pin must be
+through `apt-install.sh` just before it, so its own install has nothing left to fetch (setup-ocaml may still run its own
+`apt-get update`, in apt's default mode where a transient fetch error is a warning; in the observed job it did not run, everything
+was already installed). A new setup-ocaml pin must be
 checked against its `src/system-packages.ts`: `tests/ci-apt-mirror.test.ts` pins the SHA and the list.
 
 Cost: nothing when the mirror answers (the update and download that `apt-get install` did anyway, split
 in two). A mirror that errors fails each attempt in seconds: about 1.5 min of pauses plus apt's own
 retries before the job fails. The bound case, every attempt hanging until its timeouts, is
-3 x (120 + 600) + 90 s = 37.5 min, under the 45 min job timeout. The settings are environment
+3 x (120 + 600 + 2 x 30 s kill grace) + 90 s = 40.5 min, under the 45 min job timeout. The settings are environment
 variables (`CI_APT_ATTEMPTS`, `CI_APT_PAUSES`, `CI_APT_UPDATE_SECONDS`, `CI_APT_DOWNLOAD_SECONDS`).
 `tests/ci-apt-install.test.ts` runs the script with a fake `apt-get` on `PATH` that fails a given number
 of times with the 503 output of that day, hangs, or reports an unknown package; the same fake is the
