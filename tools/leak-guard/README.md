@@ -54,9 +54,11 @@ required `cla` check ties each to a commit authored with that address. A row is 
 what `tools/cla-check` counts as a signature, read with its own `parseRow` and `rowCandidates`:
 `| name | address | version | YYYY-MM-DD |` with a non-blank name, a version the CLA has (`1.0`),
 a real calendar date and the address bare or between a pair of backquotes, on a line outside a
-fenced block and an HTML comment. Known limit: `staged` and `commits` see added lines without the
-rest of the file, so they cannot tell that such a line sits in a fence or a comment and judge it on
-its own form; `worktree` and `tree` (the public CI runs `worktree`) read the whole file and report it.
+fenced block and an HTML comment. Rows exist only in a regular file read as UTF-8 text, the way
+`tools/cla-check` reads the register: a symbolic link of that name, or a binary file (a NUL byte
+in its first 8000 bytes, read through its latin1 and UTF-16 views), has none, and every address in
+it is reported. Known limit: `staged` and `commits` see added lines without the rest of the file,
+so they cannot tell that such a line sits in a fence or a comment and judge it on its own form; `worktree` and `tree` (the public CI runs `worktree`) read the whole file and report it.
 
 ## Exceptions
 

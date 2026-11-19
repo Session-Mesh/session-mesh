@@ -188,8 +188,9 @@ function vendorExempt(rules: PublicRules, file: string, rule: string): boolean {
   return rules.vendor.exemptRules.includes(rule) && rules.vendor.prefixes.some(prefix => file.startsWith(prefix));
 }
 
-// `rowLines`: for a whole register file, the lines outside fences and HTML comments. Added lines
-// (`staged`, `commits`) come without their context and carry none.
+// `rowLines`: for a whole register file, the lines outside fences and HTML comments; empty for a
+// file that cannot hold rows (content.ts). Added lines of a text file (`staged`, `commits`) come
+// without their context and carry none.
 export type ScanTarget = {gate: Gate; path: string; rowLines?: ReadonlySet<number>};
 
 function isRegister(rules: PublicRules, target: ScanTarget): boolean {
@@ -232,7 +233,8 @@ export function scanLines(ruleSet: RuleSet, target: ScanTarget, lines: string[],
 
 export function scanText(ruleSet: RuleSet, target: ScanTarget, text: string): Finding[] {
   const lines = text.split(/\r?\n/);
-  return scanLines(ruleSet, isRegister(ruleSet.publicRules, target) ? {...target, rowLines: rowLineNumbers(lines)} : target, lines);
+  if (!isRegister(ruleSet.publicRules, target) || target.rowLines) return scanLines(ruleSet, target, lines);
+  return scanLines(ruleSet, {...target, rowLines: rowLineNumbers(lines)}, lines);
 }
 
 export function scanFileName(ruleSet: RuleSet, file: string): Finding[] {
