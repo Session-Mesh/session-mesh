@@ -430,16 +430,36 @@ export function countLines(text: string): number {
   return text.endsWith('\n') || text === '' ? count : count + 1;
 }
 
-// Diff lines built at a time, per file ("show more" builds the next ones). Counted in lines of
-// the diff, not in table rows, so that a file keeps the same extent loaded in both views.
+// What is loaded is counted in positions of the diff: each hunk header and each line has one, in
+// the order of the diff. A file loads up to a position, whatever the view, so that switching views
+// shows at least the lines shown before (a split row may add the line paired with them); hunk
+// headers count like lines, so empty hunks cannot get around the limits.
+//
+// Positions built at a time, per file ("show more" builds the next ones).
 export const ROW_CHUNK = 2_000;
-// Diff lines built when the page opens, over all files: the files past them start folded and are
+// Positions built when the page opens, over all files: the files past them start folded and are
 // built when unfolded.
 export const INITIAL_ROWS = 4_000;
 
 // The lines of a file's hunks (without the hunk headers).
 export function fileLines(file: FileDiff): number {
   return file.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);
+}
+
+// The positions of a file: its hunk headers and lines.
+export function filePositions(file: FileDiff): number {
+  return file.hunks.length + fileLines(file);
+}
+
+// The position of each hunk header and line of a file, in the order of the diff.
+export function positionsOf(file: FileDiff): Map<Hunk | DiffLine, number> {
+  const positions = new Map<Hunk | DiffLine, number>();
+  let next = 0;
+  for (const hunk of file.hunks) {
+    positions.set(hunk, next++);
+    for (const line of hunk.lines) positions.set(line, next++);
+  }
+  return positions;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -488,8 +508,18 @@ export function itemLines(item: Item): number {
   return (item.row.left ? 1 : 0) + (item.row.right ? 1 : 0);
 }
 
+// The first and last positions a row shows (a split row pairs a deleted line with a later added one).
+export function itemSpan(item: Item, positions: Map<Hunk | DiffLine, number>): [number, number] {
+  const at = (key: Hunk | DiffLine | null): number[] => {
+    const position = key ? positions.get(key) : undefined;
+    return position === undefined ? [] : [position];
+  };
+  const found = item.type === 'hunk' ? at(item.hunk) : item.type === 'line' ? at(item.line) : [...at(item.row.left), ...at(item.row.right)];
+  return [Math.min(...found), Math.max(...found)];
+}
+
 // The rows of a file in one view, in order: unified lists the lines as the diff does, split
-// pairs them.
+// pairs them. In both, the rows come in the order of their first position.
 export function fileItems(file: FileDiff, mode: Mode): Item[] {
   const items: Item[] = [];
   for (const hunk of file.hunks) {
@@ -553,17 +583,19 @@ function button(label: string, pressed: boolean, onClick: () => void): HTMLButto
 class FileView {
   readonly details = el('details', 'file');
   private readonly body = el('div', 'body');
-  // diff lines loaded: the extent shown, the same whatever the view
+  // the rows built are those whose first position is before `loaded` (the same in every view)
   private loaded: number;
   // the view the body was built for ('' before it is built)
   private builtFor = '';
   private segments: Map<DiffLine, Segment[]> | null = null;
+  private positions: Map<Hunk | DiffLine, number> | null = null;
   private readonly file: FileDiff;
   private readonly view: Viewer;
   private table: HTMLTableElement | null = null;
   private items: Item[] = [];
   private next = 0;          // the first item not built yet
-  private built = 0;         // the diff lines of the items built
+  private reach = 0;         // one past the last position shown
+  private shown = 0;         // the diff lines shown
 
   constructor(file: FileDiff, view: Viewer, open: boolean, loaded: number) {
     this.file = file;
@@ -591,7 +623,7 @@ class FileView {
     return this.segments;
   }
 
-  // (Re)builds the rows of the lines loaded, in the current view: when unfolded with a view it was
+  // (Re)builds the rows of what is loaded, in the current view: when unfolded with a view it was
   // not built for, and on a view change.
   render(): void {
     this.builtFor = this.view.key();
@@ -603,9 +635,11 @@ class FileView {
       return;
     }
     const {mode} = this.view.options;
+    this.positions ??= positionsOf(this.file);
     this.items = fileItems(this.file, mode);
     this.next = 0;
-    this.built = 0;
+    this.reach = 0;
+    this.shown = 0;
     this.table = el('table', mode);
     columns(this.table, mode === 'unified' ? ['ln', 'ln', 'code'] : ['ln', 'code', 'ln', 'code']);
     const scroll = el('div', 'scroll');
@@ -614,30 +648,35 @@ class FileView {
     this.extend();
   }
 
-  // Builds the next chunk of lines ("show more").
+  // Builds the next chunk ("show more").
   more(): void {
-    this.loaded = this.built + ROW_CHUNK;
+    this.loaded = this.reach + ROW_CHUNK;
     this.extend();
   }
 
-  // Builds rows until the lines loaded are shown.
+  // Builds the rows that start before `loaded`; then `loaded` covers every position they show,
+  // so that another view shows them all again.
   private extend(): void {
     const table = this.table;
-    if (!table) return;
+    const positions = this.positions;
+    if (!table || !positions) return;
     const segments = this.wordSegments();
     const {mode} = this.view.options;
     while (this.next < this.items.length) {
       const item = this.items[this.next] as Item;
-      const weight = itemLines(item);
-      if (weight > 0 && this.built + weight > this.loaded && this.built > 0) break;
+      const [first, last] = itemSpan(item, positions);
+      if (first >= this.loaded && this.next > 0) break;
       table.append(itemRow(item, mode, segments));
-      this.built += weight;
+      this.reach = Math.max(this.reach, last + 1);
+      this.shown += itemLines(item);
       this.next += 1;
     }
+    this.loaded = Math.max(this.loaded, this.reach);
     this.body.querySelector('button.more')?.remove();
-    const left = fileLines(this.file) - this.built;
-    if (this.next < this.items.length && left > 0) {
-      const more = button(`show ${Math.min(left, ROW_CHUNK)} more lines (${left} left)`, false, () => this.more());
+    const left = fileLines(this.file) - this.shown;
+    if (this.next < this.items.length) {
+      const label = left > 0 ? `show ${Math.min(left, ROW_CHUNK)} more lines (${left} left)` : 'show more';
+      const more = button(label, false, () => this.more());
       more.className = 'more';
       more.removeAttribute('aria-pressed');
       this.body.append(more);
@@ -682,12 +721,12 @@ class Viewer {
       root.append(el('pre', 'preamble', parsed.preamble.join('\n').replace(/\s+$/, '')));
     }
     if (parsed.files.length === 0) root.append(el('p', 'note', 'no unified diff found in this file'));
-    // INITIAL_ROWS lines are shared out over the first files, in order; the others start folded
+    // INITIAL_ROWS positions are shared out over the first files, in order; the others start folded
     let left = INITIAL_ROWS;
     for (const file of parsed.files) {
       const open = left > 0;
       const loaded = open ? Math.min(ROW_CHUNK, left) : ROW_CHUNK;
-      if (open) left -= Math.min(fileLines(file), loaded);
+      if (open) left -= Math.min(filePositions(file), loaded);
       const view = new FileView(file, this, open, loaded);
       this.files.push(view);
       root.append(view.details);
