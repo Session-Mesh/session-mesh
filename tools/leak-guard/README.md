@@ -46,6 +46,10 @@ a bounded excerpt, after a count per rule.
 
 `static/vendor/` is exempt from the e-mail and `*.ts.net` rules only, never from secrets.
 
+The files of `email.registers` (`CLA-SIGNATORIES.md`, whose rows publish each signatory's commit
+address on purpose) are exempt from the e-mail rule only, and only for the address cell of a row
+`| name | address | version | YYYY-MM-DD |`; the rest of the file and every other rule still apply.
+
 ## Exceptions
 
 `exceptions.json` holds reviewed entries `{path, rule, substring, reason}`; `substring` must equal
