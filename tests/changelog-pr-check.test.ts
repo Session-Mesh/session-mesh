@@ -30,6 +30,8 @@ describe('a pull request to main', () => {
     ['the opt-out after a closed HTML comment', pull([CODE], '<!-- a\nnote -->\nChangelog: none: tests only\n')],
     ['the opt-out after a comment marker in a code span', pull([CODE], 'Document the `<!--` marker.\nChangelog: none: docs only\n')],
     ['the opt-out after a comment marker in a fence', pull([CODE], '```html\n<!--\n```\nChangelog: none: docs only\n')],
+    ['the opt-out after inline comments closed on their line', pull([CODE], 'Summary <!-- a --> and <!-- b -->\nChangelog: none: docs only\n')],
+    ['the opt-out after a closing fence with trailing spaces', pull([CODE], '~~~~\nx\n~~~~~  \nChangelog: none: docs only\n')],
     ['a base that is not main', pull([CODE], '', [PATCH], 'release/latest')],
     ['no semver label (judged by the semver label check)', pull([CODE], '', [])],
   ];
@@ -51,6 +53,8 @@ describe('a pull request to main', () => {
     ['the opt-out inside a code fence', pull([CODE], 'Example:\n\n```\nChangelog: none: tests only\n```\n')],
     ['the opt-out inside a tilde fence', pull([CODE], '~~~md\nChangelog: none: tests only\n~~~\n')],
     ['the opt-out inside an unclosed fence', pull([CODE], '```\nChangelog: none: tests only\n')],
+    ['the opt-out inside a comment opened after prose', pull([CODE], 'Summary <!-- internal note\nChangelog: none: tests only\n-->\n')],
+    ['the opt-out inside a fence that a mixed marker does not close', pull([CODE], '```\n```~~~\nChangelog: none: tests only\n```\n')],
     ['the opt-out inside an HTML comment', pull([CODE], '<!--\nChangelog: none: tests only\n-->\n')],
   ];
   for (const [label, verdict] of refused) {
