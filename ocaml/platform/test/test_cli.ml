@@ -14,12 +14,29 @@ let read_all descriptor =
   let channel = Unix.in_channel_of_descr descriptor in
   In_channel.input_all channel
 
-(* Run with [argv] (argv.(0) included), [env] additions, stdout to a pipe;
+let variable_name binding =
+  match String.index_opt binding '=' with
+  | Some index -> String.sub binding 0 index
+  | None -> binding
+
+(* The inherited environment without the variables that [overrides] sets:
+   getenv returns the first binding of a name, so an inherited value placed
+   before an override would win. *)
+let environment_with overrides =
+  let overridden = List.map variable_name overrides in
+  let inherited =
+    Array.to_list (Unix.environment ())
+    |> List.filter (fun binding ->
+           not (List.mem (variable_name binding) overridden))
+  in
+  Array.of_list (inherited @ overrides)
+
+(* Run with [argv] (argv.(0) included), [env] overrides, stdout to a pipe;
    return (exit status, stdout, stderr). *)
 let run ?(env = []) argv =
   let out_read, out_write = Unix.pipe ~cloexec:true () in
   let err_read, err_write = Unix.pipe ~cloexec:true () in
-  let environment = Array.append (Unix.environment ()) (Array.of_list env) in
+  let environment = environment_with env in
   let child =
     Unix.create_process_env exe argv environment Unix.stdin out_write err_write
   in
