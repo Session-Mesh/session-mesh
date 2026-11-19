@@ -32,6 +32,26 @@ let test_clip () =
   check_string "lstrip" "<x " (Text.unicode_lstrip "\xc2\xa0<x ");
   check_string "prefix" "\xc3\xa9\xc3\xa9" (Text.prefix ~code_points:2 "\xc3\xa9\xc3\xa9\xc3\xa9")
 
+(* The byte scans give the reference's results on text mixing ASCII, Python
+   whitespace (ASCII and not), other code points and invalid bytes. *)
+let pieces =
+  [| "a"; "b"; "<"; " "; "\t"; "\n"; "\x1c"; "\xc2\x85"; "\xc2\xa0"; "\xe2\x80\xa8"; "\xe3\x80\x80"; "\xc3\xa9";
+     "\xf0\x9f\x98\x80"; "\xff"; "\xc3"; "\xe2\x80"; "\xed\xa0\x80"; "\xef\xbf\xbd" |]
+
+let text_gen = QCheck.Gen.(map (String.concat "") (list_size (0 -- 60) (map (Array.get pieces) (0 -- (Array.length pieces - 1)))))
+
+let test_text_reference () =
+  let arbitrary = QCheck.make ~print:String.escaped text_gen in
+  Support.qcheck ~count:2000 ~name:"byte scans equal the reference" arbitrary (fun text ->
+      Text.unicode_strip text = Text_reference.strip text
+      && Text.unicode_lstrip text = Text_reference.lstrip text
+      && Text.collapse_spaces text = Text_reference.collapse_spaces text
+      && List.for_all (fun max -> Text.clip ~max text = Text_reference.clip ~max text) [ 0; 1; 2; 5; 40; 240 ]
+      && List.for_all (fun count -> Text.prefix ~code_points:count text = Text_reference.prefix ~code_points:count text) [ 0; 1; 7; 160 ]
+      && Text.is_blank text = (Text_reference.strip text = "")
+      && String.starts_with ~prefix:"<" (Text_reference.lstrip text)
+         = (let start = Text.lstrip_index text in start < String.length text && text.[start] = '<'))
+
 let test_values () =
   let truthy = List.map Py.truthy [ `Null; `Bool false; `Int 0; `Float 0.; `String ""; `List []; `Assoc [] ] in
   Alcotest.(check (list bool)) "falsy" (List.init 7 (fun _ -> false)) truthy;
@@ -133,7 +153,11 @@ let () =
   Alcotest.run "mesh_agent"
     [
       ( "python",
-        [ Alcotest.test_case "clip and strip" `Quick test_clip; Alcotest.test_case "values" `Quick test_values ] );
+        [
+          Alcotest.test_case "clip and strip" `Quick test_clip;
+          Alcotest.test_case "byte scans (property)" `Quick test_text_reference;
+          Alcotest.test_case "values" `Quick test_values;
+        ] );
       ( "sessions",
         [
           Alcotest.test_case "detection" `Quick test_detection;

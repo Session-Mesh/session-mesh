@@ -24,28 +24,34 @@ let control = Invalid "a raw control character inside a string"
    (an escaped quote does not end the string) and a byte below 0x20 is
    refused; outside, brackets and braces open and close levels, and '/' is
    refused: strict JSON has none there, and refusing it means the parser never
-   sees a comment, which could hide a quote from this scan. *)
-let prescan ~max_depth text =
+   sees a comment, which could hide a quote from this scan. The result says
+   whether a string holds a [\u] escape. *)
+let scan ~max_depth text =
   let length = String.length text in
+  let unicode_escape = ref false in
   let rec outside index depth =
-    if index >= length then Ok ()
+    if index >= length then Ok !unicode_escape
     else
       match String.unsafe_get text index with
       | '[' | '{' -> if depth < max_depth then outside (index + 1) (depth + 1) else Error Too_deep
-      | ']' | '}' -> outside (index + 1) (max 0 (depth - 1))
+      | ']' | '}' -> outside (index + 1) (Int.max 0 (depth - 1))
       | '"' -> inside (index + 1) depth
       | '/' -> Error comment
       | _ -> outside (index + 1) depth
   and inside index depth =
-    if index >= length then Ok ()
+    if index >= length then Ok !unicode_escape
     else
       match String.unsafe_get text index with
-      | '\\' -> inside (index + 2) depth
+      | '\\' ->
+          if index + 1 < length && String.unsafe_get text (index + 1) = 'u' then unicode_escape := true;
+          inside (index + 2) depth
       | '"' -> outside (index + 1) depth
       | '\000' .. '\031' -> Error control
       | _ -> inside (index + 1) depth
   in
   outside 0 0
+
+let prescan ~max_depth text = Result.map ignore (scan ~max_depth text)
 
 (* The maximal invalid subparts are removed: the same bytes as Python's
    [bytes.decode(errors="ignore")]. *)
@@ -140,7 +146,8 @@ let decode limits text =
   if String.length text > limits.max_bytes then Error Too_large
   else
     Result.bind (utf8_text limits text) (fun text ->
-        Result.bind (prescan ~max_depth:limits.max_depth text) (fun () -> parse (replace_lone_surrogates text)))
+        Result.bind (scan ~max_depth:limits.max_depth text) (fun unicode_escape ->
+            parse (if unicode_escape then replace_lone_surrogates text else text)))
 
 let encode ~max_bytes json =
   match Yojson.Safe.to_string json with
