@@ -16,12 +16,12 @@
     - an incomplete process table counts at least two Codex in any folder and
       lets any conversation be named by another Codex;
     - a Codex whose open files cannot be read holds unknown rollouts (every
-      rule that needs them then gives nothing). On Linux there are two
-      exceptions, where it holds none: it exited ([Not_found]), or its owner
+      rule that needs them then gives nothing). Two exceptions, where it
+      holds none: it exited ([Not_found]), or its owner
       ({!Mesh_agent_round.owner}) is positively another user, since only this
       user's Codex write in this user's [~/.codex]. [Denied] alone is not
       enough: a non-dumpable process of this user is [Denied] too. An owner
-      that cannot be read counts as this user;
+      that cannot be read (macOS does not read it yet) counts as this user;
     - a Codex's own helpers are not "another" Codex. *)
 
 type t

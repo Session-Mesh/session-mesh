@@ -33,13 +33,12 @@ let is_codex (process : Round.process) = process.comm = "codex"
 let top_level round (process : Round.process) =
   is_codex process && match Round.find round process.ppid with Some parent -> not (is_codex parent) | None -> true
 
-(* [_neighbour_rollouts]: on Linux, a Codex that exited holds nothing, and so
-   does one positively owned by another user; any other unreadable one (a
+(* [_neighbour_rollouts]: a Codex that exited holds nothing, and so does one
+   positively owned by another user; any other unreadable one (a
    non-dumpable process of this user is [Denied] too) holds unknown rollouts.
-   Elsewhere every unreadable one is unknown. *)
+   Where the owner cannot be read (macOS today), only the first rule applies. *)
 let held round pid = function
   | Ok paths -> Some paths
-  | Error _ when Mesh_platform.platform <> Mesh_platform.Linux -> None
   | Error Mesh_platform.Not_found -> Some []
   | Error _ -> ( match Round.owner round pid with Ok uid when uid <> Unix.getuid () -> Some [] | _ -> None)
 
