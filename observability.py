@@ -3,6 +3,7 @@
 
 """Current-only, privacy-preserving local resource observation."""
 
+import contextvars
 import math
 import os
 import sys
@@ -153,6 +154,25 @@ def _process_state(processes, pid):
     return {"comm": comm, "ppid": ppid, "pgrp": pgrp, "sid": sid, "tpgid": tpgid}
 
 
+# While Collector.enrich runs: [table, its _session_members] of the last table it took, emptied when it takes one.
+_SESSION_INDEX = contextvars.ContextVar("observability_session_index", default=None)
+
+
+def _session_members(processes):
+    """session id -> [(pid, state)] of a process table: validated once per table during an enrich, not per row."""
+    memo = _SESSION_INDEX.get()
+    if memo and memo[0] is processes:
+        return memo[1]
+    members = {}
+    for pid in processes:
+        state = _process_state(processes, pid)
+        if state is not None:
+            members.setdefault(state["sid"], []).append((pid, state))
+    if memo is not None:
+        memo[:] = [processes, members]
+    return members
+
+
 def _comm_only_session_agent(processes, sid):
     """Find a direct Claude/Codex comm in one session without reading argv."""
     if not isinstance(sid, int) or isinstance(sid, bool) or sid <= 0 or not isinstance(processes, dict):
@@ -161,9 +181,8 @@ def _comm_only_session_agent(processes, sid):
     if leader is None or leader["sid"] != sid:
         return None
     found = []
-    for pid in processes:
-        state = _process_state(processes, pid)
-        if state is None or state["sid"] != sid or state["comm"] not in RECOGNIZED_AGENTS:
+    for pid, state in _session_members(processes).get(sid, []):
+        if state["comm"] not in RECOGNIZED_AGENTS:
             continue
         parent = _process_state(processes, state["ppid"])
         if parent is not None and parent["sid"] == sid and parent["comm"] in RECOGNIZED_AGENTS:
@@ -215,7 +234,11 @@ class Collector:
             tracked = self._tracked_identities(rows, raw, bool(listed))
             if listed:
                 self._prune(tracked)
-            resources = self._resources_for_rows(rows, raw, bool(listed), now, monotonic, tracked)
+            token = _SESSION_INDEX.set([])
+            try:
+                resources = self._resources_for_rows(rows, raw, bool(listed), now, monotonic, tracked)
+            finally:
+                _SESSION_INDEX.reset(token)
             projected = [
                 self._project_row(row, now, resources[index])
                 for index, row in enumerate(rows)
@@ -294,7 +317,7 @@ class Collector:
         if not pending:
             return resources
         try:
-            before = self._process_snapshot()
+            before = self._fresh_snapshot()
         except (AttributeError, OSError, TypeError, ValueError):
             before = None
         if before is None:
@@ -332,7 +355,7 @@ class Collector:
         if not observed:
             return resources
         try:
-            after = self._process_snapshot()
+            after = self._fresh_snapshot()
         except (AttributeError, OSError, TypeError, ValueError):
             after = None
         for index, row, identity, witness, reading in observed:
@@ -345,6 +368,13 @@ class Collector:
                     row, identity, witness, reading, now, monotonic,
                 )
         return resources
+
+    def _fresh_snapshot(self):
+        """A new process table; the session index of the previous one is dropped (a fake may reuse its dict)."""
+        memo = _SESSION_INDEX.get()
+        if memo is not None:
+            memo.clear()
+        return self._process_snapshot()
 
     def _prechecked_resources(self, row, raw, listed, now, monotonic, tracked):
         identity = _identity(row)
