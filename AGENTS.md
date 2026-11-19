@@ -45,7 +45,7 @@ compatible) or say in the description why it is unrelated. It runs only the test
   (`CONTRIBUTORS.md`, `CLA.md`, `CLA-SIGNATORIES.md`, `tools/cla-check/MAINTAINERS`,
   `.github/CODEOWNERS`) reach `release/latest` whatever the label: after the merge, a workflow opens
   a pull request with these files alone.
-- Never edit `CHANGELOG.md` in a pull request: a change users notice adds one file
+- Never edit `CHANGELOG.md` in a pull request, except a release cut: a change users notice adds one file
   `changelog.d/<number>-<slug>.md` (format in `changelog.d/README.md`, checked by
   `node --experimental-strip-types tools/changelog/changelog.ts check`); a change no user sees
   says `Changelog: none: <reason>` on a line of the description.
