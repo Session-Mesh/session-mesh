@@ -112,18 +112,24 @@ let test_rewrite_of_the_head () =
       Alcotest.check outcome "time went back: restarted" Tail.Restarted how)
 
 (* More than a window appended: one call skips to the window and is complete,
-   since max_read is above the window; the state before is kept. *)
+   since max_read is above the window. The fold starts again from an empty
+   state, as a first read of the file does: a state change in the skipped
+   bytes cannot be mixed with the state before it. *)
 let test_large_append () =
   Support.with_directory (fun directory ->
       let path = Filename.concat directory "t.jsonl" in
       let limits = Tail.limits ~max_line_bytes:64 ~max_depth:4 ~window:1024 ~max_read:2048 () in
       Support.write_file path "{\"a\":1}\n";
       let first, _ = update ~limits path None in
-      Support.append_file path (String.make 5000 'x' ^ "\n{\"z\":1}\n");
+      Support.append_file path ("{\"a\":2}\n" ^ String.make 5000 'x' ^ "\n{\"z\":1}\n");
       let t, how = update ~limits path (Some first) in
-      Alcotest.check outcome "appended" Tail.Appended how;
+      Alcotest.check outcome "folded from an empty state" Tail.Restarted how;
       Alcotest.(check bool) "complete in one call" true (Tail.complete t);
-      check_seen "state kept, the window's line folded" [ {|{"a":1}|}; {|{"z":1}|} ] t)
+      check_seen "only the window's line" [ {|{"z":1}|} ] t;
+      let cold, _ = update ~limits path None in
+      check_seen "as a first read" (seen cold) t;
+      Alcotest.(check int) "not counted as a rewrite" 0 (Tail.stats t).resets;
+      check_seen "previous result unchanged" [ {|{"a":1}|} ] first)
 
 let test_inode_change () =
   Support.with_directory (fun directory ->

@@ -131,7 +131,7 @@ with the same keys and values:
 
 | Field | Meaning |
 |---|---|
-| `cwd` | The working directory of the agent's process, else of the session leader, as the kernel reports it; `null` when neither can be read. |
+| `cwd` | The working directory, as the kernel reports it, of the agent's process when the session runs an agent, else of the foreground process group's leader; when that one cannot be read or is empty, the session leader's (Python's `cwd(ag[0] if ag else fg) or cwd(sid)`); `null` when neither can be read. |
 | `cmd` | The command line of the session's foreground process group leader, arguments joined by spaces, at most 160 code points; else that process's name; else `"?"`. |
 | `agent` | `null` when no agent runs in the session. Otherwise the outermost agent process of the session, preferring the one in the foreground process group: `type`, `pid`, `argv` (its command line), `foreground` (whether its process group is the terminal's foreground group), and the adapter's fields. |
 
@@ -160,8 +160,9 @@ lost). Four report a different value; they are marked **differs**.
 - **Transcripts are folded incrementally.** Python folds the last 1.5 MB of a Claude transcript at every
   listing; this program folds that window once, then only the appended lines. Below the window the result is
   the same. Beyond it, a title or a prompt that has left the window is still reported here, where Python
-  loses it. When more than the window was appended since the last read, the read skips to the window at the
-  end, as Python reads only that window, and keeps what was folded before.
+  loses it. When more than the window was appended since the last read, the transcript is folded again from
+  an empty state over the window at its end, exactly as Python reads it: what was folded before is dropped,
+  since a change in the skipped lines (a new title, a question answered) cannot be seen.
 - **Rewrites read as appends (differs).** A transcript counts as rewritten, and is folded again from its
   window, when its device or inode changed, when it is shorter than the last read position, when its
   modification time went back, or when the 256 bytes before that position or the first 256 bytes of the

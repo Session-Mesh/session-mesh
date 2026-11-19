@@ -83,6 +83,56 @@ let test_large_append () =
       Support.append_file path ("\n" ^ prompt "after the 100 MB line");
       Alcotest.(check bool) "up to date at once" true (field "last" (describe adapter) = `String "after the 100 MB line"))
 
+let title text = Printf.sprintf {|{"type":"custom-title","customTitle":"%s"}|} text ^ "\n"
+
+let answer ?(message = "m1") text =
+  Printf.sprintf {|{"type":"assistant","message":{"id":"%s","content":[{"type":"text","text":"%s"}]}}|} message text ^ "\n"
+
+(* 2 MB of lines that change no field, more than the 1.5 MB window. *)
+let filler =
+  String.concat ""
+    (List.init 200 (fun n -> Printf.sprintf {|{"type":"progress","n":%d,"data":"%s"}|} n (String.make 10_000 'z') ^ "\n"))
+
+let transcript_keys = [ "title"; "last"; "said"; "choices"; "ask_id" ]
+let transcript_view described = List.map (fun key -> (key, field key described)) transcript_keys
+
+(* State changes then more than a window of other lines: the description is
+   the window's, as a first read (and Python, which reads only the window)
+   gives, never the state from before the skipped lines. *)
+let test_skip_restarts_the_fold () =
+  with_home (fun home ->
+      let path = transcript_path home in
+      let adapter = fresh home in
+      Support.write_file path (title "T1" ^ prompt "prompt one" ^ answer "answer one");
+      Alcotest.(check bool) "12a: base" true (field "title" (describe adapter) = `String "T1");
+      Support.append_file path (title "T2" ^ prompt "prompt two" ^ answer ~message:"m2" "answer two" ^ filler);
+      let skipped = describe adapter in
+      Alcotest.check fields "12b: the window's fields" (transcript_view (cold home)) (transcript_view skipped);
+      Alcotest.(check bool) "12b: no title, prompt or answer from before the skip" true
+        (List.for_all (fun key -> field key skipped = `Null) [ "title"; "last"; "said" ]))
+
+let ask_question =
+  {|{"type":"assistant","message":{"id":"mq","content":[{"type":"tool_use","id":"toolu_q","name":"AskUserQuestion",|}
+  ^ {|"input":{"questions":[{"question":"Pick?","multiSelect":false,"options":[{"label":"Yes"},{"label":"No"}]}]}}]}}|}
+  ^ "\n"
+
+let question_answered =
+  {|{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_q","content":"Yes"}]}}|}
+  ^ "\n"
+
+let test_skip_drops_an_answered_question () =
+  with_home (fun home ->
+      let path = transcript_path home in
+      let adapter = fresh home in
+      Support.write_file path (title "Q" ^ prompt "ask me" ^ ask_question);
+      Alcotest.(check bool) "12c: pending question" true (field "ask_id" (describe adapter) = `String "toolu_q");
+      Support.append_file path (question_answered ^ filler);
+      let skipped = describe adapter in
+      Alcotest.check fields "12d: the window's fields" (transcript_view (cold home)) (transcript_view skipped);
+      Alcotest.(check bool) "12d: no choices of the answered question" true
+        (field "choices" skipped = `Null && field "ask_id" skipped = `Null && field "said" skipped = `Null);
+      Alcotest.check fields "12e: the next read" (transcript_view skipped) (transcript_view (describe adapter)))
+
 let test_hostile_lines () =
   with_home (fun home ->
       let huge = {|{"type":"user","message":{"content":"|} ^ String.make 2_000_000 'x' ^ "\"}}\n" in
@@ -199,6 +249,8 @@ let () =
           Alcotest.test_case "unchanged is not decoded" `Quick test_no_decoding_when_unchanged;
           Alcotest.test_case "concurrent appends" `Quick test_concurrent_appends;
           Alcotest.test_case "100 MB append" `Quick test_large_append;
+          Alcotest.test_case "a skip restarts the fold (12b)" `Quick test_skip_restarts_the_fold;
+          Alcotest.test_case "a skip drops an answered question (12d)" `Quick test_skip_drops_an_answered_question;
         ] );
       ( "hostile",
         [

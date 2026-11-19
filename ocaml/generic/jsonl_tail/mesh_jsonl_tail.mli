@@ -19,11 +19,12 @@
     - the first read of a file larger than [window] starts [window] bytes
       before its end and drops the bytes up to and including the first
       newline there, as Python's [seek] then [readline()] does;
-    - when more than [window] bytes were appended since the cursor, the read
-      skips to the window at the end (dropping its partial first line, as a
-      first read does) and keeps the state: the lines skipped are not
-      folded, as Python, which reads only the window, never sees them either;
-      one call then brings the result up to date when [max_read >= window];
+    - when more than [window] bytes were appended since the cursor, the
+      file is read as on a first read: from an empty state, over the window
+      at its end (outcome [Restarted], [resets] unchanged). The state before
+      is dropped, since the transitions in the skipped bytes cannot be seen:
+      the result is the window's, as Python's, which reads only the window.
+      One call brings the result up to date when [max_read >= window];
     - the file counts as rewritten, and is folded again from an empty state,
       when its device or inode changed, when it is shorter than the cursor,
       when its modification time went back, or when the (at most 256) bytes
@@ -109,7 +110,7 @@ type stats = {
 type outcome =
   | Unchanged  (** Same file, same size and time, nothing left to read. *)
   | Appended  (** Bytes read after the previous cursor. *)
-  | Restarted  (** First read, or a rewrite: folded from an empty state. *)
+  | Restarted  (** First read, a rewrite, or more than a window appended: folded from an empty state. *)
 
 val update :
   limits -> 's fold -> string -> 's t option -> ('s t * outcome, Mesh_safe_file.error) result
