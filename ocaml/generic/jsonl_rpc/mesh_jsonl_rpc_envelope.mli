@@ -43,7 +43,10 @@ type error = { code : code; message : string }
 type fields = (string * Yojson.Safe.t) list
 
 type request = {
-  req : Yojson.Safe.t option;  (** Echoed in every frame of the answer. *)
+  req : Yojson.Safe.t option;
+      (** Echoed in every frame of the answer. One that holds an escaped lone
+          surrogate, which {!Mesh_jsonl_value.decode} reads as U+FFFD, is kept
+          as it was sent, as a raw literal ([`Intlit] of its JSON text). *)
   op : string;
   request_version : int;
   fields : fields;  (** Every field of the request object, reserved ones included. *)

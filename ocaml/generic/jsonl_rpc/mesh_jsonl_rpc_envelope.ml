@@ -57,11 +57,31 @@ let echoable = function
       | Error problem ->
           Error (fail Bad_request ("req cannot be echoed: " ^ Mesh_jsonl_value.error_message problem)))
 
+let lone_surrogates text = not (String.equal (Mesh_jsonl_value.replace_lone_surrogates text) text)
+
+(* The decoder reads an escaped lone surrogate as U+FFFD. A [req] that held
+   one is echoed as it was sent: its literal text, taken from the line read
+   without decoding its strings, as a raw literal that the encoder writes as
+   it is. The last [req] of the line is the one decoded. *)
+let original_req line req =
+  match req with
+  | Some _ when String.contains line '\\' && lone_surrogates line -> (
+      match Yojson.Raw.from_string line with
+      | `Assoc fields -> (
+          match List.rev (List.filter (fun (key, _) -> key = "req") fields) with
+          | (_, raw) :: _ ->
+              let text = Yojson.Raw.to_string raw in
+              if lone_surrogates text then Some (`Intlit text) else req
+          | [] -> req)
+      | _ -> req
+      | exception _ -> req)
+  | _ -> req
+
 let decode_request limits line =
   match Mesh_jsonl_value.decode limits line with
   | Error problem -> Error (None, fail Bad_request (Mesh_jsonl_value.error_message problem))
   | Ok (`Assoc fields) -> (
-      let req = List.assoc_opt "req" fields in
+      let req = original_req line (List.assoc_opt "req" fields) in
       match (echoable req, decode_version fields, List.assoc_opt "op" fields) with
       | Error problem, _, _ -> Error (None, problem)
       | Ok (), Error problem, _ -> Error (req, problem)
