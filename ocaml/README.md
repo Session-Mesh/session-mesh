@@ -20,6 +20,18 @@ with `dune runtest worklog` and use a fictional fixture in `worklog/test/fixture
 outputs, in `worklog/test/golden`. Two C functions (`flock_stubs.c`) take the same BSD `flock(2)`
 lock as `wl` and read the monotonic clock.
 
+## work-mcp
+
+`work_mcp/` holds the `work_mcp` library and the stdio program `work-mcp`: 17 `work_*` MCP tools
+(resume, tasks, projects, products, update, log, blockers, sessions, non-blocking questions) over
+the worklog library. It uses `mcp-kit` like `mesh-board-mcp` but does not talk to the Mesh. It
+reads `WL_HOME` (the data repository, created at first use through the library's `init`, never
+overwritten), `MESH_SESSION` (the session name) and the agent markers of the environment; it
+never reads the session token. There is no tool that answers a question: `Work_questions.answer`
+is a library function for the interface. Registering the server with an agent is a separate
+owner step. See [docs/work-mcp.md](../docs/work-mcp.md); tests: `dune runtest work_mcp`.
+By hand: `WL_HOME=/tmp/demo MESH_SESSION=demo ./_build/default/work_mcp/bin/work_mcp_main.exe`.
+
 ## mesh-logout-all
 
 It takes no argument and reads `MESH_CONF_DIR` (the token and `cookie-generation`), `MESH_CACHE_DIR`

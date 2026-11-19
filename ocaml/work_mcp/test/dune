@@ -1,0 +1,24 @@
+; Tests of the work_* MCP server: the real executable is driven over stdio
+; (JSON-RPC lines) against temporary fictional data repositories. Every
+; server runs with its own HOME, WL_HOME and MESH_SESSION; no port, no
+; service and no real data directory is touched.
+
+(tests
+ (names test_tools test_server)
+ (modules
+  test_tools
+  test_server
+  test_questions
+  test_hardening
+  test_requests
+  test_review2
+  test_review3
+  work_client
+  work_support)
+ (libraries work_mcp mesh_worklog alcotest yojson unix)
+ (deps ../bin/work_mcp_main.exe)
+ (action
+  (setenv
+   WORK_MCP_EXE
+   %{exe:../bin/work_mcp_main.exe}
+   (run %{test}))))

@@ -1,0 +1,5 @@
+(executable
+ (name work_mcp_main)
+ (public_name work-mcp)
+ (modules work_mcp_main)
+ (libraries work_mcp))
