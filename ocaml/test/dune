@@ -57,7 +57,7 @@
 (test
  (name agent_guide_test)
  (modules agent_guide_test)
- (libraries mesh_board_mcp mcp-kit mcp-kit.stdio alcotest yojson)
+ (libraries mesh_board_mcp work_mcp mcp-kit mcp-kit.stdio alcotest yojson)
  (action
   (run %{test} %{dep:../lib/agent-guide.md})))
 
