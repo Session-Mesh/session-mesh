@@ -29,6 +29,9 @@ val platform : ?on_read:(int -> unit) -> ?skipped:int -> process list -> Mesh_pt
 
 val round : ?skipped:int -> process list -> Mesh_agent_round.t
 
+val session : int -> Mesh_agent.session
+(** The listed session led by this pid, named [s<pid>]. *)
+
 val write : string -> string -> unit
 (** Create the parent directories, then write the file. *)
 

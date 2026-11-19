@@ -18,6 +18,18 @@ type fields = (string * Yojson.Safe.t) list
 (** The agent fields of a row, beside the [type], [pid], [argv] and
     [foreground] that the round adds for every agent. *)
 
+type session = {
+  name : string;  (** The PTY host's session name. *)
+  created : float;  (** When the host created it: with [name], one incarnation. *)
+  pid : int;  (** The session leader. *)
+}
+(** The listed session a process is described for. An identity registry keys
+    its entries by [(name, created)]. *)
+
+type described = { session : session; process : Mesh_agent_round.process; fields : fields }
+(** One row an adapter described in a round: its session, its agent process
+    and the fields {!ADAPTER.describe} returned. *)
+
 module type ADAPTER = sig
   type t
   (** The adapter's state across rounds (its caches). *)
@@ -36,12 +48,24 @@ module type ADAPTER = sig
   (** Bound the caches for this many listed sessions (twice as many entries,
       so that a session that leaves and comes back stays cached). *)
 
-  val describe : t -> Mesh_agent_round.t -> Mesh_agent_round.process -> fields
-  (** Describe one agent process. Called from several system threads at once:
-      the adapter guards its own state. It blocks on file reads; the caller
-      bounds it with a deadline. It never raises on a malformed or unreadable
-      file: what cannot be read is left out. *)
+  val describe : t -> Mesh_agent_round.t -> session -> Mesh_agent_round.process -> fields
+  (** Describe one agent process of [session]. Called from several system
+      threads at once: the adapter guards its own state. It blocks on file
+      reads; the caller bounds it with a deadline. It never raises on a
+      malformed or unreadable file: what cannot be read is left out. *)
+
+  val check : t -> Mesh_agent_round.t -> described list -> (string * fields) list
+  (** The cross-session step: called once per round (and per [describe]
+      request), after every row of the request has ended, with the rows of
+      this adapter's type that were described in time, in the order they
+      ended. It returns, by session name, the complete new fields of the
+      sessions it corrects (a rule over several sessions, such as one conversation id claimed
+      by two sessions); the other rows stay as they are. Called in a system
+      thread with the setup deadline; [no_check] is the default. *)
 end
+
+val no_check : 'state -> Mesh_agent_round.t -> described list -> (string * fields) list
+(** The default {!ADAPTER.check}: corrects nothing. *)
 
 type adapter
 
@@ -51,7 +75,8 @@ val adapter : (module ADAPTER with type t = 'state) -> Mesh_agent_roots.t -> ada
 val kind : adapter -> string
 val prepare : adapter -> Mesh_agent_round.t -> unit
 val resize : adapter -> sessions:int -> unit
-val describe : adapter -> Mesh_agent_round.t -> Mesh_agent_round.process -> fields
+val describe : adapter -> Mesh_agent_round.t -> session -> Mesh_agent_round.process -> fields
+val check : adapter -> Mesh_agent_round.t -> described list -> (string * fields) list
 
 module Registry : sig
   type t

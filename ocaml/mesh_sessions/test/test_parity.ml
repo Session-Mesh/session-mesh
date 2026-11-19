@@ -110,9 +110,9 @@ let test_golden () =
       let rows =
         List.map
           (fun (label, leader) ->
-            match Mesh_sessions_describe.row registry round ~sid:leader.pid with
-            | Described row -> (label, normalize ~root ~ids row)
-            | Unsupported _ -> Alcotest.failf "%s: unsupported" label)
+            let row = Mesh_sessions_describe.row registry round (Fake.session leader.pid) in
+            if Mesh_sessions_describe.supported row then (label, normalize ~root ~ids (Mesh_sessions_describe.json row))
+            else Alcotest.failf "%s: unsupported" label)
           leaders
       in
       let golden = Yojson.Safe.from_file (Filename.concat fixtures "golden.json") in

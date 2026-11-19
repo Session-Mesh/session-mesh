@@ -61,6 +61,8 @@ let round ?skipped processes =
   | Ok round -> round
   | Error _ -> failwith "fake table"
 
+let session pid = { Mesh_agent.name = Printf.sprintf "s%d" pid; created = 1.5; pid }
+
 let rec mkdir_p directory =
   if not (Sys.file_exists directory) then begin
     mkdir_p (Filename.dirname directory);

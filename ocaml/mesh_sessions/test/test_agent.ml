@@ -113,24 +113,21 @@ let test_rows () =
     ]
   in
   let round = Fake.round table and registry = Fake.registry "/nonexistent" in
-  let row sid = Mesh_sessions_describe.row registry round ~sid in
-  (match row 50 with
-  | Described value ->
-      let cmd = Option.get (Py.string (member "cmd" value)) in
-      Alcotest.(check int) "cmd cut at 160 code points" 160 (code_points cmd)
-  | Unsupported _ -> Alcotest.fail "vim");
-  (match row 60 with
-  | Described value -> Alcotest.(check bool) "empty argv: the name" true (member "cmd" value = `String "kworker\xef\xbf\xbd")
-  | Unsupported _ -> Alcotest.fail "kworker");
-  (match row 80 with
-  | Described value -> Alcotest.(check bool) "gone" true (value = `Assoc [ ("cwd", `Null); ("cmd", `String "?"); ("agent", `Null) ])
-  | Unsupported _ -> Alcotest.fail "gone");
+  let row sid =
+    let row = Mesh_sessions_describe.row registry round (Fake.session sid) in
+    (Mesh_sessions_describe.supported row, Mesh_sessions_describe.json row)
+  in
+  let described sid = match row sid with true, value -> value | false, _ -> Alcotest.failf "%d: unsupported" sid in
+  let cmd = Option.get (Py.string (member "cmd" (described 50))) in
+  Alcotest.(check int) "cmd cut at 160 code points" 160 (code_points cmd);
+  Alcotest.(check bool) "empty argv: the name" true (member "cmd" (described 60) = `String "kworker\xef\xbf\xbd");
+  Alcotest.(check bool) "gone" true (described 80 = `Assoc [ ("cwd", `Null); ("cmd", `String "?"); ("agent", `Null) ]);
   match row 70 with
-  | Unsupported value ->
+  | false, value ->
       let agent = member "agent" value in
       Alcotest.(check bool) "type" true (member "type" agent = `String "codex");
       Alcotest.(check bool) "argv" true (member "argv" agent = `List [ `String "codex"; `String "--yolo" ])
-  | Described _ -> Alcotest.fail "codex has no adapter yet"
+  | true, _ -> Alcotest.fail "codex has no adapter yet"
 
 let () =
   Alcotest.run "mesh_agent"

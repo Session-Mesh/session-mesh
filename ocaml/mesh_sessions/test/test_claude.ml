@@ -21,7 +21,7 @@ let sample = fixture "plain.jsonl" ^ fixture "asking.jsonl" ^ fixture "said.json
 let describe adapter =
   let round = Fake.round [ Fake.process ~pid ~sid:pid "claude" ] in
   Mesh_agent_claude.prepare adapter round;
-  Mesh_agent_claude.describe adapter round (Option.get (Mesh_agent_round.find round pid))
+  Mesh_agent_claude.describe adapter round (Fake.session pid) (Option.get (Mesh_agent_round.find round pid))
 
 let fresh home = Mesh_agent_claude.create (Mesh_agent_roots.of_home home)
 let cold home = describe (fresh home)

@@ -8,7 +8,13 @@
 module Round = Mesh_agent_round
 module Session = Mesh_agent_session
 
-type t = Described of Yojson.Safe.t | Unsupported of Yojson.Safe.t
+type agent = {
+  kind : string;
+  common : (string * Yojson.Safe.t) list;  (* pid, argv, foreground *)
+  described : Mesh_agent.described option;  (* None: no adapter for [kind] *)
+}
+
+type t = { cwd : Yojson.Safe.t; cmd : string; agent : agent option }
 
 let max_cmd = 160
 let words round pid = List.map Session.argv_text (Round.argv round pid)
@@ -29,11 +35,11 @@ let cwd round (frame : Session.frame) ~sid =
   | Some path when path <> "" -> text path
   | _ -> ( match Round.cwd round sid with Some path -> text path | None -> `Null)
 
-let agent registry round frame (process : Round.process) kind =
-  let fields, described =
-    match Mesh_agent.Registry.find registry kind with
-    | Some adapter -> (Mesh_agent.describe adapter round process, true)
-    | None -> ([], false)
+let agent registry round session frame (process : Round.process) kind =
+  let described =
+    Option.map
+      (fun adapter -> { Mesh_agent.session; process; fields = Mesh_agent.describe adapter round session process })
+      (Mesh_agent.Registry.find registry kind)
   in
   let common =
     [
@@ -42,15 +48,32 @@ let agent registry round frame (process : Round.process) kind =
       ("foreground", `Bool (Session.agent_in_foreground frame));
     ]
   in
-  let fields = List.filter (fun (key, _) -> not (List.mem_assoc key common)) fields in
-  (`Assoc ((("type", `String kind) :: fields) @ common), described)
+  { kind; common; described }
 
-let row registry round ~sid =
+let row registry round (session : Mesh_agent.session) =
+  let sid = session.pid in
   let frame = Session.frame round ~sid in
-  let agent, described =
-    match frame.agent with
-    | Some (process, kind) -> agent registry round frame process kind
-    | None -> (`Null, true)
-  in
-  let row = `Assoc [ ("cwd", cwd round frame ~sid); ("cmd", `String (cmd round frame)); ("agent", agent) ] in
-  if described then Described row else Unsupported row
+  let agent = Option.map (fun (process, kind) -> agent registry round session frame process kind) frame.agent in
+  { cwd = cwd round frame ~sid; cmd = cmd round frame; agent }
+
+let agent_json { kind; common; described } =
+  let fields = match described with Some described -> described.fields | None -> [] in
+  let fields = List.filter (fun (key, _) -> not (List.mem_assoc key common)) fields in
+  `Assoc ((("type", `String kind) :: fields) @ common)
+
+let json row =
+  let agent = match row.agent with Some agent -> agent_json agent | None -> `Null in
+  `Assoc [ ("cwd", row.cwd); ("cmd", `String row.cmd); ("agent", agent) ]
+
+let supported row = match row.agent with Some { described = None; _ } -> false | _ -> true
+
+let agent row =
+  match row.agent with
+  | Some { kind; described = Some described; _ } -> Some (kind, described)
+  | _ -> None
+
+let with_fields row fields =
+  match row.agent with
+  | Some ({ described = Some described; _ } as agent) ->
+      { row with agent = Some { agent with described = Some { described with fields } } }
+  | _ -> row
