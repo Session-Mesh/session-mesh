@@ -21,6 +21,16 @@ before 1.0, a minor version may change behaviour.
   and the inspection of the lock file, the vanished lock was reported as a missing configuration.
   The edit now refuses `busy`, and the caller retries with a fresh revision as for any other busy
   lock.
+- **The session list is computed with less repeated work.** Each listing re-decoded every line of
+  the Codex rollouts and Claude transcripts it shows, even unchanged ones, listed the recent Codex
+  rollouts once per identity rule, serialised the conversation-name file once per session, and
+  validated the whole process table once per observed session. An unchanged transcript is now
+  parsed once (the cache is keyed by path, device, inode, size and modification time, so a written,
+  replaced or relinked file is read again), the rollouts are listed once per listing, the names are
+  serialised only to be written, and each process table is indexed once. The folder and id read
+  from the first line of each recent Codex rollout are also kept in `codex-rollout-meta.json` in
+  the cache directory (mode 0600, ids and folders only), so the first listing after a restart of
+  the web server does not read every rollout again. The listed data are unchanged.
 - **An idle Codex started as `codex resume <id>` gets its conversation id from its launch
   arguments.** Such a session that holds no rollout file open had no conversation id, so a PTY host
   restart brought it back as a plain shell. The id is now read from the launch arguments of the
