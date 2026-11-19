@@ -15,7 +15,8 @@ val copy_fixture : unit -> repo
 (** A fresh copy of the worklog fixture, with its own empty home directory. *)
 
 val append_events : repo -> string list -> unit
-(** Append JSON lines to a new host file of the copy's [events/]. *)
+(** Append JSON lines to a host file of the copy's [events/] that the
+    fixture does not have; earlier batches are kept. *)
 
 val write_file : string -> string -> unit
 
