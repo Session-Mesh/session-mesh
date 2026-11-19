@@ -123,7 +123,7 @@ function oc2Home(user: object): {home: string; environ: NodeJS.ProcessEnv} {
 
 function sources2(user: object, board = true): Source[] {
   const {home, environ} = oc2Home(user);
-  const inline = execFileSync(PYTHON, ['-I', '-c', `import sys; sys.path.insert(0, ${JSON.stringify(REPO)}); import agentmcp; print(agentmcp.opencode_config_v2(reach={"MESH_PORT": "17691"}, board=${board ? 'True' : 'False'}))`],
+  const inline = execFileSync(PYTHON, ['-I', '-c', `import sys; sys.path.insert(0, ${JSON.stringify(REPO)}); import agentmcp; print(agentmcp.opencode_config_v2(reach={"MESH_PORT": "17691"}, disabled=${board ? '()' : 'agentmcp.MESH_SERVER_NAMES'}))`],
     {cwd: REPO, encoding: 'utf8', env: {PATH: process.env.PATH, HOME: home, MESH_BIN_DIR: meshBin}}).trim();
   const output = execFileSync(binary!, ['debug', 'config', '--standalone'], {cwd: home, encoding: 'utf8', timeout: 60000,
     env: {...environ, OPENCODE_CONFIG_CONTENT: inline}});
@@ -133,7 +133,8 @@ function sources2(user: object, board = true): Source[] {
 function disablesBoard(user: object): unknown {
   const {home, environ} = oc2Home(user);
   const output = execFileSync(PYTHON, ['-I', '-c', `import json, sys; sys.path.insert(0, ${JSON.stringify(REPO)}); import agentmcp
-print(json.dumps(agentmcp.opencode_user_disables_board(${JSON.stringify(home)}, ${JSON.stringify(environ)})))`],
+off = agentmcp.opencode_user_disabled_servers(${JSON.stringify(home)}, ${JSON.stringify(environ)})
+print(json.dumps(None if off is None else "mesh-board" in off))`],
   {cwd: REPO, encoding: 'utf8', timeout: 90000, env: {PATH: process.env.PATH, HOME: home}});
   return JSON.parse(output);
 }

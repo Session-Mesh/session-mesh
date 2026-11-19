@@ -492,9 +492,8 @@ async def _opencode_v2_command(words, cwd):
     if resumed is not None and not await asyncio.to_thread(discover.opencode_session_exists, resumed):
         raise web.HTTPConflict(text=OPENCODE_UNKNOWN_SESSION)
     off = await asyncio.to_thread(agentmcp.opencode_user_disabled_servers, cwd)
-    off = {agentmcp.SERVER_NAME, agentmcp.WORK_SERVER_NAME} if off is None else off   # unreadable: inject neither
-    config = agentmcp.opencode_config_v2(reach=_mesh_reach_env(), board=agentmcp.SERVER_NAME not in off,
-                                         work=agentmcp.WORK_SERVER_NAME not in off)
+    config = agentmcp.opencode_config_v2(reach=_mesh_reach_env(),     # unreadable: no server is injected
+                                         disabled=agentmcp.MESH_SERVER_NAMES if off is None else off)
     return f"env {agentmcp.OPENCODE_CONFIG_ENV}={shlex.quote(config)} {shlex.join(words)}"
 
 
@@ -554,8 +553,7 @@ def _vibe_launch(command, cwd):
         raise web.HTTPBadRequest(text="Non-canonical Vibe command")
     launch_id = f"vibe-{secrets.token_hex(12)}"
     try:
-        limits = agentmcp.vibe_board_limits(cwd)
-        work_limits = agentmcp.vibe_board_limits(cwd, name=agentmcp.WORK_SERVER_NAME)
+        limits = {name: agentmcp.vibe_user_limits(cwd, name=name) for name in agentmcp.MESH_SERVER_NAMES}
         hooks = agentmcp.vibe_hooks_dir(CONF_DIR, launch_id)
     except agentmcp.VibeRefused as exc:
         raise web.HTTPConflict(text=f"Mistral Vibe: {exc}") from exc
@@ -563,7 +561,7 @@ def _vibe_launch(command, cwd):
         raise web.HTTPServiceUnavailable(
             text=f"Mistral Vibe: the hooks directory could not be prepared ({type(exc).__name__}): no Vibe session was started") from exc
     words = [argv[0], *(["--add-dir", hooks] if hooks else []), *argv[1:]]
-    value = agentmcp.vibe_mcp_value(_mesh_reach_env(), limits, work_limits)
+    value = agentmcp.vibe_mcp_value(_mesh_reach_env(), limits)
     if value is None:
         return VibeLaunch(shlex.join(words), launch_id if hooks else None)
     # The pty shell expands every unquoted "$VAR" of the line before it runs the command, so the token must
@@ -571,10 +569,9 @@ def _vibe_launch(command, cwd):
     # The script is one single-quoted argument of ``/bin/sh -c`` (an absolute path: a ``sh`` found through the
     # PATH of the pty shell could be any program a writable PATH directory names): the inner ``sh`` expands
     # the token from its inherited environment and execs Vibe, so no argument of any process holds the value.
-    # The tracker's MESH_SESSION is expanded the same way: the session's name is not written on the line either.
-    tail = '"$MESH_SESSION"'.join(map(shlex.quote, value[1].split(agentmcp.SESSION_MARK)))
-    script = (f'export {agentmcp.VIBE_MCP_ENV}={shlex.quote(value[0])}"$MESH_SESSION_TOKEN"{tail}; '
-              'exec "$@"')
+    # The tracker's MESH_SESSION and WL_HOME are expanded the same way (agentmcp.vibe_shell_words).
+    script = (f'export {agentmcp.VIBE_MCP_ENV}={shlex.quote(value[0])}"$MESH_SESSION_TOKEN"'
+              f'{agentmcp.vibe_shell_words(value[1])}; exec "$@"')
     return VibeLaunch(f"/bin/sh -c {shlex.quote(script)} sh {shlex.join(words)}", launch_id if hooks else None)
 
 

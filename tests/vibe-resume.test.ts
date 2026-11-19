@@ -146,7 +146,7 @@ command = "/bin/true"
 disabled_tools = ["agent_peers", 7]
 `);
       const limits = (cwd: string, extra: NodeJS.ProcessEnv) => python(
-        `import json, agentmcp; print(json.dumps(agentmcp.vibe_board_limits(${JSON.stringify(cwd)})))`, extra);
+        `import json, agentmcp; print(json.dumps(agentmcp.vibe_user_limits(${JSON.stringify(cwd)})))`, extra);
       assert.deepEqual(limits(project, {VIBE_HOME: home}), {disabled: false, disabled_tools: ['agent_message_send', 'agent_peers']});
       fs.appendFileSync(path.join(home, 'config.toml'), '\n[[mcp_servers]]\nname = "mesh-board"\ndisabled = true\n');
       // `disabled` set by any entry of that name counts; the project here has no configuration of its own.
