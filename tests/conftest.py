@@ -104,7 +104,7 @@ def _check_bound_paths():
         "management": {"FILE": TEST_HOME},
         "organize": {"FILE": TEST_HOME},
         "respawn": {"FILE": TEST_HOME},
-        "discover": {"HOME": TEST_HOME},
+        "discover": {"HOME": TEST_HOME, "META_FILE": TEST_HOME},
         "history": {"HOME": TEST_HOME, "CLAUDE": TEST_HOME,
                     "CODEX": TEST_HOME, "CACHE_FILE": TEST_HOME},
         "localmesh": {"TOKEN_FILE": TEST_HOME},
