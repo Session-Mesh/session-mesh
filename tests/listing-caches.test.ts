@@ -186,6 +186,54 @@ print(json.dumps({"same": first == second == third, "decoded": [first_decoded, s
   });
 });
 
+describe('resource observation indexes each process table once', () => {
+  test('the same agents are found, and a table is validated once instead of once per session', () => {
+    const home = tempHome();
+    try {
+      const result = python(`
+import json, observability as obs
+SESSIONS, OTHERS = 30, 2000
+def table():
+    procs = {}
+    for i in range(SESSIONS):
+        shell = 1000 + i
+        procs[shell] = ("bash", "S", 1, shell, shell, 0, shell + 5000)
+        procs[shell + 5000] = ("codex", "S", shell, shell + 5000, shell, 0, shell + 5000)
+    for pid in range(20000, 20000 + OTHERS):
+        procs[pid] = ("node", "S", 1, pid, pid, 0, -1)
+    return procs
+validated = []
+real_state = obs._process_state
+def counted(processes, pid):
+    validated.append(1)
+    return real_state(processes, pid)
+obs._process_state = counted
+rows = [{"name": f"s{i}", "created": 100.0, "source": "mesh", "agent_type": "codex", "lifecycle": "active",
+         "time_basis": "created", "time": 100.0} for i in range(SESSIONS)]
+raw = [{"name": f"s{i}", "created": 100.0, "pid": 1000 + i} for i in range(SESSIONS)]
+read = []
+collector = obs.Collector(process_snapshot=table, read_start_ticks=lambda pid: 77,
+                          read_process=lambda pid: read.append(pid) or {"sid": pid - 5000, "start_ticks": 77,
+                                                                      "cpu_ticks": 1, "rss_bytes": 4096})
+result = collector.enrich(raw=raw, management={"sessions": rows}, listed=True, now=200.0, monotonic=5.0)
+during = len(validated)
+per_row = [obs._comm_only_session_agent(table(), 1000 + i) for i in range(SESSIONS)]
+print(json.dumps({"read": sorted(read), "rss": [r["metrics"]["rss_bytes"]["value"] for r in result["sessions"]],
+                  "validated": during,
+                  "per_row": per_row}))
+`, home);
+      assert.deepEqual(result.read, Array.from({length: 30}, (_unused, i) => 6000 + i));
+      assert.deepEqual(result.rss, Array(30).fill(4096));
+      assert.deepEqual(result.per_row, Array.from({length: 30}, (_unused, i) => [6000 + i, 'codex']));
+      // Without the index, each of the 30 rows validated the whole table of 2060 processes, before and after
+      // the reads: about 124 000 validations. With it, each table is validated once: about 4 200.
+      assert.ok(result.validated < 5000, `validations during enrich: ${result.validated}`);
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
+  });
+});
+
 describe('codex rollouts are listed once per listing', () => {
   test('inside listing_scope the glob runs once and every rule sees the same rollouts', () => {
     const home = tempHome();
