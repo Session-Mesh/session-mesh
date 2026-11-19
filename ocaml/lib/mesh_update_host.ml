@@ -127,7 +127,16 @@ let run_curl ~mgr ~clock ~seconds arguments =
           (fun () ->
             try Ok (finished ())
             with Eio.Cancel.Cancelled _ as cancelled ->
-              kill_and_reap ();
+              (* Kill only, do not await. When the caller is cancelled (the
+                 host stops), the cancellation also reaches the fiber Eio
+                 forked on [sw] to reap the child; with eio_posix (macOS) that
+                 fiber then ends without resolving the exit status, and only
+                 [sw]'s release resolves it: awaiting it here, inside [sw],
+                 waits for ever. Leaving [sw] reaps the child (its release
+                 hook sends SIGKILL, then waits for it under protection). On a
+                 timeout only this branch is cancelled and the reaper is
+                 alive: the [Error `Timeout] case below awaits the child. *)
+              (try Eio.Process.signal process Sys.sigkill with _ -> ());
               raise cancelled)
       with
       | Ok (Some (`Exited code, text)) -> (Unix.WEXITED code, text)

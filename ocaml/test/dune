@@ -13,6 +13,13 @@
  (modules mesh_update_host_test)
  (libraries mesh_update_host alcotest eio_main yojson unix))
 
+; run_curl cancelled under eio_posix (the macOS backend) on every platform.
+
+(test
+ (name mesh_update_host_posix_test)
+ (modules mesh_update_host_posix_test)
+ (libraries mesh_update_host alcotest eio eio_posix unix))
+
 (test
  (name smoke)
  (modules smoke)
