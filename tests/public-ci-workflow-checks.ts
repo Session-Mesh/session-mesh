@@ -5,15 +5,16 @@
 // and tests/release-workflow.test.ts. No YAML parser is available without a new dependency: the checks
 // read the text line by line and refuse every construct they do not resolve (see UNPARSED).
 // The profiles include `public` (public-ci.yml: one runner, read-only token, 15-minute jobs, docker
-// commands through digest-pinned *_IMAGE variables), `description` (the public rules plus the one
-// allowed use of the pull request body), `site` (site.yml: the public rules, except that the
+// commands through digest-pinned *_IMAGE variables, no macOS job), `macos` (public-ci-macos.yml: the
+// public rules with one exception, the informational macOS job of tests/public-ci-macos-checks.ts),
+// `description` (the public rules plus the one allowed use of the pull request body), `site` (site.yml: the public rules, except that the
 // `deploy` job alone may hold `pages: write` and `id-token: write`; no secret), `preview` (site-preview.yml:
 // the shared rules, read-only tokens, and the one deploy key of tests/site-preview-workflow-checks.ts),
 // `preview-cleanup` (site-preview-cleanup.yml: the same checks, other triggers and jobs) and
 // `release` (release.yml: the shared rules plus the checks of tests/release-workflow-checks.ts).
 import {blockOf, commandAt, expressions, githubProperties, jobBlocks, type Line, MAX_TIMEOUT_MINUTES, parseLines, permissionValues, stepOf, timeoutProblems,
   usesOf} from './public-ci-workflow-lib.ts';
-import {allowedContinueOnError, checkMacosJob, runnerFor, timeoutCap} from './public-ci-macos-checks.ts';
+import {allowedContinueOnError, checkMacosWorkflow, checkNoMacosJob, runnerFor, timeoutCap} from './public-ci-macos-checks.ts';
 import {BACKPORT_CHECKS, checkBackportEvent, checkBackportPermissions, checkBackportSecrets, checkBackportTriggers} from './backport-workflow-checks.ts';
 import {checkRegisterEvent, checkRegisterPermissions, checkRegisterSecrets, checkRegisterTriggers, REGISTER_CHECKS} from './backport-register-workflow-checks.ts';
 import {checkCleanupTriggers, checkPreviewActions, checkPreviewEvent, checkPreviewSecrets, checkPreviewTriggers, CLEANUP_CHECKS, PREVIEW_CHECKS} from './site-preview-workflow-checks.ts';
@@ -21,7 +22,7 @@ import {checkTriageEvent, checkTriagePermissions, checkTriageSecrets, checkTriag
 import {checkReleasePermissions, checkReleaseRunners, checkReleaseTimeouts, RELEASE_CHECKS, releaseTokenLines} from './release-workflow-checks.ts';
 import {checkNightlyPermissions, checkNightlyTriggers, NIGHTLY_CHECKS, nightlyTokenLines} from './nightly-workflow-checks.ts';
 
-export type Profile = 'public' | 'description' | 'release' | 'site' | 'preview' | 'preview-cleanup' | 'policy' | 'backport' | 'register' | 'nightly' | 'triage';
+export type Profile = 'public' | 'macos' | 'description' | 'release' | 'site' | 'preview' | 'preview-cleanup' | 'policy' | 'backport' | 'register' | 'nightly' | 'triage';
 
 // The one place where untrusted event text may enter an expression: the description workflow hands
 // the pull request body to its script through an environment variable.
@@ -278,8 +279,10 @@ function profileChecks(profile: Profile): {runners: Check; secrets: Check; injec
       return {...shared, secrets: checkRegisterSecrets, injection: checkRegisterEvent, actions: (items) => checkActions(items, false),
         triggers: checkRegisterTriggers, permissions: checkRegisterPermissions};
     case 'public':
-      // public-ci.yml: the informational macOS job is the one exception (tests/public-ci-macos-checks.ts).
-      return {...shared, injection: (items) => checkInjection(items, false, true), runners: (items) => checkRunners(items, runnerFor(items, RUNNER)),
+      return {...shared, injection: (items) => checkInjection(items, false, true)};
+    case 'macos':
+      // public-ci-macos.yml: the informational macOS job is the one exception (tests/public-ci-macos-checks.ts).
+      return {...shared, runners: (items) => checkRunners(items, runnerFor(items, RUNNER)),
         timeouts: (items) => timeoutProblems(items, (job) => timeoutCap(job, MAX_TIMEOUT_MINUTES)),
         continueOnError: (items) => checkContinueOnError(items, allowedContinueOnError(items))};
     default:
@@ -292,7 +295,8 @@ export function checkWorkflow(text: string, profile: Profile = 'public'): string
   const picked = profileChecks(profile);
   const checks: Check[] = [checkUnparsed, picked.runners, picked.secrets, picked.injection, picked.actions, checkImages, picked.continueOnError,
     picked.triggers, picked.permissions, picked.timeouts, checkLeakRules];
-  if (profile === 'public') checks.push(checkMacosJob);
+  if (profile === 'public') checks.push(checkNoMacosJob);
+  if (profile === 'macos') checks.push(checkMacosWorkflow);
   if (profile !== 'release') checks.push(checkDockerImages);
   if (profile === 'release') checks.push(...RELEASE_CHECKS);
   if (profile === 'backport') checks.push(...BACKPORT_CHECKS);

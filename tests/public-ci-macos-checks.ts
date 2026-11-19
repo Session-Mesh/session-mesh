@@ -1,16 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-// The one exception of the public profile (tests/public-ci-workflow-checks.ts): the informational
-// macOS job of public-ci.yml. Everywhere else the profile allows one runner (ubuntu-24.04) and no
-// `continue-on-error`. This job alone may run on the pinned macOS arm64 runner and carry a job-level
-// `continue-on-error: true`, under conditions that keep it informational and cheap: a named check
-// that no ruleset lists, an explicit read-only token, the 45-minute safety net of the workflow header, no dependency on another
-// job and none on it (so it can neither delay nor gate the pull request).
+// The `macos` profile (tests/public-ci-workflow-checks.ts): public-ci-macos.yml, the workflow of the
+// informational macOS job alone. It is the public profile with one exception: this job may run on the
+// pinned macOS arm64 runner and carry a job-level `continue-on-error: true`, under conditions that
+// keep it informational and cheap: a named check that no ruleset lists, an explicit read-only token,
+// the 45-minute safety net of the workflow header, no dependency on another job, no other job in the
+// workflow, no merge queue trigger, and a concurrency group of its own. public-ci.yml (the public
+// profile) holds no macOS job and no job that needs one, so its run never waits for the macOS runner.
 import {blockOf, jobBlocks, type Line} from './public-ci-workflow-lib.ts';
 
+export const MACOS_WORKFLOW = 'public-ci-macos.yml';
+export const MACOS_WORKFLOW_NAME = 'public-ci-macos';
 export const MACOS_JOB = 'macos';
 export const MACOS_JOB_NAME = 'macos (arm64, informational)';
+// public-ci.yml's group (`public-ci-${{ github.ref }}`) under a name of its own, with the same cancellation.
+export const MACOS_CONCURRENCY = 'concurrency:\n  group: public-ci-macos-${{ github.ref }}\n' +
+  "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n";
 // macos-15 is an arm64 image (the Intel one is macos-15-intel); release.yml builds on the same label.
 export const MACOS_RUNNER = 'macos-15';
 export const MACOS_TIMEOUT_MINUTES = 45;
@@ -43,27 +49,48 @@ function directChild(block: Line[], key: string): Line | undefined {
   return block.find((line) => !line.inBlock && line.indent === block[0].indent && line.key === key);
 }
 
-// Conditions on the macOS job, checked when it exists (the committed workflow must have it:
-// tests/public-ci-workflow-macos.test.ts).
-export function checkMacosJob(lines: Line[]): string[] {
-  const jobs = jobBlocks(lines);
+// The public profile (public-ci.yml): no macOS job, and no job that needs one.
+export function checkNoMacosJob(lines: Line[]): string[] {
   const problems: string[] = [];
-  const block = macosBlock(lines);
-  for (const job of jobs.filter((item) => item.name !== MACOS_JOB)) {
+  for (const job of jobBlocks(lines)) {
+    if (job.name === MACOS_JOB) problems.push(`job ${MACOS_JOB}: the informational macOS job belongs in ${MACOS_WORKFLOW}`);
     const needs = directChild(job.block, 'needs');
     const listed = needs ? [needs.value, ...blockOf(lines, lines.indexOf(needs)).map((item) => item.text)].join(' ') : '';
     if (new RegExp(`\\b${MACOS_JOB}\\b`).test(listed)) problems.push(`job ${job.name}: needs the informational macOS job`);
   }
-  if (block.length === 0) return problems;
+  return problems;
+}
+
+// The `macos` profile: the workflow holds the macOS job alone, under its own name and concurrency
+// group, and never runs on the merge queue.
+export function checkMacosWorkflow(lines: Line[]): string[] {
+  const problems: string[] = [];
+  const names = jobBlocks(lines).map((job) => job.name);
+  if (names.length !== 1 || names[0] !== MACOS_JOB) problems.push(`jobs ${names.join(', ') || '(none)'}: the workflow holds the ${MACOS_JOB} job alone`);
+  if (!lines.some((line) => line.indent === 0 && line.key === 'name' && line.value === MACOS_WORKFLOW_NAME)) {
+    problems.push(`workflow name is not ${MACOS_WORKFLOW_NAME}`);
+  }
+  const onIndex = lines.findIndex((line) => line.indent === 0 && line.key === 'on');
+  const triggers = onIndex < 0 ? [] : blockOf(lines, onIndex).filter((line) => line.indent === 2).map((line) => line.key);
+  if (triggers.join(',') !== 'push,pull_request,workflow_dispatch') {
+    problems.push(`triggers ${triggers.join(', ') || '(none)'}: expected push, pull_request, workflow_dispatch (no merge_group)`);
+  }
+  if (!lines.map((line) => line.raw).join('\n').includes(`\n${MACOS_CONCURRENCY}`)) {
+    problems.push('concurrency is not the group public-ci-macos-${{ github.ref }}, cancelled on pull_request only');
+  }
+  const block = macosBlock(lines);
+  return block.length === 0 ? [...problems, `no job ${MACOS_JOB}`] : [...problems, ...checkMacosJob(lines, block)];
+}
+
+// Conditions on the macOS job itself.
+function checkMacosJob(lines: Line[], block: Line[]): string[] {
+  const problems: string[] = [];
   const name = directChild(block, 'name');
   if (name?.value !== MACOS_JOB_NAME) problems.push(`job ${MACOS_JOB}: name is not "${MACOS_JOB_NAME}"`);
   if (directChild(block, 'continue-on-error')?.value !== 'true') problems.push(`job ${MACOS_JOB}: no job-level continue-on-error: true`);
   if (directChild(block, 'needs')) problems.push(`job ${MACOS_JOB}: needs another job (it must run alone, in parallel)`);
-  // The one condition allowed keeps the informational job off the merge queue; it is not a required check.
-  const condition = directChild(block, 'if');
-  if (condition && condition.value !== "github.event_name != 'merge_group'") {
-    problems.push(`job ${MACOS_JOB}: job-level condition (a skipped job would look like a pass)`);
-  }
+  // The workflow's triggers decide where the job runs; a condition would only turn the check into a skip.
+  if (directChild(block, 'if')) problems.push(`job ${MACOS_JOB}: job-level condition (a skipped job would look like a pass)`);
   const permissions = directChild(block, 'permissions');
   const scopes = permissions ? blockOf(lines, lines.indexOf(permissions)).map((line) => `${line.key}: ${line.value}`) : [];
   if (scopes.length !== 1 || scopes[0] !== 'contents: read') problems.push(`job ${MACOS_JOB}: permissions must be exactly contents: read`);

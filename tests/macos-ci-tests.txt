@@ -1,4 +1,4 @@
-# The tests the informational macOS job of public-ci.yml runs: an allow-list, not a deny-list.
+# The tests the informational macOS job of public-ci-macos.yml runs: an allow-list, not a deny-list.
 #
 # Format: one path per line, relative to the repository root; `#` starts a comment, blank lines
 # are ignored. A `.py` entry is run by `pytest -m 'not browser'`, any other entry by

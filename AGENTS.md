@@ -28,8 +28,8 @@ Then the leak check with the public rules, the one CI runs on the tree:
 node --experimental-strip-types tools/leak-guard/cli.ts worktree
 ```
 
-CI also runs an informational, non-required job `macos (arm64, informational)`: when it fails on your
-pull request, fix the macOS breakage it reports (shell scripts must stay bash 3.2 and BSD-tool
+CI also runs an informational, non-required job `macos (arm64, informational)` (workflow
+`public-ci-macos.yml`): when it fails on your pull request, fix the macOS breakage it reports (shell scripts must stay bash 3.2 and BSD-tool
 compatible) or say in the description why it is unrelated. It runs only the tests listed in
 `tests/macos-ci-tests.txt`; a new test that is portable to macOS goes in that file. See
 [docs/development.md](docs/development.md#the-macos-job).

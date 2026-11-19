@@ -113,10 +113,15 @@ the same two ways apply.
 
 ## The macOS job
 
-`public-ci.yml` has a job `macos (arm64, informational)` on the GitHub-hosted `macos-15` arm64
-runner (standard, free for a public repository). It is **informational**: `continue-on-error: true`,
+`public-ci-macos.yml` holds one job, `macos (arm64, informational)`, on the GitHub-hosted `macos-15`
+arm64 runner (standard, free for a public repository). It is **informational**: `continue-on-error: true`,
 and its name is not in the ruleset's required checks, so a failure is visible on the pull request
-but never blocks the merge. It runs in parallel with the others and nothing waits for it. It does
+but never blocks the merge. It runs in parallel with `public-ci.yml` and nothing waits for it. It is
+in a workflow of its own so that the `public-ci` run ends with its own jobs: a failed job there can
+be re-run at once instead of after the macOS runner, which may queue and run for up to 45 minutes.
+The workflow has the triggers of `public-ci.yml` except `merge_group`, and the same concurrency
+rule under its own group (`public-ci-macos-${{ github.ref }}`: a new event of a pull request
+cancels its macOS run in progress; pushes to `main` and release branches are not cancelled). It does
 not run the browser tests. In the system bash 3.2, with the macOS 13 deployment target of the
 release programs and the pinned SQLite of `mesh-history`, it runs:
 
@@ -168,8 +173,9 @@ requires the budgets and the invariant.
 
 To make it required: first let it stay green on `main` and on pull requests for a while (the
 allow-list is what makes that possible; widen it before promoting), then remove its `continue-on-error: true` and the exception for it in
-`tests/public-ci-macos-checks.ts` (the public profile then applies to it like to the other jobs, with the
-`macos-15` runner kept), have a maintainer add the check name to the ruleset (the name appears on
+`tests/public-ci-macos-checks.ts` (the public rules then apply to it like to the other jobs, with the
+`macos-15` runner kept), give `public-ci-macos.yml` the `merge_group` trigger (a required check must
+report on the queue's commit), have a maintainer add the check name to the ruleset (the name appears on
 pull requests; rename the job first if the label should not say "informational", and update
 `MACOS_JOB_NAME` in the same file and the table in CONTRIBUTING.md), and move its timeout to the
 other jobs' safety net if the cold build needs it.
@@ -464,7 +470,8 @@ runs on it, and no job that provides a required name can be skipped (see "Failed
   reports its name with a success; every other step is skipped by
   `if: github.event_name != 'merge_group'`). The description is not checked again there; the check
   is warning-only.
-- `macos (arm64, informational)` is excluded (`if: github.event_name != 'merge_group'`).
+- `macos (arm64, informational)` is excluded: its workflow, `public-ci-macos.yml`, has no
+  `merge_group` trigger.
 - The concurrency groups stay `<workflow>-${{ github.ref }}`: the queue's ref differs from the pull
   request's, and `cancel-in-progress` is off for `merge_group`, so neither event cancels the other.
 - `backport.yml` and `backport-register.yml` run on `pull_request_target` (`closed`); that event
