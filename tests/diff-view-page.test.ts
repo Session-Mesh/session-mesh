@@ -191,14 +191,14 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
     await page.waitForSelector('details.file');
     const files = page.locator('details.file');
     assert.deepEqual(await files.evaluateAll(nodes => nodes.map(node => (node as HTMLDetailsElement).open)), [true, true, false]);
-    // one hunk header and the first chunk of 2000 lines
-    assert.equal(await files.nth(0).locator('tr').count(), 2001);
+    // the first chunk of 2000 positions: the hunk header and 1999 lines
+    assert.equal(await files.nth(0).locator('tr').count(), 2000);
     assert.equal(await files.nth(2).locator('tr').count(), 0);
-    await files.nth(0).getByRole('button', {name: /^show 2000 more lines \(2500 left\)$/}).click();
-    assert.equal(await files.nth(0).locator('tr').count(), 4001);
+    await files.nth(0).getByRole('button', {name: /^show 2000 more lines \(2501 left\)$/}).click();
+    assert.equal(await files.nth(0).locator('tr').count(), 4000);
     // a view change rebuilds the rows already shown, no more
     await page.getByRole('button', {name: 'split'}).click();
-    assert.equal(await files.nth(0).locator('tr').count(), 4001);
+    assert.equal(await files.nth(0).locator('tr').count(), 4000);
     await files.nth(2).locator('summary').click();
     await files.nth(2).locator('table').waitFor();
     assert.equal(await files.nth(2).locator('tr').count(), 11);
@@ -230,29 +230,55 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
   const replaced = (name: string, count: number): string =>
     `--- a/${name}\n+++ b/${name}\n@@ -1,${count} +1,${count} @@\n${'-old\n'.repeat(count)}${'+new\n'.repeat(count)}`;
 
-  test('keeps the lines loaded, not the rows, across views', async () => {
+  // The lines a page shows, as "-old" or "+new" line numbers.
+  const visibleLines = (page: Awaited<ReturnType<typeof open>>): Promise<string[]> =>
+    page.locator('td.ln.del[data-n], td.ln.add[data-n]').evaluateAll(cells =>
+      cells.map(cell => `${cell.classList.contains('del') ? '-' : '+'}${cell.getAttribute('data-n')}`));
+
+  test('keeps the lines shown across views, both ways, when partly loaded', async () => {
     const page = await open(replaced('pairs', 3000));
     await page.waitForSelector('details.file');
-    const rows = page.locator('details.file tr:not(.hunk)');
-    assert.equal(await rows.count(), 2000);
+    // unified: the hunk header and the first 1999 deleted lines
+    const unified = await visibleLines(page);
+    assert.equal(unified.length, 1999);
     await page.getByRole('button', {name: 'split'}).click();
-    assert.equal(await rows.count(), 1000);         // 2000 lines: 1000 pairs
-    await page.getByRole('button', {name: /^show 2000 more lines \(4000 left\)$/}).click();
-    await page.getByRole('button', {name: /^show 2000 more lines \(2000 left\)$/}).click();
-    assert.equal(await rows.count(), 3000);
-    assert.equal(await page.locator('button.more').count(), 0);
+    const split = new Set(await visibleLines(page));
+    for (const line of unified) assert.ok(split.has(line), `${line} still shown in split`);
+    // each deleted line comes with the added line it pairs with
+    assert.equal(split.size, 2 * 1999);
     await page.getByRole('button', {name: 'unified'}).click();
-    assert.equal(await rows.count(), 6000);         // all of them, as loaded in split
+    const back = new Set(await visibleLines(page));
+    for (const line of split) assert.ok(back.has(line), `${line} still shown in unified`);
+    await page.close();
+  });
+
+  test('keeps a file fully loaded in split fully shown in unified', async () => {
+    const page = await open(replaced('pairs', 3000));
+    await page.waitForSelector('details.file');
+    await page.getByRole('button', {name: 'split'}).click();
+    while (await page.locator('button.more').count()) await page.locator('button.more').click();
+    assert.equal((await visibleLines(page)).length, 6000);
+    await page.getByRole('button', {name: 'unified'}).click();
+    assert.equal((await visibleLines(page)).length, 6000);
+    await page.close();
+  });
+
+  test('counts hunk headers against the limits', async () => {
+    const page = await open(`--- a/x\n+++ b/x\n${'@@ -1,0 +1,0 @@\n'.repeat(5000)}`);
+    await page.waitForSelector('details.file');
+    assert.equal(await page.locator('tr.hunk').count(), 2000);
+    assert.equal(await page.locator('button.more').textContent(), 'show more');
     await page.close();
   });
 
   test('shares the lines of the first screens out over the files, in order', async () => {
-    const page = await open(added('a', 2000) + added('b', 1999) + added('c', 10) + added('d', 10));
+    // 2000 and 1999 positions (a hunk header each): one position is left for the third file
+    const page = await open(added('a', 1999) + added('b', 1998) + added('c', 10) + added('d', 10));
     await page.waitForSelector('details.file');
     const files = page.locator('details.file');
     assert.deepEqual(await files.evaluateAll(nodes => nodes.map(node => (node as HTMLDetailsElement).open)), [true, true, true, false]);
-    assert.equal(await files.nth(2).locator('tr:not(.hunk)').count(), 1);
-    assert.equal(await files.nth(2).locator('button.more').textContent(), 'show 9 more lines (9 left)');
+    assert.equal(await files.nth(2).locator('tr').count(), 1);
+    assert.equal(await files.nth(2).locator('button.more').textContent(), 'show 10 more lines (10 left)');
     await page.close();
   });
 
@@ -272,10 +298,10 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
     const page = await open(added('one', 4500) + added('two', 3000) + added('three', 10));
     await page.waitForSelector('details.file');
     const rows = page.locator('details.file tr:not(.hunk)');
-    assert.equal(await rows.count(), 4000);
+    assert.equal(await rows.count(), 2 * 1999);
     // what the "scrollto" message of the mesh does (diff.html), for a position past the rows built
     await page.evaluate('page.growTo(document.documentElement.scrollHeight + 50000)');
-    assert.ok(await rows.count() > 4000);
+    assert.ok(await rows.count() > 2 * 1999);
     await page.close();
   });
 
