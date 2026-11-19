@@ -250,7 +250,12 @@ let test_lock_timeout_is_finite () =
   Alcotest.(check (float 0.)) "make sanitises too" 30.0
     (Ctx.make ~root ~lock_timeout:infinity ()).Ctx.lock_timeout
 
-let open_fds () = Array.length (Sys.readdir "/proc/self/fd")
+(* The open descriptors of this process: /proc/self/fd on Linux, /dev/fd on
+   macOS, which has no /proc. Both listings count the descriptor that reads
+   them, the same way before and after. *)
+let fd_directory = if Sys.file_exists "/proc/self/fd" then "/proc/self/fd" else "/dev/fd"
+
+let open_fds () = Array.length (Sys.readdir fd_directory)
 
 let test_lock_leaks_no_descriptor () =
   let root = one_task_repo () in
