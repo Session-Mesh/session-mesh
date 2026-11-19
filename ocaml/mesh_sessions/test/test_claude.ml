@@ -126,6 +126,27 @@ let test_hostile_directories () =
       Support.write_file (transcript_path home) (prompt "found");
       Alcotest.(check bool) "a link loop is skipped" true (field "last" (cold home) = `String "found"))
 
+(* A newer copy of the transcript created in another project after the first
+   was cached is the one read; so is a transcript created after a search
+   that found none. *)
+let test_newer_copy () =
+  with_home (fun home ->
+      let projects = Filename.concat home ".claude/projects" in
+      Unix.mkdir (Filename.concat projects "-other") 0o700;
+      Support.write_file (transcript_path home) (prompt "in A");
+      let adapter = fresh home in
+      Alcotest.(check bool) "the only copy" true (field "last" (describe adapter) = `String "in A");
+      let other = String.concat "/" [ projects; "-other"; id ^ ".jsonl" ] in
+      Support.write_file other (prompt "in B newer");
+      let later = Unix.time () +. 100. in
+      Unix.utimes other later later;
+      Alcotest.(check bool) "the newer copy" true (field "last" (describe adapter) = `String "in B newer");
+      Sys.remove other;
+      Sys.remove (transcript_path home);
+      Alcotest.(check bool) "none" false (List.mem_assoc "last" (describe adapter));
+      Support.write_file (transcript_path home) (prompt "created");
+      Alcotest.(check bool) "created later" true (field "last" (describe adapter) = `String "created"))
+
 let write_metadata home text = Fake.write (Printf.sprintf "%s/.claude/sessions/%d.json" home pid) text
 
 let test_hostile_metadata () =
@@ -158,8 +179,12 @@ let test_concurrent_appends () =
         Atomic.set finished true
       in
       let reader () = while not (Atomic.get finished) do ignore (describe adapter) done in
-      let threads = Thread.create writer () :: List.init 4 (fun _ -> Thread.create reader ()) in
+      (* A thread's exception is kept and raised again here. *)
+      let failure = Atomic.make None in
+      let guarded f () = try f () with error -> Atomic.set failure (Some error); Atomic.set finished true in
+      let threads = Thread.create (guarded writer) () :: List.init 4 (fun _ -> Thread.create (guarded reader) ()) in
       List.iter Thread.join threads;
+      Option.iter raise (Atomic.get failure);
       Alcotest.check fields "cache equals cold" (cold home) (describe adapter))
 
 let () =
@@ -177,6 +202,7 @@ let () =
           Alcotest.test_case "lines" `Quick test_hostile_lines;
           Alcotest.test_case "files" `Quick test_hostile_files;
           Alcotest.test_case "directories" `Quick test_hostile_directories;
+          Alcotest.test_case "newer copy" `Quick test_newer_copy;
           Alcotest.test_case "metadata" `Quick test_hostile_metadata;
         ] );
     ]
