@@ -1,0 +1,14 @@
+{"type":"user","cwd":"/work/plain","sessionId":"0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a01","message":{"role":"user","content":"Read the README and list the build steps."},"uuid":"u1"}
+{"type":"assistant","cwd":"/work/plain","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"  The build has three steps.  "}]},"uuid":"a1"}
+{"type":"custom-title","customTitle":"Build steps","sessionId":"0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a01"}
+{"type":"user","isMeta":true,"message":{"role":"user","content":"meta text that is not a prompt"}}
+{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation."}}
+not json at all
+{"type":"user","isSidechain":true,"cwd":"/elsewhere","message":{"role":"user","content":"a sidechain prompt"}}
+{"type":"user","cwd":"/work/plain/src","message":{"role":"user","content":[{"type":"text","text":"Now fix the failing   test"},{"type":"image","source":{}},{"type":"text","text":"in   src/　parser.ml\n\nplease"}]}}
+{"type":"assistant","cwd":"/work/plain/src","message":{"id":"msg_2","role":"assistant","content":[{"type":"text","text":"Looking."},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"dune build 2>&1 | head","description":"Build"}}]}}
+{"type":"user","cwd":"/work/plain/src","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}
+{"type":"user","message":{"role":"user","content":"Une très longue demande, écrite d'une traite, qui dépasse largement les deux cent quarante caractères que la liste garde pour l'aperçu : il faut donc la couper au bon endroit, compter en points de code et non en octets, et finir par une ellipse. Encore quelques mots pour être sûr de dépasser la limite fixée."}}
+{"type":"assistant","isSidechain":true,"message":{"id":"msg_side","role":"assistant","content":[{"type":"text","text":"sidechain answer"}]}}
+{"type":"assistant","message":{"id":"msg_3","role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Edit","input":{"file_path":"/work/plain/src/parser.ml","old_string":"a","new_string":"b"}}]}}

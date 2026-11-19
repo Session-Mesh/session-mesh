@@ -1,0 +1,3 @@
+{"type":"user","message":{"role":"user","content":"Run the tests then ask me."}}
+{"type":"assistant","message":{"id":"msg_t","role":"assistant","content":[{"type":"tool_use","id":"toolu_b","name":"Bash","input":{"command":"make test"}}]}}
+{"type":"assistant","message":{"id":"msg_t","role":"assistant","content":[{"type":"tool_use","id":"toolu_q","name":"AskUserQuestion","input":{"questions":[{"question":"Merge now?","multiSelect":false,"options":[{"label":"Yes"},{"label":"No"}]}]}}]}}

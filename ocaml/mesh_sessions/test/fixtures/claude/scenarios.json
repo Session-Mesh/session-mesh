@@ -1,0 +1,97 @@
+{
+  "comment": "Fictional Claude sessions shared by the parity check: tests/mesh-sessions-claude-parity.test.ts runs the Python listing (discover.describe) on real processes built from this file and writes golden.json; test_parity.ml runs the OCaml rows on the same tree and compares. Each session is a process tree of /bin/sh scripts named by their 'comm'; 'metadata' is written to ~/.claude/sessions/<pid>.json of its process; 'transcript' is copied to ~/.claude/projects/<project>/<sessionId>.jsonl.",
+  "mtime": 1700000000.5,
+  "sessions": [
+    {
+      "label": "plain",
+      "project": "-work-plain",
+      "transcript": "plain.jsonl",
+      "process": {
+        "comm": "claude",
+        "args": ["--model", "opus"],
+        "metadata": {"sessionId": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a01", "cwd": "/work/plain", "status": "idle", "name": "plain work", "statusUpdatedAt": 1700000000123}
+      }
+    },
+    {
+      "label": "asking",
+      "project": "-work-asking",
+      "transcript": "asking.jsonl",
+      "process": {
+        "comm": "claude",
+        "args": [],
+        "metadata": {"sessionId": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a02", "status": "waiting", "waitingFor": "question", "statusUpdatedAt": 1700000001000}
+      }
+    },
+    {
+      "label": "two-tools",
+      "project": "-work-two",
+      "transcript": "two-tools.jsonl",
+      "process": {
+        "comm": "claude",
+        "args": ["--resume", "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a03"],
+        "metadata": {"sessionId": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a03", "status": "busy"}
+      }
+    },
+    {
+      "label": "answered",
+      "project": "-work-answered",
+      "transcript": "answered.jsonl",
+      "process": {
+        "comm": "claude",
+        "args": [],
+        "metadata": {"sessionId": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a04", "status": "idle", "statusUpdatedAt": 1700000002500.5}
+      }
+    },
+    {
+      "label": "nested",
+      "project": "-work-nested",
+      "transcript": "titles.jsonl",
+      "process": {
+        "comm": "bash",
+        "args": ["-l"],
+        "children": [
+          {
+            "comm": "claude",
+            "args": ["--continue"],
+            "metadata": {"sessionId": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a05", "status": "idle", "name": null}
+          }
+        ]
+      }
+    },
+    {
+      "label": "helper",
+      "project": "-work-helper",
+      "transcript": "said.jsonl",
+      "process": {
+        "comm": "claude",
+        "args": [],
+        "metadata": {"sessionId": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a06", "status": "busy"},
+        "children": [{"comm": "claude", "args": ["mcp", "serve"]}]
+      }
+    },
+    {
+      "label": "no-metadata",
+      "process": {"comm": "claude", "args": ["--print"]}
+    },
+    {
+      "label": "no-transcript",
+      "process": {
+        "comm": "claude",
+        "args": [],
+        "metadata": {"sessionId": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a08", "status": "idle"}
+      }
+    },
+    {
+      "label": "bad-id",
+      "process": {
+        "comm": "claude",
+        "args": [],
+        "metadata": {"sessionId": 42, "status": "idle", "statusUpdatedAt": "soon"}
+      }
+    },
+    {
+      "label": "shell",
+      "process": {"comm": "zsh", "args": ["-i"]}
+    }
+  ]
+}

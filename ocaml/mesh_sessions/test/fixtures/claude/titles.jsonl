@@ -1,0 +1,9 @@
+{"type":"summary","summary":"First summary","leafUuid":"a"}
+{"type":"ai-title","aiTitle":"An AI title"}
+{"type":"summary","summary":"","leafUuid":"b"}
+{"type":"custom-title","customTitle":"","aiTitle":"Second AI title"}
+{"type":"user","cwd":"/work/nested","message":{"role":"user","content":"   "}}
+{"type":"user","cwd":"/work/nested","message":{"role":"user","content":"  <system-reminder>not a prompt</system-reminder>"}}
+{"type":"user","cwd":"/work/nested","message":{"role":"user","content":"A real prompt"}}
+{"type":"assistant","message":{"id":"msg_n","role":"assistant","content":"  plain string answer  "}}
+{"type":"assistant","message":{"id":"msg_m","role":"assistant","content":[{"type":"text","text":"   "}]}}

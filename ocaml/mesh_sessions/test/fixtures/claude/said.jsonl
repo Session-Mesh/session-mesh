@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":"Check two things."}}
+{"type":"assistant","message":{"id":"msg_s1","role":"assistant","content":[{"type":"tool_use","id":"toolu_s1","name":"Grep","input":{"pattern":"TODO","path":"src"}}]}}
+{"type":"assistant","message":{"id":"msg_s2","role":"assistant","content":[{"type":"tool_use","id":"toolu_s2","input":{"limit":5}}]}}
+{"type":"assistant","message":{"id":"msg_s3","role":"assistant","content":[{"type":"tool_use","id":"toolu_s3","name":"AskUserQuestion","input":{"questions":[{"question":"First?","options":[{"label":"A"},{"label":"B"}]},{"question":"Second?","options":[{"label":"C"},{"label":"D"}]}]}}]}}
