@@ -16,7 +16,7 @@ import {removeScratch, runServer, scratchHome, stopServer, type Scratch} from '.
 
 type Row = {name: string; ready: boolean; label?: string | null; agent?: Record<string, unknown> | null};
 type Answer = {mesh: Row[]; generation: number; now: number; opens?: unknown[]; full: boolean; complete: boolean; counts: {total: number; ready: number};
-  host: string; removed?: string[]; external?: unknown[]; focus?: string[]; restorable: unknown[];
+  host: string; removed?: string[]; external?: unknown[]; restorable: unknown[];
   management: {state?: string}; update: unknown; sessionRequests: unknown; agentMailConsent: unknown};
 
 type Mesh = {where: Scratch; server: ChildProcess; host: FakeHost; base: string; snapshot: string; startedMs: number};
@@ -253,15 +253,6 @@ describe('300 sessions', () => {
       assert.ok(Array.isArray(body.external));
     }
   });
-
-  test('focus: bounded, distinct, valid names the host lists', async () => {
-    const focus = async (value: string) => (await get(mesh, `?focus=${encodeURIComponent(value)}`)).body.focus;
-    assert.deepEqual(await focus('s002,s002,bad name!,s003,unknown,s002,'), ['s002', 's003']);
-    assert.equal((await focus(sessions.slice(0, 70).map(s => s.name).join(','))).length, 64);
-    assert.equal(await focus('s'.repeat(5000)), undefined, 'an oversized focus is ignored');
-    assert.equal((await get(mesh)).body.focus, undefined);
-    assert.deepEqual(await focus(['../etc', '', 's004', 'x'.repeat(49)].join(',')), ['s004']);
-  });
 });
 
 describe('a silent host', () => {
@@ -271,11 +262,11 @@ describe('a silent host', () => {
   });
   after(async () => { await stop(mesh); });
 
-  test('answers within the silent threshold (1 s) with host "silent", then at once, and leaves the snapshot as it was', async () => {
+  test('answers within the wait (2 s) with host "silent", then at once, and leaves the snapshot as it was', async () => {
     const before = fs.readFileSync(mesh.snapshot);
     const mtime = fs.statSync(mesh.snapshot).mtimeMs;
     const {ms, body} = await get(mesh);
-    assert.ok(ms < 1500, `answer in ${Math.round(ms)} ms`);
+    assert.ok(ms < 3000, `answer in ${Math.round(ms)} ms`);
     assert.equal(body.host, 'silent');
     assert.equal(body.complete, false);
     // Past the host's request timeout (5 s): the round gave up, the answers still come at once.
@@ -293,6 +284,7 @@ describe('slow rounds, with the default wait', () => {
   let mesh: Mesh;
   let processes: ReturnType<typeof sleepers>;
   let sessions: FakeSession[];
+  let current: FakeSession[] = [];   // what the host lists now
   before(async () => {
     processes = sleepers(4);
     mesh = await start('sessions-slow-', where => (sessions = rows(processes.pids, where.home)), {}, 1);
@@ -313,10 +305,58 @@ describe('slow rounds, with the default wait', () => {
     assert.ok(fresh, `the new session is listed (answer in ${Math.round(ms)} ms)`);
     assert.equal(fresh.ready, false);
     assert.ok(!body.mesh.some(row => row.name === sessions[0]!.name), 'the ended session is not listed');
-    assert.ok(ms < 2500, `answer in ${Math.round(ms)} ms`);
+    // It waits for a read of the host's list that starts after it, not for the held round (nor for its 2 s bound).
+    assert.ok(ms < 1500, `answer in ${Math.round(ms)} ms`);
+    console.log(`a request without since while a round is held: ${Math.round(ms)} ms`);
     assert.ok(Math.abs(body.now * 1000 - Date.now()) < 1000, 'now is the time of the answer, not of the last round');
     holder.kill('SIGKILL');
     await until(mesh, 'the new session described', 30_000, answer => answer.mesh.some(row => row.name === 'fresh' && row.ready));
+    // The held round listed the ended session: when it published, it was dropped again (it is in no later change).
+    const after = (await get(mesh, `?since=${body.generation}`)).body;
+    assert.ok(![...after.mesh.map(row => row.name), ...after.removed!].includes(sessions[0]!.name), 'the ended session stays removed');
+  });
+
+  test('a host list slower than the silent threshold still lists a session created before the request', async () => {
+    await quiet(mesh);
+    const listed = [...sessions.slice(1), {...sessions[0]!, name: 'fresh', created: 1_800_000_000},
+      {...sessions[0]!, name: 'late', created: 1_800_000_100}];
+    mesh.host.control({sessions: listed, slowFrom: 1, delayMs: 1300});
+    const {ms, body} = await get(mesh);
+    assert.ok(body.mesh.some(row => row.name === 'late'), `the new session is listed (answer in ${Math.round(ms)} ms)`);
+    mesh.host.control({sessions: (current = listed)});
+    await until(mesh, 'the new session described', 30_000, answer => answer.mesh.some(row => row.name === 'late' && row.ready));
+  });
+
+  test('host is "silent" only once a host list has been pending for 1 s', async () => {
+    await quiet(mesh);
+    mesh.host.control({sessions: current, slowFrom: 1, delayMs: 3000});
+    await get(mesh, '?since=0');   // asks for a round, whose read of the host's list then lasts 3 s
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert.equal((await get(mesh, '?since=0')).body.host, 'ok');
+    await new Promise(resolve => setTimeout(resolve, 1400));
+    assert.equal((await get(mesh, '?since=0')).body.host, 'silent');
+    mesh.host.control({sessions: current});
+    await until(mesh, 'a complete listing', 30_000, answer => answer.complete && answer.host === 'ok');
+  });
+
+  test('8 tabs polling with since ask the host for no list of their own', async () => {
+    await quiet(mesh);
+    const lock = path.join(mesh.where.confDir, 'conversation-names.lock');
+    const holder = spawn('flock', ['-o', lock, 'sleep', '8'], {stdio: 'ignore'});   // -o: killing flock frees the lock
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const {generation} = (await get(mesh, '?since=0')).body;   // starts a round, which reads, then stops at the lock
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const before = lists(mesh);
+    const end = performance.now() + 3000;
+    await Promise.all(Array.from({length: 8}, async () => {
+      while (performance.now() < end) {
+        await get(mesh, `?since=${generation}`);
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+    }));
+    const made = lists(mesh) - before;
+    holder.kill('SIGKILL');
+    assert.equal(made, 0, `${made} host lists for the polls of 8 tabs while a round is held`);
   });
 });
 

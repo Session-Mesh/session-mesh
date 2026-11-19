@@ -76,14 +76,19 @@ before 1.0, a minor version may change behaviour.
   poll (after a web server restart on a loaded machine), requests queued faster than they were
   answered and the list could stay empty for minutes. `GET /api/sessions` now answers from a list
   the server keeps in memory, which one background round at a time brings up to date; a request
-  never runs a listing, and waits at most 2 seconds (`MESH_SESSIONS_WAIT`) for the round it asks
-  for; a session the PTY host lists before the request is in the answer whatever the round lasts.
+  never runs a listing. A request without `since` waits only for a fresh read of the PTY host's
+  list (milliseconds), at most 2 seconds (`MESH_SESSIONS_WAIT`), so a session the PTY host lists
+  before the request is in the answer however long the round lasts.
   After a start, the first answer lists every session at once from the PTY host's list, the
   folders and the restart snapshot (rows marked `ready: false`), before the agents are described.
+  Until the page's poll after the first round's description (usually the next one, 4 seconds
+  later), the page has no management state (`pending`): phone paste has no target, board signals
+  are not received, and pending session requests and agent-mail consent requests are empty.
   Renames and moves no longer wait for a listing, and a restore, which still runs a listing of its
-  own, no longer waits behind another one: the organisation lock now covers only the writes. A silent PTY host leaves the last list on screen (`host: "silent"`). The answer gains
-  `generation`, `since` (only the changed rows and the `removed` names), `full`, `complete`,
-  `counts` and `focus`; see [docs/sessions-api.md](docs/sessions-api.md).
+  own, no longer waits behind another one: the organisation lock now covers only the writes. A
+  silent PTY host leaves the last list on screen (`host: "silent"`). The answer gains
+  `generation`, `since` (only the changed rows and the `removed` names), `full`, `complete` and
+  `counts`; see [docs/sessions-api.md](docs/sessions-api.md).
 - **Copy on select.** Selecting text in a terminal now copies it to the clipboard when you release
   the mouse button (or lift your finger after a long press on a phone), and the text stays
   selected. It is on by default and is a per-browser preference (`copyOnSelect` in the page's

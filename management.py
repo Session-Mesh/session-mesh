@@ -27,6 +27,7 @@ AGENT_STATUSES = ("busy", "waiting", "shell", "idle")
 NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,48}")
 _lock = threading.Lock()
 _baseline = {}
+_order = [float("-inf")]   # the order of the host read behind ``_baseline`` (server._read_host)
 # A failed atomic write must not make a witnessed departure disappear merely
 # because the next successful list has already replaced ``_baseline``.  This
 # bounded process-local retry set is populated only by successful observations.
@@ -176,11 +177,13 @@ def _recoveries(values, now):
     return sorted(bounded, key=lambda entry: (-entry["lost_at"], entry["name"], entry["created"]))
 
 
-def snapshot(mesh, external, listed, recovery, now=None):
+def snapshot(mesh, external, listed, recovery, now=None, order=None):
     """Return a safe management projection and record a witnessed Mesh absence.
 
     ``listed`` is the ptyhost authority bit: a failed list never changes either
-    the previous successful baseline or the persistent ledger.
+    the previous successful baseline or the persistent ledger.  ``order``: that
+    of the host read (server._read_host); a read older than the baseline's
+    witnesses no absence (listings run in parallel) and leaves the baseline.
     """
     now = time.time() if now is None else now
     with _lock:
@@ -199,15 +202,18 @@ def snapshot(mesh, external, listed, recovery, now=None):
             # successful list gives this snapshot authority to mutate storage.
             kept = [entry for entry in kept if _key(entry) not in recovery_keys]
             live = { _key(entry): entry for session in mesh if (entry := _live(session)) }
-            prior = dict(_baseline)
+            stale = order is not None and order < _order[0]
+            prior = {} if stale else dict(_baseline)
             seen = {_key(entry) for entry in kept}
             for key, entry in prior.items():
                 if key not in live and key not in seen and key not in recovery_keys:
                     kept.append({**entry, "observed_stopped_at": now})
                     seen.add(key)
             kept = _prune(kept, now)
-            _baseline.clear()
-            _baseline.update(live)
+            if not stale:
+                _baseline.clear()
+                _baseline.update(live)
+                _order[0] = _order[0] if order is None else order
             current = [_project_mesh(entry) for entry in live.values()]
             current.extend(entry for session in external if (entry := _project_external(session)))
             if kept == old or _save(kept):
@@ -235,3 +241,4 @@ def reset_for_tests():
     with _lock:
         _baseline.clear()
         _pending_stops.clear()
+        _order[0] = float("-inf")

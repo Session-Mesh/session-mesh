@@ -461,6 +461,50 @@ async def test_server_sessions_preserves_a_baseline_across_outage_then_records_o
     assert [row for row in stopped(repeated["management"]) if row["name"] == "alpha"] == alpha_stops
 
 
+async def test_an_older_listing_finishing_last_witnesses_no_stop_and_prunes_no_open(tmp_path, monkeypatch):
+    """Listings run in parallel (the round, the watchers, actions): the one of the older host read may finish
+    last. It must not record a stop of a session created since its read, nor forget that session's board open."""
+    monkeypatch.setattr(management, "FILE", tmp_path / "management-sessions.json")
+    management.reset_for_tests()
+    monkeypatch.setattr(server, "_RECORDED", [0.0])
+    monkeypatch.setattr(server.opens, "OPENS", [])
+    monkeypatch.setattr(server.opens, "_BOARD_OPEN_IDENTITIES", {})
+    hosted = [host_session("alpha", 100.0)]
+
+    async def fake_request(request):
+        assert request == {"op": "list"}
+        return list(hosted)
+
+    def fake_list_sessions(raw, listed=True):
+        return {"mesh": [mesh_session(item["name"], item["created"]) for item in raw], "external": [], "folders": [],
+                "moved": {}, "opens": {}, "home": str(tmp_path), "now": 1_000.0}
+
+    async def no_collect(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(ptyhost, "request", fake_request)
+    monkeypatch.setattr(server, "list_sessions", fake_list_sessions)
+    monkeypatch.setattr(server.respawn, "record", lambda *_args, **_kwargs: ([], False))
+    monkeypatch.setattr(server.respawn, "management_lost", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(server.portfolio, "observed_inventory", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(server.portfolio, "collect_worktrees", no_collect)
+    monkeypatch.setattr(server.portfolio, "attach_diff_selectors", lambda *_args, **_kwargs: None)
+
+    await server.sessions()                                  # the baseline: alpha
+    older = await server._read_host()                        # a listing reads the host: alpha
+    hosted.append(host_session("x", 200.0))                  # x is created, and asks for its board
+    server.opens.record_board_open("x", 200.0)
+    await server._listing(None, None)                        # a newer listing finishes first: alpha and x
+    late, _ = await server._listing(None, None, older)       # the older one finishes last
+    after, _ = await server._listing(None, None)
+
+    for result in (late, after):
+        assert not [row for row in stopped(result["management"]) if row["name"] == "x"]
+    assert '"x"' not in (management.FILE.read_text() if management.FILE.exists() else "")
+    assert [entry["session"] for entry in late["opens"] if entry.get("kind") == "board-open"] == ["x"]
+    assert any(row["name"] == "x" for row in after["management"]["sessions"])
+
+
 @pytest.mark.parametrize("malformed_reply", [
     pytest.param([{"name": "alpha"}], id="structurally-invalid-list"),
     pytest.param(json.JSONDecodeError("invalid ptyhost JSON", "{", 0), id="invalid-transport-json"),
