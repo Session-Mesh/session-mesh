@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser} from 'playwright-core';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
@@ -151,7 +152,7 @@ print(json.dumps({"type": response.headers.get("Content-Type", "").split(";")[0]
 
 describe('the diff page in a browser', {skip: skipBrowser}, () => {
   let browser: Browser;
-  before(async () => { browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']}); });
+  before(async () => { browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio'])); });
   after(async () => { await browser?.close(); });
 
   test('shows each file, the changed words, and the diff as text only', async () => {

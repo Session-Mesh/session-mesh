@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {chromium} from 'playwright-core';
+import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const PYTHON = process.env.MESH_PYTHON || 'python3';
@@ -235,7 +236,7 @@ describe('the diff viewer through the server routes', {skip: OWNER_CHECK ? false
 
   test('a line target opens the code viewer of the patch at that line', {skip: skipBrowser}, async () => {
     const {url} = await signed('target.diff', DIFF);
-    const browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']});
+    const browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
     try {
       const page = await browser.newPage();
       await page.goto(`${url}#L3`);
