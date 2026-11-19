@@ -4344,6 +4344,7 @@ const sessionRequestGate = MeshPaneActions.createSessionRequestGate({
 });
 const agentMailConsentDialog = $("#dlg-agent-mail-consent");
 const agentMailConsentDescription = $("#agent-mail-consent-description");
+const agentMailConsentStatus = $("#agent-mail-consent-status");
 const agentMailConsentPrompt = MeshPaneActions.createAgentMailConsentPrompt(agentMailConsentDialog, {
   blocked: () => document.querySelector("dialog:modal") !== null,
   describe: (request) => {
@@ -4351,7 +4352,13 @@ const agentMailConsentPrompt = MeshPaneActions.createAgentMailConsentPrompt(agen
     agentMailConsentDescription.textContent = t("agentMail.consentDescription",
       { source: request.source.id, agent: request.source.agent, started, target: request.target.id });
   },
-  withdrawn: () => flash(t("agentMail.withdrawn")),
+  // The next prompt opens over #flash, which the modal dialog makes inert: what became of the
+  // previous request is said again inside the dialog, in its status line.
+  notice: (notice) => {
+    agentMailConsentStatus.textContent = notice === "withdrawn" ? t("agentMail.previousWithdrawn")
+      : notice === "answeredElsewhere" ? t("agentMail.previousAnsweredElsewhere") : "";
+  },
+  withdrawn: () => flash(t("agentMail.withdrawn"), 4000),
 });
 const agentMailConsentGate = MeshPaneActions.createAgentMailConsentGate({
   choose: agentMailConsentPrompt.choose,

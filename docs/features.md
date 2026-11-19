@@ -623,9 +623,10 @@ Before an agent can read a message, the page asks you in
 "Message from another agent", naming the sending session: "Later", "Refuse", "Read this time" or
 "Always for this exact session". Every open window of the mesh asks; the first answer counts, and
 the question closes in the other windows at their next refresh of the session list (the page says
-"Message request decided elsewhere; the prompt was closed.") and the next pending request, if any,
-is asked. An answer given in another window before that refresh changes nothing, and that window
-says so.
+"Message request decided elsewhere; the prompt was closed."). The next pending request, if any,
+is then asked, and its prompt says "The previous message request was decided elsewhere; its prompt
+was closed." in its own status line. An answer given in another window before that refresh, or
+overtaken by it, changes nothing, and that window says so.
 
 The envelope button in a terminal pane's header opens that session's mailbox: the messages it
 received and sent that are still kept (sender or recipient, type, time and text), the approval

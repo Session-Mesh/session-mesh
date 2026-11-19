@@ -25,7 +25,10 @@ function harness(decideOutcome: 'settled' | 'stale' | 'retry' = 'settled') {
   let elsewhere = 0;
   let settle: ((choice: Choice) => void) | null = null;
   const gate = createAgentMailConsentGate({
-    choose: (value) => new Promise<Choice>((resolve) => { shown.push(value.id); settle = resolve; }),
+    choose: (value, notice) => new Promise<Choice>((resolve) => {
+      shown.push(notice === null ? value.id : `${value.id} (${notice})`);
+      settle = resolve;
+    }),
     decide: async (id, decision) => { decided.push(`${id}:${decision}`); return decideOutcome; },
     withdraw: (id) => { withdrawn.push(id); settle?.('withdrawn'); },
     answeredElsewhere: () => { elsewhere += 1; },
@@ -95,6 +98,27 @@ describe('agent-mail consent gate across viewers', () => {
     assert.equal(h.elsewhere(), 1);
     await h.gate.consider([request('r1')]);
     assert.deepEqual(h.shown, ['r1']);
+  });
+
+  test('the next prompt of a run says what became of the one before it', async () => {
+    const stale = harness('stale');
+    const first = stale.gate.consider([request('r1'), request('r2')]);
+    stale.answer('no');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(stale.shown, ['r1', 'r2 (answeredElsewhere)']);
+    stale.answer('later');
+    await first;
+
+    const h = harness();
+    const second = h.gate.consider([request('r1'), request('r2'), request('r3')]);
+    await h.gate.consider([request('r2'), request('r3')]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(h.shown, ['r1', 'r2 (withdrawn)']);
+    h.answer('yes');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(h.shown, ['r1', 'r2 (withdrawn)', 'r3'], 'a settled answer carries nothing');
+    h.answer('later');
+    await second;
   });
 
   test('a settled answer reports nothing', async () => {

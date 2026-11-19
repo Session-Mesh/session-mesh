@@ -347,16 +347,19 @@ describe('the pane mailbox', {skip}, () => {
     await prompt(page).locator(`button[value="${value}"]`).click();
     return (await decided).status();
   }
-  /** Record every text the polite status region shows, however briefly. */
-  async function recordStatus(page: Page): Promise<() => Promise<string[]>> {
-    await page.evaluate(() => {
-      const seen: string[] = [];
-      (window as unknown as {statusSeen: string[]}).statusSeen = seen;
-      const region = document.querySelector('#flash')!;
-      new MutationObserver(() => { if (region.textContent) seen.push(region.textContent); })
-        .observe(region, {childList: true, characterData: true, subtree: true});
-    });
-    return () => page.evaluate(() => (window as unknown as {statusSeen: string[]}).statusSeen);
+  type AXNode = {nodeId: string; ignored: boolean; role?: {value: string}; name?: {value: string}; childIds?: string[]};
+  /** The text of every status region the browser's accessibility tree exposes, as a screen reader
+   * gets it: an element made inert by a modal dialog is ignored there, whatever its textContent. */
+  async function exposedStatus(page: Page): Promise<string[]> {
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      const {nodes} = await cdp.send('Accessibility.getFullAXTree') as {nodes: AXNode[]};
+      const byId = new Map(nodes.map(node => [node.nodeId, node]));
+      const text = (node: AXNode): string => node.ignored ? ''
+        : node.role?.value === 'StaticText' ? node.name?.value ?? ''
+          : (node.childIds ?? []).map(id => byId.get(id)).filter(child => child !== undefined).map(text).join('');
+      return nodes.filter(node => !node.ignored && node.role?.value === 'status').map(text).filter(Boolean);
+    } finally { await cdp.detach(); }
   }
 
   test('an approval prompt answered in one window closes in the other', async () => {
@@ -371,6 +374,9 @@ describe('the pane mailbox', {skip}, () => {
     assert.equal(await answer(first.page, 'yes', requestId), 200);
     await second.page.evaluate(() => refresh());
     await prompt(second.page).waitFor({state: 'hidden'});
+    await second.page.locator('#flash').getByText('Message request decided elsewhere; the prompt was closed.').waitFor();
+    assert.ok((await exposedStatus(second.page)).includes('Message request decided elsewhere; the prompt was closed.'),
+      'with no other request, the page notice is exposed');
     assert.equal((await lab.readAs(beta, messageId)).status, 200, 'the first answer was kept');
     assert.deepEqual([...first.errors, ...second.errors], []);
   });
@@ -385,16 +391,16 @@ describe('the pane mailbox', {skip}, () => {
       await page.evaluate(() => refresh());
       await prompt(page).locator('button[value="yes"]').waitFor();
     }
-    const statusSeen = await recordStatus(second.page);
     assert.equal(await answer(first.page, 'yes', r1.requestId), 200);
     // The second window still shows r1; this refresh lists only r2.
     await second.page.evaluate(() => refresh());
-    await prompt(second.page).locator('button[value="no"]').waitFor();
+    const said = 'The previous message request was decided elsewhere; its prompt was closed.';
+    await prompt(second.page).locator('#agent-mail-consent-status').getByText(said).waitFor();
+    // r2's prompt makes #flash inert; the dialog's own status line is what a screen reader gets.
+    assert.ok((await exposedStatus(second.page)).includes(said), 'the withdrawal is exposed with r2 open');
     assert.equal(await answer(second.page, 'no', r2.requestId), 200, 'the refusal of r2 was sent');
     assert.ok(!(await lab.consent()).requests.some(item => item.id === r2.requestId), 'r2 is no longer pending');
     assert.ok(!(await lab.inbox(beta)).includes(r2.messageId), 'the refused message was dropped');
-    assert.ok((await statusSeen()).includes('Message request decided elsewhere; the prompt was closed.'),
-      'the withdrawal was announced');
     assert.deepEqual([...first.errors, ...second.errors], []);
   });
 
