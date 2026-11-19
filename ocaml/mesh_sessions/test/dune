@@ -102,3 +102,55 @@
   threads.posix)
  (deps
   (source_tree fixtures)))
+
+; The Codex scenarios (fixtures/codex/scenarios.json) on a fictional platform.
+
+(library
+ (name mesh_sessions_codex_test_support)
+ (wrapped false)
+ (modules fake_codex)
+ (libraries mesh_agent_codex mesh_platform mesh_pty_processes yojson unix))
+
+(test
+ (name test_codex)
+ (modules test_codex)
+ (libraries
+  mesh_sessions_codex_test_support
+  mesh_agent
+  mesh_agent_codex
+  mesh_session_checks
+  mesh_platform
+  generic_test_support
+  alcotest
+  yojson
+  unix))
+
+(test
+ (name test_codex_scale)
+ (modules test_codex_scale)
+ (libraries
+  mesh_sessions_codex_test_support
+  mesh_sessions
+  mesh_agent
+  mesh_agent_codex
+  generic_test_support
+  alcotest
+  eio
+  eio_main
+  yojson
+  unix))
+
+(test
+ (name test_codex_parity)
+ (modules test_codex_parity)
+ (libraries
+  mesh_sessions_codex_test_support
+  mesh_sessions_test_support
+  mesh_agent
+  mesh_agent_codex
+  generic_test_support
+  alcotest
+  yojson
+  unix)
+ (deps
+  (source_tree fixtures)))
