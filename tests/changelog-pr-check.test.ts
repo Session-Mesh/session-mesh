@@ -30,6 +30,7 @@ describe('a pull request to main', () => {
     ['the opt-out after a closed HTML comment', pull([CODE], '<!-- a\nnote -->\nChangelog: none: tests only\n')],
     ['the opt-out after a comment marker in a code span', pull([CODE], 'Document the `<!--` marker.\nChangelog: none: docs only\n')],
     ['the opt-out after a comment marker in a fence', pull([CODE], '```html\n<!--\n```\nChangelog: none: docs only\n')],
+    ['an opt-out reason with a code span', pull([CODE], 'Changelog: none: update `CONTRIBUTING.md`\n')],
     ['the opt-out after inline comments closed on their line', pull([CODE], 'Summary <!-- a --> and <!-- b -->\nChangelog: none: docs only\n')],
     ['the opt-out after a closing fence with trailing spaces', pull([CODE], '~~~~\nx\n~~~~~  \nChangelog: none: docs only\n')],
     ['a base that is not main', pull([CODE], '', [PATCH], 'release/latest')],

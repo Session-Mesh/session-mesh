@@ -14,10 +14,11 @@ export const SEMVER_LABELS = ['semver: patch', 'semver: minor'];
 // after the separator is at least two words, and not the template's placeholder "<reason>".
 const OPT_OUT_LINE = /^Changelog: none\b(.*)$/;
 
-// A line outside code with its HTML comments removed (code spans first, so a "<!--" inside one
-// opens nothing), and whether a comment it opens is still open at its end.
+// A line outside code with its HTML comments removed, and whether a comment it opens is still open
+// at its end. Each code span first becomes the word "code": its text stays a visible word of the
+// line (a reason may name a file in a span), and a "<!--" inside it opens nothing.
 function stripComments(line: string): {text: string; open: boolean} {
-  const text = line.replace(/(`+)[^`][\s\S]*?\1/g, '').replace(/<!--[\s\S]*?-->/g, '');
+  const text = line.replace(/(`+)[^`][\s\S]*?\1/g, 'code').replace(/<!--[\s\S]*?-->/g, '');
   const start = text.indexOf('<!--');
   return start < 0 ? {text, open: false} : {text: text.slice(0, start), open: true};
 }
