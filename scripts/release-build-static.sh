@@ -29,7 +29,7 @@ if [ "$#" -ne 2 ]; then
 fi
 source_tree="$(cd "$1" && pwd -P)"
 output_dir="$2"
-programs="mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all"
+programs="mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp"
 compiler="ocaml-variants.5.3.0+options"
 # The fixed opam repository commit (opam_repository), shared with the macOS release job.
 # shellcheck source=release-pins.sh

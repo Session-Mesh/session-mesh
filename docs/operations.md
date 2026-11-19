@@ -238,7 +238,7 @@ trusting](#prebuilt-binaries).
 
 **Offline.** `--assets-dir /absolute/dir` takes the files of a release from a directory instead of
 GitHub: the bundle of your platform (`mesh-linux-x86_64.tar.gz`, `mesh-linux-arm64.tar.gz` or
-`mesh-macos-arm64.tar.gz`), or, for a release without one, the six native programs of your
+`mesh-macos-arm64.tar.gz`), or, for a release without one, the eight native programs of your
 platform and `session-mesh-<tag>.tar.gz`; and, for an upgrade, `SHA256SUMS` and `install.sh`. An upgrade from a directory needs `--to`, since the latest release can only be asked
 from GitHub.
 
@@ -1571,8 +1571,8 @@ refused, with the floors named: install from a clone there.
 | File | Content |
 |---|---|
 | `install.sh` | the installer of that release, with the release tag and the SHA-256 of every other file written into it |
-| `mesh-<platform>.tar.gz` | the bundle of a platform: the code of the tagged commit, its own CPython and Node runtimes with the locked Python dependencies, and the native programs `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history` and `mesh-logout-all`; `mesh-macos-arm64.tar.gz` only when its build passed (the release notes say whether it is there) |
-| `<program>-<platform>` | each of the six native programs alone, for `linux-x86_64`, `linux-aarch64` and `macos-arm64` |
+| `mesh-<platform>.tar.gz` | the bundle of a platform: the code of the tagged commit, its own CPython and Node runtimes with the locked Python dependencies, and the native programs `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`, `mesh-logout-all`, `work-read` and `work-mcp`; `mesh-macos-arm64.tar.gz` only when its build passed (the release notes say whether it is there) |
+| `<program>-<platform>` | each of the eight native programs alone, for `linux-x86_64`, `linux-aarch64` and `macos-arm64` |
 | `session-mesh-<tag>.tar.gz` | the code of the tagged commit (`git archive`), which the native programs run with |
 | `SHA256SUMS` | the SHA-256 of every file above, `install.sh` included |
 
@@ -1687,7 +1687,7 @@ picks the bundle of this machine (`uname -s`, `uname -m`), builds its URL
 downloads it into a staging directory `~/.local/share/session-mesh/releases/.stage-<tag>.*`, checks
 its hash, then (with `gh` logged in) its attestation, against the release workflow and
 `refs/tags/<tag>`. Only then does it extract the archive, check that it holds one bundle
-`mesh-<platform>/` whose six native programs have the hashes recorded in its `bundle.json`, and
+`mesh-<platform>/` whose eight native programs have the hashes recorded in its `bundle.json`, and
 rename that directory to `releases/<tag>`.
 
 - Without `gh`, or with `gh` not logged in, the attestation is not checked: the installer says
@@ -1724,13 +1724,13 @@ sources the bundle's `env.sh`, which sets `MESH_BIN_DIR` to the bundle's `bin/`.
 
 **A release without a bundle for this platform.** The installer prefers the bundle. When the release
 has none for this machine but publishes its native programs, it installs those instead: the code
-archive `session-mesh-<tag>.tar.gz` and the six programs `<program>-<platform>`
+archive `session-mesh-<tag>.tar.gz` and the eight programs `<program>-<platform>`
 (`linux-x86_64`, `linux-aarch64` or `macos-arm64`), each checked against the stamp (and its
 attestation) before anything is unpacked, then laid out as `releases/<tag>/app` (the code) and
 `releases/<tag>/bin` (the programs). The web unit then runs this machine's Python
 (`MESH_PYTHON`, else `python3` on `PATH`, checked as for a source install) on
 `current/app/server.py`, the PTY unit runs `current/bin/mesh-ptyhost`, the native program
-itself, and `~/.local/bin/mesh-logout-all` links to `current/bin/mesh-logout-all`. Such a release is reused, upgraded and rolled back like any other; an upgrade may move
+itself, `~/.local/bin/mesh-logout-all` links to `current/bin/mesh-logout-all`, and the release's `app/bin/work-read` links to its `bin/work-read`, where the web server looks for it (`/api/work/v1`). Such a release is reused, upgraded and rolled back like any other; an upgrade may move
 between the two kinds.
 
 #### Where the native programs are found
@@ -1743,8 +1743,12 @@ links to the release's own), `agentmcp.py` uses `bin/mesh-board-mcp` beside the 
 the `bin` directory of the opam switch: `MESH_OPAM_SWITCH`, otherwise the switch of the current
 opam environment, otherwise a local switch in the checkout (`_opam/`). The PTY host is the
 exception: its unit or job runs the exact file the installer chose (`current/bin/mesh-ptyhost`
-for a release install). `mesh-read` and `mesh-platform` are commands you run, or that you add to an
-agent's configuration, by their path in one of these places.
+for a release install). The web server finds `work-read`, which answers `/api/work/v1`, in the same
+places: `MESH_WORK_READ_CMD` when set, otherwise `bin/work-read` of `MESH_BIN_DIR` or beside the
+code (`app/bin/work-read` of a release installed from its native programs links to the release's
+own), otherwise, only when `MESH_BIN_DIR` is not set, the opam switch's
+([work-read.md](work-read.md)). `mesh-read`, `mesh-platform` and `work-mcp` are commands you run, or
+that you add to an agent's configuration, by their path in one of these places.
 
 Building from source with `scripts/bootstrap.sh` ([install.md](install.md#native-pty-host)) remains
 supported and installs the same programs into an opam switch.

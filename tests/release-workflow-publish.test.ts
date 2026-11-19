@@ -25,7 +25,7 @@ describe('the publish job of release.yml', () => {
     const index = lines.findIndex((line) => job(RELEASE_WRITE_JOB).includes(line) && line.raw.includes('expected=(install.sh'));
     const script = scriptOf(lines, index).split('\n').map((line) => line.trim())
       .filter((line) => !line.startsWith('sha256sum') && !line.includes('SHA256SUMS | LC_ALL'));
-    const PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all']
+    const PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp']
       .flatMap((program) => ['linux-x86_64', 'linux-aarch64', 'macos-arm64'].map((target) => `${program}-${target}`));
     const full = ['install.sh', 'SHA256SUMS', 'session-mesh-v1.0.0.tar.gz', 'mesh-linux-x86_64.tar.gz', 'mesh-linux-arm64.tar.gz',
       'mesh-macos-arm64.tar.gz', ...PROGRAMS];

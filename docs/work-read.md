@@ -55,7 +55,7 @@ The program runs without a shell, in its own process group, with a reduced envir
 
 Status: 200 on success; 400 for a refused request (the program's `invalid_input`, or the server's own check); 404 for `not_found`; 502 for any other failure of the program (`internal` included) or an output line over the cap; 503 when the program is not installed or busy; 504 on timeout. A program that prints nothing, prints a line without its final newline, or is killed by a signal is a 502 `internal` (JSON); only a complete line is relayed. Every answer of the route is JSON with `Cache-Control: no-store`, except the refusals made before the route runs: 401 (authentication), 403 (foreign `Origin`) and 413 (body over the server's size limit) are `text/plain`. The server's own errors have the program's shape, `{"error": {"code", "message"}}`, with the codes `invalid_input` (400), `not_available` (503), `busy` (503), `output_too_large` (502) and `timeout` (504).
 
-Packaging: a source install gets `work-read` from `dune install` in the opam switch. The release scripts do not ship it yet (`ocaml/README.md`), so a release install answers 503 on `/api/work/v1` until they list the program.
+Packaging: a source install gets `work-read` from `dune install` in the opam switch. A release ships it on every platform: a bundle holds it as `bin/work-read`, the directory `MESH_BIN_DIR` names; a release installed from its native programs gets the asset `work-read-<platform>` as `bin/work-read`, and `install.sh` links `app/bin/work-read` to it. `scripts/release-smoke.sh` runs a request against each built program, and `scripts/smoke-bundle.sh` calls `/api/work/v1` on each extracted bundle.
 
 ## Tests
 
