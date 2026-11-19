@@ -960,12 +960,14 @@ async def _respond(request, path, handle):
         return _DescriptorResponse(handle, "text/plain; charset=utf-8",
                                    {**headers, "Content-Security-Policy": active_csp()})
     if ext in DIFF_EXT and "raw" not in request.query and _is_navigation(request):
-        # At most one byte past the limit, whatever the size was when checked (a watched patch
-        # may grow meanwhile). Too large, or not text (a NUL byte, as codeview.is_text): the
+        # A file already past the limit is streamed without being read here. Otherwise at most one
+        # byte past the limit is read, whatever the size was when checked (a watched patch may
+        # grow meanwhile). Too large, or not text (a NUL byte anywhere in what was read): the
         # whole file is streamed as plain text from the same descriptor, which aiohttp reopens
         # from its start.
-        data = await asyncio.to_thread(handle.read, DIFF_MAX_BYTES + 1)
-        if len(data) > DIFF_MAX_BYTES or not codeview.is_text(data):
+        oversized = _size(handle) > DIFF_MAX_BYTES
+        data = b"" if oversized else await asyncio.to_thread(handle.read, DIFF_MAX_BYTES + 1)
+        if oversized or len(data) > DIFF_MAX_BYTES or b"\0" in data:
             return _DescriptorResponse(handle, "text/plain; charset=utf-8",
                                        {**headers, "Content-Security-Policy": active_csp()})
         handle.close()

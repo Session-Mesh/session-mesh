@@ -4,7 +4,9 @@
 // The diff viewer through the real routes of a running server.py (throwaway HOME, no PTY host:
 // /view needs none): a `.diff` or `.patch` file opened with /api/view is rendered by the diff
 // page; ?raw=1, a subresource load, a file past the 4 MiB limit or holding a NUL byte get the
-// plain text; ?source=1 gets the code viewer; /viewlib/ serves the built bundle.
+// plain text; ?source=1 gets the code viewer, where a line target (#L3) lands; /viewlib/ serves
+// the built bundle. The browser part needs a Chromium: MESH_CHROMIUM=<path>; skipped without it
+// (MESH_REQUIRE_BROWSER=1 makes the absence a failure).
 import assert from 'node:assert/strict';
 import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
@@ -12,10 +14,13 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
+import {chromium} from 'playwright-core';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const PYTHON = process.env.MESH_PYTHON || 'python3';
 const LIMIT = 4 * 1024 * 1024;
+const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
+const skipBrowser = !CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM not set' : false;
 const DIFF = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n';
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'diff-view-route-'));
@@ -118,6 +123,28 @@ describe('the diff viewer through the server routes', () => {
     const page = await load(`${url}?source=1`);
     assert.equal(page.type, 'text/html');
     assert.ok(!page.body.includes('MeshDiffView'));
+  });
+
+  test('a line target opens the code viewer of the patch at that line', {skip: skipBrowser}, async () => {
+    const {url} = await signed('target.diff', DIFF);
+    const browser = await chromium.launch({executablePath: CHROMIUM, args: ['--no-sandbox', '--mute-audio']});
+    try {
+      const page = await browser.newPage();
+      await page.goto(`${url}#L3`);
+      await page.waitForURL(/\?source=1#L3$/);
+      // Monaco marks the target lines with the "hit-margin" decoration, next to their numbers
+      await page.locator('.hit-margin').first().waitFor();
+      const marked = await page.evaluate(() => {
+        const top = (node: Element): number => node.getBoundingClientRect().top;
+        const hit = document.querySelector('.hit-margin');
+        if (!hit) return null;
+        const number = [...document.querySelectorAll('.line-numbers')].find(node => Math.abs(top(node) - top(hit)) < 2);
+        return number?.textContent?.trim() ?? null;
+      });
+      assert.equal(marked, '3');
+    } finally {
+      await browser.close();
+    }
   });
 
   test('a diff past 4 MiB, or holding a NUL byte, is served whole as plain text', async () => {

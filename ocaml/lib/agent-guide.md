@@ -129,24 +129,35 @@ of a file), show it in this viewer rather than printing it in the terminal: writ
 file under the home directory or `/tmp`, then open it.
 
 ```sh
-# /tmp, not $TMPDIR (which may not be served); HEAD: staged and unstaged changes to tracked files
+# /tmp, not $TMPDIR (which may not be served); the staged changes, then the unstaged ones
+# (this works before the first commit too, when HEAD does not exist yet)
 d="$(mktemp -d /tmp/mesh-diff.XXXXXXXX)" &&
-  git diff --no-color HEAD > "$d/changes.diff" &&
+  { git diff --no-color --cached && git diff --no-color; } > "$d/changes.diff" &&
   mesh-open "$d/changes.diff"   # under the same condition as above: MESH_SESSION_TOKEN is set
 ```
 
-Other diffs: `git diff --no-color main...HEAD` (a branch), `git show --no-color <commit>`,
-`diff -u old new`. `git diff` leaves out untracked files: when the owner wants them too, mark
-them first with `git add --intent-to-add <file>` (it stages no content), or append
-`git diff --no-color --no-index /dev/null <file>` for each. Always pass `--no-color`: a
-`color.diff=always` setting would put colour codes in the file even when it is redirected.
+A file changed both in the index and in the working tree then appears twice, staged first.
+
+Other diffs: `git diff --no-color main...HEAD` (a branch), `git show --no-color <commit>`
+(for a merge, add `--diff-merges=first-parent`: the viewer does not read the combined `@@@`
+diffs Git shows by default), `diff -u old new`. `git diff` leaves out untracked files: when the
+owner wants them too, mark them first with `git add --intent-to-add <file>` (it stages no
+content), or append `git diff --no-color --no-index /dev/null <file>` for each. Always pass
+`--no-color`: a `color.diff=always` setting would put colour codes in the file even when it is
+redirected. `diff -u` and `git diff --no-index` exit with status 1 when the files differ, so do
+not chain `mesh-open` after them with `&&`:
+
+```sh
+diff -u old new > "$d/changes.diff"; [ $? -le 1 ] && mesh-open "$d/changes.diff"
+```
 
 Without `MESH_SESSION_TOKEN`, print the file's path instead: the owner clicks it and it opens in
 the same viewer. To follow changes as you work, open it with `mesh-open --watch` and write the
-diff to the same file again. A diff over 4 MiB is shown as plain text, one of more than 50,000
+diff to the same file again. A diff over 4 MiB is shown as plain text; one of more than 50,000
 lines gets a notice with a link to its plain text (show a narrower diff instead, for example one
-path: `git diff --no-color HEAD -- <path>`), and `changes.diff:42` opens the plain text at that
-line of the file.
+path: `git diff --no-color HEAD -- <path>`). A line target such as `changes.diff:42` opens the
+code viewer at that line of the patch file, for a diff of 4 MiB or less; a larger one opens as
+plain text, at its start.
 
 ### Whiteboard and demos
 
