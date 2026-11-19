@@ -13,7 +13,8 @@
 //   silent      accept requests and never answer
 //   slowFrom    the `list` requests from this number on (1 is the first) wait `delayMs` before the reply
 //   update      the update notice (null: none)
-// Every request's `op` is appended to `<control>.log`, one per line, so that a test can count them.
+// Every request's `op` is appended to `<control>.log`, one per line, so that a test can count them, and
+// `<op> answered` once its reply is sent.
 import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -56,7 +57,7 @@ function serve(socketPath: string, controlPath: string): void {
       } else if (request.op === 'update_notice') {
         reply = {ok: true, update: control.update ?? null};
       }
-      setTimeout(() => connection.end(frame(reply)), delay);
+      setTimeout(() => { connection.end(frame(reply)); fs.appendFileSync(`${controlPath}.log`, `${request.op} answered\n`); }, delay);
     });
   }).listen(socketPath);
 }
@@ -68,7 +69,10 @@ export type FakeHost = {control: (next: FakeControl) => void; ops: () => string[
 export async function startFakeHost(socketPath: string, initial: FakeControl): Promise<FakeHost> {
   fs.mkdirSync(path.dirname(socketPath), {recursive: true, mode: 0o700});
   const controlPath = `${socketPath}.control.json`;
-  const control = (next: FakeControl) => fs.writeFileSync(controlPath, JSON.stringify(next));
+  const control = (next: FakeControl) => {   // replaced at once: the host reads it at every request
+    fs.writeFileSync(`${controlPath}.next`, JSON.stringify(next));
+    fs.renameSync(`${controlPath}.next`, controlPath);
+  };
   let child: ChildProcess;
   const start = async () => {
     fs.rmSync(socketPath, {force: true});

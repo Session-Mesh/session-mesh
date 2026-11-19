@@ -82,8 +82,10 @@ before 1.0, a minor version may change behaviour.
   After a start, the first answer lists every session at once from the PTY host's list, the
   folders and the restart snapshot (rows marked `ready: false`), before the agents are described.
   Until the page's poll after the first round's description (usually the next one, 4 seconds
-  later), the page has no management state (`pending`): phone paste has no target, board signals
-  are not received, and pending session requests and agent-mail consent requests are empty.
+  later), the page has no management state (`pending`): phone paste has no target and board signals
+  are not received. Pending session requests and agent-mail consent requests are read beside the
+  first round, on their own: they are empty only until that read ends, usually before the
+  description.
   Renames and moves no longer wait for a listing, and a restore, which still runs a listing of its
   own, no longer waits behind another one: the organisation lock now covers only the writes. A
   silent PTY host leaves the last list on screen (`host: "silent"`). The answer gains

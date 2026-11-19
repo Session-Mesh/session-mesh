@@ -2,9 +2,10 @@
 
 `GET /api/sessions` answers from a session list the web server keeps in memory. One background round at
 a time reads the PTY host's list, describes the sessions and writes the restart snapshot; a request never
-runs a listing of its own. The answer therefore comes in tens of milliseconds whatever the number of
-sessions or polling pages, and a change (a new session, a rename, an agent that finished its turn) is
-listed by the next round. This page is the contract for a client of that route.
+runs a listing of its own, and never waits for the sessions to be described. A request with `since`
+answers at once; one without waits at most for a read of the PTY host's list (see [Request](#request)).
+A change (a new session, a rename, an agent that finished its turn) is listed by the next round. This
+page is the contract for a client of that route.
 
 ## Rounds
 
@@ -12,11 +13,13 @@ A round starts when a request asks for one, or 10 seconds after the previous rou
 run at once, so the requests that arrive during a round share the next one. A round:
 
 1. reads the PTY host's `list` and publishes it at once (below);
-2. describes every session (agent, conversation, state, last message) and publishes the rows;
+2. describes every session (agent, conversation, state, last message);
 3. records the restart snapshot. The snapshot is never written from a row that is not described, and a
    session the host lists but the round did not describe keeps its previous snapshot entry: it is
    never offered for restore while it runs. A description made from an older host list than the one
-   already recorded is not written over it.
+   already recorded is not written over it;
+4. publishes the described rows. Until then, a session the round's read newly listed stays a
+   `ready: false` row, also while the snapshot is being written.
 
 A request without `since` also asks for a read of the host's `list` apart from the rounds; requests
 that arrive while one runs share the next. A request with `since` asks only for a round. Reads are
@@ -61,8 +64,13 @@ Once a round has described the sessions, the fields of the earlier answer are ke
 - The skeleton has `mesh`, `external` (empty), `folders`, `home`, `restorable` (empty), `management`
   (`{"state": "pending"}`), `ptyhost` and `opens`; it has no `portfolio`, `signals`, `moved` or
   `hook_shadow`.
-- An answer before the host has listed anything (a silent or absent host after a start) has only
-  `mesh` (empty), `external`, `folders`, `management` and the fields every answer has.
+- An answer before anything is published (after a start, until the first read of the host's list
+  succeeds or the first round ends) has only `mesh` (empty), `external`, `folders`, `management` and
+  the fields every answer has.
+
+When the first read fails (a silent or absent host after a start), the first round still publishes its
+listing of no session: from then on the answer has the listing's fields (`home`, `portfolio`,
+`signals`, ...), with an empty `mesh`, `complete: true` and `host: "silent"`.
 
 Every answer has `now` (the time of the answer, in seconds), `update`, `sessionRequests`,
 `agentMailConsent`, `client_version`, `restore_guard` and the fields below. These are added:
@@ -94,11 +102,15 @@ Every row of `mesh` has `ready`:
 
 A row's `agent.argv` is unchanged in this version.
 
+`attached` is a known limit: a read for a request publishes the host's current count at once, but a
+round that read the host before it then publishes the count of its own, older read, until the next
+read. The count can therefore go back for one round (1, 0, 1 across three generations).
+
 ## Configuration
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MESH_SESSIONS_WAIT` | `2` | The most seconds a request without `since` waits (above). `0`: every request answers from the list as it is. A value that is not a decimal number of seconds (digits, an optional point and decimals: `1e1`, `inf` or ` 1.5 ` are not) is replaced by 2, with one line in the log. |
+| `MESH_SESSIONS_WAIT` | `2` | The most seconds a request without `since` waits (above). `0`: every request answers from the list as it is. A value that is not a decimal number of seconds (digits, an optional point and decimals: `1e1`, `inf` or ` 1.5 ` are not) is replaced by 2, with one line in the log. The wait is checked every 50 ms, so a value under 0.05 can wait up to 50 ms. |
 
 The test harnesses (`tests/conftest.py`, `tests/mesh-server-lib.ts`) also set
 `MESH_TEST_SESSIONS_COMPLETE=1`, never set in production: a request without `since` then waits for the
