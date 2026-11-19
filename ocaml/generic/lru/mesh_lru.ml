@@ -5,14 +5,7 @@
 (*                                                                            *)
 (******************************************************************************)
 
-module type KEY = sig
-  type t
-
-  val equal : t -> t -> bool
-  val hash : t -> int
-end
-
-module Make (Key : KEY) = struct
+module Make (Key : Hashtbl.HashedType) = struct
   module Table = Hashtbl.Make (Key)
 
   (* A doubly linked list threaded through the nodes: [newest] is the most

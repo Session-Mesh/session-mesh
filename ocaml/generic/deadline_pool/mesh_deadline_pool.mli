@@ -65,7 +65,10 @@ module Blocking : sig
   (** Run the function in a new system thread and wait for its result in a
       cancellable way; its exception is re-raised here. When the waiting
       fibre is cancelled, the thread is abandoned: it is counted by
-      {!abandoned} until it returns.
+      {!abandoned} until it returns, and the value it then returns is
+      discarded (a function that returns a resource, such as an open file,
+      leaks it when abandoned: close it inside the function). A fibre that is
+      already cancelled raises [Eio.Cancel.Cancelled] and starts no thread.
       @raise Saturated when [max_threads] threads are in flight. *)
 
   val in_flight : t -> int

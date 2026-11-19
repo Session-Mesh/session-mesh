@@ -5,54 +5,46 @@
 (*                                                                            *)
 (******************************************************************************)
 
-type tier = Focus | Pinned | Recent | Visible | Rest
-type priority = { tier : tier; rank : float }
+module Make (Key : Hashtbl.HashedType) (Tier : Set.OrderedType) = struct
+  type priority = { tier : Tier.t; rank : float }
 
-let priority ?(rank = 0.) tier = { tier; rank }
+  let priority ?(rank = 0.) tier = { tier; rank }
 
-module type KEY = sig
-  type t
+  (* The position of an item in service order: bumped (latest bump first),
+     then named by the leading list (in its order), then by tier and rank.
+     [seq] is unique per item, so two slots never compare equal. *)
+  type place = Bumped of int | Leading of int | Tiered of priority
+  type slot = { place : place; seq : int; slot_key : Key.t }
 
-  val equal : t -> t -> bool
-  val hash : t -> int
-end
+  let compare_places a b =
+    match (a, b) with
+    | Bumped x, Bumped y -> Int.compare y x
+    | Bumped _, _ -> -1
+    | _, Bumped _ -> 1
+    | Leading x, Leading y -> Int.compare x y
+    | Leading _, _ -> -1
+    | _, Leading _ -> 1
+    | Tiered x, Tiered y -> (
+        match Tier.compare x.tier y.tier with 0 -> Float.compare x.rank y.rank | c -> c)
 
-(* The position of an item in service order: [group] 0 is bumped, 1 named by
-   the focus list, 2 and above the tiers. [seq] is unique per item, so two
-   slots never compare equal. *)
-type 'k slot = { group : int; sub : float; seq : int; slot_key : 'k }
-
-let compare_slots a b =
-  match Int.compare a.group b.group with
-  | 0 -> ( match Float.compare a.sub b.sub with 0 -> Int.compare a.seq b.seq | c -> c)
-  | c -> c
-
-let tier_group = function
-  | Focus -> 2
-  | Pinned -> 3
-  | Recent -> 4
-  | Visible -> 5
-  | Rest -> 6
-
-module Make (Key : KEY) = struct
   module Table = Hashtbl.Make (Key)
 
   module Order = Set.Make (struct
-    type t = Key.t slot
+    type t = slot
 
-    let compare = compare_slots
+    let compare a b = match compare_places a.place b.place with 0 -> Int.compare a.seq b.seq | c -> c
   end)
 
   type 'v entry = {
     mutable value : 'v;
     mutable base : priority;
     mutable bumped : int option;
-    mutable slot : Key.t slot;
+    mutable slot : slot;
   }
 
   type 'v t = {
     entries : 'v entry Table.t;
-    focus : int Table.t;
+    leading : int Table.t;
     mutable order : Order.t;
     mutable next_seq : int;
     mutable bumps : int;
@@ -61,19 +53,22 @@ module Make (Key : KEY) = struct
   let create () =
     {
       entries = Table.create 64;
-      focus = Table.create 64;
+      leading = Table.create 64;
       order = Order.empty;
       next_seq = 0;
       bumps = 0;
     }
 
   let slot_for t key ~seq ~base ~bumped =
-    match (bumped, Table.find_opt t.focus key) with
-    | Some bump, _ -> { group = 0; sub = -.float_of_int bump; seq; slot_key = key }
-    | None, Some position -> { group = 1; sub = float_of_int position; seq; slot_key = key }
-    | None, None -> { group = tier_group base.tier; sub = base.rank; seq; slot_key = key }
+    let place =
+      match (bumped, Table.find_opt t.leading key) with
+      | Some bump, _ -> Bumped bump
+      | None, Some position -> Leading position
+      | None, None -> Tiered base
+    in
+    { place; seq; slot_key = key }
 
-  (* Recompute an entry's slot after its base, bump or focus changed. *)
+  (* Recompute an entry's slot after its base, bump or leading place changed. *)
   let reslot t key entry =
     t.order <- Order.remove entry.slot t.order;
     entry.slot <- slot_for t key ~seq:entry.slot.seq ~base:entry.base ~bumped:entry.bumped;
@@ -101,11 +96,12 @@ module Make (Key : KEY) = struct
         reslot t key entry;
         true
 
-  let set_focus t keys =
-    let previous = Table.fold (fun key _ acc -> key :: acc) t.focus [] in
-    Table.reset t.focus;
+  let set_leading t keys =
+    let previous = Table.fold (fun key _ acc -> key :: acc) t.leading [] in
+    Table.reset t.leading;
     List.iteri
-      (fun position key -> if not (Table.mem t.focus key) then Table.replace t.focus key position)
+      (fun position key ->
+        if not (Table.mem t.leading key) then Table.replace t.leading key position)
       keys;
     let touched = previous @ keys in
     List.iter
