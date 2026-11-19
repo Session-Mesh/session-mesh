@@ -35,6 +35,8 @@ type t = {
   mutable projects : string list;  (* the project directories, read once per round *)
   mutable layout : layout;
   mutable generation : int;  (* incremented when the layout changes *)
+  mutable listings : int;  (* the listings started *)
+  mutable installed : int;  (* the ticket of the listing in place *)
   mutable counters : counters;
 }
 
@@ -47,6 +49,8 @@ let create roots =
     projects = [];
     layout = [];
     generation = 0;
+    listings = 0;
+    installed = 0;
     counters = { restarted = 0; appended = 0; unchanged = 0 };
   }
 
@@ -76,17 +80,34 @@ let layout_of adapter projects =
       (project, Option.value ~default:Float.nan (modified (Filename.concat (projects_dir adapter) project))))
     projects
 
-(* One listing and one [lstat] per project directory per round; the
-   transcripts are searched again only after the layout changed. *)
-let prepare adapter _round =
+type listing = { ticket : int; listed : string list; times : layout }
+
+(* One listing and one [lstat] per project directory per round. The ticket
+   orders the listings: one that ends after a later one was installed (a
+   [prepare] abandoned at its deadline) is dropped. *)
+let list_layout adapter =
+  let ticket =
+    locked adapter (fun () ->
+        adapter.listings <- adapter.listings + 1;
+        adapter.listings)
+  in
   let projects = list_projects (projects_dir adapter) in
-  let layout = layout_of adapter projects in
+  { ticket; listed = projects; times = layout_of adapter projects }
+
+(* The transcripts are searched again only after the layout changed. *)
+let install adapter listing =
   locked adapter (fun () ->
-      adapter.projects <- projects;
-      if not (List.equal (fun (a, x) (b, y) -> String.equal a b && Float.equal x y) layout adapter.layout) then begin
-        adapter.layout <- layout;
-        adapter.generation <- adapter.generation + 1
+      if listing.ticket > adapter.installed then begin
+        adapter.installed <- listing.ticket;
+        adapter.projects <- listing.listed;
+        let same (a, x) (b, y) = String.equal a b && Float.equal x y in
+        if not (List.equal same listing.times adapter.layout) then begin
+          adapter.layout <- listing.times;
+          adapter.generation <- adapter.generation + 1
+        end
       end)
+
+let prepare adapter _round = install adapter (list_layout adapter)
 
 (* A conversation id usable as a file name component. *)
 let valid_id text =

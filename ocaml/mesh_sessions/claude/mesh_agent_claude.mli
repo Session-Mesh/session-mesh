@@ -41,3 +41,15 @@ val counters : t -> counters
 
 val window : int
 (** 1.5 MB: the bytes the first read of a transcript covers at most. *)
+
+type listing
+(** The project directories and their times, as one {!prepare} read them. *)
+
+val list_layout : t -> listing
+(** Read the project directories; {!prepare} is [install] of it. A listing
+    has a ticket in the order the listings started. *)
+
+val install : t -> listing -> unit
+(** Put a listing in place, unless one that started later is already in
+    place: a [prepare] abandoned at its deadline that ends after the next
+    one never brings back the older listing. Exposed for its test. *)

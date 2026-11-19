@@ -149,7 +149,8 @@ let test_hostile_lines () =
 
 let check_no_transcript name described =
   Alcotest.(check bool) (name ^ ": metadata kept") true (field "session_id" described = `String id);
-  Alcotest.(check bool) (name ^ ": no transcript field") false (List.mem_assoc "title" described)
+  Alcotest.(check bool) (name ^ ": no transcript field") false
+    (List.exists (fun key -> List.mem_assoc key described) [ "title"; "last"; "updated" ])
 
 let test_hostile_files () =
   with_home (fun home ->
@@ -199,6 +200,24 @@ let test_newer_copy () =
       Alcotest.(check bool) "none" false (List.mem_assoc "last" (describe adapter));
       Support.write_file (transcript_path home) (prompt "created");
       Alcotest.(check bool) "created later" true (field "last" (describe adapter) = `String "created"))
+
+(* A listing that started before another but ends after it (a [prepare]
+   abandoned at its deadline) does not replace the newer one: the transcript
+   in the project created in between is still found. *)
+let test_late_listing () =
+  with_home (fun home ->
+      let adapter = fresh home in
+      let late = Mesh_agent_claude.list_layout adapter in
+      let other = Filename.concat home ".claude/projects/-other" in
+      Sys.remove (transcript_path home);
+      Fake.write (Filename.concat other (id ^ ".jsonl")) (prompt "in the new project");
+      let round = Fake.round [ Fake.process ~pid ~sid:pid "claude" ] in
+      Mesh_agent_claude.install adapter (Mesh_agent_claude.list_layout adapter);
+      Mesh_agent_claude.install adapter late;
+      let described =
+        Mesh_agent_claude.describe adapter round (Fake.session pid) (Option.get (Mesh_agent_round.find round pid))
+      in
+      Alcotest.(check bool) "the newer listing stays" true (field "last" described = `String "in the new project"))
 
 let write_metadata home text = Fake.write (Printf.sprintf "%s/.claude/sessions/%d.json" home pid) text
 
@@ -258,6 +277,7 @@ let () =
           Alcotest.test_case "files" `Quick test_hostile_files;
           Alcotest.test_case "directories" `Quick test_hostile_directories;
           Alcotest.test_case "newer copy" `Quick test_newer_copy;
+          Alcotest.test_case "late listing" `Quick test_late_listing;
           Alcotest.test_case "metadata" `Quick test_hostile_metadata;
         ] );
     ]
