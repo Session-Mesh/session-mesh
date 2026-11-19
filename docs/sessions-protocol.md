@@ -275,10 +275,11 @@ For Codex:
 - **Process table.** When the process table left processes out (`table.complete` is `false`), every folder
   counts at least two Codex and any conversation may be named by another Codex, so no id is guessed or read
   from arguments. Python on Linux always takes its table as complete.
-- **Open files outside Linux.** A Codex that exited, or one of another user, holds no rollout on Linux in
-  both programs (the owner of `/proc/<pid>` is compared with this user). Outside Linux every Codex whose open
-  files cannot be read holds unknown rollouts, in both programs; the macOS backend does not read a process's
-  owner yet.
+- **Open files outside Linux.** On Linux both programs agree: a Codex that exited, or one whose owner (of
+  `/proc/<pid>`) is another user, holds no rollout; any other unreadable Codex holds unknown rollouts. On
+  macOS the backend does not read a process's owner yet, so every unreadable Codex holds unknown rollouts
+  except one that exited, which holds none here where Python counts it as unknown (**differs**: this
+  program can then report an id Python withholds).
 - **Duplicated ids** are withdrawn before the row is sent (above), where Python's web server withdraws them
   after the listing. The checks here cover every session of the process table whose agent is Codex, where
   Python's pass covers the listed sessions: a Codex outside the listing can only withdraw more.
