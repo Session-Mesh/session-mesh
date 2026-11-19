@@ -361,6 +361,17 @@ describe('the pane mailbox', {skip}, () => {
       return nodes.filter(node => !node.ignored && node.role?.value === 'status').map(text).filter(Boolean);
     } finally { await cdp.detach(); }
   }
+  /** The accessible description of the open dialog: what a screen reader reads with its name when
+   * the dialog opens, unlike a live region that appears together with its text. */
+  async function dialogDescription(page: Page): Promise<string> {
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      const {nodes} = await cdp.send('Accessibility.getFullAXTree') as
+        {nodes: (AXNode & {description?: {value: string}})[]};
+      const dialog = nodes.find(node => !node.ignored && node.role?.value === 'dialog');
+      return dialog?.description?.value ?? '';
+    } finally { await cdp.detach(); }
+  }
 
   test('an approval prompt answered in one window closes in the other', async () => {
     for (const pending of (await lab.consent()).requests) await lab.decide(pending.id, 'no');
@@ -398,6 +409,7 @@ describe('the pane mailbox', {skip}, () => {
     await prompt(second.page).locator('#agent-mail-consent-status').getByText(said).waitFor();
     // r2's prompt makes #flash inert; the dialog's own status line is what a screen reader gets.
     assert.ok((await exposedStatus(second.page)).includes(said), 'the withdrawal is exposed with r2 open');
+    assert.ok((await dialogDescription(second.page)).includes(said), 'the dialog description carries the notice');
     assert.equal(await answer(second.page, 'no', r2.requestId), 200, 'the refusal of r2 was sent');
     assert.ok(!(await lab.consent()).requests.some(item => item.id === r2.requestId), 'r2 is no longer pending');
     assert.ok(!(await lab.inbox(beta)).includes(r2.messageId), 'the refused message was dropped');

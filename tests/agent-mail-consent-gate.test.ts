@@ -121,6 +121,21 @@ describe('agent-mail consent gate across viewers', () => {
     await second;
   });
 
+  test('an answer that could not be sent reports nothing and is asked again only by a later list', async () => {
+    const h = harness('retry');
+    const run = h.gate.consider([request('r1'), request('r2')]);
+    h.answer('yes');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(h.shown, ['r1', 'r2'], 'r1 is not reopened at once, and r2 carries no notice');
+    assert.equal(h.elsewhere(), 0, 'a network failure is not "decided elsewhere"');
+    h.answer('later');
+    await run;
+    const again = h.gate.consider([request('r1')]);
+    assert.deepEqual(h.shown, ['r1', 'r2', 'r1']);
+    h.answer('later');
+    await again;
+  });
+
   test('a settled answer reports nothing', async () => {
     const h = harness('settled');
     const open = h.gate.consider([request('r1')]);
