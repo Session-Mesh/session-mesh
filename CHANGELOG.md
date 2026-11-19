@@ -33,10 +33,11 @@ before 1.0, a minor version may change behaviour.
   the server's `PATH`, so that `work-write` finds `git`. A commit that fails or is skipped no
   longer passes silently: the reply carries `uncommitted: true` and the sheet says the answer is
   not in the git history yet. The five answers shown for a question always include the owner's
-  latest one, and `owner_answered: true` marks a question the owner answered. `work_answer`'s description, the
-  server instructions and the agent guide now tell agents that the owner can answer in the view
-  and that they record the owner's words only when told in the conversation. See
-  [docs/work-mcp.md](docs/work-mcp.md#answering-from-the-projects-view).
+  latest one, and so does the size bound of a response (48 000 bytes for the MCP tools) when it
+  halves them; `owner_answered: true` marks a question the owner answered. `work_answer`'s
+  description, the server instructions and the agent guide now tell agents that the owner can
+  answer in the view and that they record the owner's words only when told in the conversation.
+  See [docs/work-mcp.md](docs/work-mcp.md#answering-from-the-projects-view).
 - **An agent records the owner's answer to its question.** `mesh-work` gains an 18th tool,
   `work_answer` (`question`, `text`, optional `answered_by`, default `owner`). The owner answers a
   question asked with `work_ask` in an agent session (the asking one or another), and the agent

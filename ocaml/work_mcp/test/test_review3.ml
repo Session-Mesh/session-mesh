@@ -88,6 +88,25 @@ let test_fit_answers_and_questions_directly () =
       check_str "the newest answer survives" "a5" (String.sub (str last "text") 0 2);
       Alcotest.(check int) "omitted counts the older ones" (6 + 2) (List.length kept + int_of (member "answers_omitted" fitted))
 
+(* The size bound keeps the owner's answer, as the answer cap does: the
+   question's [owner_answered] must not point at an answer that was cut. *)
+let test_fit_keeps_owner_answer () =
+  let answer k extra = `Assoc ([ ("text", `String (Printf.sprintf "a%d %s" k (String.make 9000 'x'))) ] @ extra) in
+  let owner = answer 0 [ ("owner_verified", `Bool true) ] in
+  let relayed = List.init 5 (fun k -> answer (k + 1) [ ("superseded", `Bool true) ]) in
+  let json = `Assoc [ ("answers", `List (owner :: relayed)); ("owner_answered", `Bool true) ] in
+  (* 54 kB of answers in a 40 kB bound: one halving, three answers kept. *)
+  match Work_mcp.Work_tool.fit ~max_bytes:40_000 json with
+  | None -> Alcotest.fail "must fit"
+  | Some fitted ->
+      let kept = items fitted "answers" in
+      Alcotest.(check int) "halved once" 3 (List.length kept);
+      let first = List.hd kept and last = List.nth kept (List.length kept - 1) in
+      check_str "the owner's answer is kept, first" "a0" (String.sub (str first "text") 0 2);
+      Alcotest.(check bool) "it is the verified one" true (member "owner_verified" first = `Bool true);
+      check_str "the newest answer survives" "a5" (String.sub (str last "text") 0 2);
+      Alcotest.(check int) "omitted counts the cut ones" 6 (List.length kept + int_of (member "answers_omitted" fitted))
+
 (* ---- S2: invalid UTF-8 in the data ------------------------------------ *)
 
 let rec task_files dir =
@@ -289,6 +308,7 @@ let tests =
     Alcotest.test_case "resume shrink keeps open and answered questions" `Quick test_resume_shrink_keeps_open_and_answered;
     Alcotest.test_case "list_questions shrink keeps the newest answers" `Quick test_list_questions_shrink_keeps_newest_answers;
     Alcotest.test_case "fit keeps the newest answers" `Quick test_fit_answers_and_questions_directly;
+    Alcotest.test_case "fit keeps the owner's answer" `Quick test_fit_keeps_owner_answer;
     Alcotest.test_case "invalid UTF-8 in a task body is replaced" `Quick test_invalid_utf8_is_replaced;
     Alcotest.test_case "clean repairs and strips" `Quick test_clean_unit;
     Alcotest.test_case "invisible characters are refused on input" `Quick test_invisible_refused_on_input;

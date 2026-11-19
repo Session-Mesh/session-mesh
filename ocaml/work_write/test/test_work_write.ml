@@ -15,8 +15,8 @@ let str key j = U.to_string (member key j)
 let flag key j = match member key j with `Bool b -> b | _ -> false
 let code_of r = str "code" (member "error" (json r))
 
-let ok repo input =
-  let r = run repo input in
+let ok ?env repo input =
+  let r = run ?env repo input in
   if r.code <> 0 then Alcotest.failf "exit %d: %s" r.code r.out;
   json r
 
@@ -115,13 +115,22 @@ let test_forged_marker () =
       {|{"ts":"2026-11-08T10:00:00Z","task":"T-3c4d","type":"answer","question":"%s","text":"x","by":"owner","via":"owner-web","session":"asking"}|}
       (qid 2)
   in
-  let repo = fixture ~questions:3 ~lines:[ forged_relay; forged_by; forged_session ] () in
+  (* By owner, with the marker and an agent but no session: the agent alone disqualifies it. *)
+  let forged_agent =
+    Printf.sprintf
+      {|{"ts":"2026-11-08T10:00:00Z","task":"T-3c4d","type":"answer","question":"%s","text":"x","by":"owner","via":"owner-web","agent":"claude"}|}
+      (qid 3)
+  in
+  let repo = fixture ~questions:4 ~lines:[ forged_relay; forged_by; forged_session; forged_agent ] () in
   List.iter
     (fun id ->
-      match answers repo id with
+      (match answers repo id with
       | [ a ] -> Alcotest.(check bool) (id ^ " not verified") false (flag "owner_verified" a)
-      | _ -> Alcotest.fail "one answer")
-    [ qid 0; qid 1; qid 2 ];
+      | _ -> Alcotest.fail "one answer");
+      Alcotest.(check bool) (id ^ " not owner_answered") false (flag "owner_answered" (question repo id)))
+    [ qid 0; qid 1; qid 2; qid 3 ];
+  Alcotest.(check bool) "the owner can answer under the agent-marked line" false
+    (flag "duplicate" (ok repo (request (qid 3) "real")));
   Alcotest.(check bool) "the owner can still answer" false (flag "duplicate" (ok repo (request (qid 0) "real")))
 
 (* Five later relayed lines (written straight to the log, as a forger would)
@@ -129,7 +138,13 @@ let test_forged_marker () =
    offer the form again and the owner's send would get already_answered. *)
 let test_cap_keeps_owner_answer () =
   let repo = fixture () in
-  ignore (ok repo (request (qid 0) "the owner's answer"));
+  (* The owner's answer gets a fixed time, before the relayed lines: with the
+     wall clock the order would flip once the clock passes them. *)
+  let owner_time = "2026-12-01T09:59:00Z" in
+  ignore (ok ~env:[ ("WL_NOW", owner_time) ] repo (request (qid 0) "the owner's answer"));
+  (match answer_events repo with
+  | [ owner ] -> Alcotest.(check string) "the owner's answer has the fixed time" owner_time (str "ts" owner)
+  | events -> Alcotest.failf "one answer event expected, got %d" (List.length events));
   let later i =
     Printf.sprintf
       {|{"ts":"2026-12-01T10:0%d:00Z","task":"T-3c4d","type":"answer","question":"%s","text":"relayed %d","by":"owner","agent":"claude","session":"asking"}|}
@@ -148,6 +163,24 @@ let test_cap_keeps_owner_answer () =
       Alcotest.(check (list string)) "then the newest relayed ones" [ "relayed 1"; "relayed 2"; "relayed 3"; "relayed 4" ]
         (List.map (str "text") relayed);
       Alcotest.(check bool) "all superseded" true (List.for_all (flag "superseded") relayed)
+  | [] -> Alcotest.fail "answers expected"
+
+(* Two owner-verified answers exist only through forgery or merged histories;
+   the cap keeps the latest one, the one the readers report. *)
+let test_cap_keeps_latest_owner_answer () =
+  let line i text extra =
+    Printf.sprintf {|{"ts":"2026-11-08T10:0%d:00Z","task":"T-3c4d","type":"answer","question":"%s","text":"%s","by":"owner"%s}|}
+      i (qid 0) text extra
+  in
+  let owner i text = line i text {|,"via":"owner-web"|} in
+  let relayed i = line i (Printf.sprintf "relayed %d" i) {|,"agent":"claude","session":"asking"|} in
+  let repo = fixture ~lines:([ owner 0 "older owner answer"; owner 1 "latest owner answer" ] @ List.init 5 (fun i -> relayed (i + 2))) () in
+  match answers repo (qid 0) with
+  | first :: rest ->
+      Alcotest.(check string) "the latest owner answer is kept" "latest owner answer" (str "text" first);
+      Alcotest.(check bool) "verified" true (flag "owner_verified" first);
+      Alcotest.(check (list string)) "then the newest relayed ones" [ "relayed 3"; "relayed 4"; "relayed 5"; "relayed 6" ]
+        (List.map (str "text") rest)
   | [] -> Alcotest.fail "answers expected"
 
 let test_open_question_flag () =
@@ -186,6 +219,22 @@ let test_commit_reported () =
   Alcotest.(check bool) "the reason goes to standard error" true (r.err <> "");
   Alcotest.(check int) "no commit made" 2 (commit_count repo);
   Alcotest.(check int) "both answers in the log" 2 (List.length (answer_events repo))
+
+let contains ~sub s =
+  let n = String.length sub in
+  let rec at i = i + n <= String.length s && (String.sub s i n = sub || at (i + 1)) in
+  at 0
+
+(* Without git on PATH the reason names the missing git, not a missing repository. *)
+let test_git_not_found () =
+  let repo = fixture () in
+  git repo [ "init"; "-q" ];
+  let no_git = temp_dir "work-write-nogit" in
+  let r = run ~env:[ ("PATH", no_git) ] repo (request (qid 0) "no git") in
+  Alcotest.(check int) "still recorded: exit 0" 0 r.code;
+  Alcotest.(check bool) "uncommitted" true (flag "uncommitted" (json r));
+  Alcotest.(check bool) ("the reason says git was not found: " ^ r.err) true (contains ~sub:"git was not found" r.err);
+  Alcotest.(check bool) "not that the repository is missing" false (contains ~sub:"not a git repository" r.err)
 
 let test_concurrent_writers () =
   let n = 12 in
@@ -242,8 +291,10 @@ let () =
           Alcotest.test_case "relay refused after the owner" `Quick test_relay_after_owner;
           Alcotest.test_case "forged markers are not verified" `Quick test_forged_marker;
           Alcotest.test_case "the answer cap keeps the owner's answer" `Quick test_cap_keeps_owner_answer;
+          Alcotest.test_case "the answer cap keeps the latest owner answer" `Quick test_cap_keeps_latest_owner_answer;
           Alcotest.test_case "owner_answered only for the owner's answer" `Quick test_open_question_flag;
           Alcotest.test_case "a commit that does not happen is reported" `Quick test_commit_reported;
+          Alcotest.test_case "git not found is reported as such" `Quick test_git_not_found;
           Alcotest.test_case "concurrent writers" `Quick test_concurrent_writers;
           Alcotest.test_case "agent session refused" `Quick test_agent_session_refused;
           Alcotest.test_case "missing repository" `Quick test_missing_repository;

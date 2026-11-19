@@ -101,10 +101,11 @@ after(async () => {
 });
 
 /** The task sheet of the test task, opened from the board as the owner would. */
-async function taskSheet(mesh: Mesh, width: number, locale = 'en-US'): Promise<{ page: Page; pane: Locator; problems: string[] }> {
+async function taskSheet(mesh: Mesh, width: number, locale = 'en-US', prepare?: (page: Page) => Promise<void>): Promise<{ page: Page; pane: Locator; problems: string[] }> {
   const context = await browser.newContext({ locale, viewport: { width, height: 900 } });
   contexts.push(context);
   const page = await context.newPage();
+  await prepare?.(page);
   page.setDefaultTimeout(180_000);
   const problems: string[] = [];
   page.on('pageerror', error => problems.push(String(error)));
@@ -199,6 +200,16 @@ describe('answering a question from the task sheet', { skip }, () => {
     await page.waitForFunction(() => document.querySelector('.work-announcer')?.textContent?.startsWith('This question already has an answer from you'));
   });
 
+  test('a draft under another question survives the reload that shows a sent answer', { timeout: 900_000 }, async () => {
+    const { pane } = await taskSheet(answering, 1440);
+    await item(pane, 'N-0000b0b5').getByLabel('Your answer').fill('a draft, not sent yet');
+    const sent = item(pane, 'N-0000b0b4');
+    await sent.getByLabel('Your answer').fill('sent');
+    await sent.getByRole('button', { name: 'Send answer' }).click();
+    await item(pane, 'N-0000b0b4').locator('.work-answer-verified').waitFor();
+    assert.equal(await item(pane, 'N-0000b0b5').getByLabel('Your answer').inputValue(), 'a draft, not sent yet');
+  });
+
   test('an answer that completes after the view was left shows nothing and reads nothing', { timeout: 900_000 }, async () => {
     const { page, pane } = await taskSheet(answering, 1440);
     let release!: () => void;
@@ -222,6 +233,23 @@ describe('answering a question from the task sheet', { skip }, () => {
     await page.waitForTimeout(1000);
     assert.deepEqual(reads, [], 'no task read after the view was left');
     assert.equal(answerEvents(answeringTracker).filter(event => event.question === 'N-0000b0b5').length, 1, 'the answer is written all the same');
+  });
+
+  test('a question the reader says the owner answered offers no form, even when no verified answer is listed', { timeout: 900_000 }, async () => {
+    // A size bound can leave the owner's answer out of `answers`; `owner_answered` still says it exists.
+    const { pane } = await taskSheet(noWriter, 1440, 'en-US', page => page.route('**/api/work/v1', async route => {
+      if (!route.request().postData()?.includes('"op":"task"')) return route.continue();
+      const response = await route.fetch();
+      const task = await response.json();
+      for (const q of task.questions ?? []) if (q.id === 'N-0000b0b2') q.owner_answered = true;
+      return route.fulfill({ response, json: task });
+    }));
+    const relayedOnly = item(pane, 'N-0000b0b2');
+    await relayedOnly.locator('.work-answer').first().waitFor();
+    assert.equal(await relayedOnly.locator('.work-answer-verified').count(), 0, 'no verified answer in the list');
+    assert.equal(await relayedOnly.locator('[data-work-answer-slot]').count(), 0, 'no reply slot');
+    assert.equal(await relayedOnly.locator('form').count(), 0, 'no form');
+    assert.equal(await item(pane, 'N-0000b0b4').locator('form').count(), 1, 'an open question keeps its form');
   });
 
   test('without work-write the form gives way to a short note', { timeout: 900_000 }, async () => {
