@@ -16,7 +16,10 @@
     unchanged transcript (same file, size and modification time, by [lstat])
     is not opened again, and a grown one is read from where the last read
     stopped ({!Mesh_jsonl_tail}). Where each conversation's transcript is
-    is cached too. The first read of a transcript covers its last 1.5 MB, as
+    (or that it has none) is cached too, and searched again after a project
+    directory changed: {!prepare} lists the project directories and [lstat]s
+    each once per round, and a transcript created, removed or renamed in one
+    changes its time. The first read of a transcript covers its last 1.5 MB, as
     Python does. The caches are guarded by a mutex: {!describe} runs in
     several system threads at once.
 

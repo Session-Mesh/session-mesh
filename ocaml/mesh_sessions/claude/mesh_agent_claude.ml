@@ -23,11 +23,18 @@ let metadata_limits =
 type entry = { path : string; tail : Fold.t Tail.t }
 type counters = { restarted : int; appended : int; unchanged : int }
 
+(* What the project directories looked like: each name with its modification
+   time, which changes when a transcript is created, removed or renamed in it. *)
+type layout = (string * float) list
+
 type t = {
   roots : Mesh_agent_roots.t;
   lock : Mutex.t;
   transcripts : entry Lru.t;  (* by conversation id *)
+  locations : (int * string option) Lru.t;  (* by conversation id: the generation searched, the path found *)
   mutable projects : string list;  (* the project directories, read once per round *)
+  mutable layout : layout;
+  mutable generation : int;  (* incremented when the layout changes *)
   mutable counters : counters;
 }
 
@@ -36,7 +43,10 @@ let create roots =
     roots;
     lock = Mutex.create ();
     transcripts = Lru.create ~max_entries:64 ();
+    locations = Lru.create ~max_entries:64 ();
     projects = [];
+    layout = [];
+    generation = 0;
     counters = { restarted = 0; appended = 0; unchanged = 0 };
   }
 
@@ -45,7 +55,9 @@ let counters adapter = locked adapter (fun () -> adapter.counters)
 let projects_dir adapter = Filename.concat (Mesh_agent_roots.claude adapter.roots) "projects"
 
 let resize adapter ~sessions =
-  locked adapter (fun () -> Lru.set_max_entries adapter.transcripts (max 1 (2 * sessions)))
+  locked adapter (fun () ->
+      Lru.set_max_entries adapter.transcripts (max 1 (2 * sessions));
+      Lru.set_max_entries adapter.locations (max 1 (2 * sessions)))
 
 (* Python's glob [*] skips names that start with a dot. *)
 let list_projects directory =
@@ -56,9 +68,25 @@ let list_projects directory =
       |> List.sort String.compare
   | exception Sys_error _ -> []
 
+let modified path = match Unix.lstat path with stats -> Some stats.st_mtime | exception Unix.Unix_error _ -> None
+
+let layout_of adapter projects =
+  List.map
+    (fun project ->
+      (project, Option.value ~default:Float.nan (modified (Filename.concat (projects_dir adapter) project))))
+    projects
+
+(* One listing and one [lstat] per project directory per round; the
+   transcripts are searched again only after the layout changed. *)
 let prepare adapter _round =
   let projects = list_projects (projects_dir adapter) in
-  locked adapter (fun () -> adapter.projects <- projects)
+  let layout = layout_of adapter projects in
+  locked adapter (fun () ->
+      adapter.projects <- projects;
+      if not (List.equal (fun (a, x) (b, y) -> String.equal a b && Float.equal x y) layout adapter.layout) then begin
+        adapter.layout <- layout;
+        adapter.generation <- adapter.generation + 1
+      end)
 
 (* A conversation id usable as a file name component. *)
 let valid_id text =
@@ -83,8 +111,6 @@ let read_metadata adapter pid =
   | Ok None | Error _ -> None
   | exception Unix.Unix_error _ -> None
 
-let modified path = match Unix.lstat path with stats -> Some stats.st_mtime | exception Unix.Unix_error _ -> None
-
 (* The newest [<project>/<id>.jsonl]; equal times go to the first project by name. *)
 let search adapter id =
   let projects = locked adapter (fun () -> adapter.projects) in
@@ -99,11 +125,17 @@ let search adapter id =
        None
   |> Option.map snd
 
+(* Where the transcript is, searched again when the layout changed since the
+   last search or the file found then is gone; absent ones are cached too. *)
 let transcript_path adapter id =
-  let cached = locked adapter (fun () -> Option.map (fun entry -> entry.path) (Lru.peek adapter.transcripts id)) in
+  let generation, cached = locked adapter (fun () -> (adapter.generation, Lru.find adapter.locations id)) in
   match cached with
-  | Some path when modified path <> None -> Some path
-  | _ -> search adapter id
+  | Some (searched, None) when searched = generation -> None
+  | Some (searched, Some path) when searched = generation && modified path <> None -> Some path
+  | _ ->
+      let found = search adapter id in
+      locked adapter (fun () -> Lru.add adapter.locations id (generation, found));
+      found
 
 let count adapter outcome =
   locked adapter (fun () ->
