@@ -70,6 +70,8 @@ def prepare(config_dir):
             "command": str(board), "args": agentmcp.BOARD_MCP_ARGS,
             "env": {}, "exposure": "direct", "enabled": True,
         }
+        if work := agentmcp.work_server("pi"):
+            servers[agentmcp.WORK_SERVER_NAME] = {**work, "exposure": "direct", "enabled": True}
         payload["mcpServers"] = servers
         root = Path(config_dir) / "pi-agent-overlays"
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
