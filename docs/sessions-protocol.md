@@ -88,7 +88,7 @@ ones included; when every thread is taken, the remaining rows are reported `erro
 |---|---|
 | `priority` | The row's place in the order of service, 0 first. |
 | `state` | `ready`: described. `unsupported`: the session runs an agent this build has no adapter for; `row` holds what does not depend on the agent (below) and `agent.type`, and the web server completes it. `slow`: past its deadline. `error`: not described (`reason`). |
-| `reason` | With `error` only: `backoff`, `saturated`, `failed` (the description raised), or `no_process_table` (the process table could not be read; every row of the round then has it). |
+| `reason` | With `error` only: `backoff`, `saturated`, `failed` (the description raised), `too_large` (the row exceeds the frame bound), or `no_process_table` (the process table could not be read; every row of the round then has it). |
 | `row` | With `ready` and `unsupported`, unless `same` is set. |
 | `same` | `true` instead of `row` when the row is exactly the one sent for this session (same `name` and `created`) in an earlier round of this run, and `full` was not asked. The web server then keeps the row it has and does not change its generation. |
 
@@ -202,3 +202,16 @@ An adapter is a module of signature `Mesh_agent.ADAPTER`: its `kind` (the agent 
 `resize` (the cache bound, twice the number of sessions) and `describe` (the agent fields of one process).
 It is registered by adding it to the list the program passes to `Mesh_agent.Registry.create`; neither the
 round nor the protocol changes. Detection of the agent type stays in `Mesh_agent_session`, shared by all.
+
+Rules every adapter keeps, so that a round costs what changed and not what exists:
+
+- **No transcript decoded twice.** A transcript's fold is cached by conversation and checked against the
+  file's identity, size and modification time; a grown file is read from the previous cursor
+  (`Mesh_jsonl_tail`). A second round over unchanged files opens none of them (the Claude adapter's
+  counters show it in its tests).
+- **Shared discovery once per round.** A directory every session of an agent searches (Codex's recent
+  rollouts) is walked once in `prepare`, not once per session; what is read from each file found there
+  (a rollout's first line) is cached by file and signature across rounds, in a form that can later be
+  saved to disk so that the first round after a restart does not read every file again.
+- **One process table per round**, from the `Mesh_agent_round.t` the adapter receives; an adapter never
+  scans the process table itself.
