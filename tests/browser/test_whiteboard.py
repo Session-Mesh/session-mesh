@@ -34,6 +34,16 @@ async def open_mesh(page, mesh, name, viewport=None):
     await page.context.add_cookies([{"name": server.COOKIE, "value": server.cookie_value(), "url": mesh.origin}])
     await goto(page, f"{mesh.origin}/#{name}")
     await page.wait_for_function(f"panes.length === 1 && panes[0].id === {json.dumps(name)}")
+    # Panes open before the first listing; that listing is the board-signal baseline.
+    await page.evaluate("localMesh.then(() => undefined)")
+
+
+async def wait_badge(page, name, shown):
+    """The list is drawn on the next animation frame after a listing: wait for the drawn row."""
+    row = json.dumps(f'.item[data-id="{name}"]')
+    await page.wait_for_function(
+        f"(() => {{ const row = document.querySelector({row});"
+        f" return row !== null && (row.querySelector('.board-badge') !== null) === {json.dumps(shown)}; }})()")
 
 
 async def open_board(page, name):
@@ -168,16 +178,16 @@ async def test_board_update_badge_is_local_and_opens_only_after_a_human_click(pa
     # establish a baseline, not make every existing board look newly changed.
     server.SIGNALS.publish(board.updated_envelope(name, 1, 1.0), created)
     await open_mesh(page, mesh, name, {"width": 390, "height": 800})
-    assert await page.locator(f'.item[data-id="{name}"] .board-badge').count() == 0
+    await wait_badge(page, name, False)
     # This is a later server reference, so it becomes a local visual hint.
     server.SIGNALS.publish(board.updated_envelope(name, 2, 2.0), created)
     await page.evaluate("refresh()")
-    assert await page.locator(f'.item[data-id="{name}"] .board-badge').count() == 1
+    await wait_badge(page, name, True)
     assert await page.locator('[data-act="board"].board-modified').count() == 1
     assert await page.evaluate("panes.some((pane) => pane.id === 'board:board-badge')") is False
     await page.locator('[data-act="board"]').click()
     await page.wait_for_function("active.id === 'board:board-badge'")
-    assert await page.locator(f'.item[data-id="{name}"] .board-badge').count() == 0
+    await wait_badge(page, name, False)
     assert await page.locator('[data-act="board"].board-modified').count() == 0
 
 
@@ -189,12 +199,12 @@ async def test_reused_session_name_drops_its_old_board_badge(page, mesh, home_di
                                   json={"elements": [], "appState": {}, "files": {}, "version": 0})
         assert response.status == 200, await response.text()
     await page.evaluate("refresh()")
-    assert await page.locator(f'.item[data-id="{name}"] .board-badge').count() == 1
+    await wait_badge(page, name, True)
     assert await server.host({"op": "kill", "name": name}) == {"ok": True}
     await wait_gone(name)
     assert await start(mesh, home_dir, name) == name
     await page.evaluate("refresh()")
-    assert await page.locator(f'.item[data-id="{name}"] .board-badge').count() == 0
+    await wait_badge(page, name, False)
 
 
 async def test_board_save_and_reload_uses_the_versioned_relative_api(page, mesh, home_dir):

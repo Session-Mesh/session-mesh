@@ -360,7 +360,7 @@ async def test_sidebar_stop_clears_only_the_stopped_pane_identity(desk, replacem
             await route.continue_()
 
     await tab.route("**/api/kill/identity-stop", fake_kill)
-    await tab.route("**/api/sessions", fake_inventory)
+    await tab.route("**/api/sessions*", fake_inventory)
     await tab.evaluate("closeSession('identity-stop')")
     assert accepted
     state = await tab.evaluate("""() => ({
@@ -458,7 +458,7 @@ async def test_an_external_session_only_offers_to_open_it(desk):
         body["external"] = [fake]
         await route.fulfill(response=reply, json=body)
 
-    await tab.route("**/api/sessions", with_external)
+    await tab.route("**/api/sessions*", with_external)
     await tab.evaluate("refresh()")
     await tab.wait_for_selector(item("x1"))
     # the list closes the menu when it scrolls (by design): on a short viewport the item sits below

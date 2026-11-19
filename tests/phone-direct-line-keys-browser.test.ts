@@ -125,9 +125,9 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
       await page.keyboard.type('/a');
       await forget(page);
       // Starting the mode fired a refresh that is still in flight: answered while the agent was
-      // there, it would restore the foreground the page is about to lose. The poll is stopped and a
-      // refresh of our own is awaited; it is the latest, so the earlier answer is discarded on arrival.
-      await page.evaluate('clearInterval(meshRefreshTimer); refresh()');
+      // there, it would restore the foreground the page is about to lose. A refresh of our own is
+      // awaited: the poller answers it after the request in flight, so both are applied before it.
+      await page.evaluate('refresh()');
       foreground.set(`left-${key}`, null);
       await page.evaluate(id => {   // the inventory the page holds says the agent is gone
         (find(id) as unknown as {agent: {foreground: boolean}}).agent.foreground = false;

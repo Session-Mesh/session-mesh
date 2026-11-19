@@ -166,6 +166,7 @@ body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--mono); ove
 .p-menu { display: grid; position: absolute; z-index: 6; top: calc(100% + 4px); right: 0; width: min(320px, calc(100vw - 16px)); gap: 4px; min-width: 0; max-height: min(60dvh, 420px); overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); box-shadow: 0 12px 24px #0006; }
 .p-menu button { min-width: 44px; min-height: 44px; padding: 10px; text-align: left; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; font: inherit; white-space: normal; overflow-wrap: anywhere; }
 .p-menu button.danger { color: var(--danger); }
+.p-menu button[aria-disabled="true"] { opacity: .55; cursor: progress; }
 .p-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .btn.sm { padding: 2px 7px; font-size: 12px; }
 .pane-body { flex: 1; min-height: 0; position: relative; }
@@ -1206,3 +1207,22 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
   .work-detail-pane { position: static; }
   .work-bar { width: 72px; }
 }
+
+/* The session list's status line (static/status-line-view.ts): one line of reserved height, so a
+   message appearing or going never moves the list. */
+.sessions-status { display: flex; align-items: center; gap: 6px; height: 22px; margin: 0 14px 4px; font-size: 11.5px; color: var(--mute); overflow: hidden; white-space: nowrap; }
+.sessions-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sessions-status-detail { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.sessions-status[data-tone="warn"] .sessions-status-text { color: var(--wait); }
+.sessions-status[data-tone="bad"] .sessions-status-text { color: var(--danger); font-weight: 600; }
+.sessions-status-retry { flex: none; margin-left: auto; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); font: inherit; cursor: pointer; }
+.sessions-status-retry[hidden] { display: none; }
+.dot.pending { background: none; border: 1.5px dotted var(--mute); box-sizing: border-box; animation: pulse 1.4s infinite; }
+.row-state { font-size: 10.5px; padding: 0 4px; margin-right: 4px; border-radius: 4px; border: 1px solid var(--line); }
+.row-state.error, .row-state.unreachable { border-color: var(--wait); color: var(--wait); }
+.row-wrap { display: flex; align-items: center; }
+.row-wrap .item { flex: 1; min-width: 0; }
+.row-retry { flex: none; border: 0; background: transparent; color: var(--mute); cursor: pointer; padding: 10px; font: inherit; }
+.row-retry:hover, .row-retry:focus-visible { color: var(--fg); }
+.vpad { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .dot.pending { animation: none; } }

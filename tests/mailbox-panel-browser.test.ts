@@ -243,7 +243,7 @@ describe('the pane mailbox', {skip}, () => {
     await page.goto('about:blank');
     await page.goto(`${lab.mesh.base}/#beta`);
     await page.waitForFunction(() => active?.id === 'beta');
-    assert.equal(await envelope(page).isVisible(), true);
+    await envelope(page).waitFor({state: 'visible'});
   });
 
   test('a French browser gets the button, the panel and the menu entry in French', async () => {
@@ -261,7 +261,8 @@ describe('the pane mailbox', {skip}, () => {
 
   test('at phone width the button is reachable, the panel fits and the keys bar keeps its pen', async () => {
     const {page} = await signedIn('en-US', 390, 800);
-    assert.equal(await envelope(page).isVisible(), true);
+    // The pane opens before the first listing; only a listing says the session is a messaging agent.
+    await envelope(page).waitFor({state: 'visible'});
     const box = await envelope(page).boundingBox();
     assert.ok(box && box.width >= 44 && box.height >= 44 && box.x >= 0 && box.x + box.width <= 390, JSON.stringify(box));
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'the header fits');

@@ -8,7 +8,7 @@
 // Needs MESH_CHROMIUM (the tests are skipped without it).
 import {after, afterEach, before} from 'node:test';
 import type {Page} from 'playwright-core';
-import {type PaneView, TerminalMesh} from './terminal-browser-lib.ts';
+import {type PaneView, TerminalMesh, withoutSince} from './terminal-browser-lib.ts';
 
 declare global {
   // app.js script-scope bindings, used inside page functions
@@ -50,9 +50,11 @@ export const foreground = new Map<string, Agent>();
 
 export function asAgent(_name: string): (page: Page) => Promise<void> {
   return async page => {
-    await page.route('**/api/sessions', async route => {
+    // Every listing request, with or without a query; asked without `since`, so that each answer is a
+    // full one that carries every session's row to rewrite (a delta carries only the changed rows).
+    await page.route(/\/api\/sessions(\?|$)/, async route => {
       try {
-        const response = await route.fetch();
+        const response = await route.fetch({url: withoutSince(route.request().url())});
         const body = await response.json();
         for (const session of body.mesh ?? []) {
           const agent = foreground.get(session.id);

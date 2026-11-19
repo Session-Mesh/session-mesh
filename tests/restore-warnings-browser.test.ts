@@ -46,7 +46,8 @@ async function offered(locale: string, width: number, stub: Stub = {restore: RES
   const page = await context.newPage();
   await page.route('**/api/restore', route => route.request().method() === 'POST'
     ? route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(stub.restore)}) : route.continue());
-  await page.route('**/api/sessions', async route => {
+  // Every listing request, also one with `since` (`restorable` is in every answer, a delta included).
+  await page.route(/\/api\/sessions(\?|$)/, async route => {
     if (stub.offer === 'real') return route.continue();
     const response = await route.fetch();
     const body = await response.json();

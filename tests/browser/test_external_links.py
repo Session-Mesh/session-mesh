@@ -13,8 +13,8 @@ async def open_mesh(page, mesh):
     await goto(page, mesh.origin)
     # The load event precedes the boot: startMesh first awaits the translation catalogs, then
     # lays out and restores the panes. A menu built before that carries untranslated labels,
-    # and the rest of the boot can still close it. The refresh timer is the boot's last step.
-    await page.wait_for_function("meshRefreshTimer !== null")
+    # and the rest of the boot can still close it. The started mesh resolves at the boot's end.
+    await page.evaluate("localMesh.then(() => undefined)")
 
 
 async def test_http_url_uses_a_new_browser_tab_not_a_mesh_pane(page, mesh):

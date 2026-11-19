@@ -94,7 +94,7 @@ async function opened(locale: string, width: number, management: unknown = SNAPS
   const page = await context.newPage();
   const requests: string[] = [];
   page.on('request', request => requests.push(new URL(request.url()).pathname));
-  await page.route('**/api/sessions', async route => {
+  await page.route('**/api/sessions*', async route => {   // also a poll with `since`
     const response = await route.fetch();
     await route.fulfill({response, json: {...(await response.json()), now: NOW, management}});
   });
