@@ -27,3 +27,31 @@
   unix)
  (deps
   (source_tree fixtures)))
+
+(test
+ (name test_agent)
+ (modules test_agent)
+ (libraries
+  mesh_sessions_test_support
+  mesh_sessions
+  mesh_agent
+  mesh_agent_claude
+  mesh_python_text
+  alcotest
+  yojson))
+
+(test
+ (name test_claude)
+ (modules test_claude)
+ (libraries
+  mesh_sessions_test_support
+  mesh_agent
+  mesh_agent_claude
+  generic_test_support
+  alcotest
+  qcheck-core
+  yojson
+  unix
+  threads.posix)
+ (deps
+  (source_tree fixtures)))
