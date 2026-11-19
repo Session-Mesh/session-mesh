@@ -4,14 +4,15 @@
 
 # Smoke check of a built release binary set before it is uploaded.
 #   release-smoke.sh <directory holding mesh-ptyhost, mesh-platform, mesh-read, mesh-board-mcp, mesh-history,
-#                     mesh-logout-all, work-read, work-mcp>
+#                     mesh-logout-all, work-read, work-mcp, work-write>
 # - mesh-ptyhost is started on a private runtime directory and answers a `list`
 #   request on its socket (one frame: kind C, 4-byte big-endian length, JSON);
 # - mesh-platform prints its platform facts;
 # - mesh-read and mesh-board-mcp start and exit on closed input;
 # - mesh-logout-all refuses an argument, and with no mesh on its port raises the generation on disk;
 # - work-read answers a request on a private worklog data repository and refuses an unknown
-#   operation; work-mcp answers initialize and lists its work_* tools.
+#   operation; work-mcp answers initialize and lists its work_* tools; work-write refuses an answer
+#   to an unknown question and refuses to run in an agent session.
 # Needs `nc` with -U (OpenBSD netcat: the Ubuntu and macOS runners have it).
 set -euo pipefail
 
@@ -134,3 +135,21 @@ if ! grep -q '"name":"work-mcp"' <<<"$mcp_out" || ! grep -q '"name":"work_' <<<"
   exit 1
 fi
 echo "smoke: work-mcp answers initialize and lists its work_* tools"
+
+# work-write, on the same repository: an answer to a question it does not hold is not_found (exit 3,
+# nothing written), and in an agent session's environment it refuses to run (exit 9).
+status=0
+work_out="$(printf '{"op":"answer","args":{"question":"N-00000000","text":"smoke"}}' |
+  env -i HOME="$runtime" WL_HOME="$work_home" "$bin/work-write" --request)" || status=$?
+if [ "$status" -ne 3 ] || [[ "$work_out" != '{"error":{"code":"not_found",'* ]]; then
+  echo "smoke: work-write answered an unknown question with exit $status and $work_out" >&2
+  exit 1
+fi
+status=0
+work_out="$(printf '{"op":"answer","args":{"question":"N-00000000","text":"smoke"}}' |
+  env -i HOME="$runtime" WL_HOME="$work_home" MESH_SESSION=smoke "$bin/work-write" --request)" || status=$?
+if [ "$status" -ne 9 ] || [[ "$work_out" != '{"error":{"code":"agent_session",'* ]]; then
+  echo "smoke: work-write in an agent session gave exit $status and $work_out" >&2
+  exit 1
+fi
+echo "smoke: work-write refuses an unknown question and an agent session"

@@ -36,6 +36,8 @@ describe('a release without a bundle for this platform', () => {
     assert.equal(fs.readFileSync(path.join(release, 'app/bin/work-read'), 'utf8'), 'v1.0.0 work-read');
     assert.equal(fs.readlinkSync(path.join(release, 'app/bin/work-mcp')), '../../bin/work-mcp', 'agents find the release\'s tracker');
     assert.equal(fs.readFileSync(path.join(release, 'app/bin/work-mcp'), 'utf8'), 'v1.0.0 work-mcp');
+    assert.equal(fs.readlinkSync(path.join(release, 'app/bin/work-write')), '../../bin/work-write', 'the web server finds the release\'s writer');
+    assert.equal(fs.readFileSync(path.join(release, 'app/bin/work-write'), 'utf8'), 'v1.0.0 work-write');
     assert.equal(mode(release) & 0o022, 0);
     assert.deepEqual(releases(fx), ['v1.0.0'], 'no staging directory is left');
     const share = escape(fx.share);
