@@ -674,6 +674,17 @@ class FileView {
     this.extend();
   }
 
+  // The diff lines the next chunk ("show more") shows: in split, a row may show two.
+  private nextChunkLines(positions: Map<Hunk | DiffLine, number>): number {
+    let lines = 0;
+    for (let k = this.next; k < this.items.length; k++) {
+      const item = this.items[k] as Item;
+      if (itemSpan(item, positions)[0] >= this.cursor + ROW_CHUNK) break;
+      lines += itemLines(item);
+    }
+    return lines;
+  }
+
   // Builds the rows that start before the cursor.
   private extend(): void {
     const table = this.table;
@@ -698,7 +709,8 @@ class FileView {
     const existing = this.body.querySelector<HTMLButtonElement>('button.more');
     const left = fileLines(this.file) - this.shown;
     if (this.next < this.items.length) {
-      const label = left > 0 ? `show ${Math.min(left, ROW_CHUNK)} more lines (${left} left)` : 'show more';
+      const next = this.nextChunkLines(positions);
+      const label = next > 0 ? `show ${next} more lines (${left} left)` : 'show more';
       if (existing) {
         existing.textContent = label;
       } else {

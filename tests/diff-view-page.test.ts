@@ -283,10 +283,11 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
     assert.equal(await rows.count(), 1999);            // the pairs of the 1999 deleted lines shown
     await page.getByRole('button', {name: 'words'}).click();
     assert.equal(await rows.count(), 1999);            // a rebuild in the same view builds the same rows
-    assert.equal(await page.locator('button.more').textContent(), 'show 2000 more lines (36002 left)');
+    // the next chunk: 2000 pairs, so 4000 lines
+    assert.equal(await page.locator('button.more').textContent(), 'show 4000 more lines (36002 left)');
     await page.locator('button.more').click();
     assert.equal(await rows.count(), 3999);            // one chunk more
-    assert.equal(await page.locator('button.more').textContent(), 'show 2000 more lines (32002 left)');
+    assert.equal(await page.locator('button.more').textContent(), 'show 4000 more lines (32002 left)');
     // back to unified: the added lines split showed are 18000 positions ahead, more than two
     // chunks, so the unified view shows the deleted lines up to the cursor
     await page.getByRole('button', {name: 'unified'}).click();
