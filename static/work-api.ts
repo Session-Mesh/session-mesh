@@ -10,7 +10,8 @@ export type WorkFetch = (input: string, init: RequestInit) => Promise<Response>;
 
 /**
  * no-tracker: no single data repository was found, missing or ambiguous (error `repository`); not-available: the
- * program is not installed (503 `not_available`); busy: the server already runs its maximum of programs (503 `busy`); unavailable: any other 503;
+ * program is not installed (503 `not_available`); busy: the server already runs its maximum of programs
+ * (503 `busy`); unavailable: any other 503;
  * invalid: the request was refused (400); missing: nothing under that id (404); failed: the program failed or timed out
  * (502, 504, other statuses); network: no answer; shape: an answer that is not the expected document; aborted: cancelled.
  */
