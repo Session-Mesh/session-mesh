@@ -1697,6 +1697,7 @@
   "work.answer.send": "Send answer",
   "work.answer.sending": "Sending…",
   "work.answer.sent": "Answer recorded.",
+  "work.answer.sentUncommitted": "Answer recorded in the data files, but the data repository's git commit failed or was skipped: it is not in the git history yet.",
   "work.answer.already": "This question already has an answer from you; it is shown as recorded.",
   "work.answer.empty": "Write an answer first.",
   "work.answer.tooLong": "The answer is longer than 2000 characters.",

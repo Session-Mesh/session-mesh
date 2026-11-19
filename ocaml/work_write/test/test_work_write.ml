@@ -155,6 +155,38 @@ let test_open_question_flag () =
   Alcotest.(check bool) "a relayed answer alone is not the owner's" false (flag "owner_answered" (question repo (qid 0)));
   Alcotest.(check bool) "an open question neither" false (flag "owner_answered" (question repo (qid 1)))
 
+let git repo args =
+  let command = Filename.quote_command "git" ([ "-C"; repo.wl_home; "-c"; "user.name=t"; "-c"; "user.email=t@example.invalid" ] @ args) in
+  if Sys.command (command ^ " >/dev/null 2>&1") <> 0 then Alcotest.failf "git %s failed" (String.concat " " args)
+
+let commit_count repo =
+  let out = Filename.temp_file "work-write-git" ".out" in
+  ignore (Sys.command (Filename.quote_command "git" ~stdout:out [ "-C"; repo.wl_home; "rev-list"; "--count"; "HEAD" ]));
+  let n = int_of_string (String.trim (In_channel.with_open_bin out In_channel.input_all)) in
+  Sys.remove out;
+  n
+
+(* A commit that does not happen is reported to the caller ([uncommitted]),
+   never hidden: the answer is recorded either way (exit 0). *)
+let test_commit_reported () =
+  let plain = fixture () in
+  Alcotest.(check bool) "not a git repository: uncommitted" true (flag "uncommitted" (ok plain (request (qid 0) "yes")));
+  let repo = fixture () in
+  git repo [ "init"; "-q" ];
+  git repo [ "add"; "-A" ];
+  git repo [ "commit"; "-q"; "-m"; "init" ];
+  let doc = ok repo (request (qid 0) "committed") in
+  Alcotest.(check bool) "committed: no uncommitted field" true (member "uncommitted" doc = `Null);
+  Alcotest.(check int) "one commit more" 2 (commit_count repo);
+  let lock = Filename.concat (Filename.concat repo.wl_home ".git") "index.lock" in
+  Out_channel.with_open_bin lock ignore;
+  let r = run repo (request (qid 1) "lock held") in
+  Alcotest.(check int) "still recorded: exit 0" 0 r.code;
+  Alcotest.(check bool) "a failed commit: uncommitted" true (flag "uncommitted" (json r));
+  Alcotest.(check bool) "the reason goes to standard error" true (r.err <> "");
+  Alcotest.(check int) "no commit made" 2 (commit_count repo);
+  Alcotest.(check int) "both answers in the log" 2 (List.length (answer_events repo))
+
 let test_concurrent_writers () =
   let n = 12 in
   let repo = fixture ~questions:n () in
@@ -211,6 +243,7 @@ let () =
           Alcotest.test_case "forged markers are not verified" `Quick test_forged_marker;
           Alcotest.test_case "the answer cap keeps the owner's answer" `Quick test_cap_keeps_owner_answer;
           Alcotest.test_case "owner_answered only for the owner's answer" `Quick test_open_question_flag;
+          Alcotest.test_case "a commit that does not happen is reported" `Quick test_commit_reported;
           Alcotest.test_case "concurrent writers" `Quick test_concurrent_writers;
           Alcotest.test_case "agent session refused" `Quick test_agent_session_refused;
           Alcotest.test_case "missing repository" `Quick test_missing_repository;
