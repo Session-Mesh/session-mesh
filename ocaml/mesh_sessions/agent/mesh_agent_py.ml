@@ -30,13 +30,18 @@ let first_truthy values =
   in
   walk values
 
+(* Python's [repr(float)]: the shortest digits that read back as the number,
+   in positional notation when the decimal exponent is from -4 to 15, else
+   as [d.ddde+XX]. *)
 let shortest_decimal number =
   let rec search precision =
-    let text = Printf.sprintf "%.*g" precision number in
-    if precision >= 17 || float_of_string text = number then text
-    else search (precision + 1)
+    let text = Printf.sprintf "%.*e" precision number in
+    if precision >= 16 || float_of_string text = number then (text, precision) else search (precision + 1)
   in
-  search 1
+  let scientific, decimals = search 0 in
+  let exponent = int_of_string (List.nth (String.split_on_char 'e' scientific) 1) in
+  if exponent >= -4 && exponent < 16 then Printf.sprintf "%.*f" (Int.max 0 (decimals - exponent)) number
+  else scientific
 
 let float_repr number =
   if Float.is_nan number then "nan"

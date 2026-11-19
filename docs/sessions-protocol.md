@@ -107,7 +107,8 @@ the earlier:
 
 `round` counts the rounds of this run. `complete` is `true` when every row is `ready` or `unsupported`.
 `table.complete` is `false` when the process table left processes out (another user's, or an unreadable
-entry). `degraded` is present when system threads are still blocked: `avoid` names the sessions reported
+entry); processes the kernel hides (`/proc` mounted with `hidepid`) are absent rather than left out, so it
+cannot count them. `degraded` is present when system threads are still blocked: `avoid` names the sessions reported
 `slow` or `backoff` in this round, after those of the earlier rounds that are still listed, for as long as
 threads stay blocked. `restart` is `true` when this round lacked a thread (a row or the process table was
 `saturated`) or none is left for the next round: the program cannot recover by itself, and the web server
@@ -152,23 +153,43 @@ directory after any `cd`), `said` (how the last answer ends: its text, or the to
 
 ### Differences from the Python listing
 
-The rows are equal to those of `discover.describe` for the same processes and files, except in these cases,
-where this program reports less or keeps more, never something different:
+The rows are equal to those of `discover.describe` for the same processes and files, except in the cases
+below. In most of them this program reports less (a field left out) or keeps more (a value Python has
+lost). Four report a different value; they are marked **differs**.
 
 - **Transcripts are folded incrementally.** Python folds the last 1.5 MB of a Claude transcript at every
   listing; this program folds that window once, then only the appended lines. Below the window the result is
   the same. Beyond it, a title or a prompt that has left the window is still reported here, where Python
-  loses it.
+  loses it. When more than the window was appended since the last read, the read skips to the window at the
+  end, as Python reads only that window, and keeps what was folded before.
+- **Rewrites read as appends (differs).** A transcript counts as rewritten, and is folded again from its
+  window, when its device or inode changed, when it is shorter than the last read position, when its
+  modification time went back, or when the 256 bytes before that position or the first 256 bytes of the
+  file changed. A rewrite that changes none of these (a line in the middle replaced by one of the same
+  length, the time moving forward) is read as an append and keeps the earlier fold, where Python, whose
+  cache key is the path, size and time, reads the new content. Claude appends to its transcripts.
+- **Several transcripts for one session id (differs).** Python takes the first the directory listing
+  returns; this program takes the most recently modified one at the time of the search. The search is made
+  again when a project directory changes (a transcript created, removed or renamed in it); in between, a
+  copy elsewhere that is only modified does not replace the one found.
+- **Escaped lone surrogates (differs).** A transcript string holding half of a UTF-16 surrogate pair as an
+  escape (`\ud800`) is read with U+FFFD in its place; Python reads the lone surrogate into its string.
+- **Command line without a final NUL (differs).** A process that rewrote its command line without the
+  final NUL (as `setproctitle` does) keeps its last word in `cmd` and `agent.argv` here; Python drops it and
+  `cmd` falls back to the process name.
 - **Unsafe files are not read.** A transcript or metadata file that is a symbolic link, a FIFO or a device is
-  not opened (Python follows the link or blocks on the FIFO). A session id that is not a plain file name
-  component (`[A-Za-z0-9_-]`, dots inside) is not looked up as a path; the session id is still reported.
-- **Bounded input.** A metadata file over 1 MiB, or a transcript line over 1.5 MB (the window) or nested
-  deeper than 128 levels, is skipped where Python might parse it.
+  not opened (Python follows the link or blocks on the FIFO). A session id that is not a string or not a
+  plain file name component (`[A-Za-z0-9_-]`, dots inside) is not looked up as a path (Python looks up a
+  number as `<number>.jsonl` and expands glob characters); the session id is still reported.
+- **Bounded and strict input.** A metadata file over 1 MiB, or a transcript line over 1.5 MB (the window)
+  or nested deeper than 128 levels, is skipped where Python might parse it. A metadata file that starts
+  with a UTF-8 byte order mark, or is in UTF-16 or UTF-32, is not read (Python's `json.load` reads it).
 - **Line ends.** A transcript line is ended by a newline only. Python's `splitlines` also ends lines at
-  U+0085, U+2028 and U+2029, so it drops a JSON line whose text holds one of them raw; this program reads
-  it. A last line without its newline is read once it is complete, where Python reads it at once.
-- **Several transcripts for one session id.** Python takes the first the directory listing returns; this
-  program takes the most recently modified one.
+  `\r` alone, `\x0b`, `\x0c`, `\x1c` to `\x1e`, U+0085, U+2028 and U+2029, so it drops a JSON line that
+  holds one of them raw (between tokens or in a string); this program reads it. A CRLF file reads the same
+  in both. A last line without its newline is read once it is complete, where Python reads it at once.
+- **A prompt part with `"text": null`** counts as empty text here; Python fails on it and drops the
+  session's whole Claude description.
 
 ## Process exits and failure
 
@@ -176,7 +197,7 @@ where this program reports less or keeps more, never something different:
 |---|---|
 | 0 | The standard input ended; the requests in progress were answered. |
 | 70 | An unexpected failure, such as a write error on the standard output (the web server went away). |
-| 78 | `HOME` is unset or empty. |
+| 78 | `HOME` is unset, empty or relative. |
 
 The program writes nothing on its standard error during normal operation, and never a session id, a path
 or transcript text there. It must never block the web server: the web server reads its frames

@@ -59,6 +59,12 @@ let test_values () =
   check_string "int" "5" (Py.str (`Int 5));
   check_string "float" "1.0" (Py.str (`Float 1.));
   check_string "fraction" "0.1" (Py.str (`Float 0.1));
+  List.iter
+    (fun (number, expected) -> check_string expected expected (Py.str (`Float number)))
+    [
+      (1e16 +. 2., "1.0000000000000002e+16"); (1e16, "1e+16"); (2.5e20, "2.5e+20"); (1.5e-05, "1.5e-05");
+      (1e-05, "1e-05"); (0.0001, "0.0001"); (123.456, "123.456"); (-0.5, "-0.5"); (1e15, "1000000000000000.0");
+    ];
   check_string "list" "['a', 1, True, None]" (Py.str (`List [ `String "a"; `Int 1; `Bool true; `Null ]));
   check_string "dict" "{'k': 'v'}" (Py.str (`Assoc [ ("k", `String "v") ]));
   Alcotest.(check bool) "last key wins" true (Py.get "a" (`Assoc [ ("a", `Int 1); ("a", `Int 2) ]) = `Int 2);
@@ -119,7 +125,8 @@ let test_registry () =
   Alcotest.check_raises "duplicate" (Invalid_argument "Mesh_agent.Registry: two adapters for claude") (fun () ->
       ignore (Mesh_agent.Registry.create [ claude (); claude () ]));
   Alcotest.(check (list string)) "kinds" [ "claude" ] (Mesh_agent.Registry.kinds (Mesh_agent.Registry.create [ claude () ]));
-  Alcotest.(check bool) "HOME required" true (Result.is_error (Mesh_agent_roots.of_environment (fun _ -> Some "")))
+  Alcotest.(check bool) "HOME required" true (Result.is_error (Mesh_agent_roots.of_environment (fun _ -> Some "")));
+  Alcotest.(check bool) "HOME absolute" true (Result.is_error (Mesh_agent_roots.of_environment (fun _ -> Some "home/me")))
 
 let member key = function `Assoc fields -> List.assoc key fields | _ -> `Null
 
@@ -132,7 +139,10 @@ let test_rows () =
       Fake.process ~pid:70 ~sid:70 ~argv:[ "codex"; "--yolo" ] ~cwd:"/c" "codex";
     ]
   in
-  let round = Fake.round table and registry = Fake.registry "/nonexistent" in
+  let reads = Hashtbl.create 4 in
+  let on_read pid = Hashtbl.replace reads pid (1 + Option.value ~default:0 (Hashtbl.find_opt reads pid)) in
+  let round = Result.get_ok (Mesh_agent_round.read (Fake.platform ~on_read table)) in
+  let registry = Fake.registry "/nonexistent" in
   let row sid =
     let row = Mesh_sessions_describe.row registry round (Fake.session sid) in
     (Mesh_sessions_describe.supported row, Mesh_sessions_describe.json row)
@@ -144,6 +154,7 @@ let test_rows () =
   Alcotest.(check bool) "gone" true (described 80 = `Assoc [ ("cwd", `Null); ("cmd", `String "?"); ("agent", `Null) ]);
   match row 70 with
   | false, value ->
+      Alcotest.(check int) "the agent's command line read once" 1 (Hashtbl.find reads 70);
       let agent = member "agent" value in
       Alcotest.(check bool) "type" true (member "type" agent = `String "codex");
       Alcotest.(check bool) "argv" true (member "argv" agent = `List [ `String "codex"; `String "--yolo" ])

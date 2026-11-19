@@ -8,8 +8,9 @@
 (** The process table of one round, read once and shared by every session of
     the round.
 
-    A value is immutable once built, so system threads may read it at the
-    same time. Process details (command line, working directory) are not part
+    The table is immutable once built, so system threads may read it at the
+    same time; the command lines read are kept for the round (guarded by a
+    mutex), so that detection, the parent check and the row read each once. Process details (command line, working directory) are not part
     of the table: they are read when asked, through the platform the round was
     built with ({!Mesh_pty_processes.platform}, which tests replace). *)
 
@@ -32,7 +33,8 @@ val session : t -> int -> process list
 (** The processes of a session (by session id), by ascending pid. *)
 
 val argv : t -> int -> string list
-(** The command line, raw bytes; [[]] when it cannot be read. *)
+(** The command line, raw bytes; [[]] when it cannot be read. Read once per
+    round and process. *)
 
 val cwd : t -> int -> string option
 (** The working directory; [None] when it cannot be read. *)
