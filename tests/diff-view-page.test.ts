@@ -61,14 +61,14 @@ print(json.dumps({"page": view.diff_page(Path(${JSON.stringify(name)}), sys.stdi
                   "ext": sorted(view.DIFF_EXT), "served": str(view.STATIC)}))`, text) as Rendered;
 }
 
-// What view._respond answers for a file of `content` (a Python bytes literal), with a 64-byte
-// limit standing for the 4 MiB one: the type served.
-function served(content: string, query = ''): string {
+// What view._respond answers for a file of `content` (a Python bytes literal), with a `limit`
+// standing for the 4 MiB one: the type served.
+function served(content: string, query = '', limit = 64): string {
   return python(`import asyncio, os
 from pathlib import Path
 from aiohttp.test_utils import make_mocked_request
 import view
-view.DIFF_MAX_BYTES = 64
+view.DIFF_MAX_BYTES = ${limit}
 path = Path(HOME_DIR) / "x.diff"
 path.write_bytes(${content})
 handle = open(path, "rb")
@@ -115,6 +115,9 @@ describe('the diff page is served', () => {
 
   test('as plain text when it holds a NUL byte, like the code viewer', () => {
     assert.equal(served(String.raw`b"--- a/x\n\x00"`), 'text/plain');
+    // anywhere in what is read, not only in the first 8 KiB
+    assert.equal(served(String.raw`b"+" * 9000 + b"\x00"`, '', 20_000), 'text/plain');
+    assert.equal(served(String.raw`b"+" * 9000`, '', 20_000), 'text/html');
   });
 
   test('as plain text with ?raw=1, and in the code viewer with ?source=1 (line targets)', () => {
@@ -188,15 +191,16 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
     await page.waitForSelector('details.file');
     const files = page.locator('details.file');
     assert.deepEqual(await files.evaluateAll(nodes => nodes.map(node => (node as HTMLDetailsElement).open)), [true, true, false]);
-    // one hunk header and 1999 lines: the first chunk of 2000 rows
-    assert.equal(await files.nth(0).locator('tr').count(), 2000);
+    // one hunk header and the first chunk of 2000 lines
+    assert.equal(await files.nth(0).locator('tr').count(), 2001);
     assert.equal(await files.nth(2).locator('tr').count(), 0);
-    await files.nth(0).getByRole('button', {name: /^show 2000 more lines \(2501 left\)$/}).click();
-    assert.equal(await files.nth(0).locator('tr').count(), 4000);
+    await files.nth(0).getByRole('button', {name: /^show 2000 more lines \(2500 left\)$/}).click();
+    assert.equal(await files.nth(0).locator('tr').count(), 4001);
     // a view change rebuilds the rows already shown, no more
     await page.getByRole('button', {name: 'split'}).click();
-    assert.equal(await files.nth(0).locator('tr').count(), 4000);
+    assert.equal(await files.nth(0).locator('tr').count(), 4001);
     await files.nth(2).locator('summary').click();
+    await files.nth(2).locator('table').waitFor();
     assert.equal(await files.nth(2).locator('tr').count(), 11);
     await page.close();
   });
@@ -214,10 +218,64 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
     await page.close();
   });
 
-  test('shows a carriage return that belongs to the file', async () => {
-    const page = await open('--- a/x\n+++ b/x\n@@ -1 +1 @@\n-line\r\n+line\n');
+  test('shows a carriage return that belongs to the file, without an element per return', async () => {
+    const page = await open(`--- a/x\n+++ b/x\n@@ -1 +1 @@\n-line\r\n+line${'\r'.repeat(500)}x\n`);
     await page.waitForSelector('details.file');
     assert.deepEqual(await page.locator('td.del .w').allTextContents(), ['␍']);
+    assert.equal(await page.locator('td.add').last().evaluate(cell => cell.querySelectorAll('*').length), 1);
+    assert.equal(await page.locator('td.add .w').textContent(), `${'␍'.repeat(500)}x`);
+    await page.close();
+  });
+
+  const replaced = (name: string, count: number): string =>
+    `--- a/${name}\n+++ b/${name}\n@@ -1,${count} +1,${count} @@\n${'-old\n'.repeat(count)}${'+new\n'.repeat(count)}`;
+
+  test('keeps the lines loaded, not the rows, across views', async () => {
+    const page = await open(replaced('pairs', 3000));
+    await page.waitForSelector('details.file');
+    const rows = page.locator('details.file tr:not(.hunk)');
+    assert.equal(await rows.count(), 2000);
+    await page.getByRole('button', {name: 'split'}).click();
+    assert.equal(await rows.count(), 1000);         // 2000 lines: 1000 pairs
+    await page.getByRole('button', {name: /^show 2000 more lines \(4000 left\)$/}).click();
+    await page.getByRole('button', {name: /^show 2000 more lines \(2000 left\)$/}).click();
+    assert.equal(await rows.count(), 3000);
+    assert.equal(await page.locator('button.more').count(), 0);
+    await page.getByRole('button', {name: 'unified'}).click();
+    assert.equal(await rows.count(), 6000);         // all of them, as loaded in split
+    await page.close();
+  });
+
+  test('shares the lines of the first screens out over the files, in order', async () => {
+    const page = await open(added('a', 2000) + added('b', 1999) + added('c', 10) + added('d', 10));
+    await page.waitForSelector('details.file');
+    const files = page.locator('details.file');
+    assert.deepEqual(await files.evaluateAll(nodes => nodes.map(node => (node as HTMLDetailsElement).open)), [true, true, true, false]);
+    assert.equal(await files.nth(2).locator('tr:not(.hunk)').count(), 1);
+    assert.equal(await files.nth(2).locator('button.more').textContent(), 'show 9 more lines (9 left)');
+    await page.close();
+  });
+
+  test('rebuilds a file unfolded after a view change in that view', async () => {
+    const page = await open(DIFF);
+    await page.waitForSelector('details.file');
+    await page.locator('details.file summary').first().click();
+    await page.getByRole('button', {name: 'split'}).click();
+    await page.locator('details.file summary').first().click();
+    await page.locator('details.file').first().locator('table.split').waitFor();   // on the toggle event
+    assert.equal(await page.locator('details.file').first().locator('table.split').count(), 1);
+    assert.equal(await page.locator('details.file').first().locator('table.unified').count(), 0);
+    await page.close();
+  });
+
+  test('loads again the rows a watched reload scrolls back to', async () => {
+    const page = await open(added('one', 4500) + added('two', 3000) + added('three', 10));
+    await page.waitForSelector('details.file');
+    const rows = page.locator('details.file tr:not(.hunk)');
+    assert.equal(await rows.count(), 4000);
+    // what the "scrollto" message of the mesh does (diff.html), for a position past the rows built
+    await page.evaluate('page.growTo(document.documentElement.scrollHeight + 50000)');
+    assert.ok(await rows.count() > 4000);
     await page.close();
   });
 

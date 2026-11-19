@@ -411,10 +411,17 @@ export function countLines(text: string): number {
   return text.endsWith('\n') || text === '' ? count : count + 1;
 }
 
-// Rows built at a time, per file ("show more" builds the next ones).
+// Diff lines built at a time, per file ("show more" builds the next ones). Counted in lines of
+// the diff, not in table rows, so that a file keeps the same extent loaded in both views.
 export const ROW_CHUNK = 2_000;
-// Rows built when the page opens: the files past them start folded and are built when unfolded.
+// Diff lines built when the page opens, over all files: the files past them start folded and are
+// built when unfolded.
 export const INITIAL_ROWS = 4_000;
+
+// The lines of a file's hunks (without the hunk headers).
+export function fileLines(file: FileDiff): number {
+  return file.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -429,26 +436,16 @@ function number(value: number | null, extra = ''): HTMLTableCellElement {
   return cell;
 }
 
-// Text, with a carriage return shown as ␍ (it is part of the line: a CRLF to LF change).
-function appendText(parent: HTMLElement, text: string): void {
-  const parts = text.split('\r');
-  parts.forEach((part, index) => {
-    if (index > 0) parent.append(el('span', 'cr', '␍'));
-    if (part !== '') parent.append(document.createTextNode(part));
-  });
-}
+// A carriage return is part of the line (a CRLF to LF change): shown as ␍, in the same text node
+// (one node per run, however many it holds).
+const visible = (text: string): string => text.replaceAll('\r', '␍');
 
 function code(line: DiffLine | null, segments: Segment[] | undefined, kind: string): HTMLTableCellElement {
   const cell = el('td', `code ${kind}`);
   if (!line) return cell;
   for (const segment of segments ?? [{text: line.text, changed: false}]) {
-    if (segment.changed) {
-      const span = el('span', 'w');
-      appendText(span, segment.text);
-      cell.append(span);
-    } else {
-      appendText(cell, segment.text);
-    }
+    if (segment.changed) cell.append(el('span', 'w', visible(segment.text)));
+    else cell.append(document.createTextNode(visible(segment.text)));
   }
   if (line.noNewline) cell.append(el('span', 'eof', ' ⏎̸'));
   return cell;
@@ -463,6 +460,14 @@ function columns(table: HTMLTableElement, kinds: ('ln' | 'code')[]): void {
 }
 
 type Item = {type: 'hunk'; hunk: Hunk} | {type: 'line'; line: DiffLine} | {type: 'row'; row: Row};
+
+// The diff lines a row shows: a context row of the split view shows one line on both sides.
+export function itemLines(item: Item): number {
+  if (item.type === 'hunk') return 0;
+  if (item.type === 'line') return 1;
+  if (item.row.kind === 'context') return 1;
+  return (item.row.left ? 1 : 0) + (item.row.right ? 1 : 0);
+}
 
 // The rows of a file in one view, in order: unified lists the lines as the diff does, split
 // pairs them.
@@ -529,14 +534,22 @@ function button(label: string, pressed: boolean, onClick: () => void): HTMLButto
 class FileView {
   readonly details = el('details', 'file');
   private readonly body = el('div', 'body');
-  private shown = ROW_CHUNK;    // rows built (or to build when unfolded), in the current view
+  // diff lines loaded: the extent shown, the same whatever the view
+  private loaded: number;
+  // the view the body was built for ('' before it is built)
+  private builtFor = '';
   private segments: Map<DiffLine, Segment[]> | null = null;
   private readonly file: FileDiff;
   private readonly view: Viewer;
+  private table: HTMLTableElement | null = null;
+  private items: Item[] = [];
+  private next = 0;          // the first item not built yet
+  private built = 0;         // the diff lines of the items built
 
-  constructor(file: FileDiff, view: Viewer, open: boolean) {
+  constructor(file: FileDiff, view: Viewer, open: boolean, loaded: number) {
     this.file = file;
     this.view = view;
+    this.loaded = loaded;
     const summary = el('summary');
     summary.append(el('span', 'path', displayPath(file)));
     if (STATUS_LABEL[file.status]) summary.append(el('span', `badge ${file.status}`, STATUS_LABEL[file.status]));
@@ -544,8 +557,13 @@ class FileView {
     this.details.append(summary, this.body);
     this.details.open = open;
     if (open) this.render();
-    // built the first time it is unfolded (the toggle event follows the change of `open`)
-    this.details.addEventListener('toggle', () => { if (this.details.open && !this.body.hasChildNodes()) this.render(); });
+    // built when unfolded, unless already built for the current view (the toggle event follows
+    // the change of `open`, including the one above)
+    this.details.addEventListener('toggle', () => { if (this.details.open && this.builtFor !== this.view.key()) this.render(); });
+  }
+
+  get remaining(): number {
+    return this.details.open && this.builtFor !== '' ? this.items.length - this.next : 0;
   }
 
   private wordSegments(): Map<DiffLine, Segment[]> | null {
@@ -554,40 +572,65 @@ class FileView {
     return this.segments;
   }
 
-  // (Re)builds the rows shown, in the current view: called when unfolded and on a view change.
+  // (Re)builds the rows of the lines loaded, in the current view: when unfolded with a view it was
+  // not built for, and on a view change.
   render(): void {
+    this.builtFor = this.view.key();
     this.body.replaceChildren();
+    this.table = null;
     if (this.file.hunks.length === 0) {
       this.body.append(el('p', 'note', this.file.status === 'binary' ? 'binary file, not shown' : 'no change in the content'));
+      this.items = [];
       return;
     }
     const {mode} = this.view.options;
-    const items = fileItems(this.file, mode);
-    const table = el('table', mode);
-    columns(table, mode === 'unified' ? ['ln', 'ln', 'code'] : ['ln', 'code', 'ln', 'code']);
+    this.items = fileItems(this.file, mode);
+    this.next = 0;
+    this.built = 0;
+    this.table = el('table', mode);
+    columns(this.table, mode === 'unified' ? ['ln', 'ln', 'code'] : ['ln', 'code', 'ln', 'code']);
     const scroll = el('div', 'scroll');
-    scroll.append(table);
+    scroll.append(this.table);
     this.body.append(scroll);
-    this.append(table, items, 0);
+    this.extend();
   }
 
-  private append(table: HTMLTableElement, items: Item[], from: number): void {
+  // Builds the next chunk of lines ("show more").
+  more(): void {
+    this.loaded = this.built + ROW_CHUNK;
+    this.extend();
+  }
+
+  // Builds rows until the lines loaded are shown.
+  private extend(): void {
+    const table = this.table;
+    if (!table) return;
     const segments = this.wordSegments();
     const {mode} = this.view.options;
-    const until = Math.min(items.length, Math.max(this.shown, from + 1));
-    for (let k = from; k < until; k++) table.append(itemRow(items[k] as Item, mode, segments));
+    while (this.next < this.items.length) {
+      const item = this.items[this.next] as Item;
+      const weight = itemLines(item);
+      if (weight > 0 && this.built + weight > this.loaded && this.built > 0) break;
+      table.append(itemRow(item, mode, segments));
+      this.built += weight;
+      this.next += 1;
+    }
     this.body.querySelector('button.more')?.remove();
-    const left = items.length - until;
-    if (left > 0) {
-      const more = button(`show ${Math.min(left, ROW_CHUNK)} more lines (${left} left)`, false, () => {
-        this.shown = until + ROW_CHUNK;
-        this.append(table, items, until);
-      });
+    const left = fileLines(this.file) - this.built;
+    if (this.next < this.items.length && left > 0) {
+      const more = button(`show ${Math.min(left, ROW_CHUNK)} more lines (${left} left)`, false, () => this.more());
       more.className = 'more';
       more.removeAttribute('aria-pressed');
       this.body.append(more);
     }
   }
+}
+
+// The page, for diff.html: `growTo` loads rows until the page reaches a height (a watched reload
+// restores the scroll position of rows loaded with "show more" before it).
+export interface DiffPage {
+  parsed: ParsedDiff;
+  growTo(height: number): void;
 }
 
 class Viewer {
@@ -620,15 +663,20 @@ class Viewer {
       root.append(el('pre', 'preamble', parsed.preamble.join('\n').replace(/\s+$/, '')));
     }
     if (parsed.files.length === 0) root.append(el('p', 'note', 'no unified diff found in this file'));
-    // the first files are unfolded up to INITIAL_ROWS rows; the others start folded
-    let rows = INITIAL_ROWS;
+    // INITIAL_ROWS lines are shared out over the first files, in order; the others start folded
+    let left = INITIAL_ROWS;
     for (const file of parsed.files) {
-      const size = fileItems(file, 'unified').length;
-      const view = new FileView(file, this, rows > 0);
-      rows -= Math.min(size, ROW_CHUNK);
+      const open = left > 0;
+      const loaded = open ? Math.min(ROW_CHUNK, left) : ROW_CHUNK;
+      if (open) left -= Math.min(fileLines(file), loaded);
+      const view = new FileView(file, this, open, loaded);
       this.files.push(view);
       root.append(view.details);
     }
+  }
+
+  key(): string {
+    return `${this.options.mode}/${this.options.words}`;
   }
 
   private set(change: Partial<Options>): void {
@@ -636,8 +684,22 @@ class Viewer {
     this.buttons.unified.setAttribute('aria-pressed', String(this.options.mode === 'unified'));
     this.buttons.split.setAttribute('aria-pressed', String(this.options.mode === 'split'));
     this.buttons.words.setAttribute('aria-pressed', String(this.options.words));
-    // only the unfolded files are rebuilt, with the rows they already showed
+    // only the unfolded files are rebuilt, with the lines they had loaded; a folded one is rebuilt
+    // when unfolded
     for (const file of this.files) if (file.details.open) file.render();
+  }
+
+  // Loads rows ("show more", then the next folded file) until the page is `height` tall.
+  growTo(height: number): void {
+    const page = document.documentElement;
+    for (let step = 0; step < 1000 && page.scrollHeight < height; step++) {
+      const open = this.files.find(file => file.remaining > 0);
+      if (open) { open.more(); continue; }
+      const folded = this.files.find(file => !file.details.open);
+      if (!folded) return;
+      folded.details.open = true;
+      folded.render();
+    }
   }
 }
 
@@ -650,15 +712,15 @@ function tooLarge(root: HTMLElement, lines: number): void {
   root.replaceChildren(note);
 }
 
-// Renders `text` into `root`, with its toolbar. Returns the parsed diff (for tests and callers),
-// or null when the diff has too many lines to be rendered.
-export function mount(root: HTMLElement, text: string, initial: Partial<Options> = {}): ParsedDiff | null {
+// Renders `text` into `root`, with its toolbar. Returns the page, or null when the diff has too
+// many lines to be rendered.
+export function mount(root: HTMLElement, text: string, initial: Partial<Options> = {}): DiffPage | null {
   const lines = countLines(text);
   if (lines > MAX_DIFF_LINES) {
     tooLarge(root, lines);
     return null;
   }
   const parsed = parseUnifiedDiff(text);
-  new Viewer(root, parsed, {mode: initial.mode ?? 'unified', words: initial.words ?? true});
-  return parsed;
+  const viewer = new Viewer(root, parsed, {mode: initial.mode ?? 'unified', words: initial.words ?? true});
+  return {parsed, growTo: height => viewer.growTo(height)};
 }

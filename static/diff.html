@@ -61,7 +61,7 @@
   td.empty { background: var(--empty); }
   td.add .w { background: var(--add-w); border-radius: 2px; }
   td.del .w { background: var(--del-w); border-radius: 2px; }
-  .eof, .cr { color: var(--mute); }
+  .eof { color: var(--mute); }
   button.more { display: block; margin: 8px 12px; }
   td.hunk { background: var(--hunk); color: var(--hunk-fg); padding: 2px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>
@@ -77,13 +77,14 @@
 <script nonce="{{nonce}}">
   // A line target ("x.diff:42", which the mesh opens with #L42) is a line of the patch file:
   // shown by the code viewer of the same document (?source=1), which jumps to it.
+  let page = null;
   if (/^#L\d+/.test(location.hash)) {
     const query = new URLSearchParams(location.search);
     query.set("source", "1");
     location.replace(`?${query}${location.hash}`);
   } else {
     // static/diff-view.ts renders the diff; the diff is only ever written as text
-    MeshDiffView.mount(document.getElementById("doc"), JSON.parse(document.getElementById("src").textContent));
+    page = MeshDiffView.mount(document.getElementById("doc"), JSON.parse(document.getElementById("src").textContent));
   }
   // The mesh's panel reloads this page when the file changes (mesh-open --watch): report the
   // scroll position, and take back the one the mesh remembers. Numbers only, and the mesh is the
@@ -98,6 +99,9 @@
     }, { passive: true });
     addEventListener("message", (e) => {
       if (e.source !== window.parent || e.data?.smesh !== "scrollto" || !Number.isFinite(e.data.y)) return;
+      // rows loaded with "show more" before the reload are loaded again first, so that the
+      // position is not clamped to the first rows
+      page?.growTo(e.data.y + innerHeight);
       scrollTo(0, e.data.y);
     });
   }
