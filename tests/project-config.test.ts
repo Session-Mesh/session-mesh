@@ -122,6 +122,8 @@ test('a lock released between the exclusive create and its inspection still refu
     let outcome: unknown;
     try { outcome = await editor.editProjectConfig(path, request(before.revision, { type: 'project.describe', title: 'Changed' })); }
     finally { released.mock.restore(); }
+    assert.equal(released.mock.calls.some(call => call.arguments[0] === lock), true, 'the lock was inspected through the mocked fs.lstat');
+    await assert.rejects(fs.lstat(lock), { code: 'ENOENT' });
     assert.deepEqual(outcome, { status: 'refused', code: 'busy' });
     assert.deepEqual(await fs.readFile(path), bytes);
   });
