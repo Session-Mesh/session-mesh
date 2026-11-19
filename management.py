@@ -177,13 +177,27 @@ def _recoveries(values, now):
     return sorted(bounded, key=lambda entry: (-entry["lost_at"], entry["name"], entry["created"]))
 
 
+def _witness(kept, live, recovery_keys, now, order):
+    """Under _lock: a stop for each session of the baseline that ``live`` no longer has; ``live``
+    (of the host read ``order``) becomes the baseline. Return the pruned ledger."""
+    seen = {_key(entry) for entry in kept}
+    for key, entry in _baseline.items():
+        if key not in live and key not in seen and key not in recovery_keys:
+            kept.append({**entry, "observed_stopped_at": now})
+            seen.add(key)
+    _baseline.clear()
+    _baseline.update(live)
+    _order[0] = _order[0] if order is None else order
+    return _prune(kept, now)
+
+
 def snapshot(mesh, external, listed, recovery, now=None, order=None):
     """Return a safe management projection and record a witnessed Mesh absence.
 
     ``listed`` is the ptyhost authority bit: a failed list never changes either
     the previous successful baseline or the persistent ledger.  ``order``: that
     of the host read (server._read_host); a read older than the baseline's
-    witnesses no absence (listings run in parallel) and leaves the baseline.
+    changes neither the baseline nor the ledger (listings run in parallel).
     """
     now = time.time() if now is None else now
     with _lock:
@@ -202,28 +216,16 @@ def snapshot(mesh, external, listed, recovery, now=None, order=None):
             # successful list gives this snapshot authority to mutate storage.
             kept = [entry for entry in kept if _key(entry) not in recovery_keys]
             live = { _key(entry): entry for session in mesh if (entry := _live(session)) }
-            stale = order is not None and order < _order[0]
-            prior = {} if stale else dict(_baseline)
-            seen = {_key(entry) for entry in kept}
-            for key, entry in prior.items():
-                if key not in live and key not in seen and key not in recovery_keys:
-                    kept.append({**entry, "observed_stopped_at": now})
-                    seen.add(key)
-            kept = _prune(kept, now)
-            if not stale:
-                _baseline.clear()
-                _baseline.update(live)
-                _order[0] = _order[0] if order is None else order
             current = [_project_mesh(entry) for entry in live.values()]
             current.extend(entry for session in external if (entry := _project_external(session)))
-            if kept == old or _save(kept):
+            if order is None or order >= _order[0]:   # an older read's earlier ``now`` would prune newer stops
+                kept = _witness(kept, live, recovery_keys, now, order)
                 _pending_stops.clear()
-            else:
-                # Keep the entire bounded desired ledger: it includes a new
-                # witnessed stop (if any) and makes the next successful list
-                # retry exactly the state that could not be committed.
-                _pending_stops.clear()
-                _pending_stops.update({_key(entry): entry for entry in kept})
+                if kept != old and not _save(kept):
+                    # Keep the entire bounded desired ledger: it includes a new
+                    # witnessed stop (if any) and makes the next successful list
+                    # retry exactly the state that could not be committed.
+                    _pending_stops.update({_key(entry): entry for entry in kept})
         else:
             # Keep the on-disk ledger byte-for-byte intact while ptyhost is
             # unavailable.  Its safe, pruned in-memory projection (including

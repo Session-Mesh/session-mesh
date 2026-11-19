@@ -348,6 +348,48 @@ async def test_membership_never_publishes_an_older_host_list_over_a_newer_one(sn
     await state.membership(([hosted("a", tmp_path, 1.0)], True, None, 0.0, 1.0))
     assert sorted(state.rows) == ["a", "x"]
     assert state.read_done == 2.0
+    await state.membership(([], False, None, 0.0, 3.0))
+    assert json.loads(state.answer(None))["host"] == "silent"
+    await state.membership(([hosted("a", tmp_path, 1.0)], True, None, 0.0, 4.0))
+    assert json.loads(state.answer(None))["host"] == "ok", "a successful read ends a silent host"
+
+
+async def test_a_read_slower_than_a_publish_never_puts_older_rows_back(snapshot_file, tmp_path, monkeypatch):
+    # A read's awaits (organisation, snapshot) let a round, or a newer read, publish in between.
+    entered, release, view = threading.Event(), threading.Event(), server.organize.view
+
+    def slow_view(raw, prune=True):
+        entered.set()
+        assert release.wait(5)
+        return view(raw, prune)
+
+    async def held(state, raw, order):
+        entered.clear()
+        release.clear()
+        monkeypatch.setattr(server.organize, "view", slow_view)
+        read = asyncio.create_task(state.membership((raw, True, None, 0.0, order)))
+        assert await asyncio.to_thread(entered.wait, 5)
+        monkeypatch.setattr(server.organize, "view", view)
+        return read
+    state = server.SessionsState()
+    await state.membership(([hosted("a", tmp_path, 1.0)], True, None, 0.0, 1.0))
+    read = await held(state, [dict(hosted("a", tmp_path, 1.0), attached=1)], 2.0)
+    state.publish([dict(state.rows["a"], ready=True)], state.top)   # a round describes a meanwhile
+    release.set()
+    await read
+    assert (state.rows["a"]["ready"], state.rows["a"]["attached"]) == (True, 1)
+    read = await held(state, [hosted("a", tmp_path, 1.0)], 3.0)    # a read while the client was detached...
+    await state.membership(([dict(hosted("a", tmp_path, 1.0), attached=1)], True, None, 0.0, 4.0))   # ...one after it reattached
+    release.set()
+    await read
+    assert state.rows["a"]["attached"] == 1
+    # A read overtaken by one still being published does not answer the requests waiting for that one.
+    newer = await held(state, [hosted("a", tmp_path, 1.0), hosted("b", tmp_path, 2.0)], 6.0)
+    await state.membership(([hosted("a", tmp_path, 1.0), hosted("b", tmp_path, 2.0)], True, None, 0.0, 5.0))
+    assert state.read_done == 4.0
+    release.set()
+    await newer
+    assert (sorted(state.rows), state.read_done) == (["a", "b"], 6.0)
 
 
 async def test_a_listing_observes_the_conversations_at_the_time_of_its_host_read(monkeypatch):
@@ -368,6 +410,6 @@ async def test_an_extra_cancelled_on_its_own_keeps_its_last_value(monkeypatch):
 
 
 @pytest.mark.parametrize("text, seconds", [(None, 2.0), ("", 2.0), ("0", 0.0), ("0.5", 0.5), ("60", 60.0),
-                                           ("2s", 2.0), ("inf", 2.0), ("nan", 2.0), ("-1", 2.0)])
+                                           ("2s", 2.0), ("inf", 2.0), ("nan", 2.0), ("-1", 2.0), ("1e1", 2.0)])
 def test_the_sessions_wait_setting_falls_back_to_two_seconds(text, seconds):
     assert server._wait_setting(text) == seconds

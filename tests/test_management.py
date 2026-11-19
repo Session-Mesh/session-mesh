@@ -463,13 +463,16 @@ async def test_server_sessions_preserves_a_baseline_across_outage_then_records_o
 
 async def test_an_older_listing_finishing_last_witnesses_no_stop_and_prunes_no_open(tmp_path, monkeypatch):
     """Listings run in parallel (the round, the watchers, actions): the one of the older host read may finish
-    last. It must not record a stop of a session created since its read, nor forget that session's board open."""
+    last. It must not record a stop of a session created since its read, nor forget that session's board open
+    or board signals, nor drop the stop of a session that ended since its read (its ``now`` is earlier)."""
     monkeypatch.setattr(management, "FILE", tmp_path / "management-sessions.json")
     management.reset_for_tests()
     monkeypatch.setattr(server, "_RECORDED", [0.0])
     monkeypatch.setattr(server.opens, "OPENS", [])
     monkeypatch.setattr(server.opens, "_BOARD_OPEN_IDENTITIES", {})
-    hosted = [host_session("alpha", 100.0)]
+    purged = []
+    monkeypatch.setattr(server, "_purge_invalid_board_signals", lambda raw: purged.append([s["name"] for s in raw]))
+    hosted = [host_session("alpha", 100.0), host_session("y", 150.0)]
 
     async def fake_request(request):
         assert request == {"op": "list"}
@@ -477,7 +480,8 @@ async def test_an_older_listing_finishing_last_witnesses_no_stop_and_prunes_no_o
 
     def fake_list_sessions(raw, listed=True):
         return {"mesh": [mesh_session(item["name"], item["created"]) for item in raw], "external": [], "folders": [],
-                "moved": {}, "opens": {}, "home": str(tmp_path), "now": 1_000.0}
+                "moved": {}, "opens": {}, "home": str(tmp_path),
+                "now": 1_001.0 if any(item["name"] == "x" for item in raw) else 1_000.5}
 
     async def no_collect(*_args, **_kwargs):
         return None
@@ -490,9 +494,9 @@ async def test_an_older_listing_finishing_last_witnesses_no_stop_and_prunes_no_o
     monkeypatch.setattr(server.portfolio, "collect_worktrees", no_collect)
     monkeypatch.setattr(server.portfolio, "attach_diff_selectors", lambda *_args, **_kwargs: None)
 
-    await server.sessions()                                  # the baseline: alpha
-    older = await server._read_host()                        # a listing reads the host: alpha
-    hosted.append(host_session("x", 200.0))                  # x is created, and asks for its board
+    await server.sessions()                                  # the baseline: alpha and y
+    older = await server._read_host()                        # a listing reads the host: alpha and y
+    hosted[1] = host_session("x", 200.0)                     # y ends; x is created, and asks for its board
     server.opens.record_board_open("x", 200.0)
     await server._listing(None, None)                        # a newer listing finishes first: alpha and x
     late, _ = await server._listing(None, None, older)       # the older one finishes last
@@ -500,8 +504,11 @@ async def test_an_older_listing_finishing_last_witnesses_no_stop_and_prunes_no_o
 
     for result in (late, after):
         assert not [row for row in stopped(result["management"]) if row["name"] == "x"]
-    assert '"x"' not in (management.FILE.read_text() if management.FILE.exists() else "")
+    ledger = management.FILE.read_text()
+    assert '"x"' not in ledger and '"y"' in ledger
+    assert [row["time"] for row in stopped(after["management"]) if row["name"] == "y"] == [1_001.0]
     assert [entry["session"] for entry in late["opens"] if entry.get("kind") == "board-open"] == ["x"]
+    assert purged == [["alpha", "y"], ["alpha", "x"], ["alpha", "x"]], "the older listing purges no board signal"
     assert any(row["name"] == "x" for row in after["management"]["sessions"])
 
 

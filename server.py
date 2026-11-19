@@ -1010,6 +1010,7 @@ class SessionsState:
 
     def __init__(self):
         self.generation = self.floor = int(time.time() * 1000)
+        self.instance = secrets.token_hex(8)   # this process: a generation of another one means nothing here
         self.rows, self.marks, self.removed = {}, {}, {}   # name -> row, (generation, print), (generation, time)
         self.top, self.external_mark, self.ready = None, (self.generation, None), 0
         self.texts = {"external": "[]", "folders": "[]", "management": '{"state": "pending"}'}   # top's, encoded
@@ -1030,16 +1031,17 @@ class SessionsState:
 
     async def wait(self, seconds):
         """Ask for a round and a read of the host's list, and wait, at most ``seconds``, for the first read
-        that starts after this request to be published (or fail), or for the round; not at all while the
-        host is known silent (its last read failed). With WAIT_COMPLETE, for the round."""
+        that starts after this request to be published (or fail), or for the round; at most HOST_SILENT_AFTER
+        while the host is known silent (its last read failed). With WAIT_COMPLETE, for the round."""
         self.wanted.set()
         self.read_wanted.set()
         ticket, start = self.started + 1, time.monotonic()   # the next round to start begins after this request
 
         def answered():
-            if self.finished >= ticket or time.monotonic() - start > seconds:
+            waited = time.monotonic() - start
+            if self.finished >= ticket or waited > seconds:
                 return True
-            return not WAIT_COMPLETE and (self.read_done >= start or self.host == "silent")
+            return not WAIT_COMPLETE and (self.read_done >= start or self.host == "silent" and waited > HOST_SILENT_AFTER)
         while seconds > 0 and not answered():
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._tick.wait(), 0.05)
@@ -1087,7 +1089,7 @@ class SessionsState:
                 texts = {key: text for key, text in texts.items() if key != "external"}
         fields.update(self.extras, client_version=client_version(), restore_guard=RESTORE_GUARD, now=time.time(),
                       generation=self.generation, full=not delta, counts={"total": len(self.rows), "ready": self.ready},
-                      complete=self.top is not None and self.ready == len(self.rows),
+                      complete=self.top is not None and self.ready == len(self.rows), instance=self.instance,
                       host="silent" if self.silent() else self.host)
         parts = [f"{json.dumps(key)}: {text}" for key, text in texts.items()]
         return "{" + ", ".join([*parts, json.dumps(fields)[1:-1], f'"mesh": [{",".join(rows)}]']) + "}"
@@ -1122,24 +1124,31 @@ class SessionsState:
         """Publish a host list at once: the sessions it newly lists as rows with ``ready: false``, from the
         host's list, mesh.json and the recovery snapshot only (no /proc, no transcript), and without the
         sessions it no longer lists. A read older than the latest one published changes nothing; else a
-        failed one makes the host "silent", a successful one ends that. Then ``read_done`` holds its order."""
+        failed one makes the host "silent", a successful one ends that. Then ``read_done`` holds its order,
+        unless a newer read is published, or being published: that one sets it when its rows are."""
         raw, listed, _, _, order = read
         if order >= self.listed[0]:
             self.host = "silent" if not listed else "ok" if self.host == "silent" else self.host
             if listed:
                 await self._members(raw, order)
-        self.read_done = max(self.read_done, order)
+        if order >= self.listed[0]:
+            self.read_done = max(self.read_done, order)
         self.changed()
+
+    def _attached(self, raw):
+        """The current rows whose attachment count differs from the host's, with the host's count."""
+        return [dict(row, attached=s["attached"]) for s in raw if (row := self.rows.get(s["name"]))
+                and row["created"] == s["created"] and row.get("attached") != s["attached"]]
 
     async def _members(self, raw, order):
         self.listed = order, {(s["name"], s["created"]) for s in raw}
         new = [s for s in raw if self.rows.get(s["name"], {}).get("created") != s["created"]]
-        attached = [dict(row, attached=s["attached"]) for s in raw if (row := self.rows.get(s["name"]))   # the host's count
-                    and row["created"] == s["created"] and row.get("attached") != s["attached"]]
-        if self.top is not None and not new and not attached and len(self.rows) == len(raw):
+        if self.top is not None and not new and not self._attached(raw) and len(self.rows) == len(raw):
             return
         org = await asyncio.to_thread(organize.view, raw, False)
         known = await asyncio.to_thread(respawn.provisional)
+        if order < self.listed[0]:   # a newer read was published meanwhile; rows: as a round published them since
+            return
         rows = []
         for s in new:
             entry = known.get((s["name"], s["created"])) or {"agent": None, "cmd": None}
@@ -1149,7 +1158,7 @@ class SessionsState:
                          "cwd": s["cwd"], "cmd": entry["cmd"] or "", "attached": s["attached"], "activity": s["activity"],
                          "known_agent": kind if kind in AGENT_TYPES else None, "notice": notice, "agent": agent or None,
                          "ready": False, **org["sessions"][s["name"]]})
-        self.publish(self.live([*attached, *self.rows.values(), *rows]), self.top or {
+        self.publish(self.live([*self._attached(raw), *self.rows.values(), *rows]), self.top or {
             "external": [], "folders": org["folders"], "home": str(Path.home()), "restorable": [],
             "management": {"state": "pending"}, "ptyhost": True,
             "opens": opens.snapshot({s["name"]: s["created"] for s in raw})})
