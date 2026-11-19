@@ -45,6 +45,8 @@ export interface FileDiff {
   deleted: number;
   // opened by a `diff --git` header: its `a/` and `b/` prefixes are Git's, and are dropped
   git: boolean;
+  // its content change is binary (whatever else happened to it: added, renamed, copied...)
+  binary: boolean;
 }
 
 export interface ParsedDiff {
@@ -115,7 +117,8 @@ export function gitHeaderPaths(line: string): [string, string] | null {
     second = unquoteWhole(rest.slice(at + 1));
   } else {
     const half = (rest.length - 1) / 2;
-    if (Number.isInteger(half) && rest[half] === ' ' && rest.slice(2, half) === rest.slice(half + 3)) {
+    const same = (from: number): boolean => rest.slice(from, half) === rest.slice(half + 1 + from);
+    if (Number.isInteger(half) && rest[half] === ' ' && (same(2) || same(0))) {
       first = rest.slice(0, half);
       second = rest.slice(half + 1);
     } else {
@@ -125,8 +128,9 @@ export function gitHeaderPaths(line: string): [string, string] | null {
       second = match[2];
     }
   }
-  if (!first.startsWith('a/') || !second.startsWith('b/')) return null;
-  return [first.slice(2), second.slice(2)];
+  if (first.startsWith('a/') && second.startsWith('b/')) return [first.slice(2), second.slice(2)];
+  // `diff.noprefix` writes the names without a/ and b/: accepted when they name the same file
+  return first === second ? [first, second] : null;
 }
 
 // The name of a `--- ` or `+++ ` line: quoted (Git), or up to a tab (`diff -u` adds a date).
@@ -142,7 +146,7 @@ function headerPath(raw: string, prefix: string, git: boolean): string | null {
 // ---------------------------------------------------------------- parser
 
 function newFile(git: boolean): FileDiff {
-  return {oldPath: null, newPath: null, status: 'modified', hunks: [], added: 0, deleted: 0, git};
+  return {oldPath: null, newPath: null, status: 'modified', hunks: [], added: 0, deleted: 0, git, binary: false};
 }
 
 export function parseUnifiedDiff(text: string): ParsedDiff {
@@ -198,7 +202,11 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       else if (line.startsWith('copy to ')) { file.newPath = unquoteWhole(line.slice('copy to '.length)); file.status = 'copied'; }
       else if (line.startsWith('rename from ')) { file.oldPath = unquoteWhole(line.slice('rename from '.length)); file.status = 'renamed'; }
       else if (line.startsWith('rename to ')) { file.newPath = unquoteWhole(line.slice('rename to '.length)); file.status = 'renamed'; }
-      else if (line.startsWith('Binary files ') || line === 'GIT binary patch') file.status = 'binary';
+      else if (line.startsWith('Binary files ') || line === 'GIT binary patch') {
+        // a binary change keeps the status of the file (a copy stays a copy, with both names)
+        file.binary = true;
+        if (file.status === 'modified') file.status = 'binary';
+      }
     } else if (!file) {
       preamble.push(line);
     }
@@ -610,6 +618,7 @@ class FileView {
     const summary = el('summary');
     summary.append(el('span', 'path', displayPath(file)));
     if (STATUS_LABEL[file.status]) summary.append(el('span', `badge ${file.status}`, STATUS_LABEL[file.status]));
+    if (file.binary && file.status !== 'binary') summary.append(el('span', 'badge binary', STATUS_LABEL.binary));
     summary.append(stat(file.added, file.deleted));
     this.details.append(summary, this.body);
     this.details.open = open;
@@ -642,7 +651,7 @@ class FileView {
     this.body.replaceChildren();
     this.table = null;
     if (this.file.hunks.length === 0) {
-      this.body.append(el('p', 'note', this.file.status === 'binary' ? 'binary file, not shown' : 'no change in the content'));
+      this.body.append(el('p', 'note', this.file.binary ? 'binary file, not shown' : 'no change in the content'));
       this.items = [];
       return;
     }
