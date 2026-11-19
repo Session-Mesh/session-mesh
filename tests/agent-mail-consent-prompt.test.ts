@@ -59,6 +59,26 @@ describe('agent-mail consent prompt', () => {
     assert.equal(await choice, 'later');
   });
 
+  test('Escape on a prompt that follows an "Always" answer defers, it does not grant again', async () => {
+    // Browsers keep a dialog's returnValue across showModal; Escape closes without a value.
+    const {dialog, prompt} = promptOn();
+    const first = prompt.choose(request('r1'));
+    dialog.click('always');
+    await settle();
+    assert.equal(await first, 'always');
+    const second = prompt.choose(request('r2'));
+    dialog.escape();
+    await settle();
+    assert.equal(await second, 'later');
+  });
+
+  test('an answer value the prompt does not know is "Later", never a refusal', async () => {
+    const {dialog, prompt} = promptOn();
+    const choice = prompt.choose(request('r1'));
+    dialog.click('unexpected');
+    assert.equal(await choice, 'later');
+  });
+
   test('a withdraw settles the prompt at once and is announced once the dialog has closed', async () => {
     const {dialog, prompt, announced} = promptOn();
     let choice: string | null = 'pending';
