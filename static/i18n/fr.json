@@ -1739,7 +1739,7 @@
     "other": "{done} faites sur {total}"
   },
   "work.dueOn": "échéance {date}",
-  "work.empty.noTracker": "Le suivi de projets est vide : il n’y en a pas encore sur cette machine. Pour en démarrer un, demandez à un agent lancé dans Mesh de créer un premier produit ou projet avec ses outils mesh-work (work_add_product, work_add_project), puis choisissez « Réessayer ».",
+  "work.empty.noTracker": "Mesh n’a trouvé aucun suivi de projets utilisable sur cette machine. S’il en existe déjà un, donnez son chemin absolu à WL_HOME (obligatoire quand ~/worklog-data et ~/worklog existent tous les deux). Sinon, demandez à un agent lancé dans Mesh de créer un premier produit ou projet avec ses outils mesh-work (work_add_product, work_add_project), puis choisissez « Réessayer ».",
   "work.empty.title": "Aucun suivi trouvé",
   "work.entryTruncated": "La liste est tronquée : tout n’est pas affiché.",
   "work.error.failed": "Le suivi n’a pas pu être lu. Réessayez.",

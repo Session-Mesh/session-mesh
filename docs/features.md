@@ -177,8 +177,8 @@ project tracker that agents write through `mesh-work`, read only:
 - **Products and projects.** The first screen lists the products and their active projects, with
   each project's progress (done tasks over all tasks) and its number of blockers.
 - **A project, in four tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent
-  activity, open questions, milestones, risks), "Board" (columns to do, in progress, blocked,
-  done), "Timeline" (a bar from creation to done or today, with due dates and estimates) and
+  activity, open questions, milestones, risks), "Board" (columns to do, in progress, blocked or
+  waiting, done, and "Other" for any other status, shown only when it holds tasks), "Timeline" (a bar from creation to done or today, with due dates and estimates) and
   "Dependencies" (the tasks by dependency level, cycles labelled). The French interface names them
   "Reprise", "Tableau", "Frise" and "Dépendances".
 - **A task.** Selecting a task opens its sheet: blockers, dependencies, the sessions that worked on
@@ -193,8 +193,13 @@ leading `~/` is expanded), else `~/worklog-data`, else an older `~/worklog`; whe
 view reads it through `POST /api/work/v1`, which runs the `work-read` program with only the web
 server's `HOME` and `WL_HOME` in its environment; the browser never reads a file
 ([work-read.md](work-read.md)). An agent's `work-mcp` uses the `HOME` and `WL_HOME` of the agent's
-own environment. If you set `WL_HOME`, set the same value for the web server and for the sessions,
-otherwise the view and the agents use different repositories. Nothing is pushed anywhere; the data
+own environment. If you set `WL_HOME`, set the same absolute path for the web server and for the
+sessions, otherwise the view and the agents use different repositories (a `~/` path expands against
+each process's own `HOME`). The web server takes it from its service environment
+([configuration.md](configuration.md#environment-variables)). Sessions do not inherit it from the
+web server or the PTY host: a session's shell receives only a fixed list of variables (`HOME`,
+`PATH`, the locale and a few others) and starts as a login shell, so set `WL_HOME` in your login
+shell's startup file, for example `~/.profile`. Nothing is pushed anywhere; the data
 format is in [worklog-format.md](worklog-format.md).
 
 **First use.** On a new installation there is no repository, and the view shows "No tracker found"
@@ -223,8 +228,7 @@ start without `mesh-work`.
 
 ## Projects and recorded Roster state
 
-The rest of this section describes the previous Projects workspace, which the "Old view" button
-shows.
+This section describes the previous Projects workspace, which the "Old view" button shows.
 
 **Projects** is a main mode beside **Sessions**, with its own project sidebar and **+ New**
 action. Create a project by name, then add repository and source settings when needed.
