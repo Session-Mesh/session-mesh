@@ -160,6 +160,17 @@ describe('parseTask', () => {
     ]);
     assert.equal(open!.open, true);
     assert.deepEqual(open!.answers, []);
+    assert.deepEqual([answered!.ownerAnswered, open!.ownerAnswered], [true, false], 'from a verified answer');
+  });
+
+  test('owner_answered says the owner answered even when no verified answer is in the list', () => {
+    const relayed = { text: 'relayed', by: 'owner', relayed_by_session: 's-1', superseded: true };
+    const detail = parseTask({ task: row('T-3c4d'), questions: [
+      { id: 'N-0000a001', text: 'Cut?', state: 'answered', owner_answered: true, answers: [relayed], answers_omitted: 4 },
+      { id: 'N-0000a002', text: 'Only true counts', state: 'answered', owner_answered: 'yes', answers: [relayed] },
+    ] });
+    assert.ok(detail);
+    assert.deepEqual(detail.questions.map(question => question.ownerAnswered), [true, false]);
   });
 
   test('refuses a document with no task', () => {

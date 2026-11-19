@@ -208,19 +208,38 @@ let answer_json ~verified_exists (a : Work_questions.answer) =
     @ (if a.owner_web then [ ("owner_verified", `Bool true) ] else [])
     @ if verified_exists && not a.owner_web then [ ("superseded", `Bool true) ] else [])
 
-(* The newest [n] items of a list in time order; [<key>_omitted] counts the
-   older ones left out. *)
-let capped_newest key n items =
-  let total = List.length items in
-  let kept = List.filteri (fun i _ -> i >= total - n) items in
-  (key, `List kept) :: (if total > n then [ (key ^ "_omitted", `Int (total - n)) ] else [])
+(* The index of the last owner-verified answer, if any. *)
+let last_owner_answer answers =
+  List.fold_left
+    (fun (i, found) (a : Work_questions.answer) -> (i + 1, if a.owner_web then Some i else found))
+    (0, None) answers
+  |> snd
+
+(* The newest [max_answers] answers in time order, except that the latest
+   owner-verified one is always kept (then with the newest others): later
+   relayed lines, forged or merged from another host, must not hide that the
+   owner answered. [answers_omitted] counts the ones left out;
+   [owner_answered] says that the owner answered, even if a size bound later
+   cuts the answers. *)
+let capped_answers (answers : Work_questions.answer list) =
+  let total = List.length answers and owner = last_owner_answer answers in
+  let keep =
+    match owner with
+    | Some o when o < total - max_answers -> fun i -> i = o || i > total - max_answers
+    | _ -> fun i -> i >= total - max_answers
+  in
+  let verified_exists = owner <> None in
+  let kept = List.filteri (fun i _ -> keep i) answers in
+  let omitted = total - List.length kept in
+  (("answers", `List (List.map (answer_json ~verified_exists) kept))
+  :: (if omitted > 0 then [ ("answers_omitted", `Int omitted) ] else []))
+  @ if verified_exists then [ ("owner_answered", `Bool true) ] else []
 
 (* A question is bounded here as well as when it is written, in the same unit
    (characters): a line written by [wl], by hand or by a later interface is
-   not. Of many answers the newest ones are kept. *)
+   not. Of many answers the newest ones are kept, and the owner's. *)
 let question_json (q : Work_questions.question) =
-  let verified_exists = List.exists (fun (a : Work_questions.answer) -> a.owner_web) q.answers in
-  let answers = capped_newest "answers" max_answers (List.map (answer_json ~verified_exists) q.answers) in
+  let answers = capped_answers q.answers in
   `Assoc
     ([
        ("id", tstr ~max:40 q.id);

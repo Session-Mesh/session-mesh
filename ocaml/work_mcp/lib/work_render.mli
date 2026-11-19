@@ -50,9 +50,11 @@ val bounded_strings :
     bytes (characters with [~chars:true]), [key_omitted] counts the rest;
     nothing for an empty list. *)
 
-val capped_newest : string -> int -> Yojson.Safe.t list -> (string * Yojson.Safe.t) list
-(** Like {!capped} for a list in time order, but the {e newest} (last) [n] are
-    kept, in order; [key_omitted] counts the older ones. *)
+val capped_answers : Work_questions.answer list -> (string * Yojson.Safe.t) list
+(** [answers]: the newest 5 answers in time order, but the latest
+    owner-verified one is always among them; [answers_omitted] counts the
+    others; [owner_answered: true] when the question has an owner-verified
+    answer. *)
 
 val blocker_json : Mesh_worklog.Model.blocker -> Yojson.Safe.t
 val link_json : Mesh_worklog.Model.session_link -> Yojson.Safe.t
