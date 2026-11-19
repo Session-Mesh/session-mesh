@@ -5,6 +5,11 @@ before 1.0, a minor version may change behaviour.
 
 ## Unreleased
 
+- **The sessions filter stays in sight while you type on a phone.** Tapping the filter opens the
+  soft keyboard, which shrinks the window's height and fires a resize; every resize closed the
+  sessions sidebar, so the text went into a hidden field and the result showed only after
+  reopening the list. A resize that changes only the height (the keyboard, the browser's toolbar)
+  now leaves the sidebar open; a change of width (a rotation, a resized window) still closes it.
 - **An agent records the owner's answer to its question.** `mesh-work` gains an 18th tool,
   `work_answer` (`question`, `text`, optional `answered_by`, default `owner`). The owner answers a
   question asked with `work_ask` in an agent session (the asking one or another), and the agent
