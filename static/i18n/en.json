@@ -1724,7 +1724,7 @@
     "other": "{done} done of {total}"
   },
   "work.dueOn": "due {date}",
-  "work.empty.noTracker": "The project tracker is empty: there is none on this machine yet. To start one, ask an agent started in Mesh to create a first product or project with its mesh-work tools (work_add_product, work_add_project), then choose “Try again”.",
+  "work.empty.noTracker": "Mesh found no usable project tracker on this machine. If one already exists, set WL_HOME to its absolute path (required when both ~/worklog-data and ~/worklog exist). Otherwise, ask an agent started in Mesh to create a first product or project with its mesh-work tools (work_add_product, work_add_project), then choose “Try again”.",
   "work.empty.title": "No tracker found",
   "work.entryTruncated": "The list is cut short: not everything is shown.",
   "work.error.failed": "The tracker could not be read. Try again.",

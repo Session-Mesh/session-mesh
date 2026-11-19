@@ -40,6 +40,12 @@ see [macOS](operations.md#macos).
 | `MESH_UPDATE_DEBUG` | unset | Read by the PTY host. `1` logs why an update check failed. |
 | `MESH_CODEX_QUEUE_WAKE` | off | `1` lets the mesh wake a Codex session with `codex queue` when agent mail arrives ([Waking Codex with codex queue](operations.md#waking-codex-with-codex-queue)). |
 
+`WL_HOME` is not a server setting, but the Projects view reads the project tracker with the web
+server's `WL_HOME` (unset: `~/worklog-data`, else `~/worklog`). Sessions do not receive the web
+server's value: when you set it, give the same absolute path to the web server here and to the
+sessions in your login shell's startup file
+([The Projects view and the project tracker](features.md#the-projects-view-and-the-project-tracker)).
+
 The installer itself reads `MESH_PYTHON`, `MESH_OPAM_SWITCH`, `MESH_PORT` and
 `MESH_REQUIRE_ATTESTATION`; see [install.md](install.md).
 

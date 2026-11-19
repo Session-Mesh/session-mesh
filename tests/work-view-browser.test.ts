@@ -304,7 +304,10 @@ for (const width of WIDTHS) {
       assert.equal((await empty.locator('.work-error-title').textContent())?.trim(), 'No tracker found');
       const advice = (await empty.locator('.work-error-text').textContent()) ?? '';
       assert.match(advice, /mesh-work/, 'the empty state says which tools start the tracker');
-      assert.match(advice, /work_add_project/);
+      assert.match(advice, /work_add_product/, 'the advice names the tool that creates a product');
+      assert.match(advice, /work_add_project/, 'the advice names the tool that creates a project');
+      assert.match(advice, /WL_HOME/, 'the advice covers an existing tracker that WL_HOME must name');
+      assert.match(advice, /“Try again”/, 'the advice names the retry button');
       assert.equal(await empty.getByRole('button', { name: 'Try again' }).count(), 1, 'the advice names a button that is there');
       await noOverflow(page);
       await shot(page, `empty-${width}`);
@@ -378,7 +381,12 @@ describe('Projects view in French', { skip }, () => {
     await enterProjects(none.page, 390);
     await none.page.locator('.work-error[data-kind="no-tracker"]').waitFor();
     assert.equal((await none.page.locator('.work-error-title').textContent())?.trim(), 'Aucun suivi trouvé');
-    assert.match((await none.page.locator('.work-error-text').textContent()) ?? '', /outils mesh-work/);
+    const advice = (await none.page.locator('.work-error-text').textContent()) ?? '';
+    assert.match(advice, /outils mesh-work/, 'the French advice says which tools start the tracker');
+    assert.match(advice, /work_add_product/, 'the French advice names the tool that creates a product');
+    assert.match(advice, /work_add_project/, 'the French advice names the tool that creates a project');
+    assert.match(advice, /WL_HOME/, 'the French advice covers an existing tracker that WL_HOME must name');
+    assert.match(advice, /« Réessayer »/, 'the French advice names the retry button');
     assert.equal(await none.page.getByRole('button', { name: 'Réessayer' }).count(), 1);
   });
 });
