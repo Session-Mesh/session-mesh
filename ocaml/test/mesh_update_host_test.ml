@@ -435,15 +435,26 @@ let test_cancellation_kills_the_child () =
       fake_curl root (hang root);
       Eio_main.run @@ fun env ->
       let mono = Eio.Stdenv.mono_clock env in
-      let started = Unix.gettimeofday () in
+      let started = ref infinity in
+      (* Cancel once the fake curl runs (it has written its pid), not after a
+         fixed delay: on a loaded machine it may not have started yet. *)
+      let rec wait_for_child tries =
+        match read_pid root with
+        | _ -> ()
+        | exception (Sys_error _ | Failure _) when tries > 0 ->
+            Eio.Time.Mono.sleep mono 0.05;
+            wait_for_child (tries - 1)
+      in
       Eio.Fiber.first
         (fun () ->
           ignore
             (H.run_curl ~mgr:(Eio.Stdenv.process_mgr env) ~clock:mono
                ~seconds:60. [ "curl"; "-q" ]))
-        (fun () -> Eio.Time.Mono.sleep mono 0.5);
+        (fun () ->
+          wait_for_child 200;
+          started := Unix.gettimeofday ());
       Alcotest.(check bool) "cancelled promptly" true
-        (Unix.gettimeofday () -. started < 5.);
+        (Unix.gettimeofday () -. !started < 5.);
       Alcotest.(check bool) "child gone and reaped" false (pid_alive (read_pid root)))
 
 (* The child's standard error goes to /dev/null: a curl that writes 200 MB on it
