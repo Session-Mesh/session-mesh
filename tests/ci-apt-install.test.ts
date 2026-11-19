@@ -73,7 +73,7 @@ describe('apt-install.sh', () => {
     fake('apt-get', FAKE_APT_GET);
     fake('sleep', 'echo "sleep $*" >> "$FAKE_LOG"');
     // Knows every package but those in FAKE_MISSING, as `apt-cache show` prints them.
-    fake('apt-cache', 'package="${*: -1}"; case " ${FAKE_MISSING:-} " in *" $package "*) echo "N: Unable to locate package $package" >&2; exit 100;; esac; printf "Package: %s\\nVersion: 1\\n" "$package"');
+    fake('apt-cache', 'package="${*: -1}"; case " ${FAKE_MISSING:-} " in *" $package "*) echo "N: Unable to locate package $package" >&2; exit 100;; esac; printf "Package: %s\\nVersion: 1\\n" "$package"; [ -z "${FAKE_BIG_SHOW:-}" ] || head -c 2000000 /dev/zero | tr "\\0" "x"');
     fake('python', 'echo "python $*" >> "$FAKE_LOG"; printf "%s\\n" "$FAKE_DRY_RUN"');
     fs.writeFileSync(path.join(dir, 'mirror.sh'), 'echo "mirror $*" >> "$FAKE_LOG"\n');
   });
@@ -228,6 +228,13 @@ describe('apt-install.sh', () => {
     const install = calls('apt-get install');
     assert.equal(install.length, 2);
     for (const line of install) assert.match(line, / bubblewrap musl-tools rsync gcc-multilib mercurial$/);
+  });
+
+  test('a long apt-cache show output does not make a known optional package look unknown (no SIGPIPE under pipefail)', () => {
+    const result = run(['rsync', '--if-available', 'gcc-multilib', 'mercurial'], {FAKE_BIG_SHOW: '1'});
+    assert.equal(result.status, 0, result.stdout);
+    assert.doesNotMatch(result.stdout, /skipping/);
+    assert.match(calls('apt-get install').at(-1) ?? '', / rsync gcc-multilib mercurial$/);
   });
 
   test('only unavailable optional packages: nothing to install, success; an invalid optional name is refused', () => {
