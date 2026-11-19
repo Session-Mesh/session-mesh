@@ -32,8 +32,9 @@ framing is that of `Mesh_jsonl_rpc` (the `mesh-history` convention):
   `{"v": 1, "req": ..., "ok": false, "error": {"code": "...", "message": "..."}}`;
 - a request line is at most 4 MiB and nested at most 64 levels; a final frame is at most 8 MiB. A longer
   request is answered `bad_request`; a longer final frame is replaced by a `too_large` error;
-- up to 4 requests may be in progress; every frame carries its request's `req`. The web server is expected
-  to run one `round` at a time and may send `describe` or `hello` beside it.
+- up to 4 requests may be in progress; every frame carries its request's `req`, as it was sent (an
+  escaped lone surrogate in it, which the other fields read as U+FFFD, is echoed unchanged). The web
+  server is expected to run one `round` at a time and may send `describe` or `hello` beside it.
 
 Error codes: `bad_request`, `unsupported_version`, `unknown_op`, `too_large`, `internal` (the message is
 fixed: it never names a path).
@@ -81,8 +82,12 @@ remaining rows are reported `error` with reason `saturated`, and so is every row
 thread left for its process table.
 
 **Events.** One `row` event per session, and a second one for a session whose row an adapter's
-cross-session check corrected after every row had ended (see "Adding an agent"); the later event replaces
-the earlier:
+cross-session check changed after every row had ended (see "Adding an agent"); the later event replaces
+the earlier. The program remembers each session's last correction (by `name` and `created`, with the row
+it was made for): while the session and its row stay the same, the next rounds send the corrected row in
+the first event, so a correction is sent as a second event once, then the row is `same`. A second event
+comes again only when the check's verdict changes, including when a correction no longer holds (the row
+is then sent corrected first, then as described):
 
 ```json
 {"event": "row", "name": "api", "created": 1763500000.25, "priority": 0, "state": "ready",
@@ -123,6 +128,12 @@ from a process table read for this request, without the order of service, the `s
 It answers one final frame, `{"ok": true, "rows": [{"name", "created", "state", "reason"?, "row"?}, ...]}`,
 in the order of `sessions`. It is meant for actions that need an identity read at the time they act
 (restart in place, resume, wake), so that they do not act on a row of an earlier round.
+
+The adapters' cross-session checks run over the requested rows, described now, and over the rows of the
+last round for the other sessions whose agent process is still in the process table: a session described
+alone is checked against the sessions it shares a conversation with, and gets the fields a round would
+give it. The other sessions' rows are those of the last round: a change since then is seen at the next
+round. Before the first round, the requested rows are checked among themselves only.
 
 ## Rows
 
@@ -239,7 +250,7 @@ An adapter is a module of signature `Mesh_agent.ADAPTER`:
 | `prepare` | Once per round and per `describe` request, before any row | What every session of that agent shares, such as one walk of a rollout directory. |
 | `resize` | Once per `round` (never for `describe`) | The cache bound: twice the number of listed sessions. |
 | `describe` | Once per row, in several system threads | The agent fields of one process. It receives the listed session (`Mesh_agent.session`: `name`, `created`, `pid`), which keys an identity registry by incarnation. |
-| `check` | Once per round and per `describe` request, after every row has ended | The cross-session step. It receives the rows of its type described in time (`Mesh_agent.described`: session, process, fields) and returns, by session name, the complete new fields of the rows it corrects (one conversation id claimed by two sessions, for instance). Each corrected row is sent again as a second `row` event before the final frame and counted once. It runs in a system thread with the setup deadline; one that raises or overruns corrects nothing. `Mesh_agent.no_check`, which corrects nothing, is the default (the Claude adapter uses it). |
+| `check` | Once per round and per `describe` request, after every row has ended | The cross-session step. It receives the rows of its type described in time (`Mesh_agent.described`: session, process, fields) and returns, by session name, the complete new fields of the rows it corrects (one conversation id claimed by two sessions, for instance). In a round, a row whose final form differs from the one sent first is sent again as a second `row` event before the final frame, and counted with the state it was last sent with; a correction is remembered and applied to the next round's first event while the session and its described row are unchanged (see "Events"). In a `describe`, it also receives the last round's rows of the sessions not requested whose agent process is still in the table (their `process` is from that round's table); only the requested rows' corrections are used. It runs in a system thread with the setup deadline; one that raises or overruns changes nothing in that request: the rows keep the form they were first sent with, and the remembered corrections are kept. `Mesh_agent.no_check`, which corrects nothing, is the default (the Claude adapter uses it). |
 
 It is registered by adding it to the list the program passes to `Mesh_agent.Registry.create`; neither the
 round nor the protocol changes. Detection of the agent type stays in `Mesh_agent_session`, shared by all.

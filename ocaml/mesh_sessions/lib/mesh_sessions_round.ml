@@ -7,6 +7,7 @@
 
 module Request = Mesh_sessions_request
 module Describe = Mesh_sessions_describe
+module Corrections = Mesh_sessions_corrections
 module Backoff = Mesh_sessions_order.Backoff
 module Blocking = Mesh_deadline_pool.Blocking
 
@@ -23,6 +24,8 @@ type t = {
   blocking : Blocking.t;
   backoff : Backoff.t;
   sent : (string, Yojson.Safe.t * Digest.t) Hashtbl.t;  (* last row sent, by name *)
+  corrections : Corrections.t;
+  mutable described : (Request.session * Describe.t) list;  (* the last round's rows, before its checks *)
   mutable rounds : int;
   mutable avoiding : string list;  (* [degraded.avoid] of the last round *)
 }
@@ -36,6 +39,8 @@ let create ~clock config platform registry =
     blocking = Blocking.create ~max_threads:config.max_threads;
     backoff = Backoff.create ();
     sent = Hashtbl.create 64;
+    corrections = Corrections.create ();
+    described = [];
     rounds = 0;
     avoiding = [];
   }
@@ -79,30 +84,14 @@ let settle engine (session : Request.session) ~backoff outcome =
       if backoff then Backoff.ready engine.backoff session;
       Error "failed"
 
-(* The rows of one adapter's type, with what the adapter described. *)
-let rows_of_kind kind ended =
-  List.filter_map
-    (fun (session, row) ->
-      match Describe.agent row with
-      | Some (row_kind, described) when row_kind = kind -> Some (session, row, described)
-      | _ -> None)
-    ended
+(* An adapter's check, in a system thread with the setup deadline; [None]
+   when it raised, overran or found no thread. *)
+let run_check engine check =
+  match setup engine (fun () -> match check () with changed -> Some changed | exception _ -> None) with
+  | Ok result -> result
+  | Error _ -> None
 
-(* An adapter's cross-session check; a check that fails or overruns corrects nothing. *)
-let check_adapter engine round adapter ended =
-  match rows_of_kind (Mesh_agent.kind adapter) ended with
-  | [] -> []
-  | mine ->
-      let described = List.map (fun (_, _, described) -> described) mine in
-      let check () = match Mesh_agent.check adapter round described with changed -> changed | exception _ -> [] in
-      let changed = Result.value ~default:[] (setup engine check) in
-      List.filter_map
-        (fun ((session : Request.session), row, _) ->
-          Option.map (fun fields -> (session, Describe.with_fields row fields)) (List.assoc_opt session.name changed))
-        mine
-
-(* The rows the adapters' cross-session checks replace. *)
-let corrections engine round ended = List.concat_map (fun adapter -> check_adapter engine round adapter ended) (adapters engine)
+let check engine round ?context ended = Corrections.check ~run:(run_check engine) (adapters engine) round ?context ended
 
 let admitted engine ~backoff ~on_row order =
   let pending = ref order in
@@ -117,7 +106,8 @@ let admitted engine ~backoff ~on_row order =
   next
 
 (* Describe every session of the request; [on_row] receives each as it ends.
-   Returns the round's table and the corrected rows, [None] without a table. *)
+   Returns the round's table and the rows described, in the order they
+   ended, before any check; [None] without a table. *)
 let run engine (request : Request.t) ~backoff ~on_row =
   let order = Mesh_sessions_order.service request in
   match read_table engine with
@@ -137,7 +127,7 @@ let run engine (request : Request.t) ~backoff ~on_row =
       in
       Mesh_deadline_pool.run ~clock:engine.clock ~max_concurrency:engine.config.concurrency
         ~deadline:engine.config.deadline ~next:(admitted engine ~backoff ~on_row order) ~work ~report ();
-      Some (round, corrections engine round (List.rev !ended))
+      Some (round, List.rev !ended)
 
 let state_name = function
   | Row row -> if Describe.supported row then "ready" else "unsupported"
@@ -162,23 +152,12 @@ let deduplicate engine (session : Request.session) ~full fields =
       Hashtbl.replace engine.sent session.name (session.created, digest);
       if same && not full then [ ("same", `Bool true) ] else fields
 
-type counts = { mutable ready : int; mutable unsupported : int; mutable slow : int; mutable error : int }
+(* The sessions last sent with one of these states. *)
+let count states names = Hashtbl.fold (fun _ state total -> if List.mem state names then total + 1 else total) states 0
 
-let count counts = function
-  | "ready" -> counts.ready <- counts.ready + 1
-  | "unsupported" -> counts.unsupported <- counts.unsupported + 1
-  | "slow" -> counts.slow <- counts.slow + 1
-  | _ -> counts.error <- counts.error + 1
-
-let counts_json counts ~total =
-  `Assoc
-    [
-      ("total", `Int total);
-      ("ready", `Int counts.ready);
-      ("unsupported", `Int counts.unsupported);
-      ("slow", `Int counts.slow);
-      ("error", `Int counts.error);
-    ]
+let counts_json states ~total =
+  let field state = (state, `Int (count states [ state ])) in
+  `Assoc (("total", `Int total) :: List.map field [ "ready"; "unsupported"; "slow"; "error" ])
 
 let priorities (request : Request.t) =
   let table = Hashtbl.create (List.length request.sessions) in
@@ -225,44 +204,83 @@ let degraded engine ~saturated =
 let resize_adapters engine (request : Request.t) =
   List.iter (fun adapter -> Mesh_agent.resize adapter ~sessions:(List.length request.sessions)) (adapters engine)
 
-let final_fields engine ~counts ~total ~table_complete ~saturated =
+let final_fields engine ~number ~states ~total ~table_complete ~saturated =
   [
-    ("round", `Int engine.rounds);
-    ("complete", `Bool (counts.ready + counts.unsupported = total));
-    ("counts", counts_json counts ~total);
+    ("round", `Int number);
+    ("complete", `Bool (count states [ "ready"; "unsupported" ] = total));
+    ("counts", counts_json states ~total);
     ("table", `Assoc [ ("complete", `Bool table_complete) ]);
   ]
   @ degraded engine ~saturated
 
+(* After the checks, a row whose final form is not the one sent is sent
+   again; the corrections are kept for the next round. *)
+let send_corrections engine round ended ~sent_rows ~send =
+  let outcomes = check engine round ended in
+  Corrections.remember engine.corrections outcomes;
+  engine.described <- ended;
+  List.iter
+    (fun (outcome : Corrections.outcome) ->
+      let row = Corrections.final outcome in
+      if Hashtbl.find_opt sent_rows outcome.session.name <> Some (Corrections.digest row) then
+        send outcome.session (Row row))
+    outcomes
+
+let forget_unlisted engine (request : Request.t) =
+  Backoff.retain engine.backoff request.sessions;
+  Request.retain_listed engine.sent request.sessions;
+  Corrections.retain engine.corrections request.sessions
+
 let round engine (request : Request.t) ~emit =
-  engine.rounds <- engine.rounds + 1;
+  (* The number is taken before the round runs: a round that starts while
+     this one sends its rows has the next one. *)
+  let number = engine.rounds + 1 in
+  engine.rounds <- number;
   (* Only a round, which lists every session, bounds the adapters' caches. *)
   resize_adapters engine request;
   Backoff.avoid engine.backoff request.sessions request.avoid;
-  let priorities = priorities request in
-  let counts = { ready = 0; unsupported = 0; slow = 0; error = 0 } and slow_names = ref [] and saturated = ref false in
+  let priorities = priorities request and total = List.length request.sessions in
+  let states = Hashtbl.create total and sent_rows = Hashtbl.create total in
+  let slow_names = ref [] and saturated = ref false in
+  (* Each session counts with the state it was last sent with. *)
+  let send (session : Request.session) result =
+    (match result with Row row -> Hashtbl.replace sent_rows session.name (Corrections.digest row) | Slow | Error _ -> ());
+    Hashtbl.replace states session.name (row_event engine request priorities ~emit session result)
+  in
   let on_row (session : Request.session) result =
     (match result with
     | Slow | Error "backoff" -> slow_names := session.name :: !slow_names
     | Error "saturated" -> saturated := true
     | Row _ | Error _ -> ());
-    count counts (row_event engine request priorities ~emit session result)
+    match result with
+    | Row row -> send session (Row (Corrections.remembered engine.corrections session row))
+    | Slow | Error _ -> send session result
   in
   let ran = run engine request ~backoff:true ~on_row in
-  (* A corrected row is sent again; it was counted when first sent. *)
-  let corrected = match ran with Some (_, corrected) -> corrected | None -> [] in
-  List.iter (fun (session, row) -> ignore (row_event engine request priorities ~emit session (Row row))) corrected;
-  Backoff.retain engine.backoff request.sessions;
-  Request.retain_listed engine.sent request.sessions;
+  Option.iter (fun (round, ended) -> send_corrections engine round ended ~sent_rows ~send) ran;
+  forget_unlisted engine request;
   let table_complete = match ran with Some (round, _) -> Mesh_agent_round.complete round | None -> false in
   update_avoiding engine request (List.rev !slow_names);
-  final_fields engine ~counts ~total:(List.length request.sessions) ~table_complete ~saturated:!saturated
+  final_fields engine ~number ~states ~total ~table_complete ~saturated:!saturated
+
+(* The last round's rows whose agent process is still in [round]'s table:
+   the context of a [describe]'s checks. *)
+let context engine round =
+  List.filter
+    (fun (_, row) ->
+      match Describe.agent row with
+      | Some (_, (described : Mesh_agent.described)) -> Mesh_agent_round.find round described.process.pid <> None
+      | None -> false)
+    engine.described
 
 let describe engine (request : Request.t) =
   let results = Hashtbl.create (List.length request.sessions) in
   let on_row (session : Request.session) result = Hashtbl.replace results session.name result in
   (match run engine request ~backoff:false ~on_row with
-  | Some (_, corrected) -> List.iter (fun ((session : Request.session), row) -> on_row session (Row row)) corrected
+  | Some (round, ended) ->
+      List.iter
+        (fun (outcome : Corrections.outcome) -> on_row outcome.session (Row (Corrections.final outcome)))
+        (check engine round ~context:(context engine round) ended)
   | None -> ());
   let row (session : Request.session) =
     let result = Option.value ~default:(Error "failed") (Hashtbl.find_opt results session.name) in
