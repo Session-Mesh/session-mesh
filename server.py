@@ -4372,7 +4372,7 @@ async def close_sockets(app):
 
 # ---------------------------------------------------------------- app
 
-CLIENT_FILES = ("index.html", "i18n.js", "folder-state.js", "history-state.js", "session-activity.js", "demo-catalog.js", "pane-actions.js", "workspace-spec.js", "terminal-links.js", "shortcuts.js", "update-notice.js", "projects.js", "project-catalog.js", "app.js", "local-entry.js", "style.css", "themes.js", "themes.css", "sw.js", "board.html")
+CLIENT_FILES = ("index.html", "i18n.js", "folder-state.js", "history-state.js", "session-activity.js", "demo-catalog.js", "pane-actions.js", "workspace-spec.js", "terminal-links.js", "shortcuts.js", "update-notice.js", "projects.js", "project-catalog.js", "work-view.js", "app.js", "local-entry.js", "style.css", "themes.js", "themes.css", "sw.js", "board.html")
 _client_version_cache = ((), "")   # (stat signature, version)
 
 

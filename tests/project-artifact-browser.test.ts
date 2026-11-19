@@ -38,7 +38,7 @@ test('complete public Roster artifact through native scope, owner HTTP and Chrom
       const context=await browser.newContext({viewport:{width,height:1000},locale:'en-US',hasTouch:width===390});assert.ok((await context.request.post(origin+'/login',{form:{token}})).ok());const page=await context.newPage();const reads:string[]=[];
       page.on('request',request=>{if(request.url().endsWith('/api/projects/artifacts/v1'))reads.push(request.postDataJSON().kind);});
       try{
-        await page.goto(origin);if(width===390){await page.locator('#btn-mobile-actions').click();await page.locator('[data-mobile-action="btn-projects"]').click();}else await page.locator('#btn-projects').click();
+        await page.goto(origin);await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');await page.evaluate('store.set("projects.legacy", true)');if(width===390){await page.locator('#btn-mobile-actions').click();await page.locator('[data-mobile-action="btn-projects"]').click();}else await page.locator('#btn-projects').click();
         await page.locator('.cockpit-tabs').waitFor();await page.locator('[data-cockpit-tab="roster"]').click();
         const intake=page.locator('.project-artifact-item[data-artifact-kind="intake"]');await intake.waitFor({timeout:35000});await intake.click();
         await page.waitForFunction(()=>document.querySelector('.project-artifact-status')?.textContent?.includes('integrity verified'),{},{timeout:35000});

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const check = process.argv.includes('--check');
-const entries = ['project-catalog'];
+const entries = ['project-catalog', 'work-view'];
 // Data-only worktrees can build the shared parser before UI integration.
 try { await access(join(root, 'static/projects.ts')); entries.push('projects'); } catch (error) {
   if (error.code !== 'ENOENT') throw error;

@@ -67,6 +67,7 @@ test('hostile catalog stays inert through real authenticated signed view and ind
     page.on('request',request=>{if(new URL(request.url()).origin!==origin)foreign.push(request.url());});
     const index = await page.goto(origin);
     assert.match(index?.headers()['content-security-policy'] ?? '',/script-src/);
+    await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');await page.evaluate('store.set("projects.legacy", true)');
     await page.locator('#btn-projects').click();
     await page.locator('details.project-legacy:not([open])').waitFor({state:'attached'});
     await page.locator('.project-legacy > summary').click();

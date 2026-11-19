@@ -22,6 +22,7 @@ test('mobile actions sheet: an action keeps the focus it moved, dismissal return
     try{
       await fixture.start();
       const {page}=await fixture.sessionPage(true);
+      await fixture.optIntoLegacy(page);
       try{
         assert.equal(page.viewportSize()!.width,390);
         await page.locator('#btn-mobile-actions').click();

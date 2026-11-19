@@ -23,6 +23,7 @@ static/history-state.js
 static/pane-actions.js
 static/project-catalog.js
 static/projects.js
+static/work-view.js
 static/session-activity.js
 static/shortcuts.js
 static/terminal-links.js

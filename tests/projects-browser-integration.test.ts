@@ -54,6 +54,7 @@ describe('integrated Projects typed settings and intentional edge navigation', {
   test('edge intents switch only list/mode while excluded controls and clean taps retain access', async () => {
     const { page, input, sockets } = await fixture.sessionPage(true);
     try {
+      await fixture.optIntoLegacy(page);
       await nativeFixture(page);
       const swipe = async (from: number, to: number, dy = 0, selector = '#main') => page.evaluate(({ from, to, dy, selector }) => {
         const target = document.querySelector(selector)!;
