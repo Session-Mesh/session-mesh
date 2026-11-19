@@ -226,9 +226,10 @@ fails, the step fails with one annotation, `Package mirror unavailable`, naming 
 re-run the job. `apt-install.sh --playwright-deps chromium` installs the list printed by
 `playwright install-deps --dry-run chromium`; the Chromium download itself is `playwright install
 chromium`, kept by the cache keyed on `requirements-browser.txt` (which pins Playwright).
-`ocaml/setup-ocaml` installs `bubblewrap musl-tools rsync darcs g++-multilib gcc-multilib mercurial` with
-a plain `apt-get install` that cannot be wrapped; the `ocaml` and `native` jobs install that list through
-`apt-install.sh` just before it, so its own install has nothing left to fetch (its `apt-get update` still
+`ocaml/setup-ocaml` installs `bubblewrap musl-tools rsync`, and `darcs g++-multilib gcc-multilib mercurial`
+when `apt-cache show` finds them (Ubuntu 24.04 has no `darcs`), with a plain `apt-get install` that cannot
+be wrapped; the `ocaml` and `native` jobs install the same list, the second part after `--if-available`,
+through `apt-install.sh` just before it, so its own install has nothing left to fetch (its `apt-get update` still
 runs, in apt's default mode where a transient fetch error is a warning). A new setup-ocaml pin must be
 checked against its `src/system-packages.ts`: `tests/ci-apt-mirror.test.ts` pins the SHA and the list.
 

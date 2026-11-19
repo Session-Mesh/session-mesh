@@ -61,6 +61,8 @@ describe('apt-install.sh', () => {
     fake('sudo', 'echo "sudo $*" >> "$FAKE_LOG"; exec "$@"');
     fake('apt-get', FAKE_APT_GET);
     fake('sleep', 'echo "sleep $*" >> "$FAKE_LOG"');
+    // Knows every package but those in FAKE_MISSING, as `apt-cache show` prints them.
+    fake('apt-cache', 'package="${*: -1}"; case " ${FAKE_MISSING:-} " in *" $package "*) echo "N: Unable to locate package $package" >&2; exit 100;; esac; printf "Package: %s\\nVersion: 1\\n" "$package"');
     fake('python', 'echo "python $*" >> "$FAKE_LOG"; printf "%s\\n" "$FAKE_DRY_RUN"');
     fs.writeFileSync(path.join(dir, 'mirror.sh'), 'echo "mirror $*" >> "$FAKE_LOG"\n');
   });
@@ -151,6 +153,25 @@ describe('apt-install.sh', () => {
     const result = run(['bubblewrap'], {FAKE_INSTALL_FAIL: '1'});
     assert.equal(result.status, 1);
     assert.match(result.stdout, /::error title=apt-get install failed::.*not a mirror outage/);
+  });
+
+  test('--if-available packages are installed only when the package index knows them (setup-ocaml: no darcs on 24.04)', () => {
+    const result = run(['bubblewrap', 'musl-tools', 'rsync', '--if-available', 'darcs', 'gcc-multilib', 'mercurial'], {FAKE_MISSING: 'darcs'});
+    assert.equal(result.status, 0, result.stdout);
+    assert.match(result.stdout, /skipping darcs: not in the package index/);
+    const install = calls('apt-get install');
+    assert.equal(install.length, 2);
+    for (const line of install) assert.match(line, / bubblewrap musl-tools rsync gcc-multilib mercurial$/);
+  });
+
+  test('only unavailable optional packages: nothing to install, success; an invalid optional name is refused', () => {
+    const none = run(['--if-available', 'darcs'], {FAKE_MISSING: 'darcs'});
+    assert.equal(none.status, 0, none.stdout);
+    assert.match(none.stdout, /nothing to install/);
+    assert.equal(calls('apt-get install').length, 0);
+    const bad = run(['rsync', '--if-available', 'x;y']);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stdout, /not a package name: x;y/);
   });
 
   test('one attempt only: no pause and no fallback', () => {
