@@ -74,8 +74,11 @@ the agents' adapters also prepare what they share between sessions once per roun
 **Deadlines.** Each row has 2 seconds. A row still running then is cancelled and reported `slow`; its system
 thread, if blocked in the kernel (a stalled file system), is abandoned, never killed. A session slow in three
 consecutive rounds is reported `error` with reason `backoff` and described again only one round in four; a
-ready description clears its count. Rows are described in system threads, at most 16 in flight, abandoned
-ones included; when every thread is taken, the remaining rows are reported `error` with reason `saturated`.
+description that ends, ready or `failed`, clears its count, and a round that could not try it (`saturated`,
+`no_process_table`) leaves the count as it was. The process table, the adapters' preparation and rows are
+read in system threads, at most 16 in flight, abandoned ones included; when every thread is taken, the
+remaining rows are reported `error` with reason `saturated`, and so is every row of a round that has no
+thread left for its process table.
 
 **Events.** One `row` event per session, and a second one for a session whose row an adapter's
 cross-session check corrected after every row had ended (see "Adding an agent"); the later event replaces
@@ -90,7 +93,7 @@ the earlier:
 |---|---|
 | `priority` | The row's place in the order of service, 0 first. |
 | `state` | `ready`: described. `unsupported`: the session runs an agent this build has no adapter for; `row` holds what does not depend on the agent (below) and `agent.type`, and the web server completes it. `slow`: past its deadline. `error`: not described (`reason`). |
-| `reason` | With `error` only: `backoff`, `saturated`, `failed` (the description raised), `too_large` (the row exceeds the frame bound), or `no_process_table` (the process table could not be read; every row of the round then has it). |
+| `reason` | With `error` only: `backoff`, `saturated` (no system thread was left to describe it), `failed` (the description raised), `too_large` (the row exceeds the frame bound), or `no_process_table` (the process table could not be read; every row of the round then has it). |
 | `row` | With `ready` and `unsupported`, unless `same` is set. |
 | `same` | `true` instead of `row` when the row is exactly the one sent for this session (same `name` and `created`) in an earlier round of this run, and `full` was not asked. The web server then keeps the row it has and does not change its generation. |
 
@@ -99,14 +102,18 @@ the earlier:
 ```json
 {"ok": true, "round": 7, "complete": true,
  "counts": {"total": 52, "ready": 49, "unsupported": 2, "slow": 1, "error": 0},
- "table": {"complete": true}, "degraded": {"abandoned": 1, "avoid": ["api"]}}
+ "table": {"complete": true}, "degraded": {"abandoned": 1, "avoid": ["api"], "restart": false}}
 ```
 
 `round` counts the rounds of this run. `complete` is `true` when every row is `ready` or `unsupported`.
 `table.complete` is `false` when the process table left processes out (another user's, or an unreadable
 entry). `degraded` is present when system threads are still blocked: `avoid` names the sessions reported
-`slow` in this round. The web server keeps the last `avoid` it received and sends it in the first round of
-the next run, so that a session that blocks the program is not retried at full rate after a restart.
+`slow` or `backoff` in this round, after those of the earlier rounds that are still listed, for as long as
+threads stay blocked. `restart` is `true` when this round lacked a thread (a row or the process table was
+`saturated`) or none is left for the next round: the program cannot recover by itself, and the web server
+then stops it and starts a new child (see below). The web server keeps the last `avoid` it received and
+sends it in the first round of the next run, so that a session that blocks the program is not retried at
+full rate after a restart.
 
 ### `describe`
 
@@ -174,7 +181,9 @@ where this program reports less or keeps more, never something different:
 The program writes nothing on its standard error during normal operation, and never a session id, a path
 or transcript text there. It must never block the web server: the web server reads its frames
 asynchronously, and kills its process group (`SIGKILL`) when a round sends no frame for 10 seconds, then
-starts a new child for the next round, passing the last `degraded.avoid`. The rows of a round that did not
+starts a new child for the next round, passing the last `degraded.avoid`. It does the same, without waiting,
+after a final frame with `degraded.restart: true`: the blocked threads can only be released by ending the
+process. The rows of a round that did not
 finish keep their previous state in the web server (`ready: false` for those never described). A missing or
 failing binary leaves the web server on its Python listing.
 
