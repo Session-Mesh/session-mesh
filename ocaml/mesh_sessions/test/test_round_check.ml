@@ -48,16 +48,8 @@ let test_describe_sees_the_round () =
       Alcotest.(check bool) "older alone: keeps the id" true (session_id (described [ older ]) = `String "shared"));
   let gone = ref false in
   let full = Fake.platform codex_table and without_old = Fake.platform [ List.nth codex_table 1 ] in
-  let current () = if !gone then without_old else full in
-  let platform : Mesh_pty_processes.platform =
-    {
-      scan = (fun () -> (current ()).scan ());
-      process = (fun pid -> (current ()).process pid);
-      command_line = (fun pid -> (current ()).command_line pid);
-      working_directory = (fun pid -> (current ()).working_directory pid);
-      open_file_paths = (fun pid -> (current ()).open_file_paths pid);
-    }
-  in
+  (* Only the process table changes: the old session's process leaves it. *)
+  let platform = { full with scan = (fun () -> (if !gone then without_old else full).scan ()) } in
   with_engine ~registry:checked platform (fun engine ->
       ignore (round engine (request [ older; newer ]));
       gone := true;
