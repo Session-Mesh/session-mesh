@@ -28,6 +28,11 @@ let rec number label spec counter ~base =
 
 let rec nodes node = node :: List.concat_map nodes node.children
 
+(* The processes are fictional: their command lines and working directories
+   use this short root, whatever the temporary directory, so that [cmd] is
+   cut at 160 code points as in golden.json. *)
+let fake_root = "/tmp/msp-parity"
+
 let processes ~root ~label leader =
   let rec build parent node =
     let comm = U.to_string (U.member "comm" node.spec) in
@@ -103,7 +108,7 @@ let test_golden () =
             (label, leader))
           sessions
       in
-      let table = List.concat_map (fun (label, leader) -> processes ~root ~label leader) leaders in
+      let table = List.concat_map (fun (label, leader) -> processes ~root:fake_root ~label leader) leaders in
       let ids = List.concat_map (fun (_, leader) -> List.map (fun node -> (node.pid, node.id)) (nodes leader)) leaders in
       let round = Fake.round table and registry = Fake.registry home in
       List.iter (fun adapter -> Mesh_agent.prepare adapter round) (Mesh_agent.Registry.adapters registry);
@@ -111,7 +116,8 @@ let test_golden () =
         List.map
           (fun (label, leader) ->
             let row = Mesh_sessions_describe.row registry round (Fake.session leader.pid) in
-            if Mesh_sessions_describe.supported row then (label, normalize ~root ~ids (Mesh_sessions_describe.json row))
+            let normalize value = normalize ~root:fake_root ~ids (normalize ~root ~ids value) in
+            if Mesh_sessions_describe.supported row then (label, normalize (Mesh_sessions_describe.json row))
             else Alcotest.failf "%s: unsupported" label)
           leaders
       in
