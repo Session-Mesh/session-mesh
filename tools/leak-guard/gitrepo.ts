@@ -3,7 +3,7 @@
 
 // Read-only access to the Git repository: files, staged diff, commit ranges.
 import {execFileSync} from 'node:child_process';
-import {type AddedLines, decode} from './content.ts';
+import {type AddedLines, decode, isBinary} from './content.ts';
 import {ToolError} from './rules.ts';
 
 const MAX_BUFFER = 1 << 30;
@@ -35,7 +35,7 @@ type DiffState = {changes: AddedLines[]; current: AddedLines | null; next: numbe
 
 function startFile(state: DiffState, line: string): void {
   const match = /^diff --git a\/(.*) b\/(.*)$/.exec(line);
-  state.current = {path: match ? match[2] : line, isNew: false, binary: false, lines: [], lineNumbers: []};
+  state.current = {path: match ? match[2] : line, isNew: false, binary: false, symlink: false, lines: [], lineNumbers: []};
   state.inHunk = false;
   state.changes.push(state.current);
 }
@@ -45,6 +45,7 @@ function headerLine(current: AddedLines, line: string): void {
   if (line.startsWith('new file mode')) current.isNew = true;
   else if (line.startsWith('Binary files ') || line === 'GIT binary patch') current.binary = true;
   else if (line.startsWith('+++ b/')) current.path = line.slice('+++ b/'.length);
+  if (/^(?:new file mode|new mode|index \S+) 120000$/.test(line)) current.symlink = true;
 }
 
 function diffLine(state: DiffState, line: string): void {
@@ -73,13 +74,14 @@ export function parseDiff(patch: string): AddedLines[] {
 
 const DIFF_FLAGS = ['-U0', '--no-color', '--no-ext-diff', '--no-renames', '--diff-filter=ACMRT'];
 
-// Binary changes are read whole from the object store, byte for byte.
+// Binary changes are read whole from the object store, byte for byte. `binary` then says whether
+// the blob itself is binary (Git also shows a text file as binary when its old version was).
 function withBinaryBlobs(root: string, changes: AddedLines[], blobPrefix: string): AddedLines[] {
   return changes.map(change => {
     if (!change.binary) return change;
     const bytes = gitBytes(root, ['cat-file', 'blob', `${blobPrefix}${change.path}`]);
     const lines = decode(bytes).split('\n');
-    return {...change, lines, lineNumbers: lines.map((_, index) => index + 1)};
+    return {...change, binary: isBinary(bytes), lines, lineNumbers: lines.map((_, index) => index + 1)};
   });
 }
 
