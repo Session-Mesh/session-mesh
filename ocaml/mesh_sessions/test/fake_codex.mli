@@ -40,7 +40,8 @@ type process = {
 }
 
 val platform : btime:float -> process list -> Mesh_pty_processes.platform
-(** Start times become Linux clock ticks after [btime] (100 per second). Every
+(** Start times become Linux clock ticks after [btime] (100 per second), or
+    microseconds since the epoch on macOS, as each backend reports them. Every
     session has a terminal whose foreground group is the session's own. *)
 
 val config : btime:float -> now:float -> Mesh_agent_codex.config

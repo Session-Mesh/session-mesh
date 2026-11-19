@@ -148,7 +148,10 @@ let to_platform ~btime p : Mesh_platform.process =
     tpgid = p.sid;
     comm = p.comm;
     state = (if p.zombie then 'Z' else 'S');
-    incarnation = Int64.of_float ((p.start -. btime) *. 100.);
+    incarnation =
+      (match Mesh_platform.platform with
+      | Macos -> Int64.of_float (p.start *. 1e6) (* microseconds since the epoch *)
+      | Linux | Other _ -> Int64.of_float ((p.start -. btime) *. 100.));
   }
 
 let platform ~btime processes : Mesh_pty_processes.platform =
