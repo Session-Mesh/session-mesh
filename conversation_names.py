@@ -112,10 +112,20 @@ def _add_entry(entries, matched, name, created, agent, sid, now):
 
 
 def _close_gone(entries, live, now):
-    """An incarnation the listing no longer shows is closed (unless a later observation already is)."""
+    """An incarnation the listing no longer shows is closed (unless a later observation already is). Whether
+    one was."""
+    closed = False
     for entry in entries:
         if (entry["name"], entry["created"]) not in live and entry["closed_at"] is None and entry["seen"] <= now:
             entry["closed_at"] = entry["seen"] = now
+            closed = True
+    return closed
+
+
+def _set(entry, key, value):
+    """Set one field; whether its JSON form changed (an int and an equal float are written differently)."""
+    old, entry[key] = entry[key], value
+    return type(old) is not type(value) or old != value
 
 
 def observe(sessions, *, listed=True, now=None):
@@ -128,7 +138,7 @@ def observe(sessions, *, listed=True, now=None):
     now = time.time() if now is None else now
     with _locked():
         entries = _load()
-        before = json.dumps(entries, sort_keys=True)
+        changed = False     # whether entries differ from what _load read (both used to be serialised to tell)
         live = {(s["name"], s["created"]) for s in sessions}
         for s in sessions:
             name, created = s["name"], s["created"]
@@ -148,18 +158,18 @@ def observe(sessions, *, listed=True, now=None):
                 continue
             if entry is None:
                 entry, entries = _add_entry(entries, matched, name, created, agent, sid, now)
+                changed = True
             if matched and entry is not _newest(matched):
-                entry["seen"] = now     # back to an earlier conversation: it is the current one again
+                changed |= _set(entry, "seen", now)     # back to an earlier conversation: the current one again
             label = _text(s.get("label"))
-            entry["aliases"] = list(dict.fromkeys(a for a in [*entry["aliases"], name,
-                                                    entry["label"], label] if a))[-MAX_ALIASES:]
-            entry["label"] = label
-            entry["closed_at"] = None
+            changed |= _set(entry, "aliases", list(dict.fromkeys(a for a in [*entry["aliases"], name,
+                                                    entry["label"], label] if a))[-MAX_ALIASES:])
+            changed |= _set(entry, "label", label)
+            changed |= _set(entry, "closed_at", None)
             # Persist time only when identity/names change, not every poll.
-            if now - entry["seen"] >= 86400 or json.dumps(entries, sort_keys=True) != before:
-                entry["seen"] = now
-        _close_gone(entries, live, now)
-        if json.dumps(entries, sort_keys=True) != before:
+            if now - entry["seen"] >= 86400 or changed:
+                changed |= _set(entry, "seen", now)
+        if _close_gone(entries, live, now) or changed:
             _save(entries)
 
 

@@ -26,6 +26,49 @@ function tempHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'listing-caches-'));
 }
 
+describe('conversation names are serialised only to be written', () => {
+  test('an unchanged listing serialises and writes nothing; a change is written once, as before', () => {
+    const home = tempHome();
+    try {
+      const result = python(`
+import json, os, time, conversation_names as names
+T = float(int(time.time()) - 100)   # in the past: _load keeps only entries seen before now
+real, dumps = json.dumps, []
+def counted(*args, **kwargs):
+    dumps.append(1)
+    return real(*args, **kwargs)
+names.json.dumps = counted
+sessions = [{"name": f"s{i}", "created": 100 + i, "label": f"L{i}",
+             "agent": {"type": "claude", "session_id": f"abcdefgh-{i:04d}", "identity_source": "pid_metadata"}}
+            for i in range(30)]
+names.observe(sessions, now=T)
+first = len(dumps)
+mtime = os.stat(names.FILE).st_mtime_ns
+del dumps[:]
+names.observe(sessions, now=T + 1)
+unchanged = {"dumps": len(dumps), "written": os.stat(names.FILE).st_mtime_ns != mtime}
+seen = sorted({e["seen"] - T for e in names.snapshot()})
+del dumps[:]
+sessions[3] = dict(sessions[3], label="Renamed")
+names.observe(sessions, now=T + 2)
+changed = [e for e in names.snapshot() if e["name"] == "s3"][0]
+later = [e for e in names.snapshot() if e["name"] == "s4"][0]
+print(json.dumps({"first": first, "unchanged": unchanged, "seen": seen, "changed_dumps": len(dumps),
+                  "s3": [changed["label"], changed["aliases"], changed["seen"] - T], "s4_seen": later["seen"] - T}))
+`, home);
+      assert.equal(result.first, 1, 'the first listing writes the file: one serialisation');
+      assert.deepEqual(result.unchanged, {dumps: 0, written: false});
+      assert.deepEqual(result.seen, [0], 'an unchanged entry keeps its time');
+      assert.equal(result.changed_dumps, 1);
+      assert.deepEqual(result.s3, ['Renamed', ['s3', 'L3', 'Renamed'], 2]);
+      // As before: once an entry changed in this listing, the entries handled after it are stamped too.
+      assert.equal(result.s4_seen, 2);
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
+  });
+});
+
 describe('codex rollouts are listed once per listing', () => {
   test('inside listing_scope the glob runs once and every rule sees the same rollouts', () => {
     const home = tempHome();
