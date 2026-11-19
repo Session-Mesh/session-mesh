@@ -3,6 +3,47 @@
 All notable changes to session-mesh. Versions follow [semantic versioning](https://semver.org/);
 before 1.0, a minor version may change behaviour.
 
+## 0.1.1
+
+A patch release of the 0.1 line: fixes, a native `mesh-logout-all`, and documentation.
+
+- **Idle sessions no longer show as working.** A Claude Code or Codex session that had been idle
+  for hours could be listed as working in the sidebar. Claude Code's own status is now
+  authoritative, and for Codex a session needs two consecutive 10-second windows at 5 % of a core
+  or more to be promoted; a question or permission prompt is still always shown. Other agents are
+  unchanged. A Codex session whose only work is a silent child process (a long build, say) may
+  stay in the inactive list.
+- **Clicks reach programs that track focus.** Full-screen programs such as Claude Code ignore a
+  click that arrives right after a focus-in, and the terminal sent that focus-in just before every
+  click (on a phone, before every tap). Focus reports now follow the pane, so the click is no
+  longer dropped.
+- **Touch scrolling and a vertical Kanban in Projects.** On phones, the Kanban, Gantt and
+  dependency views scroll sideways with the browser's own touch scrolling, inertia included, and
+  at 640 px or less the Kanban becomes full-width vertical sections that scroll with the page.
+- **`mesh-logout-all` is a native program.** It no longer needs a Python interpreter, ships in
+  the bundles and as the release assets `mesh-logout-all-<os>-<arch>` (a release now has six
+  native programs), and every install mode, including an upgrade from 0.1.0, links
+  `~/.local/bin/mesh-logout-all` to it. The command keeps its contract, and its fallback is
+  stricter: the counter on disk is raised only when the mesh sent no byte of an answer; an
+  incomplete answer is now an error with a one-line message and exit status 1.
+- **The bootstrap uses the pinned opam repository.** `scripts/bootstrap.sh` installs the OCaml
+  dependencies from the opam-repository commit pinned for the releases, instead of failing with
+  `Package dune has no known version 3.24.2` on a host whose repository is older. It changes only
+  the switch it builds into, never re-points a switch shared with other projects without
+  `MESH_OPAM_SELECT_PINNED=1`, and prints the command that undoes each change.
+- **macOS.** The Configuration dialog reports the PTY host as running, with its kind and
+  executable, on macOS as it does on Linux. The local scripts `scripts/test-local.sh` and
+  `scripts/check-copyright.sh` run on macOS (bash 3.2 and BSD tools).
+- **Documentation.** The Debian and Ubuntu prerequisites list `libsqlite3-dev`, which building
+  `mesh-history` needs. The New session dialog's folder suggestions are described in
+  [Starting and finding sessions](docs/features.md#starting-and-finding-sessions). New
+  [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) text covers the pull request
+  workflow, the `semver:` labels and the backports to `release/latest`.
+- **Repository and tests.** Ilias Garnier joined the maintainers. The CLA register files follow
+  `release/latest` through their own backport workflow, and the opam caches of the CI are keyed on
+  the pinned opam repository. The local test suite sets a fixed English locale for the browser
+  tests and a bounded concurrency (`MESH_TEST_CONCURRENCY`), and more of its tests run on macOS.
+
 ## 0.1.0 (first public release)
 
 The first public release of session-mesh, an alpha. In short:
