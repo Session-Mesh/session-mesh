@@ -1,0 +1,4 @@
+{"type":"user","cwd":"/work/asking","message":{"role":"user","content":"Which parser should we keep?"}}
+{"type":"ai-title","aiTitle":"Choosing a parser"}
+{"type":"assistant","cwd":"/work/asking","message":{"id":"msg_q","role":"assistant","content":[{"type":"text","text":"Let me ask."}]}}
+{"type":"assistant","cwd":"/work/asking","message":{"id":"msg_q","role":"assistant","content":[{"type":"tool_use","id":"toolu_ask","name":"AskUserQuestion","input":{"questions":[{"question":"Which parser?","header":"Parser","multiSelect":false,"options":[{"label":"Menhir","description":"generated"},{"label":"  A hand-written recursive descent parser with very careful error recovery  ","description":"manual"},{"label":"Angstrom"}]}]}}]}}

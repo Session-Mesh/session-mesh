@@ -1,0 +1,5 @@
+{"type":"summary","summary":"Old summary","leafUuid":"x"}
+{"type":"user","message":{"role":"user","content":"Pick one."}}
+{"type":"assistant","message":{"id":"msg_a","role":"assistant","content":[{"type":"tool_use","id":"toolu_a","name":"AskUserQuestion","input":{"questions":[{"question":"Which one?","multiSelect":false,"options":[{"label":"Left"},{"label":"Right"}]}]}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"Left"}]}}
+{"type":"assistant","message":{"id":"msg_b","role":"assistant","content":[{"type":"tool_use","id":"toolu_m","name":"AskUserQuestion","input":{"questions":[{"question":"Which colours?","multiSelect":true,"options":[{"label":"Red"},{"label":"Blue"}]}]}}]}}

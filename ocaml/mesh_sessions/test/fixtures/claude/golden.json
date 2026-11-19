@@ -1,0 +1,224 @@
+{
+  "answered": {
+    "agent": {
+      "argv": [
+        "/bin/sh",
+        "$ROOT/p/answered/0/claude"
+      ],
+      "ask_id": null,
+      "choices": null,
+      "cwd": null,
+      "foreground": false,
+      "identity_source": "pid_metadata",
+      "last": "Pick one.",
+      "name": null,
+      "pid": "answered/0",
+      "said": "❓ Which colours?",
+      "session_id": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a04",
+      "since": 1700000002.5005,
+      "status": "idle",
+      "title": "Old summary",
+      "type": "claude",
+      "updated": 1700000000.5,
+      "waiting_for": null
+    },
+    "cmd": "/bin/sh $ROOT/p/answered/0/claude",
+    "cwd": "$ROOT/work/answered"
+  },
+  "asking": {
+    "agent": {
+      "argv": [
+        "/bin/sh",
+        "$ROOT/p/asking/0/claude"
+      ],
+      "ask_id": "toolu_ask",
+      "choices": [
+        "Menhir",
+        "A hand-written recursive descent parser…",
+        "Angstrom"
+      ],
+      "cwd": "/work/asking",
+      "foreground": false,
+      "identity_source": "pid_metadata",
+      "last": "Which parser should we keep?",
+      "name": null,
+      "pid": "asking/0",
+      "said": "❓ Which parser?",
+      "session_id": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a02",
+      "since": 1700000001,
+      "status": "waiting",
+      "title": "Choosing a parser",
+      "type": "claude",
+      "updated": 1700000000.5,
+      "waiting_for": "question"
+    },
+    "cmd": "/bin/sh $ROOT/p/asking/0/claude",
+    "cwd": "$ROOT/work/asking"
+  },
+  "bad-id": {
+    "agent": {
+      "argv": [
+        "/bin/sh",
+        "$ROOT/p/bad-id/0/claude"
+      ],
+      "foreground": false,
+      "identity_source": "pid_metadata",
+      "name": null,
+      "pid": "bad-id/0",
+      "session_id": 42,
+      "since": null,
+      "status": "idle",
+      "type": "claude",
+      "waiting_for": null
+    },
+    "cmd": "/bin/sh $ROOT/p/bad-id/0/claude",
+    "cwd": "$ROOT/work/bad-id"
+  },
+  "helper": {
+    "agent": {
+      "argv": [
+        "/bin/sh",
+        "$ROOT/p/helper/0/claude"
+      ],
+      "ask_id": null,
+      "choices": null,
+      "cwd": null,
+      "foreground": false,
+      "identity_source": "pid_metadata",
+      "last": "Check two things.",
+      "name": null,
+      "pid": "helper/0",
+      "said": "❓ First?",
+      "session_id": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a06",
+      "since": null,
+      "status": "busy",
+      "title": null,
+      "type": "claude",
+      "updated": 1700000000.5,
+      "waiting_for": null
+    },
+    "cmd": "/bin/sh $ROOT/p/helper/0/claude",
+    "cwd": "$ROOT/work/helper"
+  },
+  "nested": {
+    "agent": {
+      "argv": [
+        "/bin/sh",
+        "$ROOT/p/nested/1/claude",
+        "--continue"
+      ],
+      "ask_id": null,
+      "choices": null,
+      "cwd": "/work/nested",
+      "foreground": false,
+      "identity_source": "pid_metadata",
+      "last": "A real prompt",
+      "name": null,
+      "pid": "nested/1",
+      "said": "plain string answer",
+      "session_id": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a05",
+      "since": null,
+      "status": "idle",
+      "title": "Second AI title",
+      "type": "claude",
+      "updated": 1700000000.5,
+      "waiting_for": null
+    },
+    "cmd": "/bin/sh $ROOT/p/nested/0/bash -l",
+    "cwd": "$ROOT/work/nested"
+  },
+  "no-metadata": {
+    "agent": {
+      "argv": [
+        "/bin/sh",
+        "$ROOT/p/no-metadata/0/claude",
+        "--print"
+      ],
+      "foreground": false,
+      "pid": "no-metadata/0",
+      "type": "claude"
+    },
+    "cmd": "/bin/sh $ROOT/p/no-metadata/0/claude --print",
+    "cwd": "$ROOT/work/no-metadata"
+  },
+  "no-transcript": {
+    "agent": {
+      "argv": [
+        "/bin/sh",
+        "$ROOT/p/no-transcript/0/claude"
+      ],
+      "foreground": false,
+      "identity_source": "pid_metadata",
+      "name": null,
+      "pid": "no-transcript/0",
+      "session_id": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a08",
+      "since": null,
+      "status": "idle",
+      "type": "claude",
+      "waiting_for": null
+    },
+    "cmd": "/bin/sh $ROOT/p/no-transcript/0/claude",
+    "cwd": "$ROOT/work/no-transcript"
+  },
+  "plain": {
+    "agent": {
+      "argv": [
+        "/bin/sh",
+        "$ROOT/p/plain/0/claude",
+        "--model",
+        "opus"
+      ],
+      "ask_id": null,
+      "choices": null,
+      "cwd": "/work/plain/src",
+      "foreground": false,
+      "identity_source": "pid_metadata",
+      "last": "Une très longue demande, écrite d'une traite, qui dépasse largement les deux cent quarante caractères que la liste garde pour l'aperçu : il faut donc la couper au bon endroit, compter en points de code et non en octets, et finir par une el…",
+      "name": "plain work",
+      "pid": "plain/0",
+      "said": "⚙ Edit · /work/plain/src/parser.ml",
+      "session_id": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a01",
+      "since": 1700000000.123,
+      "status": "idle",
+      "title": "Build steps",
+      "type": "claude",
+      "updated": 1700000000.5,
+      "waiting_for": null
+    },
+    "cmd": "/bin/sh $ROOT/p/plain/0/claude --model opus",
+    "cwd": "$ROOT/work/plain"
+  },
+  "shell": {
+    "agent": null,
+    "cmd": "/bin/sh $ROOT/p/shell/0/zsh -i",
+    "cwd": "$ROOT/work/shell"
+  },
+  "two-tools": {
+    "agent": {
+      "argv": [
+        "/bin/sh",
+        "$ROOT/p/two-tools/0/claude",
+        "--resume",
+        "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a03"
+      ],
+      "ask_id": null,
+      "choices": null,
+      "cwd": null,
+      "foreground": false,
+      "identity_source": "pid_metadata",
+      "last": "Run the tests then ask me.",
+      "name": null,
+      "pid": "two-tools/0",
+      "said": "❓ Merge now?",
+      "session_id": "0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a03",
+      "since": null,
+      "status": "busy",
+      "title": null,
+      "type": "claude",
+      "updated": 1700000000.5,
+      "waiting_for": null
+    },
+    "cmd": "/bin/sh $ROOT/p/two-tools/0/claude --resume 0b1e7a52-3f0e-4c55-9a8e-1f9d1f6b0a03",
+    "cwd": "$ROOT/work/two-tools"
+  }
+}
