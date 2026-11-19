@@ -434,8 +434,33 @@ click, so an agent launched with permissive options never comes back on its own.
    Limits: the rule protects an idle Codex only while the other Codex is still running. If that
    other Codex has already exited after writing its rollout, or if a `codex exec` run in the same
    folder has finished (its rollout `source` is the plain string `exec`, not recognised as a
-   sub-agent), the idle Codex can still be given that rollout's conversation. Closing these cases
-   needs the conversation registry planned as a later change.
+   sub-agent), the idle Codex can still be given that rollout's conversation. The identity registry
+   below keeps an id once it is known exactly, but a session it does not know still gets this rule.
+
+   **The identity registry.** Next to the snapshot, `~/.config/session-mesh/session-identities.json`
+   (mode 0600, replaced atomically under a lock, at most 400 entries) keeps the conversation of each
+   session once it is known exactly, with where it came from: named by the mesh before the agent
+   started (`chosen`), reported by the agent's hook (`hook`), or seen without doubt by a listing
+   (`observed`: the rollout a Codex holds open, the file Claude writes for its process). A guess is
+   never written there. The snapshot is rebuilt from each listing; the registry is not: a Codex that
+   held its rollout open once keeps that id after it closes it. A later exact fact for the same
+   session replaces the earlier one (`/clear`, `/new`, an agent started again in the terminal). When
+   the file is created, the ids already in the snapshot are copied into it as `observed`. A restore
+   reads the registry first, and the snapshot's id only for a session the registry does not know. A
+   file written by a newer version is read as empty and left untouched.
+
+   When two sessions claim one conversation, the stronger source keeps it: `chosen` over `hook` over
+   `observed`, then the session that holds the rollout open, and when they are equal the session that
+   held it first. The other session is *contested*: it has no conversation until it reports another
+   one or the holder goes.
+
+   An agent is never relaunched on a conversation that is contested, unknown, or no longer on disk
+   (no Claude transcript, no Codex rollout of that id): the session comes back as a plain shell in its
+   folder, with one line typed there that says why, for example `Session Mesh: codex not relaunched:
+   its conversation is claimed by another session (contested)`; the restore result carries the same
+   reason. A new conversation is never started in its place. A guarded restore (below) refuses such an
+   offer instead (`not-resumable`), and refuses with `expected-mismatch` when the registry names
+   another conversation than the expected one.
 
 ### Restoring exactly one offer (for tools)
 

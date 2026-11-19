@@ -59,6 +59,17 @@ before 1.0, a minor version may change behaviour.
   decided elsewhere; your choice changed nothing." The server already kept only the first answer.
   See
   [Messages and requests from agents](docs/features.md#messages-and-requests-from-agents).
+- **A session identity registry keeps the conversation of each session once it is known exactly.**
+  `~/.config/session-mesh/session-identities.json` (0600, atomic, bounded) records, per session, the
+  conversation id with its source: `chosen` by the mesh at launch, reported by a `hook`, or `observed`
+  exactly by a listing (a rollout a Codex holds open, Claude's process file). Guesses are never
+  recorded. A restore reads it before the snapshot, so a Codex that closed its rollout keeps its id.
+  When two sessions claim one conversation, the stronger source keeps it and the other is contested.
+  A restored agent whose conversation is contested, unknown or no longer on disk comes back as a plain
+  shell with one line saying why, never on a new or a contested conversation. The first run copies
+  the snapshot's ids into it. The same schema and rules are an OCaml library (`ocaml/identity`), checked
+  against shared vectors. See
+  [Restoring sessions](docs/operations.md#restoring-sessions-after-a-pty-host-restart).
 - **An idle Codex started as `codex resume <id>` gets its conversation id from its launch
   arguments.** Such a session that holds no rollout file open had no conversation id, so a PTY host
   restart brought it back as a plain shell. The id is now read from the launch arguments of the

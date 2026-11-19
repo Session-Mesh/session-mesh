@@ -98,6 +98,7 @@ class FakeHost:
 
 def install(fake):
     ptyhost.request = fake.request
+    server._conversation_missing = lambda kind, sid: False   # no transcript files in this home
 
 def live_session(name, created, agent='claude', nonce='n0'):
     return {'name': name, 'pid': 999998, 'cwd': '/tmp', 'created': created, 'activity': 0,

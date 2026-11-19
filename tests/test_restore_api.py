@@ -62,6 +62,7 @@ class FakeHost:
 def fake_host(monkeypatch, snapshot_file):
     host = FakeHost()
     monkeypatch.setattr(ptyhost, "request", host.request)
+    monkeypatch.setattr(server, "_conversation_missing", lambda kind, sid: False)   # no transcript files here
     return host
 
 
@@ -130,7 +131,7 @@ async def test_an_agent_without_a_conversation_id_is_never_relaunched_fresh(clie
     lose(tmp_path, mesh_item("a", tmp_path, 1.0, codex(sid=None, argv=["codex", "--yolo"])))
     status, body = await restore(client, auth_cookie, "a")
     [req] = fake_host.new_requests
-    assert req["command"] is None and req["meta"]["agent"] is None
+    assert shlex.split(req["command"])[0] == "printf" and req["meta"]["agent"] is None   # a shell that says why
     assert body["results"]["a"]["ok"] and body["results"]["a"]["resumed"] is False
     assert "conversation" in body["results"]["a"]["note"]
 

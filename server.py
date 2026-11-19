@@ -14,6 +14,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 from collections import deque
+import glob
 import hashlib
 import hmac
 import ipaddress
@@ -899,7 +900,9 @@ async def _record_listing(data, read, order):
     if order < _RECORDED[0]:
         return await asyncio.to_thread(respawn.restorable), False
     _RECORDED[0] = order
-    return await asyncio.to_thread(respawn.record, data["mesh"], True, host=host, seen=seen)
+    nonces = {(s["name"], s["created"]): (s.get("meta") or {}).get("nonce") for s in raw}   # binds identities
+    return await asyncio.to_thread(respawn.record, data["mesh"], True, host=host, seen=seen,
+                                   nonces=nonces)
 
 
 async def sessions(event_state=None, organisation_lock=None):
@@ -1991,6 +1994,43 @@ def _resume_argv(info):
     except resumeargs.WeakerResume as exc:
         raise web.HTTPConflict(text=str(exc)) from exc
     return agentmcp.inject(kind, argv)
+
+
+# Why the agent of a restored session was not relaunched (I6): the note the page shows, and what the
+# line typed in its shell says. Never a new conversation, never the resume of a contested one.
+NOT_RELAUNCHED = {
+    "unknown": ("Unknown conversation ID: restarted as a plain shell", "its conversation ID is unknown"),
+    "contested": ("Conversation claimed by another session: restarted as a plain shell",
+                  "its conversation is claimed by another session (contested)"),
+    "not found": ("Conversation not found: restarted as a plain shell", "its conversation no longer exists"),
+}
+
+
+def _not_relaunched_line(agent, reason):
+    """The one line typed in the shell of a restored session whose agent is not relaunched, or None."""
+    if not agent or reason not in NOT_RELAUNCHED:
+        return None
+    return shlex.join(["printf", "%s\\n", f"Session Mesh: {agent['type']} not relaunched: {NOT_RELAUNCHED[reason][1]}"])
+
+
+def _conversation_missing(kind, sid):
+    """Whether the conversation is known to be gone: no Claude transcript, no Codex rollout of that id.
+    Pi and OpenCode are checked when their launch line is built; the others are not checked."""
+    home = glob.escape(discover.HOME)
+    if kind == "claude":
+        return not glob.glob(os.path.join(home, ".claude", "projects", "*", f"{sid}.jsonl"))
+    if kind == "codex":
+        return not glob.glob(os.path.join(home, ".codex", "sessions", "*", "*", "*", f"rollout-*-{sid}.jsonl"))
+    return False
+
+
+def _restore_identity(entry):
+    """respawn.restore_identity, then the conversation looked for on disk (blocking: run it in a worker)."""
+    entry, reason = respawn.restore_identity(entry)
+    agent = entry["agent"]
+    if agent and agent["session_id"] and _conversation_missing(agent["type"], agent["session_id"]):
+        return {**entry, "agent": {**agent, "session_id": None}}, "not found"
+    return entry, reason
 
 
 async def _wait_dead(pid, timeout=10):
@@ -4198,13 +4238,14 @@ async def _settle_restored(name, new, entry, recreated, warnings, offer_done):
         warnings.append("organisation not restored")
 
 
-async def _create_restored(name, entry, running):
+async def _create_restored(name, entry, running, reason=None):
     """The page path's creation: (the new session's name, None), or (None, the refusal result). A creation sent to
-    the host whose outcome is unknown holds the conversation (``running``) and the offer, then re-raises."""
+    the host whose outcome is unknown holds the conversation (``running``) and the offer, then re-raises.
+    ``reason``: why the agent has no conversation to resume (NOT_RELAUNCHED), said in its shell."""
     agent = entry["agent"]
     resumable = bool(agent and agent["session_id"])
     try:
-        command = shlex.join(_resume_argv(agent)) if resumable else None
+        command = shlex.join(_resume_argv(agent)) if resumable else _not_relaunched_line(agent, reason)
         new = await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
                                 agent["type"] if resumable else None, keep=48)
     except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, GeminiSettingsRefused) as e:
@@ -4235,21 +4276,22 @@ async def restore_one(name, running, organisation_lock):
             return {"ok": False, "error": RESTORING_REFUSAL}
         if offer_held(name, entry["created"]):
             return {"ok": False, "error": OFFER_HELD_REFUSAL}
+        entry, reason = await asyncio.to_thread(_restore_identity, entry)   # the registry's conversation
         agent = entry["agent"]
         resumable = bool(agent and agent["session_id"])
         if resumable and agent["session_id"] in running:
             return {"ok": False, "error": "This conversation is already running (another session): nothing was restarted"}
-        new, refusal = await _create_restored(name, entry, running)
+        new, refusal = await _create_restored(name, entry, running, reason)
         if refusal:
             return refusal
         try:
-            return await _complete_restored(name, entry, new, resumable)
+            return await _complete_restored(name, entry, new, resumable, reason)
         except BaseException:    # the session exists and the offer is not settled: no second shell for a click
             hold_offer(name, entry["created"])
             raise
 
 
-async def _complete_restored(name, entry, new, resumable):
+async def _complete_restored(name, entry, new, resumable, reason=None):
     """What follows the creation of a restored session on the page path: confirm it, carry the agent
     mail, settle the board and the offer; the outcome the page shows."""
     agent = entry["agent"]
@@ -4266,7 +4308,7 @@ async def _complete_restored(name, entry, new, resumable):
     if warnings:
         out["warnings"] = warnings
     if agent and not resumable:
-        out["note"] = "Unknown conversation ID: restarted as a plain shell"
+        out["note"] = NOT_RELAUNCHED.get(reason, NOT_RELAUNCHED["unknown"])[0]
     return out
 
 
@@ -4447,10 +4489,28 @@ async def restore_exact(app, expected):
                                mismatched=differs)
             marker = entry.get("restoring")
             if marker is None:
-                refusal, marker = await _start_exact(app, name, entry, running)
+                entry, refusal = await _exact_identity(entry, expected)
+                if refusal is None:
+                    refusal, marker = await _start_exact(app, name, entry, running)
                 if refusal is not None:
                     return refusal
             return await _complete_exact(name, entry, marker)
+
+
+async def _exact_identity(entry, expected):
+    """(the offer with the registry's conversation, a refusal or None): a guarded restore resumes exactly
+    the expected conversation, never one that is contested or gone, and never turns it into a shell."""
+    resolved, reason = await asyncio.to_thread(_restore_identity, entry)
+    agent = resolved["agent"]
+    if not (agent and expected["resume_id"]):
+        return resolved, None
+    if reason:
+        why = NOT_RELAUNCHED[reason][0].split(":")[0]
+        return resolved, _result("not-resumable", "not-started", f"{why}: a guarded restore does not start a plain shell")
+    if agent["session_id"] != expected["resume_id"]:
+        return resolved, _result("expected-mismatch", "not-started", "The offer is not the expected one",
+                                 mismatched=["resume_id"])
+    return resolved, None
 
 
 async def _complete_exact(name, entry, marker):
