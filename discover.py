@@ -15,6 +15,8 @@ import sys
 import threading
 import time
 
+import resumeargs
+
 HOME = os.path.expanduser("~")
 # copilot: the native binary, argv[0] ends in /copilot (its kernel name is MainThread)
 AGENTS = ("claude", "codex", "pi", "opencode", "gemini", "agy", "vibe", "copilot")
@@ -621,10 +623,11 @@ def _is_top_level_codex(pid, st):
 
 class _CodexView:
     """What the codex identity rules need to know about the host's codex processes, read once from one
-    process table: the folder of each top-level codex and the rollouts each codex holds open."""
+    process table: the folder of each top-level codex, the conversation each was launched on and the rollouts
+    each codex holds open."""
 
     def __init__(self):
-        self._procs, self._read, self._dirs, self._held = None, False, None, None
+        self._procs, self._read, self._dirs, self._held, self._launched = None, False, None, None, None
 
     def _table(self):
         if not self._read:
@@ -654,6 +657,29 @@ class _CodexView:
                           if st[0] == "codex" and is_agent(other, st) == "codex"}
         others = [r for other, r in self._held.items() if other != pid]
         return None if any(r is None for r in others) else set().union(*others)
+
+    def claimed_by_others(self, pid, sid):
+        """Whether conversation ``sid`` is another codex's too: another top-level codex was launched on it
+        (``codex resume <sid>``) or another codex holds its rollout open. True when that cannot be known."""
+        procs = self._table()
+        if procs is None or not known_complete(procs):
+            return True
+        if self._launched is None:
+            self._launched = {other: _launch_id(other, procs) for other, st in procs.items()
+                              if _is_top_level_codex(other, st)}
+        if any(other != pid and named in (sid, UNKNOWN_NAME) for other, named in self._launched.items()):
+            return True
+        held = self.held_by_others(pid)
+        return held is None or any(_rollout_meta(path)[2] == sid for path in held)
+
+
+def _launch_id(pid, procs):
+    """The conversation a codex was launched on (resumeargs.resumed_codex_id), None, or UNKNOWN_NAME when its
+    arguments are unknown (outside Linux, a row without argv)."""
+    argv = _argv_of(procs.rows.get(pid)) if isinstance(procs, HostProcesses) else cmdline(pid)
+    if argv is None:
+        return UNKNOWN_NAME
+    return resumeargs.resumed_codex_id([a.decode(errors="ignore") for a in argv])
 
 
 _LISTING_VIEW = contextvars.ContextVar("codex_listing_view", default=None)
@@ -691,30 +717,64 @@ def _lone_codex_candidates(pid, here, started):
     return [] if held is None else [p for p in candidates if p not in held]
 
 
-def codex_info(pid):
-    info = {"type": "codex"}
-    rollouts = _open_rollouts(pid)
-    if rollouts is None:
-        return info
-    identity_source = "open_rollout" if rollouts else "cwd_unique"
-    if not rollouts:
-        # Codex does not always keep its rollout open: fall back to the most
-        # recent top-level rollout for this cwd written since the process started.
-        # A lone codex may have written several (/new): its newest is the right one. With another codex
-        # in the folder the newest may be that one's, and resuming it would kill this codex to reopen a
-        # conversation running elsewhere, so the answer is then none (fail-closed).
-        rollouts = _lone_codex_candidates(pid, cwd(pid), proc_start(pid))
+def _newest_top_level(paths):
+    """(path, id) of the most recently written top-level rollout among paths (sub-agent ones skipped), or None."""
     best = None
-    for path in set(rollouts):
+    for path in set(paths):
         rcwd, sub, rid = _rollout_meta(path)
         if sub:
             continue  # sub-agent rollout
         m = os.path.getmtime(path)
         if not best or m > best[0]:
             best = (m, path, rid)
-    if not best:
-        return info
-    lines, mtime = _tail_lines(best[1], 8_000_000)
+    return best[1:] if best else None
+
+
+def _rollout_of(sid):
+    """The recent top-level rollout of conversation sid, or None (an older one is not searched)."""
+    found = _newest_top_level(p for p in recent_rollouts() if _rollout_meta(p)[2] == sid)
+    return found[0] if found else None
+
+
+_argv_conflicts_noted = set()
+
+
+def _note_argv_conflict(pid):
+    """Say once per process that the rollout it holds open is not the conversation its ``resume`` argument
+    names (a /new or a /resume inside Codex): the open rollout is the one used."""
+    if pid in _argv_conflicts_noted:
+        return
+    if len(_argv_conflicts_noted) > 4096:
+        _argv_conflicts_noted.clear()
+    _argv_conflicts_noted.add(pid)
+    print(f"discover: codex {pid} holds open another conversation than the one its resume argument names; "
+          "the open rollout is used", flush=True)
+
+
+def _codex_conversation(pid, rollouts):
+    """(rollout or None, id, source) of the conversation of this codex, or None. In order: the rollout it
+    holds open (open_rollout, exact); the id it was launched on, ``codex resume <id>`` (argv_resume, exact at
+    launch), unless another codex claims that id too (then none: contested); the lone-codex guess (cwd_unique)."""
+    named = resumeargs.resumed_codex_id([a.decode(errors="ignore") for a in cmdline(pid)])
+    held = _newest_top_level(rollouts)
+    if held:
+        if named and held[1] != named:
+            _note_argv_conflict(pid)
+        return (*held, "open_rollout")
+    if named:
+        return None if _codex_view().claimed_by_others(pid, named) else (_rollout_of(named), named, "argv_resume")
+    # Codex does not always keep its rollout open: fall back to the most
+    # recent top-level rollout for this cwd written since the process started.
+    # A lone codex may have written several (/new): its newest is the right one. With another codex
+    # in the folder the newest may be that one's, and resuming it would kill this codex to reopen a
+    # conversation running elsewhere, so the answer is then none (fail-closed).
+    guessed = _newest_top_level(_lone_codex_candidates(pid, cwd(pid), proc_start(pid)))
+    return (*guessed, "cwd_unique") if guessed else None
+
+
+def _codex_transcript(path):
+    """What the rollout says of the conversation: the last user message, the reply, the folder, the state."""
+    lines, mtime = _tail_lines(path, 8_000_000)
     last = here = said = None
     for line in lines:
         d = _json_line(line)
@@ -728,8 +788,20 @@ def codex_info(pid):
             t = _text_blocks(p.get("content"))
             if t and not t.startswith("<") and not t.startswith("# AGENTS"):
                 last = t
-    info.update(session_id=best[2], identity_source=identity_source, last=_clip(last) if last else None, updated=mtime, cwd=here,
-                status="busy" if time.time() - mtime < 20 else "idle", said=_clip(said) if said else None)
+    return {"last": _clip(last) if last else None, "updated": mtime, "cwd": here,
+            "status": "busy" if time.time() - mtime < 20 else "idle", "said": _clip(said) if said else None}
+
+
+def codex_info(pid):
+    info = {"type": "codex"}
+    rollouts = _open_rollouts(pid)
+    found = None if rollouts is None else _codex_conversation(pid, rollouts)
+    if not found:
+        return info
+    path, sid, source = found
+    info.update(session_id=sid, identity_source=source)
+    if path:
+        info.update(_codex_transcript(path))
     return info
 
 

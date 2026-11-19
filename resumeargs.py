@@ -37,6 +37,7 @@ from pathlib import Path
 import agentmcp
 import fsutil
 from agentcap import CODEX_SUBCOMMANDS, entry_args, shell_command_index
+from agentwake import THREAD_RE
 
 # Keep Codex in xterm's normal buffer with its ordinary rich rendering.
 # Both settings are invocation-local; neither changes global configuration.
@@ -715,6 +716,29 @@ def resume_argv(kind, argv, sid):
     if kind == "vibe":
         return ["vibe", "--resume", sid, *_without_mesh_hooks(kept)]
     return ["codex", "resume", sid, *codex_args(kept)]
+
+
+def resumed_codex_id(argv):
+    """The conversation a Codex started as ``codex [options] resume <id> ...`` names, or None.  The options
+    before ``resume`` are read with the codex table, so a value (``-c resume``) is never the subcommand; an
+    unknown option, another subcommand, a prompt, or a word after ``resume`` that is not a thread id
+    (``--last``, ``--all``, an option, nothing) names none.  Anything after the id is not read."""
+    args = entry_args("codex", list(argv))
+    i = 0
+    while args is not None and i < len(args):
+        arg = args[i]
+        if arg == "resume":
+            following = args[i + 1] if i + 1 < len(args) else ""
+            return following if THREAD_RE.fullmatch(following) else None
+        if not arg.startswith("-") or arg in ("-", "--"):
+            return None
+        short = _short_option("codex", arg)
+        category = _category(_CODEX, short[0] if short else arg.split("=", 1)[0])
+        if category is None:
+            return None
+        attached = bool(short) or "=" in arg
+        i += 2 if category.endswith("value") and not attached else 1
+    return None
 
 
 def build_resume_profile(kind, saved_argv, conversation_id):
