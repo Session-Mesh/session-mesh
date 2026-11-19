@@ -1,0 +1,6 @@
+; A bounded least-recently-used map (entry count and optional weight).
+; Generic: it knows nothing of sessions or agents (ocaml/README.md, "Generic
+; libraries"; generic/test/dependency_guard.ml enforces it).
+
+(library
+ (name mesh_lru))
