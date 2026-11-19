@@ -1,0 +1,8 @@
+; The transcript fold cache the adapters keep across rounds
+; (docs/sessions-protocol.md, "Adding an agent"). It names no agent.
+
+(library
+ (name mesh_agent_transcripts)
+ (wrapped false)
+ (modules mesh_agent_transcripts)
+ (libraries mesh_jsonl_tail mesh_lru unix threads.posix))

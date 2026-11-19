@@ -41,6 +41,9 @@ let complete round = round.complete
 let size round = Hashtbl.length round.by_pid
 let find round pid = Hashtbl.find_opt round.by_pid pid
 
+let processes round =
+  List.sort (fun (a : process) (b : process) -> compare a.pid b.pid) (List.of_seq (Hashtbl.to_seq_values round.by_pid))
+
 let session round sid =
   Option.value ~default:[] (Hashtbl.find_opt round.by_session sid)
 
@@ -57,3 +60,5 @@ let cwd round pid =
   match round.platform.working_directory pid with
   | Ok path -> Some path
   | Error _ -> None
+
+let open_files round pid = round.platform.open_file_paths pid

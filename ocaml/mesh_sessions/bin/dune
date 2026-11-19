@@ -9,6 +9,7 @@
   mesh_sessions
   mesh_agent
   mesh_agent_claude
+  mesh_agent_codex
   mesh_pty_processes
   eio_main
   unix))

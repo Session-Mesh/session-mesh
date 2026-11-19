@@ -1,0 +1,26 @@
+; The Codex adapter of the session listing (docs/sessions-protocol.md): the
+; command-line reading, the rollout walk and header cache, the process view,
+; the identity rules, the rollout fold (pure), and the adapter.
+
+(library
+ (name mesh_agent_codex)
+ (wrapped false)
+ (modules
+  mesh_agent_codex_argv
+  mesh_agent_codex_rollouts
+  mesh_agent_codex_fold
+  mesh_agent_codex_view
+  mesh_agent_codex_identity
+  mesh_agent_codex)
+ (libraries
+  mesh_agent
+  mesh_agent_transcripts
+  mesh_session_checks
+  mesh_platform
+  mesh_python_text
+  mesh_jsonl
+  mesh_jsonl_tail
+  mesh_safe_file
+  yojson
+  unix
+  threads.posix))

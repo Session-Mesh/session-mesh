@@ -1,0 +1,7 @@
+; The checks between the sessions of one round (docs/sessions-protocol.md):
+; one conversation id kept by at most one session. Pure: no file, no process.
+
+(library
+ (name mesh_session_checks)
+ (wrapped false)
+ (modules mesh_session_checks))

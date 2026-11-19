@@ -91,11 +91,12 @@ By hand: `WL_HOME=/tmp/demo ./_build/default/work_read/bin/work_read_main.exe pr
 (agent, conversation, state, last message) for the web server, over standard input and output in
 JSON lines, read-only. It is built on the generic libraries above: `agent/` (the adapter interface,
 `Mesh_agent.ADAPTER`, and its registry; the round's process table; agent detection), `claude/` (the
-Claude adapter), `lib/` (requests, rows, order of service, rounds, the handler) and `bin/`. It is
+Claude adapter), `codex/` (the Codex adapter), `checks/` (the checks between the sessions of a round),
+`transcripts/` (the transcript fold cache), `lib/` (requests, rows, order of service, rounds, the handler) and `bin/`. It is
 not wired into the web server and not shipped in the release bundles yet. See
 [docs/sessions-protocol.md](../docs/sessions-protocol.md); tests: `dune runtest mesh_sessions`
-(parity with the Python listing on shared fixtures, the caches, hostile files, deadlines and a
-300-session round). `Mesh_python_text` is a library of its own (`mesh_python_text`) so that it
+(parity with the Python listing on shared fixtures, the caches, hostile files, deadlines, a 300-session round
+and 300 Codex sessions). `Mesh_python_text` is a library of its own (`mesh_python_text`) so that it
 does not link cohttp.
 
 ## mesh-logout-all
