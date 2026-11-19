@@ -62,3 +62,4 @@ let cwd round pid =
   | Error _ -> None
 
 let open_files round pid = round.platform.open_file_paths pid
+let owner round pid = round.platform.process_owner pid

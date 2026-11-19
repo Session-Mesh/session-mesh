@@ -38,7 +38,13 @@ let default_config =
   { now = Unix.gettimeofday; boot_time = (fun () -> Lazy.force boot); registry_lookup = (fun _ -> None) }
 
 type outcome = { identity : Identity.t; verdict : Checks.verdict }
-type prepared = { round : Round.t; context : Identity.context; outcomes : (int, outcome option) Hashtbl.t }
+
+type prepared = {
+  round : Round.t;
+  context : Identity.context;
+  outcomes : (int, outcome option) Hashtbl.t;
+  claims : int Checks.claim list;  (* the round's heuristic claims, before the checks *)
+}
 
 type t = {
   config : config;
@@ -82,13 +88,16 @@ let start_time config (process : Round.process) =
   | Other _ -> 0.
 
 
-(* The agent of each terminal session that runs a Codex process, when it is Codex. *)
-let participants round codex_pids =
-  let sids = List.sort_uniq compare (List.filter_map (fun pid -> Option.map (fun (p : Round.process) -> p.sid) (Round.find round pid)) codex_pids) in
+(* The agent of every session whose agent is Codex. The candidates are the
+   sessions of the processes the kernel names [codex] and every session with
+   a controlling terminal: a Codex the kernel names otherwise (a [codex-bin]
+   run as [codex]) is only told by its command line. *)
+let participants round =
+  let candidate (process : Round.process) = if process.comm = "codex" || process.tpgid > 0 then Some process.sid else None in
   List.filter_map
     (fun sid ->
       match (Mesh_agent_session.frame round ~sid).agent with Some (process, "codex") -> Some process | _ -> None)
-    sids
+    (List.sort_uniq compare (List.filter_map candidate (Round.processes round)))
 
 let claims identities =
   List.filter_map
@@ -104,16 +113,17 @@ let resolve context round =
   let identities =
     List.map
       (fun (process : Round.process) -> (process.pid, Identity.conversation context ~registered:None process))
-      (participants round (Mesh_agent_codex_view.codex_pids context.view))
+      (participants round)
   in
-  let verdicts = Checks.check (claims identities) in
+  let claims = claims identities in
+  let verdicts = Checks.check claims in
   let outcomes = Hashtbl.create 16 in
   List.iter
     (fun (pid, identity) ->
       let verdict = Option.value ~default:Checks.Keep (List.assoc_opt pid verdicts) in
       Hashtbl.replace outcomes pid (Option.map (fun identity -> { identity; verdict }) identity))
     identities;
-  outcomes
+  (outcomes, claims)
 
 let prepare adapter round =
   let rollouts = Rollouts.walk adapter.rollouts ~root:(Mesh_agent_roots.codex adapter.roots) ~now:(adapter.config.now ()) in
@@ -125,7 +135,8 @@ let prepare adapter round =
       start_time = start_time adapter.config;
     }
   in
-  let prepared = { round; context; outcomes = resolve context round } in
+  let outcomes, claims = resolve context round in
+  let prepared = { round; context; outcomes; claims } in
   Mutex.protect adapter.lock (fun () ->
       adapter.prepared <- List.filteri (fun index _ -> index < 4) (prepared :: adapter.prepared))
 
@@ -135,8 +146,10 @@ let verdict_fields verdict (id, source) =
   | Drop -> [ ("session_id", `Null); ("identity_source", `Null) ]
   | Contested -> [ ("session_id", `Null); ("identity_source", `String "contested") ]
 
+(* Only a string is an id: any other JSON value is reported as none. *)
 let identity_fields { identity; verdict } =
-  verdict_fields verdict (identity.id, `String (Identity.source_name identity.source))
+  let id = match identity.id with `String _ as id -> id | _ -> `Null in
+  verdict_fields verdict (id, `String (Identity.source_name identity.source))
 
 (* [_codex_transcript]; an unreadable rollout gives Python's empty answer. *)
 let transcript_fields adapter path =
@@ -148,16 +161,27 @@ let transcript_fields adapter path =
         ("said", Fold.said state) ]
   | None -> [ ("last", `Null); ("updated", `Int 0); ("cwd", `Null); ("status", `String "idle"); ("said", `Null) ]
 
-(* A registered identity first; else the round's; else (a Codex the kernel does
-   not name [codex]) the heuristic alone, without the checks. *)
+(* A Codex [prepare] did not see (its session has no terminal and no process
+   named [codex]): its heuristic identity, checked against the round's
+   claims. It can only lose its id there; the other rows are not changed. *)
+let unseen prepared (process : Round.process) =
+  Option.map
+    (fun identity ->
+      let verdict =
+        match claims [ (process.pid, Some identity) ] with
+        | [ claim ] -> ( match List.rev (Checks.check (prepared.claims @ [ claim ])) with (_, verdict) :: _ -> verdict | [] -> Checks.Keep)
+        | _ -> Checks.Keep
+      in
+      { identity; verdict })
+    (Identity.conversation prepared.context ~registered:None process)
+
+(* A registered identity first; else the round's; else an unseen one's. *)
 let outcome adapter prepared session (process : Round.process) =
-  let alone registered =
-    Identity.conversation prepared.context ~registered process |> Option.map (fun identity -> { identity; verdict = Checks.Keep })
-  in
   match (adapter.config.registry_lookup session, Hashtbl.find_opt prepared.outcomes process.pid) with
-  | (Some _ as registered), _ -> alone registered
+  | (Some _ as registered), _ ->
+      Identity.conversation prepared.context ~registered process |> Option.map (fun identity -> { identity; verdict = Checks.Keep })
   | None, Some outcome -> outcome
-  | None, None -> alone None
+  | None, None -> unseen prepared process
 
 let prepared_for adapter round =
   Mutex.protect adapter.lock (fun () -> List.find_opt (fun p -> p.round == round) adapter.prepared)
@@ -184,8 +208,9 @@ let holds prepared pid id =
       match prepared.context.describe_path path with Some r -> r.header.id = `String id | None -> false)
     (Option.value ~default:[] (Mesh_agent_codex_view.open_rollouts prepared.context.view pid))
 
-(* Decision I4 on the ids a registered identity shares; the other duplicates
-   were settled in [prepare], before any row was described. *)
+(* The registry's rule (the strongest source keeps the id, then the session
+   that holds its rollout open) on the ids a registered identity shares; the
+   other duplicates were settled in [prepare], before any row was described. *)
 let check adapter round (described : Mesh_agent.described list) =
   match prepared_for adapter round with
   | None -> []

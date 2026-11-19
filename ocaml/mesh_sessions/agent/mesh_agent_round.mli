@@ -45,4 +45,9 @@ val cwd : t -> int -> string option
 val open_files : t -> int -> ((int * string) list, Mesh_platform.error) result
 (** The open descriptors that have a path ({!Mesh_platform.open_file_paths}).
     The error says why they are unknown: [Not_found] (the process exited) and
-    [Denied] (another user's process) are told apart from the others. *)
+    [Denied] (no permission) are told apart from the others. [Denied] does
+    not say whose process it is: a non-dumpable process of the same user is
+    [Denied] too; {!owner} tells. *)
+
+val owner : t -> int -> (int, Mesh_platform.error) result
+(** The user id that owns the process ({!Mesh_platform.process_owner}). *)

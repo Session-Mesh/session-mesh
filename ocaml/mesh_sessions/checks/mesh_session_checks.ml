@@ -30,7 +30,7 @@ let python_verdict group claim =
   else if launched && List.length group > 1 then Drop
   else Keep
 
-(* Decision I4: the strongest source, then holding the file open. *)
+(* With a registered identity: the strongest source, then holding the file open. *)
 let registry_verdict group index claim =
   if rank claim.source = 0 then Drop
   else

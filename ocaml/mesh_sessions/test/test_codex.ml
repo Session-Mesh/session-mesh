@@ -5,10 +5,12 @@
 (*                                                                            *)
 (******************************************************************************)
 
-(* The Codex adapter beyond the Python parity set: the command-line reader,
-   the checks between sessions (Python's rules and decision I4), the rollout
-   header cache, the incremental fold, the fail-closed process rules, the
-   registry hook, and a round whose preparation is missing. *)
+(* The Codex adapter beyond the Python parity set: the command-line reader
+   and its option table, Python's case folding, the checks between sessions
+   (Python's rules and the registry's), the rollout header cache and a
+   restored cache, the incremental fold, the fail-closed process rules, ids
+   that are not strings, the registry hook, and a round whose preparation is
+   missing. *)
 
 module Argv = Mesh_agent_codex_argv
 module Checks = Mesh_session_checks
@@ -38,9 +40,36 @@ let test_argv () =
       ("other launcher", [ "sh"; "codex"; "resume"; id_a ]);
       ("bad package", [ "npx"; "@openai/codex@1/2"; "resume"; id_a ]);
     ];
-  Alcotest.(check bool) "a word names it, any case" true (Argv.may_name [ "x"; String.uppercase_ascii id_a ] id_a);
-  Alcotest.(check bool) "an unreadable resume claims" true (Argv.may_name [ "codex"; "resume"; "--yolo"; id_b ] id_a);
-  Alcotest.(check bool) "another id does not" false (Argv.may_name [ "codex"; "resume"; id_b ] id_a)
+  Alcotest.(check bool) "a word names it, any case" true (Argv.may_name [ "x"; String.uppercase_ascii id_a ] (Some id_a));
+  Alcotest.(check bool) "an unreadable resume claims" true (Argv.may_name [ "codex"; "resume"; "--yolo"; id_b ] (Some id_a));
+  Alcotest.(check bool) "another id does not" false (Argv.may_name [ "codex"; "resume"; id_b ] (Some id_a));
+  Alcotest.(check bool) "an unknown id: an unreadable resume" true (Argv.may_name [ "codex"; "resume"; "--yolo"; id_b ] None);
+  Alcotest.(check bool) "an unknown id: no word names it" false (Argv.may_name [ "codex"; id_b ] None)
+
+(* Python's str.lower, values from CPython 3.14. *)
+let test_python_lower () =
+  List.iter
+    (fun (input, expected) -> Alcotest.(check (option string)) input (Some expected) (Argv.python_lower input))
+    [
+      ("AbC-01", "abc-01");
+      ("\xc3\x91b", "\xc3\xb1b") (* Ñb *);
+      ("\xc4\xb0", "i\xcc\x87") (* İ: two code points *);
+      ("\xce\x9f\xce\xa3", "\xce\xbf\xcf\x82") (* ΟΣ: final sigma *);
+      ("\xce\xa3\xce\x9f", "\xcf\x83\xce\xbf") (* ΣΟ *);
+      ("\xce\xa3", "\xcf\x83") (* Σ alone *);
+      ("\xce\x9f\xce\xa3'\xce\x9f", "\xce\xbf\xcf\x83'\xce\xbf") (* ΟΣ'Ο: the apostrophe is case-ignorable *);
+    ];
+  Alcotest.(check (option string)) "not UTF-8" None (Argv.python_lower "a\xff");
+  Alcotest.(check bool) "a Unicode case pair names it" true (Argv.may_name [ "codex"; "\xc3\xb1b" ] (Some "\xc3\x91b"));
+  Alcotest.(check bool) "invalid UTF-8 names nothing" false (Argv.may_name [ "codex"; "\xd1b" ] (Some "\xc3\x91b"))
+
+(* The option table equals fixtures/codex/options.json, which the TS parity
+   test compares with Python's resumeargs._CODEX. *)
+let test_option_table () =
+  let fixture = Yojson.Safe.from_file "fixtures/codex/options.json" in
+  let names key = List.sort compare (List.map Yojson.Safe.Util.to_string (Yojson.Safe.Util.to_list (Yojson.Safe.Util.member key fixture))) in
+  Alcotest.(check (list string)) "options with a value" (names "takes_value") (List.sort compare Argv.takes_value);
+  Alcotest.(check (list string)) "flags" (names "flags") (List.sort compare Argv.flags)
 
 let claim ?(holds_open = false) key id source = { Checks.key; id; source; holds_open }
 let verdicts = Alcotest.(list (pair string (of_pp (fun f v -> Format.pp_print_string f (match v with Checks.Keep -> "keep" | Drop -> "drop" | Contested -> "contested")))))
@@ -52,11 +81,11 @@ let test_checks () =
   check "launch dropped with all" [ ("l", Drop); ("o", Drop) ] [ claim "l" "x" Launch; claim "o" "x" Open ];
   check "observed collisions kept" [ ("a", Keep); ("b", Keep) ] [ claim "a" "x" Open; claim "b" "x" Open ];
   check "alone" [ ("l", Keep) ] [ claim "l" "x" Launch ];
-  check "I4: chosen holds" [ ("c", Keep); ("h", Contested); ("o", Contested); ("g", Drop) ]
+  check "registry: chosen holds" [ ("c", Keep); ("h", Contested); ("o", Contested); ("g", Drop) ]
     [ claim "c" "x" (Registry Chosen); claim "h" "x" (Registry Hook); claim "o" "x" ~holds_open:true Open; claim "g" "x" Guessed ];
-  check "I4: tie broken by holding" [ ("a", Contested); ("b", Keep) ]
+  check "registry: tie broken by holding" [ ("a", Contested); ("b", Keep) ]
     [ claim "a" "x" (Registry Hook); claim "b" "x" ~holds_open:true (Registry Hook) ];
-  check "I4: unbroken tie" [ ("a", Contested); ("b", Contested) ]
+  check "registry: unbroken tie" [ ("a", Contested); ("b", Contested) ]
     [ claim "a" "x" ~holds_open:true (Registry Observed); claim "b" "x" ~holds_open:true Open ]
 
 let first_line id = Fake_codex.header ~id ~cwd:"/w"
@@ -80,10 +109,41 @@ let test_header_cache () =
       Unix.symlink path (Filename.concat (Filename.dirname path) "rollout-link.jsonl");
       Alcotest.(check int) "links are not rollouts" 1 (List.length (Rollouts.walk cache ~root ~now)))
 
-let codex ?(ppid = 50) ?(argv = [ "codex" ]) ?(cwd = Some "/w") ?(files = Ok []) ?(age = 600.) pid =
-  { Fake_codex.pid; ppid; sid = pid; comm = "codex"; start = now -. age; argv; cwd; files; zombie = false }
+(* A restored cache is untrusted: a forged entry for the real file (its
+   device and inode) cannot inject an id. *)
+let test_restored_cache () =
+  Support.with_directory (fun home ->
+      let root = Filename.concat home ".codex" in
+      let path = Fake_codex.write_rollout ~home ~name:"a" ~mtime:(now -. 10.) (first_line id_a) in
+      let stats = Unix.stat path in
+      let forged ?(size = stats.st_size + 100) ?(line_end = Some 1) id =
+        let header = { Rollouts.cwd = `String "/w"; subagent = false; id } in
+        (path, { Rollouts.device = stats.st_dev; inode = stats.st_ino; size; mtime_ns = 1; line_end; header })
+      in
+      let walked entries =
+        let cache = Rollouts.create () in
+        Rollouts.restore cache entries;
+        let ids = List.map (fun (r : Rollouts.rollout) -> r.header.id) (Rollouts.walk cache ~root ~now) in
+        (ids, (Rollouts.counters cache).headers_read)
+      in
+      let check label entries =
+        Alcotest.(check bool) label true (walked entries = ([ `String id_a ], 1))
+      in
+      check "another size and time: read again" [ forged (`String id_b) ];
+      check "a line end of 0 is refused" [ forged ~line_end:(Some 0) ~size:stats.st_size (`String id_b) ];
+      check "an id that is not a string is refused" [ forged (`Int 5) ];
+      check "an id that is not a UUID is refused" [ forged (`String "x") ];
+      check "a relative path is refused" [ ("rollout-a.jsonl", snd (forged (`String id_b))) ];
+      let cache = Rollouts.create () in
+      ignore (Rollouts.walk cache ~root ~now);
+      Rollouts.restore cache [ forged (`Int 5) ];
+      Alcotest.(check bool) "only well-formed entries are saved" true
+        (List.for_all (fun (_, (entry : Rollouts.entry)) -> entry.header.id = `String id_a) (Rollouts.entries cache)))
 
-let shell = { (codex 50) with comm = "bash"; ppid = 1 }
+let codex ?(ppid = 50) ?(argv = [ "codex" ]) ?(cwd = Some "/w") ?(files = Ok []) ?(age = 600.) ?(uid = Unix.getuid ()) pid =
+  { Fake_codex.pid; ppid; sid = pid; comm = "codex"; start = now -. age; argv; cwd; files; zombie = false; uid }
+
+let shell = { (codex 50) with comm = "bash"; ppid = 1; argv = [ "bash" ] }
 
 (* The fields of each process after one round: prepare, describe, then the
    corrections of the cross-session check. *)
@@ -108,11 +168,15 @@ let source fields = List.assoc_opt "identity_source" fields
 let test_fail_closed () =
   Support.with_directory (fun home ->
       ignore (Fake_codex.write_rollout ~home ~name:"a" ~mtime:(now -. 10.) (first_line id_a));
-      let lone files = describe home [ codex 100; codex ~ppid:1 ~cwd:(Some "/") ~files 900 ] [ 100 ] in
+      let lone ?uid files = describe home [ codex 100; codex ~ppid:1 ~cwd:(Some "/") ~files ?uid 900 ] [ 100 ] in
       Alcotest.(check bool) "another user's codex holds nothing" true
-        (source (List.hd (lone (Error Mesh_platform.Denied))) = Some (`String "cwd_unique"));
+        (source (List.hd (lone ~uid:(Unix.getuid () + 1) (Error Mesh_platform.Denied))) = Some (`String "cwd_unique"));
+      Alcotest.(check bool) "a denied codex of this user blocks the guess" true
+        (List.hd (lone (Error Mesh_platform.Denied)) = []);
       Alcotest.(check bool) "an unreadable one blocks the guess" true
         (List.hd (lone (Error (Mesh_platform.Malformed "x"))) = []);
+      Alcotest.(check bool) "another user's unreadable codex holds nothing" true
+        (source (List.hd (lone ~uid:(Unix.getuid () + 1) (Error (Mesh_platform.Malformed "x")))) = Some (`String "cwd_unique"));
       let incomplete = Fake_codex.platform ~btime [ shell; codex 100 ] in
       let incomplete = { incomplete with scan = (fun () -> Result.map (fun s -> { s with Mesh_platform.skipped = 1 }) (incomplete.scan ())) } in
       let round = Result.get_ok (Mesh_agent_round.read incomplete) in
@@ -123,6 +187,28 @@ let test_fail_closed () =
       let other = Result.get_ok (Mesh_agent_round.read (Fake_codex.platform ~btime [ shell; codex 100 ])) in
       Alcotest.(check bool) "unprepared round: no identity" true
         (Fake_codex.describe adapter other 100 = []))
+
+let session_id fields = List.assoc_opt "session_id" fields
+
+let test_ids_not_strings () =
+  Support.with_directory (fun home ->
+      let numbered = {|{"type":"session_meta","payload":{"id":5,"cwd":"/w","source":"cli"}}|} ^ "\n" in
+      let held = Fake_codex.write_rollout ~home ~name:"n" ~mtime:(now -. 10.) numbered in
+      let rows = describe home [ codex ~files:(Ok [ (3, held) ]) 100 ] [ 100 ] in
+      Alcotest.(check bool) "a numeric id is reported as none" true
+        (session_id (List.hd rows) = Some `Null && source (List.hd rows) = Some (`String "open_rollout")))
+
+(* A later rollout without an id cannot be named by another Codex's words:
+   it is a later conversation, so the launch id is not kept. (Python fails
+   here: it lowercases the missing id.) *)
+let test_later_without_id () =
+  Support.with_directory (fun home ->
+      ignore (Fake_codex.write_rollout ~home ~name:"a" ~mtime:(now -. 500.) (first_line id_a));
+      let anonymous = {|{"type":"session_meta","payload":{"cwd":"/w","source":"cli"}}|} ^ "\n" in
+      ignore (Fake_codex.write_rollout ~home ~name:"b" ~mtime:(now -. 10.) anonymous);
+      let others = [ codex ~ppid:1 ~cwd:(Some "/") 300 ] in
+      let rows = describe home (codex ~argv:[ "codex"; "resume"; id_a ] 100 :: others) [ 100 ] in
+      Alcotest.(check bool) "no launch id" true (session_id (List.hd rows) = Some `Null))
 
 let test_registry_hook () =
   Support.with_directory (fun home ->
@@ -157,10 +243,21 @@ let test_incremental () =
 let () =
   Alcotest.run "mesh_agent_codex"
     [
-      ("argv", [ Alcotest.test_case "resume id" `Quick test_argv ]);
+      ( "argv",
+        [
+          Alcotest.test_case "resume id" `Quick test_argv;
+          Alcotest.test_case "python lower" `Quick test_python_lower;
+          Alcotest.test_case "option table" `Quick test_option_table;
+        ] );
       ("checks", [ Alcotest.test_case "duplicate ids" `Quick test_checks ]);
-      ("rollouts", [ Alcotest.test_case "header cache" `Quick test_header_cache ]);
+      ( "rollouts",
+        [ Alcotest.test_case "header cache" `Quick test_header_cache; Alcotest.test_case "restored cache" `Quick test_restored_cache ] );
       ( "identity",
-        [ Alcotest.test_case "fail closed" `Quick test_fail_closed; Alcotest.test_case "registry hook" `Quick test_registry_hook ] );
+        [
+          Alcotest.test_case "fail closed" `Quick test_fail_closed;
+          Alcotest.test_case "ids not strings" `Quick test_ids_not_strings;
+          Alcotest.test_case "later without id" `Quick test_later_without_id;
+          Alcotest.test_case "registry hook" `Quick test_registry_hook;
+        ] );
       ("fold", [ Alcotest.test_case "incremental" `Quick test_incremental ]);
     ]

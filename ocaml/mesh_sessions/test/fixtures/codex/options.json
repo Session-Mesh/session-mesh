@@ -1,0 +1,40 @@
+{
+  "source": "resumeargs._CODEX: takes_value is keep_value and drop_value, flags is keep_flag and drop_flag; restrictive is not read",
+  "categories": ["drop_flag", "drop_value", "keep_flag", "keep_value", "restrictive"],
+  "takes_value": [
+    "--add-dir",
+    "--ask-for-approval",
+    "--cd",
+    "--config",
+    "--disable",
+    "--enable",
+    "--image",
+    "--local-provider",
+    "--model",
+    "--profile",
+    "--remote",
+    "--remote-auth-token-env",
+    "--sandbox",
+    "-C",
+    "-a",
+    "-c",
+    "-i",
+    "-m",
+    "-p",
+    "-s"
+  ],
+  "flags": [
+    "--approve-for-me",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--dangerously-bypass-hook-trust",
+    "--full-auto",
+    "--last",
+    "--no-alt-screen",
+    "--no-daemon",
+    "--oss",
+    "--search",
+    "--strict-config",
+    "--worktree",
+    "--yolo"
+  ]
+}

@@ -54,6 +54,7 @@ let platform ?(on_read = ignore) ?(skipped = 0) processes : Mesh_pty_processes.p
     working_directory =
       lookup (fun fake -> Option.to_result ~none:Mesh_platform.Denied fake.cwd);
     open_file_paths = (fun _ -> Error (Mesh_platform.Unsupported "fake"));
+    process_owner = (fun _ -> Error (Mesh_platform.Unsupported "fake"));
   }
 
 let round ?skipped processes =

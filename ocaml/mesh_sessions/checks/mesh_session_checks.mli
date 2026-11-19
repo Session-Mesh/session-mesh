@@ -15,8 +15,8 @@
       exact one, two guesses of one id are both dropped, an id read from launch
       arguments is dropped with every session that shares it, and observed ids
       that collide only with each other are kept.
-    - {b With a registered identity} (the identity registry, decision I4): the
-      current holder keeps the id. The strongest source wins ([Chosen], then
+    - {b With a registered identity} in the group (the identity registry):
+      the current holder keeps the id. The strongest source wins ([Chosen], then
       [Hook], then an observation, registered or live); a tie is broken by
       holding the conversation's file open. The other sessions with an exact
       claim are [Contested]; launch and guessed claims are dropped. A tie that

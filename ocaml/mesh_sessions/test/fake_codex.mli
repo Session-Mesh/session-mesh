@@ -36,10 +36,12 @@ type process = {
   cwd : string option;
   files : ((int * string) list, Mesh_platform.error) result;
   zombie : bool;
+  uid : int;  (** The owner: this test's user, unless a scenario says otherwise. *)
 }
 
 val platform : btime:float -> process list -> Mesh_pty_processes.platform
-(** Start times become Linux clock ticks after [btime] (100 per second). *)
+(** Start times become Linux clock ticks after [btime] (100 per second). Every
+    session has a terminal whose foreground group is the session's own. *)
 
 val config : btime:float -> now:float -> Mesh_agent_codex.config
 (** A fixed clock and boot time, no registry. *)

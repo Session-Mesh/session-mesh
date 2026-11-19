@@ -33,6 +33,16 @@ let is_codex (process : Round.process) = process.comm = "codex"
 let top_level round (process : Round.process) =
   is_codex process && match Round.find round process.ppid with Some parent -> not (is_codex parent) | None -> true
 
+(* [_neighbour_rollouts]: on Linux, a Codex that exited holds nothing, and so
+   does one positively owned by another user; any other unreadable one (a
+   non-dumpable process of this user is [Denied] too) holds unknown rollouts.
+   Elsewhere every unreadable one is unknown. *)
+let held round pid = function
+  | Ok paths -> Some paths
+  | Error _ when Mesh_platform.platform <> Mesh_platform.Linux -> None
+  | Error Mesh_platform.Not_found -> Some []
+  | Error _ -> ( match Round.owner round pid with Ok uid when uid <> Unix.getuid () -> Some [] | _ -> None)
+
 let codex_of round (process : Round.process) =
   let top = top_level round process in
   let opened = rollouts_of (Round.open_files round process.pid) in
@@ -42,11 +52,7 @@ let codex_of round (process : Round.process) =
     cwd = (if top then Round.cwd round process.pid else None);
     words = (if top then Round.argv round process.pid else []);
     own = Result.to_option opened;
-    held =
-      (match opened with
-      | Ok paths -> Some paths
-      | Error (Mesh_platform.Not_found | Denied) -> Some []
-      | Error (Unsupported _ | Malformed _) -> None);
+    held = held round process.pid opened;
   }
 
 let read round =
@@ -56,7 +62,6 @@ let read round =
   { round; complete = Round.complete round; codex; by_pid }
 
 let round view = view.round
-let codex_pids view = List.map (fun entry -> entry.pid) view.codex
 let top_level view pid = match Hashtbl.find_opt view.by_pid pid with Some entry -> entry.top | None -> false
 
 let open_rollouts view pid =
@@ -92,8 +97,6 @@ let held_by_others view pid =
   in
   gather view.codex
 
-let named_by_others view pid = function
-  | None -> true
-  | Some id ->
-      (not view.complete)
-      || List.exists (fun entry -> entry.top && entry.pid <> pid && Mesh_agent_codex_argv.may_name entry.words id) view.codex
+let named_by_others view pid id =
+  (not view.complete)
+  || List.exists (fun entry -> entry.top && entry.pid <> pid && Mesh_agent_codex_argv.may_name entry.words id) view.codex

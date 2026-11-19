@@ -123,7 +123,9 @@
   generic_test_support
   alcotest
   yojson
-  unix))
+  unix)
+ (deps
+  (source_tree fixtures)))
 
 (test
  (name test_codex_scale)

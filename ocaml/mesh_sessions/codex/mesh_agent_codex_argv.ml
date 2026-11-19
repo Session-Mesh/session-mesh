@@ -86,7 +86,47 @@ let rec scan = function
 
 let resumed_id words = Option.bind (entry_args words) scan
 
+(* The code points of UTF-8 text; [None] when it is not valid UTF-8. *)
+let decode text =
+  let rec loop index acc =
+    if index >= String.length text then Some (Array.of_list (List.rev acc))
+    else
+      let decoded = String.get_utf_8_uchar text index in
+      if Uchar.utf_decode_is_valid decoded then loop (index + Uchar.utf_decode_length decoded) (Uchar.utf_decode_uchar decoded :: acc)
+      else None
+  in
+  loop 0 []
+
+(* CPython's [handle_capital_sigma]: a capital sigma after a cased letter
+   and not before one (case-ignorable code points skipped) is final. *)
+let final_sigma chars index =
+  let rec skip step j =
+    if j >= 0 && j < Array.length chars && Uucp.Case.is_case_ignorable chars.(j) then skip step (j + step) else j
+  in
+  let before = skip (-1) (index - 1) and after = skip 1 (index + 1) in
+  before >= 0 && Uucp.Case.is_cased chars.(before) && (after = Array.length chars || not (Uucp.Case.is_cased chars.(after)))
+
+let lower_char chars buffer index char =
+  if Uchar.to_int char = 0x3A3 then Buffer.add_utf_8_uchar buffer (Uchar.of_int (if final_sigma chars index then 0x3C2 else 0x3C3))
+  else
+    match Uucp.Case.Map.to_lower char with
+    | `Self -> Buffer.add_utf_8_uchar buffer char
+    | `Uchars chars -> List.iter (Buffer.add_utf_8_uchar buffer) chars
+
+let python_lower text =
+  if String.for_all (fun char -> Char.code char < 0x80) text then Some (String.lowercase_ascii text)
+  else
+    Option.map
+      (fun chars ->
+        let buffer = Buffer.create (String.length text) in
+        Array.iteri (lower_char chars buffer) chars;
+        Buffer.contents buffer)
+      (decode text)
+
 let may_name words id =
-  let id = String.lowercase_ascii id in
-  List.exists (fun word -> String.lowercase_ascii word = id) words
-  || (List.mem "resume" words && resumed_id words = None)
+  let named =
+    match Option.bind id python_lower with
+    | Some id -> List.exists (fun word -> python_lower word = Some id) words
+    | None -> false
+  in
+  named || (List.mem "resume" words && resumed_id words = None)

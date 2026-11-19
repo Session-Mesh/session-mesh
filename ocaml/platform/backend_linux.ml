@@ -93,6 +93,11 @@ let open_file_paths pid =
   let* names = list_directory (proc_path pid "fd") in
   Ok (List.filter_map (fd_target pid) names |> List.sort compare)
 
+(* procfs gives [/proc/<pid>] the process's real user id as its owner. *)
+let process_owner pid =
+  let path = Printf.sprintf "/proc/%d" pid in
+  guard path (fun () -> Ok (Unix.stat path).Unix.st_uid)
+
 let scan () =
   let* names = list_directory "/proc" in
   Support.collect_scan names process

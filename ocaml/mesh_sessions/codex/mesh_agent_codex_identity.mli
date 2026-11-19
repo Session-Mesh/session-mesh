@@ -26,7 +26,7 @@ type source = Open_rollout | Argv_resume | Cwd_unique | Registry of Mesh_session
 
 type t = {
   path : string option;  (** The rollout that describes the conversation, if found. *)
-  id : Yojson.Safe.t;  (** A rollout header's id may be any JSON value. *)
+  id : Yojson.Safe.t;  (** A string, or [`Null] when the rollout's header has none. *)
   source : source;
   holds_open : bool;  (** The process holds a rollout of this id open. *)
 }

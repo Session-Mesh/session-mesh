@@ -28,7 +28,7 @@ let fixture home =
   for i = 0 to 399 do
     ignore (Fake_codex.write_rollout ~home ~name:(Printf.sprintf "old-%d" i) ~mtime:(now -. 7200.) (Fake_codex.header ~id:(id (1000 + i)) ~cwd:"/elsewhere"))
   done;
-  let shell = { Fake_codex.pid = 50; ppid = 1; sid = 50; comm = "bash"; start = now -. 9000.; argv = [ "bash" ]; cwd = Some "/"; files = Ok []; zombie = false } in
+  let shell = { Fake_codex.pid = 50; ppid = 1; sid = 50; comm = "bash"; start = now -. 9000.; argv = [ "bash" ]; cwd = Some "/"; files = Ok []; zombie = false; uid = Unix.getuid () } in
   shell
   :: List.init sessions (fun i ->
          let folder = Printf.sprintf "/w/f%d" i in

@@ -16,30 +16,45 @@
 
     {b Headers cached by file.} The first line of a rollout is immutable once
     written. Its decoded header is cached by path with the file's device,
-    inode, size and modification time: an entry stands while the file is the
+    inode, size and modification time in integer nanoseconds
+    ({!Mesh_agent_codex_stat.lstat_regular}): an entry stands while the file is the
     same one and either has not changed or still holds the complete first
-    line it was read from. A first line that is not complete yet is read again
-    once the file changes. The cache holds plain data ({!entry}) so that it
-    can be saved and restored ({!entries}, {!restore}); entries not seen in
-    the last two walks are dropped. Files are read outside the cache's lock. *)
+    line it was read from. That second rule also keeps a header across an
+    in-place rewrite of the first line that keeps the inode (Codex appends;
+    it does not rewrite). A first line that is not complete yet is read again
+    once the file changes. Entries not seen in the last two walks are
+    dropped. Files are read outside the cache's lock.
+
+    {b Saved and restored.} The cache holds plain data ({!entry}) so that it
+    can be saved ({!entries}) and restored ({!restore}). A restored entry is
+    untrusted: one that is not well formed is ignored (an absolute path, no
+    negative number, a [line_end] within the file and the first 8 MB, an id
+    that is [null] or a lowercase UUID, a [cwd] that is [null] or a string),
+    and a well-formed one is used only once the file's key matches it
+    exactly; from then on it follows the rules above. {!entries} gives only
+    well-formed entries. *)
 
 type header = {
   cwd : Yojson.Safe.t;  (** [payload.cwd], any JSON value. *)
   subagent : bool;  (** [payload.source] is an object: a sub-agent's rollout. *)
-  id : Yojson.Safe.t;  (** [payload.id], any JSON value. *)
+  id : Yojson.Safe.t;  (** [payload.id] when it is a string, else [`Null]. *)
 }
 
 val unknown : header
 (** An unreadable rollout, or one whose first line is not a JSON object:
     [{cwd = null; subagent = true; id = null}], as Python's [(None, True, None)]. *)
 
-type rollout = { path : string; mtime : float; header : header }
+type rollout = {
+  path : string;
+  mtime : float;  (** Seconds, as Python's [os.path.getmtime]. *)
+  header : header;
+}
 
 type entry = {
   device : int;
   inode : int;
   size : int;
-  mtime : float;
+  mtime_ns : int;  (** Modification time in nanoseconds. *)
   line_end : int option;  (** The byte after the first line's newline, when complete. *)
   header : header;
 }

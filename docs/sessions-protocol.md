@@ -166,10 +166,10 @@ The source is, in this order of preference (as `discover._codex_conversation`):
 
 | `identity_source` | Meaning |
 |---|---|
-| `open_rollout` | The newest top-level rollout the process holds open: exact. `session_id` is that rollout's id, `null` when its first line has none. |
+| `open_rollout` | The newest top-level rollout the process holds open: exact. `session_id` is that rollout's id, `null` when its first line has none or when it is not a string. |
 | `argv_resume` | The id of `codex [options] resume <id>`: where the process started. Not used when another Codex may have been launched on that id or holds its rollout open (the session then has no id), nor when its folder shows a later conversation written since it started (then the next rule). |
 | `cwd_unique` | The newest top-level rollout of its folder written since it started, when it is the only Codex in that folder and no other Codex holds that rollout open. A guess. |
-| `contested` | With `session_id: null`: another session holds this id under decision I4 (registered identities only, below). |
+| `contested` | With `session_id: null`: another session with a registered identity holds this id (registered identities only, below). |
 
 When the rollout is found it adds `last` (the last prompt typed), `updated` (the rollout's modification
 time), `cwd` (Codex's working directory for the latest turn), `status` (`busy` when the rollout was written
@@ -177,17 +177,20 @@ in the last 20 seconds, else `idle`) and `said` (the agent's last reply). A roll
 `last`, `cwd` and `said` `null`, `updated` 0 and `status` `idle`, as Python.
 
 **Checks between sessions.** Before any Codex row of a round is described, the conversations of every
-terminal session whose agent is Codex are resolved and checked together (`Mesh_session_checks`), with the
-rules of `discover.drop_duplicate_guessed_ids`: a guessed id that another session also reports exactly, or
-that two sessions guess, is withdrawn (`session_id` and `identity_source` `null`); an id read from launch
-arguments is withdrawn from every session that shares it; exact ids that collide only with each other are
-kept. These rows are final when sent: the Codex `check` step corrects none of them. The web server still
-applies its own pass over all agents until it uses this program.
+session whose agent is Codex are resolved and checked together (`Mesh_session_checks`), with the rules of
+`discover.drop_duplicate_guessed_ids`: a guessed id that another session also reports exactly, or that two
+sessions guess, is withdrawn (`session_id` and `identity_source` `null`); an id read from launch arguments
+is withdrawn from every session that shares it; exact ids that collide only with each other are kept. The
+sessions checked are those of the processes the kernel names `codex` and every session with a controlling
+terminal whose agent is Codex, so a Codex detected by its command line only (a `codex-bin` started as
+`codex`) is one of them. A Codex row of a session outside that set is checked against those claims when it
+is described, and can only lose its id. These rows are final when sent: the Codex `check` step corrects
+none of them. The web server still applies its own pass over all agents until it uses this program.
 
 **The identity registry** is not read by this version. The Codex adapter has the hook where it plugs in
 (`Mesh_agent_codex.config.registry_lookup`, keyed by the listed session's `name` and `created`): a session
 it answers for takes the registered id with no heuristic (`identity_source` `chosen`, `hook` or
-`observed`). The Codex `check` step then applies decision I4 to an id that a registered identity shares:
+`observed`). The Codex `check` step then decides who keeps an id that a registered identity shares:
 the strongest source keeps it (`chosen`, then `hook`, then an observation), a tie is broken by holding the
 rollout open, the other exact claims are `contested` and the guesses are withdrawn.
 
@@ -204,7 +207,7 @@ rollout open, the other exact claims are `contested` and the guesses are withdra
 
 The rows are equal to those of `discover.describe` for the same processes and files, except in the cases
 below. In most of them this program reports less (a field left out) or keeps more (a value Python has
-lost). Four report a different value; they are marked **differs**.
+lost). The others report a different value; they are marked **differs**.
 
 - **Transcripts are folded incrementally.** Python folds the last 1.5 MB of a Claude transcript at every
   listing; this program folds that window once, then only the appended lines. Below the window the result is
@@ -251,19 +254,34 @@ For Codex:
 
 - **Rollouts are folded incrementally**, in the same 8 MB window as Python, with the same consequence
   beyond it as for Claude transcripts.
-- **Unsafe files are not read.** A rollout that is a symbolic link, a FIFO or a device is not listed nor
-  opened (Python follows the link). A rollout's first line over 8 MB, or nested deeper than 128 levels, reads
-  as no header (a sub-agent rollout, as Python's unreadable one).
+- **Unsafe or oversized rollouts are skipped (differs).** A rollout that is a symbolic link, a FIFO or a
+  device is not listed nor opened (Python follows the link). A rollout whose first line is over 8 MB, or
+  nested deeper than 128 levels (Python parses up to its recursion limit, about 1000), reads as no header
+  (a sub-agent rollout, as Python's unreadable one). Leaving a rollout out is not only "less": the guess
+  takes the newest rollout that remains in the folder where Python may take the skipped, newer one, and a
+  skipped later conversation keeps the `argv_resume` id where Python moves on to the guess.
+- **Ties (differs).** Two rollouts with the same modification time: Python takes the first its set
+  iteration gives (it can change from one run to the next), this program the first by path.
+- **Ids that are not strings (differs).** A rollout whose header id is a number, an object or any other
+  value that is not a string reports `session_id: null`; Python reports the value (and its duplicate pass
+  fails on an object). A later rollout without an id in the folder of a `codex resume <id>` counts as a later
+  conversation, so the launch id is not kept; Python fails on it as soon as another top-level Codex runs
+  (it lowercases the missing id).
+- **Letter case of ids.** An argument names a conversation when it equals the id under Python's
+  `str.lower` rule, ported (the full lowercase mapping and the final-sigma rule). The case tables are those
+  of the Uucp library, whose Unicode version may be newer than the Python's: a code point whose case
+  mapping changed between the two versions may compare differently (**differs**). Codex ids are lowercase
+  UUIDs, which compare the same.
 - **Process table.** When the process table left processes out (`table.complete` is `false`), every folder
   counts at least two Codex and any conversation may be named by another Codex, so no id is guessed or read
   from arguments. Python on Linux always takes its table as complete.
-- **Open files.** A Codex whose open files are `Denied` is taken as another user's, holding no rollout of
-  this user (the platform reports `Denied` for another user's process). Python checks the owner of
-  `/proc/<pid>`.
-- **Ties.** Two rollouts with the same modification time: Python takes the first its set iteration gives,
-  this program the first by path.
+- **Open files outside Linux.** A Codex that exited, or one of another user, holds no rollout on Linux in
+  both programs (the owner of `/proc/<pid>` is compared with this user). Outside Linux every Codex whose open
+  files cannot be read holds unknown rollouts, in both programs; the macOS backend does not read a process's
+  owner yet.
 - **Duplicated ids** are withdrawn before the row is sent (above), where Python's web server withdraws them
-  after the listing; the result is the same for Codex sessions.
+  after the listing. The checks here cover every session of the process table whose agent is Codex, where
+  Python's pass covers the listed sessions: a Codex outside the listing can only withdraw more.
 - The notice Python prints when an open rollout differs from the `resume` argument is not printed.
 
 ## Process exits and failure
@@ -297,7 +315,7 @@ rollout's modification time. The roots of the other agents (`PI_CODING_AGENT_DIR
 |---|---|
 | `mesh_agent` (`agent/`) | The adapter interface (`Mesh_agent.ADAPTER`) and the registry of adapters keyed by agent type; the round's process table (`Mesh_agent_round`); agent detection and the session's foreground and outermost agent (`Mesh_agent_session`); the agents' directories (`Mesh_agent_roots`); Python's value semantics on JSON (`Mesh_agent_py`). |
 | `mesh_agent_claude` (`claude/`) | The Claude adapter: the transcript fold (`Mesh_agent_claude_fold`, pure) and the adapter with its cache (`Mesh_agent_claude`). |
-| `mesh_agent_codex` (`codex/`) | The Codex adapter: the command-line reader (`Mesh_agent_codex_argv`), the rollout walk and header cache (`Mesh_agent_codex_rollouts`), the round's Codex processes (`Mesh_agent_codex_view`), the identity rules (`Mesh_agent_codex_identity`), the rollout fold (`Mesh_agent_codex_fold`, pure) and the adapter (`Mesh_agent_codex`). |
+| `mesh_agent_codex` (`codex/`) | The Codex adapter: the command-line reader (`Mesh_agent_codex_argv`), the rollout walk and header cache (`Mesh_agent_codex_rollouts`, its file key read by `Mesh_agent_codex_stat`, a C binding of `lstat`), the round's Codex processes (`Mesh_agent_codex_view`), the identity rules (`Mesh_agent_codex_identity`), the rollout fold (`Mesh_agent_codex_fold`, pure) and the adapter (`Mesh_agent_codex`). |
 | `mesh_agent_transcripts` (`transcripts/`) | The transcript fold cache an adapter keeps across rounds (used by Codex; the Claude adapter is meant to move onto it). |
 | `mesh_session_checks` (`checks/`) | The checks between the sessions of a round: one conversation id kept by at most one session. Pure. |
 | `mesh_sessions` (`lib/`) | The protocol's requests and rows, the description of a row, the order of service and backoff, the round, and the request handler. It contains no agent name: the adapters are a value. |
@@ -333,6 +351,9 @@ Rules every adapter keeps, so that a round costs what changed and not what exist
   rollouts) is walked once in `prepare`, not once per session; what is read from each file found there
   (a rollout's first line) is cached by file and signature across rounds, in a form that can later be
   saved to disk so that the first round after a restart does not read every file again
-  (`Mesh_agent_codex_rollouts.entries` and `restore`; nothing is saved yet).
+  (`Mesh_agent_codex_rollouts.entries` and `restore`; nothing is saved yet). The signature is the device,
+  inode, size and modification time in integer nanoseconds. A restored entry is untrusted: it must be well
+  formed and match the file's signature exactly before it is used. Before the cache is persisted, its file
+  belongs in a directory owned by the user with mode 0700.
 - **One process table per round**, from the `Mesh_agent_round.t` the adapter receives; an adapter never
   scans the process table itself.

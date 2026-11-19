@@ -14,9 +14,13 @@
     {b Once per round} ({!prepare}): the process table's Codex processes are
     read ({!Mesh_agent_codex_view}), the recent rollouts are walked once
     ({!Mesh_agent_codex_rollouts}, headers cached across rounds), the
-    conversation of every terminal session whose agent is Codex is resolved,
-    and Python's duplicate-id rules run on them ({!Mesh_session_checks}):
-    such a duplicate is withdrawn before any row is described. {!describe}
+    conversation of every session whose agent is Codex is resolved (the
+    sessions of the processes named [codex] and every session with a
+    terminal, so that a Codex detected by its command line only is one of
+    them), and Python's duplicate-id rules run on them
+    ({!Mesh_session_checks}): such a duplicate is withdrawn before any row is
+    described. A Codex row of a session outside that set is checked against
+    those claims when it is described, and can only lose its id. {!describe}
     then folds the rollout, from the previous cursor when it grew
     ({!Mesh_agent_transcripts}). A round whose preparation did not finish
     gives Codex rows without an identity.
@@ -24,7 +28,9 @@
     {b The identity registry} is not read yet: {!config.registry_lookup} is
     where it plugs in. A session it answers for takes the registered id with
     no heuristic in {!describe}, and {!check}, after every row of the round,
-    applies decision I4 to the ids a registered identity shares. *)
+    applies the registry's rule to the ids a registered identity shares (see
+    {!Mesh_session_checks}). [session_id] is a string or [null]: a rollout
+    whose id is another JSON value reports none. *)
 
 type config = {
   now : unit -> float;  (** Seconds since the epoch ([Unix.gettimeofday]). *)

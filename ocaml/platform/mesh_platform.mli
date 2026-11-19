@@ -189,6 +189,12 @@ val open_file_paths : int -> ((int * string) list, error) result
 (** [(fd, target)] for each open descriptor whose target has a path. A
     ["(deleted)"] suffix on a target is returned as-is. *)
 
+val process_owner : int -> (int, error) result
+(** The user id that owns the process. Linux: the owner of [/proc/<pid>],
+    which is the process's real user id (also when its other entries are
+    [Denied], for example a non-dumpable process of the same user). macOS and
+    other systems: [Unsupported] for now. *)
+
 val foreground_process_group : int -> (int, error) result
 (** [foreground_process_group pid]: the foreground process group of the
     controlling terminal of session leader [pid]. The result is always a
