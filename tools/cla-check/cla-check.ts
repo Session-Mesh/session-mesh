@@ -138,8 +138,8 @@ export type Row = {key: string; email: string};
 
 // One signatory line: | Public name | Commit e-mail | CLA version | YYYY-MM-DD |, from the first
 // column (an indented line is a code block for Markdown). Keyed by its normalised cells, so a line
-// changed by someone else is a different row.
-function parseRow(line: string): Row | null {
+// changed by someone else is a different row. tools/leak-guard reads the same definition.
+export function parseRow(line: string): Row | null {
   const cells = /^\|(.*)\|\s*$/.exec(line)?.[1].split('|').map((cell) => cell.trim());
   if (!cells || cells.length !== 4) return null;
   const [name, rawEmail, version, date] = cells;
@@ -148,32 +148,38 @@ function parseRow(line: string): Row | null {
   return {key: [name, email, version, date].join('|'), email};
 }
 
-// Valid rows of the register. Lines inside fenced code blocks (the example of the file's header)
-// and inside HTML comments are not rows, nor is a line that opens or closes a comment: a line the
-// rendered page does not show as a table row is not a signature.
-export function parseRegister(text: string): Row[] {
-  const rows: Row[] = [];
+// Positions (0-based) of the register lines that can be rows. Lines inside fenced code blocks (the
+// example of the file's header) and inside HTML comments are not rows, nor is a line that opens or
+// closes a comment: a line the rendered page does not show as a table row is not a signature.
+// tools/leak-guard reads the same definition.
+export function rowCandidates(lines: readonly string[]): number[] {
+  const positions: number[] = [];
   let fence: string | null = null;
   let commented = false;
-  for (const line of text.split('\n')) {
+  lines.forEach((line, position) => {
     if (fence !== null) {
       if (line.trim().startsWith(fence)) fence = null;
-      continue;
+      return;
     }
     const comment = commented || line.includes('<!--');
     if (comment) {
       commented = line.lastIndexOf('<!--') > line.lastIndexOf('-->') || (commented && !line.includes('-->'));
-      continue;
+      return;
     }
     const opener = /^\s*(```|~~~)/.exec(line);
     if (opener) {
       fence = opener[1];
-      continue;
+      return;
     }
-    const parsed = parseRow(line);
-    if (parsed) rows.push(parsed);
-  }
-  return rows;
+    positions.push(position);
+  });
+  return positions;
+}
+
+// Valid rows of the register (see rowCandidates and parseRow).
+export function parseRegister(text: string): Row[] {
+  const lines = text.split('\n');
+  return rowCandidates(lines).flatMap((position) => parseRow(lines[position] ?? '') ?? []);
 }
 
 function rowsAt(repo: string, commit: string): Map<string, Row> {
