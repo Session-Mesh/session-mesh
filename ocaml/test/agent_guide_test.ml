@@ -24,13 +24,8 @@ let contains haystack needle =
   in
   len = 0 || loop 0
 
-(* Port 9 (discard) is never contacted: the guide tool makes no request. *)
-let session protocol =
-  let config =
-    Result.get_ok
-      (Mesh_board_mcp.Config.make_for_test ~token:"token" ~port:9 ())
-  in
-  let session = Mcp_kit.Server.create_session (Mesh_board_mcp.server config) in
+let open_session protocol server =
+  let session = Mcp_kit.Server.create_session server in
   let initialize =
     Printf.sprintf
       {|{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"%s","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}|}
@@ -41,6 +36,14 @@ let session protocol =
     (Mcp_kit_stdio.serve_session_line session
        {|{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}|});
   (session, response)
+
+(* Port 9 (discard) is never contacted: the guide tool makes no request. *)
+let session protocol =
+  let config =
+    Result.get_ok
+      (Mesh_board_mcp.Config.make_for_test ~token:"token" ~port:9 ())
+  in
+  open_session protocol (Mesh_board_mcp.server config)
 
 let result_of id response =
   match Option.map Yojson.Safe.from_string response with
@@ -140,6 +143,59 @@ let rejects_a_path_argument () =
     "the guide is not returned" false
     (List.mem guide (texts result))
 
+(* The tracker section of the guide names the work_* tools. Their list comes
+   from the real work-mcp server (tools/list), so a tool added, renamed or
+   removed there fails here until the guide follows. *)
+let work_tools () =
+  let session, _ = open_session "2025-06-18" (Work_mcp.Work_server.server ()) in
+  match
+    Mcp_kit_stdio.serve_session_line session
+      {|{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}|}
+    |> result_of 2 |> List.assoc_opt "tools"
+  with
+  | Some (`List tools) ->
+      List.filter_map
+        (function
+          | `Assoc fields -> (
+              match List.assoc_opt "name" fields with
+              | Some (`String name) -> Some name
+              | _ -> None)
+          | _ -> None)
+        tools
+      |> List.sort_uniq compare
+  | _ -> Alcotest.fail "work-mcp lists no tools"
+
+(* Every "work_" followed by a lowercase name ("work_*" names none). *)
+let work_names text =
+  let len = String.length text in
+  let is_name_char c = (c >= 'a' && c <= 'z') || c = '_' in
+  let rec scan i found =
+    if i + 5 > len then found
+    else if String.sub text i 5 = "work_" && (i = 0 || not (is_name_char text.[i - 1])) then (
+      let j = ref (i + 5) in
+      while !j < len && is_name_char text.[!j] do incr j done;
+      let found = if !j > i + 5 then String.sub text i (!j - i) :: found else found in
+      scan !j found)
+    else scan (i + 1) found
+  in
+  scan 0 [] |> List.sort_uniq compare
+
+let guide_names_exactly_the_work_tools () =
+  let tools = work_tools () in
+  Alcotest.(check int) "work-mcp has 17 tools" 17 (List.length tools);
+  Alcotest.(check (list string))
+    "the guide names every work_* tool and no other" tools
+    (work_names (read_file (guide_path ())))
+
+let work_instructions_name_real_tools () =
+  let tools = work_tools () in
+  List.iter
+    (fun name ->
+      Alcotest.(check bool)
+        (name ^ " in the work-mcp instructions is a real tool") true
+        (List.mem name tools))
+    (work_names Work_mcp.Work_instructions.text)
+
 let () =
   (* The guide path is ours; Alcotest must not parse it as a command. *)
   Alcotest.run
@@ -158,5 +214,12 @@ let () =
             tool_declaration;
           Alcotest.test_case "rejects a path argument" `Quick
             rejects_a_path_argument;
+        ] );
+      ( "tracker section",
+        [
+          Alcotest.test_case "names exactly the work-mcp tools" `Quick
+            guide_names_exactly_the_work_tools;
+          Alcotest.test_case "work-mcp instructions name real tools" `Quick
+            work_instructions_name_real_tools;
         ] );
     ]
