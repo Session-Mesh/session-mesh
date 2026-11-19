@@ -83,7 +83,10 @@ let test_failed_resets_backoff () =
       let states = List.map state_in_round [ `Slow; `Slow; `Raise; `Slow ] in
       Alcotest.(check (list string)) "a failure ends the slow streak" [ "slow"; "slow"; "errorfailed"; "slow" ] states)
 
-let refuse name = fun _ fields -> if List.assoc_opt "name" fields = Some (`String name) && List.mem_assoc "row" fields then Error `Too_large else Ok ()
+(* An [emit] that refuses the rows of session [name] as too large. *)
+let refuse name _ fields =
+  if List.assoc_opt "name" fields = Some (`String name) && List.mem_assoc "row" fields then Error `Too_large
+  else Ok ()
 
 let test_too_large_counted () =
   with_engine (Fake.platform (shells 2)) (fun engine ->
