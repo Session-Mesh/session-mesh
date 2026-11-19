@@ -1,0 +1,20 @@
+; Tests of the generic libraries, one executable per library. Deterministic:
+; Eio tests run on mock clocks, the system-thread test waits on a gate it
+; opens itself, file tests use a fresh temporary directory, and properties use
+; a fixed seed.
+
+(library
+ (name generic_test_support)
+ (wrapped false)
+ (modules support)
+ (libraries qcheck-core unix))
+
+(test
+ (name test_lru)
+ (modules test_lru)
+ (libraries mesh_lru generic_test_support alcotest qcheck-core))
+
+(test
+ (name test_priority)
+ (modules test_priority)
+ (libraries mesh_priority generic_test_support alcotest qcheck-core))

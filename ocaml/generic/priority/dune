@@ -1,0 +1,5 @@
+; A keyed work queue served by priority (bumped, focus list, tiers), without
+; duplicates. Generic (ocaml/README.md, "Generic libraries").
+
+(library
+ (name mesh_priority))
