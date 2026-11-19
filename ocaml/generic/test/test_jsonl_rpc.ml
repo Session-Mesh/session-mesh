@@ -203,6 +203,27 @@ let test_req_with_lone_surrogate () =
       Alcotest.(check bool) ("echoed as sent: " ^ req) true (List.for_all (fun line -> contains line ({|"req":|} ^ req)) lines))
     requests
 
+(* A [req] with a lone surrogate and a non-finite number has no strict JSON
+   form: it is refused, and every frame stays strict JSON. *)
+let test_req_with_lone_surrogate_not_finite () =
+  let requests = [ {|["\ud800",NaN]|}; {|["\ud800",Infinity]|}; {|{"k":"\udc00","n":-Infinity}|} ] in
+  let input = String.concat "" (List.map (fun req -> Printf.sprintf {|{"req":%s,"op":"echo"}|} req ^ "\n") requests) in
+  let frames = exchange echo input in
+  Alcotest.check summaries "refused, without the req"
+    [ ("bad_request", None); ("bad_request", None); ("bad_request", None) ]
+    (summary frames);
+  List.iter
+    (fun (line, _) ->
+      (* The decoder reads a NaN or an infinity as Python does; the encoder
+         refuses them. *)
+      let strict =
+        Result.is_ok
+          (Result.bind (Mesh_jsonl_value.decode Mesh_jsonl_value.default_limits line)
+             (Mesh_jsonl_value.encode ~max_bytes:max_int))
+      in
+      Alcotest.(check bool) ("strict JSON: " ^ line) true strict)
+    frames
+
 let test_envelope_round_trip () =
   let frame = Envelope.request ~req:(`Int 9) "describe" [ ("pids", `List [ `Int 1 ]); ("op", `String "x") ] in
   match Envelope.decode_request Mesh_jsonl_value.default_limits (Yojson.Safe.to_string frame) with
@@ -227,5 +248,6 @@ let () =
           Alcotest.test_case "requests in parallel" `Quick test_concurrent_requests;
           Alcotest.test_case "envelope round trip" `Quick test_envelope_round_trip;
           Alcotest.test_case "req with a lone surrogate" `Quick test_req_with_lone_surrogate;
+          Alcotest.test_case "req with a lone surrogate and NaN" `Quick test_req_with_lone_surrogate_not_finite;
         ] );
     ]

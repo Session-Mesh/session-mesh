@@ -62,16 +62,22 @@ let lone_surrogates text = not (String.equal (Mesh_jsonl_value.replace_lone_surr
 (* The decoder reads an escaped lone surrogate as U+FFFD. A [req] that held
    one is echoed as it was sent: its literal text, taken from the line read
    without decoding its strings, as a raw literal that the encoder writes as
-   it is. The last [req] of the line is the one decoded. *)
+   it is. The last [req] of the line is the one decoded. The raw literal is
+   used only for a [req] whose decoded form is echoable: one with a NaN or
+   an infinity is refused before, since the raw literal would carry it into
+   the frame unchecked. A line the raw reader refuses (an escaped lone
+   surrogate in an object key) leaves the decoded form, with U+FFFD. *)
 let original_req line req =
   match req with
   | Some _ when String.contains line '\\' && lone_surrogates line -> (
       match Yojson.Raw.from_string line with
       | `Assoc fields -> (
           match List.rev (List.filter (fun (key, _) -> key = "req") fields) with
-          | (_, raw) :: _ ->
-              let text = Yojson.Raw.to_string raw in
-              if lone_surrogates text then Some (`Intlit text) else req
+          | (_, raw) :: _ -> (
+              match Yojson.Raw.to_string raw with
+              | text when lone_surrogates text -> Some (`Intlit text)
+              | _ -> req
+              | exception _ -> req)
           | [] -> req)
       | _ -> req
       | exception _ -> req)
@@ -81,7 +87,8 @@ let decode_request limits line =
   match Mesh_jsonl_value.decode limits line with
   | Error problem -> Error (None, fail Bad_request (Mesh_jsonl_value.error_message problem))
   | Ok (`Assoc fields) -> (
-      let req = original_req line (List.assoc_opt "req" fields) in
+      let decoded = List.assoc_opt "req" fields in
+      let req = if Result.is_ok (echoable decoded) then original_req line decoded else decoded in
       match (echoable req, decode_version fields, List.assoc_opt "op" fields) with
       | Error problem, _, _ -> Error (None, problem)
       | Ok (), Error problem, _ -> Error (req, problem)
