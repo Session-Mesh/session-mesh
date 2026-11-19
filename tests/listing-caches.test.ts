@@ -234,6 +234,69 @@ print(json.dumps({"read": sorted(read), "rss": [r["metrics"]["rss_bytes"]["value
   });
 });
 
+describe('the first line of each rollout is read once, across restarts', () => {
+  // One fresh Python process per call: what a restart of the web server starts from.
+  const listing = (home: string, before = '') => python(`
+import json, os, sys, discover
+opened = []
+sys.addaudithook(lambda event, args: event == "open" and os.path.basename(str(args[0])).startswith("rollout-")
+                 and opened.append(1))
+day = os.path.join(discover.HOME, ".codex", "sessions", "2026", "11", "19")
+${before}
+with discover.listing_scope():
+    found = [os.path.basename(discover._rollout_of(f"abcdefgh-{i:04d}") or "") for i in (0, 7, 99)]
+print(json.dumps({"found": found, "opened": len(opened)}))
+`, home);
+
+  test('a restart reads no first line again; a changed, replaced or unknown file is read; bad caches are ignored', () => {
+    const home = tempHome();
+    try {
+      const day = path.join(home, '.codex', 'sessions', '2026', '11', '19');
+      fs.mkdirSync(day, {recursive: true});
+      const rollout = (i: number, id = `abcdefgh-${String(i).padStart(4, '0')}`) => fs.writeFileSync(
+        path.join(day, `rollout-${String(i).padStart(4, '0')}.jsonl`),
+        JSON.stringify({type: 'session_meta', payload: {id, cwd: '/w', base_instructions: 'PRIVATE TEXT'}}) + '\n');
+      for (let i = 0; i < 20; i++) rollout(i);
+      const want = ['rollout-0000.jsonl', 'rollout-0007.jsonl', ''];
+      const cache = path.join(home, 'cache', 'codex-rollout-meta.json');
+
+      assert.deepEqual(listing(home), {found: want, opened: 20});
+      assert.equal(fs.statSync(cache).mode & 0o777, 0o600);
+      const stored = JSON.parse(fs.readFileSync(cache, 'utf8'));
+      assert.equal(stored.v, 1);
+      assert.equal(Object.keys(stored.files).length, 20);
+      assert.ok(!fs.readFileSync(cache, 'utf8').includes('PRIVATE TEXT'), 'no transcript text in the cache');
+      const before = fs.statSync(cache).mtimeMs;
+
+      assert.deepEqual(listing(home), {found: want, opened: 0}, 'after a restart: nothing read');
+      assert.equal(fs.statSync(cache).mtimeMs, before, 'nothing learned: not written again');
+
+      fs.appendFileSync(path.join(day, 'rollout-0003.jsonl'), '{"type":"event_msg","payload":{}}\n');
+      assert.deepEqual(listing(home), {found: want, opened: 1}, 'a grown file is read again');
+
+      // Same size, same mtime_ns, another inode and another id: renamed over the path.
+      assert.deepEqual(listing(home, `
+target = os.path.join(day, "rollout-0007.jsonl")
+st = os.stat(target)
+with open(target) as old, open(target + ".new", "w") as out:
+    out.write(old.read().replace("abcdefgh-0007", "abcdefgh-0099"))
+os.utime(target + ".new", ns=(st.st_atime_ns, st.st_mtime_ns))
+os.replace(target + ".new", target)
+del opened[:]`), {found: ['rollout-0000.jsonl', '', 'rollout-0007.jsonl'], opened: 1});
+      rollout(7);
+
+      for (const bad of ['{not json', JSON.stringify({v: 0, files: {}}), JSON.stringify([1, 2]),
+        JSON.stringify({v: 1, files: {[path.join(day, 'rollout-0000.jsonl')]: ['x']}})]) {
+        fs.writeFileSync(cache, bad);
+        assert.deepEqual(listing(home), {found: want, opened: 20}, `ignored: ${bad}`);
+        assert.equal(JSON.parse(fs.readFileSync(cache, 'utf8')).v, 1, 'rewritten whole');
+      }
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
+  });
+});
+
 describe('codex rollouts are listed once per listing', () => {
   test('inside listing_scope the glob runs once and every rule sees the same rollouts', () => {
     const home = tempHome();

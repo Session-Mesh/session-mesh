@@ -15,6 +15,8 @@ import sys
 import threading
 import time
 
+import fsutil
+import meshpaths
 import resumeargs
 
 HOME = os.path.expanduser("~")
@@ -509,22 +511,81 @@ def _claude_said(content):
 
 
 _meta_cache = {}
+# The first-line cache survives a restart in META_FILE: path -> [dev, ino, size, mtime_ns, cwd, is_subagent, id],
+# used only for a file with the same four numbers. Ids and folders only, never transcript text.
+META_FILE = meshpaths.CACHE_DIR / "codex-rollout-meta.json"
+META_FILE_VERSION = 1
+META_FILE_MAX = 4096
+_meta_stamp = {}        # path -> [dev, ino, size, mtime_ns] when its _meta_cache entry was made
+_meta_stored = None     # META_FILE as read once, {} when missing, unreadable or of another version
+_meta_dirty = False
+_meta_lock = threading.Lock()
 
 
 def _rollout_meta(path):
-    """(cwd, is_subagent, id) from a rollout's first line; immutable, so cached."""
+    """(cwd, is_subagent, id) from a rollout's first line; immutable, so cached (on disk too, see META_FILE)."""
+    global _meta_dirty
     if path not in _meta_cache:
         try:
-            with open(path, "rb") as stream:
-                first = _json_line(stream.readline())
+            st = os.stat(path)
+            stamp = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
+            stored = _stored_meta().get(path)
+            meta = tuple(stored[4:]) if stored and stored[:4] == stamp else _read_rollout_meta(path)
         except OSError:
             return (None, True, None)
-        if not isinstance(first, dict):
+        if meta is None:
             return (None, True, None)
-        p = first.get("payload")
-        p = p if isinstance(p, dict) else {}
-        _meta_cache[path] = (p.get("cwd"), isinstance(p.get("source"), dict), p.get("id"))
+        with _meta_lock:
+            _meta_cache[path], _meta_stamp[path] = meta, stamp
+            _meta_dirty = _meta_dirty or stored is None or stored[:4] != stamp
     return _meta_cache[path]
+
+
+def _read_rollout_meta(path):
+    """(cwd, is_subagent, id) of the first line of a rollout, or None when it is not a JSON object."""
+    with open(path, "rb") as stream:
+        first = _json_line(stream.readline())
+    if not isinstance(first, dict):
+        return None
+    p = first.get("payload")
+    p = p if isinstance(p, dict) else {}
+    return (p.get("cwd"), isinstance(p.get("source"), dict), p.get("id"))
+
+
+def _stored_meta():
+    """The rows of META_FILE, read once per process."""
+    global _meta_stored
+    with _meta_lock:
+        if _meta_stored is None:
+            try:
+                raw = json.loads(fsutil.read_bounded(META_FILE, 8_000_000) or "null")
+                rows = raw["files"].items() if raw.get("v") == META_FILE_VERSION else ()
+                _meta_stored = {path: row for path, row in rows if _valid_meta_row(row)}
+            except (OSError, UnicodeError, ValueError, RecursionError, AttributeError, KeyError, TypeError):
+                _meta_stored = {}
+        return _meta_stored
+
+
+def _valid_meta_row(row):
+    """A row of META_FILE: four integers, a folder and an id that are text or null, a flag."""
+    return (isinstance(row, list) and len(row) == 7 and all(type(n) is int for n in row[:4])
+            and isinstance(row[5], bool) and all(v is None or isinstance(v, str) for v in (row[4], row[6])))
+
+
+def save_rollout_meta():
+    """Write the first-line cache when it learned something since the last write; the newest META_FILE_MAX."""
+    global _meta_dirty
+    with _meta_lock:
+        if not _meta_dirty:
+            return
+        _meta_dirty = False
+        rows = [(path, [*stamp, *_meta_cache[path]]) for path, stamp in _meta_stamp.items()]
+    rows = sorted((item for item in rows if _valid_meta_row(item[1])), key=lambda item: -item[1][3])
+    try:
+        META_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fsutil.atomic_write(META_FILE, json.dumps({"v": META_FILE_VERSION, "files": dict(rows[:META_FILE_MAX])}))
+    except OSError as error:
+        print(f"discover: rollout cache not saved: {error}", flush=True)
 
 
 def recent_rollouts(days=30):
@@ -756,6 +817,7 @@ def listing_scope():
         yield
     finally:
         _LISTING_VIEW.reset(token)
+        save_rollout_meta()
 
 
 def _codex_view():
