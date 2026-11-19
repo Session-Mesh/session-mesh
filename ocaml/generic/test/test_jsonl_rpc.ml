@@ -190,6 +190,19 @@ let test_concurrent_requests () =
   let frames = exchange ~config handler "{\"req\":1,\"op\":\"wait\"}\n{\"req\":2,\"op\":\"go\"}\n" in
   Alcotest.check summaries "second answered first" [ ("ok", Some "2"); ("ok", Some "1") ] (summary frames)
 
+(* A [req] that holds an escaped lone surrogate is echoed as it was sent:
+   the U+FFFD that replaces it in the other fields would not match it. *)
+let test_req_with_lone_surrogate () =
+  let requests = [ {|"a\ud800b"|}; {|{"k":["\udc00",1]}|}; {|"\\ud800"|} ] in
+  let input = String.concat "" (List.map (fun req -> Printf.sprintf {|{"req":%s,"op":"stream"}|} req ^ "\n") requests) in
+  let frames = exchange echo input in
+  Alcotest.(check int) "every frame answered" 9 (List.length frames);
+  List.iteri
+    (fun index req ->
+      let lines = List.map fst (List.filteri (fun position _ -> position / 3 = index) frames) in
+      Alcotest.(check bool) ("echoed as sent: " ^ req) true (List.for_all (fun line -> contains line ({|"req":|} ^ req)) lines))
+    requests
+
 let test_envelope_round_trip () =
   let frame = Envelope.request ~req:(`Int 9) "describe" [ ("pids", `List [ `Int 1 ]); ("op", `String "x") ] in
   match Envelope.decode_request Mesh_jsonl_value.default_limits (Yojson.Safe.to_string frame) with
@@ -213,5 +226,6 @@ let () =
           Alcotest.test_case "last line without newline" `Quick test_last_line_without_newline;
           Alcotest.test_case "requests in parallel" `Quick test_concurrent_requests;
           Alcotest.test_case "envelope round trip" `Quick test_envelope_round_trip;
+          Alcotest.test_case "req with a lone surrogate" `Quick test_req_with_lone_surrogate;
         ] );
     ]
