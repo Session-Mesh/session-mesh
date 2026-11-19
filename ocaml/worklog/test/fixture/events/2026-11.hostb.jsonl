@@ -1,0 +1,12 @@
+{"ts":"2026-11-02T08:00:00Z","task":"T-7a8b","type":"created","title":"Label the pallets","project":"gateway","category":"platform","priority":"P2","status":"todo"}
+{"ts":"2026-11-02T08:00:00Z","task":"T-1a2b","type":"set","field":"priority","to":"P0"}
+{"ts":"2026-11-04T07:00:00Z","task":"T-7a8b","type":"note","text":"copied by a merge"}
+{"ts":"2026-11-06T09:00:00Z","task":"T-1a2b","type":"set","field":"owner","to":"ana"}
+{"ts":"2026-11-06T09:00:00Z","task":"T-1a2b","type":"set","field":"size","to":"M"}
+{"ts":"2026-11-06T09:00:00Z","task":"T-1a2b","type":"set","field":"eta","to":"2026-11-20"}
+{"ts":"2026-11-06T09:00:00Z","task":"T-1a2b","type":"set","field":"origin","to":"planned"}
+{"ts":"2026-11-06T09:00:00Z","task":"T-1a2b","type":"set","field":"track","to":"first run"}
+{"ts":"2026-11-06T09:00:00Z","task":"T-1a2b","type":"add","field":"also","value":"relay-core"}
+{"ts":"2026-11-06T09:01:00Z","task":"T-1a2b","type":"metric","text":"3 pallets per hour"}
+{"ts":"2026-11-06T09:02:00Z","task":"T-1a2b","type":"mentoring","text":"showed Bo the loading plan"}
+{"ts":"2026-11-06T09:03:00Z","task":"T-1a2b","type":"risk","text":"road closure on the 12th"}

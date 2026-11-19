@@ -1,0 +1,34 @@
+; Tests of the worklog library. The fixture is a fictional data repository
+; (several hosts and months, a tree and a legacy category, a duplicate id, a
+; malformed line, unknown event types, a project spanning two products).
+; golden/ is a fictional repository written by the real `wl` tool, with the
+; outputs of three of its read commands (see docs/worklog-format.md).
+
+(tests
+ (names
+  test_basics
+  test_fold_read
+  test_write
+  test_write_io
+  test_taxonomy_edit
+  test_hardening
+  test_yaml_compat
+  test_golden
+  test_review2
+  test_gitrun)
+ (modules
+  test_basics
+  test_fold_read
+  test_write
+  test_write_io
+  test_taxonomy_edit
+  test_hardening
+  test_yaml_compat
+  test_golden
+  test_review2
+  test_gitrun
+  tutil)
+ (libraries mesh_worklog alcotest yojson unix)
+ (deps
+  (source_tree fixture)
+  (source_tree golden)))

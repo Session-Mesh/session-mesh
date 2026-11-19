@@ -1,0 +1,28 @@
+{"ts":"2026-11-02T09:00:00Z","task":"P-8f80","type":"project_created","title":"Gateway rollout","product":"gateway","category":"platform"}
+{"ts":"2026-11-02T09:00:00Z","task":"P-8f80","type":"set","field":"quarter","to":"2026Q4"}
+{"ts":"2026-11-02T09:00:00Z","task":"P-8f80","type":"set","field":"goal","to":"Ship the gateway"}
+{"ts":"2026-11-02T09:00:00Z","task":"P-8f80","type":"add","field":"milestones","value":"alpha"}
+{"ts":"2026-11-02T09:05:00Z","task":"P-8e63","type":"project_created","title":"Second factor","product":"2fa","category":"platform"}
+{"ts":"2026-11-03T09:00:00Z","task":"T-5c6c","type":"created","title":"Design the token endpoint","project":"gateway-api","category":"platform","priority":"P1","status":"in_progress"}
+{"ts":"2026-11-03T09:00:00Z","task":"T-5c6c","type":"set","field":"project","to":"P-8f80"}
+{"ts":"2026-11-03T09:00:00Z","task":"T-5c6c","type":"set","field":"track","to":"auth"}
+{"ts":"2026-11-03T09:00:00Z","task":"T-5c6c","type":"add","field":"tags","value":"api"}
+{"ts":"2026-11-03T09:00:00Z","task":"T-5c6c","type":"add","field":"links","value":"https://example.org/spec"}
+{"ts":"2026-11-03T09:20:00Z","task":"T-e86c","type":"created","title":"Enrol authenticator apps","project":"2fa","category":"platform","priority":"P1","status":"todo"}
+{"ts":"2026-11-03T09:20:00Z","task":"T-e86c","type":"set","field":"due","to":"2026-11-12"}
+{"ts":"2026-11-03T09:20:00Z","task":"T-e86c","type":"set","field":"project","to":"P-8e63"}
+{"ts":"2026-11-03T09:30:00Z","task":"T-316b","type":"created","title":"Invoice export","project":"billing","category":"platform","priority":"P3","status":"todo"}
+{"ts":"2026-11-03T09:50:00Z","task":"T-96a4","type":"created","title":"Triage tax feedback","project":"billing","category":"platform","priority":"P2","status":"inbox"}
+{"ts":"2026-11-03T10:00:00Z","task":"T-e917","type":"created","title":"Rate limiting","project":"gateway-api","category":"platform","priority":"P2","status":"todo"}
+{"ts":"2026-11-03T10:00:00Z","task":"T-e917","type":"add","field":"also","value":"billing"}
+{"ts":"2026-11-04T10:00:00Z","task":"T-5c6c","type":"progress","text":"Drafted the request flow"}
+{"ts":"2026-11-04T10:05:00Z","task":"T-5c6c","type":"note","text":"Remember the refresh token rotation"}
+{"ts":"2026-11-05T09:00:00Z","task":"T-e917","type":"add","field":"tags","value":"perf"}
+{"ts":"2026-11-05T09:10:00Z","task":"T-e917","type":"add","field":"blocked_by","value":"T-5c6c"}
+{"ts":"2026-11-05T09:20:00Z","task":"T-316b","type":"set","field":"priority","to":"P1"}
+{"ts":"2026-11-05T09:30:00Z","task":"T-316b","type":"set","field":"due","to":"2026-11-30"}
+{"ts":"2026-11-05T09:40:00Z","task":"T-96a4","type":"set","field":"status","to":"dropped"}
+{"ts":"2026-11-06T09:00:00Z","task":"P-8f80","type":"set","field":"owner","to":"mia"}
+{"ts":"2026-11-06T09:10:00Z","task":"P-8f80","type":"add","field":"risks","value":"Late design"}
+{"ts":"2026-11-07T09:00:00Z","task":"T-5c6c","type":"session_linked","agent":"claude","session":"sess-0001","cwd":"/tmp/wl-demo/project","host":"lab","repo":null,"branch":null}
+{"ts":"2026-11-09T08:00:00Z","task":"T-e86c","type":"set","field":"status","to":"in_progress"}

@@ -1,0 +1,8 @@
+{"ts":"2026-10-28T09:00:00Z","task":"T-1a2b","type":"created","title":"Ship the first delivery","project":"gateway","category":"platform","priority":"P1","status":"todo","agent":"claude","session":"s-ship"}
+{"ts":"2026-10-28T09:01:00Z","task":"T-1a2b","type":"set","field":"status","to":"in_progress"}
+{"ts":"2026-10-29T10:00:00Z","task":"T-3c4d","type":"created","title":"Book the harbour slot","project":"relay-core","category":"platform","priority":"P0","status":"todo"}
+{"ts":"2026-10-29T10:05:00Z","task":"P-5e6f","type":"project_created","title":"Delivery rollout","product":"relay","category":"platform"}
+{"ts":"2026-10-29T10:05:00Z","task":"P-5e6f","type":"set","field":"quarter","to":"2026Q4"}
+{"ts":"2026-10-29T10:06:00Z","task":"P-5e6f","type":"add","field":"milestones","value":"pilot run"}
+{"ts":"2026-10-30T08:00:00Z","task":"T-4f5a","type":"created","title":"Calibrate the scale","project":"gateway","category":"platform","priority":"P2","status":"in_progress"}
+{"ts":"2026-11-01T08:00:00Z","task":"T-4f5a","type":"progress","text":"scale ordered"}

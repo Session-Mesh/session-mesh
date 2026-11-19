@@ -1,0 +1,5 @@
+{"ts":"2026-11-03T09:10:00Z","task":"T-d8fa","type":"created","title":"Build the login screen","project":"gateway-ui","category":"platform","priority":"P2","status":"in_progress"}
+{"ts":"2026-11-03T09:10:00Z","task":"T-d8fa","type":"set","field":"project","to":"P-8f80"}
+{"ts":"2026-11-03T09:40:00Z","task":"T-026b","type":"created","title":"Survey the literature","project":"notebook","category":"research","priority":"P2","status":"in_progress"}
+{"ts":"2026-11-04T11:00:00Z","task":"T-d8fa","type":"blocker","id":"B-30e1da","kind":"decision","on":"design","text":"Waiting for the visual design"}
+{"ts":"2026-11-09T08:30:00Z","task":"T-026b","type":"set","field":"status","to":"done"}

@@ -1,0 +1,38 @@
+[
+  {
+    "id": "P-8e63",
+    "title": "Second factor",
+    "product": "2fa",
+    "category": "platform",
+    "status": "active",
+    "quarter": null,
+    "owner": null,
+    "hlp": null,
+    "goal": null,
+    "milestones": [],
+    "risks": [],
+    "created": "2026-11-02T09:05:00Z",
+    "open_tasks": 1,
+    "linear": []
+  },
+  {
+    "id": "P-8f80",
+    "title": "Gateway rollout",
+    "product": "gateway",
+    "category": "platform",
+    "status": "active",
+    "quarter": "2026Q4",
+    "owner": "mia",
+    "hlp": null,
+    "goal": "Ship the gateway",
+    "milestones": [
+      "alpha"
+    ],
+    "risks": [
+      "Late design"
+    ],
+    "created": "2026-11-02T09:00:00Z",
+    "open_tasks": 2,
+    "linear": []
+  }
+]

@@ -11,6 +11,15 @@ This directory is the opam package `session_mesh`. It builds six programs:
 | `mesh-history` | The History index: a SQLite database (FTS5 full-text search) driven over stdin/stdout in JSON lines. | The web server (`history.py`), which feeds it the parsed conversations and reads listings and searches from it; without the program it keeps the JSON cache and ripgrep. |
 | `mesh-logout-all` | The command that signs every browser out: it asks the local mesh, with the master token, to raise the cookie generation, and raises it in `cookie-generation` itself when no mesh answers. | The user, through `~/.local/bin/mesh-logout-all`, which `./install.sh` links to the release's program (bundle or native programs) or, for a source install, to the opam switch's. It replaces the Python script `bin/mesh-logout-all`. |
 
+## Library: worklog
+
+`worklog/` is a library only (`session_mesh.worklog`, no program yet): it reads and writes a
+plain-file project-tracking repository in the data format of the `wl` worklog tool, so that files
+written by either coexist. See [docs/worklog-format.md](../docs/worklog-format.md). Its tests run
+with `dune runtest worklog` and use a fictional fixture in `worklog/test/fixture` and a repository written by `wl` itself, with its
+outputs, in `worklog/test/golden`. Two C functions (`flock_stubs.c`) take the same BSD `flock(2)`
+lock as `wl` and read the monotonic clock.
+
 ## mesh-logout-all
 
 It takes no argument and reads `MESH_CONF_DIR` (the token and `cookie-generation`), `MESH_CACHE_DIR`

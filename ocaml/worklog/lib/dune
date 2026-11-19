@@ -1,0 +1,15 @@
+; Reader and writer of a plain-file project-tracking data repository, in the data
+; format of the `wl` worklog tool (see docs/worklog-format.md). Library only.
+;
+; flock_stubs.c: `wl` serialises its writers with a BSD flock(2) on .wl.lock, and
+; Linux keeps flock and POSIX record locks (Unix.lockf) apart, so the same lock
+; needs this one-function binding for the two tools to exclude each other.
+
+(library
+ (name mesh_worklog)
+ (public_name session_mesh.worklog)
+ (libraries unix yojson)
+ (foreign_stubs
+  (language c)
+  (names flock_stubs)
+  (flags :standard -Wall -Wextra)))

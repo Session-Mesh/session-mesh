@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "generated": "2026-11-10T12:00:00Z",
+  "stale_days": 5,
+  "inbox_unattached": 0,
+  "proposals_pending": 0,
+  "sections": {
+    "here": [
+      {
+        "id": "T-5c6c",
+        "title": "Design the token endpoint",
+        "project": "gateway-api",
+        "category": "platform",
+        "priority": "P1",
+        "status": "in_progress",
+        "days": 3,
+        "last_note": "Remember the refresh token rotation",
+        "due": null,
+        "tier": 3,
+        "blockers": [],
+        "unblock": false,
+        "product": "gateway-api",
+        "project_id": "P-8f80",
+        "project_title": "Gateway rollout",
+        "track": "auth",
+        "owner": "me",
+        "eta": null,
+        "size": null,
+        "origin": null,
+        "also": [],
+        "linear": []
+      }
+    ],
+    "in_progress": [],
+    "blocked": [
+      {
+        "id": "T-d8fa",
+        "title": "Build the login screen",
+        "project": "gateway-ui",
+        "category": "platform",
+        "priority": "P2",
+        "status": "in_progress",
+        "days": 6,
+        "last_note": null,
+        "due": null,
+        "tier": null,
+        "blockers": [
+          {
+            "id": "B-30e1da",
+            "kind": "decision",
+            "on": "design",
+            "text": "Waiting for the visual design",
+            "age": "6d"
+          }
+        ],
+        "unblock": false,
+        "product": "gateway-ui",
+        "project_id": "P-8f80",
+        "project_title": "Gateway rollout",
+        "track": null,
+        "owner": "me",
+        "eta": null,
+        "size": null,
+        "origin": null,
+        "also": [],
+        "linear": []
+      }
+    ],
+    "stale": [],
+    "due": [
+      {
+        "id": "T-e86c",
+        "title": "Enrol authenticator apps",
+        "project": "2fa",
+        "category": "platform",
+        "priority": "P1",
+        "status": "in_progress",
+        "days": 1,
+        "last_note": null,
+        "due": "2026-11-12",
+        "tier": null,
+        "blockers": [],
+        "unblock": false,
+        "product": "2fa",
+        "project_id": "P-8e63",
+        "project_title": "Second factor",
+        "track": null,
+        "owner": "me",
+        "eta": null,
+        "size": null,
+        "origin": null,
+        "also": [],
+        "linear": []
+      }
+    ],
+    "todo": []
+  }
+}
