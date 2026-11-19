@@ -1,0 +1,14 @@
+; The program (docs/sessions-protocol.md). It is not part of the release
+; bundles yet: packaging comes with its wiring into the web server.
+
+(executable
+ (name mesh_sessions_main)
+ (public_name mesh-sessions)
+ (modules mesh_sessions_main)
+ (libraries
+  mesh_sessions
+  mesh_agent
+  mesh_agent_claude
+  mesh_pty_processes
+  eio_main
+  unix))

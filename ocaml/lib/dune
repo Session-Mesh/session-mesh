@@ -128,8 +128,15 @@
 (library
  (name mesh_cli)
  (wrapped false)
- (modules mesh_python_text mesh_paths mesh_generation mesh_local_http)
- (libraries cohttp unix))
+ (modules mesh_paths mesh_generation mesh_local_http)
+ (libraries mesh_python_text cohttp unix))
+
+; Python's text operations as the mesh's Python components apply them, on
+; their own so that a program that only reads files does not link cohttp.
+
+(library
+ (name mesh_python_text)
+ (modules mesh_python_text))
 
 (library
  (name mesh_logout_all)
