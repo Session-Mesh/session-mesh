@@ -219,9 +219,12 @@ retries are a few seconds apart; such outages last minutes.
 What `apt-install.sh PACKAGE...` does: up to 3 attempts, each an `apt-get update` (bounded to 120 s) and
 an `apt-get install --download-only` (bounded to 600 s; killing a download is safe and the next attempt
 resumes it). Once everything is downloaded, the real install runs from the local archive, without a
-bound and without the network. A failed attempt is retried after 30 s, then 60 s when it hit the time bound or a
-failed fetch (5xx, connection or name resolution error, hash mismatch) from an Ubuntu host (`*.ubuntu.com`) or the
-mirror hosts of `fast-apt-mirror.sh`; only the output of the failing command counts, and `apt-get update` runs
+bound and without the network. An attempt that failed with a mirror error is retried, the first time after 30 s
+and the second after 60 s. A mirror error is the time bound (status 124, or 137 when apt-get had to be killed), or a
+failed fetch (5xx, connection or name resolution error, hash mismatch) from an Ubuntu host (`*.ubuntu.com`), the
+mirror hosts of `fast-apt-mirror.sh`, or the hosted runner's `mirror+file:/etc/apt/apt-mirrors.txt` list (apt
+names that list instead of the host). Only the error lines (`Err:`, `E:`, `Failed to fetch`) of the failing
+command count, so a warning such as apt's `_apt` sandbox notice does not hide a mirror error, and `apt-get update` runs
 with `--error-on=any`, so an incomplete index fails the attempt instead of making `--if-available` skip a package.
 Before the last attempt `fast-apt-mirror.sh --fallback` points the Ubuntu URIs at `archive.ubuntu.com`, a second
 host (not when `CI_APT_MIRROR_DISABLE=1` is set in the environment of the `apt-install.sh` step). Any other error
@@ -243,11 +246,13 @@ Cost: nothing when the mirror answers (the update and download that `apt-get ins
 in two). A mirror that errors fails each attempt in seconds: about 1.5 min of pauses plus apt's own
 retries before the job fails. The bound case, every attempt hanging until its timeouts, is
 3 x (120 + 600 + 2 x 30 s kill grace) + 90 s = 40.5 min, under the 45 min job timeout. The settings are environment
-variables (`CI_APT_ATTEMPTS`, `CI_APT_PAUSES`, `CI_APT_UPDATE_SECONDS`, `CI_APT_DOWNLOAD_SECONDS`).
+variables (`CI_APT_ATTEMPTS`, `CI_APT_PAUSES`, `CI_APT_UPDATE_SECONDS`, `CI_APT_DOWNLOAD_SECONDS`, `CI_APT_KILL_GRACE`).
 `tests/ci-apt-install.test.ts` runs the script with a fake `apt-get` on `PATH` that fails a given number
 of times with the 503 output of that day, hangs, or reports an unknown package; the same fake is the
-way to simulate an outage locally. `tests/ci-apt-mirror.test.ts` refuses a bare `apt-get`, `apt
-install`, `--with-deps` or `install-deps` in any workflow.
+way to simulate an outage locally. `tests/ci-apt-mirror.test.ts` refuses, in any workflow and in the
+`scripts/` and `.github/scripts/` helper scripts a workflow runs (directly or through another one), a bare
+`apt-get`, `apt install` or `apt update` (also with an option before the verb, as in `apt -y install`),
+`dpkg -i`, `aptitude`, `--with-deps` or `playwright install-deps`.
 
 ## Backports to the maintenance branch
 
