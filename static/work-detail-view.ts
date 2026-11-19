@@ -5,7 +5,7 @@
 
 import { el, formatDate, formatDateTime, omittedNote, priorityTag, statusBadge } from './work-dom.ts';
 import type { ViewContext } from './work-dom.ts';
-import type { Blocker, LinkedSession, Question, TargetRef, TaskDetail, TimelineEvent } from './work-types.ts';
+import type { Answer, Blocker, LinkedSession, Question, TargetRef, TaskDetail, TimelineEvent } from './work-types.ts';
 
 const KNOWN_EVENTS: ReadonlySet<string> = new Set(['created', 'set', 'add', 'remove', 'progress', 'note', 'blocker', 'unblocked',
   'session_linked', 'question', 'answer', 'decision', 'learning', 'risk', 'metric', 'mentoring', 'shipped', 'project_created']);
@@ -66,8 +66,36 @@ function eventItem(ctx: ViewContext, event: TimelineEvent): HTMLElement {
   return item;
 }
 
+function answerItem(ctx: ViewContext, answer: Answer): HTMLElement {
+  const meta = [answer.by ? ctx.t('work.answer.by', { by: answer.by }) : null, answer.at ? formatDateTime(answer.at, ctx.locale) : null,
+    answer.relayedBy ? ctx.t('work.answer.relayedBy', { session: answer.relayedBy }) : null].filter((part): part is string => !!part);
+  return el('li', 'work-answer', el('p', 'work-answer-text', answer.text), meta.length ? el('p', 'work-mute work-answer-meta', meta.join(' · ')) : null);
+}
+
+/**
+ * The answer area of a question, kept apart from the question text: the answers given, or for an open question
+ * a hint (the owner answers in the agent's terminal) and an empty, hidden slot `[data-work-answer-slot]` reserved for
+ * a later reply control. Nothing here sends anything.
+ */
+function answerArea(ctx: ViewContext, question: Question): HTMLElement {
+  const area = el('div', 'work-answer-area');
+  area.dataset.workAnswerFor = question.id;
+  if (question.answers.length > 0) area.append(el('ul', 'work-answer-list', ...question.answers.map(answer => answerItem(ctx, answer))));
+  if (question.open) {
+    const slot = el('div', 'work-answer-slot');
+    slot.dataset.workAnswerSlot = question.id;
+    slot.hidden = true;
+    area.append(el('p', 'work-answer-hint work-mute', ctx.t('work.question.answerHint')), slot);
+  }
+  return area;
+}
+
 function questionItem(ctx: ViewContext, question: Question): HTMLElement {
-  return el('li', 'work-detail-item', question.text, el('span', 'work-mute', ` ${ctx.t(question.open ? 'work.question.open' : 'work.question.answered')}`));
+  const state = question.open ? 'open' : 'answered';
+  const item = el('li', `work-detail-item work-question-item work-question-${state}`,
+    el('p', 'work-question-text', question.text, el('span', 'work-mute', ` ${ctx.t(question.open ? 'work.question.open' : 'work.question.answered')}`)), answerArea(ctx, question));
+  item.dataset.questionId = question.id;
+  return item;
 }
 
 function notesSection(ctx: ViewContext, notes: string): HTMLElement | null {

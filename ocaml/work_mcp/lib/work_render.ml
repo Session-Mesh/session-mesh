@@ -195,11 +195,13 @@ let max_answers = 5
 
 let answer_json (a : Work_questions.answer) =
   `Assoc
-    [
-      ("text", `String (trunc_chars ~max:Work_questions.max_text a.answer_text));
-      ("by", tstr ~max:100 a.by);
-      ("at", ts a.answered_at);
-    ]
+    ([
+       ("text", `String (trunc_chars ~max:Work_questions.max_text a.answer_text));
+       ("by", tstr ~max:100 a.by);
+       ("at", ts a.answered_at);
+     ]
+    @ opt_tstr ~max:100 "relayed_by_agent" a.relay_agent
+    @ opt_tstr ~max:100 "relayed_by_session" a.relay_session)
 
 (* The newest [n] items of a list in time order; [<key>_omitted] counts the
    older ones left out. *)

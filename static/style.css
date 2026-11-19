@@ -1174,6 +1174,12 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .work-fields dd { margin: 0; }
 .work-detail-section { margin: 12px 0; }
 .work-detail-item { padding: 3px 0; }
+.work-question-text, .work-answer-text, .work-answer-meta, .work-answer-hint { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.work-answer-area { margin: 4px 0 6px; padding-inline-start: 10px; border-inline-start: 2px solid var(--line); }
+.work-question-answered .work-answer-area { border-inline-start-color: var(--accent); }
+.work-answer-list { list-style: none; margin: 0; padding: 0; }
+.work-answer + .work-answer { margin-top: 4px; }
+.work-answer-meta, .work-answer-hint { font-size: 12px; }
 .work-notes { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .work-event { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 8px; padding: 6px 0 6px 10px; border-inline-start: 2px solid var(--line); }
 .work-event-inferred { border-inline-start-style: dashed; }

@@ -21,12 +21,18 @@ mesh's launch.
 ## Track your work: the `mesh-work` tools
 
 When the mesh gives you `mesh-board` and its `work-mcp` program is installed, you also get a
-second MCP server, `mesh-work`: 17 tools over the owner's project tracker, which the Projects view
+second MCP server, `mesh-work`: 18 tools over the owner's project tracker, which the Projects view
 shows. Its data is a local git repository shared by every session of the owner: `~/worklog-data`
 (or an older `~/worklog`, but not both; `WL_HOME` replaces them), created at first use. Entries
 are appended and committed, never edited or deleted. The server's own instructions say how to use
 the tools; follow them. In short: `work_resume` at the start, `work_log` as you go and before you stop, `work_ask` for
 a question that does not block you.
+
+**Questions.** `work_ask` records the question with the assumption you adopt, and you carry on: it
+does not wait. The owner answers in your session's terminal, in the conversation. When that
+happens, record the owner's words with `work_answer` (the question id and the text;
+`answered_by` defaults to `owner`). Use it only to relay what the owner said, never to answer a
+question yourself; a question the owner has not answered stays open.
 
 **Which system for what.**
 
@@ -39,7 +45,7 @@ a question that does not block you.
 **Tools:** `work_resume`, `work_list_tasks`, `work_get`, `work_list_projects`,
 `work_list_products`, `work_add_task`, `work_add_project`, `work_add_product`, `work_update`,
 `work_log`, `work_block`, `work_unblock`, `work_find_sessions`, `work_get_session`, `work_ask`,
-`work_list_questions`, and `work_open_view`, which is not available yet and answers
+`work_answer`, `work_list_questions`, and `work_open_view`, which is not available yet and answers
 `opened: false`.
 
 No hook is installed and nothing is typed at your prompt about the tracker: the server's

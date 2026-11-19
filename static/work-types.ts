@@ -57,9 +57,12 @@ export type TimelineEvent = Readonly<{
   fields: readonly (readonly [string, string])[]; prov: Provenance | null;
 }>;
 
+/** An answer as recorded: `by` is who gave it (free text, not authenticated), `relayedBy` the session that wrote it. */
+export type Answer = Readonly<{ text: string; by: string | null; at: string | null; relayedBy: string | null }>;
+
 export type Question = Readonly<{
   id: string; open: boolean; text: string; options: readonly string[]; about: string | null;
-  askedBy: string | null; askedAt: string | null;
+  askedBy: string | null; askedAt: string | null; answers: readonly Answer[];
 }>;
 
 /** Counts of items a list kept out (`<key>_omitted` of the document). */
