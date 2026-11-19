@@ -22,6 +22,28 @@ with `dune runtest worklog` and use a fictional fixture in `worklog/test/fixture
 outputs, in `worklog/test/golden`. Two C functions (`flock_stubs.c`) take the same BSD `flock(2)`
 lock as `wl` and read the monotonic clock.
 
+## Generic libraries
+
+`generic/` holds small libraries that know nothing of sessions or agents. They have no program
+and no caller yet; the session listing program is meant to be built on them. Each module has an
+`.mli`, and the tests are in `generic/test` (`dune runtest generic`).
+
+| Library | What it is |
+|---|---|
+| `mesh_lru` | A map bounded by entry count and optionally by a caller-measured weight, evicting the least recently used entry; O(1) operations. |
+| `mesh_priority` | A keyed work queue without duplicates: bumped items first, then a focus list in its order, then tiers (`Focus`, `Pinned`, `Recent`, `Visible`, `Rest`) by rank. |
+| `mesh_deadline_pool` | Items run under Eio with bounded concurrency and a deadline each, ending `Ready`, `Slow` or `Failed`; blocking calls in abandonable system threads, with a bound on threads; a no-progress watchdog for rounds. |
+| `mesh_jsonl` | Bounded JSON lines: a line splitter that never holds more than the line bound, and a decoder that checks length and nesting depth before parsing and keeps the last value of a duplicated key, as Python does. |
+| `mesh_safe_file` | Opening a file written by another program without following a link or blocking on a FIFO (`lstat`, `O_NONBLOCK`, then `fstat` of the same file), and positioned reads. |
+| `mesh_jsonl_tail` | An incremental fold over an append-only JSON-lines file: reads only appended bytes, waits for a partial last line, starts again on truncation, inode change or changed bytes before the cursor, and bounds each call's reads. It ports the History index's Python reader. |
+| `mesh_jsonl_rpc` | A JSON-lines request protocol over Eio flows, with the frames of `mesh-history` (`req` echo, `ok`, `error.code`), a version on every frame, streamed events, and lines bounded in both directions. |
+
+**Independence rule.** A generic library depends only on other generic libraries and on `unix`,
+`threads.posix`, `yojson`, `eio` and `cstruct`. `generic/test/dependency_guard.ml`, run by
+`dune runtest`, reads their dune files and fails on any other dependency, and on a directory of
+`generic/` that it does not list. Adding a generic library, or an allowed external dependency,
+means editing its lists on purpose.
+
 ## work-mcp
 
 `work_mcp/` holds the `work_mcp` library and the stdio program `work-mcp`: 17 `work_*` MCP tools

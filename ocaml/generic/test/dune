@@ -40,3 +40,35 @@
   qcheck-core
   yojson
   unix))
+
+(test
+ (name test_deadline_pool)
+ (modules test_deadline_pool)
+ (libraries
+  mesh_deadline_pool
+  mesh_priority
+  alcotest
+  eio
+  eio.mock
+  eio_main
+  threads.posix))
+
+(test
+ (name test_jsonl_rpc)
+ (modules test_jsonl_rpc)
+ (libraries mesh_jsonl_rpc mesh_jsonl alcotest eio eio.mock yojson))
+
+; The independence rule of the generic libraries (ocaml/README.md, "Generic
+; libraries"): their dune files may name only each other and an allowed list
+; of general-purpose packages.
+
+(executable
+ (name dependency_guard)
+ (modules dependency_guard))
+
+(rule
+ (alias runtest)
+ (deps
+  (glob_files_rec ../dune))
+ (action
+  (run %{exe:dependency_guard.exe} ..)))

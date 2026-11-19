@@ -1,0 +1,7 @@
+; Work items with bounded concurrency and a deadline each (Eio), blocking
+; calls in abandonable system threads, and a no-progress watchdog for rounds.
+; Generic (ocaml/README.md, "Generic libraries").
+
+(library
+ (name mesh_deadline_pool)
+ (libraries eio threads.posix))

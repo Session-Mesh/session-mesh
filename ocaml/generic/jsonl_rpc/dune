@@ -1,0 +1,9 @@
+; A JSON-lines request protocol over Eio flows: versioned frames that keep the
+; mesh-history convention (req echo, ok, error.code), streamed events, lines
+; bounded in both directions. Generic (ocaml/README.md, "Generic libraries").
+
+(library
+ (name mesh_jsonl_rpc)
+ (wrapped false)
+ (modules mesh_jsonl_rpc_envelope mesh_jsonl_rpc)
+ (libraries mesh_jsonl eio cstruct yojson))
