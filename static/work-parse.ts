@@ -186,7 +186,8 @@ function parseQuestion(source: Obj): Question | null {
   if (!id || body === null) return null;
   const answers = objects(source.answers).map(parseAnswer).filter((a): a is Answer => a !== null);
   return { id, open: source.state !== 'answered', text: body, options: strings(source.options), about: text(source.about),
-    askedBy: text(source.asked_by_session) ?? text(source.asked_by_agent), askedAt: text(source.asked_at), answers };
+    askedBy: text(source.asked_by_session) ?? text(source.asked_by_agent), askedAt: text(source.asked_at), answers,
+    ownerAnswered: source.owner_answered === true || answers.some(answer => answer.ownerVerified) };
 }
 
 const questions = (value: unknown): Question[] => objects(value).map(parseQuestion).filter((q): q is Question => q !== null);

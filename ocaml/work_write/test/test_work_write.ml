@@ -109,14 +109,51 @@ let test_forged_marker () =
     Printf.sprintf {|{"ts":"2026-11-08T10:00:00Z","task":"T-3c4d","type":"answer","question":"%s","text":"x","by":"admin","via":"owner-web"}|}
       (qid 1)
   in
-  let repo = fixture ~lines:[ forged_relay; forged_by ] () in
+  (* By owner, with the marker and a session but no agent: the session alone disqualifies it. *)
+  let forged_session =
+    Printf.sprintf
+      {|{"ts":"2026-11-08T10:00:00Z","task":"T-3c4d","type":"answer","question":"%s","text":"x","by":"owner","via":"owner-web","session":"asking"}|}
+      (qid 2)
+  in
+  let repo = fixture ~questions:3 ~lines:[ forged_relay; forged_by; forged_session ] () in
   List.iter
     (fun id ->
       match answers repo id with
       | [ a ] -> Alcotest.(check bool) (id ^ " not verified") false (flag "owner_verified" a)
       | _ -> Alcotest.fail "one answer")
-    [ qid 0; qid 1 ];
+    [ qid 0; qid 1; qid 2 ];
   Alcotest.(check bool) "the owner can still answer" false (flag "duplicate" (ok repo (request (qid 0) "real")))
+
+(* Five later relayed lines (written straight to the log, as a forger would)
+   must not push the owner's answer out of the five shown: the view would then
+   offer the form again and the owner's send would get already_answered. *)
+let test_cap_keeps_owner_answer () =
+  let repo = fixture () in
+  ignore (ok repo (request (qid 0) "the owner's answer"));
+  let later i =
+    Printf.sprintf
+      {|{"ts":"2026-12-01T10:0%d:00Z","task":"T-3c4d","type":"answer","question":"%s","text":"relayed %d","by":"owner","agent":"claude","session":"asking"}|}
+      i (qid 0) i
+  in
+  Out_channel.with_open_bin
+    (Filename.concat (Filename.concat repo.wl_home "events") "2026-12.hostr.jsonl")
+    (fun oc -> output_string oc (String.concat "\n" (List.init 5 later) ^ "\n"));
+  let q = question repo (qid 0) in
+  Alcotest.(check bool) "the question says the owner answered it" true (flag "owner_answered" q);
+  Alcotest.(check int) "one older answer left out" 1 (U.to_int (member "answers_omitted" q));
+  match answers repo (qid 0) with
+  | owner :: relayed ->
+      Alcotest.(check string) "the owner's answer is kept, first in time order" "the owner's answer" (str "text" owner);
+      Alcotest.(check bool) "it is verified" true (flag "owner_verified" owner);
+      Alcotest.(check (list string)) "then the newest relayed ones" [ "relayed 1"; "relayed 2"; "relayed 3"; "relayed 4" ]
+        (List.map (str "text") relayed);
+      Alcotest.(check bool) "all superseded" true (List.for_all (flag "superseded") relayed)
+  | [] -> Alcotest.fail "answers expected"
+
+let test_open_question_flag () =
+  let repo = fixture ~lines:[ relayed_line (qid 0) "relayed only" ] () in
+  Alcotest.(check bool) "a relayed answer alone is not the owner's" false (flag "owner_answered" (question repo (qid 0)));
+  Alcotest.(check bool) "an open question neither" false (flag "owner_answered" (question repo (qid 1)))
 
 let test_concurrent_writers () =
   let n = 12 in
@@ -172,6 +209,8 @@ let () =
           Alcotest.test_case "supersedes a relayed answer" `Quick test_supersedes_relayed;
           Alcotest.test_case "relay refused after the owner" `Quick test_relay_after_owner;
           Alcotest.test_case "forged markers are not verified" `Quick test_forged_marker;
+          Alcotest.test_case "the answer cap keeps the owner's answer" `Quick test_cap_keeps_owner_answer;
+          Alcotest.test_case "owner_answered only for the owner's answer" `Quick test_open_question_flag;
           Alcotest.test_case "concurrent writers" `Quick test_concurrent_writers;
           Alcotest.test_case "agent session refused" `Quick test_agent_session_refused;
           Alcotest.test_case "missing repository" `Quick test_missing_repository;

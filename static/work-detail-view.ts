@@ -117,8 +117,7 @@ function answerArea(ctx: ViewContext, question: Question): HTMLElement {
   const area = el('div', 'work-answer-area');
   area.dataset.workAnswerFor = question.id;
   if (question.answers.length > 0) area.append(el('ul', 'work-answer-list', ...question.answers.map(answer => answerItem(ctx, answer))));
-  const verified = question.answers.some(answer => answer.ownerVerified);
-  if (question.open || (!verified && ctx.answers)) {
+  if (question.open || (!question.ownerAnswered && ctx.answers)) {
     const { slot, form } = answerSlot(ctx, question);
     area.append(el('p', 'work-answer-hint work-mute', answerHint(ctx, question, form)), slot);
   }

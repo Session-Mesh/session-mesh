@@ -66,9 +66,10 @@ export type Answer = Readonly<{
   text: string; by: string | null; at: string | null; relayedBy: string | null; ownerVerified: boolean; superseded: boolean;
 }>;
 
+/** `ownerAnswered`: the question has an owner-verified answer, even when a size bound left it out of `answers`. */
 export type Question = Readonly<{
   id: string; open: boolean; text: string; options: readonly string[]; about: string | null;
-  askedBy: string | null; askedAt: string | null; answers: readonly Answer[];
+  askedBy: string | null; askedAt: string | null; answers: readonly Answer[]; ownerAnswered: boolean;
 }>;
 
 /** Counts of items a list kept out (`<key>_omitted` of the document). */
