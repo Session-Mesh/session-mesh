@@ -46,9 +46,17 @@ a bounded excerpt, after a count per rule.
 
 `static/vendor/` is exempt from the e-mail and `*.ts.net` rules only, never from secrets.
 
-The files of `email.registers` (`CLA-SIGNATORIES.md`, whose rows publish each signatory's commit
-address on purpose) are exempt from the e-mail rule only, and only for the address cell of a row
-`| name | address | version | YYYY-MM-DD |`; the rest of the file and every other rule still apply.
+The files of `email.registers` are exempt from the e-mail rule only, and only for the address cell
+of a signatory row; the rest of the file and every other rule still apply. The one entry is
+`CLA-SIGNATORIES.md`, compared as an exact path: the file at the repository root, never one of the
+same name in a subdirectory. Its rows publish each signatory's commit address on purpose, and the
+required `cla` check ties each to a commit authored with that address. A row is therefore exactly
+what `tools/cla-check` counts as a signature, read with its own `parseRow` and `rowCandidates`:
+`| name | address | version | YYYY-MM-DD |` with a non-blank name, a version the CLA has (`1.0`),
+a real calendar date and the address bare or between a pair of backquotes, on a line outside a
+fenced block and an HTML comment. Known limit: `staged` and `commits` see added lines without the
+rest of the file, so they cannot tell that such a line sits in a fence or a comment and judge it on
+its own form; `worktree` and `tree` (the public CI runs `worktree`) read the whole file and report it.
 
 ## Exceptions
 

@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {findAllow, loadAllows, type PrivateAllow} from './allows.ts';
+import {isRowAddress, type RowAddress, rowAddress, rowLineNumbers} from './register.ts';
 
 export type Gate = 'content' | 'filename' | 'message' | 'identity';
 // `match` is the exact text a line rule matched (for a gitleaks secret, `<gitleaks rule>:sha256:<digest>`);
@@ -187,18 +188,21 @@ function vendorExempt(rules: PublicRules, file: string, rule: string): boolean {
   return rules.vendor.exemptRules.includes(rule) && rules.vendor.prefixes.some(prefix => file.startsWith(prefix));
 }
 
-export type ScanTarget = {gate: Gate; path: string};
+// `rowLines`: for a whole register file, the lines outside fences and HTML comments. Added lines
+// (`staged`, `commits`) come without their context and carry none.
+export type ScanTarget = {gate: Gate; path: string; rowLines?: ReadonlySet<number>};
 
-// A signatory row of the CLA register: | Public name | Commit e-mail | CLA version | YYYY-MM-DD |,
-// the address optionally in backquotes (tools/cla-check reads the same form).
-const REGISTER_ROW = /^\|[^|]+\|\s*`?([^|\s`]+)`?\s*\|\s*\d+\.\d+\s*\|\s*\d{4}-\d{2}-\d{2}\s*\|\s*$/d;
+function isRegister(rules: PublicRules, target: ScanTarget): boolean {
+  return target.gate === 'content' && (rules.email.registers ?? []).includes(target.path);
+}
 
-// Lifts the email rule only, only in the content of a register file, only for a hit that is exactly
-// the address cell of a signatory row: free text, other cells and every other rule are still checked.
-function registerAddress(rules: PublicRules, target: ScanTarget, line: string, rule: string, hit: Hit): boolean {
-  if (rule !== 'email' || target.gate !== 'content' || !(rules.email.registers ?? []).includes(target.path)) return false;
-  const row = REGISTER_ROW.exec(line);
-  return row !== null && row.indices?.[1]?.[0] === hit.index && row[1] === hit.text;
+// The signatory row of a register line, as tools/cla-check counts it (register.ts), parsed once per
+// line. Only an email hit that is exactly its address is lifted: free text, other cells and every
+// other rule are still checked.
+function registerRow(rules: PublicRules, target: ScanTarget, line: string, lineNumber: number): RowAddress | null {
+  if (!isRegister(rules, target)) return null;
+  if (target.rowLines && !target.rowLines.has(lineNumber)) return null;
+  return rowAddress(line);
 }
 
 // Only file content and file names can be authorized, like reviewed exceptions.
@@ -215,9 +219,10 @@ export function scanLines(ruleSet: RuleSet, target: ScanTarget, lines: string[],
   lines.forEach((line, position) => {
     const lineNumber = lineNumbers ? lineNumbers[position] : position + 1;
     const hits = [...genericHits(ruleSet.publicRules, line), ...privateHits(ruleSet.privateRules, line)];
+    const row = registerRow(ruleSet.publicRules, target, line, lineNumber);
     for (const {rule, hit} of hits) {
       if (vendorExempt(ruleSet.publicRules, target.path, rule)) continue;
-      if (registerAddress(ruleSet.publicRules, target, line, rule, hit)) continue;
+      if (rule === 'email' && row !== null && isRowAddress(row, hit.index, hit.text)) continue;
       if (allowedPrivateHit(ruleSet, target, line, rule, hit)) continue;
       findings.push({gate: target.gate, path: target.path, line: lineNumber, rule, excerpt: excerpt(line, hit), match: hit.text});
     }
@@ -226,7 +231,8 @@ export function scanLines(ruleSet: RuleSet, target: ScanTarget, lines: string[],
 }
 
 export function scanText(ruleSet: RuleSet, target: ScanTarget, text: string): Finding[] {
-  return scanLines(ruleSet, target, text.split(/\r?\n/));
+  const lines = text.split(/\r?\n/);
+  return scanLines(ruleSet, isRegister(ruleSet.publicRules, target) ? {...target, rowLines: rowLineNumbers(lines)} : target, lines);
 }
 
 export function scanFileName(ruleSet: RuleSet, file: string): Finding[] {
