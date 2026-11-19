@@ -1,0 +1,22 @@
+; The agent side of the session listing (docs/sessions-protocol.md): the
+; adapter interface and its registry, the round's process table, agent
+; detection, the agents' directories, and Python's value semantics on JSON.
+; It knows no protocol and no scheduling; the generic libraries never depend
+; on it (generic/test/generic_guard.ml).
+
+(library
+ (name mesh_agent)
+ (wrapped false)
+ (modules
+  mesh_agent
+  mesh_agent_py
+  mesh_agent_roots
+  mesh_agent_round
+  mesh_agent_session)
+ (libraries
+  mesh_platform
+  mesh_pty_processes
+  mesh_python_text
+  mesh_jsonl
+  yojson
+  unix))

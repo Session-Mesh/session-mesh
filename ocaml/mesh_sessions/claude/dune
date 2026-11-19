@@ -1,0 +1,17 @@
+; The Claude adapter of the session listing (docs/sessions-protocol.md): the
+; transcript fold, pure, and the adapter with its caches.
+
+(library
+ (name mesh_agent_claude)
+ (wrapped false)
+ (modules mesh_agent_claude_fold mesh_agent_claude)
+ (libraries
+  mesh_agent
+  mesh_python_text
+  mesh_jsonl
+  mesh_jsonl_tail
+  mesh_safe_file
+  mesh_lru
+  yojson
+  unix
+  threads.posix))

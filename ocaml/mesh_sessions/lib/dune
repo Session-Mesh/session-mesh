@@ -1,0 +1,20 @@
+; mesh-sessions without its main: the protocol's requests and rows, the
+; description of a row, the order of service, rounds, and the request handler
+; (docs/sessions-protocol.md). It names no agent type: the adapters are a
+; value (Mesh_agent.Registry).
+
+(library
+ (name mesh_sessions)
+ (wrapped false)
+ (libraries
+  mesh_agent
+  mesh_platform
+  mesh_pty_processes
+  mesh_python_text
+  mesh_priority
+  mesh_deadline_pool
+  mesh_jsonl
+  mesh_jsonl_rpc
+  eio
+  yojson
+  unix))
