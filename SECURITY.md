@@ -136,7 +136,10 @@ install.
   own configuration (for Claude Code and for Copilot CLI alike; Copilot's project and plugin hooks
   and each MCP server it launches included). Such a process can use it for the actions above, for
   as long as the session lives, and for nothing else. Mesh cannot withhold it from them: do not
-  trust a project's or a plugin's hooks and servers more than the agent that runs them.
+  trust a project's or a plugin's hooks and servers more than the agent that runs them. The
+  tracker server the mesh adds beside the board (`mesh-work`, the `work-mcp` program) never reads
+  the token and empties it in its own process at start, so the `git` it runs does not inherit it;
+  Codex and Vibe do not pass it to that server at all ([docs/work-mcp.md](docs/work-mcp.md#registration)).
 - **Documents written by agents.** HTML, Markdown and source files shown in the interface are served
   from an opaque-origin sandbox with a restrictive Content Security Policy. A document cannot read
   the login cookie, drive the terminals or call the mesh's API. Its script cannot use `fetch`, XHR,
@@ -529,7 +532,7 @@ sibling. Only you start one, from "New session".
   with the injected one, so a `disabled: true` (1.x: `enabled: false`) would be lost. The mesh reads the
   documents OpenCode reads (`opencode debug config --standalone`: global, project, inline) and does not
   inject the server when any of them disables it, or when they cannot be read; your `permissions` rules
-  are never touched.
+  are never touched. The same holds for the tracker server, `mesh-work`.
 - **A resumed OpenCode 2 conversation is checked first.** OpenCode 2 creates an empty conversation for an
   unknown `--session`; the mesh looks the id up in OpenCode's store and refuses the resume (and a restore,
   and an adoption, which is checked before the agent is stopped) when it is not there. Options 2.x does not

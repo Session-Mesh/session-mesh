@@ -44,6 +44,15 @@ before 1.0, a minor version may change behaviour.
   instead of 24 (29 instead of 23 without the macOS bundle). A release install therefore answers
   `/api/work/v1` instead of a 503; a release installed from its native programs links
   `app/bin/work-read` to its own. See [docs/work-read.md](docs/work-read.md).
+- **Agents get the project tracker.** Claude Code, Codex, Pi, OpenCode, Gemini CLI, Copilot CLI and
+  Mistral Vibe started by the mesh, and Antigravity through its plugin, now receive a second MCP
+  server, `mesh-work` (`work-mcp`, 17 `work_*` tools), beside `mesh-board`, with the agent kind as
+  `WL_AGENT`; the session name and the data directory (`~/worklog-data` unless `WL_HOME` is set)
+  come from the environment, and no token or session name is written into a configuration or a
+  command line. An installation without `work-mcp` launches agents as before; a release installed
+  from its native programs links `app/bin/work-mcp` to its own. The agent guide gains a "Track your
+  work" section (when to resume, log, ask and close; the 17 tools; the rules), checked against the
+  server's real tool list. See [docs/work-mcp.md](docs/work-mcp.md#registration).
 
 ## 0.1.1
 

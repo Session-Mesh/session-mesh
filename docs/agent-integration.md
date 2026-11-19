@@ -15,7 +15,7 @@ result table at the end, and each can be `supported`, `partial` or `impossible`.
 
 | Feature | What it means |
 |---|---|
-| Launch | "+ New" starts it, with the `mesh-board` MCP server injected and no secret written to disk |
+| Launch | "+ New" starts it, with the `mesh-board` MCP server (and `mesh-work`, the tracker, when `work-mcp` is installed: [work-mcp.md](work-mcp.md#registration)) injected and no secret written to disk |
 | State | The sidebar tells working, idle, waiting for a question and waiting for a permission apart |
 | Resume | After a PTY host restart, the same conversation comes back with its safety options |
 | History | Past conversations are listed and searchable |
