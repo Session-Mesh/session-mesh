@@ -13,9 +13,9 @@
     opened), opens it with [O_NONBLOCK] (one swapped in after the check
     cannot block the open), then checks the descriptor: it must be a regular
     file, the same one [lstat] saw. Only the last path component is checked:
-    the caller chooses the directories it trusts. This is the rule the mesh
-    already applies to its own files (worklog's [Safefs.open_regular],
-    [Mesh_update_report.read_settings_file]).
+    the caller chooses the directories it trusts. Other copies of this rule
+    in the mesh are meant to converge on this module (ocaml/README.md,
+    "Follow-up: converge the safe-open copies").
 
     On a regular file, [O_NONBLOCK] has no effect on reads. A read can still
     wait on a stalled file system: callers that must keep a deadline run these
