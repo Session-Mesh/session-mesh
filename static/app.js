@@ -4351,8 +4351,7 @@ const chooseAgentMailConsent = (request) => new Promise(resolve => {
     { source: request.source.id, agent: request.source.agent, started, target: request.target.id });
   const settle = () => {
     const decision = agentMailConsentDialog.returnValue;
-    resolve(decision === "no" || decision === "yes" || decision === "always" || decision === "later"
-      ? decision : "later");
+    resolve(["no", "yes", "always", "later", "withdrawn"].includes(decision) ? decision : "later");
   };
   agentMailConsentDialog.addEventListener("close", settle, { once: true });
   agentMailConsentDialog.returnValue = "later";
@@ -4361,6 +4360,9 @@ const chooseAgentMailConsent = (request) => new Promise(resolve => {
 });
 const agentMailConsentGate = MeshPaneActions.createAgentMailConsentGate({
   choose: chooseAgentMailConsent,
+  // Answered in another window: the gate calls this only while its own prompt is open.
+  withdraw: () => { if (agentMailConsentDialog.open) agentMailConsentDialog.close("withdrawn"); },
+  answeredElsewhere: () => flash(t("agentMail.answeredElsewhere")),
   decide: async (id, decision) => {
     try {
       const response = await requestLocal(`/api/agent-mail/consent/${encodeURIComponent(id)}/decision`, {

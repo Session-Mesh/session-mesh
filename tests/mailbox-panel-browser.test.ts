@@ -327,4 +327,54 @@ describe('the pane mailbox', {skip}, () => {
     await page.unroute(`**/api/agent-mail/consent/${requestId}/decision`);
     await lab.decide(requestId, 'no');
   });
+
+  /** Send beta a fresh message, have beta try to read it, and return its id once it waits for approval. */
+  async function awaitingApproval(text: string): Promise<{messageId: string; requestId: string}> {
+    const before = new Set(await lab.inbox(beta));
+    await lab.send(lab.agents.alpha!, beta, text);
+    const [messageId] = (await lab.inbox(beta)).filter(known => !before.has(known));
+    assert.ok(messageId, 'the new message reached the inbox');
+    assert.equal((await lab.readAs(beta, messageId)).status, 202);
+    const request = (await lab.consent()).requests.find(item => item.message_id === messageId);
+    assert.ok(request, 'the read created an approval request');
+    return {messageId, requestId: request.id};
+  }
+  const prompt = (page: Page) => page.locator('#dlg-agent-mail-consent');
+
+  test('an approval prompt answered in one window closes in the other', async () => {
+    for (const pending of (await lab.consent()).requests) await lab.decide(pending.id, 'no');
+    const first = await signedIn('en-US');
+    const second = await signedIn('en-US');
+    const {messageId} = await awaitingApproval('seen by two viewers');
+    for (const {page} of [first, second]) {
+      await page.evaluate(() => refresh());
+      await prompt(page).locator('button[value="yes"]').waitFor();
+    }
+    await prompt(first.page).locator('button[value="yes"]').click();
+    await prompt(first.page).waitFor({state: 'hidden'});
+    await second.page.evaluate(() => refresh());
+    await prompt(second.page).waitFor({state: 'hidden'});
+    assert.equal((await lab.readAs(beta, messageId)).status, 200, 'the first answer was kept');
+    assert.deepEqual([...first.errors, ...second.errors], []);
+  });
+
+  test('an approval answered just after another window did says it changed nothing', async () => {
+    const {page, errors} = await signedIn('en-US');
+    const {messageId, requestId} = await awaitingApproval('answered twice');
+    await page.evaluate(() => refresh());
+    await prompt(page).locator('button[value="no"]').waitFor();
+    // Another window grants it just before this refusal reaches the server: a real 404.
+    let status = 0;
+    await page.route(`**/api/agent-mail/consent/${requestId}/decision`, async route => {
+      await lab.decide(requestId, 'yes');
+      const response = await route.fetch();
+      status = response.status();
+      await route.fulfill({response});
+    });
+    await prompt(page).locator('button[value="no"]').click();
+    await page.locator('#flash').getByText('Message request decided elsewhere; your choice changed nothing.').waitFor();
+    assert.equal(status, 404);
+    assert.ok((await lab.inbox(beta)).includes(messageId), 'the late refusal dropped nothing');
+    assert.deepEqual(errors, []);
+  });
 });
