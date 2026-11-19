@@ -34,7 +34,7 @@ export interface Hunk {
   lines: DiffLine[];
 }
 
-export type FileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'binary';
+export type FileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'binary';
 
 export interface FileDiff {
   oldPath: string | null;
@@ -179,8 +179,8 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       }
       const oldPath = headerPath(line.slice(4), 'a/', file.git);
       const newPath = headerPath((lines[i + 1] ?? '').replace(/\r$/, '').slice(4), 'b/', file.git);
-      // a renamed file keeps the names of its rename lines
-      if (file.status !== 'renamed') { file.oldPath = oldPath; file.newPath = newPath; }
+      // a renamed or copied file keeps the names of its rename or copy lines
+      if (file.status !== 'renamed' && file.status !== 'copied') { file.oldPath = oldPath; file.newPath = newPath; }
       if (oldPath === null && file.status === 'modified') file.status = 'added';
       if (newPath === null && file.status === 'modified') file.status = 'deleted';
       i += 2;
@@ -194,6 +194,8 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
     if (file && file.hunks.length === 0) {
       if (line.startsWith('new file mode')) file.status = 'added';
       else if (line.startsWith('deleted file mode')) file.status = 'deleted';
+      else if (line.startsWith('copy from ')) { file.oldPath = unquoteWhole(line.slice('copy from '.length)); file.status = 'copied'; }
+      else if (line.startsWith('copy to ')) { file.newPath = unquoteWhole(line.slice('copy to '.length)); file.status = 'copied'; }
       else if (line.startsWith('rename from ')) { file.oldPath = unquoteWhole(line.slice('rename from '.length)); file.status = 'renamed'; }
       else if (line.startsWith('rename to ')) { file.newPath = unquoteWhole(line.slice('rename to '.length)); file.status = 'renamed'; }
       else if (line.startsWith('Binary files ') || line === 'GIT binary patch') file.status = 'binary';
@@ -281,8 +283,21 @@ export interface Budget {
   cells: number;
 }
 
+const TOKEN = /[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu;
+
 export function tokenize(text: string): string[] {
-  return text.match(/[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu) ?? [];
+  return text.match(TOKEN) ?? [];
+}
+
+// The tokens of `text`, or null as soon as there are more than `max` (nothing more is collected).
+export function tokenizeUpTo(text: string, max: number): string[] | null {
+  const tokens: string[] = [];
+  const pattern = new RegExp(TOKEN.source, TOKEN.flags);
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    if (tokens.length >= max) return null;
+    tokens.push(match[0]);
+  }
+  return tokens;
 }
 
 function merge(segments: Segment[]): Segment[] {
@@ -302,10 +317,14 @@ const whole = (before: string, after: string): [Segment[], Segment[]] =>
 // work is charged to `budget` when one is given.
 export function wordDiff(before: string, after: string, budget?: Budget): [Segment[], Segment[]] {
   if (before === '' || after === '') return whole(before, after);
-  const a = tokenize(before);
-  const b = tokenize(after);
+  // the pair must fit in `cap` token pairs: each side has at least one token, so the first side
+  // may have up to `cap`, and the second up to `cap` divided by the first side's count; the
+  // tokens are collected only up to those counts
+  const cap = Math.min(WORD_DIFF_LIMIT, budget ? budget.cells : WORD_DIFF_LIMIT);
+  const a = tokenizeUpTo(before, cap);
+  const b = a && a.length > 0 ? tokenizeUpTo(after, Math.floor(cap / a.length)) : null;
+  if (!a || !b || b.length === 0) return whole(before, after);
   const cells = a.length * b.length;
-  if (cells > WORD_DIFF_LIMIT || (budget && cells > budget.cells)) return whole(before, after);
   if (budget) budget.cells -= cells;
   const width = b.length + 1;
   const table = new Uint32Array((a.length + 1) * width);
@@ -386,7 +405,7 @@ export function fileSegments(file: FileDiff, budget: Budget): Map<DiffLine, Segm
 }
 
 export function displayPath(file: FileDiff): string {
-  if (file.status === 'renamed' && file.oldPath && file.newPath && file.oldPath !== file.newPath) {
+  if ((file.status === 'renamed' || file.status === 'copied') && file.oldPath && file.newPath && file.oldPath !== file.newPath) {
     return `${file.oldPath} → ${file.newPath}`;
   }
   return file.newPath ?? file.oldPath ?? '(unnamed)';
@@ -513,7 +532,7 @@ function itemRow(item: Item, mode: Mode, segments: Map<DiffLine, Segment[]> | nu
 }
 
 const STATUS_LABEL: Record<FileStatus, string> = {
-  modified: '', added: 'new', deleted: 'deleted', renamed: 'renamed', binary: 'binary',
+  modified: '', added: 'new', deleted: 'deleted', renamed: 'renamed', copied: 'copied', binary: 'binary',
 };
 
 function stat(added: number, deleted: number): HTMLSpanElement {

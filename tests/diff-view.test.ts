@@ -5,7 +5,7 @@
 // changed lines and cutting them into changed words.
 import assert from 'node:assert/strict';
 import {describe, test} from 'node:test';
-import {countLines, displayPath, fileSegments, gitHeaderPaths, hunkRows, parseUnifiedDiff, readQuoted, tokenize, wordDiff, WORD_DIFF_LIMIT} from '../static/diff-view.ts';
+import {countLines, displayPath, fileSegments, gitHeaderPaths, hunkRows, parseUnifiedDiff, readQuoted, tokenize, tokenizeUpTo, wordDiff, WORD_DIFF_LIMIT} from '../static/diff-view.ts';
 
 const GIT = `commit 0123456789abcdef
 Author: Someone <someone@example.invalid>
@@ -167,6 +167,13 @@ describe('path names', () => {
     ]);
   });
 
+  test('shows a copy as a copy, with both names, even without hunks', () => {
+    const copy = parseUnifiedDiff('diff --git a/src.c b/dst.c\nsimilarity index 100%\ncopy from src.c\ncopy to dst.c\n'
+      + 'diff --git a/x b/y\nsimilarity index 90%\ncopy from x\ncopy to y\n--- a/x\n+++ b/y\n@@ -1 +1 @@\n-1\n+2\n');
+    assert.deepEqual(copy.files.map(file => [file.status, displayPath(file), file.hunks.length]),
+      [['copied', 'src.c → dst.c', 0], ['copied', 'x → y', 1]]);
+  });
+
   test('splits an unquoted header with spaces where both names agree', () => {
     assert.deepEqual(gitHeaderPaths('diff --git a/x y b/x y'), ['x y', 'x y']);
     assert.deepEqual(gitHeaderPaths('diff --git a/x "b/\\303\\251"'), ['x', 'é']);
@@ -231,6 +238,16 @@ describe('wordDiff', () => {
     const segments = fileSegments(file, budget);
     assert.equal(segments.size, 4);
     assert.equal(budget.cells, 100 - 9 - 1);
+  });
+
+  test('stops collecting tokens as soon as a pair cannot fit', () => {
+    assert.deepEqual(tokenizeUpTo('a, b', 10), ['a', ',', ' ', 'b']);
+    assert.equal(tokenizeUpTo(',,,,,', 4), null);
+    // a long punctuation line against one word: marked whole, without aligning
+    const budget = {cells: 1_000_000};
+    const [left, right] = wordDiff(';'.repeat(WORD_DIFF_LIMIT + 1), 'word', budget);
+    assert.deepEqual([left.length, right], [1, [{text: 'word', changed: true}]]);
+    assert.equal(budget.cells, 1_000_000);
   });
 
   test('gives up on very long lines and marks them whole', () => {

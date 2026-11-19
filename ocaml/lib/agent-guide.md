@@ -120,9 +120,9 @@ cannot fetch, but the panel is a display, not an isolation boundary.
 
 The panel has a diff viewer. A file whose name ends in `.diff` or `.patch` and holds a unified
 diff (`git diff`, `git show`, `git format-patch`, `diff -u`) opens rendered: one block per file,
-with its renamed, new, deleted or binary status and its count of added and removed lines, line
-numbers on both sides, the changed words of each modified line highlighted, and a switch between
-unified and side-by-side views. Its "source" link shows the plain text.
+with its renamed, copied, new, deleted or binary status and its count of added and removed
+lines, line numbers on both sides, the changed words of each modified line highlighted, and a
+switch between unified and side-by-side views. Its "source" link shows the plain text.
 
 When the owner asks to see a diff (your changes, a commit, a branch against `main`, two versions
 of a file), show it in this viewer rather than printing it in the terminal: write it to a `.diff`
@@ -132,20 +132,23 @@ file under the home directory or `/tmp`, then open it.
 # /tmp, not $TMPDIR (which may not be served); the staged changes, then the unstaged ones
 # (this works before the first commit too, when HEAD does not exist yet)
 d="$(mktemp -d /tmp/mesh-diff.XXXXXXXX)" &&
-  { git diff --no-color --cached && git diff --no-color; } > "$d/changes.diff" &&
+  { git diff --no-color --no-ext-diff --cached &&
+    git diff --no-color --no-ext-diff; } > "$d/changes.diff" &&
   mesh-open "$d/changes.diff"   # under the same condition as above: MESH_SESSION_TOKEN is set
 ```
 
 A file changed both in the index and in the working tree then appears twice, staged first.
 
-Other diffs: `git diff --no-color main...HEAD` (a branch), `git show --no-color <commit>`
-(for a merge, add `--diff-merges=first-parent`: the viewer does not read the combined `@@@`
-diffs Git shows by default), `diff -u old new`. `git diff` leaves out untracked files: when the
-owner wants them too, mark them first with `git add --intent-to-add <file>` (it stages no
-content), or append `git diff --no-color --no-index /dev/null <file>` for each. Always pass
-`--no-color`: a `color.diff=always` setting would put colour codes in the file even when it is
-redirected. `diff -u` and `git diff --no-index` exit with status 1 when the files differ, so do
-not chain `mesh-open` after them with `&&`:
+Other diffs: `git diff --no-color --no-ext-diff main...HEAD` (a branch),
+`git show --no-color --no-ext-diff <commit>` (for a merge, add `--diff-merges=first-parent`: the
+viewer does not read the combined `@@@` diffs Git shows by default), `diff -u old new`.
+`git diff` leaves out untracked files: when the owner wants them too, mark them first with
+`git add --intent-to-add <file>` (it stages no content), or append
+`git diff --no-color --no-ext-diff --no-index /dev/null <file>` for each. Always pass
+`--no-color --no-ext-diff`: a `color.diff=always` setting would put colour codes in the file
+even when it is redirected, and a `diff.external` tool would write its own output, or none.
+`diff -u` and `git diff --no-index` exit with status 1 when the files differ, so do not chain
+`mesh-open` after them with `&&`:
 
 ```sh
 diff -u old new > "$d/changes.diff"; [ $? -le 1 ] && mesh-open "$d/changes.diff"
@@ -155,9 +158,9 @@ Without `MESH_SESSION_TOKEN`, print the file's path instead: the owner clicks it
 the same viewer. To follow changes as you work, open it with `mesh-open --watch` and write the
 diff to the same file again. A diff over 4 MiB is shown as plain text; one of more than 50,000
 lines gets a notice with a link to its plain text (show a narrower diff instead, for example one
-path: `git diff --no-color HEAD -- <path>`). A line target such as `changes.diff:42` opens the
-code viewer at that line of the patch file, for a diff of 4 MiB or less; a larger one opens as
-plain text, at its start.
+path: `git diff --no-color --no-ext-diff HEAD -- <path>`). A line target such as
+`changes.diff:42` opens the code viewer at that line of the patch file, for a diff of 4 MiB or
+less; a larger one opens as plain text, at its start.
 
 ### Whiteboard and demos
 

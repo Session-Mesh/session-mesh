@@ -39,14 +39,44 @@ function freePort(): Promise<number> {
   });
 }
 
-function accepts(port: number): Promise<boolean> {
-  return new Promise(resolve => {
-    const socket = net.connect({host: '127.0.0.1', port}, () => { socket.destroy(); resolve(true); });
-    socket.on('error', () => resolve(false));
-  });
+const token = (): string => fs.readFileSync(path.join(confDir, 'token'), 'utf8').trim();
+
+// Ready when an authenticated request succeeds: the token is the one this child wrote under the
+// throwaway HOME, so another listener that took the port in the meantime cannot answer it.
+async function ownsPort(port: number): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/view`, {
+      method: 'POST',
+      headers: {'Authorization': `Bearer ${token()}`, 'Content-Type': 'application/json'},
+      body: JSON.stringify({target: path.join(home, 'ready.diff')}),
+    });
+    return response.status === 200;
+  } catch {
+    return false;    // not listening yet, or no token written yet
+  }
 }
 
-const token = (): string => fs.readFileSync(path.join(confDir, 'token'), 'utf8').trim();
+// Starts server.py on a free port; false when it exited (the port was taken between the probe
+// and its bind); throws when Python cannot be started at all.
+async function startServer(env: NodeJS.ProcessEnv): Promise<boolean> {
+  const port = await freePort();
+  const child = spawn(PYTHON, ['server.py'], {cwd: REPO, env: {...env, MESH_PORT: String(port)}, stdio: ['ignore', 'pipe', 'pipe']});
+  server = child;
+  child.stdout?.on('data', chunk => { output += chunk; });
+  child.stderr?.on('data', chunk => { output += chunk; });
+  let failure: Error | null = null;
+  child.on('error', error => { failure = error; });
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (failure) throw new Error(`${PYTHON} could not be started: ${String(failure)}`);
+    if (child.exitCode !== null || child.signalCode !== null) return false;
+    if (await ownsPort(port)) {
+      base = `http://127.0.0.1:${port}`;
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`server.py did not start:\n${output}`);
+}
 
 // The signed URL of a file written under the throwaway HOME, as the panel gets it.
 async function signed(name: string, content: string | Buffer): Promise<{url: string; keepsScroll: boolean}> {
@@ -62,33 +92,32 @@ async function signed(name: string, content: string | Buffer): Promise<{url: str
   return {url: `${base}${described.url}`, keepsScroll: described.keeps_scroll};
 }
 
-// What a frame (or another destination) loading `url` gets: the type and the body.
-async function load(url: string, dest = 'iframe'): Promise<{type: string; body: string; csp: string}> {
+// What a frame (or another destination) loading `url` gets: the type and the body, as text and
+// as bytes.
+async function load(url: string, dest = 'iframe'): Promise<{type: string; body: string; bytes: Buffer; csp: string}> {
   const response = await fetch(url, {headers: {'Sec-Fetch-Dest': dest}});
   assert.equal(response.status, 200);
-  return {type: (response.headers.get('content-type') ?? '').split(';')[0] ?? '', body: await response.text(),
+  const bytes = Buffer.from(await response.arrayBuffer());
+  return {type: (response.headers.get('content-type') ?? '').split(';')[0] ?? '', body: bytes.toString('utf8'), bytes,
     csp: response.headers.get('content-security-policy') ?? ''};
 }
 
 describe('the diff viewer through the server routes', () => {
   before(async () => {
-    const port = await freePort();
     const runtime = path.join(scratch, 'run');
     fs.mkdirSync(runtime, {recursive: true, mode: 0o700});
     fs.mkdirSync(home, {recursive: true});
+    fs.writeFileSync(path.join(home, 'ready.diff'), DIFF);
     const env: NodeJS.ProcessEnv = {PATH: process.env.PATH, HOME: home, XDG_RUNTIME_DIR: runtime,
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'),
-      MESH_CONF_DIR: confDir, MESH_CACHE_DIR: path.join(home, '.cache', 'session-mesh'), MESH_PORT: String(port),
-      LANG: 'C.UTF-8'};
-    server = spawn(PYTHON, ['server.py'], {cwd: REPO, env, stdio: ['ignore', 'pipe', 'pipe']});
-    server.stdout?.on('data', chunk => { output += chunk; });
-    server.stderr?.on('data', chunk => { output += chunk; });
-    for (let attempt = 0; attempt < 200 && !(await accepts(port)); attempt += 1) {
-      if (server.exitCode !== null) break;
-      await new Promise(resolve => setTimeout(resolve, 50));
+      MESH_CONF_DIR: confDir, MESH_CACHE_DIR: path.join(home, '.cache', 'session-mesh'), LANG: 'C.UTF-8'};
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) if (await startServer(env)) return;
+      throw new Error(`server.py exited three times before serving:\n${output}`);
+    } catch (error) {
+      fs.rmSync(scratch, {recursive: true, force: true});
+      throw error;
     }
-    if (!(await accepts(port))) throw new Error(`server.py did not start:\n${output}`);
-    base = `http://127.0.0.1:${port}`;
   });
 
   after(async () => {
@@ -115,7 +144,9 @@ describe('the diff viewer through the server routes', () => {
   test('?raw=1 and a subresource load get the bytes as they are', async () => {
     const {url} = await signed('raw.diff', DIFF);
     assert.deepEqual([(await load(`${url}?raw=1`)).type, (await load(`${url}?raw=1`)).body], ['text/plain', DIFF]);
-    assert.notEqual((await load(url, 'script')).type, 'text/html');
+    const subresource = await load(url, 'script');
+    assert.notEqual(subresource.type, 'text/html');
+    assert.equal(subresource.body, DIFF);
   });
 
   test('?source=1 gets the code viewer, which line targets use', async () => {
@@ -150,12 +181,14 @@ describe('the diff viewer through the server routes', () => {
   test('a diff past 4 MiB, or holding a NUL byte, is served whole as plain text', async () => {
     const large = DIFF + '+x\n'.repeat(Math.ceil(LIMIT / 3));
     const big = await load((await signed('big.diff', large)).url);
-    assert.deepEqual([big.type, big.body.length], ['text/plain', large.length]);
+    assert.equal(big.type, 'text/plain');
+    assert.ok(big.bytes.equals(Buffer.from(large)), 'the large diff, byte for byte');
     const exact = DIFF + 'x'.repeat(LIMIT - DIFF.length);
     assert.equal((await load((await signed('exact.diff', exact)).url)).type, 'text/html');
     const binary = Buffer.from(`${DIFF}\0tail`);
     const nul = await load((await signed('nul.patch', binary)).url);
-    assert.deepEqual([nul.type, nul.body.length], ['text/plain', binary.length]);
+    assert.equal(nul.type, 'text/plain');
+    assert.ok(nul.bytes.equals(binary), 'the diff with a NUL byte, byte for byte');
   });
 
   test('/viewlib/ serves the built bundle, and nothing else of static/', async () => {
