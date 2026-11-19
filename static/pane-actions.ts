@@ -12,6 +12,7 @@ export * from "./mailbox-panel.ts";
 export * from "./config-panel.ts";
 export * from "./agent-mail-consent.ts";
 export * from "./narrow-drawer.ts";
+export { holdLineForTarget } from "./held-line.ts";
 export type Translator = (key: string, params?: Record<string, unknown>) => string;
 const untranslated: Translator = (key) => key;
 let translate: Translator = untranslated;
@@ -906,6 +907,47 @@ export interface MenuController {
   readonly dispose: () => void;
 }
 let nextMenuId = 0;
+type MenuCloseReason = "escape" | "outside" | "tab" | "invalidate";
+
+/** Where the focus goes once the menu is hidden: see createMenu. */
+function focusAfterMenuHide(trigger: HTMLButtonElement, ports: MenuPorts, ownerDocument: Document,
+  focus: { menuHeldFocus: boolean; triggerWasFocusTarget: boolean }, reason: MenuCloseReason): void {
+  if (focus.menuHeldFocus) {
+    // A hidden focused row remains document.activeElement in Chromium. Tab
+    // starts at the trigger; other exits must not strand keyboard focus.
+    // Capture eligibility before hiding: getClientRects can be transiently
+    // empty while Chromium removes the focused menu row from layout.
+    if (focus.triggerWasFocusTarget && trigger.isConnected && !trigger.hidden) trigger.focus({ preventScroll: true });
+    else ports.fallbackFocus();
+  } else if (reason === "escape") {
+    const current = ownerDocument.activeElement;
+    if (!(current && current !== ownerDocument.body && ports.canFocus(current as HTMLElement))) ports.fallbackFocus();
+  }
+}
+
+/** Arrow keys, Home and End move between the entries. True when the key was one of them. */
+function moveMenuFocus(menu: HTMLElement, ownerDocument: Document, key: string): boolean {
+  const buttons = Array.from(menu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+  if (!buttons.length) return false;
+  const at = buttons.indexOf(ownerDocument.activeElement as HTMLButtonElement);
+  let next: number;
+  if (key === "ArrowDown") next = (at + 1) % buttons.length;
+  else if (key === "ArrowUp") next = (at - 1 + buttons.length) % buttons.length;
+  else if (key === "Home") next = 0;
+  else if (key === "End") next = buttons.length - 1;
+  else return false; // Native Enter/Space activation fires exactly one click.
+  buttons[next]?.focus({ preventScroll: true });
+  return true;
+}
+
+/** Entries of an unbound menu are unavailable (aria-disabled). The menu itself is never marked busy:
+ * some screen readers would then hold back its content. */
+function markMenuEntries(menu: HTMLElement, available: boolean): void {
+  for (const entry of menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')) {
+    if (available) entry.removeAttribute("aria-disabled"); else entry.setAttribute("aria-disabled", "true");
+  }
+}
+
 export function createMenu(root: HTMLElement, ports: MenuPorts): MenuController {
   const trigger = root.querySelector<HTMLButtonElement>('[data-act="more"]');
   const menu = root.querySelector<HTMLElement>('[role="menu"]');
@@ -916,33 +958,57 @@ export function createMenu(root: HTMLElement, ports: MenuPorts): MenuController 
   // Resolve the live document at interaction time, never at construction.
   const ownerDocument = (): Document => root.ownerDocument;
   let outsideDocument: Document | null = null;
-  let opened: { target: CapturedTarget; signature: string } | null = null;
+  // An opening of the menu. Before the session list names the pane's session (its terminal attaches
+  // first), no target can be captured: the menu still opens, its entries marked unavailable
+  // (aria-disabled), and the next refresh() that can capture one binds it and enables them. Only a
+  // bound menu holds a pending reload of the page (`hold`): an unbound one has nothing to lose.
+  type Opening = { target: CapturedTarget | null; signature: string };
+  let opened: Opening | null = null;
   const signature = (actions: readonly MenuAction[]): string => actions.map((action) => `${action.id}:${action.label}`).join("|");
-  const focusAfterHide = (menuHeldFocus: boolean, triggerWasFocusTarget: boolean,
-    reason: "escape" | "outside" | "tab" | "invalidate"): void => {
-    if (menuHeldFocus) {
-      // A hidden focused row remains document.activeElement in Chromium. Tab
-      // starts at the trigger; other exits must not strand keyboard focus.
-      // Capture eligibility before hiding: getClientRects can be transiently
-      // empty while Chromium removes the focused menu row from layout.
-      if (triggerWasFocusTarget && trigger.isConnected && !trigger.hidden) trigger.focus({ preventScroll: true });
-      else ports.fallbackFocus();
-    } else if (reason === "escape") {
-      const current = ownerDocument().activeElement;
-      if (!(current && current !== ownerDocument().body && ports.canFocus(current as HTMLElement))) ports.fallbackFocus();
-    }
-  };
-  const close = (reason: "escape" | "outside" | "tab" | "invalidate" = "invalidate"): void => {
-    const original = opened;
-    if (!original) return;
+  const hide = (reason: MenuCloseReason): void => {
     const menuHeldFocus = menu.contains(ownerDocument().activeElement);
     const triggerWasFocusTarget = menuHeldFocus && ports.canFocus(trigger);
     opened = null;
     outsideDocument?.removeEventListener("pointerdown", outside, true); outsideDocument = null;
     menu.hidden = true; trigger.setAttribute("aria-expanded", "false");
-    focusAfterHide(menuHeldFocus, triggerWasFocusTarget, reason);
+    focusAfterMenuHide(trigger, ports, ownerDocument(), { menuHeldFocus, triggerWasFocusTarget }, reason);
     ports.hold(false);
-    ports.release(original.target);
+  };
+  const close = (reason: MenuCloseReason = "invalidate"): void => {
+    const original = opened;
+    if (!original) return;
+    hide(reason);
+    if (original.target) ports.release(original.target);
+  };
+  const capture = (): CapturedTarget | null => {
+    const target = ports.capture();
+    if (target && ports.valid(target)) return target;
+    if (target) ports.release(target);
+    return null;
+  };
+  const entry = (opening: Opening, action: MenuAction): HTMLButtonElement => {
+    const button = ownerDocument().createElement("button");
+    button.type = "button"; button.setAttribute("role", "menuitem"); button.dataset.menuAction = action.id;
+    button.textContent = action.label; button.className = action.danger ? "danger" : "";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (opened === opening && opening.target === null) return;   // not bound yet: the entry is unavailable
+      const target = opening.target;
+      if (opened !== opening || !target || !ports.valid(target)) { close(); return; }
+      // End menu ownership before dispatch, retain only this callback's token.
+      hide("invalidate");
+      try {
+        Promise.resolve(ports.run(action.id, target)).catch(ports.reportError).finally(() => ports.release(target));
+      } catch (error) { ports.release(target); ports.reportError(error); }
+    });
+    return button;
+  };
+  const fill = (opening: Opening, actions: readonly MenuAction[]): void => {
+    const heldFocus = menu.contains(ownerDocument().activeElement);
+    opening.signature = signature(actions);
+    menu.replaceChildren(...actions.map((action) => entry(opening, action)));
+    markMenuEntries(menu, opening.target !== null);
+    if (heldFocus) menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
   };
   const open = (): void => {
     if (opened) { close(); return; }
@@ -950,51 +1016,22 @@ export function createMenu(root: HTMLElement, ports: MenuPorts): MenuController 
     ports.activate();
     if (!ports.canFocus(trigger)) return;
     const actions = ports.actions();
-    const target = actions.length ? ports.capture() : null;
-    if (!target || !ports.valid(target)) { if (target) ports.release(target); return; }
-    opened = { target, signature: signature(actions) };
-    menu.replaceChildren(...actions.map((action) => {
-      const button = ownerDocument().createElement("button");
-      button.type = "button"; button.setAttribute("role", "menuitem"); button.dataset.menuAction = action.id;
-      button.textContent = action.label; button.className = action.danger ? "danger" : "";
-      button.addEventListener("click", (event) => {
-        event.stopPropagation();
-        const invocation = opened;
-        if (!invocation || invocation.target !== target || !ports.valid(target)) { close(); return; }
-        // End menu ownership before dispatch, retain only this callback's token.
-        const menuHeldFocus = menu.contains(ownerDocument().activeElement);
-        const triggerWasFocusTarget = menuHeldFocus && ports.canFocus(trigger);
-        opened = null;
-        outsideDocument?.removeEventListener("pointerdown", outside, true); outsideDocument = null;
-        menu.hidden = true; trigger.setAttribute("aria-expanded", "false");
-        focusAfterHide(menuHeldFocus, triggerWasFocusTarget, "invalidate");
-        ports.hold(false);
-        try {
-          Promise.resolve(ports.run(action.id, target)).catch(ports.reportError).finally(() => ports.release(target));
-        } catch (error) { ports.release(target); ports.reportError(error); }
-      });
-      return button;
-    }));
-    trigger.setAttribute("aria-expanded", "true"); menu.hidden = false; ports.hold(true);
+    if (!actions.length) return;
+    const opening: Opening = { target: capture(), signature: "" };
+    opened = opening;
+    fill(opening, actions);
+    trigger.setAttribute("aria-expanded", "true"); menu.hidden = false;
+    if (opening.target) ports.hold(true);
     outsideDocument = ownerDocument(); outsideDocument.addEventListener("pointerdown", outside, true);
     menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
   };
   const triggerClick = (event: Event): void => { event.stopPropagation(); open(); };
   const keydown = (event: KeyboardEvent): void => {
     if (!opened) return;
-    if (!ports.valid(opened.target)) { close(); return; }
+    if (opened.target && !ports.valid(opened.target)) { close(); return; }
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close("escape"); return; }
     if (event.key === "Tab") { close("tab"); return; }
-    const buttons = Array.from(menu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
-    if (!buttons.length) return;
-    const at = buttons.indexOf(ownerDocument().activeElement as HTMLButtonElement);
-    let next: number;
-    if (event.key === "ArrowDown") next = (at + 1) % buttons.length;
-    else if (event.key === "ArrowUp") next = (at - 1 + buttons.length) % buttons.length;
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = buttons.length - 1;
-    else return; // Native Enter/Space activation fires exactly one click.
-    event.preventDefault(); event.stopPropagation(); buttons[next]?.focus({ preventScroll: true });
+    if (moveMenuFocus(menu, ownerDocument(), event.key)) { event.preventDefault(); event.stopPropagation(); }
   };
   const outside = (event: PointerEvent): void => {
     const view = ownerDocument().defaultView;
@@ -1006,7 +1043,14 @@ export function createMenu(root: HTMLElement, ports: MenuPorts): MenuController 
   const refresh = (): void => {
     const actions = ports.actions();
     trigger.hidden = actions.length === 0;
-    if (opened && (!ports.valid(opened.target) || signature(actions) !== opened.signature)) close();
+    const opening = opened;
+    if (opening && opening.target === null && actions.length) {
+      // Still unbound: follow the actions and bind as soon as a target can be captured.
+      if (signature(actions) !== opening.signature) fill(opening, actions);
+      opening.target = capture();
+      markMenuEntries(menu, opening.target !== null);
+      if (opening.target) ports.hold(true);
+    } else if (opening && (!opening.target || !ports.valid(opening.target) || signature(actions) !== opening.signature)) close();
     if (!opened) trigger.setAttribute("aria-expanded", "false");
   };
   refresh();
