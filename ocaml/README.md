@@ -32,6 +32,17 @@ is a library function for the interface. Registering the server with an agent is
 owner step. See [docs/work-mcp.md](../docs/work-mcp.md); tests: `dune runtest work_mcp`.
 By hand: `WL_HOME=/tmp/demo MESH_SESSION=demo ./_build/default/work_mcp/bin/work_mcp_main.exe`.
 
+## work-read
+
+`work_read/` holds the `work_read` library and the program `work-read`, the read path of the
+Projects view: one subcommand per run (`products`, `projects`, `project`, `task`, `resume`,
+`sessions-of`), one bounded JSON document on standard output. It is read-only (no write, no lock,
+no repository creation) and reuses the text cleaning, renderers and question fold of `work_mcp`.
+The server starts it through `POST /api/work/v1`. It is built and installed with the package
+(`public_name work-read`, like `work-mcp`); it is not yet in the release assets. See
+[docs/work-read.md](../docs/work-read.md); tests: `dune runtest work_read`.
+By hand: `WL_HOME=/tmp/demo ./_build/default/work_read/bin/work_read_main.exe products`.
+
 ## mesh-logout-all
 
 It takes no argument and reads `MESH_CONF_DIR` (the token and `cookie-generation`), `MESH_CACHE_DIR`

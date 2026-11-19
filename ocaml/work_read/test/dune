@@ -1,0 +1,17 @@
+; Tests of work-read: the real executable is run against temporary copies of
+; the committed fictional fixture of the worklog library. Every run has its own
+; WL_HOME, HOME and clock; nothing outside the temporary directories is read or
+; written, and the default data directory is never touched.
+
+(test
+ (name test_work_read)
+ (modules test_work_read test_limits work_read_runner)
+ (libraries work_read mesh_worklog alcotest yojson unix)
+ (deps
+  ../bin/work_read_main.exe
+  (source_tree ../../worklog/test/fixture))
+ (action
+  (setenv
+   WORK_READ_EXE
+   %{exe:../bin/work_read_main.exe}
+   (run %{test}))))

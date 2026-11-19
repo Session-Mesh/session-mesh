@@ -41,6 +41,7 @@ EXPECTED = {
     ("GET", "/api/portfolio/diff/{selector}"): COOKIE,
     ("GET", "/api/dirs"): COOKIE,
     ("POST", "/api/projects/v1"): COOKIE,
+    ("POST", "/api/work/v1"): COOKIE,
     ("POST", "/api/projects/artifacts/v1"): COOKIE,
     ("POST", "/api/projects/issues/v1"): COOKIE,
     ("GET", "/api/docs"): COOKIE,
