@@ -108,7 +108,11 @@ async def main():
     server._LIVE_EVENT_STATE = None          # only the loop's own argument can carry the hooks
     hook(state, NEW_SID)
     server.SNAPSHOT_EVERY = 0.01
-    app = {"event_state": state, "organisation_lock": asyncio.Lock()}
+    class Nothing:   # no wake line unfollowed, no session request
+        def unconfirmed(self): return set()
+        def pending(self): return []
+    app = {"event_state": state, "organisation_lock": asyncio.Lock(), "sessions_state": server.SessionsState(),
+           "claude_wakes": Nothing(), "codex_wakes": Nothing(), "session_requests": Nothing()}
     task = asyncio.create_task(server.snapshot_loop(app))
     await asyncio.sleep(0.5)
     task.cancel()
