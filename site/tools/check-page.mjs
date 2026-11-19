@@ -21,8 +21,11 @@
 // 5. Every gate open: the same with every gated feature set to available,
 //    "planned" ones included, so the text that replaces a planned feature's
 //    caveat (data-requires="binaries", for example) is checked before it ships.
+// 6. Policy: the Content-Security-Policy <meta> tag closes the two directives
+//    that default-src does not cover, base-uri 'none' and form-action 'none', and
+//    the page and its scripts use neither <base> nor <form>.
 "use strict";
-import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -115,8 +118,23 @@ function preview(name, flip, keep) {
   return { dir, features: flippedIds, shown: shown.length };
 }
 
+// The directives of the page's Content-Security-Policy tag, and what would break under them.
+function checkPolicy(html) {
+  const tag = html.match(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]*)"\s*>/i);
+  if (!tag) { fail("policy: no Content-Security-Policy <meta> tag"); return; }
+  const directives = tag[1].split(";").map((part) => part.trim().replace(/\s+/g, " "));
+  for (const required of ["base-uri 'none'", "form-action 'none'"]) {
+    if (!directives.includes(required)) fail(`policy: the Content-Security-Policy lacks ${required}`);
+  }
+  if (/<(?:base|form)[\s>/]/i.test(html)) fail("policy: the page uses <base> or <form>, which base-uri and form-action 'none' forbid");
+  for (const name of readdirSync(SITE).filter((file) => file.endsWith(".js"))) {
+    if (/createElement\(\s*["'](?:base|form)["']\s*\)/.test(readFileSync(join(SITE, name), "utf8"))) fail(`policy: ${name} creates a <base> or <form>`);
+  }
+}
+
 const keepAt = process.argv.indexOf("--keep");
 const html = readFileSync(join(SITE, "index.html"), "utf8");
+checkPolicy(html);
 checkLinks(html, "page");
 const quotes = checkQuotes(html);
 const current = checkGates(html, "page");
@@ -126,6 +144,7 @@ if (failures.length) {
   failures.forEach((message) => console.error(`FAIL ${message}`));
   process.exit(1);
 }
+console.log("Policy closes base-uri and form-action; the page uses no <base> or <form>.");
 console.log(`Links resolve. ${quotes} quoted passages match their sources. ${current.length} gated elements follow the status table.`);
 console.log(`Launch preview (${launch.features.join(", ")} set to available): ${launch.shown} gated elements shown, links resolve${keepAt > 0 ? `, kept in ${launch.dir}` : ""}.`);
 console.log(`Every gate open (${allOpen.features.join(", ")} set to available): ${allOpen.shown} gated elements shown, links resolve.`);
