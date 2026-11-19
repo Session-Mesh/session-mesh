@@ -143,6 +143,9 @@ import agentmcp  # noqa: E402
 # not this run built it (the CI pytest job has no OCaml); set before server builds its presets.
 # test_agentmcp checks the real installed/absent decision in a fresh interpreter.
 agentmcp.board_available = lambda: True
+# ... and without the tracker (work-mcp), whether or not a development switch holds it; its
+# injection is covered by tests/work-mcp-injection.test.ts.
+agentmcp.work_available = lambda: False
 
 import ptyhost  # noqa: E402
 import server  # noqa: E402
