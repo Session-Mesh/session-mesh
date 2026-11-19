@@ -36,15 +36,20 @@ function earlierSnapshot(file: string, sessions: FakeSession[], count: number): 
     agent: {type: 'claude', session_id: `conversation-${s.name}`, argv: ['claude', '--resume', 'argv-never-shown']}}))}));
 }
 
-async function start(prefix: string, sessions: (where: Scratch) => FakeSession[], hostMode: object, seed: number): Promise<Mesh> {
-  const where = await scratchHome(prefix, {MESH_SESSIONS_WAIT: '', MESH_TEST_SESSIONS_COMPLETE: ''});   // the server's default wait
+async function start(prefix: string, sessions: (where: Scratch) => FakeSession[], hostMode: object, seed: number,
+  wait = ''): Promise<Mesh> {
+  const where = await scratchHome(prefix, {MESH_SESSIONS_WAIT: wait, MESH_TEST_SESSIONS_COMPLETE: ''});   // '': the server's default wait
   const snapshot = path.join(where.confDir, 'sessions-snapshot.json');
   const listed = sessions(where);
   earlierSnapshot(snapshot, listed, seed);
   const host = await startFakeHost(SOCKET(where), {sessions: listed, ...hostMode});
   const startedMs = Date.now();
   const {child, result} = await runServer(where);
-  assert.ok(result.listened, result.output);
+  if (!result.listened) {   // the suite's teardown gets no Mesh: stop the fake host here
+    await host.stop();
+    removeScratch(where.scratch);
+    assert.fail(result.output);
+  }
   return {where, server: child, host, base: `http://127.0.0.1:${where.port}`, snapshot, startedMs};
 }
 
@@ -61,6 +66,7 @@ function token(mesh: Mesh): string {
 
 /** JSON.parse, refusing a duplicate key in any object as a strict parser does. */
 function strictParse(text: string): unknown {
+  const parsed: unknown = JSON.parse(text);   // first: the scan below assumes valid JSON (a truncated body would never end it)
   let at = 0;
   const space = () => { while (/\s/.test(text[at] ?? '')) at += 1; };
   const string = (): string => {
@@ -89,12 +95,12 @@ function strictParse(text: string): unknown {
     at += 1;
   };
   value();
-  return JSON.parse(text);
+  return parsed;
 }
 
-async function get(mesh: Mesh, query = ''): Promise<{ms: number; body: Answer}> {
+async function get(mesh: Mesh, query = '', signal?: AbortSignal): Promise<{ms: number; body: Answer}> {
   const sent = performance.now();
-  const response = await fetch(`${mesh.base}/api/sessions${query}`, {headers: {Authorization: `Bearer ${token(mesh)}`, Origin: mesh.base}});
+  const response = await fetch(`${mesh.base}/api/sessions${query}`, {headers: {Authorization: `Bearer ${token(mesh)}`, Origin: mesh.base}, signal});
   assert.equal(response.status, 200);
   const body = strictParse(await response.text()) as Answer;
   return {ms: performance.now() - sent, body};
@@ -103,21 +109,24 @@ async function get(mesh: Mesh, query = ''): Promise<{ms: number; body: Answer}> 
 async function until(mesh: Mesh, what: string, timeoutMs: number, done: (body: Answer) => boolean, query = ''): Promise<Answer> {
   const deadline = performance.now() + timeoutMs;
   for (;;) {
-    const {body} = await get(mesh, query);
-    if (done(body)) return body;
+    // The deadline also bounds a request in flight (a body that never ends).
+    const body = await get(mesh, query, AbortSignal.timeout(Math.max(1, Math.ceil(deadline - performance.now())))).then(answer => answer.body,
+      error => { if ((error as Error).name === 'TimeoutError') return null; throw error; });
+    if (body && done(body)) return body;
     if (performance.now() > deadline) throw new Error(`${what}: not within ${timeoutMs} ms`);
     await new Promise(resolve => setTimeout(resolve, 200));
   }
 }
 
-const lists = (mesh: Mesh) => mesh.host.ops().filter(op => op === 'list').length;
+const lists = (mesh: Mesh, op = 'list') => mesh.host.ops().filter(line => line === op).length;
 
-/** Until the host has not been asked to list for two seconds (no round, no read runs); the number of lists then. */
+/** Until every list asked of the host is answered and none was asked for two seconds (no round, no read
+ * runs); the number of lists then. */
 async function quiet(mesh: Mesh): Promise<number> {
   let seen = lists(mesh);
   for (let calm = 0; calm < 8; calm += 1) {
     await new Promise(resolve => setTimeout(resolve, 250));
-    if (lists(mesh) !== seen) { seen = lists(mesh); calm = 0; }
+    if (lists(mesh) !== seen || lists(mesh, 'list answered') !== seen) { seen = lists(mesh); calm = 0; }
   }
   return seen;
 }
@@ -242,9 +251,14 @@ describe('300 sessions', () => {
     assert.ok(delta.mesh.length < N / 2, `${delta.mesh.length} rows in a delta`);
     assert.ok(!delta.mesh.some(row => row.name === 'fresh'));
     assert.deepEqual(delta.counts, {total: N, ready: N});
-    // Nothing changed since the current generation: an empty delta, without `external`.
-    const same = await until(mesh, 'a quiet delta', 30_000, body => body.mesh.length === 0,
-      `?since=${(await get(mesh)).body.generation}`);
+    // Nothing changed since the current generation: an empty delta, without `external`. Each try takes the
+    // generation again: a change after one (an outside terminal) would stay in every delta to it.
+    let same: Answer | undefined;
+    for (const deadline = performance.now() + 30_000; !same || same.mesh.length > 0 || 'external' in same;) {
+      assert.ok(performance.now() < deadline, 'a quiet delta: not within 30000 ms');
+      if (same) await new Promise(resolve => setTimeout(resolve, 200));
+      same = (await get(mesh, `?since=${(await get(mesh)).body.generation}`)).body;
+    }
     assert.equal(same.full, false);
     assert.deepEqual(same.removed, []);
     assert.ok(!('external' in same), 'an unchanged external list is not sent in a delta');
@@ -260,18 +274,20 @@ describe('300 sessions', () => {
 describe('a silent host', () => {
   let mesh: Mesh;
   before(async () => {
-    mesh = await start('sessions-silent-', where => rows([process.pid], where.home), {silent: true}, 1);
+    // A 4 s wait: an answer within 2.5 s after the first read failed shows the 1 s bound, not the wait.
+    mesh = await start('sessions-silent-', where => rows([process.pid], where.home), {silent: true}, 1, '4');
   });
   after(async () => { await stop(mesh); });
 
-  test('answers within the wait (2 s) with host "silent", then at once, and leaves the snapshot as it was', async () => {
+  test('answers within the wait with host "silent", then within 1 s, and leaves the snapshot as it was', async () => {
     const before = fs.readFileSync(mesh.snapshot);
     const mtime = fs.statSync(mesh.snapshot).mtimeMs;
     const {ms, body} = await get(mesh);
-    assert.ok(ms < 3000, `answer in ${Math.round(ms)} ms`);
+    assert.ok(ms < 5000, `answer in ${Math.round(ms)} ms`);
     assert.equal(body.host, 'silent');
     assert.equal(body.complete, false);
-    // Past the host's request timeout (5 s): the round gave up; an answer waits at most 1 s for a read.
+    // Past the host's request timeout (5 s): the round gave up; an answer waits at most 1 s for a read. Only a
+    // failed read sets that bound (a read merely pending still waits the 4 s): 2.5 s also shows it failed.
     await new Promise(resolve => setTimeout(resolve, 6000));
     const later = await get(mesh);
     assert.ok(later.ms < 2500, `answer in ${Math.round(later.ms)} ms`);
@@ -297,10 +313,13 @@ describe('slow rounds, with the default wait', () => {
   test('a session created, or ended, while a round runs is in the next answer, and now is the answer\'s time', async () => {
     // A round's listing records the conversations it saw under this file lock: held, every round lasts 8 s.
     const lock = path.join(mesh.where.confDir, 'conversation-names.lock');
-    const holder = spawn('flock', [lock, 'sleep', '8'], {stdio: 'ignore'});
-    await new Promise(resolve => setTimeout(resolve, 300));
+    const holder = spawn('flock', [lock, 'sh', '-c', 'echo held; exec sleep 8'], {stdio: ['ignore', 'pipe', 'ignore']});
+    await new Promise(resolve => holder.stdout!.once('data', resolve));   // the lock is held
+    const before = lists(mesh);
     await get(mesh, '?since=0');   // starts a round, which stops at the lock
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    // The round has read the host's list before it changes (no request without since reads it meanwhile).
+    await until(mesh, 'the round\'s read of the host', 30_000, () => lists(mesh, 'list answered') > before, '?since=0');
+    await new Promise(resolve => setTimeout(resolve, 1500));   // then describes that list, up to the lock
     mesh.host.control({sessions: [...sessions.slice(1), {...sessions[0]!, name: 'fresh', created: 1_800_000_000}]});
     const {ms, body} = await get(mesh);   // what the page does right after POST /api/new, before it opens the pane
     const fresh = body.mesh.find(row => row.name === 'fresh');

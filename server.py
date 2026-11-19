@@ -970,15 +970,15 @@ async def _listing(event_state=None, organisation_lock=None, read=None):
     return data, listed
 
 
-async def _update_notice():
-    """The PTY host's update notice (a dict), None on any failure: an older host answers an error,
-    a silent or broken one is bounded by the request timeout. Never raises (cancellation aside)."""
+async def _update_notice(failed=None):
+    """The PTY host's update notice (a dict), None for a reply without one (an older host answers an error),
+    ``failed`` when the request fails (a silent one is bounded by its timeout). Never raises (cancellation aside)."""
     try:
         reply = await ptyhost.request({"op": "update_notice"})
         update = reply.get("update") if isinstance(reply, dict) and reply.get("ok") is True else None
         return update if isinstance(update, dict) else None
     except Exception:    # any failure of this optional notice must leave /api/sessions intact
-        return None
+        return failed
 
 
 def _wait_setting(text):
@@ -1171,7 +1171,7 @@ class SessionsState:
 
     async def _read_extras(self, app):
         """Each field on its own: one that fails keeps its last value and never stops a listing."""
-        reads = {"update": _update_notice()}
+        reads = {"update": _update_notice(self.extras["update"])}   # a failed read keeps the notice shown
         if app:
             reads |= {"sessionRequests": asyncio.to_thread(app["session_requests"].pending),
                       "agentMailConsent": asyncio.to_thread(lambda: agentmail.consent_projection()["requests"])}

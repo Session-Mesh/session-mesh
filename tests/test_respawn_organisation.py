@@ -399,14 +399,20 @@ async def test_a_listing_observes_the_conversations_at_the_time_of_its_host_read
     assert observed == [123.0]
 
 
-async def test_an_extra_cancelled_on_its_own_keeps_its_last_value(monkeypatch):
-    async def cancelled():
-        raise asyncio.CancelledError
-    monkeypatch.setattr(server, "_update_notice", cancelled)
+@pytest.mark.parametrize("reply, kept", [(asyncio.CancelledError(), True), (ConnectionResetError(), True),
+                                          (asyncio.TimeoutError(), True), ({"ok": True}, False)])
+async def test_an_extra_that_fails_keeps_its_last_value(monkeypatch, reply, kept):
+    async def request(req):   # a failure (also a child cancelled on its own), or a reply without a notice
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+    monkeypatch.setattr(ptyhost, "request", request)
     state = server.SessionsState()
+    state.extras["update"] = {"tag": "v9"}
     await state._read_extras(None)
-    assert state.extras["update"] is None
-    assert json.loads(state.answer(None))["update"] is None
+    expected = {"tag": "v9"} if kept else None
+    assert state.extras["update"] == expected
+    assert json.loads(state.answer(None))["update"] == expected
 
 
 @pytest.mark.parametrize("text, seconds", [(None, 2.0), ("", 2.0), ("0", 0.0), ("0.5", 0.5), ("60", 60.0),
