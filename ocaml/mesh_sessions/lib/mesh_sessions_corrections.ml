@@ -49,7 +49,8 @@ let check_adapter ~run round adapter ~context rows =
       let others =
         List.filter (fun ((session : Request.session), _) -> not (List.mem session.name requested)) context
       in
-      let described = List.map (fun (_, _, described) -> described) (mine @ rows_of_kind (Mesh_agent.kind adapter) others) in
+      let checked = mine @ rows_of_kind (Mesh_agent.kind adapter) others in
+      let described = List.map (fun (_, _, described) -> described) checked in
       match run (fun () -> Mesh_agent.check adapter round described) with
       | None -> []
       | Some changed ->
