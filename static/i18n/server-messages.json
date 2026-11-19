@@ -556,6 +556,18 @@
     "key": "server.restoreNotFound"
   },
   {
+    "pattern": "^This conversation is claimed by another session: nothing was started$",
+    "key": "server.launchConversationClaimed"
+  },
+  {
+    "pattern": "^The conversation could not be recorded: nothing was started$",
+    "key": "server.launchConversationNotRecorded"
+  },
+  {
+    "pattern": "^This conversation is already running \\(another session\\): nothing was started$",
+    "key": "server.launchConversationRunning"
+  },
+  {
     "pattern": "^This conversation is already running \\(another session\\): nothing was restarted$",
     "key": "server.restoreAlreadyRunning"
   },

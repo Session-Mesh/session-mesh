@@ -131,7 +131,10 @@ function claudeToken(name: string): string {
   return lines('claude-token.log')[index];
 }
 
-const start = (invocationNum: number) => ({conversationId: CONVERSATION, invocationNum, initialNumSteps: 0});
+const start = (invocationNum: number, conversationId = CONVERSATION) => ({conversationId, invocationNum, initialNumSteps: 0});
+// A conversation no other session of this suite reports: the identity registry gives one conversation to one
+// live session, and the restored agy-main holds CONVERSATION when agy-term reports.
+const TERM_CONVERSATION = '0b9a1c2e-1111-4222-8333-777788889999';
 const stop = (fullyIdle: boolean, terminationReason = 'model_stop') =>
   ({conversationId: CONVERSATION, executionNum: 1, terminationReason, fullyIdle});
 
@@ -313,8 +316,8 @@ describe('Antigravity preset', () => {
   // reported must still be what the restore resumes.
   test('after a PTY host stopped with SIGTERM the conversation is restored too', async () => {
     await launch('agy-term');
-    hook('agy-term', 'PreInvocation', start(1));
-    await until('the conversation', async () => (await agentOf('agy-term'))?.session_id === CONVERSATION);
+    hook('agy-term', 'PreInvocation', start(1, TERM_CONVERSATION));
+    await until('the conversation', async () => (await agentOf('agy-term'))?.session_id === TERM_CONVERSATION);
     // Listings with no page open (the snapshot loop, the watcher, an action) take the hook reports too: one of
     // them, here a request that finds no such process, must not record the session without its conversation.
     const adopt = await post('/api/adopt', {pid: 2147483000, mode: 'restart'});
