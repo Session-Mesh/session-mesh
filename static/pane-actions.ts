@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
+export {createRetainedLifetime} from './dictation.ts';
+export {createDictationModeObserver} from './terminal-mode.ts';
+export {createTerminalInputOrigin} from './terminal-origin.ts';
 // Pane-local presentation only. The app supplies data and keeps action authority.
 
 export { replayPrefix } from "./terminal-replay.ts";
@@ -27,51 +30,172 @@ export function setTranslator(fn: Translator): void {
 
 export type AgentState = "busy" | "waiting" | "shell" | "idle" | "unknown";
 
+export interface HumanInputTransport {
+  control(clientId: string, dirty: boolean): void;
+  data(bytes: Uint8Array): void;
+}
+export interface DeferredHumanInput {flush(): boolean; cancel(): void}
 export interface HumanInputLease {
   readonly dirty: boolean;
+  readonly releasePending: boolean;
+  readonly inputDirty: boolean;
+  readonly revision: number;
+  claim(): HumanInputAttempt | null;
+  canInsert(): boolean;
+  claimInsertion(expectedCaptureRevision: number): HumanInputAttempt | null;
   reconnect(): void;
-  write(bytes: Uint8Array, complete?: boolean): boolean;
+  write(bytes: Uint8Array, complete?: boolean, transport?: HumanInputTransport): boolean;
+  defer(bytes: Uint8Array, complete: boolean): DeferredHumanInput;
   atomic(bytes: Uint8Array): boolean;
+  readonly retired: boolean; readonly retained: number;
+  bind(transport: HumanInputTransport): void;
+  retain(): () => void; retire(): void; dispose(): void;
+}
+// Exact-session history spans known local views; H identity/dirty stay per lease.
+// Count attempted D writes, including completed or uncertain foreign input.
+export interface HumanInputScope {
+  readonly revision: number;
+  readonly dirty: boolean;
+  observe(dirty: () => boolean, owner?: HumanInputLease): () => void;
+  canInsert(lease: HumanInputLease): boolean;
+  mutate(): number;
+  track(lease: HumanInputLease): void; forget(lease: HumanInputLease): void;
+  adopt(transport: HumanInputTransport, options?: {retained?: boolean}): HumanInputLease | null;
+  dispose(): void;
+}
+export interface HumanInputAttempt {
+  valid(): boolean;
+  write(bytes: Uint8Array, complete: boolean, transport: HumanInputTransport): boolean;
+}
+export function createHumanInputScope(empty: () => void = () => {}): HumanInputScope {
+  let revision = 0;
+  const observations = new Map<() => boolean, HumanInputLease | undefined>();
+  const leases = new Set<HumanInputLease>();
+  return {get revision() {return revision;}, get dirty() {for (const read of observations.keys()) if (read()) return true; return false;},
+    observe(read, owner) {observations.set(read, owner); return () => {observations.delete(read);};}, mutate() {return ++revision;},
+    canInsert(lease) {
+      if (!leases.has(lease)) return false;
+      for (const [read, owner] of observations) if (owner !== lease && read()) return false;
+      return true;
+    },
+    track(lease) {leases.add(lease);}, forget(lease) {leases.delete(lease); if (!leases.size && !observations.size) empty();},
+    adopt(transport, options) {
+      // Explicit user-opened views may share a retired job's input identity;
+      // bind only ordinary input, never the job's explicit original transport.
+      for (const lease of leases) if (lease.retired
+        && ((!lease.retained && (lease.dirty || lease.releasePending)) || (options?.retained === true && lease.retained > 0))) {
+        lease.bind(transport); return lease;
+      }
+      return null;
+    }, dispose() {revision++; for (const lease of leases) lease.dispose(); observations.clear(); empty();}};
+}
+function claimHumanInput(scope: HumanInputScope, write: HumanInputLease['write'], expected = scope.revision,
+  eligible: () => boolean = () => true): HumanInputAttempt | null {
+  if (scope.revision !== expected || !eligible()) return null;
+  const valid = (): boolean => scope.revision === expected && eligible();
+  return {valid,
+    write(bytes, complete, transport) {
+      if (!valid()) return false;
+      const delivered = write(bytes, complete, transport);
+      if (scope.revision !== expected + 1) return false;
+      expected = scope.revision; return delivered;
+    }};
 }
 
 // One browser tab owns one opaque client id. WebSocket ordering makes each
 // successful H/D/H sequence visible to the PTY arbiter in that order. H is an
 // advisory extension, though: an older relay or a transient control failure
 // must never prevent the baseline D frame from reaching the terminal.
-export function createHumanInputLease(ports: {
-  readonly clientId: string;
-  readonly control: (clientId: string, dirty: boolean) => void;
-  readonly data: (bytes: Uint8Array) => void;
-}): HumanInputLease {
-  let dirty = false;
-  const set = (next: boolean): void => {
-    if (dirty === next) return;
-    ports.control(ports.clientId, next);
-    dirty = next;
-  };
-  const write = (bytes: Uint8Array, complete = false): boolean => {
-    if (!bytes.byteLength) return false;
-    if (!dirty) {
-      try { set(true); } catch { /* H is optional; D remains the authority. */ }
+class NativeInputLease implements HumanInputLease {
+  private readonly clientId: string; private readonly scope: HumanInputScope;
+  private pending = false; private pendingRelease = false; private isRetired = false; private refs = 0;
+  private disposed = false; private queued = 0;
+  private transport: HumanInputTransport | null;
+  private readonly unobserve: () => void;
+  constructor(clientId: string, scope: HumanInputScope, transport: HumanInputTransport) {
+    this.clientId = clientId; this.scope = scope;
+    this.transport = transport;
+    const unobservePending = scope.observe(() => this.dirty, this);
+    // Deferred input is a barrier even when it belongs to this same lease.
+    const unobserveQueued = scope.observe(() => this.queued > 0);
+    this.unobserve = () => {unobservePending(); unobserveQueued();}; scope.track(this);
+  }
+  get inputDirty(): boolean {return this.scope.dirty;}
+  get dirty(): boolean {return this.pending;}
+  get releasePending(): boolean {return this.pendingRelease;}
+  get retired(): boolean {return this.isRetired;}
+  get retained(): number {return this.refs;}
+  get revision(): number {return this.scope.revision;}
+  private set(next: boolean, transport: HumanInputTransport, force = false): void {
+    if (this.dirty === next && !force) return;
+    // Keep the barrier until advisory release succeeds, but remember that
+    // completed D needs only H(false), never another D, on reconnect.
+    this.pendingRelease = !next;
+    transport.control(this.clientId, next); this.pending = next; this.pendingRelease = false;
+  }
+  defer(bytes: Uint8Array, complete: boolean): DeferredHumanInput {
+    const transport = this.transport, payload = bytes.slice();
+    let held = !this.disposed && !!transport && !!payload.byteLength;
+    if (!this.disposed && payload.byteLength) this.scope.mutate();
+    if (held) this.queued++;
+    const cancel = (): void => {if (held) {held = false; this.queued--; this.cleanup();}};
+    let flushing = false;
+    return {cancel, flush: () => {
+      if (!held || flushing) return false;
+      flushing = true;
+      try {return this.write(payload, complete, transport);}
+      finally {cancel();}
+    }};
+  }
+  write(bytes: Uint8Array, complete = false, transport = this.transport): boolean {
+    if (this.disposed || !bytes.byteLength) return false;
+    const revision = this.scope.mutate();
+    if (!transport) return false;
+    const reacquire = this.pendingRelease;
+    this.pendingRelease = false;   // a new D attempt supersedes an older completed operation
+    if (!this.dirty || reacquire) {
+      try { this.set(true, transport, reacquire); } catch { /* H is optional; D remains the authority. */ }
     }
+    const releaseNeeded = this.dirty;
+    this.pending = true;   // unfinished local D is a barrier even when optional H(true) failed
     let delivered = false;
     try {
-      ports.data(bytes);
+      transport.data(bytes);
       delivered = true;
-    } catch { /* An uncertain/failed D is reported to the caller below. */ }
-    if (delivered && complete && dirty) {
-      try { set(false); } catch { /* Keep dirty: reconnect must retry release. */ }
+    } catch {this.pending = true; /* An uncertain/failed D remains dirty, even if advisory acquisition failed. */ }
+    if (delivered && complete && this.dirty && this.scope.revision === revision) {
+      if (!releaseNeeded) this.pending = false;
+      else try { this.set(false, transport); } catch { /* Reconnect retries H(false), never D. */ }
     }
+    this.cleanup();
     return delivered;
-  };
-  return {
-    get dirty() { return dirty; },
-    reconnect() {
-      try { ports.control(ports.clientId, dirty); } catch { /* Socket setup must continue. */ }
-    },
-    write,
-    atomic(bytes) { return write(bytes, true); },
-  };
+  }
+  atomic(bytes: Uint8Array): boolean {return this.write(bytes, true);}
+  claim(): HumanInputAttempt | null {return this.disposed || this.scope.dirty ? null : claimHumanInput(this.scope, this.write.bind(this));}
+  canInsert(): boolean {return !this.disposed && this.scope.canInsert(this);}
+  claimInsertion(expectedCaptureRevision: number): HumanInputAttempt | null {
+    return claimHumanInput(this.scope, this.write.bind(this), expectedCaptureRevision, () => this.canInsert());
+  }
+  reconnect(): void {
+    try {if (this.transport) {
+      const dirty = this.releasePending ? false : this.dirty;
+      this.transport.control(this.clientId, dirty); this.pending = dirty; this.pendingRelease = false;
+    }}
+    catch { /* Socket setup must continue. */ }
+    this.cleanup();
+  }
+  bind(transport: HumanInputTransport): void {if (!this.disposed) {this.isRetired = false; this.transport = transport;}}
+  retain(): () => void {
+    if (this.disposed) return () => {};
+    this.refs++; let held = true;
+    return () => {if (!held) return; held = false; this.refs--; this.cleanup();};
+  }
+  retire(): void {this.isRetired = true; this.transport = null; this.cleanup();}
+  private cleanup(): void {if (this.retired && !this.retained && !this.dirty && !this.releasePending && !this.queued) this.dispose();}
+  dispose(): void {if (this.disposed) return; this.disposed = true; this.transport = null; this.unobserve(); this.scope.forget(this);}
+}
+export function createHumanInputLease(ports: HumanInputTransport & {clientId: string; scope?: HumanInputScope}): HumanInputLease {
+  return new NativeInputLease(ports.clientId, ports.scope ?? createHumanInputScope(), ports);
 }
 
 type PortfolioFactState = "observed" | "unavailable" | "not-collected" | "not-a-repository" | "malformed";
@@ -566,6 +690,7 @@ export interface PastePorts {
   readonly paste: (pane: object, text: string) => void;
   readonly encode: (text: string) => Uint8Array;
   readonly send?: (pane: object, socket: PasteSocket, bytes: Uint8Array, complete: boolean) => boolean;
+  readonly defer?: (binding: PasteBinding, text: string, resume: () => void, cancel: () => void) => {start(): void; settle(): void};
   readonly schedule: (callback: () => void) => void;
 }
 export interface PasteDelivery {
@@ -616,46 +741,55 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
       const requestedBytes = ports.encode(text).byteLength;
       const attempt: Attempt = { binding, frames: 0, wireBytes: 0, joined: "",
         stopped: false, unknown: false, reason: null };
-      let settled = false;
+      let settled = false, deferred: {start(): void; settle(): void} | null = null;
       const finish = (kind: PasteResultKind): void => {
         if (settled) return;
-        settled = true; settle(result(attempt, requestedBytes, kind));
+        settled = true;
+        try {settle(result(attempt, requestedBytes, kind));}
+        finally {deferred?.settle();}
       };
       const operation = { cancel: (): void => {
         if (settled) return;
         attempt.stopped = true; attempt.reason = "cancel";
         finish(attempt.frames || attempt.unknown ? "uncertain" : "refused");
       } };
-      if (!valid(binding)) { attempt.reason = "guard"; finish("refused"); return operation; }
-      if (!text) {
-        if (!enter) { attempt.reason = "incomplete"; finish("refused"); return operation; }
-        send(attempt, "\r");
-        finish(attempt.stopped ? (attempt.unknown ? "uncertain" : "refused") : "submitted");
-        return operation;
-      }
-      const previous = current;
-      current = attempt;
-      try { ports.paste(binding.pane, text); }
-      catch { attempt.stopped = true; attempt.unknown = true; attempt.reason = "paste"; }
-      finally { current = previous; }
-      // xterm may normalize line endings and surround the payload with bracketed
-      // paste frames. Do not accept a framing-only or truncated synchronous paste.
-      const normalize = (value: string): string => value.replace(/\r\n|\n/g, "\r");
-      if (!attempt.stopped && (!attempt.frames || !normalize(attempt.joined).includes(normalize(text)))) {
-        attempt.stopped = true; attempt.reason = "incomplete";
-      }
-      if (attempt.stopped) {
-        finish(attempt.frames || attempt.unknown ? "uncertain" : "refused");
-        return operation;
-      }
-      if (!enter) { finish("paste"); return operation; }
-      try {
-        ports.schedule(() => {
-          if (settled) return;
+      const run = (): void => {
+        if (settled) return;
+        if (!valid(binding)) { attempt.reason = "guard"; finish("refused"); return; }
+        if (!text) {
+          if (!enter) { attempt.reason = "incomplete"; finish("refused"); return; }
           send(attempt, "\r");
-          finish(attempt.stopped ? "uncertain" : "submitted");
-        });
-      } catch { attempt.reason = "schedule"; finish("uncertain"); }
+          finish(attempt.stopped ? (attempt.unknown ? "uncertain" : "refused") : "submitted");
+          return;
+        }
+        const previous = current;
+        current = attempt;
+        try { ports.paste(binding.pane, text); }
+        catch { attempt.stopped = true; attempt.unknown = true; attempt.reason = "paste"; }
+        finally { current = previous; }
+        // xterm may normalize line endings and surround the payload with bracketed
+        // paste frames. Do not accept a framing-only or truncated synchronous paste.
+        const normalize = (value: string): string => value.replace(/\r\n|\n/g, "\r");
+        if (!attempt.stopped && (!attempt.frames || !normalize(attempt.joined).includes(normalize(text)))) {
+          attempt.stopped = true; attempt.reason = "incomplete";
+        }
+        if (attempt.stopped) {
+          finish(attempt.frames || attempt.unknown ? "uncertain" : "refused");
+          return;
+        }
+        if (!enter) { finish("paste"); return; }
+        try {
+          ports.schedule(() => {
+            if (settled) return;
+            send(attempt, "\r");
+            finish(attempt.stopped ? "uncertain" : "submitted");
+          });
+        } catch { attempt.reason = "schedule"; finish("uncertain"); }
+      };
+      if (!valid(binding)) {attempt.reason = "guard"; finish("refused"); return operation;}
+      deferred = ports.defer?.(binding, text, run, operation.cancel) ?? null;
+      if (deferred) deferred.start();
+      else run();
       return operation;
     },
   };

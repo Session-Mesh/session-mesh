@@ -1966,7 +1966,7 @@ let write_reply flow reply =
   Eio.Flow.copy_string (Mesh_wire.encode { kind = 'C'; payload }) flow
 
 let conditional_selection sessions fields =
-  let allowed = [ "op"; "name"; "created"; "rows"; "cols" ] in
+  let allowed = [ "op"; "name"; "created"; "rows"; "cols"; "size" ] in
   let rec keys seen = function
     | [] -> ()
     | (key, _) :: rest ->
@@ -1977,6 +1977,9 @@ let conditional_selection sessions fields =
   keys [] fields;
   if List.assoc_opt "op" fields <> Some (`String "attach_if") then
     invalid_arg "op";
+  (match List.assoc_opt "size" fields with
+  | None | Some (`String "claim") -> ()
+  | _ -> invalid_arg "size");
   let name =
     match List.assoc_opt "name" fields with
     | Some (`String name) when name <> "" && valid_string ~maximum:max_int name
@@ -2035,24 +2038,38 @@ let conditional_attach env observer sessions fields flow =
   | Some (s, geometry) -> (
       let streaming = ref false in
       try
+        let snapshot, replay_geometry =
+          if List.assoc_opt "op" fields = Some (`String "attach_if") then
+            (* Keep the replay and its geometry paired before resizing, as for
+               ordinary attach, but only after strict incarnation selection. *)
+            let snapshot = Mesh_pty_replay.snapshot s.replay in
+            let replay_geometry =
+              try Some (s.geometry ())
+              with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None
+            in
+            (Some snapshot, replay_geometry)
+          else (None, None)
+        in
+        let watch = List.assoc_opt "size" fields = Some (`String "claim") in
+        let client = Mesh_pty_output.create () in
+        let claimed =
+          Option.is_some geometry
+          && (Mesh_pty_size.resize ~same:( == ) ~owner:s.size_owner ~client
+                (if watch then Mesh_pty_size.Claim else Mesh_pty_size.Take))
+               .apply
+        in
+        let size_attach = { client; claimed; watch } in
         Option.iter
           (fun (rows, cols) ->
-            s.resize rows cols;
-            observe observer env Observe.Resize)
+            if claimed then (
+              s.resize rows cols;
+              observe observer env Observe.Resize))
           geometry;
         if (not s.alive) || s.finishing || s.kill_requested then
           refusal "indeterminate"
         else (
           streaming := true;
-          (* As before the size owner rule, a geometry here takes the size. *)
-          let size_attach =
-            {
-              client = Mesh_pty_output.create ();
-              claimed = Option.is_some geometry;
-              watch = false;
-            }
-          in
-          attach
+          attach ?snapshot ?replay_geometry
             ~origin:
               (List.assoc_opt "op" fields = Some (`String "attach_origin_bound"))
             ~size_attach env observer s flow)
