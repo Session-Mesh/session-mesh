@@ -17,6 +17,7 @@ let dispatch loaded = function
   | Wr_args.Sessions_of target -> Wr_sessions.run loaded target
   | Wr_args.Session_questions -> Wr_session_questions.run loaded
   | Wr_args.Ids -> Wr_ids.run loaded
+  | Wr_args.Open_questions { after; limit } -> Wr_open_questions.run loaded ~after ~limit
 
 let run ?getenv args =
   Wr_out.reset ();

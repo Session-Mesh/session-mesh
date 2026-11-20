@@ -33,7 +33,15 @@ let fields (loaded : Wr_load.t) (q : Q.question) =
   match q.about with
   | Some id when W.Model.Smap.mem id world.tasks ->
       let t = W.Model.Smap.find id world.tasks in
-      R.opt_tstr ~max:max_title "task_title" (Some t.title) @ project_fields world t.project_id @ place t.product t.category
+      (* A task in a known project stands under that project's product, even
+         when the task was moved to another one: the view shows each project
+         once, under its own product. *)
+      let product, recorded =
+        match Option.bind t.project_id (fun pid -> W.Model.Smap.find_opt pid world.projects) with
+        | Some p -> (p.product_p, p.category_p)
+        | None -> (t.product, t.category)
+      in
+      R.opt_tstr ~max:max_title "task_title" (Some t.title) @ project_fields world t.project_id @ place product recorded
   | Some id when W.Model.Smap.mem id world.projects ->
       let p = W.Model.Smap.find id world.projects in
       project_fields world (Some id) @ place p.product_p p.category_p

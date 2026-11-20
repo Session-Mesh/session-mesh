@@ -9,7 +9,7 @@ module E = Work_mcp.Work_err
 open E
 
 let max_bytes = 4096
-let ops = [ "products"; "projects"; "project"; "task"; "resume"; "sessions-of"; "session-questions"; "ids" ]
+let ops = [ "products"; "projects"; "project"; "task"; "resume"; "sessions-of"; "session-questions"; "ids"; "open-questions" ]
 
 let read ?(max_bytes = max_bytes) channel =
   let buffer = Buffer.create 512 and chunk = Bytes.create 1024 in
@@ -31,6 +31,7 @@ let words op = function
   | "id", _ -> Error (invalid "id is one identifier, for project and task only")
   | "all", `Bool true -> Ok [ "--all" ]
   | "all", _ -> Error (invalid "all must be true")
+  | "limit", `Int n when op = "open-questions" -> Ok [ "--limit"; string_of_int n ]
   | name, `String v -> Ok [ "--" ^ name; v ]
   | name, _ -> Error (invalid "argument %s must be a string" (Work_mcp.Work_text.clean (String.escaped name)))
 
