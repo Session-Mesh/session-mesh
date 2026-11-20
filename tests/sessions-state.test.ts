@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {type FakeHost, type FakeSession, sleepers, startFakeHost} from './fake-pty-host.ts';
 import {assertLoopAnswers} from './loop-heartbeat.ts';
+import {waitForServer} from './wait-for-token.ts';
 import {removeScratch, runServer, scratchHome, stopServer, type Scratch} from './mesh-server-lib.ts';
 
 type Row = {name: string; ready: boolean; label?: string | null; agent?: Record<string, unknown> | null};
@@ -51,7 +52,16 @@ async function start(prefix: string, sessions: (where: Scratch) => FakeSession[]
     removeScratch(where.scratch);
     assert.fail(result.output);
   }
-  return {where, server: child, host, base: `http://127.0.0.1:${where.port}`, snapshot, startedMs};
+  const base = `http://127.0.0.1:${where.port}`;
+  try {   // the port accepts before the server has written its token file
+    await waitForServer(path.join(where.confDir, 'token'), `${base}/api/dirs`, base);
+  } catch (error) {
+    await stopServer(child);
+    await host.stop();
+    removeScratch(where.scratch);
+    throw error;
+  }
+  return {where, server: child, host, base, snapshot, startedMs};
 }
 
 async function stop(mesh: Mesh | undefined): Promise<void> {
