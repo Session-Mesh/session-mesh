@@ -1813,6 +1813,16 @@ class Pane {
         catch { flash(t("pane.copyRefused")); }
       });
       name.append(copy); identityBody.append(name);
+      if (Number.isFinite(s.created) && localMeshEffectsAllowed()) {
+        const artifacts = document.createElement("button");
+        artifacts.type = "button"; artifacts.textContent = t("artifacts.title");
+        artifacts.addEventListener("click", () => MeshPaneActions.openSessionArtifacts({
+          document, name: s.name, created: s.created, translate: t,
+          current: () => localMeshEffectsAllowed() && find(this.id)?.kind === "mesh"
+            && find(this.id)?.name === s.name && find(this.id)?.created === s.created,
+        }));
+        identityBody.append(artifacts);
+      }
     }
     const disclosure = $(".p-provenance", this.el);
     disclosure.onkeydown = (event) => {

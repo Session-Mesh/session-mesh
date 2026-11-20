@@ -11,6 +11,7 @@ export { parsePtySize, sendsSize, sizePlan } from "./terminal-size-owner.ts";
 // as itself. Text is always translated when it is produced, never at load.
 export * from "./mailbox-panel.ts";
 export * from "./config-panel.ts";
+export * from "./session-artifacts.ts";
 export * from "./agent-mail-consent.ts";
 export * from "./narrow-drawer.ts";
 export { holdLineForTarget } from "./held-line.ts";

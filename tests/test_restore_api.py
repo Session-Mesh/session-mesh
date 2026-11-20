@@ -61,6 +61,14 @@ class FakeHost:
 @pytest.fixture
 def fake_host(monkeypatch, snapshot_file):
     host = FakeHost()
+    # These core REST tests model no artifact data explicitly, rather than
+    # assuming a missing optional catalogue proves that on a real installation.
+    # Native knowledge/absence/repair behavior is covered by the TS integration tests.
+    async def confirmed_empty(op, *args, **kwargs):
+        if op == "list":
+            return {"references": [], "catalogue_present": True, "source_present": True}
+        return {"transferred": False, "catalogue_present": True, "transfer_status": "source-empty"}
+    monkeypatch.setattr(server, "artifact_lifecycle", confirmed_empty)
     monkeypatch.setattr(ptyhost, "request", host.request)
     monkeypatch.setattr(server, "_conversation_missing", lambda kind, sid, account=None: False)   # no transcript files here
     return host
