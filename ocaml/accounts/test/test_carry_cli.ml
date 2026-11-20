@@ -14,7 +14,9 @@ let sid = "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e"
 let rec remove path =
   match Unix.lstat path with
   | { Unix.st_kind = Unix.S_DIR; _ } ->
-      Array.iter (fun name -> remove (Filename.concat path name)) (Sys.readdir path);
+      Array.iter
+        (fun name -> remove (Filename.concat path name))
+        (Sys.readdir path);
       Unix.rmdir path
   | _ -> Unix.unlink path
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
@@ -92,20 +94,65 @@ let test_carry_from_default_to_alias () =
         (Sys.file_exists (Filename.concat work ".credentials.json"));
       List.iter
         (fun (args, code) ->
-          let status, answer = run root ([ "accounts"; "carry"; file ] @ args) in
-          Alcotest.(check bool) (code ^ ": exit 1") true (status = Unix.WEXITED 1);
+          let status, answer =
+            run root ([ "accounts"; "carry"; file ] @ args)
+          in
+          Alcotest.(check bool)
+            (code ^ ": exit 1") true (status = Unix.WEXITED 1);
           Alcotest.(check (option string))
             code (Some code)
-            (match field "code" answer with Some (`String c) -> Some c | _ -> None))
+            (match field "code" answer with
+            | Some (`String c) -> Some c
+            | _ -> None))
         [
           ([ "claude"; sid; "default"; "nobody" ], "account_unknown");
           ([ "codex"; sid; "default"; "work" ], "account_no_agent");
           ([ "claude"; "../" ^ sid; "default"; "work" ], "conversation_unknown");
           ([ "gemini"; sid; "default"; "work" ], "agent_unsupported");
           ([ "claude"; sid; "work"; "work" ], "account_same");
-          ([ "claude"; "1f1e2d3c-4b5a-4968-8778-695a4b3c2d1e"; "default"; "work" ],
-            "conversation_not_found");
+          ( [
+              "claude"; "1f1e2d3c-4b5a-4968-8778-695a4b3c2d1e"; "default"; "work";
+            ],
+            "conversation_not_found" );
         ])
+
+(* A refused carry does not leave the alias folder it created, and its
+   message does not repeat an unknown alias. *)
+let test_refusals_leave_nothing () =
+  let root = Filename.temp_dir "carrycli" "" in
+  Fun.protect
+    ~finally:(fun () -> remove root)
+    (fun () ->
+      let travel = Filename.concat root "accounts/travel/.claude" in
+      mkdirs (Filename.dirname travel);
+      mkdirs (Filename.concat root ".claude");
+      let file = Filename.concat root "accounts.json" in
+      write file
+        (Printf.sprintf
+           {|{"v": 1, "accounts": [{"id": "travel", "label": "Travel", "claude_config_dir": "%s"}]}|}
+           travel);
+      let refusal args =
+        let status, answer = run root ([ "accounts"; "carry"; file ] @ args) in
+        Alcotest.(check bool) "exit 1" true (status = Unix.WEXITED 1);
+        match (field "code" answer, field "error" answer) with
+        | Some (`String code), Some (`String error) -> (code, error)
+        | _ -> Alcotest.fail "no code or error"
+      in
+      let code, _ = refusal [ "claude"; sid; "default"; "travel" ] in
+      Alcotest.(check string) "not found" "conversation_not_found" code;
+      Alcotest.(check bool)
+        "the alias folder is not left behind" false (Sys.file_exists travel);
+      let code, error =
+        refusal [ "claude"; sid; "default"; "x\027[31mRED\nline2" ]
+      in
+      Alcotest.(check string) "unknown" "account_unknown" code;
+      Alcotest.(check bool)
+        "the alias is not repeated" false
+        (String.exists (fun c -> c = '\027' || c = '\n') error
+        || String.length error >= 3
+           && List.exists
+                (fun index -> String.sub error index 3 = "RED")
+                (List.init (String.length error - 2) Fun.id)))
 
 let () =
   Alcotest.run "mesh-platform-accounts-carry"
@@ -114,5 +161,7 @@ let () =
         [
           Alcotest.test_case "carry from the default account to an alias" `Quick
             test_carry_from_default_to_alias;
+          Alcotest.test_case "refusals leave nothing" `Quick
+            test_refusals_leave_nothing;
         ] );
     ]

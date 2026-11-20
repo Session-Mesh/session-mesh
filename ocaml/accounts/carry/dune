@@ -1,6 +1,11 @@
 ; Carrying one conversation from an account alias's folder to another's
 ; (`mesh-platform accounts carry`), with the folder checks of mesh_accounts.
+; carry_statvfs_stubs.c reads the free space of the target's file system.
 
 (library
  (name mesh_accounts_carry)
+ (foreign_stubs
+  (language c)
+  (names carry_statvfs_stubs)
+  (flags :standard -Wall -Wextra))
  (libraries mesh_accounts mesh_safe_file unix yojson))

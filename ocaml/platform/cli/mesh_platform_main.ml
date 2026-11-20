@@ -382,9 +382,11 @@ let accounts_prepare file id =
 (* [accounts carry FILE KIND CONVERSATION FROM TO] copies one Claude or Codex
    conversation from account FROM's folder to account TO's (an alias id of
    FILE, or "default"), with the checks of [prepare] on both folders (TO is
-   created when missing), and prints {"carried": {...}}. A refusal exits 1
-   with {"kind": "accounts", "code": "...", "error": "..."}; the target is then
-   as it was. The agent must be stopped first. *)
+   created when missing, and removed again when this run created it and the
+   carry is refused), and prints {"carried": {...}}. A refusal exits 1 with
+   {"kind": "accounts", "code": "...", "error": "..."}; the target is then as
+   it was. The agent must be stopped first. For Codex only the rollout is
+   copied: resuming from it alone is not verified (Mesh_accounts_carry). *)
 let accounts_carry file kind conversation from_account to_account =
   let module Carry = Mesh_accounts_carry in
   let refuse { Carry.code; message } =
@@ -409,11 +411,9 @@ let accounts_carry file kind conversation from_account to_account =
   | Some _ when not (Carry.valid_conversation_id conversation) ->
       refuse { Carry.code = "conversation_unknown"; message = "not a conversation id" }
   | Some kind -> (
-      let folder = Carry.account_folder ~uid ~getenv:Sys.getenv_opt ~file ~kind in
       match
-        Result.bind (folder ~create:false from_account) (fun source ->
-            Result.bind (folder ~create:true to_account) (fun target ->
-                Carry.carry ~uid ~kind ~conversation ~source ~target ()))
+        Carry.carry_accounts ~uid ~getenv:Sys.getenv_opt ~file ~kind
+          ~conversation ~from_account ~to_account ()
       with
       | Ok outcome ->
           print_json (`Assoc [ ("carried", Carry.outcome_to_json outcome) ]);

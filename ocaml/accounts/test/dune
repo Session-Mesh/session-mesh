@@ -3,12 +3,24 @@
  (modules test_accounts)
  (libraries mesh_accounts alcotest unix))
 
-; Carrying a conversation between account folders, on temporary folders.
+; Carrying a conversation between account folders, on temporary folders:
+; the copy itself (test_carry) and its guards (test_carry_guards), sharing
+; the folders and failing operations of carry_fixture.
+
+(library
+ (name carry_fixture)
+ (modules carry_fixture)
+ (libraries mesh_accounts_carry alcotest unix))
 
 (test
  (name test_carry)
  (modules test_carry)
- (libraries mesh_accounts mesh_accounts_carry alcotest unix))
+ (libraries carry_fixture mesh_accounts_carry alcotest unix))
+
+(test
+ (name test_carry_guards)
+ (modules test_carry_guards)
+ (libraries carry_fixture mesh_accounts_carry alcotest unix))
 
 ; `mesh-platform accounts carry` run as the web server runs it.
 
