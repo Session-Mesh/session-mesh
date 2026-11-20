@@ -94,7 +94,9 @@ describe('mesh-event vibe', () => {
 describe('the hooks directory handed to Vibe', () => {
   const python = (code: string, home: string) => execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c',
     `import sys; sys.path.insert(0, ${JSON.stringify(REPO)})\n${code}`],
-  {cwd: REPO, encoding: 'utf8', env: {PATH: process.env.PATH, HOME: home}}).trim();
+  // The project context hook (docs/agent-hooks.md) is off: these tests are about the state hooks, and
+  // whether it is added depends on a work-read in the opam switch (tests/agent-hooks-golden.test.ts).
+  {cwd: REPO, encoding: 'utf8', env: {PATH: process.env.PATH, HOME: home, MESH_PROJECT_HOOKS: '0'}}).trim();
   const make = (conf: string, id: string, command: string, home: string) => python(
     `import agentmcp; print(agentmcp.vibe_hooks_dir(${JSON.stringify(conf)}, ${JSON.stringify(id)}, ${JSON.stringify(command)}))`, home);
   const mode = (target: string) => fs.statSync(target).mode & 0o777;
