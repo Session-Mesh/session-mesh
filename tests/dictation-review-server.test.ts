@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {build} from 'esbuild';
-import {fixture,identityHeaders,until} from '../checks/dictation-fixture.ts';
+import {fixture,identityHeaders,processBirth,until} from '../checks/dictation-fixture.ts';
 
 async function controlled(t:TestContext,childTempDepth=0){
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-admission-'));
@@ -19,20 +19,23 @@ async function controlled(t:TestContext,childTempDepth=0){
   fs.writeFileSync(preload,`const fs=require('node:fs'),http=require('node:http'),create=http.createServer;
 const trace=${JSON.stringify(trace)},control=${JSON.stringify(control)},release=${JSON.stringify(release)};
 const log=row=>fs.appendFileSync(trace,JSON.stringify(row)+'\\n');
-process.stdin.once('data',part=>{const value=JSON.parse(part.toString().split('\\n')[0]);fs.writeFileSync(${JSON.stringify(bootstrap)},JSON.stringify({socket:value.socket}));});
+process.stdin.once('data',part=>{const value=JSON.parse(part.toString().split('\\n')[0]);fs.writeFileSync(${JSON.stringify(bootstrap)},JSON.stringify({socket:value.socket,pid:process.pid}));});
 http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
  log({event:'request',path:req.url});
  const rule=fs.existsSync(control)?JSON.parse(fs.readFileSync(control,'utf8')):null;
- if(rule&&rule.path===req.url){const end=res.end;res.end=function(...args){
-  log({event:'held',path:req.url});const timer=setInterval(()=>{if(fs.existsSync(release)){clearInterval(timer);end.apply(res,args);}},5);return res;
+ if(rule&&rule.paths.some(path=>path.endsWith('*')?req.url.startsWith(path.slice(0,-1)):path===req.url)){const end=res.end;res.end=function(...args){
+  const body=JSON.parse(args[0]);log({event:'held',path:req.url,job:body.job?.job_id??body.job_id});
+  const timer=setInterval(()=>{if(fs.existsSync(release)){clearInterval(timer);end.apply(res,args);}},5);return res;
  };}return listener(req,res);
 });};`);
   await build({entryPoints:['backend/dictation-main.ts'],outfile:worker,bundle:true,platform:'node',format:'cjs',target:'node22',logLevel:'silent'});
   let f:Awaited<ReturnType<typeof fixture>>|undefined;
   t.after(async()=>{try{if(f)await f.close();}finally{fs.rmSync(directory,{recursive:true,force:true});}});
   f=await fixture(true,false,undefined,{workerEntry:worker,workerPreload:preload,childTempDepth});
-  const events=():{event:string;path:string}[]=>fs.existsSync(trace)?fs.readFileSync(trace,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[];
-  return {f,events,pause:(route:string)=>fs.writeFileSync(control,JSON.stringify({path:route})),release:()=>fs.writeFileSync(release,'go'),clearTrace:()=>fs.writeFileSync(trace,''),socket:()=>JSON.parse(fs.readFileSync(bootstrap,'utf8')).socket as string};
+   const events=():{event:string;path:string;job?:string}[]=>fs.existsSync(trace)?fs.readFileSync(trace,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[];
+   const pauseRoutes=(paths:string[])=>fs.writeFileSync(control,JSON.stringify({paths}));
+   const identity=()=>JSON.parse(fs.readFileSync(bootstrap,'utf8')) as {socket:string;pid:number};
+   return {f,events,pause:(route:string)=>pauseRoutes([route]),pauseRoutes,release:()=>fs.writeFileSync(release,'go'),clearTrace:()=>fs.writeFileSync(trace,''),socket:()=>identity().socket,identity};
 }
 
 for(const mode of ['initial liveness','preparation reply','final liveness','commit reply'] as const)
@@ -119,4 +122,45 @@ test('deep child TMPDIR does not lengthen the private worker socket or break the
   const admitted=await f.call('/api/transcribe','POST',headers,'synthetic audio');assert.equal(admitted.status,202);
   await until(async()=>(await f.call(`/api/transcribe/${admitted.body.job_id}`,'GET',headers)).body.state==='ready');
   assert.equal(f.upstreamCalls,1);
+});
+
+for(const phase of ['preparation reply','commit reply'] as const)
+for(const credential of ['cookie','master'] as const)test(`worker loss during ${credential} ${phase} and concurrent logout stays fenced`,async t=>{
+  const c=await controlled(t),f=c.f,identity=c.identity();
+  const login=await f.call(`/login?token=${encodeURIComponent(f.token)}`);
+  const cookie={Cookie:login.headers['set-cookie']![0]!.split(';')[0]!};
+  const headers={...(credential==='cookie'?cookie:f.auth),...identityHeaders()};
+  c.pauseRoutes(['/internal/principal',phase==='preparation reply'?'/api/transcribe':'/internal/commit/*']);
+  const pending=f.call('/api/transcribe','POST',headers,'synthetic private audio');
+  void pending.catch(()=>{});
+  await finish(pending);
+
+  async function finish(pending:ReturnType<typeof f.call>){
+    await until(()=>c.events().some(event=>event.event==='held'&&event.path!=='/internal/principal'));
+    const job=c.events().find(event=>event.event==='held'&&event.job)?.job;
+    assert.ok(job,'fixture observed an actual prepared/committed job');
+    if(phase==='commit reply')await until(()=>f.upstreamCalls===1);
+    const logout=f.call('/api/logout-all','POST',cookie);
+    void logout.catch(()=>{});
+    await until(()=>c.events().some(event=>event.event==='held'&&event.path==='/internal/principal'));
+    assert.equal(fs.readFileSync(path.join(f.config,'cookie-generation'),'utf8').trim(),'1');
+    process.kill(identity.pid,'SIGKILL');
+    const [transfer,revocation]=await Promise.all([pending,logout]);
+    assert.ok([401,503].includes(transfer.status),JSON.stringify(transfer.body));
+    assert.equal(revocation.status,200);assert.deepEqual(revocation.body,{ok:true,generation:1});
+    assert.equal((await f.call(`/api/transcribe/${job}`,'GET',{...identityHeaders(),...cookie})).status,401);
+    await until(async()=>(await f.call('/api/transcribe/config','GET',f.auth)).body.enabled===false);
+    assert.deepEqual((await f.call('/api/transcribe/config','GET',f.auth)).body,{enabled:false,disabled_reason:'worker_failed'});
+    const freshLogin=await f.call(`/login?token=${encodeURIComponent(f.token)}`);
+    const fresh={Cookie:freshLogin.headers['set-cookie']![0]!.split(';')[0]!};
+    const lookup=await f.call(`/api/transcribe/${job}`,'GET',{...identityHeaders(),...fresh});
+    assert.equal(lookup.status,503);assert.equal(lookup.body.error.code,'disabled');
+    assert.equal((await f.call('/api/sessions','GET',fresh)).status,200);
+    const commits=c.events().filter(event=>event.event==='request'&&event.path.startsWith('/internal/commit/'));
+    assert.equal(commits.length,phase==='preparation reply'?0:1);
+    assert.equal(f.upstreamCalls,phase==='preparation reply'?0:1);
+    await until(()=>processBirth(identity.pid)===null&&!fs.existsSync(path.dirname(identity.socket)));
+    assert.doesNotMatch(f.errors,/synthetic private|Traceback|Task exception was never retrieved|Session is closed/);
+    assert.doesNotMatch(JSON.stringify(transfer.body),/synthetic private|job_id|text/);
+  }
 });

@@ -12,7 +12,7 @@ test('the CI check chain includes dictation typing, generated freshness and regr
   const {scripts}=JSON.parse(fs.readFileSync('package.json','utf8'));
   assert.ok(scripts.check.split(' && ').includes('npm run check:dictation'));
   assert.match(scripts['check:dictation'],/^tsc --project tsconfig\.dictation\.json && node tools\/build-dictation\.mjs --check && /);
-  for(const file of ['tests/dictation.test.ts','tests/dictation-auth.test.ts','tests/dictation-startup.test.ts','tests/dictation-check-chain.test.ts']){
+  for(const file of ['tests/dictation.test.ts','tests/dictation-auth.test.ts','tests/dictation-startup.test.ts','tests/dictation-check-chain.test.ts','tests/dictation-review-server.test.ts']){
     assert.ok(scripts['check:dictation'].includes(file),`missing ${file}`);
   }
 });

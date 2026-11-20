@@ -5,5 +5,5 @@
     "allowImportingTsExtensions": true, "erasableSyntaxOnly": true,
     "types": ["node"], "skipLibCheck": true
   },
-  "include": ["backend/dictation*.ts", "tests/dictation.test.ts", "tests/dictation-auth.test.ts", "tests/dictation-service*.test.ts", "tests/dictation-startup.test.ts", "tests/dictation-check-chain.test.ts", "checks/dictation-fixture.ts", "checks/dictation-pty*.ts"]
+  "include": ["backend/dictation*.ts", "tests/dictation.test.ts", "tests/dictation-auth.test.ts", "tests/dictation-service*.test.ts", "tests/dictation-startup.test.ts", "tests/dictation-check-chain.test.ts", "tests/dictation-review-server.test.ts", "checks/dictation-fixture.ts", "checks/dictation-pty*.ts"]
 }
