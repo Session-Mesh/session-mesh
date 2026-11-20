@@ -44,6 +44,7 @@ const context = vm.createContext({WebSocket: Socket, Uint8Array, TextEncoder,
   location: {protocol: 'https:', host: 'mesh.example'}, touch: false,
   inputLeaseTab: 'a'.repeat(32), humanInputScopes: new Map(), enc: new TextEncoder(), active: null,
   lineDirect: null, composeOwner: null,   // app.js module state read by lifecycle callbacks
+  renderInlineDictation: () => {}, cancelInlineCapture: () => {},
   find: name => ({id: name, created: 42}),
   updateKeys: () => {}, flash: () => {}, refresh: () => refresh(),
   data: {mesh: [{id: 'shell/name', created: 42}]},
