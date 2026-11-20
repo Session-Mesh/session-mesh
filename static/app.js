@@ -388,7 +388,8 @@ function openLocalTerminal(name, { rows, cols }, observer) {
   requireLocalMesh();
   const proto = location.protocol === "https:" ? "wss" : "ws";
   // replay_geometry=1: server.py sends, before the replay, the geometry it was produced at.
-  const socket = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(name)}?rows=${rows}&cols=${cols}&replay_geometry=1`);
+  // pty_size=1: this pane follows the PTY size another device owns ({t:"s"}, Pane.applyPtySize).
+  const socket = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(name)}?rows=${rows}&cols=${cols}&replay_geometry=1&pty_size=1`);
   socket.binaryType = "arraybuffer";
   let disposed = false;
   const send = (payload) => {
@@ -400,7 +401,10 @@ function openLocalTerminal(name, { rows, cols }, observer) {
     isOpen: () => !disposed && localTerminalSocketReady(socket),
     queueInput: (bytes) => send(bytes),
     lease: (clientId, dirty) => send(JSON.stringify({ t: "h", client_id: clientId, dirty })),
-    resize: (rows, cols) => send(JSON.stringify({ t: "r", rows, cols })),
+    // mode "claim" (the default, no field): applied only while no other device owns the size;
+    // "take": the banner's take-over; "keep": a redraw at the PTY's size.
+    resize: (rows, cols, mode = "claim") =>
+      send(JSON.stringify(mode === "claim" ? { t: "r", rows, cols } : { t: "r", rows, cols, size: mode })),
     close: () => { disposed = true; socket.close(); },
   };
   const current = () => !disposed && observer.current(handle);
@@ -412,7 +416,9 @@ function openLocalTerminal(name, { rows, cols }, observer) {
     if (!current()) return;
     if (typeof event.data !== "string") return observer.bytes(handle, new Uint8Array(event.data));
     const geometry = replayGeometry(event.data);
-    if (geometry) observer.replayGeometry(handle, geometry);
+    if (geometry) return observer.replayGeometry(handle, geometry);
+    const ptySize = MeshPaneActions.parsePtySize(event.data);
+    if (ptySize) observer.ptySize?.(handle, ptySize);
   };
   socket.onclose = (event) => {
     if (event?.code === 1012) inventoryPoller?.noteRestart();   // the server closes its sockets as it restarts
@@ -451,6 +457,9 @@ class Pane {
       selectDemoScene(this, event.currentTarget.value);
     });
     $(".demo-history", this.el).addEventListener("click", () => openDemoHistory(this));
+    this.sizeBanner = $(".size-banner", this.el);   // another device owns the PTY size (followPtySize)
+    this.ptyFollowing = false;
+    $("button", this.sizeBanner).addEventListener("click", () => this.takeSize());
     $(".web", this.el).addEventListener("load", () => this.frameLoaded());
     this.id = null;
     this.layoutTarget = null;
@@ -474,7 +483,9 @@ class Pane {
     this.frameLoadSerial = 0;
     this.frameInitialReady = false;
     this.term = new Terminal({
-      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, monospace',
+      // "Mesh Symbols" (style.css): the bundled symbol font, only for symbols such as U+23F5
+      // that the fonts before it lack (no Android font has it).
+      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, monospace, "Mesh Symbols"',
       fontSize, lineHeight: 1.12, cursorBlink: true, allowProposedApi: true,
       // Option still forces a selection on macOS (Shift does elsewhere) when a program tracks the mouse
       scrollback: localMeshEffectsAllowed() ? 20000 : 0,
@@ -765,14 +776,59 @@ class Pane {
   // the one in use" (focus, the page becoming visible, a new socket); automatic
   // refits only send a size that differs from the last one this connection sent,
   // so a layout that jitters cannot storm the program with SIGWINCH.
-  sendSize(force = false, rows = this.ownSize().rows) {
+  // `mode` (MeshPaneActions.sendsSize): a pane that follows another device's size sends
+  // only "keep" (a redraw at the PTY's size); "take" goes through takeSize.
+  sendSize(force = false, rows = this.ownSize().rows, mode = "claim") {
     if (!localMeshEffectsAllowed()) return;
     const c = this.conn;
     if (c?.initializing || !c?.terminal?.isOpen()) return;
+    if (!MeshPaneActions.sendsSize(c.pty ?? null, mode)) return;
     const cols = this.ownSize().cols, last = c.lastSize;
     if (!force && last && last.rows === rows && last.cols === cols) return;
     c.lastSize = { rows, cols };
-    c.terminal.resize(rows, cols);
+    c.terminal.resize(rows, cols, mode);
+  }
+  // The PTY size and its owner, from the host ({t:"s"}, at each change). Another device owns
+  // it: the pane shows the PTY at that size (followPtySize). Nobody owns it: the pane fits and
+  // claims. This pane owns it: nothing to change, unless it followed until now.
+  applyPtySize(c) {
+    if (c !== this.conn || c.replaySize || this.termEl.hidden) return;
+    const owner = c.pty?.owner;
+    if (owner === "you" && !this.ptyFollowing) return;
+    this.refit();
+    if (owner === "none") this.sendSize(true);
+  }
+  // The size the pane's area fits, without applying it; null when it cannot be measured.
+  fitSize() {
+    let size = null;
+    try { size = this.fit.proposeDimensions(); } catch {}
+    return Number.isInteger(size?.rows) && Number.isInteger(size?.cols) ? { rows: size.rows, cols: size.cols } : null;
+  }
+  // True when another device owns the size: xterm takes the PTY's size, clipped by the pane
+  // (the bottom rows kept when it is taller), and the banner offers to take the size back.
+  followPtySize(c) {
+    if (!c?.pty && !this.ptyFollowing) return false;   // a host without the rule: nothing to show
+    const own = this.fitSize() ?? { rows: this.term.rows, cols: this.term.cols };
+    const plan = MeshPaneActions.sizePlan(c?.pty ?? null, own);
+    this.ptyFollowing = plan.follow;
+    this.termEl.classList.toggle("pty-follow", plan.follow);
+    this.termEl.classList.toggle("pty-tall", plan.follow && plan.term.rows > own.rows);
+    this.sizeBanner.hidden = !plan.banner;
+    if (plan.follow && (plan.term.rows !== this.term.rows || plan.term.cols !== this.term.cols))
+      this.term.resize(plan.term.cols, plan.term.rows);
+    return plan.follow;
+  }
+  // The banner's button: the PTY takes this pane's size, and this device owns it until another
+  // one takes it back. The take-over is sent before xterm fits, so the fit's own size, sent as
+  // a claim, reaches the host after it.
+  takeSize() {
+    const c = this.conn, own = this.fitSize();
+    if (localActionUnavailable() || !own || c?.initializing || c?.replaySize || !c?.terminal?.isOpen()) return;
+    if (c.pty) c.pty = { ...c.pty, owner: "you" };
+    c.lastSize = own;
+    c.away = null;
+    c.terminal.resize(own.rows, own.cols, "take");
+    this.refit();
   }
   // The pane's fitted size; while a replay is parsed at its own geometry (enterReplayGeometry),
   // the size xterm returns to afterwards, never the replay's.
@@ -797,7 +853,9 @@ class Pane {
     const own = c.replaySize;
     if (!own) return;
     c.replaySize = null;
-    this.term.resize(own.cols, own.rows);
+    // A pane that follows another device's size goes straight to the PTY's (one rewrap).
+    const back = c.pty?.owner === "other" ? c.pty : own;
+    this.term.resize(back.cols, back.rows);
     this.refit();   // the layout may have changed meanwhile
   }
   // A socket's first frame: the replay of the session's recent output, which after a
@@ -827,20 +885,27 @@ class Pane {
     const c = this.conn;
     if (!c?.terminal?.isOpen()) return;
     const rows = this.ownSize().rows;
+    // A pane that follows another device's size redraws at the PTY's size, which stays that
+    // device's ("keep"); the second size is the one read now, as the first changes xterm's.
+    const mode = c.pty?.owner === "other" ? "keep" : "claim";
     c.away = null;   // the program repaints the whole screen for this size
-    this.sendSize(true, rows > 2 ? rows - 1 : rows + 1);
-    setTimeout(() => { if (this.conn === c) this.sendSize(true); }, REDRAW_GAP_MS);
+    this.sendSize(true, rows > 2 ? rows - 1 : rows + 1, mode);
+    setTimeout(() => { if (this.conn === c) this.sendSize(true, rows, mode); }, REDRAW_GAP_MS);
   }
   // The device in use takes the size back (its terminal focused, the page visible again).
-  // The PTY has the size of the last client that sent one, and this pane is not told when
-  // another one does. Evidence that the screen may hold output drawn for another width:
-  // output arrived while this terminal was not in use and another client was attached. Then
-  // ask for a redraw, which repaints even when the PTY already has this size; else only
-  // send the size, so an ordinary focus never makes the program repaint. Taking the size
-  // back ends the time away either way: output from then on is drawn for this size.
+  // With a host that has the size owner rule (c.pty known), the pane always shows the PTY's
+  // width, so nothing was drawn for another width: it only sends its size, which the host
+  // applies if this pane owns the size or nobody does (only the banner takes it from another
+  // device). With an older host, the PTY has the size of the last client that sent one, and
+  // this pane is not told when another one does. Evidence that the screen may hold output
+  // drawn for another width: output arrived while this terminal was not in use and another
+  // client was attached. Then ask for a redraw, which repaints even when the PTY already has
+  // this size; else only send the size, so an ordinary focus never makes the program repaint.
+  // Taking the size back ends the time away either way: output from then on is drawn for
+  // this size.
   retakeSize() {
     const c = this.conn, away = c?.away;
-    if (away && (away.shared || this.sharedSession(c)) && !c.autoRedraw) { this.redraw(); return; }
+    if (away && !c.pty && (away.shared || this.sharedSession(c)) && !c.autoRedraw) { this.redraw(); return; }
     if (c) c.away = null;
     this.sendSize(true);
   }
@@ -1023,7 +1088,9 @@ class Pane {
   }
   refit() {
     if (this.conn?.replaySize) return;   // leaveReplayGeometry refits once the replay is parsed
-    if (!this.termEl.hidden) { try { this.fit.fit(); } catch {} this.sendSize(); }
+    if (this.termEl.hidden || this.followPtySize(this.conn)) return;
+    try { this.fit.fit(); } catch {}
+    this.sendSize();
   }
   // on a phone the keyboard types in the input line (see "phone input line")
   focus() {
@@ -2002,6 +2069,7 @@ class Pane {
           c.replayPending = true;   // the host's first frame is the replay (see onData)
           c.replayGeometry = null;   // until server.py names it, before the replay
           c.away = null;   // this socket sends its size and redraws (armAutoRedraw)
+          c.pty = null;    // until the host tells this socket (ptySize, after the replay)
           c.retry = 0; this.setConn("●");
           this.inputLease.reconnect();
           if (this.inputLease.dirty)
@@ -2015,6 +2083,10 @@ class Pane {
         },
         replayGeometry: (_terminal, geometry) => {
           if (c.replayPending) c.replayGeometry = geometry;
+        },
+        ptySize: (_terminal, size) => {
+          c.pty = size;
+          this.applyPtySize(c);
         },
         bytes: (terminal, bytes) => {
           // A closing browser socket may already have a replay frame queued.
@@ -2069,6 +2141,11 @@ class Pane {
     if (this.conn.initTimer) clearTimeout(this.conn.initTimer);
     try { this.conn.terminal?.close(); } catch {}
     this.conn = null;
+    if (this.ptyFollowing || this.sizeBanner?.hidden === false) {
+      this.ptyFollowing = false;
+      this.sizeBanner.hidden = true;
+      this.termEl.classList.remove("pty-follow", "pty-tall");
+    }
     this.setConn("");
     updateKeys();
   }

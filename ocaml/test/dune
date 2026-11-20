@@ -91,6 +91,23 @@
  (modules pty_replay_window_test)
  (libraries mesh_pty_support alcotest))
 
+; Who owns the size of a shared PTY, through the host: two attachments, their
+; S frames, claims, take-overs and redraws.
+
+(test
+ (name ptyhost_size_owner_test)
+ (modules ptyhost_size_owner_test)
+ (libraries ptyhost_blackbox test_scratch alcotest unix yojson)
+ (action
+  (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
+
+; Who owns the size of a shared PTY: the pure rule of Mesh_pty_size.
+
+(test
+ (name pty_size_owner_test)
+ (modules pty_size_owner_test)
+ (libraries mesh_pty_support alcotest yojson))
+
 (test
  (name pty_output_coalescing_test)
  (modules pty_output_coalescing_test)

@@ -941,6 +941,8 @@
   "terminal.copilotScrollRestored": "Copilot fullscreen scrolling restored",
   "terminal.piScrollRestored": "Pi fullscreen scrolling restored",
   "terminal.textSelected": "Text selected: tap Copy",
+  "terminal.sizeForeign": "Terminal sized by another device",
+  "terminal.sizeTake": "Take the size back",
   "time.daysShort": "{n} d",
   "time.hoursShort": "{n} h",
   "time.justNow": "just now",

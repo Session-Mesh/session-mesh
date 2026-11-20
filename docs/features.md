@@ -477,6 +477,25 @@ the replay replaces what the terminal showed, so the history appears once; a ful
 the alternate screen is redrawn in place instead. The replay is read at the terminal size the
 session had before this browser attached, then rewrapped to the browser's width.
 
+- **Several browsers on one session: who sets the size.** A session has one terminal size, and a
+  program such as Claude Code redraws its footer for that width only; a browser narrower than it
+  used to keep copies of the footer in its scrollback. So one browser owns the size, and the
+  others show the terminal at that size, clipped (the last rows stay visible), with the banner
+  "Terminal sized by another device" and its button "Take the size back". The rule, applied by
+  the PTY host:
+  - the first browser that opens the session while no other one owns the size sets it and owns
+    it; a browser that opens it later does not change it;
+  - the owner's own changes (window resized, phone keyboard, font size) apply; a size sent by a
+    browser that does not own it (a fit, a focus, the page coming back) changes nothing;
+  - "Take the size back" always applies and makes that browser the owner: the last take-over
+    wins. `mesh-attach` and other clients that predate this rule take the size when they attach
+    or resize, as before;
+  - when the owner closes the session (or its page), nobody owns the size, and the next browser
+    that sends its size takes it.
+
+  A browser alone on a session owns its size: nothing changes for it. The symbols that Claude
+  Code and other programs draw (such as "⏵", which no Android font has) come from a bundled
+  font, Noto Sans Symbols 2, loaded only when the terminal shows one of them.
 - **Long messages.** "Write" in the pane header opens "Write in the terminal", a multi-line field
   sent in one block like a paste. "Insert" pastes without pressing Enter; "Send ⏎" pastes and
   submits.
@@ -505,14 +524,15 @@ session had before this browser attached, then rewrapped to the browser's width.
   is not changed. Whenever the rows cannot be rebuilt from the terminal (a column selection, a
   phone selection the terminal no longer holds), the text is copied as it is.
 - **Garbled display.** "Redraw the terminal" (pane "More" menu or session menu) briefly changes the
-  terminal size so the program redraws itself. When several browsers show the same session, the
-  session has the size of the one that sent it last, and output drawn for another width can
-  look garbled here. A terminal you come back to (click in it, or return to the page) does the
-  same redraw by itself only if output arrived while it was not in use (another element focused
-  or the page hidden) and another browser or `mesh-attach` was attached. A terminal that stayed
-  focused on a visible page while another device drove the session does not: use "Redraw the
-  terminal". Leaving the page and coming back repairs it only if the program writes something
-  while the page is hidden. "Reset mouse/focus modes" resets the browser
+  terminal size so the program redraws itself; from a browser that does not own the size (see
+  above), it does so at the owner's size, which stays the owner's. With a PTY host older than the
+  size rule, the session has the size of the browser that sent it last, and output drawn for
+  another width can look garbled here. A terminal you come back to (click in it, or return to
+  the page) then does the same redraw by itself only if output arrived while it was not in use
+  (another element focused or the page hidden) and another browser or `mesh-attach` was
+  attached. A terminal that stayed focused on a visible page while another device drove the
+  session does not: use "Redraw the terminal". Leaving the page and coming back repairs it only
+  if the program writes something while the page is hidden. "Reset mouse/focus modes" resets the browser
   terminal's mouse and focus handling when a program left it in the wrong state. For Codex, Pi and
   OpenCode, "Enable Codex scrollback", "Restore Pi full-screen scrolling" and "Restore OpenCode
   full-screen scrolling" appear when they apply. OpenCode draws on the alternate screen and asks

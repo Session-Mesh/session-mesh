@@ -256,6 +256,35 @@ Cascadia. Its name table, field 13, is the MIT license text headed "Copyright
 2020 Shannon Miwa"; the repository's `LICENSE` (`LICENSES/MIT-comic-shanns.txt`)
 is the same MIT text with "Copyright (c) 2018 Shannon Miwa".
 
+## Noto Sans Symbols 2, the terminal's fallback for symbols — OFL-1.1
+
+Files: fonts/NotoSansSymbols2-Regular.ttf
+License: OFL-1.1
+License-File: LICENSES/OFL-1.1-Noto-Sans-Symbols-2.txt
+
+`fonts/NotoSansSymbols2-Regular.ttf` is
+`NotoSansSymbols2/unhinted/ttf/NotoSansSymbols2-Regular.ttf` of the release
+asset `NotoSansSymbols2-v2.008.zip` (SHA-256
+`346c930bbe8eb946701a05c54e9c11a2094dee1d93c387bf1771c0a3e335688f`) of the tag
+`NotoSansSymbols2-v2.008` of https://github.com/notofonts/symbols, unchanged
+(SHA-256 `c4a0a80f0041ce4be81e2478faad22776d23edb98ae3f0d19bd37044820ecf9d`; the
+`hinted/ttf` file of the same archive is identical, and so is the copy that the
+Arch Linux package `noto-fonts` 1:2026.11.01-1 installs). It is the full font,
+not a subset: a subset would be a modification. The terminal's `@font-face`
+(`static/style.css`) loads it only for a code point of its `unicode-range`
+(arrows, miscellaneous technical symbols such as U+23F5 "⏵", dingbats) that the
+fonts before it do not have; Android has no system font with U+23F5, which then
+showed as a box.
+
+Its license was read from the font's own name table, not guessed: field 0
+"Copyright 2022 The Noto Project Authors (https://github.com/notofonts/symbols)";
+field 13 "This Font Software is licensed under the SIL Open Font License,
+Version 1.1. This license is available with a FAQ at:
+https://scripts.sil.org/OFL"; field 14 "https://scripts.sil.org/OFL"; version
+"Version 2.008". No Reserved Font Name is declared.
+`LICENSES/OFL-1.1-Noto-Sans-Symbols-2.txt` is the archive's `OFL.txt`, unchanged
+(SHA-256 `b118dd41337806a5d4797052c77caf3bd096aed783e5eb21b4d11154351e1ac0`).
+
 ## xterm.js
 
 Files: xterm.min.js, xterm.css, addon-fit.min.js

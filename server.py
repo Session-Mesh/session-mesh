@@ -4894,14 +4894,23 @@ async def stop_snapshot(app):
 
 # ---------------------------------------------------------------- terminal bridge
 
-def browser_control_frame(text):
-    """Translate a strict browser control message into one PTY host frame."""
+def browser_control_frame(text, pty_size=False):
+    """Translate a strict browser control message into one PTY host frame. With ``pty_size``
+    (a browser that follows the PTY size another one owns, ws_term), a resize without "size"
+    is a claim, applied only while no other attachment owns the size; "take" (the banner's
+    explicit take-over) and "keep" (a redraw at the PTY's size) are passed on. See the size
+    owner rule in ocaml/lib/mesh_pty_size.mli."""
     try:
         message = json.loads(text)
         if not isinstance(message, dict):
             return None
         if set(message) == {"t", "rows", "cols"} and message["t"] == "r":
-            return ptyhost.frame(b"R", {"rows": int(message["rows"]), "cols": int(message["cols"])})
+            claim = {"size": "claim"} if pty_size else {}
+            return ptyhost.frame(b"R", {"rows": int(message["rows"]), "cols": int(message["cols"]), **claim})
+        if (pty_size and set(message) == {"t", "rows", "cols", "size"} and message["t"] == "r"
+                and message["size"] in ("take", "keep")):
+            return ptyhost.frame(b"R", {"rows": int(message["rows"]), "cols": int(message["cols"]),
+                                        "size": message["size"]})
         if (set(message) == {"t", "client_id", "dirty"} and message["t"] == "h"
                 and isinstance(message["client_id"], str)
                 and re.fullmatch(r"[A-Za-z0-9_.:-]{8,96}", message["client_id"])
@@ -4911,6 +4920,18 @@ def browser_control_frame(text):
         return None
     except (KeyError, TypeError, ValueError, OverflowError):   # OverflowError: 1e999
         return None
+
+
+def pty_size_message(payload):
+    """The host's S frame as the browser's {t:"s"} message, or None when it is malformed."""
+    try:
+        size = json.loads(payload)
+    except (TypeError, ValueError):
+        return None
+    valid = (isinstance(size, dict) and set(size) == {"rows", "cols", "owner"}
+             and all(type(size[key]) is int and 2 <= size[key] <= 65535 for key in ("rows", "cols"))
+             and size["owner"] in ("you", "other", "none"))
+    return json.dumps({"t": "s", **size}) if valid else None
 
 
 def releases_human_input(text):
@@ -4945,8 +4966,12 @@ async def ws_term(request):
     ws = web.WebSocketResponse(heartbeat=25, max_msg_size=4 * 1024 * 1024)
     if not ws.can_prepare(request).ok:     # not a websocket upgrade: nothing to attach
         raise web.HTTPBadRequest(text="WebSocket expected")
+    # pty_size=1: a browser that follows the PTY size another one owns. Its attach claims the
+    # size (applied only while no other attachment owns it) and it receives {t:"s"} messages.
+    pty_size = request.query.get("pty_size") == "1"
     try:
-        reader, writer, attach_reply = await ptyhost.attach_info(name, rows, cols)
+        reader, writer, attach_reply = await ptyhost.attach_info(name, rows, cols,
+                                                                 size="claim" if pty_size else None)
     except (OSError, LookupError, asyncio.IncompleteReadError, asyncio.TimeoutError):
         # IncompleteReadError: an older ptyhost closes some failed requests without replying
         raise web.HTTPNotFound()
@@ -4969,6 +4994,10 @@ async def ws_term(request):
                 kind, payload = await ptyhost.read_frame(reader)
                 if kind == b"D":
                     await ws.send_bytes(payload)
+                elif kind == b"S" and pty_size:
+                    size = pty_size_message(payload)
+                    if size:
+                        await ws.send_str(size)
                 elif kind == b"X":
                     break
         except (asyncio.IncompleteReadError, ConnectionError):
@@ -4981,7 +5010,7 @@ async def ws_term(request):
             if msg.type == web.WSMsgType.BINARY:
                 writer.write(ptyhost.frame(b"D", msg.data))
             elif msg.type == web.WSMsgType.TEXT:
-                control = browser_control_frame(msg.data)
+                control = browser_control_frame(msg.data, pty_size)
                 # H is an optional extension.  Forwarding it to the former
                 # OCaml owner closes the whole attachment, including ordinary
                 # keyboard D frames.  R remains part of the baseline protocol.

@@ -72,7 +72,7 @@ const finishAttach = () => { frames.splice(0).forEach(callback => callback()); r
   assert.equal(sockets.length, 0, 'no attach before measured geometry');
   finishAttach();
   const first = sockets[0];
-  assert.equal(first.url, 'wss://mesh.example/ws/shell%2Fname?rows=37&cols=143&replay_geometry=1');
+  assert.equal(first.url, 'wss://mesh.example/ws/shell%2Fname?rows=37&cols=143&replay_geometry=1&pty_size=1');
   assert.equal(first.binaryType, 'arraybuffer');
   assert.equal(pane.conn.ws, first, 'compatibility field is the actual local socket');
   assert.equal(pane.conn.terminal.isOpen(), false);

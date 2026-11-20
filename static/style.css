@@ -3,6 +3,16 @@
  * Copyright (c) 2026 Atacama <contact@atacama.tech>
  */
 
+/* The terminal's last font (app.js, fontFamily): Noto Sans Symbols 2, unmodified, OFL-1.1
+   (static/vendor/THIRD_PARTY.md). The browser fetches it only for a code point of this range
+   that the fonts before it lack, such as Claude Code's U+23F5 "⏵", which no Android font has. */
+@font-face {
+  font-family: "Mesh Symbols";
+  src: url("/static/vendor/fonts/NotoSansSymbols2-Regular.ttf") format("truetype");
+  unicode-range: U+2190-21FF, U+2300-23FF, U+2700-27BF;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --bg: #0b0e13;
@@ -189,6 +199,14 @@ body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--mono); ove
 .pane-body .to-bottom.on { opacity: 1; visibility: visible; pointer-events: auto; }
 .pane-body .to-bottom:hover { background: var(--accent); color: var(--bg); }
 .pane-body .term[hidden] ~ .to-bottom { display: none; }
+/* Another device owns the PTY size (Pane.followPtySize): xterm has the PTY's size, clipped by the
+   pane on the right and, when it is taller, at the top, so the prompt and the last rows stay
+   visible. The banner offers to take the size back. */
+.pane-body .term.pty-tall .xterm { position: absolute; left: 8px; bottom: 0; height: auto; }
+.pane-body .size-banner { position: absolute; top: 6px; right: 18px; z-index: 3; max-width: calc(100% - 36px);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 6px 4px 10px; border-radius: 6px;
+  border: 1px solid var(--accent); background: var(--panel); color: var(--fg); font-size: 12px; box-shadow: 0 2px 8px #0008; }
+.pane-body .size-banner[hidden], .pane-body .term[hidden] ~ .size-banner { display: none; }
 @media (hover: none) { .pane-body .to-bottom { width: 44px; height: 44px; font-size: 22px; right: 20px; bottom: 14px; } }
 .pane-body .empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; color: var(--mute); gap: 12px; padding: 16px; }
 .grip { background: var(--line); cursor: col-resize; flex: none; width: 5px; transition: background .1s; touch-action: none; }

@@ -306,6 +306,11 @@ type session = {
   input : Mesh_pty_input.t;
   replay : Mesh_pty_replay.t;
   mutable clients : Mesh_pty_output.t list;
+  mutable size_owner : Mesh_pty_output.t option;
+      (** The attachment that owns the PTY size (Mesh_pty_size). *)
+  mutable size_watchers : Mesh_pty_output.t list;
+      (** Attachments that claimed at attach: they receive an S frame at each
+          size or ownership change. *)
   geometry : unit -> int * int;
   birth_geometry : unit -> (int * int) option;
   birth_clients : Mesh_pty_output.t list ref;
@@ -1292,6 +1297,8 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                           input;
                           replay = Mesh_pty_replay.create ();
                           clients = [];
+                          size_owner = None;
+                          size_watchers = [];
                           geometry;
                           birth_geometry;
                           birth_clients;
@@ -1457,6 +1464,39 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
 let read_frame = Mesh_pty_protocol.read_frame
 let size = Mesh_pty_protocol.size
 
+(* The attachment that is about to attach, and what the attach decided about
+   the PTY size (Mesh_pty_size): [claimed], it applied its geometry and owns
+   the size; [watch], it asked for S frames (an attach with "size":"claim"). *)
+type size_attach = {
+  client : Mesh_pty_output.t;
+  claimed : bool;
+  watch : bool;
+}
+
+(* Each watching attachment learns the PTY's size and whether it owns it. *)
+let announce_size s =
+  match s.size_watchers with
+  | [] -> ()
+  | watchers -> (
+      match s.geometry () with
+      | exception (Invalid_argument _ | Eio.Io _ | Unix.Unix_error _) -> ()
+      | rows, cols ->
+          List.iter
+            (fun client ->
+              let role =
+                Mesh_pty_size.role ~same:( == ) ~owner:s.size_owner ~client
+              in
+              let frame =
+                Mesh_wire.encode
+                  {
+                    kind = 'S';
+                    payload = Mesh_pty_size.frame_payload ~rows ~cols role;
+                  }
+              in
+              if not (Mesh_pty_output.enqueue client frame) then
+                Mesh_pty_output.close client)
+            watchers)
+
 let prepare_attach env observer sessions fields =
   let s =
     match List.assoc_opt "name" fields with
@@ -1489,16 +1529,34 @@ let prepare_attach env observer sessions fields =
           try Some (s.geometry ())
           with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None
         in
+        (* "size":"claim": the geometry applies only while nobody owns the
+           size, and the attachment receives S frames. Without it, as before,
+           the attach takes the size. *)
+        let watch = List.assoc_opt "size" fields = Some (`String "claim") in
+        let client = Mesh_pty_output.create () in
+        let claimed =
+          Option.is_some geometry
+          && (Mesh_pty_size.resize ~same:( == ) ~owner:s.size_owner ~client
+                (if watch then Mesh_pty_size.Claim else Mesh_pty_size.Take))
+               .apply
+        in
         Option.iter
           (fun (rows, cols) ->
-            s.resize rows cols;
-            observe observer env Observe.Resize)
+            if claimed then (
+              s.resize rows cols;
+              observe observer env Observe.Resize))
           geometry;
-        Some (s, snapshot, replay_geometry)
+        Some (s, snapshot, replay_geometry, { client; claimed; watch })
       with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None)
 
-let attach ?(origin = false) ?snapshot ?replay_geometry env observer s flow =
-  let client = Mesh_pty_output.create () in
+let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
+    observer s flow =
+  let { client; claimed; watch } =
+    match size_attach with
+    | Some decided -> decided
+    | None ->
+        { client = Mesh_pty_output.create (); claimed = false; watch = false }
+  in
   let input_client_id = ref None in
   let snapshot, origin_metadata, ready =
     if not origin then
@@ -1554,12 +1612,23 @@ let attach ?(origin = false) ?snapshot ?replay_geometry env observer s flow =
   (* No yield between the captured C/D pair and subscriber registration. *)
   if ready then s.birth_clients := client :: !(s.birth_clients);
   s.clients <- client :: s.clients;
+  (* Still no yield: a watcher's first S frame follows its replay. *)
+  if claimed then s.size_owner <- Some client;
+  if watch then s.size_watchers <- client :: s.size_watchers;
+  if claimed || watch then announce_size s;
   observe observer env Observe.Attach;
   Fun.protect
     ~finally:(fun () ->
       s.clients <- List.filter (fun other -> other != client) s.clients;
       s.birth_clients :=
         List.filter (fun other -> other != client) !(s.birth_clients);
+      s.size_watchers <-
+        List.filter (fun other -> other != client) s.size_watchers;
+      (match Mesh_pty_size.detach ~same:( == ) ~owner:s.size_owner ~client with
+      | None when Option.is_some s.size_owner ->
+          s.size_owner <- None;
+          announce_size s
+      | _ -> ());
       Option.iter
         (lease_connection_closed s
            ~now:(Eio.Time.Mono.now (Eio.Stdenv.mono_clock env)))
@@ -1582,9 +1651,19 @@ let attach ?(origin = false) ?snapshot ?replay_geometry env observer s flow =
           | Ok (`Assoc fields) -> (
               try
                 let rows, cols = size fields in
-                if not s.finishing then (
-                  s.resize rows cols;
-                  observe observer env Observe.Resize)
+                match Mesh_pty_size.mode_of_fields fields with
+                | None -> ()
+                | Some mode ->
+                    if not s.finishing then (
+                      let decision =
+                        Mesh_pty_size.resize ~same:( == ) ~owner:s.size_owner
+                          ~client mode
+                      in
+                      if decision.apply then (
+                        s.resize rows cols;
+                        observe observer env Observe.Resize);
+                      s.size_owner <- decision.owner;
+                      announce_size s)
               with Invalid_argument _ | Not_found | Failure _ -> ())
           | _ -> ());
           input ())
@@ -1707,10 +1786,18 @@ let conditional_attach env observer sessions fields flow =
           refusal "indeterminate"
         else (
           streaming := true;
+          (* As before the size owner rule, a geometry here takes the size. *)
+          let size_attach =
+            {
+              client = Mesh_pty_output.create ();
+              claimed = Option.is_some geometry;
+              watch = false;
+            }
+          in
           attach
             ~origin:
               (List.assoc_opt "op" fields = Some (`String "attach_origin_bound"))
-            env observer s flow)
+            ~size_attach env observer s flow)
       with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ ->
         (* Once attach may have emitted its success frame, close the stream;
            never append a contradictory second control outcome. *)
@@ -1805,8 +1892,9 @@ let handle env observer dispatch sessions flow =
         else if List.assoc_opt "op" fields = Some (`String "attach") then
           match prepare_attach env observer sessions fields with
           | None -> write_reply flow error
-          | Some (s, snapshot, replay_geometry) ->
-              attach ~snapshot ?replay_geometry env observer s flow
+          | Some (s, snapshot, replay_geometry, size_attach) ->
+              attach ~snapshot ?replay_geometry ~size_attach env observer s
+                flow
         else
           let reply =
             try dispatch fields with

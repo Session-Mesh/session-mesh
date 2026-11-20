@@ -203,12 +203,17 @@ async def host_identity():
     return f"{pid}:{start}" if pid > 0 else None
 
 
-async def attach_info(name, rows, cols):
+async def attach_info(name, rows, cols, size=None):
+    """``size="claim"``: the geometry applies only while no other attachment owns the PTY
+    size, and the host sends S frames (the size and its owner) on this attachment."""
+    request = {"op": "attach", "name": name, "rows": rows, "cols": cols}
+    if size is not None:
+        request["size"] = size
+
     async def handshake():
         reader, writer = await asyncio.open_unix_connection(str(SOCK), limit=4 * 1024 * 1024)
         try:
-            reply = await _exchange(writer, reader, {"op": "attach", "name": name,
-                                                     "rows": rows, "cols": cols})
+            reply = await _exchange(writer, reader, request)
         except BaseException:
             writer.close()
             raise
