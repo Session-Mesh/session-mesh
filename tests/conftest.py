@@ -31,6 +31,9 @@ os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".cache" / "
 # Likewise opam: agentmcp resolves a switch named by MESH_OPAM_SWITCH under OPAMROOT, by default
 # ~/.opam, and would look for mesh-board-mcp in the throwaway home
 os.environ.setdefault("OPAMROOT", str(Path.home() / ".opam"))
+# The Python suites check the state hooks only: whether the read-only project context hook is added
+# depends on a work-read being installed, so it is off here and tested by tests/agent-hooks-*.test.ts
+os.environ["MESH_PROJECT_HOOKS"] = "0"
 os.environ["HOME"] = str(TEST_HOME)
 os.environ["XDG_RUNTIME_DIR"] = str(TEST_RUNTIME)
 # MESH_RUNTIME_DIR takes precedence over XDG_RUNTIME_DIR: an inherited one would name a real socket

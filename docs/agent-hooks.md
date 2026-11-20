@@ -2,8 +2,10 @@
 
 Every agent Mesh launches gets Mesh's hooks from one declarative model: a list of generic events, a
 normalised event, the consumers that react to them, and one *source* per agent that says how that agent
-emits the events. A Mesh feature is written once, against the generic events; adding a hook to every
-compatible agent, or adding an agent, is one line of the table [`agent-hooks.json`](../agent-hooks.json).
+emits the events. A Mesh feature is written once, against the generic events. Which native hook of an
+agent a consumer runs on, and its timeout, is one line of the table [`agent-hooks.json`](../agent-hooks.json);
+each agent's generator reads it, so a consumer that generator already installs is wired into the agent by
+that line alone ([Adding a hook or an agent](#adding-a-hook-or-an-agent) says what else a new consumer needs).
 This page is the model (schema 1) and the capability matrix of the agents Mesh launches today.
 
 The table is data. Its types and checks are [`agent-hooks.ts`](../agent-hooks.ts) (`loadModel` refuses a
@@ -149,8 +151,9 @@ tracker ([work-read.md](work-read.md)) and adds one sentence to the agent's cont
 Project tracker: 2 tasks linked to this session (T-4f5a, T-1a2b), 1 open question. Call work_resume for the details.
 ```
 
-- **Only ids, counts and a fixed sentence.** Tasks linked to this session (at most five ids, `T-` and
-  hexadecimal digits only), tasks linked to this folder or branch, this session's open questions and those
+- **Only ids, counts and a fixed sentence.** Tasks linked to this session (all counted, at most five ids
+  shown, `T-` and hexadecimal digits only), tasks linked to this folder or branch (at most five, as in the
+  `work_resume` briefing, "at least 5" when it is full), this session's open questions and those
   answered in the last 14 days. Never a title, a note, a question text or a path: tracker text is written by
   other agents, and injected at session start it would read as trusted context.
 - **Nothing to say, nothing printed.** No linked task and no question: the agent's context is unchanged.
@@ -172,11 +175,17 @@ Mesh all leave the agent's start undelayed beyond the cap and its output unchang
 
 ## Adding a hook or an agent
 
-- **A consumer on more agents.** Add the event to the source's `subscriptions` (and, for
-  `inject_context`, the format to `inject`). The generator of a `native_config` source installs it.
-- **A new consumer.** Add it to `consumers` with its reaction, program and switch, then subscribe it in the
-  sources. Each `native_config` generator writes one hook per subscribed event; the commands a generator
-  recognises as Mesh's on resume must include the new one.
+- **A consumer on more events of an agent.** Add the event to the source's `subscriptions`: the
+  generator installs every subscribed event of the consumers it handles. The `state` consumer is handled
+  by the Claude, Gemini, agy and Vibe generators (Copilot's file is checked against the table), the
+  `project_context` consumer by the Claude and Vibe generators (`agentmcp.project_context_hooks`).
+- **A consumer on a new agent.** Subscribe it and, for `inject_context`, add the format to `inject`. If
+  that agent's generator does not handle the consumer yet, add the call there too (for `project_context`,
+  one call to `project_context_hooks` and the agent's way of writing a command hook), and make the
+  commands it recognises as Mesh's on resume include the new hook.
+- **A new consumer.** Add it to `consumers` with its reaction, program and switch, subscribe it in the
+  sources, and add one call to each generator that should install it: a table entry alone installs
+  nothing.
 - **A new agent.** Add a source row. A `native_config` source also needs a generator that writes the
   agent's configuration for one session; a `plugin`, `extension` or `protocol` source emits the normalised
   event from its own code.

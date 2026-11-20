@@ -171,11 +171,44 @@ let test_slow () =
   silent "slow tracker" r;
   Alcotest.(check bool) (Printf.sprintf "ended by the cap (%.2f s)" took) true (took >= 1.4 && took < 2.5)
 
+
+(* More tasks than the briefing's HERE section shows (five): the session's
+   tasks are all counted, five ids are shown; the folder's are shown up to
+   the cap and said to be "at least" that many. *)
+let many_tasks ~prefix ~session ~cwd n =
+  List.concat
+    (List.init n (fun i ->
+         let id = Printf.sprintf "T-%s%03x" prefix i in
+         [
+           Printf.sprintf
+             {|{"ts":"2026-11-09T09:%02d:00Z","task":"%s","type":"created","title":"Many %d","project":"gateway","category":"platform","priority":"P2","status":"todo"}|}
+             i id i;
+           Printf.sprintf
+             {|{"ts":"2026-11-09T09:%02d:30Z","task":"%s","type":"session_linked","agent":"claude","session":"%s","cwd":"%s","host":"testhost","repo":null,"branch":null}|}
+             i id session cwd;
+         ]))
+
+let test_counts_beyond_the_briefing () =
+  let repo = copy_fixture () in
+  let here = Unix.realpath (Sys.getcwd ()) in
+  append_events repo
+    (many_tasks ~prefix:"a" ~session:"s-many" ~cwd:"/work/elsewhere" 7
+    @ many_tasks ~prefix:"b" ~session:"s-other" ~cwd:here 6);
+  let line env =
+    U.to_string (U.member "line" (json (run ~env repo [ "context"; "--format"; "json" ])))
+  in
+  let session = line [ ("MESH_SESSION", "s-many") ] in
+  Alcotest.(check bool) session true (contains session "Project tracker: 7 tasks linked to this session (T-a");
+  Alcotest.(check bool) "five ids, then more" true (contains session ", ...)");
+  let folder = line [ ("MESH_SESSION", "s-folder") ] in
+  Alcotest.(check bool) folder true (contains folder "Project tracker: at least 5 tasks linked to this folder (T-b")
+
 let tests =
   [
     Alcotest.test_case "claude additionalContext" `Quick test_claude;
     Alcotest.test_case "vibe additional_context" `Quick test_vibe;
     Alcotest.test_case "text and json" `Quick test_text_and_json;
+    Alcotest.test_case "counts beyond the briefing" `Quick test_counts_beyond_the_briefing;
     Alcotest.test_case "outside a Mesh session" `Quick test_outside_mesh;
     Alcotest.test_case "nothing to say" `Quick test_nothing_to_say;
     Alcotest.test_case "missing tracker" `Quick test_missing_tracker;

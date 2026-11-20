@@ -46,6 +46,8 @@ type summary = {
   folder_tasks : string list;
       (** tasks linked to this folder or branch, at most {!max_ids} *)
   folder_tasks_total : int;
+  folder_tasks_capped : bool;
+      (** the briefing showed its maximum of folder tasks: there may be more *)
   open_questions : int;  (** asked by this session, unanswered *)
   answered_questions : int;
       (** asked by this session, answered in the last 14 days *)
