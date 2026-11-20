@@ -393,7 +393,7 @@ module Client = struct
         Error
           "Mesh knows no such session action request for this session (HTTP \
            404): it expired without a decision, or another session \
-           incarnation made it. A restarted or switched session cannot read \
+           incarnation made it. A restarted session cannot read \
            the request of the one it replaced; call session_accounts to see \
            which account this session runs under."
     | Ok (status, text) when status >= 200 && status < 300 -> (
@@ -1789,8 +1789,9 @@ let session_accounts_tool client =
       "Read-only. The account alias this session's agent runs under \
        (\"current\", \"default\" for the default account), the aliases the \
        owner declared on the runner with the agents each one serves, and \
-       whether this agent kind can switch account. Ids and labels only, never \
-       a folder. The session and the agent kind are the ones the Mesh server \
+       whether this agent kind runs under an alias. There is no tool to \
+       change your account: the owner chooses it when creating a session. Ids \
+       and labels only, never a folder. The session and the agent kind are the ones the Mesh server \
        recorded for this session's token, not something you pass. Call it \
        when the owner asks which account you run under, and once at the start \
        of a session that was restarted, to tell the owner the account it runs \

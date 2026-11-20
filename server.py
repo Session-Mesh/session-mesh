@@ -4079,7 +4079,7 @@ async def api_session_accounts(request):
     current = session_account(raw)
     return web.json_response({
         "agent": source["agent"],
-        "switch_supported": source["agent"] in ACCOUNT_MEMBER,
+        "aliases_supported": source["agent"] in ACCOUNT_MEMBER,
         "accounts_file": _ACCOUNTS["file"],
         "current": ({"id": current, "label": account_label(current),
                      "declared": any(a["id"] == current for a in declared)} if current

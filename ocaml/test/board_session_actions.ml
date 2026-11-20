@@ -137,7 +137,7 @@ let request_body request =
   find 0
 
 let accounts_answer =
-  {|{"agent":"claude","current":{"id":"default","label":"Default account","declared":true},"accounts":[{"id":"default","label":"Default account","claude":true,"codex":true},{"id":"travel","label":"Travel","claude":true,"codex":false}],"accounts_file":"ok","switch_supported":true}|}
+  {|{"agent":"claude","current":{"id":"default","label":"Default account","declared":true},"accounts":[{"id":"default","label":"Default account","claude":true,"codex":true},{"id":"travel","label":"Travel","claude":true,"codex":false}],"accounts_file":"ok","aliases_supported":true}|}
 
 let test_session_accounts_reads_the_self_route () =
   let (is_error, text), request =
@@ -270,11 +270,78 @@ let test_an_unknown_request_is_explained () =
     "expired, or made by another incarnation" true
     (contains text "expired" && contains text "session_accounts")
 
+(* Slice A has no tool that changes the account: neither the tool description
+   nor the 404 explanation may promise one, and the field that says which
+   agent kinds run under an alias must not be named as a switch. *)
+let test_accounts_tool_does_not_promise_a_switch () =
+  let config =
+    Result.get_ok
+      (Mesh_board_mcp.Config.make_for_test ~token:"token" ~port:9 ())
+  in
+  let session = Mcp_kit.Server.create_session (Mesh_board_mcp.server config) in
+  List.iter
+    (fun line -> ignore (Mcp_kit_stdio.serve_session_line session line))
+    [
+      {|{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.0"}}}|};
+      {|{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}|};
+    ];
+  let answer =
+    Mcp_kit_stdio.serve_session_line session
+      {|{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}|}
+  in
+  let description =
+    match Option.map Yojson.Safe.from_string answer with
+    | Some (`Assoc fields) -> (
+        match List.assoc_opt "result" fields with
+        | Some (`Assoc result) -> (
+            match List.assoc_opt "tools" result with
+            | Some (`List tools) ->
+                List.find_map
+                  (function
+                    | `Assoc tool
+                      when List.assoc_opt "name" tool
+                           = Some (`String "session_accounts") -> (
+                        match List.assoc_opt "description" tool with
+                        | Some (`String text) -> Some text
+                        | _ -> None)
+                    | _ -> None)
+                  tools
+            | _ -> None)
+        | _ -> None)
+    | _ -> None
+  in
+  match description with
+  | None -> Alcotest.fail "session_accounts is not listed"
+  | Some text ->
+      let lower = String.lowercase_ascii text in
+      Alcotest.(check bool)
+        "the description does not mention switching" false
+        (contains lower "switch");
+      Alcotest.(check bool)
+        "the description says there is no switch tool" true
+        (contains lower "no tool to change")
+
+let test_the_unknown_request_text_does_not_promise_a_switch () =
+  let (_, text), _ =
+    with_server ~content_type:"text/plain; charset=utf-8" "404 Not Found"
+      "404: Not Found" (fun port ->
+        call port "session_action_status"
+          (`Assoc [ ("request_id", `String "abc") ]))
+  in
+  Alcotest.(check bool)
+    "no switched session is mentioned" false
+    (contains (String.lowercase_ascii text) "switch")
+
+
 let () =
   Alcotest.run "mesh-board-session-actions"
     [
       ( "session_accounts",
         [
+          Alcotest.test_case "does not promise an account switch" `Quick
+            test_accounts_tool_does_not_promise_a_switch;
+          Alcotest.test_case "the 404 text does not promise a switch" `Quick
+            test_the_unknown_request_text_does_not_promise_a_switch;
           Alcotest.test_case "reads the session's own accounts route" `Quick
             test_session_accounts_reads_the_self_route;
           Alcotest.test_case "takes no argument" `Quick

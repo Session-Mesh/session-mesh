@@ -134,6 +134,18 @@ let tool_declaration () =
             | _ -> false)
         | _ -> false)
 
+(* Slice A has no account switching tool: the guide must say so and must not
+   suggest the agent can change its account. *)
+let guide_does_not_promise_an_account_switch () =
+  let guide = read_file (guide_path ()) in
+  Alcotest.(check bool)
+    "says there is no tool to change the account" true
+    (contains guide "no tool to change your account");
+  Alcotest.(check bool)
+    "does not say the agent can change account" false
+    (contains guide "can change account" || contains guide "switch_supported")
+
+
 let rejects_a_path_argument () =
   let guide = read_file (guide_path ()) in
   let session, _ = session "2025-06-18" in
@@ -212,6 +224,8 @@ let () =
             instructions_point_to_the_guide;
           Alcotest.test_case "declared without parameters" `Quick
             tool_declaration;
+          Alcotest.test_case "promises no account switch" `Quick
+            guide_does_not_promise_an_account_switch;
           Alcotest.test_case "rejects a path argument" `Quick
             rejects_a_path_argument;
         ] );
