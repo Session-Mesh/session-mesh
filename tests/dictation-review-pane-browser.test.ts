@@ -78,3 +78,34 @@ test('closing a replay-pending composer cancels the whole operation before anoth
     assert.deepEqual(wire(writes, 'A:0'), []); assert.deepEqual(wire(writes, 'B:0'), []);
   }, false, 'en');
 });
+
+for (const absent of [false, true]) test(`explicit selection reopens a cache-disconnected replacement (${absent ? 'after authoritative absence' : 'fresh replacement'}) without old voice`, async () => {
+  await harness(async (page, api, sockets, writes) => {
+    await open(page);
+    await page.waitForFunction(() => document.querySelector('#compose-mic')?.getAttribute('aria-disabled') === 'false');
+    await page.locator('#compose-mic').focus(); await page.keyboard.down('Space');
+    await page.waitForFunction(() => dictation.session('A', 1).state === 'recording');
+    await page.waitForTimeout(350); await page.keyboard.up('Space');
+    for (let i = 0; !api.jobs.length && i < 500; i++) await page.waitForTimeout(10);
+    assert.equal(api.jobs.length, 1); await closeCompose(page);
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true})));
+    const replacement = {...api.inventory.mesh[0]!, created: 11};
+    if (absent) api.inventory.mesh.shift(); else api.inventory.mesh[0] = replacement;
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true})));
+    await page.waitForFunction(() => dictationInventoryReady && meshPageCache === null);
+    assert.equal(await page.evaluate(() => active.conn), null, 'automatic restoration never changes incarnation');
+    api.jobs[0]!.state = 'ready'; api.jobs[0]!.text = 'old voice must not transfer'; api.ack('A');
+    if (absent) {
+      await page.evaluate(() => openSession('A'));
+      assert.equal(await page.evaluate(() => active.conn), null);
+      assert.equal(sockets.get('A')!.length, 1, 'absence is not permission for a name-only attach');
+      api.inventory.mesh.unshift(replacement); await page.evaluate(() => refresh());
+    }
+    await page.locator('#list .item[data-id="A"]').click();
+    await page.waitForFunction(() => active.conn?.created === 11 && active.conn.terminal?.isOpen()
+      && !active.conn.replaying && !active.conn.replayPending && !active.conn.draining);
+    assert.equal(sockets.get('A')!.length, 2);
+    assert.deepEqual(wire(writes, 'A:0'), []); assert.deepEqual(wire(writes, 'A:1'), []);
+    assert.equal(await page.evaluate(() => dictation.session('A', 1).channel), null);
+  }, false, 'en');
+});

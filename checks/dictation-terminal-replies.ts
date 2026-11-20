@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 import assert from 'node:assert/strict';
-import {test, harness, open, closeCompose, select, typeNative, wire, observeOutput} from './dictation-browser-fixture.ts';
+import {test, harness, open, closeCompose, select, record, ready, typeNative, wire, observeOutput} from './dictation-browser-fixture.ts';
 
 declare const active: any, dictation: any;
 
@@ -65,6 +65,18 @@ for (const [prefix, body] of [[[27, 91, 54], [110]], [[194], [155, 54, 110]]] as
   });
 });
 
+test('real xterm DSR replies reach the original terminal without human dirty state or revision', async () => {
+  await harness(async (page, _api, sockets, writes) => {
+    await open(page); const before = await page.evaluate(() => (({reason:dictation.reason(composeDictationSession()),revision:active.inputLease.revision}))) as {reason: string; revision: number};
+    sockets.get('A')![0]!.send(Buffer.from('\x1b[6n'));
+    for (let i = 0; !wire(writes, 'A:0').length && i < 200; i++) await page.waitForTimeout(10);
+    assert.ok(wire(writes, 'A:0').includes('\x1b[1;1R'), 'the real terminal reply must still be sent');
+    assert.equal(await page.evaluate(() => (active.inputLease.dirty)), false, 'protocol is not human input');
+    assert.equal(await page.evaluate(() => (active.inputLease.revision)), before.revision);
+    assert.equal(await page.evaluate(() => (dictation.reason(composeDictationSession()))), before.reason);
+  });
+});
+
 test('an old queued query cannot route a protocol reply into a replacement B connection', async () => {
   await harness(async (page, _api, sockets, writes) => {
     await page.evaluate(() => {const write=active.term.write.bind(active.term);let hold=true;
@@ -86,6 +98,21 @@ test('protocol replies preserve an existing human dirty bit and input revision',
     assert.equal(await page.evaluate(() => (active.inputLease.revision)), revision);
   });
 });
+
+test('a genuine DSR reply during voice preflight is not foreign human input', async () => {
+  await harness(async (page, api, sockets, writes) => {
+    await record(page); await ready(page, api); api.holdRead(); await page.locator('#compose-send').click();
+    for (let i = 0; !api.readHeld && i < 200; i++) await page.waitForTimeout(10);
+    assert.equal(api.readHeld, true); sockets.get('A')![0]!.send(Buffer.from('\x1b[6n'));
+    for (let i = 0; !wire(writes, 'A:0').length && i < 200; i++) await page.waitForTimeout(10);
+    assert.deepEqual(wire(writes, 'A:0'), ['\x1b[1;1R']);
+    api.releaseRead(); await page.waitForFunction(() => dictation.session('A', 1).state === 'idle' || (dictation.session('A', 1).state === 'recovery' && !dictation.session('A', 1).outcome));
+    assert.equal(await page.evaluate(() => (dictation.session("A",1).state)), 'idle');
+    assert.deepEqual(wire(writes, 'A:0'), ['\x1b[1;1R', 'alpha\rbeta', '\r']);
+    assert.equal(api.jobs[0]!.outcome, 'submitted');
+  });
+});
+
 test('visible terminal focus reports keep their legitimate connection without becoming human draft input', async () => {
   await harness(async (page, _api, sockets, writes) => {
     sockets.get('A')![0]!.send(Buffer.from('\x1b[?1004h'));
@@ -94,7 +121,7 @@ test('visible terminal focus reports keep their legitimate connection without be
     await page.waitForTimeout(50); assert.equal(wire(writes, 'A:0').at(-1), '\x1b[I');
     await open(page); await page.waitForTimeout(50); assert.equal(wire(writes, 'A:0').at(-1), '\x1b[O');
     assert.equal(await page.evaluate(() => (active.inputLease.dirty)), false);
-
+    assert.equal(await page.evaluate(() => (dictation.reason(composeDictationSession()))), '');
   });
 });
 
@@ -110,7 +137,7 @@ for (const origin of ['keyboard', 'paste', 'composition']) test(`${origin} still
     assert.equal(await page.evaluate(() => (active.inputLease.dirty)), true);
     assert.equal((await page.evaluate(() => (active.inputLease.revision)) as number) > before, true);
     assert.ok(wire(writes, 'A:0').join('').length);
-    await open(page);
+    await open(page); assert.notEqual(await page.evaluate(() => (dictation.reason(composeDictationSession()))), '');
     await closeCompose(page);
   });
 });

@@ -386,11 +386,17 @@
 <dialog id="dlg-compose">
   <h2 data-i18n="compose.title">Write in the terminal</h2>
   <textarea id="compose-text" rows="9" placeholder="Multi-line text: sent in one block, like a paste." data-i18n-placeholder="compose.placeholder"></textarea>
+  <p id="dictation-status" role="status" aria-live="polite" aria-atomic="true"></p>
+  <label class="dictation-auto"><input type="checkbox" id="dictation-auto-send" aria-describedby="dictation-auto-warning dictation-preference-status" disabled> <span data-i18n="dictation.autoSend"></span></label>
+  <p id="dictation-auto-warning" class="mute" data-i18n="dictation.autoWarning"></p>
+  <p id="dictation-preference-status" role="status" aria-live="polite"></p>
   <div class="row">
     <span class="mute hint-keys" data-i18n="compose.hint">Ctrl+Enter: send · pasting an image or a file inserts its path</span>
     <button type="button" class="btn ghost" id="compose-attach" title="Attach: file, photo, recording" data-i18n-title="compose.attachTitle">📎</button>
+    <button type="button" class="btn ghost" id="dictation-discard" data-i18n="dictation.discard" disabled></button>
     <button type="button" class="btn ghost" data-close-dialog data-i18n="common.cancel">Cancel</button>
     <button type="button" class="btn" id="compose-insert" data-i18n="compose.insert">Insert</button>
+    <button type="button" class="btn" id="compose-mic" data-i18n-aria-label="dictation.holdLabel" aria-pressed="false" aria-disabled="true" aria-describedby="dictation-status" data-i18n="dictation.microphone"></button>
     <button type="button" class="btn primary" id="compose-send" data-i18n="compose.send">Send ⏎</button>
   </div>
 </dialog>

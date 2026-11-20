@@ -638,14 +638,16 @@ A disabled microphone has an explanatory title and status message.
 
 Transcription-job cleanup is automatic; it does not submit or clear the terminal's pending input.
 Clearing a phone draft permits another recording without a separate Discard action. Speech that is
-already in a native prompt is not moved back into the phone field.
+already in a native prompt is not moved back into the phone field. The separate composer's saved
+auto-send preference does not authorize automatic sending from the header microphone.
 
 An upload whose acknowledgement is lost is recovered by its original request id, never by uploading
 the audio again. A first "not found" response does not prove that the upload was never admitted.
 After its 30-second recovery window, explicit Discard (or a fresh header-microphone recovery hold)
 can release the local recording after its delivery channel is revoked; a late result cannot be
 inserted. This is local abandonment, not proof that the remote job never existed, and the service
-can still report that the original session is busy.
+can still report that the original session is busy. Transferring a
+recovery result to a nonempty saved compose draft requires confirmation before replacing that draft.
 
 ## Columns and panes
 

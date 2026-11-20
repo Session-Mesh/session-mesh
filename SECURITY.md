@@ -39,7 +39,7 @@ install.
   bearer/session tokens are not forwarded. The returned
   transcript is untrusted text, not permission to execute it: the header microphone inserts it
   without Enter on desktop and stages it in an editable field on phones. Review it before submitting
-  manually.
+  manually. The separate composer's explicit auto-send preference does not authorize the header flow.
   This does not attest that the service transcribed the recording accurately. Endpoint configuration
   and the current API contract are documented under [Whisper dictation](docs/operations.md#whisper-dictation).
 - **GitHub and everyone who can push to the repository**, for a release install. A release is

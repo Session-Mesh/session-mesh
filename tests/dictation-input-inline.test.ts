@@ -410,3 +410,14 @@ test('inline channel: throwing guards refuse before attempts and are uncertain a
     assert.equal(f.frames.length, afterFrame ? 1 : 0); channel.release();
   }
 });
+
+test('legacy channel: default option retains submission and delayed Enter', t => {
+  const callbacks: (() => void)[] = [];
+  t.mock.method(globalThis, 'setTimeout', (callback: () => void) => {callbacks.push(callback); return 1 as unknown as ReturnType<typeof setTimeout>;});
+  const f = channelFixture({insertionOnly: false}), channel = f.make(), results: string[] = [];
+  channel.claim(); channel.deliver('legacy', result => results.push(result.kind), () => true);
+  assert.deepEqual(results, []); assert.equal(callbacks.length, 1);
+  callbacks[0]!(); assert.deepEqual(results, ['submitted']);
+  assert.deepEqual(f.frames, ['\x1b[200~legacy\x1b[201~', '\r']);
+  assert.deepEqual(f.controls, [true, false]); channel.release();
+});
