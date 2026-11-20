@@ -84,6 +84,9 @@ before(async () => {
 });
 
 after(async () => {
+  // The fake agents outlive the PTY host; a process named codex left running would be seen by the next suites'
+  // listings (they would read its rollout and write a cache).
+  if (bin) spawnSync('pkill', ['-KILL', '-f', path.join(bin, 'real', 'codex')]);
   host?.kill('SIGKILL');
   await mesh?.stop();
   if (bin) fs.rmSync(bin, {recursive: true, force: true});
