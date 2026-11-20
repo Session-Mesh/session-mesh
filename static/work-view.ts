@@ -128,8 +128,8 @@ class WorkView implements WorkViewController {
     document.addEventListener('keydown', this.onEscape, true);
     if (!target) return this.reload();
     if (target.kind === 'entry') return this.loadEntry();
-    if (target.kind === 'task') await this.openTask(target.id);
-    else await this.openProject(target.id, 'questions');
+    if (target.kind === 'task') await this.openTask(target.id, target.tab);
+    else await this.openProject(target.id, target.tab ?? 'questions');
     await this.refreshCount();   // the entry screen, which reads the count with its list, was not shown
   }
 
@@ -313,21 +313,22 @@ class WorkView implements WorkViewController {
     focusFirst(view.root.querySelector<HTMLElement>('.work-back'));
   }
 
-  /** From a question of the entry screen: read the task to learn its project, then open that project on its Questions
-   *  tab with the task's sheet. A task outside any project says so, with the way back. */
-  private async openTask(id: string): Promise<void> {
+  /** From a question of the entry screen (or a terminal reference): read the task to learn its project, then open that
+   *  project on its Questions tab (or `tab`) with the task's sheet. A task outside any project says so, with the way back. */
+  private async openTask(id: string, tab: TabKey = 'questions'): Promise<void> {
     const { token, signal } = this.begin();
     this.show(loadingBlock(this.t));
     const result = await this.api.task(id, signal);
     if (token !== this.generation) return;
-    if (!result.ok) return this.failure(result.error, () => void this.openTask(id), () => void this.backToEntry());
+    if (!result.ok) return this.failure(result.error, () => void this.openTask(id, tab), () => void this.backToEntry());
     const project = result.value.task.project;
     if (!project) {
       const back = button('btn work-back', this.t('work.back'), () => void this.backToEntry());
-      this.show(el('div', 'work-error', el('p', 'work-error-text', this.t('work.questions.taskNoProject', { id })), el('div', 'work-actions', back)));
+      const why = tab === 'questions' ? 'work.questions.taskNoProject' : 'work.references.taskNoProject';
+      this.show(el('div', 'work-error', el('p', 'work-error-text', this.t(why, { id })), el('div', 'work-actions', back)));
       return focusFirst(back);
     }
-    await this.openProject(project, 'questions');
+    await this.openProject(project, tab);
     if (this.project?.id === project) await this.selectTask(id);
   }
 
@@ -492,6 +493,7 @@ class WorkView implements WorkViewController {
 
 export { counterText } from './work-questions.ts';
 export { createSessionMarker as mountSessionMarker } from './work-session-marker.ts';
+export { createReferences as mountReferences } from './work-references.ts';
 
 export function mountWorkView(options: WorkViewOptions): WorkViewController {
   const view = new WorkView(options);

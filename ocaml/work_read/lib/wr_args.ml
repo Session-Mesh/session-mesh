@@ -19,11 +19,12 @@ type command =
   | Resume of { product : string option; project : string option; all : bool }
   | Sessions_of of target
   | Session_questions
+  | Ids
 
 let usage =
   "usage: work-read products | projects [--product P] [--all] | project P-ID | task T-ID | resume \
    [--product P] [--project P-ID] [--all] | sessions-of (--product P | --project P-ID | --task T-ID) | \
-   session-questions"
+   session-questions | ids"
 
 let max_value = 100
 let is_hex c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
@@ -125,4 +126,6 @@ let parse = function
   | "sessions-of" :: rest -> sessions_of rest
   | [ "session-questions" ] -> Ok Session_questions
   | "session-questions" :: _ -> Error (invalid "session-questions takes no argument")
+  | [ "ids" ] -> Ok Ids
+  | "ids" :: _ -> Error (invalid "ids takes no argument")
   | cmd :: _ -> Error (invalid "unknown subcommand %s; %s" (T.clean (String.escaped cmd)) usage)

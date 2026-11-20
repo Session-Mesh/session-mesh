@@ -6,6 +6,8 @@
 import { isObj, parseOpenQuestions, parseProducts, parseProject, parseProjects, parseTask, text } from './work-parse.ts';
 import { parseSessionQuestions } from './work-session-questions.ts';
 import type { SessionQuestionsDoc } from './work-session-questions.ts';
+import { parseIds } from './work-references-parse.ts';
+import type { KnownIds } from './work-references-parse.ts';
 import type { OpenQuestionsDoc, ProductsDoc, ProjectDoc, ProjectsDoc, TaskDetail } from './work-types.ts';
 
 export type WorkFetch = (input: string, init: RequestInit) => Promise<Response>;
@@ -72,6 +74,8 @@ export type WorkApi = Readonly<{
   openQuestions(signal?: AbortSignal): Promise<WorkResult<OpenQuestionsDoc>>;
   /** The open questions of each session, by name (`session-questions`), for the session marker. */
   sessionQuestions(signal?: AbortSignal): Promise<WorkResult<SessionQuestionsDoc>>;
+  /** Every task, project and question id with its title (`ids`), for the references of the terminal. */
+  ids(signal?: AbortSignal): Promise<WorkResult<KnownIds>>;
   /** The owner's answer to an open question (the write op, sent with the page's own cookie only). */
   answer(question: string, answerText: string): Promise<WorkResult<AnswerReceipt>>;
 }>;
@@ -166,6 +170,7 @@ export function createWorkApi(request: WorkFetch, url = '/api/work/v1', options:
     task: (id, signal) => read('task', { id }, parseTask, signal),
     openQuestions: signal => read('resume', {}, parseOpenQuestions, signal),
     sessionQuestions: signal => read('session-questions', {}, parseSessionQuestions, signal),
+    ids: signal => read('ids', {}, parseIds, signal),
     answer: (question, answerText) => call('answer', { question, text: answerText }, parseReceipt),
   };
 }

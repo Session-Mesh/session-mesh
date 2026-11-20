@@ -111,6 +111,9 @@ describe('POST /api/work/v1 with the real program', { skip }, () => {
     const resume = await call(server, { op: 'resume', args: { all: true } });
     assert.equal(resume.status, 200);
     assert.ok(Array.isArray(resume.json().todo));
+    const ids = await call(server, { op: 'ids' });
+    assert.equal(ids.status, 200, 'the server relays the ids op as any read op');
+    assert.deepEqual(ids.json().projects.map((p: { id: string }) => p.id), ['P-5e6f']);
   });
 
   test('refuses an unknown op and unknown or malformed arguments with an invalid_input document', async () => {
@@ -164,6 +167,7 @@ describe('POST /api/work/v1 with the real program', { skip }, () => {
       { op: 'products' }, { op: 'projects', args: { all: true } }, { op: 'project', args: { id: 'P-5e6f' } },
       { op: 'task', args: { id: 'T-3c4d' } }, { op: 'resume', args: {} }, { op: 'sessions-of', args: { product: 'relay' } },
       { op: 'task', args: { id: 'T-ffff' } },
+      { op: 'ids' },
     ]) {
       const reply = await call(server, body);
       for (const needle of forbidden) assert.ok(!reply.text.includes(needle), `${JSON.stringify(body)} leaks ${needle}`);
