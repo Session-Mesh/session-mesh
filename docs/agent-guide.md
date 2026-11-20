@@ -223,9 +223,11 @@ session started, or to restart your own conversation. Nothing happens until the 
 request in the page, and an undecided request expires. A restart continues in a new session.
 
 `session_accounts` tells you which account alias your session runs under (`default` for the default
-account), which aliases the owner declared on the runner with the agents each one serves, and
-whether your agent kind can run under an alias. Mesh has no tool to change your account yet: the
-owner chooses the account when creating a session. It shows ids and labels only, never a folder, and it takes no
+account) and which aliases the owner declared on the runner, with the agents each one serves. Its
+`switch_qualified` field is `false`: Mesh cannot move your session to another account yet, and has
+no tool to change your account; the owner chooses the account when creating a session. If the owner
+asks for another account, tell them to start a session under that alias from the page. It shows ids
+and labels only, never a folder, and it takes no
 argument: the mesh knows your session and your agent from your session token and from how it
 launched you. Call it when the owner asks which account you run under, and once at the start of a
 session that continues a restarted conversation, then tell the owner the account. A request made

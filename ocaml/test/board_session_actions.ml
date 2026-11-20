@@ -137,7 +137,7 @@ let request_body request =
   find 0
 
 let accounts_answer =
-  {|{"agent":"claude","current":{"id":"default","label":"Default account","declared":true},"accounts":[{"id":"default","label":"Default account","claude":true,"codex":true},{"id":"travel","label":"Travel","claude":true,"codex":false}],"accounts_file":"ok","aliases_supported":true}|}
+  {|{"agent":"claude","current":{"id":"default","label":"Default account","declared":true},"accounts":[{"id":"default","label":"Default account","claude":true,"codex":true},{"id":"travel","label":"Travel","claude":true,"codex":false}],"accounts_file":"ok","switch_qualified":false}|}
 
 let test_session_accounts_reads_the_self_route () =
   let (is_error, text), request =
