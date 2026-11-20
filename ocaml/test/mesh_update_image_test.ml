@@ -260,6 +260,12 @@ let test_size () =
       "https://github.com/x"
   in
   status "curl's own limit" 413 answer.status;
+  (* curl 8.5 (Ubuntu 24.04) stops on a declared length over --max-filesize
+     before it writes the headers: exit 63 and no response at all *)
+  let answer, _, _ = fetch [ (63, "") ] "https://github.com/x" in
+  status "curl's limit, no headers written" 413 answer.status;
+  let answer, _, _ = fetch [ (7, "") ] "https://github.com/x" in
+  status "no response for another reason" 502 answer.status;
   let exact = png ^ String.make (I.size_limit - String.length png) '\000' in
   let answer, _, _ =
     fetch
