@@ -249,6 +249,7 @@ let test_tools () =
       "session_restart_request";
       "session_action_status";
       "session_accounts";
+      "session_account_switch_request";
       "agent_guide_read";
     ]
     names;

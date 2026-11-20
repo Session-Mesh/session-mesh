@@ -447,7 +447,12 @@ DEFAULT_ACCOUNT = {"id": "default", "label": "Default account", "claude": True, 
 
 
 class AccountsUnavailable(Exception):
-    """accounts.json, one of its folders, or the program that checks them was refused."""
+    """accounts.json, one of its folders, or the program that checks them was refused; ``code``: the program's
+    refusal code when it gave one (accounts carry)."""
+
+    def __init__(self, reason, code=None):
+        super().__init__(reason)
+        self.code = code
 
 
 def _accounts_signature():
@@ -460,15 +465,15 @@ def _accounts_signature():
     return (st.st_ino, st.st_size, st.st_mtime_ns)
 
 
-async def _accounts_program(*args):
+async def _accounts_program(*args, timeout=10, env=None):
     """The JSON answer of `mesh-platform accounts ARGS`; AccountsUnavailable on any refusal."""
     program, proc = work_command("mesh-platform"), None
     if not program:
         raise AccountsUnavailable("mesh-platform not found")
     try:
-        proc = await asyncio.create_subprocess_exec(program, "accounts", *args, env=work_child_env(),
+        proc = await asyncio.create_subprocess_exec(program, "accounts", *args, env=env or work_child_env(),
                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await asyncio.wait_for(proc.communicate(), 10)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
         answer = json.loads(out)
     except (OSError, ValueError, asyncio.TimeoutError) as exc:
         raise AccountsUnavailable(repr(exc)) from exc
@@ -476,7 +481,9 @@ async def _accounts_program(*args):
         if proc is not None and proc.returncode is None:
             proc.kill()
     if proc.returncode != 0 or not isinstance(answer, dict):
-        raise AccountsUnavailable(str(answer.get("error") if isinstance(answer, dict) else answer))
+        code = answer.get("code") if isinstance(answer, dict) else None
+        raise AccountsUnavailable(str(answer.get("error") if isinstance(answer, dict) else answer),
+                                  code if isinstance(code, str) else None)
     return answer
 
 
@@ -973,7 +980,16 @@ async def _wait_source_gone(old_name, old_created, standby):
         await asyncio.sleep(0.05)
 
 
-async def replace_session(old_name, old_created, base, cwd, command, agent, known_agent, account=None):
+class AccountSwitchUndone(Exception):
+    """The conversation could not be carried to the other account: it resumed under its own, in session ``name``."""
+
+    def __init__(self, name, code, reason):
+        super().__init__(reason)
+        self.name, self.code = name, code
+
+
+async def replace_session(old_name, old_created, base, cwd, command, agent, known_agent, account=None,
+                          switch=None):
     """Prepare a dormant shell, retire the source, then start the replacement.
 
     A failed spawn leaves the source intact.  The replacement receives no
@@ -981,11 +997,16 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
     two clients never run the same provider conversation concurrently.
     ``account``: the source's alias, kept by the replacement (refused before
     anything is stopped when it can no longer be used, never the default).
+    ``switch``: (target alias or None for the default account, carry) of an account switch: the replacement runs
+    under the target once ``await carry()`` copied the conversation, after the source stopped. When the carry
+    fails, the conversation resumes under ``account`` and AccountSwitchUndone names that session.
     """
-    account_env = await account_environment(account, known_agent)
+    target = switch[0] if switch else account
+    account_env = await account_environment(target, known_agent)
+    source_env = await account_environment(account, known_agent) if switch else account_env
     command, notice, vibe = await _prepared_launch(known_agent, command, cwd)
     name = await new_session(base, cwd, None, agent, known_agent, keep=48, notice=notice, vibe=vibe,
-                             account=account, account_env=account_env)
+                             account=target, account_env=account_env)
     listed = await host({"op": "list"})
     replacement = next((item for item in listed if item.get("name") == name), None)
     if replacement is None:
@@ -995,6 +1016,15 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
         await host({"op": "kill_if", "name": name, "created": replacement["created"]})
         raise web.HTTPConflict(text="Session replaced or stop already requested")
     await _wait_source_gone(old_name, old_created, name)
+    if switch:
+        try:
+            await switch[1]()
+        except AccountsUnavailable as exc:   # nothing changed under the source account: the conversation goes on there
+            print(f"account switch of {old_name} undone: {exc}", flush=True)
+            await host({"op": "kill_if", "name": name, "created": replacement["created"]})
+            resumed = await new_session(base, cwd, command, agent, known_agent, keep=48, account=account,
+                                        account_env=source_env)
+            raise AccountSwitchUndone(resumed, exc.code or "carry_failed", str(exc)) from exc
     if known_agent == "claude":
         command = await asyncio.to_thread(claudewake.launch_command, command,
                                           replacement["meta"].get("nonce"), CLAUDE_WAKE_DIR,
@@ -1469,7 +1499,8 @@ class SessionsState:
         """Each field on its own: one that fails keeps its last value and never stops a listing."""
         reads = {"update": _update_notice(self.extras["update"])}   # a failed read keeps the notice shown
         if app:
-            reads |= {"sessionRequests": asyncio.to_thread(app["session_requests"].pending),
+            reads |= {"sessionRequests": asyncio.to_thread(
+                          lambda: [_with_account_labels(item) for item in app["session_requests"].pending()]),
                       "agentMailConsent": asyncio.to_thread(lambda: agentmail.consent_projection()["requests"])}
         for key, value in zip(reads, await asyncio.gather(*reads.values(), return_exceptions=True)):
             if isinstance(value, BaseException):   # also a child cancelled on its own
@@ -4053,14 +4084,140 @@ async def api_session_action_request(request):
         if item is None:
             raise web.HTTPNotFound()
         return web.json_response({"request": item}, headers={"Cache-Control": "no-store"})
+    body, current = await json_object(request), None
+    if body.get("action") == "switch_account" and set(body) == {"action", "account"}:
+        body, current = await _switch_request(source, body)
     try:
         item = request.app["session_requests"].create(
-            source, await json_object(request), enabled_agents=set(AGENT_PRESETS),
-            resumable=RESUMABLE_AGENT_PRESETS)
+            source, body, enabled_agents=set(AGENT_PRESETS),
+            resumable=RESUMABLE_AGENT_PRESETS, current_account=current)
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc))
     return web.json_response({"request": item}, status=202,
                              headers={"Cache-Control": "no-store"})
+
+
+# ---- Account switch requests (session_account_switch_request): the session's agent asks to continue its
+# conversation under another account. Checked here before it is queued, then, once the owner approved it: the
+# exact source stopped, `mesh-platform accounts carry` copies the conversation, the agent resumes under the target;
+# a failed carry resumes it under its own account. The agent kind is the session's (its token), never the body's.
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+CARRY_TIMEOUT = 300
+
+
+def _switch_refusal(code, message):
+    """A refused switch request: {"error": {"code", "message"}}, which the mesh-board client hands the agent."""
+    return web.HTTPBadRequest(text=json.dumps({"error": {"code": code, "message": message}}),
+                              content_type="application/json")
+
+
+def _switch_target(name, kind):
+    """The account ``name`` designates for a ``kind`` agent: an exact id, else the one label equal to it ignoring
+    ASCII case (among the accounts serving ``kind`` when several share it). No prefix, no guess."""
+    offered = [DEFAULT_ACCOUNT, *accounts_projection()]
+    available = ", ".join(f"{a['id']} ({a['label']})" for a in offered)
+    shown = name if isinstance(name, str) and name.isprintable() and len(name) <= 64 else "?"
+    found = [a for a in offered if a["id"] == name] if isinstance(name, str) else []
+    if not found and isinstance(name, str):
+        labelled = [a for a in offered if a["label"].translate(_ASCII_LOWER) == name.translate(_ASCII_LOWER)]
+        found = [a for a in labelled if a[kind]] or labelled
+    if not found:
+        raise _switch_refusal("account_unknown", f"No account “{shown}” is declared. Available: {available}.")
+    if len(found) > 1:
+        raise _switch_refusal("account_ambiguous",
+                              f"“{shown}” matches several accounts ({', '.join(a['id'] for a in found)}); give the id.")
+    target = found[0]
+    if not target[kind]:
+        serves = ", ".join(ACCOUNT_MEMBER[k][2] for k in ACCOUNT_MEMBER if target[k])
+        raise _switch_refusal("account_no_agent",
+                              f"Account {target['label']} has no {ACCOUNT_MEMBER[kind][2]} folder; it serves: {serves}.")
+    return target
+
+
+def _switch_conversation(described, source):
+    """The exact conversation id of the source's agent, or None (unknown, guessed, or another agent running)."""
+    entry = next((e for e in described["mesh"] if e["id"] == source["id"] and e["created"] == source["created"]), None)
+    agent = entry and entry.get("agent")
+    if (not agent or agent.get("type") != source["agent"] or not agent.get("session_id")
+            or agent.get("identity_source") in respawn.GUESSED_SOURCES):
+        return None
+    return agent["session_id"]
+
+
+async def _switch_request(source, body):
+    """({"action", "account": target id}, current account id) of a switch request that can be carried out now,
+    else a coded refusal. The target folder is prepared (created 0700 when missing) as for a launch."""
+    kind = source["agent"]
+    if kind not in ACCOUNT_MEMBER:
+        raise _switch_refusal("agent_unsupported", "Account switching applies to Claude and Codex only.")
+    await declared_accounts()
+    if _ACCOUNTS["file"] == "refused" and body["account"] != DEFAULT_ACCOUNT["id"]:
+        raise _switch_refusal("accounts_refused", "accounts.json is missing or refused on the runner; no alias is "
+                              "offered (details in the service log).")
+    target = _switch_target(body["account"], kind)
+    listed = await host({"op": "list"})
+    raw = next((item for item in listed if item["name"] == source["id"] and item["created"] == source["created"]), None)
+    if raw is None:
+        raise web.HTTPConflict(text="Requesting session replaced")
+    current = session_account(raw) or DEFAULT_ACCOUNT["id"]
+    if target["id"] == current:
+        raise _switch_refusal("account_same", f"This session already runs under {target['label']}.")
+    sid = _switch_conversation(await asyncio.to_thread(_describe_with_hooks, listed), source)
+    if sid is None:
+        raise _switch_refusal("conversation_unknown",
+                              "The exact conversation id is unknown; it cannot be resumed elsewhere.")
+    folder = None if current == DEFAULT_ACCOUNT["id"] else current
+    if await asyncio.to_thread(_conversation_missing, kind, sid, folder):
+        raise _switch_refusal("conversation_not_found", "The conversation is not in the current account's folder.")
+    try:
+        await account_environment(None if target["id"] == DEFAULT_ACCOUNT["id"] else target["id"], kind)
+    except web.HTTPBadRequest as exc:
+        raise _switch_refusal("account_folder_refused", f"The folder of account {target['label']} is refused; see "
+                              "the service log.") from exc
+    return {"action": "switch_account", "account": target["id"]}, current
+
+
+def _carry_env(kind):
+    """The carry's environment: the server's, with the default account's folder variable when it is absolute
+    (what the default account's agents use, as _conversation_missing reads it)."""
+    variable = ACCOUNT_MEMBER[kind][1]
+    configured = os.environ.get(variable) or ""
+    return {**work_child_env(), **({variable: configured} if os.path.isabs(configured) else {})}
+
+
+async def _switch_session(item, raw, conversation, argv):
+    """Carry out an approved switch: the source stopped, its conversation carried, then resumed under the target
+    (a failed carry: under the source again, AccountSwitchUndone)."""
+    kind, account = item["source"]["agent"], session_account(raw)
+    if (account or DEFAULT_ACCOUNT["id"]) != item["from_account"]:
+        raise web.HTTPConflict(text="The session's account changed since the request")
+
+    async def carry():
+        await _accounts_program("carry", str(ACCOUNTS_FILE), kind, conversation, item["from_account"],
+                                item["account"], timeout=CARRY_TIMEOUT, env=_carry_env(kind))
+
+    target = None if item["account"] == DEFAULT_ACCOUNT["id"] else item["account"]
+    try:
+        name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"], shlex.join(argv), kind,
+                                     kind, account=account, switch=(target, carry))
+    except AccountSwitchUndone:   # the source was stopped all the same
+        await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
+        raise
+    await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
+    return {"id": name, "account": item["account"]}
+
+
+def _account_label_of(account):
+    """The label of an account id of a request, "default" included."""
+    return DEFAULT_ACCOUNT["label"] if account == DEFAULT_ACCOUNT["id"] else account_label(account)
+
+
+def _with_account_labels(item):
+    """A pending request as the page shows it: a switch carries the labels of both accounts."""
+    if item.get("action") != "switch_account":
+        return item
+    return {**item, "account_label": _account_label_of(item["account"]),
+            "from_label": _account_label_of(item["from_account"])}
 
 
 async def api_session_accounts(request):
@@ -4133,6 +4290,8 @@ async def _execute_session_action(item):
     if not agent or agent.get("type") != source["agent"]:
         raise web.HTTPConflict(text="Agent to resume unavailable")
     argv = _model_argv(_resume_argv(agent), item["model"])
+    if item["action"] == "switch_account":
+        return await _switch_session(item, raw, agent["session_id"], argv)
     name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"],
                                  shlex.join(argv), source["agent"], source["agent"], account=session_account(raw))
     await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
@@ -4146,6 +4305,10 @@ async def _run_session_action(app, request_id):
         return app["session_requests"].status(request_id)
     try:
         result = await _execute_session_action(item)
+    except AccountSwitchUndone as exc:
+        return app["session_requests"].finish(
+            request_id, error=f"Switch undone: the conversation resumed under account {item['from_account']}. "
+            f"Cause: {exc.code}: {exc}", detail={"rolled_back": True, "id": exc.name, "code": exc.code})
     except web.HTTPException as exc:
         return app["session_requests"].finish(
             request_id, error=exc.text or "Action failed")

@@ -96,6 +96,7 @@ const NOT_SHOWN: Record<string, string> = {
   'Recipient agent session unavailable': 'agent mail API, called by the agent MCP bridge only',
   'Request ID required': 'session action request poll by an agent session, not by a screen',
   'This route takes no parameter': 'session_accounts read by an agent session through the MCP bridge, not by a screen',
+  "The session's account changed since the request": 'outcome of an approved account switch, read by the agent with session_action_status, not by a screen',
   'Document not opened: its access scope could not be recorded': 'answer to mesh-open run with a session token, read in the terminal',
   'Agent session unavailable': 'agent mail API (read and acknowledge), called by the agent MCP bridge only',
   'Content-Type must be application/json': 'protocol error of the JSON routes: the page always sends JSON, a client that does not is not a screen',

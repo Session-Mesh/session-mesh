@@ -726,12 +726,17 @@ export function createChooserGate(): ChooserGate {
 
 type SessionActionRequest = Readonly<{
   id: string;
-  action: "create" | "restart";
+  action: "create" | "restart" | "switch_account";
   state: "pending" | "claimed";
   preset: string | null;
   model: string | null;
   lease_expires_at?: number | null;
   source: Readonly<{ id: string }>;
+  // switch_account: the account ids, and their labels as the server knows them
+  account?: string | null;
+  account_label?: string | null;
+  from_account?: string | null;
+  from_label?: string | null;
 }>;
 
 // The owner reads the label of the "New session" form, not an internal preset id.
@@ -743,8 +748,19 @@ function presetLabel(preset: string | null): string {
   return key ? translate(key) : preset;
 }
 
+/** An account as the switch dialog names it: its label, and its id when the label differs. */
+function accountName(id: string, label: string | null | undefined): string {
+  return typeof label === "string" && label && label !== id ? `${label} (${id})` : id;
+}
+
 function describeSessionRequest(request: SessionActionRequest): string {
   const params = { agent: request.source.id, model: request.model, preset: presetLabel(request.preset) };
+  if (request.action === "switch_account") {
+    // The owner approves sending the whole conversation to the other account's provider: the text says so.
+    return translate("paneActions.sessionRequest.switchAccount", { agent: request.source.id,
+      from: accountName(request.from_account as string, request.from_label),
+      to: accountName(request.account as string, request.account_label) });
+  }
   if (request.action === "restart") {
     return request.model ? translate("paneActions.sessionRequest.restartWithModel", params)
       : translate("paneActions.sessionRequest.restart", params);
@@ -781,8 +797,12 @@ export function createSessionRequestGate(ports: Readonly<{
   const valid = (value: unknown): value is SessionActionRequest => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     const request = value as Partial<SessionActionRequest>;
+    const switchNames = request.action !== "switch_account"
+      || (typeof request.account === "string" && request.account.length > 0
+        && typeof request.from_account === "string" && request.from_account.length > 0);
     return typeof request.id === "string" && request.id.length > 0
-      && (request.action === "create" || request.action === "restart")
+      && (request.action === "create" || request.action === "restart" || request.action === "switch_account")
+      && switchNames
       && (request.state === "pending" || request.state === "claimed") && !!request.source
       && typeof request.source.id === "string";
   };
