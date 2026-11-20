@@ -197,11 +197,13 @@ class WorkView implements WorkViewController {
     void this.rereadEntryQuestions(null, false, undefined, true);
   }
 
-  /** Read the entry screen's questions again once the focus has left `node` (the owner was answering there). */
+  /** Read the entry screen's questions again once the focus has left `node` (the owner was answering there), unless
+   *  a read is under way then (an answer's): it shows the questions itself and must not be replaced. */
   private whenLeft(node: HTMLElement): void {
     node.addEventListener('focusout', event => {
       if (event.relatedTarget instanceof Node && node.contains(event.relatedTarget)) return this.whenLeft(node);
-      if (node === this.entryQuestionsNode && !this.project) void this.rereadEntryQuestions(null, false, undefined, true);
+      if (node !== this.entryQuestionsNode || this.project || this.entryReads > 0) return;
+      void this.rereadEntryQuestions(null, false, undefined, true);
     }, { once: true });
   }
 
@@ -299,7 +301,7 @@ class WorkView implements WorkViewController {
 
   private async openProject(id: string, tab: TabKey = 'reprise'): Promise<void> {
     const { token, signal } = this.begin();
-    this.selected = null;
+    this.project = null; this.selected = null;   // the view shown before is gone: Escape now goes to the entry screen
     this.nav.at(1);
     this.show(loadingBlock(this.t));
     const result = await this.api.project(id, signal);
