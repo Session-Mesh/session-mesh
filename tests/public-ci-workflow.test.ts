@@ -327,6 +327,29 @@ describe('the public CI as committed', () => {
       }
       assert.ok(body.indexOf('bash scripts/bootstrap.sh') < body.indexOf('name: History index protocol'), 'the step runs after the build');
     });
+
+    // The Projects tests (work-read and work-write behind the server) skip without the programs: the
+    // native job hands them over, and the jobs that run those tests require them, failing rather than skipping.
+    test(`${name} hands work-read and work-write to the frontend and browser jobs, failing rather than skipping`, () => {
+      const jobs = jobBlocks(parseLines(text));
+      const body = (jobName: string): string => {
+        const job = jobs.find((item) => item.name === jobName);
+        assert.ok(job, `no ${jobName} job`);
+        return job.block.map((line) => line.raw).join('\n');
+      };
+      const native = body('native');
+      for (const needle of ['native-host/work-read', 'native-host/work-write', 'name: mesh-work-programs-linux-x86_64',
+        'key: native-programs-']) {
+        assert.ok(native.includes(needle), `${needle} missing from the native job`);
+      }
+      for (const jobName of ['frontend', 'browser']) {
+        const job = body(jobName);
+        for (const needle of ['name: mesh-work-programs-linux-x86_64', 'MESH_WORK_READ_CMD=$RUNNER_TEMP/native-work/work-read',
+          'MESH_WORK_WRITE_CMD=$RUNNER_TEMP/native-work/work-write', 'MESH_REQUIRE_WORK_READ=1']) {
+          assert.ok(job.includes(needle), `${needle} missing from the ${jobName} job`);
+        }
+      }
+    });
   }
 });
 

@@ -27,7 +27,7 @@ const READER = process.env.MESH_WORK_READ_CMD || path.join(REPO, 'ocaml/_build/d
 const WRITER = process.env.MESH_WORK_WRITE_CMD || path.join(REPO, 'ocaml/_build/default/work_write/bin/work_write_main.exe');
 const credentialSkip = !CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM is required' : false;
 const skip = credentialSkip
-  || ((!fs.existsSync(READER) || !fs.existsSync(WRITER)) && !process.env.MESH_REQUIRE_WORK_READ
+  || ((!fs.existsSync(READER) || !fs.existsSync(WRITER)) && !process.env.MESH_REQUIRE_WORK_READ && !process.env.CI
     ? 'built work-read and work-write are required' : false);
 const FIXTURE = path.join(REPO, 'ocaml/worklog/test/fixture');
 const TASK = 'T-8e8e';

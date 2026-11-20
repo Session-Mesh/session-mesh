@@ -20,7 +20,7 @@ const READER = process.env.MESH_WORK_READ_CMD
   ?? path.join(ROOT, 'ocaml/_build/default/work_read/bin/work_read_main.exe');
 const FIXTURE = path.join(ROOT, 'ocaml/worklog/test/fixture');
 // MESH_REQUIRE_WORK_READ=1 turns a missing prerequisite into a failure instead of a skip.
-const skip = (!PYTHON || !fs.existsSync(READER)) && !process.env.MESH_REQUIRE_WORK_READ
+const skip = (!PYTHON || !fs.existsSync(READER)) && !process.env.MESH_REQUIRE_WORK_READ && !process.env.CI
   ? 'MESH_PYTHON and a built work-read (dune build work_read/bin/work_read_main.exe) are required' : false;
 
 interface Running { origin: string; token: string; stop: () => Promise<void>; temp: string; wl: string }

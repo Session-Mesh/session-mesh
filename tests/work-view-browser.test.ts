@@ -23,10 +23,10 @@ const SHOTS = process.env.MESH_SHOT_DIR ?? '';
 const READER = process.env.MESH_WORK_READ_CMD
   || path.join(REPO, 'ocaml/_build/default/work_read/bin/work_read_main.exe');   // never an empty value: the server reads that as "no program"
 const WRITER = process.env.MESH_WORK_WRITE_CMD || path.join(REPO, 'ocaml/_build/default/work_write/bin/work_write_main.exe');
-// MESH_REQUIRE_BROWSER=1 makes a missing Chromium a failure; MESH_REQUIRE_WORK_READ=1 does the same for the reader
-// (public CI builds no work-read, so there the file skips instead of failing).
+// MESH_REQUIRE_BROWSER=1 makes a missing Chromium a failure; MESH_REQUIRE_WORK_READ=1, or CI set (any CI runner), does
+// the same for the programs: public CI hands them to the browser shards, so there they never skip.
 const skip = (!CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM is required' : false)
-  || ((!fs.existsSync(READER) || !fs.existsSync(WRITER)) && !process.env.MESH_REQUIRE_WORK_READ
+  || ((!fs.existsSync(READER) || !fs.existsSync(WRITER)) && !process.env.MESH_REQUIRE_WORK_READ && !process.env.CI
     ? 'built work-read and work-write are required (dune build work_read/bin/work_read_main.exe work_write/bin/work_write_main.exe)' : false);
 const FIXTURE = path.join(REPO, 'ocaml/worklog/test/fixture');
 const LONG_WORD = 'W'.repeat(120);
@@ -417,6 +417,8 @@ describe('Projects view in French', { skip }, () => {
     assert.match(advice, /work_add_project/, 'the French advice names the tool that creates a project');
     assert.match(advice, /WL_HOME/, 'the French advice covers an existing tracker that WL_HOME must name');
     assert.match(advice, /« Réessayer »/, 'the French advice names the retry button');
-    assert.equal(await none.page.getByRole('button', { name: 'Réessayer' }).count(), 1);
+    // Counted in the Projects view: these servers run no PTY host, so the session status line above it may offer
+    // its own « Réessayer » (the terminal host is not answering), depending on how long the server has been up.
+    assert.equal(await none.page.locator('#work-root').getByRole('button', { name: 'Réessayer' }).count(), 1);
   });
 });

@@ -25,7 +25,7 @@ import { REPO, TerminalMesh, skip as noBrowser } from './terminal-browser-lib.ts
 const READER = process.env.MESH_WORK_READ_CMD || path.join(REPO, 'ocaml/_build/default/work_read/bin/work_read_main.exe');
 const WRITER = process.env.MESH_WORK_WRITE_CMD || path.join(REPO, 'ocaml/_build/default/work_write/bin/work_write_main.exe');
 const skip = noBrowser || (!process.env.MESH_PTYHOST_CMD && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_PTYHOST_CMD is required' : false)
-  || ((!fs.existsSync(READER) || !fs.existsSync(WRITER)) && !process.env.MESH_REQUIRE_WORK_READ
+  || ((!fs.existsSync(READER) || !fs.existsSync(WRITER)) && !process.env.MESH_REQUIRE_WORK_READ && !process.env.CI
     ? 'built work-read and work-write are required' : false);
 const SHOTS = process.env.MESH_SHOT_DIR ?? '';
 const FIXTURE = path.join(REPO, 'ocaml/worklog/test/fixture');
