@@ -65,14 +65,15 @@ export function parseSessionQuestions(value: unknown): SessionQuestionsDoc | nul
 }
 
 /**
- * Where the button of a session leads. All its questions about one task: that task's sheet. All in one project (about
+ * Where the button of a session leads. All its questions about one task of a project: that task's sheet. All in one project (about
  * the project or its tasks): the project's Questions tab. Anything else (a question about nothing, several projects,
  * questions left out of the list): the entry screen, which lists the open questions with and without a task.
  */
 export function markerTarget(entry: SessionEntry): WorkTarget {
   const [first] = entry.questions;
   if (!first || entry.omitted > 0) return { kind: 'entry' };
-  if (first.about && TASK.test(first.about) && entry.questions.every(question => question.about === first.about)) {
+  // A task in no project has no sheet in the Projects view: its question is answered from the entry screen.
+  if (first.about && TASK.test(first.about) && first.project && entry.questions.every(question => question.about === first.about)) {
     return { kind: 'task', id: first.about };
   }
   const project = first.project;

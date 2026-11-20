@@ -89,8 +89,7 @@ const row = (page: Page, name: string) => page.locator(`#list .item[data-id="${n
 const rowBadge = (page: Page, name: string) => row(page, name).locator('.question-badge');
 // app.js script-scope bindings, read inside page functions.
 declare const active: { id: string } | null;
-declare const sessionMarker: unknown;
-const headerButton = (page: Page) => page.locator('.pane.active [data-act="questions"]');
+declare const sessionMarker: unknown;const headerButton = (page: Page) => page.locator('.pane.active [data-act="questions"]');
 
 async function shot(page: Page, name: string): Promise<void> {
   if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }); }
@@ -109,6 +108,28 @@ async function openSession(page: Page, name: string, phone = false): Promise<voi
 }
 
 describe('the session marker', { skip }, () => {
+  test('the Sessions button reads the tracker only when it closes the Projects view', { timeout: 600_000 }, async () => {
+    const sent: string[] = [];
+    const page = await mesh.signIn({ width: 1440, height: 900 }, undefined, watch(sent));
+    await rowBadge(page, 'qa-asker').waitFor({ timeout: 60_000 });
+    const reads = (): number => sent.filter(op => op === 'session-questions').length;
+
+    const first = reads();
+    for (let click = 0; click < 8; click++) { await page.locator('#btn-sessions').click(); await page.waitForTimeout(500); }
+    assert.equal(reads(), first, 'eight clicks on Sessions while it is the view in use: no read');
+
+    await page.locator('#btn-projects').click();
+    await page.locator('#work-root .work-detail-pane, #work-root .work-entry, #work-root [data-question-id]').first().waitFor({ timeout: 60_000 });
+    await page.waitForTimeout(1_000);
+    assert.equal(await page.locator('#btn-projects .projects-question-badge').textContent(), '3');
+
+    await page.locator('#btn-sessions').click();
+    await page.waitForTimeout(8_000);
+    assert.equal(reads(), first + 1, 'leaving Projects reads once');
+    assert.equal(await page.locator('#btn-projects .projects-question-badge').textContent(), '3', 'the marker count shows again');
+    await page.context().close();
+  });
+
   test('rows and headers at 1440 px: counts, names, where the button leads, keyboard, answer, idle reads', { timeout: 600_000 }, async () => {
     const sent: string[] = [];
     const page = await mesh.signIn({ width: 1440, height: 900 }, undefined, watch(sent));

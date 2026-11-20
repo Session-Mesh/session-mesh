@@ -5662,6 +5662,7 @@ function setProjects(on) {
   if (on && exploring) setExplorer(false);
   if (on && managing) setManagement(false);
   if (on && !projecting && document.activeElement instanceof HTMLElement && document.activeElement.closest("#panes,#keys,#line")) projectsReturnFocus = document.activeElement;
+  const leavingProjects = projecting && !on;
   projecting = on;
   store.set("primaryView", on ? "projects" : "sessions");
   document.body.classList.toggle("projecting", on);
@@ -5684,8 +5685,10 @@ function setProjects(on) {
     projectsGeneration++; workGeneration++;
     projectsController?.close(); workController?.close();
     pendingWorkTarget = null;
-    sessionMarker?.refresh();   // an answer given in Projects may have closed questions
-    tickSessionMarker();
+    if (leavingProjects) {   // an answer given in Projects may have closed questions; the Sessions button alone reads nothing
+      sessionMarker?.refresh();
+      tickSessionMarker();
+    }
     for (const pane of panes) pane.refit();
     if (projectsReturnFocus instanceof HTMLElement && projectsReturnFocus.isConnected && !projectsReturnFocus.closest("#projects,#side")) projectsReturnFocus.focus({ preventScroll: true });
     else active?.focus();
