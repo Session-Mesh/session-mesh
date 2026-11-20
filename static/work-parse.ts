@@ -201,7 +201,7 @@ function parseQuestion(source: Obj): Question | null {
 
 const questions = (value: unknown): Question[] => objects(value).map(parseQuestion).filter((q): q is Question => q !== null);
 
-/** The questions part of an unscoped `resume`: only open questions are kept (the document holds no other). */
+/** A page of `open-questions` (or the questions part of an unscoped `resume`): only open questions are kept. */
 export function parseOpenQuestions(value: unknown): OpenQuestionsDoc | null {
   if (!isObj(value) || !Array.isArray(value.questions)) return null;
   const open = questions(value.questions).filter(question => question.open);

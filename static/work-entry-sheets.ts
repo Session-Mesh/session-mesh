@@ -8,9 +8,9 @@
  */
 
 import type { WorkApi, WorkError } from './work-api.ts';
-import { el, focusFirst, restoreDrafts, unsentDrafts } from './work-dom.ts';
+import { focusFirst, restoreDrafts, unsentDrafts } from './work-dom.ts';
 import type { ViewContext } from './work-dom.ts';
-import { errorBlock } from './work-error-view.ts';
+import { recordedButUnread } from './work-error-view.ts';
 import { renderAnsweredSheet, renderLoneTaskSheet, renderQuestionSheet } from './work-question-sheet.ts';
 import type { Question, TaskDetail } from './work-types.ts';
 import type { ViewMemory } from './work-view-memory.ts';
@@ -105,15 +105,11 @@ export class EntrySheets {
     return true;
   }
 
-  /** The answer is recorded but the task could not be read again: its form gives way to a note saying so (it would
-   *  stay disabled), and the sheet offers to read the task again; the other forms and their drafts stay. */
+  /** The answer is recorded but the task could not be read again: "Answer recorded" in place of its form, and the way
+   *  to read the task again (static/work-error-view.ts). */
   private rereadFailed(shown: Shown & { kind: 'task' }, question: string, error: WorkError): void {
-    const content = this.host.content, t = this.host.ctx.t;
-    content.querySelector<HTMLElement>(`[data-work-answer-slot="${CSS.escape(question)}"]`)
-      ?.replaceChildren(el('p', 'work-answer-recorded', t('work.answer.sent')));
-    content.querySelector('.work-qsheet-reread')?.remove();
-    const block = errorBlock(t, { ...error, retry: true }, { retry: () => void this.reread(shown, question) });
-    block.classList.add('work-qsheet-reread');
-    content.querySelector('.work-qsheet-actions')?.after(block);
+    const content = this.host.content;
+    recordedButUnread(this.host.ctx.t, content, question, error, () => void this.reread(shown, question),
+      content.querySelector('.work-qsheet-actions'));
   }
 }

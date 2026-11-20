@@ -29,6 +29,9 @@ export type EntryQuestionsHost = Readonly<{
   render: (state: EntryQuestionsState) => HTMLElement;
 }>;
 
+/** The questions of one page, and the most a read gives (work-read's `open-questions`). */
+const PAGE = 20, MAX_PAGE = 100;
+
 const opener = (scope: HTMLElement, question: string): HTMLElement | null =>
   scope.querySelector<HTMLElement>(`.work-qrow[data-question-id="${CSS.escape(question)}"] .work-qrow-open`);
 
@@ -97,7 +100,8 @@ export class EntryQuestions {
   async reread(focus = true, pending?: Promise<WorkResult<OpenQuestionsDoc>>, passive = false): Promise<void> {
     const token = this.host.generation(), sequence = ++this.sequence;
     this.reads++;
-    const result = await (pending ?? this.host.api.openQuestions(this.host.signal())).finally(() => { this.reads--; });
+    const result = await (pending ?? this.host.api.openQuestions(this.host.signal(), { limit: this.shownLimit() }))
+      .finally(() => { this.reads--; });
     const node = this.node;
     if (token !== this.host.generation() || sequence !== this.sequence || this.host.away() || !node) return;
     this.host.report(result);
@@ -111,6 +115,37 @@ export class EntryQuestions {
     const toggle = next.querySelector<HTMLElement>('.work-qsection-toggle');
     if (focus) focusFirst(toggle ?? next.querySelector<HTMLElement>('h2'));
     else if (kept !== null) focusFirst((kept ? opener(next, kept) : null) ?? toggle ?? next.querySelector<HTMLElement>('h2'));
+  }
+
+  /** As many questions as the list shows (pages read with "Show more" stay shown), between one page and the bound. */
+  private shownLimit(): number {
+    const shown = this.state;
+    const count = shown.kind === 'ready' || shown.kind === 'stale' ? shown.doc.questions.length : 0;
+    return Math.min(MAX_PAGE, Math.max(PAGE, count));
+  }
+
+  /** "Show more": the next page, after the last question shown, added under the others (a question already shown is
+   *  not shown twice); focus goes to the first one added, else to the section's line. A failed read keeps the list
+   *  with the error and its retry. */
+  async more(): Promise<void> {
+    const shown = this.state;
+    if (shown.kind !== 'ready' && shown.kind !== 'stale') return;
+    const token = this.host.generation(), sequence = ++this.sequence, last = shown.doc.questions.at(-1)?.id;
+    this.reads++;
+    const result = await this.host.api.openQuestions(this.host.signal(), last ? { after: last } : {})
+      .finally(() => { this.reads--; });
+    const node = this.node;
+    if (token !== this.host.generation() || sequence !== this.sequence || this.host.away() || !node) return;
+    this.host.report(result);
+    const known = new Set(shown.doc.questions.map(question => question.id));
+    const added = result.ok ? result.value.questions.filter(question => !known.has(question.id)) : [];
+    this.state = result.ok ? { kind: 'ready', doc: { ...result.value, questions: [...shown.doc.questions, ...added] } }
+      : { kind: 'stale', doc: shown.doc, error: result.error, retry: () => void this.more() };
+    const next = this.host.render(this.state);
+    node.replaceWith(next);
+    this.node = next;
+    const first = added[0] ? opener(next, added[0].id) : null;
+    focusFirst(first ?? next.querySelector<HTMLElement>('.work-qsection-toggle') ?? next.querySelector<HTMLElement>('h2'));
   }
 
   /** What the block shows after a read. A failed read keeps the questions already shown (less those answered since)

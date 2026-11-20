@@ -19,24 +19,23 @@ export type ProjectAnswersHost = Readonly<{
   /** The project shown, and the task whose sheet is open in it. */
   project: () => Readonly<{ id: string; view: ProjectView }> | null;
   selected: () => string | null;
-  /** Read the task sheet again, at the question (focus on it when asked). */
-  selectTask: (id: string, after: Readonly<{ question: string; focus: boolean }>) => Promise<void>;
+  /** Read the task sheet again, at the question (focus on it when asked); false when the task could not be read. */
+  selectTask: (id: string, after: Readonly<{ question: string; focus: boolean }>) => Promise<boolean>;
 }>;
 
+/** What could not be read again after an answer (the task sheet first), or null when everything was. */
+export type Unread = 'task' | 'project' | null;
+
 /** The answer to `question` came from the task sheet of `task` (`fromSheet`) or from the Questions tab: read that one
- *  first, then the other. False when the project could not be read again. */
+ *  first, then the other. Says what could not be read again, so that success is only announced when both were. */
 export async function showRecordedInProject(host: ProjectAnswersHost, question: string, fromSheet: boolean,
-  task: string | null): Promise<boolean> {
-  const sheet = async (focus: boolean): Promise<void> => {
-    if (task !== null && task === host.selected()) await host.selectTask(task, { question, focus });
-  };
-  if (!fromSheet) {
-    const shown = await rereadProject(host, question, true);
-    await sheet(false);
-    return shown;
-  }
-  await sheet(true);
-  return rereadProject(host, question, false);
+  task: string | null): Promise<Unread> {
+  const sheet = async (focus: boolean): Promise<boolean> =>
+    task === null || task !== host.selected() || host.selectTask(task, { question, focus });
+  const sheetShown = fromSheet ? await sheet(true) : true;
+  const projectShown = await rereadProject(host, question, !fromSheet);
+  const otherSheetShown = fromSheet ? true : await sheet(false);
+  return !sheetShown || !otherSheetShown ? 'task' : projectShown ? null : 'project';
 }
 
 /** Read the open project again and show it (header and sheet kept); drafts of the tab survive, but the answered one's.

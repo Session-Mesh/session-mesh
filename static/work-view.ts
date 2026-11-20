@@ -9,8 +9,7 @@
  * static/work-entry-sheets.ts.
  */
 
-import { failureOfKind } from './work-answer-form.ts';
-import type { AnswerFailure, AnswerSender } from './work-answer-form.ts';
+import type { AnswerSender } from './work-answer-form.ts';
 import { createWorkApi } from './work-api.ts';
 import type { WorkApi, WorkError, WorkResult } from './work-api.ts';
 import { entryTree } from './work-derive.ts';
@@ -23,15 +22,16 @@ import { EntryQuestions } from './work-entry-questions.ts';
 import { EntrySheets } from './work-entry-sheets.ts';
 import { entryFocusTarget, renderEntry, seedExpanded } from './work-entry-view.ts';
 import { loadOperatorName } from './work-operator-label.ts';
-import { errorBlock, loadingBlock } from './work-error-view.ts';
+import { errorBlock, loadingBlock, recordedButUnread } from './work-error-view.ts';
 import { browserHistory, createWorkNav, scrollerOf, tabsHidden, upOnEscape, wentBack } from './work-nav.ts';
 import type { LevelHost, WorkNav } from './work-nav.ts';
-import { showRecordedInProject } from './work-project-answers.ts';
 import type { ProjectAnswersHost } from './work-project-answers.ts';
 import { TAB_KEYS, nameSheetBack, renderProject } from './work-project-view.ts';
 import type { ProjectView, TabKey } from './work-project-view.ts';
 import { createViewMemory } from './work-view-memory.ts';
 import type { Scroll, ViewMemory } from './work-view-memory.ts';
+import { sendAnswer } from './work-view-answer.ts';
+import type { AnswerHost, Surface } from './work-view-answer.ts';
 import type { WorkViewController, WorkViewOptions } from './work-view-options.ts';
 import { sameSheet } from './work-view-state.ts';
 import type { Place } from './work-view-state.ts';
@@ -49,9 +49,6 @@ type OpenProject = Readonly<{ id: string; view: ProjectView }>;
 /** After an answer (or on opening the sheet at a question, `fresh`): the question, and whether focus goes to it once
  *  the task is read. */
 type AfterAnswer = Readonly<{ question: string; focus: boolean; fresh?: boolean }>;
-/** Where an answer form was sent from: the task sheet, the Questions tab of a project, or a sheet opened from the
- *  entry screen (a question about nothing, a task in no project). */
-type Surface = 'detail' | 'questions' | 'sheet';
 
 class WorkView implements WorkViewController {
   private readonly api: WorkApi;
@@ -220,7 +217,7 @@ class WorkView implements WorkViewController {
   };
 
   private sender(surface: Surface): AnswerSender {
-    return { available: () => !this.writeUnavailable, submit: (question, answerText) => this.submitAnswer(question, answerText, surface) };
+    return { available: () => !this.writeUnavailable, submit: (question, answerText) => sendAnswer(this.answerHost(), question, answerText, surface) };
   }
 
   private stopRequests(): void {
@@ -305,7 +302,7 @@ class WorkView implements WorkViewController {
     const zones = (this.entry?.products.categories ?? []).map(category => ({ key: category.key, name: category.name }));
     const from = (question: string): void => { this.lastQuestion = question; };
     return renderEntryQuestions(this.ctx, { zones, projectTitle: id => titles.get(id) ?? null, sectionOpen: this.questionsOpen,
-      sectionToggled: open => { this.questionsOpen = open; this.memory.note(); },
+      sectionToggled: open => { this.questionsOpen = open; this.memory.note(); }, showMore: () => void this.questions.more(),
       openProject: (id, question) => { from(question); void this.openProject(id, 'questions'); },
       openTask: (id, question) => { from(question); void this.openTask(id, 'questions', question); },
       openQuestion: question => { from(question.id); this.openQuestionSheet(question); } }, state);
@@ -394,28 +391,17 @@ class WorkView implements WorkViewController {
     await this.questions.reread(false);   // the focus stays on that row's way in when the row is still there
   }
 
-  /** Send the owner's answer; on success or "already answered", read again what shows it, so it appears as recorded. */
-  private async submitAnswer(question: string, answerText: string, surface: Surface): Promise<AnswerFailure | null> {
-    const task = this.selected, token = this.generation;
-    const result = await this.api.answer(question, answerText);
-    if (!result.ok && result.error.kind !== 'conflict') {
-      if (result.error.kind === 'not-available') this.writeUnavailable = true;
-      return failureOfKind(result.error.kind);
-    }
-    this.memory.sent(question);   // recorded: its draft is not kept, nor put back by the reads that follow
-    this.sync.publish({ source: 'view', answered: question });   // the marker drops it now, wherever the view is
-    this.questions.forgetAnswered(question);
-    // The write stands whatever happened meanwhile; a view closed (or reloaded) since shows nothing and reads nothing.
-    if (token !== this.generation) return null;
-    const notice = this.t(!result.ok ? 'work.answer.already' : result.value.uncommitted ? 'work.answer.sentUncommitted' : 'work.answer.sent');
-    // What shows the answer is read again (the sheet it came from, or in a project that surface first), then the count.
-    const shown = surface === 'sheet' ? await this.sheets.recorded(question)
-      : await showRecordedInProject(this.projectAnswers, question, surface === 'detail', task);
-    await this.refreshCount();
-    // The write stands; when what shows it could not be read again, the notice says that rather than only "recorded".
-    const failed = surface === 'sheet' ? 'work.triage.rereadFailed' : 'work.questions.rereadFailed';
-    if (token === this.generation) this.announce(shown ? notice : this.t(failed));
-    return null;
+  /** What an answer sent from the view needs (static/work-view-answer.ts sends it). */
+  private answerHost(): AnswerHost {
+    return { api: this.api, t: this.t, generation: () => this.generation, selected: () => this.selected,
+      writeUnavailable: () => { this.writeUnavailable = true; },
+      recorded: question => {
+        this.memory.sent(question);   // its draft is not kept, nor put back by the reads that follow
+        this.sync.publish({ source: 'view', answered: question });   // the marker drops it now, wherever the view is
+        this.questions.forgetAnswered(question);
+      },
+      sheetRecorded: question => this.sheets.recorded(question), project: this.projectAnswers,
+      refreshCount: () => this.refreshCount(), announce: message => this.announce(message) };
   }
 
   private announce(message: string): void {
@@ -423,9 +409,10 @@ class WorkView implements WorkViewController {
     setTimeout(() => { this.announcer.textContent = message; }, 50);   // a new text node, so the same message is read again
   }
 
-  /** `resuming` (the sheet the owner left): a task gone since closes the sheet. */
-  private async selectTask(id: string, after?: AfterAnswer, resuming = false): Promise<void> {
-    if (!this.project) return;
+  /** `resuming` (the sheet the owner left): a task gone since closes the sheet. False when the task could not be read
+   *  (a view moved meanwhile is not a failure); after an answer the sheet then says it is recorded, with "Try again". */
+  private async selectTask(id: string, after?: AfterAnswer, resuming = false): Promise<boolean> {
+    if (!this.project) return true;
     const view = this.project.view;
     this.selected = id;
     markSelected(view.root, id);
@@ -438,21 +425,25 @@ class WorkView implements WorkViewController {
     this.detailController?.abort();
     this.detailController = new AbortController();
     const result = await this.api.task(id, this.detailController.signal);
-    if (token !== this.generation || sequence !== this.detailSequence || this.selected !== id) return;
-    if (!result.ok && resuming && result.error.kind === 'missing') return this.closeDetail(view);
-    if (!result.ok) {
+    if (token !== this.generation || sequence !== this.detailSequence || this.selected !== id) return true;
+    if (!result.ok && resuming && result.error.kind === 'missing') { this.closeDetail(view); return true; }
+    if (!result.ok && after && !after.fresh) {
+      const slot = view.detailSlot;
+      recordedButUnread(this.t, slot, after.question, result.error, () => void this.selectTask(id, after), slot.querySelector('.work-detail-close'));
+    } else if (!result.ok) {
       view.detailSlot.replaceChildren(this.closeButton(view), errorBlock(this.t, result.error, { retry: () => void this.selectTask(id) }));
-      return;
     }
+    if (!result.ok) return false;
     const body = renderDetail(this.ctx, result.value);
     // The reload after an answer keeps what the owner was typing under the other questions; the drafts kept while
     // away (this sheet's, or one typed in another place) come back too.
     if (after && !after.fresh) restoreDrafts(body, unsentDrafts(view.detailSlot, after.question));
     this.memory.fill(body);
     view.detailSlot.replaceChildren(this.closeButton(view), body);
-    if (after && !after.focus) return;
+    if (after && !after.focus) return true;
     const question = after ? body.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(after.question)}"]`) : null;
     focusFirst(question ?? body.querySelector<HTMLElement>('.work-detail-heading'));
+    return true;
   }
 
   /** The sheet's way back: it names the tab it returns to (and, for a screen reader, the project). */
