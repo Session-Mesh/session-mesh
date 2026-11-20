@@ -248,6 +248,7 @@ let test_tools () =
       "session_create_request";
       "session_restart_request";
       "session_action_status";
+      "session_accounts";
       "agent_guide_read";
     ]
     names;

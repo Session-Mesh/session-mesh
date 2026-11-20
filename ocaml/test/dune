@@ -35,6 +35,14 @@
  (modules smoke)
  (libraries mesh_board_mcp mcp-kit alcotest unix))
 
+; The session action tools against a one-shot fake Mesh server that records
+; the request: routes, bodies, and the server's cause in a refusal.
+
+(test
+ (name board_session_actions)
+ (modules board_session_actions)
+ (libraries mesh_board_mcp mcp-kit alcotest unix yojson))
+
 ; mesh-logout-all and the mesh_cli library: MESH_PORT and the directories, the
 ; cookie generation file, and the command against a fake one-shot mesh.
 

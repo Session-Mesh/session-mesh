@@ -11,7 +11,8 @@ let text = Mesh_agent_guide_text.text
 let instructions =
   "You are running inside a session-mesh session: call " ^ tool_name
   ^ " once to read the guide to what you can do here (show files and panels to \
-     the owner, whiteboard, demos, agent messages, session requests, the work_* \
+     the owner, whiteboard, demos, agent messages, session requests, the \
+     account your session runs under, the work_* \
      project tracker)."
 
 (* Pi declares direct MCP tools without the server instructions, and a
