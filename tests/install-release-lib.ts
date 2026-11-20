@@ -136,6 +136,18 @@ export type ReleaseOptions = {program?: (program: string) => string | Buffer; ta
 // The platforms of the native programs, as the release workflow names them.
 export const PROGRAM_PLATFORMS = ['linux-x86_64', 'linux-aarch64', 'macos-arm64'];
 
+// The releases these tests install use launchd agents in the fixture's home. The macOS installer
+// also reads /Library/LaunchDaemons to choose the form, and on a Mac where session-mesh runs as
+// boot-time daemons it would refuse every install; the copy in a release names a directory that
+// never exists instead (tests/install-macos-lib.ts redirects it to a directory of its fixture).
+const PRODUCT_DAEMON_DIR = /^DAEMON_DIR=\/Library\/LaunchDaemons$/m;
+const NO_DAEMON_DIR = '/nonexistent/session-mesh-test/LaunchDaemons';
+function withoutHostDaemons(script: string): void {
+  const text = fs.readFileSync(script, 'utf8');
+  assert.match(text, PRODUCT_DAEMON_DIR, 'scripts/install-macos.sh no longer sets DAEMON_DIR=/Library/LaunchDaemons on one line');
+  fs.writeFileSync(script, text.replace(PRODUCT_DAEMON_DIR, `DAEMON_DIR=${NO_DAEMON_DIR}`));
+}
+
 // The directory of an extracted bundle, as scripts/build-bundle.sh lays it out: the repository's
 // launcher, env.sh and wrappers; app/ with the installer, its scripts, the unit templates, the
 // helper stand-ins, agentmcp.py and a stand-in server.py; the native programs (`program`, by
@@ -146,6 +158,7 @@ export function bundleTree(dir: string, label: string, opts: ReleaseOptions = {}
   for (const sub of ['app/scripts', 'app/bin', 'bin', 'libexec', 'runtime/python/bin']) fs.mkdirSync(path.join(dir, sub), {recursive: true});
   fs.copyFileSync(path.join(SOURCE, 'install.sh'), path.join(app, 'install.sh'));
   for (const file of INSTALL_SCRIPTS) fs.copyFileSync(path.join(SOURCE, 'scripts', file), path.join(app, 'scripts', file));
+  withoutHostDaemons(path.join(app, 'scripts', 'install-macos.sh'));
   fs.cpSync(path.join(SOURCE, 'systemd'), path.join(app, 'systemd'), {recursive: true});
   for (const module of ['agentmcp.py', 'resumeargs.py', 'fsutil.py', 'agentcap.py', 'agentwake.py', 'agentmail.py', 'meshpaths.py', 'respawn.py', 'organize.py', 'conversation_names.py', 'agent-hooks.json']) fs.copyFileSync(path.join(SOURCE, module), path.join(app, module));
   for (const cmd of HELPERS) fs.writeFileSync(path.join(app, 'bin', cmd), '', {mode: 0o755});
