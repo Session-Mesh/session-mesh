@@ -147,7 +147,8 @@ describe('the operator name', { skip }, () => {
 
       const fresh = await signedIn(width);
       await openProjects(fresh.page, width);
-      assert.equal(await waiting(fresh.page).textContent(), NAMED, 'shared by the runner: another browser sees it');
+      // Shared by the runner: another browser sees it once its own read of the configuration arrives.
+      await fresh.page.waitForFunction(text => document.querySelector('.work-entry-questions .work-question-waiting')?.textContent === text, NAMED);
 
       await saveName(page, width, '', '');
       await page.waitForFunction(text => document.querySelector('.work-entry-questions .work-question-waiting')?.textContent === text, UNNAMED);
@@ -167,7 +168,7 @@ describe('the operator name', { skip }, () => {
     await tap(page, 'btn-config', 1440);
     await showSection(page, 'appearance');
     const card = page.locator('#dlg-config .config-operator');
-    await card.locator('.config-operator-name').fill('Ma‮thias');
+    await card.locator('.config-operator-name').fill('Ma\u202ethias');
     await card.locator('.config-operator-save').click();
     await card.locator('.config-operator-status.config-error').waitFor();
     assert.match(await card.locator('.config-operator-status').textContent() ?? '', /caractère interdit/);

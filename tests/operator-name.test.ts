@@ -34,7 +34,7 @@ describe('operatorLabel', () => {
     assert.equal(operatorLabel(en, 'superseded', 'Mathias'), 'replaced by the answer from Mathias');
   });
   test('falls back to the wording without a name for an empty, blank or hidden-only name', () => {
-    for (const name of ['', '   ', '‮​', '\n']) {
+    for (const name of ['', '   ', '\u202e\u200b', '\n', '\u034f', '\ufe0f\u034f']) {
       assert.equal(operatorLabel(fr, 'waiting', name), "En attente de la réponse de l'opérateur");
       assert.equal(operatorLabel(en, 'verified', name), 'answered by the owner in this view (signed in)');
     }
@@ -57,7 +57,9 @@ describe('operatorLabel', () => {
 describe('cleanOperatorName', () => {
   test('trims, drops control, format and bidirectional characters, and caps the length', () => {
     assert.equal(cleanOperatorName('  Mathias  '), 'Mathias');
-    assert.equal(cleanOperatorName('Ma‮thi​as\u0007'), 'Mathias');
+    assert.equal(cleanOperatorName('Ma\u202ethi\u200bas\u0007'), 'Mathias');
+    assert.equal(cleanOperatorName('Ma\u034fthi\ufe0fas'), 'Mathias');
+    assert.equal(cleanOperatorName('Re\u0301ne'), 'Re\u0301ne', 'an ordinary combining accent stays');
     assert.equal(cleanOperatorName('x'.repeat(60)), 'x'.repeat(OPERATOR_NAME_MAX));
     assert.equal([...cleanOperatorName('é'.repeat(50))].length, OPERATOR_NAME_MAX);
     for (const value of [null, undefined, 3, {}, ['Mathias']]) assert.equal(cleanOperatorName(value), '');
@@ -69,7 +71,7 @@ describe('operatorNameProblem', () => {
     assert.equal(operatorNameProblem(''), null);
     assert.equal(operatorNameProblem(`  ${'x'.repeat(OPERATOR_NAME_MAX)}  `), null);
     assert.equal(operatorNameProblem('x'.repeat(OPERATOR_NAME_MAX + 1)), 'tooLong');
-    for (const hidden of ['‮', '⁦', '​', '\u0000', '\n', ' ', '']) {
+    for (const hidden of ['\u202e', '\u2066', '\u200b', '\u0000', '\n', '\u2028', '\ue000', '\u034f', '\ufe0f', '\u{e0100}']) {
       assert.equal(operatorNameProblem(`Ma${hidden}thias`), 'invalid', JSON.stringify(hidden));
     }
   });

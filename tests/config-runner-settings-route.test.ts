@@ -48,8 +48,8 @@ describe('the runner settings', () => {
   });
 
   test('refuses a long name, hidden characters, a non-text value and unknown or missing fields, keeping the saved one', async () => {
-    for (const settings of [{operator_name: 'x'.repeat(41)}, {operator_name: 'Ma‮thias'}, {operator_name: 'Ma​thias'},
-      {operator_name: 'a\nb'}, {operator_name: 7}, {operator_name: null}, {colour: 'red'}, {operator_name: 'Eve', colour: 'red'}, {}, 'Eve', []]) {
+    for (const settings of [{operator_name: 'x'.repeat(41)}, {operator_name: 'Ma\u202ethias'}, {operator_name: 'Ma\u200bthias'},
+      {operator_name: 'a\nb'}, {operator_name: '\u034f'}, {operator_name: 'Ma\ufe0fthias'}, {operator_name: 7}, {operator_name: null}, {colour: 'red'}, {operator_name: 'Eve', colour: 'red'}, {}, 'Eve', []]) {
       const response = await write(settings);
       assert.equal(response.status, 400, JSON.stringify(settings));
       assert.equal(((await response.json()) as {error: string}).error, 'invalid');
@@ -69,7 +69,7 @@ describe('the runner settings', () => {
   test('a broken or hand-edited file reads as the defaults, a bad field alone is ignored', async () => {
     fs.writeFileSync(file(), '{not json');
     assert.equal((await runner()).values.operator_name, '');
-    fs.writeFileSync(file(), JSON.stringify({v: 1, operator_name: 'Ma‮thias'}));
+    fs.writeFileSync(file(), JSON.stringify({v: 1, operator_name: 'Ma\u202ethias'}));
     assert.equal((await runner()).values.operator_name, '');
     fs.writeFileSync(file(), JSON.stringify(['Mathias']));
     assert.equal((await runner()).values.operator_name, '');

@@ -16,8 +16,9 @@ export const OPERATOR_NAME_MAX = 40;
 export const OPERATOR_NAME_EVENT = 'mesh:operator-name';
 
 /** Control, format (bidirectional marks, zero-width characters), surrogate, private-use, unassigned and
- *  line or paragraph separator characters: the ones the server refuses in a runner setting. */
-const HIDDEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/gu;
+ *  line or paragraph separator characters, and the invisible marks (combining grapheme joiner, variation selectors):
+ *  the ones the server refuses in a runner setting. */
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\u034f\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/gu;
 
 /** The keys of one label: without a name, with a name, and with a name that starts with a vowel (French
  *  elides "de" into "d'" there; other languages give the same text to both). */

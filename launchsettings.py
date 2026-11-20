@@ -219,11 +219,13 @@ def write_update(agents: object, roots: object, expected_revision: str, applied_
 RUNNER_SETTINGS_FILE = "settings.json"
 RUNNER_LIMITS = {"operator_name": 40}
 _HIDDEN = frozenset(("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))   # control, format (bidi), unassigned
+_INVISIBLE_MARKS = frozenset("\u034f" + "".join(map(chr, [*range(0xFE00, 0xFE10), *range(0xE0100, 0xE01F0)])))
 
 
 def _runner_text(key: str, value: object) -> str:
     text = value.strip() if isinstance(value, str) else None
-    if text is None or len(text) > RUNNER_LIMITS[key] or any(unicodedata.category(c) in _HIDDEN for c in text):
+    if text is None or len(text) > RUNNER_LIMITS[key] or any(
+            unicodedata.category(c) in _HIDDEN or c in _INVISIBLE_MARKS for c in text):
         raise InvalidLaunchSettings(f"{key}: at most {RUNNER_LIMITS[key]} characters, no control or bidi character")
     return text
 
