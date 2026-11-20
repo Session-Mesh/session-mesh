@@ -25,7 +25,13 @@ val latest : t -> Yojson.Basic.t
 (** The [update] value of the host's [update_notice] reply: the object that
     [mesh-platform update-check] prints when a newer release is announced
     ([status] ["available"], [latest], [security], [notes_url],
-    [upgrade_command], [line]), [`Null] otherwise. *)
+    [upgrade_command], [line], [notes]), [`Null] otherwise. *)
+
+val notes : t -> Yojson.Basic.t
+(** The [notes] value of the host's [update_notes] reply: the notes of the
+    release {!latest} announces ({!Mesh_update_report.notes_json}), [`Null]
+    when nothing is announced (the feature off included) or the release has
+    none. Set with {!latest}, at the same look. *)
 
 val tick : float
 (** Seconds between two looks at the cache (ten minutes). A request is made

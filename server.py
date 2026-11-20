@@ -27,15 +27,18 @@ import secrets
 import shlex
 import shutil
 import signal
+import socket
 import stat
 import sys
 import threading
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import NamedTuple
 
 import aiohttp
+import aiohttp.abc
 from aiohttp import web
 
 import agentmcp
@@ -1033,6 +1036,175 @@ async def _update_notice(failed=None):
         return update if isinstance(update, dict) else None
     except Exception:    # any failure of this optional notice must leave /api/sessions intact
         return failed
+
+
+# ---- "What's new": the notes of the release the banner announces (static/update-notes.ts)
+# The PTY host keeps them from the releases list it already fetches for the notice, so showing them makes no
+# request. Their images are fetched only when the panel shows them, by the proxy below, never by the browser:
+# https on github.com or *.githubusercontent.com only, a URL written in the notes themselves, public addresses
+# only, PNG, JPEG, GIF or WebP up to 5 MiB, no cookie or credential sent.
+UPDATE_IMAGE_MAGIC = {"image/png": (b"\x89PNG\r\n\x1a\n",), "image/jpeg": (b"\xff\xd8\xff",),
+                      "image/gif": (b"GIF87a", b"GIF89a"), "image/webp": (b"RIFF",)}
+UPDATE_IMAGE_LIMIT = 5 * 1024 * 1024
+UPDATE_IMAGE_REDIRECTS = 3
+UPDATE_IMAGE_BUDGET = (60, 600.0)     # fetches per window (seconds), for all browsers together
+_UPDATE_IMAGE_FETCHES = deque()
+_UPDATE_IMAGE_HOST = re.compile(r"github\.com|[a-z0-9-]+(\.[a-z0-9-]+)*\.githubusercontent\.com")
+
+
+async def _update_notes():
+    """The PTY host's notes of the announced release, or None (none, an older host, a failure)."""
+    try:
+        reply = await ptyhost.request({"op": "update_notes"})
+    except Exception:    # the panel then says the notes are unavailable
+        return None
+    notes = reply.get("notes") if isinstance(reply, dict) and reply.get("ok") is True else None
+    fields = ("tag", "published", "body", "notes_url")
+    if not isinstance(notes, dict) or not all(isinstance(notes.get(name), str) for name in fields):
+        return None
+    return {**{name: notes[name] for name in fields}, "truncated": notes.get("truncated") is True}
+
+
+def _require_owner_page(request):
+    """The owner's browser, from this server's own page: the cookie alone and no foreign Origin."""
+    _require_owner_cookie(request)
+    if not same_origin(request) or request.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+        raise web.HTTPForbidden()
+
+
+async def api_update_notes(request):
+    _require_owner_page(request)
+    if request.query:
+        raise web.HTTPBadRequest()
+    notes = await _update_notes()
+    if notes is None:
+        raise web.HTTPNotFound(text="no release notes")
+    return web.json_response(notes, headers={"Cache-Control": "no-store"})
+
+
+def update_image_url(text):
+    """``text`` when it may be fetched as an image of the notes: https, github.com or a *.githubusercontent.com
+    name (never an address), the default port, no credentials; else None."""
+    if not isinstance(text, str) or len(text) > 2048 or re.search(r"[\s\\]", text):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return None
+    if (parts.scheme != "https" or parts.username is not None or parts.password is not None
+            or port not in (None, 443) or not _UPDATE_IMAGE_HOST.fullmatch(parts.hostname or "")):
+        return None
+    return text
+
+
+def _update_image_target(url):
+    """Where the request for ``url`` goes. MESH_UPDATE_IMAGE_TEST_HOSTS (tests only: ``name=address:port,...``)
+    sends it over plain HTTP to a local stand-in for that name instead, and refuses any other name."""
+    stand_ins = os.environ.get("MESH_UPDATE_IMAGE_TEST_HOSTS")
+    if not stand_ins:
+        return url
+    parts = urllib.parse.urlsplit(url)
+    target = dict(item.split("=", 1) for item in stand_ins.split(",") if "=" in item).get(parts.hostname)
+    return target and urllib.parse.urlunsplit(("http", target, parts.path, parts.query, ""))
+
+
+class _PublicResolver(aiohttp.abc.AbstractResolver):
+    """Resolves a name only to public addresses: the proxy never reaches this machine, its networks or a reserved
+    range. The connection uses the addresses checked here (no second lookup)."""
+
+    def __init__(self):
+        self.inner = aiohttp.DefaultResolver()
+
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        found = await self.inner.resolve(host, port, family)
+        for item in found:
+            address = ipaddress.ip_address(item["host"])
+            address = getattr(address, "ipv4_mapped", None) or address
+            if not address.is_global:
+                raise OSError(f"{host} resolves to a non-public address")
+        if not found:
+            raise OSError(f"{host} has no address")
+        return found
+
+    async def close(self):
+        await self.inner.close()
+
+
+def _update_image_budget(now):
+    while _UPDATE_IMAGE_FETCHES and now - _UPDATE_IMAGE_FETCHES[0] > UPDATE_IMAGE_BUDGET[1]:
+        _UPDATE_IMAGE_FETCHES.popleft()
+    if len(_UPDATE_IMAGE_FETCHES) >= UPDATE_IMAGE_BUDGET[0]:
+        return False
+    _UPDATE_IMAGE_FETCHES.append(now)
+    return True
+
+
+def _update_http(app):
+    if app.get("update_http") is None:
+        app["update_http"] = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(resolver=_PublicResolver(), limit=4),
+            cookie_jar=aiohttp.DummyCookieJar(), timeout=aiohttp.ClientTimeout(total=20, connect=10))
+    return app["update_http"]
+
+
+async def close_update_http(app):
+    if app.get("update_http") is not None:
+        await app["update_http"].close()
+
+
+async def _fetch_update_image(session, url):
+    """(status, content type, bytes) of the image at ``url``, following at most UPDATE_IMAGE_REDIRECTS
+    redirects, each to an address update_image_url accepts."""
+    for _ in range(UPDATE_IMAGE_REDIRECTS + 1):
+        target = _update_image_target(url)
+        if not target:
+            return 502, None, None
+        async with session.get(target, allow_redirects=False, headers={
+                "User-Agent": "session-mesh-update-check", "Accept": ", ".join(UPDATE_IMAGE_MAGIC)}) as answer:
+            if answer.status in (301, 302, 303, 307, 308):
+                url = update_image_url(urllib.parse.urljoin(url, answer.headers.get("Location", "")))
+                if url is None:
+                    return 502, None, None
+                continue
+            kind = answer.headers.get("Content-Type", "").partition(";")[0].strip().lower()
+            if answer.status != 200:
+                return 502, None, None
+            if kind not in UPDATE_IMAGE_MAGIC:
+                return 415, None, None
+            if (answer.content_length or 0) > UPDATE_IMAGE_LIMIT:
+                return 413, None, None
+            body = bytearray()
+            async for chunk in answer.content.iter_chunked(65536):
+                body += chunk
+                if len(body) > UPDATE_IMAGE_LIMIT:
+                    return 413, None, None
+            # the bytes must be what the type says (WebP: RIFF....WEBP)
+            if not body.startswith(UPDATE_IMAGE_MAGIC[kind]) or (kind == "image/webp" and body[8:12] != b"WEBP"):
+                return 502, None, None
+            return 200, kind, bytes(body)
+    return 502, None, None
+
+
+async def api_update_image(request):
+    _require_owner_page(request)
+    if list(request.query) != ["url"]:
+        raise web.HTTPBadRequest()
+    url = update_image_url(request.query["url"])
+    notes = await _update_notes() if url else None
+    if notes is None or url not in notes["body"]:
+        raise web.HTTPNotFound()
+    if not _update_image_budget(time.monotonic()):
+        raise web.HTTPTooManyRequests()
+    try:
+        status, kind, body = await _fetch_update_image(_update_http(request.app), url)
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError):
+        status, kind, body = 502, None, None
+    if status != 200:
+        return web.Response(status=status, headers={"Cache-Control": "no-store"})
+    return web.Response(body=body, content_type=kind, headers={
+        "Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox", "Cross-Origin-Resource-Policy": "same-origin"})
 
 
 def _wait_setting(text):
@@ -5217,6 +5389,7 @@ def make_app(*, session_request_path=None):
     app["session_action_tasks"] = {}
     app.on_startup.append(start_session_actions)
     app.on_cleanup.append(stop_session_actions)
+    app.on_cleanup.append(close_update_http)
     async def close_session_requests(_app):
         _app["session_requests"].close()
     app["pi_wakes"] = piwake.Connections(lambda: app["agent_wakes"].trigger())
@@ -5313,6 +5486,8 @@ def make_app(*, session_request_path=None):
     app.router.add_post("/api/agent-mail/@self/send", api_agent_mail_send)
     app.router.add_post("/api/agent-mail/@self/reply", api_agent_mail_reply)
     app.router.add_post("/api/agent-mail/@self/ack", api_agent_mail_ack)
+    app.router.add_get("/api/update/notes", api_update_notes)
+    app.router.add_get("/api/update/image", api_update_image)
     app.router.add_get("/api/agent-mail/consent", api_agent_mail_consent)
     app.router.add_get("/api/agent-mail/overview", api_agent_mail_overview)
     app.router.add_get("/api/agent-mail/messages", api_agent_mail_messages)

@@ -165,6 +165,8 @@ const ACCEPTED_STATUS = `
   GET /api/agent-mail/consent 200
   GET /api/agent-mail/overview 200
   GET /api/agent-mail/messages 400
+  GET /api/update/notes 404 no release notes
+  GET /api/update/image 400
   GET /api/config 200
   POST /api/config/elevate 400
   POST /api/config/elevate/revoke 400

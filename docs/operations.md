@@ -84,6 +84,19 @@ How it works:
   header, `--netrc`) cannot change it; curl still honours the usual proxy environment variables.
   GitHub sees the installation's IP address, as for any request. `./mesh` (help, `doctor`) only
   reads the cache: it never makes a request.
+- "What's new", in the banner, shows the release notes of the announced release in a panel of the
+  page, rendered like a Markdown document (headings, lists, tables, code, links, images); the link
+  to the GitHub release page stays next to it. The notes come from the same releases list: the host
+  keeps each release's notes (at most 64 KiB; longer notes end with a pointer to GitHub) in the
+  cache and hands those of the announced release to the web server (`GET /api/update/notes`), so
+  showing them makes no request. Their images are fetched only when the panel shows them, by the
+  web server, never by the browser (`GET /api/update/image`): only `https` URLs written in the
+  notes, on `github.com` or a `*.githubusercontent.com` name, resolved to public addresses, PNG,
+  JPEG, GIF or WebP up to 5 MiB, with the same fixed `User-Agent` and no credentials. That request
+  goes directly, without the proxy environment variables curl honours; an image that cannot be
+  fetched becomes a link. A cache written by an earlier version has no notes: its ETag is not sent
+  back once, so the next request brings the full list. With `check=0` or `notice=none` there is no
+  banner, so no "What's new".
 - Drafts and pre-releases are ignored. With no published release, nothing is shown.
 - The installed version is the release directory the programs run from
   (`releases/<tag>/`). A source install or an extracted bundle has no such directory: it makes no

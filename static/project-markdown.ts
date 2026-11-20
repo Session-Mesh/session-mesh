@@ -8,7 +8,7 @@ interface MarkdownWindow extends Window {
   DOMPurify?: { sanitize: (html: string, options: Record<string, unknown>) => string };
 }
 const libraries = new WeakMap<Document, Promise<MarkdownWindow>>();
-async function markdownLibraries(doc: Document): Promise<MarkdownWindow> {
+export async function markdownLibraries(doc: Document): Promise<MarkdownWindow> {
   let pending = libraries.get(doc);
   if (!pending) {
     pending = (async () => {

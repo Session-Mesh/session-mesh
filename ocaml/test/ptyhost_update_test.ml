@@ -9,7 +9,7 @@
    is copied to releases/v0.1.0/bin/ (a release install: the version is the
    directory it runs from) and a fake curl stands in for the network: no
    request leaves the machine. What is checked: the answer reaches the
-   [update_notice] request and the log once, a request that hangs neither
+   [update_notice] and [update_notes] requests and the log once, a request that hangs neither
    blocks the host nor survives it, and a source install answers [null]. *)
 
 open Ptyhost_blackbox
@@ -129,6 +129,16 @@ let test_answer_reaches_the_request () =
           expect "latest" (member "latest" update = `String "v0.2.0");
           expect "security" (member "security" update = `Bool true);
           expect "running" (member "current" update = `String "v0.1.0");
+          expect "notes said" (member "notes" update = `Bool true);
+          let notes =
+            member "notes" (request fixture.socket_path {|{"op":"update_notes"}|})
+          in
+          expect "notes tag" (member "tag" notes = `String "v0.2.0");
+          expect "notes body" (member "body" notes = `String "Security: yes");
+          expect "notes take no other field"
+            (member "error"
+               (request fixture.socket_path {|{"op":"update_notes","x":1}|})
+            <> `Null);
           let lines =
             String.split_on_char '\n' (read_file fixture.log)
             |> List.filter (fun line ->
@@ -214,6 +224,9 @@ let test_settings_file_turns_it_off () =
           Unix.sleepf 0.5;
           expect "null"
             (update_reply fixture = `Assoc [ ("ok", `Bool true); ("update", `Null) ]);
+          expect "no notes"
+            (request fixture.socket_path {|{"op":"update_notes"}|}
+            = `Assoc [ ("ok", `Bool true); ("notes", `Null) ]);
           expect "no request, no file"
             (not (Sys.file_exists (Filename.concat fixture.scratch "cache")))))
 

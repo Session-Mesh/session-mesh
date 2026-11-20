@@ -8,10 +8,11 @@
 module C = Mesh_update_check
 module R = Mesh_update_report
 
-type t = { mutable latest : Yojson.Basic.t }
+type t = { mutable latest : Yojson.Basic.t; mutable notes : Yojson.Basic.t }
 
-let create () = { latest = `Null }
+let create () = { latest = `Null; notes = `Null }
 let latest t = t.latest
+let notes t = t.notes
 let tick = 600.
 let request_limit = 30.
 
@@ -51,6 +52,7 @@ let loop t ~getenv ~installation ~now ~sleep ~fetch ~log =
     in
     Option.iter note problem;
     t.latest <- answer ~home outcome;
+    t.notes <- Yojson.Safe.to_basic (R.notes_json outcome);
     (match (outcome, !announced) with
     | R.Available _, false ->
         announced := true;

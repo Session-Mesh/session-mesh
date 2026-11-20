@@ -580,6 +580,42 @@ input.rename { width: 100%; padding: 1px 4px; background: var(--bg); color: var(
 .update-notice-command code { font-family: var(--mono); color: var(--fg); user-select: all; }
 .update-notice-close { margin-left: auto; padding: 0 6px; border: 0; background: none; color: var(--mute); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
 .update-notice-close:hover, .update-notice-close:focus-visible { color: var(--fg); }
+.update-notice-whatsnew { padding: 2px 10px; border: 1px solid var(--accent); border-radius: 6px; background: none; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+.update-notice-whatsnew:hover, .update-notice-whatsnew:focus-visible { background: var(--accent); color: var(--bg); }
+/* "What's new": the release notes in a dialog (static/update-notes.ts), the document viewer's look
+   (static/markdown.html); the whole screen on a phone, the notes scroll, never the page sideways. */
+dialog.update-notes { width: min(860px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0; overflow: hidden; }
+dialog.update-notes[open] { display: flex; flex-direction: column; }
+.update-notes-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 20px 12px; border-bottom: 1px solid var(--line); }
+.update-notes-titles { min-width: 0; }
+dialog.update-notes .update-notes-title { margin: 0 0 4px; font-size: 17px; overflow-wrap: anywhere; }
+.update-notes-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; color: var(--mute); font-size: 12px; }
+.update-notes-meta a { color: var(--accent); }
+.update-notes-close { margin-left: auto; padding: 0 6px; border: 0; background: none; color: var(--mute); font: inherit; font-size: 22px; line-height: 1; cursor: pointer; }
+.update-notes-close:hover, .update-notes-close:focus-visible { color: var(--fg); }
+.update-notes-body { min-height: 0; overflow: auto; padding: 4px 20px 24px; font: 14px/1.65 -apple-system, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; overflow-wrap: anywhere; }
+.update-notes-status { color: var(--mute); }
+.update-notes-markdown h1, .update-notes-markdown h2, .update-notes-markdown h3, .update-notes-markdown h4 { line-height: 1.25; margin: 1.4em 0 .6em; font-size: revert; }
+.update-notes-markdown h1, .update-notes-markdown h2 { padding-bottom: .3em; border-bottom: 1px solid var(--line); }
+.update-notes-markdown h1 { font-size: 1.7em; }
+.update-notes-markdown h2 { font-size: 1.35em; }
+.update-notes-markdown a, .update-notes-image { color: var(--accent); }
+.update-notes-markdown p, .update-notes-markdown ul, .update-notes-markdown ol, .update-notes-markdown table, .update-notes-markdown pre, .update-notes-markdown blockquote { margin: 0 0 1em; }
+.update-notes-markdown code { font: .88em var(--mono); background: var(--bg); padding: .15em .35em; border-radius: 5px; }
+.update-notes-markdown pre { background: var(--bg); padding: 12px 14px; border-radius: 8px; overflow-x: auto; overflow-wrap: normal; }
+.update-notes-markdown pre code { padding: 0; background: none; font-size: 13px; line-height: 1.5; }
+.update-notes-markdown a:not([href]) { color: inherit; }
+.update-notes-markdown blockquote { border-left: 4px solid var(--line); padding: 0 1em; color: var(--mute); }
+.update-notes-markdown table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; overflow-wrap: normal; }
+.update-notes-markdown th, .update-notes-markdown td { border: 1px solid var(--line); padding: 6px 12px; }
+.update-notes-markdown th { background: var(--bg); }
+.update-notes-markdown img { max-width: 100%; height: auto; }
+.update-notes-markdown hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
+@media (max-width: 600px) {
+  dialog.update-notes { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; }
+  .update-notes-head { padding: 12px 16px 10px; }
+  .update-notes-body { padding: 4px 16px 24px; }
+}
 
 /* ---------------- attachments: the menu and the capture dialog */
 #attach-menu button { display: block; width: 100%; margin-bottom: 6px; padding: 10px 12px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--fg); font: inherit; cursor: pointer; }

@@ -668,3 +668,14 @@ nothing in the server: it still listens only on loopback, and the proxy must kee
   ignored when it is a symbolic link, not a regular file of the same user, writable by group or
   others, or larger than 4096 bytes. `MESH_UPDATE_CHECK=0` in the host's environment is the default
   when the file does not say ([Update notice](docs/operations.md#update-notice)).
+- The release notes shown by the banner's "What's new" come from that same answer: the host keeps
+  the notes of each release (at most 64 KiB each, control characters removed) in
+  `update-check.json` and gives those of the announced release to the web server on request; the
+  page renders them with the document viewer's sanitizer (DOMPurify: no script, frame, form, style,
+  SVG, `id`, `name` or `class`; links only to `http(s)`, opened in a new tab without opener or
+  referrer). The notes' images are fetched only when the panel shows them, by the web server
+  (`GET /api/update/image`, the owner's cookie only): an `https` URL that is written in the notes,
+  on `github.com` or a `*.githubusercontent.com` name (never an address), resolved to public
+  addresses only, at most three redirects each checked the same way, PNG, JPEG, GIF or WebP whose
+  bytes match the type (never SVG), at most 5 MiB, no cookie or credential sent, 60 fetches per ten
+  minutes at most. The browser itself never contacts GitHub; another image becomes a link.

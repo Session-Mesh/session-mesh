@@ -12,9 +12,10 @@
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
+    "allowImportingTsExtensions": true,
     "strict": true,
     "target": "ES2022",
     "verbatimModuleSyntax": true
   },
-  "files": ["static/update-notice.ts"]
+  "files": ["static/update-notice.ts", "static/update-notes.ts"]
 }

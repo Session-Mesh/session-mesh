@@ -145,7 +145,15 @@ let test_security_marker () =
 
 (* ---- levels *)
 
-let rel ?(security = false) tag = { C.tag; version = version tag; security }
+let rel ?(security = false) tag =
+  {
+    C.tag;
+    version = version tag;
+    security;
+    published = "";
+    notes = "";
+    truncated = false;
+  }
 
 let announced level current releases =
   Option.map
@@ -818,6 +826,146 @@ let test_settings_file_drives_the_check () =
         ("disabled", 0)
         (decide [ ("MESH_UPDATE_CHECK", "0") ]))
 
+(* ---- release notes: kept for the page, bounded *)
+
+let test_notes_kept () =
+  let parsed =
+    C.releases_of_body
+      (body
+         [
+           `Assoc
+             [
+               ("tag_name", `String "v0.2.0");
+               ("draft", `Bool false);
+               ("prerelease", `Bool false);
+               ("published_at", `String "2026-11-19T10:00:00Z");
+               ("body", `String "## New\r\n\x01Text\x7f\tend\r\nSecurity: yes");
+             ];
+           `Assoc
+             [
+               ("tag_name", `String "v0.1.0");
+               ("published_at", `String "yesterday");
+             ];
+         ])
+  in
+  match Result.get_ok parsed with
+  | [ first; second ] ->
+      Alcotest.(check string)
+        "line ends and control characters" "## New\nText\tend\nSecurity: yes"
+        first.notes;
+      Alcotest.(check bool) "security" true first.security;
+      Alcotest.(check bool) "not cut" false first.truncated;
+      Alcotest.(check string)
+        "date" "2026-11-19T10:00:00Z" first.published;
+      Alcotest.(check string) "no body" "" second.notes;
+      Alcotest.(check string) "a date that is not one" "" second.published
+  | _ -> Alcotest.fail "two releases"
+
+let test_notes_capped () =
+  (* two-byte characters: a cut at the limit falls inside one *)
+  let long = String.concat "" (List.init 40000 (fun _ -> "\xc3\xa9")) ^ "x" in
+  let notes, truncated = C.cap_notes ("a" ^ long) in
+  Alcotest.(check bool) "cut" true truncated;
+  Alcotest.(check bool)
+    "within the limit" true
+    (String.length notes <= C.notes_limit);
+  Alcotest.(check bool)
+    "valid UTF-8" true
+    (String.is_valid_utf_8 notes);
+  Alcotest.(check bool)
+    "close to the limit" true
+    (String.length notes >= C.notes_limit - 3);
+  let short, cut = C.cap_notes "short" in
+  Alcotest.(check string) "short notes unchanged" "short" short;
+  Alcotest.(check bool) "not cut" false cut;
+  let exact = String.make C.notes_limit 'a' in
+  Alcotest.(check bool)
+    "exactly the limit is kept" false
+    (snd (C.cap_notes exact))
+
+let test_cache_keeps_notes () =
+  with_root (fun root ->
+      let path = Filename.concat root "update-check.json" in
+      let release =
+        {
+          (rel "v0.2.0") with
+          notes = "## Notes\n| a | b |";
+          published = "2026-11-19T10:00:00Z";
+          truncated = true;
+        }
+      in
+      C.write_cache path
+        { checked_at = 1.; etag = Some "\"e\""; releases = [ release ] };
+      let cache = Option.get (C.read_cache path) in
+      Alcotest.(check (option string)) "etag" (Some "\"e\"") cache.etag;
+      match cache.releases with
+      | [ kept ] ->
+          Alcotest.(check string) "notes" release.notes kept.notes;
+          Alcotest.(check string) "date" release.published kept.published;
+          Alcotest.(check bool) "cut" true kept.truncated
+      | _ -> Alcotest.fail "one release")
+
+(* A cache written before the notes were kept has none: its ETag is not sent
+   back, so the next request gets the whole list (with the notes) once. *)
+let test_old_cache_sends_no_etag () =
+  with_root (fun root ->
+      let path = Filename.concat root "update-check.json" in
+      Out_channel.with_open_bin path (fun channel ->
+          output_string channel
+            {|{"checked_at":1.0,"etag":"\"old\"","releases":[{"tag":"v0.2.0","security":false}]}|});
+      let cache = Option.get (C.read_cache path) in
+      Alcotest.(check (option string)) "no etag" None cache.etag;
+      Alcotest.(check int) "releases kept" 1 (List.length cache.releases);
+      let sent = ref (Some "unset") in
+      ignore
+        (C.refresh ~now:(4. *. 3600.) ~force:false ~cache_path:path
+           ~fetch:(fun ~etag ->
+             sent := etag;
+             C.Not_modified));
+      Alcotest.(check (option string)) "nothing sent" None !sent)
+
+let test_notes_reported () =
+  let installation =
+    { R.tag = "v0.1.0"; version = version "v0.1.0"; share = "/srv/share" }
+  in
+  let latest =
+    {
+      (rel "v0.2.0") with
+      notes = "## New";
+      published = "2026-11-19T10:00:00Z";
+    }
+  in
+  let outcome =
+    R.Available { notice = { latest; security = false }; installation }
+  in
+  let field name json = Yojson.Safe.Util.member name json in
+  Alcotest.(check bool)
+    "the notice says notes exist" true
+    (field "notes" (R.to_json ~home:None outcome) = `Bool true);
+  let notes = R.notes_json outcome in
+  Alcotest.(check bool) "tag" true (field "tag" notes = `String "v0.2.0");
+  Alcotest.(check bool) "body" true (field "body" notes = `String "## New");
+  Alcotest.(check bool)
+    "date" true
+    (field "published" notes = `String "2026-11-19T10:00:00Z");
+  Alcotest.(check bool) "cut" true (field "truncated" notes = `Bool false);
+  Alcotest.(check bool)
+    "link" true
+    (field "notes_url" notes
+    = `String "https://github.com/Session-Mesh/session-mesh/releases/tag/v0.2.0");
+  let empty =
+    R.Available
+      {
+        notice = { latest = { latest with notes = "" }; security = false };
+        installation;
+      }
+  in
+  Alcotest.(check bool)
+    "no notes: said" true
+    (field "notes" (R.to_json ~home:None empty) = `Bool false);
+  Alcotest.(check bool) "no notes: null" true (R.notes_json empty = `Null);
+  Alcotest.(check bool) "nothing announced" true (R.notes_json R.Current = `Null)
+
 let () =
   Alcotest.run "mesh_update"
     [
@@ -839,6 +987,8 @@ let () =
         [
           Alcotest.test_case "filtering" `Quick test_filtering;
           Alcotest.test_case "security marker" `Quick test_security_marker;
+          Alcotest.test_case "notes kept" `Quick test_notes_kept;
+          Alcotest.test_case "notes capped" `Quick test_notes_capped;
         ] );
       ( "levels",
         [
@@ -855,6 +1005,9 @@ let () =
           Alcotest.test_case "unsafe ETag" `Quick test_invalid_etag;
           Alcotest.test_case "failure keeps releases" `Quick
             test_failure_keeps_releases;
+          Alcotest.test_case "notes kept" `Quick test_cache_keeps_notes;
+          Alcotest.test_case "an older cache sends no ETag" `Quick
+            test_old_cache_sends_no_etag;
         ] );
       ( "check",
         [
@@ -871,6 +1024,7 @@ let () =
           Alcotest.test_case "no release" `Quick test_no_release;
           Alcotest.test_case "network failure" `Quick test_network_failure;
           Alcotest.test_case "report" `Quick test_report;
+          Alcotest.test_case "notes reported" `Quick test_notes_reported;
           Alcotest.test_case "installation from its path" `Quick
             test_installation_from_path;
         ] );

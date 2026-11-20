@@ -102,6 +102,7 @@ const NOT_SHOWN: Record<string, string> = {
   'too-many-attempts': 'machine code of the elevation route, mapped to its own label by static/config-launch-editor.ts (config.launch.err.tooMany)',
   'wrong-token': 'machine code of the elevation route, mapped to its own label by static/config-launch-editor.ts',
   'elevation-required': 'machine code of the configuration routes, mapped to the elevation prompt by static/config-launch-editor.ts',
+  'no release notes': 'GET /api/update/notes: static/update-notes.ts treats any non-OK reply as "unavailable" and shows its own text (update.notesFailed)',
   'a guarded restore is exactly {names: [name], expected: {...}}': 'protocol error of the guarded restore: only a tool sends `expected`, the page never does',
   'names: exactly [expected.name]': 'protocol error of the guarded restore: only a tool sends `expected`, the page never does',
   'invalid': 'machine code of the configuration route, sent with the validation detail in its own field; not a text for a screen',
