@@ -28,7 +28,7 @@ const WRITER = process.env.MESH_WORK_WRITE_CMD || path.join(ROOT, 'ocaml/_build/
 const READER = process.env.MESH_WORK_READ_CMD || path.join(ROOT, 'ocaml/_build/default/work_read/bin/work_read_main.exe');
 const FIXTURE = path.join(ROOT, 'ocaml/worklog/test/fixture');
 const credentialSkip = PYTHON ? false : 'MESH_PYTHON is required';
-const skip = (!PYTHON || !fs.existsSync(WRITER) || !fs.existsSync(READER)) && !process.env.MESH_REQUIRE_WORK_READ
+const skip = (!PYTHON || !fs.existsSync(WRITER) || !fs.existsSync(READER)) && !process.env.MESH_REQUIRE_WORK_READ && !process.env.CI
   ? 'MESH_PYTHON and built work-write and work-read are required' : false;
 const QUESTIONS = ['N-0000a0b1', 'N-0000a0b2', 'N-0000a0b3', 'N-0000a0b4'];
 
