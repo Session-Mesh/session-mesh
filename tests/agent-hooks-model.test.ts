@@ -61,6 +61,15 @@ print(json.dumps({row["agent"]: {name: list(agentmcp.hook_events(row["agent"], n
     assert.equal(copilotHooksFile(MODEL), fs.readFileSync(path.join(REPO, 'copilot-mesh-plugin/hooks/hooks.json'), 'utf8'));
   });
 
+  // The cap that runs is the OCaml constant Wr_context.cap_seconds (work-read does not read the table):
+  // the table's cap_seconds documents it, and this keeps the two equal.
+  test('states the cap work-read applies', () => {
+    const consumer = MODEL.consumers.find(c => c.name === 'project_context')!;
+    const source = fs.readFileSync(path.join(REPO, 'ocaml/work_read/lib/wr_context.ml'), 'utf8');
+    const caps = [...source.matchAll(/^let cap_seconds = ([0-9.]+)$/gm)].map(match => Number(match[1]));
+    assert.deepEqual(caps, [consumer.cap_seconds], 'Wr_context.cap_seconds equals the table');
+  });
+
   test('injects context only where a source has a verified format', () => {
     const wired = MODEL.sources.filter(s => (s.subscriptions.project_context ?? []).length > 0).map(s => s.agent);
     assert.deepEqual(wired, ['claude', 'vibe']);
@@ -136,7 +145,7 @@ print(json.dumps(out))`) as (Record<string, unknown> | null)[];
       const native = MODEL.sources.find(s => s.agent === item.agent)!.events.map(e => e.native);
       assert.ok(native.includes(item.hook), `${item.hook} is a native hook of the ${item.agent} source`);
       const envelope = item.normalised === null ? null
-        : stateEnvelope(MODEL, {schema: 1, at: 1, agent: item.agent, native: item.hook, ...item.normalised});
+        : stateEnvelope({schema: 1, at: 1, agent: item.agent, native: item.hook, ...item.normalised});
       assert.deepEqual(envelope, relayed[index]);
     });
   });

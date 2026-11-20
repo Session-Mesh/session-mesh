@@ -5,8 +5,8 @@
 // generic events, the normalised event, the reactions a consumer may have, the consumers Mesh runs and
 // the event sources (one per agent). Pure: reading the file is the caller's business (loadModel takes
 // its text). The Python generators read the same file (agentmcp.hook_events); this module is what a
-// TypeScript or future protocol source (an ACP client) builds on, and what the tests check the
-// generators and bin/mesh-event against.
+// TypeScript or future protocol source (an ACP client) would build on. Today only the tests import it:
+// they check the generators against the table, and bin/mesh-event against the stateEnvelope oracle.
 
 export const EVENTS = ['session_start', 'prompt_submit', 'tool_before', 'tool_after', 'tool_failure',
   'permission_request', 'notification', 'turn_end', 'turn_end_failure', 'session_end'] as const;
@@ -45,9 +45,7 @@ export interface Consumer {
   program: string;
   args?: string[];
   switch: string | null;
-  cap_seconds?: number;
-  kinds?: Partial<Record<GenericEvent, StateKind>>;
-  notice_kinds?: Partial<Record<Notice, StateKind>>;
+  cap_seconds?: number;    // documents work-read's cap: a test keeps it equal to Wr_context.cap_seconds
 }
 
 export interface SourceEvent { event: GenericEvent; native: string; label?: string }
@@ -57,7 +55,6 @@ export interface Source {
   kind: SourceKind;
   install: string;
   timeout: {value: number; unit: 's' | 'ms'} | null;
-  state_args: string[] | null;
   inject: Partial<Record<GenericEvent, string>>;
   events: SourceEvent[];
   subscriptions: Record<string, GenericEvent[]>;
@@ -117,11 +114,23 @@ export function installed(model: Model, agent: string, consumer: string): Source
   return (row.subscriptions[consumer] ?? []).map(event => row.events.find(e => e.event === event)!);
 }
 
-/** The state consumer: the envelope POST /api/event receives for one normalised event (what
- *  bin/mesh-event sends today, without the size trimming), or null when it says nothing about the state. */
-export function stateEnvelope(model: Model, event: NormalisedEvent): Record<string, unknown> | null {
-  const consumer = model.consumers.find(c => c.name === 'state')!;
-  const kind = event.notice ? consumer.notice_kinds?.[event.notice] : consumer.kinds?.[event.event];
+/** The session state each generic event, and each notice of a notification, gives. Part of the test
+ *  oracle below, not of the table: in production, the per-agent decoding and this mapping live in
+ *  bin/mesh-event. */
+const STATE_KINDS: Partial<Record<GenericEvent, StateKind>> = {
+  session_start: 'done', prompt_submit: 'working', tool_before: 'working', tool_after: 'working',
+  tool_failure: 'working', permission_request: 'waiting_permission', turn_end: 'done', turn_end_failure: 'error',
+};
+const NOTICE_STATE_KINDS: Record<Notice, StateKind> = {
+  permission: 'waiting_permission', question: 'waiting_question', turn_completed: 'done', turn_failed: 'error',
+};
+
+/** A test oracle, not a production path: the envelope POST /api/event would receive for one normalised
+ *  event from a state consumer written against the model, or null when the event says nothing about the
+ *  state. tests/agent-hooks-model.test.ts checks that bin/mesh-event, which does its own per-agent
+ *  decoding, sends exactly this (without its size trimming) for each agent's native hooks. */
+export function stateEnvelope(event: NormalisedEvent): Record<string, unknown> | null {
+  const kind = event.notice ? NOTICE_STATE_KINDS[event.notice] : STATE_KINDS[event.event];
   if (!kind) return null;
   const detail: Record<string, string> = {source: event.agent, hook: event.native};
   if (event.tool !== undefined) detail.tool = event.tool;
