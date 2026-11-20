@@ -16,6 +16,7 @@ import { renderDetail } from './work-detail-view.ts';
 import { button, el } from './work-dom.ts';
 import type { Translate, ViewContext } from './work-dom.ts';
 import { renderEntry } from './work-entry-view.ts';
+import { loadOperatorName } from './work-operator-label.ts';
 import { errorBlock, loadingBlock } from './work-error-view.ts';
 import { renderProject } from './work-project-view.ts';
 import type { ProjectView, TabKey } from './work-project-view.ts';
@@ -424,5 +425,10 @@ export { counterText } from './work-questions.ts';
 export { createSessionMarker as mountSessionMarker } from './work-session-marker.ts';
 
 export function mountWorkView(options: WorkViewOptions): WorkViewController {
-  return new WorkView(options);
+  const view = new WorkView(options);
+  // Each opening also reads the operator's display name again (work-operator-label.ts).
+  return { close: view.close, destroy: view.destroy, open: (...args: Parameters<WorkViewController['open']>) => {
+    void loadOperatorName(options.request);
+    view.open(...args);
+  } };
 }

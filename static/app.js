@@ -4532,6 +4532,12 @@ const configPanel = MeshPaneActions.createConfigPanel({ dialog: $("#dlg-config")
     const body = await response.json().catch(() => ({}));
     return { ok: false, error: String(body.error || response.status), message: typeof body.message === "string" ? body.message : null };
   },
+  // The runner settings (the operator's display name) share the launch route and its elevation.
+  saveSettings: async (settings) => {
+    const response = await requestLocal("/api/config/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings }) });
+    const body = await response.json().catch(() => ({}));
+    return response.ok ? { ok: true, value: body } : { ok: false, error: String(body.error || response.status) };
+  },
 }, () => MeshI18n.locale());
 $("#btn-config").addEventListener("click", () => configPanel.open());
 

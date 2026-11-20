@@ -8,11 +8,13 @@ among already integrated agent identifiers.  It cannot name a binary, command,
 credential, URL, plugin, or arbitrary environment variable.
 """
 
+import contextlib
 from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
 from pathlib import Path
+import unicodedata
 
 import fsutil
 import launchplan
@@ -210,6 +212,40 @@ def write_update(agents: object, roots: object, expected_revision: str, applied_
     mode = path.stat().st_mode & 0o777
     fsutil.atomic_write(path, text, mode)
     return replace(settings, source=path), revision_of(text.encode("utf-8"))
+
+
+# Runner settings: display texts shared by every device of this runner, in one JSON object in Mesh's
+# configuration folder (field -> maximum length; "" is the default). The server never acts on them.
+RUNNER_SETTINGS_FILE = "settings.json"
+RUNNER_LIMITS = {"operator_name": 40}
+_HIDDEN = frozenset(("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))   # control, format (bidi), unassigned
+
+
+def _runner_text(key: str, value: object) -> str:
+    text = value.strip() if isinstance(value, str) else None
+    if text is None or len(text) > RUNNER_LIMITS[key] or any(unicodedata.category(c) in _HIDDEN for c in text):
+        raise InvalidLaunchSettings(f"{key}: at most {RUNNER_LIMITS[key]} characters, no control or bidi character")
+    return text
+
+
+def read_runner_settings(path: Path) -> dict:
+    """Every runner setting: its stored value when valid, else "" (also for a missing or broken file)."""
+    values = dict.fromkeys(RUNNER_LIMITS, "")
+    with contextlib.suppress(OSError, ValueError, AttributeError):   # unreadable, not JSON, not an object
+        stored = json.loads(path.read_bytes()[:MAX_BYTES].decode("utf-8"))
+        for key in RUNNER_LIMITS.keys() & stored.keys():
+            with contextlib.suppress(InvalidLaunchSettings):
+                values[key] = _runner_text(key, stored[key])
+    return values
+
+
+def write_runner_settings(path: Path, changes: object) -> dict:
+    """Validate the changed settings, merge them and replace the file atomically (the caller serialises)."""
+    if not isinstance(changes, dict) or not changes or not changes.keys() <= RUNNER_LIMITS.keys():
+        raise InvalidLaunchSettings("unknown runner setting")
+    values = {**read_runner_settings(path), **{key: _runner_text(key, value) for key, value in changes.items()}}
+    fsutil.atomic_write(path, json.dumps({"v": VERSION, **values}, ensure_ascii=False, indent=2) + "\n", 0o600)
+    return values
 
 
 if __name__ == "__main__":

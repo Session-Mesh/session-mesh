@@ -6,6 +6,8 @@
 import { answerForm, unavailableNote } from './work-answer-form.ts';
 import { el, formatDate, formatDateTime, omittedNote, priorityTag, statusBadge } from './work-dom.ts';
 import type { ViewContext } from './work-dom.ts';
+import { operatorLabel } from './operator-name.ts';
+import { withOperatorName } from './work-operator-label.ts';
 import type { Answer, Blocker, LinkedSession, Question, TargetRef, TaskDetail, TimelineEvent } from './work-types.ts';
 
 const KNOWN_EVENTS: ReadonlySet<string> = new Set(['created', 'set', 'add', 'remove', 'progress', 'note', 'blocker', 'unblocked',
@@ -72,24 +74,27 @@ function eventItem(ctx: ViewContext, event: TimelineEvent): HTMLElement {
  * relayed by an agent session that writes `by` freely: it reads as a relayed claim, a `by` other than `owner`
  * appears only as the stated answerer, and one that the owner's answer replaces says so.
  */
-function provenance(ctx: ViewContext, answer: Answer): string {
-  if (answer.ownerVerified) return ctx.t('work.answer.verified');
-  const relayed = relayedProvenance(ctx, answer);
-  return answer.superseded ? `${relayed} · ${ctx.t('work.answer.superseded')}` : relayed;
+function provenance(ctx: ViewContext, answer: Answer, name: string): string {
+  if (answer.ownerVerified) return operatorLabel(ctx.t, 'verified', name);
+  const relayed = relayedProvenance(ctx, answer, name);
+  return answer.superseded ? `${relayed} · ${operatorLabel(ctx.t, 'superseded', name)}` : relayed;
 }
 
-function relayedProvenance(ctx: ViewContext, answer: Answer): string {
+/** The operator labels (operator-name.ts) say the operator's name when one is set; a stated answerer is shown as stated. */
+function relayedProvenance(ctx: ViewContext, answer: Answer, name: string): string {
   const session = answer.relayedBy;
   if (answer.by === null || answer.by === 'owner') {
-    return session ? ctx.t('work.answer.relayed', { session }) : ctx.t('work.answer.unrelayed');
+    return session ? operatorLabel(ctx.t, 'relayed', name, { session }) : operatorLabel(ctx.t, 'unrelayed', name);
   }
   return session ? ctx.t('work.answer.relayedOther', { session, by: answer.by }) : ctx.t('work.answer.unrelayedOther', { by: answer.by });
 }
 
 function answerItem(ctx: ViewContext, answer: Answer): HTMLElement {
-  const meta = [provenance(ctx, answer), answer.at ? formatDateTime(answer.at, ctx.locale) : null].filter((part): part is string => !!part);
+  const when = answer.at ? formatDateTime(answer.at, ctx.locale) : null;
+  const meta = withOperatorName(el('p', 'work-mute work-answer-meta'),
+    name => [provenance(ctx, answer, name), when].filter((part): part is string => !!part).join(' · '));
   const state = answer.ownerVerified ? ' work-answer-verified' : answer.superseded ? ' work-answer-superseded' : '';
-  return el('li', `work-answer${state}`, el('p', 'work-answer-text', answer.text), el('p', 'work-mute work-answer-meta', meta.join(' · ')));
+  return el('li', `work-answer${state}`, el('p', 'work-answer-text', answer.text), meta);
 }
 
 /** The hint of a question the owner can still answer: open, or answered only by relayed (unverified) answers. */
@@ -117,6 +122,7 @@ export function answerArea(ctx: ViewContext, question: Question): HTMLElement {
   const area = el('div', 'work-answer-area');
   area.dataset.workAnswerFor = question.id;
   if (question.answers.length > 0) area.append(el('ul', 'work-answer-list', ...question.answers.map(answer => answerItem(ctx, answer))));
+  if (question.open) area.append(withOperatorName(el('p', 'work-question-waiting'), name => operatorLabel(ctx.t, 'waiting', name)));
   if (question.open || (!question.ownerAnswered && ctx.answers)) {
     const { slot, form } = answerSlot(ctx, question);
     area.append(el('p', 'work-answer-hint work-mute', answerHint(ctx, question, form)), slot);
