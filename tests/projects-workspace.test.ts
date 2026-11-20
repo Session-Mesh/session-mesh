@@ -175,7 +175,12 @@ for (const width of [1280, 390]) test(`actual native Projects create/settings/co
       const foreign: string[] = [];
       page.on('request', request => { if (new URL(request.url()).origin !== origin) foreign.push(request.url()); });
       await page.goto(origin); await page.waitForFunction(() => typeof panes !== 'undefined' && panes.length > 0);
-      await page.waitForFunction(() => typeof meshContext !== 'undefined' && meshContext !== null && !!find('p1-quiet')); await page.evaluate('openSession("p1-quiet")');
+      await page.waitForFunction(() => {
+        if (typeof meshContext === 'undefined' || meshContext === null) return false;
+        const session = find('p1-quiet');
+        return session?.kind === 'mesh' && rowAuthoritative(session);
+      });
+      await page.evaluate('openSession("p1-quiet")');
       await page.waitForFunction(() => active?.conn?.terminal?.isOpen() && active.term.buffer.active.length > 80);
       await page.evaluate(`(() => {
         active.noteUserScroll(false); active.term.scrollToLine(20);
@@ -380,7 +385,12 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
       window.projectContextDeadlines = () => [...timers.values()].map(timer => timer.delay);
     });
     await page.goto(origin);
-    await page.waitForFunction(() => typeof panes !== 'undefined' && panes.length > 0 && typeof meshContext !== 'undefined' && meshContext !== null && !!find('i1-live'));
+    await page.waitForFunction(() => typeof panes !== 'undefined' && panes.length > 0);
+    await page.waitForFunction(() => {
+      if (typeof meshContext === 'undefined' || meshContext === null) return false;
+      const session = find('i1-live');
+      return session?.kind === 'mesh' && rowAuthoritative(session);
+    });
     await page.evaluate('openSession("i1-live")');
     await page.waitForFunction(() => active?.conn?.terminal?.isOpen());
     await page.evaluate('window.i1Saved={pane:active,term:active.term,conn:active.conn,target:paneTargets.capture(active,true)}');
@@ -495,6 +505,9 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
         new MutationObserver(() => { (window as any).observedStatusWrites++; })
           .observe(status, { childList: true, characterData: true, subtree: true });
       });
+      fs.writeFileSync(path.join(repository, 'README.md'), readme + '\nFresh observation evidence.\n');
+      git('add', 'README.md'); git('-c', 'user.name=I1 Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Refresh observation fixture');
+      const refreshedCommit = git('rev-parse', 'HEAD').trim();
       const taskControls=page.locator('.project-followup [data-followup-key^="row-"]');
       if(REAL_ROSTER)assert.ok(await taskControls.count()>0,'real Roster task controls are mounted before refresh');
       else assert.equal(await taskControls.count(),0,'Git-only observation has no Roster task controls');
@@ -503,8 +516,9 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
       if(REAL_ROSTER)assert.ok(await taskControls.count()>0,'old task controls remain mounted while refreshing in list or clock view');
       else assert.equal(await taskControls.count(),0,'Git-only refresh does not create Roster task controls');
       await settled(); assert.equal(starts().length, before + 1, 'settled observation refreshes on the thirty second cadence');
-      await page.waitForFunction(() => (window as any).observedStatusWrites > 0 &&
-        document.querySelector('#project-overview > p[role="status"]')?.textContent?.startsWith('Context observed'));
+      await page.waitForFunction(commit => (window as any).observedStatusWrites > 0 &&
+        document.querySelector('#project-overview > p[role="status"]')?.textContent?.startsWith('Context observed') &&
+        document.querySelector('.projects-repository-observation')?.textContent?.includes(commit), refreshedCommit);
       await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); window.tickProjectContext(30000); });
       assert.equal(starts().length, before + 1, 'hidden document does not start captures');
       const resume = page.waitForRequest(request => request.url().endsWith('/api/projects/v1') && request.postDataJSON()?.op === 'project_observation_start');

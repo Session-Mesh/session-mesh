@@ -330,7 +330,8 @@ async def test_unfinished_input_lease_stays_with_its_session_incarnation(browser
         await tab.wait_for_function("data?.mesh?.some((session) => session.id === 'lease-a')")
         await tab.locator('#list .item[data-id="lease-a"]').click()
         await tab.wait_for_function("active?.id === 'lease-a' && active.conn?.ws?.readyState === WebSocket.OPEN")
-        assert await tab.evaluate("active.send('partial'); active.inputLease.dirty")
+        await tab.evaluate("active.send('partial')")
+        await tab.wait_for_function("active.inputLease.dirty")
         await tab.evaluate("active.show('lease-b')")
         await tab.wait_for_function("active?.id === 'lease-b' && active.conn?.ws?.readyState === WebSocket.OPEN")
         state = await tab.evaluate("""() => ({
@@ -339,7 +340,10 @@ async def test_unfinished_input_lease_stays_with_its_session_incarnation(browser
           leases: active.inputLeases.size,
         })""")
         assert state == {"currentDirty": False, "retained": [True, False], "leases": 2}
-        assert await tab.evaluate("active.send('safe'); active.send('\\r'); !active.inputLease.dirty")
+        await tab.evaluate("active.send('safe')")
+        await tab.wait_for_function("active.inputLease.dirty")
+        await tab.evaluate("active.send('\\r')")
+        await tab.wait_for_function("!active.inputLease.dirty")
         assert await tab.evaluate("[...active.inputLeases.values()].map(lease => lease.dirty)") == [True, False]
     finally:
         await context.close()
