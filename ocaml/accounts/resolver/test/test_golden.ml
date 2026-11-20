@@ -31,12 +31,25 @@ let run arguments =
   let code = match status with Unix.WEXITED code -> code | _ -> -1 in
   (code, stdout_text, stderr_text)
 
-let temporary () =
-  let base =
-    Filename.concat (Filename.get_temp_dir_name ()) "mesh-resolver-golden"
+(* Each test gets its own private folder under TMPDIR, removed with all it
+   holds when the test ends, whatever the outcome; a symbolic link is removed,
+   never followed. *)
+let rec remove_tree path =
+  match Unix.lstat path with
+  | { Unix.st_kind = Unix.S_DIR; _ } ->
+      Unix.chmod path 0o700;
+      Array.iter
+        (fun name -> remove_tree (Filename.concat path name))
+        (Sys.readdir path);
+      Unix.rmdir path
+  | _ -> Sys.remove path
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
+
+let with_temporary test () =
+  let root =
+    Unix.realpath (Filename.temp_dir ~perms:0o700 "mesh-resolver-golden" "")
   in
-  (try Unix.mkdir base 0o700 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  Unix.realpath (Filename.temp_dir ~temp_dir:base ~perms:0o700 "t" "")
+  Fun.protect ~finally:(fun () -> remove_tree root) (fun () -> test root)
 
 let write_file path text =
   Out_channel.with_open_gen [ Open_wronly; Open_creat; Open_trunc ] 0o600 path
@@ -44,8 +57,7 @@ let write_file path text =
 
 (* A root holding accounts.json with two aliases: work (both folders, the
    Claude one present, the Codex one missing) and travel (Codex only). *)
-let fixture () =
-  let root = temporary () in
+let fixture root =
   Unix.mkdir (Filename.concat root "work") 0o700;
   Unix.mkdir (Filename.concat root "work/claude") 0o700;
   let file = Filename.concat root "accounts.json" in
@@ -55,7 +67,7 @@ let fixture () =
   {"id": "work", "label": "Work", "claude_config_dir": "%s/work/claude", "codex_home": "%s/work/codex"},
   {"id": "travel", "label": "Travel", "codex_home": "%s/travel-codex"}]}|}
        root root root);
-  (root, file)
+  file
 
 let expect name (code, out, err) (code', out', err') =
   Alcotest.(check int) (name ^ ": exit code") code code';
@@ -67,8 +79,8 @@ let is_private_directory path =
   | { Unix.st_kind = Unix.S_DIR; st_perm; _ } -> st_perm land 0o777 = 0o700
   | _ | (exception Unix.Unix_error _) -> false
 
-let test_list () =
-  let root, file = fixture () in
+let test_list root =
+  let file = fixture root in
   expect "list"
     ( 0,
       Printf.sprintf
@@ -81,8 +93,7 @@ let test_list () =
     "list creates nothing" false
     (Sys.file_exists (Filename.concat root "work/codex"))
 
-let test_list_refused () =
-  let root = temporary () in
+let test_list_refused root =
   let file = Filename.concat root "accounts.json" in
   write_file file "{";
   expect "not JSON"
@@ -109,8 +120,8 @@ let test_list_refused () =
       "mesh-platform: " ^ message ^ "\n" )
     (run [ "accounts"; "list"; file ])
 
-let test_prepare () =
-  let root, file = fixture () in
+let test_prepare root =
+  let file = fixture root in
   expect "prepare work"
     ( 0,
       Printf.sprintf
@@ -139,8 +150,8 @@ let unknown =
     {|{"kind":"accounts","error":"unknown account"}|} ^ "\n",
     "mesh-platform: unknown account\n" )
 
-let test_prepare_refused () =
-  let _root, file = fixture () in
+let test_prepare_refused root =
+  let file = fixture root in
   expect "unknown" unknown (run [ "accounts"; "prepare"; file; "nobody" ]);
   expect "default is not in the file" unknown
     (run [ "accounts"; "prepare"; file; "default" ]);
@@ -163,8 +174,8 @@ let resolve_refused code message =
     ^ "\n",
     "mesh-platform: " ^ message ^ "\n" )
 
-let test_resolve () =
-  let root, file = fixture () in
+let test_resolve root =
+  let file = fixture root in
   let resolve backend name = run [ "accounts"; "resolve"; file; backend; name ] in
   expect "exact id" (resolved "claude" "work" "Work") (resolve "claude" "work");
   expect "label, any case" (resolved "codex" "travel" "Travel")
@@ -184,8 +195,7 @@ let test_resolve () =
   let code, _, _ = resolve "pi" "work" in
   Alcotest.(check int) "unknown backend: usage" 2 code
 
-let test_resolve_ambiguous () =
-  let root = temporary () in
+let test_resolve_ambiguous root =
   let file = Filename.concat root "accounts.json" in
   write_file file
     (Printf.sprintf
@@ -206,19 +216,65 @@ let test_resolve_ambiguous () =
     (resolved "codex" "default" "Default account")
     (run [ "accounts"; "resolve"; file; "codex"; "default account" ])
 
+(* One alias's label is the other's id: the exact id no longer wins on its own,
+   so the letter case cannot pick the account. *)
+let test_resolve_id_and_label root =
+  let file = Filename.concat root "accounts.json" in
+  write_file file
+    (Printf.sprintf
+       {|{"v": 1, "accounts": [{"id": "x", "label": "y", "claude_config_dir": "%s/x"}, {"id": "y", "label": "Other", "claude_config_dir": "%s/y"}]}|}
+       root root);
+  let message = "several accounts match: y (Other), x (y)" in
+  expect "id of one, label of the other"
+    ( 1,
+      Printf.sprintf
+        {|{"kind":"accounts","error":"%s","code":"account_ambiguous","candidates":[{"backend":"claude","id":"y","label":"Other"},{"backend":"claude","id":"x","label":"y"}]}|}
+        message
+      ^ "\n",
+      "mesh-platform: " ^ message ^ "\n" )
+    (run [ "accounts"; "resolve"; file; "claude"; "y" ]);
+  expect "a label only" (resolved "claude" "x" "y")
+    (run [ "accounts"; "resolve"; file; "claude"; "Y" ])
+
+(* A refusal of the file names no folder in [resolve], even one of another
+   alias; [list] keeps printing it, byte for byte. *)
+let test_resolve_sanitized root =
+  let file = Filename.concat root "accounts.json" in
+  Unix.mkdir (Filename.concat root "a") 0o700;
+  write_file file
+    (Printf.sprintf
+       {|{"v": 1, "accounts": [{"id": "a", "label": "A", "claude_config_dir": "%s/a"}, {"id": "b", "label": "B", "codex_home": "%s/none/b"}]}|}
+       root root);
+  expect "resolve: no path"
+    (resolve_refused "accounts_refused" "b: <path> does not exist")
+    (run [ "accounts"; "resolve"; file; "claude"; "a" ]);
+  let raw = Printf.sprintf "b: %s/none does not exist" root in
+  expect "list: unchanged"
+    ( 1,
+      Printf.sprintf {|{"kind":"accounts","error":"%s"}|} raw ^ "\n",
+      "mesh-platform: " ^ raw ^ "\n" )
+    (run [ "accounts"; "list"; file ])
+
 let () =
   Alcotest.run "mesh-platform accounts (golden)"
     [
       ( "golden",
         [
-          Alcotest.test_case "list" `Quick test_list;
-          Alcotest.test_case "list refused" `Quick test_list_refused;
-          Alcotest.test_case "prepare" `Quick test_prepare;
-          Alcotest.test_case "prepare refused" `Quick test_prepare_refused;
+          Alcotest.test_case "list" `Quick (with_temporary test_list);
+          Alcotest.test_case "list refused" `Quick
+            (with_temporary test_list_refused);
+          Alcotest.test_case "prepare" `Quick (with_temporary test_prepare);
+          Alcotest.test_case "prepare refused" `Quick
+            (with_temporary test_prepare_refused);
         ] );
       ( "resolve",
         [
-          Alcotest.test_case "resolve" `Quick test_resolve;
-          Alcotest.test_case "ambiguous" `Quick test_resolve_ambiguous;
+          Alcotest.test_case "resolve" `Quick (with_temporary test_resolve);
+          Alcotest.test_case "ambiguous" `Quick
+            (with_temporary test_resolve_ambiguous);
+          Alcotest.test_case "id and label" `Quick
+            (with_temporary test_resolve_id_and_label);
+          Alcotest.test_case "sanitized" `Quick
+            (with_temporary test_resolve_sanitized);
         ] );
     ]

@@ -6,4 +6,5 @@ kind: internal
   and where the account (backend, id) lives; their output is unchanged byte for byte. The new
   `mesh-platform accounts resolve FILE claude|codex NAME` finds an account of one backend by its
   exact id, else by its label ignoring ASCII case; it never accepts a prefix, never an account of
-  another backend, and refuses an ambiguous name with the candidates.
+  another backend, and refuses an ambiguous name with the candidates, including a name that is
+  one account's id and another account's label. Its error messages name no folder.

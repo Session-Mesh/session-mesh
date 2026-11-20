@@ -133,14 +133,61 @@ let label_matches t backend name =
     (fun (e : entry) -> String.lowercase_ascii e.label = wanted)
     (accounts_of t backend)
 
+(* The exact id first, then every other account whose label is the name: when
+   both match, the letter case alone must not pick the account. *)
+let candidates t backend name =
+  let labelled = label_matches t backend name in
+  match
+    List.find_opt (fun (e : entry) -> e.id = name) (accounts_of t backend)
+  with
+  | Some exact ->
+      exact :: List.filter (fun (e : entry) -> e.id <> exact.id) labelled
+  | None -> labelled
+
 let resolve_name t backend name =
-  match List.find_opt (fun (e : entry) -> e.id = name) (accounts_of t backend) with
-  | Some entry -> Ok entry
-  | None -> (
-      match label_matches t backend name with
-      | [ entry ] -> Ok entry
-      | [] -> find t ({ backend; id = name } : account_ref)
-      | several -> fail "account_ambiguous" (candidates_message several))
+  match candidates t backend name with
+  | [ entry ] -> Ok entry
+  | [] -> find t ({ backend; id = name } : account_ref)
+  | several -> fail "account_ambiguous" (candidates_message several)
+
+(* No absolute path (a word starting with "/" becomes "<path>") and no control
+   character ("?"): the rule Carry_base.sanitize applies to the messages of
+   [carry]. *)
+let sanitize message =
+  let length = String.length message in
+  let buffer = Buffer.create length in
+  let rec skip_path index =
+    if index < length && message.[index] <> ' ' && message.[index] <> ':' then
+      skip_path (index + 1)
+    else index
+  in
+  let rec copy index =
+    if index < length then
+      let character = message.[index] in
+      if character = '/' && (index = 0 || message.[index - 1] = ' ') then begin
+        Buffer.add_string buffer "<path>";
+        copy (skip_path index)
+      end
+      else begin
+        Buffer.add_char buffer
+          (if Char.code character < 0x20 || Char.code character = 0x7f then '?'
+           else character);
+        copy (index + 1)
+      end
+  in
+  copy 0;
+  Buffer.contents buffer
+
+let resolve ~uid ~file backend name =
+  let sanitized error = { error with message = sanitize error.message } in
+  match load ~uid ~file with
+  | Error error -> Error (sanitized error, [])
+  | Ok t -> (
+      match resolve_name t backend name with
+      | Ok entry -> Ok entry
+      | Error error when error.code = "account_ambiguous" ->
+          Error (sanitized error, candidates t backend name)
+      | Error error -> Error (sanitized error, []))
 
 let serves t ~id backend = Result.is_ok (find t ({ backend; id } : account_ref))
 let ref_ (entry : entry) : account_ref = { backend = entry.backend; id = entry.id }

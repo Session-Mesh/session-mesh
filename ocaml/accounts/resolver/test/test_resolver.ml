@@ -86,7 +86,17 @@ let test_resolve () =
        (fun e -> show_ref (R.ref_ e))
        (R.label_matches t Claude "Default Account"))
 
-let test_id_before_label () =
+let refused_with what message = function
+  | Ok entry -> Alcotest.failf "%s: got %s" what (show_ref (R.ref_ entry))
+  | Error (error : R.error) ->
+      Alcotest.(check (pair string string))
+        what
+        ("account_ambiguous", message)
+        (error.code, error.message)
+
+(* A name that is one account's exact id and another account's label is
+   refused: otherwise the letter case alone would pick the account. *)
+let test_id_and_label () =
   let t =
     of_list
       [
@@ -94,9 +104,41 @@ let test_id_before_label () =
         alias "beta" "Alpha" ~claude:"/r/beta";
       ]
   in
-  check_ref "the id wins" "claude/beta" (ok (R.resolve_name t Claude "beta"));
+  refused_with "id of one, label of the other"
+    "several accounts match: beta (Alpha), alpha (Beta)"
+    (R.resolve_name t Claude "beta");
   check_ref "a label that is no id" "claude/alpha"
-    (ok (R.resolve_name t Claude "BETA"))
+    (ok (R.resolve_name t Claude "BETA"));
+  let t =
+    of_list [ alias "x" "y" ~claude:"/r/x"; alias "y" "Other" ~claude:"/r/y" ]
+  in
+  refused_with "y" "several accounts match: y (Other), x (y)"
+    (R.resolve_name t Claude "y");
+  check_ref "Y is only a label" "claude/x" (ok (R.resolve_name t Claude "Y"));
+  check_ref "its own label" "claude/y" (ok (R.resolve_name t Claude "other"));
+  Alcotest.(check (list string))
+    "candidates: the exact id first" [ "claude/y"; "claude/x" ]
+    (List.map (fun e -> show_ref (R.ref_ e)) (R.candidates t Claude "y"))
+
+let test_default_label () =
+  let t = of_list [ alias "x" "default" ~claude:"/r/x" ] in
+  refused_with "default"
+    "several accounts match: default (Default account), x (default)"
+    (R.resolve_name t Claude "default");
+  check_ref "DEFAULT is only a label" "claude/x"
+    (ok (R.resolve_name t Claude "DEFAULT"));
+  check_ref "x has no Codex folder" "codex/default"
+    (ok (R.resolve_name t Codex "default"))
+
+let test_sanitize () =
+  let check what expected message =
+    Alcotest.(check string) what expected (R.sanitize message)
+  in
+  check "a path" "b: <path> does not exist" "b: /r/x/none does not exist";
+  check "a leading path" "<path>: Permission denied" "/r/x: Permission denied";
+  check "control characters" "a?b?c" "a\nb\x7fc";
+  check "a relative path stays" "accounts.json is not JSON"
+    "accounts.json is not JSON"
 
 let test_refused_sources () =
   let refuses what list =
@@ -157,12 +199,25 @@ let test_describe_and_host_json () =
 
 (* ----------------------------------------------------------- the folders *)
 
-let temporary () =
-  let base =
-    Filename.concat (Filename.get_temp_dir_name ()) "mesh-resolver-test"
+(* Each test gets its own private folder under TMPDIR, removed with all it
+   holds when the test ends, whatever the outcome; a symbolic link is removed,
+   never followed. *)
+let rec remove_tree path =
+  match Unix.lstat path with
+  | { Unix.st_kind = Unix.S_DIR; _ } ->
+      Unix.chmod path 0o700;
+      Array.iter
+        (fun name -> remove_tree (Filename.concat path name))
+        (Sys.readdir path);
+      Unix.rmdir path
+  | _ -> Sys.remove path
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
+
+let with_temporary test () =
+  let root =
+    Unix.realpath (Filename.temp_dir ~perms:0o700 "mesh-resolver-test" "")
   in
-  (try Unix.mkdir base 0o700 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  Unix.realpath (Filename.temp_dir ~temp_dir:base ~perms:0o700 "t" "")
+  Fun.protect ~finally:(fun () -> remove_tree root) (fun () -> test root)
 
 let is_private_directory path =
   match Unix.lstat path with
@@ -175,8 +230,7 @@ let write_file path text =
     0o600 path
     (fun channel -> output_string channel text)
 
-let test_prepare () =
-  let root = temporary () in
+let test_prepare root =
   let folder name = Filename.concat root name in
   let t =
     of_list
@@ -200,8 +254,7 @@ let test_prepare () =
   refused "account_folder_refused"
     (R.prepare ~uid (ok (R.find orphan { backend = Codex; id = "lost" })))
 
-let test_carry_folder () =
-  let root = temporary () in
+let test_carry_folder root =
   let home = Filename.concat root "home" in
   Unix.mkdir home 0o700;
   let t = of_list [ alias "work" "Work" ~codex:(Filename.concat root "codex") ] in
@@ -230,8 +283,7 @@ let test_carry_folder () =
 
 (* The folders are checked, never opened: an unreadable login file inside
    changes nothing. *)
-let test_load_reads_no_login_file () =
-  let root = temporary () in
+let test_load_reads_no_login_file root =
   let claude = Filename.concat root "claude" in
   Unix.mkdir claude 0o700;
   let secret = Filename.concat claude ".credentials.json" in
@@ -251,6 +303,38 @@ let test_load_reads_no_login_file () =
       Alcotest.(check string) "refused" "accounts_refused" error.code;
       Alcotest.(check string) "reason" "accounts.json is not JSON" error.message
 
+(* [resolve] reads the whole file: a refusal about another alias names no
+   folder; an ambiguity comes with its candidates. *)
+let test_resolve_file root =
+  Unix.mkdir (Filename.concat root "a") 0o700;
+  let file = Filename.concat root "accounts.json" in
+  let declare accounts =
+    write_file file (Printf.sprintf {|{"v": 1, "accounts": [%s]}|} accounts)
+  in
+  declare
+    (Printf.sprintf
+       {|{"id": "a", "label": "A", "claude_config_dir": "%s/a"}, {"id": "b", "label": "B", "codex_home": "%s/none/b"}|}
+       root root);
+  (match R.resolve ~uid ~file Claude "a" with
+  | Ok entry -> Alcotest.failf "accepted: %s" (show_ref (R.ref_ entry))
+  | Error (error, candidates) ->
+      Alcotest.(check (pair string string))
+        "another alias's folder, sanitized"
+        ("accounts_refused", "b: <path> does not exist")
+        (error.code, error.message);
+      Alcotest.(check int) "no candidate" 0 (List.length candidates));
+  declare
+    (Printf.sprintf
+       {|{"id": "a", "label": "b", "claude_config_dir": "%s/a"}, {"id": "b", "label": "B2", "claude_config_dir": "%s/a/b"}|}
+       root root);
+  match R.resolve ~uid ~file Claude "b" with
+  | Ok entry -> Alcotest.failf "accepted: %s" (show_ref (R.ref_ entry))
+  | Error (error, candidates) ->
+      Alcotest.(check string) "ambiguous" "account_ambiguous" error.code;
+      Alcotest.(check (list string))
+        "candidates" [ "claude/b"; "claude/a" ]
+        (List.map (fun e -> show_ref (R.ref_ e)) candidates)
+
 let () =
   Alcotest.run "mesh_account_resolver"
     [
@@ -260,7 +344,9 @@ let () =
           Alcotest.test_case "find" `Quick test_find;
           Alcotest.test_case "serves" `Quick test_serves;
           Alcotest.test_case "resolve a name" `Quick test_resolve;
-          Alcotest.test_case "id before label" `Quick test_id_before_label;
+          Alcotest.test_case "id and label" `Quick test_id_and_label;
+          Alcotest.test_case "label default" `Quick test_default_label;
+          Alcotest.test_case "sanitize" `Quick test_sanitize;
           Alcotest.test_case "refused sources" `Quick test_refused_sources;
           Alcotest.test_case "launch env, roots" `Quick test_launch_env_and_roots;
           Alcotest.test_case "describe, host JSON" `Quick
@@ -268,9 +354,12 @@ let () =
         ] );
       ( "folders",
         [
-          Alcotest.test_case "prepare" `Quick test_prepare;
-          Alcotest.test_case "carry folder" `Quick test_carry_folder;
+          Alcotest.test_case "prepare" `Quick (with_temporary test_prepare);
+          Alcotest.test_case "carry folder" `Quick
+            (with_temporary test_carry_folder);
           Alcotest.test_case "no login file read" `Quick
-            test_load_reads_no_login_file;
+            (with_temporary test_load_reads_no_login_file);
+          Alcotest.test_case "resolve a file" `Quick
+            (with_temporary test_resolve_file);
         ] );
     ]
