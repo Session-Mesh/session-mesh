@@ -25,7 +25,7 @@ class _EchoAttach:
         self.capabilities = capabilities
         self.attachments = []
 
-    async def attach_info(self, _name, _rows, _cols):
+    async def attach_info(self, _name, _rows, _cols, size=None):
         reader = asyncio.StreamReader()
         record = []
         self.attachments.append(record)

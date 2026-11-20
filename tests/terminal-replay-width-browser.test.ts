@@ -56,6 +56,10 @@ describe('a replay is interpreted at the width it was produced at', {skip}, () =
     assert.equal(produced, await cols(wide));
     const source = words(paragraphs.map(({first, rest}) => `${first} ${rest}`).join(' '));
     assert.equal(readText(region(await logicalLines(wide), 'a')), source);
+    // The wide page leaves first: a page that opens beside the owner of the size shows the PTY at
+    // that size (terminal-shared-size-browser.test.ts); alone, the narrow page takes its own.
+    const wideTermRows = await wide.evaluate(() => active.term.rows);
+    await wide.context().close();
 
     const frames: (string | Buffer)[] = [];
     const narrow = await mesh.openPage('rw', NARROW, undefined, page => page.on('websocket', socket =>
@@ -66,7 +70,7 @@ describe('a replay is interpreted at the width it was produced at', {skip}, () =
     // server.py relayed the host's geometry before the replay: the wide page's size.
     const [geometry, replay] = frames;
     assert.equal(typeof geometry, 'string');
-    assert.deepEqual(JSON.parse(geometry as string), {t: 'g', rows: await wide.evaluate(() => active.term.rows), cols: produced});
+    assert.deepEqual(JSON.parse(geometry as string), {t: 'g', rows: wideTermRows, cols: produced});
     assert.ok(Buffer.isBuffer(replay));
 
     await narrow.setViewportSize(WIDE);
@@ -74,7 +78,6 @@ describe('a replay is interpreted at the width it was produced at', {skip}, () =
     await narrow.waitForTimeout(300);
     assert.deepEqual(region(await rows(narrow), 'a'), wideRows);
     await narrow.context().close();
-    await wide.context().close();
   });
 
   test("a pane that opens another session during a replay leaves that replay's size behind", async () => {

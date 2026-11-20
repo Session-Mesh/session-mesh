@@ -45,7 +45,8 @@
   mesh_pty_output
   mesh_pty_input
   mesh_pty_protocol
-  mesh_pty_observe)
+  mesh_pty_observe
+  mesh_pty_size)
  (libraries mesh_wire yojson eio unix mtime))
 
 (library
