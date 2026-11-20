@@ -130,6 +130,7 @@ test('recent folders of the runner: read from GET /api/config, absent on an olde
 test('the one-time move of this browser\'s recent folders to the runner: expanded, once each, at most 8', () => {
   assert.deepEqual(plain(bundle.recentFoldersToImport(['~/b/', '/home/u/b', '/a', 7, 'rel', ''], HOME)), ['/home/u/b', '/a']);
   assert.deepEqual(plain(bundle.recentFoldersToImport('junk', HOME)), []);
+  assert.deepEqual(plain(bundle.recentFoldersToImport(['~/x', '~', '/a'], '')), ['/a'], 'home not known yet: ~/x never becomes /x');
   assert.equal(bundle.recentFoldersToImport(Array.from({length: 12}, (_, i) => `/r${i}`), HOME).length, 8);
   // the local copy goes once the runner answered for good; a failure that may pass keeps it for the next try
   for (const status of [200, 400, 401, 403, 404, 413, 415]) assert.equal(bundle.recentImportOutcome(status), 'clear', String(status));
@@ -171,4 +172,28 @@ test('Tab completes like a shell: the chosen suggestion, else the first one once
   assert.deepEqual(tab(true, -1, '/home/u', false), {state: closed(), accept: null, handled: false},
     'nothing typed yet (the folder the dialog opened with): Tab moves on, the folder is kept');
   assert.deepEqual(tab(true, 0, '/home/u', false), {state: closed(), accept: 0, handled: true}, 'unless an option was chosen with the arrows');
+});
+
+test('Tab completes only a prefix of what was typed, like a shell; a fuzzy match never replaces the text', () => {
+  const tab = (value: string, suggestions: string[], active = -1) =>
+    plain(bundle.tabKey({open: true, active, count: suggestions.length}, {suggestions, value, typed: true, home: HOME}));
+  const moveOn = (count: number) => ({state: {open: false, active: -1, count}, accept: null, handled: false});
+  const accept = (count: number, index: number) => ({state: {open: false, active: -1, count}, accept: index, handled: true});
+  // letters in order (matchScore 3): "api" in "alpha-pi"
+  assert.deepEqual(tab('~/dev/api', ['/home/u/dev/alpha-pi']), moveOn(1), 'a subsequence match is not a completion');
+  // contained (matchScore 2) and name prefix (matchScore 1)
+  assert.deepEqual(tab('~/dev/pha', ['/home/u/dev/alpha']), moveOn(1), 'a substring match is not a completion');
+  assert.deepEqual(tab('alp', ['/home/u/dev/alpha']), moveOn(1), 'a folder-name match is not a completion of the typed path');
+  assert.deepEqual(tab('~/dev/api', ['/home/u/dev/alpha-pi', '/home/u/dev/api-gateway']), accept(2, 1),
+    'the first suggestion that extends the typed text');
+  assert.deepEqual(tab('~/dev/', ['/home/u/devel', '/home/u/dev/x']), accept(2, 1), 'a typed trailing slash is part of the prefix');
+  assert.deepEqual(tab('~/dev/Al', ['/home/u/dev/alpha']), moveOn(1), 'case-sensitive, as a shell');
+  assert.deepEqual(tab('/home/u/dev/al', ['~/dev/alpha']), accept(1, 0), 'both sides compared once ~ is expanded');
+  assert.deepEqual(tab('~/dev/alpha', ['/home/u/dev/alpha', '/home/u/dev/alpha-2']), moveOn(2),
+    'the field already holds the first prefix match: a second Tab moves on');
+  // the 150 ms debounce window: the list still shows the suggestions of an earlier text, not the listing of this one
+  const stale = ['/home/u/dev/alpha', '/home/u/dev/alpine'];   // listed for "~/dev/a", the field now holds "~/dev/ap"
+  assert.deepEqual(tab('~/dev/ap', stale), moveOn(2), 'no stale fuzzy match is accepted before the exact listing');
+  assert.deepEqual(tab('~/dev/alpi', stale), accept(2, 1), 'a stale suggestion is accepted only when it extends the typed text');
+  assert.deepEqual(tab('~/dev/api', ['/home/u/dev/alpha-pi'], 0), accept(1, 0), 'an option chosen with the arrows is taken as chosen');
 });

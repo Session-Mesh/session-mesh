@@ -154,11 +154,24 @@ class ConflictError(Exception):
         self.code = code
 
 
+def deny_places(deny: tuple[Path, ...]) -> tuple[tuple[str, str], ...]:
+    """Each protected entry as typed (absolute) and resolved, worked out once for many checks (protected)."""
+    return tuple((os.path.abspath(entry), str(entry.resolve())) for entry in deny)
+
+
+def _inside(path: str, parent: str) -> bool:
+    """Path.is_relative_to on two absolute, normalised paths, as strings."""
+    return path == parent or path.startswith(parent if parent.endswith("/") else parent + "/")
+
+
+def protected(root: str, resolved: Path, places: tuple[tuple[str, str], ...]) -> bool:
+    """Whether the folder, as typed or once resolved, is one of the protected places (deny_places) or inside one."""
+    typed, real = os.path.abspath(root), str(resolved)
+    return any(_inside(typed, entry) or _inside(real, entry_resolved) for entry, entry_resolved in places)
+
+
 def _protected(root: str, resolved: Path, deny: tuple[Path, ...]) -> bool:
-    """Whether the folder, as typed or once resolved, is one of the protected entries or inside one."""
-    typed = Path(os.path.abspath(root))
-    return any(typed.is_relative_to(os.path.abspath(entry)) or resolved.is_relative_to(entry.resolve())
-               for entry in deny)
+    return protected(root, resolved, deny_places(deny))
 
 
 def validate_update(agents: object, roots: object, *, home: Path | None = None,
@@ -215,11 +228,14 @@ def write_update(agents: object, roots: object, expected_revision: str, applied_
 
 
 # Runner settings: values shared by every device of this runner, in one JSON object in Mesh's configuration
-# folder. RUNNER_LIMITS bounds each one (a text: characters; a list: entries), _RUNNER_CHECKS holds its typed
-# validator. The owner edits those of RUNNER_OWNER_EDITABLE (elevated); the server alone records the recent
-# folders (server.api_new). The server never acts on these values.
+# folder. A text is bounded in characters (RUNNER_MAX_LENGTH), a list in entries (RUNNER_MAX_ENTRIES); GET
+# /api/config shows both under those names. _RUNNER_CHECKS holds the typed validator of each. The owner edits
+# those of RUNNER_OWNER_EDITABLE (elevated); the server alone records the recent folders (server.api_new). The
+# server never acts on these values.
 RUNNER_SETTINGS_FILE = "settings.json"
-RUNNER_LIMITS = {"operator_name": 40, "recent_folders": 8}
+RUNNER_MAX_LENGTH = {"operator_name": 40}
+RUNNER_MAX_ENTRIES = {"recent_folders": 8}
+RUNNER_LIMITS = {**RUNNER_MAX_LENGTH, **RUNNER_MAX_ENTRIES}   # every key, with its bound
 RUNNER_OWNER_EDITABLE = frozenset(("operator_name",))
 RUNNER_MAX_MARKS = 3   # combining marks (Mn, Me) in a row, after NFC
 _HIDDEN = frozenset(("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))   # control, format (bidi), unassigned
@@ -271,39 +287,87 @@ _RUNNER_CHECKS = {"operator_name": _runner_text, "recent_folders": _runner_folde
 _RUNNER_DEFAULTS = {"operator_name": "", "recent_folders": ()}
 
 
-def read_runner_settings(path: Path) -> dict:
-    """Every runner setting: its stored value when valid, else its default (also for a missing or broken file)."""
+class OtherRunnerVersion(InvalidLaunchSettings):
+    """The runner settings file was written by another version of Mesh (its "v")."""
+
+
+def _stored_runner_settings(path: Path, *, any_version: bool = False) -> dict:
+    """The file as stored, strictly: {} when there is none. Raises OSError when it cannot be read, and
+    InvalidLaunchSettings when it is over MAX_BYTES, not UTF-8 JSON, nested too deep for the parser, not an
+    object, or (OtherRunnerVersion, unless ``any_version``) written by another version: a writer then leaves it
+    as it is."""
+    try:
+        with open(path, "rb") as stream:
+            data = stream.read(MAX_BYTES + 1)
+    except FileNotFoundError:
+        return {}
+    if len(data) > MAX_BYTES:
+        raise InvalidLaunchSettings(f"{path.name}: larger than {MAX_BYTES} bytes")
+    try:
+        stored = json.loads(data.decode("utf-8"))
+    except (ValueError, RecursionError) as exc:   # UnicodeDecodeError and JSONDecodeError are ValueErrors
+        raise InvalidLaunchSettings(f"{path.name}: not valid JSON") from exc
+    if not isinstance(stored, dict):
+        raise InvalidLaunchSettings(f"{path.name}: not a JSON object")
+    if not any_version and stored.get("v", VERSION) != VERSION:
+        raise OtherRunnerVersion(f"{path.name}: written by another version of Mesh")
+    return stored
+
+
+def _runner_values(stored: dict) -> dict:
+    """Every runner setting of a stored object: its value when valid, else its default."""
     values = {key: list(default) if isinstance(default, tuple) else default for key, default in _RUNNER_DEFAULTS.items()}
-    # Unreadable, not JSON, nested too deep for the parser, not an object: all read as the defaults.
-    with contextlib.suppress(OSError, ValueError, AttributeError, RecursionError):
-        stored = json.loads(path.read_bytes()[:MAX_BYTES].decode("utf-8"))
-        for key in RUNNER_LIMITS.keys() & stored.keys():
-            with contextlib.suppress(InvalidLaunchSettings):
-                values[key] = _RUNNER_CHECKS[key](key, stored[key])
+    for key in RUNNER_LIMITS.keys() & stored.keys():
+        with contextlib.suppress(InvalidLaunchSettings):
+            values[key] = _RUNNER_CHECKS[key](key, stored[key])
     return values
 
 
-def _save_runner_settings(path: Path, values: dict) -> dict:
-    fsutil.atomic_write(path, json.dumps({"v": VERSION, **values}, ensure_ascii=False, indent=2) + "\n", 0o600)
-    return values
+def read_runner_settings(path: Path) -> dict:
+    """Every runner setting: its stored value when valid, else its default (also for a missing or broken file, and
+    whatever its "v": a reader only shows them)."""
+    try:
+        stored = _stored_runner_settings(path, any_version=True)
+    except (OSError, InvalidLaunchSettings):
+        stored = {}
+    return _runner_values(stored)
+
+
+def _save_runner_settings(path: Path, stored: dict, changed: dict) -> None:
+    """Write the changed settings over the stored object: every other key, unknown ones included, is kept."""
+    text = json.dumps({**stored, "v": VERSION, **changed}, ensure_ascii=False, indent=2) + "\n"
+    if len(text.encode("utf-8")) > MAX_BYTES:
+        raise InvalidLaunchSettings(f"{RUNNER_SETTINGS_FILE}: the settings would exceed {MAX_BYTES} bytes")
+    fsutil.atomic_write(path, text, 0o600)
 
 
 def write_runner_settings(path: Path, changes: object) -> dict:
-    """Validate the owner's changed settings, merge them and replace the file atomically (the caller serialises)."""
+    """Validate the owner's changed settings, merge them and replace the file atomically (the caller serialises).
+    The owner's explicit save also repairs a file that cannot be read (it then starts from the defaults), but
+    refuses one written by another version of Mesh (OtherRunnerVersion)."""
     if not isinstance(changes, dict) or not changes or not changes.keys() <= RUNNER_OWNER_EDITABLE:
         raise InvalidLaunchSettings("unknown runner setting")
     changed = {key: _RUNNER_CHECKS[key](key, value) for key, value in changes.items()}
-    return _save_runner_settings(path, {**read_runner_settings(path), **changed})
+    try:
+        stored = _stored_runner_settings(path)
+    except OtherRunnerVersion:
+        raise
+    except (OSError, InvalidLaunchSettings):
+        stored = {}
+    _save_runner_settings(path, stored, changed)
+    return _runner_values({**stored, **changed})
 
 
 def add_recent_folders(path: Path, folders: list, *, newest: bool) -> list:
     """Put folders in the recent list: first (``newest``: a session just started there), or after the ones kept
-    (a list moved from a browser); once each, at most 8. The caller has checked that each one may hold a session,
-    and serialises the calls."""
-    values = read_runner_settings(path)
-    kept = values["recent_folders"]
-    values["recent_folders"] = _runner_folders("recent_folders", [*folders, *kept] if newest else [*kept, *folders])
-    return _save_runner_settings(path, values)["recent_folders"]
+    (a list moved from a browser); once each, at most RUNNER_MAX_ENTRIES. The caller has checked that each one may
+    hold a session, and serialises the calls. Unlike the owner's save, this automatic write never repairs: a file
+    that cannot be read whole raises (OSError, InvalidLaunchSettings) and is left exactly as it is."""
+    stored = _stored_runner_settings(path)
+    kept = _runner_values(stored)["recent_folders"]
+    recent = _runner_folders("recent_folders", [*folders, *kept] if newest else [*kept, *folders])
+    _save_runner_settings(path, stored, {"recent_folders": recent})
+    return recent
 
 
 if __name__ == "__main__":

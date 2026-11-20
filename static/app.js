@@ -7195,7 +7195,7 @@ window.openNew = openNew;
 const RECENT_FOLDERS_KEY = "recentFolders";
 async function moveRecentFoldersToRunner() {
   const key = `${meshContext?.storagePrefix ?? "mesh"}.${RECENT_FOLDERS_KEY}`;
-  if (store.get(RECENT_FOLDERS_KEY, null) === null) return;
+  if (store.get(RECENT_FOLDERS_KEY, null) === null || !data.home) return;   // ~/x needs the home folder: the copy waits
   const folders = MeshFolderState.recentFoldersToImport(store.get(RECENT_FOLDERS_KEY, null), data.home);
   let status = 200;   // nothing usable to send: the copy goes all the same
   if (folders.length) {

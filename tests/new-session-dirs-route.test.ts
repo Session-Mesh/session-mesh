@@ -82,6 +82,50 @@ describe('GET /api/dirs with allowed work folders', () => {
   });
 });
 
+describe('GET /api/dirs cost: runs on every dialog opening', () => {
+  let mesh: ConfigMesh;
+  let roots: string[];
+  before(async () => {
+    mesh = await ConfigMesh.start('ndc-', home => {
+      fs.mkdirSync(path.join(home, 'work4'));
+      return {v: 1, workspace_roots: ['work', 'work2', 'work3', 'work4'].map(name => path.join(home, name)), enabled_agents: ['claude']};
+    });
+    roots = ['work', 'work2', 'work3', 'work4'].map(name => path.join(mesh.home, name));
+    mkdirs(roots[0]!, Array.from({length: 2000}, (_, i) => `big-${i}`));
+    mkdirs(roots[1]!, Array.from({length: 120}, (_, i) => `mid-${i}`));
+    mkdirs(roots[2]!, Array.from({length: 120}, (_, i) => `end-${i}`));
+    mkdirs(roots[3]!, ['never-reached']);
+  });
+  after(async () => { await mesh?.stop(); });
+
+  test('2000 sub-folders under one allowed folder list well under a second (generous bound: 2 s)', async () => {
+    await dirs(mesh);   // warm
+    const started = performance.now();
+    const listed = await dirs(mesh) as string[];
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 2000, `GET /api/dirs took ${Math.round(elapsed)} ms`);
+    assert.equal(listed.filter(entry => path.dirname(entry) === roots[0]).length, 80);
+  });
+
+  test('stops reading folders once 200 entries are listed: a later allowed folder is not read', async (t) => {
+    // Observed through the access time of the folders: only a directory read sets it. Skipped where the file
+    // system does not record it (noatime mounts, common for tmpfs and developer machines; CI runners use relatime).
+    const old = new Date('2020-01-01T00:00:00Z');
+    const now = new Date();
+    const control = path.join(mesh.outside, 'atime-control');
+    fs.mkdirSync(control, {recursive: true});
+    fs.utimesSync(control, old, now);
+    fs.readdirSync(control);
+    if (fs.statSync(control).atimeMs === old.getTime()) { t.skip('directory reads do not update atime here'); return; }
+    for (const root of roots.slice(2)) fs.utimesSync(root, old, now);
+    const listed = await dirs(mesh) as string[];
+    assert.equal(listed.length, 200);
+    assert.notEqual(fs.statSync(roots[2]!).atimeMs, old.getTime(), 'the folder that completes the 200 entries is read');
+    assert.equal(fs.statSync(roots[3]!).atimeMs, old.getTime(), 'the next one is not');
+    assert.ok(!listed.includes(path.join(roots[3]!, 'never-reached')));
+  });
+});
+
 describe('GET /api/dirs without a work folder restriction', () => {
   let mesh: ConfigMesh;
   before(async () => {
@@ -96,6 +140,13 @@ describe('GET /api/dirs without a work folder restriction', () => {
   test('the home folder and the folders of ~/dev, as before; no symlink out of home or into a protected folder', async () => {
     const listed = await dirs(mesh) as string[];
     assert.deepEqual(listed, [mesh.home, path.join(mesh.home, 'dev', 'one')]);
+  });
+
+  test('POST /api/dirs/recent keeps only what GET /api/dirs could list: in the home folder, not protected', async () => {
+    const response = await importRecent(mesh, {folders: [mesh.outside, path.join(mesh.home, '.ssh'), mesh.confDir,
+      path.join(mesh.home, 'dev', 'keys'), path.join(mesh.home, 'dev', 'escape'), path.join(mesh.home, 'dev', 'one')]});
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.deepEqual(await recent(mesh), [path.join(mesh.home, 'dev', 'one')]);
   });
 });
 
@@ -114,7 +165,7 @@ describe('the recent folders of the runner', () => {
 
   test('start empty, as a list of at most 8 entries beside the operator name', async () => {
     assert.deepEqual((await mesh.config()).runner_settings,
-      {values: {operator_name: '', recent_folders: []}, max_length: {operator_name: 40, recent_folders: 8}});
+      {values: {operator_name: '', recent_folders: []}, max_length: {operator_name: 40}, max_entries: {recent_folders: 8}});
   });
 
   test('the owner\'s browser starting a session records its folder: newest first, once each', async () => {
@@ -190,6 +241,36 @@ describe('the recent folders of the runner', () => {
     assert.deepEqual(runner.values, {operator_name: 'Ana', recent_folders: kept.slice(0, 8)});
     fs.writeFileSync(settingsFile(), JSON.stringify({v: 1, operator_name: 'Ana', recent_folders: 'x'}));
     assert.deepEqual(((await mesh.config()).runner_settings as Runner).values, {operator_name: 'Ana', recent_folders: []});
+  });
+
+  test('a settings file that cannot be read whole is never rewritten: the start succeeds, the file stays as it was', async () => {
+    const big = JSON.stringify({v: 1, operator_name: 'Ana', recent_folders: [], note: 'x'.repeat(17 * 1024)});
+    const broken: [string, string][] = [['not JSON', '{"v": 1, "operator_name": "Ana",'], ['not an object', '["Ana"]'],
+      ['nested too deep', '['.repeat(16000)], ['over 16 KiB', big], ['not UTF-8', '{"v": 1, "operator_name": "\xff"}'],
+      ['a newer version', JSON.stringify({v: 2, operator_name: 'Ana', recent_folders: [], added_later: {x: 1}})]];
+    for (const [what, text] of broken) {
+      fs.writeFileSync(settingsFile(), what === 'not UTF-8' ? Buffer.from(text, 'latin1') : text);
+      const stored = fs.readFileSync(settingsFile());
+      assert.equal((await start(mesh, path.join(work, 'a'))).status, 200, `${what}: ${mesh.output()}`);
+      assert.ok(fs.readFileSync(settingsFile()).equals(stored), `${what}: recording a start left the file alone`);
+      const moved = await importRecent(mesh, {folders: [path.join(work, 'b')]});
+      assert.equal(moved.status, 503, `${what}: the browser keeps its copy for a later try`);
+      assert.ok(fs.readFileSync(settingsFile()).equals(stored), `${what}: the move left the file alone`);
+    }
+    fs.writeFileSync(settingsFile(), JSON.stringify({v: 1, operator_name: 'Ana', recent_folders: []}));
+    fs.chmodSync(settingsFile(), 0o000);
+    try {
+      assert.equal((await start(mesh, path.join(work, 'a'))).status, 200, 'an unreadable file: the start succeeds');
+      assert.equal((await importRecent(mesh, {folders: [path.join(work, 'b')]})).status, 503);
+    } finally { fs.chmodSync(settingsFile(), 0o600); }
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile(), 'utf8')), {v: 1, operator_name: 'Ana', recent_folders: []});
+  });
+
+  test('recording a folder keeps the other settings as stored, unknown ones included', async () => {
+    fs.writeFileSync(settingsFile(), JSON.stringify({v: 1, operator_name: 'Ana', recent_folders: [], added_later: {x: [1]}}));
+    assert.equal((await start(mesh, path.join(work, 'b'))).status, 200);
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile(), 'utf8')),
+      {v: 1, operator_name: 'Ana', recent_folders: [path.join(work, 'b')], added_later: {x: [1]}});
   });
 
   test('a folder is recorded only when it fits 1024 bytes as stored, so the file stays far below its size limit', async () => {

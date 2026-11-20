@@ -145,14 +145,20 @@ down arrow. It stays closed when the dialog opens.
   inside an allowed work folder once symbolic links are resolved, inside your home folder, and not
   protected (`~/.ssh`, the mesh's own configuration, the other places the file tree refuses). It
   leaves out names that start with a dot, files, broken links, and links that lead outside these
-  places. It reads at most 2000 entries of each folder. The answer is a plain list of paths.
+  places. It reads at most 2000 entries of each folder, and no further folder once 200 are listed.
+  The answer is a plain list of paths.
 - **Recent folders:** the 8 folders in which the last sessions were started from the dialog, newest
   first, once each. They belong to the runner, not to the browser: every device signed in to it
   sees the same list (`runner_settings` of `GET /api/config`). The server records the folder itself
   (resolved) when your signed-in browser starts a session with `POST /api/new`; a start with the
-  master token from a script is not recorded. The configuration editor cannot change them. A browser
-  that kept recent folders before this version sends them once (`POST /api/dirs/recent`, after the
-  runner's own) and then removes its copy. Signing out removes that copy too, and so does the
+  master token from a script is not recorded. The configuration editor cannot change them. When
+  `settings.json` cannot be read whole (not valid JSON, not an object, over 16 KiB, unreadable,
+  written by another version), the server leaves it exactly as it is: the session starts all the
+  same, the folder is not recorded, and the server log says so. A browser that kept recent folders
+  before this version sends them once (`POST /api/dirs/recent`, after the runner's own; only folders
+  `GET /api/dirs` could list are kept) and then removes its copy; it keeps the copy for a later try
+  when that request fails (including a 503 for a settings file that cannot be read). Signing out
+  removes that copy too, and so does the
   sign-in page, which a device revoked by "Log out everywhere" lands on the next time it opens the
   interface; a revoked device cannot read the runner's list.
 - **While you type a path:** once the text is an absolute path or starts with `~/`, the page lists the
@@ -167,12 +173,16 @@ down arrow. It stays closed when the dialog opens.
   dialog stays open), Escape closes the list (a second Escape closes the dialog). With no folder
   chosen, Enter opens the session, as without the list. On a phone, tap a folder.
 - **Tab completes, as in a shell:** while the list is shown, Tab puts the chosen folder in the field,
-  or the first suggestion when none is chosen, closes the list and keeps the focus in the field;
-  a screen reader announces the completed folder. Tab moves the focus on, as without the list, when
-  the list is closed, when it has no suggestion, when the field already holds that suggestion (so a
-  second Tab moves on), and when nothing has been typed yet: the folder the dialog opened with is
-  not replaced by a key pressed to leave the field, unless you chose a folder with the arrows.
-  Shift+Tab always moves back. Type `/` after a completion to go one level down.
+  or, when none is chosen, the first suggestion that starts with what you typed (`~` expanded, same
+  case), closes the list and keeps the focus in the field; a screen reader announces the completed
+  folder. A suggestion that only matches part of a name or its letters in order is never put in the
+  field by Tab, nor is a suggestion still shown for an earlier text while the listing of the new one
+  is on its way: `~/dev/api` then Tab keeps `~/dev/api` even when `~/dev/alpha-pi` is suggested.
+  Tab moves the focus on, as without the list, when the list is closed, when no suggestion starts
+  with the text, when the field already holds that suggestion (so a second Tab moves on), and when
+  nothing has been typed yet: the folder the dialog opened with is not replaced by a key pressed to
+  leave the field, unless you chose a folder with the arrows. Shift+Tab always moves back. Type `/`
+  after a completion to go one level down.
 - **Allowed work folders:** when they are configured, the list leaves out a known folder outside
   them, and a listed sub-folder unless it is inside one of them or on the way to one (`~/` still
   offers `~/work` when `~/work` is allowed). For the folders of `POST /api/ls` and of the open
