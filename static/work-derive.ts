@@ -10,6 +10,22 @@ import type {
 export const STATUSES = ['inbox', 'todo', 'in_progress', 'blocked', 'waiting', 'done', 'dropped'] as const;
 export const isFinished = (status: string): boolean => status === 'done' || status === 'dropped';
 
+/** The statuses the timeline legend lists (an untriaged task is drawn like a task to do). */
+export const FRISE_LEGEND_STATUSES = ['todo', 'in_progress', 'waiting', 'blocked', 'done', 'dropped'] as const;
+
+/** The class of a timeline bar and the theme variable that colours it: the variable of the status dot, except that
+ *  to do and dropped use --mute (the dot's --off is below 3:1 against the track in the dark themes). */
+export type FriseBarStyle = { cls: string; token: string };
+const FRISE_BARS: Readonly<Record<string, FriseBarStyle>> = Object.freeze({
+  inbox: { cls: 'work-bar-todo', token: '--mute' }, todo: { cls: 'work-bar-todo', token: '--mute' },
+  in_progress: { cls: 'work-bar-in_progress', token: '--busy' }, waiting: { cls: 'work-bar-waiting', token: '--wait' },
+  blocked: { cls: 'work-bar-blocked', token: '--danger' }, done: { cls: 'work-bar-done', token: '--accent' },
+  dropped: { cls: 'work-bar-dropped', token: '--mute' },
+});
+const NEUTRAL_BAR: FriseBarStyle = { cls: 'work-bar-unknown', token: '--mute' };
+export const friseBarStyle = (status: string): FriseBarStyle =>
+  Object.hasOwn(FRISE_BARS, status) ? FRISE_BARS[status]! : NEUTRAL_BAR;
+
 /** Done over open plus done, as a whole percentage rounded down; null when there is no task. */
 export function progressPercent(counts: Counts): number | null {
   const total = counts.open + counts.done;

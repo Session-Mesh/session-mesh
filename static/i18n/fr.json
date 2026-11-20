@@ -1880,6 +1880,8 @@
   "work.frise.eta": "Estimation",
   "work.frise.etaOn": "estimée {date}",
   "work.frise.legend": "Barre : de la création à la fin, ou à aujourd’hui. Carré : estimation. Losange : échéance. Une tâche sans date n’a pas de barre.",
+  "work.frise.legendStatus": "Barre selon l’état",
+  "work.frise.barStatus": "Statut : {status}",
   "work.frise.noDates": "sans date",
   "work.frise.today": "Aujourd’hui",
   "work.lastNote": "Dernière note : {text}",

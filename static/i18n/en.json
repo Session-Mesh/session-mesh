@@ -1865,6 +1865,8 @@
   "work.frise.eta": "Estimate",
   "work.frise.etaOn": "estimated {date}",
   "work.frise.legend": "Bar: from creation to done, or to today. Square: estimate. Diamond: due date. A task with no date has no bar.",
+  "work.frise.legendStatus": "Bar by status",
+  "work.frise.barStatus": "Status: {status}",
   "work.frise.noDates": "no date",
   "work.frise.today": "Today",
   "work.lastNote": "Last note: {text}",
