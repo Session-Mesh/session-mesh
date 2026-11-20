@@ -5802,6 +5802,17 @@ async def ws_term(request):
         raise web.HTTPForbidden()
     rows = _int_param(request.query.get("rows"), 40)
     cols = _int_param(request.query.get("cols"), 120)
+    created = None
+    if "created" in request.query:
+        values = request.query.getall("created")
+        try:
+            if len(values) != 1:
+                raise ValueError("duplicate incarnation")
+            created = float(values[0])
+            if not math.isfinite(created) or created <= 0:
+                raise ValueError("invalid incarnation")
+        except ValueError:
+            raise web.HTTPBadRequest(text="Invalid terminal incarnation") from None
     ws = web.WebSocketResponse(heartbeat=25, max_msg_size=4 * 1024 * 1024)
     if not ws.can_prepare(request).ok:     # not a websocket upgrade: nothing to attach
         raise web.HTTPBadRequest(text="WebSocket expected")
@@ -5809,9 +5820,9 @@ async def ws_term(request):
     # size (applied only while no other attachment owns it) and it receives {t:"s"} messages.
     pty_size = request.query.get("pty_size") == "1"
     try:
-        reader, writer, attach_reply = await ptyhost.attach_info(name, rows, cols,
-                                                                 size="claim" if pty_size else None)
-    except (OSError, LookupError, asyncio.IncompleteReadError, asyncio.TimeoutError):
+        reader, writer, attach_reply = await ptyhost.attach_info(
+            name, rows, cols, created=created, size="claim" if pty_size else None)
+    except (OSError, LookupError, ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError):
         # IncompleteReadError: an older ptyhost closes some failed requests without replying
         raise web.HTTPNotFound()
     human_input_lease = attach_supports(attach_reply, "human_input_lease_v1")
@@ -5827,6 +5838,8 @@ async def ws_term(request):
 
     async def downstream():
         try:
+            if created is not None:   # only after the native attach_if handshake succeeded
+                await ws.send_str(json.dumps({"t": "bound", "name": name, "created": created}))
             if isinstance(geometry, dict):   # before the replay, the host's first D frame
                 await ws.send_str(json.dumps({"t": "g", "rows": geometry.get("rows"), "cols": geometry.get("cols")}))
             while True:

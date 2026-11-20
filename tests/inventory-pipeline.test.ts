@@ -39,7 +39,10 @@ function page(inventory: (page: Page) => Loader): Page {
     AbortController, URLSearchParams, console, calls,
     setTimeout: () => 0, clearTimeout: () => {},   // only refresh() starts a request
     window: Object.assign(events(), {navigator: {onLine: true}}), document: Object.assign(events(), {hidden: false}),
-    meshStopped: false, data: {mesh: [], external: []}, lastListing: null, inventoryLoaded: false,
+    meshStopped: false, meshPageEpoch: 0, inventoryPoller: null, pageSignals: null,
+    dictation: null, inlineDictation: null, inlineDictationView: null,
+    reportDictationInventory: () => {}, restorePendingCachedTerminals: () => {},
+    data: {mesh: [], external: []}, lastListing: null, inventoryLoaded: false,
     paneInventoryIssue: 0, activityRanking: {}, clockOffset: 0, lastOpen: null, pageStartedAt: 0,
     restoringWorkspace: false,
     managing: false, panes: [], location: {href: '/'},
@@ -170,10 +173,13 @@ describe('inventory pipeline', () => {
 
   test('a refusal that arrives after disposal does not navigate', async () => {
     let release: (response: unknown) => void = () => {};
+    let issued!: () => void;
+    const started = new Promise<void>(resolve => {issued = resolve;});
     const context = page(page => page.loadLocalInventory);
-    context.requestLocal = () => new Promise(resolve => { release = resolve; });
+    context.requestLocal = () => new Promise(resolve => { release = resolve; issued(); });
     context.location.href = '/stay';
     const first = context.startInventory(context.meshContext);
+    await started;
     context.meshStopped = true;
     release({status: 401, ok: false});
     await first;

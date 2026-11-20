@@ -25,8 +25,13 @@ class _EchoAttach:
         self.capabilities = capabilities
         self.attachments = []
 
-    async def attach_info(self, _name, _rows, _cols, size=None):
+    async def attach_info(self, _name, _rows, _cols, *, created=None, size=None):
+        if created is not None:
+            listed = await ptyhost.request({"op": "list"})
+            assert any(row["name"] == _name and row["created"] == created for row in listed)
         reader = asyncio.StreamReader()
+        # Every native attach starts with a replay D frame, even when it is empty.
+        reader.feed_data(ptyhost.frame(b"D", b""))
         record = []
         self.attachments.append(record)
 

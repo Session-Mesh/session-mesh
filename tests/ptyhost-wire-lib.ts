@@ -31,12 +31,14 @@ export function request(socketPath: string, payload: object): Promise<unknown> {
     let received = Buffer.alloc(0);
     socket.setTimeout(5000, () => socket.destroy(new Error('ptyhost did not answer')));
     socket.on('error', reject);
+    socket.on('close', () => reject(new Error('ptyhost closed before a complete reply')));
     socket.on('connect', () => socket.write(encode('C', Buffer.from(JSON.stringify(payload)))));
     socket.on('data', chunk => {
-      received = Buffer.concat([received, chunk]);
+      received = Buffer.concat([received, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
       if (received.length < 5 || received.length < 5 + received.readUInt32BE(1)) return;
-      socket.destroy();
-      resolve(JSON.parse(received.subarray(5, 5 + received.readUInt32BE(1)).toString('utf8')));
+      try { resolve(JSON.parse(received.subarray(5, 5 + received.readUInt32BE(1)).toString('utf8'))); }
+      catch (error) { reject(error); }
+      finally { socket.destroy(); }
     });
   });
 }
@@ -50,7 +52,7 @@ export class Attachment {
   constructor(socket: net.Socket) {
     this.socket = socket;
     socket.on('data', chunk => {
-      this.buffer = Buffer.concat([this.buffer, chunk]);
+      this.buffer = Buffer.concat([this.buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
       while (this.buffer.length >= 5 && this.buffer.length >= 5 + this.buffer.readUInt32BE(1)) {
         const length = this.buffer.readUInt32BE(1);
         this.frames.push({kind: this.buffer.subarray(0, 1).toString('latin1'), payload: this.buffer.subarray(5, 5 + length)});

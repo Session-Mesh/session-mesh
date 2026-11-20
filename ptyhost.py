@@ -17,6 +17,7 @@ Wire format on the unix socket: frames of  type(1) | length(4, BE) | payload.
 """
 import asyncio
 import json
+import math
 import os
 import pwd
 import re
@@ -206,26 +207,40 @@ async def host_identity():
     return f"{pid}:{start}" if pid > 0 else None
 
 
-async def attach_info(name, rows, cols, size=None):
-    """``size="claim"``: the geometry applies only while no other attachment owns the PTY
-    size, and the host sends S frames (the size and its owner) on this attachment."""
-    request = {"op": "attach", "name": name, "rows": rows, "cols": cols}
-    if size is not None:
-        request["size"] = size
+async def attach_info(name, rows, cols, created=None, size=None):
+    """Attach by name for legacy callers, or conditionally to exactly ``created``.
+
+    A conditional success is the native attach_if C/ok handshake, not an inventory
+    check. Refusal or an indeterminate/malformed handshake never falls back to attach.
+    ``size="claim"`` applies geometry only while no other attachment owns the PTY
+    size, and requests S frames (the size and its owner).
+    """
+    if created is not None and (type(created) not in (int, float)
+                                or not math.isfinite(created) or created <= 0):
+        raise ValueError("invalid terminal incarnation")
 
     async def handshake():
         reader, writer = await asyncio.open_unix_connection(str(SOCK), limit=4 * 1024 * 1024)
         try:
-            reply = await _exchange(writer, reader, request)
+            req = {"op": "attach" if created is None else "attach_if", "name": name,
+                   "rows": rows, "cols": cols}
+            if created is not None:
+                req["created"] = created
+            if size is not None:
+                req["size"] = size
+            writer.write(frame(b"C", req))
+            await writer.drain()
+            kind, payload = await read_frame(reader)
+            reply = json.loads(payload)
+            if (kind != b"C" or not isinstance(reply, dict) or reply.get("ok") is not True
+                    or "outcome" in reply):
+                raise LookupError("terminal attachment refused")
         except BaseException:
             writer.close()
             raise
         return reader, writer, reply
 
     reader, writer, reply = await asyncio.wait_for(handshake(), REQUEST_TIMEOUT)
-    if not reply.get("ok"):
-        writer.close()
-        raise LookupError(reply.get("error"))
     return reader, writer, reply
 
 

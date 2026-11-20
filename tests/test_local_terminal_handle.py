@@ -28,18 +28,22 @@ class Socket {
     this.sent.push(typeof value === 'string' ? JSON.parse(value) : Array.from(value));
   }
   close() { this.closes++; this.readyState = 3; return this.onclose?.(); }
-  open() { this.readyState = 1; return this.onopen(); }
+  open() {
+    this.readyState = 1;
+    this.onopen();
+    this.bytes(this === sockets[0] ? 'first output' : '');
+  }
   bytes(text) { this.onmessage({data: new TextEncoder().encode(text).buffer}); }
 }
 const context = vm.createContext({WebSocket: Socket, Uint8Array, TextEncoder,
   requireLocalMesh: () => {}, localMeshEffectsAllowed: () => true,
   localActionUnavailable: () => false, t: key => key,
   location: {protocol: 'https:', host: 'mesh.example'}, touch: false,
-  inputLeaseTab: 'a'.repeat(32), enc: new TextEncoder(), active: null,
-  lineDirect: null,   // app.js module state read by the connection's close handler
+  inputLeaseTab: 'a'.repeat(32), humanInputScopes: new Map(), enc: new TextEncoder(), active: null,
+  lineDirect: null, composeOwner: null,   // app.js module state read by lifecycle callbacks
   find: name => ({id: name, created: 42}),
   updateKeys: () => {}, flash: () => {}, refresh: () => refresh(),
-  data: {mesh: [{id: 'shell/name'}]},
+  data: {mesh: [{id: 'shell/name', created: 42}]},
   requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
   cancelAnimationFrame: () => {},
   setTimeout: (callback, delay) => { const id = ++serial; timers.set(id, {callback, delay}); return id; },
@@ -57,7 +61,11 @@ const pane = Object.assign(Object.create(context.TestPane.prototype), {
   term: {rows: 24, cols: 80, reset() { this.rows = 24; this.cols = 80; }, write(_data, done) { done?.(); }},
   fit: {fit() { fits++; pane.term.rows = 37; pane.term.cols = 143; }},
   setConn: (text, bad) => states.push([text, bad]),
-  output: value => output.push(typeof value === 'string' ? value : new TextDecoder().decode(value)),
+  output: (value, done) => {
+    output.push(typeof value === 'string' ? value : new TextDecoder().decode(value));
+    done?.();
+  },
+  resumeFollowing: () => {}, enterReplayGeometry: () => {}, leaveReplayGeometry: () => {},
   armAutoRedraw: () => {}, bumpAutoRedraw: () => {}, bumpInitialFollow: () => {},
   dropReaderAnchor: () => {},
 });
@@ -72,7 +80,7 @@ const finishAttach = () => { frames.splice(0).forEach(callback => callback()); r
   assert.equal(sockets.length, 0, 'no attach before measured geometry');
   finishAttach();
   const first = sockets[0];
-  assert.equal(first.url, 'wss://mesh.example/ws/shell%2Fname?rows=37&cols=143&replay_geometry=1&pty_size=1');
+  assert.equal(first.url, 'wss://mesh.example/ws/shell%2Fname?rows=37&cols=143&replay_geometry=1&pty_size=1&created=42');
   assert.equal(first.binaryType, 'arraybuffer');
   assert.equal(pane.conn.ws, first, 'compatibility field is the actual local socket');
   assert.equal(pane.conn.terminal.isOpen(), false);
@@ -92,7 +100,6 @@ const finishAttach = () => { frames.splice(0).forEach(callback => callback()); r
   assert.equal(first.sent.length, count, 'unchanged size does not send another resize');
   pane.sendSize(true);
   assert.equal(first.sent.length, count + 1);
-  first.bytes('first output');
   assert.deepEqual(output, ['\x1bcfirst output']);   // the replay starts from a reset terminal
 
   pane.sendRaw(new Uint8Array([120]));
@@ -131,7 +138,7 @@ const finishAttach = () => { frames.splice(0).forEach(callback => callback()); r
   third.bytes('stale detached output'); third.onopen(); await third.onclose();
   assert.equal(pane.conn, null);
   assert.equal(states.length, afterDetach);
-  assert.deepEqual(output, ['\x1bcfirst output']);   // the replay starts from a reset terminal
+  assert.deepEqual(output, ['\x1bcfirst output', '\x1bc', '\x1bc']);   // each socket supplies its replay
   assert.throws(() => oldConnection.terminal.queueInput(new Uint8Array([1])), /disconnected/);
   pane.attach('shell/name');
   frames.splice(0).forEach(callback => callback());

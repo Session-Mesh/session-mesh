@@ -1,5 +1,6 @@
 {
   "agentMail.answeredElsewhere": "Demande de message décidée ailleurs ; votre choix n’a rien modifié.",
+  "dictation.inline.invalidIncarnation": "Incarnation du terminal invalide.",
   "agentMail.consentDescription": "La session Mesh exacte « {source} » ({agent}, démarrée {started}) a envoyé un message à « {target} ». Autoriser sa lecture ?",
   "agentMail.previousAnsweredElsewhere": "La demande de message précédente a été décidée ailleurs ; votre choix n’a rien modifié.",
   "agentMail.previousWithdrawn": "La demande de message précédente a été décidée ailleurs ; sa question a été fermée.",
@@ -879,6 +880,7 @@
   "server.protectedFolderUnavailable": "dossier protégé indisponible",
   "server.ptyhostEnvInvalid": "requête invalide: env doit associer des noms MESH_* à des textes",
   "server.ptyhostInvalidReply": "réponse ptyhost invalide",
+  "server.invalidTerminalIncarnation": "Incarnation du terminal invalide",
   "server.ptyhostInvalidRequest": "requête invalide",
   "server.ptyhostNameTaken": "nom déjà pris",
   "server.ptyhostNoConditionalKill": "ptyhost ne prend pas en charge l'arrêt conditionnel",
