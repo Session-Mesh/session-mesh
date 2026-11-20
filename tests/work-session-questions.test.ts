@@ -58,7 +58,6 @@ describe('where the marker leads', () => {
   test('all about one task: its sheet', () => {
     assert.deepEqual(markerTarget(entry([{ id: 'N-1', about: 'T-1a', project: 'P-9' }, { id: 'N-2', about: 'T-1a', project: 'P-9' }])),
       { kind: 'task', id: 'T-1a' });
-    assert.deepEqual(markerTarget(entry([{ id: 'N-1', about: 'T-1a' }])), { kind: 'task', id: 'T-1a' }, 'a task outside any project too');
   });
 
   test('all in one project (about it or its tasks): its Questions tab', () => {
@@ -74,6 +73,8 @@ describe('where the marker leads', () => {
       { kind: 'entry' }, 'two projects');
     assert.deepEqual(markerTarget(entry([{ id: 'N-1', about: 'T-1a', project: 'P-9' }, { id: 'N-2' }])), { kind: 'entry' }, 'one about nothing');
     assert.deepEqual(markerTarget(entry([{ id: 'N-1', about: 'T-1a', project: 'P-9' }], 2)), { kind: 'entry' }, 'some left out');
+    assert.deepEqual(markerTarget(entry([{ id: 'N-1', about: 'T-1a' }])), { kind: 'entry' },
+      'a task outside any project has no sheet to open: the entry screen, where it is answered');
     assert.deepEqual(markerTarget(entry([])), { kind: 'entry' });
     assert.deepEqual(markerTarget(entry([{ id: 'N-1', about: 'X-1', project: 'Z-1' }])), { kind: 'entry' }, 'unexpected references');
   });

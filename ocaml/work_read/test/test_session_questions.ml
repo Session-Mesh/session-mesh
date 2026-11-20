@@ -164,6 +164,29 @@ let test_caps () =
     "the others counted" 5
     (U.to_int (U.member "questions_omitted" s))
 
+let test_session_cap () =
+  let repo = copy_fixture () in
+  let extra = 20 in
+  append_events repo
+    (List.init (500 + extra) (fun i ->
+         question
+           (Printf.sprintf "2026-11-09T12:00:%02dZ" (i mod 60))
+           (Printf.sprintf "N-%08x" (0x1000 + i))
+           (Printf.sprintf "N-%08x" (0x1000 + i))
+           (Printf.sprintf "s-cap-%04d" i)));
+  let doc = ok repo [ "session-questions" ] in
+  Alcotest.(check int)
+    "at most max_sessions listed" 500
+    (List.length (names doc));
+  Alcotest.(check int)
+    "the others counted" extra
+    (U.to_int (U.member "sessions_omitted" doc));
+  Alcotest.(check bool) "truncated" true (U.to_bool (U.member "truncated" doc));
+  Alcotest.(check int)
+    "every question of the tracker still counted"
+    (500 + extra)
+    (U.to_int (U.member "open_questions" doc))
+
 let test_no_path () =
   let repo = tracker () in
   let r = run repo [ "session-questions" ] in
@@ -180,5 +203,6 @@ let tests =
       test_request_form;
     Alcotest.test_case "no open question" `Quick test_no_question;
     Alcotest.test_case "caps" `Quick test_caps;
+    Alcotest.test_case "session cap" `Quick test_session_cap;
     Alcotest.test_case "no path" `Quick test_no_path;
   ]

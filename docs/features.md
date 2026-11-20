@@ -208,12 +208,15 @@ project tracker that agents write through `mesh-work`, read only:
   its row in the list, and a "? n" button in its header (named with the count). n counts, once each,
   the open questions the session asked, those about a task it is linked to, and those about the
   project of such a task. The button opens the Projects view where the questions are: the task's
-  sheet with its answer form when they are all about one task, the project's Questions tab when they
-  are all in one project, else the first screen. The page reads them (`session-questions` of
-  [work-read](work-read.md)) after a session listing, at most once a minute while it is visible, and
-  again when the Projects view is left; when the tracker cannot be read, nothing is shown. Sessions
-  are matched by name: a session restored under another name loses its questions, and a later
-  session that takes an earlier one's name gets them.
+  sheet with its answer form when they are all about one task of a project, the project's Questions
+  tab when they are all in one project, else the first screen (also for a task in no project, which
+  has no sheet). The page reads them (`session-questions` of [work-read](work-read.md)) after a
+  session listing, at most once a minute while it is visible, and again when the Projects view is
+  left (the Sessions button alone does not read); when the tracker cannot be read, nothing is shown.
+  The count on the Projects button is written by this read and by the Projects view; the last one to
+  write wins, so a count can stay out of date for up to a minute until the next read. Sessions are
+  matched by name: a session restored under another name loses its questions, and a later session
+  that takes an earlier one's name gets them.
 - **Products and projects.** The first screen lists the products and their active projects, with
   each project's progress (done tasks over all tasks) and its number of blockers.
 - **A project, in five tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent

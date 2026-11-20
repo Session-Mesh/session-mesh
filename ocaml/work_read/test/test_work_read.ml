@@ -231,7 +231,7 @@ let test_read_only () =
     (fun args -> ignore (run repo args))
     [
       [ "products" ]; [ "projects"; "--all" ]; [ "project"; "P-5e6f" ]; [ "task"; "T-3c4d" ]; [ "resume"; "--all" ];
-      [ "sessions-of"; "--product"; "relay" ]; [ "task"; "T-ffff" ];
+      [ "sessions-of"; "--product"; "relay" ]; [ "session-questions" ]; [ "task"; "T-ffff" ];
     ];
   Alcotest.(check bool) "repository and home untouched" true (before = tree_state (Filename.dirname repo.wl_home));
   Alcotest.(check bool) "no lock file" false (Sys.file_exists (Filename.concat repo.wl_home ".wl.lock"));
@@ -241,6 +241,7 @@ let every_command =
   [
     [ "products" ]; [ "projects"; "--all" ]; [ "project"; "P-5e6f" ]; [ "task"; "T-3c4d" ]; [ "task"; "T-1a2b" ];
     [ "resume"; "--all" ]; [ "sessions-of"; "--product"; "relay" ]; [ "sessions-of"; "--task"; "T-3c4d" ];
+    [ "session-questions" ];
   ]
 
 let test_no_path_leak () =
