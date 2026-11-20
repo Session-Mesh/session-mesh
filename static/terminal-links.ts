@@ -283,7 +283,8 @@ export function linksOnRow(buf: TerminalBuffer, y: number, cols: number): Termin
 }
 
 // Tracker references (T-, P-, N- ids) on buffer row y that `known` accepts (static/terminal-references.ts): one
-// row only, and an id that a soft wrap cuts is left out, so the start of a longer id is never offered as a shorter one.
+// row only, and an id whose word a soft wrap cuts is left out, so the start of a longer id is never offered as a
+// shorter one. The whole word is checked, punctuation included: "(T-1a2b)" then "/notes" is one word, not an id.
 export function referencesOnRow(buf: TerminalBuffer, y: number, known: (id: string) => boolean): TerminalLink[] {
   const line = buf.getLine(y);
   if (!line) return [];
@@ -293,7 +294,7 @@ export function referencesOnRow(buf: TerminalBuffer, y: number, known: (id: stri
   for (const m of referenceMatches(row.text)) {
     const start = row.cols[m.index], end = row.cols[m.index + m.length - 1];
     if (start === undefined || end === undefined) continue;
-    if ((line.isWrapped && m.index === 0) || (continues && m.index + m.length === row.text.length)) continue;
+    if ((line.isWrapped && m.wordIndex === 0) || (continues && m.wordIndex + m.wordLength === row.text.length)) continue;
     if (known(m.id)) found.push({ text: m.id, start: [y, start], end: [y, end], kind: "ref" });
   }
   return found;

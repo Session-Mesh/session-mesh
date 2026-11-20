@@ -9,13 +9,18 @@
  * at least a minute ago (or `refresh` asked for one, as the Projects view does when it opens). A lookup never reads: a
  * known id and an unknown one are both answered from the last read, so text full of ids sends nothing.
  *
+ * A very large tracker gives a cut document (`truncated`, docs/work-read.md): the ids it lists are used, and an id it
+ * leaves out is only not known yet, never unknown for good: every read replaces the whole cache, so it becomes a link
+ * as soon as a later read lists it.
+ *
  * It holds ids and titles only, in memory, and sends them nowhere. A missing reader program, one that does not know
- * the request (an older install) or a refused credential empties it and stops the reads for the page's life; any
- * other failure empties it until a later read succeeds (no tracker, no links), except `busy`, which keeps it.
+ * the request (an older install) or a refused credential empties it and stops the reads for the page's life. A read
+ * that says nothing about the tracker (`busy`, a `timeout`, no answer from the server) keeps what is known; any other
+ * failure empties it until a later read succeeds (no tracker, no links).
  */
 
 import { createWorkApi } from './work-api.ts';
-import type { WorkApi, WorkApiOptions, WorkFetch, WorkResult } from './work-api.ts';
+import type { WorkApi, WorkApiOptions, WorkErrorKind, WorkFetch, WorkResult } from './work-api.ts';
 import type { KnownIds, ReferenceEntry } from './work-references-parse.ts';
 
 export { parseIds } from './work-references-parse.ts';
@@ -42,6 +47,8 @@ export type ReferencesController = Readonly<{
 
 export const REFERENCES_INTERVAL_MS = 60_000;
 const EMPTY: KnownIds = new Map();
+/** Failures that say nothing about the tracker: what is known stays known. */
+const KEEPS: ReadonlySet<WorkErrorKind> = new Set(['busy', 'timeout', 'network', 'aborted']);
 
 class References implements ReferencesController {
   private readonly api: WorkApi;
@@ -77,7 +84,7 @@ class References implements ReferencesController {
     if (this.stopped) return;
     if (result?.ok) { this.known = result.value; return; }
     const kind = result?.error.kind ?? 'failed';
-    if (kind === 'busy' || kind === 'aborted') return;
+    if (KEEPS.has(kind)) return;
     if (kind === 'not-available' || kind === 'invalid' || kind === 'auth') return this.stop();
     this.known = EMPTY;
   }

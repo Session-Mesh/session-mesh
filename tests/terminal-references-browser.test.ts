@@ -4,8 +4,10 @@
 // The tracker references of the terminal (static/terminal-references.ts, static/work-references.ts wired by app.js) in
 // headless Chromium against a throwaway server.py, native PTY host and real work-read, on a fictional tracker:
 //   - a shell prints a known task, project and question id, an unknown id and "T-12": only the known ids are links;
-//   - hovering a known id shows its title; clicking it opens the Projects view on the task's sheet (Board tab), on the
-//     project, or where the question is, at 1440 px and at 390 px (a tap), also when the program tracks the mouse;
+//   - hovering a known id shows its title, as text even when the title is markup; clicking it opens the Projects view
+//     on the task's sheet (Board tab), on the project, or where the question is, at 1440 px and at 390 px (a tap),
+//     also when the program tracks the mouse;
+//   - a path that holds a known id stays a path link: a file name cut by a soft wrap, or by a hard wrap of the agent;
 //   - looking at and hovering ids for 30 seconds sends no burst of requests (one read of the ids a minute at most);
 //   - without a tracker nothing is a link and the page shows no error.
 // Needs MESH_CHROMIUM, MESH_PTYHOST_CMD, MESH_PYTHON and a built work-read (MESH_WORK_READ_CMD, default the dune build
@@ -25,11 +27,14 @@ const skip = noBrowser || (!process.env.MESH_PTYHOST_CMD && !process.env.MESH_RE
   || (!fs.existsSync(READER) && !process.env.MESH_REQUIRE_WORK_READ && !process.env.CI ? 'a built work-read is required' : false);
 const SHOTS = process.env.MESH_SHOT_DIR ?? '';
 const FIXTURE = path.join(REPO, 'ocaml/worklog/test/fixture');
-const PROJECT = 'P-7a7a', TASK = 'T-7b7b', QUESTION = 'N-0000d001';
+const PROJECT = 'P-7a7a', TASK = 'T-7b7b', QUESTION = 'N-0000d001', HOSTILE = 'T-7c7c';
+// A title that would run script if it were ever rendered as markup.
+const HOSTILE_TITLE = '<img src=x onerror="window.__refsPwned=1">';
 const EVENTS = [
   { ts: '2026-11-07T09:00:00Z', task: PROJECT, type: 'project_created', title: 'Second rollout', product: 'relay', category: 'platform' },
   { ts: '2026-11-07T09:01:00Z', task: TASK, type: 'created', title: 'Reference task', project: 'relay', category: 'platform', priority: 'P1', status: 'todo' },
   { ts: '2026-11-07T09:02:00Z', task: TASK, type: 'set', field: 'project', to: PROJECT },
+  { ts: '2026-11-07T09:03:00Z', task: HOSTILE, type: 'created', title: HOSTILE_TITLE, project: 'relay', category: 'platform', priority: 'P2', status: 'todo' },
   { ts: '2026-11-08T09:00:00Z', task: TASK, type: 'question', id: QUESTION, text: 'Fictional question about the reference task?', agent: 'claude', session: 'far-away' },
 ];
 // The shell prints the ids; the command line itself does not hold them ("T%s7b7b"), so only the output row has them.
@@ -80,7 +85,10 @@ after(() => { assert.deepEqual(errors, [], 'no error in the pages'); });
 type Link = { text: string; kind: string; start: [number, number]; end: [number, number] };
 type Buffer = { length: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined };
 // app.js script-scope bindings, read inside page functions.
-declare const active: { term: { cols: number; rows: number; buffer: { active: Buffer & { viewportY: number } }; element: HTMLElement }; termEl: HTMLElement } | null;
+declare const active: {
+  term: { cols: number; rows: number; buffer: { active: Buffer & { viewportY: number } }; element: HTMLElement };
+  termEl: HTMLElement;
+} | null;
 declare const references: { lookup(id: string): unknown } | null;
 declare const projecting: boolean;
 declare function terminalLinksOnRow(buffer: unknown, y: number, cols: number): Link[];
@@ -89,17 +97,27 @@ async function shot(page: Page, name: string): Promise<void> {
   if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }); }
 }
 
+/** A 1440 px page on the tracked mesh, once the known ids are read. */
+async function openWide(onPage: (page: Page) => void): Promise<Page> {
+  const page = await mesh.openPage('qa-refs', { width: 1440, height: 900 }, undefined, onPage);
+  await page.waitForFunction(id => references?.lookup(id) != null, TASK, { timeout: 60_000 });
+  return page;
+}
+
 /** Print the ids in the active shell and return the buffer row of the output. */
 async function printIds(page: Page, command = PRINT, output = OUTPUT): Promise<number> {
   await typeLine(page, 'clear');
   await typeLine(page, command);
   await waitForRow(page, output);
-  return page.evaluate(wanted => {
-    const buffer = active!.term.buffer.active;
-    for (let y = buffer.length - 1; y >= 0; y--) if (buffer.getLine(y)?.translateToString(true) === wanted) return y;
-    return -1;
-  }, output);
+  return rowOf(page, output);
 }
+
+/** The last buffer row whose text is `wanted`, or -1. */
+const rowOf = (page: Page, wanted: string): Promise<number> => page.evaluate(text => {
+  const buffer = active!.term.buffer.active;
+  for (let y = buffer.length - 1; y >= 0; y--) if (buffer.getLine(y)?.translateToString(true) === text) return y;
+  return -1;
+}, wanted);
 
 const linksOn = (page: Page, y: number): Promise<Link[]> =>
   page.evaluate(row => terminalLinksOnRow(active!.term.buffer.active, row, active!.term.cols), y);
@@ -120,42 +138,53 @@ async function backToSessions(page: Page): Promise<void> {
   await page.waitForFunction(() => !projecting);
 }
 
-describe('tracker references in the terminal', { skip }, () => {
-  test('at 1440 px: only known ids are links, a hover shows the title, a click opens the place, no request storm',
-    { timeout: 600_000 }, async () => {
-      const sent: { op: string; at: number }[] = [];
-      const page = await mesh.openPage('qa-refs', { width: 1440, height: 900 }, undefined, watch(sent));
-      await page.waitForFunction(id => references?.lookup(id) != null, TASK, { timeout: 60_000 });
-      const y = await printIds(page);
-      const links = await linksOn(page, y);
-      assert.deepEqual(links.map(link => [link.kind, link.text]), [['ref', TASK], ['ref', PROJECT], ['ref', QUESTION]],
-        'the known ids only: not T-9f9f, not T-12');
-      assert.deepEqual(links[0]!.start, [y, columnOf(TASK)]);
+/** Hover the ids of the output row for 30 s and return the ops sent meanwhile. */
+async function hoverAround(page: Page, y: number, sent: { op: string }[]): Promise<string[]> {
+  const before = sent.length, started = Date.now();
+  while (Date.now() - started < 30_000) {
+    for (const id of [TASK, 'T-9f9f', 'T-12', PROJECT, QUESTION]) {
+      const point = await cellPoint(page, y, columnOf(id) + 1);
+      await page.mouse.move(point.x, point.y);
+      await page.waitForTimeout(100);
+    }
+  }
+  return sent.slice(before).map(entry => entry.op);
+}
 
-      // Hover: the title, as text.
+describe('tracker references in the terminal', { skip }, () => {
+  test('at 1440 px: only known ids are links, a hover shows the title, no request storm', { timeout: 600_000 }, async () => {
+    const sent: { op: string; at: number }[] = [];
+    const page = await openWide(watch(sent));
+    const y = await printIds(page);
+    const links = await linksOn(page, y);
+    assert.deepEqual(links.map(link => [link.kind, link.text]), [['ref', TASK], ['ref', PROJECT], ['ref', QUESTION]],
+      'the known ids only: not T-9f9f, not T-12');
+    assert.deepEqual(links[0]!.start, [y, columnOf(TASK)]);
+
+    // Hover: the title, as text.
+    const task = await cellPoint(page, y, columnOf(TASK) + 2);
+    await page.mouse.move(task.x, task.y);
+    await page.waitForFunction(() => active!.termEl.title !== '');
+    assert.equal(await page.evaluate(() => active!.termEl.title), `Task ${TASK}: Reference task`);
+    const unknown = await cellPoint(page, y, columnOf('T-9f9f') + 2);
+    await page.mouse.move(unknown.x, unknown.y);
+    await page.waitForFunction(() => !active!.termEl.hasAttribute('title'));
+    await shot(page, 'references-1440');
+
+    // No storm: the ids are looked at and hovered for 30 s; one read a minute at most, nothing per hover.
+    const during = await hoverAround(page, y, sent);
+    assert.ok(during.filter(op => op === 'ids').length <= 1, `ids reads in 30 s: ${JSON.stringify(during)}`);
+    assert.ok(during.length <= 2, `work reads in 30 s: ${JSON.stringify(during)}`);
+    await page.context().close();
+  });
+
+  test('at 1440 px: a click opens the task, the question, and the project also when the program tracks the mouse',
+    { timeout: 600_000 }, async () => {
+      const page = await openWide(watch([]));
+      const y = await printIds(page);
+      // The task: the Projects view, the Board tab of its project, its sheet.
       const task = await cellPoint(page, y, columnOf(TASK) + 2);
       await page.mouse.move(task.x, task.y);
-      await page.waitForFunction(() => active!.termEl.title !== '');
-      assert.equal(await page.evaluate(() => active!.termEl.title), `Task ${TASK}: Reference task`);
-      const unknown = await cellPoint(page, y, columnOf('T-9f9f') + 2);
-      await page.mouse.move(unknown.x, unknown.y);
-      await page.waitForFunction(() => !active!.termEl.hasAttribute('title'));
-      await shot(page, 'references-1440');
-
-      // No storm: the ids are looked at and hovered for 30 s; one read a minute at most, nothing per hover.
-      const before = sent.length, started = Date.now();
-      while (Date.now() - started < 30_000) {
-        for (const id of [TASK, 'T-9f9f', 'T-12', PROJECT, QUESTION]) {
-          const point = await cellPoint(page, y, columnOf(id) + 1);
-          await page.mouse.move(point.x, point.y);
-          await page.waitForTimeout(100);
-        }
-      }
-      const during = sent.slice(before).map(entry => entry.op);
-      assert.ok(during.filter(op => op === 'ids').length <= 1, `ids reads in 30 s: ${JSON.stringify(during)}`);
-      assert.ok(during.length <= 2, `work reads in 30 s: ${JSON.stringify(during)}`);
-
-      // Click on the task: the Projects view, the Board tab of its project, its sheet.
       await page.mouse.click(task.x, task.y);
       await page.waitForFunction(() => projecting);
       await page.locator('#work-tab-board[aria-selected="true"]').waitFor({ timeout: 60_000 });
@@ -184,6 +213,41 @@ describe('tracker references in the terminal', { skip }, () => {
       await typeLine(page, String.raw`printf '\033[?1000l'`);
       await page.context().close();
     });
+
+  test('a path holding a known id stays a path link; a title that is markup is shown as text', { timeout: 600_000 }, async () => {
+    const page = await openWide(watch([]));
+    // A file name cut by a soft wrap right after its dot: the terminal's own wrap, so one word over two rows.
+    const cols = await page.evaluate(() => active!.term.cols);
+    const lead = 'w'.repeat(cols - ` ${TASK}.`.length);
+    const y = await printIds(page, String.raw`printf '%s T%s7b7b.md soft\n' ${lead} -`, `${lead} ${TASK}.`);
+    assert.ok(y >= 0, 'the first row of the wrapped file name');
+    for (const row of [y, y + 1]) {
+      assert.deepEqual((await linksOn(page, row)).map(link => [link.kind, link.text]), [['doc', `${TASK}.md`]], `row ${row}`);
+    }
+
+    // An agent's hard wrap (12 columns, indented rows): "docs/" "T-7b7b." "md" is one path, and the id on the middle
+    // row is offered as a reference too: only the overlap check of the page keeps the path.
+    const hard = await page.evaluate(id => {
+      const rows = ['read  docs/', `  ${id}.`, '  md now'];
+      const buffer = { getLine: (row: number) => rows[row] === undefined ? undefined : {
+        length: 12, isWrapped: false,
+        getCell: (x: number) => ({ getWidth: () => 1, getChars: () => rows[row]![x] ?? '' }),
+      } };
+      return [0, 1, 2].map(row => terminalLinksOnRow(buffer, row, 12).map(link => [link.kind, link.text]));
+    }, TASK);
+    assert.deepEqual(hard, [0, 1, 2].map(() => [['doc', `docs/${TASK}.md`]]), 'the path only, never the reference inside it');
+
+    // A title made of markup: shown as text in the title attribute, never parsed.
+    const row = await printIds(page, String.raw`printf 'hostile T%s7c7c\n' -`, `hostile ${HOSTILE}`);
+    const point = await cellPoint(page, row, 'hostile '.length + 2);
+    await page.mouse.move(point.x, point.y);
+    await page.waitForFunction(() => active!.termEl.title !== '');
+    assert.equal(await page.evaluate(() => active!.termEl.title), `Task ${HOSTILE}: ${HOSTILE_TITLE}`);
+    await page.waitForTimeout(500);
+    assert.deepEqual(await page.evaluate(() => [document.querySelectorAll('img[src="x"]').length,
+      (window as unknown as { __refsPwned?: number }).__refsPwned ?? null]), [0, null], 'no element made from the title');
+    await page.context().close();
+  });
 
   test('at 390 px a tap on a known id opens its sheet, and nothing overflows', { timeout: 600_000 }, async () => {
     const page = await mesh.openPage('qa-refs', { width: 390, height: 844 }, undefined, watch([]), { phone: true });

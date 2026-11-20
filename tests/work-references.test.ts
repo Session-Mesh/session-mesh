@@ -34,20 +34,44 @@ describe('parsing ids', () => {
     assert.equal(known.size, 6);
   });
 
+  test('a question about a task in no project leads to the entry screen, as the session marker does', () => {
+    const known = parseIds({
+      tasks: [], projects: [],
+      questions: [
+        { id: 'N-0000a001', title: 'No project', about: 'T-3c4d' },
+        { id: 'N-0000a002', title: 'Malformed project', about: 'T-3c4d', project: 'P-../x' },
+        { id: 'N-0000a003', title: 'In a project', about: 'T-3c4d', project: 'P-5e6f' },
+      ],
+    });
+    assert.ok(known);
+    assert.deepEqual(known.get('N-0000a001')?.target, { kind: 'entry' }, 'the task has no sheet in the Projects view');
+    assert.deepEqual(known.get('N-0000a002')?.target, { kind: 'entry' });
+    assert.deepEqual(known.get('N-0000a003')?.target, { kind: 'task', id: 'T-3c4d' });
+  });
+
+  test('a cut document (truncated) still gives the ids it lists', () => {
+    const known = parseIds({ ...DOC, truncated: true, tasks_omitted: 3000, questions: [] });
+    assert.ok(known);
+    assert.equal(known.get('T-1a2b')?.title, 'Ship the first delivery');
+    assert.equal(known.size, 3);
+  });
+
   test('not a document: null; malformed ids, wrong kinds, control characters and long titles are dealt with', () => {
     assert.equal(parseIds(null), null);
     assert.equal(parseIds({ tasks: 'x' }), null);
     assert.equal(parseIds([]), null);
     const known = parseIds({
       tasks: [null, 7, { id: 'T-1A2B', title: 'upper' }, { id: 'P-1a2b', title: 'a project in tasks' }, { id: 'T-zz', title: 'x' },
-        { id: 'T-abcd', title: `a\u0000b‮c${'x'.repeat(500)}` }, { id: 'T-abcd', title: 'second' }, { id: 'T-beef' }],
+        { id: 'T-abcd', title: `a\u0000b\u202ec${'x'.repeat(500)}` }, { id: 'T-abcd', title: 'second' }, { id: 'T-beef' },
+        { id: 'T-cafe', title: 'o\u034fk\ufe0f\u{e0041}\u{e0100}' }],
       projects: [{ id: 'T-5e6f', title: 'a task in projects' }],
       questions: [{ id: 'N-0000abcd', title: 'q', about: 'T-../../x' }],
     });
     assert.ok(known);
-    assert.deepEqual([...known.keys()], ['T-abcd', 'T-beef', 'N-0000abcd']);
+    assert.deepEqual([...known.keys()], ['T-abcd', 'T-beef', 'T-cafe', 'N-0000abcd']);
+    assert.equal(known.get('T-cafe')?.title, 'ok', 'grapheme joiner, variation selectors and tag characters removed');
     const title = known.get('T-abcd')!.title;
-    assert.ok(!/[\u0000-\u001f‮]/u.test(title) && title.length <= 120, title);
+    assert.ok(!/[\u0000-\u001f\u202e]/u.test(title) && title.length <= 120, title);
     assert.equal(known.get('T-beef')?.title, '', 'no title: none shown');
     assert.deepEqual(known.get('N-0000abcd')?.target, { kind: 'entry' }, 'a malformed about leads nowhere specific');
   });
@@ -143,6 +167,16 @@ describe('the reads behind the references', () => {
     r.advance(REFERENCES_INTERVAL_MS); r.cache.tick(); await r.settle();
     assert.equal(r.cache.lookup('T-1a2b'), null, 'another failure: cleared');
     assert.equal(r.ops.length, 4);
+  });
+
+  test('a read that times out keeps what is known, like busy: the links do not vanish for a minute', async () => {
+    const r = rig([OK, error(504, 'timeout'), OK]);
+    r.cache.tick(); await r.settle();
+    assert.ok(r.cache.lookup('T-1a2b'));
+    r.advance(REFERENCES_INTERVAL_MS); r.cache.tick(); await r.settle();
+    assert.ok(r.cache.lookup('T-1a2b'), 'timeout: kept');
+    r.advance(REFERENCES_INTERVAL_MS); r.cache.tick(); await r.settle();
+    assert.equal(r.ops.length, 3, 'read again a minute later');
   });
 
   test('stop clears what is known and drops a read in flight; no read after it', async () => {

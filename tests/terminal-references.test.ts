@@ -30,7 +30,9 @@ describe('referenceMatches', () => {
 
   test('uppercase hex digits name the same lowercase id; the index and length are those of the text shown', () => {
     const [match] = referenceMatches('task T-1A2B done');
-    assert.deepEqual(match, { id: 'T-1a2b', index: 5, length: 6 });
+    assert.deepEqual(match, { id: 'T-1a2b', index: 5, length: 6, wordIndex: 5, wordLength: 6 });
+    const [quoted] = referenceMatches('see (T-1a2b).');
+    assert.deepEqual(quoted, { id: 'T-1a2b', index: 5, length: 6, wordIndex: 4, wordLength: 9 }, 'the word keeps its punctuation');
   });
 
   test('glued to other text, inside a path, a URL, a file name or an assignment: nothing', () => {
@@ -42,11 +44,11 @@ describe('referenceMatches', () => {
   });
 
   test('hostile Unicode never makes an id: look-alike letters and dashes, invisible and bidirectional characters', () => {
-    for (const text of ['Т-1a2b', 'T‐1a2b', 'T–1a2b', 'T－1a2b', 'Ｔ-1a2b', 'T-１a2b', 'T-1a2b​', '​T-1a2b',
-      'T-1a‍2b', '‮T-1a2b', 'T-1a2b́', 'T-1a2b‬']) {
+    for (const text of ['Т-1a2b', 'T‐1a2b', 'T–1a2b', 'T－1a2b', 'Ｔ-1a2b', 'T-１a2b', 'T-1a2b\u200b', '\u200bT-1a2b',
+      'T-1a\u200d2b', '\u202eT-1a2b', 'T-1a2b\u0301', 'T-1a2b\u202c']) {
       assert.deepEqual(ids(text), [], JSON.stringify(text));
     }
-    assert.deepEqual(ids(' T-1a2b　P-5e6f'), ['T-1a2b', 'P-5e6f'], 'Unicode spaces still separate words');
+    assert.deepEqual(ids(' T-1a2b\u3000P-5e6f'), ['T-1a2b', 'P-5e6f'], 'Unicode spaces still separate words');
   });
 
   test('a very long line is scanned in linear time', () => {
@@ -61,7 +63,7 @@ describe('referenceMatches', () => {
 
 /** A buffer of one-cell characters (a CJK character takes two cells, the second of width 0). */
 function buffer(rows: string[], cols: number, wrapped: number[] = []): TerminalBuffer {
-  const wide = (ch: string): boolean => /[　-鿿]/u.test(ch);
+  const wide = (ch: string): boolean => /[\u3000-鿿]/u.test(ch);
   const cells = rows.map(text => {
     const out: { width: number; chars: string }[] = [];
     for (const ch of text) { out.push({ width: wide(ch) ? 2 : 1, chars: ch }); if (wide(ch)) out.push({ width: 0, chars: '' }); }
@@ -98,6 +100,16 @@ describe('referencesOnRow', () => {
     assert.deepEqual(referencesOnRow(buffer(rows, 15, [1]), 0, known), [], 'the end of the row continues on the next');
     assert.deepEqual(referencesOnRow(buffer(['3c4d', 'T-1a2b done'], 15, [1]), 1, known), [], 'the row continues the one above');
     assert.equal(referencesOnRow(buffer(rows, 15), 0, known).length, 1, 'without a wrap it is a link');
+  });
+
+  test('the wrap guard looks at the whole word, the punctuation taken off included', () => {
+    assert.deepEqual(referencesOnRow(buffer(['see (T-1a2b)', '/notes'], 12, [1]), 0, known), [],
+      '"(T-1a2b)/notes" is one word, not an id');
+    assert.deepEqual(referencesOnRow(buffer(['read T-1a2b.', 'md now'], 12, [1]), 0, known), [],
+      'the file name "T-1a2b.md" cut after its dot');
+    assert.deepEqual(referencesOnRow(buffer(['xxxxxxxxxxx', '(T-1a2b) ok'], 11, [1]), 1, known), [],
+      '"xxxxxxxxxxx(T-1a2b)" is one word');
+    assert.equal(referencesOnRow(buffer(['see (T-1a2b)', '/notes'], 12), 0, known).length, 1, 'without a wrap it is a link');
   });
 
   test('no row, no link; the check is asked once per candidate', () => {

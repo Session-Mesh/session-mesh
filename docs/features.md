@@ -266,12 +266,14 @@ project tracker that agents write through `mesh-work`, read only:
   captures the mouse still lets the click through, `Shift`, or `Option` on macOS, selects text
   instead), opens the Projects view on it: a task on its project's Board with its sheet, a project
   on its "Pick up" tab, a question where its answer form is (the sheet of its task, the Questions
-  tab of its project, or the first screen). The page knows the ids from one read (`ids` of
-  [work-read](work-read.md)) after a session listing while terminals are shown, at most once a
-  minute while it is visible, and again when the Projects view opens; checking a word sends no
-  request. It keeps the ids and titles in memory only, and forgets them when the credential is
-  refused. When the tracker cannot be read, nothing is a link. Session names are not links: they
-  are ordinary words as often as names.
+  tab of its project, or the first screen, which is also where a question about a task in no
+  project goes). The page knows the ids from one read (`ids` of [work-read](work-read.md)) after a
+  session listing while terminals are shown, at most once a minute while it is visible, and again
+  when the Projects view opens; checking a word sends no request. It keeps the ids and titles in
+  memory only, and forgets them when the credential is refused. When the tracker cannot be read,
+  nothing is a link; a read that is only busy or too slow keeps the ids already known. On a very
+  large tracker the read is cut, and an id it leaves out becomes a link once a later read lists it.
+  Session names are not links: they are ordinary words as often as names.
 - **Products and projects.** The first screen lists the products and their active projects, with
   each project's progress (done tasks over all tasks) and its number of blockers.
 - **A project, in five tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent
