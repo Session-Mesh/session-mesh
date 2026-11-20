@@ -7,6 +7,9 @@ if (location.search.includes("bad")) document.getElementById("bad").style.displa
 // The recent folders an older version kept in this browser (the runner keeps them now, see static/app.js,
 // moveRecentFoldersToRunner): a browser signed out, or revoked by "log out everywhere", keeps no copy of the paths.
 try { localStorage.removeItem("mesh.recentFolders"); } catch {}
+// The Projects view's place and unsent answer drafts of this tab (static/work-view-state.ts, STATE_KEY): a tab that
+// reaches the sign-in page (signed out, token refused) keeps none of them.
+try { sessionStorage.removeItem("mesh.workView"); } catch {}
 // Served before authentication, this page cannot fetch the catalogs: it uses the
 // language and catalog the interface last mirrored into the Cache API (static/i18n.js).
 (async () => {

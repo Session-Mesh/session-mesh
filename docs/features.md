@@ -294,6 +294,14 @@ project tracker that agents write through `mesh-work`, read only:
   screen `Esc` leaves Projects, and the browser's Back does what it did before. A sheet opened from
   a session's "? n" button or from the first screen's questions returns to its project's Questions
   tab. `Esc` in a text field that holds text does nothing, so a draft answer is not lost.
+- **Coming back.** Leaving Projects (the Sessions button, a session, `Esc`, a link) and coming
+  back, or reloading the tab, shows the view as it was left, read again: the project, its tab, the
+  open task sheet (with its level of the way back), where they were scrolled, and every answer not
+  yet sent, under each question typed in, in any sheet or on the first screen. A project that no
+  longer exists shows the first screen; a session's "? n" button still opens its own place. The
+  drafts stay in the browser tab only (its `sessionStorage`, at most 40 of them and 64 KiB): they
+  are never sent until the answer is, and they are removed when it is recorded, when the field is
+  emptied, and when the browser signs out or shows the sign-in page.
 - **A task.** Selecting a task opens its sheet: blockers, dependencies, the sessions that worked on
   it, its notes, its events and its questions. An answer given with the sheet's answer button
   reads "answered by the owner in this view (signed in)". Any other answer reads as the owner's

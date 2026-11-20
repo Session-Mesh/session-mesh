@@ -22,8 +22,11 @@ import { loadOperatorName } from './work-operator-label.ts';
 import { errorBlock, loadingBlock } from './work-error-view.ts';
 import { browserHistory, createWorkNav, escapeKeepsField, scrollerOf, tabsHidden } from './work-nav.ts';
 import type { HistoryPort, WorkNav } from './work-nav.ts';
-import { renderProject } from './work-project-view.ts';
+import { TAB_KEYS, renderProject } from './work-project-view.ts';
 import type { ProjectView, TabKey } from './work-project-view.ts';
+import { createViewMemory } from './work-view-memory.ts';
+import type { Scroll, ViewMemory } from './work-view-memory.ts';
+import type { Place } from './work-view-state.ts';
 import { pageQuestionsSync } from './work-questions-sync.ts';
 import type { QuestionsChange, QuestionsSync } from './work-questions-sync.ts';
 import { renderEntryQuestions } from './work-questions-view.ts';
@@ -51,9 +54,11 @@ export type WorkViewOptions = Readonly<{
   sync?: QuestionsSync;
 }>;
 
-/** `open` shows the view as it was (the entry screen the first time), or the place a target names: the sheet of a task
- *  in its project's Questions tab, the Questions tab of a project, or the entry screen. */
-export type WorkViewController = Readonly<{ open: (target?: WorkTarget) => void; close: () => void; destroy: () => void }>;
+/** `open` shows the view as the owner left it, in this page or before a reload of this tab (the entry screen the first
+ *  time), or the place a target names: the sheet of a task in its project's Questions tab, the Questions tab of a
+ *  project, or the entry screen. `forget` drops that memory and the unsent drafts (the browser signs out). */
+export type WorkViewController = Readonly<{ open: (target?: WorkTarget) => void; close: () => void; destroy: () => void;
+  forget: () => void }>;
 
 type EntryData = Readonly<{ products: ProductsDoc; projects: ProjectsDoc }>;
 type OpenProject = Readonly<{ id: string; view: ProjectView }>;
@@ -98,6 +103,11 @@ class WorkView implements WorkViewController {
   /** Where the tab was scrolled when the sheet covered it (a phone), put back when the sheet closes. */
   private tabScroll: number | null = null;
   private sheetBack: HTMLElement | null = null;
+  /** The owner's place and unsent drafts while away (static/work-view-memory.ts); `openings` numbers each `open`. */
+  private readonly memory: ViewMemory;
+  private openings = 0;
+  /** The project being read (shown once read), until the view moves elsewhere. */
+  private reading: Readonly<{ id: string; tab: TabKey }> | null = null;
   private readonly onEscape = (event: KeyboardEvent): void => this.upOnEscape(event);
   private readonly onPopState = (event: PopStateEvent): void => this.wentBack(event.state);
 
@@ -119,22 +129,57 @@ class WorkView implements WorkViewController {
     options.root.classList.add('work-root');
     options.root.replaceChildren(el('div', 'work-toolbar', refresh), this.content, this.announcer);
     this.docs = mountDocPanel({ root: options.root, request: options.request, translate: this.t });
+    this.memory = createViewMemory({ root: options.root, scroller: () => scrollerOf(options.root), current: scroll => this.placeNow(scroll) });
+    const unfolded = this.memory.place().expanded;
+    if (unfolded) { unfolded.forEach(id => this.expanded.add(id)); this.expandedSeeded = true; }
   }
 
   open = (target?: WorkTarget): void => void this.openAt(target);
 
   private async openAt(target?: WorkTarget): Promise<void> {
     this.active = true;
+    const opening = ++this.openings;
     document.addEventListener('keydown', this.onEscape, true);
-    if (!target) return this.reload();
-    if (target.kind === 'entry') return this.loadEntry();
-    if (target.kind === 'task') await this.openTask(target.id, target.tab);
-    else await this.openProject(target.id, target.tab ?? 'questions');
-    await this.refreshCount();   // the entry screen, which reads the count with its list, was not shown
+    if (!target) await this.resume();
+    else if (target.kind === 'entry') await this.loadEntry();
+    else {
+      if (target.kind === 'task') await this.openTask(target.id, target.tab);
+      else await this.openProject(target.id, target.tab ?? 'questions');
+      await this.refreshCount();   // the entry screen, which reads the count with its list, was not shown
+    }
+    if (this.active && opening === this.openings) this.memory.listen(true);   // from now on the owner's moves are noted
   }
 
-  /** Leaving the view takes back its entries of the browser history. */
+  /** Back to where the owner left the view: the project and its tab read again, then the sheet, the scroll and the
+   *  drafts put back. A project gone since shows the entry screen, a task gone since its tab. */
+  private async resume(): Promise<void> {
+    const place = this.memory.place();
+    if (!place.project) { await this.loadEntry(); return this.scrollTo(place); }
+    const tab = TAB_KEYS.find(key => key === place.tab) ?? 'reprise';
+    if (!(await this.openProject(place.project, tab, true))) return;
+    if (place.task) await this.selectTask(place.task, undefined, true);
+    if (place.task !== null && place.task === this.selected) this.tabScroll = place.tabScroll;
+    this.scrollTo(place);
+    await this.refreshCount();
+  }
+
+  private scrollTo(place: Place): void {
+    if (!this.active) return;
+    scrollerOf(this.options.root).scrollTop = place.scroll;
+    const sheet = this.project?.view.detailSlot;
+    if (sheet && !sheet.hidden) sheet.scrollTop = place.sheetScroll;
+  }
+
+  /** The place the view shows, as the memory keeps it. */
+  private placeNow(scroll: Scroll): Place {
+    const project = this.project, task = project ? this.selected : null, reading = project ? null : this.reading;
+    return { project: project?.id ?? reading?.id ?? null, tab: project?.view.current() ?? reading?.tab ?? null, task, ...scroll,
+      tabScroll: task ? this.tabScroll : null, expanded: this.expandedSeeded ? [...this.expanded] : null };
+  }
+
+  /** Leaving the view takes back its entries of the browser history; the place and the drafts stay in memory. */
   close = (): void => {
+    this.memory.listen(false);
     this.stopRequests();
     this.active = false;
     document.removeEventListener('keydown', this.onEscape, true);
@@ -142,8 +187,11 @@ class WorkView implements WorkViewController {
     this.nav.at(0);
   };
 
+  forget = (): void => this.memory.forget();
+
   destroy = (): void => {
     this.close();
+    this.memory.dispose();
     this.docs.destroy();
     window.removeEventListener('popstate', this.onPopState);
     this.unsubscribe();
@@ -218,7 +266,7 @@ class WorkView implements WorkViewController {
    *  questions, drawn in place when they arrive. */
   private async loadEntry(): Promise<void> {
     const { token, signal } = this.begin();
-    this.project = null; this.selected = null;
+    this.project = null; this.selected = null; this.reading = null;
     this.nav.at(0);
     this.show(loadingBlock(this.t));
     const reads = [this.api.products(signal), this.api.projects(signal)] as const;
@@ -265,12 +313,16 @@ class WorkView implements WorkViewController {
     this.entryQuestionsNode = this.entryQuestionsBlock();
     this.show(this.entryQuestionsNode, renderEntry(handlers, entryTree(this.entry.products, this.entry.projects)),
       ...(cut ? [el('p', 'work-notice work-omitted', this.t('work.entryTruncated'))] : []));
+    this.memory.note();
   }
 
+  /** The entry screen's questions, with the owner's unsent drafts. */
   private entryQuestionsBlock(): HTMLElement {
     const titles = new Map((this.entry?.projects.projects ?? []).map(project => [project.id, project.title]));
-    return renderEntryQuestions(this.entryCtx, { projectTitle: id => titles.get(id) ?? null,
+    const block = renderEntryQuestions(this.entryCtx, { projectTitle: id => titles.get(id) ?? null,
       openProject: id => void this.openProject(id, 'questions'), openTask: id => void this.openTask(id) }, this.entryQuestions);
+    this.memory.fill(block);
+    return block;
   }
 
   /** Read the open questions of the entry screen again (or take the read `pending`) and redraw them in place, keeping
@@ -299,18 +351,35 @@ class WorkView implements WorkViewController {
     return result.ok;
   }
 
-  private async openProject(id: string, tab: TabKey = 'reprise'): Promise<void> {
+  /** True when the project is shown. `resuming` (the place the owner left): a project gone since shows the entry screen. */
+  private async openProject(id: string, tab: TabKey = 'reprise', resuming = false): Promise<boolean> {
     const { token, signal } = this.begin();
     this.project = null; this.selected = null;   // the view shown before is gone: Escape now goes to the entry screen
+    this.reading = { id, tab };   // the place while it is read: a reload meanwhile comes back to it
     this.nav.at(1);
     this.show(loadingBlock(this.t));
+    this.memory.note();
     const result = await this.api.project(id, signal);
-    if (token !== this.generation) return;
-    if (!result.ok) return this.failure(result.error, () => void this.openProject(id, tab), () => void this.backToEntry());
-    const view = renderProject(this.panelCtx, result.value, tab, () => void this.backToEntry(), () => this.nameSheetBack());
+    if (token !== this.generation) return false;
+    this.reading = null;
+    if (!result.ok && resuming && result.error.kind === 'missing') { await this.loadEntry(); return false; }
+    if (!result.ok) { this.failure(result.error, () => void this.openProject(id, tab), () => void this.backToEntry()); return false; }
+    const view = renderProject(this.panelCtx, result.value, tab, () => void this.backToEntry(), key => this.tabShown(key));
     this.project = { id, view };
+    this.memory.fill(view.root);
     this.show(view.root);
     focusFirst(view.root.querySelector<HTMLElement>('.work-back'));
+    this.memory.note();
+    return true;
+  }
+
+  /** A tab shown: the sheet's way back names it, a panel just built gets the drafts back, and the place is noted. */
+  private tabShown(key: TabKey): void {
+    this.nameSheetBack();
+    const view = this.project?.view;
+    if (!view) return;
+    this.memory.fill(view.panel(key));
+    this.memory.note();
   }
 
   /** From a question of the entry screen (or a terminal reference): read the task to learn its project, then open that
@@ -340,7 +409,7 @@ class WorkView implements WorkViewController {
     this.nav.at(0);
     this.controller = new AbortController();   // the project's signal is aborted; the questions read needs a live one
     const from = this.project?.id;
-    this.project = null; this.selected = null;
+    this.project = null; this.selected = null; this.reading = null;
     this.renderEntryScreen();
     focusFirst(this.entryFocusTarget(from));
     await this.rereadEntryQuestions(null, false);
@@ -361,6 +430,7 @@ class WorkView implements WorkViewController {
       if (result.error.kind === 'not-available') this.writeUnavailable = true;
       return failureOfKind(result.error.kind);
     }
+    this.memory.sent(question);   // recorded: its draft is not kept, nor put back by the reads that follow
     this.sync.publish({ source: 'view', answered: question });   // the marker drops it now, wherever the view is
     // The write stands whatever happened meanwhile; a view closed (or reloaded) since shows nothing and reads nothing.
     if (token !== this.generation) return null;
@@ -412,7 +482,8 @@ class WorkView implements WorkViewController {
     setTimeout(() => { this.announcer.textContent = message; }, 50);   // a new text node, so the same message is read again
   }
 
-  private async selectTask(id: string, after?: AfterAnswer): Promise<void> {
+  /** `resuming` (the sheet the owner left): a task gone since closes the sheet. */
+  private async selectTask(id: string, after?: AfterAnswer, resuming = false): Promise<void> {
     if (!this.project) return;
     const view = this.project.view;
     this.selected = id;
@@ -421,18 +492,22 @@ class WorkView implements WorkViewController {
     if (!after) view.detailSlot.replaceChildren(this.closeButton(view), loadingBlock(this.t));
     view.showDetail(true);
     this.nav.at(2);
+    this.memory.note();
     const token = this.generation, sequence = ++this.detailSequence;
     this.detailController?.abort();
     this.detailController = new AbortController();
     const result = await this.api.task(id, this.detailController.signal);
     if (token !== this.generation || sequence !== this.detailSequence || this.selected !== id) return;
+    if (!result.ok && resuming && result.error.kind === 'missing') return this.closeDetail(view);
     if (!result.ok) {
       view.detailSlot.replaceChildren(this.closeButton(view), errorBlock(this.t, result.error, { retry: () => void this.selectTask(id) }));
       return;
     }
     const body = renderDetail(this.ctx, result.value);
-    // The reload after an answer keeps what the owner was typing under the other questions.
+    // The reload after an answer keeps what the owner was typing under the other questions; the drafts kept while
+    // away (this sheet's, or one typed in another place) come back too.
     if (after) restoreDrafts(body, unsentDrafts(view.detailSlot, after.question));
+    this.memory.fill(body);
     view.detailSlot.replaceChildren(this.closeButton(view), body);
     if (after && !after.focus) return;
     const question = after ? body.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(after.question)}"]`) : null;
@@ -464,6 +539,7 @@ class WorkView implements WorkViewController {
     view.showDetail(false);
     view.detailSlot.replaceChildren();
     if (restore !== null) scrollerOf(view.root).scrollTop = restore;
+    this.memory.note();
     // The control that opened the sheet is in the tab shown (a card, or a task heading of the Questions tab).
     const selector = `[data-task="${CSS.escape(previous ?? '')}"]`;
     if (previous) focusFirst(view.panel(view.current()).querySelector<HTMLElement>(selector) ?? view.root.querySelector<HTMLElement>(selector), restore !== null);
@@ -498,7 +574,7 @@ export { createReferences as mountReferences } from './work-references.ts';
 export function mountWorkView(options: WorkViewOptions): WorkViewController {
   const view = new WorkView(options);
   // Each opening also reads the operator's display name again (work-operator-label.ts).
-  return { close: view.close, destroy: view.destroy, open: (...args: Parameters<WorkViewController['open']>) => {
+  return { close: view.close, destroy: view.destroy, forget: view.forget, open: (...args: Parameters<WorkViewController['open']>) => {
     void loadOperatorName(options.request);
     view.open(...args);
   } };
