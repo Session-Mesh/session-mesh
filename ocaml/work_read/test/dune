@@ -5,7 +5,7 @@
 
 (test
  (name test_work_read)
- (modules test_work_read test_limits test_session_questions work_read_runner)
+ (modules test_work_read test_limits test_session_questions test_context work_read_runner)
  (libraries work_read mesh_worklog alcotest yojson unix)
  (deps
   ../bin/work_read_main.exe

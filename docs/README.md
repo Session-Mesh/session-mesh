@@ -13,6 +13,7 @@
 | [sessions-api.md](sessions-api.md) | The `GET /api/sessions` contract: background rounds, `since`, `generation`, skeleton rows |
 | [changelog-fragments.md](changelog-fragments.md) | Changelog entries as one file per pull request, and how a release is cut |
 | [agent-integration.md](agent-integration.md) | Adding support for another agent |
+| [agent-hooks.md](agent-hooks.md) | The agent hook model: generic events, consumers, one source per agent, and what each agent receives |
 | [sessions-protocol.md](sessions-protocol.md) | `mesh-sessions`, the native program that describes sessions for the session list, and its protocol (not wired into the web server yet) |
 | [agent-wake-mechanisms.md](agent-wake-mechanisms.md) | What each agent offers natively for receiving an external message, and what the mesh does with it |
 | [demo-scene-v0.md](demo-scene-v0.md), [demo-scene-v1.md](demo-scene-v1.md), [demo-scene-v2.md](demo-scene-v2.md) | The declarative demo formats `mesh-scene-v0` (static scene), `v1` (states and choices) and `v2` (adds gears) |

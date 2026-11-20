@@ -165,6 +165,9 @@ Run a prompt that needs a permission and one that asks a question. The sidebar m
 `working`, `waiting_permission`, `waiting_question` and idle at the right moments. Prefer the
 agent's own hooks or plugin over guessing from the screen or from its database. If the state can
 only be guessed, record the feature as `partial` and say what is guessed from.
+Declare the agent's hooks as a source in `agent-hooks.json` ([agent-hooks.md](agent-hooks.md)): its
+native events, the consumers it subscribes and, where it adds a hook's output to the model's context, the
+format; the configuration generator then installs every subscribed hook.
 
 ## Step 4: resume and restore
 

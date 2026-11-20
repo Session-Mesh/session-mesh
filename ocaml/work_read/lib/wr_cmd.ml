@@ -30,7 +30,7 @@ let of_request () =
 (* Every exception, whatever it is, becomes an [internal] error (exit 7): an
    uncaught one would make the runtime exit with 2, the code of
    [invalid_input]. *)
-let main args =
+let document args =
   let result =
     try
       match args with
@@ -39,3 +39,7 @@ let main args =
     with _ -> Error (E.internal "unexpected exception")
   in
   try Wr_out.finish result with _ -> 7
+
+(* [context] is the agent hook (Wr_context): its own output, always exit 0.
+   It is reachable from the command line only, never through [--request]. *)
+let main = function "context" :: rest -> Wr_context.main rest | args -> document args

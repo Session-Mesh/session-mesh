@@ -39,6 +39,7 @@ see [macOS](operations.md#macos).
 | `MESH_UPDATE_CHECK` | on | Read by the PTY host, not the web server, as the default of the file `update-notice` of the configuration directory, which overrides it and applies without a restart (`check=0`, `notice=minor`...: [Update notice](operations.md#update-notice)). `0` turns the update notice off: no request to GitHub, no banner, no log line ([Update notice](operations.md#update-notice)). |
 | `MESH_UPDATE_NOTICE` | `all` | Read by the PTY host, as the default of the `update-notice` file (`notice=` line). Which newer releases the update notice announces: `all`, `minor`, `major`, `security` or `none` (no request). A security release is announced at every level but `none`; an unknown value counts as `all`. |
 | `MESH_UPDATE_DEBUG` | unset | Read by the PTY host. `1` logs why an update check failed. |
+| `MESH_PROJECT_HOOKS` | on | `0` (or `off`, `false`, `no`) stops adding the read-only project context hook to the sessions started or restored afterwards: at session start, Claude and Vibe receive the ids and counts of the session's tracked tasks and questions ([The project context hook](agent-hooks.md#the-project-context-hook)). |
 | `MESH_CODEX_QUEUE_WAKE` | off | `1` lets the mesh wake a Codex session with `codex queue` when agent mail arrives ([Waking Codex with codex queue](operations.md#waking-codex-with-codex-queue)). |
 
 `WL_HOME` is not a server setting, but the Projects view reads the project tracker with the web

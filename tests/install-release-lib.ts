@@ -147,7 +147,7 @@ export function bundleTree(dir: string, label: string, opts: ReleaseOptions = {}
   fs.copyFileSync(path.join(SOURCE, 'install.sh'), path.join(app, 'install.sh'));
   for (const file of INSTALL_SCRIPTS) fs.copyFileSync(path.join(SOURCE, 'scripts', file), path.join(app, 'scripts', file));
   fs.cpSync(path.join(SOURCE, 'systemd'), path.join(app, 'systemd'), {recursive: true});
-  for (const module of ['agentmcp.py', 'resumeargs.py', 'fsutil.py', 'agentcap.py', 'agentwake.py', 'agentmail.py', 'meshpaths.py', 'respawn.py', 'organize.py', 'conversation_names.py']) fs.copyFileSync(path.join(SOURCE, module), path.join(app, module));
+  for (const module of ['agentmcp.py', 'resumeargs.py', 'fsutil.py', 'agentcap.py', 'agentwake.py', 'agentmail.py', 'meshpaths.py', 'respawn.py', 'organize.py', 'conversation_names.py', 'agent-hooks.json']) fs.copyFileSync(path.join(SOURCE, module), path.join(app, module));
   for (const cmd of HELPERS) fs.writeFileSync(path.join(app, 'bin', cmd), '', {mode: 0o755});
   fs.writeFileSync(path.join(app, 'server.py'), `# server of ${label}\n`);
   fs.copyFileSync(path.join(SOURCE, 'scripts/bundle/mesh'), path.join(dir, 'mesh'));
