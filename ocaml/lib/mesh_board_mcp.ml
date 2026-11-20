@@ -1810,10 +1810,11 @@ let session_account_switch_input_schema =
     ~properties:[ ("account", Mcp_kit.Schema.string ()) ]
     ~required:[ "account" ] ~additional_properties:false ()
 
-(* The name is sent as the owner said it: the Mesh server resolves it (the
-   exact id, else the one label equal to it ignoring case) for the agent kind
-   it recorded for this session's token, and refuses an unknown or ambiguous
-   name with the list of accounts. Nothing else is sent. *)
+(* The name is sent as the owner said it: the Mesh server resolves it with
+   `mesh-platform accounts resolve` (Mesh_account_resolver: the exact id, else
+   the one label equal to it ignoring case) for the agent kind it recorded for
+   this session's token, and refuses an unknown or ambiguous name with the
+   list of accounts. Nothing else is sent. *)
 let session_account_switch_request_tool client =
   Mcp_kit.Tool.make
     ~description:
