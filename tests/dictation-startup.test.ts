@@ -75,6 +75,19 @@ test('cancelling startup preserves shutdown and reaps the partial worker',{timeo
   assert.equal(fs.existsSync(path.dirname(identity.socket)),false);
 });
 
+test('an early configuration rejection survives a closed bootstrap pipe',async t=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-early-exit-'));
+  fs.chmodSync(directory,0o700);t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const runtime=path.join(directory,'runtime');
+  // This executable never consumes bootstrap input: close its read end before
+  // emitting the closed private handshake and exiting. No Python test harness.
+  fs.writeFileSync(runtime,"#!/bin/sh\nexec 0<&-\nprintf 'invalid_configuration\\n'\nexit 1\n",{mode:0o700});
+  for(let attempt=0;attempt<12;attempt++){
+    const f=await fixture(true,true,runtime);
+    try{await disabled(f,'invalid_configuration');}finally{await f.close();}
+  }
+});
+
 for(const mode of ['exit','bad handshake','timeout'] as const)test(`optional worker ${mode} has bounded cleanup`,{timeout:16000},async t=>{
   const c=workerFixture(t,mode==='exit'?"process.stderr.write('PRIVATE_SENTINEL');process.exit(1);":
     mode==='bad handshake'?"process.stdout.write('PRIVATE_SENTINEL\\n');process.stdin.resume();":
@@ -112,4 +125,38 @@ test('post-startup worker loss clears enabled config and repeated fixture lifecy
     }finally{await f.close();await f.close();}
   }
   assert.notEqual(sockets[0],sockets[1],'fresh lifecycle has a fresh private socket');
+});
+
+test('interrupted shutdown still reaps a worker stopped during cleanup',{timeout:12000},async t=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-interrupted-stop-'));
+  fs.chmodSync(directory,0o700);t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const marker=path.join(directory,'identity'),interrupted=path.join(directory,'interrupted');
+  const preload=path.join(directory,'interrupt.cjs');
+  fs.writeFileSync(preload,`const fs=require('node:fs');
+process.stdin.once('data',part=>{
+ const b=JSON.parse(part.toString().split('\\n')[0]);
+ fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,socket:b.socket}));
+});
+process.stdin.once('end',()=>{
+ fs.writeFileSync(${JSON.stringify(interrupted)},'cleanup reached child stdin close');
+ process.kill(process.ppid,'SIGINT');
+ process.kill(process.pid,'SIGSTOP');
+});`);
+  const f=await fixture(true,false,undefined,{workerPreload:preload});
+  const identity=JSON.parse(fs.readFileSync(marker,'utf8')) as {pid:number;socket:string};
+  const birth=processBirth(identity.pid);assert.ok(birth);
+  try{
+    f.child.kill('SIGTERM');
+    await until(()=>fs.existsSync(interrupted));
+    await until(()=>f.child.exitCode!==null||f.child.signalCode!==null);
+    await until(()=>processBirth(identity.pid)!==birth);
+    assert.equal(fs.existsSync(path.dirname(identity.socket)),false);
+    assert.doesNotMatch(f.errors,/Task was destroyed|Task exception was never retrieved|Unclosed client session/);
+  }finally{
+    if(processBirth(identity.pid)===birth){
+      process.kill(identity.pid,'SIGKILL');
+      await until(()=>processBirth(identity.pid)!==birth);
+    }
+    await f.close();
+  }
 });
