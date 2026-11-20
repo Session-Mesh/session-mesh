@@ -4606,6 +4606,9 @@ function forgetKnownSessions() {
     localStorage.removeItem(`${prefix}.recentFolders`);   // kept here by older versions (see moveRecentFoldersToRunner)
     localStorage.setItem(`${prefix}.${SIGNED_OUT_KEY}`, JSON.stringify(Date.now()));
   } catch {}
+  // The Projects view's place and unsent answer drafts (static/work-view-state.ts); the sign-in page removes them too.
+  workController?.forget();
+  try { sessionStorage.removeItem("mesh.workView"); } catch {}
 }
 
 // Preserve the existing local DTO and management-observation distinction.

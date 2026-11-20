@@ -222,14 +222,18 @@ describe('the way back inside a project', { skip }, () => {
       await page.locator('#projects-return').click();
       await page.waitForFunction(() => !document.body.classList.contains('projecting'));
       await page.waitForFunction(() => ((history.state as { meshWorkLevel?: number } | null)?.meshWorkLevel ?? 0) === 0);
-      // Projects opens again as it was left, on the project (its entry pushed once the move back has landed); Escape
-      // goes to the entry screen, and there it leaves Projects as before.
+      // Projects opens again as it was left, on the sheet over its tab (both entries pushed again once the move back
+      // has landed); Escape goes to the tab, then to the entry screen, and there it leaves Projects as before.
       if (phone) {
         await page.locator('#btn-mobile-actions').click();
         await page.locator('[data-mobile-action="btn-projects"]').click();
       } else await page.locator('#btn-projects').click();
-      await page.locator('#work-tab-board[aria-selected="true"]').waitFor();
+      await page.locator('.work-detail-heading', { hasText: 'Marker task' }).waitFor();
+      await page.waitForFunction(() => (history.state as { meshWorkLevel?: number } | null)?.meshWorkLevel === 2);
+      await page.locator('.work-detail-heading').focus();
+      await page.keyboard.press('Escape');
       await page.waitForFunction(() => (history.state as { meshWorkLevel?: number } | null)?.meshWorkLevel === 1);
+      await page.locator('#work-tab-board[aria-selected="true"]').waitFor();
       await page.locator('#work-tab-board').focus();
       await page.keyboard.press('Escape');
       await page.locator('.work-entry-questions h2 .work-count').waitFor();
@@ -238,15 +242,13 @@ describe('the way back inside a project', { skip }, () => {
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => !document.body.classList.contains('projecting'));
       if (!phone) {
-        // A reload inside a project keeps the history entry; the new page reuses it rather than stacking a second
-        // project entry, so Back from a project opened after the reload still reaches the entry screen.
+        // A reload inside a project keeps the history entry; the new page shows the project again on it rather than
+        // stacking a second project entry, so Back still reaches the entry screen.
         await enterProjects(page, width);
         await page.locator(`.work-entry-project[data-project="${OTHER_PROJECT}"]`).click();
         await atLevel(page, 1);
         await page.reload();
-        await page.locator('.work-entry-questions h2 .work-count').waitFor();
-        await atLevel(page, 0);
-        await page.locator(`.work-entry-project[data-project="${OTHER_PROJECT}"]`).click();
+        await page.locator('#work-tab-reprise[aria-selected="true"]').waitFor();
         await atLevel(page, 1);
         await page.goBack();
         await page.locator('.work-entry-questions h2 .work-count').waitFor();
