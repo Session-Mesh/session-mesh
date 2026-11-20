@@ -735,6 +735,11 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
            file. [null] when no newer release is announced. *)
         if List.map fst fields <> [ "op" ] then invalid_arg "keys";
         `Assoc [ ("ok", `Bool true); ("update", Mesh_update_host.latest update) ]
+    | Some (`String "update_notes") ->
+        (* The notes of the release [update_notice] announces, from memory: no
+           request, no file. [null] without one. *)
+        if List.map fst fields <> [ "op" ] then invalid_arg "keys";
+        `Assoc [ ("ok", `Bool true); ("notes", Mesh_update_host.notes update) ]
     | Some (`String "processes") ->
         (* Read-only. Refused in the Unix identity split (Linux only, where
            clients read /proc themselves): there another account's clients

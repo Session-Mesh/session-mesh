@@ -30,6 +30,7 @@ const HANDLER_ANSWERS: Record<string, string> = {
   'GET /api/agent-mail/@self/pi-wakes': PLAIN,
   'POST /api/agent-mail/@self/pi-wake-ack': PLAIN,
   'GET /api/portfolio/diff/{selector}': '404: no diff selector is known (see BLIND_CELLS)',
+  'GET /api/update/notes': '404: no release is announced with notes, named in the body',
 };
 
 // Accepted cells whose own answer cannot tell the handler from a path the server does not serve. Each of them is

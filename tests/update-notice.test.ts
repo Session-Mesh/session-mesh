@@ -25,7 +25,7 @@ describe('update notice', () => {
   test('accepts only an available answer with a matching release-notes link', () => {
     assert.deepEqual(parseNotice(answer('v0.2.0')), {
       latest: 'v0.2.0', security: false, notesUrl: NOTES + 'v0.2.0',
-      upgradeCommand: '~/.local/share/session-mesh/current/install.sh --upgrade'});
+      upgradeCommand: '~/.local/share/session-mesh/current/install.sh --upgrade', notes: false});
     for (const bad of [null, undefined, 'x', answer('v0.2.0', {status: 'current'}), answer('v0.2.0-rc.1'),
       answer('v0.2.0', {notes_url: 'https://example.invalid/'}), answer('v0.2.0', {notes_url: NOTES + 'v0.3.0'}),
       answer('v0.2.0', {security: 'yes'}), answer('v0.2.0', {upgrade_command: 7})]) {

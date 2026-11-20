@@ -130,6 +130,13 @@ val curl_fetch_in_cache :
 (** {!curl_fetch} with working files in {!cache_directory}. *)
 
 val to_json : home:string option -> outcome -> Yojson.Safe.t
+(** The [update-check --json] object; when a release is announced it also says
+    whether its notes are known ([notes], a boolean). *)
+
+val notes_json : outcome -> Yojson.Safe.t
+(** The notes of the announced release ([tag], [published], [body],
+    [truncated], [notes_url]), [`Null] when nothing is announced or the release
+    has no notes. *)
 
 val line : home:string option -> outcome -> string option
 (** One English sentence when an update is available. *)

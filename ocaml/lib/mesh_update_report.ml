@@ -426,7 +426,22 @@ let to_json ~home outcome =
           ("notes_url", `String (notes_url notice.latest.tag));
           ("upgrade_command", `String (upgrade_command ~home ~tag:notice.latest.tag installation));
           ("line", `String text);
+          ("notes", `Bool (notice.latest.notes <> ""));
         ]
     | _ -> []
   in
   `Assoc (("status", `String (status_name outcome)) :: details)
+
+(* The notes of the announced release, for the page's "What's new" panel: the
+   host answers them on request ([update_notes]), never in every listing. *)
+let notes_json = function
+  | Available { notice; _ } when notice.latest.notes <> "" ->
+      `Assoc
+        [
+          ("tag", `String notice.latest.tag);
+          ("published", `String notice.latest.published);
+          ("body", `String notice.latest.notes);
+          ("truncated", `Bool notice.latest.truncated);
+          ("notes_url", `String (notes_url notice.latest.tag));
+        ]
+  | _ -> `Null

@@ -3,7 +3,7 @@
 
 // A stand-in PTY host for server tests: it speaks the host's control protocol (one frame per request: a kind
 // byte, a 32-bit big-endian length, a JSON payload) on a Unix socket and answers `list` with the sessions
-// a control file names, `update_notice` with the notice it names, and anything else with the error an
+// a control file names, `update_notice` with the notice it names, `update_notes` with the notes it names, and anything else with the error an
 // older host gives. It runs as a process of its own, so that restarting it changes the host identity the
 // web server reads from the socket's peer credentials.
 //
@@ -13,6 +13,7 @@
 //   silent      accept requests and never answer
 //   slowFrom    the `list` requests from this number on (1 is the first) wait `delayMs` before the reply
 //   update      the update notice (null: none)
+//   notes       the `update_notes` reply: the notes of the announced release (null: none)
 // Every request's `op` is appended to `<control>.log`, one per line, so that a test can count them, and
 // `<op> answered` once its reply is sent.
 import {type ChildProcess, spawn} from 'node:child_process';
@@ -23,7 +24,7 @@ import path from 'node:path';
 export type FakeSession = {name: string; pid: number; cwd: string; created: number; activity: number;
   attached: number; meta: Record<string, unknown>};
 export type FakeControl = {sessions: FakeSession[]; firstList?: string[]; silent?: boolean; slowFrom?: number;
-  delayMs?: number; update?: Record<string, unknown> | null};
+  delayMs?: number; update?: Record<string, unknown> | null; notes?: Record<string, unknown> | null};
 
 function frame(body: unknown): Buffer {
   const payload = Buffer.from(JSON.stringify(body));
@@ -56,6 +57,8 @@ function serve(socketPath: string, controlPath: string): void {
         if (control.slowFrom !== undefined && lists >= control.slowFrom) delay = control.delayMs ?? 1000;
       } else if (request.op === 'update_notice') {
         reply = {ok: true, update: control.update ?? null};
+      } else if (request.op === 'update_notes') {
+        reply = {ok: true, notes: control.notes ?? null};
       }
       setTimeout(() => { connection.end(frame(reply)); fs.appendFileSync(`${controlPath}.log`, `${request.op} answered\n`); }, delay);
     });

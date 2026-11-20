@@ -18,12 +18,56 @@ let level_of_string text =
   | "none" -> Some Off
   | _ -> None
 
-type release = { tag : string; version : Version.t; security : bool }
+type release = {
+  tag : string;
+  version : Version.t;
+  security : bool;
+  published : string;
+  notes : string;
+  truncated : bool;
+}
 
 let security_marked body =
   String.split_on_char '\n' body
   |> List.exists (fun line ->
       String.lowercase_ascii (String.trim line) = "security: yes")
+
+let notes_limit = 65536
+
+(* The notes as the page may receive them: line ends made \n, the other
+   control characters but \t removed (each would take six bytes in JSON, and
+   the host's reply must stay well under the web server's frame limit), and at
+   most [notes_limit] bytes, cut before a UTF-8 sequence, never inside one. *)
+let cap_notes text =
+  let kept =
+    String.to_seq text
+    |> Seq.filter (fun c -> c = '\n' || c = '\t' || (c >= ' ' && c <> '\x7f'))
+    |> String.of_seq
+  in
+  if String.length kept <= notes_limit then (kept, false)
+  else
+    let rec start index =
+      if index > 0 && Char.code kept.[index] land 0xc0 = 0x80 then
+        start (index - 1)
+      else index
+    in
+    (String.sub kept 0 (start notes_limit), true)
+
+(* GitHub's [published_at]: YYYY-MM-DDTHH:MM:SSZ, or nothing. *)
+let published_date text =
+  let digit index = text.[index] >= '0' && text.[index] <= '9' in
+  if
+    String.length text = 20
+    && List.for_all digit [ 0; 1; 2; 3; 5; 6; 8; 9; 11; 12; 14; 15; 17; 18 ]
+    && text.[4] = '-'
+    && text.[7] = '-'
+    && text.[10] = 'T'
+    && text.[13] = ':'
+    && text.[16] = ':'
+    && text.[19] = 'Z'
+  then text
+  else ""
+
 
 (* A release tag is v<major>.<minor>.<patch>, as the release workflow
    requires; a suffix makes it a pre-release whatever its flag says. *)
@@ -54,7 +98,21 @@ let release_of_json = function
                 | Some (`String body) -> body
                 | _ -> ""
               in
-              Some { tag; version; security = security_marked body }
+              let notes, truncated = cap_notes body in
+              let published =
+                match List.assoc_opt "published_at" fields with
+                | Some (`String text) -> published_date text
+                | _ -> ""
+              in
+              Some
+                {
+                  tag;
+                  version;
+                  security = security_marked body;
+                  published;
+                  notes;
+                  truncated;
+                }
           | None -> None)
       | _ -> None)
   | _ -> None
@@ -121,9 +179,14 @@ let valid_etag text =
        (fun c -> c = '\x21' || (c >= '\x23' && c <= '\x7e'))
        (String.sub text (start + 1) (length - start - 2))
 
+(* Format 2 keeps the notes of each release. An older cache has none: its ETag
+   is not sent back, so that the next request brings the whole list once. *)
+let cache_format = 2
+
 let cache_to_json cache =
   `Assoc
     [
+      ("format", `Int cache_format);
       ("checked_at", `Float cache.checked_at);
       ("etag", match cache.etag with Some etag -> `String etag | None -> `Null);
       ( "releases",
@@ -134,6 +197,9 @@ let cache_to_json cache =
                  [
                    ("tag", `String release.tag);
                    ("security", `Bool release.security);
+                   ("published", `String release.published);
+                   ("notes", `String release.notes);
+                   ("truncated", `Bool release.truncated);
                  ])
              cache.releases) );
     ]
@@ -142,8 +208,31 @@ let cached_release = function
   | `Assoc fields -> (
       match (List.assoc_opt "tag" fields, List.assoc_opt "security" fields) with
       | Some (`String tag), Some (`Bool security) ->
+          let text name =
+            match List.assoc_opt name fields with
+            | Some (`String value) -> value
+            | _ -> ""
+          in
+          (* the cache is this program's own file, but it is read back with
+             the same bounds as an answer *)
+          let notes, cut = cap_notes (text "notes") in
+          let truncated =
+            cut
+            ||
+            match List.assoc_opt "truncated" fields with
+            | Some (`Bool value) -> value
+            | _ -> false
+          in
           Option.map
-            (fun version -> { tag; version; security })
+            (fun version ->
+              {
+                tag;
+                version;
+                security;
+                published = published_date (text "published");
+                notes;
+                truncated;
+              })
             (release_version tag)
       | _ -> None)
   | _ -> None
@@ -158,7 +247,10 @@ let cache_of_json = function
       in
       let etag =
         match List.assoc_opt "etag" fields with
-        | Some (`String etag) when valid_etag etag -> Some etag
+        | Some (`String etag)
+          when valid_etag etag
+               && List.assoc_opt "format" fields = Some (`Int cache_format) ->
+            Some etag
         | _ -> None
       in
       match (checked_at, List.assoc_opt "releases" fields) with

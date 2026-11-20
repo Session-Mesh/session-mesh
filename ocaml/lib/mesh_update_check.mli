@@ -21,15 +21,33 @@ type level = All | Minor | Major | Security_only | Off
 val level_of_string : string -> level option
 (** [all], [minor], [major], [security] or [none], in any case. *)
 
-type release = { tag : string; version : Version.t; security : bool }
+type release = {
+  tag : string;
+  version : Version.t;
+  security : bool;
+  published : string;
+      (** GitHub's [published_at] (YYYY-MM-DDTHH:MM:SSZ), or [""]. *)
+  notes : string;
+      (** The release notes (Markdown) as {!cap_notes} bounds them, or [""]. *)
+  truncated : bool;  (** The notes were cut at {!notes_limit}. *)
+}
+
+val notes_limit : int
+(** 65536 bytes. *)
+
+val cap_notes : string -> string * bool
+(** The notes kept for the page: line ends made [\n], control characters
+    other than [\n] and [\t] removed, at most {!notes_limit} bytes cut at a
+    UTF-8 character boundary; [true] when something was cut. *)
 
 val security_marked : string -> bool
 (** The convention for a security release: its notes contain a line
     [Security: yes] (case and surrounding blanks ignored). *)
 
 val releases_of_body : string -> (release list, string) result
-(** The releases of a GitHub [/releases] answer (a JSON list). Drafts,
-    pre-releases and tags that are not [vX.Y.Z] are left out. *)
+(** The releases of a GitHub [/releases] answer (a JSON list), with their
+    notes and dates. Drafts, pre-releases and tags that are not [vX.Y.Z] are
+    left out. *)
 
 type notice = { latest : release; security : bool }
 (** [security] is true when a release newer than the running one and not newer
@@ -50,6 +68,8 @@ val period : float
 (** Seconds between two requests: three hours. *)
 
 val read_cache : string -> cache option
+(** A cache written before the notes were kept (no [format] 2) is read without
+    its ETag, so that the next request brings the whole list once. *)
 
 val write_cache : string -> cache -> unit
 (** Written to a temporary file then renamed, mode 0600; the parent directory is

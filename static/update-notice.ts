@@ -3,10 +3,12 @@
 
 // The "update available" banner. The server relays what the PTY host's release check found
 // (field `update` of /api/sessions); this page never contacts GitHub itself. Dismissing the banner
-// is remembered per release in this browser, so it comes back only for a newer one.
+// is remembered per release in this browser, so it comes back only for a newer one. "What's new" opens the
+// release notes in the page (static/update-notes.ts) when the host has them.
+import { openNotes } from "./update-notes.ts";
 
 export type UpdateNotice = {
-  latest: string; security: boolean; notesUrl: string; upgradeCommand: string;
+  latest: string; security: boolean; notesUrl: string; upgradeCommand: string; notes: boolean;
 };
 type Translate = (key: string, params?: Record<string, string>) => string;
 type Store = { getItem(key: string): string | null; setItem(key: string, value: string): void };
@@ -38,7 +40,8 @@ export function parseNotice(raw: unknown): UpdateNotice | null {
   if (value.status !== "available" || typeof latest !== "string" || !TAG.test(latest)) return null;
   if (typeof security !== "boolean" || typeof notesUrl !== "string" || !notesFor(notesUrl, latest)) return null;
   if (typeof upgradeCommand !== "string" || upgradeCommand.length > 4096) return null;
-  return { latest, security, notesUrl, upgradeCommand };
+  // `notes`: the host holds the release notes (an older host does not say so: no "What's new")
+  return { latest, security, notesUrl, upgradeCommand, notes: value.notes === true };
 }
 
 // The newest release closed on this page. Without a usable store (blocked storage, a private window)
@@ -66,7 +69,7 @@ export function dismiss(notice: UpdateNotice, store: Store | null): void {
 // Forget what this page closed (tests).
 export function forgetDismissals(): void { dismissedOnThisPage = ""; }
 
-function build(root: HTMLElement, notice: UpdateNotice, t: Translate, onClose: () => void): void {
+function build(root: HTMLElement, notice: UpdateNotice, t: Translate, language: string, onClose: () => void): void {
   const doc = root.ownerDocument;
   const text = doc.createElement("span");
   text.className = "update-notice-text";
@@ -88,7 +91,17 @@ function build(root: HTMLElement, notice: UpdateNotice, t: Translate, onClose: (
   close.title = t("update.dismiss");
   close.textContent = "×";
   close.addEventListener("click", onClose);
-  root.replaceChildren(text, " ", link, " ", command, close);
+  const parts: (Node | string)[] = [text, " "];
+  if (notice.notes) {
+    const whatsNew = doc.createElement("button");
+    whatsNew.type = "button";
+    whatsNew.className = "update-notice-whatsnew";
+    whatsNew.textContent = t("update.whatsNew");
+    whatsNew.setAttribute("aria-haspopup", "dialog");
+    whatsNew.addEventListener("click", () => openNotes(doc, notice, t, language, whatsNew));
+    parts.push(whatsNew, " ");
+  }
+  root.replaceChildren(...parts, link, " ", command, close);
 }
 
 // Draws or hides the banner for the latest /api/sessions answer. The markup is rebuilt only when
@@ -101,9 +114,9 @@ export function render(root: HTMLElement, raw: unknown, t: Translate, store: Sto
     delete root.dataset.shown;
     return;
   }
-  const key = `${notice.latest}|${notice.security}|${notice.upgradeCommand}|${language}`;
+  const key = `${notice.latest}|${notice.security}|${notice.notes}|${notice.upgradeCommand}|${language}`;
   if (root.dataset.shown !== key) {
-    build(root, notice, t, () => {
+    build(root, notice, t, language, () => {
       dismiss(notice, store);
       root.hidden = true;
       root.replaceChildren();
