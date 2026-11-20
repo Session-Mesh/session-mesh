@@ -394,8 +394,7 @@ function prefixedBytes(prefix, bytes) {
   return joined;
 }
 
-function openLocalTerminal(name, { rows, cols, created }, observer) {
-  requireLocalMesh();
+function localTerminalSocket(name, { rows, cols, created }) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   // replay_geometry=1: server.py sends, before the replay, the geometry it was produced at.
   // pty_size=1: this pane follows the PTY size another device owns ({t:"s"}, Pane.applyPtySize).
@@ -404,10 +403,44 @@ function openLocalTerminal(name, { rows, cols, created }, observer) {
   const incarnation = conditional ? `&created=${encodeURIComponent(created)}` : "";
   const socket = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(name)}?rows=${rows}&cols=${cols}&replay_geometry=1&pty_size=1${incarnation}`);
   socket.binaryType = "arraybuffer";
+  return socket;
+}
+
+// Original-socket identity only. Callers must additionally guard replay/drain,
+// inventory, mode and input revision. View detachment alone does not revoke it.
+function localTerminalBinding(name, created, bytes, geometry, ptySize = () => {}) {
+  let binding = created != null ? "pending" : "invalid";
+  let replayStarted = false;
+  return {
+    isBound: () => binding === "bound",
+    receive(data) {
+      if (typeof data !== "string") {
+        replayStarted = true;   // the first D is a boundary even when its payload is empty
+        if (binding === "pending") binding = "invalid";
+        bytes(new Uint8Array(data));
+        return;
+      }
+      const size = replayGeometry(data);
+      const ownedSize = MeshPaneActions.parsePtySize(data);
+      let message;
+      try { message = JSON.parse(data); } catch { binding = "invalid"; return; }
+      if (message?.t === "bound") {
+        const exact = Object.keys(message).length === 3 && message.name === name
+          && typeof message.created === "number" && Number.isFinite(message.created)
+          && message.created > 0 && message.created === created;
+        binding = binding === "pending" && !replayStarted && exact ? "bound" : "invalid";
+      } else if (!size && !ownedSize) binding = "invalid";
+      if (size) geometry(size);
+      if (ownedSize) ptySize(ownedSize);
+    },
+  };
+}
+
+function openLocalTerminal(name, size, observer) {
+  requireLocalMesh();
+  const socket = localTerminalSocket(name, size), {created} = size;
   let disposed = false;
   let attached = true;
-  let binding = conditional ? "pending" : "invalid";
-  let replayStarted = false;
   let dictationMode = MeshPaneActions.createDictationModeObserver(observer.modeSource?.modes?.bracketedPasteMode === true, observer.modeSource);
   const lifetime = MeshPaneActions.createRetainedLifetime(() => {
     disposed = true; dictationMode.dispose(); localTerminalHandles.delete(handle); socket.close();
@@ -425,9 +458,7 @@ function openLocalTerminal(name, { rows, cols, created }, observer) {
       dictationMode.bytes(prefixedBytes(prefix, bytes));
     },
     isOpen: () => !disposed && localTerminalSocketReady(socket),
-    // Original-socket identity only. Callers must additionally guard replay/drain,
-    // inventory, mode and input revision. View detachment alone does not revoke it.
-    isBound: (expectedName, expectedCreated) => handle.isOpen() && binding === "bound"
+    isBound: (expectedName, expectedCreated) => handle.isOpen() && binding.isBound()
       && expectedName === name && expectedCreated === created,
     queueInput: (bytes) => send(bytes),
     lease: (clientId, dirty) => send(JSON.stringify({ t: "h", client_id: clientId, dirty })),
@@ -441,33 +472,16 @@ function openLocalTerminal(name, { rows, cols, created }, observer) {
   };
   localTerminalHandles.add(handle);
   const current = () => !disposed && attached && observer.current(handle);
+  const binding = localTerminalBinding(name, created, (bytes) => {
+    dictationMode.bytes(bytes);
+    if (current()) observer.bytes(handle, bytes);
+  }, (geometry) => {if (current()) observer.replayGeometry(handle, geometry);},
+  (ptySize) => {if (current()) observer.ptySize?.(handle, ptySize);});
   socket.onopen = () => {
     if (!current()) { try { handle.close(); } catch {} return; }
     observer.opened(handle);
   };
-  socket.onmessage = (event) => {
-    if (disposed) return;
-    if (typeof event.data !== "string") {
-      replayStarted = true;   // the first D is a boundary even when its payload is empty
-      if (binding === "pending") binding = "invalid";
-      const bytes = new Uint8Array(event.data);
-      dictationMode.bytes(bytes);
-      if (current()) observer.bytes(handle, bytes);
-      return;
-    }
-    const geometry = replayGeometry(event.data);
-    const ptySize = MeshPaneActions.parsePtySize(event.data);
-    let message;
-    try { message = JSON.parse(event.data); } catch { binding = "invalid"; return; }
-    if (message?.t === "bound") {
-      const exact = message && Object.keys(message).length === 3
-        && message.name === name && typeof message.created === "number"
-        && Number.isFinite(message.created) && message.created > 0 && message.created === created;
-      binding = binding === "pending" && !replayStarted && exact ? "bound" : "invalid";
-    } else if (!geometry && !ptySize) binding = "invalid";
-    if (geometry && current()) observer.replayGeometry(handle, geometry);
-    if (ptySize && current()) observer.ptySize?.(handle, ptySize);
-  };
+  socket.onmessage = (event) => {if (!disposed) binding.receive(event.data);};
   socket.onclose = (event) => {
     if (event?.code === 1012) inventoryPoller?.noteRestart();   // the server closes its sockets as it restarts
     const notify = current();
@@ -8632,6 +8646,8 @@ function restorePendingCachedTerminals() {
   for (const binding of cached.bindings) restoreCachedTerminal(binding, cached.focus);
 }
 function restoreCachedTerminal({pane, id, name, created}, focus) {
+  // A live reconnect can follow a restarted name; a frozen page may only restore
+  // its original target. pageshow is not user authority to select a replacement.
   const identity = paneTargets.identity(id);
   if (!panes.includes(pane) || pane.id !== id || pane.actionDisposed || pane.conn
       || !Number.isFinite(created) || created <= 0 || identity?.name !== name || identity.created !== created) return;
