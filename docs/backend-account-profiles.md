@@ -40,7 +40,8 @@ and its persisted conversation layout before using a profile.
 
 Claude/Pi `history` and Codex `state` must be a distinct subtree, never the credential root itself or
 its ancestor. Shared conversation subtrees are permitted, including an explicitly declared subtree
-under another profile's configuration folder. Credential roots cannot overlap. Sharing a subtree or
+under another profile's configuration folder **only when both profiles use the same backend**.
+Cross-backend overlaps are rejected. Credential roots cannot otherwise overlap. Sharing a subtree or
 carrying persisted conversation files is not proof that in-memory drafts, queues, dialogs and tools
 have reached a safe switch boundary.
 
