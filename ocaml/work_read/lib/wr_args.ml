@@ -18,10 +18,12 @@ type command =
   | Task_detail of string
   | Resume of { product : string option; project : string option; all : bool }
   | Sessions_of of target
+  | Session_questions
 
 let usage =
   "usage: work-read products | projects [--product P] [--all] | project P-ID | task T-ID | resume \
-   [--product P] [--project P-ID] [--all] | sessions-of (--product P | --project P-ID | --task T-ID)"
+   [--product P] [--project P-ID] [--all] | sessions-of (--product P | --project P-ID | --task T-ID) | \
+   session-questions"
 
 let max_value = 100
 let is_hex c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
@@ -121,4 +123,6 @@ let parse = function
   | "task" :: rest -> single "task" task_value (fun id -> Task_detail id) rest
   | "resume" :: rest -> resume rest
   | "sessions-of" :: rest -> sessions_of rest
+  | [ "session-questions" ] -> Ok Session_questions
+  | "session-questions" :: _ -> Error (invalid "session-questions takes no argument")
   | cmd :: _ -> Error (invalid "unknown subcommand %s; %s" (T.clean (String.escaped cmd)) usage)

@@ -28,6 +28,10 @@ function requestLocal(...args) {
 function localActionUnavailable() {
   return !localMeshEffectsAllowed();
 }
+// The work view's bundle once loaded (static/work-view.ts), shared by the Projects view and the session marker, so
+// that both read through the same page slots; and the session marker (see tickSessionMarker).
+let workModule = null;
+let sessionMarker = null;
 
 const $ = (s, root = document) => root.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -523,6 +527,17 @@ class Pane {
     $(".mail-badge-count", badge).textContent = count ? String(count) : "";
     $(".sr-only", badge).textContent = count ? t("mailbox.pending", { count }) : "";
   }
+  // The "? n" button: the open questions of this session in the tracker (sessionMarkerOf); it opens them in the
+  // Projects view. Hidden when the session has none or the tracker could not be read.
+  renderQuestionsButton(s) {
+    const button = $('[data-act="questions"]', this.el), marker = sessionMarkerOf(s);
+    button.hidden = !marker;
+    if (!marker) return;
+    const questionsLabel = t("pane.questions.aria", { n: marker.count });
+    $(".p-questions-count", button).textContent = sessionMarkerText(marker);
+    button.setAttribute("aria-label", questionsLabel);
+    button.title = questionsLabel;
+  }
 
   // xterm must be opened once its element is in the document (it measures glyphs)
   mount() {
@@ -686,6 +701,7 @@ class Pane {
       else if (act === "redraw") this.redraw();
       else if (act === "raw") this.enableCodexRawScrollback();
       else if (act === "compose") { setActive(this); this.openMailbox(); }
+      else if (act === "questions") openSessionQuestions(this.id);
       else if (act === "file") openAttach();
       else if (act === "new") openNew();
       else if (act === "folder") openFolderDialog(this.id);
@@ -1738,6 +1754,7 @@ class Pane {
     $('[data-act="compose"]', this.el).hidden = !mesh || !localMeshEffectsAllowed() || !MeshPaneActions.hasMailbox(s);
     $('[data-act="compose"]', this.el).disabled = !localMeshEffectsAllowed();
     this.renderMailboxBadge(mesh && s ? s : null);
+    this.renderQuestionsButton(mesh && s && localMeshEffectsAllowed() ? s : null);
     $('[data-act="board"]', this.el).hidden = !mesh || !localMeshEffectsAllowed();
     // External/history/empty retain direct local close; Mesh/documents use Plus.
     $('[data-act="close"]', this.el).hidden = panes.length < 2 || mesh || isWeb || isBoard || isDemo;
@@ -3381,7 +3398,7 @@ function itemHtml(s, opts = {}) {
   const preview = mine ? a.said || a.last : a?.last;
   const rowBadge = rowSt === "ready" ? "" : `<span class="row-state ${rowSt}">${esc(t(`sessions.row.${rowSt}`))}</span>`;
   const row = `<button class="item ${here ? "sel" : shown ? "shown" : ""}${s.folder ? " in-folder" : ""}${mine ? ` ${st}` : ""}${rowSt === "ready" ? "" : ` row-${rowSt}`}" data-id="${esc(s.id)}"${opts.todo ? "" : drag}>
-    <div class="top"><span class="dot ${rowSt === "ready" ? st : "pending"}" aria-hidden="true"></span><span class="name">${esc(label(s))}</span>${changed ? `<span class="board-badge" aria-label="${esc(t("list.boardModified"))}" title="${esc(t("list.boardModified"))}"></span>` : ""}${s.pending ? `<span class="tag" title="${esc(t("list.pendingRestart"))}">⏳</span>` : ""}${s.wake_unconfirmed === true ? `<span class="tag wake-unconfirmed" role="img" aria-label="${esc(t("list.wakeUnconfirmed"))}" title="${esc(t("list.wakeUnconfirmed"))}">✉?</span>` : ""}${tag}<span class="ago">${esc(ago(lastSeen(s)))}</span></div>
+    <div class="top"><span class="dot ${rowSt === "ready" ? st : "pending"}" aria-hidden="true"></span><span class="name">${esc(label(s))}</span>${changed ? `<span class="board-badge" aria-label="${esc(t("list.boardModified"))}" title="${esc(t("list.boardModified"))}"></span>` : ""}${s.pending ? `<span class="tag" title="${esc(t("list.pendingRestart"))}">⏳</span>` : ""}${s.wake_unconfirmed === true ? `<span class="tag wake-unconfirmed" role="img" aria-label="${esc(t("list.wakeUnconfirmed"))}" title="${esc(t("list.wakeUnconfirmed"))}">✉?</span>` : ""}${questionBadgeHtml(s)}${tag}<span class="ago">${esc(ago(lastSeen(s)))}</span></div>
     <div class="meta">${rowBadge}${stText}${esc(where)}</div>
     ${s.notice === "opencode-unsupported" ? `<div class="last">${esc(t("list.opencodeUnsupportedNotice"))}</div>` : ""}
     ${s.notice === "opencode-unreadable" ? `<div class="last">${esc(t("list.opencodeUnreadableNotice"))}</div>` : ""}
@@ -4686,6 +4703,7 @@ function applyInventorySnapshot(issue, { next, identities }) {
     renderRestore();
     pollWatched();
     pollHistory();
+    tickSessionMarker();
   }
   return { portfolio: data.portfolio };
 }
@@ -5469,7 +5487,9 @@ function setExplorer(on) {
 }
 $("#btn-explore").addEventListener("click", () => setExplorer(!exploring));
 
-// Projects is optional: import and artifact reads never participate in Sessions boot or polling.
+// Projects is optional: import and artifact reads never participate in Sessions boot or polling. The one exception is
+// the session marker (tickSessionMarker): it loads the work view's bundle after the first listing and reads the
+// tracker at most once a minute, and a failure shows nothing.
 let projecting = false;
 let projectsReturnFocus = null;
 document.addEventListener('focusin', event => {
@@ -5538,36 +5558,56 @@ function fallBackToLegacyProjects() {
   setLegacyProjects(true, true);
   return true;
 }
+// Where the work view opens next (a session marker's target, static/work-session-questions.ts), taken once.
+let pendingWorkTarget = null;
 function openProjectsPresentation() {
   if (legacyProjects()) {
+    pendingWorkTarget = null;   // the old view has no such places
     if (projectsController) projectsController.open();
     else void loadProjectsModule();
   } else void loadWorkView();
+}
+// The bundle is imported once per page (one module, so one set of read slots): callers share the import in flight,
+// and a failed import is tried again by the next caller.
+let workImportAttempt = 0;
+let workImport = null;
+function importWorkModule() {
+  if (workModule) return Promise.resolve(workModule);
+  workImport ||= importWorkModuleOnce().finally(() => { workImport = null; });
+  return workImport;
+}
+async function importWorkModuleOnce() {
+  let timer;
+  try {
+    workModule = await Promise.race([
+      import(`/static/work-view.js?v=${encodeURIComponent($("meta[name=client-version]").content)}&attempt=${++workImportAttempt}`),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), 5000); }),
+    ]);
+    return workModule;
+  } finally { clearTimeout(timer); }
 }
 async function loadWorkView() {
   const issue = ++workGeneration;
   const status = $("#projects-module-status");
   const retry = $("#projects-module-retry");
   status.textContent = t("projects.loading"); retry.hidden = true;
-  let timer;
   try {
-    const module = await Promise.race([
-      import(`/static/work-view.js?v=${encodeURIComponent($("meta[name=client-version]").content)}&attempt=${issue}`),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), 5000); }),
-    ]);
+    const module = await importWorkModule();
     if (!projecting || issue !== workGeneration || legacyProjects() || !localMeshEffectsAllowed()) return;
     workController ||= module.mountWorkView({ root: $("#work-root"), request: requestLocal, translate: t,
       onLegacy: () => setLegacyProjects(true), onNotAvailable: fallBackToLegacyProjects,
       onOpenQuestions: (count) => showOpenQuestions(count, module.counterText(count)) });
-    workController.open();
+    const target = pendingWorkTarget ?? undefined;
+    pendingWorkTarget = null;
+    workController.open(target);
     status.textContent = "";
   } catch {
     if (projecting && issue === workGeneration) { status.textContent = t("projects.unavailable"); retry.hidden = false; }
-  } finally { clearTimeout(timer); }
+  }
 }
-// The open questions badge of the Projects buttons (main and phone menu). It shows the count the work view last read
-// (when it opens, on Refresh, after an answer); nothing reads it on a timer, and an unknown count shows nothing.
-// `shown` is the badge text from the work view's counterText ("" for nothing).
+// The open questions badge of the Projects buttons (main and phone menu). It shows the count the work view or the
+// session marker last read (the view when it opens, on Refresh, after an answer; the marker at most once a minute),
+// and an unknown count shows nothing. `shown` is the badge text from the work view's counterText ("" for nothing).
 function showOpenQuestions(count, shown) {
   for (const badge of document.querySelectorAll(".projects-question-badge")) {
     badge.textContent = shown;
@@ -5578,6 +5618,43 @@ function showOpenQuestions(count, shown) {
   for (const button of document.querySelectorAll('#btn-projects,[data-mobile-action="btn-projects"]')) {
     if (shown) button.setAttribute("aria-describedby", description.id); else button.removeAttribute("aria-describedby");
   }
+}
+// The "? n" marker of the session rows and headers: the open questions of each session in the tracker, joined by
+// session name (static/work-session-marker.ts, in the work view's bundle). Each applied listing ticks it; it reads
+// at most once a minute while the page is visible, and at once after the Projects view is left.
+let sessionMarkerLoading = false;
+let sessionMarkerRetryAt = 0;
+const sessionMarkerOf = (s) => (s && typeof s.name === "string" && sessionMarker?.marker(s.name)) || null;
+const sessionMarkerText = (marker) => workModule?.counterText(marker.count) ?? "";
+function tickSessionMarker() {
+  if (sessionMarker) return sessionMarker.tick();
+  if (sessionMarkerLoading || Date.now() < sessionMarkerRetryAt || !localMeshEffectsAllowed()) return;
+  sessionMarkerLoading = true;
+  importWorkModule().then((module) => {
+    if (!localMeshEffectsAllowed()) return;
+    sessionMarker ||= module.mountSessionMarker({ request: requestLocal, onChange: sessionMarkerChanged,
+      visible: () => document.visibilityState === "visible" });
+    sessionMarker.tick();
+  }, () => { sessionMarkerRetryAt = Date.now() + 60_000; }).finally(() => { sessionMarkerLoading = false; });
+}
+function sessionMarkerChanged() {
+  listBatch.request();
+  for (const pane of panes) pane.header();
+  const count = sessionMarker.openQuestions();
+  showOpenQuestions(count, workModule.counterText(count));
+}
+function questionBadgeHtml(s) {
+  const marker = s.kind === "mesh" ? sessionMarkerOf(s) : null;
+  if (!marker) return "";
+  const questionsLabel = t("sessions.questions.row", { n: marker.count });
+  return `<span class="tag question-badge" role="img" aria-label="${esc(questionsLabel)}" title="${esc(questionsLabel)}">? ${esc(sessionMarkerText(marker))}</span>`;
+}
+function openSessionQuestions(id) {
+  const marker = sessionMarkerOf(find(id));
+  if (!marker) return;
+  pendingWorkTarget = marker.target;
+  setProjects(true);
+  if (!projecting) pendingWorkTarget = null;   // the view did not open: the target is not kept for a later opening
 }
 function setProjects(on) {
   if (on && localActionUnavailable()) return;
@@ -5606,6 +5683,9 @@ function setProjects(on) {
   } else {
     projectsGeneration++; workGeneration++;
     projectsController?.close(); workController?.close();
+    pendingWorkTarget = null;
+    sessionMarker?.refresh();   // an answer given in Projects may have closed questions
+    tickSessionMarker();
     for (const pane of panes) pane.refit();
     if (projectsReturnFocus instanceof HTMLElement && projectsReturnFocus.isConnected && !projectsReturnFocus.closest("#projects,#side")) projectsReturnFocus.focus({ preventScroll: true });
     else active?.focus();

@@ -15,6 +15,7 @@ let dispatch loaded = function
   | Wr_args.Task_detail id -> Wr_task.run loaded id
   | Wr_args.Resume { product; project; all } -> Wr_resume.run loaded ~product ~project ~all
   | Wr_args.Sessions_of target -> Wr_sessions.run loaded target
+  | Wr_args.Session_questions -> Wr_session_questions.run loaded
 
 let run ?getenv args =
   Wr_out.reset ();

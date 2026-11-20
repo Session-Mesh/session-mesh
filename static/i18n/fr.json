@@ -1417,6 +1417,10 @@
   "pane.mailbox": "Messagerie",
   "pane.mailboxAria": "Ouvrir la messagerie de cette session",
   "pane.mailboxTitle": "Messagerie : messages entre agents pour cette session",
+  "pane.questions.aria": {
+    "one": "{n} question ouverte pour cette session : l’ouvrir dans Projets",
+    "other": "{n} questions ouvertes pour cette session : les ouvrir dans Projets"
+  },
   "paneActions.action.compose": "Écrire dans le terminal…",
   "bar.config": "Configuration",
   "bar.configTitle": "Chemins, versions et réglages utilisés, et ceux qui peuvent être modifiés",
@@ -1950,6 +1954,10 @@
   "sessions.phase.focus": "sessions ouvertes et épinglées d'abord",
   "sessions.phase.recent": "sessions récemment actives",
   "sessions.phase.rest": "les autres sessions",
+  "sessions.questions.row": {
+    "one": "{n} question ouverte pour cette session",
+    "other": "{n} questions ouvertes pour cette session"
+  },
   "sessions.row.loading": "chargement",
   "sessions.row.ready": "prête",
   "sessions.row.slow": "lente",

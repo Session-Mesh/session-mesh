@@ -4,6 +4,8 @@
 /** Client of `POST /api/work/v1`: same origin, page credentials, every outcome a value (never a throw). */
 
 import { isObj, parseOpenQuestions, parseProducts, parseProject, parseProjects, parseTask, text } from './work-parse.ts';
+import { parseSessionQuestions } from './work-session-questions.ts';
+import type { SessionQuestionsDoc } from './work-session-questions.ts';
 import type { OpenQuestionsDoc, ProductsDoc, ProjectDoc, ProjectsDoc, TaskDetail } from './work-types.ts';
 
 export type WorkFetch = (input: string, init: RequestInit) => Promise<Response>;
@@ -68,6 +70,8 @@ export type WorkApi = Readonly<{
   task(id: string, signal?: AbortSignal): Promise<WorkResult<TaskDetail>>;
   /** Every open question of the tracker (`resume` without a scope): the list (at most 20) and the total. */
   openQuestions(signal?: AbortSignal): Promise<WorkResult<OpenQuestionsDoc>>;
+  /** The open questions of each session, by name (`session-questions`), for the session marker. */
+  sessionQuestions(signal?: AbortSignal): Promise<WorkResult<SessionQuestionsDoc>>;
   /** The owner's answer to an open question (the write op, sent with the page's own cookie only). */
   answer(question: string, answerText: string): Promise<WorkResult<AnswerReceipt>>;
 }>;
@@ -75,7 +79,8 @@ export type WorkApi = Readonly<{
 /**
  * The reads a page may have in flight at once. The relay runs at most four work programs for all its pages together and
  * refuses the next one as `busy`; two per page is what the Projects view needed before it also read the open
- * questions, so two pages opening it together still fit.
+ * questions, so two pages opening it together still fit. The session marker (work-session-marker.ts) reads through
+ * the same slots.
  */
 export type ReadSlots = Readonly<{
   /** Wait for a free slot; false when the signal aborted first (the slot is then not taken). */
@@ -160,6 +165,7 @@ export function createWorkApi(request: WorkFetch, url = '/api/work/v1', options:
     project: (id, signal) => read('project', { id }, parseProject, signal),
     task: (id, signal) => read('task', { id }, parseTask, signal),
     openQuestions: signal => read('resume', {}, parseOpenQuestions, signal),
+    sessionQuestions: signal => read('session-questions', {}, parseSessionQuestions, signal),
     answer: (question, answerText) => call('answer', { question, text: answerText }, parseReceipt),
   };
 }

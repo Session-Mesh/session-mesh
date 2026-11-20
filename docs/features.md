@@ -201,9 +201,19 @@ project tracker that agents write through `mesh-work`, read only:
   project), its age, the session and agent that asked it, the options and the assumption the agent
   gave, and the answer form of the task sheet. The list holds the 20 newest open questions; a note
   counts the others, which show in their project. The **Projects** button (and its entry in the
-  phone's menu) carries the number of open questions, as read the last time the view read it: when
-  the view opens, on "Refresh" and after an answer. Nothing reads it on a timer, so the number
-  appears once Projects has been opened in the page, and disappears when the read fails.
+  phone's menu) carries the number of open questions, as read the last time the view or the session
+  marker read it: when the view opens, on "Refresh", after an answer, and with the marker below. An
+  unknown number shows nothing.
+- **Questions on the sessions.** In the Sessions view, a session with open questions shows "? n" on
+  its row in the list, and a "? n" button in its header (named with the count). n counts, once each,
+  the open questions the session asked, those about a task it is linked to, and those about the
+  project of such a task. The button opens the Projects view where the questions are: the task's
+  sheet with its answer form when they are all about one task, the project's Questions tab when they
+  are all in one project, else the first screen. The page reads them (`session-questions` of
+  [work-read](work-read.md)) after a session listing, at most once a minute while it is visible, and
+  again when the Projects view is left; when the tracker cannot be read, nothing is shown. Sessions
+  are matched by name: a session restored under another name loses its questions, and a later
+  session that takes an earlier one's name gets them.
 - **Products and projects.** The first screen lists the products and their active projects, with
   each project's progress (done tasks over all tasks) and its number of blockers.
 - **A project, in five tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent

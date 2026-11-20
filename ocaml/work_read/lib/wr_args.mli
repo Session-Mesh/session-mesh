@@ -22,6 +22,7 @@ type command =
   | Resume of { product : string option; project : string option; all : bool }
       (** [all]: also the [todo] section *)
   | Sessions_of of target
+  | Session_questions  (** the open questions of each session, by name *)
 
 val parse : string list -> (command, Work_mcp.Work_err.t) result
 (** The arguments after the program name. *)
