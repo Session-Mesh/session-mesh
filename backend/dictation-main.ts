@@ -5,7 +5,10 @@ import {configuration} from './dictation.ts';
 import {startService} from './dictation-service.ts';
 
 async function main(){
-  const config=configuration(process.env);if(!config)throw Error('Disabled worker');
+   let config;
+   try {config=configuration(process.env);}
+   catch {process.stdout.write('invalid_configuration\n');process.exitCode=1;return;}
+   if(!config)throw Error('Disabled worker');
   // Private inherited pipe: no secret in arguments, environment or output.
   let input='',ended=false;
   process.stdin.once('end',()=>{ended=true;});

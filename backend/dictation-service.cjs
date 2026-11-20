@@ -657,7 +657,14 @@ async function startService(config, secret, socketPath, inventorySocket, princip
 
 // backend/dictation-main.ts
 async function main() {
-  const config = configuration(process.env);
+  let config;
+  try {
+    config = configuration(process.env);
+  } catch {
+    process.stdout.write("invalid_configuration\n");
+    process.exitCode = 1;
+    return;
+  }
   if (!config) throw Error("Disabled worker");
   let input = "", ended = false;
   process.stdin.once("end", () => {

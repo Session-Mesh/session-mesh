@@ -396,57 +396,104 @@ def _dictation_error(code, status):
 
 
 async def start_dictation(app):
+    app["dictation_disabled_reason"] = "not_configured"
     if not os.environ.get("MESH_WHISPER_URL"):
         return
-    app["dictation_directory"] = tempfile.TemporaryDirectory(prefix="mesh-dictation-", dir="/tmp")
-    app["dictation_secret"] = secrets.token_hex(32)
-    app["dictation_principal"] = _dictation_principal(app)
-    app["dictation_revision"] = 0
-    app["dictation_principal_lock"] = asyncio.Lock()
-    socket = str(Path(app["dictation_directory"].name) / "worker.sock")
+    reason = "worker_failed"
     try:
+        app["dictation_directory"] = tempfile.TemporaryDirectory(prefix="mesh-dictation-", dir="/tmp")
+        app["dictation_secret"] = secrets.token_hex(32)
+        app["dictation_principal"] = _dictation_principal(app)
+        app["dictation_revision"] = 0
+        app["dictation_principal_lock"] = asyncio.Lock()
+        socket = str(Path(app["dictation_directory"].name) / "worker.sock")
         node = os.environ.get("MESH_NODE", "node")
-        if "MESH_NODE" in os.environ and (not Path(node).is_absolute() or not os.access(node, os.X_OK)):
-            raise RuntimeError("Dictation runtime must be an absolute executable path")
+        if "MESH_NODE" in os.environ and not Path(node).is_absolute():
+            reason = "invalid_configuration"
+            raise ValueError()
+        reason = "runtime_unavailable"
         app["dictation_worker"] = await asyncio.create_subprocess_exec(
             node, str(ROOT / "backend" / "dictation-service.cjs"),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL, limit=128,
             env={k: v for k, v in os.environ.items() if k == "PATH" or k.startswith("MESH_WHISPER_")})
+        reason = "worker_failed"
         worker = app["dictation_worker"]
         worker.stdin.write((json.dumps({"secret": app["dictation_secret"], "socket": socket,
                                        "inventory": str(ptyhost.SOCK), "parent": os.getpid(),
                                        "principal": app["dictation_principal"]}) + "\n").encode())
-        await worker.stdin.drain()
-        if await asyncio.wait_for(worker.stdout.readline(), 5) != b"ready\n":
-            raise RuntimeError("Dictation worker unavailable")
+        await asyncio.wait_for(worker.stdin.drain(), 1)
+        handshake = await asyncio.wait_for(worker.stdout.readline(), 5)
+        if handshake != b"ready\n":
+            if handshake == b"invalid_configuration\n":
+                reason = "invalid_configuration"
+            raise ValueError()
         app["dictation_client"] = aiohttp.ClientSession(
             connector=aiohttp.UnixConnector(path=socket, limit=33),  # 32 public transfers + principal control
             cookie_jar=aiohttp.DummyCookieJar(), trust_env=False, auto_decompress=False,
             timeout=aiohttp.ClientTimeout(total=20))
         app["dictation_capacity"] = asyncio.Semaphore(32)
+        app["dictation_monitor"] = asyncio.create_task(_watch_dictation(app, worker))
+    except asyncio.CancelledError:
+        await stop_dictation(app)
+        raise
+    except Exception as error:
+        if isinstance(error, asyncio.TimeoutError):
+            reason = "startup_timeout"
+        _disable_dictation(app, reason)
+        await stop_dictation(app)
     except BaseException:
         await stop_dictation(app)
-        raise RuntimeError("Dictation worker unavailable") from None
+        raise
+
+
+def _disable_dictation(app, reason):
+    # Only internally selected closed codes, never exception text or child output.
+    app["dictation_disabled_reason"] = reason
+    print("session-mesh: dictation disabled: " + reason, file=sys.stderr, flush=True)
+
+
+async def _watch_dictation(app, worker):
+    await worker.wait()
+    if app.get("dictation_worker") is worker:
+        _disable_dictation(app, "worker_failed")
+        await stop_dictation(app)
 
 
 async def stop_dictation(app):
-    client = app.get("dictation_client")
-    if client:
-        await client.close()
-    worker = app.get("dictation_worker")
-    if worker:
-        if worker.stdin:
-            worker.stdin.close()
+    # Detach before awaiting: repeated cleanup is harmless and no closed client
+    # can continue to advertise an enabled feature.
+    client = app.pop("dictation_client", None)
+    worker = app.pop("dictation_worker", None)
+    directory = app.pop("dictation_directory", None)
+    monitor = app.pop("dictation_monitor", None)
+    app.pop("dictation_capacity", None)
+    if monitor and monitor is not asyncio.current_task():
+        monitor.cancel()
+        await asyncio.gather(monitor, return_exceptions=True)
+    try:
+        if client:
+            with contextlib.suppress(asyncio.TimeoutError, OSError):
+                await asyncio.wait_for(client.close(), 1)
+    finally:
         try:
-            await asyncio.wait_for(worker.wait(), 3)
-        except asyncio.TimeoutError:
-            if worker.returncode is None:
-                worker.kill()
-            await worker.wait()
-    directory = app.get("dictation_directory")
-    if directory:
-        directory.cleanup()
+            if worker:
+                if worker.stdin:
+                    worker.stdin.close()
+                try:
+                    await asyncio.wait_for(worker.wait(), 3)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    if worker.returncode is None:
+                        with contextlib.suppress(ProcessLookupError):
+                            worker.kill()
+                        with contextlib.suppress(asyncio.TimeoutError):
+                            await asyncio.wait_for(worker.wait(), 1)
+        finally:
+            if directory:
+                with contextlib.suppress(OSError):
+                    directory.cleanup()
 
 
 def _dictation_principal(app):
@@ -455,8 +502,9 @@ def _dictation_principal(app):
 
 
 async def _sync_dictation_principal(app):
-    if not app.get("dictation_client"):
-        return
+    client = app.get("dictation_client")
+    if client is None:
+        raise web.HTTPServiceUnavailable()
     async with app["dictation_principal_lock"]:
         principal = _dictation_principal(app)
         if principal != app["dictation_principal"]:
@@ -464,7 +512,7 @@ async def _sync_dictation_principal(app):
             headers = {"X-Mesh-Bridge": app["dictation_secret"], "X-Mesh-Principal": principal,
                        "Content-Type": "application/json"}
             try:
-                status, _ = await _dictation_exchange(app["dictation_client"], headers, "POST", "/internal/principal",
+                status, _ = await _dictation_exchange(client, headers, "POST", "/internal/principal",
                                                      json.dumps({"revision": app["dictation_revision"]}).encode())
             except (asyncio.TimeoutError, aiohttp.ClientError, OSError, ValueError):
                 raise web.HTTPServiceUnavailable() from None
@@ -550,7 +598,8 @@ async def api_dictation(request):
     client = request.app.get("dictation_client")
     if client is None:
         if request.method in ("GET", "HEAD") and request.path == "/api/transcribe/config":
-            return web.json_response({"enabled": False}, headers={"Cache-Control": "no-store"})
+            return web.json_response({"enabled": False, "disabled_reason": request.app["dictation_disabled_reason"]},
+                                     headers={"Cache-Control": "no-store"})
         return _dictation_error("disabled", 503)
     headers = [("X-Mesh-Bridge", request.app["dictation_secret"]),
                ("X-Mesh-Principal", _dictation_principal(request.app))]
@@ -561,8 +610,9 @@ async def api_dictation(request):
         headers.extend((name, value) for value in request.headers.getall(name, []))
     async def exchange(method, path, data, selected=headers):
         return await _dictation_exchange(client, selected, method, path, data)
+    capacity = request.app["dictation_capacity"]
     try:
-        await asyncio.wait_for(request.app["dictation_capacity"].acquire(), 0.05)
+        await asyncio.wait_for(capacity.acquire(), 0.05)
     except asyncio.TimeoutError:
         return _dictation_error("unavailable", 503)
     try:
@@ -571,7 +621,7 @@ async def api_dictation(request):
     except (asyncio.TimeoutError, aiohttp.ClientError, OSError, ValueError, web.HTTPServiceUnavailable):
         return _dictation_error("unavailable", 503)
     finally:
-        request.app["dictation_capacity"].release()
+        capacity.release()
 
 
 # ---------------------------------------------------------------- ptyhost

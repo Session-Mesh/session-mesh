@@ -1211,6 +1211,14 @@ web service, not the PTY host: terminal sessions stay running, but in-flight rec
 Source installs need Node on the web service's PATH, or an absolute executable path in `MESH_NODE`;
 bundles select their bundled Node without changing the Node available to agents.
 
+Dictation is optional: invalid configuration or worker startup failure disables only dictation,
+not the web server. The authenticated, same-origin `GET /api/transcribe/config` returns
+`{"enabled":false,"disabled_reason":"CODE"}` when disabled (`HEAD` has the same status and
+headers without a body). The closed reason codes are `not_configured`, `invalid_configuration`,
+`runtime_unavailable`, `startup_timeout` and `worker_failed`. They contain no endpoint, runtime
+path or child output; clients translate them locally. Unexpected worker exit also disables
+dictation. Correct the configuration/runtime and restart the web service to retry.
+
 Audio preparation does not start inference until the bridge commits it against a live session.
 Matching retries share that preparation: a failed attempt leaves it available for another attempt,
 or until its 15-second preparation deadline. During that interval, a fresh recording for the same
