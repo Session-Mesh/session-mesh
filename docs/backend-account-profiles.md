@@ -12,8 +12,10 @@ The private `backend-profiles.json` file under `MESH_CONF_DIR` contains
 A profile's identity is **`(backend, id)`**. The same alias, such as `work`, may therefore identify one
 Claude profile and one Codex profile without rewriting existing session account IDs. IDs reuse the
 existing alias grammar: `[a-z0-9-]{1,32}`, excluding `default`. Within a backend, both IDs and labels
-must be unique; label comparison ignores ASCII case, including disabled profiles. Labels are display
-text, not verified provider identities.
+must be unique; labels are trimmed at their ASCII whitespace edges and comparison ignores ASCII case,
+including disabled profiles. Labels use the existing alias validator: 1–24 Unicode characters, with
+control/format characters and line separators refused. They are display text, not verified provider
+identities.
 
 The context revision hashes the backend and declared roots, not the label or enabled state. The
 registry revision hashes the authored file bytes. An account reference in persisted consent rules has
@@ -33,7 +35,7 @@ and its persisted conversation layout before using a profile.
 | --- | --- | --- |
 | Claude | `config`, `history` | `CLAUDE_CONFIG_DIR` selects configuration and native history together. `history` declares a conversation subtree; it is not an independent environment selector. |
 | Codex | `config`, `state` | `CODEX_HOME` selects the native home. `state` declares conversation state; it does not itself redirect the native home or SQLite database. |
-| OpenCode V2 | `config`, `data`, `state`, `cache` | Check the four XDG selectors and their application subdirectories against the selected version. A declared role is not a claim that the application directory and the XDG base are interchangeable. |
+| OpenCode V2 | `config`, `data`, `state`, `cache` | The roles denote XDG base directories, assigned unchanged to `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`. OpenCode appends its application subdirectory; do not append `opencode` to the bases yourself. |
 | Pi | `config`, `history` | Check `PI_CODING_AGENT_DIR` for the agent directory and `--session-dir` / `--session` for conversation storage. Those selectors alone do not establish a safe live checkpoint. |
 
 Claude/Pi `history` and Codex `state` must be a distinct subtree, never the credential root itself or
@@ -41,6 +43,10 @@ its ancestor. Shared conversation subtrees are permitted, including an explicitl
 under another profile's configuration folder. Credential roots cannot overlap. Sharing a subtree or
 carrying persisted conversation files is not proof that in-memory drafts, queues, dialogs and tools
 have reached a safe switch boundary.
+
+For migration of an existing Claude/Codex alias, the conventional declared conversation subtrees are
+`<CLAUDE_CONFIG_DIR>/projects` and `<CODEX_HOME>/sessions`. Declaring those paths does not copy any
+conversation or change where the CLI writes it.
 
 ## One-shot protocol
 
@@ -90,4 +96,6 @@ there is no public journal-management operation.
 
 This is a draft v1 contract, not a migration for deployed aliases. Earlier experimental consent
 references without a backend and journal tables without terminal metadata are not reinterpreted.
+An experimental registry with labels outside the alias rules must be corrected explicitly before use;
+an invalid entry refuses the whole registry, rather than silently dropping a profile.
 Migration from `accounts.json` and the server/launch/UI bindings are separate integration work.

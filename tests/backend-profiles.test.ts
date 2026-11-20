@@ -77,11 +77,29 @@ test('pair references require a backend and cannot remove another backend rule',
   const pair={expected_revision:0,source_id:'work',target_id:'personal',registry_revision:listed.data.registry_revision,confirmation:'skip'};
   assert.equal(f.request('consent.set_pair',pair).code,'invalid-request');assert.equal(fs.existsSync(f.db),false);
   assert.equal(f.request('consent.set_pair',{...pair,backend:'claude'}).ok,true);
-  assert.equal(f.request('consent.set_pair',{...pair,backend:'codex',expected_revision:1}).ok,true);
+  assert.equal(f.request('consent.set_pair',{...pair,backend:'codex',confirmation:'ask',expected_revision:1}).ok,true);
+  const both=f.request('consent.get').data.pairs;assert.equal(both.length,2);
+  for(const backend of ['claude','codex']){
+    const rule=both.find((r:any)=>r.a.backend===backend);assert(rule);
+    assert.equal(rule.b.backend,backend);assert.equal(rule.confirmation,backend==='claude'?'skip':'ask');
+    for(const ref of [rule.a,rule.b]){
+      const own=listed.data.profiles.find((p:any)=>p.backend===backend&&p.id===ref.id);assert(own);
+      assert.equal(ref.context_revision,own.context_revision,'lookup must use the selected backend, not the first ID match');
+    }
+  }
   assert.equal(f.request('consent.remove_pair',{expected_revision:2,backend:'claude',source_id:'personal',target_id:'work'}).ok,true);
   const state=f.request('consent.get').data;assert.equal(state.pairs.length,1);assert.equal(state.pairs[0].a.backend,'codex');
   assert.equal(state.pairs[0].b.backend,'codex');
 }));
+test('labels follow the alias character limit and normalized display names are unique',{skip},()=>{
+  for(const label of ['x'.repeat(25),'work\u200b'])use(f=>{
+    const p=f.add('work');p.label=label;f.save();assert.equal(f.request('profiles.list').code,'invalid-profile-config');
+  });
+  use(f=>{const p=f.add('work');p.label='é'.repeat(24);f.save();assert.equal(f.request('profiles.list').ok,true);});
+  use(f=>{const p=f.add('work');p.label=' Work ';f.save();assert.equal(f.request('profiles.list').data.profiles[0].label,'Work');});
+  use(f=>{const a=f.add('work'),b=f.add('personal');a.label='Work';b.label=' Work ';f.save();
+    assert.equal(f.request('profiles.list').code,'invalid-profile-config');});
+});
 test('host-side resolution binds exact ID/backend/context and checks current roots',{skip},()=>use(f=>{
   f.add('work');f.add('off','pi',false);f.save();const profile=f.request('profiles.list').data.profiles[0];
   const good=f.request('profiles.resolve',{id:'work',backend:'pi',expected_context:profile.context_revision});assert.equal(good.ok,true);assert.equal(good.data.roots.config,f.profiles[0].roots.config);
