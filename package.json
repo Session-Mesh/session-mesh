@@ -10,6 +10,9 @@
   "scripts": {
     "build:flow": "esbuild static/flow-view.ts --bundle --format=esm --target=es2022 --outfile=static/flow-view.js --minify --legal-comments=none --banner:js='/* SPDX-License-Identifier: AGPL-3.0-or-later; Copyright (c) 2026 Atacama <contact@atacama.tech> */'",
     "check:flow": "tsc --noEmit --strict --exactOptionalPropertyTypes --noUncheckedIndexedAccess --target es2022 --module esnext --moduleResolution bundler --allowImportingTsExtensions --lib dom,es2022 --skipLibCheck static/flow-model.ts static/flow-view.ts && esbuild static/flow-view.ts --bundle --format=esm --target=es2022 --minify --legal-comments=none --banner:js='/* SPDX-License-Identifier: AGPL-3.0-or-later; Copyright (c) 2026 Atacama <contact@atacama.tech> */' | cmp -s - static/flow-view.js",
+    "build:dictation": "node tools/build-dictation.mjs",
+    "typecheck:dictation": "tsc --project tsconfig.dictation.json",
+    "check:dictation": "tsc --project tsconfig.dictation.json && node tools/build-dictation.mjs --check && node --experimental-strip-types --test tests/dictation.test.ts tests/dictation-auth.test.ts tests/dictation-service*.test.ts",
     "build:board": "node tools/build-board.mjs",
     "check:third-party": "node tools/check-third-party.mjs",
     "check:board": "node --check static/board-src.mjs && node --check tools/build-board.mjs",

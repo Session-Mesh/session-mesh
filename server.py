@@ -29,6 +29,7 @@ import shutil
 import signal
 import stat
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -37,6 +38,7 @@ from typing import NamedTuple
 
 import aiohttp
 from aiohttp import web
+from yarl import URL
 
 import agentmcp
 import agentmail
@@ -350,6 +352,11 @@ async def api_logout_all(request):
     ELEVATION_FAILURES.clear()
     for ws in list(request.app["sockets"]):
         await ws.close(code=aiohttp.WSCloseCode.POLICY_VIOLATION, message=b"logout")
+    try:
+        await _sync_dictation_principal(request.app)
+    except web.HTTPServiceUnavailable:
+        # Cookie revocation succeeded; dictation requests still require a successful sync.
+        print("session-mesh: dictation principal sync unavailable; requests remain gated", file=sys.stderr, flush=True)
     resp = web.json_response({"ok": True, "generation": generation})
     resp.del_cookie(COOKIE)
     return resp
@@ -374,6 +381,197 @@ async def login_post(request):
         raise resp
     await asyncio.sleep(1)
     raise web.HTTPFound("/login?bad=1")
+
+
+# ---------------------------------------------------------------- typed dictation compatibility boundary
+
+DICTATION_INTERNAL_RESPONSE_MAX_BYTES = 128 * 1024
+
+
+def _dictation_error(code, status):
+    messages = {"disabled": "Dictation is disabled.", "unavailable": "Dictation is unavailable.",
+                "invalid_request": "Invalid dictation request.", "stale_session": "The session is no longer live."}
+    return web.json_response({"error": {"code": code, "message": messages[code]}}, status=status,
+                             headers={"Cache-Control": "no-store"})
+
+
+async def start_dictation(app):
+    if not os.environ.get("MESH_WHISPER_URL"):
+        return
+    app["dictation_directory"] = tempfile.TemporaryDirectory(prefix="mesh-dictation-", dir="/tmp")
+    app["dictation_secret"] = secrets.token_hex(32)
+    app["dictation_principal"] = _dictation_principal(app)
+    app["dictation_revision"] = 0
+    app["dictation_principal_lock"] = asyncio.Lock()
+    socket = str(Path(app["dictation_directory"].name) / "worker.sock")
+    try:
+        node = os.environ.get("MESH_NODE", "node")
+        if "MESH_NODE" in os.environ and (not Path(node).is_absolute() or not os.access(node, os.X_OK)):
+            raise RuntimeError("Dictation runtime must be an absolute executable path")
+        app["dictation_worker"] = await asyncio.create_subprocess_exec(
+            node, str(ROOT / "backend" / "dictation-service.cjs"),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env={k: v for k, v in os.environ.items() if k == "PATH" or k.startswith("MESH_WHISPER_")})
+        worker = app["dictation_worker"]
+        worker.stdin.write((json.dumps({"secret": app["dictation_secret"], "socket": socket,
+                                       "inventory": str(ptyhost.SOCK), "parent": os.getpid(),
+                                       "principal": app["dictation_principal"]}) + "\n").encode())
+        await worker.stdin.drain()
+        if await asyncio.wait_for(worker.stdout.readline(), 5) != b"ready\n":
+            raise RuntimeError("Dictation worker unavailable")
+        app["dictation_client"] = aiohttp.ClientSession(
+            connector=aiohttp.UnixConnector(path=socket, limit=33),  # 32 public transfers + principal control
+            cookie_jar=aiohttp.DummyCookieJar(), trust_env=False, auto_decompress=False,
+            timeout=aiohttp.ClientTimeout(total=20))
+        app["dictation_capacity"] = asyncio.Semaphore(32)
+    except BaseException:
+        await stop_dictation(app)
+        raise RuntimeError("Dictation worker unavailable") from None
+
+
+async def stop_dictation(app):
+    client = app.get("dictation_client")
+    if client:
+        await client.close()
+    worker = app.get("dictation_worker")
+    if worker:
+        if worker.stdin:
+            worker.stdin.close()
+        try:
+            await asyncio.wait_for(worker.wait(), 3)
+        except asyncio.TimeoutError:
+            if worker.returncode is None:
+                worker.kill()
+            await worker.wait()
+    directory = app.get("dictation_directory")
+    if directory:
+        directory.cleanup()
+
+
+def _dictation_principal(app):
+    authenticated = "mesh:" + str(GENERATION.current())
+    return hmac.new(bytes.fromhex(app["dictation_secret"]), authenticated.encode(), hashlib.sha256).hexdigest()
+
+
+async def _sync_dictation_principal(app):
+    if not app.get("dictation_client"):
+        return
+    async with app["dictation_principal_lock"]:
+        principal = _dictation_principal(app)
+        if principal != app["dictation_principal"]:
+            app["dictation_revision"] += 1
+            headers = {"X-Mesh-Bridge": app["dictation_secret"], "X-Mesh-Principal": principal,
+                       "Content-Type": "application/json"}
+            try:
+                status, _ = await _dictation_exchange(app["dictation_client"], headers, "POST", "/internal/principal",
+                                                     json.dumps({"revision": app["dictation_revision"]}).encode())
+            except (asyncio.TimeoutError, aiohttp.ClientError, OSError, ValueError):
+                raise web.HTTPServiceUnavailable() from None
+            if status != 200:
+                raise web.HTTPServiceUnavailable()
+            app["dictation_principal"] = principal
+
+
+async def _dictation_live(name, created):
+    listed = await host({"op": "list"})
+    if not _valid_ptyhost_list(listed):
+        raise web.HTTPServiceUnavailable()
+    return any(item["name"] == name and item["created"] == created for item in listed)
+
+
+async def _dictation_exchange(client, headers, method, path, data):
+    # Preserve the raw operation for typed validation, without URL normalization.
+    async with client.request("GET" if method == "HEAD" else method,
+                              URL("http://dictation" + path, encoded=True), headers=headers,
+                              data=data, allow_redirects=False) as response:
+        payload = bytearray()
+        async for chunk in response.content.iter_chunked(65536):
+            if len(payload) + len(chunk) > DICTATION_INTERNAL_RESPONSE_MAX_BYTES:
+                raise ValueError("Dictation response limit")
+            payload.extend(chunk)
+        return response.status, json.loads(payload)
+
+
+def _dictation_internal_headers(headers, prepared):
+    internal = [(key, value) for key, value in headers if key.lower() != "content-type"]
+    internal.extend((("Content-Type", "application/json"), ("X-Mesh-Preparation", prepared["preparation"])))
+    return internal
+
+
+async def _dictation_transfer(request, headers, exchange):
+    admission = request.method == "POST" and request.path == "/api/transcribe"
+
+    def check_authority():
+        if not authed(request) or _dictation_principal(request.app) != dict(headers)["X-Mesh-Principal"]:
+            raise web.HTTPUnauthorized()
+
+    check_authority()
+    if admission:
+        names, dates = request.headers.getall("X-Mesh-Session", []), request.headers.getall("X-Mesh-Created", [])
+        if len(names) != 1 or len(dates) != 1 or not NAME_RE.fullmatch(names[0]) or not dates[0].strip():
+            return _dictation_error("invalid_request", 400)
+        try:
+            created = float(dates[0])
+        except ValueError:
+            return _dictation_error("invalid_request", 400)
+        if not math.isfinite(created):
+            return _dictation_error("invalid_request", 400)
+        live = await _dictation_live(names[0], created)
+        check_authority()
+        if not live:
+            return _dictation_error("stale_session", 409)
+    status, payload = await exchange(request.method, request.rel_url.raw_path, request.content.iter_chunked(65536))
+    check_authority()
+    if admission and status == 202:
+        # Matching attempts share a preparation. A failed attempt must leave it
+        # for another attempt to commit, or for the worker's 15-second expiry.
+        prepared = payload
+        live = await _dictation_live(names[0], created)
+        check_authority()
+        if not live:
+            return _dictation_error("stale_session", 409)
+        internal = _dictation_internal_headers(headers, prepared)
+        status, payload = await exchange("POST", "/internal/commit/" + prepared["job"]["job_id"], b"{}", internal)
+        check_authority()
+        if status == 200:
+            status = 202
+    return web.json_response(payload, status=status, headers={"Cache-Control": "no-store"})
+
+
+async def api_dictation(request):
+    # Existing auth middleware owns browser admission. No document or session
+    # capability is extended by this adapter.
+    if (not same_origin(request) or len(request.headers.getall("Origin", [])) > 1
+            or len(request.headers.getall("Host", [])) != 1):
+        raise web.HTTPForbidden()
+    if request.query_string or request.headers.getall("Content-Encoding", []):
+        return _dictation_error("invalid_request", 400)
+    client = request.app.get("dictation_client")
+    if client is None:
+        if request.method in ("GET", "HEAD") and request.path == "/api/transcribe/config":
+            return web.json_response({"enabled": False}, headers={"Cache-Control": "no-store"})
+        return _dictation_error("disabled", 503)
+    headers = [("X-Mesh-Bridge", request.app["dictation_secret"]),
+               ("X-Mesh-Principal", _dictation_principal(request.app))]
+    # Closed whitelist preserves duplicate public metadata for typed rejection;
+    # caller-supplied internal context is never forwarded.
+    for name in ("Content-Type", "X-Mesh-Dictation-Client", "X-Mesh-Session",
+                 "X-Mesh-Created", "X-Mesh-Request-Id"):
+        headers.extend((name, value) for value in request.headers.getall(name, []))
+    async def exchange(method, path, data, selected=headers):
+        return await _dictation_exchange(client, selected, method, path, data)
+    try:
+        await asyncio.wait_for(request.app["dictation_capacity"].acquire(), 0.05)
+    except asyncio.TimeoutError:
+        return _dictation_error("unavailable", 503)
+    try:
+        await _sync_dictation_principal(request.app)
+        return await _dictation_transfer(request, headers, exchange)
+    except (asyncio.TimeoutError, aiohttp.ClientError, OSError, ValueError, web.HTTPServiceUnavailable):
+        return _dictation_error("unavailable", 503)
+    finally:
+        request.app["dictation_capacity"].release()
 
 
 # ---------------------------------------------------------------- ptyhost
@@ -6679,6 +6877,14 @@ def make_app(*, session_request_path=None):
     app.router.add_post("/login", login_post)
     app.router.add_post("/api/logout", api_logout)
     app.router.add_post("/api/logout-all", api_logout_all)
+    app.on_startup.append(start_dictation)
+    app.on_cleanup.append(stop_dictation)
+    app.router.add_get("/api/transcribe/config", api_dictation)
+    app.router.add_post("/api/transcribe", api_dictation)
+    app.router.add_get("/api/transcribe/request/{request_id}", api_dictation)
+    app.router.add_get("/api/transcribe/{job_id}", api_dictation)
+    app.router.add_post("/api/transcribe/{job_id}/cancel", api_dictation)
+    app.router.add_post("/api/transcribe/{job_id}/settle", api_dictation)
     app.router.add_get("/", index)
     app.router.add_get("/sw.js", service_worker)
     app.router.add_get("/manifest.webmanifest", manifest)

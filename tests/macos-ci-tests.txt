@@ -47,8 +47,12 @@ tests/copilot-real.test.ts
 tests/copilot-resume.test.ts
 tests/direct-line.test.ts
 tests/direct-line-pending-paste.test.ts
+tests/dictation-python-compat.test.ts
 tests/dictation-projects-lifecycle.test.ts
 tests/dictation-review-pane-replay.test.ts
+tests/dictation-review-server.test.ts
+tests/dictation-service-review.test.ts
+tests/dictation-service-second-review.test.ts
 tests/dictation-state.test.ts
 tests/login-path-fixture.test.ts
 tests/event-sequence.test.ts
