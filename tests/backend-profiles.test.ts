@@ -199,7 +199,28 @@ test('concurrent native helpers cannot both commit the same policy revision',{sk
     });
     const replies=await Promise.all([write('consent.set_global',{confirmation:'skip'}),write('consent.reset',{})]);
     assert.equal(replies.filter(reply=>reply.ok).length,1,'exactly one writer owns revision zero');
+    assert.equal(replies.find(reply=>!reply.ok)?.code,'consent-revision-conflict','the loser observes the committed revision, not a transient storage failure');
     const current=f.request('consent.get');assert.equal(current.data.revision,1);
     assert.equal(current.data.global,replies[0].ok?'skip':'ask');
   }finally{f.close();}
+});
+
+test('concurrent first-use readers all reuse one initialized private store',{skip},async()=>{
+  for(let attempt=0;attempt<4;attempt++){
+    const f=fixture();
+    try{
+      const get=()=>new Promise<Reply>((resolve,reject)=>{
+        const child=spawn(binary,[],{env:{HOME:f.root,MESH_CONF_DIR:f.conf,PATH:'/usr/bin:/bin'},stdio:['pipe','pipe','pipe']});
+        let out='';const timer=setTimeout(()=>child.kill('SIGKILL'),10000);
+        child.stdout.on('data',chunk=>{out+=chunk;});child.stderr.resume();
+        child.on('error',error=>{clearTimeout(timer);reject(error);});
+        child.on('close',()=>{clearTimeout(timer);try{resolve(JSON.parse(out));}catch(error){reject(error);}});
+        child.stdin.end('{"version":1,"op":"consent.get"}');
+      });
+      const replies=await Promise.all(Array.from({length:8},get));
+      assert(replies.every(reply=>reply.ok),JSON.stringify(replies.map(reply=>reply.code??'ok')));
+      assert(replies.every(reply=>reply.data.revision===0));
+      assert.equal(f.request('consent.get').data.revision,0);
+    }finally{f.close();}
+  }
 });

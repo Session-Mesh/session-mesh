@@ -242,6 +242,30 @@ let foreign_unversioned () =
         "unrelated data unchanged" before
         (In_channel.with_open_bin file In_channel.input_all))
 
+let foreign_schema_objects () =
+  List.iter
+    (fun sql ->
+      with_root (fun root ->
+          let file = Filename.concat root "backend-accounts.sqlite" in
+          let db = Sqlite3.db_open file in
+          if Sqlite3.exec db sql <> Sqlite3.Rc.OK then
+            Alcotest.fail "fixture schema";
+          ignore (Sqlite3.db_close db);
+          Unix.chmod file 0o600;
+          let before = In_channel.with_open_bin file In_channel.input_all in
+          Alcotest.(check bool)
+            "foreign schema object refuses" true
+            (match S.open_ ~root () with
+            | Error S.Invalid_state -> true
+            | _ -> false);
+          Alcotest.(check string)
+            "foreign schema bytes unchanged" before
+            (In_channel.with_open_bin file In_channel.input_all)))
+    [
+      "CREATE TABLE sqliteX(value TEXT)";
+      "CREATE VIEW foreign_view AS SELECT 1 AS value";
+    ]
+
 let quoted_root () =
   with_root (fun root ->
       let nested = Filename.concat root "accounts % # ? ' $" in
@@ -453,6 +477,8 @@ let () =
             alias_refusal;
           Alcotest.test_case "unversioned foreign schema refused" `Quick
             foreign_unversioned;
+          Alcotest.test_case "all foreign schema objects refuse unchanged"
+            `Quick foreign_schema_objects;
           Alcotest.test_case "literal private path characters" `Quick
             quoted_root;
           Alcotest.test_case "database custody remains current" `Quick

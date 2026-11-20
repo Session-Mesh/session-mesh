@@ -57,10 +57,11 @@ let ddl sql =
 
 let user_version = (unit ->! int) "PRAGMA user_version"
 
-let table_count =
+let schema_object_count =
   (unit ->! int)
-    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE \
-     'sqlite_%'"
+    "SELECT count(*) FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"
+
+let begin_immediate = ddl "BEGIN IMMEDIATE"
 
 let meta =
   (unit ->! t2 string int) "SELECT kind, version FROM backend_meta WHERE id=1"
@@ -140,13 +141,15 @@ let prepare_path root =
     let stat =
       match Unix.lstat path with
       | st -> st
-      | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
-          let fd =
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> (
+          match
             Unix.openfile path [ Unix.O_CREAT; Unix.O_EXCL; Unix.O_RDWR ] 0o600
-          in
-          Fun.protect
-            ~finally:(fun () -> Unix.close fd)
-            (fun () -> Unix.fstat fd)
+          with
+          | fd ->
+              Fun.protect
+                ~finally:(fun () -> Unix.close fd)
+                (fun () -> Unix.fstat fd)
+          | exception Unix.Unix_error (Unix.EEXIST, _, _) -> Unix.lstat path)
     in
     if private_file stat then Ok (path, stat, root_identity)
     else Error Unsafe_store
@@ -163,19 +166,20 @@ let read_connection (module C : Caqti_blocking.CONNECTION) =
 
 let initialize conn =
   let (module C : Caqti_blocking.CONNECTION) = conn in
-  let* version = lift (C.find user_version ()) in
-  let* () =
-    if version = 1 then
-      let* kind, version = lift (C.find meta ()) in
-      if kind = "mesh-backend-state" && version = 1 then Ok ()
-      else Error Unsupported_version
-    else if version <> 0 then Error Unsupported_version
-    else
-      let* count = lift (C.find table_count ()) in
-      if count <> 0 then Error Invalid_state
+  let* _ = lift (C.collect_list busy_timeout ()) in
+  let* () = lift (C.exec begin_immediate ()) in
+  let locked () =
+    let* version = lift (C.find user_version ()) in
+    let* () =
+      if version = 1 then
+        let* kind, version = lift (C.find meta ()) in
+        if kind = "mesh-backend-state" && version = 1 then Ok ()
+        else Error Unsupported_version
+      else if version <> 0 then Error Unsupported_version
       else
-        let* () = lift (C.start ()) in
-        let result =
+        let* count = lift (C.find schema_object_count ()) in
+        if count <> 0 then Error Invalid_state
+        else
           let* () =
             List.fold_left
               (fun acc query ->
@@ -183,26 +187,28 @@ let initialize conn =
                 lift (C.exec query ()))
               (Ok ()) schema
           in
-          let* () =
-            lift (C.exec insert_policy (Consent.to_string (Consent.empty ())))
-          in
-          lift (C.commit ())
-        in
-        match result with
-        | Ok () -> Ok ()
-        | Error _ as error ->
-            ignore (C.rollback ());
-            error
+          lift (C.exec insert_policy (Consent.to_string (Consent.empty ())))
+    in
+    let* invalid_journal =
+      Result.map_error (fun _ -> Invalid_state) (C.find unfinished_schema ())
+    in
+    if invalid_journal <> 0 then Error Invalid_state
+    else
+      let* _ = read_connection conn in
+      lift (C.commit ())
   in
-  let* invalid_journal =
-    Result.map_error (fun _ -> Invalid_state) (C.find unfinished_schema ())
+  let* () =
+    match locked () with
+    | Ok () -> Ok ()
+    | Error _ as error ->
+        ignore (C.rollback ());
+        error
+    | exception exn ->
+        ignore (C.rollback ());
+        raise exn
   in
-  if invalid_journal <> 0 then Error Invalid_state
-  else
-    let* _ = read_connection conn in
-    let* _ = lift (C.collect_list busy_timeout ()) in
-    let* _ = lift (C.collect_list wal ()) in
-    lift (C.exec (ddl "PRAGMA synchronous=FULL") ())
+  let* _ = lift (C.collect_list wal ()) in
+  lift (C.exec (ddl "PRAGMA synchronous=FULL") ())
 
 let custody store =
   let* () =
@@ -399,7 +405,7 @@ let purge_finished tx =
 let transaction store ~expected_revision callback =
   with_lock store (fun () ->
       let (module C : Caqti_blocking.CONNECTION) = store.conn in
-      let* () = lift (C.start ()) in
+      let* () = lift (C.exec begin_immediate ()) in
       let tx = ref None in
       let rollback () =
         Option.iter (fun t -> t.live <- false) !tx;
