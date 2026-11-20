@@ -179,6 +179,7 @@
       <button type="button" class="btn ghost sm back" data-act="back" hidden>←</button>
       <div class="p-identity">
         <span class="p-name">—</span>
+        <span class="account-badge p-account" hidden></span>
         <details class="p-name-disclosure">
           <summary aria-label="Full name" data-i18n-aria-label="pane.fullName" data-i18n="pane.fullName">Full name</summary>
           <div class="p-full-name">—</div>
@@ -287,6 +288,9 @@
       <label><input type="radio" name="preset" value="custom"> <span data-i18n="new.custom">other</span></label>
     </fieldset>
     <input name="command" placeholder="command" data-i18n-placeholder="new.command" hidden>
+    <label id="new-account-row" hidden><span data-i18n="new.account">Account</span>
+      <select name="account" disabled></select>
+    </label>
     <label><span data-i18n="new.name">Name</span> <span class="mute" data-i18n="new.optional">(optional)</span>
       <input name="name" pattern="[A-Za-z0-9_-]{1,48}" autocomplete="off">
     </label>

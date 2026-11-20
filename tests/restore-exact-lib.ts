@@ -33,7 +33,8 @@ export function writeClaudeTranscript(home: string, id: string, cwd: string): vo
 export type Offer = {name: string; created: number; agent_kind: string; resume_id: string | null; cwd: string};
 export type Listed = {name: string; created: number};
 export type LabOptions = {marker?: string; twin?: boolean; bare?: boolean; pi?: boolean; intercept?: Intercept;
-  env?: NodeJS.ProcessEnv; identities?: object[]; noRegistry?: boolean; claudeLines?: string[]};
+  env?: NodeJS.ProcessEnv; identities?: object[]; noRegistry?: boolean; claudeLines?: string[];
+  alphaExtra?: object; prepare?: (home: string, confDir: string) => void};
 
 export class Lab {
   readonly mesh: Mesh;
@@ -89,7 +90,8 @@ export class Lab {
         agent: offer.agent_kind !== 'shell'
           ? {type: offer.agent_kind, session_id: offer.resume_id, argv: ['claude']} : null,
         ...extra});
-      const lost = [entry(offers.alpha, options.marker ? {restoring: {nonce: options.marker}} : {}), entry(offers.bravo)];
+      const lost = [entry(offers.alpha, {...options.alphaExtra, ...options.marker ? {restoring: {nonce: options.marker}} : {}}),
+        entry(offers.bravo)];
       if (options.twin) {
         const twinDir = path.join(where.home, 'twin-dir');
         fs.mkdirSync(twinDir);
@@ -122,6 +124,7 @@ export class Lab {
       }
       fs.writeFileSync(path.join(where.confDir, 'sessions-snapshot.json'),
         JSON.stringify({version: 1, host: null, live: [], lost}));
+      options.prepare?.(where.home, where.confDir);
     });
     const runtime = path.join(mesh.home, 'run');
     const [hostCommand, ...hostArgs] = nativePtyhost();   // MESH_PTYHOST_CMD: the host under test

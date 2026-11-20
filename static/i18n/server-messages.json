@@ -124,6 +124,22 @@
     "key": "server.presetUnknown"
   },
   {
+    "pattern": "^An account alias applies to Claude and Codex sessions only$",
+    "key": "server.accountAgentsOnly"
+  },
+  {
+    "pattern": "^Unknown account alias \\(accounts\\.json on the runner\\)$",
+    "key": "server.accountUnknown"
+  },
+  {
+    "pattern": "^The account alias (?<label>.+) has no (?<agent>\\S+) folder$",
+    "key": "server.accountNoFolder"
+  },
+  {
+    "pattern": "^Account alias refused: (?<reason>.+)$",
+    "key": "server.accountRefused"
+  },
+  {
     "pattern": "^Invalid name \\(letters, digits, - and _\\)$",
     "key": "server.nameInvalid"
   },

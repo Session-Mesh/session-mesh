@@ -101,6 +101,8 @@ describe('GET /api/config', () => {
       else if (value && typeof value === 'object') Object.entries(value).forEach(([key, item]) => walk(item, `${where}.${key}`));
     };
     walk(report, 'config');
-    assert.deepEqual(Object.keys(report).sort(), ['agents', 'elevation', 'host', 'launch', 'network', 'notifications', 'paths', 'runner_settings', 'version']);
+    // accounts: the operator's aliases as {id, label, claude, codex}, never a folder (session-accounts.test.ts)
+    assert.deepEqual(report.accounts, []);
+    assert.deepEqual(Object.keys(report).sort(), ['accounts', 'agents', 'elevation', 'host', 'launch', 'network', 'notifications', 'paths', 'runner_settings', 'version']);
   });
 });

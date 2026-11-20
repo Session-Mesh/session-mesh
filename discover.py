@@ -663,12 +663,20 @@ def _may_be_pi(pid, st, procs):
     return st[0] in ("node", "nodejs", UNKNOWN_NAME)
 
 
+def _is_rollout(path):
+    """A Codex rollout, under ~/.codex or under the CODEX_HOME of an operator's account alias:
+    <home>/sessions/YYYY/MM/DD/rollout-*.jsonl."""
+    return bool(_ROLLOUT_RE.search(path))
+
+
+_ROLLOUT_RE = re.compile(r"/sessions/[0-9]{4}/[0-9]{2}/[0-9]{2}/rollout-[^/]*\.jsonl")
+
+
 def _open_rollouts(pid):
     """The codex rollouts the process holds open, or None if its files are unknown."""
     if sys.platform != "linux":
         files = _host_open_files(pid)
-        return None if files is None else [t for t in files
-                                           if "/.codex/sessions/" in t and "rollout-" in t]
+        return None if files is None else [t for t in files if _is_rollout(t)]
     rollouts = []
     try:
         for fd in os.listdir(f"/proc/{pid}/fd"):
@@ -676,7 +684,7 @@ def _open_rollouts(pid):
                 t = os.readlink(f"/proc/{pid}/fd/{fd}")
             except OSError:
                 continue
-            if "/.codex/sessions/" in t and "rollout-" in t:
+            if _is_rollout(t):
                 rollouts.append(t)
     except OSError:
         return None

@@ -65,6 +65,12 @@ body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--mono); ove
 .tag { font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--mute); }
 .tag.claude { color: #e5a88a; border-color: #4a352b; }
 .tag.codex { color: #8ab8e5; border-color: #2b3b4a; }
+/* The operator's account alias of a session (row and pane header): an inverted pill, readable in every theme. */
+.account-badge { flex: none; max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; font-weight: 700; line-height: 16px; padding: 0 7px; border-radius: 8px;
+  background: var(--fg); color: var(--bg); }
+.account-badge[hidden] { display: none; }
+.pane-head .p-identity .account-badge { display: inline-block; vertical-align: middle; margin-left: 6px; }
 .tag.known-agent { color: #9fcf9f; border-color: #315238; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); flex: none; display: inline-block; }
 .dot.idle { background: none; border: 1.5px solid var(--idle); box-sizing: border-box; }   /* finished, seen */
