@@ -9,7 +9,7 @@
 //   - looking at and hovering ids for 30 seconds sends no burst of requests (one read of the ids a minute at most);
 //   - without a tracker nothing is a link and the page shows no error.
 // Needs MESH_CHROMIUM, MESH_PTYHOST_CMD, MESH_PYTHON and a built work-read (MESH_WORK_READ_CMD, default the dune build
-// output); skipped without them (MESH_REQUIRE_BROWSER=1 and MESH_REQUIRE_WORK_READ=1 make that a failure).
+// output); skipped without them (MESH_REQUIRE_BROWSER=1 and MESH_REQUIRE_WORK_READ=1, or CI, make that a failure).
 // MESH_SHOT_DIR=<dir> saves screenshots.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -22,7 +22,7 @@ import { REPO, TerminalMesh, skip as noBrowser, typeLine, waitForRow } from './t
 
 const READER = process.env.MESH_WORK_READ_CMD || path.join(REPO, 'ocaml/_build/default/work_read/bin/work_read_main.exe');
 const skip = noBrowser || (!process.env.MESH_PTYHOST_CMD && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_PTYHOST_CMD is required' : false)
-  || (!fs.existsSync(READER) && !process.env.MESH_REQUIRE_WORK_READ ? 'a built work-read is required' : false);
+  || (!fs.existsSync(READER) && !process.env.MESH_REQUIRE_WORK_READ && !process.env.CI ? 'a built work-read is required' : false);
 const SHOTS = process.env.MESH_SHOT_DIR ?? '';
 const FIXTURE = path.join(REPO, 'ocaml/worklog/test/fixture');
 const PROJECT = 'P-7a7a', TASK = 'T-7b7b', QUESTION = 'N-0000d001';
