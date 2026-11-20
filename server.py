@@ -4103,6 +4103,21 @@ async def api_session_action_request(request):
 # a failed carry resumes it under its own account. The agent kind is the session's (its token), never the body's.
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 CARRY_TIMEOUT = 300
+# The carry's refusal codes (Mesh_accounts_carry): these two may pass when asked again later; these two leave
+# something in the target folder for the operator to look at (named in the service log). Every other code is a
+# refusal that asking again does not change. Each carry runs as its own mesh-platform process: its fcntl lock does
+# not exclude two carries of one process.
+CARRY_RETRYABLE = frozenset(("carry_in_progress", "target_no_space"))
+CARRY_NEEDS_OPERATOR = frozenset(("carry_restore_failed", "carry_rollback_incomplete"))
+
+
+def _switch_undone_text(from_account, exc):
+    """What the agent relays of an undone switch: where the conversation went on, the carry's cause, what next."""
+    advice = (" Asking again later may work." if exc.code in CARRY_RETRYABLE
+              else " The operator must check the target account's folder (see the service log) before another "
+                   "switch; do not ask again." if exc.code in CARRY_NEEDS_OPERATOR
+              else " Asking again does not change this.")
+    return f"Switch undone: the conversation resumed under account {from_account}. Cause: {exc.code}: {str(exc).rstrip('.')}.{advice}"
 
 
 def _switch_refusal(code, message):
@@ -4307,8 +4322,9 @@ async def _run_session_action(app, request_id):
         result = await _execute_session_action(item)
     except AccountSwitchUndone as exc:
         return app["session_requests"].finish(
-            request_id, error=f"Switch undone: the conversation resumed under account {item['from_account']}. "
-            f"Cause: {exc.code}: {exc}", detail={"rolled_back": True, "id": exc.name, "code": exc.code})
+            request_id, error=_switch_undone_text(item["from_account"], exc),
+            detail={"rolled_back": True, "id": exc.name, "code": exc.code, "retryable": exc.code in CARRY_RETRYABLE,
+                    "operator_action": exc.code in CARRY_NEEDS_OPERATOR})
     except web.HTTPException as exc:
         return app["session_requests"].finish(
             request_id, error=exc.text or "Action failed")
