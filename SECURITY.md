@@ -674,8 +674,9 @@ nothing in the server: it still listens only on loopback, and the proxy must kee
   page renders them with the document viewer's sanitizer (DOMPurify: no script, frame, form, style,
   SVG, `id`, `name` or `class`; links only to `http(s)`, opened in a new tab without opener or
   referrer). The notes' images are fetched only when the panel shows them, by the web server
-  (`GET /api/update/image`, the owner's cookie only): an `https` URL that is written in the notes,
-  on `github.com` or a `*.githubusercontent.com` name (never an address), resolved to public
-  addresses only, at most three redirects each checked the same way, PNG, JPEG, GIF or WebP whose
+  (`GET /api/update/image`, the owner's cookie only), which has `mesh-platform update-image` check
+  and fetch them: an `https` URL that is written in the notes, on `github.com` or a
+  `*.githubusercontent.com` name (never an address), resolved to public addresses only and
+  fetched from the address checked, at most three redirects each checked the same way, PNG, JPEG, GIF or WebP whose
   bytes match the type (never SVG), at most 5 MiB, no cookie or credential sent, 60 fetches per ten
   minutes at most. The browser itself never contacts GitHub; another image becomes a link.

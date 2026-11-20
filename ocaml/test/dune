@@ -9,6 +9,16 @@
  (libraries mesh_update alcotest yojson unix))
 
 (test
+ (name mesh_update_image_test)
+ (modules mesh_update_image_test)
+ (libraries mesh_update alcotest unix))
+
+(test
+ (name mesh_update_image_url_test)
+ (modules mesh_update_image_url_test)
+ (libraries mesh_update alcotest unix))
+
+(test
  (name mesh_update_host_test)
  (modules mesh_update_host_test)
  (libraries mesh_update_host alcotest eio_main yojson unix))
