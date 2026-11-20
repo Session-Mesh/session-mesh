@@ -98,6 +98,7 @@ const NOT_SHOWN: Record<string, string> = {
   'This route takes no parameter': 'session_accounts read by an agent session through the MCP bridge, not by a screen',
   "The session's account changed since the request": 'outcome of an approved account switch, read by the agent with session_action_status, not by a screen',
   "The exact conversation id is unknown; it cannot be resumed elsewhere": 'outcome of an approved account switch whose conversation is only guessed by then, read by the agent with session_action_status, not by a screen',
+  "The conversation is not in the current account's folder": 'outcome of an approved account switch whose transcript is gone by then, read by the agent with session_action_status, not by a screen',
   'Document not opened: its access scope could not be recorded': 'answer to mesh-open run with a session token, read in the terminal',
   'Agent session unavailable': 'agent mail API (read and acknowledge), called by the agent MCP bridge only',
   'Content-Type must be application/json': 'protocol error of the JSON routes: the page always sends JSON, a client that does not is not a screen',
