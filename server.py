@@ -504,7 +504,7 @@ def _dictation_principal(app):
 async def _sync_dictation_principal(app):
     client = app.get("dictation_client")
     if client is None:
-        raise web.HTTPServiceUnavailable()
+        return
     async with app["dictation_principal_lock"]:
         principal = _dictation_principal(app)
         if principal != app["dictation_principal"]:
@@ -530,6 +530,8 @@ async def _dictation_live(name, created):
 
 async def _dictation_exchange(client, headers, method, path, data):
     # Preserve the raw operation for typed validation, without URL normalization.
+    if client.closed:
+        raise web.HTTPServiceUnavailable()
     async with client.request("GET" if method == "HEAD" else method,
                               URL("http://dictation" + path, encoded=True), headers=headers,
                               data=data, allow_redirects=False) as response:
