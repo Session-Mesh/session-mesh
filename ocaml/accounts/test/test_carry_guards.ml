@@ -153,7 +153,7 @@ let test_leftovers_of_a_killed_carry () =
         ]
       and kept =
         [
-          project ^ "/." ^ sid ^ ".jsonl.carry-new-0123456789ABCDEF";
+          project ^ "/." ^ sid ^ ".jsonl.carry-new-FEDCBA9876543210";
           project ^ "/." ^ sid ^ ".jsonl.carry-new-0123";
           project ^ "/.other-conversation.jsonl.carry-new-" ^ hex;
           project ^ "/" ^ sid ^ ".jsonl.carry-new-" ^ hex;

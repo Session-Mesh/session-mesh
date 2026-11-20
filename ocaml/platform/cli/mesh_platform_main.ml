@@ -385,7 +385,12 @@ let accounts_prepare file id =
    created when missing, and removed again when this run created it and the
    carry is refused), and prints {"carried": {...}}. A refusal exits 1 with
    {"kind": "accounts", "code": "...", "error": "..."}; the target is then as
-   it was. The agent must be stopped first. For Codex only the rollout is
+   it was. The agent must be stopped first. Exit 2 is a usage error
+   (wrong arguments); the CLI alone also refuses with "agent_unsupported" (an
+   agent other than claude or codex). "carry_in_progress" and "target_no_space"
+   can be retried; "carry_restore_failed" and "carry_rollback_incomplete" name a
+   file left in place and need someone to step in. One process per carry: the
+   lock does not exclude carries inside one process. For Codex only the rollout is
    copied: resuming from it alone is not verified (Mesh_accounts_carry). *)
 let accounts_carry file kind conversation from_account to_account =
   let module Carry = Mesh_accounts_carry in
