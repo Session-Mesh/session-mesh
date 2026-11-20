@@ -21,7 +21,7 @@ mesh's launch.
 ## Track your work: the `mesh-work` tools
 
 When the mesh gives you `mesh-board` and its `work-mcp` program is installed, you also get a
-second MCP server, `mesh-work`: 18 tools over the owner's project tracker, which the Projects view
+second MCP server, `mesh-work`: 19 tools over the owner's project tracker, which the Projects view
 shows. Its data is a local git repository shared by every session of the owner: `~/worklog-data`
 (or an older `~/worklog`, but not both; `WL_HOME` replaces them), created at first use. Entries
 are appended and committed, never edited or deleted. The server's own instructions say how to use
@@ -34,6 +34,10 @@ does not wait. The owner answers either in the Projects view, which records the 
 conversation, record the owner's words with `work_answer` (the question id and the text;
 `answered_by` defaults to `owner`). Use it only to relay what the owner said, never to answer a
 question yourself; a question the owner has not answered stays open.
+
+**Attempts.** When a pass of work on a task ends in a failure you will retry, is abandoned, or
+succeeds after failures, record it with `work_attempt` (the outcome, and a reason for a failure).
+Not for every failed command. A failure that stops the work is a blocker (`work_block`).
 
 **Which system for what.**
 

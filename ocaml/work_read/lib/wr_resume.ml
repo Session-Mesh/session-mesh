@@ -15,8 +15,8 @@ let section_cap = 25
 let max_row_blockers = 5
 let max_open_questions = 20
 
-let row_json world (row : W.Resume.row) =
-  let base = match Wr_view.task_row world row.task with `Assoc l -> l | _ -> [] in
+let row_json ~attempts world (row : W.Resume.row) =
+  let base = match Wr_view.task_row ~attempts world row.task with `Assoc l -> l | _ -> [] in
   `Assoc
     (base
     @ [ ("days_since_activity", `Int row.days) ]
@@ -26,7 +26,7 @@ let row_json world (row : W.Resume.row) =
 let sections (loaded : Wr_load.t) ?keep ?(show_all = false) () =
   let world = Wr_load.world loaded in
   let report = W.Resume.build world ~now:(loaded.ctx.now ()) ?keep ~show_all () in
-  let section name rows = Wr_out.list name section_cap (List.map (row_json world) rows) in
+  let section name rows = Wr_out.list name section_cap (List.map (row_json ~attempts:loaded.attempts world) rows) in
   section "in_progress" report.in_progress
   @ section "blocked" report.blocked
   @ section "stale" report.stale

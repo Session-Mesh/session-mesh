@@ -36,11 +36,14 @@ val done_at : Mesh_worklog.Model.task -> int option
 (** When a [done] task was last set to [done]; [None] otherwise or when the
     status came from the [created] event. *)
 
-val task_row : Mesh_worklog.Model.world -> Mesh_worklog.Model.task -> Yojson.Safe.t
+val task_row :
+  ?attempts:Work_mcp.Work_attempts.attempt list -> Mesh_worklog.Model.world -> Mesh_worklog.Model.task -> Yojson.Safe.t
 (** The compact task of lists: [id], [title], [status], [priority], [product],
     [project], [project_title], [track], [due], [owner], [last_activity],
     [last_note], plus [created], [eta], [size], [done_at], [blockers] (open),
     [blocked_by] (ids, at most 20), [dependency_open] (a [blocked_by] task is
-    still open) and [sessions] (names of the linked sessions, at most 10). *)
+    still open), [sessions] (names of the linked sessions, at most 10) and,
+    when the task has attempts among [attempts], [attempts] (their number)
+    and [consecutive_failures]. *)
 
 val project_title : Mesh_worklog.Model.world -> Mesh_worklog.Model.task -> string option

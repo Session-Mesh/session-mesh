@@ -147,11 +147,12 @@ let list_tasks args =
   let* limit = Work_args.limit args ~default:50 ~max:list_cap in
   let* ctx = Work_repo.context () in
   let* tasks, warnings = Work_err.lift (W.Reader.list_tasks ctx filter) in
+  let* attempts, attempt_warnings = Work_attempts.load_report ctx in
   Ok
     (`Assoc
-      (R.capped "tasks" limit (List.map (fun t -> R.task_row t) tasks)
+      (R.capped "tasks" limit (List.map (fun t -> R.with_attempts attempts t (R.task_row t)) tasks)
       @ [ ("total", `Int (List.length tasks)) ]
-      @ R.warnings_json warnings))
+      @ R.warnings_json (warnings @ attempt_warnings)))
 
 let list_tasks_tool =
   T.make ~name:"work_list_tasks"
@@ -175,6 +176,7 @@ let questions_about id questions =
 let get_task ctx id =
   let* view, warnings = Work_err.lift (W.Reader.get_task ctx id) in
   let* questions, collisions = Work_questions.load_report ctx in
+  let* attempts, attempt_warnings = Work_attempts.load_report ctx in
   let t = view.task in
   let timeline = List.rev t.timeline |> List.map R.event_json in
   Ok
@@ -189,19 +191,21 @@ let get_task ctx id =
       @ R.capped "sessions" 20 (List.map R.link_json t.sessions)
       @ R.capped "timeline_newest_first" 40 timeline
       @ questions_about t.id questions
-      @ R.warnings_json (warnings @ view.warnings @ collisions)))
+      @ [ ("attempts", R.attempts_json (Work_attempts.summary (Work_attempts.of_task t.id attempts))) ]
+      @ R.warnings_json (warnings @ view.warnings @ collisions @ attempt_warnings)))
 
 let get_project ctx id =
   let* row, tasks, warnings = Work_err.lift (W.Reader.get_project ctx id) in
   let* questions, collisions = Work_questions.load_report ctx in
+  let* attempts, attempt_warnings = Work_attempts.load_report ctx in
   let p = row.project in
   Ok
     (`Assoc
       ([ ("kind", `String "project"); ("project", R.project_json row) ]
-      @ R.capped "tasks" 60 (List.map (fun t -> R.task_row t) tasks)
+      @ R.capped "tasks" 60 (List.map (fun t -> R.with_attempts attempts t (R.task_row t)) tasks)
       @ R.capped "timeline_newest_first" 30 (List.rev p.timeline_p |> List.map R.event_json)
       @ questions_about p.pid questions
-      @ R.warnings_json (warnings @ collisions)))
+      @ R.warnings_json (warnings @ collisions @ attempt_warnings)))
 
 let get args =
   let* id = Work_args.string args "id" in
@@ -214,7 +218,7 @@ let get_tool =
   T.make ~name:"work_get"
     ~description:
       "One task (T-...) or project (P-...) by id or unique id prefix: fields, blockers, linked \
-       sessions, notes or tasks, newest events and questions."
+       sessions, notes or tasks, newest events, questions and, for a task, its attempts summary."
     ~input_schema:(T.object_ ~required:[ "id" ] [ ("id", T.string ~max:40 ()) ])
     get
 

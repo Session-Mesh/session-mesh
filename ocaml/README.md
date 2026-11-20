@@ -72,8 +72,8 @@ library, opens files for writing and checks the path again after opening.
 
 ## work-mcp
 
-`work_mcp/` holds the `work_mcp` library and the stdio program `work-mcp`: 18 `work_*` MCP tools
-(resume, tasks, projects, products, update, log, blockers, sessions, non-blocking questions) over
+`work_mcp/` holds the `work_mcp` library and the stdio program `work-mcp`: 19 `work_*` MCP tools
+(resume, tasks, projects, products, update, log, blockers, sessions, non-blocking questions, attempts) over
 the worklog library. It uses `mcp-kit` like `mesh-board-mcp` but does not talk to the Mesh. It
 reads `WL_HOME` (the data repository, created at first use through the library's `init`, never
 overwritten), `MESH_SESSION` (the session name) and the agent markers of the environment; it

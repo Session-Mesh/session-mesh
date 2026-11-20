@@ -132,7 +132,7 @@ let detail (loaded : Wr_load.t) reference =
   Ok
     (Wr_out.document "project"
        ([ ("project", `Assoc (project_fields row stats)) ]
-       @ Wr_out.list "tasks" max_tasks (List.map (Wr_view.task_row world) all_tasks)
+       @ Wr_out.list "tasks" max_tasks (List.map (Wr_view.task_row ~attempts:loaded.attempts world) all_tasks)
        @ columns_fields ~shown:tasks ~all:all_tasks
        @ Wr_out.list "dependencies" max_edges (edges_json world ~all:all_tasks tasks)
        @ [ ("reprise", `Assoc (Wr_resume.sections loaded ~keep ())) ]
