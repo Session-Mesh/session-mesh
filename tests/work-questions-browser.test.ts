@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, afterEach, before, describe, test } from 'node:test';
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright-core';
+import { chromium, type Browser, type BrowserContext, type Locator, type Page, type Route } from 'playwright-core';
 import { type Mesh, REPO, startMesh } from './mesh-server-lib.ts';
 import { chromiumLaunchOptions } from './helpers/browser-launch.ts';
 
@@ -40,12 +40,23 @@ const ASKED: readonly Asked[] = [
   { id: 'N-0000c0c4', about: null, text: 'A question about nothing in particular?', at: '2026-11-09T09:00:00Z' },
   { id: 'N-0000c0c5', about: null, text: 'Another free question?', at: '2026-11-09T09:01:00Z' },
   { id: 'N-0000c0c6', about: TASK, text: 'Phone width question?', at: '2026-11-08T09:03:00Z' },
+  { id: 'N-0000c0c7', about: null, text: 'Hostile extras?', at: '2026-11-09T09:02:00Z' },
+  { id: 'N-0000c0c8', about: TASK, text: 'Answered from the sheet over the board?', at: '2026-11-08T09:04:00Z' },
+  { id: 'N-0000c0c9', about: PROJECT, text: 'Draft kept in the tab?', at: '2026-11-08T09:05:00Z' },
+  { id: 'N-0000c0ca', about: null, text: 'Answered when the re-read fails?', at: '2026-11-09T09:03:00Z' },
+  { id: 'N-0000c0cb', about: null, text: 'Answered before a late re-read?', at: '2026-11-09T09:04:00Z' },
 ];
+const HOSTILE_ASSUMPTION = '<img src=x onerror=window.__pwn=7>';
+const HOSTILE_OPTIONS = ['<b>keep</b>', '<a href="javascript:window.__pwn=8">drop</a>'];
+const EXTRAS: Readonly<Record<string, object>> = {
+  'N-0000c0c2': { assumption: 'keep it for now', options: ['keep', 'drop'] },
+  'N-0000c0c7': { assumption: HOSTILE_ASSUMPTION, options: HOSTILE_OPTIONS },
+};
 const EVENTS = [
   { ts: '2026-11-07T09:00:00Z', task: TASK, type: 'created', title: 'Questions task', project: 'gateway', category: 'platform', priority: 'P1', status: 'todo' },
   { ts: '2026-11-07T09:01:00Z', task: TASK, type: 'set', field: 'project', to: PROJECT },
   ...ASKED.map(q => ({ ts: q.at, task: q.about ?? q.id, type: 'question', id: q.id, text: q.text, agent: 'claude', session: 'asking-session',
-    ...(q.id === 'N-0000c0c2' ? { assumption: 'keep it for now', options: ['keep', 'drop'] } : {}) })),
+    ...(EXTRAS[q.id] ?? {}) })),
 ];
 
 let browser: Browser;
@@ -88,8 +99,24 @@ after(async () => {
 
 type Session = Readonly<{ page: Page; problems: string[]; reads: string[] }>;
 
-/** A signed-in page with Projects open on the entry screen. */
+/** A signed-in page with Projects open on the entry screen, its open questions read (or their read failed). */
 async function entry(mesh: Mesh, width: number, locale = 'en-US', prepare?: (page: Page) => Promise<void>): Promise<Session> {
+  const session = await signedIn(mesh, width, locale, prepare);
+  await openProjects(session.page, width);
+  return session;
+}
+
+async function openProjects(page: Page, width: number): Promise<void> {
+  if (width <= 600) {
+    await page.locator('#btn-mobile-actions').click();
+    await page.locator('[data-mobile-action="btn-projects"]').click();
+  } else await page.locator('#btn-projects').click();
+  await page.locator('.work-entry-toggle, .work-content > .work-error').first().waitFor();
+  await page.locator('.work-entry-questions .work-qcard, .work-questions-none, .work-entry-questions .work-error, .work-content > .work-error')
+    .first().waitFor();
+}
+
+async function signedIn(mesh: Mesh, width: number, locale = 'en-US', prepare?: (page: Page) => Promise<void>): Promise<Session> {
   const context = await browser.newContext({ locale, viewport: { width, height: 900 } });
   contexts.push(context);
   const page = await context.newPage();
@@ -103,14 +130,13 @@ async function entry(mesh: Mesh, width: number, locale = 'en-US', prepare?: (pag
   await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
   await page.goto(`${mesh.base}/`);
   await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');
-  if (width <= 600) {
-    await page.locator('#btn-mobile-actions').click();
-    await page.locator('[data-mobile-action="btn-projects"]').click();
-  } else await page.locator('#btn-projects').click();
-  await page.locator('.work-entry-questions').waitFor();
-  await page.locator('.work-entry-toggle').first().waitFor();
   return { page, problems, reads };
 }
+
+const announced = (page: Page, text: string): Promise<unknown> =>
+  page.waitForFunction(expected => document.querySelector('.work-announcer')?.textContent === expected, text, { timeout: 30_000 });
+const isResume = (route: Route): boolean => route.request().postData()?.includes('"op":"resume"') === true;
+const BUSY = { status: 503, contentType: 'application/json', body: '{"error":{"code":"busy","message":"busy"}}' };
 
 const card = (scope: Locator | Page, id: string): Locator => scope.locator(`[data-question-id="${id}"]`);
 const badge = (page: Page): Promise<string | null> => page.locator('#btn-projects .projects-question-badge')
@@ -168,8 +194,12 @@ describe('open questions in the Projects view', { skip }, () => {
     assert.equal(await hostile.locator('.work-question-text').textContent(), HOSTILE, 'shown as written, as text');
     assert.match((await hostile.locator('.work-qcard-meta').textContent())!, /^Open · Open task T-8e8e · (\d+ days ago|yesterday) · asked by asking-session \(claude\)$/);
     assert.equal(await page.evaluate(() => (window as unknown as { __pwn?: number }).__pwn), undefined);
-    assert.equal(await page.locator('#work-root img, #work-root script').count(), 0);
     assert.match((await card(withTask, 'N-0000c0c2').textContent())!, /Options offered: keep · drop.*Assumption adopted meanwhile: keep it for now/);
+    // The options and the assumption are agent text too: shown as written, never as markup.
+    const extras = await card(noTask, 'N-0000c0c7').locator('.work-qcard-extra').allTextContents();
+    assert.deepEqual(extras, [`Options offered: ${HOSTILE_OPTIONS.join(' · ')}`, `Assumption adopted meanwhile: ${HOSTILE_ASSUMPTION}`]);
+    assert.equal(await page.locator('#work-root img, #work-root script, #work-root b, #work-root a').count(), 0);
+    assert.equal(await page.evaluate(() => (window as unknown as { __pwn?: number }).__pwn), undefined);
     await uniqueIds(page);
     await shot(page, 'questions-entry-1440');
     assert.deepEqual(problems, []);
@@ -206,12 +236,14 @@ describe('open questions in the Projects view', { skip }, () => {
     await card(pane, 'N-0000c0c2').locator('.work-answer-verified').waitFor();
     assert.equal(await card(tab, 'N-0000c0c2').locator('.work-qcard-state').textContent(), 'Answered');
     assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-question-id')), 'N-0000c0c2', 'focus on the answered question in the tab');
-    await page.waitForFunction(expected => document.querySelector('#btn-projects .projects-question-badge')?.textContent === expected, String(before - 1));
+    await page.waitForFunction(expected => document.querySelector('#btn-projects .projects-question-badge')?.textContent === expected,
+      String(before - 1), { timeout: 30_000 });
     // An answer from the sheet updates the tab in turn.
     await answer(card(pane, 'N-0000c0c1'), 'port 8443');
     await card(pane, 'N-0000c0c1').locator('.work-answer-verified').waitFor();
     await card(tab, 'N-0000c0c1').locator('.work-answer-verified').waitFor();
-    await page.waitForFunction(expected => document.querySelector('#btn-projects .projects-question-badge')?.textContent === expected, String(before - 2));
+    await page.waitForFunction(expected => document.querySelector('#btn-projects .projects-question-badge')?.textContent === expected,
+      String(before - 2), { timeout: 30_000 });
     await uniqueIds(page);
     await shot(page, 'questions-tab-1440');
     assert.deepEqual(problems, []);
@@ -292,5 +324,98 @@ describe('open questions in the Projects view', { skip }, () => {
     await page.locator('#work-tab-questions').focus();
     await page.keyboard.press('Home');
     assert.equal(await page.locator('#work-tab-reprise').getAttribute('aria-selected'), 'true', 'the tab is in the keyboard ring');
+  });
+
+  test('a draft in the Questions tab survives an answer sent from the sheet while another tab is shown', { timeout: 900_000 }, async () => {
+    const { page, problems } = await entry(asking, 1440);
+    await card(page, 'N-0000c0c3').getByRole('button', { name: 'Open project Delivery rollout' }).click();
+    const tab = page.locator('#work-panel-questions');
+    await card(tab, 'N-0000c0c9').getByLabel('Your answer').fill('draft while on the board');
+    await page.locator('#work-tab-board').click();
+    await page.locator(`#work-panel-board [data-task="${TASK}"]`).first().click();
+    const pane = page.locator('.work-detail-pane');
+    await answer(card(pane, 'N-0000c0c8'), 'answered from the sheet over the board');
+    await announced(page, 'Answer recorded.');
+    await page.locator('#work-tab-questions').click();
+    assert.equal(await card(tab, 'N-0000c0c9').getByLabel('Your answer').inputValue(), 'draft while on the board');
+    await card(tab, 'N-0000c0c8').locator('.work-answer-verified').waitFor({ timeout: 10_000 });
+    assert.deepEqual(problems, []);
+  });
+
+  test('entry drafts survive an answer whose re-read fails, and the retry that follows', { timeout: 900_000 }, async () => {
+    let failResume = false;
+    const { page, problems } = await entry(asking, 1440, 'en-US', p => p.route('**/api/work/v1', route =>
+      (failResume && isResume(route) ? route.fulfill(BUSY) : route.continue())));
+    await card(page, 'N-0000c0c5').getByLabel('Your answer').fill('precious draft');
+    failResume = true;
+    await answer(card(page, 'N-0000c0ca'), 'answered, then the re-read fails');
+    await announced(page, 'The answer is recorded, but the open questions could not be read again.');
+    const error = page.locator('.work-entry-questions .work-error[data-kind="busy"]');
+    assert.equal(await error.count(), 1, 'the failed re-read says so, with a retry');
+    assert.equal(await card(page, 'N-0000c0c5').getByLabel('Your answer').inputValue(), 'precious draft', 'the cards stay');
+    assert.equal(await card(page, 'N-0000c0ca').count(), 0, 'the answered question left the list');
+    assert.equal(await badge(page), null, 'no number that was not read');
+    failResume = false;
+    await error.getByRole('button', { name: 'Try again' }).click();
+    await error.waitFor({ state: 'detached' });
+    assert.equal(await card(page, 'N-0000c0c5').getByLabel('Your answer').inputValue(), 'precious draft', 'the retry keeps the draft');
+    assert.equal(await card(page, 'N-0000c0ca').count(), 0);
+    assert.equal(await badge(page), String(await openCount(page)));
+    assert.deepEqual(problems, []);
+  });
+
+  test('a late re-read started by "Back" does not bring back a question answered meanwhile', { timeout: 900_000 }, async () => {
+    let hold = false, fetched = false;
+    let release: () => void = () => undefined;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const { page } = await entry(asking, 1440, 'en-US', p => p.route('**/api/work/v1', async route => {
+      if (!hold || !isResume(route)) return route.continue();
+      hold = false;
+      const response = await route.fetch();   // read now, before the answer below...
+      fetched = true;
+      await released;                          // ...and delivered after the read that follows the answer
+      return route.fulfill({ response });
+    }));
+    await page.locator('.work-entry-project', { hasText: 'Delivery rollout' }).click();
+    await page.locator('.work-back').waitFor();
+    hold = true;
+    await page.locator('.work-back').click();
+    await card(page, 'N-0000c0cb').waitFor();
+    while (!fetched) await page.waitForTimeout(50);
+    await answer(card(page, 'N-0000c0cb'), 'answered before the late re-read');
+    await announced(page, 'Answer recorded.');
+    assert.equal(await card(page, 'N-0000c0cb').count(), 0);
+    const late = page.waitForResponse(response => response.url().endsWith('/api/work/v1') && response.request().postData()?.includes('"op":"resume"') === true);
+    release();
+    await late;
+    await page.waitForTimeout(500);   // the list would be redrawn right after the response
+    assert.equal(await card(page, 'N-0000c0cb').count(), 0, 'the older read is not shown over the newer one');
+    assert.equal(await badge(page), String(await openCount(page)));
+  });
+
+  test('two pages opening Projects at once both show the entry screen and its questions', { timeout: 900_000 }, async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const pages = await Promise.all([signedIn(asking, 1440), signedIn(asking, 1440)]);
+      await Promise.all(pages.map(({ page }) => openProjects(page, 1440)));
+      for (const { page } of pages) {
+        assert.equal(await page.locator('.work-content > .work-error').count(), 0, `attempt ${attempt}: the entry screen is shown`);
+        assert.equal(await page.locator('.work-entry-questions .work-error').count(), 0, `attempt ${attempt}: the questions are shown`);
+      }
+      for (const context of contexts.splice(0)) await context.close();
+    }
+  });
+
+  test('a question about a project missing from the list still opens it, by its id', { timeout: 900_000 }, async () => {
+    const { page } = await entry(asking, 1440, 'en-US', p => p.route('**/api/work/v1', async route => {
+      if (!route.request().postData()?.includes('"op":"projects"')) return route.continue();
+      const response = await route.fetch();
+      const body = await response.json() as { projects: { id: string }[] };
+      return route.fulfill({ response, json: { ...body, projects: body.projects.filter(project => project.id !== PROJECT) } });
+    }));
+    const open = card(page, 'N-0000c0c3').locator('.work-qcard-about');
+    assert.equal(await open.textContent(), `Open project ${PROJECT}`, 'named by its id');
+    await open.click();
+    await page.locator('.work-crumb-title', { hasText: 'Delivery rollout' }).waitFor();
+    assert.equal(await page.locator('#work-tab-questions').getAttribute('aria-selected'), 'true');
   });
 });

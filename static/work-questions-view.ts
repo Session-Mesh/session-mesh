@@ -13,7 +13,7 @@ import { answerArea } from './work-detail-view.ts';
 import { button, el, notice, omittedNote } from './work-dom.ts';
 import type { Child, ViewContext } from './work-dom.ts';
 import { errorBlock } from './work-error-view.ts';
-import { ageOf, formatAge, groupProjectQuestions, splitEntryQuestions } from './work-questions.ts';
+import { aboutKind, ageOf, formatAge, groupProjectQuestions, splitEntryQuestions } from './work-questions.ts';
 import type { QuestionGroup } from './work-questions.ts';
 import type { OpenQuestionsDoc, ProjectDoc, Question } from './work-types.ts';
 
@@ -90,9 +90,11 @@ export type EntryQuestionHandlers = Readonly<{
   openTask: (id: string) => void;
 }>;
 
-/** What the entry screen knows of the open questions: being read, read, or a failed read with its retry. */
+/** What the entry screen knows of the open questions: being read, read, a failed read with its retry, or a failed
+ *  read again of questions already shown (they stay, with the error above them). */
 export type EntryQuestionsState = Readonly<{ kind: 'loading' }> | Readonly<{ kind: 'ready'; doc: OpenQuestionsDoc }>
-  | Readonly<{ kind: 'failed'; error: WorkError; retry: () => void }>;
+  | Readonly<{ kind: 'failed'; error: WorkError; retry: () => void }>
+  | Readonly<{ kind: 'stale'; doc: OpenQuestionsDoc; error: WorkError; retry: () => void }>;
 
 function aboutControl(ctx: ViewContext, handlers: EntryQuestionHandlers, about: string | null, task: boolean): Child {
   if (about === null) return null;
@@ -101,7 +103,8 @@ function aboutControl(ctx: ViewContext, handlers: EntryQuestionHandlers, about: 
     open.dataset.task = about;
     return open;
   }
-  const title = handlers.projectTitle(about);
+  // A project missing from the entry list (closed, or past its first rows) is still opened by its id, named by it.
+  const title = handlers.projectTitle(about) ?? (aboutKind(about) === 'project' ? about : null);
   if (title === null) return el('span', 'work-qcard-about', ctx.t('work.questions.project', { title: about }));
   const open = button('work-qcard-about', ctx.t('work.questions.openProject', { title }), () => handlers.openProject(about));
   open.dataset.project = about;
@@ -120,9 +123,11 @@ function entryBody(ctx: ViewContext, handlers: EntryQuestionHandlers, state: Ent
   if (state.kind === 'loading') return [el('p', 'work-loading work-mute', ctx.t('work.questions.loading'))];
   if (state.kind === 'failed') return [errorBlock(ctx.t, state.error, { retry: state.retry })];
   const { doc } = state;
-  if (doc.questions.length === 0 && doc.openQuestions === 0) return [el('p', 'work-entry-empty work-questions-none', ctx.t('work.questions.none'))];
+  const nodes: Node[] = state.kind === 'stale' ? [errorBlock(ctx.t, state.error, { retry: state.retry })] : [];
+  if (doc.questions.length === 0 && doc.openQuestions === 0) {
+    return [...nodes, el('p', 'work-entry-empty work-questions-none', ctx.t('work.questions.none'))];
+  }
   const lists = splitEntryQuestions(doc.questions);
-  const nodes: Node[] = [];
   for (const block of [entryList(ctx, handlers, 'work.questions.noTask', lists.noTask, false),
     entryList(ctx, handlers, 'work.questions.withTask', lists.withTask, true)]) if (block) nodes.push(block);
   const left = Math.max(doc.omitted, doc.openQuestions - doc.questions.length);
@@ -132,7 +137,7 @@ function entryBody(ctx: ViewContext, handlers: EntryQuestionHandlers, state: Ent
 
 /** The open questions block of the entry screen, above the products. */
 export function renderEntryQuestions(ctx: ViewContext, handlers: EntryQuestionHandlers, state: EntryQuestionsState): HTMLElement {
-  const count = state.kind === 'ready' ? el('span', 'work-count', String(state.doc.openQuestions)) : null;
+  const count = state.kind === 'ready' || state.kind === 'stale' ? el('span', 'work-count', String(state.doc.openQuestions)) : null;
   const heading = el('h2', 'work-entry-category-name', ctx.t('work.questions.title'), count);
   heading.id = 'work-entry-questions-title';
   const root = el('section', 'work-entry-questions', heading, ...entryBody(ctx, handlers, state));

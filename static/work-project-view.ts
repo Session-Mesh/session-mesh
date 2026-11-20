@@ -27,8 +27,8 @@ export type ProjectView = Readonly<{
   current: () => TabKey;
   /** The panel of a tab (built or not). */
   panel: (key: TabKey) => HTMLElement;
-  /** Show a project document read again: the current panel is rebuilt now, the others when next shown. The header
-   *  and the detail pane are kept. */
+  /** Show a project document read again: the current panel and a Questions panel already built are rebuilt now, the
+   *  others when next shown. The header and the detail pane are kept. */
   replaceDoc: (next: ProjectDoc) => void;
 }>;
 
@@ -77,6 +77,7 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
   const buttons = new Map<TabKey, HTMLButtonElement>(), panels = new Map<TabKey, HTMLElement>(), built = new Set<TabKey>();
   for (const key of TAB_KEYS) { buttons.set(key, tabButton(ctx, key)); panels.set(key, panelFor(key)); }
   let currentKey: TabKey = initial;
+  const build = (key: TabKey): void => { panels.get(key)!.replaceChildren(RENDERERS[key](panelContext(ctx, key), doc)); built.add(key); };
   const activate = (key: TabKey, focus: boolean): void => {
     currentKey = key;
     for (const [name, node] of buttons) {
@@ -85,7 +86,7 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
       node.tabIndex = selected ? 0 : -1;
       panels.get(name)!.hidden = !selected;
     }
-    if (!built.has(key)) { panels.get(key)!.replaceChildren(RENDERERS[key](panelContext(ctx, key), doc)); built.add(key); }
+    if (!built.has(key)) build(key);
     if (focus) buttons.get(key)!.focus();
   };
   for (const [key, node] of buttons) {
@@ -107,8 +108,12 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
   activate(initial, false);
   const replaceDoc = (next: ProjectDoc): void => {
     doc = next;
+    // The Questions panel holds the owner's unsent answers: once built it is rebuilt now, even when hidden, so that
+    // the caller can put them back.
+    const keepQuestions = built.has('questions') && currentKey !== 'questions';
     built.clear();
     for (const [key, panel] of panels) if (key !== currentKey) panel.replaceChildren();
+    if (keepQuestions) build('questions');
     activate(currentKey, false);
   };
   return { root, detailSlot, current: () => currentKey, activate, replaceDoc, panel: key => panels.get(key)!,
