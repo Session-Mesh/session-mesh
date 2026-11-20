@@ -48,7 +48,8 @@ let usage =
    command-line PID | require isolated-agent|demo-sandbox | update-check \
    [--refresh] [--cache-only] [--line] [--debug] [--release-dir DIR] | \
    update-image | accounts list FILE | accounts prepare FILE ID | accounts \
-   carry FILE claude|codex CONVERSATION FROM TO"
+   carry FILE claude|codex CONVERSATION FROM TO | accounts resolve FILE \
+   claude|codex NAME"
 
 let ex_config = 78
 
@@ -333,51 +334,62 @@ let update_image () =
     0;
   0
 
-(* [accounts list FILE] prints {"accounts": [...]} (Mesh_accounts.to_json) once
-   the operator's file and every folder it declares are valid; [accounts
-   prepare FILE ID] also creates that account's missing folders (mode 0700)
-   and prints {"account": {...}}. A refusal exits 1 with {"kind": "accounts",
-   "error": "..."}: the web server then offers no alias. *)
-let accounts_failure message =
+(* The accounts come from Mesh_account_resolver. [accounts list FILE] prints
+   {"accounts": [...]} (Mesh_accounts.to_json) once the operator's file and
+   every folder it declares are valid; [accounts prepare FILE ID] also creates
+   that account's missing folders (mode 0700) and prints {"account": {...}}.
+   [accounts resolve FILE claude|codex NAME] prints {"account": {"backend",
+   "id", "label"}}: the account of that backend whose id is NAME, else the one
+   whose label is NAME ignoring ASCII case; never a prefix. A refusal exits 1
+   with {"kind": "accounts", "error": "..."}: the web server then offers no
+   alias. [resolve] adds the error's "code", and "candidates" when the name is
+   ambiguous. *)
+module R = Mesh_account_resolver
+
+let accounts_failure ?(extra = []) message =
   print_error ("mesh-platform: " ^ message);
   print_json
-    (`Assoc [ ("kind", `String "accounts"); ("error", `String message) ]);
+    (`Assoc
+       ([ ("kind", `String "accounts"); ("error", `String message) ] @ extra));
   1
 
 let accounts_list file =
-  match Mesh_accounts.load ~uid:(Unix.geteuid ()) file with
+  match R.load ~uid:(Unix.geteuid ()) ~file with
   | Ok accounts ->
-      print_json
-        (`Assoc
-           [ ("accounts", `List (List.map Mesh_accounts.to_json accounts)) ]);
+      print_json (R.to_host_json accounts);
       0
-  | Error message -> accounts_failure message
+  | Error error -> accounts_failure error.message
 
 let accounts_prepare file id =
   let uid = Unix.geteuid () in
-  match Mesh_accounts.load ~uid file with
-  | Error message -> accounts_failure message
-  | Ok accounts -> (
-      match
-        List.find_opt (fun (a : Mesh_accounts.account) -> a.id = id) accounts
-      with
-      | None -> accounts_failure "unknown account"
-      | Some account -> (
-          let folders =
-            List.filter_map Fun.id
-              [ account.claude_config_dir; account.codex_home ]
+  match Result.bind (R.load ~uid ~file) (fun t -> R.prepare_id ~uid t id) with
+  | Ok account ->
+      print_json (`Assoc [ ("account", account) ]);
+      0
+  | Error error -> accounts_failure error.message
+
+let accounts_resolve file backend name =
+  match R.load ~uid:(Unix.geteuid ()) ~file with
+  | Error error ->
+      accounts_failure ~extra:[ ("code", `String error.code) ] error.message
+  | Ok t -> (
+      match R.resolve_name t backend name with
+      | Ok entry ->
+          print_json (`Assoc [ ("account", R.entry_json entry) ]);
+          0
+      | Error error ->
+          let candidates =
+            if error.code = "account_ambiguous" then
+              [
+                ( "candidates",
+                  `List
+                    (List.map R.entry_json (R.label_matches t backend name)) );
+              ]
+            else []
           in
-          match
-            List.fold_left
-              (fun result folder ->
-                Result.bind result (fun () ->
-                    Mesh_accounts.prepare_directory ~uid folder))
-              (Ok ()) folders
-          with
-          | Ok () ->
-              print_json (`Assoc [ ("account", Mesh_accounts.to_json account) ]);
-              0
-          | Error message -> accounts_failure message))
+          accounts_failure
+            ~extra:(("code", `String error.code) :: candidates)
+            error.message)
 
 (* [accounts carry FILE KIND CONVERSATION FROM TO] copies one Claude or Codex
    conversation from account FROM's folder to account TO's (an alias id of
@@ -431,6 +443,9 @@ let run = function
   | [ "accounts"; "carry"; file; kind; conversation; from_account; to_account ]
     ->
       accounts_carry file kind conversation from_account to_account
+  | [ "accounts"; "resolve"; file; backend; name ]
+    when R.backend_of_string backend <> None ->
+      accounts_resolve file (Option.get (R.backend_of_string backend)) name
   | "update-check" :: options -> update_check options
   | [ "update-image" ] -> update_image ()
   | [ "require"; name ] -> with_feature name (require_feature name)

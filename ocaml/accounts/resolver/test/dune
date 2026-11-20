@@ -1,0 +1,10 @@
+(test
+ (name test_resolver)
+ (modules test_resolver)
+ (libraries mesh_account_resolver mesh_accounts alcotest unix yojson))
+
+(test
+ (name test_golden)
+ (modules test_golden)
+ (deps ../../../platform/cli/mesh_platform_main.exe)
+ (libraries alcotest unix))
