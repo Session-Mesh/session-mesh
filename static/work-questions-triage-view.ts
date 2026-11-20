@@ -15,7 +15,7 @@ import type { Child, ViewContext } from './work-dom.ts';
 import { errorBlock } from './work-error-view.ts';
 import { linkText } from './work-linkify.ts';
 import { aboutKind, ageOf, formatAge } from './work-questions.ts';
-import { isLongText, questionKind, readSectionOpen, triageQuestions, writeSectionOpen } from './work-questions-triage.ts';
+import { isLongText, questionKind, triageQuestions } from './work-questions-triage.ts';
 import type { Triage, TriageProduct, TriageProject, TriageTask, TriageZone, ZoneName } from './work-questions-triage.ts';
 import type { EntryQuestionsState } from './work-questions-view.ts';
 import type { Question } from './work-types.ts';
@@ -30,8 +30,10 @@ export type TriageHandlers = Readonly<{
   openProject: (project: string, question: string) => void;
   /** Open the sheet of a question about no task or project. */
   openQuestion: (question: Question) => void;
-  /** Where the folded or open state is kept (sessionStorage); null: not kept. */
-  storage: Storage | null;
+  /** Whether the section is unfolded, and the owner unfolding or folding it (the view keeps it with its place,
+   *  static/work-view-state.ts). */
+  sectionOpen: boolean;
+  sectionToggled: (open: boolean) => void;
 }>;
 
 function count(n: number): HTMLElement {
@@ -189,12 +191,12 @@ function heading(ctx: ViewContext, handlers: TriageHandlers, state: EntryQuestio
     title.append(ctx.t('work.triage.title'), shown === null ? '' : count(0));
     return title;
   }
-  const open = readSectionOpen(handlers.storage);
+  const open = handlers.sectionOpen;
   const toggle = button('work-qsection-toggle', '', () => {
     const now = toggle.getAttribute('aria-expanded') !== 'true';
     toggle.setAttribute('aria-expanded', String(now));
     body.hidden = !now;
-    writeSectionOpen(handlers.storage, now);
+    handlers.sectionToggled(now);
   }, el('span', 'work-chev'), el('span', 'work-qsection-name', ctx.t('work.triage.title')), count(shown));
   toggle.setAttribute('aria-expanded', String(open));
   toggle.setAttribute('aria-controls', body.id);

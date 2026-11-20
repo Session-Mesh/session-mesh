@@ -6,7 +6,7 @@
 import { renderBoard } from './work-board-view.ts';
 import { renderDependencies } from './work-deps-view.ts';
 import { button, el, notice, progressBlock, setAttributes } from './work-dom.ts';
-import type { ViewContext } from './work-dom.ts';
+import type { Translate, ViewContext } from './work-dom.ts';
 import { renderFrise } from './work-frise-view.ts';
 import { renderQuestionsTab } from './work-questions-view.ts';
 import { renderReprise } from './work-reprise-view.ts';
@@ -33,6 +33,13 @@ export type ProjectView = Readonly<{
    *  others when next shown. The header and the detail pane are kept. */
   replaceDoc: (next: ProjectDoc) => void;
 }>;
+
+/** The task sheet's way back names the tab it returns to (and, for a screen reader, the project). */
+export function nameSheetBack(t: Translate, back: HTMLElement, view: ProjectView): void {
+  const tab = t(`work.tab.${view.current()}`);
+  back.textContent = t('work.detail.back', { tab });
+  back.setAttribute('aria-label', t('work.detail.backLabel', { tab, project: view.title }));
+}
 
 function header(ctx: ViewContext, head: ProjectHead, back: () => void): HTMLElement {
   const counts = { open: head.openTasks, done: head.doneTasks, blockedTasks: head.blockedTasks, dependencyOpenTasks: head.dependencyOpenTasks,

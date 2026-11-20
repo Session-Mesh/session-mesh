@@ -36,8 +36,8 @@ function cleanTitle(value: unknown): string {
 }
 
 /** Where a question leads: the sheet of the task it is about, the Questions tab of its project, or the entry screen. A task
- *  in no project has no sheet in the Projects view, so its question is answered from the entry screen (as the session
- *  marker does, markerTarget in static/work-session-questions.ts). */
+ *  in no project has no project view, so its question leads to the entry screen, whose list opens the task's sheet (as
+ *  the session marker does, markerTarget in static/work-session-questions.ts). */
 function questionTarget(about: string | null, project: string | null): WorkTarget {
   if (about && FORMS.task.test(about)) return project && FORMS.project.test(project) ? { kind: 'task', id: about } : { kind: 'entry' };
   if (about && FORMS.project.test(about)) return { kind: 'project', id: about };

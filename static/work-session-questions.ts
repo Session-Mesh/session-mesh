@@ -75,7 +75,7 @@ export function parseSessionQuestions(value: unknown): SessionQuestionsDoc | nul
 export function markerTarget(entry: SessionEntry): WorkTarget {
   const [first] = entry.questions;
   if (!first || entry.omitted > 0) return { kind: 'entry' };
-  // A task in no project has no sheet in the Projects view: its question is answered from the entry screen.
+  // A task in no project has no project view: its question leads to the entry screen, whose list opens the task's sheet.
   if (first.about && TASK.test(first.about) && first.project && entry.questions.every(question => question.about === first.about)) {
     return { kind: 'task', id: first.about };
   }

@@ -12,7 +12,8 @@ import {
 } from '../static/work-view-state.ts';
 import type { Draft, Place, StoragePort, ViewState } from '../static/work-view-state.ts';
 
-const PLACE: Place = { project: 'P-7a7a', tab: 'board', task: 'T-7b7b', scroll: 420, sheetScroll: 30, tabScroll: 812, expanded: ['relay', 'kiln'] };
+const PLACE: Place = { project: 'P-7a7a', tab: 'board', task: 'T-7b7b', sheet: null, scroll: 420, sheetScroll: 30, tabScroll: 812,
+  expanded: ['relay', 'kiln'], questionsOpen: true };
 const draft = (text: string, at: number, extra: Partial<Draft> = {}): Draft => ({ text, picked: [], edit: false, at, ...extra });
 
 function memoryStorage(): StoragePort & { items: Map<string, string> } {
@@ -102,8 +103,33 @@ describe('the stored state', () => {
       drafts: { 'N-1': { text: 'kept', picked: ['a', 3], at: 9 }, 'not an id!': { text: 'dropped', at: 1 }, 'N-2': { text: 5 },
         'N-3': 'text', '__proto__': { text: 'dropped' } } });
     const state = parseState(raw);
-    assert.deepEqual(state.place, { project: 'P-1', tab: null, task: null, scroll: 0, sheetScroll: 0, tabScroll: 0, expanded: ['ok'] });
+    assert.deepEqual(state.place, { project: 'P-1', tab: null, task: null, sheet: null, scroll: 0, sheetScroll: 0, tabScroll: 0,
+      expanded: ['ok'], questionsOpen: false });
     assert.deepEqual([...state.drafts], [['N-1', { text: 'kept', picked: ['a'], edit: false, at: 9 }]]);
+  });
+
+  test('a sheet opened from the entry screen (a task in no project, a question about nothing) is a place', () => {
+    for (const sheet of [{ kind: 'task', id: 'T-9c0d' }, { kind: 'question', id: 'N-0000d031' }] as const) {
+      const place: Place = { ...ENTRY_PLACE, sheet, scroll: 120 };
+      assert.deepEqual(parseState(serializeState(withPlace(EMPTY_STATE, place))).place, place, sheet.kind);
+    }
+    const read = (place: object): Place => parseState(JSON.stringify({ schema: STATE_SCHEMA, place, drafts: {} })).place;
+    assert.equal(read({ sheet: { kind: 'project', id: 'P-1' } }).sheet, null, 'another kind');
+    assert.equal(read({ sheet: { kind: 'task', id: '<img>' } }).sheet, null, 'not an id');
+    assert.equal(read({ sheet: 'T-9c0d' }).sheet, null, 'not a record');
+    assert.equal(read({ project: 'P-7a7a', sheet: { kind: 'task', id: 'T-9c0d' } }).sheet, null, 'a project is shown, not a sheet');
+  });
+
+  test('the unfolded pending questions are kept in the same state, and alone are worth storing', () => {
+    const storage = memoryStorage();
+    saveState(() => storage, withPlace(EMPTY_STATE, { ...ENTRY_PLACE, questionsOpen: true }));
+    assert.deepEqual([...storage.items.keys()], [STATE_KEY]);
+    assert.equal(loadState(() => storage).place.questionsOpen, true);
+    const read = (value: unknown): boolean =>
+      parseState(JSON.stringify({ schema: STATE_SCHEMA, place: { questionsOpen: value }, drafts: {} })).place.questionsOpen;
+    assert.deepEqual([read(true), read('1'), read(1), read(null)], [true, false, false, false]);
+    clearState(() => storage);
+    assert.equal(storage.items.size, 0);
   });
 
   test('a task or tab without a project is not a place: the entry screen', () => {

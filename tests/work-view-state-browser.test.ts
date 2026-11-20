@@ -129,6 +129,15 @@ const atLevel = (page: Page, expected: number) => page.waitForFunction(
   wanted => ((history.state as { meshWorkLevel?: number } | null)?.meshWorkLevel ?? 0) === wanted, expected);
 const sheetField = (page: Page, questionId: string) =>
   page.locator(`.work-detail-pane [data-work-answer-slot="${questionId}"] .work-answer-input`);
+const tabField = (page: Page, questionId: string) =>
+  page.locator(`#work-panel-questions [data-work-answer-slot="${questionId}"] .work-answer-input`);
+
+/** Unfold the pending questions of the entry screen (when folded) and open the row of `question`. */
+async function openRow(page: Page, question: string): Promise<void> {
+  const toggle = page.locator('.work-qsection-toggle');
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  await page.locator(`.work-qrow[data-question-id="${question}"] .work-qrow-open`).click();
+}
 const scrollTop = (page: Page) => page.locator('#projects').evaluate(node => node.scrollTop);
 const stored = (page: Page) => page.evaluate(key => sessionStorage.getItem(key) ?? '', KEY);
 const card = (page: Page, id: string) => page.locator(`#work-panel-board [data-task="${id}"]`);
@@ -154,9 +163,10 @@ describe('the Projects view comes back as it was left', { skip }, () => {
         await toProjects(page, phone);
         await page.locator('.work-entry-questions h2 .work-count').waitFor();
 
-        // A draft on the entry screen, under the second question; then the first task's sheet from the Board.
-        await page.locator(`.work-entry-questions [data-work-answer-slot="${Q_SECOND}"] .work-answer-input`).fill(DRAFT_ENTRY);
+        // A draft in the project's Questions tab, under the second question; then the first task's sheet from the Board.
         await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
+        await page.locator('#work-tab-questions').click();
+        await tabField(page, Q_SECOND).fill(DRAFT_ENTRY);
         await page.locator('#work-tab-board').click();
         await card(page, FIRST).scrollIntoViewIfNeeded();
         const tabScroll = await scrollTop(page);
@@ -179,8 +189,8 @@ describe('the Projects view comes back as it was left', { skip }, () => {
         await noOverflow(page);
         await shot(page, `state-back-${width}`);
 
-        // Escape from the sheet put back: its tab (on a phone, scrolled where it was), then the entry screen, whose
-        // draft is still there.
+        // Escape from the sheet put back: its tab (on a phone, scrolled where it was), then the entry screen. The
+        // project opened again: the draft of its Questions tab is still there.
         await escape(page);
         await atLevel(page, 1);
         assert.equal(await page.locator('.work-detail-pane').isHidden(), true);
@@ -188,10 +198,11 @@ describe('the Projects view comes back as it was left', { skip }, () => {
         await escape(page);
         await page.locator('.work-entry-questions h2 .work-count').waitFor();
         await atLevel(page, 0);
-        assert.equal(await page.locator(`.work-entry-questions [data-work-answer-slot="${Q_SECOND}"] .work-answer-input`).inputValue(), DRAFT_ENTRY);
-
-        // The second sheet: the draft typed on the entry screen is there; it is changed. The first one's stays.
         await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
+        await page.locator('#work-tab-questions').click();
+        assert.equal(await tabField(page, Q_SECOND).inputValue(), DRAFT_ENTRY);
+
+        // The second sheet: the draft typed in the Questions tab is there; it is changed. The first one's stays.
         await page.locator('#work-tab-board').click();
         await card(page, SECOND).click();
         await sheetShown(page, TITLE_SECOND);
@@ -256,8 +267,10 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     await toProjects(page, false);
     await page.locator('.work-entry-questions h2 .work-count').waitFor();
     await atLevel(page, 0);
-    assert.equal(await page.locator(`.work-entry-questions [data-work-answer-slot="${Q_GONE}"] .work-answer-input`).inputValue(),
-      'fictional orphan draft', 'the drafts of questions still open come back');
+    // The entry screen has no answer form: the question's sheet, opened from its row, has the draft.
+    await openRow(page, Q_GONE);
+    await sheetShown(page, 'Charlie one');
+    assert.equal(await sheetField(page, Q_GONE).inputValue(), 'fictional orphan draft', 'the drafts of questions still open come back');
     // A corrupt value (written after the view's own last writes, as the page goes: pagehide, then the page hidden):
     // the next page starts as new.
     await page.evaluate(key => {
@@ -268,7 +281,59 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     await page.reload();
     await page.locator('.work-entry-questions h2 .work-count').waitFor();
     assert.equal(await level(page), 0);
-    assert.equal(await page.locator(`.work-entry-questions [data-work-answer-slot="${Q_GONE}"] .work-answer-input`).inputValue(), '');
+    await openRow(page, Q_GONE);
+    await sheetShown(page, 'Charlie one');
+    assert.equal(await sheetField(page, Q_GONE).inputValue(), '');
+    await page.context().close();
+  });
+
+  test('the scroll of a tab left is not put on another tab chosen while the sheet is read again', { timeout: 300_000 }, async () => {
+    const page = await signIn(1440, []);
+    const { first: FIRST, titles: [TITLE_FIRST] } = SETS[1440];
+    await toProjects(page, false);
+    await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
+    await page.locator('#work-tab-board').click();
+    await card(page, FIRST).scrollIntoViewIfNeeded();
+    const boardScroll = await scrollTop(page);
+    assert.ok(boardScroll > 0, `the board scrolls (scrollTop ${boardScroll})`);
+    await card(page, FIRST).click();
+    await sheetShown(page, TITLE_FIRST);
+    await toSessions(page, false);
+    // Coming back, the read of the sheet's task waits while the owner picks the Timeline tab, scrolled to its top.
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/api/work/v1', async route => {
+      if (JSON.parse(route.request().postData() ?? '{}').op !== 'task') return route.continue();
+      await gate;
+      return route.continue();
+    });
+    await toProjects(page, false);
+    await page.locator('#work-tab-board[aria-selected="true"]').waitFor();
+    await page.locator('#work-tab-frise').click();
+    await page.locator('#projects').evaluate(node => { node.scrollTop = 0; });
+    assert.ok(await page.locator('#projects').evaluate(node => node.scrollHeight > node.clientHeight), 'the Timeline scrolls');
+    release();
+    await sheetShown(page, TITLE_FIRST);
+    assert.equal(await scrollTop(page), 0, 'the Timeline stays at its top');
+    await page.unroute('**/api/work/v1');
+    await page.context().close();
+  });
+
+  test('a refused read of the history signs out: the drafts of the view go too', { timeout: 300_000 }, async () => {
+    const page = await signIn(1440, []);
+    await toProjects(page, false);
+    await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
+    await page.locator('#work-tab-questions').click();
+    await tabField(page, Q_GONE).fill('fictional refused draft');
+    await page.waitForFunction(([key, text]) => (sessionStorage.getItem(key) ?? '').includes(text), [KEY, 'fictional refused draft'] as const);
+    await toSessions(page, false);
+    // The credential is refused when the history is read; the sign-in page is a stub here, so that only the page
+    // left (not static/login.js) can have removed the drafts.
+    await page.route('**/api/history**', route => route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }));
+    await page.route('**/login', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>stub</title>' }));
+    await page.locator('#tab-hist').click();
+    await page.waitForURL(/\/login/);
+    assert.equal(await stored(page), '', 'no draft kept after the refusal');
     await page.context().close();
   });
 });

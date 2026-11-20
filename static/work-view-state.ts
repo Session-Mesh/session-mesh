@@ -3,7 +3,8 @@
 
 /**
  * What the Projects view puts back when the owner comes back to it: the place (the project, its tab, the task sheet,
- * where they were scrolled, the products unfolded on the entry screen) and the unsent answer drafts of every question
+ * or a sheet opened from the entry screen, where they were scrolled, the products and the pending questions unfolded on
+ * the entry screen) and the unsent answer drafts of every question
  * the owner typed under, by question id. Kept in this tab's sessionStorage under one key, never in localStorage and
  * never sent anywhere: a draft may hold sensitive text, so it lives no longer than the tab and is removed when the
  * answer is sent, when the owner empties the field, and when the browser signs out (static/app.js, static/login.js).
@@ -33,12 +34,21 @@ export type Draft = Readonly<{
   at: number;
 }>;
 
+/** A sheet opened from the entry screen, with no project view under it: a task in no project, or a question about
+ *  no task or project. */
+export type EntrySheetPlace = Readonly<{ kind: 'task' | 'question'; id: string }>;
+
+export const sameSheet = (left: EntrySheetPlace | null, right: EntrySheetPlace | null): boolean =>
+  left?.kind === right?.kind && left?.id === right?.id;
+
 export type Place = Readonly<{
   /** The open project, or null for the entry screen. */
   project: string | null;
   tab: string | null;
   /** The task whose sheet is open. */
   task: string | null;
+  /** Without a project: the sheet opened from the entry screen, or null for the entry screen itself. */
+  sheet: EntrySheetPlace | null;
   /** Where the view's scroller stood, where the sheet's own pane stood, and where the tab stood under a sheet that
    *  covers it (a phone). */
   scroll: number;
@@ -46,6 +56,8 @@ export type Place = Readonly<{
   tabScroll: number | null;
   /** The products unfolded on the entry screen; null until the owner's first visit seeds them. */
   expanded: readonly string[] | null;
+  /** The pending questions of the entry screen unfolded (folded by default). */
+  questionsOpen: boolean;
 }>;
 
 export type ViewState = Readonly<{ place: Place; drafts: ReadonlyMap<string, Draft> }>;
@@ -57,7 +69,8 @@ export type StoragePort = Readonly<{
   removeItem: (key: string) => void;
 }>;
 
-export const ENTRY_PLACE: Place = { project: null, tab: null, task: null, scroll: 0, sheetScroll: 0, tabScroll: null, expanded: null };
+export const ENTRY_PLACE: Place = { project: null, tab: null, task: null, sheet: null, scroll: 0, sheetScroll: 0, tabScroll: null,
+  expanded: null, questionsOpen: false };
 export const EMPTY_STATE: ViewState = { place: ENTRY_PLACE, drafts: new Map() };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -73,14 +86,20 @@ function ids(value: unknown, max: number): string[] | null {
   return value.filter(isId).slice(0, max);
 }
 
+function readSheet(value: unknown): EntrySheetPlace | null {
+  if (!isRecord(value) || (value.kind !== 'task' && value.kind !== 'question') || !isId(value.id)) return null;
+  return { kind: value.kind, id: value.id };
+}
+
 function readPlace(value: unknown): Place {
   if (!isRecord(value)) return ENTRY_PLACE;
   const project = idOrNull(value.project);
   return {
     project, tab: project ? idOrNull(value.tab) : null, task: project ? idOrNull(value.task) : null,
+    sheet: project ? null : readSheet(value.sheet),
     scroll: offset(value.scroll), sheetScroll: offset(value.sheetScroll),
     tabScroll: value.tabScroll === null || value.tabScroll === undefined ? null : offset(value.tabScroll),
-    expanded: ids(value.expanded, MAX_EXPANDED),
+    expanded: ids(value.expanded, MAX_EXPANDED), questionsOpen: value.questionsOpen === true,
   };
 }
 

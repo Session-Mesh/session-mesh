@@ -90,6 +90,37 @@ export function escapeKeepsField(target: EventTarget | null): boolean {
   return (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) && target.value !== '';
 }
 
+/** What the view gives its way up one level (static/work-view.ts). */
+export type LevelHost = Readonly<{
+  nav: WorkNav;
+  root: HTMLElement;
+  /** Between the view's `open` and `close`. */
+  active: () => boolean;
+  inProject: () => boolean;
+  /** Close the task sheet shown over a project's tab; false when none is shown. */
+  closeSheet: () => boolean;
+  toEntry: () => void;
+}>;
+
+/** The browser's Back (or a phone's back gesture) went to an entry of the view: show that level. */
+export function wentBack(host: LevelHost, state: unknown): void {
+  const level = host.nav.popped(state);
+  if (level === null || !host.active()) return;
+  if (level === 0) host.toEntry(); else host.closeSheet();
+}
+
+/** Escape goes up one level: sheet to tab, project (or a sheet opened from the entry screen) to the entry screen; on
+ *  the entry screen the page's own Escape leaves Projects. A text field holding text keeps it (nothing happens). */
+export function upOnEscape(host: LevelHost, event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || !host.active()) return;
+  const target = event.target;
+  if (target !== document.body && !(target instanceof Node && host.root.contains(target))) return;   // a dialog or field elsewhere keeps its own Escape
+  if (escapeKeepsField(target)) { event.stopPropagation(); return; }
+  if (!host.inProject() && host.nav.level() === 0) return;   // a project still read (or that failed) is level 1 already
+  event.stopPropagation();
+  if (!host.closeSheet()) host.toEntry();
+}
+
 /** The tabs of a project view are hidden while the sheet is shown (a phone layout): closing the sheet then puts
  *  back where the tab was scrolled. */
 export function tabsHidden(projectRoot: HTMLElement): boolean {
