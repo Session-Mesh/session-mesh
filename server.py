@@ -419,12 +419,18 @@ async def start_dictation(app):
             env={k: v for k, v in os.environ.items() if k == "PATH" or k.startswith("MESH_WHISPER_")})
         reason = "worker_failed"
         worker = app["dictation_worker"]
-        worker.stdin.write((json.dumps({"secret": app["dictation_secret"], "socket": socket,
-                                       "inventory": str(ptyhost.SOCK), "parent": os.getpid(),
-                                       "principal": app["dictation_principal"]}) + "\n").encode())
-        await asyncio.wait_for(worker.stdin.drain(), 1)
+        pipe_failed = False
+        try:
+            worker.stdin.write((json.dumps({"secret": app["dictation_secret"], "socket": socket,
+                                           "inventory": str(ptyhost.SOCK), "parent": os.getpid(),
+                                           "principal": app["dictation_principal"]}) + "\n").encode())
+            await asyncio.wait_for(worker.stdin.drain(), 1)
+        except (BrokenPipeError, ConnectionResetError):
+            pipe_failed = True
+        # An early configuration rejection may already have closed stdin. Read
+        # only the bounded private handshake, never stderr or exception text.
         handshake = await asyncio.wait_for(worker.stdout.readline(), 5)
-        if handshake != b"ready\n":
+        if pipe_failed or handshake != b"ready\n":
             if handshake == b"invalid_configuration\n":
                 reason = "invalid_configuration"
             raise ValueError()
@@ -461,39 +467,65 @@ async def _watch_dictation(app, worker):
 
 
 async def stop_dictation(app):
-    # Detach before awaiting: repeated cleanup is harmless and no closed client
-    # can continue to advertise an enabled feature.
+    cleanup = app.get("dictation_cleanup")
+    if cleanup is None:
+        if not any(app.get(key) for key in ("dictation_client", "dictation_worker",
+                                            "dictation_directory", "dictation_monitor")):
+            return
+        # One tracked task retains detached resources across cancellation and
+        # concurrent stops. Every caller joins it before propagating cancellation.
+        monitor = app.get("dictation_monitor")
+        if monitor is asyncio.current_task():
+            monitor = None
+        cleanup = asyncio.create_task(_close_dictation(app, monitor))
+        app["dictation_cleanup"] = cleanup
+    cancelled = False
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError()
+    cleanup.result()
+
+
+async def _close_dictation(app, monitor):
+    # Detach only in the cleanup task that retains and closes these resources.
     client = app.pop("dictation_client", None)
     worker = app.pop("dictation_worker", None)
     directory = app.pop("dictation_directory", None)
-    monitor = app.pop("dictation_monitor", None)
+    app.pop("dictation_monitor", None)
     app.pop("dictation_capacity", None)
-    if monitor and monitor is not asyncio.current_task():
-        monitor.cancel()
-        await asyncio.gather(monitor, return_exceptions=True)
     try:
-        if client:
-            with contextlib.suppress(asyncio.TimeoutError, OSError):
-                await asyncio.wait_for(client.close(), 1)
+        if monitor:
+            monitor.cancel()
+            await asyncio.wait({monitor}, timeout=1)
     finally:
         try:
-            if worker:
-                if worker.stdin:
-                    worker.stdin.close()
-                try:
-                    await asyncio.wait_for(worker.wait(), 3)
-                except asyncio.TimeoutError:
-                    pass
-                finally:
-                    if worker.returncode is None:
-                        with contextlib.suppress(ProcessLookupError):
-                            worker.kill()
-                        with contextlib.suppress(asyncio.TimeoutError):
-                            await asyncio.wait_for(worker.wait(), 1)
+            if client:
+                with contextlib.suppress(asyncio.TimeoutError, OSError):
+                    await asyncio.wait_for(client.close(), 1)
         finally:
-            if directory:
-                with contextlib.suppress(OSError):
-                    directory.cleanup()
+            try:
+                if worker:
+                    if worker.stdin:
+                        worker.stdin.close()
+                    try:
+                        await asyncio.wait_for(worker.wait(), 3)
+                    except asyncio.TimeoutError:
+                        pass
+                    finally:
+                        if worker.returncode is None:
+                            with contextlib.suppress(ProcessLookupError):
+                                worker.kill()
+                            with contextlib.suppress(asyncio.TimeoutError):
+                                await asyncio.wait_for(worker.wait(), 1)
+            finally:
+                if directory:
+                    with contextlib.suppress(OSError):
+                        directory.cleanup()
+                app.pop("dictation_cleanup", None)
 
 
 def _dictation_principal(app):
