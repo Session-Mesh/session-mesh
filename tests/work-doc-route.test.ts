@@ -120,8 +120,11 @@ describe('what the document URL serves', () => {
   test('a tampered capability or a traversal in the URL is refused', async () => {
     const { url } = await signed('~/notes/2026-11-20-fictional/plan.html');
     const capability = url.split('/')[2]!;
+    // The last hex digit changed: to 0, or to 1 when it already is 0 (else the URL would be the valid one).
+    const flipped = capability.slice(0, -1) + (capability.endsWith('0') ? '1' : '0');
+    assert.notEqual(flipped, capability);
     for (const tampered of [`/view/${capability}/etc/passwd`, `/view/${capability}${notes}/../../.ssh/notes.md`,
-      `/view/${capability.slice(0, -1)}0${notes}/plan.html`, `/view/v2.d.1.${'0'.repeat(32)}${notes}/plan.html`]) {
+      `/view/${flipped}${notes}/plan.html`, `/view/v2.d.1.${'0'.repeat(32)}${notes}/plan.html`]) {
       const response = await fetch(`${mesh.base}${tampered}?static=1`);
       assert.ok(response.status === 403 || response.status === 404, `${tampered}: ${response.status}`);
     }
