@@ -1275,3 +1275,6 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .row-retry:hover, .row-retry:focus-visible { color: var(--fg); }
 .vpad { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .dot.pending { animation: none; } }
+/* Session capability references are never embedded or prefetched. */
+.session-artifacts { width: min(42rem, 90vw); max-height: 85vh; overflow: auto; }
+.session-artifacts li { margin-block: 1rem; overflow-wrap: anywhere; }
