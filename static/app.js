@@ -4565,7 +4565,6 @@ async function loadLocalInventory(signal, attempt) {
   if (!localMeshEffectsAllowed()) return { kind: "failed", status: null };
   if (response.status === 401) {
     forgetKnownSessions();
-    references?.stop();   // the credential is gone: forget the known ids
     location.href = "/login";
     return { kind: "refused" };
   }
@@ -4600,6 +4599,7 @@ function rememberKnownSessions(listing) {
 }
 function forgetKnownSessions() {
   knownForgotten = true;
+  references?.stop();   // the credential is gone: the known tracker ids go too
   const prefix = meshContext?.storagePrefix ?? "mesh";
   try {
     localStorage.removeItem(`${prefix}.${KNOWN_KEY}`);

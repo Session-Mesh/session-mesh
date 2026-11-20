@@ -30,7 +30,7 @@ type Page = Record<string, any> & {calls: string[]};
 
 const EFFECTS = ['receiveBoardSignals', 'checkClientVersion', 'showUpdateNotice', 'markSeen',
   'invalidateReplacedDemoPanes', 'handleOpen', 'checkDemoSceneUpdates', 'renderManagement',
-  'renderRestore', 'pollWatched', 'pollHistory', 'tickSessionMarker', 'directLineAlive', 'rememberKnownSessions'];
+  'renderRestore', 'pollWatched', 'pollHistory', 'tickSessionMarker', 'tickReferences', 'directLineAlive', 'rememberKnownSessions'];
 
 function page(inventory: (page: Page) => Loader): Page {
   const calls: string[] = [];
@@ -89,7 +89,7 @@ describe('inventory pipeline', () => {
     // Every effect of an observed listing, in order (no open request, no management view here).
     assert.deepEqual(context.calls, ['rememberKnownSessions', 'session-actions', 'agent-mail', 'activity',
       'receiveBoardSignals', 'checkClientVersion', 'showUpdateNotice', 'directLineAlive', 'markSeen',
-      'invalidateReplacedDemoPanes', 'checkDemoSceneUpdates', 'renderLists', 'renderRestore', 'pollWatched', 'pollHistory', 'tickSessionMarker']);
+      'invalidateReplacedDemoPanes', 'checkDemoSceneUpdates', 'renderLists', 'renderRestore', 'pollWatched', 'pollHistory', 'tickSessionMarker', 'tickReferences']);
     const oldTarget = capture(context, 1);
     assert.ok(oldTarget && context.paneTargets.valid(oldTarget));
 
