@@ -143,7 +143,13 @@ let guide_does_not_promise_an_account_switch () =
     (contains guide "no tool to change your account");
   Alcotest.(check bool)
     "does not say the agent can change account" false
-    (contains guide "can change account" || contains guide "switch_supported")
+    (contains guide "can change account" || contains guide "switch_supported");
+  Alcotest.(check bool)
+    "names the switch_qualified field" true
+    (contains guide "`switch_qualified`");
+  Alcotest.(check bool)
+    "no longer names aliases_supported" false
+    (contains guide "aliases_supported")
 
 
 let rejects_a_path_argument () =

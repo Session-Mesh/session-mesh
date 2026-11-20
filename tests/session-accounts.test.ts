@@ -349,13 +349,17 @@ describe("a session's own accounts, read with its session token", {skip: SKIP}, 
     const response = await selfAccounts(await tokenOf('a-work'));
     const text = await response.text();
     assert.equal(response.status, 200, text);
-    assert.deepEqual(JSON.parse(text), {agent: 'claude', aliases_supported: true, accounts_file: 'ok',
+    // switch_qualified (the backend profile registry's name, #165) is false: Mesh cannot switch this session's
+    // account yet, for any agent kind.
+    assert.deepEqual(JSON.parse(text), {agent: 'claude', switch_qualified: false, accounts_file: 'ok',
       current: {id: 'work', label: 'Atacama', declared: true},
       accounts: [DEFAULT, {id: 'work', label: 'Atacama', claude: true, codex: true},
         {id: 'perso', label: 'Perso', claude: false, codex: true}]});
     assert.ok(!text.includes('.agent-accounts') && !text.includes(mesh.home), 'no folder reaches the agent');
     const plain = await (await selfAccounts(await tokenOf('a-default'))).json() as Record<string, unknown>;
     assert.equal(plain.agent, 'codex');
+    assert.equal(plain.switch_qualified, false);
+    assert.ok(!('aliases_supported' in plain), 'the former field name is gone');
     assert.deepEqual(plain.current, {id: 'default', label: 'Default account', declared: true});
   });
 
