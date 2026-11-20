@@ -1578,15 +1578,23 @@ same variable set, prints the settings as the server reads them.
 ## Account aliases: separate Claude and Codex accounts
 
 An account alias lets a session run Claude or Codex under another login than your usual one, for
-example a work account beside a personal one. An alias has an id, a label and up to two folders: a
-Claude configuration folder (given to Claude as `CLAUDE_CONFIG_DIR`) and a Codex home (given to
-Codex as `CODEX_HOME`). A session started without an alias, and every session when no alias is
-declared, runs exactly as before.
+example several work accounts and clients beside a personal one. You can declare any number of
+aliases, up to 64, each Claude-only, Codex-only or both. An alias has an id, a label and up to two
+folders: a Claude configuration folder (given to Claude as `CLAUDE_CONFIG_DIR`) and a Codex home
+(given to Codex as `CODEX_HOME`). A session started without an alias, and every session when no
+alias is declared, runs exactly as before.
 
 Each folder holds that account's own login, settings, history and conversations: a conversation
-started under an alias is not in the default account's history, and the reverse. Mesh never reads,
-copies, logs or shows what is in these folders; it checks the folders and passes their paths to
-the agent.
+started under an alias is not in the default account's history, and the reverse. Mesh never opens
+the login files in these folders (`.credentials.json`, `.claude.json`, `auth.json`), never copies
+them, and refuses them in `/view`. It does read, as it does for the default account:
+
+- the alias's Claude `settings.json`, when a Claude session starts (to decide whether Claude
+  delivers Mesh's wake line by itself);
+- the names of the alias's Claude transcripts (`projects/*/<id>.jsonl`), when a session is
+  restored, to check that its conversation is still there;
+- the Codex rollout an alias's Codex keeps open (`sessions/YYYY/MM/DD/rollout-*.jsonl`), to show
+  the conversation's last messages and state in the session list.
 
 ### Declaring aliases
 
@@ -1601,17 +1609,29 @@ Write `accounts.json` in the Mesh configuration folder (`~/.config/session-mesh/
   {"id": "perso", "label": "Perso", "codex_home": "/home/USER/.agent-accounts/perso/.codex"}]}
 ```
 
-- `id`: 1 to 32 characters among `a-z`, `0-9` and `-`; `default` is reserved.
-- `label`: what the session list and the pane header show, 1 to 24 characters.
-- `claude_config_dir`, `codex_home`: at least one. An absolute path made of `A-Z a-z 0-9 . _ + @ / -`
-  only (it is written on the agent's command line), with no symbolic link in it. An existing
-  folder must be yours and not writable by group or others; a missing one is created with mode
-  0700 at the first launch, if its parent exists and is yours.
+- `id`: 1 to 32 characters among `a-z`, `0-9` and `-`; `default` is reserved; unique.
+- `label`: what the session list and the pane header show, 1 to 24 characters, at least one that
+  is not a space, with no control, format (zero-width, bidirectional mark), line or paragraph
+  separator character. Two aliases may not have the same label (ignoring the case of `A-Z`).
+- `claude_config_dir`, `codex_home`: at least one, each declared by one alias only. An absolute
+  path made of `A-Z a-z 0-9 . _ + @ / -` only (it is written on the agent's command line), with no
+  symbolic link in it. Every folder above it, from `/` down, must belong to you or to root and not
+  be writable by group or others, unless it is sticky like `/tmp`. An existing folder must be yours
+  and not writable by group or others; a missing one is created with mode 0700 at the first
+  launch, if its parent exists, is yours and is writable by you only.
+
+`accounts.json` itself must be yours and not writable by group or others. More than 64 aliases,
+or any invalid part, refuses the whole file. A declared folder whose parent does not exist also
+refuses the whole file, as soon as it is read, not only when that alias is used.
 
 The file is checked by `mesh-platform accounts list ~/.config/session-mesh/accounts.json`, which
 prints the aliases as Mesh reads them, or why the file is refused. An invalid file offers no alias
 at all (the reason is in `journalctl --user -u session-mesh`). The web server reads the file again
 when it changes, the next time the New session dialog opens: no restart is needed.
+
+Mesh remembers every folder an alias has declared (in `accounts-protected.json`, next to
+`accounts.json`) and keeps refusing their login files in `/view` after the alias is removed or the
+file refused: the logins stay on disk until you delete them.
 
 Do not point an alias at a folder made of symbolic links into `~/.claude`: Claude keeps the
 account's identity in `.claude.json` inside the folder, and a shared file would switch every
@@ -1627,24 +1647,41 @@ CLAUDE_CONFIG_DIR=/home/USER/.agent-accounts/work/.claude claude    # then /logi
 CODEX_HOME=/home/USER/.agent-accounts/work/.codex codex login
 ```
 
-Create the folders first (`mkdir -p -m 700 ...`) if no session has used the alias yet. `claude`
-then `/status`, or `codex login status`, run with the same variable, shows which account the folder
-holds.
+Create the folders first if no session has used the alias yet, private at every level:
+`(umask 077; mkdir -p /home/USER/.agent-accounts/work/.claude)`. A plain `mkdir -p -m 700` sets
+0700 on the last folder only; under a `umask` of 002 the folders above it are writable by your
+group, and the file is refused. `claude` then `/status`, or `codex login status`, run with the same
+variable, shows which account the folder holds.
+
+A credential in the environment comes before the login kept in the folder. When a session starts
+under an alias, Mesh unsets, for that agent only, the variables that would override it, even if
+your login shell's profile exports them: for Claude `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`,
+`CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`, `AWS_BEARER_TOKEN_BEDROCK` and
+`ANTHROPIC_FOUNDRY_API_KEY`; for Codex `OPENAI_API_KEY`, `CODEX_API_KEY` and `CODEX_ACCESS_TOKEN`.
+If an account must use such a credential (an API key rather than a login), set it in that
+account's own configuration (for Claude, the `env` block or `apiKeyHelper` of the alias's
+`settings.json`), not in your profile, or do not declare aliases for that agent. Sessions under the
+default account keep your environment as it is.
 
 ### Using an alias
 
-When at least one alias is declared, New session shows an **Account** choice for Claude and Codex.
-The browser remembers the last alias chosen on that device. A session started with an alias shows
-its label as a badge on its row in the session list and in its pane header. The alias is fixed
-when the session starts; to change it, start another session.
+When at least one alias is declared, New session shows an **Account** choice for Claude and Codex,
+sorted by label. The browser remembers the last alias chosen on that device. A session started with
+an alias shows its label as a badge on its row in the session list and in its pane header. The
+alias is fixed when the session starts; to change it, start another session.
 
 The page only sends the alias id; the folders stay on the runner. A launch is refused, never moved
-to the default account, when the alias is unknown, has no folder for that agent, or is chosen for
-a shell, a custom command or another agent.
+to the default account, when the alias is unknown, has no folder for that agent (it is then shown
+greyed in the list), is chosen for a shell, a custom command or another agent, or when one of its
+folders fails the checks above at launch (the reason is in the server log, not in the page). An
+alias remembered on a device but removed from the runner since stays selected, marked "no longer
+declared", and is refused until you choose another account.
 
 A restore after a PTY host restart keeps the alias: the conversation is looked for in the alias's
 folder only, and the agent is relaunched with it. If the alias was removed from `accounts.json`
-meanwhile, the restore of that session is refused.
+meanwhile, the restore of that session is refused. A restart that an agent requests and you
+approve keeps the alias of the session too.
 
 Limits of this version:
 
@@ -1653,6 +1690,18 @@ Limits of this version:
 - The history panel, "Resume" from the history, and moving in an agent running in another terminal
   only know the default account's folders.
 - Waking Codex with `codex queue` (below) reaches the default Codex home, not an alias's.
+- A new session that an agent requests (and you approve) starts under the default account, even
+  when the requesting session runs under an alias.
+- The session list's details for a Claude session under an alias (its conversation id and last
+  messages) come from the default account's `~/.claude/sessions`: they may be missing.
+- A restored alias session whose Claude folder has no `projects/` folder yet is relaunched with
+  `claude --resume`, which then fails in the pane instead of being refused before launch.
+- The agent is started with `env`, so a `claude` or `codex` available only as a shell alias or
+  function is not found under an alias.
+- Mesh does not check that `.claude.json` or the login files in an alias's folder are not symbolic
+  links into another account's folder (see the warning above).
+- Per-alias colours, the alias in the browser tab title, and a login helper are not part of this
+  version.
 
 ## Debugging the agent hook
 

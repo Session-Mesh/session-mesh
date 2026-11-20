@@ -206,18 +206,18 @@ def configure(token, conf_dir):
     _deny_inodes.cache = None
 
 
-# The login files of the operator's account aliases (server.declared_accounts): refused as the
-# default account's ~/.claude/.credentials.json, ~/.claude.json and ~/.codex/auth.json are.
-ACCOUNT_LOGIN_FILES = {"claude_config_dir": (".credentials.json", ".claude.json"), "codex_home": ("auth.json",)}
+# The login files of the operator's account aliases (server._protected_folders: every folder an alias
+# declared, now or before): refused as the default account's ~/.claude/.credentials.json, ~/.claude.json
+# and ~/.codex/auth.json are. Claude's and Codex's names are refused in every folder, whichever agent it serves.
+ACCOUNT_LOGIN_FILES = (".credentials.json", ".claude.json", "auth.json")
 _ACCOUNT_DENY = []
 
 
-def deny_account_files(accounts):
+def deny_account_files(folders):
     """Replace the account aliases' login files in the deny-list."""
     global VIEW_DENY
     kept = tuple(entry for entry in VIEW_DENY if entry not in _ACCOUNT_DENY)
-    _ACCOUNT_DENY[:] = [Path(account[field]) / name for account in accounts
-                        for field, names in ACCOUNT_LOGIN_FILES.items() if account.get(field) for name in names]
+    _ACCOUNT_DENY[:] = [Path(folder) / name for folder in folders for name in ACCOUNT_LOGIN_FILES]
     VIEW_DENY = (*kept, *_ACCOUNT_DENY)
     _deny_inodes.cache = None
 

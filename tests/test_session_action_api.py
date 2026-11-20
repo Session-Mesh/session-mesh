@@ -261,7 +261,7 @@ async def test_restart_approval_revalidates_self_then_resumes_with_replaced_mode
     agent_info = {"type": "codex", "session_id": "0199aa00-0000-7000-8000-000000000001",
                   "argv": ["codex", "-m", "old-model"], "pid": 44}
 
-    async def replace_session(old_name, old_created, base, cwd, command, agent, known_agent):
+    async def replace_session(old_name, old_created, base, cwd, command, agent, known_agent, account=None):
         calls.append((old_name, old_created, base, cwd, shlex.split(command), agent, known_agent))
         return "alpha-2"
 

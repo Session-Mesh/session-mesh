@@ -62,7 +62,7 @@ class FakeHost:
 def fake_host(monkeypatch, snapshot_file):
     host = FakeHost()
     monkeypatch.setattr(ptyhost, "request", host.request)
-    monkeypatch.setattr(server, "_conversation_missing", lambda kind, sid: False)   # no transcript files here
+    monkeypatch.setattr(server, "_conversation_missing", lambda kind, sid, account=None: False)   # no transcript files here
     return host
 
 

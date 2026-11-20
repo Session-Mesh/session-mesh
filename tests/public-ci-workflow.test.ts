@@ -350,6 +350,29 @@ describe('the public CI as committed', () => {
         }
       }
     });
+
+    // The account alias and update image tests skip without mesh-platform: it travels with the work programs,
+    // the cache key prefix changed when it joined (an older entry lacks it), and the test jobs require it.
+    test(`${name} hands mesh-platform to the frontend and browser jobs, failing rather than skipping`, () => {
+      const jobs = jobBlocks(parseLines(text));
+      const body = (jobName: string): string => {
+        const job = jobs.find((item) => item.name === jobName);
+        assert.ok(job, `no ${jobName} job`);
+        return job.block.map((line) => line.raw).join('\n');
+      };
+      const native = body('native');
+      for (const needle of ['cp -L ocaml/_build/install/default/bin/mesh-platform native-host/mesh-platform',
+        'test -x native-host/mesh-platform', '            native-host/mesh-platform', 'key: native-programs-v2-']) {
+        assert.ok(native.includes(needle), `${needle} missing from the native job`);
+      }
+      for (const jobName of ['frontend', 'browser']) {
+        const job = body(jobName);
+        for (const needle of ['MESH_MESH_PLATFORM_CMD=$RUNNER_TEMP/native-work/mesh-platform', 'MESH_REQUIRE_MESH_PLATFORM=1',
+          'MESH_REQUIRE_UPDATE_IMAGE=1']) {
+          assert.ok(job.includes(needle), `${needle} missing from the ${jobName} job`);
+        }
+      }
+    });
   }
 });
 
