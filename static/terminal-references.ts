@@ -13,6 +13,9 @@ export type ReferenceMatch = Readonly<{
   /** Where the id starts in the text, and its length there. */
   index: number;
   length: number;
+  /** The whole word around it, brackets and punctuation included: where it starts in the text, and its length. */
+  wordIndex: number;
+  wordLength: number;
 }>;
 
 // An uppercase prefix, then two to thirty-two hex digits (the form work-read accepts); nothing else in the word.
@@ -34,7 +37,8 @@ export function referenceMatches(text: string): ReferenceMatch[] {
     if (end - start < 4 || end - start > 34) continue;
     const parts = REFERENCE.exec(value.slice(start, end));
     if (!parts) continue;
-    found.push({ id: `${parts[1]}-${(parts[2] ?? '').toLowerCase()}`, index: word.index + start, length: end - start });
+    found.push({ id: `${parts[1]}-${(parts[2] ?? '').toLowerCase()}`, index: word.index + start, length: end - start,
+      wordIndex: word.index, wordLength: value.length });
   }
   return found;
 }

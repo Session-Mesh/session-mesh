@@ -5667,10 +5667,11 @@ let referencesRetryAt = 0;
 function tickReferences() {
   if (!panes.length) return;
   if (references) return references.tick();
-  if (referencesLoading || Date.now() < referencesRetryAt || !localMeshEffectsAllowed()) return;
+  if (referencesLoading || knownForgotten || Date.now() < referencesRetryAt || !localMeshEffectsAllowed()) return;
   referencesLoading = true;
   importWorkModule().then((module) => {
-    if (!localMeshEffectsAllowed()) return;
+    // The credential may have been refused while the module loaded (forgetKnownSessions): no cache, no read.
+    if (!localMeshEffectsAllowed() || knownForgotten) return;
     references ||= module.mountReferences({ request: requestLocal, visible: () => document.visibilityState === "visible" });
     references.tick();
   }, () => { referencesRetryAt = Date.now() + 60_000; }).finally(() => { referencesLoading = false; });

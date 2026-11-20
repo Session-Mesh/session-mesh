@@ -25,8 +25,9 @@ const MAX_IDS = 6000;
 const FORMS: Readonly<Record<ReferenceKind, RegExp>> = {
   task: /^T-[0-9a-f]{2,32}$/, project: /^P-[0-9a-f]{2,32}$/, question: /^N-[0-9a-f]{2,32}$/,
 };
-// C0 and C1 controls, bidirectional marks and overrides, zero-width and other invisible format characters.
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f­؜᠎​-‏‪-‮⁠-⁯﻿￹-￻]/gu;
+// C0 and C1 controls, bidirectional marks and overrides, zero-width and other invisible format characters, the
+// combining grapheme joiner, variation selectors and tag characters.
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb\u034f\ufe00-\ufe0f\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/gu;
 
 function cleanTitle(value: unknown): string {
   const raw = (text(value) ?? '').slice(0, MAX_TITLE * 4).replace(UNSAFE, '').replace(/\s+/gu, ' ').trim();
@@ -34,9 +35,11 @@ function cleanTitle(value: unknown): string {
   return chars.length > MAX_TITLE ? `${chars.slice(0, MAX_TITLE - 1).join('')}…` : raw;
 }
 
-/** Where a question leads: the sheet of the task it is about, the Questions tab of its project, or the entry screen. */
-function questionTarget(about: string | null): WorkTarget {
-  if (about && FORMS.task.test(about)) return { kind: 'task', id: about };
+/** Where a question leads: the sheet of the task it is about, the Questions tab of its project, or the entry screen. A task
+ *  in no project has no sheet in the Projects view, so its question is answered from the entry screen (as the session
+ *  marker does, markerTarget in static/work-session-questions.ts). */
+function questionTarget(about: string | null, project: string | null): WorkTarget {
+  if (about && FORMS.task.test(about)) return project && FORMS.project.test(project) ? { kind: 'task', id: about } : { kind: 'entry' };
   if (about && FORMS.project.test(about)) return { kind: 'project', id: about };
   return { kind: 'entry' };
 }
@@ -44,7 +47,7 @@ function questionTarget(about: string | null): WorkTarget {
 function targetOf(kind: ReferenceKind, id: string, item: Record<string, unknown>): WorkTarget {
   if (kind === 'task') return { kind: 'task', id, tab: 'board' };
   if (kind === 'project') return { kind: 'project', id, tab: 'reprise' };
-  return questionTarget(text(item.about));
+  return questionTarget(text(item.about), text(item.project));
 }
 
 /** The ids of a document, by id; the first entry of a repeated id is kept. Null when it is not an ids document. */
