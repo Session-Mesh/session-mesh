@@ -63,15 +63,36 @@ val find : t -> account_ref -> (entry, error) result
     [account_unknown] otherwise. *)
 
 val resolve_name : t -> backend -> string -> (entry, error) result
-(** The account of [backend] whose id is exactly the name; otherwise the one
-    whose label equals the name ignoring ASCII case. Never a prefix, never
-    another backend's account. Several label matches are [account_ambiguous]
-    (its message lists the candidates); none is {!find}'s error for the name as
-    an id. *)
+(** The account of [backend] whose id is exactly the name, or else whose label
+    equals the name ignoring ASCII case. Never a prefix, never another
+    backend's account. Several {!candidates} are [account_ambiguous] (its
+    message lists their ids and labels), so an exact id whose name is also the
+    label of another account is refused rather than chosen by the letter case.
+    No candidate is {!find}'s error for the name as an id. *)
+
+val candidates : t -> backend -> string -> entry list
+(** The accounts [resolve_name] chooses from: the account of [backend] whose id
+    is exactly the name, if any, then the other accounts of [backend]
+    ([default] included) whose label equals the name ignoring ASCII case. *)
 
 val label_matches : t -> backend -> string -> entry list
 (** The accounts of [backend] ([default] included) whose label equals the name
-    ignoring ASCII case: the candidates of an [account_ambiguous] refusal. *)
+    ignoring ASCII case. *)
+
+val sanitize : string -> string
+(** The message with every absolute path (a word starting with ["/"]) replaced
+    by ["<path>"] and every control character by ["?"]. *)
+
+val resolve :
+  uid:int ->
+  file:string ->
+  backend ->
+  string ->
+  (entry, error * entry list) result
+(** {!load} then {!resolve_name}: [mesh-platform accounts resolve]. Every error
+    message is {!sanitize}d (no folder, of this account or another, and no
+    control character); the list holds the {!candidates} of an
+    [account_ambiguous] refusal, [[]] otherwise. *)
 
 val serves : t -> id:string -> backend -> bool
 (** [find] succeeds. *)

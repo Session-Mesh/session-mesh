@@ -1629,6 +1629,20 @@ prints the aliases as Mesh reads them, or why the file is refused. An invalid fi
 at all (the reason is in `journalctl --user -u session-mesh`). The web server reads the file again
 when it changes, the next time the New session dialog opens: no restart is needed.
 
+`mesh-platform accounts resolve ~/.config/session-mesh/accounts.json claude|codex NAME` prints the
+account of that agent that `NAME` designates, as `{"account": {"backend", "id", "label"}}`, without
+any folder: the account whose id is exactly `NAME` (`default` included), otherwise the one whose
+label is `NAME` ignoring the case of `A-Z`. It never accepts a prefix or an account of the other
+agent, and creates nothing. A refusal exits 1 with `{"kind": "accounts", "error", "code"}`, where
+the message names no folder (a path is shown as `<path>`) and `code` is one of:
+
+- `accounts_refused`: the file is refused, as `accounts list` would say;
+- `account_unknown`: no account of that agent has this id or label;
+- `account_no_agent`: the id is declared, for the other agent only;
+- `account_ambiguous`: several accounts match, listed in `candidates`. This includes a name that
+  is one account's id and another account's label: name the account by its other name (its id or
+  its label), or change that label.
+
 Mesh remembers every folder an alias has declared (in `accounts-protected.json`, next to
 `accounts.json`) and keeps refusing their login files in `/view` after the alias is removed or the
 file refused: the logins stay on disk until you delete them.

@@ -368,28 +368,21 @@ let accounts_prepare file id =
       0
   | Error error -> accounts_failure error.message
 
+(* [resolve]'s messages name no folder and hold no control character
+   (R.sanitize); [list] and [prepare] print theirs unchanged. *)
 let accounts_resolve file backend name =
-  match R.load ~uid:(Unix.geteuid ()) ~file with
-  | Error error ->
-      accounts_failure ~extra:[ ("code", `String error.code) ] error.message
-  | Ok t -> (
-      match R.resolve_name t backend name with
-      | Ok entry ->
-          print_json (`Assoc [ ("account", R.entry_json entry) ]);
-          0
-      | Error error ->
-          let candidates =
-            if error.code = "account_ambiguous" then
-              [
-                ( "candidates",
-                  `List
-                    (List.map R.entry_json (R.label_matches t backend name)) );
-              ]
-            else []
-          in
-          accounts_failure
-            ~extra:(("code", `String error.code) :: candidates)
-            error.message)
+  match R.resolve ~uid:(Unix.geteuid ()) ~file backend name with
+  | Ok entry ->
+      print_json (`Assoc [ ("account", R.entry_json entry) ]);
+      0
+  | Error (error, candidates) ->
+      let shown =
+        if candidates = [] then []
+        else [ ("candidates", `List (List.map R.entry_json candidates)) ]
+      in
+      accounts_failure
+        ~extra:(("code", `String error.code) :: shown)
+        error.message
 
 (* [accounts carry FILE KIND CONVERSATION FROM TO] copies one Claude or Codex
    conversation from account FROM's folder to account TO's (an alias id of
