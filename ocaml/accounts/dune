@@ -3,4 +3,4 @@
 
 (library
  (name mesh_accounts)
- (libraries unix yojson mesh_safe_file))
+ (libraries unix yojson uucp mesh_safe_file))

@@ -21,13 +21,12 @@
     v}
 
     The whole file is refused when any part of it is invalid: no alias is then
-    offered. Mesh never reads, copies or shows what is inside the folders (the
-    credentials the agents keep there): it only checks the folders and hands
-    their paths to the agent. *)
+    offered. This module only checks the folders; it never opens what is inside
+    them. *)
 
 type account = {
   id : string;  (** [[a-z0-9-]{1,32}], never [default]. *)
-  label : string;  (** 1 to 24 characters, no control character. *)
+  label : string;  (** See {!valid_label}. *)
   claude_config_dir : string option;
   codex_home : string option;
 }
@@ -36,11 +35,16 @@ val max_bytes : int
 (** Largest accepted file, in bytes. *)
 
 val max_accounts : int
+(** Any number of aliases up to 64; a file declaring more is refused whole. *)
 
 val valid_id : string -> bool
 (** [[a-z0-9-]{1,32}] and not [default]. *)
 
 val valid_label : string -> bool
+(** 1 to 24 characters of valid UTF-8, at least one that is not white space, and
+    none of the Unicode categories Cc (controls), Cf (format characters:
+    bidirectional marks, overrides and isolates, zero-width characters), Zl or
+    Zp (line and paragraph separators). *)
 
 val valid_path : string -> bool
 (** Absolute, normalised (no empty, [.] or [..] component, no trailing slash),
@@ -48,21 +52,31 @@ val valid_path : string -> bool
     shell command line, so nothing in it may need quoting. *)
 
 val parse : string -> (account list, string) result
-(** The structure of the file's text: exactly the fields above, unique ids, no
+(** The structure of the file's text: exactly the fields above, at most
+    {!max_accounts} aliases, unique ids, unique labels (ignoring ASCII case), no
     folder declared twice. The file system is not looked at. *)
 
 val check_directory : uid:int -> string -> (unit, string) result
 (** A declared folder as it is now: no component of the path is a symbolic link;
-    when it exists it is a directory owned by [uid] that neither group nor
-    others can write; when it does not exist its parent exists, is owned by
-    [uid] and is not writable by others (it can then be created). *)
+    every upper component, from [/] down to the parent, exists and is a
+    directory owned by [uid] or root that neither group nor others can write,
+    unless it is sticky (as [/tmp]); when the folder exists it is a directory
+    owned by [uid] that neither group nor others can write; when it does not
+    exist its parent is owned by [uid] and not writable by group or others (it
+    can then be created). *)
+
+val trusted_ancestor : uid:int -> string -> Unix.stats -> (unit, string) result
+(** The rule {!check_directory} applies to each upper component, given its
+    [lstat]: a directory, not a link, owned by [uid] or root, not writable by
+    group or others unless sticky. *)
 
 val prepare_directory : uid:int -> string -> (unit, string) result
 (** {!check_directory}, then create the folder with mode 0700 when it is
     missing, and check it again. *)
 
 val load : uid:int -> string -> (account list, string) result
-(** Read the file (a regular file, not a link, at most {!max_bytes}), {!parse}
-    it and {!check_directory} every folder. *)
+(** Read the file (a regular file, not a link, owned by [uid], not writable by
+    group or others, at most {!max_bytes}), {!parse} it and {!check_directory}
+    every folder. *)
 
 val to_json : account -> Yojson.Safe.t

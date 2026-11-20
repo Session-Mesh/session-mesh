@@ -12,8 +12,10 @@ type account = {
   codex_home : string option;
 }
 
-let max_bytes = 16 * 1024
-let max_accounts = 16
+(* Any number of aliases up to 64; the size bound leaves room for 64 aliases
+   with two folders of the longest accepted path each. *)
+let max_bytes = 256 * 1024
+let max_accounts = 64
 let max_label = 24
 let max_path = 1024
 
@@ -24,27 +26,32 @@ let valid_id id =
        (function 'a' .. 'z' | '0' .. '9' | '-' -> true | _ -> false)
        id
 
-(* A code point that must not reach a label: C0 and C1 controls, DEL, and the
-   bidirectional overrides and isolates that reorder the text around them. *)
-let forbidden_code_point code =
-  code < 0x20
-  || (code >= 0x7f && code <= 0x9f)
-  || (code >= 0x202a && code <= 0x202e)
-  || (code >= 0x2066 && code <= 0x2069)
+(* A label is shown as text on rows and headers: no control (Cc), no format
+   character (Cf: the bidirectional marks, overrides and isolates, zero-width
+   characters), no line or paragraph separator (Zl, Zp), and at least one
+   character that is not white space. *)
+let forbidden_character uchar =
+  match Uucp.Gc.general_category uchar with
+  | `Cc | `Cf | `Zl | `Zp | `Cs -> true
+  | _ -> false
 
 let valid_label label =
-  let rec count index characters =
-    if index >= String.length label then Some characters
+  let rec count index characters visible =
+    if index >= String.length label then Some (characters, visible)
     else
       let decoded = String.get_utf_8_uchar label index in
-      let code = Uchar.to_int (Uchar.utf_decode_uchar decoded) in
-      if (not (Uchar.utf_decode_is_valid decoded)) || forbidden_code_point code
+      let uchar = Uchar.utf_decode_uchar decoded in
+      if (not (Uchar.utf_decode_is_valid decoded)) || forbidden_character uchar
       then None
-      else count (index + Uchar.utf_decode_length decoded) (characters + 1)
+      else
+        count
+          (index + Uchar.utf_decode_length decoded)
+          (characters + 1)
+          (visible || not (Uucp.White.is_white_space uchar))
   in
-  match count 0 0 with
-  | Some characters ->
-      characters >= 1 && characters <= max_label && String.trim label <> ""
+  match count 0 0 false with
+  | Some (characters, visible) ->
+      visible && characters >= 1 && characters <= max_label
   | None -> false
 
 let safe_path_character = function
@@ -127,8 +134,14 @@ let check_unique accounts =
         List.filter_map Fun.id [ account.claude_config_dir; account.codex_home ])
       accounts
   in
+  (* labels are what a person tells aliases apart by: no two alike, ignoring
+     ASCII case *)
+  let labels =
+    List.map (fun account -> String.lowercase_ascii account.label) accounts
+  in
   if not (distinct (List.map (fun account -> account.id) accounts)) then
     Error "account ids must be unique"
+  else if not (distinct labels) then Error "account labels must be unique"
   else if not (distinct folders) then Error "a folder is declared twice"
   else Ok accounts
 
@@ -138,7 +151,7 @@ let parse text =
   | `Assoc [ ("v", `Int 1); ("accounts", `List values) ]
   | `Assoc [ ("accounts", `List values); ("v", `Int 1) ] ->
       if List.length values > max_accounts then
-        Error "too many accounts (16 at most)"
+        Error (Printf.sprintf "too many accounts (%d at most)" max_accounts)
       else
         let* accounts = all_ok [] values in
         check_unique accounts
@@ -162,38 +175,61 @@ let lstat_opt path =
   | exception Unix.Unix_error (error, _, _) ->
       Error (path ^ ": " ^ Unix.error_message error)
 
-(* No component is a symbolic link: a link could lead the agent's
-   credentials anywhere, and the folder must be the one the operator wrote. *)
-let no_link path =
-  List.fold_left
-    (fun result prefix ->
-      let* () = result in
-      match lstat_opt prefix with
-      | Ok (Some { Unix.st_kind = Unix.S_LNK; _ }) ->
-          Error (prefix ^ " is a symbolic link")
-      | Ok _ -> Ok ()
-      | Error message -> Error message)
-    (Ok ()) (prefixes path)
+let group_or_other_writable (stats : Unix.stats) = stats.st_perm land 0o022 <> 0
+let sticky (stats : Unix.stats) = stats.st_perm land 0o1000 <> 0
 
-let private_directory ~uid ~what path (stats : Unix.stats) =
-  if stats.st_kind <> Unix.S_DIR then Error (path ^ " is not a directory")
+(* An upper component of a folder: a directory only its owner, the operator or
+   root, can change; one writable by others is accepted only when sticky (as
+   /tmp), where nobody may rename what another user owns. Anyone who could
+   rename a component could put a folder of their own in its place after the
+   check, while the agent reopens its files by path. *)
+let trusted_ancestor ~uid path (stats : Unix.stats) =
+  if stats.st_kind = Unix.S_LNK then Error (path ^ " is a symbolic link")
+  else if stats.st_kind <> Unix.S_DIR then Error (path ^ " is not a directory")
+  else if stats.st_uid <> uid && stats.st_uid <> 0 then
+    Error (path ^ " is owned by another user")
+  else if group_or_other_writable stats && not (sticky stats) then
+    Error (path ^ " can be written by other users")
+  else Ok ()
+
+(* Every upper component, from / down to the folder's parent, exists and is
+   trusted, and none is a symbolic link: a link could lead the agent's
+   credentials anywhere, and the folder must be the one the operator wrote. *)
+let check_ancestors ~uid path =
+  let rec walk = function
+    | [] | [ _ ] -> Ok ()
+    | prefix :: rest -> (
+        match lstat_opt prefix with
+        | Error message -> Error message
+        | Ok None -> Error (prefix ^ " does not exist")
+        | Ok (Some stats) ->
+            let* () = trusted_ancestor ~uid prefix stats in
+            walk rest)
+  in
+  walk ("/" :: prefixes path)
+
+(* The folder itself, or the parent it is to be created in: the operator's own,
+   writable by nobody else. *)
+let private_directory ~uid path (stats : Unix.stats) =
+  if stats.st_kind = Unix.S_LNK then Error (path ^ " is a symbolic link")
+  else if stats.st_kind <> Unix.S_DIR then Error (path ^ " is not a directory")
   else if stats.st_uid <> uid then Error (path ^ " is not owned by the operator")
-  else if stats.st_perm land what <> 0 then
+  else if group_or_other_writable stats then
     Error (path ^ " can be written by other users")
   else Ok ()
 
 let check_directory ~uid path =
   let* () = if valid_path path then Ok () else Error "invalid path" in
-  let* () = no_link path in
+  let* () = check_ancestors ~uid path in
   let* found = lstat_opt path in
   match found with
-  | Some stats -> private_directory ~uid ~what:0o022 path stats
+  | Some stats -> private_directory ~uid path stats
   | None -> (
       let parent = Filename.dirname path in
       let* parent_stats = lstat_opt parent in
       match parent_stats with
       | None -> Error (parent ^ " does not exist")
-      | Some stats -> private_directory ~uid ~what:0o002 parent stats)
+      | Some stats -> private_directory ~uid parent stats)
 
 let prepare_directory ~uid path =
   let* () = check_directory ~uid path in
@@ -206,13 +242,19 @@ let prepare_directory ~uid path =
   in
   let* found = lstat_opt path in
   match found with
-  | Some stats -> private_directory ~uid ~what:0o022 path stats
+  | Some stats -> private_directory ~uid path stats
   | None -> Error (path ^ " could not be created")
 
-let read_file path =
+(* The file names folders whose settings the agents run: only the operator may
+   change it. *)
+let read_file ~uid path =
   match
     Mesh_safe_file.with_regular path (fun descriptor stats ->
-        if stats.Unix.st_size > max_bytes then
+        if stats.Unix.st_uid <> uid then
+          Error "accounts.json is not owned by the operator"
+        else if group_or_other_writable stats then
+          Error "accounts.json can be written by other users"
+        else if stats.Unix.st_size > max_bytes then
           Error "accounts.json is too large"
         else
           Ok (Mesh_safe_file.read_range descriptor ~offset:0 ~length:max_bytes))
@@ -223,7 +265,7 @@ let read_file path =
       Error ("accounts.json: " ^ Unix.error_message error)
 
 let load ~uid path =
-  let* text = read_file path in
+  let* text = read_file ~uid path in
   let* accounts = parse text in
   let* () =
     List.fold_left
