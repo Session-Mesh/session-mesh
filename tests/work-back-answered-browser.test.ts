@@ -183,7 +183,8 @@ describe('the way back inside a project', { skip }, () => {
 
       // The button, then Escape, from the keyboard.
       await card.click();
-      await sheetBack(page).waitFor();
+      // The button is drawn with the loading block, then again with the task read: focus the final one.
+      await page.locator('.work-detail-heading').waitFor();
       await sheetBack(page).focus();
       await page.keyboard.press('Enter');
       assert.equal((await where(page)).sheet, false);
