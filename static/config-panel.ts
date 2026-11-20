@@ -148,6 +148,7 @@ export function buildSections(raw: unknown, t: ConfigTranslate, language: string
 export class ConfigPanel {
   private generation = 0;
   private editor: LaunchEditor | null = null;
+  private operator: OperatorNameCard | null = null;
   private shell: SettingsShell | null = null;
   private selected: string | null = null;
   private readonly elements: ConfigElements;
@@ -192,6 +193,7 @@ export class ConfigPanel {
   }
 
   private disposeShell(): void {
+    this.operator?.dispose(); this.operator = null;
     if (this.shell !== null) this.selected = this.shell.selected;
     this.shell?.dispose(); this.shell = null;
   }
@@ -246,8 +248,9 @@ export class ConfigPanel {
     this.editor = new LaunchEditor(dialog.ownerDocument, parseLaunch(raw.launch), parseElevation(raw.elevation),
       { t, elevate, revoke, save, reload: (next) => { void this.load(next); } }, notice);
     const cards = this.render(buildSections(result.value, t, this.language()));
+    this.operator = new OperatorNameCard(dialog.ownerDocument, raw, { t, elevate, saveSettings });
     this.shell = new SettingsShell(dialog.ownerDocument, { nav: t("config.nav"), back: t("config.back") },
-      this.layout(cards, this.editor.element, new OperatorNameCard(dialog.ownerDocument, raw, { t, elevate, saveSettings }).element), this.selected);
+      this.layout(cards, this.editor.element, this.operator.element), this.selected);
     body.replaceChildren(this.shell.element);
   }
 

@@ -28,6 +28,10 @@ export class OperatorNameCard {
   private readonly token: HTMLFormElement;
   private readonly status: HTMLElement;
   private readonly save: HTMLButtonElement;
+  /** Set when the dialog closes or redraws: a card no longer shown never saves after an answer arrives late. */
+  private disposed = false;
+
+  dispose(): void { this.disposed = true; }
 
   constructor(doc: Document, config: unknown, ports: OperatorNamePorts) {
     this.doc = doc; this.ports = ports;
@@ -98,6 +102,7 @@ export class OperatorNameCard {
     const { t } = this.ports;
     this.busy(true);
     const result = await this.ports.elevate(token).catch(() => null);
+    if (this.disposed) return;
     this.busy(false);
     if (result === null) { this.say({ text: t("config.launch.err.network"), ok: false }); return; }
     if (!result.ok) {
@@ -111,10 +116,12 @@ export class OperatorNameCard {
 
   private async submit(): Promise<void> {
     const { t } = this.ports;
+    if (this.disposed) return;
     const problem = operatorNameProblem(this.input.value);
     if (problem !== null) { this.say({ text: t(`config.operator.err.${problem}`, { max: OPERATOR_NAME_MAX }), ok: false }); return; }
     this.busy(true);
     const result = await this.ports.saveSettings({ operator_name: this.input.value.trim() }).catch(() => null);
+    if (this.disposed) return;
     this.busy(false);
     if (result === null) { this.say({ text: t("config.launch.err.network"), ok: false }); return; }
     if (!result.ok && result.error === "elevation-required") {
