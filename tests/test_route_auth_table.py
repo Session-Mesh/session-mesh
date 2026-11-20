@@ -40,6 +40,7 @@ EXPECTED = {
     ("GET", "/api/sessions"): COOKIE,
     ("GET", "/api/portfolio/diff/{selector}"): COOKIE,
     ("GET", "/api/dirs"): COOKIE,
+    ("POST", "/api/dirs/recent"): COOKIE_ONLY,
     ("POST", "/api/projects/v1"): COOKIE,
     ("POST", "/api/work/v1"): COOKIE,           # its write op (answer) is cookie-only: tests/work-write-api.test.ts
     ("POST", "/api/projects/artifacts/v1"): COOKIE,

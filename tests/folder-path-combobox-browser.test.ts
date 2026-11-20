@@ -2,10 +2,12 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 // The folder field of the "New session" dialog in the real interface, on a throwaway server whose launch
-// settings allow one work folder (~/work): the list shows the allowed folder first, never a folder outside
-// it, walks down a typed path, is driven by the keyboard (arrows, Enter, Tab, Escape) with the combobox
-// attributes kept current, renders folder names as text, remembers the folder a session started in, and on
-// a touch phone opens on a tap with options large enough to tap and no horizontal overflow.
+// settings allow one work folder (~/work): the list shows the allowed folder first, then its sub-folders
+// (GET /api/dirs), never a folder outside it, walks down a typed path, is driven by the keyboard (arrows,
+// Enter, Escape, and Tab which completes like a shell) with the combobox attributes kept current, opens on a
+// click, a tap or a focus, renders folder names as text, shows the runner's recent folders on every browser,
+// moves the recent folders an older version kept in a browser to the runner once, and has options large
+// enough to tap and no horizontal overflow at 1440 and 390 px.
 // Needs MESH_CHROMIUM and MESH_PTYHOST_CMD (skipped without the browser).
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -27,9 +29,14 @@ describe('folder field of the New session dialog', {skip}, () => {
   const pages: Page[] = [];
 
   before(async () => {
-    for (const folder of ['work/alpha/inner', 'work/alpine', 'work/beta', `work/${HOSTILE}`, 'other/outside', 'dev/legacy']) {
+    for (const folder of ['work/alpha/inner', 'work/alpine', 'work/beta', `work/${HOSTILE}`, 'work/gamma', 'other/outside', 'dev/legacy']) {
       fs.mkdirSync(path.join(mesh.home, folder), {recursive: true});
     }
+    // GET /api/dirs lists the sub-folders newest first: a fixed order
+    ['alpha', 'alpine', 'beta', HOSTILE, 'gamma'].forEach((name, rank) => {
+      const when = new Date(Date.UTC(2026, 0, 10 - rank));
+      fs.utimesSync(path.join(work, name), when, when);
+    });
     fs.writeFileSync(settingsFile, JSON.stringify({v: 1, workspace_roots: [work], enabled_agents: ['claude']}));
     await mesh.start();
     const response = await fetch(`${mesh.base}/api/new`, {method: 'POST',
@@ -45,7 +52,7 @@ describe('folder field of the New session dialog', {skip}, () => {
   const listShown = (page: Page) => page.locator('#new-folder-list').isVisible();
 
   async function dialog(phone = false): Promise<Page> {
-    const page = await mesh.signIn(phone ? {width: 390, height: 844} : {width: 1280, height: 800}, undefined, undefined, {phone});
+    const page = await mesh.signIn(phone ? {width: 390, height: 844} : {width: 1440, height: 900}, undefined, undefined, {phone});
     pages.push(page);
     await page.evaluate(() => { void openNew(); });
     await page.locator('#dlg-new[open]').waitFor();
@@ -65,15 +72,17 @@ describe('folder field of the New session dialog', {skip}, () => {
       .map(option => option.textContent)) === want, JSON.stringify(expected), {polling: 100, timeout: 10000});
   }
 
+  const listed = [path.join(work, 'alpha'), path.join(work, 'alpine'), path.join(work, HOSTILE), path.join(work, 'gamma')];
+
   test('the allowed folder first, nothing outside it; arrows, Enter and Tab accept, Escape closes the list only', async () => {
     const page = await dialog();
     await field(page).press('ArrowDown');
-    assert.deepEqual(await options(page), [work, path.join(work, 'beta')]);
+    assert.deepEqual(await options(page), [work, path.join(work, 'beta'), ...listed], 'roots, open sessions, then GET /api/dirs');
     assert.equal(await field(page).getAttribute('aria-expanded'), 'true');
     assert.equal(await field(page).getAttribute('aria-activedescendant'), 'new-folder-0');
     assert.equal(await page.locator('#new-folder-0').getAttribute('aria-selected'), 'true');
 
-    await typeAndWait(page, '~/', ['~/work', path.join(work, 'beta')]);   // ~/dev and ~/other are outside the allowed folder
+    await typeAndWait(page, '~/', ['~/work', path.join(work, 'beta'), ...listed]);   // ~/dev and ~/other are outside the allowed folder
     await typeAndWait(page, '~/work/al', ['~/work/alpha', '~/work/alpine']);
     assert.equal(await field(page).getAttribute('aria-activedescendant'), null);
     await field(page).press('ArrowDown');
@@ -105,7 +114,7 @@ describe('folder field of the New session dialog', {skip}, () => {
     assert.equal(await page.evaluate(() => (window as unknown as {__folderXss?: number}).__folderXss), undefined);
   });
 
-  test('the folder a session started in comes back after the allowed folder', async () => {
+  test('the folder a session started in comes back after the allowed folder (recorded by the runner)', async () => {
     const page = await dialog();
     await typeAndWait(page, '~/work/alpi', ['~/work/alpine']);
     await field(page).press('ArrowDown');
@@ -142,5 +151,92 @@ describe('folder field of the New session dialog', {skip}, () => {
     await page.locator('#new-folder-list [role="option"]', {hasText: '~/work/beta'}).tap();
     assert.equal(await field(page).inputValue(), '~/work/beta');
     assert.equal(await listShown(page), false);
+  });
+
+  test('a click opens the list, and so does reaching the field with Tab; the dialog opens with it closed', async () => {
+    const page = await dialog();
+    assert.equal(await listShown(page), false);
+    await field(page).click();
+    assert.equal(await listShown(page), true);
+    assert.equal(await field(page).getAttribute('aria-expanded'), 'true');
+    await field(page).press('Escape');
+    assert.equal(await listShown(page), false);
+    await page.locator('#form-new input[name="name"]').focus();   // the agent choices between them are labels, not stops
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('name')), 'cwd');
+    assert.equal(await listShown(page), true);
+  });
+
+  test('Tab completes the first suggestion like a shell, says so, and a second Tab moves on', async () => {
+    const page = await dialog();
+    const before = await field(page).inputValue();
+    const focused = () => page.evaluate(() => document.activeElement?.getAttribute('name') ?? document.activeElement?.tagName);
+    await field(page).click();
+    await field(page).press('Tab');                     // nothing typed: the folder the dialog opened with is kept
+    assert.equal(await field(page).inputValue(), before);
+    assert.notEqual(await focused(), 'cwd');
+
+    await typeAndWait(page, '~/work/alp', ['~/work/alpha', '~/work/alpine']);
+    await field(page).press('Tab');
+    assert.equal(await field(page).inputValue(), '~/work/alpha', 'the first suggestion');
+    assert.equal(await focused(), 'cwd', 'the focus stays to go on typing');
+    assert.equal(await listShown(page), false);
+    assert.equal(await page.locator('#new-folder-status').textContent(), 'Folder completed: ~/work/alpha');
+    assert.equal(await page.locator('#new-folder-status').getAttribute('aria-live'), 'polite');
+    await field(page).press('Tab');                     // the list is closed: Tab moves on
+    assert.notEqual(await focused(), 'cwd');
+    assert.equal(await field(page).inputValue(), '~/work/alpha');
+
+    await typeAndWait(page, '~/work/alpine', ['~/work/alpine']);
+    await field(page).press('Tab');                     // the field already holds the only suggestion: Tab moves on
+    assert.notEqual(await focused(), 'cwd');
+
+    await typeAndWait(page, '~/work/be', ['~/work/beta']);
+    await field(page).press('Shift+Tab');               // Shift+Tab moves back, never completes
+    assert.notEqual(await focused(), 'cwd');
+    assert.equal(await field(page).inputValue(), '~/work/be');
+  });
+
+  test('the recent folders belong to the runner: a folder started from one browser is offered on another', async () => {
+    const first = await dialog();
+    await typeAndWait(first, '~/work/alpha/', ['~/work/alpha/inner']);
+    await field(first).press('Tab');
+    await first.locator('#form-new label', {has: first.locator('input[value="shell"]')}).click();
+    await first.locator('#form-new button.primary').click();
+    await first.locator('#dlg-new').waitFor({state: 'hidden'});
+    assert.deepEqual(await first.evaluate(() => Object.keys(localStorage).filter(key => key.endsWith('recentFolders'))), [],
+      'nothing is kept in the browser');
+
+    const phone = await dialog(true);
+    await field(phone).tap();
+    assert.deepEqual((await options(phone)).slice(0, 2), [work, path.join(work, 'alpha', 'inner')]);
+  });
+
+  test('the recent folders an older version kept in a browser move to the runner once; sign-in drops a copy', async () => {
+    const page = await dialog();
+    await page.evaluate(([gamma, home]) => localStorage.setItem('mesh.recentFolders', JSON.stringify([gamma, `${home}/missing`, 7])),
+      [path.join(work, 'gamma'), mesh.home]);
+    await page.reload();
+    await page.waitForFunction(() => localStorage.getItem('mesh.recentFolders') === null, undefined, {timeout: 10000});
+    const recent = await page.evaluate(async () =>
+      ((await (await fetch('/api/config')).json()) as {runner_settings: {values: {recent_folders: string[]}}}).runner_settings.values.recent_folders);
+    assert.equal(recent.at(-1), path.join(work, 'gamma'), JSON.stringify(recent));
+    assert.ok(!recent.includes(path.join(mesh.home, 'missing')));
+
+    await page.evaluate(() => localStorage.setItem('mesh.recentFolders', JSON.stringify(['/somewhere'])));
+    await page.goto(`${mesh.base}/login`);
+    assert.equal(await page.evaluate(() => localStorage.getItem('mesh.recentFolders')), null);
+  });
+
+  test('desktop: the open list leaves nothing overflowing', async () => {
+    const page = await dialog();
+    await field(page).click();
+    assert.equal(await listShown(page), true);
+    const overflow = await page.evaluate(() => {
+      const dialog = document.querySelector('#dlg-new')!;
+      const box = document.querySelector('#new-folder-list')!.getBoundingClientRect();
+      return {page: document.documentElement.scrollWidth - innerWidth, dialog: dialog.scrollWidth - dialog.clientWidth, right: box.right - innerWidth};
+    });
+    assert.ok(overflow.page <= 0 && overflow.dialog <= 0 && overflow.right <= 0, JSON.stringify(overflow));
   });
 });

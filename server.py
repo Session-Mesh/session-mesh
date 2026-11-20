@@ -18,6 +18,7 @@ import glob
 import hashlib
 import hmac
 import ipaddress
+import itertools
 import json
 import math
 import os
@@ -1845,18 +1846,66 @@ async def _cancel_pending_notice(name, created):
         pass
 
 
-def project_dirs():
-    out = [str(Path.home())]
-    dev = Path.home() / "dev"
-    if dev.is_dir():
-        dirs = [p for p in dev.iterdir() if p.is_dir() and not p.name.startswith(".")]
-        dirs.sort(key=lambda p: -p.stat().st_mtime)
-        out += [str(p) for p in dirs[:80]]
-    return out
+def _startable_dir(path, home):
+    """A folder a session may start in (allows_cwd), whose resolved place stays in the home folder and is not
+    protected (view.VIEW_DENY): a symlink cannot lead the list out of them."""
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    return (resolved.is_dir() and resolved.is_relative_to(home) and LAUNCH_SETTINGS.allows_cwd(resolved)
+            and not launchsettings._protected(str(path), resolved, view.VIEW_DENY))
+
+
+def project_dirs(per_parent=80, scanned=2000, total=200):
+    """GET /api/dirs, a plain list of paths: the home folder and the allowed work folders, then the visible
+    sub-folders of each work folder (of ~/dev when none is configured), newest first; at most ``per_parent``
+    of one folder among its first ``scanned`` entries, ``total`` in all."""
+    home = Path.home().resolve()
+    parents = list(LAUNCH_SETTINGS.roots) if LAUNCH_SETTINGS.configured else [Path.home() / "dev"]
+    out = [p for p in dict.fromkeys([Path.home(), *LAUNCH_SETTINGS.roots]) if _startable_dir(p, home)]
+    for parent in parents:
+        with contextlib.suppress(OSError):
+            with os.scandir(parent) as entries:
+                found = [Path(e.path) for e in itertools.islice(entries, scanned) if not e.name.startswith(".")]
+            dirs = [p for p in found if _startable_dir(p, home)]
+            out += sorted(dirs, key=lambda p: -p.stat().st_mtime)[:per_parent]
+    return list(dict.fromkeys(str(p) for p in out))[:total]
 
 
 async def api_dirs(request):
     return web.json_response(await asyncio.to_thread(project_dirs))
+
+
+async def api_dirs_recent(request):
+    """A browser moves the recent folders it kept before they were a runner setting: the owner's cookie only.
+    A folder is kept only when a session may start in it, and goes after the runner's own recent folders."""
+    _require_owner_cookie(request)
+    body = await _bounded_json_object(request, CONFIG_BODY_MAX)
+    folders = body.get("folders")
+    if set(body) != {"folders"} or not isinstance(folders, list) \
+            or len(folders) > launchsettings.RUNNER_LIMITS["recent_folders"]:
+        raise web.HTTPBadRequest(text="Invalid fields")
+    usable = [os.path.realpath(f) for f in folders
+              if launchsettings.plain_folder(f) and os.path.isdir(f) and LAUNCH_SETTINGS.allows_cwd(f)]
+    async with LAUNCH_WRITE_LOCK:
+        kept = await asyncio.to_thread(launchsettings.add_recent_folders, RUNNER_SETTINGS, usable, newest=False)
+    return _json_reply({"recent_folders": kept})
+
+
+async def _record_recent_folder(request, cwd):
+    """After the owner's browser started a session (POST /api/new, cookie and no Authorization header): its
+    folder, resolved, goes first in the runner's recent folders. A failure here never fails the start."""
+    if request.headers.get("Authorization") or not has_owner_cookie(request):
+        return
+    folder = os.path.realpath(cwd)
+    if not launchsettings.plain_folder(folder):
+        return
+    try:
+        async with LAUNCH_WRITE_LOCK:
+            await asyncio.to_thread(launchsettings.add_recent_folders, RUNNER_SETTINGS, [folder], newest=True)
+    except OSError as exc:
+        print(f"new: recent folder not recorded: {exc!r}", flush=True)
 
 
 PROJECT_HOST_OPS = frozenset(("project_capabilities", "project_list", "project_read",
@@ -2072,6 +2121,7 @@ async def api_new(request):
     name = await new_session(name or f"{Path(cwd).name}-{kind if kind != 'custom' else 'cmd'}",
                              cwd, command, agent if agent in RESUMABLE_AGENT_PRESETS else None,
                              agent, conversation=conversation)
+    await _record_recent_folder(request, cwd)
     return web.json_response({"id": name})
 
 
@@ -5186,6 +5236,7 @@ def make_app(*, session_request_path=None):
     app.router.add_get("/api/portfolio/diff/{selector}", api_portfolio_diff)
     app.router.add_post("/api/event", api_event)
     app.router.add_get("/api/dirs", api_dirs)
+    app.router.add_post("/api/dirs/recent", api_dirs_recent)
     app.router.add_post("/api/projects/v1", api_projects)
     app.router.add_post("/api/work/v1", api_work)
     app.router.add_post("/api/projects/artifacts/v1", api_project_artifacts)

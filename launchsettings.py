@@ -214,10 +214,13 @@ def write_update(agents: object, roots: object, expected_revision: str, applied_
     return replace(settings, source=path), revision_of(text.encode("utf-8"))
 
 
-# Runner settings: display texts shared by every device of this runner, in one JSON object in Mesh's
-# configuration folder (field -> maximum length; "" is the default). The server never acts on them.
+# Runner settings: values shared by every device of this runner, in one JSON object in Mesh's configuration
+# folder. RUNNER_LIMITS bounds each one (a text: characters; a list: entries), _RUNNER_CHECKS holds its typed
+# validator. The owner edits those of RUNNER_OWNER_EDITABLE (elevated); the server alone records the recent
+# folders (server.api_new). The server never acts on these values.
 RUNNER_SETTINGS_FILE = "settings.json"
-RUNNER_LIMITS = {"operator_name": 40}
+RUNNER_LIMITS = {"operator_name": 40, "recent_folders": 8}
+RUNNER_OWNER_EDITABLE = frozenset(("operator_name",))
 RUNNER_MAX_MARKS = 3   # combining marks (Mn, Me) in a row, after NFC
 _HIDDEN = frozenset(("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))   # control, format (bidi), unassigned
 # Invisible or blank-looking characters of other categories (static/operator-name.ts refuses the same): combining
@@ -245,25 +248,62 @@ def _runner_text(key: str, value: object) -> str:
     return text
 
 
+def plain_folder(value: object) -> bool:
+    """An absolute path as os.path.normpath writes it (no '.', '..', '//' or trailing '/'), at most MAX_PATH bytes
+    once written as JSON, with no control, format or unassigned character. Its shape only: nothing is resolved."""
+    try:
+        return (isinstance(value, str) and value.startswith("/") and not value.startswith("//")
+                and value == os.path.normpath(value)
+                and len(json.dumps(value, ensure_ascii=False).encode("utf-8")) <= MAX_PATH + 2
+                and not any(unicodedata.category(c) in _HIDDEN for c in value))
+    except UnicodeEncodeError:   # a lone surrogate: a file name that is not UTF-8
+        return False
+
+
+def _runner_folders(key: str, value: object) -> list:
+    """The plain folders of a list, in order, once each, at most RUNNER_LIMITS[key]; any other entry is dropped."""
+    if not isinstance(value, list):
+        raise InvalidLaunchSettings(f"{key}: a list of folders is expected")
+    return list(dict.fromkeys(entry for entry in value if plain_folder(entry)))[:RUNNER_LIMITS[key]]
+
+
+_RUNNER_CHECKS = {"operator_name": _runner_text, "recent_folders": _runner_folders}   # the typed validator of each key
+_RUNNER_DEFAULTS = {"operator_name": "", "recent_folders": ()}
+
+
 def read_runner_settings(path: Path) -> dict:
-    """Every runner setting: its stored value when valid, else "" (also for a missing or broken file)."""
-    values = dict.fromkeys(RUNNER_LIMITS, "")
+    """Every runner setting: its stored value when valid, else its default (also for a missing or broken file)."""
+    values = {key: list(default) if isinstance(default, tuple) else default for key, default in _RUNNER_DEFAULTS.items()}
     # Unreadable, not JSON, nested too deep for the parser, not an object: all read as the defaults.
     with contextlib.suppress(OSError, ValueError, AttributeError, RecursionError):
         stored = json.loads(path.read_bytes()[:MAX_BYTES].decode("utf-8"))
         for key in RUNNER_LIMITS.keys() & stored.keys():
             with contextlib.suppress(InvalidLaunchSettings):
-                values[key] = _runner_text(key, stored[key])
+                values[key] = _RUNNER_CHECKS[key](key, stored[key])
+    return values
+
+
+def _save_runner_settings(path: Path, values: dict) -> dict:
+    fsutil.atomic_write(path, json.dumps({"v": VERSION, **values}, ensure_ascii=False, indent=2) + "\n", 0o600)
     return values
 
 
 def write_runner_settings(path: Path, changes: object) -> dict:
-    """Validate the changed settings, merge them and replace the file atomically (the caller serialises)."""
-    if not isinstance(changes, dict) or not changes or not changes.keys() <= RUNNER_LIMITS.keys():
+    """Validate the owner's changed settings, merge them and replace the file atomically (the caller serialises)."""
+    if not isinstance(changes, dict) or not changes or not changes.keys() <= RUNNER_OWNER_EDITABLE:
         raise InvalidLaunchSettings("unknown runner setting")
-    values = {**read_runner_settings(path), **{key: _runner_text(key, value) for key, value in changes.items()}}
-    fsutil.atomic_write(path, json.dumps({"v": VERSION, **values}, ensure_ascii=False, indent=2) + "\n", 0o600)
-    return values
+    changed = {key: _RUNNER_CHECKS[key](key, value) for key, value in changes.items()}
+    return _save_runner_settings(path, {**read_runner_settings(path), **changed})
+
+
+def add_recent_folders(path: Path, folders: list, *, newest: bool) -> list:
+    """Put folders in the recent list: first (``newest``: a session just started there), or after the ones kept
+    (a list moved from a browser); once each, at most 8. The caller has checked that each one may hold a session,
+    and serialises the calls."""
+    values = read_runner_settings(path)
+    kept = values["recent_folders"]
+    values["recent_folders"] = _runner_folders("recent_folders", [*folders, *kept] if newest else [*kept, *folders])
+    return _save_runner_settings(path, values)["recent_folders"]
 
 
 if __name__ == "__main__":

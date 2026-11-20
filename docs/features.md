@@ -130,18 +130,34 @@ tasks and the counts of its questions, never their text ([The project context ho
 
 The "Folder" field of the "New session" dialog starts with the folder of the session you are
 looking at (the home folder when there is none). It is a combobox: its list of suggestions opens
-when you type, press the down arrow or tap the field.
+when you click or tap the field, when you reach it with Tab, when you type, or when you press the
+down arrow. It stays closed when the dialog opens.
 
 - **Known folders:** the allowed work folders when they are configured ([Restricting folders and
-  agents](operations.md#restricting-folders-and-agents), read from `GET /api/config`), then the 8
-  folders in which this browser last started a session, the folders of your open sessions, then
-  your home folder and the 80 most recently modified folders directly under `~/dev`, newest first,
-  without folders whose name starts with a dot (`GET /api/dirs`). Both requests are sent each time
-  the dialog opens; if one fails, the list goes on without what it would have given. Until you
+  agents](operations.md#restricting-folders-and-agents), read from `GET /api/config`), then the
+  recent folders, the folders of your open sessions, then the folders of `GET /api/dirs`. Both
+  requests are sent each time the dialog opens; if one fails, the list goes on without what it
+  would have given. Until you
   type, the list holds them all; once you type, it holds those that match the text, best first:
   the path starts with it, then the folder name does, then the path contains it, then the path
   holds its letters in order (`dvap` finds `~/dev/alpha`). Case is ignored and `~` stands for
   your home folder.
+- **`GET /api/dirs`:** your home folder (unless work folders exclude it) and the allowed work folders, then the sub-folders of each
+  allowed work folder (of `~/dev` when no work folder is configured), the 80 most recently modified
+  of each folder first, at most 200 in all. The server keeps only folders a session may start in:
+  inside an allowed work folder once symbolic links are resolved, inside your home folder, and not
+  protected (`~/.ssh`, the mesh's own configuration, the other places the file tree refuses). It
+  leaves out names that start with a dot, files, broken links, and links that lead outside these
+  places. It reads at most 2000 entries of each folder. The answer is a plain list of paths.
+- **Recent folders:** the 8 folders in which the last sessions were started from the dialog, newest
+  first, once each. They belong to the runner, not to the browser: every device signed in to it
+  sees the same list (`runner_settings` of `GET /api/config`). The server records the folder itself
+  (resolved) when your signed-in browser starts a session with `POST /api/new`; a start with the
+  master token from a script is not recorded. The configuration editor cannot change them. A browser
+  that kept recent folders before this version sends them once (`POST /api/dirs/recent`, after the
+  runner's own) and then removes its copy. Signing out removes that copy too, and so does the
+  sign-in page, which a device revoked by "Log out everywhere" lands on the next time it opens the
+  interface; a revoked device cannot read the runner's list.
 - **While you type a path:** once the text is an absolute path or starts with `~/`, the page lists the
   folder you have typed up to its last `/` with the same listing as the file tree (`POST /api/ls`,
   no dedicated route) and suggests first its sub-folders whose name starts with the text after that `/`,
@@ -150,13 +166,21 @@ when you type, press the down arrow or tap the field.
   down. The request is sent 150 ms after the last key, a request for an older text is cancelled and its
   answer dropped, the listing of a folder is reused for 5 seconds (a refused or failed listing is not
   reused), at most 50 folders are suggested, and folders whose name starts with a dot only when you type the dot.
-- **Keys:** the up and down arrows move in the list, Enter or Tab puts the chosen folder in the
-  field (the dialog stays open), Escape closes the list (a second Escape closes the dialog). With no
-  folder chosen, Enter opens the session and Tab moves on, as without the list. On a phone, tap a folder.
+- **Keys:** the up and down arrows move in the list, Enter puts the chosen folder in the field (the
+  dialog stays open), Escape closes the list (a second Escape closes the dialog). With no folder
+  chosen, Enter opens the session, as without the list. On a phone, tap a folder.
+- **Tab completes, as in a shell:** while the list is shown, Tab puts the chosen folder in the field,
+  or the first suggestion when none is chosen, closes the list and keeps the focus in the field;
+  a screen reader announces the completed folder. Tab moves the focus on, as without the list, when
+  the list is closed, when it has no suggestion, when the field already holds that suggestion (so a
+  second Tab moves on), and when nothing has been typed yet: the folder the dialog opened with is
+  not replaced by a key pressed to leave the field, unless you chose a folder with the arrows.
+  Shift+Tab always moves back. Type `/` after a completion to go one level down.
 - **Allowed work folders:** when they are configured, the list leaves out a known folder outside
   them, and a listed sub-folder unless it is inside one of them or on the way to one (`~/` still
-  offers `~/work` when `~/work` is allowed). This is a comparison of the paths as written: a
-  link inside an allowed folder that leads outside it can still be suggested.
+  offers `~/work` when `~/work` is allowed). For the folders of `POST /api/ls` and of the open
+  sessions this is a comparison of the paths as written: a link inside an allowed folder that leads
+  outside it can still be suggested. `GET /api/dirs` resolves links itself.
 - **What is never listed:** what the file tree refuses: a folder outside your home folder and
   `/tmp`, a protected one (`~/.ssh`, the mesh's own configuration), or one that does not exist or
   cannot be read; these give no suggestion. The listing returns at most 2000 entries, files
@@ -164,8 +188,8 @@ when you type, press the down arrow or tap the field.
 - **Limits:** the suggestions do not check that a folder is usable for the agent you choose. The
   folder is checked when you start the session, as before: it must exist, and when work folders are
   configured it must be inside one of them, otherwise the server refuses it ("Folder outside the
-  allowed workspace roots"), even if it was suggested. The recent folders are kept in this browser
-  only.
+  allowed workspace roots"), even if it was suggested. A recent folder that was moved or deleted
+  stays in the list until newer ones push it out.
 
 The "Live" tab of the sidebar lists the mesh's own sessions under "Mesh — interactive", with each
 conversation's title, last prompt and state. Sessions that need you are also repeated at the top in
