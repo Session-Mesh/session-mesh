@@ -25,6 +25,8 @@ async function disabled(f:Awaited<ReturnType<typeof fixture>>,reason:string){
   assert.equal(f.upstreamCalls,0);
   const lines=f.errors.split('\n').filter(line=>line.startsWith('session-mesh: dictation disabled:'));
   assert.deepEqual(lines,reason==='not_configured'?[]:[`session-mesh: dictation disabled: ${reason}`]);
+  assert.equal((await f.call('/api/logout-all','POST',f.auth)).status,200);
+  assert.doesNotMatch(f.errors,/dictation principal sync unavailable/,'disabled dictation has no principal to synchronize');
   assert.doesNotMatch(f.errors,/PRIVATE_SENTINEL|Traceback|Task exception was never retrieved/);
 }
 
