@@ -1,0 +1,6 @@
+; Carrying one conversation from an account alias's folder to another's
+; (`mesh-platform accounts carry`), with the folder checks of mesh_accounts.
+
+(library
+ (name mesh_accounts_carry)
+ (libraries mesh_accounts mesh_safe_file unix yojson))
