@@ -14,6 +14,8 @@ export type NavLevel = 0 | 1 | 2;
 
 /** What the module needs of `window.history`. */
 export type HistoryPort = Readonly<{
+  /** The state of the entry the page stands at. */
+  state: () => unknown;
   pushState: (state: unknown) => void;
   go: (delta: number) => void;
 }>;
@@ -40,9 +42,12 @@ export type WorkNav = Readonly<{
  * `history.go` lands later (a task of the browser), so an entry pushed before it lands would be the one it moves
  * from: closing the view and opening it again at once could then go back past the page. So while a move of this
  * module is under way, a new level is only noted, and reached once the move has landed (its popstate came).
+ * A reload keeps the history and the state of its entries: the module starts at the level of the entry the page
+ * stands at, so the view's first `at` takes the entries a previous load pushed back (or keeps them) instead of
+ * stacking new ones over them.
  */
 export function createWorkNav(port: HistoryPort): WorkNav {
-  let level: NavLevel = 0;
+  let level: NavLevel = levelOf(port.state());
   /** The popstate events still due to this module's own `go`. */
   let moving = 0;
   let wanted: NavLevel | null = null;
@@ -74,6 +79,7 @@ export function createWorkNav(port: HistoryPort): WorkNav {
  *  state of the entry it replaces. */
 export function browserHistory(): HistoryPort {
   return {
+    state: () => window.history.state,
     pushState: state => window.history.pushState(state, ''),
     go: delta => window.history.go(delta),
   };
