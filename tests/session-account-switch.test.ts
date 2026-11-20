@@ -241,6 +241,28 @@ describe('account switch requests', {skip: SKIP}, () => {
     assert.equal(code, 'conversation_unknown', 'a guess (cwd_unique) is not the exact conversation');
   });
 
+  test("a conversation not found in its account's folder is refused, also when that folder is missing", async () => {
+    const twin = path.join(mesh.home, '.agent-accounts', 'twin');
+    const session = await codexSession('x-nofolder', 'twin');
+    const queued = await requested(session, 'travel');
+    const before = launches().length;
+    // the agent keeps its rollout open (still listed with its conversation), but twin's Codex home is gone
+    fs.renameSync(path.join(twin, '.codex'), path.join(twin, 'moved'));
+    try {
+      const [code] = await refused(session, 'travel');
+      assert.equal(code, 'conversation_not_found', 'nothing to carry: never queued');
+      const decided = await decide(queued, true);
+      assert.equal(decided.state, 'failed', JSON.stringify(decided));
+      assert.equal(decided.result?.error, "The conversation is not in the current account's folder");
+      assert.ok(!decided.result?.rolled_back, 'checked before the stop');
+      await sleep(500);
+      assert.equal(launches().length, before, 'nothing stopped or launched');
+      assert.ok(await listed('x-nofolder'), 'the source still runs');
+    } finally {
+      fs.renameSync(path.join(twin, 'moved'), path.join(twin, '.codex'));
+    }
+  });
+
   test('nothing is stopped or launched without the owner: a pending request waits, a declined one ends', async () => {
     const before = launches().length;
     const request = await requested(source, 'work');

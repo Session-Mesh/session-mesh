@@ -2499,14 +2499,34 @@ def _not_relaunched_line(agent, reason):
     return shlex.join(["printf", "%s\\n", f"Session Mesh: {agent['type']} not relaunched: {NOT_RELAUNCHED[reason][1]}"])
 
 
+def _conversation_layout(kind, sid):
+    """(folder variable, home folder, data folder, glob of the transcript) of a Claude or Codex conversation."""
+    return {"claude": ("CLAUDE_CONFIG_DIR", ".claude", "projects", ("*", f"{sid}.jsonl")),
+            "codex": ("CODEX_HOME", ".codex", "sessions", ("*", "*", "*", f"rollout-*-{sid}.jsonl"))}.get(kind)
+
+
+def _conversation_found(kind, sid, account):
+    """Whether the transcript of the conversation is in the folder `accounts carry` reads it from: the alias's
+    (``account``), or for the default account (None) ``$CLAUDE_CONFIG_DIR`` or ``$CODEX_HOME`` when absolute, else
+    the home folder's. Unlike _conversation_missing, a missing folder is not found."""
+    variable, default, data, pattern = _conversation_layout(kind, sid)
+    if account is None:
+        configured = os.environ.get(variable) or ""
+        root = configured if os.path.isabs(configured) else os.path.join(discover.HOME, default)
+    else:
+        root = account_folder(account, kind)
+    folder = os.path.join(root, data) if root else None
+    return bool(folder) and os.path.isdir(folder) and any(
+        os.path.isfile(match) for match in glob.glob(os.path.join(glob.escape(folder), *pattern)))
+
+
 def _conversation_missing(kind, sid, account=None):
     """Whether the conversation is known to be gone: no Claude transcript, no Codex rollout of that id.
     Pi and OpenCode are checked when their launch line is built; the others are not checked. Claude's and
     Codex's data folders are looked for in ``$CLAUDE_CONFIG_DIR`` and ``$CODEX_HOME`` (absolute) and in
     the home folder; with none of them present, nothing is known to be gone. A session of an alias
     (``account``) is looked for in that alias's folder only: never in the default account's."""
-    layout = {"claude": ("CLAUDE_CONFIG_DIR", ".claude", "projects", ("*", f"{sid}.jsonl")),
-              "codex": ("CODEX_HOME", ".codex", "sessions", ("*", "*", "*", f"rollout-*-{sid}.jsonl"))}.get(kind)
+    layout = _conversation_layout(kind, sid)
     if layout is None:
         return False
     variable, default, data, pattern = layout
@@ -4214,7 +4234,7 @@ async def _switch_request(source, body):
         raise _switch_refusal("conversation_unknown",
                               "The exact conversation id is unknown; it cannot be resumed elsewhere.")
     folder = None if current == DEFAULT_ACCOUNT["id"] else current
-    if await asyncio.to_thread(_conversation_missing, kind, sid, folder):
+    if not await asyncio.to_thread(_conversation_found, kind, sid, folder):
         raise _switch_refusal("conversation_not_found", "The conversation is not in the current account's folder.")
     try:
         await account_environment(None if target["id"] == DEFAULT_ACCOUNT["id"] else target["id"], kind)
@@ -4340,6 +4360,9 @@ async def _execute_session_action(item):
     if item["action"] == "switch_account":   # checked again: the conversation may only be guessed by now
         if _switch_conversation(described, source) is None:
             raise web.HTTPConflict(text="The exact conversation id is unknown; it cannot be resumed elsewhere")
+        if not await asyncio.to_thread(_conversation_found, source["agent"], agent["session_id"],
+                                       session_account(raw)):   # checked again: nothing to carry, nothing stopped
+            raise web.HTTPConflict(text="The conversation is not in the current account's folder")
         return await _switch_session(item, raw, agent["session_id"], argv)
     name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"],
                                  shlex.join(argv), source["agent"], source["agent"], account=session_account(raw))
