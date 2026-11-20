@@ -13,6 +13,7 @@ export * from "./config-panel.ts";
 export * from "./agent-mail-consent.ts";
 export * from "./narrow-drawer.ts";
 export { holdLineForTarget } from "./held-line.ts";
+export { postInBatches } from "./restore-batches.ts";
 export type Translator = (key: string, params?: Record<string, unknown>) => string;
 const untranslated: Translator = (key) => key;
 let translate: Translator = untranslated;
