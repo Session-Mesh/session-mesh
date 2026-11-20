@@ -11,10 +11,14 @@
 
     It reads the tracker and never writes: no lock, no commit, no repository
     creation. It never delays the agent beyond {!cap_seconds}: a real-time timer
-    ends the process (exit 0, nothing printed) when the read takes longer. It
-    never fails visibly: no Mesh session ([MESH_SESSION] unset), no repository,
-    an unreadable one, an error or an exception all end with exit 0 and nothing
-    on standard output or standard error.
+    ends the process (exit 0, nothing printed) when the read takes longer. The
+    read runs in a child process in a session of its own, and the timer kills
+    that whole process group, so nothing it started (the [git] the library runs
+    to find the session's repository) outlives the cap. The timer works even
+    when the inherited signal mask blocks SIGALRM. It never fails visibly: no
+    Mesh session ([MESH_SESSION] unset), no repository, an unreadable one, an
+    error or an exception all end with exit 0 and nothing on standard output or
+    standard error.
 
     What it prints carries no text of the tracker: only task identifiers
     (checked against the [T-<hex>] form), counts and a fixed sentence, since
@@ -37,7 +41,8 @@ val formats : (string * format) list
 (** The names accepted by [--format]. *)
 
 val cap_seconds : float
-(** 1.5 s. *)
+(** 1.5 s. The [cap_seconds] of the [project_context] consumer in
+    agent-hooks.json must equal it: tests/agent-hooks-model.test.ts checks it. *)
 
 type summary = {
   session_tasks : string list;
