@@ -194,9 +194,11 @@ let project_json (row : W.Query.project_row) =
 let max_answers = 5
 
 (* [owner_verified]: written through the owner-authenticated writer;
-   [superseded]: a relayed answer of a question that has an owner-authenticated
-   one. *)
-let answer_json ~verified_exists (a : Work_questions.answer) =
+   [superseded]: any answer but the latest owner-authenticated one of a
+   question that has one (a relayed answer, or an earlier answer the owner
+   edited); [choices]: the options the owner picked. *)
+let answer_json ~latest_owner i (a : Work_questions.answer) =
+  let superseded = match latest_owner with Some o -> i <> o | None -> false in
   `Assoc
     ([
        ("text", `String (trunc_chars ~max:Work_questions.max_text a.answer_text));
@@ -205,8 +207,9 @@ let answer_json ~verified_exists (a : Work_questions.answer) =
      ]
     @ opt_tstr ~max:100 "relayed_by_agent" a.relay_agent
     @ opt_tstr ~max:100 "relayed_by_session" a.relay_session
+    @ bounded_strings ~chars:true "choices" ~items:Work_questions.max_options ~len:Work_questions.max_option a.choices
     @ (if a.owner_web then [ ("owner_verified", `Bool true) ] else [])
-    @ if verified_exists && not a.owner_web then [ ("superseded", `Bool true) ] else [])
+    @ if superseded then [ ("superseded", `Bool true) ] else [])
 
 (* The index of the last owner-verified answer, if any. *)
 let last_owner_answer answers =
@@ -229,9 +232,9 @@ let capped_answers (answers : Work_questions.answer list) =
     | _ -> fun i -> i >= total - max_answers
   in
   let verified_exists = owner <> None in
-  let kept = List.filteri (fun i _ -> keep i) answers in
+  let kept = List.mapi (fun i a -> (i, a)) answers |> List.filter (fun (i, _) -> keep i) in
   let omitted = total - List.length kept in
-  (("answers", `List (List.map (answer_json ~verified_exists) kept))
+  (("answers", `List (List.map (fun (i, a) -> answer_json ~latest_owner:owner i a) kept))
   :: (if omitted > 0 then [ ("answers_omitted", `Int omitted) ] else []))
   @ if verified_exists then [ ("owner_answered", `Bool true) ] else []
 
@@ -247,6 +250,7 @@ let question_json (q : Work_questions.question) =
        ("text", `String (trunc_chars ~max:Work_questions.max_text q.text));
      ]
     @ bounded_strings ~chars:true "options" ~items:Work_questions.max_options ~len:Work_questions.max_option q.options
+    @ [ ("kind", str (Work_questions.string_of_kind q.kind)) ]
     @ opt "assumption" (fun a -> `String (trunc_chars ~max:Work_questions.max_assumption a)) q.assumption
     @ opt_tstr ~max:40 "about" q.about
     @ opt_tstr ~max:100 "asked_by_agent" q.agent

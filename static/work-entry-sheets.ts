@@ -8,13 +8,14 @@
  */
 
 import type { WorkApi, WorkError } from './work-api.ts';
-import { focusFirst, restoreDrafts, unsentDrafts } from './work-dom.ts';
+import { focusFirst } from './work-dom.ts';
 import type { ViewContext } from './work-dom.ts';
 import { recordedButUnread } from './work-error-view.ts';
 import { renderAnsweredSheet, renderLoneTaskSheet, renderQuestionSheet } from './work-question-sheet.ts';
 import type { Question, TaskDetail } from './work-types.ts';
 import type { ViewMemory } from './work-view-memory.ts';
-import type { EntrySheetPlace } from './work-view-state.ts';
+import { fillDrafts, unsentDrafts } from './work-view-drafts.ts';
+import type { Draft, EntrySheetPlace } from './work-view-state.ts';
 
 export type EntrySheetsHost = Readonly<{
   /** The context of the sheets, whose answer sender says the answer came from a sheet. */
@@ -85,10 +86,10 @@ export class EntrySheets {
     return shown?.kind === 'task' ? this.reread(shown, question) : true;
   }
 
-  private drawTask(detail: TaskDetail, question: string | null, drafts: ReadonlyMap<string, string>): void {
+  private drawTask(detail: TaskDetail, question: string | null, drafts: ReadonlyMap<string, Draft>): void {
     const content = this.host.content;
     this.host.show(renderLoneTaskSheet(this.host.ctx, detail, this.host.back));
-    restoreDrafts(content, drafts);
+    fillDrafts(content, drafts);
     this.host.memory.fill(content);
     focusFirst((question ? card(content, question) : null) ?? content.querySelector<HTMLElement>('.work-detail-heading'));
   }

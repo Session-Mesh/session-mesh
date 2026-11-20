@@ -12,11 +12,13 @@
 import { aboutKind } from './work-questions.ts';
 import type { Question } from './work-types.ts';
 
-/** A cue for the operator: a choice among the options the agent offered, or an open question. */
-export type QuestionKind = 'choice' | 'open';
+/** A cue for the operator: a choice (one or several options, yes / no) or an open question (free text). It reads the
+ *  question's kind (work-answer-options.ts, effectiveKind), the one the answer form is drawn from, so the two never
+ *  disagree. */
+export type QuestionCue = 'choice' | 'open';
 
-export function questionKind(question: Question): QuestionKind {
-  return question.options.length > 0 ? 'choice' : 'open';
+export function questionKind(question: Question): QuestionCue {
+  return question.kind === 'text' ? 'open' : 'choice';
 }
 
 /** The questions of one task, or (task null) the ones about the project itself. */

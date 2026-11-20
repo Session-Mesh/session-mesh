@@ -8,7 +8,8 @@
  */
 
 import type { WorkApi } from './work-api.ts';
-import { focusFirst, markSelected, restoreDrafts, unsentDrafts } from './work-dom.ts';
+import { focusFirst, markSelected } from './work-dom.ts';
+import { fillDrafts, unsentDrafts } from './work-view-drafts.ts';
 import type { ProjectView } from './work-project-view.ts';
 
 export type ProjectAnswersHost = Readonly<{
@@ -49,7 +50,7 @@ async function rereadProject(host: ProjectAnswersHost, question: string, focus: 
   const panel = project.view.panel('questions');
   const drafts = unsentDrafts(panel, question);
   project.view.replaceDoc(result.value);
-  restoreDrafts(panel, drafts);
+  fillDrafts(panel, drafts);
   markSelected(project.view.root, host.selected());
   if (focus) focusFirst(panel.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(question)}"]`) ?? panel);
   return true;

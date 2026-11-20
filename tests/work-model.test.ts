@@ -153,10 +153,10 @@ describe('parseTask', () => {
     assert.ok(detail);
     const [answered, open] = detail.questions;
     assert.deepEqual(answered!.answers, [
-      { text: '8443', by: 'owner', at: '2026-11-19T10:00:00Z', relayedBy: 's-1', ownerVerified: false, superseded: true },
+      { text: '8443', by: 'owner', at: '2026-11-19T10:00:00Z', relayedBy: 's-1', ownerVerified: false, superseded: true, choices: [] },
       // The agent kind is not a session: without a relaying session, none is named. Only true marks verification.
-      { text: 'later', by: null, at: null, relayedBy: null, ownerVerified: false, superseded: false },
-      { text: '8080', by: 'owner', at: '2026-11-19T11:00:00Z', relayedBy: null, ownerVerified: true, superseded: false },
+      { text: 'later', by: null, at: null, relayedBy: null, ownerVerified: false, superseded: false, choices: [] },
+      { text: '8080', by: 'owner', at: '2026-11-19T11:00:00Z', relayedBy: null, ownerVerified: true, superseded: false, choices: [] },
     ]);
     assert.equal(open!.open, true);
     assert.deepEqual(open!.answers, []);

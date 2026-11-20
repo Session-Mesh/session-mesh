@@ -1326,6 +1326,24 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .work-answer-status { margin: 0; min-height: 1em; font-size: 12px; overflow-wrap: anywhere; }
 .work-answer-status[data-state="error"] { color: var(--danger); }
 .work-answer-unavailable { margin: 4px 0 0; font-size: 12px; }
+/* Pre-built answers (work-answer-choices.ts): each row is a 44 px target holding a native radio or checkbox. */
+.work-answer-choices { margin: 0; padding: 0; border: 0; min-width: 0; }
+.work-answer-legend { padding: 0; margin-bottom: 4px; font-size: 13px; }
+.work-answer-choice-list { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.work-answer-choice { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; max-width: 100%; box-sizing: border-box; padding: 6px 12px;
+  border: 1px solid var(--line); border-radius: 22px; background: var(--bg); cursor: pointer; overflow-wrap: anywhere; }
+.work-answer-choice:has(.work-answer-choice-input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.work-answer-choice:has(.work-answer-choice-input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.work-answer-choice-input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.work-answer-choice-text { min-width: 0; white-space: pre-wrap; }
+.work-answer-choices[disabled] .work-answer-choice { opacity: .6; cursor: default; }
+.work-answer-actions { gap: 8px; flex-wrap: wrap; }
+.work-answer-actions .btn, .work-answer-edit-open { min-height: 44px; }
+.work-answer-edit { margin-top: 6px; }
+.work-answer-history { margin: 0 0 4px; font-size: 12px; }
+.work-answer-history-summary { cursor: pointer; min-height: 24px; color: var(--mute); }
+.work-answer-history .work-answer-text { color: var(--mute); text-decoration: line-through; }
+.work-answer-history .work-answer-meta { color: var(--mute); }
 .work-notes { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .work-event { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 8px; padding: 6px 0 6px 10px; border-inline-start: 2px solid var(--line); }
 .work-event-inferred { border-inline-start-style: dashed; }

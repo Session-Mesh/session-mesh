@@ -4,6 +4,7 @@
 /** The detail pane of a task (`task` operation): fields, blockers, sessions (plain text), notes, typed events, questions. */
 
 import { answerForm, unavailableNote } from './work-answer-form.ts';
+import { answerHistory, editControl } from './work-answer-edit.ts';
 import { el, formatDate, formatDateTime, omittedNote, priorityTag, statusBadge } from './work-dom.ts';
 import { linkText } from './work-linkify.ts';
 import type { ViewContext } from './work-dom.ts';
@@ -76,7 +77,7 @@ function eventItem(ctx: ViewContext, event: TimelineEvent): HTMLElement {
  * appears only as the stated answerer, and one that the owner's answer replaces says so.
  */
 function provenance(ctx: ViewContext, answer: Answer, name: string): string {
-  if (answer.ownerVerified) return operatorLabel(ctx.t, 'verified', name);
+  if (answer.ownerVerified) return operatorLabel(ctx.t, answer.superseded ? 'replaced' : 'verified', name);
   const relayed = relayedProvenance(ctx, answer, name);
   return answer.superseded ? `${relayed} · ${operatorLabel(ctx.t, 'superseded', name)}` : relayed;
 }
@@ -90,12 +91,15 @@ function relayedProvenance(ctx: ViewContext, answer: Answer, name: string): stri
   return session ? ctx.t('work.answer.relayedOther', { session, by: answer.by }) : ctx.t('work.answer.unrelayedOther', { by: answer.by });
 }
 
-function answerItem(ctx: ViewContext, answer: Answer): HTMLElement {
+/** One answer; `edited`: the owner's current answer corrects an earlier one of theirs (work-answer-edit.ts). The mark
+ *  is part of the text the operator name rewrites, so a name read later keeps it. */
+function answerItem(ctx: ViewContext, answer: Answer, edited = false): HTMLElement {
   const when = answer.at ? formatDateTime(answer.at, ctx.locale) : null;
+  const mark = edited ? ctx.t('work.answer.edited') : null;
   const meta = withOperatorName(el('p', 'work-mute work-answer-meta'),
-    name => [provenance(ctx, answer, name), when].filter((part): part is string => !!part).join(' · '));
+    name => [provenance(ctx, answer, name), when, mark].filter((part): part is string => !!part).join(' · '));
   const state = answer.ownerVerified ? ' work-answer-verified' : answer.superseded ? ' work-answer-superseded' : '';
-  return el('li', `work-answer${state}`, el('p', 'work-answer-text', linkText(ctx.t, answer.text)), meta);
+  return el('li', `work-answer${state}${edited ? ' work-answer-edited' : ''}`, el('p', 'work-answer-text', linkText(ctx.t, answer.text)), meta);
 }
 
 /** The hint of a question the owner can still answer: open, or answered only by relayed (unverified) answers. */
@@ -111,7 +115,7 @@ function answerSlot(ctx: ViewContext, question: Question): { slot: HTMLElement; 
   slot.dataset.workAnswerSlot = question.id;
   const sender = ctx.answers;
   if (!sender) slot.hidden = true;
-  else slot.append(sender.available() ? answerForm(ctx, sender, question.id) : unavailableNote(ctx));
+  else slot.append(sender.available() ? answerForm(ctx, sender, question) : unavailableNote(ctx));
   return { slot, form: !!sender && sender.available() };
 }
 
@@ -122,12 +126,12 @@ function answerSlot(ctx: ViewContext, question: Question): { slot: HTMLElement; 
 export function answerArea(ctx: ViewContext, question: Question): HTMLElement {
   const area = el('div', 'work-answer-area');
   area.dataset.workAnswerFor = question.id;
-  if (question.answers.length > 0) area.append(el('ul', 'work-answer-list', ...question.answers.map(answer => answerItem(ctx, answer))));
+  if (question.answers.length > 0) area.append(...answerHistory(ctx, question.answers, (answer, edited) => answerItem(ctx, answer, edited)));
   if (question.open) area.append(withOperatorName(el('p', 'work-question-waiting'), name => operatorLabel(ctx.t, 'waiting', name)));
   if (question.open || (!question.ownerAnswered && ctx.answers)) {
     const { slot, form } = answerSlot(ctx, question);
     area.append(el('p', 'work-answer-hint work-mute', answerHint(ctx, question, form)), slot);
-  }
+  } else if (question.ownerAnswered && ctx.answers?.available()) area.append(editControl(ctx, ctx.answers, question));
   return area;
 }
 

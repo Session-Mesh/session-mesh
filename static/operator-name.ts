@@ -34,6 +34,8 @@ export const OPERATOR_LABELS = {
   relayed: { plain: 'work.answer.relayed', named: 'work.answer.relayedNamed', elided: 'work.answer.relayedNamedElided' },
   unrelayed: { plain: 'work.answer.unrelayed', named: 'work.answer.unrelayedNamed', elided: 'work.answer.unrelayedNamedElided' },
   superseded: { plain: 'work.answer.superseded', named: 'work.answer.supersededNamed', elided: 'work.answer.supersededNamedElided' },
+  /** An earlier answer of the operator that a correction of theirs replaced (an edit). */
+  replaced: { plain: 'work.answer.verifiedReplaced', named: 'work.answer.verifiedReplacedNamed', elided: 'work.answer.verifiedReplacedNamedElided' },
 } as const satisfies Record<string, OperatorLabelKeys>;
 
 export type OperatorLabelId = keyof typeof OPERATOR_LABELS;

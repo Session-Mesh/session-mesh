@@ -121,24 +121,6 @@ export function markSelected(scope: HTMLElement, id: string | null): void {
   }
 }
 
-/** The unsent text under each question but `except` (the one just answered), by question id. */
-export function unsentDrafts(scope: HTMLElement, except: string): Map<string, string> {
-  const drafts = new Map<string, string>();
-  for (const slot of scope.querySelectorAll<HTMLElement>('[data-work-answer-slot]')) {
-    const id = slot.dataset.workAnswerSlot, input = slot.querySelector<HTMLTextAreaElement>('.work-answer-input');
-    if (id && id !== except && input?.value) drafts.set(id, input.value);
-  }
-  return drafts;
-}
-
-/** Put the drafts back under the questions that still offer the form. */
-export function restoreDrafts(scope: HTMLElement, drafts: ReadonlyMap<string, string>): void {
-  for (const slot of scope.querySelectorAll<HTMLElement>('[data-work-answer-slot]')) {
-    const draft = drafts.get(slot.dataset.workAnswerSlot ?? ''), input = slot.querySelector<HTMLTextAreaElement>('.work-answer-input');
-    if (draft !== undefined && input) input.value = draft;
-  }
-}
-
 /** Focus a node, made focusable when it is not; `preventScroll` when the caller already put the scroll back. */
 export function focusFirst(node: HTMLElement | null, preventScroll = false): void {
   if (!node) return;

@@ -34,6 +34,11 @@ describe('operatorLabel', () => {
     assert.equal(operatorLabel(fr, 'relayed', 'Camille', {session: 'agent-1'}), `réponse de ${iso('Camille')} transmise par agent-1, non vérifiée`);
     assert.equal(operatorLabel(fr, 'verified', 'Camille'), `réponse de ${iso('Camille')}, donnée dans cette vue (connecté)`);
     assert.equal(operatorLabel(en, 'superseded', 'Camille'), `replaced by the answer from ${iso('Camille')}`);
+    // An earlier answer of the operator, corrected since (an edit): named like the answer it was.
+    assert.equal(operatorLabel(fr, 'replaced', 'Camille'), `réponse antérieure de ${iso('Camille')} dans cette vue, remplacée par une correction`);
+    assert.equal(operatorLabel(fr, 'replaced', 'alice'), `réponse antérieure d'${iso('alice')} dans cette vue, remplacée par une correction`);
+    assert.equal(operatorLabel(fr, 'replaced', ''), "réponse antérieure de l'opérateur dans cette vue, remplacée par une correction");
+    assert.equal(operatorLabel(en, 'replaced', 'Camille'), `earlier answer by ${iso('Camille')} in this view, replaced by a correction`);
   });
   test('a right-to-left name sits between one pair of first-strong isolate marks', () => {
     const label = operatorLabel(en, 'waiting', '\u05d3\u05e0\u05d4 2');

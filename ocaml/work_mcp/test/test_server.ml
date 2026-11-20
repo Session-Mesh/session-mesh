@@ -127,6 +127,7 @@ let () =
       ("questions", Test_questions.tests);
       ("answer", Test_answer.tests);
       ("attempts", Test_attempts.tests);
+      ("question kind", Test_question_kind.tests);
       ("hardening", Test_hardening.tests);
       ("requests", Test_requests.tests);
       ("review2", Test_review2.tests);
