@@ -11,6 +11,7 @@
 
 import { SettingsShell, type ShellSection } from "./settings-shell.ts";
 import { LaunchEditor, parseElevation, parseLaunch, type LaunchNotice, type LaunchPorts } from "./config-launch-editor.ts";
+import { OperatorNameCard, type OperatorNamePorts } from "./config-operator-name.ts";
 
 export type ConfigTranslate = (key: string, params?: Record<string, string | number>) => string;
 export type ConfigLoad = () => Promise<{ state: "ok"; value: unknown } | { state: "error" }>;
@@ -18,6 +19,7 @@ export type ConfigElements = Readonly<{ dialog: HTMLDialogElement; body: HTMLEle
 export type ConfigPorts = Readonly<{
   t: ConfigTranslate; load: ConfigLoad; copy: (text: string) => Promise<boolean>;
   elevate: LaunchPorts["elevate"]; revoke: LaunchPorts["revoke"]; save: LaunchPorts["save"];
+  saveSettings: OperatorNamePorts["saveSettings"];
 }>;
 
 type Row = Readonly<{ label: string; value: string; copy: string | null; mono: boolean; hint: string | null }>;
@@ -204,11 +206,11 @@ export class ConfigPanel {
   }
 
   // Where each existing card lives. Nothing moves between cards, only between sections.
-  private layout(cards: readonly HTMLElement[], launch: HTMLElement): ShellSection[] {
+  private layout(cards: readonly HTMLElement[], launch: HTMLElement, operator: HTMLElement): ShellSection[] {
     const { t } = this.ports;
     const pick = (...ids: string[]) => cards.filter((card) => ids.includes(card.dataset.section ?? ""));
     return [
-      { id: "appearance", title: t("config.section.appearance"), cards: [this.soon("appearance")] },
+      { id: "appearance", title: t("config.section.appearance"), cards: [operator, this.soon("appearance")] },
       { id: "terminal", title: t("config.section.terminal"), cards: [this.soon("terminal")] },
       { id: "notifications", title: t("config.section.notifications"), cards: pick("notifications") },
       { id: "updates", title: t("config.section.updates"), cards: [this.soon("updates")] },
@@ -240,12 +242,12 @@ export class ConfigPanel {
     this.editor?.dispose(); this.editor = null; this.disposeShell();
     if (result.state !== "ok") { body.replaceChildren(this.note(this.ports.t("config.loadFailed"))); return; }
     const raw = record(result.value);
-    const { t, elevate, revoke, save } = this.ports;
+    const { t, elevate, revoke, save, saveSettings } = this.ports;
     this.editor = new LaunchEditor(dialog.ownerDocument, parseLaunch(raw.launch), parseElevation(raw.elevation),
       { t, elevate, revoke, save, reload: (next) => { void this.load(next); } }, notice);
     const cards = this.render(buildSections(result.value, t, this.language()));
     this.shell = new SettingsShell(dialog.ownerDocument, { nav: t("config.nav"), back: t("config.back") },
-      this.layout(cards, this.editor.element), this.selected);
+      this.layout(cards, this.editor.element, new OperatorNameCard(dialog.ownerDocument, raw, { t, elevate, saveSettings }).element), this.selected);
     body.replaceChildren(this.shell.element);
   }
 

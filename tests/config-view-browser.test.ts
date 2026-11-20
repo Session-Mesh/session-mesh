@@ -93,7 +93,8 @@ describe('the Configuration dialog', {skip}, () => {
       // Only the open section is in the DOM: check each one in turn.
       await eachSection(page, async id => {
         assert.equal(await dialog.locator('button, a, input, select, textarea').evaluateAll(
-          nodes => nodes.filter(node => !node.matches('.config-copy, .config-edit, [data-close-dialog], .config-nav-button, .config-back')).length), 0, `copy, close and the section navigation are the only controls in ${id}`);
+          nodes => nodes.filter(node => !node.matches('.config-copy, .config-edit, [data-close-dialog], .config-nav-button, .config-back')
+            && !node.closest('.config-operator')).length), 0, `copy, close, the section navigation and the operator name card are the only controls in ${id}`);
         await fits(page);
       });
       assert.deepEqual(problems, []);

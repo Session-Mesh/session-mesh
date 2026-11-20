@@ -602,6 +602,20 @@ another tab or device saved since the dialog loaded, nothing is written and the 
 current values with a message. The change applies to the next session you start, with no restart;
 running sessions are not touched, but restarting one whose folder is no longer allowed is refused.
 There must be a settings file (`MESH_LAUNCH_SETTINGS`); without one the dialog says how to create it.
+
+**Operator name.** The "Appearance" section has an "Operator name" field. When it is set, the
+Projects view names you in the labels that say whose answer a question waits for or who answered
+it ("Waiting for an answer from Camille" instead of "Waiting for an answer from the owner"; in
+French, "En attente de la réponse de Camille" instead of "… de l'opérateur"). It is a runner
+setting: the server keeps it in `settings.json` of the configuration folder (`MESH_CONF_DIR`), so
+every device signed in to this runner shows the same name; the page reads it through the
+configuration API each time Projects opens, and at once after a save. Saving asks for the master
+token when editing is not unlocked yet, as the launch settings do; it works without a launch
+settings file. The name is trimmed, holds at most 40 characters and no control, invisible or
+bidirectional character; an empty name, or one that cannot be read, gives the wording without a
+name. The page shows it as text only and never sends it anywhere else: it is not written to the
+project tracker.
+
 The port, listen address, trusted proxy and notification settings live in the server's environment
 and stay read-only, as do the system folders. Each read-only value says where it is stored and
 how to change it: the port, listen address, trusted proxy, configuration, cache and runtime

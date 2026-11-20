@@ -4019,6 +4019,7 @@ def config_report(origin, host_report):
         "host": host_report,
         "agents": agents,
         "launch": launch_projection(),
+        "runner_settings": runner_settings_projection(),
         "network": {"port": PORT, "listen_host": HOST, "loopback_only": HOST in ("127.0.0.1", "::1", "localhost"),
                     "trust_proxy": TRUST_PROXY, "request_scheme": scheme, "request_host": public_host,
                     "tailscale": "inferred" if public_host.split(":")[0].endswith(".ts.net") else "not-seen"},
@@ -4051,6 +4052,13 @@ CONFIG_BODY_MAX = 32 * 1024
 ELEVATIONS = {}          # nonce -> (monotonic expiry, sha256 of the owner cookie it was granted to)
 ELEVATION_FAILURES = deque()
 LAUNCH_WRITE_LOCK = asyncio.Lock()
+RUNNER_SETTINGS = CONF_DIR / launchsettings.RUNNER_SETTINGS_FILE
+
+
+def runner_settings_projection(values=None):
+    """The runner settings shared by every device (launchsettings.RUNNER_LIMITS) and their limits."""
+    return {"values": launchsettings.read_runner_settings(RUNNER_SETTINGS) if values is None else values,
+            "max_length": launchsettings.RUNNER_LIMITS}
 
 
 def _owner_binding():
@@ -4139,6 +4147,8 @@ async def api_config_launch(request):
     if elevation_seconds_left(request) <= 0:
         return _json_reply({"error": "elevation-required"}, 403)
     body = await _bounded_json_object(request, CONFIG_BODY_MAX)
+    if set(body) == {"settings"}:
+        return await _write_runner_settings(request, body["settings"])
     if set(body) != {"revision", "enabled_agents", "workspace_roots"} or not isinstance(body["revision"], str):
         raise web.HTTPBadRequest(text="Invalid fields")
     async with LAUNCH_WRITE_LOCK:
@@ -4156,6 +4166,18 @@ async def api_config_launch(request):
             return _json_reply({"error": "invalid", "message": str(exc)}, 400)
         apply_launch_settings(settings, revision)
     return _json_reply({"launch": launch_projection()})
+
+
+async def _write_runner_settings(request, changes):
+    """A body {"settings": {...}} on the launch route: the runner settings, under the same rules."""
+    async with LAUNCH_WRITE_LOCK:
+        if elevation_seconds_left(request) <= 0:
+            return _json_reply({"error": "elevation-required"}, 403)
+        try:
+            values = await asyncio.to_thread(launchsettings.write_runner_settings, RUNNER_SETTINGS, changes)
+        except launchsettings.InvalidLaunchSettings as exc:
+            return _json_reply({"error": "invalid", "message": str(exc)}, 400)
+    return _json_reply({"runner_settings": runner_settings_projection(values)})
 
 
 async def api_agent_mail_consent_decision(request):
