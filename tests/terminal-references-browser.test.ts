@@ -104,9 +104,16 @@ async function openWide(onPage: (page: Page) => void): Promise<Page> {
   return page;
 }
 
-/** Print the ids in the active shell and return the buffer row of the output. */
+/** Print the ids in the active shell and return the buffer row of the output. The tests share one session, so the
+ * output of an earlier test is still on screen: wait until `clear` has removed it, or the row found below would be
+ * that stale one, blanked and redrawn under the pointer while the test hovers and clicks it. */
 async function printIds(page: Page, command = PRINT, output = OUTPUT): Promise<number> {
   await typeLine(page, 'clear');
+  await page.waitForFunction(text => {
+    const buffer = active!.term.buffer.active;
+    for (let y = 0; y < buffer.length; y++) if (buffer.getLine(y)?.translateToString(true) === text) return false;
+    return true;
+  }, output, { timeout: 20_000 });
   await typeLine(page, command);
   await waitForRow(page, output);
   return rowOf(page, output);
