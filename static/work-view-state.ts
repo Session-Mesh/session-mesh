@@ -65,6 +65,8 @@ const isId = (value: unknown): value is string => typeof value === 'string' && v
   && /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(value);
 const idOrNull = (value: unknown): string | null => (isId(value) ? value : null);
 const offset = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.round(value), 1e7) : 0);
+/** A time in epoch milliseconds (the latest a Date can hold), 0 for anything else. */
+const stamp = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.round(value), 8.64e15) : 0);
 
 function ids(value: unknown, max: number): string[] | null {
   if (!Array.isArray(value)) return null;
@@ -87,7 +89,7 @@ function readDraft(value: unknown): Draft | null {
   const picked = Array.isArray(value.picked)
     ? value.picked.filter((item): item is string => typeof item === 'string' && item.length <= MAX_DRAFT_CHARS).slice(0, MAX_PICKED) : [];
   if (value.text === '' && picked.length === 0) return null;
-  return { text: value.text, picked, edit: value.edit === true, at: offset(value.at) };
+  return { text: value.text, picked, edit: value.edit === true, at: stamp(value.at) };
 }
 
 function readDrafts(value: unknown): Map<string, Draft> {

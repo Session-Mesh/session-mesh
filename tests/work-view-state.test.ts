@@ -65,6 +65,16 @@ describe('the stored state', () => {
     assert.deepEqual(back.place, PLACE);
   });
 
+  test('drafts typed one after the other (epoch milliseconds) keep their order: the oldest goes first', () => {
+    const start = Date.UTC(2026, 10, 20, 9, 0, 0);
+    let state = EMPTY_STATE;
+    for (let index = 0; index < MAX_DRAFTS + 5; index++) state = withDraft(state, `N-${index}`, draft(`draft ${index}`, start + index));
+    const back = parseState(serializeState(state));
+    assert.equal(back.drafts.size, MAX_DRAFTS);
+    assert.equal(back.drafts.get(`N-${MAX_DRAFTS + 4}`)?.at, start + MAX_DRAFTS + 4, 'the newest kept, its time intact');
+    for (let index = 0; index < 5; index++) assert.equal(back.drafts.has(`N-${index}`), false, `N-${index} (oldest) dropped`);
+  });
+
   test('a draft longer than the field allows is not one of ours', () => {
     const state = withDraft(EMPTY_STATE, 'N-1', draft('y'.repeat(MAX_DRAFT_CHARS + 1), 1));
     assert.equal(state.drafts.size, 0);

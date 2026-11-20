@@ -154,12 +154,20 @@ class WorkView implements WorkViewController {
    *  drafts put back. A project gone since shows the entry screen, a task gone since its tab. */
   private async resume(): Promise<void> {
     const place = this.memory.place();
-    if (!place.project) { await this.loadEntry(); return this.scrollTo(place); }
+    if (!place.project) {
+      await this.loadEntry();
+      if (this.project === null && this.reading === null) this.scrollTo(place);   // not when the owner moved meanwhile
+      return;
+    }
     const tab = TAB_KEYS.find(key => key === place.tab) ?? 'reprise';
     if (!(await this.openProject(place.project, tab, true))) return;
+    const token = this.generation;
     if (place.task) await this.selectTask(place.task, undefined, true);
-    if (place.task !== null && place.task === this.selected) this.tabScroll = place.tabScroll;
-    this.scrollTo(place);
+    // Unless the owner moved meanwhile (another project, another sheet) or the task is gone, the scroll comes back.
+    if (token === this.generation && place.task === this.selected) {
+      if (place.task !== null) this.tabScroll = place.tabScroll;
+      this.scrollTo(place);
+    }
     await this.refreshCount();
   }
 
