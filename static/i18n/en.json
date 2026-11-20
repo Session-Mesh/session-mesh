@@ -1895,8 +1895,8 @@
   "work.questions.emptyProject": "No question about this project or its tasks.",
   "work.questions.loading": "Reading the open questions…",
   "work.questions.more": {
-    "one": "{n} more open question is not listed here; it shows in its project.",
-    "other": "{n} more open questions are not listed here; they show in their project."
+    "one": "{n} more open question, more recent, is not shown yet. The counts above cover the questions shown.",
+    "other": "{n} more open questions, more recent, are not shown yet. The counts above cover the questions shown."
   },
   "work.questions.noTask": "Without a task",
   "work.questions.none": "No open question.",
@@ -1951,10 +1951,11 @@
   "work.triage.rereadFailed": "The answer is recorded, but the task could not be read again.",
   "work.triage.sessionUnknown": "Asking session not recorded",
   "work.triage.sheetTitle": "Question without context",
+  "work.triage.showMore": "Show more questions",
   "work.triage.task": "{id} {title}",
   "work.triage.title": "Pending questions",
   "work.triage.unattached": "Without context",
-  "work.triage.unattachedHint": "These questions are attached to no task or project, so they are shown without context. The agent should attach each question to the task it concerns.",
+  "work.triage.unattachedHint": "These questions are attached to no task or project the tracker knows, so they are shown without context. The agent should attach each question to the task it concerns.",
   "work.triage.zoneUnknown": "Unknown zone",
   "work.tabsLabel": "Project views",
   "work.trackValue": "track {track}",

@@ -15,7 +15,7 @@ import type { Child, ViewContext } from './work-dom.ts';
 import { errorBlock } from './work-error-view.ts';
 import { linkText } from './work-linkify.ts';
 import { aboutKind, ageOf, formatAge } from './work-questions.ts';
-import { isLongText, questionKind, triageQuestions } from './work-questions-triage.ts';
+import { isAttached, isLongText, questionKind, triageQuestions } from './work-questions-triage.ts';
 import type { Triage, TriageProduct, TriageProject, TriageTask, TriageZone, ZoneName } from './work-questions-triage.ts';
 import type { EntryQuestionsState } from './work-questions-view.ts';
 import type { Question } from './work-types.ts';
@@ -34,6 +34,8 @@ export type TriageHandlers = Readonly<{
    *  static/work-view-state.ts). */
   sectionOpen: boolean;
   sectionToggled: (open: boolean) => void;
+  /** Read the next page of questions ("Show more"). */
+  showMore: () => void;
 }>;
 
 function count(n: number): HTMLElement {
@@ -96,7 +98,8 @@ function assumptionBlock(ctx: ViewContext, question: Question): HTMLElement | nu
 }
 
 function openControl(ctx: ViewContext, handlers: TriageHandlers, question: Question): HTMLElement {
-  const about = question.about, kind = aboutKind(about);
+  // A question about a task or project the tracker does not know opens its own sheet, with the answer form.
+  const about = isAttached(question) ? question.about : null, kind = aboutKind(about);
   if (about && kind === 'task') {
     const open = button('btn work-qrow-open', ctx.t('work.triage.openInTask', { id: about }), () => handlers.openTask(about, question.id));
     open.dataset.task = about;
@@ -171,6 +174,13 @@ function unattachedBlock(ctx: ViewContext, handlers: TriageHandlers, triage: Tri
   return block;
 }
 
+/** The newer questions not read yet (the list shows the oldest first, a page at a time): how many, and the way to the
+ *  next page. The counts of the groups cover the questions shown. */
+function moreBlock(ctx: ViewContext, handlers: TriageHandlers, left: number): HTMLElement {
+  return el('div', 'work-qmore', notice('work-omitted', ctx.t('work.questions.more', { n: left })),
+    el('div', 'work-actions', button('btn work-qmore-button', ctx.t('work.triage.showMore'), handlers.showMore)));
+}
+
 function listBody(ctx: ViewContext, handlers: TriageHandlers, state: EntryQuestionsState): Node[] {
   if (state.kind !== 'ready' && state.kind !== 'stale') return [];
   const { doc } = state;
@@ -179,7 +189,7 @@ function listBody(ctx: ViewContext, handlers: TriageHandlers, state: EntryQuesti
   const unattached = unattachedBlock(ctx, handlers, triage);
   if (unattached) nodes.push(unattached);
   const left = Math.max(doc.omitted, doc.openQuestions - doc.questions.length);
-  if (left > 0) nodes.push(notice('work-omitted', ctx.t('work.questions.more', { n: left })));
+  if (left > 0) nodes.push(moreBlock(ctx, handlers, left));
   return nodes;
 }
 

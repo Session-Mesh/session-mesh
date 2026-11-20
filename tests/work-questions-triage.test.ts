@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 // The classification of the open questions of the entry screen (static/work-questions-triage.ts) and the parsing of
-// the `context` that `resume` gives each question (static/work-parse.ts). The section itself runs in
+// the `context` that `open-questions` gives each question (static/work-parse.ts). The section itself runs in
 // tests/work-questions-browser.test.ts. All data here is fictional.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
@@ -40,11 +40,14 @@ describe('order and attachment', () => {
     assert.deepEqual(oldestFirst(list).map(q => q.id), ['a', 'b1', 'b2', 'c', 'u']);
   });
 
-  test('a question about a task or a project is attached; about nothing or a question id, it is not', () => {
-    assert.equal(isAttached(question('a', 'T-0001', null)), true);
-    assert.equal(isAttached(question('b', 'P-0001', null)), true);
+  test('a question about a known task or project is attached; about nothing, a question id or an unknown id, it is not', () => {
+    assert.equal(isAttached(question('a', 'T-0001', null, { context: { taskTitle: 'Ship it' } })), true);
+    assert.equal(isAttached(question('b', 'P-0001', null, { context: { project: 'P-0001' } })), true);
     assert.equal(isAttached(question('c', null, null)), false);
     assert.equal(isAttached(question('d', 'N-0000abcd', null)), false);
+    // The reader gives no context for a task or project it does not know: no sheet to open, so its own sheet.
+    assert.equal(isAttached(question('e', 'T-0009', null)), false);
+    assert.equal(isAttached(question('f', 'P-0009', null)), false);
   });
 });
 
@@ -60,7 +63,8 @@ describe('the classification', () => {
     question('lone-2', null, '2026-11-01T00:00:00Z', { session: 'session-a' }),
     question('lone-3', null, '2026-11-03T00:00:00Z', { session: 'session-b' }),
     question('lone-agent', null, '2026-11-04T00:00:00Z', { session: null, agent: 'codex' }),
-    question('unknown-zone', 'T-0009', '2026-10-01T00:00:00Z'),
+    question('unknown-zone', 'T-0009', '2026-10-01T00:00:00Z', { context: { taskTitle: null } }),
+    question('unknown-task', 'T-0010', '2026-10-03T00:00:00Z'),
     question('other-zone', 'T-0008', '2026-10-02T00:00:00Z', inTask('T-0008', 'Elsewhere', null, 'misc', 'zzz')),
     { ...question('answered', 'T-0001', '2026-10-01T00:00:00Z', inTask('T-0001', 'Ship it', 'P-0001', 'relay', 'atlas')), open: false },
   ];
@@ -90,21 +94,21 @@ describe('the classification', () => {
     assert.equal(home.products[0]!.projects[0]!.tasks[0]!.title, 'Paint the fence');
   });
 
-  test('a question without a context still stands, in the unknown zone, product and project', () => {
+  test('a known task whose product and category are not known stands in the unknown zone, product and project', () => {
     const unknown = triage.zones[3]!;
     assert.deepEqual(unknown.products.map(product => product.product), [null]);
     assert.deepEqual(unknown.products[0]!.projects[0]!.tasks.map(task => [task.task, task.title]), [['T-0009', null]]);
   });
 
   test('a project the context does not name is named by the entry list', () => {
-    const named = triageQuestions([question('x', 'P-0009', null)], ZONES, id => (id === 'P-0009' ? 'Named elsewhere' : null));
+    const named = triageQuestions([question('x', 'P-0009', null, { context: { project: 'P-0009' } })], ZONES, id => (id === 'P-0009' ? 'Named elsewhere' : null));
     assert.equal(named.zones[0]!.products[0]!.projects[0]!.title, 'Named elsewhere');
   });
 
   test('unattached questions are grouped by the session that asked them, the session of the oldest question first', () => {
-    assert.equal(triage.unattachedCount, 4);
+    assert.equal(triage.unattachedCount, 5, 'a question about an unknown task is unattached');
     assert.deepEqual(triage.unattached.map(group => [group.session, group.questions.map(q => q.id)]),
-      [['session-a', ['lone-2']], ['session-b', ['lone-1', 'lone-3']], ['codex', ['lone-agent']]]);
+      [['asker', ['unknown-task']], ['session-a', ['lone-2']], ['session-b', ['lone-1', 'lone-3']], ['codex', ['lone-agent']]]);
   });
 
   test('nothing to classify: no zone, no session', () => {
@@ -123,7 +127,7 @@ describe('long texts', () => {
   });
 });
 
-describe('the context of the questions of resume', () => {
+describe('the context of the questions of open-questions', () => {
   test('parsed when present, absent when empty or not an object; text fields only', () => {
     const doc = parseOpenQuestions({ open_questions: 3, questions: [
       { id: 'N-00000001', state: 'open', text: 'a?', about: 'T-0001',

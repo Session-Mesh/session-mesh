@@ -65,13 +65,18 @@ function parseReceipt(body: unknown): AnswerReceipt | null {
   return id ? { id, duplicate: body.duplicate === true, uncommitted: body.uncommitted === true } : null;
 }
 
+/** Which page of the open questions to read: after the question `after`, at most `limit` of them. */
+export type OpenQuestionsPage = Readonly<{ after?: string; limit?: number }>;
+
 export type WorkApi = Readonly<{
   products(signal?: AbortSignal): Promise<WorkResult<ProductsDoc>>;
   projects(signal?: AbortSignal): Promise<WorkResult<ProjectsDoc>>;
   project(id: string, signal?: AbortSignal): Promise<WorkResult<ProjectDoc>>;
   task(id: string, signal?: AbortSignal): Promise<WorkResult<TaskDetail>>;
-  /** Every open question of the tracker (`resume` without a scope): the list (at most 20) and the total. */
-  openQuestions(signal?: AbortSignal): Promise<WorkResult<OpenQuestionsDoc>>;
+  /** A page of the open questions of the tracker, oldest first and in full (`open-questions`): those asked after the
+   *  question `after` (the last one of the previous page), at most `limit` (20 by default, at most 100), the total, and
+   *  how many come after the page (`omitted`). */
+  openQuestions(signal?: AbortSignal, page?: OpenQuestionsPage): Promise<WorkResult<OpenQuestionsDoc>>;
   /** The open questions of each session, by name (`session-questions`), for the session marker. */
   sessionQuestions(signal?: AbortSignal): Promise<WorkResult<SessionQuestionsDoc>>;
   /** Every task, project and question id with its title (`ids`), for the references of the terminal. */
@@ -168,7 +173,9 @@ export function createWorkApi(request: WorkFetch, url = '/api/work/v1', options:
     projects: signal => read('projects', {}, parseProjects, signal),
     project: (id, signal) => read('project', { id }, parseProject, signal),
     task: (id, signal) => read('task', { id }, parseTask, signal),
-    openQuestions: signal => read('resume', {}, parseOpenQuestions, signal),
+    openQuestions: (signal, page = {}) => read('open-questions', {
+      ...(page.after ? { after: page.after } : {}), ...(page.limit ? { limit: page.limit } : {}),
+    }, parseOpenQuestions, signal),
     sessionQuestions: signal => read('session-questions', {}, parseSessionQuestions, signal),
     ids: signal => read('ids', {}, parseIds, signal),
     answer: (question, answerText) => call('answer', { question, text: answerText }, parseReceipt),

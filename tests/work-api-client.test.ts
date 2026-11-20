@@ -43,9 +43,9 @@ describe('the relay\'s program slots', () => {
     assert.deepEqual(pending.map(call => call.op), ['products', 'projects', 'answer']);
     pending[1]!.release();
     await tick(); await tick();
-    assert.deepEqual(pending.map(call => call.op), ['products', 'projects', 'answer', 'resume'], 'a free slot goes to the next read');
+    assert.deepEqual(pending.map(call => call.op), ['products', 'projects', 'answer', 'open-questions'], 'a free slot goes to the next read');
     pending[0]!.release(); await tick(); await tick();
-    assert.deepEqual(pending.map(call => call.op), ['products', 'projects', 'answer', 'resume', 'project']);
+    assert.deepEqual(pending.map(call => call.op), ['products', 'projects', 'answer', 'open-questions', 'project']);
     pending[3]!.release(); pending[4]!.release();
     pending[2]!.release(200, { id: 'N-1', owner_verified: true });
     assert.equal((await Promise.all(results)).length, 4);
@@ -73,7 +73,7 @@ describe('the relay\'s program slots', () => {
     };
     const api = createWorkApi(request, undefined, { slots: readSlots(2), busyDelays: [0, 0, 0] });
     assert.equal((await api.openQuestions()).ok, true);
-    assert.deepEqual(calls, ['resume', 'resume', 'resume']);
+    assert.deepEqual(calls, ['open-questions', 'open-questions', 'open-questions']);
     busyLeft = 99; calls.length = 0;
     const result = await api.products();
     assert.equal(result.ok, false);
@@ -119,12 +119,14 @@ describe('request', () => {
     }
   });
 
-  test('the open questions are the unscoped resume op: no project, no product, nothing else', async () => {
-    const { api, calls } = fake(200, { open_questions: 2, questions: [{ id: 'N-1', text: 'Port?', state: 'open' }] });
+  test('the open questions are the open-questions op, a page at a time: after the last question shown, a limit', async () => {
+    const { api, calls } = fake(200, { open_questions: 2, questions: [{ id: 'N-1', text: 'Port?', state: 'open' }], questions_omitted: 1 });
     const result = await api.openQuestions();
-    assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), { op: 'resume', args: {} });
+    assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), { op: 'open-questions', args: {} });
     assert.ok(result.ok);
-    if (result.ok) assert.equal(result.value.openQuestions, 2);
+    if (result.ok) assert.deepEqual([result.value.openQuestions, result.value.omitted], [2, 1]);
+    await api.openQuestions(undefined, { after: 'N-00000001', limit: 40 });
+    assert.deepEqual(JSON.parse(String(calls[1]!.init.body)), { op: 'open-questions', args: { after: 'N-00000001', limit: 40 } });
   });
 
   test('passes the abort signal on, and an aborted call is not an error to retry', async () => {

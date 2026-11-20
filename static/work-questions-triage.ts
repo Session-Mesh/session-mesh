@@ -4,8 +4,9 @@
 /**
  * The classification of the open questions of the entry screen (pure, no DOM): by zone (the category of the
  * product), then product, project and task, each group with its count, the oldest question first inside a group and
- * the group of the oldest question first. A question about no task or project is "unattached": it is grouped by the
- * session that asked it. Where a question stands comes from its `context` (work-read's `resume`).
+ * the group of the oldest question first. A question about no task or project, or about one the tracker does not know
+ * (it has no `context`), is "unattached": it is grouped by the session that asked it. Where a question stands comes
+ * from its `context` (work-read's `open-questions`): a task in a project stands under the project's product.
  */
 
 import { aboutKind } from './work-questions.ts';
@@ -44,9 +45,10 @@ export function oldestFirst(questions: readonly Question[]): Question[] {
   });
 }
 
-/** Whether a question is about a task or a project (else it is shown under the session that asked it). */
+/** Whether a question is about a task or a project the tracker knows (else it is shown under the session that asked
+ *  it, and answered on its own sheet). Only a known task or project has a `context`. */
 export function isAttached(question: Question): boolean {
-  return aboutKind(question.about) !== 'none';
+  return aboutKind(question.about) !== 'none' && question.context !== undefined;
 }
 
 /** A map that keeps the order in which its keys were first seen (the oldest question first). */

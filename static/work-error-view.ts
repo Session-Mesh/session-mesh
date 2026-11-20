@@ -46,3 +46,16 @@ export function errorBlock(t: Translate, error: WorkError, actions: ErrorActions
   root.append(row);
   return root;
 }
+
+/** An answer is recorded but the sheet that shows it could not be read again: in `scope`, the question's form gives
+ *  way to "Answer recorded" (it would stay disabled), and a failed-read block with "Try again" goes after `anchor`
+ *  (replacing an earlier one); the other forms and their drafts stay. */
+export function recordedButUnread(t: Translate, scope: HTMLElement, question: string, error: WorkError, retry: () => void,
+  anchor: Element | null): void {
+  scope.querySelector<HTMLElement>(`[data-work-answer-slot="${CSS.escape(question)}"]`)
+    ?.replaceChildren(el('p', 'work-answer-recorded', t('work.answer.sent')));
+  scope.querySelector('.work-qsheet-reread')?.remove();
+  const block = errorBlock(t, { ...error, retry: true }, { retry });
+  block.classList.add('work-qsheet-reread');
+  if (anchor) anchor.after(block); else scope.prepend(block);
+}

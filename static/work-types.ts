@@ -83,7 +83,8 @@ export type QuestionContext = Readonly<{
   taskTitle: string | null; project: string | null; projectTitle: string | null; product: string | null; category: string | null;
 }>;
 
-/** The open questions of the `resume` document read without a scope: every open question of the tracker. */
+/** A page of the open questions (`open-questions`), oldest first, in full; `omitted` counts the open questions after
+ *  the page (the next page starts after its last question). */
 export type OpenQuestionsDoc = Readonly<{
   /** How many questions are open in all, also those the list left out. */
   openQuestions: number; questions: readonly Question[]; omitted: number; truncated: boolean;
