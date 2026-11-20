@@ -47,7 +47,8 @@ let usage =
   "usage: mesh-platform capabilities | runtime-dir | snapshot | process PID | \
    command-line PID | require isolated-agent|demo-sandbox | update-check \
    [--refresh] [--cache-only] [--line] [--debug] [--release-dir DIR] | \
-   update-image | accounts list FILE | accounts prepare FILE ID"
+   update-image | accounts list FILE | accounts prepare FILE ID | accounts \
+   carry FILE claude|codex CONVERSATION FROM TO"
 
 let ex_config = 78
 
@@ -378,9 +379,53 @@ let accounts_prepare file id =
               0
           | Error message -> accounts_failure message))
 
+(* [accounts carry FILE KIND CONVERSATION FROM TO] copies one Claude or Codex
+   conversation from account FROM's folder to account TO's (an alias id of
+   FILE, or "default"), with the checks of [prepare] on both folders (TO is
+   created when missing), and prints {"carried": {...}}. A refusal exits 1
+   with {"kind": "accounts", "code": "...", "error": "..."}; the target is then
+   as it was. The agent must be stopped first. *)
+let accounts_carry file kind conversation from_account to_account =
+  let module Carry = Mesh_accounts_carry in
+  let refuse { Carry.code; message } =
+    print_error ("mesh-platform: " ^ message);
+    print_json
+      (`Assoc
+         [
+           ("kind", `String "accounts");
+           ("code", `String code);
+           ("error", `String message);
+         ]);
+    1
+  in
+  let uid = Unix.geteuid () in
+  match Carry.kind_of_string kind with
+  | None ->
+      refuse
+        {
+          Carry.code = "agent_unsupported";
+          message = "a conversation is carried for claude or codex only";
+        }
+  | Some _ when not (Carry.valid_conversation_id conversation) ->
+      refuse { Carry.code = "conversation_unknown"; message = "not a conversation id" }
+  | Some kind -> (
+      let folder = Carry.account_folder ~uid ~getenv:Sys.getenv_opt ~file ~kind in
+      match
+        Result.bind (folder ~create:false from_account) (fun source ->
+            Result.bind (folder ~create:true to_account) (fun target ->
+                Carry.carry ~uid ~kind ~conversation ~source ~target ()))
+      with
+      | Ok outcome ->
+          print_json (`Assoc [ ("carried", Carry.outcome_to_json outcome) ]);
+          0
+      | Error error -> refuse error)
+
 let run = function
   | [ "accounts"; "list"; file ] -> accounts_list file
   | [ "accounts"; "prepare"; file; id ] -> accounts_prepare file id
+  | [ "accounts"; "carry"; file; kind; conversation; from_account; to_account ]
+    ->
+      accounts_carry file kind conversation from_account to_account
   | "update-check" :: options -> update_check options
   | [ "update-image" ] -> update_image ()
   | [ "require"; name ] -> with_feature name (require_feature name)

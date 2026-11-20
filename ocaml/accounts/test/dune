@@ -1,3 +1,19 @@
 (test
  (name test_accounts)
+ (modules test_accounts)
  (libraries mesh_accounts alcotest unix))
+
+; Carrying a conversation between account folders, on temporary folders.
+
+(test
+ (name test_carry)
+ (modules test_carry)
+ (libraries mesh_accounts mesh_accounts_carry alcotest unix))
+
+; `mesh-platform accounts carry` run as the web server runs it.
+
+(test
+ (name test_carry_cli)
+ (modules test_carry_cli)
+ (deps ../../platform/cli/mesh_platform_main.exe)
+ (libraries alcotest unix yojson))
