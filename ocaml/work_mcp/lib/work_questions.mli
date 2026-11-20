@@ -13,14 +13,16 @@
       lowercase hex digits, drawn at random; the six-digit ids of the first version
       are still read; [Q-] belongs to [wl]'s proposals), [text] (at most
       2000 characters), optional [options] (at most 8 labels of at most 100
-      characters) and [assumption] (at most 1000 characters), plus the
+      characters, distinct), optional [kind] (see {!kind}) and [assumption]
+      (at most 1000 characters), plus the
       [agent] and [session] of the asker.
     - [answer]: same [task] as its question; fields [question], [text] and
       [by], the identity of the answerer, plus the [agent] and [session] of
       the process that wrote it when it has one (an agent relaying the
       owner's words). The owner-authenticated writer ([work-write], behind
       the web server's owner sign-in) writes no [agent] and no [session],
-      [by] = [owner] and [via] = [owner-web] instead.
+      [by] = [owner] and [via] = [owner-web] instead, and the options the
+      owner picked in [choices] when there are any.
 
     The worklog library ignores unknown event types with a warning, so [wl]
     keeps working and does not display them. The fold of these two types lives
@@ -43,12 +45,23 @@ type answer = {
           [by] is {!owner_by}, and the event has no [agent] and no [session].
           A provenance marker in the log, not a signature: a process of the
           same user that writes the log directly can forge it. *)
+  choices : string list;
+      (** the options the owner picked, by their text ([choices] of the
+          event; empty for a free-text answer and for relayed answers) *)
 }
+
+(** How the owner answers: one option ([Single]), any number of options
+    ([Multi]), free text only ([Text]), or yes / no ([Yes_no]). Free text
+    stays possible for every kind. *)
+type kind = Single | Multi | Text | Yes_no
 
 type question = {
   id : string;
   text : string;
   options : string list;
+  kind : kind;
+      (** the effective kind: the stored [kind] when it is known and fits the
+          options, else [Single] with options and [Text] without *)
   assumption : string option;
   about : string option;  (** task or project id, when there is one *)
   event_task : string;  (** the [task] field of the events of this question *)
@@ -76,6 +89,14 @@ val max_options : int
 
 val max_option : int
 (** 100. *)
+
+val kind_names : string list
+(** ["single"; "multi"; "text"; "yes_no"]. *)
+
+val string_of_kind : kind -> string
+
+val yes_no_choices : string list
+(** ["yes"; "no"]: the choices of a [Yes_no] question. *)
 
 val valid_id : string -> bool
 val is_ours : string -> bool
@@ -111,12 +132,16 @@ val ask :
   ?session:Mesh_worklog.Session.t ->
   text:string ->
   ?options:string list ->
+  ?kind:string ->
   ?assumption:string ->
   ?about:string ->
   ?request_id:string ->
   unit ->
   (string * bool, Mesh_worklog.Err.t) result
 (** Record a question and return its id and whether it was a duplicate.
+    Options are distinct. [kind] is one of {!kind_names}, stored only when
+    given: [single] and [multi] need options, [text] and [yes_no] take none
+    ([Usage] otherwise).
     [about] is a task or project reference, resolved to the full id; unknown is
     [Not_found]. Nothing is written when a validation fails. With a
     [request_id] (stored on the event), a question of the same session, the
@@ -148,6 +173,8 @@ val answer_once :
   Mesh_worklog.Ctx.t ->
   ?session:Mesh_worklog.Session.t ->
   ?owner_web:bool ->
+  ?edit:bool ->
+  ?choices:string list ->
   question:string ->
   text:string ->
   by:string ->
@@ -173,4 +200,15 @@ val answer_once :
     [via] = {!owner_web_via}. Only earlier owner-authenticated answers count:
     one with the same text is [Same_answer], another is [Already_answered].
     Relayed answers do not block it: the owner's answer supersedes them. They
-    stay in the log, unchanged; the readers mark them as superseded. *)
+    stay in the log, unchanged; the readers mark them as superseded.
+
+    [~edit:true] (owner-authenticated only): the owner corrects the answer.
+    Only the latest owner-authenticated answer counts: the same text is
+    [Same_answer], another is appended ([Recorded]) and the earlier one stays
+    in the log, marked superseded by the readers.
+
+    [choices] (owner-authenticated only): the options picked, stored on the
+    event. Each is an option of the question ([yes] or [no] for a [Yes_no]
+    one), none twice, at most 8, at most one unless the kind is [Multi], and
+    none for a [Text] question ([Usage] otherwise). [edit] or [choices] on
+    the relayed path is [Usage]. *)

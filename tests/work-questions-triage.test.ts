@@ -6,18 +6,19 @@
 // tests/work-questions-browser.test.ts. All data here is fictional.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { effectiveKind } from '../static/work-answer-options.ts';
 import { parseOpenQuestions } from '../static/work-parse.ts';
 import { isAttached, isLongText, oldestFirst, questionKind, triageQuestions } from '../static/work-questions-triage.ts';
 import type { Question, QuestionContext } from '../static/work-types.ts';
 
-type Extra = Partial<{ options: string[]; session: string | null; agent: string | null; context: Partial<QuestionContext> }>;
+type Extra = Partial<{ options: string[]; kind: string; session: string | null; agent: string | null; context: Partial<QuestionContext> }>;
 
 const context = (part: Partial<QuestionContext>): QuestionContext => ({
   taskTitle: null, project: null, projectTitle: null, product: null, category: null, ...part,
 });
 
 const question = (id: string, about: string | null, askedAt: string | null, extra: Extra = {}): Question => ({
-  id, open: true, text: `Question ${id}?`, options: extra.options ?? [], assumption: null, about, askedBy: null,
+  id, open: true, text: `Question ${id}?`, options: extra.options ?? [], kind: effectiveKind(extra.kind, extra.options ?? []), assumption: null, about, askedBy: null,
   askedByAgent: extra.agent ?? null, askedBySession: extra.session === undefined ? 'asker' : extra.session, askedAt,
   answers: [], ownerAnswered: false, ...(extra.context ? { context: context(extra.context) } : {}),
 });
@@ -30,6 +31,14 @@ describe('the kind of a question', () => {
   test('options offered make it a choice; none, an open question', () => {
     assert.equal(questionKind(question('a', 'T-0001', null, { options: ['keep', 'drop'] })), 'choice');
     assert.equal(questionKind(question('b', 'T-0001', null)), 'open');
+  });
+  test('the cue follows the kind the answer form uses: a yes / no is a choice, a free-text question is open', () => {
+    // One source of truth (Question.kind, work-answer-options.ts): the cue never says "Decision" over a free-text form.
+    assert.equal(questionKind(question('c', 'T-0001', null, { kind: 'yes_no' })), 'choice');
+    assert.equal(questionKind(question('d', 'T-0001', null, { kind: 'multi', options: ['x', 'y'] })), 'choice');
+    assert.equal(questionKind(question('e', 'T-0001', null, { kind: 'text' })), 'open');
+    // The cue reads the kind, never the options: a kind of text over options would still be an open question.
+    assert.equal(questionKind({ ...question('f', 'T-0001', null, { options: ['x'] }), kind: 'text' }), 'open');
   });
 });
 

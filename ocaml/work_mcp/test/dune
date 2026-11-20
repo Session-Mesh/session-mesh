@@ -11,6 +11,7 @@
   test_questions
   test_answer
   test_attempts
+  test_question_kind
   test_hardening
   test_requests
   test_review2

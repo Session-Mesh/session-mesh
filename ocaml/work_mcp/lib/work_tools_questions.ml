@@ -34,6 +34,7 @@ let state_of ctx qid =
 let ask args =
   let* text = Work_args.string args "text" in
   let* options = Work_args.strings args "options" in
+  let* kind = Work_args.opt_string args "kind" in
   let* assumption = Work_args.opt_string args "assumption" in
   let* about = Work_args.opt_string args "task" in
   let* request_id = Work_request.of_args args in
@@ -42,7 +43,7 @@ let ask args =
   Work_identity.warn_if_unresolved id;
   let* () = needs_session id request_id in
   let* qid, duplicate =
-    lift (Work_questions.ask ctx ?session:id.session ~text ~options ?assumption ?about ?request_id ())
+    lift (Work_questions.ask ctx ?session:id.session ~text ~options ?kind ?assumption ?about ?request_id ())
   in
   if not duplicate then link_task ctx about;
   let* state = if duplicate then state_of ctx qid else Ok "open" in
@@ -52,15 +53,21 @@ let ask_tool =
   T.make ~name:"work_ask"
     ~description:
       "Record a non-blocking question and carry on: state in assumption what you adopt meanwhile. \
-       Optional task (T-... or P-...) the question is about, and options (answer choices). The \
-       owner answers later, in this session's conversation: record that answer with \
-       work_answer. Read answers with work_resume or work_list_questions. For a question that \
-       truly blocks (a permission, an irreversible action) ask directly instead."
+       Optional task (T-... or P-...) the question is about, and options (distinct answer \
+       choices, shown to the owner as buttons). Optional kind says how the owner answers: \
+       single (pick one option; the default with options), multi (pick every option that \
+       applies, sent as the picked options one per line), text (free text only; the default \
+       without options) or yes_no (yes or no, no options). Free text is always possible. The \
+       owner answers later, in the Projects view or in this session's conversation: record a \
+       conversation answer with work_answer. Read answers with work_resume or \
+       work_list_questions. For a question that truly blocks (a permission, an irreversible \
+       action) ask directly instead."
     ~input_schema:
       (T.object_ ~required:[ "text" ]
          [
            ("text", T.string ~max:Work_questions.max_text ());
            ("options", T.strings ~max_items:Work_questions.max_options ~max:Work_questions.max_option ());
+           ("kind", T.enum Work_questions.kind_names);
            ("assumption", T.string ~max:Work_questions.max_assumption ());
            ("task", T.string ~max:40 ());
            ("request_id", T.string ~max:Work_request.max_length ~description:"Optional retry key (A-Z a-z 0-9 _ . : -): a repeated call of the same session with the same request_id on the same task returns the first question with duplicate=true." ());

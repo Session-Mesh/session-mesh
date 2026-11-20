@@ -60,18 +60,23 @@ export type TimelineEvent = Readonly<{
 /**
  * An answer as recorded: `by` is who it names as the answerer (free text written by the relaying agent, not
  * authenticated), `relayedBy` the session that wrote it (null when the event names none). `ownerVerified`: written
- * through the owner's signed-in browser (work-write); `superseded`: a relayed answer that such an answer replaces.
+ * through the owner's signed-in browser (work-write); `superseded`: an answer that the latest owner-verified answer
+ * replaces (a relayed one, or an earlier owner answer since edited); `choices`: the options the owner picked.
  */
 export type Answer = Readonly<{
   text: string; by: string | null; at: string | null; relayedBy: string | null; ownerVerified: boolean; superseded: boolean;
+  choices: readonly string[];
 }>;
+
+/** How the owner answers a question: one option, several, free text only, or yes / no (free text is always possible). */
+export type QuestionKind = 'single' | 'multi' | 'text' | 'yes_no';
 
 /**
  * `ownerAnswered`: the question has an owner-verified answer, even when a size bound left it out of `answers`.
  * `askedBy` is the session, else the agent; `askedByAgent` and `askedBySession` keep both as recorded.
  */
 export type Question = Readonly<{
-  id: string; open: boolean; text: string; options: readonly string[]; assumption: string | null; about: string | null;
+  id: string; open: boolean; text: string; options: readonly string[]; kind: QuestionKind; assumption: string | null; about: string | null;
   askedBy: string | null; askedByAgent: string | null; askedBySession: string | null; askedAt: string | null;
   answers: readonly Answer[]; ownerAnswered: boolean;
   /** Where the question stands (only the open questions of `resume` carry it): absent when it is about nothing. */

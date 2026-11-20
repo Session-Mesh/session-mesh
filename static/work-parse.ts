@@ -12,6 +12,7 @@ import type {
   ProductsDoc, ProjectDoc, ProjectHead, ProjectsDoc, ProjectSummary, Provenance, Question, QuestionContext, Reprise, TargetRef, TaskDetail,
   TaskRow, TimelineEvent,
 } from './work-types.ts';
+import { effectiveKind } from './work-answer-options.ts';
 
 type Obj = Record<string, unknown>;
 
@@ -178,7 +179,7 @@ function parseAnswer(source: Obj): Answer | null {
   const body = text(source.text);
   if (body === null) return null;
   return { text: body, by: text(source.by), at: text(source.at), relayedBy: text(source.relayed_by_session),
-    ownerVerified: source.owner_verified === true, superseded: source.superseded === true };
+    ownerVerified: source.owner_verified === true, superseded: source.superseded === true, choices: strings(source.choices) };
 }
 
 /** The `context` of a question of `resume`; absent (not an empty object) when it names nothing. */
@@ -194,7 +195,8 @@ function parseQuestion(source: Obj): Question | null {
   if (!id || body === null) return null;
   const answers = objects(source.answers).map(parseAnswer).filter((a): a is Answer => a !== null);
   const askedByAgent = text(source.asked_by_agent), askedBySession = text(source.asked_by_session);
-  return { id, open: source.state !== 'answered', text: body, options: strings(source.options), assumption: text(source.assumption),
+  const options = strings(source.options);
+  return { id, open: source.state !== 'answered', text: body, options, kind: effectiveKind(source.kind, options), assumption: text(source.assumption),
     about: text(source.about), askedBy: askedBySession ?? askedByAgent, askedByAgent, askedBySession, askedAt: text(source.asked_at), answers,
     ownerAnswered: source.owner_answered === true || answers.some(answer => answer.ownerVerified), ...contextOf(source.context) };
 }

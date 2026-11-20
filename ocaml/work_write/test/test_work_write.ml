@@ -300,4 +300,5 @@ let () =
           Alcotest.test_case "missing repository" `Quick test_missing_repository;
         ] );
       ("hostile input", Test_hostile.tests);
+      ("answer options", Test_answer_options.tests);
     ]

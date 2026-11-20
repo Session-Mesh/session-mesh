@@ -59,3 +59,14 @@ export function fillDrafts(scope: HTMLElement, drafts: ReadonlyMap<string, Draft
     if (editing === draft.edit && (field.value === '' || editing)) fill(slot, draft);
   }
 }
+
+/** What the owner has put under each question of `scope` but `except` (the one just answered), by question id: the
+ *  text, the pre-built answers ticked, and whether it is a correction. Kept across a redraw of `scope`. */
+export function unsentDrafts(scope: HTMLElement, except: string): Map<string, Draft> {
+  const drafts = new Map<string, Draft>(), now = Date.now();
+  for (const slot of scope.querySelectorAll<HTMLElement>(SLOT)) {
+    const question = slot.dataset.workAnswerSlot, draft = question && question !== except ? draftIn(slot, now) : null;
+    if (question && draft) drafts.set(question, draft);
+  }
+  return drafts;
+}

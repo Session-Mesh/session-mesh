@@ -54,11 +54,11 @@ let outcome ~uncommitted = function
    after the event is durable: the answer stands, and the reply says that it
    is not committed (the reason, which may name paths, goes to standard
    error only). *)
-let run ?(getenv = Sys.getenv_opt) (Ww_request.Answer { question; text }) =
+let run ?(getenv = Sys.getenv_opt) (Ww_request.Answer { question; text; edit; choices }) =
   let problems = ref [] in
   let warn why = problems := why :: !problems in
   let* ctx = Result.map_error of_worklog (W.Ctx.of_env ~getenv ~warn ()) in
-  let* recorded = lift (Q.answer_once ctx ~owner_web:true ~question ~text ~by:Q.owner_by ()) in
+  let* recorded = lift (Q.answer_once ctx ~owner_web:true ~edit ~choices ~question ~text ~by:Q.owner_by ()) in
   List.iter (fun why -> prerr_endline ("work-write: " ^ E.safe_text why)) (List.rev !problems);
   outcome ~uncommitted:(!problems <> []) recorded
 

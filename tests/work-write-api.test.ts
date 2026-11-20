@@ -327,6 +327,10 @@ describe('POST /api/work/v1 write op with a real session token', { skip: session
     const reply = await post(mesh.base, answer(QUESTIONS[0]!, 'agent says yes'),
       { authorization: `MeshSession ${mesh.sessionToken}`, origin: mesh.base });
     assert.equal(reply.status, 401);
+    // A correction with picked options (#147) is no way around it.
+    const edit = { op: 'answer', args: { question: QUESTIONS[0]!, text: 'agent edit', edit: true, choices: ['yes'] } };
+    const edited = await post(mesh.base, edit, { authorization: `MeshSession ${mesh.sessionToken}`, origin: mesh.base });
+    assert.equal(edited.status, 401);
     assert.equal(writer.ran(), false);
   });
 });

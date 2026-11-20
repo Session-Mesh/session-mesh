@@ -240,8 +240,8 @@ project tracker that agents write through `mesh-work`, read only:
   is unfolded. Unfolded, it lists them classified by zone (the category of the product), product,
   project and task, each group with its count, the oldest question first. A project is shown once,
   under its own product, even when one of its tasks was moved to another product. A row shows the
-  whole text (a long one folded behind "Show more"), "Decision" when the agent offered options and "Open
-  question" otherwise, its age, the session and agent that asked it, where it stands (product,
+  whole text (a long one folded behind "Show more"), "Decision" when its answer form offers choices
+  (options to pick, or Yes / No) and "Open question" when it asks for free text, its age, the session and agent that asked it, where it stands (product,
   project, task), the options, the assumption (folded), and one way in: "Open in task" opens the task
   sheet over its project's Questions tab, at that question, beside the task's notes, blockers and
   events; a question about a project opens that project's Questions tab; a task in no project opens
@@ -396,14 +396,22 @@ checks that the words are yours, and the answer records which session wrote it
 ([work-mcp.md](work-mcp.md#answering-a-question)). Such an answer is therefore shown as relayed,
 not verified.
 
-You can also answer in the task sheet: type the answer under the question and press "Send
-answer". The browser sends it to `POST /api/work/v1`, and the web server runs the `work-write`
-program for it only when the request carries your signed-in browser's cookie and no token: an
+You can also answer in the view, under the question, wherever it is shown with its context: the task
+sheet, the project's Questions tab, or the sheet of a question attached to nothing. Type the
+answer and press "Send answer". The browser sends it to `POST /api/work/v1`, and the web server
+runs the `work-write` program for it only when the request carries your signed-in browser's cookie and no token: an
 agent's session token and the master token are refused, and so is a request from another site.
 The sheet then reads the task again and shows your answer as "answered by the owner in this
 view". An answer an agent relayed earlier, mistaken or forged, does not lock you out: yours
-replaces it. "Verified" means written through your signed-in browser; it is a marker in the
-tracker's log, not a signature, so a process of your user that writes the log directly can still
+replaces it. When the agent gave options, they appear above the field: click one (radio buttons;
+it fills the field, which you can still change) or tick every option that applies (checkboxes,
+for a question the agent marked `multi`), or Yes / No for a yes-or-no question, then press "Send
+answer"; the field stays for any other answer. A question you answered shows "Edit answer": your
+correction is recorded as a new answer, and the earlier one stays in the history, folded under
+"Earlier answers", while the current one is marked "edited". What you ticked or typed and did not
+send yet, a correction included, comes back when you return to the view, like any other unsent
+answer. "Verified" means written through your signed-in browser; it is a marker in the tracker's
+log, not a signature, so a process of your user that writes the log directly can still
 imitate it ([trust model](work-mcp.md#trust-model)). A release ships `work-write`; on an
 installation without it the form is replaced by a note that answering from the view needs
 `work-write`.

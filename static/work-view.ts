@@ -16,7 +16,7 @@ import { entryTree } from './work-derive.ts';
 import { renderDetail } from './work-detail-view.ts';
 import { mountDocPanel } from './work-doc-panel.ts';
 import type { DocPanel } from './work-doc-panel.ts';
-import { button, el, focusFirst, markSelected, restoreDrafts, unsentDrafts } from './work-dom.ts';
+import { button, el, focusFirst, markSelected } from './work-dom.ts';
 import type { Translate, ViewContext } from './work-dom.ts';
 import { EntryQuestions } from './work-entry-questions.ts';
 import { EntrySheets } from './work-entry-sheets.ts';
@@ -33,6 +33,7 @@ import type { Scroll, ViewMemory } from './work-view-memory.ts';
 import { sendAnswer } from './work-view-answer.ts';
 import type { AnswerHost, Surface } from './work-view-answer.ts';
 import type { WorkViewController, WorkViewOptions } from './work-view-options.ts';
+import { fillDrafts, unsentDrafts } from './work-view-drafts.ts';
 import { sameSheet } from './work-view-state.ts';
 import type { Place } from './work-view-state.ts';
 import { pageQuestionsSync } from './work-questions-sync.ts';
@@ -217,7 +218,8 @@ class WorkView implements WorkViewController {
   };
 
   private sender(surface: Surface): AnswerSender {
-    return { available: () => !this.writeUnavailable, submit: (question, answerText) => sendAnswer(this.answerHost(), question, answerText, surface) };
+    return { available: () => !this.writeUnavailable, submit: (question, answerText, extra) =>
+      sendAnswer(this.answerHost(), question, answerText, surface, extra) };
   }
 
   private stopRequests(): void {
@@ -437,7 +439,7 @@ class WorkView implements WorkViewController {
     const body = renderDetail(this.ctx, result.value);
     // The reload after an answer keeps what the owner was typing under the other questions; the drafts kept while
     // away (this sheet's, or one typed in another place) come back too.
-    if (after && !after.fresh) restoreDrafts(body, unsentDrafts(view.detailSlot, after.question));
+    if (after && !after.fresh) fillDrafts(body, unsentDrafts(view.detailSlot, after.question));
     this.memory.fill(body);
     view.detailSlot.replaceChildren(this.closeButton(view), body);
     if (after && !after.focus) return true;

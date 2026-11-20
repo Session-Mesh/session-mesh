@@ -81,9 +81,18 @@ export type WorkApi = Readonly<{
   sessionQuestions(signal?: AbortSignal): Promise<WorkResult<SessionQuestionsDoc>>;
   /** Every task, project and question id with its title (`ids`), for the references of the terminal. */
   ids(signal?: AbortSignal): Promise<WorkResult<KnownIds>>;
-  /** The owner's answer to an open question (the write op, sent with the page's own cookie only). */
-  answer(question: string, answerText: string): Promise<WorkResult<AnswerReceipt>>;
+  /** The owner's answer to an open question (the write op, sent with the page's own cookie only); with `edit`, a
+   *  correction of the owner's earlier answer; `choices`: the options picked. */
+  answer(question: string, answerText: string, extra?: AnswerExtra): Promise<WorkResult<AnswerReceipt>>;
 }>;
+
+/** The optional arguments of the write op: sent only when set, so a plain answer is the request it always was. */
+export type AnswerExtra = Readonly<{ edit?: boolean; choices?: readonly string[] }>;
+
+function answerArgs(question: string, answerText: string, extra: AnswerExtra = {}): Record<string, unknown> {
+  return { question, text: answerText, ...(extra.edit ? { edit: true } : {}),
+    ...(extra.choices && extra.choices.length > 0 ? { choices: [...extra.choices] } : {}) };
+}
 
 /**
  * The reads a page may have in flight at once. The relay runs at most four work programs for all its pages together and
@@ -178,6 +187,6 @@ export function createWorkApi(request: WorkFetch, url = '/api/work/v1', options:
     }, parseOpenQuestions, signal),
     sessionQuestions: signal => read('session-questions', {}, parseSessionQuestions, signal),
     ids: signal => read('ids', {}, parseIds, signal),
-    answer: (question, answerText) => call('answer', { question, text: answerText }, parseReceipt),
+    answer: (question, answerText, extra) => call('answer', answerArgs(question, answerText, extra), parseReceipt),
   };
 }

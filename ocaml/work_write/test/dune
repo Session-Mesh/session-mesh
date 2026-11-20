@@ -6,7 +6,7 @@
 
 (test
  (name test_work_write)
- (modules test_work_write test_hostile ww_runner)
+ (modules test_work_write test_hostile test_answer_options ww_runner)
  (libraries work_write work_mcp mesh_worklog alcotest yojson unix)
  (deps
   ../bin/work_write_main.exe
