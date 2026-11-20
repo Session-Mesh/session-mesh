@@ -13,6 +13,10 @@ import {test} from 'node:test';
 const repo=path.resolve(import.meta.dirname,'..');
 const candidate=path.join(repo,'ocaml/_build/default/bin/mesh_profile_main.exe');
 const binary=process.env.MESH_PROFILE_CMD || (fs.existsSync(candidate)?candidate:path.join(repo,'_opam/bin/mesh-profile'));
+// Without mesh-profile the file is skipped, with the reason, unless MESH_REQUIRE_MESH_PROFILE is set (CI):
+// then a missing program fails every test. ocaml/test covers the modules themselves.
+const skip=fs.existsSync(binary)||process.env.MESH_REQUIRE_MESH_PROFILE?false
+  :`mesh-profile not built: dune build ./bin/mesh_profile_main.exe, or set MESH_PROFILE_CMD (${binary})`;
 type Reply={version:number;ok:boolean;data?:any;code?:string};
 function fixture(){
   const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'mesh-profiles-'));
@@ -41,36 +45,36 @@ function fixture(){
 }
 function use(fn:(f:ReturnType<typeof fixture>)=>void){const f=fixture();try{fn(f);}finally{f.close();}}
 
-test('unconfigured registry is explicit and does not create account state',()=>use(f=>{
+test('unconfigured registry is explicit and does not create account state',{skip},()=>use(f=>{
   const reply=f.request('profiles.list');assert.equal(reply.ok,true);assert.deepEqual(reply.data.profiles,[]);
   assert.equal(reply.data.configured,false);assert.equal(fs.existsSync(f.db),false);
 }));
-test('four backend projections contain no paths and cannot qualify a switch',()=>use(f=>{
+test('four backend projections contain no paths and cannot qualify a switch',{skip},()=>use(f=>{
   for(const backend of ['claude','codex','opencode-v2','pi'])f.add(backend,backend);f.save();
   const reply=f.request('profiles.list');assert.equal(reply.ok,true);assert.equal(reply.data.profiles.length,4);
   assert.equal(JSON.stringify(reply).includes(f.root),false);
   for(const profile of reply.data.profiles){assert.equal(profile.switch_qualified,false);assert.equal('roots' in profile,false);assert.match(profile.context_revision,/^[a-f0-9]{64}$/);}
 }));
-test('host-side resolution binds exact ID/backend/context and checks current roots',()=>use(f=>{
+test('host-side resolution binds exact ID/backend/context and checks current roots',{skip},()=>use(f=>{
   f.add('work');f.add('off','pi',false);f.save();const profile=f.request('profiles.list').data.profiles[0];
   const good=f.request('profiles.resolve',{id:'work',backend:'pi',expected_context:profile.context_revision});assert.equal(good.ok,true);assert.equal(good.data.roots.config,f.profiles[0].roots.config);
   for(const extra of [{id:'missing',backend:'pi',expected_context:null},{id:'off',backend:'pi',expected_context:null},{id:'work',backend:'codex',expected_context:null},{id:'work',backend:'pi',expected_context:'0'.repeat(64)}])assert.equal(f.request('profiles.resolve',extra).ok,false);
   fs.chmodSync(f.profiles[0].roots.config,0o777);assert.equal(f.request('profiles.resolve',{id:'work',backend:'pi',expected_context:null}).ok,false);
 }));
-test('unknown fields and unsupported native actions refuse before persistent state',()=>use(f=>{
+test('unknown fields and unsupported native actions refuse before persistent state',{skip},()=>use(f=>{
   for(const [op,extra]of [['consent.reset',{expected_revision:0,roots:{config:'/unsafe'}}],['consent.set_global',{expected_revision:0.5,confirmation:'skip'}],['switch.start',{}]] as const){
     assert.equal(f.request(op,extra).ok,false);assert.equal(fs.existsSync(f.db),false);
   }
   assert.equal(f.request('profiles.list',{},['--root','/arbitrary']).code,'unsupported-arguments');
 }));
-test('global preference persists across helper processes and rejects stale writes',()=>use(f=>{
+test('global preference persists across helper processes and rejects stale writes',{skip},()=>use(f=>{
   assert.equal(f.request('consent.get').data.revision,0);
   assert.equal(f.request('consent.set_global',{expected_revision:0,confirmation:'skip'}).data.revision,1);
   assert.equal(f.request('consent.get').data.global,'skip');
   assert.equal(f.request('consent.reset',{expected_revision:0}).code,'consent-revision-conflict');
   assert.equal(f.request('consent.get').data.global,'skip');
 }));
-test('pair Ask exceptions use native context and current registry revision',()=>use(f=>{
+test('pair Ask exceptions use native context and current registry revision',{skip},()=>use(f=>{
   f.add('work');f.add('personal');f.save();const registry=f.request('profiles.list').data.registry_revision;
   const pair={expected_revision:0,source_id:'work',target_id:'personal',registry_revision:registry,confirmation:'ask'};
   assert.equal(f.request('consent.set_pair',pair).ok,true);
@@ -79,7 +83,7 @@ test('pair Ask exceptions use native context and current registry revision',()=>
   assert.equal(f.request('consent.set_pair',{...pair,expected_revision:1}).code,'profile-registry-changed');
   assert.equal(f.request('consent.get').data.revision,1);
 }));
-test('retired pair removal and reset remain explicit revisioned management actions',()=>use(f=>{
+test('retired pair removal and reset remain explicit revisioned management actions',{skip},()=>use(f=>{
   f.add('work');f.add('personal');f.save();const registry=f.request('profiles.list').data.registry_revision;
   assert.equal(f.request('consent.set_pair',{expected_revision:0,source_id:'work',target_id:'personal',registry_revision:registry,confirmation:'skip'}).ok,true);
   f.profiles.pop();f.save();
@@ -87,27 +91,27 @@ test('retired pair removal and reset remain explicit revisioned management actio
   assert.equal(f.request('consent.reset',{expected_revision:2}).data.revision,3);
   const state=f.request('consent.get').data;assert.equal(state.global,'ask');assert.deepEqual(state.pairs,[]);
 }));
-test('unsafe registry custody fails without echoing private paths or payload',()=>use(f=>{
+test('unsafe registry custody fails without echoing private paths or payload',{skip},()=>use(f=>{
   f.add('work');f.save();fs.chmodSync(f.file,0o644);
   const result=f.request('profiles.list');assert.equal(result.ok,false);assert.equal(JSON.stringify(result).includes(f.root),false);
   assert.equal(fs.existsSync(f.db),false);
 }));
 
-test('same-account pair changes are invalid before a state store is created',()=>use(f=>{
+test('same-account pair changes are invalid before a state store is created',{skip},()=>use(f=>{
   f.add('work');f.save();const registry=f.request('profiles.list').data.registry_revision;
   assert.equal(f.request('consent.set_pair',{expected_revision:0,source_id:'work',target_id:'work',registry_revision:registry,confirmation:'skip'}).code,'invalid-account-pair');
   assert.equal(f.request('consent.remove_pair',{expected_revision:0,source_id:'work',target_id:'work'}).code,'invalid-account-pair');
   assert.equal(fs.existsSync(f.db),false);
 }));
 
-test('physical aliases cannot register two credential contexts with different path spellings',()=>use(f=>{
+test('physical aliases cannot register two credential contexts with different path spellings',{skip},()=>use(f=>{
   const a=f.add('work'),b=f.add('personal');
   fs.rmdirSync(b.roots.config);fs.symlinkSync(a.roots.config,b.roots.config);f.save();
   assert.equal(f.request('profiles.resolve',{id:'work',backend:'pi',expected_context:null}).code,'unsafe-profile-roots');
   assert.equal(fs.existsSync(f.db),false);
 }));
 
-test('HTTP mode exposes only public operations and retains duplicate-field rejection',()=>use(f=>{
+test('HTTP mode exposes only public operations and retains duplicate-field rejection',{skip},()=>use(f=>{
   assert.equal(f.http('profiles.list','{}').reply.http_status,200);
   for(const raw of ['{"op":"profiles.resolve"}','{"version":1}','{"expected_revision":0,"expected_revision":0}',
     '{"expected_revision":0,"roots":{"config":"/arbitrary"}}']){
@@ -119,13 +123,13 @@ test('HTTP mode exposes only public operations and retains duplicate-field rejec
   assert.equal(fs.existsSync(f.db),false);
 }));
 
-test('native HTTP status projection distinguishes a stale policy from a successful edit',()=>use(f=>{
+test('native HTTP status projection distinguishes a stale policy from a successful edit',{skip},()=>use(f=>{
   assert.equal(f.http('consent.set_global','{"expected_revision":0,"confirmation":"skip"}').reply.http_status,200);
   const stale=f.http('consent.reset','{"expected_revision":0}');assert.equal(stale.status,1);assert.equal(stale.reply.http_status,409);
   assert.equal(stale.reply.code,'consent-revision-conflict');assert.equal(f.http('consent.get','{}').reply.data.global,'skip');
 }));
 
-test('concurrent native helpers cannot both commit the same policy revision',async()=>{
+test('concurrent native helpers cannot both commit the same policy revision',{skip},async()=>{
   const f=fixture();
   try{
     assert.equal(f.request('consent.get').ok,true);
