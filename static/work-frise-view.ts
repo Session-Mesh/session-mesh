@@ -30,7 +30,7 @@ function statusText(ctx: ViewContext, status: string): string {
 
 function bar(ctx: ViewContext, frise: Frise, row: FriseRow): HTMLElement | null {
   if (row.start === null || row.end === null) return null;
-  const node = el('span', `work-bar-span work-bar-fill ${friseBarStyle(row.task.status).cls}`);
+  const node = el('span', `work-bar-span ${friseBarStyle(row.task.status).cls}`);
   const name = ctx.t('work.frise.barStatus', { status: statusText(ctx, row.task.status) });
   setAttributes(node, { role: 'img', 'aria-label': name, title: name });
   const left = axisPercent(frise, row.start), right = axisPercent(frise, row.end);
@@ -87,7 +87,7 @@ function statusLegend(ctx: ViewContext): HTMLElement {
   const list = el('ul', 'work-frise-status-legend');
   list.setAttribute('aria-label', ctx.t('work.frise.legendStatus'));
   for (const status of FRISE_LEGEND_STATUSES) {
-    const swatch = el('span', `work-bar-swatch work-bar-fill ${friseBarStyle(status).cls}`);
+    const swatch = el('span', `work-bar-swatch ${friseBarStyle(status).cls}`);
     swatch.setAttribute('aria-hidden', 'true');
     const item = el('li', `work-frise-status work-frise-status-${status}`, swatch, statusText(ctx, status));
     list.append(item);

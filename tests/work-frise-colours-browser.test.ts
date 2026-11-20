@@ -85,6 +85,44 @@ async function openTimeline(locale: string, width: number, theme: string): Promi
   return page;
 }
 
+/** The project header's progress fill shares .work-bar-fill with nothing of the timeline: it keeps --accent. */
+function headerProgress(page: Page): Promise<{ fill: string | null; accent: string }> {
+  return page.evaluate(() => {
+    const fill = document.querySelector<HTMLElement>('#work-root .work-project-head .work-progress .work-bar-fill');
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--accent)';
+    document.body.append(probe);
+    const accent = getComputedStyle(probe).color;
+    probe.remove();
+    return { fill: fill ? getComputedStyle(fill).backgroundColor : null, accent };
+  });
+}
+
+/** The contrast of each legend word against the first opaque background behind it (WCAG 1.4.3 asks 4.5:1). */
+function legendContrasts(page: Page): Promise<number[]> {
+  return page.evaluate(() => {
+    const rgb = (value: string): number[] => (value.match(/[\d.]+/g) ?? []).map(Number);
+    const backdrop = (node: Element | null): number[] => {
+      for (let item = node; item; item = item.parentElement) {
+        const channels = rgb(getComputedStyle(item).backgroundColor);
+        if (channels.length === 3 || (channels.length === 4 && channels[3]! > 0)) return channels.slice(0, 3);
+      }
+      return [255, 255, 255];
+    };
+    const luminance = (channels: number[]): number => {
+      const [red, green, blue] = channels.map(channel => {
+        const share = channel / 255;
+        return share <= 0.03928 ? share / 12.92 : ((share + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
+    };
+    return [...document.querySelectorAll('.work-frise-status-legend li')].map(item => {
+      const fore = luminance(rgb(getComputedStyle(item).color).slice(0, 3)), back = luminance(backdrop(item));
+      return (Math.max(fore, back) + 0.05) / (Math.min(fore, back) + 0.05);
+    });
+  });
+}
+
 for (const width of WIDTHS) {
   for (const theme of THEMES) {
     describe(`Timeline status colours at ${width}px in ${theme}`, { skip }, () => {
@@ -130,6 +168,11 @@ for (const width of WIDTHS) {
         const swatches = await page.locator('.work-frise-status-legend .work-bar-swatch').evaluateAll(nodes =>
           nodes.map(node => getComputedStyle(node).backgroundColor + '|' + getComputedStyle(node).borderTopColor + '|' + getComputedStyle(node).backgroundImage));
         assert.equal(new Set(swatches).size, 6, 'the six swatches look different');
+        const progress = await headerProgress(page);
+        assert.equal(progress.fill, progress.accent, 'the header progress fill keeps --accent');
+        const ratios = await legendContrasts(page);
+        assert.equal(ratios.length, 6);
+        for (const ratio of ratios) assert.ok(ratio >= 4.5, `legend text contrast ${ratio.toFixed(2)} is at least 4.5:1`);
         const overflow = await page.evaluate(() => ({
           page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           wide: [...document.querySelectorAll<HTMLElement>('#work-root *')].filter(node => node.getBoundingClientRect().right > innerWidth + 1)
