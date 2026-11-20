@@ -269,6 +269,7 @@ class WorkView implements WorkViewController {
   private async backToEntry(): Promise<void> {
     if (!this.entry) return this.loadEntry();
     this.close();
+    this.controller = new AbortController();   // close() aborted the project's signal; the questions read needs a live one
     const from = this.project?.id;
     this.project = null; this.selected = null;
     this.renderEntryScreen();

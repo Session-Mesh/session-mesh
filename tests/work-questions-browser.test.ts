@@ -222,9 +222,15 @@ describe('open questions in the Projects view', { skip }, () => {
     await page.locator(`.work-entry-questions .work-qcard-about[data-task="${TASK}"]`).first().click();
     await page.locator('.work-detail-pane .work-detail-heading', { hasText: 'Questions task' }).waitFor();
     assert.equal(await page.locator('#work-tab-questions').getAttribute('aria-selected'), 'true');
-    // Back to the entry screen: the list is read again.
+    // Back to the entry screen: the list is read again, and shows questions, not an error.
+    const reread = page.waitForResponse(response => response.url().endsWith('/api/work/v1')
+      && response.request().postData()?.includes('"op":"resume"') === true, { timeout: 30_000 });
     await page.locator('.work-back').click();
-    await page.locator('.work-entry-questions').waitFor();
+    await reread;
+    await page.waitForTimeout(500);   // the list is redrawn right after the response
+    await page.locator('.work-entry-questions .work-qcard').first().waitFor();
+    assert.equal(await page.locator('.work-entry-questions .work-error').count(), 0);
+    assert.notEqual(await badge(page), null, 'the badge is still shown');
   });
 
   test('at phone width the list and the tab fit, the phone menu shows the badge, and an answer works', { timeout: 900_000 }, async () => {
