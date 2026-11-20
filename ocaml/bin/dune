@@ -27,3 +27,15 @@
  (public_name mesh-logout-all)
  (modules mesh_logout_all_main)
  (libraries mesh_logout_all unix))
+
+(executable
+ (name mesh_profile_main)
+ (public_name mesh-profile)
+ (modules mesh_profile_main)
+ (libraries
+  mesh_backend_profile
+  mesh_backend_consent
+  mesh_backend_store
+  mesh_cli
+  yojson
+  unix))
