@@ -142,11 +142,46 @@ describe('GET /api/dirs without a work folder restriction', () => {
     assert.deepEqual(listed, [mesh.home, path.join(mesh.home, 'dev', 'one')]);
   });
 
+  test('a folder a session starts in is recorded only when GET /api/dirs could list it; one stored earlier is not offered', async () => {
+    const ssh = path.join(mesh.home, '.ssh');
+    const one = path.join(mesh.home, 'dev', 'one');
+    assert.equal((await start(mesh, ssh)).status, 200, mesh.output());
+    assert.equal((await start(mesh, mesh.outside)).status, 200, mesh.output());
+    assert.equal((await start(mesh, one)).status, 200, mesh.output());
+    const stored = JSON.parse(fs.readFileSync(path.join(mesh.confDir, 'settings.json'), 'utf8')) as {recent_folders: string[]};
+    assert.deepEqual(stored.recent_folders, [one], 'neither the protected folder nor the one outside home is recorded');
+    fs.writeFileSync(path.join(mesh.confDir, 'settings.json'), JSON.stringify({v: 1, recent_folders: [ssh, mesh.outside, one]}));
+    assert.deepEqual(await recent(mesh), [one], 'a hand-written or older entry is filtered when read back');
+    fs.rmSync(path.join(mesh.confDir, 'settings.json'));
+  });
+
   test('POST /api/dirs/recent keeps only what GET /api/dirs could list: in the home folder, not protected', async () => {
     const response = await importRecent(mesh, {folders: [mesh.outside, path.join(mesh.home, '.ssh'), mesh.confDir,
       path.join(mesh.home, 'dev', 'keys'), path.join(mesh.home, 'dev', 'escape'), path.join(mesh.home, 'dev', 'one')]});
     assert.equal(response.status, 200, await response.clone().text());
     assert.deepEqual(await recent(mesh), [path.join(mesh.home, 'dev', 'one')]);
+  });
+});
+
+describe('GET /api/dirs when one entry of a folder cannot be examined', () => {
+  let mesh: ConfigMesh;
+  let locked: string;
+  before(async () => {
+    mesh = await ConfigMesh.start('ndl-', null);
+    const dev = path.join(mesh.home, 'dev');
+    mkdirs(dev, ['one', 'two', 'locked/inner']);
+    locked = path.join(dev, 'locked');
+    fs.symlinkSync(path.join(dev, 'loop'), path.join(dev, 'loop'));            // points at itself: ELOOP
+    fs.symlinkSync(path.join(locked, 'inner'), path.join(dev, 'via-locked'));  // into a folder that cannot be entered
+    fs.chmodSync(locked, 0);
+  });
+  after(async () => { fs.chmodSync(locked, 0o700); await mesh?.stop(); });
+
+  test('only the bad entries are left out: the good siblings are still listed', async () => {
+    const listed = await dirs(mesh) as string[];
+    const dev = path.join(mesh.home, 'dev');
+    for (const wanted of [path.join(dev, 'one'), path.join(dev, 'two')]) assert.ok(listed.includes(wanted), `${wanted} in ${JSON.stringify(listed)}`);
+    for (const refused of [path.join(dev, 'loop'), path.join(dev, 'via-locked')]) assert.ok(!listed.includes(refused), refused);
   });
 });
 
@@ -234,9 +269,10 @@ describe('the recent folders of the runner', () => {
   });
 
   test('a hand-edited file: the entries that are not plain absolute paths are dropped, the rest kept, at most 8', async () => {
-    const kept = Array.from({length: 10}, (_, i) => `/kept/${i}`);
+    mkdirs(work, Array.from({length: 10}, (_, i) => `kept${i}`));
+    const kept = Array.from({length: 10}, (_, i) => path.join(work, `kept${i}`));
     fs.writeFileSync(settingsFile(), JSON.stringify({v: 1, operator_name: 'Ana',
-      recent_folders: ['rel', '/a\u0000b', '/a‮b', 5, null, '/x/../y', '/x/', '/kept/0', ...kept]}));
+      recent_folders: ['rel', '/a\u0000b', '/a‮b', 5, null, '/x/../y', '/x/', kept[0], ...kept]}));
     const runner = (await mesh.config()).runner_settings as Runner;
     assert.deepEqual(runner.values, {operator_name: 'Ana', recent_folders: kept.slice(0, 8)});
     fs.writeFileSync(settingsFile(), JSON.stringify({v: 1, operator_name: 'Ana', recent_folders: 'x'}));
