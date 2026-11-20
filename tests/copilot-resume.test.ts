@@ -187,14 +187,20 @@ print(json.dumps(agentmcp.copilot_args(reach={"MESH_PORT": "7701", "MESH_CONF_DI
 `, {MESH_BIN_DIR: path.join(REPO, 'bin')}) as string[];
     // No bridge in bin/ of the checkout: only the plugin is added.
     assert.deepEqual(args, ['--plugin-dir', path.join(REPO, 'copilot-mesh-plugin')]);
-    const withBridge = python(`
-import json, os, tempfile, agentmcp
-d = tempfile.mkdtemp()
-b = os.path.join(d, "mesh-board-mcp")
-open(b, "w").write("#!/bin/sh\\n"); os.chmod(b, 0o755)
-agentmcp.BOARD_MCP = b
+    // A bin directory that holds the bridge and no work-mcp. Without MESH_BIN_DIR, agentmcp looks for
+    // work-mcp in the opam switch (the checkout's _opam on the macOS CI job, which installs it there), so
+    // the tracker entry would depend on the host. That entry is covered by tests/work-mcp-injection.test.ts.
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-bin-'));
+    let withBridge: string[];
+    try {
+      fs.writeFileSync(path.join(bin, 'mesh-board-mcp'), '#!/bin/sh\n', {mode: 0o755});
+      withBridge = python(`
+import json, agentmcp
 print(json.dumps(agentmcp.copilot_args(reach={"MESH_PORT": "7701", "MESH_CONF_DIR": "/c"})))
-`) as string[];
+`, {MESH_BIN_DIR: bin}) as string[];
+    } finally {
+      fs.rmSync(bin, {recursive: true, force: true});
+    }
     assert.equal(withBridge[0], '--additional-mcp-config');
     const config = JSON.parse(withBridge[1]);
     assert.deepEqual(Object.keys(config.mcpServers), ['mesh-board']);
