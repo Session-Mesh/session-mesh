@@ -1470,20 +1470,33 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .vpad { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .dot.pending { animation: none; } }
 
+#dlg-compose .row { flex-wrap: wrap; }
+/* Blur cancellation must not move a close button between pointer down and up. */
+#dictation-status { overflow-wrap: anywhere; min-height: 3em; }
+#dlg-compose .dictation-auto { display: flex; align-items: baseline; gap: .5em; overflow-wrap: anywhere; }
+#dlg-compose #dictation-auto-send { width: auto; flex: none; margin: 0; padding: 0; }
+#dictation-auto-warning, #dictation-preference-status { overflow-wrap: anywhere; }
+#compose-mic { touch-action: none; user-select: none; -webkit-user-select: none; min-height: 44px; min-width: 44px; }
+#compose-mic[aria-disabled="true"] { opacity: .55; }
+#compose-mic[aria-pressed="true"] { outline: 2px solid var(--accent); }
 .p-native-mic { touch-action: none; user-select: none; -webkit-user-select: none; min-width: 44px; min-height: 44px; flex: none; }
 .p-native-mic[aria-disabled="true"] { opacity: .55; }
 .p-native-mic[aria-pressed="true"] { outline: 2px solid var(--accent); color: var(--accent); }
 .p-inline-dictation-status { margin: 0; padding: 3px 8px; min-height: 1.5em; font-size: .8rem; overflow-wrap: anywhere; color: var(--mute); }
 .p-inline-dictation-status[data-state="recording"] { color: var(--accent); }
+.dictation-row { padding: 8px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.dictation-row pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .dictation-label { font-size: .85em; overflow-wrap: anywhere; }
+#dictation-jobs { flex: none; max-height: 30vh; overflow: auto; background: var(--panel); }
+#dictation-jobs pre { max-height: 6em; overflow: auto; }
 .p-dictation { max-width: min(35vw, 14em); white-space: normal; }
 .dictation-encoder { position: fixed; left: -10000px; top: 0; width: 800px; height: 40px; pointer-events: none; }
-.dictation-label[data-state="processing"]::before {
+.dictation-label[data-state="processing"]::before, #dictation-status[data-state="processing"]::before {
   content: ""; display: inline-block; width: .7em; height: .7em; margin-right: .4em;
   border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
   animation: dictation-spin 1s linear infinite;
 }
 @keyframes dictation-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .dictation-label[data-state="processing"]::before { animation: none; }
+  .dictation-label[data-state="processing"]::before, #dictation-status[data-state="processing"]::before { animation: none; }
 }

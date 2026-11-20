@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-import {type CapturedTarget, type HumanInputLease, type HumanInputAttempt, type PasteResult} from './pane-actions.ts';
+import {createPasteDelivery, type CapturedTarget, type HumanInputLease, type HumanInputAttempt, type PasteResult} from './pane-actions.ts';
 import type {DictationChannel} from './dictation.ts';
 import type {DictationMode} from './terminal-mode.ts';
 import {hasDictationControls} from '../shared/dictation-text.ts';
@@ -60,8 +60,47 @@ export function createDictationChannel(p: OriginalChannelPorts): DictationChanne
   try {
     releaseLease = p.lease.retain(); encoder = p.encoder();
     const resources: ChannelResources = {encoder, listen(callback) {data = encoder!.onData(callback);}, release};
-    return createNativeInsertionChannel(p, resources);
+    return p.insertionOnly ? createNativeInsertionChannel(p, resources) : createComposeChannel(p, resources);
   } catch (error) {release(); throw error;}
+}
+function createComposeChannel(p: OriginalChannelPorts, resources: ChannelResources): DictationChannel {
+  let released = false, generation = 0;
+  let native: HumanInputAttempt | null = null;
+  const mode = p.mode;
+  const captureRevision = p.lease.revision;
+  const encoder = resources.encoder, identity = {}, connection = {ws: p.socket, closed: false, initializing: false};
+  let attemptValid = (): boolean => true;
+  let preparedMode: boolean | null = null;
+  const valid = (): boolean => !released && mode.valid && p.valid() && (native ? native.valid() : !p.lease.inputDirty) && attemptValid();
+  const delivery = createPasteDelivery({
+    valid: () => valid(), connection: () => connection, open: () => valid(),
+    paste: (_pane, text) => encoder.paste(text), encode: text => new TextEncoder().encode(text),
+    send: (_pane, _socket, bytes, complete) => valid() && !!native?.write(bytes, complete, p.transport),
+    schedule: callback => {setTimeout(callback, 60);},
+  });
+  resources.listen(frame => delivery.onData(identity, frame, () => {}));
+  return {
+    valid,
+    captureFresh: () => valid() && p.lease.revision === captureRevision,
+    claim() {native = p.lease.claim(); return !!native && valid();},
+    release() {
+      if (released) return;
+      released = true; generation++; resources.release();
+    },
+    deliver(text, done, guard) {
+      const current = ++generation;
+      preparedMode = null;
+      attemptValid = () => current === generation && guard() && (preparedMode === null || mode.value === preparedMode);
+      prepareEncoder({encoder, mode: () => mode.value, valid, refused: () => done({kind: 'refused'}),
+        ready(seeded) {
+          preparedMode = seeded;
+          const binding = delivery.capture(identity, p.target);
+          if (!binding || !valid()) {done({kind: 'refused'}); return;}
+          delivery.deliver(binding, text, true, done);
+        },
+      });
+    },
+  };
 }
 
 function createNativeInsertionChannel(p: OriginalChannelPorts, resources: ChannelResources): DictationChannel {

@@ -27,7 +27,7 @@ function requireLocalMesh() {
 function requestLocal(...args) {
   requireLocalMesh();
   if (args[0] === "/api/logout" || args[0] === "/api/logout-all") {
-    meshPageFinal = true;
+    meshPageFinal = true; dictation?.dispose();
     inlineDictation?.dispose(); inlineDictationView?.cancel();
   }
   return fetch(...args);
@@ -2461,6 +2461,10 @@ class Pane {
     if (this.focusReported === true) this.reportFocus(false);
     this.focusReported = null; this.heldFocusIn = false;
     cancelInlineCapture(this);
+    if (composeOwner?.target.pane === this) {
+      const session = composeDictationSession();
+      if (session) dictation?.detach(session);
+    }
     this.cancelReplayInput(this.conn);
     this.dropReaderAnchor(this.conn);
     this.conn.closed = true;
@@ -3864,8 +3868,8 @@ function itemHtml(s, opts = {}) {
   // what needs me shows what the agent said or asks; otherwise the last prompt
   const preview = mine ? a.said || a.last : a?.last;
   const nativeVoice = s.kind === "mesh" && inlineDictation?.peekSession(s.name, s.created);
-  const voice = nativeVoice;
-  const voiceLabel = voice ? inlineStateLabel(voice) : "";
+  const voice = nativeVoice?.outstanding ? nativeVoice : s.kind === "mesh" && dictation?.peekSession(s.name, s.created);
+  const voiceLabel = nativeVoice?.outstanding ? inlineStateLabel(nativeVoice) : voice ? MeshPaneActions.dictationLabel(voice.state) : "";
   const voiceBadge = voice?.outstanding ? `<span class="dictation-label" data-state="${esc(voice.state)}">${esc(voiceLabel)}</span>` : "";
   const rowBadge = rowSt === "ready" ? "" : `<span class="row-state ${rowSt}">${esc(t(`sessions.row.${rowSt}`))}</span>`;
   const row = `<button class="item ${here ? "sel" : shown ? "shown" : ""}${s.folder ? " in-folder" : ""}${mine ? ` ${st}` : ""}${rowSt === "ready" ? "" : ` row-${rowSt}`}" data-id="${esc(s.id)}"${opts.todo ? "" : drag}>
@@ -4761,6 +4765,7 @@ let pendingClientVersion = "";
 function reloadHolds() {
   const holds = [];
   const add = (kind, label, owner = null) => holds.push({ kind, label, owner });
+  for (const session of dictation?.holds() || []) add("dictation", t("dictation.reloadHold", {session: session.name}), session);
   for (const session of inlineDictation?.holds() || []) add("dictation", t("dictation.reloadHold", {session: session.name}), session);
   if (fieldHoldsText()) add("draft", t("reload.hold.draft"));
   if (linePending) add("line-pending", t("reload.hold.linePending"), linePending);
@@ -5094,6 +5099,7 @@ async function loadLocalInventory(signal, attempt) {
   if (!current()) return { kind: "failed", status: null };
   if (response.status === 401) {
     forgetKnownSessions();
+    dictation?.dispose();
     inlineDictation?.dispose(); inlineDictationView?.cancel();
     location.href = "/login";
     return { kind: "refused" };
@@ -6772,7 +6778,7 @@ function finishUploadRecord(record) {
     const owner = destination.owner;
     if (owner === composeOwner && cdlg.open && owner.acceptsUpload(record.revision)
         && paneTargets.valid(owner.target)) {
-      insertAtCursor(ctext, record.paths + " "); owner.change();
+      insertAtCursor(ctext, record.paths + " "); owner.change(); syncDictationDraft();
       record.inserted = true;
     }
   } else if (record.paths && paneTargets.valid(destination.target)) {
@@ -7211,9 +7217,29 @@ composePending.hidden = true;
 ctext.after(composePending);
 let composeOwner = null;
 const composeRecovery = [], composeUploads = [];
+let dictation = null;
 let inlineDictation = null, inlineDictationView = null;
 const inlineContexts = new WeakMap();
 let dictationInventoryReady = false, dictationInventoryIssue = 0;
+const dictationGlobal = document.createElement("section");
+dictationGlobal.id = "dictation-jobs";
+dictationGlobal.setAttribute("aria-live", "polite");
+$("#side")?.append(dictationGlobal);
+function composeDictationSession(owner = composeOwner) {
+  if (!dictation || !owner || !Number.isFinite(owner.target.created)) return null;
+  return dictation.session(owner.target.name, owner.target.created);
+}
+function syncDictationDraft() {
+  const session = composeDictationSession();
+  if (session && cdlg.open) session.edit(ctext.value);
+}
+const dictationView = MeshPaneActions.createDictationView({
+  controller: () => dictation, session: () => composeDictationSession(), text: ctext,
+  microphone: $("#compose-mic"), status: $("#dictation-status"),
+  discard: $("#dictation-discard"),
+  autoSend: $("#dictation-auto-send"), preferenceStatus: $("#dictation-preference-status"),
+  send: composeSend, insert: composeInsert, global: dictationGlobal, sync: syncDictationDraft,
+});
 function createDictationEncoder() {
   const host = document.createElement("div");
   host.setAttribute("aria-hidden", "true"); host.inert = true;
@@ -7234,9 +7260,67 @@ function createDictationEncoder() {
       try {terminal.dispose();} finally {host.remove();}
     }};
 }
+function dictationCaptureEligible(session) {
+  const owner = composeOwner, pane = owner?.target.pane, connection = pane?.conn;
+  const identity = paneTargets.identity(owner?.target.sessionId);
+  const row = find(owner?.target.sessionId);
+  return !!(localMeshEffectsAllowed() && dictationInventoryReady && owner && paneTargets.valid(owner.target)
+    && owner.open && cdlg.open && !owner.pending && !composeRecovery.length
+    && owner.target.name === session.name && owner.target.created === session.created
+    && identity?.created === session.created && connection?.created === session.created
+    && row && rowAuthoritative(row) && row.agent?.status !== "busy"
+    && !connection.closed && !connection.ended && !connection.replaying && !connection.draining && !connection.replayPending
+    && connection.terminal?.isOpen() && connection.terminal.dictationMode.valid
+    && pane.inputOrigin?.supported && !pane.inputLease?.inputDirty);
+}
+function retainDictationChannel(session) {
+  const owner = composeOwner, pane = owner?.target.pane, connection = pane?.conn;
+  const terminal = connection?.terminal, socket = connection?.ws, lease = pane?.inputLease;
+  if (!owner || owner.target.name !== session.name || owner.target.created !== session.created
+      || !socket || !terminal?.isOpen() || !lease || lease.inputDirty) return null;
+  const releaseTerminal = terminal.retain();
+  if (!releaseTerminal) return null;
+  let released = false;
+  const release = () => {if (!released) {released = true; releaseTerminal();}};
+  let sendRevision = null;
+  try {return MeshPaneActions.createDictationChannel({
+    target: owner.target, socket, lease, release,
+    encoder: createDictationEncoder,
+    mode: terminal.dictationMode,
+    transport: {control: (id, dirty) => terminal.lease(id, dirty), data: (bytes) => terminal.queueInput(bytes)},
+    valid: () => {
+      const identity = paneTargets.identity(owner.target.sessionId);
+      if (!localMeshEffectsAllowed() || !dictationInventoryReady || !terminal.isOpen()
+          || !rowAuthoritative(find(owner.target.sessionId))
+          || connection.ended || connection.ws !== socket || identity?.created !== session.created
+          || identity?.name !== session.name || session.discard || session.sent && session.state !== "delivering") return false;
+      if (session.state === "delivering") {
+        sendRevision ??= session.revision;
+        if (session.revision !== sendRevision) return false;
+      } else if (lease.inputDirty) return false;
+      return true;
+    },
+  });} catch (error) {release(); throw error;}
+}
+function startDictation() {
+  const preferenceKey = `${meshContext.storagePrefix}.dictation-auto-send`;
+  dictation = MeshPaneActions.createDictationController({
+    namespace: `${location.origin}/${meshContext.storagePrefix}`, uuid: () => crypto.randomUUID(),
+    allowed: localMeshEffectsAllowed, media: MeshPaneActions.browserDictationMedia(),
+    eligible: dictationCaptureEligible,
+    preference: {read: () => JSON.parse(localStorage.getItem(preferenceKey) || "false"),
+      write: (enabled) => localStorage.setItem(preferenceKey, JSON.stringify(enabled))},
+    changed: () => {renderComposeStatus(); renderLists(); renderDictationBadges();},
+    retain: retainDictationChannel, request: (path, init) => requestLocal(path, init),
+    schedule: (callback, ms) => setTimeout(callback, ms), unschedule: (id) => clearTimeout(id), now: () => performance.now(),
+  });
+  void dictation.start();
+  startInlineDictation();
+}
 function reportDictationInventory(issue, ready) {
   if (!localMeshEffectsAllowed() || issue < dictationInventoryIssue) return;
   dictationInventoryIssue = issue; dictationInventoryReady = ready;
+  dictationView.render();
   renderInlineDictation();
 }
 function inlinePhoneBusy() {
@@ -7424,9 +7508,9 @@ function renderDictationBadges(onlyPane = null) {
     if (!badge) {badge = document.createElement("span"); badge.className = "p-dictation dictation-label";
       badge.setAttribute("role", "status"); pane.el.querySelector(".p-name").after(badge);}
     const s = find(pane.id), native = s?.kind === "mesh" && inlineDictation?.peekSession(s.name, s.created);
-    const session = native;
+    const session = native?.outstanding ? native : s?.kind === "mesh" && dictation?.peekSession(s.name, s.created);
     badge.hidden = !session?.outstanding; badge.dataset.state = session?.state || "idle";
-    badge.textContent = session ? inlineStateLabel(session) : "";
+    badge.textContent = native?.outstanding ? inlineStateLabel(native) : session ? MeshPaneActions.dictationLabel(session.state) : "";
   }
   renderInlineDictation(onlyPane);
 }
@@ -7447,6 +7531,7 @@ function renderComposeStatus() {
   }
   for (const record of composeRecovery) renderComposeRecovery(record);
   for (const record of composeUploads) renderComposeUpload(record);
+  dictationView.render();
   renderReloadStatus();
 }
 function renderComposeRecovery(record) {
@@ -7474,6 +7559,8 @@ function renderComposeRecovery(record) {
   discard.addEventListener("click", () => {
     const index = composeRecovery.indexOf(record);
     if (index < 0) return;
+    const draft = dictation?.peekSession(record.target.name, record.target.created);
+    if (draft?.text === record.text) draft.edit("");
     composeRecovery.splice(index, 1); renderComposeStatus();
   });
   const transfer = document.createElement("button");
@@ -7547,13 +7634,24 @@ function openCompose(preset = "", fromRecovery = false) {
   if (!target) { flash(t("compose.noTarget")); return false; }
   const binding = paneInput.capture(pane, target);
   if (!binding) { paneTargets.release(target); flash(t("compose.noConnection")); return false; }
-  composeOwner = MeshPaneActions.createComposeOwner(target, binding);
-  ctext.value = preset;
+  const owner = MeshPaneActions.createComposeOwner(target, binding);
+  const draft = composeDictationSession(owner);
+  if (fromRecovery && preset && draft?.text && draft.text !== preset) {
+    if (!confirm(t("compose.recovery.replaceDraftConfirm", {target: target.displayName}))
+        || !localMeshEffectsAllowed() || active !== pane || !paneTargets.valid(target)
+        || pane.conn !== binding.connection || pane.conn?.ws !== binding.socket) {
+      paneTargets.release(target); return false;
+    }
+  }
+  composeOwner = owner;
+  if (draft && preset) draft.edit(preset);
+  ctext.value = draft?.text ?? preset;
   cdlg.append(composeStatus);
   cdlg.showModal(); renderComposeStatus(); ctext.focus(); return true;
 }
 function retireComposeOwner(owner) {
   if (!owner) return;
+  if (composeOwner === owner) {syncDictationDraft(); const s = composeDictationSession(owner); if (s) dictation?.detach(s);}
   owner.close(); owner.operation?.cancel(); paneTargets.release(owner.target);
   if (composeOwner !== owner) return;
   composeOwner = null; ctext.value = ""; renderComposeStatus();
@@ -7561,6 +7659,9 @@ function retireComposeOwner(owner) {
 function sendCompose(submit) {
   if (!localMeshEffectsAllowed()) return;
   const owner = composeOwner, text = ctext.value;
+  syncDictationDraft();
+  const voice = composeDictationSession();
+  if (voice?.outstanding) {if (submit && !dictation.send(voice)) flash(t("dictation.sendUnavailable")); return;}
   if (!owner?.open || !cdlg.open || owner.pending || composeRecovery.length || !text) return;
   const revision = owner.begin();
   if (revision === null) return;
@@ -7571,6 +7672,7 @@ function sendCompose(submit) {
     paneTargets.release(owner.target);
     if (result.kind === (submit ? "submitted" : "paste")) {
       if (stillOpen && composeOwner === owner && ctext.value === text) {
+        composeDictationSession()?.edit(""); ctext.value = "";
         retireComposeOwner(owner); cdlg.close();
       }
     } else {
@@ -7587,7 +7689,7 @@ cdlg.addEventListener("close", () => {
   if (pickerGate.pending?.destination.kind === "compose") adlg.after(pickerStatus);
   renderReloadStatus();
 });
-ctext.addEventListener("input", () => { composeOwner?.change(); });
+ctext.addEventListener("input", () => { composeOwner?.change(); syncDictationDraft(); });
 $("#compose-send").addEventListener("click", () => sendCompose(true));
 $("#compose-insert").addEventListener("click", () => sendCompose(false));
 ctext.addEventListener("paste", (e) => {
@@ -8969,7 +9071,7 @@ async function startMesh(context) {
   tree.hidden = store.get("treeHidden", false);
   document.documentElement.style.setProperty("--side", `${store.get("side", 320)}px`);
   initializeLocalInputTab();
-  startInlineDictation();
+  startDictation();
   sessionRequestTab = sessionRequestTabNonce();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   navigator.serviceWorker?.addEventListener("message", handleLocalServiceWorkerMessage);
@@ -9006,6 +9108,7 @@ function retirePageInput(preserveDraft = false) {
   }
   endDirectLine();
   inlineDictationView?.cancel(); inlineDictation?.hidden();
+  syncDictationDraft(); dictationView.cancel();
   if (capActive && !capActive.file) resetCapture(capActive);
   linePending?.operation?.cancel();
   for (const record of composeUploads) if (record.inserting) record.operation?.cancel();
@@ -9020,6 +9123,7 @@ function disposeLocalPage() {
   projectsGeneration++; workGeneration++;
   projectsController?.close(); workController?.close();
   retirePageInput();
+  dictation?.dispose();
   inlineDictation?.dispose(); inlineDictationView?.dispose();
   inventoryPoller?.stop(); listBatch.cancel(); sessionsStatus.dispose(); pageSignals?.dispose();
   navigator.serviceWorker?.removeEventListener("message", handleLocalServiceWorkerMessage);
@@ -9040,7 +9144,7 @@ function suspendLocalPage() {
   projectsGeneration++; workGeneration++;
   projectsController?.close(); workController?.close();
   inventoryPoller?.stop(); listBatch.cancel(); pageSignals?.dispose();
-  retirePageInput(true);
+  syncDictationDraft(); dictation?.suspendForPageCache(); retirePageInput(true);
   inlineDictation?.suspendForPageCache();
   for (const pane of panes) {
     pane.invalidateActionView(); pane.detach();
@@ -9056,7 +9160,7 @@ async function resumeLocalPage() {
   meshPageCache.focusRevision = meshCacheFocusRevision;
   meshPageSuspended = false;
   void startBackendAccountSettings();
-  renderComposeStatus(); listBatch.request();
+  dictation?.resumeFromPageCache(); renderComposeStatus(); listBatch.request();
   inlineDictation?.resumeFromPageCache(); renderInlineDictation();
   await startInventory(context, true);
   if (!localMeshEffectsAllowed() || meshPageFinal || meshContext !== context || epoch !== meshPageEpoch) return;

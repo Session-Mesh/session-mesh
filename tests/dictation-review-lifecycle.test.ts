@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createDictationChannel} from '../static/dictation-channel.ts';
+import {createDictationController} from '../static/dictation.ts';
 import {createInlineDictationController} from '../static/dictation-inline.ts';
 import {createHumanInputLease} from '../static/pane-actions.ts';
 
@@ -11,7 +12,7 @@ const flush = async () => {for (let i = 0; i < 60; i++) await Promise.resolve();
 function deferred<T>() {let resolve!: (value: T) => void; const promise = new Promise<T>(r => {resolve = r;}); return {promise, resolve};}
 const config = {enabled: true, max_bytes: 1024, capture_seconds: 2};
 
-for (const insertionOnly of [true]) for (const failure of ['retain', 'encoder', 'listener', 'dispose'] as const) {
+for (const insertionOnly of [false, true]) for (const failure of ['retain', 'encoder', 'listener', 'dispose'] as const) {
   test(`${insertionOnly ? 'insertion' : 'compose'} channel rolls back ${failure} failure exactly once`, () => {
     let retained = 0, leaseReleased = 0, released = 0, disposed = 0, listenerDisposed = 0;
     const lease = createHumanInputLease({clientId: 'test-client', control() {}, data() {}});
@@ -49,7 +50,7 @@ function fixture(inline: boolean) {
     request(path: string, init: RequestInit = {}) {calls.push({path, init}); return request(path, init);}, now: () => now,
     schedule(run: () => void, ms: number) {timers.set(++timer, {at: now + ms, run}); return timer;}, unschedule(id: number) {timers.delete(id);}};
   // Both controllers deliberately expose the same capture/recovery gesture surface.
-  const controller: any = createInlineDictationController(ports);
+  const controller: any = inline ? createInlineDictationController(ports) : createDictationController(ports);
   const session = controller.session('A', 1);
   return {controller, session, ports, calls, timers, counts: () => ({permissions, releases, delivered}),
     setRequest(fn: typeof request) {request = fn;},
@@ -64,7 +65,7 @@ function fixture(inline: boolean) {
     }};
 }
 
-for (const inline of [true]) {
+for (const inline of [false, true]) {
   for (const failure of ['retain', 'valid'] as const) test(`${inline ? 'inline' : 'compose'} ${failure} acquisition failure resolves false and permits next press`, async () => {
     const f = fixture(inline), retain = f.ports.retain; await f.controller.start();
     f.ports.retain = () => {
@@ -137,6 +138,36 @@ test('inline discovery of a previously unknown job does not renew its local reco
   } finally {f.controller.dispose(); late.resolve(Response.json({})); await flush();}
 });
 
+for (const stall of ['headers', 'body'] as const) {
+  test(`compose ${stall} deadline clears busy and reconciles same ID without audio replay`, async () => {
+    const f = fixture(false), late = deferred<any>(); let signal: AbortSignal | null | undefined;
+    let uploadId: string | null = null;
+    await f.controller.start();
+    f.setRequest(async (path, init) => {
+      if (path !== '/api/transcribe') return Response.json({}, {status: 404});
+      const id = new Headers(init.headers).get('X-Mesh-Request-Id')!;
+      if (uploadId && id !== uploadId) return Response.json(f.job(id, 'queued'));
+      uploadId = id;
+      signal = init.signal;
+      if (stall === 'headers') return late.promise;
+      const r = Response.json({}); r.json = () => late.promise; return r;
+    });
+    await f.record(); const id = f.session.requestId; assert.equal(f.session.busy, true);
+    await f.advance(30000); assert.equal(signal?.aborted, true);
+    assert.equal(f.session.busy, false); assert.equal(f.session.io, 0); assert.equal(f.session.audio, null);
+    await f.advance(1000);
+    const lookups = f.calls.filter(c => c.path.includes('/request/'));
+    assert.ok(lookups.length); assert.ok(lookups.every(c => c.path.endsWith(`/${id}`)));
+    f.controller.discard(f.session); await f.advance(29000);
+    assert.equal(f.session.requestId, null); assert.equal(f.session.audio, null);
+    await f.record(); const fresh = f.session.requestId; assert.notEqual(fresh, id);
+    late.resolve(stall === 'headers' ? Response.json(f.job(id)) : f.job(id)); await flush();
+    assert.equal(f.session.requestId, fresh); assert.equal(f.session.text, ''); assert.equal(f.counts().delivered, 0);
+    assert.equal(f.session.state, 'queued');
+    assert.equal(f.calls.filter(c => c.path === '/api/transcribe').length, 2); f.controller.dispose();
+  });
+}
+
 for (const stall of ['headers', 'body'] as const) test(`inline resumes interrupted configuration ${stall} but ignores its old response`, async () => {
   const f = fixture(true), old = deferred<any>(); let configs = 0;
   f.setRequest(async () => {
@@ -152,7 +183,42 @@ for (const stall of ['headers', 'body'] as const) test(`inline resumes interrupt
   assert.equal(configs, 2, 'already loaded configuration is retained'); f.controller.dispose();
 });
 
-for (const inline of [true]) test(`${inline ? 'inline' : 'compose'} local abandonment aborts an old read and stops background retries`, async () => {
+for (const operation of ['config', 'status', 'cancel', 'settle', 'preflight'] as const) for (const stall of ['headers', 'body'] as const) {
+  test(`compose bounds ${operation} ${stall} even when the transport ignores abort`, async () => {
+    const f = fixture(false), late = deferred<any>(); let stallNow = operation === 'config';
+    f.setRequest(async path => {
+      if (stallNow) {
+        if (stall === 'headers') return late.promise;
+        const r = Response.json({}); r.json = () => late.promise; return r;
+      }
+      if (path.endsWith('/config')) return Response.json(config);
+      return Response.json(f.job(undefined, operation === 'status' || operation === 'cancel' ? 'queued' : 'ready'));
+    });
+    if (operation === 'config') {
+      const start = f.controller.start(); await flush(); await f.advance(30000); await start;
+      assert.equal(f.controller.reason(f.session), 'unavailable');
+    } else {
+      await f.controller.start(); await f.record();
+      let pending: Promise<void> | null = null;
+      if (operation === 'status') {stallNow = true; pending = f.controller.reconcile(f.session);}
+      if (operation === 'cancel') {stallNow = true; f.controller.discard(f.session);}
+      if (operation === 'preflight') {stallNow = true; assert.equal(f.controller.send(f.session), true);}
+      if (operation === 'settle') {
+        const request = f.ports.request;
+        f.ports.request = (path, init) => {if (path.endsWith('/settle')) stallNow = true; return request(path, init);};
+        assert.equal(f.controller.send(f.session), true); await flush();
+      }
+      await f.advance(30000); await pending;
+      assert.equal(f.session.busy, false); assert.equal(f.session.io, 0);
+      assert.notEqual(f.session.state, 'delivering');
+    }
+    assert.equal(f.counts().delivered, operation === 'settle' ? 1 : 0);
+    f.controller.dispose(); late.resolve(stall === 'headers' ? Response.json(f.job()) : f.job()); await flush();
+    assert.equal(f.counts().delivered, operation === 'settle' ? 1 : 0);
+  });
+}
+
+for (const inline of [false, true]) test(`${inline ? 'inline' : 'compose'} local abandonment aborts an old read and stops background retries`, async () => {
   const f = fixture(inline), late = deferred<Response>(); let signal: AbortSignal | null | undefined;
   await f.controller.start();
   f.setRequest(async (path, init) => {
@@ -171,7 +237,32 @@ for (const inline of [true]) test(`${inline ? 'inline' : 'compose'} local abando
   assert.equal(f.session.requestId, fresh); assert.equal(f.counts().delivered, 0); f.controller.dispose();
 });
 
-for (const inline of [true]) test(`${inline ? 'inline' : 'compose'} upload time does not consume confirmed admission budget`, async () => {
+for (const status of [404, 503]) test(`submitted compose settlement ${status} retires locally without replay or newer draft loss`, async () => {
+  const f = fixture(false); await f.controller.start();
+  f.setRequest(async path => path.endsWith('/settle') ? Response.json({}, {status}) : Response.json(f.job()));
+  await f.record(); assert.equal(f.controller.send(f.session), true); await flush();
+  assert.equal(f.counts().delivered, 1); f.session.edit('newer user draft');
+  await f.advance(31000);
+  assert.equal(f.session.requestId, null); assert.equal(f.session.outstanding, false);
+  assert.equal(f.session.text, 'newer user draft'); assert.equal(f.counts().delivered, 1);
+  const requests = f.calls.length; await f.advance(120000); assert.equal(f.calls.length, requests);
+  f.controller.dispose();
+});
+
+test('compose releases its audio reference while preserving uncertain request identity and one upload', async () => {
+  const f = fixture(false); await f.controller.start();
+  f.setRequest(async path => {if (path === '/api/transcribe') throw Error('lost'); return Response.json({}, {status: 404});});
+  await f.record(); const id = f.session.requestId;
+  assert.ok(id); assert.equal(f.session.audio, null);
+  await f.advance(90000);
+  assert.equal(f.session.requestId, id); assert.equal(f.session.audio, null);
+  assert.equal(f.calls.filter(call => call.path === '/api/transcribe').length, 1);
+  const lookups = f.calls.filter(call => call.path.includes('/request/'));
+  assert.ok(lookups.length > 0); assert.ok(lookups.every(call => call.path.endsWith(`/${id}`)));
+  f.controller.dispose();
+});
+
+for (const inline of [false, true]) test(`${inline ? 'inline' : 'compose'} upload time does not consume confirmed admission budget`, async () => {
   const f = fixture(inline), admission = deferred<Response>();
   f.setRequest(async path => {
     if (path.endsWith('/config')) return Response.json({...config, queue_wait_seconds: 1, active_timeout_seconds: 1, result_ttl_seconds: 1});
