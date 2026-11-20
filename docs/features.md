@@ -153,8 +153,10 @@ down arrow. It stays closed when the dialog opens.
 - **Recent folders:** the 8 folders in which the last sessions were started from the dialog, newest
   first, once each. They belong to the runner, not to the browser: every device signed in to it
   sees the same list (`runner_settings` of `GET /api/config`). The server records the folder itself
-  (resolved) when your signed-in browser starts a session with `POST /api/new`; a start with the
-  master token from a script is not recorded. The configuration editor cannot change them. When
+  (resolved) when your signed-in browser starts a session with `POST /api/new`, if `GET /api/dirs`
+  could list it (a start in `/etc` or `~/.ssh`, where the server allows it, is not recorded, and such an
+  entry is not offered if the file holds one); a start with the master token from a script is not
+  recorded. The configuration editor cannot change them. When
   `settings.json` cannot be read whole (not valid JSON, not an object, over 16 KiB, unreadable,
   written by another version), the server leaves it exactly as it is: the session starts all the
   same, the folder is not recorded, and the server log says so. A browser that kept recent folders

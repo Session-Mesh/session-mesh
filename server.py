@@ -1862,12 +1862,21 @@ def _startable_dir(path, home, places):
     return resolved, info.st_mtime
 
 
+def _visible_dir_entry(entry):
+    """A visible entry that is a folder (a symlink followed). One that cannot be examined (a symlink loop, a link
+    into a folder that cannot be entered) is left out alone: it must not hide its siblings."""
+    try:
+        return not entry.name.startswith(".") and entry.is_dir()
+    except (OSError, RuntimeError):
+        return False
+
+
 def _listed_children(parent, home, places, scanned, per_parent):
     """The visible sub-folders of one parent a session may start in, newest first: at most ``per_parent`` of its
     first ``scanned`` entries. A file is left out before anything is resolved (DirEntry.is_dir)."""
     with os.scandir(parent) as entries:
         found = [Path(e.path) for e in itertools.islice(entries, scanned)
-                 if not e.name.startswith(".") and e.is_dir()]
+                 if _visible_dir_entry(e)]
     dirs = [(path, checked[1]) for path in found if (checked := _startable_dir(path, home, places))]
     return [path for path, _ in sorted(dirs, key=lambda entry: -entry[1])[:per_parent]]
 
@@ -1927,9 +1936,9 @@ async def api_dirs_recent(request):
 
 def _record_folder(cwd):
     """The folder a session started in, resolved, first in the runner's recent folders (in a worker thread)."""
-    folder = os.path.realpath(cwd)
-    if launchsettings.plain_folder(folder):
-        launchsettings.add_recent_folders(RUNNER_SETTINGS, [folder], newest=True)
+    usable = _usable_recent_folders([os.path.realpath(cwd)])
+    if usable:
+        launchsettings.add_recent_folders(RUNNER_SETTINGS, usable, newest=True)
 
 
 async def _record_recent_folder(request, cwd):
@@ -4144,8 +4153,11 @@ RUNNER_SETTINGS = CONF_DIR / launchsettings.RUNNER_SETTINGS_FILE
 
 def runner_settings_projection(values=None):
     """The runner settings shared by every device and their bounds: characters of a text (max_length), entries
-    of a list (max_entries)."""
-    return {"values": launchsettings.read_runner_settings(RUNNER_SETTINGS) if values is None else values,
+    of a list (max_entries). The recent folders shown are the ones GET /api/dirs could list (_usable_recent_folders):
+    one recorded before that rule, or no longer startable, is not offered."""
+    values = dict(launchsettings.read_runner_settings(RUNNER_SETTINGS) if values is None else values)
+    values["recent_folders"] = list(dict.fromkeys(_usable_recent_folders(values.get("recent_folders", []))))
+    return {"values": values,
             "max_length": launchsettings.RUNNER_MAX_LENGTH, "max_entries": launchsettings.RUNNER_MAX_ENTRIES}
 
 
