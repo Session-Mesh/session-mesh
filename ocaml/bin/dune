@@ -1,8 +1,14 @@
 (executable
+ (name mesh_artifacts_main)
+ (public_name mesh-artifacts)
+ (modules mesh_artifacts_main)
+ (libraries mesh_artifacts_worker))
+
+(executable
  (name mesh_board_mcp_main)
  (public_name mesh-board-mcp)
  (modules mesh_board_mcp_main)
- (libraries mesh_board_mcp mcp-kit.stdio mcp-kit.trace-plugin mesh_trace_journal)
+ (libraries mesh_board_mcp mesh_artifacts_worker mcp-kit.stdio mcp-kit.trace-plugin mesh_trace_journal)
  (link_flags (:standard -linkall)))
 
 (executable

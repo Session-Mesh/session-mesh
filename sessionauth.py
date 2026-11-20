@@ -75,7 +75,9 @@ TOKEN_ONLY_ROUTES.update({("POST", "/api/session-actions/@self/request"),
                           ("GET", "/api/session-actions/@self/request"),
                           ("GET", "/api/session-actions/@self/accounts")})
 TOKEN_ONLY_ROUTES.update({("GET", "/api/agent-mail/@self/pi-wakes"),
-                          ("POST", "/api/agent-mail/@self/pi-wake-ack")})
+                           ("POST", "/api/agent-mail/@self/pi-wake-ack")})
+ROUTES.add(("POST", "/api/session-artifacts/@self/notes"))
+TOKEN_ONLY_ROUTES.add(("POST", "/api/session-artifacts/@self/notes"))
 
 
 def is_session_request(request):

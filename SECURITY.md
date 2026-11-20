@@ -125,6 +125,15 @@ install.
     its plugin, for Gemini CLI and Mistral Vibe, their hooks (they also report the conversation to resume), or, for Copilot CLI,
     the hooks of the per-session plugin (`mesh-event copilot`);
   - read, replace, restore and open the session's whiteboard and its revisions;
+  - explicitly create/replace Notes content or mint/revoke shares through the configured
+    Notes connector. Mesh derives attribution from the live session token, not tool arguments.
+    Notes requires a separate default-denied operator grant for exact live name/created/nonce
+    and operation. Connector credentials alone never authorize it. Notes tools are injected
+    only in the opt-in mesh-notes namespace, not under existing mesh-board wildcard approvals.
+    Notes receives only its separately configured credential; share links are sensitive
+    capabilities, stored privately and shown only to the authenticated operator. No share
+    is minted implicitly by content creation. Connector mutation timeouts must not be replayed
+    automatically; an upstream mutation can succeed even when local recording fails.
   - create, update, list, open and restore the session's demos;
   - exchange messages with other agents: list peers, send, reply, read its inbox and acknowledge
     (reading a message needs your consent in the page), and, for Pi, receive message notices;

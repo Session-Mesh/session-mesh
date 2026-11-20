@@ -100,6 +100,7 @@ if os.path.isabs(os.environ.get("MESH_MCP_TRACE_PLUGIN", "")):
 # the session name (MESH_SESSION) and a WL_HOME the user set come from the agent's environment.
 WORK_MCP = str(mesh_executable("work-mcp"))
 WORK_SERVER_NAME = "mesh-work"
+NOTES_SERVER_NAME = "mesh-notes"
 WORK_IDENTITY_ENV = ["MESH_SESSION", "WL_HOME"]
 WORK_ENV_VARS = list(WORK_IDENTITY_ENV)
 if os.path.isabs(os.environ.get("MESH_MCP_TRACE_JOURNAL", "")):
@@ -107,7 +108,7 @@ if os.path.isabs(os.environ.get("MESH_MCP_TRACE_JOURNAL", "")):
 # Reserved names.  Whatever a command, a snapshot or a user's configuration defines under one of them, the
 # definition (command, arguments, environment) is Mesh's, and the user's restrictions on it (server turned
 # off, tools disabled, approvals required) are kept.  The recognisers and the removal on resume use this list.
-MESH_SERVER_NAMES = (SERVER_NAME, WORK_SERVER_NAME)
+MESH_SERVER_NAMES = (SERVER_NAME, WORK_SERVER_NAME, NOTES_SERVER_NAME)
 
 # The agent hook model (docs/agent-hooks.md): which native hook of each agent every Mesh consumer is
 # installed on, its timeout, and the project context hook's program, arguments and switch come from this
@@ -205,6 +206,11 @@ def _with_board(kind, reach=None, bridge=None):
     """mesh_servers once the board bridge is known to be installed."""
     servers = [MeshServer(SERVER_NAME, BOARD_MCP if bridge is None else bridge, list(BOARD_MCP_ARGS),
                           dict(reach or {}), CODEX_ENV_VARS, ["MESH_SESSION_TOKEN"])]
+    # Adapter opt-in is not a Notes grant. The server independently checks its
+    # private per-incarnation grants; no board wildcard approval covers this name.
+    if os.environ.get("MESH_NOTES_ADAPTER") == "1":
+        servers.append(MeshServer(NOTES_SERVER_NAME, BOARD_MCP if bridge is None else bridge, ["--notes"],
+                                  dict(reach or {}), CODEX_ENV_VARS, ["MESH_SESSION_TOKEN"]))
     if work_available():
         work_env = {"WL_AGENT": kind}
         if (reach or {}).get("MESH_MCP_TRACE_JOURNAL"):

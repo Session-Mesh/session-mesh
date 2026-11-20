@@ -1499,3 +1499,6 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .restore-rebind label { display: grid; gap: .4rem; margin: 1rem 0; }
 .restore-rebind select { max-width: 100%; }
 .restore-rebind-details { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Session capability references are never embedded or prefetched. */
+.session-artifacts { width: min(42rem, 90vw); max-height: 85vh; overflow: auto; }
+.session-artifacts li { margin-block: 1rem; overflow-wrap: anywhere; }
