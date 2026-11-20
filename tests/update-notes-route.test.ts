@@ -8,11 +8,17 @@
 // only, PNG/JPEG/GIF/WebP up to 5 MiB, redirects inside the same allowlist. The "GitHub" here is a local
 // stand-in (tests/helpers/fake-github.ts) reached through MESH_UPDATE_IMAGE_TEST_HOSTS: nothing leaves the machine.
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {startFakeHost, type FakeHost} from './fake-pty-host.ts';
 import {PNG, startFakeGithub, type FakeGithub} from './helpers/fake-github.ts';
-import {startMesh, type Mesh} from './mesh-server-lib.ts';
+import {REPO, startMesh, type Mesh} from './mesh-server-lib.ts';
+
+// `mesh-platform update-image` checks and fetches the images (ocaml/lib/mesh_update_image.ml): this tree's build,
+// or MESH_MESH_PLATFORM_CMD. Without it the cases that need it are skipped, unless MESH_REQUIRE_UPDATE_IMAGE=1.
+const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD || path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
+const noPlatform = fs.existsSync(PLATFORM) || process.env.MESH_REQUIRE_UPDATE_IMAGE ? false : `no mesh-platform at ${PLATFORM}`;
 
 const GH = 'https://github.com/user-attachments/assets';
 const IMAGES = ['ok', 'moved', 'away', 'plain', 'loop', 'svg', 'html', 'liar', 'huge', 'huge-declared', 'missing']
@@ -39,7 +45,7 @@ let cookie = '';
 before(async () => {
   github = await startFakeGithub();
   // raw.githubusercontent.com is sent to "localhost": a name that resolves to a loopback address, refused after DNS
-  mesh = await startMesh('upd-notes-', {MESH_UPDATE_IMAGE_TEST_HOSTS: [
+  mesh = await startMesh('upd-notes-', {MESH_MESH_PLATFORM_CMD: PLATFORM, MESH_UPDATE_IMAGE_TEST_HOSTS: [
     `github.com=127.0.0.1:${github.port}`, `private-user-images.githubusercontent.com=127.0.0.1:${github.port}`,
     `raw.githubusercontent.com=localhost:${github.port}`].join(',')});
   host = await startFakeHost(path.join(mesh.home, 'run', 'session-mesh', 'ptyhost.sock'), {sessions: [], notes: NOTES});
@@ -91,7 +97,7 @@ describe('GET /api/update/notes', () => {
 });
 
 describe('GET /api/update/image', () => {
-  test('an image of the notes, through the server only', async () => {
+  test('an image of the notes, through the server only', {skip: noPlatform}, async () => {
     const answer = await image(`${GH}/ok`);
     assert.equal(answer.status, 200);
     assert.equal(answer.headers.get('content-type'), 'image/png');
@@ -103,22 +109,22 @@ describe('GET /api/update/image', () => {
     assert.equal(sent, 'session-mesh-update-check - - /user-attachments/assets/ok', 'fixed User-Agent, no cookie, no credential');
   });
 
-  test('an image written in an HTML attribute, with its entities, is one of the notes', async () => {
+  test('an image written in an HTML attribute, with its entities, is one of the notes', {skip: noPlatform}, async () => {
     assert.equal((await image(`${GH}/ok?a=1&b=2`)).status, 200);
   });
 
-  test('a redirect inside the allowlist is followed (GitHub attachments)', async () => {
+  test('a redirect inside the allowlist is followed (GitHub attachments)', {skip: noPlatform}, async () => {
     const answer = await image(`${GH}/moved`);
     assert.equal(answer.status, 200);
     assert.deepEqual(Buffer.from(await answer.arrayBuffer()), PNG);
   });
 
-  test('a redirect out of the allowlist, to plain HTTP, or in a loop is refused', async () => {
+  test('a redirect out of the allowlist, to plain HTTP, or in a loop is refused', {skip: noPlatform}, async () => {
     for (const name of ['away', 'plain', 'loop']) assert.equal((await image(`${GH}/${name}`)).status, 502, name);
     assert.equal(github.requests.filter(line => line.endsWith('/loop')).length, 4, 'three redirects at most');
   });
 
-  test('only PNG, JPEG, GIF or WebP that is what it says, up to 5 MiB', async () => {
+  test('only PNG, JPEG, GIF or WebP that is what it says, up to 5 MiB', {skip: noPlatform}, async () => {
     assert.equal((await image(`${GH}/svg`)).status, 415, 'SVG never');
     assert.equal((await image(`${GH}/html`)).status, 415, 'HTML');
     assert.equal((await image(`${GH}/liar`)).status, 502, 'HTML labelled image/png');
@@ -127,7 +133,7 @@ describe('GET /api/update/image', () => {
     assert.equal((await image(`${GH}/missing`)).status, 502, 'an error answer');
   });
 
-  test('an URL outside the allowlist, or absent from the notes, makes no request', async () => {
+  test('an URL outside the allowlist, or absent from the notes, makes no request', {skip: noPlatform}, async () => {
     const before = github.requests.length;
     for (const url of REFUSED.slice(0, -1)) assert.equal((await image(url)).status, 404, url);
     assert.equal((await image(`${GH}/not-in-the-notes`)).status, 404, 'not in the notes');
@@ -135,7 +141,7 @@ describe('GET /api/update/image', () => {
     assert.equal(github.requests.length, before);
   });
 
-  test('a name that resolves to a private address is refused after DNS', async () => {
+  test('a name that resolves to a private address is refused after DNS', {skip: noPlatform}, async () => {
     const before = github.requests.length;
     assert.equal((await image('https://raw.githubusercontent.com/private/ok')).status, 502);
     assert.equal(github.requests.length, before, 'no connection to the loopback address');
@@ -152,7 +158,7 @@ describe('GET /api/update/image', () => {
     assert.equal(twice.status, 400);
   });
 
-  test('at most 60 fetches in ten minutes, for all browsers together', async () => {
+  test('at most 60 fetches in ten minutes, for all browsers together', {skip: noPlatform}, async () => {
     let refused = 0;
     for (let index = 0; index < 70; index += 1) if ((await image(`${GH}/ok`)).status === 429) refused += 1;
     assert.ok(refused >= 10, `refused ${refused}`);

@@ -35,14 +35,19 @@
    SIGPIPE.
    [update-check] always exits 0 once its options are valid: it prints
    {"status": ...} (see [update_check]), or with --line one English sentence
-   when an update is available and nothing otherwise. *)
+   when an update is available and nothing otherwise.
+   [update-image] reads {"url": ..., "notes": ...} on stdin (the web server's
+   relay of GET /api/update/image) and exits 0 once that input is read: it
+   prints one line {"status": N} or {"status": 200, "type": "image/..."}, then
+   with 200 the image's bytes (Mesh_update_image). Invalid input: status 400. *)
 
 module P = Mesh_platform
 
 let usage =
   "usage: mesh-platform capabilities | runtime-dir | snapshot | process PID | \
    command-line PID | require isolated-agent|demo-sandbox | update-check \
-   [--refresh] [--cache-only] [--line] [--debug] [--release-dir DIR]"
+   [--refresh] [--cache-only] [--line] [--debug] [--release-dir DIR] | \
+   update-image"
 
 let ex_config = 78
 
@@ -290,8 +295,46 @@ let update_check arguments =
       else print_json (R.to_json ~home outcome);
       0
 
+(* The relay's request: at most 1 MiB (the notes are at most 64 KiB). *)
+let image_request () =
+  let limit = 1024 * 1024 in
+  let buffer = Buffer.create 65536 and chunk = Bytes.create 65536 in
+  let rec read () =
+    match In_channel.input stdin chunk 0 (Bytes.length chunk) with
+    | 0 -> ()
+    | count ->
+        Buffer.add_subbytes buffer chunk 0 count;
+        if Buffer.length buffer <= limit then read ()
+  in
+  read ();
+  match Yojson.Safe.from_string (Buffer.contents buffer) with
+  | `Assoc [ ("url", `String url); ("notes", `String notes) ]
+    when Buffer.length buffer <= limit ->
+      Some (url, notes)
+  | _ | (exception Yojson.Json_error _) -> None
+
+let update_image () =
+  let module I = Mesh_update_image in
+  let answer =
+    match image_request () with
+    | Some (url, notes) ->
+        I.answer ~getenv:Sys.getenv_opt ~resolve:I.resolve
+          ~transport:I.run_curl ~clock:Unix.gettimeofday ~url ~notes
+    | None -> { I.status = 400; content_type = ""; body = "" }
+  in
+  let head =
+    ("status", `Int answer.status)
+    :: (if answer.status = 200 then [ ("type", `String answer.content_type) ]
+        else [])
+  in
+  write_from Unix.stdout
+    (Yojson.Safe.to_string (`Assoc head) ^ "\n" ^ answer.body)
+    0;
+  0
+
 let run = function
   | "update-check" :: options -> update_check options
+  | [ "update-image" ] -> update_image ()
   | [ "require"; name ] -> with_feature name (require_feature name)
   | [ "capabilities" ] -> report capabilities_json (Ok (P.capabilities ()))
   | [ "runtime-dir" ] -> runtime_dir_report runtime_dir_json (P.runtime_dir ())

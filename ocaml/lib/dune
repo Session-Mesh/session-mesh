@@ -149,7 +149,12 @@
 (library
  (name mesh_update)
  (wrapped false)
- (modules mesh_update_version mesh_update_check mesh_update_report)
+ (modules
+  mesh_update_version
+  mesh_update_check
+  mesh_update_report
+  mesh_update_image_url
+  mesh_update_image)
  (libraries yojson unix))
 
 ; The PTY host's schedule of that check: one fiber, a bounded Eio child.

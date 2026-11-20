@@ -17,11 +17,15 @@ import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type Page} from 'playwright-core';
 import {startFakeGithub, type FakeGithub} from './helpers/fake-github.ts';
 import {startUpdateHost, NOTES, type UpdateHost} from './helpers/update-host.ts';
-import {startMesh, type Mesh} from './mesh-server-lib.ts';
+import {REPO, startMesh, type Mesh} from './mesh-server-lib.ts';
 import {chromiumLaunchOptions, READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
 
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const skip = !CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM not set' : false;
+// `mesh-platform update-image` fetches the images: this tree's build, or MESH_MESH_PLATFORM_CMD. Without it every
+// image of the notes must become a link, which is then what is checked (MESH_REQUIRE_UPDATE_IMAGE=1: a failure).
+const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD || path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
+const imaging = fs.existsSync(PLATFORM) || Boolean(process.env.MESH_REQUIRE_UPDATE_IMAGE);
 const GH = 'https://github.com/user-attachments/assets';
 
 const BODY = [
@@ -76,7 +80,7 @@ before(async () => {
   if (skip) return;
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'upd-notes-'));
   github = await startFakeGithub();
-  mesh = await startMesh('upd-notes-b-', {MESH_UPDATE_IMAGE_TEST_HOSTS: `github.com=127.0.0.1:${github.port}`});
+  mesh = await startMesh('upd-notes-b-', {MESH_MESH_PLATFORM_CMD: PLATFORM, MESH_UPDATE_IMAGE_TEST_HOSTS: `github.com=127.0.0.1:${github.port}`});
   host = startUpdateHost(mesh, {release: true, curl: answeringCurl()});
   for (let attempt = 0; attempt < 200 && (await listing()).update?.notes !== true; attempt += 1) {
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -139,19 +143,23 @@ describe('update notes panel', {skip}, () => {
     assert.equal(await body.locator('h2').first().innerText(), 'Highlights');
     assert.equal(await body.locator('table td').nth(3).innerText(), 'best effort');
     assert.equal((await body.locator('pre code').innerText()).trim(), 'mesh doctor --json');
-    const picture = body.getByRole('img', {name: 'A diagram of the relay'});
-    assert.match(await picture.getAttribute('src') ?? '', /^\/api\/update\/image\?url=https%3A%2F%2Fgithub\.com%2F/);
-    await page.waitForFunction(() => {
-      const image = document.querySelector<HTMLImageElement>('.update-notes-markdown img[alt="A diagram of the relay"]');
-      return image?.complete && image.naturalWidth === 1;
-    });
+    if (imaging) {
+      const picture = body.getByRole('img', {name: 'A diagram of the relay'});
+      assert.match(await picture.getAttribute('src') ?? '', /^\/api\/update\/image\?url=https%3A%2F%2Fgithub\.com%2F/);
+      await page.waitForFunction(() => {
+        const image = document.querySelector<HTMLImageElement>('.update-notes-markdown img[alt="A diagram of the relay"]');
+        return image?.complete && image.naturalWidth === 1;
+      });
+    }
     const pull = body.getByRole('link', {name: 'the pull request'});
     assert.equal(await pull.getAttribute('target'), '_blank');
     assert.equal(await pull.getAttribute('rel'), 'noopener noreferrer');
     // the hostile parts: nothing ran, nothing was asked of another origin, nothing reached the interface
     // (the images load lazily: bring each one into view)
     for (const shown of await body.locator('img').all()) await shown.scrollIntoViewIfNeeded();
-    await page.waitForFunction(() => document.querySelectorAll('.update-notes-markdown .update-notes-image').length === 3);
+    const fallbacks = [...(imaging ? [] : ['A diagram of the relay']), 'vector', 'a huge picture', 'a tracker'];
+    await page.waitForFunction(count => document.querySelectorAll('.update-notes-markdown .update-notes-image').length === count,
+      fallbacks.length);
     assert.equal(await page.evaluate(() => (window as unknown as {__pwned?: string}).__pwned), undefined);
     assert.ok(inertHandlers.length <= 2, 'at most the two handlers of the notes were seen, blocked');
     assert.equal(await body.locator('script, iframe, form, button, svg, [style], [id], [onerror], [onclick]').count(), 0);
@@ -160,8 +168,8 @@ describe('update notes panel', {skip}, () => {
     assert.equal(await body.locator('a', {hasText: 'an external page'}).getAttribute('href'), 'https://example.com/x');
     assert.equal(await page.locator('[id="update-notice"]').count(), 1, 'no element of the notes takes an id of the page');
     const standIns = body.locator('.update-notes-image');
-    assert.deepEqual(await standIns.allInnerTexts(), ['vector', 'a huge picture', 'a tracker']);
-    assert.equal(await standIns.nth(2).getAttribute('href'), 'https://evil.example/pixel.png', 'a link, never loaded');
+    assert.deepEqual(await standIns.allInnerTexts(), fallbacks);
+    assert.equal(await standIns.last().getAttribute('href'), 'https://evil.example/pixel.png', 'a link, never loaded');
     if (shots) await page.screenshot({path: path.join(shots, 'notes-1440.png')});
     // long notes scroll inside the dialog
     const scroller = dialog.locator('.update-notes-body');
@@ -188,7 +196,7 @@ describe('update notes panel', {skip}, () => {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     assert.ok(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth), 'the dialog does not scroll sideways');
     assert.ok(await dialog.locator('.update-notes-body').evaluate(node => node.scrollHeight > node.clientHeight));
-    await page.waitForFunction(() => (document.querySelector<HTMLImageElement>('.update-notes-markdown img')?.naturalWidth ?? 0) > 0);
+    if (imaging) await page.waitForFunction(() => (document.querySelector<HTMLImageElement>('.update-notes-markdown img')?.naturalWidth ?? 0) > 0);
     if (shots) await page.screenshot({path: path.join(shots, 'notes-390.png')});
     await page.keyboard.press('Escape');
     await dialog.waitFor({state: 'detached'});
