@@ -31,6 +31,13 @@ var import_node_net = require("node:net");
 var import_node_dns = __toESM(require("node:dns"));
 var import_node_stream = require("node:stream");
 var import_promises = require("node:stream/promises");
+
+// shared/dictation-text.ts
+function hasDictationControls(text) {
+  return /[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(text);
+}
+
+// backend/dictation.ts
 var messages = {
   invalid_request: "Invalid dictation request.",
   not_found: "Dictation job not found.",
@@ -94,8 +101,8 @@ function configuration(env) {
     if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0) throw Error(`Invalid Whisper ${key}`);
     return Number(value);
   };
-  const language = env.MESH_WHISPER_LANGUAGE ?? "fr";
-  if (!/^[A-Za-z][A-Za-z0-9-]{0,31}$/.test(language)) throw Error("Invalid Whisper language");
+  const language = env.MESH_WHISPER_LANGUAGE ?? null;
+  if (language !== null && !/^[A-Za-z][A-Za-z0-9-]{0,31}$/.test(language)) throw Error("Invalid Whisper language");
   return { url, public: { enabled: true, language, max_bytes: integer("MAX_BYTES", 8388608), aggregate_bytes: integer("AGGREGATE_BYTES", 67108864), queue_size: integer("QUEUE_SIZE", 16), workers: integer("WORKERS", 1), active_timeout_seconds: integer("TIMEOUT", 60), queue_wait_seconds: integer("QUEUE_TTL", 600), result_ttl_seconds: integer("RESULT_TTL", 1800), capture_seconds: integer("CAPTURE_SECONDS", 120) } };
 }
 function uuid(value) {
@@ -384,23 +391,26 @@ var Dictation = class {
   }
 };
 function normalizeText(value) {
-  if (typeof value !== "string" || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(value)) throw new Fault("upstream_invalid");
-  const text = value.replace(/\r\n?/g, "\n").trim();
+  if (typeof value !== "string") throw new Fault("upstream_invalid");
+  const normalized = value.replace(/\r\n?/g, "\n");
+  if (hasDictationControls(normalized)) throw new Fault("upstream_invalid");
+  const text = normalized.trim();
   if (Buffer.byteLength(text) > 32768) throw new Fault("upstream_invalid");
   if (!text) throw new Fault("empty_transcript");
   return text;
 }
 async function transcribe(config, chunks, m, signal) {
   const boundary = `mesh-${(0, import_node_crypto.randomUUID)()}`, mime = media(m.mime);
+  const language = config.public.language === null ? "" : `--${boundary}\r
+Content-Disposition: form-data; name="language"\r
+\r
+${config.public.language}\r
+`;
   const prefix = Buffer.from(`--${boundary}\r
 Content-Disposition: form-data; name="response_format"\r
 \r
 json\r
---${boundary}\r
-Content-Disposition: form-data; name="language"\r
-\r
-${config.public.language}\r
---${boundary}\r
+${language}--${boundary}\r
 Content-Disposition: form-data; name="file"; filename="audio.${extensions[mime]}"\r
 Content-Type: ${mime}\r
 \r

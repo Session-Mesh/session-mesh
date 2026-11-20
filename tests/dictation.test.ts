@@ -8,6 +8,7 @@ import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createServer} from 'node:http';
 import {Dictation, configuration, Fault, transcribe, normalizeText, PREPARATION_MS} from '../backend/dictation.ts';
+import {hasDictationControls} from '../shared/dictation-text.ts';
 
 const config = (extra = {}) => configuration({MESH_WHISPER_URL: 'http://127.0.0.1:1/transcribe', ...extra})!;
 const meta = (session = 'alpha', extra = {}) => ({principal: 'owner', client: randomUUID(), request: randomUUID(), session, created: 1, mime: 'audio/webm;codecs=opus', ...extra});
@@ -29,7 +30,9 @@ test('standalone dictation worker is part of the application closure', () => {
 test('configuration is exact, disabled independently of invalid limits; enabled configuration fails closed', () => {
   assert.equal(configuration({MESH_WHISPER_WORKERS: 'bad'}), null);
   const c = config();
-  assert.deepEqual(c.public, {enabled:true, language:'fr', max_bytes:8388608, aggregate_bytes:67108864, queue_size:16, workers:1, active_timeout_seconds:60, queue_wait_seconds:600, result_ttl_seconds:1800, capture_seconds:120});
+  assert.deepEqual(c.public, {enabled:true, language:null, max_bytes:8388608, aggregate_bytes:67108864, queue_size:16, workers:1, active_timeout_seconds:60, queue_wait_seconds:600, result_ttl_seconds:1800, capture_seconds:120});
+  assert.equal(config({MESH_WHISPER_LANGUAGE:'fr'}).public.language,'fr');
+  assert.throws(()=>config({MESH_WHISPER_LANGUAGE:''}));
   for (const value of ['0', '-1', '1.5', 'NaN', 'Infinity', '']) assert.throws(() => config({MESH_WHISPER_WORKERS:value}));
   for (const value of ['file:///tmp/a', 'http://user:secret@localhost/', 'http://localhost/#x']) assert.throws(() => config({MESH_WHISPER_URL:value}));
 });
@@ -216,6 +219,41 @@ test('text normalization rejects control sequences, invalid/empty and oversized 
   assert.equal(normalizeText(' '.repeat(40000)+'ok'),'ok');
   for(const value of ['\0','\x1b[31m','\x7f','\x85','x'.repeat(32769)])assert.throws(()=>normalizeText(value),code('upstream_invalid'));
   assert.throws(()=>normalizeText('  '),code('empty_transcript'));
+  assert.equal(normalizeText('é'.repeat(16384)),'é'.repeat(16384));
+  assert.throws(()=>normalizeText('é'.repeat(16385)),code('upstream_invalid'));
+  assert.throws(()=>normalizeText(null),code('upstream_invalid'));
+  assert.throws(()=>normalizeText('\r\n \t'),code('empty_transcript'));
+});
+
+test('shared dictation filter rejects every C0 except TAB/LF and every DEL/C1 control',()=>{
+  assert.equal(hasDictationControls('speech\tmore\nété'),false);
+  for(let point=0;point<=0x9f;point++){
+    if(point>=0x20&&point<0x7f||point===9||point===10)continue;
+    const control=String.fromCharCode(point);
+    assert.equal(hasDictationControls(control),true,`control ${point.toString(16)}`);
+    if(point===13)continue; // The backend normalizes CR before the shared filter.
+    for(const value of [`${control}ok`,`ok${control}`,`a${control}b`]){
+      assert.throws(()=>normalizeText(value),code('upstream_invalid'),`control ${point.toString(16)} cannot be hidden by trim`);
+    }
+  }
+  assert.equal(normalizeText('\r\n a\tb\r\nc\rd \r'),'a\tb\nc\nd');
+});
+
+for(const language of [undefined,'fr'])test(`upstream language ${language??'auto-detect'} multipart contract`,async()=>{
+  let received='';
+  const upstream=createServer(async(req,res)=>{
+    for await(const part of req)received+=part;
+    res.setHeader('Content-Type','application/json');res.end('{"text":"ok"}');
+  });
+  await new Promise<void>(resolve=>upstream.listen(0,'127.0.0.1',resolve));
+  try{
+    const c=config({MESH_WHISPER_URL:`http://127.0.0.1:${(upstream.address() as any).port}/fixed`,MESH_WHISPER_LANGUAGE:language});
+    assert.equal(c.public.language,language??null);
+    assert.equal(await transcribe(c,[Buffer.from('audio')],meta(),new AbortController().signal),'ok');
+    assert.equal((received.match(/; name="/g)||[]).length,language?3:2);
+    if(language)assert.match(received,/name="language"\r\n\r\nfr\r\n/);
+    else assert.doesNotMatch(received,/name="language"|\r\nnull\r\n/);
+  }finally{upstream.closeAllConnections();await new Promise<void>(resolve=>upstream.close(()=>resolve()));}
 });
 
 test('receiving cancel cannot resurrect retained bytes or lose its request tombstone',async()=>{
@@ -342,7 +380,7 @@ test('fixed upstream multipart whitelist, no redirects, bounded JSON/status/time
     res.end(mode==='large'?'x'.repeat(65537):mode==='bad'?'{':JSON.stringify({text:' bonjour '}));
   });
   await new Promise<void>(r=>upstream.listen(0,'127.0.0.1',r));
-  const c=config({MESH_WHISPER_URL:`http://127.0.0.1:${(upstream.address() as any).port}/fixed`,MESH_WHISPER_TIMEOUT:'1'});
+  const c=config({MESH_WHISPER_URL:`http://127.0.0.1:${(upstream.address() as any).port}/fixed`,MESH_WHISPER_TIMEOUT:'1',MESH_WHISPER_LANGUAGE:'fr'});
   try{
     assert.equal(await transcribe(c,[Buffer.from('audio')],meta(),new AbortController().signal),'bonjour');
     assert.equal((received.match(/; name="/g)||[]).length,3);assert.match(received,/name="language"\r\n\r\nfr/);assert.match(received,/name="response_format"\r\n\r\njson/);

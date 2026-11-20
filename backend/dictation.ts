@@ -8,6 +8,7 @@ import {isIP,type LookupFunction} from 'node:net';
 import dns from 'node:dns';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
+import {hasDictationControls} from '../shared/dictation-text.ts';
 
 const messages = {
   invalid_request:'Invalid dictation request.', not_found:'Dictation job not found.',
@@ -29,7 +30,7 @@ export class Fault extends Error {
   json() {return {error:{code:this.code,message:this.message}};}
 }
 export interface PublicConfig {
-  enabled:true; language:string; max_bytes:number; aggregate_bytes:number; queue_size:number; workers:number;
+  enabled:true; language:string|null; max_bytes:number; aggregate_bytes:number; queue_size:number; workers:number;
   active_timeout_seconds:number; queue_wait_seconds:number; result_ttl_seconds:number; capture_seconds:number;
 }
 export interface Config {url:URL; public:PublicConfig}
@@ -56,8 +57,8 @@ export function configuration(env: NodeJS.ProcessEnv): Config|null {
     if(!/^\d+$/.test(value)||!Number.isSafeInteger(Number(value))||Number(value)<=0)throw Error(`Invalid Whisper ${key}`);
     return Number(value);
   };
-  const language=env.MESH_WHISPER_LANGUAGE??'fr';
-  if(!/^[A-Za-z][A-Za-z0-9-]{0,31}$/.test(language))throw Error('Invalid Whisper language');
+  const language=env.MESH_WHISPER_LANGUAGE??null;
+  if(language!==null&&!/^[A-Za-z][A-Za-z0-9-]{0,31}$/.test(language))throw Error('Invalid Whisper language');
   return {url,public:{enabled:true,language,max_bytes:integer('MAX_BYTES',8388608),aggregate_bytes:integer('AGGREGATE_BYTES',67108864),queue_size:integer('QUEUE_SIZE',16),workers:integer('WORKERS',1),active_timeout_seconds:integer('TIMEOUT',60),queue_wait_seconds:integer('QUEUE_TTL',600),result_ttl_seconds:integer('RESULT_TTL',1800),capture_seconds:integer('CAPTURE_SECONDS',120)}};
 }
 export function uuid(value:string): string {
@@ -266,15 +267,18 @@ export class Dictation {
   }
 }
 export function normalizeText(value:unknown):string {
-  if(typeof value!=='string'||/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(value))throw new Fault('upstream_invalid');
-  const text=value.replace(/\r\n?/g,'\n').trim();
+  if(typeof value!=='string')throw new Fault('upstream_invalid');
+  const normalized=value.replace(/\r\n?/g,'\n');
+  if(hasDictationControls(normalized))throw new Fault('upstream_invalid');
+  const text=normalized.trim();
   if(Buffer.byteLength(text)>32768)throw new Fault('upstream_invalid');
   if(!text)throw new Fault('empty_transcript');return text;
 }
 
 export async function transcribe(config:Config,chunks:Buffer[],m:Admission,signal:AbortSignal):Promise<string> {
   const boundary=`mesh-${randomUUID()}`,mime=media(m.mime);
-  const prefix=Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n${config.public.language}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.${extensions[mime]}"\r\nContent-Type: ${mime}\r\n\r\n`);
+  const language=config.public.language===null?'':`--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n${config.public.language}\r\n`;
+  const prefix=Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n${language}--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.${extensions[mime]}"\r\nContent-Type: ${mime}\r\n\r\n`);
   const suffix=Buffer.from(`\r\n--${boundary}--\r\n`);
   const transport=config.url.protocol==='https:'?https:http;
   const connection=config.url.protocol==='http:'?{lookup:loopbackLookup,autoSelectFamily:true}:{};
