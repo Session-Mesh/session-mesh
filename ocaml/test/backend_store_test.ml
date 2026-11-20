@@ -263,6 +263,152 @@ let moved_store () =
             (S.transaction store ~expected_revision:0 save_skip
             = Error S.Unsafe_store)))
 
+let journal_retention () =
+  with_root (fun root ->
+      with_store root (fun store ->
+          ignore
+            (value
+               (S.transaction store ~expected_revision:0 (fun tx ->
+                    List.fold_left
+                      (fun result i ->
+                        let* () = result in
+                        S.put_operation tx
+                          ~id:("op-" ^ string_of_int i)
+                          (`Assoc []))
+                      (Ok ()) (List.init 1024 Fun.id))));
+          Alcotest.(check bool)
+            "active journal cap" true
+            (S.transaction store ~expected_revision:0 (fun tx ->
+                 S.put_operation tx ~id:"overflow" (`Assoc []))
+            = Error S.Capacity);
+          ignore
+            (value
+               (S.transaction store ~expected_revision:0 (fun tx ->
+                    let* removed = S.purge_finished tx in
+                    Alcotest.(check int) "no active eviction" 0 removed;
+                    S.finish_operation tx ~id:"op-0")));
+          Alcotest.(check bool)
+            "terminal row immutable" true
+            (S.transaction store ~expected_revision:0 (fun tx ->
+                 S.put_operation tx ~id:"op-0" (`Assoc []))
+            = Error S.Invalid_state);
+          let aborted =
+            S.transaction store ~expected_revision:0 (fun tx ->
+                let* _ = S.purge_finished tx in
+                let* () = S.put_operation tx ~id:"replacement" (`Assoc []) in
+                let* () = save_skip tx in
+                Error S.Aborted)
+          in
+          Alcotest.(check bool)
+            "purge rolls back with policy and insertion" true
+            (aborted = Error S.Aborted);
+          Alcotest.(check int)
+            "policy unchanged" 0
+            (C.revision (value (S.read_policy store))));
+      with_store root (fun store ->
+          ignore
+            (value
+               (S.transaction store ~expected_revision:0 (fun tx ->
+                    let* old = S.get_operation tx ~id:"op-0" in
+                    Alcotest.(check bool)
+                      "terminal retained across rollback/reopen" true
+                      (old = Some (`Assoc []));
+                    let* missing = S.get_operation tx ~id:"replacement" in
+                    Alcotest.(check bool)
+                      "insertion rolled back" true (missing = None);
+                    let* removed = S.purge_finished tx in
+                    Alcotest.(check int) "only terminal removed" 1 removed;
+                    let* () =
+                      S.put_operation tx ~id:"replacement" (`Assoc [])
+                    in
+                    let* active = S.get_operation tx ~id:"op-1" in
+                    Alcotest.(check bool)
+                      "active operation survives" true
+                      (active = Some (`Assoc []));
+                    Ok ())))))
+
+let revision_jump () =
+  with_root (fun root ->
+      with_store root (fun store ->
+          let jumped =
+            match
+              C.of_string
+                "{\"version\":1,\"revision\":2,\"global\":\"skip\",\"pairs\":[]}"
+            with
+            | Ok p -> p
+            | Error _ -> Alcotest.fail "fixture"
+          in
+          Alcotest.(check bool)
+            "revision jump refused" true
+            (S.transaction store ~expected_revision:0 (fun tx ->
+                 S.set_policy tx jumped)
+            = Error S.Invalid_state);
+          Alcotest.(check int)
+            "jump did not commit" 0
+            (C.revision (value (S.read_policy store)))))
+
+let custody_before_commit () =
+  with_root (fun root ->
+      with_store root (fun store ->
+          let file = Filename.concat root "backend-accounts.sqlite" in
+          let result =
+            S.transaction store ~expected_revision:0 (fun tx ->
+                let* () = save_skip tx in
+                let* () = S.put_operation tx ~id:"new" (`Assoc []) in
+                Unix.chmod file 0o644;
+                Ok ())
+          in
+          Unix.chmod file 0o600;
+          Alcotest.(check bool)
+            "late custody failure refuses" true
+            (result = Error S.Unsafe_store);
+          Alcotest.(check int)
+            "late failure rolls policy back" 0
+            (C.revision (value (S.read_policy store)));
+          ignore
+            (value
+               (S.transaction store ~expected_revision:0 (fun tx ->
+                    let* row = S.get_operation tx ~id:"new" in
+                    Alcotest.(check bool)
+                      "late failure rolls journal back" true (row = None);
+                    Ok ())))))
+
+let old_draft_schema () =
+  with_root (fun root ->
+      let file = Filename.concat root "backend-accounts.sqlite" in
+      let db = Sqlite3.db_open file in
+      Fun.protect
+        ~finally:(fun () -> ignore (Sqlite3.db_close db))
+        (fun () ->
+          List.iter
+            (fun sql ->
+              if Sqlite3.exec db sql <> Sqlite3.Rc.OK then
+                Alcotest.fail "fixture schema")
+            [
+              "CREATE TABLE backend_meta(id INTEGER PRIMARY KEY,kind TEXT NOT \
+               NULL,version INTEGER NOT NULL)";
+              "INSERT INTO backend_meta VALUES(1,'mesh-backend-state',1)";
+              "CREATE TABLE backend_policy(id INTEGER PRIMARY KEY,revision \
+               INTEGER NOT NULL,payload TEXT NOT NULL)";
+              "INSERT INTO backend_policy \
+               VALUES(1,0,'{\"version\":1,\"revision\":0,\"global\":\"ask\",\"pairs\":[]}')";
+              "CREATE TABLE backend_operations(id TEXT PRIMARY KEY,payload \
+               TEXT NOT NULL)";
+              "INSERT INTO backend_operations \
+               VALUES('old-active','{\"phase\":\"prepared\"}')";
+              "PRAGMA user_version=1";
+            ]);
+      Unix.chmod file 0o600;
+      let before = In_channel.with_open_bin file In_channel.input_all in
+      Alcotest.(check bool)
+        "old experimental schema refused" true
+        (match S.open_ ~root () with
+        | Error S.Invalid_state -> true
+        | _ -> false);
+      Alcotest.(check string)
+        "old journal and policy are not migrated or erased" before
+        (In_channel.with_open_bin file In_channel.input_all))
+
 let () =
   Alcotest.run "backend state store"
     [
@@ -290,5 +436,13 @@ let () =
             quoted_root;
           Alcotest.test_case "database custody remains current" `Quick
             moved_store;
+          Alcotest.test_case
+            "terminal retention frees bounded capacity atomically" `Quick
+            journal_retention;
+          Alcotest.test_case "revision jump refused" `Quick revision_jump;
+          Alcotest.test_case "custody rechecked before commit" `Quick
+            custody_before_commit;
+          Alcotest.test_case "old draft schema refused unchanged" `Quick
+            old_draft_schema;
         ] );
     ]

@@ -20,7 +20,7 @@ function fixture(){
   const profiles:any[]=[];
   function add(id:string,backend='pi',enabled=true){
     const keys=backend==='codex'?['config','state']:backend==='opencode-v2'?['config','data','state','cache']:['config','history'];
-    const roots=Object.fromEntries(keys.map(key=>{const dir=path.join(root,'accounts',id,key);fs.mkdirSync(dir,{recursive:true,mode:0o700});return [key,dir];}));
+    const roots=Object.fromEntries(keys.map(key=>{const dir=path.join(root,'accounts',backend,id,key);fs.mkdirSync(dir,{recursive:true,mode:0o700});return [key,dir];}));
     const profile={id,label:id,backend,enabled,roots};profiles.push(profile);return profile;
   }
   const file=path.join(conf,'backend-profiles.json'),db=path.join(conf,'backend-accounts.sqlite');
@@ -51,6 +51,33 @@ test('four backend projections contain no paths and cannot qualify a switch',()=
   assert.equal(JSON.stringify(reply).includes(f.root),false);
   for(const profile of reply.data.profiles){assert.equal(profile.switch_qualified,false);assert.equal('roots' in profile,false);assert.match(profile.context_revision,/^[a-f0-9]{64}$/);}
 }));
+test('one alias ID resolves independently in each backend without changing legacy IDs',()=>use(f=>{
+  for(const backend of ['claude','codex','opencode-v2','pi'])f.add('work',backend);f.save();
+  const list=f.request('profiles.list');assert.equal(list.ok,true);assert.equal(list.data.profiles.length,4);
+  for(const backend of ['claude','codex','opencode-v2','pi']){
+    const resolved=f.request('profiles.resolve',{id:'work',backend,expected_context:null});
+    assert.equal(resolved.ok,true);assert.equal(resolved.data.profile.backend,backend);
+    assert.equal(resolved.data.roots.config,f.profiles.find(p=>p.backend===backend).roots.config);
+  }
+}));
+test('profile IDs reuse the alias grammar and labels are unambiguous within a backend',()=>{
+  for(const id of ['default','Work','work_id','a'.repeat(33)])use(f=>{
+    const p=f.add('work');p.id=id;f.save();assert.equal(f.request('profiles.list').code,'invalid-profile-config');
+  });
+  use(f=>{const a=f.add('work'),b=f.add('personal');a.label='Work';b.label='wOrK';f.save();
+    assert.equal(f.request('profiles.list').code,'invalid-profile-config');});
+});
+test('pair references require a backend and cannot remove another backend rule',()=>use(f=>{
+  for(const backend of ['claude','codex']){f.add('work',backend);f.add('personal',backend);}f.save();
+  const listed=f.request('profiles.list');assert.equal(listed.ok,true);
+  const pair={expected_revision:0,source_id:'work',target_id:'personal',registry_revision:listed.data.registry_revision,confirmation:'skip'};
+  assert.equal(f.request('consent.set_pair',pair).code,'invalid-request');assert.equal(fs.existsSync(f.db),false);
+  assert.equal(f.request('consent.set_pair',{...pair,backend:'claude'}).ok,true);
+  assert.equal(f.request('consent.set_pair',{...pair,backend:'codex',expected_revision:1}).ok,true);
+  assert.equal(f.request('consent.remove_pair',{expected_revision:2,backend:'claude',source_id:'personal',target_id:'work'}).ok,true);
+  const state=f.request('consent.get').data;assert.equal(state.pairs.length,1);assert.equal(state.pairs[0].a.backend,'codex');
+  assert.equal(state.pairs[0].b.backend,'codex');
+}));
 test('host-side resolution binds exact ID/backend/context and checks current roots',()=>use(f=>{
   f.add('work');f.add('off','pi',false);f.save();const profile=f.request('profiles.list').data.profiles[0];
   const good=f.request('profiles.resolve',{id:'work',backend:'pi',expected_context:profile.context_revision});assert.equal(good.ok,true);assert.equal(good.data.roots.config,f.profiles[0].roots.config);
@@ -72,7 +99,7 @@ test('global preference persists across helper processes and rejects stale write
 }));
 test('pair Ask exceptions use native context and current registry revision',()=>use(f=>{
   f.add('work');f.add('personal');f.save();const registry=f.request('profiles.list').data.registry_revision;
-  const pair={expected_revision:0,source_id:'work',target_id:'personal',registry_revision:registry,confirmation:'ask'};
+  const pair={backend:'pi',expected_revision:0,source_id:'work',target_id:'personal',registry_revision:registry,confirmation:'ask'};
   assert.equal(f.request('consent.set_pair',pair).ok,true);
   const policy=f.request('consent.get').data;assert.equal(policy.pairs.length,1);assert.equal(policy.pairs[0].confirmation,'ask');
   f.profiles[0].label='Renamed';f.save();
@@ -81,9 +108,9 @@ test('pair Ask exceptions use native context and current registry revision',()=>
 }));
 test('retired pair removal and reset remain explicit revisioned management actions',()=>use(f=>{
   f.add('work');f.add('personal');f.save();const registry=f.request('profiles.list').data.registry_revision;
-  assert.equal(f.request('consent.set_pair',{expected_revision:0,source_id:'work',target_id:'personal',registry_revision:registry,confirmation:'skip'}).ok,true);
+  assert.equal(f.request('consent.set_pair',{backend:'pi',expected_revision:0,source_id:'work',target_id:'personal',registry_revision:registry,confirmation:'skip'}).ok,true);
   f.profiles.pop();f.save();
-  assert.equal(f.request('consent.remove_pair',{expected_revision:1,source_id:'personal',target_id:'work'}).data.revision,2);
+  assert.equal(f.request('consent.remove_pair',{backend:'pi',expected_revision:1,source_id:'personal',target_id:'work'}).data.revision,2);
   assert.equal(f.request('consent.reset',{expected_revision:2}).data.revision,3);
   const state=f.request('consent.get').data;assert.equal(state.global,'ask');assert.deepEqual(state.pairs,[]);
 }));
@@ -95,8 +122,8 @@ test('unsafe registry custody fails without echoing private paths or payload',()
 
 test('same-account pair changes are invalid before a state store is created',()=>use(f=>{
   f.add('work');f.save();const registry=f.request('profiles.list').data.registry_revision;
-  assert.equal(f.request('consent.set_pair',{expected_revision:0,source_id:'work',target_id:'work',registry_revision:registry,confirmation:'skip'}).code,'invalid-account-pair');
-  assert.equal(f.request('consent.remove_pair',{expected_revision:0,source_id:'work',target_id:'work'}).code,'invalid-account-pair');
+  assert.equal(f.request('consent.set_pair',{backend:'pi',expected_revision:0,source_id:'work',target_id:'work',registry_revision:registry,confirmation:'skip'}).code,'invalid-account-pair');
+  assert.equal(f.request('consent.remove_pair',{backend:'pi',expected_revision:0,source_id:'work',target_id:'work'}).code,'invalid-account-pair');
   assert.equal(fs.existsSync(f.db),false);
 }));
 
@@ -104,6 +131,17 @@ test('physical aliases cannot register two credential contexts with different pa
   const a=f.add('work'),b=f.add('personal');
   fs.rmdirSync(b.roots.config);fs.symlinkSync(a.roots.config,b.roots.config);f.save();
   assert.equal(f.request('profiles.resolve',{id:'work',backend:'pi',expected_context:null}).code,'unsafe-profile-roots');
+  assert.equal(fs.existsSync(f.db),false);
+}));
+test('the same alias ID in two backends does not bypass physical peer custody',()=>use(f=>{
+  const a=f.add('work','claude'),b=f.add('work','codex');
+  fs.rmdirSync(b.roots.config);fs.symlinkSync(a.roots.config,b.roots.config);f.save();
+  assert.equal(f.request('profiles.resolve',{id:'work',backend:'claude',expected_context:null}).code,'unsafe-profile-roots');
+  assert.equal(fs.existsSync(f.db),false);
+}));
+test('native profile paths retain the shell-safe alias grammar',()=>use(f=>{
+  const p=f.add('work');p.roots.config+=" 'quoted'";f.save();
+  assert.equal(f.request('profiles.list').code,'invalid-profile-config');
   assert.equal(fs.existsSync(f.db),false);
 }));
 

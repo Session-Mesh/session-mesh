@@ -34,14 +34,7 @@ let error_code = function
   | Context_changed -> "profile-context-changed"
   | Unsafe_roots -> "unsafe-profile-roots"
 
-let valid_id text =
-  let length = String.length text in
-  length > 0 && length <= 80
-  && String.for_all
-       (function
-         | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' -> true | _ -> false)
-       text
-
+let valid_id = Mesh_accounts.valid_id
 let hash text = Digestif.SHA256.(to_hex (digest_string text))
 
 let tag = function
@@ -109,7 +102,7 @@ let decode_roots backend value =
     | [] -> Ok (List.sort (fun (a, _) (b, _) -> String.compare a b) acc)
     | (key, value) :: rest ->
         let* value = text 4096 value in
-        if not (absolute value) then Error Invalid_config
+        if not (Mesh_accounts.valid_path value) then Error Invalid_config
         else loop ((key, value) :: acc) rest
   in
   loop [] fields
@@ -209,7 +202,15 @@ let of_json revision value =
       | [] -> Ok { profiles = List.rev acc; revision }
       | raw :: rest ->
           let* profile = decode raw in
-          if List.exists (fun p -> p.id = profile.id || aliases p profile) acc
+          if
+            List.exists
+              (fun p ->
+                p.backend = profile.backend
+                && (p.id = profile.id
+                   || String.lowercase_ascii p.label
+                      = String.lowercase_ascii profile.label)
+                || aliases p profile)
+              acc
           then Error Invalid_config
           else loop (profile :: acc) rest
     in
@@ -242,10 +243,14 @@ let public_json p =
     ]
 
 let resolve registry ~id ~backend ~expected_context =
-  match List.find_opt (fun p -> p.id = id) registry.profiles with
-  | None -> Error Unknown_profile
+  match
+    List.find_opt (fun p -> p.id = id && p.backend = backend) registry.profiles
+  with
+  | None ->
+      if List.exists (fun p -> p.id = id) registry.profiles then
+        Error Backend_mismatch
+      else Error Unknown_profile
   | Some p when not p.enabled -> Error Disabled_profile
-  | Some p when p.backend <> backend -> Error Backend_mismatch
   | Some p
     when Option.fold ~none:false
            ~some:(fun expected -> expected <> p.context_revision)
@@ -297,7 +302,7 @@ let validate_roots ?registry profile =
         | Some registry ->
             List.exists
               (fun other ->
-                other.id <> profile.id
+                (other.id <> profile.id || other.backend <> profile.backend)
                 && List.exists
                      (fun (role, path) ->
                        match Unix.stat path with
