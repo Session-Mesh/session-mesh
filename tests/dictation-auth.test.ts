@@ -82,7 +82,7 @@ test('private Unix service requires bridge secret, opaque principal, exact heade
 test('actual server default-off requires no Node; owner only config and safe disabled response',async()=>{
   const f=await fixture(false,true,'/nonexistent/node');
   try{
-    assert.deepEqual((await f.call('/api/transcribe/config','GET',f.auth)).body,{enabled:false});
+    assert.deepEqual((await f.call('/api/transcribe/config','GET',f.auth)).body,{enabled:false,disabled_reason:'not_configured'});
     assert.equal((await f.call('/api/transcribe','POST',{...f.auth,...identityHeaders()},'a')).body.error.code,'disabled');
     assert.equal(fs.readdirSync(f.directory).some(n=>n.startsWith('mesh-dictation-')),false);
   }finally{await f.close();}
@@ -103,8 +103,11 @@ test('configured Node is a plain executable path, not a command or shell fragmen
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-node-command-'));
   const marker=path.join(directory,'must-not-exist');
   try{
-    await assert.rejects(fixture(true,false,`${process.execPath}; touch ${marker}`),/server fixture failed/);
-    await assert.rejects(fixture(true,false,'node --eval anything'),/server fixture failed/);
+    for(const runtime of [`${process.execPath}; touch ${marker}`,'node --eval anything']){
+      const f=await fixture(true,false,runtime);
+      try{assert.equal((await f.call('/api/transcribe/config','GET',f.auth)).body.enabled,false);}
+      finally{await f.close();}
+    }
     assert.equal(fs.existsSync(marker),false);
   }finally{fs.rmSync(directory,{recursive:true,force:true});}
 });

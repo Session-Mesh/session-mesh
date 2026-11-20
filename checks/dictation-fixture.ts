@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
 import net from 'node:net';
-import {spawn, spawnSync} from 'node:child_process';
+import {spawn, spawnSync, type ChildProcess} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 
@@ -36,7 +36,7 @@ export function processState(pid:number):string|null {
   return result.status===0?result.stdout.trim().slice(0,1)||null:null;
 }
 
-interface FixtureOptions {childTempDepth?:number;workerEntry?:string;workerPreload?:string}
+interface FixtureOptions {childTempDepth?:number;workerEntry?:string;workerPreload?:string;whisperEnv?:NodeJS.ProcessEnv;startupWaitMs?:number;onSpawn?:(child:ChildProcess)=>void}
 export async function fixture(enabled=true,noNode=false,nodePath?:string,options:FixtureOptions={}){
   const root=process.cwd();
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-http-'));fs.chmodSync(directory,0o700);
@@ -78,6 +78,7 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
   const probe=net.createServer();await new Promise<void>(r=>probe.listen(0,'127.0.0.1',r));const port=(probe.address() as net.AddressInfo).port;await new Promise<void>(r=>probe.close(()=>r()));
   const env:NodeJS.ProcessEnv={PATH:noNode?'/nonexistent':process.env.PATH,HOME:home,MESH_CONF_DIR:config,MESH_CACHE_DIR:path.join(directory,'cache'),XDG_CONFIG_HOME:path.join(home,'.config'),XDG_CACHE_HOME:path.join(home,'.cache'),XDG_DATA_HOME:path.join(home,'.local','share'),XDG_RUNTIME_DIR:run,TMPDIR:directory,MESH_HOST:'127.0.0.1',MESH_PORT:String(port),PYTHONDONTWRITEBYTECODE:'1'};
   if(enabled)env.MESH_WHISPER_URL=`http://127.0.0.1:${(upstream.address() as net.AddressInfo).port}/fixed`;
+  Object.assign(env,options.whisperEnv);
   if(options.childTempDepth){
     env.TMPDIR=path.join(directory,...Array.from({length:options.childTempDepth},()=> 'long-child-temp-segment'));
     fs.mkdirSync(env.TMPDIR,{recursive:true,mode:0o700});
@@ -89,10 +90,17 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
   }
   if(nodePath!==undefined)env.MESH_NODE=nodePath;
   const child=spawn(python(),['-B',path.join(root,'server.py')],{cwd:root,env,stdio:['ignore','ignore','pipe']});let errors='';child.stderr.on('data',b=>errors+=b);
+  options.onSpawn?.(child);
   const call=(p:string,method='GET',headers:any={},body:string|Buffer='')=>request({hostname:'127.0.0.1',port,path:p,method,headers},body);
   const close=async()=>{for(const release of upstreamReleases)release();if(child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');await until(()=>child.exitCode!==null||child.signalCode!==null);}child.stderr.destroy();for(const peer of peers)peer.destroy();upstream.closeAllConnections();await Promise.all([new Promise<void>(r=>inventory.close(()=>r())),new Promise<void>(r=>upstream.close(()=>r()))]);fs.rmSync(directory,{recursive:true,force:true});};
   try{
-    await until(async()=>{if(child.exitCode!==null)throw Error(`server fixture failed: ${errors}`);try{return [401,403].includes((await call('/api/transcribe/config')).status);}catch{return false;}});
+    const deadline=performance.now()+(options.startupWaitMs??5000);
+    while(true){
+      if(child.exitCode!==null||child.signalCode!==null)throw Error(`server fixture failed: ${errors}`);
+      try{if([401,403].includes((await call('/api/transcribe/config')).status))break;}catch{/* not listening yet */}
+      if(performance.now()>=deadline)throw Error('server fixture startup timeout');
+      await delay(10);
+    }
   }catch(error){await close();throw error;}
   const token=fs.readFileSync(path.join(config,'token'),'utf8').trim();
   const auth={Authorization:`Bearer ${token}`};
