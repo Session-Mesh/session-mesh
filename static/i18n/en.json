@@ -705,6 +705,10 @@
     "one": "{n} session lost when ptyhost restarted",
     "other": "{n} sessions lost when ptyhost restarted"
   },
+  "restore.notSent": {
+    "one": "{n} session not sent: {error}",
+    "other": "{n} sessions not sent: {error}"
+  },
   "restore.warningItem": "{name}: {warning}",
   "restore.withWarnings": "{summary} Warnings: {warnings}",
   "server.absoluteUrlExpected": "Absolute http(s) URL expected",

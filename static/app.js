@@ -4798,10 +4798,24 @@ function renderRestore() {
   restoreButtons();
 }
 
+// The restore routes take at most 50 names per request: larger offers go in batches, one after
+// the other, stopping at the first refused or failed one (its names and the later ones stay offered).
 async function restorePost(path, names) {
-  const r = await requestLocal(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ names }) });
-  if (!r.ok) { flash(serverText(await r.text())); return null; }
-  return r.json();
+  return MeshPaneActions.postInBatches(names, async (batch) => {
+    try {
+      const r = await requestLocal(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ names: batch }) });
+      if (!r.ok) return { ok: false, error: serverText(await r.text()) };
+      const body = await r.json();
+      return { ok: true, results: body && typeof body.results === "object" ? body.results : {} };
+    } catch (err) {
+      return { ok: false, error: String(err?.message || err) };
+    }
+  });
+}
+
+// What was not sent, and why: "" when every batch was answered.
+function restoreUnsent(out) {
+  return out.error === null ? "" : t("restore.notSent", { n: out.unsent.length, error: out.error });
 }
 
 async function restoreGo() {
@@ -4813,19 +4827,21 @@ async function restoreGo() {
   restoreButtons();
   try {
     const out = await restorePost("/api/restore", names);
-    if (!out) return;
+    const unsent = restoreUnsent(out);
+    if (!out.sent.length) { flash(out.error); return; }   // nothing answered: the refusal alone, as before
     const bad = Object.entries(out.results).filter(([, r]) => !r.ok);
     const notes = Object.values(out.results).map((r) => r.note).filter(Boolean);
     const warnings = restoreWarnings(out.results);
-    const summary = bad.length ? restoreFailures(bad)
-      : notes[0] ? serverText(notes[0]) : t("restore.done", { n: names.length });
+    const done = bad.length ? restoreFailures(bad)
+      : notes[0] ? serverText(notes[0]) : t("restore.done", { n: out.sent.length });
+    const summary = unsent ? `${done} ${unsent}` : done;
     // A restoration can succeed in part (the session exists, its agent mail stays at the old identity and the
     // offer stays): the warnings say so, with the name of the session they concern.
     if (warnings) {
       restoreNotice = t("restore.withWarnings", { summary, warnings });
       restoreNoticeNames = Object.entries(out.results).filter(([, r]) => Array.isArray(r.warnings) && r.warnings.length).map(([name]) => name);
       flashLong(restoreNotice);
-    } else (bad.length ? flashLong : flash)(summary);
+    } else (bad.length || unsent ? flashLong : flash)(summary);
   } finally { restoreBusy = false; restoreKey = ""; await refresh(); }
 }
 
@@ -4851,7 +4867,9 @@ $("#restore").addEventListener("click", async (e) => {
   if (e.target.closest("#restore-go")) restoreGo();
   else if (e.target.closest("#restore-ignore")) {
     restoreNotice = "";
-    if (await restorePost("/api/restore/discard", (data.restorable || []).map((x) => x.name))) { restoreKey = ""; await refresh(); }
+    const out = await restorePost("/api/restore/discard", (data.restorable || []).map((x) => x.name));
+    if (out.error !== null) flash(out.sent.length ? restoreUnsent(out) : out.error);
+    if (out.sent.length) { restoreKey = ""; await refresh(); }
   }
 });
 

@@ -714,6 +714,10 @@
     "one": "{n} session perdue au redémarrage de ptyhost",
     "other": "{n} sessions perdues au redémarrage de ptyhost"
   },
+  "restore.notSent": {
+    "one": "{n} session non envoyée : {error}",
+    "other": "{n} sessions non envoyées : {error}"
+  },
   "restore.warningItem": "{name} : {warning}",
   "restore.withWarnings": "{summary} Avertissements : {warnings}",
   "server.absoluteUrlExpected": "URL http(s) absolue attendue",
