@@ -110,15 +110,3 @@ export function triageQuestions(questions: readonly Question[], zones: readonly 
 export function isLongText(text: string, limit = 280): boolean {
   return [...text].length > limit || text.split('\n').length > 4;
 }
-
-/** The key under which the section of the entry screen keeps its folded or open state (sessionStorage). */
-export const SECTION_STATE_KEY = 'mesh.work.questionsOpen';
-
-/** The folded or open state kept for the section; folded when nothing is kept or the storage cannot be read. */
-export function readSectionOpen(storage: Pick<Storage, 'getItem'> | null): boolean {
-  try { return storage?.getItem(SECTION_STATE_KEY) === '1'; } catch { return false; }
-}
-
-export function writeSectionOpen(storage: Pick<Storage, 'setItem'> | null, open: boolean): void {
-  try { storage?.setItem(SECTION_STATE_KEY, open ? '1' : '0'); } catch { /* a private window: the state is not kept */ }
-}

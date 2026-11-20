@@ -296,7 +296,9 @@ describe('pending questions in the Projects view', { skip }, () => {
     await toggle(page).waitFor();
     assert.equal(await toggle(page).getAttribute('aria-expanded'), 'true', 'kept open in sessionStorage');
     await toggle(page).click();
-    assert.equal(await page.evaluate(() => sessionStorage.getItem('mesh.work.questionsOpen')), '0');
+    // Kept with the rest of the view's place (static/work-view-state.ts), under its one key.
+    await page.waitForFunction(() => !(sessionStorage.getItem('mesh.workView') ?? '').includes('"questionsOpen":true'));
+    assert.deepEqual(await page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('mesh.work'))), ['mesh.workView']);
     assert.deepEqual(problems, []);
   });
 

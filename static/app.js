@@ -5173,7 +5173,11 @@ async function fetchHistory() {
     if (hist.gen !== null) params.set("gen", String(hist.gen));
     if (hist.namesGen !== null) params.set("names_gen", hist.namesGen);
     const r = await requestLocal(`/api/history${params.size ? `?${params}` : ""}`);
-    if (r.status === 401) return (location.href = "/login");
+    if (r.status === 401) {
+      forgetKnownSessions();   // as a refused listing does: the Projects view's drafts go too
+      location.href = "/login";
+      return;
+    }
     if (!r.ok) throw new Error(serverText(await r.text()) || r.statusText);
     const j = await r.json();
     hist.error = null;

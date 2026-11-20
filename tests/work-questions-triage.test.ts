@@ -7,9 +7,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { parseOpenQuestions } from '../static/work-parse.ts';
-import {
-  SECTION_STATE_KEY, isAttached, isLongText, oldestFirst, questionKind, readSectionOpen, triageQuestions, writeSectionOpen,
-} from '../static/work-questions-triage.ts';
+import { isAttached, isLongText, oldestFirst, questionKind, triageQuestions } from '../static/work-questions-triage.ts';
 import type { Question, QuestionContext } from '../static/work-types.ts';
 
 type Extra = Partial<{ options: string[]; session: string | null; agent: string | null; context: Partial<QuestionContext> }>;
@@ -114,28 +112,14 @@ describe('the classification', () => {
   });
 });
 
-describe('long texts and the folded state', () => {
+// The folded or open state of the section is kept with the rest of the view's state (tests/work-view-state.test.ts).
+describe('long texts', () => {
   test('a text is long past 280 characters (code points) or 4 lines', () => {
     assert.equal(isLongText('a'.repeat(280)), false);
     assert.equal(isLongText('a'.repeat(281)), true);
     assert.equal(isLongText('😀'.repeat(200)), false, 'counted in characters, not UTF-16 units');
     assert.equal(isLongText('1\n2\n3\n4'), false);
     assert.equal(isLongText('1\n2\n3\n4\n5'), true);
-  });
-
-  test('the section is folded unless the session kept it open, and a storage that throws keeps it folded', () => {
-    const kept = new Map<string, string>();
-    const storage = { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => void kept.set(key, value) };
-    assert.equal(readSectionOpen(storage), false);
-    writeSectionOpen(storage, true);
-    assert.equal(kept.get(SECTION_STATE_KEY), '1');
-    assert.equal(readSectionOpen(storage), true);
-    writeSectionOpen(storage, false);
-    assert.equal(readSectionOpen(storage), false);
-    const broken = { getItem: (): string => { throw new Error('denied'); }, setItem: (): void => { throw new Error('denied'); } };
-    assert.equal(readSectionOpen(broken), false);
-    assert.doesNotThrow(() => writeSectionOpen(broken, true));
-    assert.equal(readSectionOpen(null), false);
   });
 });
 

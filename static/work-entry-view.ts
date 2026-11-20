@@ -6,7 +6,7 @@
 import type { EntryCategory, EntryProduct } from './work-derive.ts';
 import { button, el, progressBlock, setAttributes } from './work-dom.ts';
 import type { Translate } from './work-dom.ts';
-import type { ProjectSummary } from './work-types.ts';
+import type { ProductsDoc, ProjectSummary } from './work-types.ts';
 
 export type EntryHandlers = Readonly<{
   t: Translate;
@@ -70,4 +70,21 @@ export function renderEntry(handlers: EntryHandlers, tree: readonly EntryCategor
   }
   if (!root.firstChild) root.append(el('p', 'work-entry-empty', handlers.t('work.noProducts')));
   return root;
+}
+
+/** The first visit unfolds the products that have projects. */
+export function seedExpanded(expanded: Set<string>, products: ProductsDoc): void {
+  for (const category of products.categories) {
+    for (const product of category.products) if (product.projects > 0) expanded.add(product.id);
+  }
+}
+
+/** Where focus goes when a project or sheet is left for the entry screen drawn in `scope`: the question row that opened
+ *  it (when its list is unfolded), the row of that project, else the first product button. */
+export function entryFocusTarget(scope: HTMLElement, projectId: string | undefined, question: string | null): HTMLElement | null {
+  const opener = question ? scope.querySelector<HTMLElement>(`.work-qrow[data-question-id="${CSS.escape(question)}"] .work-qrow-open`) : null;
+  if (opener && !opener.closest('[hidden]')) return opener;
+  const row = projectId ? scope.querySelector<HTMLElement>(`.work-entry-project[data-project="${CSS.escape(projectId)}"]`) : null;
+  if (row && !row.closest('[hidden]')) return row;
+  return scope.querySelector<HTMLElement>('.work-entry-toggle') ?? scope.querySelector<HTMLElement>('.work-entry-category-name');
 }
