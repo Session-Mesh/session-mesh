@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { parseOpenQuestions, parseProject } from '../static/work-parse.ts';
 import {
-  aboutKind, ageOf, counterText, formatAge, groupProjectQuestions, orderQuestions, splitEntryQuestions, withoutQuestion,
+  aboutKind, ageOf, counterText, formatAge, groupProjectQuestions, orderQuestions, withoutQuestion,
 } from '../static/work-questions.ts';
 import type { Question, TaskRow } from '../static/work-types.ts';
 
@@ -57,13 +57,6 @@ describe('ordering and grouping', () => {
 
   test('no questions, no groups', () => {
     assert.deepEqual(groupProjectQuestions([], []), []);
-  });
-
-  test('the entry screen keeps open questions only, split into "without a task" and "about a task"', () => {
-    const lists = splitEntryQuestions([question('n1', null, '2026-11-01T00:00:00Z'), question('t1', 'T-0001', '2026-11-03T00:00:00Z'),
-      question('p1', 'P-0a0a', '2026-11-02T00:00:00Z'), question('t2', 'T-0002', '2026-11-04T00:00:00Z', false)]);
-    assert.deepEqual(lists.noTask.map(q => q.id), ['p1', 'n1']);
-    assert.deepEqual(lists.withTask.map(q => q.id), ['t1']);
   });
 });
 

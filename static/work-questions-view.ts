@@ -3,8 +3,9 @@
 
 /**
  * The Questions surfaces: the Questions tab of a project (its questions, open and answered, grouped by task, with a
- * "without a task" group) and the list of every open question on the entry screen (from `resume` without a scope).
- * Each question shows its text, what it is about, its age, who asked it, and the owner's answer form of the sheet.
+ * "without a task" group) and the question cards it shares with the sheet of a question about no task
+ * (static/work-question-sheet.ts). Each question shows its text, its age, who asked it, and the owner's answer form.
+ * The open questions of the entry screen are a classified list without forms (static/work-questions-triage-view.ts).
  * Question text is tracker data written by agents: it only ever becomes text nodes.
  */
 
@@ -12,9 +13,8 @@ import type { WorkError } from './work-api.ts';
 import { answerArea } from './work-detail-view.ts';
 import { button, el, notice, omittedNote } from './work-dom.ts';
 import type { Child, ViewContext } from './work-dom.ts';
-import { errorBlock } from './work-error-view.ts';
 import { linkText } from './work-linkify.ts';
-import { aboutKind, ageOf, formatAge, groupProjectQuestions, splitEntryQuestions } from './work-questions.ts';
+import { ageOf, formatAge, groupProjectQuestions } from './work-questions.ts';
 import type { QuestionGroup } from './work-questions.ts';
 import type { OpenQuestionsDoc, ProjectDoc, Question } from './work-types.ts';
 
@@ -84,64 +84,9 @@ export function renderQuestionsTab(ctx: ViewContext, doc: ProjectDoc): HTMLEleme
   return root;
 }
 
-export type EntryQuestionHandlers = Readonly<{
-  /** The title of a project of the entry list, or null when it is not listed there. */
-  projectTitle: (id: string) => string | null;
-  openProject: (id: string) => void;
-  openTask: (id: string) => void;
-}>;
-
 /** What the entry screen knows of the open questions: being read, read, a failed read with its retry, or a failed
  *  read again of questions already shown (they stay, with the error above them). */
 export type EntryQuestionsState = Readonly<{ kind: 'loading' }> | Readonly<{ kind: 'ready'; doc: OpenQuestionsDoc }>
   | Readonly<{ kind: 'failed'; error: WorkError; retry: () => void }>
   | Readonly<{ kind: 'stale'; doc: OpenQuestionsDoc; error: WorkError; retry: () => void }>;
 
-function aboutControl(ctx: ViewContext, handlers: EntryQuestionHandlers, about: string | null, task: boolean): Child {
-  if (about === null) return null;
-  if (task) {
-    const open = button('work-qcard-about', ctx.t('work.questions.openTask', { id: about }), () => handlers.openTask(about));
-    open.dataset.task = about;
-    return open;
-  }
-  // A project missing from the entry list (closed, or past its first rows) is still opened by its id, named by it.
-  const title = handlers.projectTitle(about) ?? (aboutKind(about) === 'project' ? about : null);
-  if (title === null) return el('span', 'work-qcard-about', ctx.t('work.questions.project', { title: about }));
-  const open = button('work-qcard-about', ctx.t('work.questions.openProject', { title }), () => handlers.openProject(about));
-  open.dataset.project = about;
-  return open;
-}
-
-function entryList(ctx: ViewContext, handlers: EntryQuestionHandlers, titleKey: string, questions: readonly Question[], task: boolean): HTMLElement | null {
-  if (questions.length === 0) return null;
-  const section = el('section', 'work-section work-qgroup', el('h3', 'work-section-title', ctx.t(titleKey), el('span', 'work-count', String(questions.length))));
-  section.dataset.group = task ? 'with-task' : 'no-task';
-  section.append(el('ul', 'work-qcard-list', ...questions.map(question => questionCard(ctx, question, aboutControl(ctx, handlers, question.about, task)))));
-  return section;
-}
-
-function entryBody(ctx: ViewContext, handlers: EntryQuestionHandlers, state: EntryQuestionsState): Node[] {
-  if (state.kind === 'loading') return [el('p', 'work-loading work-mute', ctx.t('work.questions.loading'))];
-  if (state.kind === 'failed') return [errorBlock(ctx.t, state.error, { retry: state.retry })];
-  const { doc } = state;
-  const nodes: Node[] = state.kind === 'stale' ? [errorBlock(ctx.t, state.error, { retry: state.retry })] : [];
-  if (doc.questions.length === 0 && doc.openQuestions === 0) {
-    return [...nodes, el('p', 'work-entry-empty work-questions-none', ctx.t('work.questions.none'))];
-  }
-  const lists = splitEntryQuestions(doc.questions);
-  for (const block of [entryList(ctx, handlers, 'work.questions.noTask', lists.noTask, false),
-    entryList(ctx, handlers, 'work.questions.withTask', lists.withTask, true)]) if (block) nodes.push(block);
-  const left = Math.max(doc.omitted, doc.openQuestions - doc.questions.length);
-  if (left > 0) nodes.push(notice('work-omitted', ctx.t('work.questions.more', { n: left })));
-  return nodes;
-}
-
-/** The open questions block of the entry screen, above the products. */
-export function renderEntryQuestions(ctx: ViewContext, handlers: EntryQuestionHandlers, state: EntryQuestionsState): HTMLElement {
-  const count = state.kind === 'ready' || state.kind === 'stale' ? el('span', 'work-count', String(state.doc.openQuestions)) : null;
-  const heading = el('h2', 'work-entry-category-name', ctx.t('work.questions.title'), count);
-  heading.id = 'work-entry-questions-title';
-  const root = el('section', 'work-entry-questions', heading, ...entryBody(ctx, handlers, state));
-  root.setAttribute('aria-labelledby', heading.id);
-  return root;
-}

@@ -29,7 +29,9 @@ the tools; follow them. In short: `work_resume` at the start, `work_log` as you 
 a question that does not block you.
 
 **Questions.** `work_ask` records the question with the assumption you adopt, and you carry on: it
-does not wait. The owner answers either in the Projects view, which records the answer itself
+does not wait. Attach each question to the task or project it concerns (its `task` argument):
+the owner answers it beside that task's notes and blockers; a question about no task is shown without
+context. The owner answers either in the Projects view, which records the answer itself
 (marked `owner_verified`), or in the conversation. Only when the owner tells you an answer in the
 conversation, record the owner's words with `work_answer` (the question id and the text;
 `answered_by` defaults to `owner`). Use it only to relay what the owner said, never to answer a

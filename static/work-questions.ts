@@ -2,8 +2,9 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 /**
- * Pure derivations of the Questions surfaces: what a question is about, the groups of the project tab and of the
- * entry list, the age of a question, and the text of the counter on the Projects button. No DOM here.
+ * Pure derivations of the Questions surfaces: what a question is about, the groups of the project tab, the age of a
+ * question, and the text of the counter on the Projects button (static/work-questions-triage.ts classifies the open
+ * questions of the entry screen). No DOM here.
  */
 
 import type { OpenQuestionsDoc, Question, TaskRow } from './work-types.ts';
@@ -52,14 +53,6 @@ export function groupProjectQuestions(questions: readonly Question[], tasks: rea
     || newestFirst(left.questions[0]!, right.questions[0]!));
   if (noTask.length > 0) groups.push({ task: null, title: null, questions: noTask });
   return groups;
-}
-
-/** The two lists of the entry screen: the open questions about no task (none or a project), then those about a task. */
-export type EntryQuestionLists = Readonly<{ noTask: readonly Question[]; withTask: readonly Question[] }>;
-
-export function splitEntryQuestions(questions: readonly Question[]): EntryQuestionLists {
-  const open = orderQuestions(questions.filter(question => question.open));
-  return { noTask: open.filter(question => aboutKind(question.about) !== 'task'), withTask: open.filter(question => aboutKind(question.about) === 'task') };
 }
 
 /** The open questions shown, less the one just answered (when it was listed); its total goes down with it. */

@@ -9,7 +9,7 @@
 
 import type {
   Answer, Blocker, Category, ColumnKey, Columns, Counts, Dependency, DependencyState, LinkedSession, NoProject, Omitted, OpenQuestionsDoc, Product,
-  ProductsDoc, ProjectDoc, ProjectHead, ProjectsDoc, ProjectSummary, Provenance, Question, Reprise, TargetRef, TaskDetail,
+  ProductsDoc, ProjectDoc, ProjectHead, ProjectsDoc, ProjectSummary, Provenance, Question, QuestionContext, Reprise, TargetRef, TaskDetail,
   TaskRow, TimelineEvent,
 } from './work-types.ts';
 
@@ -181,6 +181,14 @@ function parseAnswer(source: Obj): Answer | null {
     ownerVerified: source.owner_verified === true, superseded: source.superseded === true };
 }
 
+/** The `context` of a question of `resume`; absent (not an empty object) when it names nothing. */
+function contextOf(value: unknown): { context: QuestionContext } | Record<string, never> {
+  if (!isObj(value)) return {};
+  const context = { taskTitle: text(value.task_title), project: text(value.project), projectTitle: text(value.project_title),
+    product: text(value.product), category: text(value.category) };
+  return Object.values(context).some(part => part !== null) ? { context } : {};
+}
+
 function parseQuestion(source: Obj): Question | null {
   const id = text(source.id), body = text(source.text);
   if (!id || body === null) return null;
@@ -188,7 +196,7 @@ function parseQuestion(source: Obj): Question | null {
   const askedByAgent = text(source.asked_by_agent), askedBySession = text(source.asked_by_session);
   return { id, open: source.state !== 'answered', text: body, options: strings(source.options), assumption: text(source.assumption),
     about: text(source.about), askedBy: askedBySession ?? askedByAgent, askedByAgent, askedBySession, askedAt: text(source.asked_at), answers,
-    ownerAnswered: source.owner_answered === true || answers.some(answer => answer.ownerVerified) };
+    ownerAnswered: source.owner_answered === true || answers.some(answer => answer.ownerVerified), ...contextOf(source.context) };
 }
 
 const questions = (value: unknown): Question[] => objects(value).map(parseQuestion).filter((q): q is Question => q !== null);

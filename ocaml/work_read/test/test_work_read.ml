@@ -333,4 +333,5 @@ let () =
       ("context", Test_context.tests);
       ("ids", Test_ids.tests);
       ("attempts", Test_read_attempts.tests);
+      ("question context", Test_question_context.tests);
     ]

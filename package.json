@@ -50,7 +50,7 @@
     "build:projects": "node tools/build-projects.mjs",
     "typecheck:projects": "tsc --project tsconfig.projects.json",
     "check:projects": "tsc --project tsconfig.projects.json && node tools/build-projects.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/project*.test.ts",
-    "check:work-view": "tsc --project tsconfig.projects.json && node tools/build-projects.mjs --check && node --experimental-strip-types --test tests/work-model.test.ts tests/work-api-client.test.ts tests/work-answer-form.test.ts tests/work-questions.test.ts tests/work-session-questions.test.ts tests/work-questions-sync.test.ts tests/work-references.test.ts tests/work-view-state.test.ts",
+    "check:work-view": "tsc --project tsconfig.projects.json && node tools/build-projects.mjs --check && node --experimental-strip-types --test tests/work-model.test.ts tests/work-api-client.test.ts tests/work-answer-form.test.ts tests/work-questions.test.ts tests/work-questions-triage.test.ts tests/work-session-questions.test.ts tests/work-questions-sync.test.ts tests/work-references.test.ts tests/work-view-state.test.ts",
     "snapshot:projects": "node --experimental-strip-types tools/project-snapshot.ts"
   },
   "dependencies": {

@@ -68,5 +68,7 @@ let run loaded ~product ~project ~all =
        (sections loaded ~keep ~show_all:all ()
        @ [ ("open_questions", `Int (List.length opened)) ]
        @ Wr_out.list "questions" max_open_questions
-           (List.map (Wr_questions.to_json ~brief:true) (Wr_questions.ordered opened))
+           (List.map
+              (fun q -> Wr_question_context.add loaded q (Wr_questions.to_json ~brief:true q))
+              (Wr_questions.ordered opened))
        @ Wr_load.warnings_json loaded))

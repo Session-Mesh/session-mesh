@@ -74,6 +74,13 @@ export type Question = Readonly<{
   id: string; open: boolean; text: string; options: readonly string[]; assumption: string | null; about: string | null;
   askedBy: string | null; askedByAgent: string | null; askedBySession: string | null; askedAt: string | null;
   answers: readonly Answer[]; ownerAnswered: boolean;
+  /** Where the question stands (only the open questions of `resume` carry it): absent when it is about nothing. */
+  context?: QuestionContext;
+}>;
+
+/** The task, project, product and zone (category key) of a question, as far as the reader knows them. */
+export type QuestionContext = Readonly<{
+  taskTitle: string | null; project: string | null; projectTitle: string | null; product: string | null; category: string | null;
 }>;
 
 /** The open questions of the `resume` document read without a scope: every open question of the tracker. */
