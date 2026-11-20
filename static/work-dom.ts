@@ -113,3 +113,35 @@ export function notice(className: string, text: string, role: 'status' | 'alert'
 export function omittedNote(t: Translate, count: number | undefined): Node {
   return count ? notice('work-omitted', t('work.omitted', { n: count })) : document.createDocumentFragment();
 }
+
+/** Mark the control of task `id` as the one shown in the sheet (none when null). */
+export function markSelected(scope: HTMLElement, id: string | null): void {
+  for (const node of scope.querySelectorAll<HTMLElement>('[data-task]')) {
+    if (node.getAttribute('data-task') === id) node.setAttribute('aria-current', 'true'); else node.removeAttribute('aria-current');
+  }
+}
+
+/** The unsent text under each question but `except` (the one just answered), by question id. */
+export function unsentDrafts(scope: HTMLElement, except: string): Map<string, string> {
+  const drafts = new Map<string, string>();
+  for (const slot of scope.querySelectorAll<HTMLElement>('[data-work-answer-slot]')) {
+    const id = slot.dataset.workAnswerSlot, input = slot.querySelector<HTMLTextAreaElement>('.work-answer-input');
+    if (id && id !== except && input?.value) drafts.set(id, input.value);
+  }
+  return drafts;
+}
+
+/** Put the drafts back under the questions that still offer the form. */
+export function restoreDrafts(scope: HTMLElement, drafts: ReadonlyMap<string, string>): void {
+  for (const slot of scope.querySelectorAll<HTMLElement>('[data-work-answer-slot]')) {
+    const draft = drafts.get(slot.dataset.workAnswerSlot ?? ''), input = slot.querySelector<HTMLTextAreaElement>('.work-answer-input');
+    if (draft !== undefined && input) input.value = draft;
+  }
+}
+
+/** Focus a node, made focusable when it is not; `preventScroll` when the caller already put the scroll back. */
+export function focusFirst(node: HTMLElement | null, preventScroll = false): void {
+  if (!node) return;
+  if (!node.matches('button, a, input, select, textarea, [tabindex]')) node.tabIndex = -1;
+  node.focus({ preventScroll });
+}

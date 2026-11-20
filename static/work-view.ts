@@ -15,13 +15,17 @@ import { entryTree } from './work-derive.ts';
 import { renderDetail } from './work-detail-view.ts';
 import { mountDocPanel } from './work-doc-panel.ts';
 import type { DocPanel } from './work-doc-panel.ts';
-import { button, el } from './work-dom.ts';
+import { button, el, focusFirst, markSelected, restoreDrafts, unsentDrafts } from './work-dom.ts';
 import type { Translate, ViewContext } from './work-dom.ts';
 import { renderEntry } from './work-entry-view.ts';
 import { loadOperatorName } from './work-operator-label.ts';
 import { errorBlock, loadingBlock } from './work-error-view.ts';
+import { browserHistory, createWorkNav, escapeKeepsField, scrollerOf, tabsHidden } from './work-nav.ts';
+import type { HistoryPort, WorkNav } from './work-nav.ts';
 import { renderProject } from './work-project-view.ts';
 import type { ProjectView, TabKey } from './work-project-view.ts';
+import { pageQuestionsSync } from './work-questions-sync.ts';
+import type { QuestionsChange, QuestionsSync } from './work-questions-sync.ts';
 import { renderEntryQuestions } from './work-questions-view.ts';
 import type { EntryQuestionsState } from './work-questions-view.ts';
 import { withoutQuestion } from './work-questions.ts';
@@ -41,6 +45,10 @@ export type WorkViewOptions = Readonly<{
   onOpenQuestions?: (count: number | null) => void;
   now?: () => number;
   locale?: string;
+  /** The browser history (static/work-nav.ts); the page's by default. */
+  history?: HistoryPort;
+  /** The questions channel shared with the session marker (static/work-questions-sync.ts); the page's by default. */
+  sync?: QuestionsSync;
 }>;
 
 /** `open` shows the view as it was (the entry screen the first time), or the place a target names: the sheet of a task
@@ -53,36 +61,6 @@ type OpenProject = Readonly<{ id: string; view: ProjectView }>;
 type AfterAnswer = Readonly<{ question: string; focus: boolean }>;
 /** Where an answer form was sent from: the task sheet, the Questions tab of a project, or the entry screen. */
 type Surface = 'detail' | 'questions' | 'entry';
-
-function markSelected(scope: HTMLElement, id: string | null): void {
-  for (const node of scope.querySelectorAll<HTMLElement>('[data-task]')) {
-    if (node.getAttribute('data-task') === id) node.setAttribute('aria-current', 'true'); else node.removeAttribute('aria-current');
-  }
-}
-
-/** The unsent text under each question but `except` (the one just answered), by question id. */
-function unsentDrafts(scope: HTMLElement, except: string): Map<string, string> {
-  const drafts = new Map<string, string>();
-  for (const slot of scope.querySelectorAll<HTMLElement>('[data-work-answer-slot]')) {
-    const id = slot.dataset.workAnswerSlot, input = slot.querySelector<HTMLTextAreaElement>('.work-answer-input');
-    if (id && id !== except && input?.value) drafts.set(id, input.value);
-  }
-  return drafts;
-}
-
-/** Put the drafts back under the questions that still offer the form. */
-function restoreDrafts(scope: HTMLElement, drafts: ReadonlyMap<string, string>): void {
-  for (const slot of scope.querySelectorAll<HTMLElement>('[data-work-answer-slot]')) {
-    const draft = drafts.get(slot.dataset.workAnswerSlot ?? ''), input = slot.querySelector<HTMLTextAreaElement>('.work-answer-input');
-    if (draft !== undefined && input) input.value = draft;
-  }
-}
-
-function focusFirst(node: HTMLElement | null): void {
-  if (!node) return;
-  if (!node.matches('button, a, input, select, textarea, [tabindex]')) node.tabIndex = -1;
-  node.focus();
-}
 
 class WorkView implements WorkViewController {
   private readonly api: WorkApi;
@@ -103,6 +81,8 @@ class WorkView implements WorkViewController {
   private generation = 0;
   /** Numbers each read of the entry screen's open questions; only the last one started is shown. */
   private questionsSequence = 0;
+  /** The reads of the entry screen's open questions under way. */
+  private entryReads = 0;
   private controller: AbortController | null = null;
   private detailController: AbortController | null = null;
   private detailSequence = 0;
@@ -110,11 +90,24 @@ class WorkView implements WorkViewController {
   private readonly announcer = el('p', 'sr-only work-announcer');
   /** The document panel of the references in tracker text (static/work-doc-panel.ts). */
   private readonly docs: DocPanel;
-  private readonly onEscape = (event: KeyboardEvent): void => this.closeDetailOnEscape(event);
+  /** Between `open` and `close`: Escape and the browser's Back act on the view only then. */
+  private active = false;
+  private readonly nav: WorkNav;
+  private readonly sync: QuestionsSync;
+  private readonly unsubscribe: () => void;
+  /** Where the tab was scrolled when the sheet covered it (a phone), put back when the sheet closes. */
+  private tabScroll: number | null = null;
+  private sheetBack: HTMLElement | null = null;
+  private readonly onEscape = (event: KeyboardEvent): void => this.upOnEscape(event);
+  private readonly onPopState = (event: PopStateEvent): void => this.wentBack(event.state);
 
   constructor(private readonly options: WorkViewOptions) {
     this.t = options.translate;
     this.api = createWorkApi(options.request);
+    this.nav = createWorkNav(options.history ?? browserHistory());
+    this.sync = options.sync ?? pageQuestionsSync;
+    this.unsubscribe = this.sync.subscribe('view', change => this.heard(change));
+    window.addEventListener('popstate', this.onPopState);
     this.ctx = { t: this.t, locale: options.locale ?? (document.documentElement.lang || undefined),
       nowMs: options.now ?? (() => Date.now()), selectedTask: () => this.selected, selectTask: id => void this.selectTask(id),
       answers: this.sender('detail') };
@@ -131,6 +124,8 @@ class WorkView implements WorkViewController {
   open = (target?: WorkTarget): void => void this.openAt(target);
 
   private async openAt(target?: WorkTarget): Promise<void> {
+    this.active = true;
+    document.addEventListener('keydown', this.onEscape, true);
     if (!target) return this.reload();
     if (target.kind === 'entry') return this.loadEntry();
     if (target.kind === 'task') await this.openTask(target.id);
@@ -138,16 +133,20 @@ class WorkView implements WorkViewController {
     await this.refreshCount();   // the entry screen, which reads the count with its list, was not shown
   }
 
+  /** Leaving the view takes back its entries of the browser history. */
   close = (): void => {
-    this.controller?.abort(); this.detailController?.abort();
-    this.generation++; this.detailSequence++;
+    this.stopRequests();
+    this.active = false;
     document.removeEventListener('keydown', this.onEscape, true);
     this.docs.close();
+    this.nav.at(0);
   };
 
   destroy = (): void => {
     this.close();
     this.docs.destroy();
+    window.removeEventListener('popstate', this.onPopState);
+    this.unsubscribe();
     this.options.root.classList.remove('work-root');
     this.options.root.replaceChildren();
   };
@@ -156,10 +155,14 @@ class WorkView implements WorkViewController {
     return { available: () => !this.writeUnavailable, submit: (question, answerText) => this.submitAnswer(question, answerText, surface) };
   }
 
+  private stopRequests(): void {
+    this.controller?.abort(); this.detailController?.abort();
+    this.generation++; this.detailSequence++;
+  }
+
   /** Starts a request series: cancels the previous one and returns the token that tells a stale answer. */
   private begin(): { token: number; signal: AbortSignal } {
     this.controller?.abort(); this.detailController?.abort();
-    document.removeEventListener('keydown', this.onEscape, true);   // a new series discards the open detail
     this.controller = new AbortController();
     return { token: ++this.generation, signal: this.controller.signal };
   }
@@ -178,7 +181,20 @@ class WorkView implements WorkViewController {
 
   /** Report the open questions count, or null after a failed read: the badge never shows a number it did not read. */
   private report(result: WorkResult<OpenQuestionsDoc>): void {
-    this.options.onOpenQuestions?.(result.ok ? result.value.openQuestions : null);
+    const count = result.ok ? result.value.openQuestions : null;
+    this.options.onOpenQuestions?.(count);
+    this.sync.publish({ source: 'view', openQuestions: count });   // the marker reads again when the count moved
+  }
+
+  /** The marker read another count: the entry screen, when it shows the questions, is not reading them already (an
+   *  answer's read would lose its notice and focus to a newer one) and the owner is not answering one of them, reads
+   *  them again. Elsewhere the view reads again when the owner moves (Back, Refresh, a sheet). */
+  private heard(change: QuestionsChange): void {
+    const node = this.entryQuestionsNode, shown = this.entryQuestions;
+    if (!this.active || this.project || this.entryReads > 0 || !node?.isConnected || shown.kind !== 'ready') return;
+    if (typeof change.openQuestions !== 'number' || change.openQuestions === shown.doc.openQuestions) return;
+    if (document.activeElement && node.contains(document.activeElement)) return;
+    void this.rereadEntryQuestions(null, false);
   }
 
   /** Read the count again for the badge (Refresh and answers in a project; the entry screen reads it with its list). */
@@ -193,6 +209,7 @@ class WorkView implements WorkViewController {
   private async loadEntry(): Promise<void> {
     const { token, signal } = this.begin();
     this.project = null; this.selected = null;
+    this.nav.at(0);
     this.show(loadingBlock(this.t));
     const reads = [this.api.products(signal), this.api.projects(signal)] as const;
     const questions = this.api.openQuestions(signal);   // waits for a free slot
@@ -252,7 +269,8 @@ class WorkView implements WorkViewController {
   private async rereadEntryQuestions(answered: string | null, focus = true,
     pending?: Promise<WorkResult<OpenQuestionsDoc>>): Promise<boolean> {
     const token = this.generation, sequence = ++this.questionsSequence;
-    const result = await (pending ?? this.api.openQuestions(this.controller?.signal));
+    this.entryReads++;
+    const result = await (pending ?? this.api.openQuestions(this.controller?.signal)).finally(() => { this.entryReads--; });
     if (token !== this.generation || sequence !== this.questionsSequence || this.project || !this.entryQuestionsNode) return true;
     this.report(result);
     const drafts = unsentDrafts(this.entryQuestionsNode, answered ?? '');
@@ -271,11 +289,12 @@ class WorkView implements WorkViewController {
   private async openProject(id: string, tab: TabKey = 'reprise'): Promise<void> {
     const { token, signal } = this.begin();
     this.selected = null;
+    this.nav.at(1);
     this.show(loadingBlock(this.t));
     const result = await this.api.project(id, signal);
     if (token !== this.generation) return;
     if (!result.ok) return this.failure(result.error, () => void this.openProject(id, tab), () => void this.backToEntry());
-    const view = renderProject(this.panelCtx, result.value, tab, () => void this.backToEntry());
+    const view = renderProject(this.panelCtx, result.value, tab, () => void this.backToEntry(), () => this.nameSheetBack());
     this.project = { id, view };
     this.show(view.root);
     focusFirst(view.root.querySelector<HTMLElement>('.work-back'));
@@ -302,8 +321,10 @@ class WorkView implements WorkViewController {
   /** Back to the entry screen as it was, then its open questions read again (an answer may have closed some). */
   private async backToEntry(): Promise<void> {
     if (!this.entry) return this.loadEntry();
-    this.close();
-    this.controller = new AbortController();   // close() aborted the project's signal; the questions read needs a live one
+    this.stopRequests();
+    this.docs.close();
+    this.nav.at(0);
+    this.controller = new AbortController();   // the project's signal is aborted; the questions read needs a live one
     const from = this.project?.id;
     this.project = null; this.selected = null;
     this.renderEntryScreen();
@@ -326,6 +347,7 @@ class WorkView implements WorkViewController {
       if (result.error.kind === 'not-available') this.writeUnavailable = true;
       return failureOfKind(result.error.kind);
     }
+    this.sync.publish({ source: 'view', answered: question });   // the marker drops it now, wherever the view is
     // The write stands whatever happened meanwhile; a view closed (or reloaded) since shows nothing and reads nothing.
     if (token !== this.generation) return null;
     const notice = this.t(!result.ok ? 'work.answer.already' : result.value.uncommitted ? 'work.answer.sentUncommitted' : 'work.answer.sent');
@@ -381,9 +403,10 @@ class WorkView implements WorkViewController {
     const view = this.project.view;
     this.selected = id;
     markSelected(view.root, id);
+    if (view.detailSlot.hidden) this.tabScroll = scrollerOf(view.root).scrollTop;
     if (!after) view.detailSlot.replaceChildren(this.closeButton(view), loadingBlock(this.t));
     view.showDetail(true);
-    document.addEventListener('keydown', this.onEscape, true);
+    this.nav.at(2);
     const token = this.generation, sequence = ++this.detailSequence;
     this.detailController?.abort();
     this.detailController = new AbortController();
@@ -402,29 +425,55 @@ class WorkView implements WorkViewController {
     focusFirst(question ?? body.querySelector<HTMLElement>('.work-detail-heading'));
   }
 
+  /** The sheet's way back: it names the tab it returns to (and, for a screen reader, the project). */
   private closeButton(view: ProjectView): HTMLElement {
-    return button('btn work-detail-close', this.t('work.detail.close'), () => this.closeDetail(view));
+    this.sheetBack = button('btn work-detail-close', '', () => this.closeDetail(view));
+    this.nameSheetBack();
+    return this.sheetBack;
   }
 
+  private nameSheetBack(): void {
+    const view = this.project?.view;
+    if (!view || !this.sheetBack) return;
+    const tab = this.t(`work.tab.${view.current()}`);
+    this.sheetBack.textContent = this.t('work.detail.back', { tab });
+    this.sheetBack.setAttribute('aria-label', this.t('work.detail.backLabel', { tab, project: view.title }));
+  }
+
+  /** Back from the sheet to the tab it covered, scrolled where it was, focus on the control that opened it. */
   private closeDetail(view: ProjectView): void {
-    const previous = this.selected;
-    this.selected = null;
+    const previous = this.selected, restore = tabsHidden(view.root) ? this.tabScroll : null;
+    this.selected = null; this.tabScroll = null; this.sheetBack = null;
     this.detailController?.abort(); this.detailSequence++;
-    document.removeEventListener('keydown', this.onEscape, true);
+    this.nav.at(1);
     markSelected(view.root, null);
     view.showDetail(false);
     view.detailSlot.replaceChildren();
+    if (restore !== null) scrollerOf(view.root).scrollTop = restore;
     // The control that opened the sheet is in the tab shown (a card, or a task heading of the Questions tab).
     const selector = `[data-task="${CSS.escape(previous ?? '')}"]`;
-    if (previous) focusFirst(view.panel(view.current()).querySelector<HTMLElement>(selector) ?? view.root.querySelector<HTMLElement>(selector));
+    if (previous) focusFirst(view.panel(view.current()).querySelector<HTMLElement>(selector) ?? view.root.querySelector<HTMLElement>(selector), restore !== null);
   }
 
-  private closeDetailOnEscape(event: KeyboardEvent): void {
-    if (event.key !== 'Escape' || !this.project || this.project.view.detailSlot.hidden) return;
+  /** The browser's Back (or a phone's back gesture) went to an entry of the view: show that level. */
+  private wentBack(state: unknown): void {
+    const level = this.nav.popped(state), project = this.project;
+    if (level === null || !this.active) return;
+    if (level === 0) void this.backToEntry();
+    else if (project && !project.view.detailSlot.hidden) this.closeDetail(project.view);
+  }
+
+  /** Escape goes up one level: sheet to tab, project to the entry screen; on the entry screen the page's own Escape
+   *  leaves Projects. A text field holding text keeps it (nothing happens). */
+  private upOnEscape(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || !this.active) return;
     const target = event.target;
     if (target !== document.body && !(target instanceof Node && this.options.root.contains(target))) return;   // a dialog or field elsewhere keeps its own Escape
+    const project = this.project;
+    if (escapeKeepsField(target)) { event.stopPropagation(); return; }
+    if (!project) return;
     event.stopPropagation();
-    this.closeDetail(this.project.view);
+    if (!project.view.detailSlot.hidden) this.closeDetail(project.view); else void this.backToEntry();
   }
 }
 

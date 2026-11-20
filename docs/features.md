@@ -213,10 +213,12 @@ project tracker that agents write through `mesh-work`, read only:
   has no sheet). The page reads them (`session-questions` of [work-read](work-read.md)) after a
   session listing, at most once a minute while it is visible, and again when the Projects view is
   left (the Sessions button alone does not read); when the tracker cannot be read, nothing is shown.
-  The count on the Projects button is written by this read and by the Projects view; the last one to
-  write wins, so a count can stay out of date for up to a minute until the next read. Sessions are
-  matched by name: a session restored under another name loses its questions, and a later session
-  that takes an earlier one's name gets them.
+  The count on the Projects button is written by this read and by the Projects view. A question
+  answered in the Projects view leaves the markers and that count at once, and they are read again
+  then (not a minute later), as they are when the view reads another count of open questions (for
+  example after "Refresh") or fails to read it. Sessions are matched by name: a session restored
+  under another name loses its questions, and a later session that takes an earlier one's name gets
+  them.
 - **Products and projects.** The first screen lists the products and their active projects, with
   each project's progress (done tasks over all tasks) and its number of blockers.
 - **A project, in five tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent
@@ -227,7 +229,16 @@ project tracker that agents write through `mesh-work`, read only:
   answered, grouped by task, then "Without a task" for those about the project itself, each with
   the answer form; at most 20, open ones first). The French interface names them "Reprise",
   "Tableau", "Frise", "Dépendances" and "Questions". An answer given in the Questions tab, in the
-  task sheet or on the first screen shows in the other places once they are read again.
+  task sheet or on the first screen shows in the other places once they are read again; an
+  answered question is never shown in the colour of the open ones.
+- **The way back.** The view has three levels: the first screen, a project on one of its tabs, and
+  a task sheet over that tab. The sheet's first button ("Back to the Board tab", named after the
+  tab) returns to the tab, scrolled where it was on a phone, with the focus on the task that
+  opened the sheet; "Back to products" in the project header returns to the first screen. `Esc`
+  and the browser's Back (a phone's back gesture) go up one level the same way; on the first
+  screen `Esc` leaves Projects, and the browser's Back does what it did before. A sheet opened from
+  a session's "? n" button or from the first screen's questions returns to its project's Questions
+  tab. `Esc` in a text field that holds text does nothing, so a draft answer is not lost.
 - **A task.** Selecting a task opens its sheet: blockers, dependencies, the sessions that worked on
   it, its notes, its events and its questions. An answer given with the sheet's answer button
   reads "answered by the owner in this view (signed in)". Any other answer reads as the owner's

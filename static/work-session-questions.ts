@@ -83,6 +83,19 @@ export function markerTarget(entry: SessionEntry): WorkTarget {
   return { kind: 'entry' };
 }
 
+/** The document less a question just answered: each session listing it counts one less, and so does the total.
+ *  Null when no session lists it (it may be among those left out): only a new read can tell then. */
+export function withoutAnswered(doc: SessionQuestionsDoc, id: string): SessionQuestionsDoc | null {
+  let listed = false;
+  const sessions = doc.sessions.map(entry => {
+    const questions = entry.questions.filter(question => question.id !== id);
+    if (questions.length === entry.questions.length) return entry;
+    listed = true;
+    return { ...entry, questions, count: Math.max(questions.length + entry.omitted, entry.count - 1) };
+  });
+  return listed ? { ...doc, sessions, openQuestions: Math.max(0, doc.openQuestions - 1) } : null;
+}
+
 /** The markers by session name: only the sessions with at least one open question. */
 export function markerIndex(doc: SessionQuestionsDoc): ReadonlyMap<string, SessionMarker> {
   const index = new Map<string, SessionMarker>();
