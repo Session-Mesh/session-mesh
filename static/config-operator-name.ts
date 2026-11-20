@@ -6,15 +6,22 @@
 // settings route with a body {"settings": {...}} and needs the same short elevation (the master
 // token, typed again): when the server asks for it, the card shows the token field, then saves.
 // The token is sent once and cleared at once. Everything reaches the DOM as text or input values.
+//
+// An elevation this card asks for serves that one save and is revoked right after it, whatever the outcome. The
+// launch editor of the same dialog was built before it and would show neither its clock nor its Lock button, so
+// keeping it would leave ten minutes of editing rights running unseen. An elevation that already existed (unlocked
+// from the launch editor, which shows it) is left alone.
 
 import type { ConfigTranslate } from "./config-panel.ts";
 import type { ElevateResult } from "./config-launch-editor.ts";
-import { OPERATOR_NAME_EVENT, OPERATOR_NAME_MAX, cleanOperatorName, operatorNameOfConfig, operatorNameProblem } from "./operator-name.ts";
+import { OPERATOR_NAME_EVENT, OPERATOR_NAME_MAX, cleanOperatorName, normalizeOperatorName, operatorNameOfConfig,
+  operatorNameProblem } from "./operator-name.ts";
 
 export type RunnerSettingsResult = { ok: true; value: unknown } | { ok: false; error: string };
 export type OperatorNamePorts = Readonly<{
   t: ConfigTranslate;
   elevate: (token: string) => Promise<ElevateResult>;
+  revoke: () => Promise<boolean>;
   saveSettings: (settings: { operator_name: string }) => Promise<RunnerSettingsResult>;
 }>;
 
@@ -30,6 +37,8 @@ export class OperatorNameCard {
   private readonly save: HTMLButtonElement;
   /** Set when the dialog closes or redraws: a card no longer shown never saves after an answer arrives late. */
   private disposed = false;
+  /** Set while this card holds an elevation it asked for itself; relock() revokes it. */
+  private unlocked = false;
 
   dispose(): void { this.disposed = true; }
 
@@ -40,7 +49,8 @@ export class OperatorNameCard {
     card.dataset.section = "operator";
     const label = this.make("label", "config-operator-label", t("config.operator.label", { max: OPERATOR_NAME_MAX }));
     const input = this.input = this.make("input", "config-operator-name");
-    input.type = "text"; input.autocomplete = "off"; input.spellcheck = false; input.maxLength = OPERATOR_NAME_MAX * 2;
+    // A loose cap in UTF-16 units only (a decomposed or astral name is longer there); the real check is operatorNameProblem.
+    input.type = "text"; input.autocomplete = "off"; input.spellcheck = false; input.maxLength = OPERATOR_NAME_MAX * 4;
     input.value = operatorNameOfConfig(config);
     label.append(input);
     this.save = this.make("button", "btn sm primary config-operator-save", t("config.operator.save"));
@@ -102,7 +112,8 @@ export class OperatorNameCard {
     const { t } = this.ports;
     this.busy(true);
     const result = await this.ports.elevate(token).catch(() => null);
-    if (this.disposed) return;
+    if (result?.ok) this.unlocked = true;
+    if (this.disposed) { await this.relock(); return; }
     this.busy(false);
     if (result === null) { this.say({ text: t("config.launch.err.network"), ok: false }); return; }
     if (!result.ok) {
@@ -111,7 +122,14 @@ export class OperatorNameCard {
       return;
     }
     this.token.hidden = true;
-    await this.submit();
+    try { await this.submit(); } finally { await this.relock(); }
+  }
+
+  /** Give back the elevation this card obtained (see the header); one that existed before is not touched. */
+  private async relock(): Promise<void> {
+    if (!this.unlocked) return;
+    this.unlocked = false;
+    await this.ports.revoke().catch(() => false);
   }
 
   private async submit(): Promise<void> {
@@ -120,7 +138,7 @@ export class OperatorNameCard {
     const problem = operatorNameProblem(this.input.value);
     if (problem !== null) { this.say({ text: t(`config.operator.err.${problem}`, { max: OPERATOR_NAME_MAX }), ok: false }); return; }
     this.busy(true);
-    const result = await this.ports.saveSettings({ operator_name: this.input.value.trim() }).catch(() => null);
+    const result = await this.ports.saveSettings({ operator_name: normalizeOperatorName(this.input.value) }).catch(() => null);
     if (this.disposed) return;
     this.busy(false);
     if (result === null) { this.say({ text: t("config.launch.err.network"), ok: false }); return; }

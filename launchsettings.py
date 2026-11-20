@@ -218,22 +218,38 @@ def write_update(agents: object, roots: object, expected_revision: str, applied_
 # configuration folder (field -> maximum length; "" is the default). The server never acts on them.
 RUNNER_SETTINGS_FILE = "settings.json"
 RUNNER_LIMITS = {"operator_name": 40}
+RUNNER_MAX_MARKS = 3   # combining marks (Mn, Me) in a row, after NFC
 _HIDDEN = frozenset(("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))   # control, format (bidi), unassigned
-_INVISIBLE_MARKS = frozenset("\u034f" + "".join(map(chr, [*range(0xFE00, 0xFE10), *range(0xE0100, 0xE01F0)])))
+# Invisible or blank-looking characters of other categories (static/operator-name.ts refuses the same): combining
+# grapheme joiner, Hangul fillers, Mongolian variation selectors, Braille blank, object replacement, variation selectors.
+_INVISIBLE_MARKS = frozenset("\u034f\u115f\u1160\u180b\u180c\u180d\u180f\u2800\u3164\uffa0\ufffc"
+                             + "".join(map(chr, [*range(0xFE00, 0xFE10), *range(0xE0100, 0xE01F0)])))
+
+
+def _mark_run_too_long(text: str) -> bool:
+    run = 0
+    for c in text:
+        run = run + 1 if unicodedata.category(c) in ("Mn", "Me") else 0
+        if run > RUNNER_MAX_MARKS:
+            return True
+    return False
 
 
 def _runner_text(key: str, value: object) -> str:
-    text = value.strip() if isinstance(value, str) else None
-    if text is None or len(text) > RUNNER_LIMITS[key] or any(
+    """The value in NFC, trimmed; its length is counted in code points after normalisation."""
+    text = unicodedata.normalize("NFC", value).strip() if isinstance(value, str) else None
+    if text is None or len(text) > RUNNER_LIMITS[key] or _mark_run_too_long(text) or any(
             unicodedata.category(c) in _HIDDEN or c in _INVISIBLE_MARKS for c in text):
-        raise InvalidLaunchSettings(f"{key}: at most {RUNNER_LIMITS[key]} characters, no control or bidi character")
+        raise InvalidLaunchSettings(f"{key}: at most {RUNNER_LIMITS[key]} characters, no control, bidi or invisible "
+                                    f"character, at most {RUNNER_MAX_MARKS} combining marks in a row")
     return text
 
 
 def read_runner_settings(path: Path) -> dict:
     """Every runner setting: its stored value when valid, else "" (also for a missing or broken file)."""
     values = dict.fromkeys(RUNNER_LIMITS, "")
-    with contextlib.suppress(OSError, ValueError, AttributeError):   # unreadable, not JSON, not an object
+    # Unreadable, not JSON, nested too deep for the parser, not an object: all read as the defaults.
+    with contextlib.suppress(OSError, ValueError, AttributeError, RecursionError):
         stored = json.loads(path.read_bytes()[:MAX_BYTES].decode("utf-8"))
         for key in RUNNER_LIMITS.keys() & stored.keys():
             with contextlib.suppress(InvalidLaunchSettings):

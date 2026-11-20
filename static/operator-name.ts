@@ -3,7 +3,7 @@
 
 // The operator's display name: a runner setting ("runner_settings" of GET /api/config, written by the
 // owner from the Configuration dialog) that the labels saying who a question or an answer waits for or
-// comes from can use ("Waiting for an answer from Mathias"). Pure helpers, shared by the Projects view
+// comes from can use ("Waiting for an answer from Camille"). Pure helpers, shared by the Projects view
 // bundle and the Configuration dialog bundle.
 //
 // The name is text typed by a person: it is only ever passed as a translation parameter and shown
@@ -16,9 +16,13 @@ export const OPERATOR_NAME_MAX = 40;
 export const OPERATOR_NAME_EVENT = 'mesh:operator-name';
 
 /** Control, format (bidirectional marks, zero-width characters), surrogate, private-use, unassigned and
- *  line or paragraph separator characters, and the invisible marks (combining grapheme joiner, variation selectors):
- *  the ones the server refuses in a runner setting. */
-const HIDDEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\u034f\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/gu;
+ *  line or paragraph separator characters, and the invisible or blank-looking ones of other categories (combining
+ *  grapheme joiner, Hangul fillers, Mongolian variation selectors, Braille blank, object replacement, variation
+ *  selectors): the ones the server refuses in a runner setting (launchsettings.py). */
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\u034f\u115f\u1160\u180b-\u180d\u180f\u2800\u3164\uffa0\ufffc\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/gu;
+/** At most this many combining marks in a row (after NFC), as on the server: more piles up out of the line. */
+export const OPERATOR_NAME_MAX_MARKS = 3;
+const MARK_RUN = new RegExp(`[\\p{Mn}\\p{Me}]{${OPERATOR_NAME_MAX_MARKS + 1},}`, 'gu');
 
 /** The keys of one label: without a name, with a name, and with a name that starts with a vowel (French
  *  elides "de" into "d'" there; other languages give the same text to both). */
@@ -34,17 +38,26 @@ export const OPERATOR_LABELS = {
 
 export type OperatorLabelId = keyof typeof OPERATOR_LABELS;
 
-/** A name fit to show: hidden characters removed, trimmed, at most OPERATOR_NAME_MAX characters; "" for
- *  anything that is not text. The server already refuses such names; this guards the display anyway. */
-export function cleanOperatorName(raw: unknown): string {
-  if (typeof raw !== 'string') return '';
-  return [...raw.replace(HIDDEN, '').trim()].slice(0, OPERATOR_NAME_MAX).join('').trim();
+/** The form a typed name is checked, saved and counted in, as the server does: NFC, trimmed. Lengths are counted
+ *  in code points (`[...text].length`), never in UTF-16 units. */
+export function normalizeOperatorName(typed: string): string {
+  return typed.normalize('NFC').trim();
 }
 
-/** Why a typed name cannot be saved, or null. Leading and trailing blanks are dropped first. */
+/** A name fit to show: hidden characters removed, NFC, trimmed, runs of combining marks cut to
+ *  OPERATOR_NAME_MAX_MARKS, at most OPERATOR_NAME_MAX characters; "" for anything that is not text. The server
+ *  already refuses such names; this guards the display anyway. */
+export function cleanOperatorName(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const name = normalizeOperatorName(raw.replace(HIDDEN, ''))
+    .replace(MARK_RUN, run => [...run].slice(0, OPERATOR_NAME_MAX_MARKS).join(''));
+  return [...name].slice(0, OPERATOR_NAME_MAX).join('').trim();
+}
+
+/** Why a typed name cannot be saved, or null. Checked on its normalised form (normalizeOperatorName). */
 export function operatorNameProblem(typed: string): 'tooLong' | 'invalid' | null {
-  const name = typed.trim();
-  if (new RegExp(HIDDEN.source, 'u').test(name)) return 'invalid';
+  const name = normalizeOperatorName(typed);
+  if (new RegExp(HIDDEN.source, 'u').test(name) || new RegExp(MARK_RUN.source, 'u').test(name)) return 'invalid';
   return [...name].length > OPERATOR_NAME_MAX ? 'tooLong' : null;
 }
 
@@ -55,14 +68,18 @@ export function operatorNameOfConfig(raw: unknown): string {
   return cleanOperatorName(field(field(field(raw, 'runner_settings'), 'values'), 'operator_name'));
 }
 
-/** Applied to the decomposed (NFD) name, so that an accented vowel counts; then æ and œ. Not "y" nor "h". */
-const STARTS_WITH_VOWEL = new RegExp('^[aeiou\\u00e6\\u0153]', 'iu');
+/** Where French elides "de" into "d'", applied to the decomposed (NFD) name so that an accented vowel counts: a vowel,
+ *  æ or œ; an h, taken as mute as in nearly every first name (d'Hélène, d'Hugo; a rare aspirated h reads d' too); a y
+ *  before a consonant (d'Yves), not before a vowel, where it is a consonant (de Yann). */
+const ELIDES = new RegExp('^(?:[aeiouh\\u00e6\\u0153]|y[^aeiouy])', 'iu');
 
-/** The label `id` with the operator's name when there is one, else the wording without a name. */
+/** The label `id` with the operator's name when there is one, else the wording without a name. The name sits between
+ *  FIRST STRONG ISOLATE and POP DIRECTIONAL ISOLATE, so that a right-to-left name never reorders the sentence around
+ *  it; the whole label stays plain text. */
 export function operatorLabel(t: OperatorTranslate, id: OperatorLabelId, name: string,
   params: Readonly<Record<string, string | number>> = {}): string {
   const keys: OperatorLabelKeys = OPERATOR_LABELS[id];
   const shown = cleanOperatorName(name);
   if (shown === '') return t(keys.plain, { ...params });
-  return t(STARTS_WITH_VOWEL.test(shown.normalize('NFD')) ? keys.elided : keys.named, { ...params, name: shown });
+  return t(ELIDES.test(shown.normalize('NFD')) ? keys.elided : keys.named, { ...params, name: `\u2068${shown}\u2069` });
 }

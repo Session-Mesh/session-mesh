@@ -3,7 +3,7 @@
 
 // The operator's display name, end to end in headless Chromium against the real server, work-read and work-write on a
 // fictional tracker: the owner types a name in the Configuration dialog (Appearance), unlocks with the master token
-// when the server asks for it, and the Projects view says "En attente de la réponse de Mathias"; a cleared name gives
+// when the server asks for it, and the Projects view says "En attente de la réponse de Camille"; a cleared name gives
 // the wording without a name, at once in a Projects view already open, and in a new page. At 1440 and 390 px.
 // Nothing here uses the default port or a real data directory: free MESH_PORT, temporary home and MESH_CONF_DIR,
 // WL_HOME in a temporary directory.
@@ -29,7 +29,7 @@ const skip = (!CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM is
   || ((!fs.existsSync(READER) || !fs.existsSync(WRITER)) && !process.env.MESH_REQUIRE_WORK_READ
     ? 'built work-read and work-write are required' : false);
 const FIXTURE = path.join(REPO, 'ocaml/worklog/test/fixture');
-const NAMED = 'En attente de la réponse de Mathias';
+const NAMED = 'En attente de la réponse de \u2068Camille\u2069';
 const UNNAMED = "En attente de la réponse de l'opérateur";
 const EVENTS = [{ ts: '2026-11-09T09:00:00Z', task: 'N-0000d0d1', type: 'question', id: 'N-0000d0d1', text: 'Which port?',
   agent: 'claude', session: 'asking-session' }];
@@ -64,20 +64,28 @@ after(async () => {
   if (tracker) fs.rmSync(tracker, { recursive: true, force: true });
 });
 
-async function signedIn(width: number): Promise<{ page: Page; problems: string[]; configWrites: string[] }> {
+async function signedIn(width: number): Promise<{ page: Page; problems: string[]; otherRequests: string[] }> {
   const context = await browser.newContext({ locale: 'fr-FR', viewport: { width, height: 900 } });
   contexts.push(context);
   const page = await context.newPage();
   page.setDefaultTimeout(120_000);
-  const problems: string[] = [], configWrites: string[] = [];
+  const problems: string[] = [], otherRequests: string[] = [];
   page.on('pageerror', error => problems.push(String(error)));
+  // Every request outside the configuration API, whatever its method (a GET can carry the name in its query too).
   page.on('request', request => {
-    if (request.method() === 'POST' && !request.url().includes('/api/config')) configWrites.push(`${request.url()} ${request.postData() ?? ''}`);
+    if (!new URL(request.url()).pathname.startsWith('/api/config')) {
+      otherRequests.push(`${request.method()} ${decodeURIComponent(request.url())} ${request.postData() ?? ''}`);
+    }
   });
   await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
   await page.goto(`${mesh.base}/`);
   await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');
-  return { page, problems, configWrites };
+  return { page, problems, otherRequests };
+}
+
+/** Whether the server still holds an elevation for this page. */
+async function elevated(page: Page): Promise<boolean> {
+  return await page.evaluate(async () => (await (await fetch('/api/config', { cache: 'no-store' })).json()).elevation?.active === true);
 }
 
 async function tap(page: Page, id: string, width: number): Promise<void> {
@@ -102,13 +110,21 @@ async function saveName(page: Page, width: number, name: string, expected: strin
   await card.locator('.config-operator-save').click();
   const token = card.locator('.config-operator-token');
   await Promise.race([token.waitFor(), card.locator('.config-operator-status.config-ok').waitFor()]);
-  if (await token.isVisible()) {
+  const unlocked = await token.isVisible();
+  if (unlocked) {
     await token.locator('input[type=password]').fill(mesh.token());
     await token.locator('button[type=submit]').click();
   }
   await card.locator('.config-operator-status.config-ok').waitFor();
   assert.equal(await card.locator('.config-operator-name').inputValue(), expected);
   assert.equal(await token.locator('input[type=password]').inputValue(), '', 'the token is not kept in the field');
+  if (unlocked) {
+    // The elevation was asked for this one save; the launch editor of the dialog, built before it, would show no clock
+    // and no Lock button for it, so the card gives it back once the save is done.
+    const until = Date.now() + 10_000;
+    while (await elevated(page) && Date.now() < until) await page.waitForTimeout(100);
+    assert.equal(await elevated(page), false, 'no elevation left running unseen');
+  }
   await fits(page);
   await shot(page, `config-${width}-${expected || 'empty'}`);
   await page.locator('#dlg-config [data-close-dialog]').click();
@@ -136,11 +152,11 @@ describe('the operator name', { skip }, () => {
   for (const width of [1440, 390]) {
     test(`set in the Configuration dialog, it names the operator in Projects, and a cleared one falls back (${width} px)`, async () => {
       fs.rmSync(path.join(mesh.confDir, 'settings.json'), { force: true });
-      const { page, problems, configWrites } = await signedIn(width);
+      const { page, problems, otherRequests } = await signedIn(width);
       await openProjects(page, width);
       assert.equal(await waiting(page).textContent(), UNNAMED, 'no name yet: the wording without one');
 
-      await saveName(page, width, '  Mathias  ', 'Mathias');
+      await saveName(page, width, '  Camille  ', 'Camille');
       await page.waitForFunction(text => document.querySelector('.work-entry-questions .work-question-waiting')?.textContent === text, NAMED);
       await fits(page);
       await shot(page, `projects-${width}-named`);
@@ -159,7 +175,10 @@ describe('the operator name', { skip }, () => {
       await shot(page, `projects-${width}-unnamed`);
 
       assert.deepEqual([...problems, ...fresh.problems], []);
-      for (const write of [...configWrites, ...fresh.configWrites]) assert.ok(!write.includes('Mathias'), `the name is never sent elsewhere: ${write}`);
+      assert.ok(otherRequests.some(request => request.startsWith('GET ')), 'the GET requests are watched too');
+      for (const request of [...otherRequests, ...fresh.otherRequests]) {
+        assert.ok(!request.includes('Camille'), `the name is never sent elsewhere: ${request}`);
+      }
     });
   }
 
@@ -168,7 +187,7 @@ describe('the operator name', { skip }, () => {
     await tap(page, 'btn-config', 1440);
     await showSection(page, 'appearance');
     const card = page.locator('#dlg-config .config-operator');
-    await card.locator('.config-operator-name').fill('Ma\u202ethias');
+    await card.locator('.config-operator-name').fill('Ca\u202emille');
     await card.locator('.config-operator-save').click();
     await card.locator('.config-operator-status.config-error').waitFor();
     assert.match(await card.locator('.config-operator-status').textContent() ?? '', /caractère interdit/);

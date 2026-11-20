@@ -248,7 +248,7 @@ export class ConfigPanel {
     this.editor = new LaunchEditor(dialog.ownerDocument, parseLaunch(raw.launch), parseElevation(raw.elevation),
       { t, elevate, revoke, save, reload: (next) => { void this.load(next); } }, notice);
     const cards = this.render(buildSections(result.value, t, this.language()));
-    this.operator = new OperatorNameCard(dialog.ownerDocument, raw, { t, elevate, saveSettings });
+    this.operator = new OperatorNameCard(dialog.ownerDocument, raw, { t, elevate, revoke, saveSettings });
     this.shell = new SettingsShell(dialog.ownerDocument, { nav: t("config.nav"), back: t("config.back") },
       this.layout(cards, this.editor.element, this.operator.element), this.selected);
     body.replaceChildren(this.shell.element);
