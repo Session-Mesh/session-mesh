@@ -129,6 +129,7 @@ let decode value =
   let* id = text 80 raw_id in
   let* raw_label = field "label" fields in
   let* label = text 160 raw_label in
+  let label = String.trim label in
   let* raw_backend = field "backend" fields in
   let* backend = parse_backend raw_backend in
   let* raw_enabled = field "enabled" fields in
@@ -139,7 +140,7 @@ let decode value =
   let* roots = decode_roots backend raw_roots in
   if
     (not (valid_id id))
-    || String.trim label = ""
+    || (not (Mesh_accounts.valid_label label))
     || not (separate_conversation_root backend roots)
   then Error Invalid_config
   else

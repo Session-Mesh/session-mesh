@@ -38,7 +38,9 @@ val id : t -> string
 (** Stable configured ID, qualified by {!backend} for identity. *)
 
 val label : t -> string
-(** Display text, never an identity or permission resource. *)
+(** Display text after trimming ASCII edge whitespace, validated by the existing
+    alias label rules (at most 24 Unicode characters). Never an identity or
+    permission resource. *)
 
 val backend : t -> backend
 (** Exact backend variant, independent of native approval/sandbox presets. *)

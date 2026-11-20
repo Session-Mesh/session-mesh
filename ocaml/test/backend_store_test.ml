@@ -409,6 +409,27 @@ let old_draft_schema () =
         "old journal and policy are not migrated or erased" before
         (In_channel.with_open_bin file In_channel.input_all))
 
+let finish_unknown () =
+  with_root (fun root ->
+      with_store root (fun store ->
+          Alcotest.(check bool)
+            "unknown operation cannot be finished" true
+            (S.transaction store ~expected_revision:0 (fun tx ->
+                 let* () = save_skip tx in
+                 ignore (S.finish_operation tx ~id:"missing");
+                 Ok ())
+            = Error S.Invalid_state);
+          Alcotest.(check int)
+            "ignored finish error rolls policy back" 0
+            (C.revision (value (S.read_policy store)));
+          ignore
+            (value
+               (S.transaction store ~expected_revision:0 (fun tx ->
+                    let* row = S.get_operation tx ~id:"missing" in
+                    Alcotest.(check bool)
+                      "no row is manufactured" true (row = None);
+                    Ok ())))))
+
 let () =
   Alcotest.run "backend state store"
     [
@@ -444,5 +465,7 @@ let () =
             custody_before_commit;
           Alcotest.test_case "old draft schema refused unchanged" `Quick
             old_draft_schema;
+          Alcotest.test_case "unknown terminal operation refuses and poisons"
+            `Quick finish_unknown;
         ] );
     ]
