@@ -41,7 +41,8 @@ ROUTES.update({("GET", "/api/agent-mail/@self/peers"),
                ("POST", "/api/agent-mail/@self/reply"),
                ("POST", "/api/agent-mail/@self/ack")})
 ROUTES.update({("POST", "/api/session-actions/@self/request"),
-               ("GET", "/api/session-actions/@self/request")})
+               ("GET", "/api/session-actions/@self/request"),
+               ("GET", "/api/session-actions/@self/accounts")})
 ROUTES.update({("GET", "/api/agent-mail/@self/pi-wakes"),
                ("POST", "/api/agent-mail/@self/pi-wake-ack")})
 # These routes name a session solely by a MeshSession token.  In contrast with
@@ -71,7 +72,8 @@ TOKEN_ONLY_ROUTES.update({("GET", "/api/agent-mail/@self/peers"),
                           ("POST", "/api/agent-mail/@self/reply"),
                           ("POST", "/api/agent-mail/@self/ack")})
 TOKEN_ONLY_ROUTES.update({("POST", "/api/session-actions/@self/request"),
-                          ("GET", "/api/session-actions/@self/request")})
+                          ("GET", "/api/session-actions/@self/request"),
+                          ("GET", "/api/session-actions/@self/accounts")})
 TOKEN_ONLY_ROUTES.update({("GET", "/api/agent-mail/@self/pi-wakes"),
                           ("POST", "/api/agent-mail/@self/pi-wake-ack")})
 

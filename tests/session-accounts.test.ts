@@ -324,6 +324,65 @@ describe('account aliases', {skip: SKIP}, () => {
   });
 });
 
+/** The session token the fake agent of session ``name`` was started with. */
+async function tokenOf(name: string): Promise<string> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const token = logText().split('\n').map(line => line.split('|')).find(fields => fields[2] === name)?.[5];
+    if (token) return token;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`no token recorded for ${name}`);
+}
+
+const selfAccounts = (token: string, query = '') => fetch(`${mesh.base}/api/session-actions/@self/accounts${query}`,
+  {headers: {Authorization: `MeshSession ${token}`}});
+
+// The mesh-board `session_accounts` tool reads this route: what an agent may learn of the accounts.
+describe("a session's own accounts, read with its session token", {skip: SKIP}, () => {
+  const DEFAULT = {id: 'default', label: 'Default account', claude: true, codex: true};
+
+  test('the alias of the calling session, its agent kind as launched, and ids and labels only', async () => {
+    declare([{id: 'work', label: 'Atacama', claude_config_dir: workClaude, codex_home: workCodex},
+      {id: 'perso', label: 'Perso', codex_home: codexOnly}]);
+    assert.equal((await create({preset: 'claude', name: 'a-work', account: 'work'})).status, 200);
+    assert.equal((await create({preset: 'codex', name: 'a-default'})).status, 200);
+    const response = await selfAccounts(await tokenOf('a-work'));
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    assert.deepEqual(JSON.parse(text), {agent: 'claude', switch_supported: true, accounts_file: 'ok',
+      current: {id: 'work', label: 'Atacama', declared: true},
+      accounts: [DEFAULT, {id: 'work', label: 'Atacama', claude: true, codex: true},
+        {id: 'perso', label: 'Perso', claude: false, codex: true}]});
+    assert.ok(!text.includes('.agent-accounts') && !text.includes(mesh.home), 'no folder reaches the agent');
+    const plain = await (await selfAccounts(await tokenOf('a-default'))).json() as Record<string, unknown>;
+    assert.equal(plain.agent, 'codex');
+    assert.deepEqual(plain.current, {id: 'default', label: 'Default account', declared: true});
+  });
+
+  test('nothing the caller sends chooses the session or the agent kind', async () => {
+    const token = await tokenOf('a-work');
+    for (const query of ['?agent=codex', '?session=a-default', '?account=perso']) {
+      const response = await selfAccounts(token, query);
+      assert.equal(response.status, 400, query);
+    }
+    const bearer = await fetch(`${mesh.base}/api/session-actions/@self/accounts`, {headers: headers()});
+    assert.equal(bearer.status, 401, 'the master token names no session');
+    const forged = await selfAccounts(`${token.slice(0, -2)}xx`);
+    assert.equal(forged.status, 401);
+  });
+
+  test('a refused accounts.json is said, offers the default account only, and keeps naming the current alias', async () => {
+    fs.writeFileSync(path.join(mesh.confDir, 'accounts.json'), '{"v": 1, "accounts": [', {mode: 0o600});
+    const refused = await (await selfAccounts(await tokenOf('a-work'))).json() as Record<string, unknown>;
+    assert.equal(refused.accounts_file, 'refused');
+    assert.deepEqual(refused.accounts, [DEFAULT]);
+    assert.deepEqual(refused.current, {id: 'work', label: 'work', declared: false});
+    fs.rmSync(path.join(mesh.confDir, 'accounts.json'));
+    const absent = await (await selfAccounts(await tokenOf('a-work'))).json() as Record<string, unknown>;
+    assert.equal(absent.accounts_file, 'absent');
+  });
+});
+
 describe('alias login files across a restart', {skip: SKIP}, () => {
   test('a server restarted with a refused accounts.json still refuses the login files of the folders declared before', async () => {
     const where = await scratchHome('accounts-restart-', {MESH_MESH_PLATFORM_CMD: PLATFORM});

@@ -222,6 +222,17 @@ The session request tools ask the owner to start a new agent session, in the fol
 session started, or to restart your own conversation. Nothing happens until the owner approves the
 request in the page, and an undecided request expires. A restart continues in a new session.
 
+`session_accounts` tells you which account alias your session runs under (`default` for the default
+account), which aliases the owner declared on the runner with the agents each one serves, and
+whether your agent can change account. It shows ids and labels only, never a folder, and it takes no
+argument: the mesh knows your session and your agent from your session token and from how it
+launched you. Call it when the owner asks which account you run under, and once at the start of a
+session that continues a restarted conversation, then tell the owner the account. A request made
+before a restart belongs to the session that made it: the new session cannot read its status.
+
+When a session request is refused, the tool's error carries the mesh's reason. Tell the owner that
+reason as it is; do not retry with arguments the owner did not ask for.
+
 ## When you wait for the owner
 
 The owner's sidebar shows a session under "Waiting for you" when Claude Code is blocked on a

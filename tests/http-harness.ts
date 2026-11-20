@@ -205,6 +205,7 @@ const ACCEPTED_STATUS = `
   POST /api/agent-mail/@self/pi-wake-ack 403 Only agent sessions can use messaging
   GET /api/session-actions/@self/request 400
   POST /api/session-actions/@self/request 400
+  GET /api/session-actions/@self/accounts 200
   POST /api/event 400
   POST /api/logout-all 200
 `;

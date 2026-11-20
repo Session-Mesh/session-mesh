@@ -441,7 +441,9 @@ ACCOUNT_OVERRIDES = {
 ACCOUNT_AGENTS_ONLY = "An account alias applies to Claude and Codex sessions only"
 ACCOUNT_UNKNOWN = "Unknown account alias (accounts.json on the runner)"
 ACCOUNT_REFUSED = "Account alias refused: check accounts.json and its folders on the runner (details in the server log)"
-_ACCOUNTS = {"signature": "not read yet", "accounts": [], "protected": None}   # the first reading always runs
+# the first reading always runs; "file": absent, refused or ok (what an agent is told of accounts.json)
+_ACCOUNTS = {"signature": "not read yet", "accounts": [], "protected": None, "file": "absent"}
+DEFAULT_ACCOUNT = {"id": "default", "label": "Default account", "claude": True, "codex": True}
 
 
 class AccountsUnavailable(Exception):
@@ -521,15 +523,15 @@ async def declared_accounts():
     (the refusal is logged: the default account stays what it always was)."""
     signature = await asyncio.to_thread(_accounts_signature)
     if signature != _ACCOUNTS["signature"]:
-        accounts = []
+        accounts, state = [], "absent"
         if signature is not None:
             try:
                 answer = await _accounts_program("list", str(ACCOUNTS_FILE))
-                accounts = [_valid_account(value) for value in answer.get("accounts") or []]
+                accounts, state = [_valid_account(value) for value in answer.get("accounts") or []], "ok"
             except AccountsUnavailable as exc:
                 print(f"accounts.json refused, no alias offered: {exc}", flush=True)
-                accounts = []
-        _ACCOUNTS.update(signature=signature, accounts=accounts)
+                accounts, state = [], "refused"
+        _ACCOUNTS.update(signature=signature, accounts=accounts, file=state)
         view.deny_account_files(await asyncio.to_thread(_protected_folders, accounts))
     return _ACCOUNTS["accounts"]
 
@@ -4061,6 +4063,31 @@ async def api_session_action_request(request):
                              headers={"Cache-Control": "no-store"})
 
 
+async def api_session_accounts(request):
+    """The account alias the calling session's agent runs under and the declared aliases (ids, labels and the
+    agents each serves; never a folder), for the mesh-board `session_accounts` tool. The session is the token's
+    and the agent kind the one recorded at launch: the route takes no parameter."""
+    if request.query:
+        raise web.HTTPBadRequest(text="This route takes no parameter")
+    source, _live = await _agent_mail_context(request)
+    listed = await host({"op": "list"})
+    raw = next((item for item in listed if item["name"] == source["id"]
+                and item["created"] == source["created"]), None)
+    if raw is None:
+        raise web.HTTPConflict(text="Requesting session replaced")
+    declared = await declared_accounts()
+    current = session_account(raw)
+    return web.json_response({
+        "agent": source["agent"],
+        "switch_supported": source["agent"] in ACCOUNT_MEMBER,
+        "accounts_file": _ACCOUNTS["file"],
+        "current": ({"id": current, "label": account_label(current),
+                     "declared": any(a["id"] == current for a in declared)} if current
+                    else {"id": DEFAULT_ACCOUNT["id"], "label": DEFAULT_ACCOUNT["label"], "declared": True}),
+        "accounts": [DEFAULT_ACCOUNT, *accounts_projection()],
+    }, headers={"Cache-Control": "no-store"})
+
+
 def _model_argv(argv, model):
     if model is None:
         return list(argv)
@@ -5609,6 +5636,7 @@ def make_app(*, session_request_path=None):
     app.router.add_post("/api/agent-mail/consent/revoke", api_agent_mail_consent_revoke)
     app.router.add_get("/api/session-actions/@self/request", api_session_action_request)
     app.router.add_post("/api/session-actions/@self/request", api_session_action_request)
+    app.router.add_get("/api/session-actions/@self/accounts", api_session_accounts)
     app.router.add_post("/api/session-actions/{request_id}/claim", api_session_action_claim)
     app.router.add_post("/api/session-actions/{request_id}/decision", api_session_action_decision)
     app.router.add_get("/api/demo-scene/@self", api_demo_scene_self_get)

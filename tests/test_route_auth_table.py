@@ -117,6 +117,7 @@ EXPECTED = {
     ("POST", "/api/agent-mail/consent/revoke"): COOKIE_ONLY,
     ("GET", "/api/session-actions/@self/request"): SESSION_ONLY,
     ("POST", "/api/session-actions/@self/request"): SESSION_ONLY,
+    ("GET", "/api/session-actions/@self/accounts"): SESSION_ONLY,
     ("POST", "/api/session-actions/{request_id}/claim"): COOKIE,
     ("POST", "/api/session-actions/{request_id}/decision"): COOKIE,
     ("POST", "/api/organize"): COOKIE,
