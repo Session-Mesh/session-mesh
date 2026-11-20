@@ -97,37 +97,22 @@ let test_concurrent_carries () =
       let other = "1f1e2d3c-4b5a-4968-8778-695a4b3c2d1e" in
       write (Filename.concat source (project ^ "/" ^ other ^ ".jsonl")) "{}\n";
       let target = claude_account root "b" in
-      let entered_read, entered_write = Unix.pipe () in
-      let go_read, go_write = Unix.pipe () in
-      let byte = Bytes.create 1 in
-      match Unix.fork () with
-      | 0 ->
-          let first = ref true in
-          let write descriptor buffer offset length =
-            if !first then begin
-              first := false;
-              ignore (Unix.write_substring entered_write "x" 0 1);
-              ignore (Unix.read go_read byte 0 1)
-            end;
-            Unix.write descriptor buffer offset length
-          in
-          let io = { C.default_io with C.write } in
-          Unix._exit
-            (match carry ~io ~source ~target C.Claude with
-            | Ok _ -> 0
-            | Error _ -> 1)
-      | child ->
-          ignore (Unix.read entered_read byte 0 1);
-          let second = carry ~source ~target C.Claude in
-          let another = carry ~conversation:other ~source ~target C.Claude in
-          ignore (Unix.write_substring go_write "x" 0 1);
-          let _, status = Unix.waitpid [] child in
+      let results = ref [] in
+      let status =
+        while_carrying ~source ~target (fun () ->
+            let second = carry ~source ~target C.Claude in
+            let another = carry ~conversation:other ~source ~target C.Claude in
+            results := [ second; another ])
+      in
+      match !results with
+      | [ second; another ] ->
           refused_with "carry_in_progress" second;
           ignore (carried another);
           Alcotest.(check bool)
             "the first carry completed" true (status = Unix.WEXITED 0);
           let again = carried (carry ~source ~target C.Claude) in
-          Alcotest.(check int) "its files are in place" 3 again.C.unchanged)
+          Alcotest.(check int) "its files are in place" 3 again.C.unchanged
+      | _ -> Alcotest.fail "the other carries did not run")
 
 let test_lock_file_is_checked () =
   with_root (fun root ->

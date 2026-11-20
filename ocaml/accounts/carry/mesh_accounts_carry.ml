@@ -24,6 +24,8 @@ type outcome = {
 
 type io = Carry_write.io = {
   write : Unix.file_descr -> bytes -> int -> int -> int;
+  read : Unix.file_descr -> bytes -> int -> int -> int;
+  unlink : string -> unit;
   rename : string -> string -> unit;
   close : Unix.file_descr -> unit;
   free_bytes : string -> int option;
@@ -32,6 +34,8 @@ type io = Carry_write.io = {
 let default_io =
   {
     write = Unix.write;
+    read = Unix.read;
+    unlink = Unix.unlink;
     rename = Unix.rename;
     close = Unix.close;
     free_bytes = Carry_target.free_bytes;
@@ -206,10 +210,11 @@ let carry_locked io limits ~uid ~kind ~conversation ~source ~target =
   let* () = check_bounds limits files in
   let relatives = List.map fst files in
   let* () = all (Carry_target.check_folders ~uid ~target) relatives in
-  let* () = Carry_target.clean_leftovers ~uid ~target relatives in
-  let* planned = map_all (Carry_write.plan ~uid ~source ~target) files in
+  let* olds = Carry_target.clean_leftovers ~uid ~target relatives in
+  let* planned = map_all (Carry_write.plan io ~uid ~source ~target) files in
   let* () = check_space io limits ~target planned in
   let* () = Carry_write.write_plan io ~uid ~source ~target planned in
+  List.iter (fun old -> quietly (fun () -> Unix.unlink old)) olds;
   Ok (outcome_of planned)
 
 let check_id kind conversation =
@@ -232,11 +237,28 @@ let carry ?(io = default_io) ?(limits = default_limits) ~uid ~kind ~conversation
   sanitized
     (let* () = check_id kind conversation in
      let* () = check_pair ~uid ~source ~target in
-     Carry_target.with_lock ~uid ~target conversation (fun () ->
+     Carry_target.with_lock ~uid ~target conversation (fun _ ->
          carry_locked io limits ~uid ~kind ~conversation ~source ~target))
 
-(* A target folder this run created is removed again when the carry fails:
-   it then holds only the lock file. *)
+(* The target folder of [carry_accounts] when it was created by this run:
+   removed again when the carry is refused ({!Carry_target.remove_created}),
+   or, without a lock file, when it is still empty. *)
+let carry_into_created io limits ~uid ~kind ~conversation ~source ~target =
+  let result =
+    Carry_target.with_lock ~uid ~target conversation (fun descriptor ->
+        match
+          carry_locked io limits ~uid ~kind ~conversation ~source ~target
+        with
+        | Error _ as refused ->
+            Carry_target.remove_created ~target descriptor;
+            refused
+        | carried -> carried)
+  in
+  (match result with
+  | Error { code = "carry_in_progress"; _ } | Ok _ -> ()
+  | Error _ -> quietly (fun () -> Unix.rmdir target));
+  result
+
 let carry_accounts ?(io = default_io) ?(limits = default_limits) ~uid ~getenv
     ~file ~kind ~conversation ~from_account ~to_account () =
   sanitized
@@ -244,6 +266,7 @@ let carry_accounts ?(io = default_io) ?(limits = default_limits) ~uid ~getenv
      let folder = account_folder ~uid ~getenv ~file ~kind in
      let* source = folder ~create:false from_account in
      let* path = resolve_folder ~uid ~getenv ~file ~kind to_account in
+     let* () = existing_folder ~uid source in
      let existed =
        match Unix.lstat path with
        | _ -> true
@@ -251,15 +274,10 @@ let carry_accounts ?(io = default_io) ?(limits = default_limits) ~uid ~getenv
      in
      let* target = folder ~create:true to_account in
      let* () = check_pair ~uid ~source ~target in
-     Carry_target.with_lock ~uid ~target conversation (fun () ->
-         match
-           carry_locked io limits ~uid ~kind ~conversation ~source ~target
-         with
-         | Error _ as refused when not existed ->
-             quietly (fun () -> Unix.unlink (join target lock_name));
-             quietly (fun () -> Unix.rmdir target);
-             refused
-         | result -> result))
+     if existed then
+       Carry_target.with_lock ~uid ~target conversation (fun _ ->
+           carry_locked io limits ~uid ~kind ~conversation ~source ~target)
+     else carry_into_created io limits ~uid ~kind ~conversation ~source ~target)
 
 let outcome_to_json outcome =
   `Assoc

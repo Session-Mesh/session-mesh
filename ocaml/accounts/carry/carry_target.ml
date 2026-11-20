@@ -71,26 +71,53 @@ let open_lock ~uid ~target =
       open_existing_lock ~uid path
   | exception Unix.Unix_error (error, _, _) -> lock_failure error
 
-(* Run [f] holding an exclusive lock, without waiting, on the byte of
-   [target]/.mesh-carry.lock that the conversation's hash picks: two carries
-   of one conversation into one folder never overlap, carries of other
-   conversations go on. The lock is an fcntl lock, between processes; it ends
-   with the process. The file stays. *)
+let in_progress () =
+  fail "carry_in_progress"
+    "a carry of this conversation into this account is already in progress"
+
+(* Whether [descriptor] is still the file named [path]: a lock taken on a
+   file that {!remove_created} unlinked in between protects nothing. *)
+let still_named ~path descriptor =
+  match (Unix.lstat path, Unix.fstat descriptor) with
+  | named, opened -> same_file named opened
+  | exception Unix.Unix_error _ -> false
+
+(* Run [f descriptor] holding an exclusive lock, without waiting, on the byte
+   of [target]/.mesh-carry.lock that the conversation's hash picks, the id
+   taken without case (a case-insensitive file system gives two spellings one
+   transcript): two carries of one conversation into one folder never
+   overlap, carries of other conversations go on. The lock is an fcntl lock,
+   between processes; it ends with the process. The file stays. *)
 let with_lock ~uid ~target conversation f =
+  let path = join target lock_name in
   let* descriptor = open_lock ~uid ~target in
+  let byte = Hashtbl.hash (String.lowercase_ascii conversation) in
   Fun.protect
     ~finally:(fun () -> quietly (fun () -> Unix.close descriptor))
     (fun () ->
       match
-        ignore (Unix.lseek descriptor (Hashtbl.hash conversation) Unix.SEEK_SET);
+        ignore (Unix.lseek descriptor byte Unix.SEEK_SET);
         Unix.lockf descriptor Unix.F_TLOCK 1
       with
-      | () -> f ()
+      | () when still_named ~path descriptor -> f descriptor
+      | () -> in_progress ()
       | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EACCES), _, _) ->
-          fail "carry_in_progress"
-            "a carry of this conversation into this account is already in \
-             progress"
+          in_progress ()
       | exception Unix.Unix_error (error, _, _) -> lock_failure error)
+
+(* Remove the target folder a refused carry created, with its lock file, when
+   no other carry holds any byte of the lock: the whole file is locked first,
+   and a carry that opened the file before it went away sees it with
+   {!still_named}. [rmdir] removes the folder only when it is empty. *)
+let remove_created ~target descriptor =
+  match
+    ignore (Unix.lseek descriptor 0 Unix.SEEK_SET);
+    Unix.lockf descriptor Unix.F_TLOCK 0
+  with
+  | () ->
+      quietly (fun () -> Unix.unlink (join target lock_name));
+      quietly (fun () -> Unix.rmdir target)
+  | exception Unix.Unix_error _ -> ()
 
 (* -------------------------------------------------- a killed carry's files *)
 
@@ -116,7 +143,8 @@ let leftovers ~uid folder bases =
 
 (* A new temporary is removed. An old one is a copy put aside by a
    replacement: the newest goes back in place when the file itself is
-   missing; the others are removed. *)
+   missing. The old copies still there are returned: they are removed only
+   once the carry succeeds, so a refused carry loses no older copy. *)
 let settle folder found base =
   let mine = List.filter (fun leftover -> leftover.base = base) found in
   let olds =
@@ -136,13 +164,14 @@ let settle folder found base =
   match olds with
   | newest :: rest when missing ->
       Unix.rename newest.path final;
-      List.iter (fun leftover -> Unix.unlink leftover.path) rest
-  | _ -> List.iter (fun leftover -> Unix.unlink leftover.path) olds
+      List.map (fun leftover -> leftover.path) rest
+  | _ -> List.map (fun leftover -> leftover.path) olds
 
 (* Before a carry, under its lock: the temporary files a killed carry left
    next to the files about to be written ([.<name>.carry-new-<16 hex>] and
-   [.<name>.carry-old-<16 hex>] exactly, nothing else). The folders were
-   checked by {!check_folders}. *)
+   [.<name>.carry-old-<16 hex>] exactly, nothing else). New ones are removed;
+   the old copies to remove once the carry succeeds are returned. The folders
+   were checked by {!check_folders}. *)
 let clean_leftovers ~uid ~target relatives =
   let folders = List.sort_uniq compare (List.map Filename.dirname relatives) in
   let bases_in folder =
@@ -155,17 +184,17 @@ let clean_leftovers ~uid ~target relatives =
   in
   List.fold_left
     (fun acc folder ->
-      let* () = acc in
+      let* olds = acc in
       let full = join target folder in
       let* present = lstat_opt full in
-      if present = None then Ok ()
+      if present = None then Ok olds
       else
         let bases = bases_in folder in
         let* found = leftovers ~uid full bases in
-        match List.iter (settle full found) bases with
-        | () -> Ok ()
+        match List.concat_map (settle full found) bases with
+        | settled -> Ok (settled @ olds)
         | exception Unix.Unix_error (error, _, _) ->
             fail "carry_failed"
               ("a killed carry's files could not be removed: "
              ^ Unix.error_message error))
-    (Ok ()) folders
+    (Ok []) folders
