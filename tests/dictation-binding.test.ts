@@ -132,6 +132,26 @@ test('retained original handle observes binding and modes while its view is deta
   release(); assert.equal(f.handle.isOpen(), false);
 });
 
+test('geometry controls preserve binding, unexpected controls revoke it, and disposal ignores late frames', () => {
+  const f = browserHandle();
+  f.bound(); f.message(JSON.stringify({t: 'g', rows: 31, cols: 91}));
+  assert.deepEqual(JSON.parse(JSON.stringify(f.geometry)), [{rows: 31, cols: 91}]);
+  assert.equal(f.handle.isBound('alpha', 1), true);
+  f.replay(); f.message(JSON.stringify({t: 'unexpected'}));
+  assert.equal(f.handle.isBound('alpha', 1), false);
+  f.message(new TextEncoder().encode('ordinary-output').buffer);
+  assert.equal(f.output.length, 2, 'revoked bound authority does not stop ordinary output');
+  const mode = f.handle.dictationMode;
+  f.handle.dispose();
+  assert.equal(mode.valid, false, 'the private mode parser is disposed with the socket');
+  f.message(new TextEncoder().encode('late-output\x1b[?2004h').buffer);
+  f.message(JSON.stringify({t: 'g', rows: 40, cols: 100}));
+  f.bound();
+  assert.equal(f.handle.isBound('alpha', 1), false);
+  assert.equal(f.output.length, 2); assert.equal(f.geometry.length, 1);
+  assert.throws(() => f.handle.queueInput(Uint8Array.of(97)), /disconnected/);
+});
+
 function frame(kind: string, body: unknown): Buffer {
   const data = Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
   const head = Buffer.alloc(5); head[0] = kind.charCodeAt(0); head.writeUInt32BE(data.length, 1);
