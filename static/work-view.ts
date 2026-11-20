@@ -13,6 +13,8 @@ import { createWorkApi } from './work-api.ts';
 import type { WorkApi, WorkError, WorkFetch, WorkResult } from './work-api.ts';
 import { entryTree } from './work-derive.ts';
 import { renderDetail } from './work-detail-view.ts';
+import { mountDocPanel } from './work-doc-panel.ts';
+import type { DocPanel } from './work-doc-panel.ts';
 import { button, el } from './work-dom.ts';
 import type { Translate, ViewContext } from './work-dom.ts';
 import { renderEntry } from './work-entry-view.ts';
@@ -106,6 +108,8 @@ class WorkView implements WorkViewController {
   private detailSequence = 0;
   private writeUnavailable = false;
   private readonly announcer = el('p', 'sr-only work-announcer');
+  /** The document panel of the references in tracker text (static/work-doc-panel.ts). */
+  private readonly docs: DocPanel;
   private readonly onEscape = (event: KeyboardEvent): void => this.closeDetailOnEscape(event);
 
   constructor(private readonly options: WorkViewOptions) {
@@ -121,6 +125,7 @@ class WorkView implements WorkViewController {
     this.announcer.setAttribute('aria-live', 'polite');
     options.root.classList.add('work-root');
     options.root.replaceChildren(el('div', 'work-toolbar', refresh), this.content, this.announcer);
+    this.docs = mountDocPanel({ root: options.root, request: options.request, translate: this.t });
   }
 
   open = (target?: WorkTarget): void => void this.openAt(target);
@@ -137,10 +142,12 @@ class WorkView implements WorkViewController {
     this.controller?.abort(); this.detailController?.abort();
     this.generation++; this.detailSequence++;
     document.removeEventListener('keydown', this.onEscape, true);
+    this.docs.close();
   };
 
   destroy = (): void => {
     this.close();
+    this.docs.destroy();
     this.options.root.classList.remove('work-root');
     this.options.root.replaceChildren();
   };

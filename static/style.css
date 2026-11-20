@@ -1232,6 +1232,30 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
   .work-detail-pane { position: static; }
   .work-bar { width: 72px; }
 }
+/* Links in tracker text and the document panel of the Projects view (static/work-linkify.ts, static/work-doc-panel.ts):
+   beside the view on a wide screen, over it (full screen, with its close button) on a phone. */
+.work-link { color: var(--accent); overflow-wrap: anywhere; }
+.work-root .work-doc-link { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 6px; margin: 1px 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); color: var(--accent); font: inherit; cursor: pointer; vertical-align: baseline; text-align: start; overflow-wrap: anywhere; }
+.work-root .work-doc-link:hover { border-color: var(--accent); }
+.work-doc-icon { flex: none; }
+.work-root.work-doc-open { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 46%); column-gap: 16px; align-items: start; }
+.work-root.work-doc-open > :not(.work-doc-panel) { grid-column: 1; }
+.work-doc-panel { grid-column: 2; grid-row: 1 / span 3; position: sticky; top: 0; display: flex; flex-direction: column; height: calc(100dvh - 120px); min-height: 320px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.work-doc-panel[hidden] { display: none; }
+.work-doc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.work-doc-title { flex: 1 1 160px; margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.work-doc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.work-doc-newtab { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; }
+.work-doc-newtab[hidden] { display: none; }
+.work-doc-body { display: flex; flex: 1; min-height: 0; overflow: auto; }
+.work-doc-frame { flex: 1; width: 100%; min-height: 100%; border: 0; background: #fff; }
+.work-doc-image { max-width: 100%; height: auto; margin: auto; object-fit: contain; }
+.work-doc-status { margin: 0; padding: 12px; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .work-root .work-doc-link { min-height: 44px; }
+  .work-root.work-doc-open { display: block; }
+  .work-doc-panel { position: fixed; inset: 0; z-index: 60; height: auto; min-height: 0; border: 0; border-radius: 0; }
+}
 
 /* The session list's status line (static/status-line-view.ts): one line of reserved height, so a
    message appearing or going never moves the list. */

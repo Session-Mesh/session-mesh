@@ -5,6 +5,7 @@
 
 import { answerForm, unavailableNote } from './work-answer-form.ts';
 import { el, formatDate, formatDateTime, omittedNote, priorityTag, statusBadge } from './work-dom.ts';
+import { linkText } from './work-linkify.ts';
 import type { ViewContext } from './work-dom.ts';
 import { operatorLabel } from './operator-name.ts';
 import { withOperatorName } from './work-operator-label.ts';
@@ -31,7 +32,7 @@ function fieldList(ctx: ViewContext, detail: TaskDetail): HTMLElement {
 
 function blockerItem(ctx: ViewContext, blocker: Blocker): HTMLElement {
   const parts = [blocker.kind, blocker.text, blocker.on ? ctx.t('work.blockerWho', { on: blocker.on }) : ''].filter(part => part !== '');
-  return el('li', 'work-detail-item', parts.join(' · '), blocker.opened ? el('span', 'work-mute', ` ${formatDate(blocker.opened, ctx.locale)}`) : null);
+  return el('li', 'work-detail-item', linkText(ctx.t, parts.join(' · ')), blocker.opened ? el('span', 'work-mute', ` ${formatDate(blocker.opened, ctx.locale)}`) : null);
 }
 
 function targetItem(ctx: ViewContext, target: TargetRef): HTMLElement {
@@ -62,7 +63,7 @@ function eventItem(ctx: ViewContext, event: TimelineEvent): HTMLElement {
   const item = el('li', `work-event${event.prov === 'inferred' ? ' work-event-inferred' : ''}`);
   item.append(el('span', 'work-event-when', formatDateTime(event.at, ctx.locale)),
     el('span', 'work-event-type', KNOWN_EVENTS.has(event.type) ? ctx.t(`work.event.${event.type}`) : event.type),
-    el('span', 'work-event-text', eventSummary(event)));
+    el('span', 'work-event-text', linkText(ctx.t, eventSummary(event))));
   if (event.prov) item.append(el('span', `work-prov work-prov-${event.prov}`, ctx.t(`work.prov.${event.prov}`)));
   const who = [event.agent, event.session].filter((part): part is string => !!part).join(' · ');
   if (who) item.append(el('span', 'work-mute work-event-who', who));
@@ -94,7 +95,7 @@ function answerItem(ctx: ViewContext, answer: Answer): HTMLElement {
   const meta = withOperatorName(el('p', 'work-mute work-answer-meta'),
     name => [provenance(ctx, answer, name), when].filter((part): part is string => !!part).join(' · '));
   const state = answer.ownerVerified ? ' work-answer-verified' : answer.superseded ? ' work-answer-superseded' : '';
-  return el('li', `work-answer${state}`, el('p', 'work-answer-text', answer.text), meta);
+  return el('li', `work-answer${state}`, el('p', 'work-answer-text', linkText(ctx.t, answer.text)), meta);
 }
 
 /** The hint of a question the owner can still answer: open, or answered only by relayed (unverified) answers. */
@@ -133,14 +134,14 @@ export function answerArea(ctx: ViewContext, question: Question): HTMLElement {
 function questionItem(ctx: ViewContext, question: Question): HTMLElement {
   const state = question.open ? 'open' : 'answered';
   const item = el('li', `work-detail-item work-question-item work-question-${state}`,
-    el('p', 'work-question-text', question.text, el('span', 'work-mute', ` ${ctx.t(question.open ? 'work.question.open' : 'work.question.answered')}`)), answerArea(ctx, question));
+    el('p', 'work-question-text', linkText(ctx.t, question.text), el('span', 'work-mute', ` ${ctx.t(question.open ? 'work.question.open' : 'work.question.answered')}`)), answerArea(ctx, question));
   item.dataset.questionId = question.id;
   return item;
 }
 
 function notesSection(ctx: ViewContext, notes: string): HTMLElement | null {
   if (!notes.trim()) return null;
-  return el('section', 'work-detail-section', el('h4', 'work-detail-title', ctx.t('work.detail.notes')), el('pre', 'work-notes', notes));
+  return el('section', 'work-detail-section', el('h4', 'work-detail-title', ctx.t('work.detail.notes')), el('pre', 'work-notes', linkText(ctx.t, notes)));
 }
 
 export function renderDetail(ctx: ViewContext, detail: TaskDetail): HTMLElement {
@@ -154,6 +155,7 @@ export function renderDetail(ctx: ViewContext, detail: TaskDetail): HTMLElement 
     section(ctx, 'work.detail.blocking', detail.blocking.map(target => targetItem(ctx, target)), omittedNote(ctx.t, detail.omitted.blocking)),
     section(ctx, 'work.detail.sessions', detail.sessions.map(session => sessionItem(ctx, session)), omittedNote(ctx.t, detail.omitted.sessions)),
     notesSection(ctx, detail.notes),
+    section(ctx, 'work.detail.links', detail.links.map(link => el('li', 'work-detail-item work-detail-link', linkText(ctx.t, link)))),
     section(ctx, 'work.detail.questions', detail.questions.map(question => questionItem(ctx, question)), omittedNote(ctx.t, detail.omitted.questions)),
   ];
   for (const block of blocks) if (block) root.append(block);
