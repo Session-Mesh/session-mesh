@@ -7265,23 +7265,42 @@ async function openNew() {
 }
 window.openNew = openNew;
 
-// The "Account" choice: shown only when the operator declared aliases on the runner, for Claude and Codex only;
-// the last alias chosen on this device is chosen again. The page sends an alias id, never a folder.
+// The "Account" choice: shown when the operator declared aliases on the runner (any number), for Claude and Codex
+// only, sorted by label (the file's order among equal labels); the last alias chosen on this device is chosen
+// again. An alias remembered here but no longer declared stays chosen, greyed, so that the session is refused
+// instead of starting under the default account. The page sends an alias id, never a folder.
 const ACCOUNT_PRESETS = { claude: "claude", codex: "codex", "codex-yolo": "codex" };
 let newAccounts = [];
 function fillAccounts(accounts) {
-  newAccounts = accounts.filter((a) => typeof a?.id === "string" && typeof a?.label === "string");
+  newAccounts = accounts.filter((a) => typeof a?.id === "string" && typeof a?.label === "string")
+    .map((a, rank) => ({ ...a, rank }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) || a.rank - b.rank);
   const select = form.account, last = store.get("account", "");
+  const gone = last && !newAccounts.some((a) => a.id === last) ? new Option(t("new.accountGoneOption", { id: last }), last) : null;
+  if (gone) gone.dataset.gone = "1";
   select.replaceChildren(new Option(t("new.accountDefault"), ""),
-    ...newAccounts.map((a) => new Option(a.label.slice(0, 24), a.id)));
-  select.value = newAccounts.some((a) => a.id === last) ? last : "";
+    ...newAccounts.map((a) => new Option(a.label.slice(0, 24), a.id)), ...(gone ? [gone] : []));
+  select.value = gone || newAccounts.some((a) => a.id === last) ? last : "";
   syncAccountChoice();
 }
 function syncAccountChoice() {
-  const agent = ACCOUNT_PRESETS[form.preset.value];
-  $("#new-account-row").hidden = !newAccounts.length;
-  form.account.disabled = !newAccounts.length || !agent;
-  for (const option of form.account.options) option.disabled = !!option.value && !!agent && !newAccounts.find((a) => a.id === option.value)?.[agent];
+  const agent = ACCOUNT_PRESETS[form.preset.value], offered = form.account.options.length > 1;
+  $("#new-account-row").hidden = !offered;
+  form.account.disabled = !offered || !agent;
+  for (const option of form.account.options) {
+    option.disabled = !!option.value && !!agent && (!!option.dataset.gone || !newAccounts.find((a) => a.id === option.value)?.[agent]);
+  }
+}
+// The alias to send: {} for the default account (or an agent without aliases), {id}, or {refused: message} when the
+// chosen alias has no folder for this agent or is no longer declared. A greyed option stays selected but FormData
+// leaves it out: it must never become the default account silently.
+const ACCOUNT_AGENT_NAMES = { claude: "Claude", codex: "Codex" };
+function accountChoice() {
+  const agent = ACCOUNT_PRESETS[form.preset.value], option = form.account.selectedOptions[0];
+  if (form.account.disabled || !agent || !option?.value) return {};
+  if (option.dataset.gone) return { refused: t("new.accountGone", { id: option.value }) };
+  if (option.disabled) return { refused: t("server.accountNoFolder", { label: option.text, agent: ACCOUNT_AGENT_NAMES[agent] }) };
+  return { id: option.value };
 }
 
 // The recent folders were kept in this browser before they became a runner setting (recorded by the server when a
@@ -7395,6 +7414,10 @@ form.addEventListener("change", () => { form.command.hidden = form.preset.value 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const body = Object.fromEntries(new FormData(form));
+  delete body.account;   // "" for the default account: the server takes an alias id or nothing
+  const account = accountChoice();
+  if (account.refused) { $("#new-err").textContent = account.refused; return; }
+  if (account.id) body.account = account.id;
   const r = await requestLocal("/api/new", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) { $("#new-err").textContent = serverText(await r.text()); return; }
   const { id } = await r.json();

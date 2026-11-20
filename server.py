@@ -418,15 +418,30 @@ def _mesh_reach_env():
 
 # ---- Account aliases: accounts.json in the config folder, written by the operator on the runner and validated by
 # `mesh-platform accounts` (ocaml/accounts/mesh_accounts.mli). A page only ever names an alias id; the folders
-# stay here. Mesh hands the folder to the agent as CLAUDE_CONFIG_DIR or CODEX_HOME and never reads what is in it.
+# stay here. Mesh hands the folder to the agent as CLAUDE_CONFIG_DIR or CODEX_HOME; it never reads the login
+# files in it (it does read settings.json for the Claude policy check and the conversations to restore them).
 ACCOUNTS_FILE = CONF_DIR / "accounts.json"
+# Every folder an alias has declared while this runner ran: /view keeps refusing their login files even when
+# accounts.json is later refused or the alias removed (the folders and the logins stay on disk).
+ACCOUNTS_PROTECTED_FILE = CONF_DIR / "accounts-protected.json"
+_ACCOUNTS_PROTECTED_MAX = 256
 ACCOUNT_ID_RE = re.compile(r"[a-z0-9-]{1,32}")
 _ACCOUNT_PATH_RE = re.compile(r"/[A-Za-z0-9._+@/-]{1,1023}")
 ACCOUNT_MEMBER = {"claude": ("claude_config_dir", "CLAUDE_CONFIG_DIR", "Claude"),
                   "codex": ("codex_home", "CODEX_HOME", "Codex")}
+# The variables that make the agent use another credential or provider than the login kept in the alias's
+# folder (Claude Code: authentication precedence in its documentation; Codex: its environment variables). A login
+# shell profile may export them for the default account: an alias launch unsets them (with_account).
+ACCOUNT_OVERRIDES = {
+    "CLAUDE_CONFIG_DIR": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+                          "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                          "CLAUDE_CODE_USE_FOUNDRY", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY"),
+    "CODEX_HOME": ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"),
+}
 ACCOUNT_AGENTS_ONLY = "An account alias applies to Claude and Codex sessions only"
 ACCOUNT_UNKNOWN = "Unknown account alias (accounts.json on the runner)"
-_ACCOUNTS = {"signature": None, "accounts": []}
+ACCOUNT_REFUSED = "Account alias refused: check accounts.json and its folders on the runner (details in the server log)"
+_ACCOUNTS = {"signature": "not read yet", "accounts": [], "protected": None}   # the first reading always runs
 
 
 class AccountsUnavailable(Exception):
@@ -475,6 +490,32 @@ def _valid_account(value):
     return value
 
 
+def _protected_folders(accounts):
+    """The folders whose login files /view refuses: the ones declared now and every one declared before, kept in
+    accounts-protected.json (never shrunk: a refused accounts.json or a removed alias leaves the logins on disk).
+    A file that cannot be read or written only loses the earlier runs' folders, never this run's."""
+    known = _ACCOUNTS["protected"]
+    if known is None:
+        known = []
+        try:
+            stored = json.loads(ACCOUNTS_PROTECTED_FILE.read_text())
+            known = [p for p in stored if isinstance(p, str) and _ACCOUNT_PATH_RE.fullmatch(p)] \
+                if isinstance(stored, list) else []
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as exc:
+            print(f"accounts-protected.json unreadable: {exc!r}", flush=True)
+    declared = [a[field] for a in accounts for field, _, _ in ACCOUNT_MEMBER.values() if a.get(field)]
+    merged = list(dict.fromkeys([*known, *declared]))[-_ACCOUNTS_PROTECTED_MAX:]
+    if merged != known:
+        try:
+            fsutil.atomic_write(ACCOUNTS_PROTECTED_FILE, json.dumps(merged))
+        except OSError as exc:
+            print(f"accounts-protected.json not written: {exc!r}", flush=True)
+    _ACCOUNTS["protected"] = merged
+    return merged
+
+
 async def declared_accounts():
     """The operator's aliases, read again whenever accounts.json changed; none when it is absent or refused
     (the refusal is logged: the default account stays what it always was)."""
@@ -489,7 +530,7 @@ async def declared_accounts():
                 print(f"accounts.json refused, no alias offered: {exc}", flush=True)
                 accounts = []
         _ACCOUNTS.update(signature=signature, accounts=accounts)
-        view.deny_account_files(accounts)
+        view.deny_account_files(await asyncio.to_thread(_protected_folders, accounts))
     return _ACCOUNTS["accounts"]
 
 
@@ -530,19 +571,24 @@ async def account_environment(account, agent):
     field, variable, shown = ACCOUNT_MEMBER[agent]
     try:
         prepared = _valid_account((await _accounts_program("prepare", str(ACCOUNTS_FILE), account)).get("account"))
-    except AccountsUnavailable as exc:
-        raise web.HTTPBadRequest(text=f"Account alias refused: {exc}") from exc
+    except AccountsUnavailable as exc:   # the reason names folders: the log only, never the page
+        print(f"account alias {account} refused: {exc}", flush=True)
+        raise web.HTTPBadRequest(text=ACCOUNT_REFUSED) from exc
     if not prepared.get(field):
         raise web.HTTPBadRequest(text=f"The account alias {prepared['label']} has no {shown} folder")
     return {variable: prepared[field]}
 
 
 def with_account(command, environment):
-    """The launch line run with the alias's variable: ``env VAR=folder command`` (ptyhost only forwards MESH_*
-    names; ``env`` because csh and tcsh refuse ``VAR=value command``)."""
+    """The launch line run with the alias's variable: ``env -u OVERRIDE… VAR=folder command``. The variables that
+    would put another credential first (ACCOUNT_OVERRIDES, perhaps exported by the login shell's profile) are
+    unset, so the agent uses the alias's login. ptyhost only forwards MESH_* names; ``env`` because csh and tcsh
+    refuse ``VAR=value command``."""
     if not environment:
         return command
-    return "env " + " ".join(f"{name}={shlex.quote(value)}" for name, value in environment.items()) + " " + command
+    unset = [f"-u {name}" for variable in environment for name in ACCOUNT_OVERRIDES.get(variable, ())]
+    assigned = [f"{name}={shlex.quote(value)}" for name, value in environment.items()]
+    return " ".join(["env", *unset, *assigned, command])
 
 
 async def _pi_runtime():
@@ -794,7 +840,7 @@ async def _send_new(request):
 
 async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, pi_runtime=None,
                       notice=None, vibe=None, opencode=None, exact=False, nonce=None, conversation=None,
-                      account=None):
+                      account=None, account_env=None):
     """Start a session. Every way to start one ends here ("New session", a
     conversation resumed from the history, a restored session, an agent moved
     in from another terminal, a restart), so workspace_roots is applied here.
@@ -805,12 +851,15 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
     ``exact``: the name is ``base`` or nothing (409 when taken), never a suffixed one.
     ``nonce``: the session nonce, when the caller recorded it before the creation (exact restore).
     ``conversation``: (agent, id, evidence) of the conversation the command launches (_send_launch).
-    ``account``: the operator's alias whose folder the agent runs with (account_environment), None: the default."""
+    ``account``: the operator's alias whose folder the agent runs with (account_environment), None: the default.
+    ``account_env``: its account_environment, when the caller prepared it (replace_session: a shell started
+    without its command, which comes later)."""
     if not LAUNCH_SETTINGS.allows_cwd(cwd):
         raise web.HTTPForbidden(text=OUTSIDE_WORKSPACE_ROOTS)
     if known_agent == "gemini" and _is_home_directory(cwd):
         raise web.HTTPBadRequest(text=GEMINI_IN_HOME)
-    account_env = await account_environment(account, known_agent if command else None)
+    if account_env is None:
+        account_env = await account_environment(account, known_agent if command else None)
     if exact:
         if any(s.get("name") == base for s in await host({"op": "list"})):
             raise web.HTTPConflict(text=NAME_TAKEN)
@@ -832,7 +881,8 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
     if known_agent == "claude" and command:
         command = await asyncio.to_thread(claudewake.launch_command, command, nonce, CLAUDE_WAKE_DIR,
                                           cwd, ptyhost.clean_env(account_env))
-    command = with_account(command, account_env)
+    if command:
+        command = with_account(command, account_env)
     env = {"MESH_SESSION": name, "MESH_SESSION_TOKEN": sessiontoken.issue(name, nonce), **_mesh_reach_env()}
     meta = {"agent": agent, "known_agent": known_agent, "nonce": nonce, **({"notice": notice} if notice else {}),
             **({"account": account} if account_env else {})}
@@ -921,15 +971,19 @@ async def _wait_source_gone(old_name, old_created, standby):
         await asyncio.sleep(0.05)
 
 
-async def replace_session(old_name, old_created, base, cwd, command, agent, known_agent):
+async def replace_session(old_name, old_created, base, cwd, command, agent, known_agent, account=None):
     """Prepare a dormant shell, retire the source, then start the replacement.
 
     A failed spawn leaves the source intact.  The replacement receives no
     agent command until ``kill_if`` has claimed the exact old incarnation, so
     two clients never run the same provider conversation concurrently.
+    ``account``: the source's alias, kept by the replacement (refused before
+    anything is stopped when it can no longer be used, never the default).
     """
+    account_env = await account_environment(account, known_agent)
     command, notice, vibe = await _prepared_launch(known_agent, command, cwd)
-    name = await new_session(base, cwd, None, agent, known_agent, keep=48, notice=notice, vibe=vibe)
+    name = await new_session(base, cwd, None, agent, known_agent, keep=48, notice=notice, vibe=vibe,
+                             account=account, account_env=account_env)
     listed = await host({"op": "list"})
     replacement = next((item for item in listed if item.get("name") == name), None)
     if replacement is None:
@@ -942,7 +996,8 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
     if known_agent == "claude":
         command = await asyncio.to_thread(claudewake.launch_command, command,
                                           replacement["meta"].get("nonce"), CLAUDE_WAKE_DIR,
-                                          cwd, ptyhost.clean_env())
+                                          cwd, ptyhost.clean_env(account_env))
+    command = with_account(command, account_env)
     started = await host({"op": "start_if", "name": name,
                           "created": replacement["created"], "command": command})
     if started != {"ok": True}:
@@ -2345,7 +2400,7 @@ async def api_new(request):
     if name and not NAME_RE.fullmatch(name):
         raise web.HTTPBadRequest(text="Invalid name (letters, digits, - and _)")
     agent = launchplan.agent_type(kind) if kind in AGENT_PRESETS else None
-    account = body.get("account") or None
+    account = body.get("account")   # absent or null: the default account; anything else must be an alias id
     if account is not None and not (isinstance(account, str) and ACCOUNT_ID_RE.fullmatch(account)):
         raise web.HTTPBadRequest(text=ACCOUNT_UNKNOWN)
     conversation = None
@@ -4052,7 +4107,7 @@ async def _execute_session_action(item):
         raise web.HTTPConflict(text="Agent to resume unavailable")
     argv = _model_argv(_resume_argv(agent), item["model"])
     name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"],
-                                 shlex.join(argv), source["agent"], source["agent"])
+                                 shlex.join(argv), source["agent"], source["agent"], account=session_account(raw))
     await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
     return {"id": name}
 

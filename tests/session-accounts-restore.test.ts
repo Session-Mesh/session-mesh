@@ -15,8 +15,9 @@ import {SID, withLab} from './restore-exact-lib.ts';
 
 const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD
   || path.join(REPO, 'ocaml', '_build', 'default', 'platform', 'cli', 'mesh_platform_main.exe');
-// Without mesh-platform (a job that only fetches the PTY host) these are skipped, with the reason.
-const TIMEOUT = {timeout: 120000, skip: fs.existsSync(PLATFORM) ? false
+// Without mesh-platform (a job that only fetches the PTY host) these are skipped, with the reason, unless
+// MESH_REQUIRE_MESH_PLATFORM is set (CI): then a missing program fails them.
+const TIMEOUT = {timeout: 120000, skip: fs.existsSync(PLATFORM) || process.env.MESH_REQUIRE_MESH_PLATFORM ? false
   : `mesh-platform not built: dune build ./platform/cli/mesh_platform_main.exe, or set MESH_MESH_PLATFORM_CMD (${PLATFORM})`};
 const env = {MESH_MESH_PLATFORM_CMD: PLATFORM, CLAUDE_CONFIG_DIR: undefined};
 const workDir = (home: string) => path.join(home, '.agent-accounts', 'work', '.claude');
@@ -44,7 +45,10 @@ test('a restored alias session resumes its conversation with the alias folder', 
     const answer = await lab.post({names: ['alpha']});
     assert.equal(answer.json.results.alpha.resumed, true, answer.text);
     assert.equal(host.sent.alpha.meta.account, 'work');
-    assert.ok(host.sent.alpha.command.startsWith(`env CLAUDE_CONFIG_DIR=${workDir(lab.mesh.home)} `), host.sent.alpha.command);
+    // the alias's folder, the default account's credential variables unset (server.ACCOUNT_OVERRIDES)
+    assert.ok(host.sent.alpha.command.startsWith('env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN '),
+      host.sent.alpha.command);
+    assert.ok(host.sent.alpha.command.includes(` CLAUDE_CONFIG_DIR=${workDir(lab.mesh.home)} `), host.sent.alpha.command);
     assert.match(host.sent.alpha.command, new RegExp(`--resume ${SID}`));
   }, {env, alphaExtra: {account: 'work'}, prepare: prepare(true), intercept: host.intercept});
 });

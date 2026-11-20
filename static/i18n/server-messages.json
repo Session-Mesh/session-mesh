@@ -136,7 +136,7 @@
     "key": "server.accountNoFolder"
   },
   {
-    "pattern": "^Account alias refused: (?<reason>.+)$",
+    "pattern": "^Account alias refused: check accounts\\.json and its folders on the runner \\(details in the server log\\)$",
     "key": "server.accountRefused"
   },
   {
