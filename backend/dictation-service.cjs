@@ -57,7 +57,19 @@ var messages = {
   upstream_invalid: "Invalid transcription response.",
   empty_transcript: "No speech was transcribed."
 };
-var statuses = { not_found: 404, session_busy: 409, stale_session: 409, request_conflict: 409, invalid_state: 409, audio_too_large: 413, unsupported_audio: 415, queue_full: 429, capacity_full: 429, disabled: 503, unavailable: 503 };
+var statuses = {
+  not_found: 404,
+  session_busy: 409,
+  stale_session: 409,
+  request_conflict: 409,
+  invalid_state: 409,
+  audio_too_large: 413,
+  unsupported_audio: 415,
+  queue_full: 429,
+  capacity_full: 429,
+  disabled: 503,
+  unavailable: 503
+};
 var Fault = class extends Error {
   status;
   code;
@@ -98,26 +110,47 @@ function configuration(env) {
   const integer = (key, fallback) => {
     const value = env[`MESH_WHISPER_${key}`];
     if (value === void 0) return fallback;
-    if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0) throw Error(`Invalid Whisper ${key}`);
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0)
+      throw Error(`Invalid Whisper ${key}`);
     return Number(value);
   };
   const language = env.MESH_WHISPER_LANGUAGE ?? null;
   if (language !== null && !/^[A-Za-z][A-Za-z0-9-]{0,31}$/.test(language)) throw Error("Invalid Whisper language");
-  return { url, public: { enabled: true, language, max_bytes: integer("MAX_BYTES", 8388608), aggregate_bytes: integer("AGGREGATE_BYTES", 67108864), queue_size: integer("QUEUE_SIZE", 16), workers: integer("WORKERS", 1), active_timeout_seconds: integer("TIMEOUT", 60), queue_wait_seconds: integer("QUEUE_TTL", 600), result_ttl_seconds: integer("RESULT_TTL", 1800), capture_seconds: integer("CAPTURE_SECONDS", 120) } };
+  return { url, public: {
+    enabled: true,
+    language,
+    max_bytes: integer("MAX_BYTES", 8388608),
+    aggregate_bytes: integer("AGGREGATE_BYTES", 67108864),
+    queue_size: integer("QUEUE_SIZE", 16),
+    workers: integer("WORKERS", 1),
+    active_timeout_seconds: integer("TIMEOUT", 60),
+    queue_wait_seconds: integer("QUEUE_TTL", 600),
+    result_ttl_seconds: integer("RESULT_TTL", 1800),
+    capture_seconds: integer("CAPTURE_SECONDS", 120)
+  } };
 }
 function uuid(value) {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw new Fault("invalid_request");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
+    throw new Fault("invalid_request");
   return value.toLowerCase();
 }
-var extensions = { "audio/webm": "webm", "audio/mp4": "mp4", "audio/ogg": "ogg", "audio/wav": "wav", "audio/x-wav": "wav" };
+var extensions = {
+  "audio/webm": "webm",
+  "audio/mp4": "mp4",
+  "audio/ogg": "ogg",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav"
+};
 function media(value) {
-  if (!/^[a-z]+\/[a-z0-9-]+(?:\s*;\s*[a-z0-9_-]+=(?:[a-z0-9_.+-]+|"[a-z0-9_.+ -]+"))*\s*$/i.test(value)) throw new Fault("unsupported_audio");
+  if (!/^[a-z]+\/[a-z0-9-]+(?:\s*;\s*[a-z0-9_-]+=(?:[a-z0-9_.+-]+|"[a-z0-9_.+ -]+"))*\s*$/i.test(value))
+    throw new Fault("unsupported_audio");
   const base = value.split(";")[0].trim().toLowerCase();
   if (!extensions[base]) throw new Fault("unsupported_audio");
   return base;
 }
 function admission(value) {
-  if (!/^[A-Za-z0-9_-]{1,48}$/.test(value.session) || !Number.isFinite(value.created)) throw new Fault("invalid_request");
+  if (!/^[A-Za-z0-9_-]{1,48}$/.test(value.session) || !Number.isFinite(value.created))
+    throw new Fault("invalid_request");
   return { ...value, client: uuid(value.client), request: uuid(value.request), mime: media(value.mime) };
 }
 var PREPARATION_MS = 15e3;
@@ -189,52 +222,30 @@ var Dictation = class {
   }
   checkPreparation(r) {
     this.authorize(r.meta.principal);
-    if (this.closed || this.records.get(r.job.job_id) !== r || (r.expires !== null ? this.now() >= r.expires : r.phase !== "committed" && this.now() >= r.deadline)) throw new Fault("unavailable");
+    const expired = r.expires !== null ? this.now() >= r.expires : r.phase !== "committed" && this.now() >= r.deadline;
+    if (this.closed || this.records.get(r.job.job_id) !== r || expired) throw new Fault("unavailable");
   }
   async prepare(input, source) {
     this.authorize(input.principal);
     if (this.closed) throw new Fault("unavailable");
     this.sweep();
-    const m = admission(input), key = this.key(m, m.request), existing = this.requests.get(key);
+    const m = admission(input), existing = this.requests.get(this.key(m, m.request));
     if (existing) {
-      if (existing.meta.session !== m.session || existing.meta.created !== m.created) throw new Fault("request_conflict");
+      if (existing.meta.session !== m.session || existing.meta.created !== m.created)
+        throw new Fault("request_conflict");
       await existing.prepared;
       this.checkPreparation(existing);
       return { job: this.snapshot(existing), preparation: existing.preparation };
     }
-    if (this.slots.has(this.slot(m))) throw new Fault("session_busy");
-    if (this.records.size >= 256) throw new Fault("capacity_full");
-    const waiting = [...this.records.values()].filter((r2) => r2.job.state === "queued").length;
-    if (waiting + this.active >= this.config.public.queue_size + this.config.public.workers) throw new Fault("queue_full");
-    let resolve, reject;
-    const prepared = new Promise((ok, no) => {
-      resolve = ok;
-      reject = no;
-    });
-    void prepared.catch(() => {
-    });
-    const r = { meta: m, job: { job_id: (0, import_node_crypto.randomUUID)(), request_id: m.request, session: m.session, created: m.created, state: "queued", text: null, error: null, outcome: null }, preparation: (0, import_node_crypto.randomUUID)(), phase: "receiving", chunks: [], bytes: 0, deadline: this.now() + PREPARATION_MS, expires: null, queuedAt: 0, prepared, resolve, reject, running: false };
-    this.records.set(r.job.job_id, r);
-    this.requests.set(key, r);
-    this.slots.set(this.slot(m), r);
+    const r = this.reserve(m);
     let timeout;
     try {
-      let received = 0;
-      const receive = async () => {
-        for await (const chunk of source) {
-          if (this.closed || !this.records.has(r.job.job_id) || this.now() >= r.deadline) throw new Fault("unavailable");
-          received += chunk.length;
-          if (received > this.config.public.max_bytes) throw new Fault("audio_too_large");
-          if (r.job.state !== "queued") continue;
-          if (this.bytes + chunk.length > this.config.public.aggregate_bytes) throw new Fault("capacity_full");
-          this.bytes += chunk.length;
-          r.bytes += chunk.length;
-          r.chunks.push(chunk);
-        }
-      };
-      await Promise.race([receive(), new Promise((_, no) => {
-        timeout = setTimeout(() => no(new Fault("unavailable")), PREPARATION_MS);
-      })]);
+      const received = await Promise.race([
+        this.receiveAudio(r, source),
+        new Promise((_, no) => {
+          timeout = setTimeout(() => no(new Fault("unavailable")), PREPARATION_MS);
+        })
+      ]);
       this.checkPreparation(r);
       if (!received && r.job.state === "queued") throw new Fault("invalid_request");
       if (r.phase === "receiving") r.phase = "prepared";
@@ -249,6 +260,62 @@ var Dictation = class {
     } finally {
       clearTimeout(timeout);
     }
+  }
+  reserve(m) {
+    if (this.slots.has(this.slot(m))) throw new Fault("session_busy");
+    if (this.records.size >= 256) throw new Fault("capacity_full");
+    const waiting = [...this.records.values()].filter((r2) => r2.job.state === "queued").length;
+    if (waiting + this.active >= this.config.public.queue_size + this.config.public.workers)
+      throw new Fault("queue_full");
+    let resolve, reject;
+    const prepared = new Promise((ok, no) => {
+      resolve = ok;
+      reject = no;
+    });
+    void prepared.catch(() => {
+    });
+    const r = {
+      meta: m,
+      job: {
+        job_id: (0, import_node_crypto.randomUUID)(),
+        request_id: m.request,
+        session: m.session,
+        created: m.created,
+        state: "queued",
+        text: null,
+        error: null,
+        outcome: null
+      },
+      preparation: (0, import_node_crypto.randomUUID)(),
+      phase: "receiving",
+      chunks: [],
+      bytes: 0,
+      deadline: this.now() + PREPARATION_MS,
+      expires: null,
+      queuedAt: 0,
+      prepared,
+      resolve,
+      reject,
+      running: false
+    };
+    this.records.set(r.job.job_id, r);
+    this.requests.set(this.key(m, m.request), r);
+    this.slots.set(this.slot(m), r);
+    return r;
+  }
+  async receiveAudio(r, source) {
+    let received = 0;
+    for await (const chunk of source) {
+      if (this.closed || !this.records.has(r.job.job_id) || this.now() >= r.deadline) throw new Fault("unavailable");
+      received += chunk.length;
+      if (received > this.config.public.max_bytes) throw new Fault("audio_too_large");
+      if (r.job.state !== "queued") continue;
+      if (this.bytes + chunk.length > this.config.public.aggregate_bytes) throw new Fault("capacity_full");
+      this.bytes += chunk.length;
+      r.bytes += chunk.length;
+      r.chunks.push(chunk);
+    }
+    return received;
   }
   commit(m, id, preparation) {
     const r = this.owned(m, id);
@@ -284,7 +351,8 @@ var Dictation = class {
       if (r.job.outcome !== outcome) throw new Fault("invalid_state");
       return this.snapshot(r);
     }
-    if ((outcome === "submitted" || outcome === "inserted") && r.job.state !== "ready") throw new Fault("invalid_state");
+    if ((outcome === "submitted" || outcome === "inserted") && r.job.state !== "ready")
+      throw new Fault("invalid_state");
     this.terminal(r, "settled", true);
     r.job.outcome = outcome;
     return this.snapshot(r);
@@ -323,7 +391,9 @@ var Dictation = class {
       else if (r.expires === null && r.phase !== "committed" && now >= r.deadline) {
         this.remove(r);
         r.reject(new Fault("unavailable"));
-      } else if (r.phase === "committed" && r.job.state === "queued" && now - r.queuedAt >= this.config.public.queue_wait_seconds * 1e3) this.terminal(r, "error", false, "queue_expired");
+      } else if (r.phase === "committed" && r.job.state === "queued" && now - r.queuedAt >= this.config.public.queue_wait_seconds * 1e3) {
+        this.terminal(r, "error", false, "queue_expired");
+      }
     }
     this.pump();
   }
@@ -338,38 +408,42 @@ var Dictation = class {
       this.active++;
       r.running = true;
       r.job.state = "processing";
-      const controller = new AbortController();
-      this.controllers.add(controller);
-      let timer;
-      const operation = (async () => {
-        try {
-          if (!await this.isLive(r.meta)) throw new Fault("stale_session");
-          if (this.closed || r.job.state !== "processing") return;
-          const deadline = this.now() + this.config.public.active_timeout_seconds * 1e3;
-          const expire = () => {
-            const remaining = deadline - this.now();
-            if (remaining <= 0) controller.abort(new Fault("upstream_timeout"));
-            else timer = setTimeout(expire, Math.min(remaining, 2147483647));
-          };
-          expire();
-          const text = normalizeText(await this.infer(r.chunks, r.meta, controller.signal));
-          if (r.job.state === "processing") {
-            this.terminal(r, "ready");
-            r.job.text = text;
-          }
-        } catch (error) {
-          if (r.job.state === "processing") this.terminal(r, "error", false, controller.signal.aborted && !this.closed ? "upstream_timeout" : error instanceof Fault ? error.code : "upstream_unavailable");
-        } finally {
-          clearTimeout(timer);
-          this.controllers.delete(controller);
-          r.running = false;
-          this.releaseAudio(r);
-          this.active--;
-          this.pump();
-        }
-      })();
+      const operation = this.run(r);
       this.operations.add(operation);
       void operation.finally(() => this.operations.delete(operation));
+    }
+  }
+  async run(r) {
+    const controller = new AbortController();
+    this.controllers.add(controller);
+    let timer;
+    try {
+      if (!await this.isLive(r.meta)) throw new Fault("stale_session");
+      if (this.closed || r.job.state !== "processing") return;
+      const deadline = this.now() + this.config.public.active_timeout_seconds * 1e3;
+      const expire = () => {
+        const remaining = deadline - this.now();
+        if (remaining <= 0) controller.abort(new Fault("upstream_timeout"));
+        else timer = setTimeout(expire, Math.min(remaining, 2147483647));
+      };
+      expire();
+      const text = normalizeText(await this.infer(r.chunks, r.meta, controller.signal));
+      if (r.job.state === "processing") {
+        this.terminal(r, "ready");
+        r.job.text = text;
+      }
+    } catch (error) {
+      if (r.job.state === "processing") {
+        const code = controller.signal.aborted && !this.closed ? "upstream_timeout" : error instanceof Fault ? error.code : "upstream_unavailable";
+        this.terminal(r, "error", false, code);
+      }
+    } finally {
+      clearTimeout(timer);
+      this.controllers.delete(controller);
+      r.running = false;
+      this.releaseAudio(r);
+      this.active--;
+      this.pump();
     }
   }
   stats() {
@@ -399,55 +473,77 @@ function normalizeText(value) {
   if (!text) throw new Fault("empty_transcript");
   return text;
 }
-async function transcribe(config, chunks, m, signal) {
-  const boundary = `mesh-${(0, import_node_crypto.randomUUID)()}`, mime = media(m.mime);
-  const language = config.public.language === null ? "" : `--${boundary}\r
-Content-Disposition: form-data; name="language"\r
-\r
-${config.public.language}\r
-`;
-  const prefix = Buffer.from(`--${boundary}\r
+function multipartPrefix(config, boundary, mime) {
+  const fields = [
+    `--${boundary}\r
 Content-Disposition: form-data; name="response_format"\r
 \r
 json\r
-${language}--${boundary}\r
+`
+  ];
+  if (config.public.language !== null) fields.push(
+    `--${boundary}\r
+Content-Disposition: form-data; name="language"\r
+\r
+${config.public.language}\r
+`
+  );
+  fields.push(`--${boundary}\r
 Content-Disposition: form-data; name="file"; filename="audio.${extensions[mime]}"\r
 Content-Type: ${mime}\r
 \r
 `);
+  return Buffer.from(fields.join(""));
+}
+async function transcriptResponse(res) {
+  if (res.statusCode !== 200) throw new Fault("upstream_unavailable");
+  if (res.headers["content-encoding"]) throw new Fault("upstream_invalid");
+  const parts = [];
+  let size = 0;
+  for await (const part of res) {
+    size += part.length;
+    if (size > 65536) throw new Fault("upstream_invalid");
+    parts.push(part);
+  }
+  const body = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(parts));
+  const contentType = (res.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+  if (contentType === "application/json") {
+    let parsed;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      throw new Fault("upstream_invalid");
+    }
+    return normalizeText(parsed?.text);
+  }
+  if (contentType === "text/plain") return normalizeText(body);
+  throw new Fault("upstream_invalid");
+}
+async function transcribe(config, chunks, m, signal) {
+  const boundary = `mesh-${(0, import_node_crypto.randomUUID)()}`, mime = media(m.mime);
+  const prefix = multipartPrefix(config, boundary, mime);
   const suffix = Buffer.from(`\r
 --${boundary}--\r
 `);
   const transport = config.url.protocol === "https:" ? import_node_https.default : import_node_http.default;
   const connection = config.url.protocol === "http:" ? { lookup: loopbackLookup, autoSelectFamily: true } : {};
+  const failure = () => signal.aborted && signal.reason instanceof Fault ? signal.reason : new Fault("upstream_unavailable");
   try {
     return await new Promise((resolve, reject) => {
       let upload;
-      const req = transport.request(config.url, { ...connection, method: "POST", agent: false, signal, headers: { "Content-Type": `multipart/form-data; boundary=${boundary}`, "Content-Length": prefix.length + suffix.length + chunks.reduce((sum, b) => sum + b.length, 0) } }, (res) => {
+      const req = transport.request(config.url, {
+        ...connection,
+        method: "POST",
+        agent: false,
+        signal,
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "Content-Length": prefix.length + suffix.length + chunks.reduce((sum, b) => sum + b.length, 0)
+        }
+      }, (res) => {
         void (async () => {
           try {
-            if (res.statusCode !== 200) throw new Fault("upstream_unavailable");
-            if (res.headers["content-encoding"]) throw new Fault("upstream_invalid");
-            const parts = [];
-            let size = 0;
-            for await (const part of res) {
-              size += part.length;
-              if (size > 65536) throw new Fault("upstream_invalid");
-              parts.push(part);
-            }
-            const body = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(parts));
-            const contentType = (res.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
-            let text;
-            if (contentType === "application/json") {
-              let parsed;
-              try {
-                parsed = JSON.parse(body);
-              } catch {
-                throw new Fault("upstream_invalid");
-              }
-              text = normalizeText(parsed?.text);
-            } else if (contentType === "text/plain") text = normalizeText(body);
-            else throw new Fault("upstream_invalid");
+            const text = await transcriptResponse(res);
             await upload;
             resolve(text);
           } catch (error) {
@@ -457,9 +553,9 @@ Content-Type: ${mime}\r
           }
         })();
       });
-      req.on("error", () => reject(signal.aborted ? signal.reason instanceof Fault ? signal.reason : new Fault("upstream_unavailable") : new Fault("upstream_unavailable")));
+      req.on("error", () => reject(failure()));
       upload = (0, import_promises.pipeline)(import_node_stream.Readable.from([prefix, ...chunks, suffix]), req);
-      void upload.catch(() => reject(signal.aborted && signal.reason instanceof Fault ? signal.reason : new Fault("upstream_unavailable")));
+      void upload.catch(() => reject(failure()));
     });
   } catch (error) {
     throw error instanceof Fault ? error : new Fault("upstream_unavailable");
@@ -474,7 +570,9 @@ var import_node_path = require("node:path");
 var import_node_net2 = require("node:net");
 function single(req, name, optional = false) {
   const values = [];
-  for (let i = 0; i < req.rawHeaders.length; i += 2) if (req.rawHeaders[i].toLowerCase() === name.toLowerCase()) values.push(req.rawHeaders[i + 1]);
+  for (let i = 0; i < req.rawHeaders.length; i += 2) {
+    if (req.rawHeaders[i].toLowerCase() === name.toLowerCase()) values.push(req.rawHeaders[i + 1]);
+  }
   if (values.length === 0 && optional) return "";
   if (values.length !== 1) throw new Fault("invalid_request");
   return values[0];
@@ -487,7 +585,13 @@ function owner(req) {
 function metadata(req) {
   const created = single(req, "X-Mesh-Created");
   if (!created.trim()) throw new Fault("invalid_request");
-  return admission({ ...owner(req), session: single(req, "X-Mesh-Session"), created: Number(created), request: single(req, "X-Mesh-Request-Id"), mime: single(req, "Content-Type") });
+  return admission({
+    ...owner(req),
+    session: single(req, "X-Mesh-Session"),
+    created: Number(created),
+    request: single(req, "X-Mesh-Request-Id"),
+    mime: single(req, "Content-Type")
+  });
 }
 async function object(req) {
   if (single(req, "Content-Type").split(";")[0].trim() !== "application/json") throw new Fault("invalid_request");
@@ -509,6 +613,11 @@ async function object(req) {
 async function empty(req) {
   for await (const part of req.iterator({ destroyOnReturn: false })) if (part.length) throw new Fault("invalid_request");
 }
+function validInventoryItem(value) {
+  if (!value || typeof value !== "object") return false;
+  const item = value;
+  return typeof item.name === "string" && item.name.length > 0 && typeof item.pid === "number" && Number.isInteger(item.pid) && item.pid > 0 && typeof item.cwd === "string" && typeof item.created === "number" && Number.isFinite(item.created) && typeof item.activity === "number" && Number.isFinite(item.activity) && typeof item.attached === "number" && Number.isInteger(item.attached) && item.attached >= 0 && !!item.meta && typeof item.meta === "object" && !Array.isArray(item.meta);
+}
 async function liveInventory(socketPath, m) {
   return await new Promise((resolve, reject) => {
     const socket = (0, import_node_net2.connect)(socketPath);
@@ -524,8 +633,7 @@ async function liveInventory(socketPath, m) {
     socket.on("error", () => finish());
     socket.on("end", () => finish());
     socket.on("connect", () => {
-      const body = Buffer.from('{"op":"list"}');
-      const head = Buffer.alloc(5);
+      const body = Buffer.from('{"op":"list"}'), head = Buffer.alloc(5);
       head[0] = 67;
       head.writeUInt32BE(body.length, 1);
       socket.end(Buffer.concat([head, body]));
@@ -540,7 +648,7 @@ async function liveInventory(socketPath, m) {
       if (data.length < size + 5) return;
       try {
         const list = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(data.subarray(5, 5 + size)));
-        if (!Array.isArray(list) || !list.every((item) => item && typeof item.name === "string" && item.name.length && Number.isInteger(item.pid) && item.pid > 0 && typeof item.cwd === "string" && typeof item.created === "number" && Number.isFinite(item.created) && typeof item.activity === "number" && Number.isFinite(item.activity) && Number.isInteger(item.attached) && item.attached >= 0 && item.meta && typeof item.meta === "object" && !Array.isArray(item.meta))) return finish();
+        if (!Array.isArray(list) || !list.every(validInventoryItem)) return finish();
         finish(list.some((item) => item.name === m.session && item.created === m.created));
       } catch {
         finish();
@@ -551,7 +659,8 @@ async function liveInventory(socketPath, m) {
 async function dispatch(req, config, engine, send) {
   const path = req.url ?? "";
   if (/[?#%\\]/.test(path) || req.headers["content-encoding"] !== void 0) throw new Fault("invalid_request");
-  for (const name of ["X-Mesh-Dictation-Client", "X-Mesh-Session", "X-Mesh-Created", "X-Mesh-Request-Id"]) single(req, name, true);
+  for (const name of ["X-Mesh-Dictation-Client", "X-Mesh-Session", "X-Mesh-Created", "X-Mesh-Request-Id"])
+    single(req, name, true);
   const principal = single(req, "X-Mesh-Principal");
   if (!/^[a-f0-9]{64}$/.test(principal)) throw new Fault("invalid_request");
   if (req.method === "POST" && path === "/internal/principal") {
@@ -572,6 +681,9 @@ async function dispatch(req, config, engine, send) {
     send(202, result);
     return;
   }
+  await dispatchJob(req, path, engine, send);
+}
+async function dispatchJob(req, path, engine, send) {
   const m = owner(req);
   const lookup = /^\/api\/transcribe\/request\/([^/]+)$/.exec(path);
   if (req.method === "GET" && lookup) {
@@ -610,21 +722,15 @@ async function dispatch(req, config, engine, send) {
   }
   throw new Fault("not_found");
 }
-async function startService(config, secret, socketPath, inventorySocket, principal) {
-  if (!/^[a-f0-9]{64}$/.test(principal)) throw Error("Initial principal required");
-  const parent = await (0, import_promises2.lstat)((0, import_node_path.dirname)(socketPath));
-  if (!parent.isDirectory() || parent.isSymbolicLink() || (parent.mode & 511) !== 448 || parent.uid !== process.getuid()) throw Error("Private dictation directory required");
-  const digest = (value) => (0, import_node_crypto2.createHash)("sha256").update(value).digest();
-  const expected = digest(secret);
-  const engine = new Dictation(config, { principal, isLive: (m) => liveInventory(inventorySocket, m) });
+var digest = (value) => (0, import_node_crypto2.createHash)("sha256").update(value).digest();
+function serviceHandler(config, engine, expected) {
   let handlers = 0;
-  const server = (0, import_node_http2.createServer)({ maxHeaderSize: 8192, requestTimeout: 16e3, headersTimeout: 5e3 }, (req, res) => {
+  return (req, res) => {
     const send = (status, body) => {
-      if (!res.destroyed) {
-        if (!req.complete) res.setHeader("Connection", "close");
-        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-        res.end(JSON.stringify(body));
-      }
+      if (res.destroyed) return;
+      if (!req.complete) res.setHeader("Connection", "close");
+      res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify(body));
     };
     void (async () => {
       let counted = false;
@@ -646,7 +752,18 @@ async function startService(config, secret, socketPath, inventorySocket, princip
         if (counted) handlers--;
       }
     })();
-  });
+  };
+}
+async function startService(config, secret, socketPath, inventorySocket, principal) {
+  if (!/^[a-f0-9]{64}$/.test(principal)) throw Error("Initial principal required");
+  const parent = await (0, import_promises2.lstat)((0, import_node_path.dirname)(socketPath));
+  if (!parent.isDirectory() || parent.isSymbolicLink() || (parent.mode & 511) !== 448 || parent.uid !== process.getuid())
+    throw Error("Private dictation directory required");
+  const engine = new Dictation(config, { principal, isLive: (m) => liveInventory(inventorySocket, m) });
+  const server = (0, import_node_http2.createServer)(
+    { maxHeaderSize: 8192, requestTimeout: 16e3, headersTimeout: 5e3 },
+    serviceHandler(config, engine, digest(secret))
+  );
   server.maxConnections = 64;
   server.keepAliveTimeout = 1e3;
   server.timeout = 16e3;
