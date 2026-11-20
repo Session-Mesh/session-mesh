@@ -328,4 +328,5 @@ let () =
           Alcotest.test_case "caps" `Quick test_caps;
         ] );
       ("limits", Test_limits.tests);
+      ("session-questions", Test_session_questions.tests);
     ]

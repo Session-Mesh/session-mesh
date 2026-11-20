@@ -238,6 +238,7 @@ code { background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
 .board-badge { margin-left: 5px; vertical-align: middle; }
 /* A wake line nobody followed: visible, never acted on by typing. */
 .tag.wake-unconfirmed { color: var(--busy); border-color: currentColor; }
+.tag.question-badge { flex: none; color: var(--wait); border-color: currentColor; font-weight: 700; white-space: nowrap; }
 div.wake-unconfirmed { margin: 4px 0; color: var(--busy); }
 [data-act="board"].board-modified { position: relative; }
 [data-act="board"].board-modified::after { position: absolute; right: 2px; top: 2px; }
@@ -378,6 +379,10 @@ dialog input:focus { outline: none; border-color: var(--accent); }
 .pane-head .p-actions [data-act="board"]::before { content: "✎"; font-size: 24px; }
 .pane-head .p-actions [data-act="more"]::after { content: "⋯"; font-size: 26px; line-height: 1; }
 .pane-head .p-actions [data-act="close"]::after { content: "×"; font-size: 24px; }
+/* The questions button shows its count as text: "? 3". */
+.pane-head .p-actions .p-questions { width: auto; min-width: 44px; padding: 0 8px; font-size: 14px; font-weight: 700; color: var(--wait); border-color: var(--wait); white-space: nowrap; }
+.pane-head .p-actions .p-questions[hidden] { display: none; }
+.p-questions-count { margin-inline-start: 3px; }
 
 /* ---------------- phone */
 @media (max-width: 760px) {

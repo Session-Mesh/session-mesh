@@ -1402,6 +1402,10 @@
   "pane.mailbox": "Mailbox",
   "pane.mailboxAria": "Open the mailbox of this session",
   "pane.mailboxTitle": "Mailbox: messages between agents for this session",
+  "pane.questions.aria": {
+    "one": "{n} open question for this session: open it in Projects",
+    "other": "{n} open questions for this session: open them in Projects"
+  },
   "paneActions.action.compose": "Write in the terminal…",
   "bar.config": "Configuration",
   "bar.configTitle": "Paths, versions and settings in use, and the ones that can be changed",
@@ -1935,6 +1939,10 @@
   "sessions.phase.focus": "open and pinned sessions first",
   "sessions.phase.recent": "recently active sessions",
   "sessions.phase.rest": "the other sessions",
+  "sessions.questions.row": {
+    "one": "{n} open question for this session",
+    "other": "{n} open questions for this session"
+  },
   "sessions.row.loading": "loading",
   "sessions.row.ready": "ready",
   "sessions.row.slow": "slow",

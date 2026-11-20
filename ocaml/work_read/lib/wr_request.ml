@@ -9,7 +9,7 @@ module E = Work_mcp.Work_err
 open E
 
 let max_bytes = 4096
-let ops = [ "products"; "projects"; "project"; "task"; "resume"; "sessions-of" ]
+let ops = [ "products"; "projects"; "project"; "task"; "resume"; "sessions-of"; "session-questions" ]
 
 let read ?(max_bytes = max_bytes) channel =
   let buffer = Buffer.create 512 and chunk = Bytes.create 1024 in

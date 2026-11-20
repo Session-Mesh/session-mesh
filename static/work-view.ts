@@ -22,6 +22,7 @@ import type { ProjectView, TabKey } from './work-project-view.ts';
 import { renderEntryQuestions } from './work-questions-view.ts';
 import type { EntryQuestionsState } from './work-questions-view.ts';
 import { withoutQuestion } from './work-questions.ts';
+import type { WorkTarget } from './work-session-questions.ts';
 import type { OpenQuestionsDoc, ProductsDoc, ProjectsDoc } from './work-types.ts';
 
 export type WorkViewOptions = Readonly<{
@@ -39,7 +40,9 @@ export type WorkViewOptions = Readonly<{
   locale?: string;
 }>;
 
-export type WorkViewController = Readonly<{ open: () => void; close: () => void; destroy: () => void }>;
+/** `open` shows the view as it was (the entry screen the first time), or the place a target names: the sheet of a task
+ *  in its project's Questions tab, the Questions tab of a project, or the entry screen. */
+export type WorkViewController = Readonly<{ open: (target?: WorkTarget) => void; close: () => void; destroy: () => void }>;
 
 type EntryData = Readonly<{ products: ProductsDoc; projects: ProjectsDoc }>;
 type OpenProject = Readonly<{ id: string; view: ProjectView }>;
@@ -119,7 +122,15 @@ class WorkView implements WorkViewController {
     options.root.replaceChildren(el('div', 'work-toolbar', refresh), this.content, this.announcer);
   }
 
-  open = (): void => void this.reload();
+  open = (target?: WorkTarget): void => void this.openAt(target);
+
+  private async openAt(target?: WorkTarget): Promise<void> {
+    if (!target) return this.reload();
+    if (target.kind === 'entry') return this.loadEntry();
+    if (target.kind === 'task') await this.openTask(target.id);
+    else await this.openProject(target.id, 'questions');
+    await this.refreshCount();   // the entry screen, which reads the count with its list, was not shown
+  }
 
   close = (): void => {
     this.controller?.abort(); this.detailController?.abort();
@@ -410,6 +421,7 @@ class WorkView implements WorkViewController {
 }
 
 export { counterText } from './work-questions.ts';
+export { createSessionMarker as mountSessionMarker } from './work-session-marker.ts';
 
 export function mountWorkView(options: WorkViewOptions): WorkViewController {
   return new WorkView(options);
