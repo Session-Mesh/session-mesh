@@ -1697,6 +1697,17 @@ folder only, and the agent is relaunched with it. If the alias was removed from 
 meanwhile, the restore of that session is refused. A restart that an agent requests and you
 approve keeps the alias of the session too.
 
+A Claude or Codex agent can also ask to continue its conversation under another account (its
+`session_account_switch_request` tool, used when you ask for it in the conversation). The page
+asks for your approval: the whole conversation is then copied into the other account's folder and
+sent to that account's provider. Once approved, Mesh stops the session, copies the conversation
+with `mesh-platform accounts carry` (the transcript only, never a login or settings file) and
+resumes it in a new session under the other account. When the copy fails (for example the other
+account already holds a different copy of that conversation), the conversation resumes under its
+own account and the request records why. Resuming a Codex conversation from its copied rollout
+alone, and Claude from its copied transcript, is not yet verified on real accounts:
+`session_accounts` reports `switch_qualified: false`.
+
 Limits of this version:
 
 - The variable is set on the agent's command line, not in the session's shell: after the agent

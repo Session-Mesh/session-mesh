@@ -608,6 +608,7 @@
   "paneActions.sessionRequest.restart": "Agent “{agent}” asks to resume its conversation. Its current session will be stopped after this confirmation.",
   "paneActions.sessionRequest.restartWithModel": "Agent “{agent}” asks to resume its conversation with model “{model}”. Its current session will be stopped after this confirmation.",
   "paneActions.sessionRequest.stale": "Request already decided or expired.",
+  "paneActions.sessionRequest.switchAccount": "Agent “{agent}” asks to move from account {from} to account {to}. Its whole conversation will be copied into the folder of account {to} and sent to that account’s provider; the current session will be stopped, then resumed under a new name.",
   "picker.alreadyOpen": "a picker is already open",
   "picker.alreadyOpenChoose": "a picker is already open; choose a file or reset it",
   "picker.alreadyOpenReset": "a picker is already open; reset it if needed",

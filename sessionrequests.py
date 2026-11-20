@@ -29,6 +29,10 @@ CLAIM_TTL = 45
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
 NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,48}")
 TAB_NONCE_RE = re.compile(r"[0-9a-f]{32}")
+# An account alias id (server.ACCOUNT_ID_RE) or "default", the default account.
+ACCOUNT_RE = re.compile(r"[a-z0-9-]{1,32}")
+# The agents whose conversation Mesh can carry to another account (mesh-platform accounts carry).
+SWITCHABLE_AGENTS = frozenset(("claude", "codex"))
 # Presets an agent may never request: a session without approvals or sandbox
 # would let one agent obtain an unconfined sibling. The owner still can.
 OWNER_ONLY_PRESETS = frozenset(("codex-yolo",))
@@ -163,6 +167,11 @@ class Requests:
                         terminal_at REAL
                     )
                 """)
+                # A database written before account switching: the two columns are added, empty.
+                columns = {row[1] for row in self._db.execute("PRAGMA table_info(session_requests)")}
+                for column in ("account", "from_account"):
+                    if column not in columns:
+                        self._db.execute(f"ALTER TABLE session_requests ADD COLUMN {column} TEXT")
             finally:
                 os.umask(old_mask)
         if self._path != ":memory:":
@@ -253,6 +262,7 @@ class Requests:
             "id": row["id"], "action": row["action"],
             "source": cls._decode(row["source_json"]), "preset": row["preset"],
             "name": row["requested_name"], "model": row["model"],
+            "account": row["account"], "from_account": row["from_account"],
             "state": row["state"], "created_at": row["created_at"],
             "result": cls._decode(row["result_json"]),
             # Scheduling hint only. It grants no authority and is safe for the
@@ -263,17 +273,41 @@ class Requests:
     @staticmethod
     def public(item):
         return {key: item[key] for key in
-                ("id", "action", "source", "preset", "name", "model", "state",
+                ("id", "action", "source", "preset", "name", "model", "account", "from_account", "state",
                  "created_at", "result", "lease_expires_at")}
 
-    def create(self, source, body, *, enabled_agents, resumable):
-        if not isinstance(body, dict) or set(body) - {"action", "preset", "name", "model"}:
+    @staticmethod
+    def _switch(source, body, current_account, resumable):
+        """(account, from_account) of a switch_account request: the target named by an id or "default", the
+        current one given by the server (never the body), for a Claude or Codex agent that can resume."""
+        if set(body) != {"action", "account"}:
+            raise ValueError("Invalid request fields")
+        account = body["account"]
+        if not isinstance(account, str) or not ACCOUNT_RE.fullmatch(account):
+            raise ValueError("Invalid account")
+        if source["agent"] not in SWITCHABLE_AGENTS or source["agent"] not in resumable:
+            raise ValueError("Account switching applies to Claude and Codex only")
+        if not isinstance(current_account, str) or not ACCOUNT_RE.fullmatch(current_account):
+            raise ValueError("Invalid account")
+        if account == current_account:
+            raise ValueError("This session already runs under this account")
+        return account, current_account
+
+    def create(self, source, body, *, enabled_agents, resumable, current_account=None):
+        if not isinstance(body, dict) or set(body) - {"action", "preset", "name", "model", "account"}:
             raise ValueError("Invalid request fields")
         action = body.get("action")
-        if action not in ("create", "restart"):
+        if action not in ("create", "restart", "switch_account"):
             raise ValueError("Invalid session action")
+        account = from_account = None
+        if action == "switch_account":
+            account, from_account = self._switch(source, body, current_account, resumable)
+        elif "account" in body:
+            raise ValueError("Only an account switch names an account")
         model = self._optional_model(body.get("model"))
-        if action == "create":
+        if action == "switch_account":
+            preset, name = source["agent"], None
+        elif action == "create":
             preset = body.get("preset")
             if not isinstance(preset, str):   # a list or an object is not hashable either
                 raise ValueError("Unknown or disabled agent preset")
@@ -309,9 +343,9 @@ class Requests:
                 raise ValueError("Too many active requests for this session")
             self._db.execute(
                 "INSERT INTO session_requests "
-                "(id, action, source_json, preset, requested_name, model, state, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-                (request_id, action, source_json, preset, name, model, now))
+                "(id, action, source_json, preset, requested_name, model, account, from_account, state, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (request_id, action, source_json, preset, name, model, account, from_account, now))
             row = self._db.execute("SELECT * FROM session_requests WHERE id = ?",
                                    (request_id,)).fetchone()
         return self._row(row)
@@ -430,10 +464,11 @@ class Requests:
                                    (request_id,)).fetchone()
         return self._row(row)
 
-    def finish(self, request_id, *, result=None, error=None):
+    def finish(self, request_id, *, result=None, error=None, detail=None):
+        """``detail``: fields recorded beside a failure's error (an undone account switch: rolled_back, id)."""
         now = self._clock()
         state = "completed" if error is None else "failed"
-        value = result if error is None else {"error": error}
+        value = result if error is None else {**(detail or {}), "error": error}
         with self._transaction():
             changed = self._db.execute(
                 "UPDATE session_requests SET state = ?, result_json = ?, terminal_at = ? "

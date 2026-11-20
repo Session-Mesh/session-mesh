@@ -617,6 +617,7 @@
   "paneActions.sessionRequest.restart": "L’agent « {agent} » demande à reprendre sa conversation. Sa session actuelle sera arrêtée après cette confirmation.",
   "paneActions.sessionRequest.restartWithModel": "L’agent « {agent} » demande à reprendre sa conversation avec le modèle « {model} ». Sa session actuelle sera arrêtée après cette confirmation.",
   "paneActions.sessionRequest.stale": "Demande déjà décidée ou expirée.",
+  "paneActions.sessionRequest.switchAccount": "L’agent « {agent} » demande à passer du compte {from} au compte {to}. Toute sa conversation sera copiée dans le dossier du compte {to} et envoyée au fournisseur de ce compte ; la session actuelle sera arrêtée, puis reprise sous un nouveau nom.",
   "picker.alreadyOpen": "un sélecteur est déjà ouvert",
   "picker.alreadyOpenChoose": "un sélecteur est déjà ouvert ; choisis un fichier ou réinitialise-le",
   "picker.alreadyOpenReset": "un sélecteur est déjà ouvert ; réinitialise-le si nécessaire",
