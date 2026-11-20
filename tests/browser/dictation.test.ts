@@ -307,6 +307,30 @@ async function autoReady(page: Page, api: Parameters<Parameters<typeof harness>[
   await page.waitForTimeout(180);
 }
 
+for (const autoSend of [false, true]) {
+  test(`invalid C1 ready text never writes, submits or auto-recovers (autoSend=${autoSend})`, async () => {
+    await harness(async (page, api, _sockets, writes) => {
+      await autoPreference(page, autoSend); await closeCompose(page); await record(page);
+      await autoReady(page, api, 'A', 'before\x80\x85\x9fafter');
+      await page.waitForFunction(() => dictation.session('A', 1).state === 'recovery');
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await page.evaluate(() => dictation.reconcile(dictation.session('A', 1)));
+        assert.equal(await page.evaluate(() => dictation.send(dictation.session('A', 1))), false);
+        assert.equal(await page.evaluate(() => dictation.send(dictation.session('A', 1), true)), false);
+      }
+      assert.equal(await page.locator('#compose-text').inputValue(), '');
+      assert.equal(await page.locator('#compose-send').isDisabled(), true);
+      assert.equal(await page.evaluate(() => dictation.session('A', 1).transcript), '');
+      assert.equal(await page.evaluate(() => dictation.session('A', 1).autoAttempted), false);
+      assert.equal(await page.evaluate(() => dictation.session('A', 1).requestId),
+        api.uploads[0]!.headers['x-mesh-request-id']);
+      assert.equal(api.uploads.length, 1);
+      assert.equal(api.jobs[0]!.state, 'ready', 'invalid result is never settled as submitted');
+      assert.deepEqual(dataFrames(writes), [], 'no paste or Enter on any channel');
+    });
+  });
+}
+
 test('auto preference is visible, accessible, warns about inactive commands and defaults off', async () => {
   await harness(async page => {
     await open(page);

@@ -6,14 +6,18 @@ import type {Translator} from './pane-actions.ts';
 
 let translate: Translator = key => key;
 export function setDictationTranslator(fn: Translator): void {translate = fn;}
-export function dictationLabel(state: DictationState): string {return state === 'idle' ? '' : translate(`dictation.state.${state}`);}
+export function dictationLabel(state: DictationState): string {
+  return state === 'idle' ? '' : translate(`dictation.state.${state}`);
+}
 // Only code-owned codes select catalog keys; untrusted server prose is never UI.
 const messages = new Set(['storageWrite', 'storageRead', 'unavailable', 'unsupported', 'nonempty', 'outstanding',
   'microphoneBusy', 'ineligible', 'originalUnavailable', 'permissionTimeout', 'permissionDenied', 'audioLimit',
   'recordingError', 'microphoneInterrupted', 'durationLimit', 'invalidAudio', 'contextChanged', 'channelExpired',
   'resultExpired', 'admissionRejected', 'admissionUnconfirmed', 'draftChanged', 'statusUnavailable', 'jobMissing',
   'discardPending', 'channelUnavailable', 'resultUnconfirmed', 'settlementPending', 'deliveryUncertain']);
-function message(code: string): string {return code ? translate(`dictation.message.${messages.has(code) ? code : 'serviceError'}`) : '';}
+function message(code: string): string {
+  return code ? translate(`dictation.message.${messages.has(code) ? code : 'serviceError'}`) : '';
+}
 interface ViewPorts {
   controller(): DictationController | null;
   session(): DictationSession | null;
@@ -45,12 +49,14 @@ function statusRow(s: DictationSession, controller: DictationController) {
   const copyDraft = document.createElement('button'); copyDraft.type = 'button';
   copyDraft.onclick = () => copy(s.text);
   const clear = document.createElement('button'); clear.type = 'button'; clear.onclick = () => s.edit('');
-  const discard = document.createElement('button'); discard.type = 'button'; discard.onclick = () => controller.discard(s);
+  const discard = document.createElement('button'); discard.type = 'button';
+  discard.onclick = () => controller.discard(s);
   row.append(originalTitle, original, copyOriginal, draftTitle, draft, copyDraft, clear, discard, feedback);
   return {row, update(): void {
     label.dataset.state = s.state;
     label.textContent = translate('dictation.sessionStatus', {session: s.name,
-      status: [dictationLabel(s.state) || translate('dictation.draftRetained'), message(s.message)].filter(Boolean).join(' · ')});
+      status: [dictationLabel(s.state) || translate('dictation.draftRetained'), message(s.message)]
+        .filter(Boolean).join(' · ')});
     originalTitle.textContent = translate('dictation.original'); original.textContent = s.transcript;
     copyOriginal.textContent = translate('dictation.copyOriginal');
     for (const node of [originalTitle, original, copyOriginal]) node.hidden = !s.transcript;
@@ -115,8 +121,12 @@ export function createDictationView(p: ViewPorts) {
     if (!s || !c || c.reason(s)) return null;
     const token = {}; held = {session: s, token}; void c.press(s); return token;
   };
-  const release: EndHold = token => {if (held && token === held.token) {p.controller()?.release(held.session); held = null;}};
-  const cancel: EndHold = token => {if (held && (!token || token === held.token)) {p.controller()?.detach(held.session); held = null;}};
+  const release: EndHold = token => {
+    if (held && token === held.token) {p.controller()?.release(held.session); held = null;}
+  };
+  const cancel: EndHold = token => {
+    if (held && (!token || token === held.token)) {p.controller()?.detach(held.session); held = null;}
+  };
   pointerHold(p.microphone, press, release, cancel);
   p.microphone.addEventListener('contextmenu', e => e.preventDefault());
   p.microphone.addEventListener('click', e => e.preventDefault());
@@ -141,7 +151,8 @@ export function createDictationView(p: ViewPorts) {
   }};
 }
 function renderView(p: ViewPorts): void {
-  const c = p.controller(), s = p.session(), reason = s && c ? message(c.reason(s)) : translate('dictation.localSession');
+  const c = p.controller(), s = p.session();
+  const reason = s && c ? message(c.reason(s)) : translate('dictation.localSession');
   renderPreference(p, c);
   const capturing = s?.state === 'requesting' || s?.state === 'recording';
   // aria-disabled preserves pointer capture during hold.

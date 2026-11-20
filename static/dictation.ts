@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
+import {hasDictationControls} from '../shared/dictation-text.ts';
+
 // Page-memory-only jobs and authorization; only the opt-in boolean is persisted.
 export type DictationState = 'idle' | 'requesting' | 'recording' | 'uploading' |
   'queued' | 'processing' | 'ready' | 'error' | 'recovery' | 'delivering';
@@ -87,7 +89,10 @@ export class DictationController {
   session(name: string, created: number): DictationSession {
     const key = JSON.stringify([this.p.namespace, name, created]);
     let session = this.sessions.get(key);
-    if (!session) {session = new DictationSession(key, name, created, () => this.notify()); this.sessions.set(key, session);}
+    if (!session) {
+      session = new DictationSession(key, name, created, () => this.notify());
+      this.sessions.set(key, session);
+    }
     return session;
   }
   peekSession(name: string, created: number): DictationSession | undefined {
@@ -116,7 +121,9 @@ export class DictationController {
     catch {this.automatic = false; this.preferenceMessage = 'storageRead';}
   }
   private notify(): void {if (!this.disposed) this.p.changed();}
-  private async read(path: string, init: RequestInit = {}, s?: DictationSession): Promise<{response: Response; value: any}> {
+  private async read(
+    path: string, init: RequestInit = {}, s?: DictationSession,
+  ): Promise<{response: Response; value: any}> {
     if (!this.allowed()) throw Error('disposed');
     const lifetime = this.abort, abort = new AbortController();
     const deadline = Math.min(this.p.now() + RECOVERY_MS, s?.recoveryDeadline || Infinity);
@@ -126,17 +133,23 @@ export class DictationController {
     lifetime.signal.addEventListener('abort', cancel, {once: true});
     const timer = this.p.schedule(cancel, Math.max(0, deadline - this.p.now()));
     let rejectAbort!: () => void;
-    const aborted = new Promise<never>((_resolve, reject) => {rejectAbort = () => {this.p.unschedule(timer); reject(Error('aborted'));};});
+    const aborted = new Promise<never>((_resolve, reject) => {
+      rejectAbort = () => {this.p.unschedule(timer); reject(Error('aborted'));};
+    });
     abort.signal.addEventListener('abort', rejectAbort, {once: true});
     try {
       // Race the whole exchange, not only fetch: an adapter may ignore abort or
       // resolve headers while its JSON body never settles.
       return await Promise.race([aborted, (async () => {
         const response = await this.p.request(path, {...init, signal: abort.signal});
-        if (abort.signal.aborted || lifetime !== this.abort || !this.allowed() || this.p.now() >= deadline) throw Error('aborted');
+        if (abort.signal.aborted || lifetime !== this.abort || !this.allowed() || this.p.now() >= deadline) {
+          throw Error('aborted');
+        }
         if (response.status === 401 || response.status === 403) {this.dispose(); throw Error('authentication');}
         const value = await response.json().catch(() => null);
-        if (abort.signal.aborted || lifetime !== this.abort || !this.allowed() || this.p.now() >= deadline) throw Error('aborted');
+        if (abort.signal.aborted || lifetime !== this.abort || !this.allowed() || this.p.now() >= deadline) {
+          throw Error('aborted');
+        }
         return {response, value};
       })()]);
     } finally {
@@ -177,7 +190,8 @@ export class DictationController {
     s.generation++; s.uploadStarted = false;
     s.autoAuthorized = this.autoSend; s.autoAttempted = false; s.insertionRevision = null;
     const cap: Capture = {session: s, stream: null, recorder: null, chunks: [], bytes: 0,
-      released: false, cancelled: false, started: this.p.now(), timer: null, completed: false, generation: s.generation};
+      released: false, cancelled: false, started: this.p.now(), timer: null,
+      completed: false, generation: s.generation};
     this.capture = cap; this.notify();
     cap.timer = this.p.schedule(() => this.failCapture(cap, 'permissionTimeout'), this.config!.capture_seconds * 1000);
     try {
@@ -189,7 +203,8 @@ export class DictationController {
     } catch {if (this.captureCurrent(cap)) this.failCapture(cap, 'permissionDenied'); return false;}
   }
   private captureCurrent(cap: Capture): boolean {
-    return this.allowed() && this.capture === cap && cap.generation === cap.session.generation && !cap.cancelled && !cap.released;
+    return this.allowed() && this.capture === cap && cap.generation === cap.session.generation
+      && !cap.cancelled && !cap.released;
   }
   private record(cap: Capture): void {
     if (cap.timer !== null) this.p.unschedule(cap.timer);
@@ -202,7 +217,9 @@ export class DictationController {
     };
     recorder.onerror = () => this.failCapture(cap, 'recordingError');
     recorder.onstop = () => this.captured(cap);
-    cap.stream!.getTracks().forEach(t => {t.onended = () => {if (!cap.released) this.failCapture(cap, 'microphoneInterrupted');};});
+    cap.stream!.getTracks().forEach(t => {
+      t.onended = () => {if (!cap.released) this.failCapture(cap, 'microphoneInterrupted');};
+    });
     recorder.start(250); cap.session.state = 'recording';
     cap.timer = this.p.schedule(() => this.failCapture(cap, 'durationLimit'), this.config!.capture_seconds * 1000);
     this.notify();
@@ -242,7 +259,8 @@ export class DictationController {
     const s = cap.session, type = cap.chunks.find(b => b.type)?.type || cap.recorder?.mimeType || '';
     s.audio = new Blob(cap.chunks, {type}); cap.chunks = [];
     if (!s.audio.size || !/^audio\/(webm|mp4|ogg|wav|x-wav)(;|$)/i.test(type)) {
-      s.requestId = null; s.audio = null; s.release(); s.state = 'error'; s.message = 'invalidAudio'; this.notify(); return;
+      s.requestId = null; s.audio = null; s.release(); s.state = 'error'; s.message = 'invalidAudio';
+      this.notify(); return;
     }
     void this.upload(s);
   }
@@ -308,9 +326,15 @@ export class DictationController {
   }
   private accept(s: DictationSession, value: unknown): void {
     const j = value as Job;
-    if (!j || typeof j.job_id !== 'string' || j.request_id !== s.requestId || j.session !== s.name || j.created !== s.created
-      || !['queued', 'processing', 'ready', 'error', 'cancelled', 'settled'].includes(j.state)) throw Error('invalid job');
-    if (j.state === 'ready' && (typeof j.text !== 'string' || !j.text.trim() || /[\x00-\x08\x0b-\x1f\x7f]/.test(j.text))) throw Error('invalid text');
+    if (!j || typeof j.job_id !== 'string' || j.request_id !== s.requestId
+      || j.session !== s.name || j.created !== s.created
+      || !['queued', 'processing', 'ready', 'error', 'cancelled', 'settled'].includes(j.state)) {
+      throw Error('invalid job');
+    }
+    if (j.state === 'ready'
+      && (typeof j.text !== 'string' || !j.text.trim() || hasDictationControls(j.text))) {
+      throw Error('invalid text');
+    }
     const firstResult = !['ready', 'error'].includes(s.job?.state || '');
     if (!s.job && ['queued', 'processing'].includes(j.state)) this.boundChannel(s);
     s.job = j; s.audio = null;
@@ -330,7 +354,8 @@ export class DictationController {
   }
   private later(s: DictationSession): void {
     const retainedResult = ['ready', 'error'].includes(s.job?.state || s.state);
-    if (!this.allowed() || s.missing || !s.requestId || s.timer !== null || (!s.discard && !s.outcome && retainedResult)) return;
+    if (!this.allowed() || s.missing || !s.requestId || s.timer !== null
+      || (!s.discard && !s.outcome && retainedResult)) return;
     if (s.recoveryDeadline && this.p.now() >= s.recoveryDeadline) return;
     const op = this.operation(s);
     s.timer = this.p.schedule(() => {if (this.current(s, op)) {s.timer = null; void this.reconcile(s);}}, 1000);
@@ -339,7 +364,8 @@ export class DictationController {
     if (!this.allowed() || s.missing || s.reconciling || !s.requestId) return;
     if (s.recoveryDeadline && this.p.now() >= s.recoveryDeadline) {if (s.discard || s.outcome) this.finish(s); return;}
     const op = this.beginIo(s), knownId = s.job?.job_id ?? null; s.reconciling = true;
-    const obsolete = (): boolean => !this.current(s, op) || (knownId !== null ? s.job?.job_id !== knownId : s.job !== null);
+    const obsolete = (): boolean => !this.current(s, op)
+      || (knownId !== null ? s.job?.job_id !== knownId : s.job !== null);
     try {
       if (s.job && (s.discard || s.outcome)) {await this.acknowledge(s, op); return;}
       const path = knownId !== null ? `/api/transcribe/${knownId}` : `/api/transcribe/request/${op.requestId}`;
@@ -425,17 +451,21 @@ export class DictationController {
     void this.deliver(s, text, revision, operation, automatic);
     return true;
   }
-  private async deliver(s: DictationSession, text: string, revision: number, operation: number, automatic: boolean): Promise<void> {
+  private async deliver(
+    s: DictationSession, text: string, revision: number, operation: number, automatic: boolean,
+  ): Promise<void> {
     const guard = (): boolean => this.allowed() && s.delivery === operation && !s.discard
       && (!automatic || s.autoAuthorized)
       && s.state === 'delivering' && s.revision === revision && s.text === text;
     try {
       // Revalidate the existing job, never admission or input, before using its original port.
-      const {response: r, value: j} = await this.read(`/api/transcribe/${s.job!.job_id}`, {headers: this.headers(), cache: 'no-store'}, s);
+      const {response: r, value: j} = await this.read(`/api/transcribe/${s.job!.job_id}`,
+        {headers: this.headers(), cache: 'no-store'}, s);
       if (!this.allowed() || s.delivery !== operation) return;
       if (r.status === 404) {this.absent(s); return;}
       if (!r.ok || j?.job_id !== s.job!.job_id || j.request_id !== s.requestId || j.session !== s.name
-        || j.created !== s.created || j.state !== 'ready' || j.text !== s.transcript || !guard() || !s.channel?.valid()) throw Error('guard');
+        || j.created !== s.created || j.state !== 'ready' || j.text !== s.transcript
+        || !guard() || !s.channel?.valid()) throw Error('guard');
     } catch {
       if (!this.allowed() || s.delivery !== operation) return;
       s.delivery++; s.release(); s.state = 'recovery'; s.message = 'resultUnconfirmed'; this.notify(); return;
@@ -453,7 +483,9 @@ export class DictationController {
       this.notify();
     }, guard);
   }
-  detach(s: DictationSession): void {if (this.capture?.session === s && !this.capture.released) this.cancelCapture(this.capture);}
+  detach(s: DictationSession): void {
+    if (this.capture?.session === s && !this.capture.released) this.cancelCapture(this.capture);
+  }
   hidden(): void {if (this.capture && !this.capture.released) this.cancelCapture(this.capture);}
   holds(): DictationSession[] {return [...this.sessions.values()].filter(s => s.outstanding || s.text.length > 0);}
   suspendForPageCache(): void {
