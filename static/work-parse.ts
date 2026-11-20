@@ -8,7 +8,7 @@
  */
 
 import type {
-  Answer, Blocker, Category, ColumnKey, Columns, Counts, Dependency, DependencyState, LinkedSession, NoProject, Omitted, Product,
+  Answer, Blocker, Category, ColumnKey, Columns, Counts, Dependency, DependencyState, LinkedSession, NoProject, Omitted, OpenQuestionsDoc, Product,
   ProductsDoc, ProjectDoc, ProjectHead, ProjectsDoc, ProjectSummary, Provenance, Question, Reprise, TargetRef, TaskDetail,
   TaskRow, TimelineEvent,
 } from './work-types.ts';
@@ -185,12 +185,21 @@ function parseQuestion(source: Obj): Question | null {
   const id = text(source.id), body = text(source.text);
   if (!id || body === null) return null;
   const answers = objects(source.answers).map(parseAnswer).filter((a): a is Answer => a !== null);
-  return { id, open: source.state !== 'answered', text: body, options: strings(source.options), about: text(source.about),
-    askedBy: text(source.asked_by_session) ?? text(source.asked_by_agent), askedAt: text(source.asked_at), answers,
+  const askedByAgent = text(source.asked_by_agent), askedBySession = text(source.asked_by_session);
+  return { id, open: source.state !== 'answered', text: body, options: strings(source.options), assumption: text(source.assumption),
+    about: text(source.about), askedBy: askedBySession ?? askedByAgent, askedByAgent, askedBySession, askedAt: text(source.asked_at), answers,
     ownerAnswered: source.owner_answered === true || answers.some(answer => answer.ownerVerified) };
 }
 
 const questions = (value: unknown): Question[] => objects(value).map(parseQuestion).filter((q): q is Question => q !== null);
+
+/** The questions part of an unscoped `resume`: only open questions are kept (the document holds no other). */
+export function parseOpenQuestions(value: unknown): OpenQuestionsDoc | null {
+  if (!isObj(value) || !Array.isArray(value.questions)) return null;
+  const open = questions(value.questions).filter(question => question.open);
+  return { openQuestions: Math.max(count(value.open_questions), open.length), questions: open,
+    omitted: count(value.questions_omitted), truncated: flag(value.truncated) };
+}
 
 export function parseProject(value: unknown): ProjectDoc | null {
   if (!isObj(value)) return null;

@@ -113,7 +113,7 @@ function answerSlot(ctx: ViewContext, question: Question): { slot: HTMLElement; 
  * The answer area of a question, kept apart from the question text: the answers given, then, while the owner has
  * not answered it here (open, or answered only by relayed answers), a hint and the reply slot.
  */
-function answerArea(ctx: ViewContext, question: Question): HTMLElement {
+export function answerArea(ctx: ViewContext, question: Question): HTMLElement {
   const area = el('div', 'work-answer-area');
   area.dataset.workAnswerFor = question.id;
   if (question.answers.length > 0) area.append(el('ul', 'work-answer-list', ...question.answers.map(answer => answerItem(ctx, answer))));

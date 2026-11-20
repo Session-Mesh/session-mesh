@@ -32,6 +32,14 @@ describe('request', () => {
     }
   });
 
+  test('the open questions are the unscoped resume op: no project, no product, nothing else', async () => {
+    const { api, calls } = fake(200, { open_questions: 2, questions: [{ id: 'N-1', text: 'Port?', state: 'open' }] });
+    const result = await api.openQuestions();
+    assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), { op: 'resume', args: {} });
+    assert.ok(result.ok);
+    if (result.ok) assert.equal(result.value.openQuestions, 2);
+  });
+
   test('passes the abort signal on, and an aborted call is not an error to retry', async () => {
     const controller = new AbortController();
     const request = async (_url: string, init: RequestInit) => {

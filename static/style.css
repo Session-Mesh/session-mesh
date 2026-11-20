@@ -368,6 +368,8 @@ dialog input:focus { outline: none; border-color: var(--accent); }
 .pane-head .p-actions .btn { position: relative; width: 44px; height: 44px; padding: 0; font-size: 0; }
 .mail-badge { position: absolute; top: 3px; right: 3px; z-index: 1; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: var(--danger); color: var(--bg); font-size: 11px; line-height: 16px; font-weight: 700; text-align: center; }
 .mail-badge[hidden] { display: none; }
+.projects-question-badge { display: inline-block; min-width: 18px; height: 18px; margin-inline-start: 6px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--wait); color: var(--bg); font-size: 11px; line-height: 18px; font-weight: 700; text-align: center; vertical-align: middle; }
+.projects-question-badge[hidden] { display: none; }
 .pane-head .p-actions [data-act="compose"]::before,
 .pane-head .p-actions [data-act="board"]::before,
 .pane-head .p-actions [data-act="more"]::after,
@@ -1143,6 +1145,18 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .work-plain-list, .work-question-list, .work-detail-list, .work-dep-list, .work-dep-targets, .work-frise-list { list-style: none; margin: 0; padding: 0; }
 .work-question { padding: 6px 0; border-bottom: 1px dashed var(--line); }
 .work-question-about { margin-inline-start: 8px; color: var(--mute); font-size: 12px; }
+/* questions (entry list and the Questions tab) */
+.work-entry-questions { margin: 0 0 16px; }
+.work-questions-summary { margin: 0 0 10px; }
+.work-qcard-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.work-qcard { min-width: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.work-qcard-meta { margin: 4px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.work-qcard-extra { margin: 4px 0 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.work-qcard-open { color: var(--wait); }
+.work-qcard-answered { color: var(--accent); }
+.work-qcard-about, .work-qgroup-task { max-width: 100%; padding: 0 4px; font: inherit; text-align: start; color: var(--fg); background: none; border: 0; text-decoration: underline; overflow-wrap: anywhere; cursor: pointer; }
+.work-qgroup-task { text-transform: none; letter-spacing: normal; font-size: 13px; }
+.work-qcard-about:focus-visible, .work-qgroup-task:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* timeline */
 .work-frise-axis { color: var(--mute); font-size: 12px; margin-bottom: 4px; }
 .work-frise-today-row { position: relative; height: 18px; }

@@ -188,13 +188,13 @@ for (const width of WIDTHS) {
       assert.deepEqual(problems, []);
     });
 
-    test('a project opens on four tabs that switch by mouse and by keyboard', { timeout: 900_000 }, async () => {
+    test('a project opens on five tabs that switch by mouse and by keyboard', { timeout: 900_000 }, async () => {
       const { page, problems } = await signedIn(tracked, 'en-US', width);
       await enterProjects(page, width);
       await openRelayProject(page);
       const tabs = page.locator('.work-tab');
-      assert.deepEqual(await tabs.allTextContents(), ['Pick up', 'Board', 'Timeline', 'Dependencies']);
-      assert.equal(await page.locator('#work-root [role=tablist] [role=tab]').count(), 4);
+      assert.deepEqual(await tabs.allTextContents(), ['Pick up', 'Board', 'Timeline', 'Dependencies', 'Questions']);
+      assert.equal(await page.locator('#work-root [role=tablist] [role=tab]').count(), 5);
       assert.equal(await page.locator('#work-panel-reprise').isVisible(), true);
       await page.locator('#work-panel-reprise .work-card').first().waitFor();
       await shot(page, `reprise-${width}`);
@@ -231,11 +231,11 @@ for (const width of WIDTHS) {
       assert.equal(await page.locator('#work-tab-board').getAttribute('aria-selected'), 'true');
       assert.equal(await page.evaluate(() => document.activeElement?.id), 'work-tab-board');
       await page.keyboard.press('End');
-      assert.equal(await page.locator('#work-tab-deps').getAttribute('aria-selected'), 'true');
+      assert.equal(await page.locator('#work-tab-questions').getAttribute('aria-selected'), 'true');
       await page.keyboard.press('ArrowRight');
       assert.equal(await page.locator('#work-tab-reprise').getAttribute('aria-selected'), 'true', 'wraps around');
       await page.keyboard.press('ArrowLeft');
-      assert.equal(await page.locator('#work-tab-deps').getAttribute('aria-selected'), 'true');
+      assert.equal(await page.locator('#work-tab-questions').getAttribute('aria-selected'), 'true');
       await page.keyboard.press('Home');
       assert.equal(await page.locator('#work-tab-reprise').getAttribute('aria-selected'), 'true');
       assert.equal(await page.locator('.work-tab[tabindex="0"]').count(), 1);
@@ -405,7 +405,7 @@ describe('Projects view in French', { skip }, () => {
     const { page } = await signedIn(tracked, 'fr-FR', 390);
     await enterProjects(page, 390);
     await openRelayProject(page);
-    assert.deepEqual(await page.locator('.work-tab').allTextContents(), ['Reprise', 'Tableau', 'Frise', 'Dépendances']);
+    assert.deepEqual(await page.locator('.work-tab').allTextContents(), ['Reprise', 'Tableau', 'Frise', 'Dépendances', 'Questions']);
     await shot(page, 'french-390');
     const none = await signedIn(untracked, 'fr-FR', 390);
     await enterProjects(none.page, 390);
