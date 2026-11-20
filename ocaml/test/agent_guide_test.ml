@@ -182,7 +182,7 @@ let work_names text =
 
 let guide_names_exactly_the_work_tools () =
   let tools = work_tools () in
-  Alcotest.(check int) "work-mcp has 18 tools" 18 (List.length tools);
+  Alcotest.(check int) "work-mcp has 19 tools" 19 (List.length tools);
   Alcotest.(check (list string))
     "the guide names every work_* tool and no other" tools
     (work_names (read_file (guide_path ())))

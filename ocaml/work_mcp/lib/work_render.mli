@@ -64,6 +64,20 @@ val event_json : Mesh_worklog.Event.t -> Yojson.Safe.t
 val project_json : Mesh_worklog.Query.project_row -> Yojson.Safe.t
 val question_json : Work_questions.question -> Yojson.Safe.t
 
+val attempts_json : Work_attempts.summary -> Yojson.Safe.t
+(** The [attempts] summary of a task: [total], [failures],
+    [consecutive_failures] (since the last success), the
+    [consecutive_failures_threshold] ({!Work_attempts.reframe_threshold}),
+    [needs_reframe] (the run has reached it) and [last] (its derived number
+    [n], [id], [outcome], [reason], [text] and [at]) when there is one. *)
+
+val attempts_row : Work_attempts.summary -> (string * Yojson.Safe.t) list
+(** The fields a list row gets: [attempts] and [consecutive_failures], only
+    when the task has attempts (a row of a task without any is unchanged). *)
+
+val with_attempts : Work_attempts.attempt list -> Mesh_worklog.Model.task -> Yojson.Safe.t -> Yojson.Safe.t
+(** A task row with {!attempts_row} of that task appended. *)
+
 val warnings_json : string list -> (string * Yojson.Safe.t) list
-(** [data_warnings] for the read warnings that matter (the question and
-    answer events are not reported), at most 10. Empty when there are none. *)
+(** [data_warnings] for the read warnings that matter (the question, answer, request
+    and attempt events are not reported as unknown), at most 10. Empty when there are none. *)

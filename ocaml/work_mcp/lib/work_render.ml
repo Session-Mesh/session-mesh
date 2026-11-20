@@ -254,8 +254,34 @@ let question_json (q : Work_questions.question) =
     @ [ ("asked_at", ts q.asked_at) ]
     @ answers)
 
+let attempt_last (a : Work_attempts.attempt) =
+  `Assoc
+    ([ ("n", `Int a.n); ("id", tstr ~max:40 a.id); ("outcome", tstr ~max:20 a.outcome) ]
+    @ opt_tstr ~max:40 "reason" a.reason
+    @ opt "text" (fun t -> `String (trunc_chars ~max:Work_attempts.max_text t)) a.text
+    @ [ ("at", ts a.at) ])
+
+let attempts_json (s : Work_attempts.summary) =
+  `Assoc
+    ([
+       ("total", `Int s.total);
+       ("failures", `Int s.failures);
+       ("consecutive_failures", `Int s.consecutive_failures);
+       ("consecutive_failures_threshold", `Int Work_attempts.reframe_threshold);
+       ("needs_reframe", `Bool (Work_attempts.needs_reframe s));
+     ]
+    @ opt "last" attempt_last s.last)
+
+let attempts_row (s : Work_attempts.summary) =
+  if s.total = 0 then []
+  else [ ("attempts", `Int s.total); ("consecutive_failures", `Int s.consecutive_failures) ]
+
+let with_attempts attempts (t : W.Model.task) = function
+  | `Assoc l -> `Assoc (l @ attempts_row (Work_attempts.summary (Work_attempts.of_task t.id attempts)))
+  | other -> other
+
 let warnings_json warnings =
-  let kept = List.filter (fun w -> not (Work_questions.is_noise w)) warnings in
+  let kept = List.filter (fun w -> not (Work_questions.is_noise w || Work_attempts.is_noise w)) warnings in
   let shown, omitted = cap 10 kept in
   match shown with
   | [] -> []

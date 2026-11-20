@@ -105,7 +105,7 @@ let project_title (world : W.Model.world) (t : W.Model.task) =
 let max_blocked_by = 20
 let max_session_names = 10
 
-let task_row world (t : W.Model.task) =
+let task_row ?(attempts = []) world (t : W.Model.task) =
   let base = match R.task_row ?project_title:(project_title world t) t with `Assoc l -> l | _ -> [] in
   let names = List.map (fun (l : W.Model.session_link) -> R.tstr ~max:100 l.session) t.sessions in
   `Assoc
@@ -117,4 +117,5 @@ let task_row world (t : W.Model.task) =
     @ [ ("blockers", `Int (List.length (Wr_stats.open_blockers t))) ]
     @ Wr_out.list "blocked_by" max_blocked_by (List.map (fun id -> R.tstr ~max:40 id) t.blocked_by)
     @ [ ("dependency_open", `Bool (Wr_stats.is_open t && Wr_stats.unfinished_dependency world t)) ]
-    @ Wr_out.list "sessions" max_session_names names)
+    @ Wr_out.list "sessions" max_session_names names
+    @ R.attempts_row (Work_mcp.Work_attempts.summary (Work_mcp.Work_attempts.of_task t.id attempts)))

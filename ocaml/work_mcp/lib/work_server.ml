@@ -7,6 +7,7 @@
 
 let tools =
   Work_tools_read.tools @ Work_tools_write.tools @ Work_tools_sessions.tools @ Work_tools_questions.tools
+  @ Work_tools_attempts.tools
 
 let server () =
   let server =

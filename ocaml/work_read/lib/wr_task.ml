@@ -49,4 +49,5 @@ let run (loaded : Wr_load.t) reference =
        @ Wr_out.list "sessions" max_list (List.map Wr_view.linked_json (Wr_view.collect [ t ]))
        @ Wr_out.list "timeline" max_timeline (List.rev_map Wr_view.event_json t.timeline)
        @ Wr_questions.fields ~about:[ t.id ] loaded.questions
+       @ [ ("attempts", R.attempts_json (Work_mcp.Work_attempts.summary (Work_mcp.Work_attempts.of_task t.id loaded.attempts))) ]
        @ R.warnings_json (loaded.warnings @ view.warnings)))

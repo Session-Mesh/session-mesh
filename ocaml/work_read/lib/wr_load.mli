@@ -14,7 +14,8 @@ type t = {
   ctx : Mesh_worklog.Ctx.t;
   snapshot : Mesh_worklog.Reader.snapshot;
   questions : Work_mcp.Work_questions.question list;  (** oldest first *)
-  warnings : string list;  (** read, fold and question warnings *)
+  attempts : Work_mcp.Work_attempts.attempt list;  (** fold order, numbered per task *)
+  warnings : string list;  (** read, fold, question and attempt warnings *)
 }
 
 val load : ?getenv:(string -> string option) -> unit -> (t, Work_mcp.Work_err.t) result
