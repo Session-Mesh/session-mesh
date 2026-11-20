@@ -875,6 +875,9 @@ let test_notes_capped () =
   Alcotest.(check bool)
     "close to the limit" true
     (String.length notes >= C.notes_limit - 3);
+  Alcotest.(check string)
+    "a lone CR is a line end" "# Changes\n- Fix A\nB"
+    (fst (C.cap_notes "# Changes\r- Fix A\r\nB"));
   let short, cut = C.cap_notes "short" in
   Alcotest.(check string) "short notes unchanged" "short" short;
   Alcotest.(check bool) "not cut" false cut;

@@ -17,6 +17,7 @@ from collections import deque
 import glob
 import hashlib
 import hmac
+import html
 import ipaddress
 import itertools
 import json
@@ -1192,7 +1193,8 @@ async def api_update_image(request):
         raise web.HTTPBadRequest()
     url = update_image_url(request.query["url"])
     notes = await _update_notes() if url else None
-    if notes is None or url not in notes["body"]:
+    # as written in Markdown, or in an HTML attribute (where &amp; stands for &)
+    if notes is None or (url not in notes["body"] and url not in html.unescape(notes["body"])):
         raise web.HTTPNotFound()
     if not _update_image_budget(time.monotonic()):
         raise web.HTTPTooManyRequests()

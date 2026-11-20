@@ -34,16 +34,23 @@ let security_marked body =
 
 let notes_limit = 65536
 
-(* The notes as the page may receive them: line ends made \n, the other
+(* The notes as the page may receive them: line ends (\r\n, a lone \r) made \n, the other
    control characters but \t removed (each would take six bytes in JSON, and
    the host's reply must stay well under the web server's frame limit), and at
    most [notes_limit] bytes, cut before a UTF-8 sequence, never inside one. *)
 let cap_notes text =
-  let kept =
-    String.to_seq text
-    |> Seq.filter (fun c -> c = '\n' || c = '\t' || (c >= ' ' && c <> '\x7f'))
-    |> String.of_seq
-  in
+  let buffer = Buffer.create (String.length text) in
+  String.iteri
+    (fun index c ->
+      match c with
+      | '\r' ->
+          if index + 1 >= String.length text || text.[index + 1] <> '\n' then
+            Buffer.add_char buffer '\n'
+      | '\n' | '\t' -> Buffer.add_char buffer c
+      | c when c >= ' ' && c <> '\x7f' -> Buffer.add_char buffer c
+      | _ -> ())
+    text;
+  let kept = Buffer.contents buffer in
   if String.length kept <= notes_limit then (kept, false)
   else
     let rec start index =
