@@ -26,7 +26,9 @@ const REFUSED = ['http://github.com/user-attachments/assets/ok', 'https://127.0.
 const NOTES = {
   tag: 'v0.2.0', published: '2026-11-19T10:00:00Z', truncated: false,
   notes_url: 'https://github.com/Session-Mesh/session-mesh/releases/tag/v0.2.0',
-  body: ['## What changed', '', '| a | b |', '|---|---|', '| 1 | 2 |', '', ...IMAGES, ...REFUSED.map(url => `![x](${url})`)].join('\n'),
+  body: ['## What changed', '', '| a | b |', '|---|---|', '| 1 | 2 |', '', ...IMAGES, ...REFUSED.map(url => `![x](${url})`),
+    // raw HTML, as GitHub's editor writes it: the browser reads the attribute with &amp; as &
+    `<img width="200" src="${GH}/ok?a=1&amp;b=2">`].join('\n'),
 };
 
 let mesh: Mesh;
@@ -99,6 +101,10 @@ describe('GET /api/update/image', () => {
     assert.deepEqual(Buffer.from(await answer.arrayBuffer()), PNG);
     const sent = github.requests.at(-1)!;
     assert.equal(sent, 'session-mesh-update-check - - /user-attachments/assets/ok', 'fixed User-Agent, no cookie, no credential');
+  });
+
+  test('an image written in an HTML attribute, with its entities, is one of the notes', async () => {
+    assert.equal((await image(`${GH}/ok?a=1&b=2`)).status, 200);
   });
 
   test('a redirect inside the allowlist is followed (GitHub attachments)', async () => {
