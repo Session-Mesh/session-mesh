@@ -8,6 +8,9 @@
     "node": "^22.13.0 || >=24.0.0"
   },
   "scripts": {
+    "build:dictation": "node tools/build-dictation.mjs",
+    "typecheck:dictation": "tsc --project tsconfig.dictation.json",
+    "check:dictation": "tsc --project tsconfig.dictation.json && node tools/build-dictation.mjs --check && node --experimental-strip-types --test tests/dictation.test.ts tests/dictation-auth.test.ts tests/dictation-service*.test.ts",
     "build:board": "node tools/build-board.mjs",
     "check:third-party": "node tools/check-third-party.mjs",
     "check:board": "node --check static/board-src.mjs && node --check tools/build-board.mjs",
