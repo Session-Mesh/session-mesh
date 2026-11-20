@@ -85,7 +85,10 @@ describe('update check', () => {
         await until('the host', async () => fs.existsSync(source.socket));
         await new Promise(resolve => setTimeout(resolve, 500));
         assert.equal((await listing(mesh)).update, null, 'a source install');
-        assert.equal(fs.existsSync(path.join(mesh.home, '.cache', 'session-mesh')), false, 'and no request, no cache');
+        // the update check's own cache file: the folder itself also holds the listing's caches, written when a
+        // test running alongside leaves a process named codex on the machine
+        assert.equal(fs.existsSync(path.join(mesh.home, '.cache', 'session-mesh', 'update-check.json')), false,
+          'and no request, no cache');
       } finally {
         await source.stop();
       }
