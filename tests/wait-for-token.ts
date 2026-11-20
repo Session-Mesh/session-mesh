@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-// A server accepts connections before it has written its token file, so a test that reads the file
-// as soon as the port answers can race it. This waits for the file, then for the server to accept
-// that token, and fails with a message naming what was missing instead of a raw ENOENT.
+// The server writes its token file at import and binds its port only later, so the file appearing means
+// our server has started. The port, by contrast, can answer before that: another process of a parallel
+// test run can hold the same number between freePort() closing its probe and the server's bind. A test
+// that reads the token as soon as the port answers can therefore hit ENOENT. This waits for the file,
+// then for the server to accept that token, and fails with a message naming what was missing.
 import fs from 'node:fs';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -28,6 +30,7 @@ export async function waitForServer(file: string, url: string, origin: string, t
   const deadline = Date.now() + timeoutMs;
   const token = await waitForToken(file, timeoutMs, stepMs);
   let last = 'no answer';
+  let sawStatus = false;
   for (;;) {
     try {
       const response = await fetch(url, {headers: {Authorization: `Bearer ${token}`, Origin: origin},
@@ -35,8 +38,9 @@ export async function waitForServer(file: string, url: string, origin: string, t
       await response.arrayBuffer();
       if (response.status === 200) return token;
       last = `status ${response.status}`;
+      sawStatus = true;
     } catch (error) {
-      last = (error as Error).message;
+      if (!sawStatus) last = (error as Error).message;   // the final aborted request must not hide a status
     }
     if (Date.now() >= deadline) throw new Error(`the server did not answer ${url} with its token within ${timeoutMs} ms (${last})`);
     await sleep(stepMs);

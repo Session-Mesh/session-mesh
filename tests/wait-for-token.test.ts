@@ -6,8 +6,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import {test} from 'node:test';
-import {waitForToken} from './wait-for-token.ts';
+import {waitForServer, waitForToken} from './wait-for-token.ts';
 
 function scratch(): string { return fs.mkdtempSync(path.join(os.tmpdir(), 'wait-token-')); }
 
@@ -43,3 +44,25 @@ test('a token file that never appears fails with a clear message after the bound
     assert.ok(Date.now() - started >= 400, 'it waited the whole bound');
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
+
+for (let run = 1; run <= 5; run++) {
+  test(`the timeout message keeps the last HTTP status, not the final aborted request (run ${run})`, async () => {
+    const dir = scratch();
+    const file = path.join(dir, 'token');
+    fs.writeFileSync(file, 'secret');
+    let requests = 0;
+    const server = http.createServer((_req, res) => {   // 401 once, then never answers
+      if (++requests === 1) { res.statusCode = 401; res.end(); }
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const {port} = server.address() as {port: number};
+    try {
+      await assert.rejects(waitForServer(file, `http://127.0.0.1:${port}/`, 'http://x', 600, 20),
+        (error: Error) => { assert.match(error.message, /\(status 401\)/); return true; });
+    } finally {
+      server.closeAllConnections();
+      await new Promise(resolve => server.close(resolve));
+      fs.rmSync(dir, {recursive: true, force: true});
+    }
+  });
+}

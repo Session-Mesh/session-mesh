@@ -53,7 +53,7 @@ async function start(prefix: string, sessions: (where: Scratch) => FakeSession[]
     assert.fail(result.output);
   }
   const base = `http://127.0.0.1:${where.port}`;
-  try {   // the port accepts before the server has written its token file
+  try {   // the port can answer before our server is up (a parallel run may hold it); the token file marks our start
     await waitForServer(path.join(where.confDir, 'token'), `${base}/api/dirs`, base);
   } catch (error) {
     await stopServer(child);
