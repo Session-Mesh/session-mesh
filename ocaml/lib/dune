@@ -99,6 +99,31 @@
  (libraries yojson digestif))
 
 (library
+ (name mesh_backend_profile)
+ (modules mesh_backend_profile)
+ (libraries yojson digestif unix))
+
+(library
+ (name mesh_backend_consent)
+ (modules mesh_backend_consent)
+ (libraries mesh_backend_profile yojson))
+
+(library
+ (name mesh_backend_store)
+ (modules mesh_backend_store)
+ (libraries
+  mesh_backend_profile
+  mesh_backend_consent
+  caqti
+  caqti.classic
+  caqti.blocking
+  caqti-driver-sqlite3
+  yojson
+  uri
+  unix
+  threads))
+
+(library
  (name mesh_agent_resume_preset)
  (modules mesh_agent_resume_preset)
  (libraries mesh_resume_profile mesh_runner_target yojson digestif eio unix))

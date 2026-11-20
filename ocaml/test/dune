@@ -4,6 +4,28 @@
  (libraries mesh_history alcotest yojson unix sqlite3))
 
 (test
+ (name backend_profile_test)
+ (modules backend_profile_test)
+ (libraries mesh_backend_profile test_scratch alcotest yojson unix))
+
+(test
+ (name backend_consent_test)
+ (modules backend_consent_test)
+ (libraries mesh_backend_consent alcotest yojson))
+
+(test
+ (name backend_store_test)
+ (modules backend_store_test)
+ (libraries
+  mesh_backend_store
+  mesh_backend_consent
+  test_scratch
+  alcotest
+  yojson
+  unix
+  sqlite3))
+
+(test
  (name mesh_update_test)
  (modules mesh_update_test)
  (libraries mesh_update alcotest yojson unix))
