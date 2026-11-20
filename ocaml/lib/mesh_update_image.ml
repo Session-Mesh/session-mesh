@@ -252,6 +252,10 @@ let fetch ~resolve ~transport ~stand_ins ~clock (url : U.url) =
           transport (curl_arguments target ~max_time:remaining)
         in
         match parse_response output 0 with
+        | None when exit_code status = 63 ->
+            (* over --max-filesize: some curl versions stop on the declared
+               length before writing any header *)
+            refused 413
         | None -> refused 502
         | Some response when redirect response.code -> (
             let next =
