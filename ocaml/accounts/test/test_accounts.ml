@@ -63,7 +63,39 @@ let test_refused_structure () =
         {|"id": "work", "label": "Work", "codex_home": "/a/b", "codex_home": "/a/c"|};
       {|{"v": 1, "accounts": [{"id": "a", "label": "A", "codex_home": "/a/b"}, {"id": "a", "label": "B", "codex_home": "/a/c"}]}|};
       {|{"v": 1, "accounts": [{"id": "a", "label": "A", "codex_home": "/a/b"}, {"id": "b", "label": "B", "claude_config_dir": "/a/b"}]}|};
+      (* two aliases shown alike: the same label, or labels differing in case *)
+      {|{"v": 1, "accounts": [{"id": "a", "label": "Work", "codex_home": "/a/b"}, {"id": "b", "label": "Work", "codex_home": "/a/c"}]}|};
+      {|{"v": 1, "accounts": [{"id": "a", "label": "Work", "codex_home": "/a/b"}, {"id": "b", "label": "WORK", "codex_home": "/a/c"}]}|};
     ]
+
+(* Any number of aliases up to the documented cap (64): Claude-only, Codex-only
+   and both; one more refuses the whole file. *)
+let many count =
+  let account index =
+    let folders =
+      match index mod 3 with
+      | 0 -> Printf.sprintf {|"claude_config_dir": "/acc/%d/.claude"|} index
+      | 1 -> Printf.sprintf {|"codex_home": "/acc/%d/.codex"|} index
+      | _ ->
+          Printf.sprintf
+            {|"claude_config_dir": "/acc/%d/.claude", "codex_home": "/acc/%d/.codex"|}
+            index index
+    in
+    Printf.sprintf {|{"id": "a%d", "label": "Account %d", %s}|} index index
+      folders
+  in
+  Printf.sprintf {|{"v": 1, "accounts": [%s]}|}
+    (String.concat ", " (List.init count account))
+
+let test_count () =
+  Alcotest.(check int) "the cap" 64 A.max_accounts;
+  Alcotest.(check int) "three" 3 (List.length (parsed (many 3)));
+  let all = parsed (many A.max_accounts) in
+  Alcotest.(check int) "the cap is accepted" 64 (List.length all);
+  Alcotest.(check bool)
+    "the text of 64 aliases fits the size limit" true
+    (String.length (many A.max_accounts) <= A.max_bytes);
+  refused (many (A.max_accounts + 1))
 
 let test_ids () =
   List.iter
@@ -76,12 +108,37 @@ let test_ids () =
 let test_labels () =
   List.iter
     (fun label -> Alcotest.(check bool) label true (A.valid_label label))
-    [ "Atacama"; "Perso"; "Société Générale"; String.make 24 'x' ];
+    [
+      "Atacama";
+      "Perso";
+      "Société Générale";
+      String.make 24 'x';
+      "Équipe 2";
+      "\xe2\x98\x95 Café";
+    ];
   List.iter
     (fun label ->
       Alcotest.(check bool) (String.escaped label) false (A.valid_label label))
     [
-      ""; "   "; String.make 25 'x'; "a\nb"; "a\x1bb"; "a\xe2\x80\xaeb"; "\xff";
+      "";
+      "   ";
+      String.make 25 'x';
+      "a\nb";
+      "a\x1bb";
+      "a\xe2\x80\xaeb";
+      "\xff";
+      (* format characters (Cf): LRM, RLM, ALM, zero-width space, BOM *)
+      "a\xe2\x80\x8eb";
+      "a\xe2\x80\x8fb";
+      "a\xd8\x9cb";
+      "a\xe2\x80\x8bb";
+      "a\xef\xbb\xbfb";
+      (* line and paragraph separators (Zl, Zp) *)
+      "a\xe2\x80\xa8b";
+      "a\xe2\x80\xa9b";
+      (* white space only: no-break and ideographic spaces *)
+      "\xc2\xa0\xc2\xa0";
+      "\xe3\x80\x80";
     ]
 
 let test_paths () =
@@ -174,8 +231,97 @@ let test_prepare () =
   Alcotest.(check int) "mode 0700" 0o700 (Unix.stat folder).st_perm;
   ok "prepare again" (A.prepare_directory ~uid folder)
 
+let directory path perm =
+  Unix.mkdir path 0o700;
+  Unix.chmod path perm;
+  path
+
+(* Every upper component, not only the last one: anyone who can write in one
+   could swap the folder for a folder of their own after the check. *)
+let test_ancestors () =
+  let root = temporary () in
+  let open_parent = directory (Filename.concat root "open") 0o777 in
+  let inside = directory (Filename.concat open_parent "inside") 0o700 in
+  error "an existing folder under a 0777 parent" (A.check_directory ~uid inside);
+  let deeper = directory (Filename.concat inside "deeper") 0o700 in
+  error "a 0777 grand-parent" (A.check_directory ~uid deeper);
+  let group_parent = directory (Filename.concat root "group") 0o770 in
+  error "a folder to create under a 0770 parent"
+    (A.check_directory ~uid (Filename.concat group_parent "x"));
+  error "prepare under a 0770 parent"
+    (A.prepare_directory ~uid (Filename.concat group_parent "x"));
+  Alcotest.(check bool)
+    "nothing created under the 0770 parent" false
+    (Sys.file_exists (Filename.concat group_parent "x"));
+  let in_group = directory (Filename.concat group_parent "in") 0o700 in
+  error "an existing folder under a 0770 parent"
+    (A.check_directory ~uid in_group);
+  let sticky = directory (Filename.concat root "sticky") 0o1777 in
+  let kept = directory (Filename.concat sticky "kept") 0o700 in
+  ok "a sticky parent (as /tmp)" (A.check_directory ~uid kept);
+  (* the owner rule on a stat result (no other user to chown to in a test) *)
+  let stats = Unix.lstat root in
+  let other = { stats with Unix.st_uid = uid + 1 } in
+  ok "an upper folder of the operator" (A.trusted_ancestor ~uid root stats);
+  ok "an upper folder of root"
+    (A.trusted_ancestor ~uid root { stats with Unix.st_uid = 0 });
+  error "an upper folder of another user" (A.trusted_ancestor ~uid root other);
+  error "a sticky upper folder of another user"
+    (A.trusted_ancestor ~uid root { other with Unix.st_perm = 0o1777 })
+
+(* The documented creation under umask 002: a `mkdir -p` makes 0775
+   intermediate folders, refused; prepare still creates its folder 0700. *)
+let test_umask () =
+  let root = temporary () in
+  let previous = Unix.umask 0o002 in
+  Fun.protect
+    ~finally:(fun () -> ignore (Unix.umask previous))
+    (fun () ->
+      let intermediate = Filename.concat root "accounts" in
+      Unix.mkdir intermediate 0o777;
+      Alcotest.(check int)
+        "mkdir -p under umask 002" 0o775 (Unix.stat intermediate).st_perm;
+      error "a folder under a 0775 intermediate"
+        (A.check_directory ~uid (Filename.concat intermediate "work"));
+      Unix.chmod intermediate 0o700;
+      let folder = Filename.concat intermediate "work" in
+      ok "prepare under umask 002" (A.prepare_directory ~uid folder);
+      Alcotest.(check int) "created 0700" 0o700 (Unix.stat folder).st_perm)
+
 let write path text =
   Out_channel.with_open_bin path (fun channel -> output_string channel text)
+
+(* accounts.json names folders whose settings the agents run: a file another
+   user could change, or does own, is refused. *)
+let test_file_permissions () =
+  let root = temporary () in
+  let file = Filename.concat root "accounts.json" in
+  write file
+    (one
+       (Printf.sprintf {|"id": "work", "label": "Work", "codex_home": "%s"|}
+          (Filename.concat root "codex")));
+  Unix.chmod file 0o600;
+  (match A.load ~uid file with
+  | Ok [ _ ] -> ()
+  | Ok _ -> Alcotest.fail "unexpected accounts"
+  | Error message -> Alcotest.fail message);
+  List.iter
+    (fun perm ->
+      Unix.chmod file perm;
+      match A.load ~uid file with
+      | Ok _ -> Alcotest.failf "accounts.json %o accepted" perm
+      | Error _ -> ())
+    [ 0o666; 0o620; 0o602 ];
+  (* no folder: only the file's owner can refuse it *)
+  write file {|{"v": 1, "accounts": []}|};
+  Unix.chmod file 0o600;
+  (match A.load ~uid file with
+  | Ok [] -> ()
+  | Ok _ -> Alcotest.fail "unexpected accounts"
+  | Error message -> Alcotest.fail message);
+  match A.load ~uid:(uid + 1) file with
+  | Ok _ -> Alcotest.fail "accounts.json of another owner accepted"
+  | Error _ -> ()
 
 let test_load () =
   let root = temporary () in
@@ -210,6 +356,7 @@ let () =
           Alcotest.test_case "a full alias" `Quick test_valid;
           Alcotest.test_case "one member" `Quick test_one_member;
           Alcotest.test_case "refused structures" `Quick test_refused_structure;
+          Alcotest.test_case "any number, up to the cap" `Quick test_count;
           Alcotest.test_case "ids" `Quick test_ids;
           Alcotest.test_case "labels" `Quick test_labels;
           Alcotest.test_case "paths" `Quick test_paths;
@@ -217,6 +364,9 @@ let () =
       ( "folders",
         [
           Alcotest.test_case "checks" `Quick test_directories;
+          Alcotest.test_case "upper components" `Quick test_ancestors;
+          Alcotest.test_case "umask 002" `Quick test_umask;
+          Alcotest.test_case "file permissions" `Quick test_file_permissions;
           Alcotest.test_case "links" `Quick test_links;
           Alcotest.test_case "prepare" `Quick test_prepare;
           Alcotest.test_case "load" `Quick test_load;
