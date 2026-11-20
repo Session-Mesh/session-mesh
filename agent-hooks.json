@@ -36,23 +36,7 @@
       "name": "state",
       "reaction": "observe",
       "program": "mesh-event",
-      "switch": null,
-      "kinds": {
-        "session_start": "done",
-        "prompt_submit": "working",
-        "tool_before": "working",
-        "tool_after": "working",
-        "tool_failure": "working",
-        "permission_request": "waiting_permission",
-        "turn_end": "done",
-        "turn_end_failure": "error"
-      },
-      "notice_kinds": {
-        "permission": "waiting_permission",
-        "question": "waiting_question",
-        "turn_completed": "done",
-        "turn_failed": "error"
-      }
+      "switch": null
     },
     {
       "name": "project_context",
@@ -69,7 +53,6 @@
       "kind": "native_config",
       "install": "inline_settings",
       "timeout": {"value": 5, "unit": "s"},
-      "state_args": ["claude"],
       "inject": {"session_start": "claude"},
       "events": [
         {"event": "session_start", "native": "SessionStart"},
@@ -90,7 +73,6 @@
       "kind": "native_config",
       "install": "private_overlay",
       "timeout": {"value": 5000, "unit": "ms"},
-      "state_args": ["gemini"],
       "inject": {},
       "events": [
         {"event": "prompt_submit", "native": "BeforeAgent"},
@@ -108,7 +90,6 @@
       "kind": "plugin",
       "install": "user_installed_plugin",
       "timeout": {"value": 5, "unit": "s"},
-      "state_args": ["agy", "{native}"],
       "inject": {},
       "events": [
         {"event": "prompt_submit", "native": "PreInvocation"},
@@ -123,7 +104,6 @@
       "kind": "plugin",
       "install": "session_plugin_dir",
       "timeout": {"value": 5, "unit": "s"},
-      "state_args": ["copilot", "{native}"],
       "inject": {},
       "events": [
         {"event": "prompt_submit", "native": "userPromptSubmitted"},
@@ -142,7 +122,6 @@
       "kind": "native_config",
       "install": "private_overlay",
       "timeout": {"value": 5, "unit": "s"},
-      "state_args": ["vibe"],
       "inject": {"session_start": "vibe"},
       "events": [
         {"event": "session_start", "native": "session_start", "label": "session-start"},
@@ -161,7 +140,6 @@
       "kind": "plugin",
       "install": "session_plugin_code",
       "timeout": null,
-      "state_args": null,
       "inject": {},
       "events": [
         {"event": "prompt_submit", "native": "session.status"},
@@ -177,7 +155,6 @@
       "kind": "extension",
       "install": "session_extension_code",
       "timeout": null,
-      "state_args": null,
       "inject": {},
       "events": [
         {"event": "session_start", "native": "session_start"},
@@ -191,7 +168,6 @@
       "kind": "none",
       "install": "none",
       "timeout": null,
-      "state_args": null,
       "inject": {},
       "events": [],
       "subscriptions": {},

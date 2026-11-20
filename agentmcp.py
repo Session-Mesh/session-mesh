@@ -102,9 +102,11 @@ WORK_ENV_VARS = ["MESH_SESSION", "WL_HOME"]
 MESH_SERVER_NAMES = (SERVER_NAME, WORK_SERVER_NAME)
 
 # The agent hook model (docs/agent-hooks.md): which native hook of each agent every Mesh consumer is
-# installed on, and its timeout, come from this one table; each generator below only shapes them.
+# installed on, its timeout, and the project context hook's program, arguments and switch come from this
+# one table; each generator below only shapes them.
 AGENT_HOOKS = json.loads((Path(__file__).resolve().parent / "agent-hooks.json").read_text(encoding="utf-8"))
-PROJECT_HOOKS_ENV = "MESH_PROJECT_HOOKS"
+PROJECT_CONTEXT = next(c for c in AGENT_HOOKS["consumers"] if c["name"] == "project_context")
+PROJECT_HOOKS_ENV = PROJECT_CONTEXT["switch"]
 
 
 def hook_source(agent):
@@ -130,12 +132,11 @@ def project_context_hooks(agent, environ=os.environ):
     switch is off (MESH_PROJECT_HOOKS=0), when work-read is not installed, or for an agent not wired."""
     if environ.get(PROJECT_HOOKS_ENV, "1").strip().lower() in ("0", "off", "false", "no"):
         return ()
-    reader = mesh_executable("work-read", environ)
+    reader = mesh_executable(PROJECT_CONTEXT["program"], environ)
     if not _is_executable(reader):
         return ()
-    consumer = next(c for c in AGENT_HOOKS["consumers"] if c["name"] == "project_context")
     row = hook_source(agent)
-    return tuple((entry["native"], [str(reader), *consumer["args"], row["inject"][entry["event"]]])
+    return tuple((entry["native"], [str(reader), *PROJECT_CONTEXT["args"], row["inject"][entry["event"]]])
                  for entry in hook_entries(agent, "project_context"))
 
 

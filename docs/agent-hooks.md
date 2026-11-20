@@ -2,11 +2,25 @@
 
 Every agent Mesh launches gets Mesh's hooks from one declarative model: a list of generic events, a
 normalised event, the consumers that react to them, and one *source* per agent that says how that agent
-emits the events. A Mesh feature is written once, against the generic events. Which native hook of an
-agent a consumer runs on, and its timeout, is one line of the table [`agent-hooks.json`](../agent-hooks.json);
-each agent's generator reads it, so a consumer that generator already installs is wired into the agent by
-that line alone ([Adding a hook or an agent](#adding-a-hook-or-an-agent) says what else a new consumer needs).
-This page is the model (schema 1) and the capability matrix of the agents Mesh launches today.
+emits the events. This page is the model (schema 1) and the capability matrix of the agents Mesh launches
+today.
+
+What the table [`agent-hooks.json`](../agent-hooks.json) drives today is narrower than the model:
+
+- **Driven by the table.** Which native hooks of an agent each consumer is installed on, in which order,
+  and their timeout; for the project context hook, its program, arguments, switch and output format per
+  agent. Each agent's generator reads these, so a consumer that generator already installs is wired into
+  the agent by one line of the table ([Adding a hook or an agent](#adding-a-hook-or-an-agent) says what else
+  a new consumer needs).
+- **Still per agent.** Decoding each agent's native payload into a state (the normalised event, then the
+  session state) is done agent by agent in Python, in `bin/mesh-event`; the OpenCode plugin and the Pi
+  extension do their own in code. The normalised event and `stateEnvelope` (in `agent-hooks.ts`) are the
+  model's description of that decoding and a test oracle: a test checks that `bin/mesh-event` sends exactly
+  what `stateEnvelope` gives, but no production path runs `stateEnvelope`.
+- **Descriptive only.** The `payload` section, the `fires` text of each event, the `program` and `switch`
+  of the `state` consumer, a source's `kind`, `install` and `reason`, and `cap_seconds`: no generator reads
+  them. The cap that runs is the OCaml constant `Wr_context.cap_seconds`; a test keeps the table's value
+  equal to it.
 
 The table is data. Its types and checks are [`agent-hooks.ts`](../agent-hooks.ts) (`loadModel` refuses a
 table that breaks a rule below); the Python generators read the same file (`agentmcp.hook_events`,
@@ -85,9 +99,10 @@ Every consumer, whatever its reaction:
 
 `state` turns a generic event into a session state: `session_start` and `turn_end` are idle (`done`),
 `prompt_submit` and the tool events are `working`, `permission_request` is `waiting_permission`,
-`turn_end_failure` is `error`; a `notification` takes its state from its notice. `stateEnvelope` in
-`agent-hooks.ts` is that projection; the tests check that it gives, for each agent's native hooks, exactly
-the envelope `bin/mesh-event` sends today.
+`turn_end_failure` is `error`; a `notification` takes its state from its notice. In production that
+mapping, and the decoding of each agent's payload, is `bin/mesh-event`'s, agent by agent. `stateEnvelope`
+in `agent-hooks.ts` states the same projection against the normalised event, as a test oracle only: the
+tests check that it gives, for each agent's native hooks, exactly the envelope `bin/mesh-event` sends.
 
 `project_context` is described in [The project context hook](#the-project-context-hook).
 
@@ -106,9 +121,13 @@ A source is how one agent emits the generic events. Its `kind` is one of:
 
 A source row gives its `events` (generic event, native hook name), the `subscriptions` (which consumer is
 installed on which events, in the order the configuration is written), its `timeout` (value and unit, as
-the agent reads it), how `mesh-event` is called (`state_args`), and `inject`: for each event where the
-agent adds a hook's output to the model's context, the format name `work-read context` prints for it. A
-`none` source states its `reason`.
+the agent reads it), and `inject`: for each event where the agent adds a hook's output to the model's
+context, the format name `work-read context` prints for it. A `none` source states its `reason`. How each
+generator calls `mesh-event` is in that generator's code.
+
+OpenCode and Pi have no `subscriptions`, so the table installs no consumer on their native hooks. That
+does not mean OpenCode reports no state: its plugin code translates its events and reports the state itself.
+Pi's extension wakes Pi and reports no state (see the matrix below).
 
 ## Capability matrix
 
@@ -159,7 +178,9 @@ Project tracker: 2 tasks linked to this session (T-4f5a, T-1a2b), 1 open questio
 - **Nothing to say, nothing printed.** No linked task and no question: the agent's context is unchanged.
 - **Read-only.** No lock, no commit, no repository creation; a writer holding the lock does not delay it.
 - **Never blocks.** A real-time cap of 1.5 s ends the program silently; the agent's own timeout (5 s)
-  is a second bound. No Mesh session (`MESH_SESSION` unset), no tracker, an unreadable one, bad arguments or
+  is a second bound. The read runs in a child process in a process group of its own, and the cap kills that
+  whole group, so a `git` that hangs (on a stalled network file system, say) does not outlive it. The cap
+  holds even when the program is started with SIGALRM blocked. No Mesh session (`MESH_SESSION` unset), no tracker, an unreadable one, bad arguments or
   any error: exit 0, nothing on standard output or standard error.
 - **No token.** `MESH_SESSION_TOKEN` is emptied before anything else, so the git processes the library
   starts do not inherit it.
@@ -194,11 +215,13 @@ Mesh all leave the agent's start undelayed beyond the cap and its output unchang
 
 - `tests/agent-hooks-model.test.ts`: the table is valid and a broken one is refused; it has a source for
   every agent in `agentcap.MATRIX`; the Python generators install what the table says; the shipped Copilot
-  `hooks.json` is the table's rendering byte for byte; `stateEnvelope` equals `bin/mesh-event`'s envelope for
-  each agent's native hooks.
+  `hooks.json` is the table's rendering byte for byte; the table's `cap_seconds` equals
+  `Wr_context.cap_seconds`; `stateEnvelope` equals `bin/mesh-event`'s envelope for each agent's native hooks.
 - `tests/agent-hooks-golden.test.ts`: the configurations generated for Claude, Gemini, agy, Vibe and Copilot
   are byte for byte those of the revision before the model (`tests/fixtures/agent-hooks-model/`) without
   `work-read` or with the switch off, and differ by the project hook alone otherwise.
 - `tests/agent-hooks-fake-agent.test.ts`: a stand-in for Claude's and Vibe's hook runners runs the generated
   session-start hooks with the real `work-read` on a fictional tracker.
-- `ocaml/work_read/test/test_context.ml`: the program itself (formats, silence, read-only, lock, cap).
+- `ocaml/work_read/test/test_context.ml`: the program itself (formats, silence, read-only, lock, cap); a
+  hanging `git` killed with the program, also with SIGALRM blocked; ill-formed task ids never printed nor
+  counted; the session token emptied in the `git` it starts.
