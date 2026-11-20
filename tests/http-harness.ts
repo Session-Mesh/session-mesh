@@ -119,6 +119,7 @@ const ACCEPTED_STATUS = `
   GET /api/sessions 200
   GET /api/portfolio/diff/{selector} 404
   GET /api/dirs 200
+  POST /api/dirs/recent 400
   POST /api/projects/v1 400
   POST /api/work/v1 400
   POST /api/projects/artifacts/v1 400

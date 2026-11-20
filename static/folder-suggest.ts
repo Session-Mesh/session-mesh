@@ -3,9 +3,10 @@
 
 /**
  * The folder field of the "New session" dialog, its pure part: the known folders (the allowed work
- * folders of GET /api/config, the recent folders of this browser, the folders of the open sessions,
+ * folders of GET /api/config, the runner's recent folders, the folders of the open sessions,
  * GET /api/dirs), their ranking for a typed text, the merge with the sub-folders listed while a path
- * is typed (see createFolderSuggester), and the keys of the combobox.
+ * is typed (see createFolderSuggester), the keys of the combobox (Tab completes, see tabKey), and the
+ * one-time move of the recent folders an older version kept in this browser.
  *
  * Every check here is a convenience on the client: the server checks the folder again when the
  * session starts, and the listing (POST /api/ls) keeps its own roots and protections.
@@ -131,17 +132,29 @@ export function folderSuggestions(typed: string, known: readonly string[], walke
   return out;
 }
 
-/** The recent folders kept in this browser, cleaned of anything that is not a usable path. */
+/** The recent folders an older version kept in this browser, cleaned of anything that is not a usable path. */
 export function recentFolders(stored: unknown): string[] {
   return Array.isArray(stored) ? stored.filter(usablePath).slice(0, MAX_RECENT) : [];
 }
 
-/** The recent list after a session started in `folder`: that folder first, expanded, once; at most 8. */
-export function rememberFolder(recent: unknown, folder: string, home: string, max = MAX_RECENT): string[] {
-  const kept = recentFolders(recent);
-  const added = expandHome(folder, home);
-  if (!usablePath(added)) return kept.slice(0, max);
-  return [added, ...kept.filter((entry) => expandHome(entry, home) !== added)].slice(0, max);
+/** The runner's recent folders (`runner_settings.values.recent_folders` of GET /api/config), shared by every
+ * device; the server records them when a session starts. Null from an older server, which has no such list. */
+export function runnerRecentFolders(config: unknown): string[] | null {
+  if (!isObject(config) || !isObject(config.runner_settings) || !isObject(config.runner_settings.values)) return null;
+  const stored = config.runner_settings.values.recent_folders;
+  return Array.isArray(stored) ? recentFolders(stored).filter((folder) => folder.startsWith("/")) : null;
+}
+
+/** The list this browser kept, as sent once to the runner (POST /api/dirs/recent): expanded, once each, at most 8. */
+export function recentFoldersToImport(stored: unknown, home: string): string[] {
+  const expanded = recentFolders(stored).map((folder) => expandHome(folder, home)).filter((folder) => folder.startsWith("/"));
+  return [...new Set(expanded)].slice(0, MAX_RECENT);
+}
+
+/** After that request: drop the local copy once the runner answered for good (stored, refused, or this browser
+ * signed out), keep it for the next try when the answer may change (no answer, a timeout, a server error). */
+export function recentImportOutcome(status: number): "clear" | "keep" {
+  return status === 0 || status === 408 || status === 429 || status >= 500 ? "keep" : "clear";
 }
 
 export type ComboState = Readonly<{ open: boolean; active: number; count: number }>;
@@ -162,13 +175,27 @@ export function comboboxKey(wanted: ComboState, key: string): ComboAction {
     case "ArrowDown":
     case "ArrowUp":
       return state.count === 0 ? none : { state: moved(state, key === "ArrowDown" ? 1 : -1), accept: null, handled: true };
-    case "Enter":   // with no option chosen, Enter submits the form and Tab moves on, as without the list
-    case "Tab":
+    case "Enter":   // with no option chosen, Enter submits the form, as without the list
       if (!state.open) return none;
       return { state: closed(state), accept: state.active >= 0 ? state.active : null, handled: state.active >= 0 };
     case "Escape":
       return state.open ? { state: closed(state), accept: null, handled: true } : none;
     default:
-      return none;
+      return none;   // Tab: tabKey
   }
+}
+
+export type TabContext = Readonly<{ suggestions: readonly string[]; value: string; typed: boolean; home: string }>;
+
+/** Tab on the folder field completes like a shell: with the list shown, it accepts the chosen suggestion, else
+ * the first one once something was typed, and keeps the focus. It lets the focus move on (the list closed) when
+ * the list is not shown, there is no suggestion, the field already holds that suggestion (so a second Tab
+ * leaves), or nothing was typed: the folder the dialog opened with is not replaced by a key meant to move on. */
+export function tabKey(wanted: ComboState, context: TabContext): ComboAction {
+  const shown = wanted.open && wanted.count > 0 && context.suggestions.length > 0;
+  const index = !shown ? -1 : wanted.active >= 0 ? wanted.active : context.typed ? 0 : -1;
+  const suggestion = context.suggestions[index];
+  const moveOn: ComboAction = { state: closed(wanted), accept: null, handled: false };
+  if (suggestion === undefined || expandHome(suggestion, context.home) === expandHome(context.value, context.home)) return moveOn;
+  return { state: closed(wanted), accept: index, handled: true };
 }

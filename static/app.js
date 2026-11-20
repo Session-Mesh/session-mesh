@@ -4589,6 +4589,7 @@ function forgetKnownSessions() {
   const prefix = meshContext?.storagePrefix ?? "mesh";
   try {
     localStorage.removeItem(`${prefix}.${KNOWN_KEY}`);
+    localStorage.removeItem(`${prefix}.recentFolders`);   // kept here by older versions (see moveRecentFoldersToRunner)
     localStorage.setItem(`${prefix}.${SIGNED_OUT_KEY}`, JSON.stringify(Date.now()));
   } catch {}
 }
@@ -7176,18 +7177,40 @@ async function openNew() {
   form.cwd.select();
   folderSuggester.reset();
   Object.assign(folderField, { known: [], roots: [], walked: [], pristine: true, combo: { open: false, active: -1, count: 0 } });
-  folderField.known = knownFoldersFrom([], []);
+  $("#new-folder-status").textContent = "";
+  folderField.known = knownFoldersFrom([], [], []);
   renderFolderList();
-  const [dirs, config] = await Promise.allSettled([readJson("/api/dirs"), readJson("/api/config", { cache: "no-store" })]);
+  const [listed, config] = await Promise.allSettled([readJson("/api/dirs"),   // the moved folders are in the config's answer
+    moveRecentFoldersToRunner().then(() => readJson("/api/config", { cache: "no-store" }))]);
   folderField.roots = config.status === "fulfilled" ? MeshFolderState.workspaceRoots(config.value) : [];
-  folderField.known = knownFoldersFrom(dirs.status === "fulfilled" && Array.isArray(dirs.value) ? dirs.value : [], folderField.roots);
+  const recent = (config.status === "fulfilled" && MeshFolderState.runnerRecentFolders(config.value)) || [];
+  folderField.known = knownFoldersFrom(listed.status === "fulfilled" && Array.isArray(listed.value) ? listed.value : [], folderField.roots, recent);
   renderFolderList();   // keeps what was typed while the requests were pending
 }
 window.openNew = openNew;
 
+// The recent folders were kept in this browser before they became a runner setting (recorded by the server when a
+// session starts, shared by every device). The list kept here is sent once, then removed from this browser; it is
+// also removed when this browser signs out (forgetKnownSessions) and by the sign-in page (static/login.js).
+const RECENT_FOLDERS_KEY = "recentFolders";
+async function moveRecentFoldersToRunner() {
+  const key = `${meshContext?.storagePrefix ?? "mesh"}.${RECENT_FOLDERS_KEY}`;
+  if (store.get(RECENT_FOLDERS_KEY, null) === null) return;
+  const folders = MeshFolderState.recentFoldersToImport(store.get(RECENT_FOLDERS_KEY, null), data.home);
+  let status = 200;   // nothing usable to send: the copy goes all the same
+  if (folders.length) {
+    try {
+      status = (await requestLocal("/api/dirs/recent", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folders }) })).status;
+    } catch { status = 0; }
+  }
+  if (MeshFolderState.recentImportOutcome(status) === "clear") try { localStorage.removeItem(key); } catch {}
+}
+
 // The folder field is a combobox. Its list: while an absolute or ~/ path is typed, the sub-folders of the folder typed
 // up to its last "/" (the file tree's listing, POST /api/ls), then the known folders ranked for the text: the allowed
-// work folders (GET /api/config), the recent folders of this browser, the folders of the open sessions, GET /api/dirs.
+// work folders (GET /api/config), the runner's recent folders (same answer), the folders of the open sessions, and
+// GET /api/dirs (the allowed folders' sub-folders). It opens on a click, a tap or a focus; Tab completes (tabKey).
 // static/folder-suggest.ts holds the logic; this is the page side. Text only: no markup is built from a path.
 const folderList = $("#new-folder-list");
 const folderField = { known: [], roots: [], walked: [], shown: [], pristine: true, combo: { open: false, active: -1, count: 0 } };
@@ -7197,7 +7220,7 @@ async function readJson(url, options) {
   if (!response.ok) throw new Error(String(response.status));
   return response.json();
 }
-const knownFoldersFrom = (listed, roots) => MeshFolderState.knownFolderList({ roots, recent: MeshFolderState.recentFolders(store.get("recentFolders", [])),
+const knownFoldersFrom = (listed, roots, recent) => MeshFolderState.knownFolderList({ roots, recent,
   sessions: sessionFolders(), listed: listed.filter((d) => typeof d === "string") }, data.home);
 function renderFolderList() {
   const typed = folderField.pristine ? "" : form.cwd.value;   // the folder the dialog opened with: the whole known list
@@ -7253,14 +7276,18 @@ form.cwd.addEventListener("input", () => {
   folderSuggester.input(form.cwd.value);
 });
 form.cwd.addEventListener("keydown", (e) => {
-  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.isComposing) return;
-  const action = MeshFolderState.comboboxKey(folderField.combo, e.key);
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.isComposing) return;   // Shift+Tab moves back as always
+  const action = e.key === "Tab"
+    ? MeshFolderState.tabKey(folderField.combo, { suggestions: folderField.shown, value: form.cwd.value, typed: !folderField.pristine, home: data.home })
+    : MeshFolderState.comboboxKey(folderField.combo, e.key);
   folderField.combo = action.state;
   if (action.accept !== null) acceptFolder(action.accept);
+  if (action.accept !== null && e.key === "Tab") $("#new-folder-status").textContent = t("new.folderCompleted", { folder: form.cwd.value });
   syncFolderList();
   if (action.handled) { e.preventDefault(); e.stopPropagation(); }   // Escape closes the list, not the dialog
 });
 form.cwd.addEventListener("click", openFolderList);   // a tap on a phone shows the list
+form.cwd.addEventListener("focus", openFolderList);   // and so does reaching the field with Tab (openNew closes it at first)
 form.cwd.addEventListener("blur", () => { folderField.combo = { ...folderField.combo, open: false, active: -1 }; syncFolderList(); });
 folderList.addEventListener("mousedown", (e) => e.preventDefault());   // the field keeps the focus (a tap too)
 folderList.addEventListener("click", (e) => {
@@ -7277,8 +7304,7 @@ form.addEventListener("submit", async (e) => {
   if (!r.ok) { $("#new-err").textContent = serverText(await r.text()); return; }
   const { id } = await r.json();
   store.set("preset", body.preset);
-  if (body.preset === "custom") store.set("command", body.command || "");
-  store.set("recentFolders", MeshFolderState.rememberFolder(store.get("recentFolders", []), body.cwd, data.home));
+  if (body.preset === "custom") store.set("command", body.command || "");   // the folder: recorded by the server
   dlg.close();
   await refresh();
   active.show(id, false, { focusTerminal: true });
@@ -7603,7 +7629,10 @@ async function bootMesh() {
 }
 
 function startLocalMesh() {
-  return startMesh({ inventory: loadLocalInventory, storagePrefix: "mesh" });
+  const started = startMesh({ inventory: loadLocalInventory, storagePrefix: "mesh" });
+  // the first page load after an update moves this browser's recent folders, before any sign-in page can drop them
+  void started.then(moveRecentFoldersToRunner).catch(() => {});   // resolved once the first listing gave the home folder
+  return started;
 }
 
 // The language setting (footer): the browser's language, or a forced one kept in

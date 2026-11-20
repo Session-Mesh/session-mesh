@@ -22,9 +22,12 @@ type State = {
   matchScore: (typed: string, folder: string, home: string) => number | null;
   rankFolders: (typed: string, folders: string[], home: string, limit?: number) => string[];
   folderSuggestions: (typed: string, known: string[], walked: string[], roots: string[], home: string, limit?: number) => string[];
-  rememberFolder: (recent: unknown, folder: string, home: string, max?: number) => string[];
   recentFolders: (stored: unknown) => string[];
+  runnerRecentFolders: (config: unknown) => string[] | null;
+  recentFoldersToImport: (stored: unknown, home: string) => string[];
+  recentImportOutcome: (status: number) => 'clear' | 'keep';
   comboboxKey: (state: ComboState, key: string) => ComboAction;
+  tabKey: (state: ComboState, context: {suggestions: string[]; value: string; typed: boolean; home: string}) => ComboAction;
 };
 const context: {MeshFolderState?: State} = {};
 vm.runInNewContext(fs.readFileSync(new URL('../static/folder-state.js', import.meta.url), 'utf8'), context);
@@ -106,17 +109,34 @@ test('suggestions: the listed sub-folders as typed first, then the ranked known 
   assert.equal(bundle.folderSuggestions('~/dev/a', known, walked, roots, HOME).length, 50);
 });
 
-test('recent folders: newest first, expanded once, at most 8, junk ignored', () => {
-  assert.deepEqual(plain(bundle.rememberFolder(['/a', '/home/u/b'], '~/b/', HOME)), ['/home/u/b', '/a']);
-  const nine = Array.from({length: 9}, (_, i) => `/r${i}`);
-  assert.deepEqual(plain(bundle.rememberFolder(nine, '/new', HOME)), ['/new', ...nine.slice(0, 7)]);
-  assert.deepEqual(plain(bundle.rememberFolder('junk', '/new', HOME)), ['/new']);
-  assert.deepEqual(plain(bundle.rememberFolder([3, '/a', ''], '  ', HOME)), ['/a']);
+test('recent folders kept by an older version of this browser: usable paths only, at most 8', () => {
   assert.deepEqual(plain(bundle.recentFolders(['/a', 7, '', 'rel', '/b'])), ['/a', '/b']);
   assert.deepEqual(plain(bundle.recentFolders(null)), []);
+  assert.deepEqual(plain(bundle.recentFolders(Array.from({length: 12}, (_, i) => `/r${i}`))).length, 8);
 });
 
-test('combobox keys: arrows move and wrap, Enter and Tab accept the active option, Escape closes', () => {
+test('recent folders of the runner: read from GET /api/config, absent on an older server', () => {
+  const config = (values: unknown) => ({runner_settings: {values}});
+  assert.deepEqual(plain(bundle.runnerRecentFolders(config({operator_name: '', recent_folders: ['/home/u/b', '/home/u/a']}))),
+    ['/home/u/b', '/home/u/a']);
+  assert.deepEqual(plain(bundle.runnerRecentFolders(config({recent_folders: ['/a', 3, 'rel', '~/x', '', '/b']}))), ['/a', '/b'],
+    'only absolute paths: the server stores them expanded');
+  assert.equal(bundle.runnerRecentFolders(config({operator_name: 'Ana'})), null, 'an older server: no shared list');
+  for (const bad of [null, 'x', {}, {runner_settings: null}, config(null), config({recent_folders: 'x'})]) {
+    assert.equal(bundle.runnerRecentFolders(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('the one-time move of this browser\'s recent folders to the runner: expanded, once each, at most 8', () => {
+  assert.deepEqual(plain(bundle.recentFoldersToImport(['~/b/', '/home/u/b', '/a', 7, 'rel', ''], HOME)), ['/home/u/b', '/a']);
+  assert.deepEqual(plain(bundle.recentFoldersToImport('junk', HOME)), []);
+  assert.equal(bundle.recentFoldersToImport(Array.from({length: 12}, (_, i) => `/r${i}`), HOME).length, 8);
+  // the local copy goes once the runner answered for good; a failure that may pass keeps it for the next try
+  for (const status of [200, 400, 401, 403, 404, 413, 415]) assert.equal(bundle.recentImportOutcome(status), 'clear', String(status));
+  for (const status of [0, 408, 429, 500, 502, 503]) assert.equal(bundle.recentImportOutcome(status), 'keep', String(status));
+});
+
+test('combobox keys: arrows move and wrap, Enter accepts the active option, Escape closes; Tab is tabKey', () => {
   const key = (open: boolean, active: number, count: number, name: string) => plain(bundle.comboboxKey({open, active, count}, name));
   assert.deepEqual(key(false, -1, 3, 'ArrowDown'), {state: {open: true, active: 0, count: 3}, accept: null, handled: true});
   assert.deepEqual(key(true, 2, 3, 'ArrowDown').state.active, 0);
@@ -126,13 +146,29 @@ test('combobox keys: arrows move and wrap, Enter and Tab accept the active optio
   assert.deepEqual(key(true, 1, 3, 'Enter'), {state: {open: false, active: -1, count: 3}, accept: 1, handled: true});
   assert.deepEqual(key(true, -1, 3, 'Enter'), {state: {open: false, active: -1, count: 3}, accept: null, handled: false});
   assert.deepEqual(key(false, -1, 3, 'Enter').handled, false);
-  assert.deepEqual(key(true, 1, 3, 'Tab'), {state: {open: false, active: -1, count: 3}, accept: 1, handled: true});
-  assert.deepEqual(key(true, -1, 3, 'Tab'), {state: {open: false, active: -1, count: 3}, accept: null, handled: false});
-  assert.deepEqual(key(false, -1, 3, 'Tab').handled, false);
+  assert.deepEqual(key(true, 1, 3, 'Tab').handled, false, 'comboboxKey leaves Tab to tabKey');
   assert.deepEqual(key(true, 1, 3, 'Escape'), {state: {open: false, active: -1, count: 3}, accept: null, handled: true});
   assert.deepEqual(key(false, -1, 3, 'Escape').handled, false);
-  for (const name of ['Escape', 'Enter', 'Tab', 'ArrowDown']) {   // wanted open but empty: not shown, so the key goes on
+  for (const name of ['Escape', 'Enter', 'ArrowDown']) {   // wanted open but empty: not shown, so the key goes on
     assert.deepEqual(key(true, -1, 0, name), {state: {open: true, active: -1, count: 0}, accept: null, handled: false}, name);
   }
   assert.deepEqual(key(true, 1, 3, 'a'), {state: {open: true, active: 1, count: 3}, accept: null, handled: false});
+});
+
+test('Tab completes like a shell: the chosen suggestion, else the first one once something is typed', () => {
+  const shown = ['/home/u/dev/alpha', '/home/u/dev/alpine'];
+  const tab = (open: boolean, active: number, value: string, typed = true, suggestions = shown) =>
+    plain(bundle.tabKey({open, active, count: suggestions.length}, {suggestions, value, typed, home: HOME}));
+  const closed = (count = 2) => ({open: false, active: -1, count});
+  assert.deepEqual(tab(true, -1, '~/dev/al'), {state: closed(), accept: 0, handled: true}, 'the first suggestion');
+  assert.deepEqual(tab(true, 1, '~/dev/al'), {state: closed(), accept: 1, handled: true}, 'the highlighted one wins');
+  assert.deepEqual(tab(false, -1, '~/dev/al'), {state: closed(), accept: null, handled: false}, 'list closed: focus moves on');
+  assert.deepEqual(tab(true, -1, '~/dev/zz', true, []), {state: closed(0), accept: null, handled: false}, 'no suggestion: focus moves on');
+  assert.deepEqual(tab(true, -1, '/home/u/dev/alpha'), {state: closed(), accept: null, handled: false},
+    'the field already holds the suggestion: a second Tab moves on');
+  assert.deepEqual(tab(true, -1, '~/dev/alpha/'), {state: closed(), accept: null, handled: false}, 'compared after ~ and the trailing slash');
+  assert.deepEqual(tab(true, 1, '/home/u/dev/alpine'), {state: closed(), accept: null, handled: false});
+  assert.deepEqual(tab(true, -1, '/home/u', false), {state: closed(), accept: null, handled: false},
+    'nothing typed yet (the folder the dialog opened with): Tab moves on, the folder is kept');
+  assert.deepEqual(tab(true, 0, '/home/u', false), {state: closed(), accept: 0, handled: true}, 'unless an option was chosen with the arrows');
 });

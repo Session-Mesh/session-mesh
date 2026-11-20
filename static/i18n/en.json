@@ -475,6 +475,7 @@
   "new.command": "command",
   "new.custom": "other",
   "new.folder": "Folder",
+  "new.folderCompleted": "Folder completed: {folder}",
   "new.folderSuggestions": "Folder suggestions",
   "new.launch": "Launch",
   "new.name": "Name",
