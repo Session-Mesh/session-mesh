@@ -1,21 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-/** The project view: header, the four tabs (Reprise, Tableau, Frise, Dependances) and the detail pane slot. */
+/** The project view: header, the five tabs (Reprise, Tableau, Frise, Dependances, Questions) and the detail pane slot. */
 
 import { renderBoard } from './work-board-view.ts';
 import { renderDependencies } from './work-deps-view.ts';
 import { button, el, notice, progressBlock, setAttributes } from './work-dom.ts';
 import type { ViewContext } from './work-dom.ts';
 import { renderFrise } from './work-frise-view.ts';
+import { renderQuestionsTab } from './work-questions-view.ts';
 import { renderReprise } from './work-reprise-view.ts';
 import type { ProjectDoc, ProjectHead } from './work-types.ts';
 
-export const TAB_KEYS = ['reprise', 'board', 'frise', 'deps'] as const;
+export const TAB_KEYS = ['reprise', 'board', 'frise', 'deps', 'questions'] as const;
 export type TabKey = (typeof TAB_KEYS)[number];
 
 const RENDERERS: Readonly<Record<TabKey, (ctx: ViewContext, doc: ProjectDoc) => HTMLElement>> = {
-  reprise: renderReprise, board: renderBoard, frise: renderFrise, deps: renderDependencies,
+  reprise: renderReprise, board: renderBoard, frise: renderFrise, deps: renderDependencies, questions: renderQuestionsTab,
 };
 
 export type ProjectView = Readonly<{
@@ -24,6 +25,11 @@ export type ProjectView = Readonly<{
   showDetail: (open: boolean) => void;
   activate: (key: TabKey, focus: boolean) => void;
   current: () => TabKey;
+  /** The panel of a tab (built or not). */
+  panel: (key: TabKey) => HTMLElement;
+  /** Show a project document read again: the current panel is rebuilt now, the others when next shown. The header
+   *  and the detail pane are kept. */
+  replaceDoc: (next: ProjectDoc) => void;
 }>;
 
 function header(ctx: ViewContext, head: ProjectHead, back: () => void): HTMLElement {
@@ -59,7 +65,11 @@ function nextTab(key: TabKey, event: KeyboardEvent): TabKey | null {
   return null;
 }
 
-export function renderProject(ctx: ViewContext, doc: ProjectDoc, initial: TabKey, back: () => void): ProjectView {
+/** The context of a panel: the Questions tab gets its own prefix of answer form ids (the sheet may show the same question). */
+const panelContext = (ctx: ViewContext, key: TabKey): ViewContext => (key === 'questions' ? { ...ctx, answerScope: 'tab-' } : ctx);
+
+export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial: TabKey, back: () => void): ProjectView {
+  let doc = initialDoc;
   const root = el('div', 'work-project');
   const tabs = el('div', 'work-tabs');
   tabs.setAttribute('role', 'tablist');
@@ -75,7 +85,7 @@ export function renderProject(ctx: ViewContext, doc: ProjectDoc, initial: TabKey
       node.tabIndex = selected ? 0 : -1;
       panels.get(name)!.hidden = !selected;
     }
-    if (!built.has(key)) { panels.get(key)!.replaceChildren(RENDERERS[key](ctx, doc)); built.add(key); }
+    if (!built.has(key)) { panels.get(key)!.replaceChildren(RENDERERS[key](panelContext(ctx, key), doc)); built.add(key); }
     if (focus) buttons.get(key)!.focus();
   };
   for (const [key, node] of buttons) {
@@ -95,6 +105,12 @@ export function renderProject(ctx: ViewContext, doc: ProjectDoc, initial: TabKey
   if (doc.truncated) root.append(notice('work-omitted', ctx.t('work.projectTruncated')));
   root.append(split);
   activate(initial, false);
-  return { root, detailSlot, current: () => currentKey, activate,
+  const replaceDoc = (next: ProjectDoc): void => {
+    doc = next;
+    built.clear();
+    for (const [key, panel] of panels) if (key !== currentKey) panel.replaceChildren();
+    activate(currentKey, false);
+  };
+  return { root, detailSlot, current: () => currentKey, activate, replaceDoc, panel: key => panels.get(key)!,
     showDetail: open => { detailSlot.hidden = !open; split.classList.toggle('detail-open', open); } };
 }

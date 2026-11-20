@@ -66,10 +66,20 @@ export type Answer = Readonly<{
   text: string; by: string | null; at: string | null; relayedBy: string | null; ownerVerified: boolean; superseded: boolean;
 }>;
 
-/** `ownerAnswered`: the question has an owner-verified answer, even when a size bound left it out of `answers`. */
+/**
+ * `ownerAnswered`: the question has an owner-verified answer, even when a size bound left it out of `answers`.
+ * `askedBy` is the session, else the agent; `askedByAgent` and `askedBySession` keep both as recorded.
+ */
 export type Question = Readonly<{
-  id: string; open: boolean; text: string; options: readonly string[]; about: string | null;
-  askedBy: string | null; askedAt: string | null; answers: readonly Answer[]; ownerAnswered: boolean;
+  id: string; open: boolean; text: string; options: readonly string[]; assumption: string | null; about: string | null;
+  askedBy: string | null; askedByAgent: string | null; askedBySession: string | null; askedAt: string | null;
+  answers: readonly Answer[]; ownerAnswered: boolean;
+}>;
+
+/** The open questions of the `resume` document read without a scope: every open question of the tracker. */
+export type OpenQuestionsDoc = Readonly<{
+  /** How many questions are open in all, also those the list left out. */
+  openQuestions: number; questions: readonly Question[]; omitted: number; truncated: boolean;
 }>;
 
 /** Counts of items a list kept out (`<key>_omitted` of the document). */

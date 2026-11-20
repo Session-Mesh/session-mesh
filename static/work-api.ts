@@ -3,8 +3,8 @@
 
 /** Client of `POST /api/work/v1`: same origin, page credentials, every outcome a value (never a throw). */
 
-import { isObj, parseProducts, parseProject, parseProjects, parseTask, text } from './work-parse.ts';
-import type { ProductsDoc, ProjectDoc, ProjectsDoc, TaskDetail } from './work-types.ts';
+import { isObj, parseOpenQuestions, parseProducts, parseProject, parseProjects, parseTask, text } from './work-parse.ts';
+import type { OpenQuestionsDoc, ProductsDoc, ProjectDoc, ProjectsDoc, TaskDetail } from './work-types.ts';
 
 export type WorkFetch = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -66,6 +66,8 @@ export type WorkApi = Readonly<{
   projects(signal?: AbortSignal): Promise<WorkResult<ProjectsDoc>>;
   project(id: string, signal?: AbortSignal): Promise<WorkResult<ProjectDoc>>;
   task(id: string, signal?: AbortSignal): Promise<WorkResult<TaskDetail>>;
+  /** Every open question of the tracker (`resume` without a scope): the list (at most 20) and the total. */
+  openQuestions(signal?: AbortSignal): Promise<WorkResult<OpenQuestionsDoc>>;
   /** The owner's answer to an open question (the write op, sent with the page's own cookie only). */
   answer(question: string, answerText: string): Promise<WorkResult<AnswerReceipt>>;
 }>;
@@ -91,6 +93,7 @@ export function createWorkApi(request: WorkFetch, url = '/api/work/v1'): WorkApi
     projects: signal => call('projects', {}, parseProjects, signal),
     project: (id, signal) => call('project', { id }, parseProject, signal),
     task: (id, signal) => call('task', { id }, parseTask, signal),
+    openQuestions: signal => call('resume', {}, parseOpenQuestions, signal),
     answer: (question, answerText) => call('answer', { question, text: answerText }, parseReceipt),
   };
 }

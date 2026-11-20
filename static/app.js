@@ -5539,12 +5539,27 @@ async function loadWorkView() {
     ]);
     if (!projecting || issue !== workGeneration || legacyProjects() || !localMeshEffectsAllowed()) return;
     workController ||= module.mountWorkView({ root: $("#work-root"), request: requestLocal, translate: t,
-      onLegacy: () => setLegacyProjects(true), onNotAvailable: fallBackToLegacyProjects });
+      onLegacy: () => setLegacyProjects(true), onNotAvailable: fallBackToLegacyProjects,
+      onOpenQuestions: (count) => showOpenQuestions(count, module.counterText(count)) });
     workController.open();
     status.textContent = "";
   } catch {
     if (projecting && issue === workGeneration) { status.textContent = t("projects.unavailable"); retry.hidden = false; }
   } finally { clearTimeout(timer); }
+}
+// The open questions badge of the Projects buttons (main and phone menu). It shows the count the work view last read
+// (when it opens, on Refresh, after an answer); nothing reads it on a timer, and an unknown count shows nothing.
+// `shown` is the badge text from the work view's counterText ("" for nothing).
+function showOpenQuestions(count, shown) {
+  for (const badge of document.querySelectorAll(".projects-question-badge")) {
+    badge.textContent = shown;
+    badge.hidden = !shown;
+  }
+  const description = $("#projects-questions-description");
+  description.textContent = shown ? t("work.questions.badge", { n: count }) : "";
+  for (const button of document.querySelectorAll('#btn-projects,[data-mobile-action="btn-projects"]')) {
+    if (shown) button.setAttribute("aria-describedby", description.id); else button.removeAttribute("aria-describedby");
+  }
 }
 function setProjects(on) {
   if (on && localActionUnavailable()) return;

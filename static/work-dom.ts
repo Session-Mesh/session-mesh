@@ -20,6 +20,8 @@ export type ViewContext = Readonly<{
   selectTask: (id: string) => void;
   /** Sends the owner's answer to an open question; null where the view offers no answer form. */
   answers: AnswerSender | null;
+  /** Prefix of the element ids of answer forms, so that the same question shown twice (tab and sheet) keeps unique ids. */
+  answerScope?: string;
 }>;
 
 export type Child = Node | string | null | undefined;

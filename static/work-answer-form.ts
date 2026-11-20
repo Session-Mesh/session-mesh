@@ -57,7 +57,7 @@ export function localFailure(answerText: string): AnswerFailure | null {
 type Parts = Readonly<{ form: HTMLFormElement; input: HTMLTextAreaElement; send: HTMLButtonElement; status: HTMLElement }>;
 
 function parts(ctx: ViewContext, questionId: string): Parts {
-  const suffix = questionId.replace(/[^A-Za-z0-9-]/g, '_');
+  const suffix = (ctx.answerScope ?? '') + questionId.replace(/[^A-Za-z0-9-]/g, '_');
   const input = el('textarea', 'work-answer-input');
   // maxLength counts UTF-16 units: twice the bound lets 2000 characters outside the BMP (emoji) in; localFailure
   // then checks the bound in characters, as the writer does.

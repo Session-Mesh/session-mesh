@@ -195,13 +195,26 @@ joins an existing one; see the [command-line tools](configuration.md#command-lin
 **Projects**, the main mode beside **Sessions**, opens on the Projects view by default. It shows the
 project tracker that agents write through `mesh-work`, read only:
 
+- **Open questions.** The first screen starts with the questions agents asked with `work_ask` that
+  are still open, in two lists: "Without a task" (about a project or about nothing) and "About a
+  task". Each shows its text, what it is about (a button opens that project, or that task in its
+  project), its age, the session and agent that asked it, the options and the assumption the agent
+  gave, and the answer form of the task sheet. The list holds the 20 newest open questions; a note
+  counts the others, which show in their project. The **Projects** button (and its entry in the
+  phone's menu) carries the number of open questions, as read the last time the view read it: when
+  the view opens, on "Refresh" and after an answer. Nothing reads it on a timer, so the number
+  appears once Projects has been opened in the page, and disappears when the read fails.
 - **Products and projects.** The first screen lists the products and their active projects, with
   each project's progress (done tasks over all tasks) and its number of blockers.
-- **A project, in four tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent
+- **A project, in five tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent
   activity, open questions, milestones, risks), "Board" (columns to do, in progress, blocked or
   waiting, done, and "Other" for any other status, shown only when it holds tasks), "Timeline"
-  (a bar from creation to done or today, with due dates and estimates) and "Dependencies" (the tasks by dependency level, cycles labelled). The French interface names them
-  "Reprise", "Tableau", "Frise" and "Dépendances".
+  (a bar from creation to done or today, with due dates and estimates), "Dependencies" (the tasks
+  by dependency level, cycles labelled) and "Questions" (the project's questions, open and
+  answered, grouped by task, then "Without a task" for those about the project itself, each with
+  the answer form; at most 20, open ones first). The French interface names them "Reprise",
+  "Tableau", "Frise", "Dépendances" and "Questions". An answer given in the Questions tab, in the
+  task sheet or on the first screen shows in the other places once they are read again.
 - **A task.** Selecting a task opens its sheet: blockers, dependencies, the sessions that worked on
   it, its notes, its events and its questions. An answer given with the sheet's answer button
   reads "answered by the owner in this view (signed in)". Any other answer reads as the owner's
