@@ -21,6 +21,7 @@ import { renderProject } from './work-project-view.ts';
 import type { ProjectView, TabKey } from './work-project-view.ts';
 import { renderEntryQuestions } from './work-questions-view.ts';
 import type { EntryQuestionsState } from './work-questions-view.ts';
+import { withoutQuestion } from './work-questions.ts';
 import type { OpenQuestionsDoc, ProductsDoc, ProjectsDoc } from './work-types.ts';
 
 export type WorkViewOptions = Readonly<{
@@ -94,6 +95,8 @@ class WorkView implements WorkViewController {
   private selected: string | null = null;
   private expandedSeeded = false;
   private generation = 0;
+  /** Numbers each read of the entry screen's open questions; only the last one started is shown. */
+  private questionsSequence = 0;
   private controller: AbortController | null = null;
   private detailController: AbortController | null = null;
   private detailSequence = 0;
@@ -166,24 +169,32 @@ class WorkView implements WorkViewController {
     if (token === this.generation) this.report(result);
   }
 
+  /** The products and projects first (the page reads two documents at a time, see work-api.ts), then the open
+   *  questions, drawn in place when they arrive. */
   private async loadEntry(): Promise<void> {
     const { token, signal } = this.begin();
     this.project = null; this.selected = null;
     this.show(loadingBlock(this.t));
-    const [products, projects, questions] = await Promise.all([this.api.products(signal), this.api.projects(signal),
-      this.api.openQuestions(signal)]);
+    const reads = [this.api.products(signal), this.api.projects(signal)] as const;
+    const questions = this.api.openQuestions(signal);   // waits for a free slot
+    const [products, projects] = await Promise.all(reads);
     if (token !== this.generation) return;
-    this.report(questions);
     if (!products.ok) return this.entryFailure(products.error);
     if (!projects.ok) return this.entryFailure(projects.error);
     this.entry = { products: products.value, projects: projects.value };
-    this.entryQuestions = this.questionsState(questions);
+    this.entryQuestions = { kind: 'loading' };
     this.renderEntryScreen();
+    await this.rereadEntryQuestions(null, false, questions);
   }
 
-  private questionsState(result: WorkResult<OpenQuestionsDoc>): EntryQuestionsState {
-    return result.ok ? { kind: 'ready', doc: result.value }
-      : { kind: 'failed', error: result.error, retry: () => void this.rereadEntryQuestions(null) };
+  /** What the entry screen shows after a read of the open questions. A failed read keeps the questions already shown
+   *  (and so the drafts under them) with the error and its retry; the one just answered leaves the list. */
+  private nextQuestionsState(result: WorkResult<OpenQuestionsDoc>, answered: string | null): EntryQuestionsState {
+    if (result.ok) return { kind: 'ready', doc: result.value };
+    const retry = (): void => void this.rereadEntryQuestions(null);
+    const shown = this.entryQuestions;
+    if (shown.kind === 'ready' || shown.kind === 'stale') return { kind: 'stale', doc: withoutQuestion(shown.doc, answered), error: result.error, retry };
+    return { kind: 'failed', error: result.error, retry };
   }
 
   /** A missing reader program lets the host show the old view (once); any other failure is shown here with its buttons. */
@@ -216,22 +227,26 @@ class WorkView implements WorkViewController {
       openProject: id => void this.openProject(id, 'questions'), openTask: id => void this.openTask(id) }, this.entryQuestions);
   }
 
-  /** Read the open questions of the entry screen again and redraw them in place, keeping unsent drafts (but the one of
-   *  `answered`); focus goes to the answered question, or to the block after a retry. */
-  private async rereadEntryQuestions(answered: string | null, focus = true): Promise<void> {
-    const token = this.generation;
-    const result = await this.api.openQuestions(this.controller?.signal);
-    if (token !== this.generation || this.project || !this.entryQuestionsNode) return;
+  /** Read the open questions of the entry screen again (or take the read `pending`) and redraw them in place, keeping
+   *  unsent drafts (but the one of `answered`); focus goes to the answered question, or to the block after a retry.
+   *  Only the read started last is shown, so an older answer never replaces a newer one. False when the read failed. */
+  private async rereadEntryQuestions(answered: string | null, focus = true,
+    pending?: Promise<WorkResult<OpenQuestionsDoc>>): Promise<boolean> {
+    const token = this.generation, sequence = ++this.questionsSequence;
+    const result = await (pending ?? this.api.openQuestions(this.controller?.signal));
+    if (token !== this.generation || sequence !== this.questionsSequence || this.project || !this.entryQuestionsNode) return true;
     this.report(result);
     const drafts = unsentDrafts(this.entryQuestionsNode, answered ?? '');
-    this.entryQuestions = this.questionsState(result);
+    this.entryQuestions = this.nextQuestionsState(result, answered);
     const next = this.entryQuestionsBlock();
     restoreDrafts(next, drafts);
     this.entryQuestionsNode.replaceWith(next);
     this.entryQuestionsNode = next;
-    if (!focus) return;
-    const question = answered ? next.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(answered)}"]`) : null;
-    focusFirst(question ?? next.querySelector<HTMLElement>('h2'));
+    if (focus) {
+      const question = answered ? next.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(answered)}"]`) : null;
+      focusFirst(question ?? next.querySelector<HTMLElement>('h2'));
+    }
+    return result.ok;
   }
 
   private async openProject(id: string, tab: TabKey = 'reprise'): Promise<void> {
@@ -295,40 +310,46 @@ class WorkView implements WorkViewController {
     // The write stands whatever happened meanwhile; a view closed (or reloaded) since shows nothing and reads nothing.
     if (token !== this.generation) return null;
     const notice = this.t(!result.ok ? 'work.answer.already' : result.value.uncommitted ? 'work.answer.sentUncommitted' : 'work.answer.sent');
-    if (surface === 'entry') await this.rereadEntryQuestions(question);
-    else await this.showRecordedInProject(question, surface, task);
-    if (token === this.generation) this.announce(notice);
+    const shown = surface === 'entry' ? await this.rereadEntryQuestions(question) : await this.showRecordedInProject(question, surface, task);
+    // The write stands; when what shows it could not be read again, the notice says that rather than only "recorded".
+    const failed = surface === 'entry' ? 'work.questions.entryRereadFailed' : 'work.questions.rereadFailed';
+    if (token === this.generation) this.announce(shown ? notice : this.t(failed));
     return null;
   }
 
-  /** In a project, the surface the answer came from is read first (focus on the question), then the other, then the count. */
-  private async showRecordedInProject(question: string, surface: Surface, task: string | null): Promise<void> {
+  /** In a project, the surface the answer came from is read first (focus on the question), then the other, then the
+   *  count. False when the project could not be read again. */
+  private async showRecordedInProject(question: string, surface: Surface, task: string | null): Promise<boolean> {
     const sheet = async (focus: boolean): Promise<void> => {
       if (task !== null && task === this.selected) await this.selectTask(task, { question, focus });
     };
+    let shown: boolean;
     if (surface === 'detail') {
       await sheet(true);
-      await this.rereadProject(question, false);
+      shown = await this.rereadProject(question, false);
     } else {
-      await this.rereadProject(question, true);
+      shown = await this.rereadProject(question, true);
       await sheet(false);
     }
     await this.refreshCount();
+    return shown;
   }
 
-  /** Read the open project again and show it (header and sheet kept); drafts of the tab survive, but the answered one's. */
-  private async rereadProject(question: string, focus: boolean): Promise<void> {
+  /** Read the open project again and show it (header and sheet kept); drafts of the tab survive, but the answered one's.
+   *  False when the read failed (a view left meanwhile is not a failure). */
+  private async rereadProject(question: string, focus: boolean): Promise<boolean> {
     const project = this.project, token = this.generation;
-    if (!project) return;
+    if (!project) return true;
     const result = await this.api.project(project.id, this.controller?.signal);
-    if (token !== this.generation || this.project !== project) return;
-    if (!result.ok) return this.announce(this.t('work.questions.rereadFailed'));
+    if (token !== this.generation || this.project !== project) return true;
+    if (!result.ok) return false;
     const panel = project.view.panel('questions');
     const drafts = unsentDrafts(panel, question);
     project.view.replaceDoc(result.value);
     restoreDrafts(panel, drafts);
     markSelected(project.view.root, this.selected);
     if (focus) focusFirst(panel.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(question)}"]`) ?? panel);
+    return true;
   }
 
   private announce(message: string): void {

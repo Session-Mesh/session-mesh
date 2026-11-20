@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { parseOpenQuestions, parseProject } from '../static/work-parse.ts';
 import {
-  aboutKind, ageOf, counterText, formatAge, groupProjectQuestions, orderQuestions, splitEntryQuestions,
+  aboutKind, ageOf, counterText, formatAge, groupProjectQuestions, orderQuestions, splitEntryQuestions, withoutQuestion,
 } from '../static/work-questions.ts';
 import type { Question, TaskRow } from '../static/work-types.ts';
 
@@ -64,6 +64,17 @@ describe('ordering and grouping', () => {
       question('p1', 'P-0a0a', '2026-11-02T00:00:00Z'), question('t2', 'T-0002', '2026-11-04T00:00:00Z', false)]);
     assert.deepEqual(lists.noTask.map(q => q.id), ['p1', 'n1']);
     assert.deepEqual(lists.withTask.map(q => q.id), ['t1']);
+  });
+});
+
+describe('the list kept after a failed read again', () => {
+  test('loses the question just answered and one from its total; anything else is the same document', () => {
+    const doc = { openQuestions: 30, questions: [question('a', null, null), question('b', 'T-0001', null)], omitted: 28, truncated: true };
+    assert.deepEqual(withoutQuestion(doc, 'a'), { ...doc, openQuestions: 29, questions: [doc.questions[1]] });
+    assert.equal(withoutQuestion(doc, 'z'), doc, 'a question not listed changes nothing');
+    assert.equal(withoutQuestion(doc, null), doc);
+    const small = { openQuestions: 1, questions: [question('a', null, null)], omitted: 0, truncated: false };
+    assert.equal(withoutQuestion(small, 'a').openQuestions, 0);
   });
 });
 

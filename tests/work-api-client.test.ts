@@ -4,7 +4,7 @@
 // The client of POST /api/work/v1 (work-api.ts) against a fake fetch.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { createWorkApi } from '../static/work-api.ts';
+import { createWorkApi, readSlots } from '../static/work-api.ts';
 
 type Call = { url: string; init: RequestInit };
 
@@ -13,8 +13,95 @@ function fake(status: number, body: unknown, calls: Call[] = []) {
     calls.push({ url, init });
     return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   };
-  return { api: createWorkApi(request), calls };
+  return { api: createWorkApi(request, undefined, { slots: readSlots(2), busyDelays: [] }), calls };
 }
+
+/** A fetch whose answers the test releases one by one, to see how many requests are in flight. */
+function held() {
+  const pending: { op: string; release: (status?: number, body?: unknown) => void }[] = [];
+  const request = (_url: string, init: RequestInit) => new Promise<Response>((resolve, reject) => {
+    const op = String(JSON.parse(String(init.body)).op);
+    init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    pending.push({ op, release: (status = 200, body = { categories: [], projects: [], questions: [] }) =>
+      resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })) });
+  });
+  return { request, pending };
+}
+
+const tick = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
+const BUSY = { error: { code: 'busy', message: 'busy' } };
+
+describe('the relay\'s program slots', () => {
+  test('a page reads at most two documents at a time, in the order asked; a write does not wait for them', async () => {
+    const { request, pending } = held();
+    const api = createWorkApi(request, undefined, { slots: readSlots(2), busyDelays: [] });
+    const results = [api.products(), api.projects(), api.openQuestions(), api.project('P-5e6f')];
+    await tick();
+    assert.deepEqual(pending.map(call => call.op), ['products', 'projects'], 'the third read waits for a free slot');
+    const write = api.answer('N-1', 'x');
+    await tick();
+    assert.deepEqual(pending.map(call => call.op), ['products', 'projects', 'answer']);
+    pending[1]!.release();
+    await tick(); await tick();
+    assert.deepEqual(pending.map(call => call.op), ['products', 'projects', 'answer', 'resume'], 'a free slot goes to the next read');
+    pending[0]!.release(); await tick(); await tick();
+    assert.deepEqual(pending.map(call => call.op), ['products', 'projects', 'answer', 'resume', 'project']);
+    pending[3]!.release(); pending[4]!.release();
+    pending[2]!.release(200, { id: 'N-1', owner_verified: true });
+    assert.equal((await Promise.all(results)).length, 4);
+    assert.equal((await write).ok, true);
+  });
+
+  test('the slots are shared by every client of the page by default', async () => {
+    const { request, pending } = held();
+    const first = createWorkApi(request, undefined, { busyDelays: [] }), second = createWorkApi(request, undefined, { busyDelays: [] });
+    const results = [first.products(), second.products(), second.projects()];
+    await tick();
+    assert.equal(pending.length, 2, 'two clients of one page still read two at a time');
+    pending[0]!.release(); await tick(); await tick();
+    assert.equal(pending.length, 3);
+    pending[1]!.release(); pending[2]!.release();
+    await Promise.all(results);
+  });
+
+  test('a read refused as busy is tried again after a pause, a bounded number of times', async () => {
+    let busyLeft = 2;
+    const calls: string[] = [];
+    const request = async (_url: string, init: RequestInit) => {
+      calls.push(String(JSON.parse(String(init.body)).op));
+      return busyLeft-- > 0 ? new Response(JSON.stringify(BUSY), { status: 503 }) : new Response(JSON.stringify({ questions: [] }));
+    };
+    const api = createWorkApi(request, undefined, { slots: readSlots(2), busyDelays: [0, 0, 0] });
+    assert.equal((await api.openQuestions()).ok, true);
+    assert.deepEqual(calls, ['resume', 'resume', 'resume']);
+    busyLeft = 99; calls.length = 0;
+    const result = await api.products();
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.error.kind, 'busy', 'after the last pause the error is shown');
+    assert.equal(calls.length, 4, 'the first try and three more');
+  });
+
+  test('a write refused as busy is not sent again, and an abort during a pause stops the tries', async () => {
+    const calls: string[] = [];
+    const controller = new AbortController();
+    const request = async (_url: string, init: RequestInit) => {
+      calls.push(String(JSON.parse(String(init.body)).op));
+      return new Response(JSON.stringify(BUSY), { status: 503 });
+    };
+    const api = createWorkApi(request, undefined, { slots: readSlots(2), busyDelays: [10_000] });
+    const answer = await api.answer('N-1', 'x');
+    assert.equal(answer.ok, false);
+    assert.deepEqual(calls, ['answer']);
+    const started = Date.now();
+    const read = api.products(controller.signal);
+    setTimeout(() => controller.abort(), 20);
+    const result = await read;
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.error.kind, 'aborted');
+    assert.ok(Date.now() - started < 5_000, 'the pause ends with the abort');
+    assert.deepEqual(calls, ['answer', 'products']);
+  });
+});
 
 describe('request', () => {
   test('is a same-origin POST of one op with its arguments, with the page credentials', async () => {

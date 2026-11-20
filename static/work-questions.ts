@@ -6,7 +6,7 @@
  * entry list, the age of a question, and the text of the counter on the Projects button. No DOM here.
  */
 
-import type { Question, TaskRow } from './work-types.ts';
+import type { OpenQuestionsDoc, Question, TaskRow } from './work-types.ts';
 
 /** What a question is about, from its `about` reference: a task (`T-`), a project (`P-`) or nothing. */
 export type AboutKind = 'task' | 'project' | 'none';
@@ -60,6 +60,13 @@ export type EntryQuestionLists = Readonly<{ noTask: readonly Question[]; withTas
 export function splitEntryQuestions(questions: readonly Question[]): EntryQuestionLists {
   const open = orderQuestions(questions.filter(question => question.open));
   return { noTask: open.filter(question => aboutKind(question.about) !== 'task'), withTask: open.filter(question => aboutKind(question.about) === 'task') };
+}
+
+/** The open questions shown, less the one just answered (when it was listed); its total goes down with it. */
+export function withoutQuestion(doc: OpenQuestionsDoc, id: string | null): OpenQuestionsDoc {
+  const questions = doc.questions.filter(question => question.id !== id);
+  if (questions.length === doc.questions.length) return doc;
+  return { ...doc, questions, openQuestions: Math.max(questions.length, doc.openQuestions - (doc.questions.length - questions.length)) };
 }
 
 export type Age = Readonly<{ value: number; unit: 'minute' | 'hour' | 'day' }>;

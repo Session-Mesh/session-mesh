@@ -1846,6 +1846,7 @@
     "other": "{n} open questions"
   },
   "work.questions.emptyProject": "No question about this project or its tasks.",
+  "work.questions.entryRereadFailed": "The answer is recorded, but the open questions could not be read again.",
   "work.questions.loading": "Reading the open questions…",
   "work.questions.more": {
     "one": "{n} more open question is not listed here; it shows in its project.",

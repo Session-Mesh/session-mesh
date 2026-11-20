@@ -72,7 +72,73 @@ export type WorkApi = Readonly<{
   answer(question: string, answerText: string): Promise<WorkResult<AnswerReceipt>>;
 }>;
 
-export function createWorkApi(request: WorkFetch, url = '/api/work/v1'): WorkApi {
+/**
+ * The reads a page may have in flight at once. The relay runs at most four work programs for all its pages together and
+ * refuses the next one as `busy`; two per page is what the Projects view needed before it also read the open
+ * questions, so two pages opening it together still fit.
+ */
+export type ReadSlots = Readonly<{
+  /** Wait for a free slot; false when the signal aborted first (the slot is then not taken). */
+  take: (signal?: AbortSignal) => Promise<boolean>;
+  give: () => void;
+}>;
+
+export function readSlots(limit: number): ReadSlots {
+  let used = 0;
+  const waiting: (() => void)[] = [];
+  const take = (signal?: AbortSignal): Promise<boolean> => {
+    if (signal?.aborted) return Promise.resolve(false);
+    if (used < limit) { used++; return Promise.resolve(true); }
+    return new Promise(resolve => {
+      const granted = (): void => { signal?.removeEventListener('abort', aborted); resolve(true); };
+      const aborted = (): void => { waiting.splice(waiting.indexOf(granted), 1); resolve(false); };
+      signal?.addEventListener('abort', aborted, { once: true });
+      waiting.push(granted);
+    });
+  };
+  const give = (): void => {
+    const next = waiting.shift();
+    if (next) next(); else used = Math.max(0, used - 1);   // the slot passes straight to the next read
+  };
+  return { take, give };
+}
+
+/** The slots of this page, shared by every client it creates. */
+const PAGE_READS = readSlots(2);
+
+/** The pauses before a read refused as `busy` is sent again (a little longer each time, spread so pages do not retry
+ *  together); a write is never sent again. */
+const BUSY_DELAYS: readonly number[] = [300, 900, 2000];
+
+export type WorkApiOptions = Readonly<{ slots?: ReadSlots; busyDelays?: readonly number[] }>;
+
+/** Wait `ms` (a little more, at random), or less when the signal aborts; false when it aborted. */
+function pause(ms: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise(resolve => {
+    const done = (): void => { signal?.removeEventListener('abort', stop); resolve(true); };
+    const timer = setTimeout(done, ms * (1 + Math.random() / 2));
+    const stop = (): void => { clearTimeout(timer); resolve(false); };
+    signal?.addEventListener('abort', stop, { once: true });
+  });
+}
+
+export function createWorkApi(request: WorkFetch, url = '/api/work/v1', options: WorkApiOptions = {}): WorkApi {
+  const slots = options.slots ?? PAGE_READS, delays = options.busyDelays ?? BUSY_DELAYS;
+
+  /** A read: in one of the page's slots, sent again after a pause while the relay answers `busy`. */
+  async function read<T>(op: string, args: Record<string, unknown>, parse: (body: unknown) => T | null,
+    signal?: AbortSignal): Promise<WorkResult<T>> {
+    for (let attempt = 0; ; attempt++) {
+      if (!await slots.take(signal)) return fail('aborted');
+      let result: WorkResult<T>;
+      try { result = await call(op, args, parse, signal); } finally { slots.give(); }
+      const delay = delays[attempt];
+      if (result.ok || result.error.kind !== 'busy' || delay === undefined) return result;
+      if (!await pause(delay, signal)) return fail('aborted');
+    }
+  }
+
   async function call<T>(op: string, args: Record<string, unknown>, parse: (body: unknown) => T | null,
     signal?: AbortSignal): Promise<WorkResult<T>> {
     let response: Response;
@@ -89,11 +155,11 @@ export function createWorkApi(request: WorkFetch, url = '/api/work/v1'): WorkApi
     return parseBody(parse, body, response.status);
   }
   return {
-    products: signal => call('products', {}, parseProducts, signal),
-    projects: signal => call('projects', {}, parseProjects, signal),
-    project: (id, signal) => call('project', { id }, parseProject, signal),
-    task: (id, signal) => call('task', { id }, parseTask, signal),
-    openQuestions: signal => call('resume', {}, parseOpenQuestions, signal),
+    products: signal => read('products', {}, parseProducts, signal),
+    projects: signal => read('projects', {}, parseProjects, signal),
+    project: (id, signal) => read('project', { id }, parseProject, signal),
+    task: (id, signal) => read('task', { id }, parseTask, signal),
+    openQuestions: signal => read('resume', {}, parseOpenQuestions, signal),
     answer: (question, answerText) => call('answer', { question, text: answerText }, parseReceipt),
   };
 }

@@ -1861,6 +1861,7 @@
     "other": "{n} questions ouvertes"
   },
   "work.questions.emptyProject": "Aucune question sur ce projet ni sur ses tâches.",
+  "work.questions.entryRereadFailed": "La réponse est enregistrée, mais les questions ouvertes n’ont pas pu être relues.",
   "work.questions.loading": "Lecture des questions ouvertes…",
   "work.questions.more": {
     "one": "{n} autre question ouverte n’est pas listée ici ; elle apparaît dans son projet.",
@@ -1880,7 +1881,7 @@
   "work.questions.stateAnswered": "Répondue",
   "work.questions.stateOpen": "Ouverte",
   "work.questions.task": "Tâche {id}",
-  "work.questions.taskNoProject": "La tâche {id} n’appartient à aucun projet : elle n’a pas de vue projet. Sa question se répond depuis la liste des questions ouvertes.",
+  "work.questions.taskNoProject": "La tâche {id} n’appartient à aucun projet : elle n’a pas de vue projet. On peut répondre à sa question depuis la liste des questions ouvertes.",
   "work.questions.title": "Questions ouvertes",
   "work.questions.withTask": "Liées à une tâche",
   "work.refresh": "Actualiser",
