@@ -22,9 +22,11 @@ val write_file : string -> string -> unit
 
 type result = { code : int; out : string; err : string }
 
-val run : ?env:(string * string) list -> ?input:string -> repo -> string list -> result
+val run :
+  ?env:(string * string) list -> ?input:string -> ?blocked:int list -> repo -> string list -> result
 (** Run work-read on the repository, WL_NOW fixed at 2026-11-10T00:00:00Z;
-    [input] is its standard input (else [/dev/null]). *)
+    [input] is its standard input (else [/dev/null]); [blocked] signals are
+    blocked in the signal mask it inherits. *)
 
 val json : result -> Yojson.Safe.t
 (** The single line of standard output, parsed; fails unless it is exactly one

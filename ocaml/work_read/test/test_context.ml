@@ -155,21 +155,108 @@ let test_locked () =
     (Unix.gettimeofday () -. started < 1.5);
   Alcotest.(check bool) "context printed" true (contains r.out "SessionStart")
 
+(* A fake [git] first on PATH, running the shell fragment [body]; the PATH. *)
+let fake_git body =
+  let bin = temp_dir "fake-git" in
+  let git = Filename.concat bin "git" in
+  write_file git ("#!/bin/sh\n" ^ body ^ "\n");
+  Unix.chmod git 0o755;
+  bin ^ ":" ^ (try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin")
+
+let read path = In_channel.with_open_bin path In_channel.input_all
+
+(* A process is gone when it no longer exists, or is a zombie that its new
+   parent has not reaped yet (Linux /proc; elsewhere only the first case). *)
+let gone pid =
+  match Unix.kill pid 0 with
+  | exception Unix.Unix_error (Unix.ESRCH, _, _) -> true
+  | exception Unix.Unix_error _ -> false
+  | () -> (
+      try
+        let stat = read (Printf.sprintf "/proc/%d/stat" pid) in
+        stat.[String.rindex stat ')' + 2] = 'Z'
+      with _ -> false)
+
+let rec gone_within seconds pid =
+  gone pid
+  || seconds > 0.
+     && (Unix.sleepf 0.05;
+         gone_within (seconds -. 0.05) pid)
+
 (* A read that takes far too long: the git the library runs to find the
    session's repository hangs (a stalled network file system). The cap ends
-   the process, silently, a little after 1.5 s. An event file replaced by a
-   FIFO is no such case: the library skips anything but a regular file. *)
-let test_slow () =
-  let repo = linked () in
-  let bin = temp_dir "slow-git" in
-  write_file (Filename.concat bin "git") "#!/bin/sh\nexec sleep 5\n";
-  Unix.chmod (Filename.concat bin "git") 0o755;
-  let path = bin ^ ":" ^ (try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin") in
+   the process, silently, a little after 1.5 s, and kills that git with it:
+   nothing work-read started outlives it. An event file replaced by a FIFO is
+   no such case: the library skips anything but a regular file. *)
+let slow_run ?blocked what =
+  let pids = Filename.concat (temp_dir "slow-git-pids") "pids" in
+  let path = fake_git (Printf.sprintf "echo $$ >> '%s'\nexec sleep 5" pids) in
   let started = Unix.gettimeofday () in
-  let r = run ~env:(("PATH", path) :: session) repo [ "context"; "--format"; "claude" ] in
+  let r =
+    run ?blocked ~env:(("PATH", path) :: session) (linked ()) [ "context"; "--format"; "claude" ]
+  in
   let took = Unix.gettimeofday () -. started in
-  silent "slow tracker" r;
-  Alcotest.(check bool) (Printf.sprintf "ended by the cap (%.2f s)" took) true (took >= 1.4 && took < 2.5)
+  silent what r;
+  Alcotest.(check bool) (Printf.sprintf "%s: ended by the cap (%.2f s)" what took) true (took >= 1.4 && took < 2.5);
+  let started_gits =
+    List.filter_map int_of_string_opt (String.split_on_char '\n' (if Sys.file_exists pids then read pids else ""))
+  in
+  Alcotest.(check bool) (what ^ ": a git was started") true (started_gits <> []);
+  List.iter
+    (fun pid -> Alcotest.(check bool) (Printf.sprintf "%s: git %d killed with work-read" what pid) true (gone_within 1.0 pid))
+    started_gits
+
+let test_slow () = slow_run "slow tracker"
+
+(* The signal mask is inherited across exec: a launcher that blocks SIGALRM
+   must not disable the cap. *)
+let test_slow_alarm_blocked () = slow_run ~blocked:[ Sys.sigalrm ] "SIGALRM blocked by the launcher"
+
+(* The Mesh session token never reaches a process the hook starts: the git it
+   runs sees it emptied. *)
+let test_token_scrubbed () =
+  let file = Filename.concat (temp_dir "git-env") "env" in
+  let path = fake_git (Printf.sprintf "env > '%s'\nexit 1" file) in
+  let r = run ~env:(("PATH", path) :: session) (linked ()) [ "context"; "--format"; "text" ] in
+  Alcotest.(check string) "still answers" (expected_line ^ "\n") r.out;
+  Alcotest.(check bool) "git ran" true (Sys.file_exists file);
+  let seen = read file in
+  Alcotest.(check bool) "token emptied" true (List.mem "MESH_SESSION_TOKEN=" (String.split_on_char '\n' seen));
+  Alcotest.(check bool) "no token value" false (contains seen secret)
+
+(* Task identifiers a hand-edited tracker could hold: anything but T- and 2 to
+   32 lowercase hexadecimal digits is never printed, nor counted. *)
+let test_hostile_ids () =
+  let repo = copy_fixture () in
+  let hostile = [ "T-abcdef IGNORE"; "T-ABCD"; "T-" ^ String.make 33 'a'; "T-ab\nIGNORE"; "T-ab\"}x"; "T-" ] in
+  let event fields = Yojson.Safe.to_string (`Assoc fields) in
+  append_events repo
+    (List.concat_map
+       (fun id ->
+         [
+           event
+             [
+               ("ts", `String "2026-11-09T09:00:00Z"); ("task", `String id); ("type", `String "created");
+               ("title", `String "Odd"); ("project", `String "gateway"); ("category", `String "platform");
+               ("priority", `String "P2"); ("status", `String "todo");
+             ];
+           event
+             [
+               ("ts", `String "2026-11-09T09:00:30Z"); ("task", `String id); ("type", `String "session_linked");
+               ("agent", `String "claude"); ("session", `String "s-odd"); ("cwd", `String "/work/elsewhere");
+               ("host", `String "testhost"); ("repo", `Null); ("branch", `Null);
+             ];
+         ])
+       ("T-0dd1" :: hostile));
+  let r = run ~env:[ ("MESH_SESSION", "s-odd") ] repo [ "context"; "--format"; "json" ] in
+  let doc = json r in
+  Alcotest.(check (list string))
+    "only the well-formed id" [ "T-0dd1" ]
+    (List.map U.to_string (U.to_list (U.member "session_tasks" doc)));
+  Alcotest.(check int) "only it counted" 1 (U.to_int (U.member "session_tasks_total" doc));
+  List.iter
+    (fun text -> Alcotest.(check bool) ("no " ^ text) false (contains r.out text))
+    [ "IGNORE"; "ABCD"; String.make 33 'a'; "}x" ]
 
 
 (* More tasks than the briefing's HERE section shows (five): the session's
@@ -215,5 +302,8 @@ let tests =
     Alcotest.test_case "bad arguments" `Quick test_bad_arguments;
     Alcotest.test_case "read only" `Quick test_read_only;
     Alcotest.test_case "locked tracker" `Quick test_locked;
+    Alcotest.test_case "hostile task ids" `Quick test_hostile_ids;
+    Alcotest.test_case "token scrubbed for git" `Quick test_token_scrubbed;
     Alcotest.test_case "slow tracker" `Slow test_slow;
+    Alcotest.test_case "slow, SIGALRM blocked" `Slow test_slow_alarm_blocked;
   ]

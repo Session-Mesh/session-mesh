@@ -44,7 +44,21 @@ let append_events repo lines =
     (Filename.concat (Filename.concat repo.wl_home "events") "2026-11.hostc.jsonl")
     (fun oc -> output_string oc (String.concat "\n" lines ^ "\n"))
 
-let run ?(env = []) ?input repo args =
+(* fork and exec by hand, with [blocked] signals blocked in the child: the
+   signal mask is inherited across exec, as from a launcher that blocks them. *)
+let spawn_blocked ~blocked argv env stdin_fd out_fd err_fd =
+  match Unix.fork () with
+  | 0 -> (
+      try
+        ignore (Unix.sigprocmask Unix.SIG_BLOCK blocked);
+        Unix.dup2 stdin_fd Unix.stdin;
+        Unix.dup2 out_fd Unix.stdout;
+        Unix.dup2 err_fd Unix.stderr;
+        Unix.execve argv.(0) argv env
+      with _ -> Unix._exit 127)
+  | pid -> pid
+
+let run ?(env = []) ?input ?(blocked = []) repo args =
   let base =
     [
       "PATH=" ^ (try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin");
@@ -68,7 +82,11 @@ let run ?(env = []) ?input repo args =
         write_file in_path text;
         Unix.openfile in_path [ Unix.O_RDONLY ] 0
   in
-  let pid = Unix.create_process_env (Lazy.force exe) (Array.of_list (Lazy.force exe :: args)) env null out_fd err_fd in
+  let argv = Array.of_list (Lazy.force exe :: args) in
+  let pid =
+    if blocked = [] then Unix.create_process_env (Lazy.force exe) argv env null out_fd err_fd
+    else spawn_blocked ~blocked argv env null out_fd err_fd
+  in
   List.iter Unix.close [ out_fd; err_fd; null ];
   let _, status = Unix.waitpid [] pid in
   let code = match status with Unix.WEXITED c -> c | _ -> -1 in

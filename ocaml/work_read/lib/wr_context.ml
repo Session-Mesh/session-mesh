@@ -191,18 +191,86 @@ let summarise ~getenv () =
                   answered_questions;
                 }))
 
-(* The cap: SIGALRM after [cap_seconds] of real time ends the process at once,
-   with exit 0 and nothing printed (no output is written before the read has
-   finished). *)
-let arm_cap () =
-  Sys.set_signal Sys.sigalrm (Sys.Signal_handle (fun _ -> Unix._exit 0));
+(* The cap. The read runs in a worker, a child process in a session (so a
+   process group) of its own: every process it starts, the git the library
+   runs included, is in that group. After [cap_seconds] of real time, SIGALRM
+   kills the whole group and ends work-read at once, with exit 0 and nothing
+   printed (the worker hands its line over only when the read has finished).
+   SIGALRM is unblocked first: the signal mask is inherited across exec, and a
+   launcher that blocks it would otherwise disable the cap. *)
+let arm_alarm seconds handler =
+  ignore (Unix.sigprocmask Unix.SIG_UNBLOCK [ Sys.sigalrm ]);
+  Sys.set_signal Sys.sigalrm (Sys.Signal_handle handler);
   ignore
     (Unix.setitimer Unix.ITIMER_REAL
-       { Unix.it_interval = 0.; it_value = cap_seconds })
+       { Unix.it_interval = 0.; it_value = seconds })
 
 let disarm_cap () =
   ignore
     (Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval = 0.; it_value = 0. })
+
+let kill_quietly target =
+  try Unix.kill target Sys.sigkill with Unix.Unix_error _ -> ()
+
+(* The worker never writes to the agent: its standard output and error go to
+   /dev/null, and its line goes to [out] once complete. Should work-read be
+   killed before its cap, the worker's own alarm, a little later, kills the
+   group. Without a session of its own, the worker does nothing (a [kill 0]
+   would reach work-read's group). *)
+let worker out compute =
+  (try
+     ignore (Unix.setsid ());
+     arm_alarm (cap_seconds +. 0.5) (fun _ -> kill_quietly 0);
+     let null = Unix.openfile "/dev/null" [ Unix.O_RDWR; Unix.O_CLOEXEC ] 0 in
+     Unix.dup2 ~cloexec:false null Unix.stdout;
+     Unix.dup2 ~cloexec:false null Unix.stderr;
+     match compute () with
+     | Some line -> ignore (Unix.write_substring out line 0 (String.length line))
+     | None -> ()
+   with _ -> ());
+  Unix._exit 0
+
+let read_all fd =
+  let buf = Buffer.create 256 and chunk = Bytes.create 4096 in
+  let rec go () =
+    match Unix.read fd chunk 0 (Bytes.length chunk) with
+    | 0 -> Buffer.contents buf
+    | n ->
+        Buffer.add_subbytes buf chunk 0 n;
+        go ()
+    | exception Unix.Unix_error (Unix.EINTR, _, _) -> go ()
+  in
+  go ()
+
+let rec reap pid =
+  match Unix.waitpid [] pid with
+  | _ -> ()
+  | exception Unix.Unix_error (Unix.EINTR, _, _) -> reap pid
+
+(* [compute ()] in the worker, under the cap. The group is killed through
+   [-pid], and the worker through [pid] in case the alarm comes before its
+   [setsid] (it has started nothing then). *)
+let bounded compute =
+  flush_all ();
+  let out_r, out_w = Unix.pipe ~cloexec:true () in
+  match Unix.fork () with
+  | 0 ->
+      (try Unix.close out_r with Unix.Unix_error _ -> ());
+      worker out_w compute
+  | pid ->
+      Unix.close out_w;
+      arm_alarm cap_seconds (fun _ ->
+          kill_quietly (-pid);
+          kill_quietly pid;
+          Unix._exit 0);
+      let line =
+        Fun.protect
+          ~finally:(fun () -> Unix.close out_r)
+          (fun () -> read_all out_r)
+      in
+      reap pid;
+      disarm_cap ();
+      if line = "" then None else Some line
 
 let parse = function
   | [ "--format"; name ] -> List.assoc_opt name formats
@@ -214,12 +282,10 @@ let main args =
      match parse args with
      | None -> ()
      | Some format -> (
-         arm_cap ();
-         let line =
-           Option.bind (summarise ~getenv:Sys.getenv_opt ()) (render format)
-         in
-         disarm_cap ();
-         match line with
+         match
+           bounded (fun () ->
+               Option.bind (summarise ~getenv:Sys.getenv_opt ()) (render format))
+         with
          | Some line ->
              print_string (line ^ "\n");
              flush stdout
