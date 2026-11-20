@@ -123,7 +123,8 @@ const ask = (session: Session, body: Record<string, unknown>) => fetch(`${mesh.b
     headers: {Authorization: `MeshSession ${session.token}`, 'Content-Type': 'application/json'}});
 
 type Request = {id: string; state: string; account: string | null; from_account: string | null;
-  result: {id?: string; account?: string; error?: string; rolled_back?: boolean; code?: string} | null};
+  result: {id?: string; account?: string; error?: string; rolled_back?: boolean; code?: string;
+    retryable?: boolean; operator_action?: boolean} | null};
 
 async function requested(session: Session, account: unknown): Promise<Request> {
   const response = await ask(session, {action: 'switch_account', account});
@@ -273,6 +274,8 @@ describe('account switch requests', {skip: SKIP}, () => {
     assert.equal(decided.result?.rolled_back, true);
     assert.equal(decided.result?.code, 'conversation_diverged');
     assert.match(decided.result!.error!, /^Switch undone: the conversation resumed under account default\. Cause: conversation_diverged/);
+    assert.match(decided.result!.error!, /Asking again does not change this\.$/, 'a refusal, not a retryable failure');
+    assert.deepEqual([decided.result?.retryable, decided.result?.operator_action], [false, false]);
     const name = decided.result!.id!;
     const [home, argv] = await launchOf(name);
     assert.equal(home, 'unset', "resumed under its own (default) account, never the target's");
