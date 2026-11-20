@@ -416,6 +416,135 @@ def _mesh_reach_env():
     return {"MESH_CONF_DIR": str(CONF_DIR), "MESH_PORT": str(PORT)}
 
 
+# ---- Account aliases: accounts.json in the config folder, written by the operator on the runner and validated by
+# `mesh-platform accounts` (ocaml/accounts/mesh_accounts.mli). A page only ever names an alias id; the folders
+# stay here. Mesh hands the folder to the agent as CLAUDE_CONFIG_DIR or CODEX_HOME and never reads what is in it.
+ACCOUNTS_FILE = CONF_DIR / "accounts.json"
+ACCOUNT_ID_RE = re.compile(r"[a-z0-9-]{1,32}")
+_ACCOUNT_PATH_RE = re.compile(r"/[A-Za-z0-9._+@/-]{1,1023}")
+ACCOUNT_MEMBER = {"claude": ("claude_config_dir", "CLAUDE_CONFIG_DIR", "Claude"),
+                  "codex": ("codex_home", "CODEX_HOME", "Codex")}
+ACCOUNT_AGENTS_ONLY = "An account alias applies to Claude and Codex sessions only"
+ACCOUNT_UNKNOWN = "Unknown account alias (accounts.json on the runner)"
+_ACCOUNTS = {"signature": None, "accounts": []}
+
+
+class AccountsUnavailable(Exception):
+    """accounts.json, one of its folders, or the program that checks them was refused."""
+
+
+def _accounts_signature():
+    try:
+        st = os.lstat(ACCOUNTS_FILE)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return ("unreadable", repr(exc))
+    return (st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+async def _accounts_program(*args):
+    """The JSON answer of `mesh-platform accounts ARGS`; AccountsUnavailable on any refusal."""
+    program, proc = work_command("mesh-platform"), None
+    if not program:
+        raise AccountsUnavailable("mesh-platform not found")
+    try:
+        proc = await asyncio.create_subprocess_exec(program, "accounts", *args, env=work_child_env(),
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), 10)
+        answer = json.loads(out)
+    except (OSError, ValueError, asyncio.TimeoutError) as exc:
+        raise AccountsUnavailable(repr(exc)) from exc
+    finally:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+    if proc.returncode != 0 or not isinstance(answer, dict):
+        raise AccountsUnavailable(str(answer.get("error") if isinstance(answer, dict) else answer))
+    return answer
+
+
+def _valid_account(value):
+    """The alias as the program described it, checked again (an id, a label, absolute shell-safe folders)."""
+    ok = (isinstance(value, dict) and isinstance(value.get("id"), str) and ACCOUNT_ID_RE.fullmatch(value["id"])
+          and value["id"] != "default" and isinstance(value.get("label"), str) and 0 < len(value["label"]) <= 24
+          and all(value.get(field) is None
+                  or (isinstance(value[field], str) and _ACCOUNT_PATH_RE.fullmatch(value[field]))
+                  for field, _, _ in ACCOUNT_MEMBER.values()))
+    if not ok:
+        raise AccountsUnavailable("unexpected answer")
+    return value
+
+
+async def declared_accounts():
+    """The operator's aliases, read again whenever accounts.json changed; none when it is absent or refused
+    (the refusal is logged: the default account stays what it always was)."""
+    signature = await asyncio.to_thread(_accounts_signature)
+    if signature != _ACCOUNTS["signature"]:
+        accounts = []
+        if signature is not None:
+            try:
+                answer = await _accounts_program("list", str(ACCOUNTS_FILE))
+                accounts = [_valid_account(value) for value in answer.get("accounts") or []]
+            except AccountsUnavailable as exc:
+                print(f"accounts.json refused, no alias offered: {exc}", flush=True)
+                accounts = []
+        _ACCOUNTS.update(signature=signature, accounts=accounts)
+        view.deny_account_files(accounts)
+    return _ACCOUNTS["accounts"]
+
+
+def accounts_projection():
+    """What a page is told of the aliases: id, label and which agents each serves, never a folder."""
+    return [{"id": a["id"], "label": a["label"], "claude": bool(a.get("claude_config_dir")),
+             "codex": bool(a.get("codex_home"))} for a in _ACCOUNTS["accounts"]]
+
+
+def account_label(account):
+    """The label of a known alias, or its id (an alias removed from the file since)."""
+    return next((a["label"] for a in _ACCOUNTS["accounts"] if a["id"] == account), account)
+
+
+def session_account(session):
+    """The alias a session was started with (its meta), or None."""
+    account = (session.get("meta") or {}).get("account")
+    return account if isinstance(account, str) and ACCOUNT_ID_RE.fullmatch(account) else None
+
+
+def account_folder(account, kind):
+    """The folder of ``kind`` (claude, codex) the alias declares, from the last reading, or None."""
+    field = ACCOUNT_MEMBER.get(kind, (None,))[0]
+    found = next((a for a in _ACCOUNTS["accounts"] if a["id"] == account), None)
+    return found.get(field) if found and field else None
+
+
+async def account_environment(account, agent):
+    """{CLAUDE_CONFIG_DIR|CODEX_HOME: folder} of an alias for an agent, its folder created (0700) if missing;
+    {} for the default account (None). Refused (400) for another agent, an unknown alias, or an alias without
+    a folder for this agent: never a silent fall back to the default account."""
+    if account is None:
+        return {}
+    if agent not in ACCOUNT_MEMBER:
+        raise web.HTTPBadRequest(text=ACCOUNT_AGENTS_ONLY)
+    if not any(a["id"] == account for a in await declared_accounts()):
+        raise web.HTTPBadRequest(text=ACCOUNT_UNKNOWN)
+    field, variable, shown = ACCOUNT_MEMBER[agent]
+    try:
+        prepared = _valid_account((await _accounts_program("prepare", str(ACCOUNTS_FILE), account)).get("account"))
+    except AccountsUnavailable as exc:
+        raise web.HTTPBadRequest(text=f"Account alias refused: {exc}") from exc
+    if not prepared.get(field):
+        raise web.HTTPBadRequest(text=f"The account alias {prepared['label']} has no {shown} folder")
+    return {variable: prepared[field]}
+
+
+def with_account(command, environment):
+    """The launch line run with the alias's variable: ``env VAR=folder command`` (ptyhost only forwards MESH_*
+    names; ``env`` because csh and tcsh refuse ``VAR=value command``)."""
+    if not environment:
+        return command
+    return "env " + " ".join(f"{name}={shlex.quote(value)}" for name, value in environment.items()) + " " + command
+
+
 async def _pi_runtime():
     try:
         return await asyncio.to_thread(pimcp.prepare, CONF_DIR)
@@ -664,7 +793,8 @@ async def _send_new(request):
 
 
 async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, pi_runtime=None,
-                      notice=None, vibe=None, opencode=None, exact=False, nonce=None, conversation=None):
+                      notice=None, vibe=None, opencode=None, exact=False, nonce=None, conversation=None,
+                      account=None):
     """Start a session. Every way to start one ends here ("New session", a
     conversation resumed from the history, a restored session, an agent moved
     in from another terminal, a restart), so workspace_roots is applied here.
@@ -674,11 +804,13 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
     its probe (``opencode debug config``) is run once per launch.
     ``exact``: the name is ``base`` or nothing (409 when taken), never a suffixed one.
     ``nonce``: the session nonce, when the caller recorded it before the creation (exact restore).
-    ``conversation``: (agent, id, evidence) of the conversation the command launches (_send_launch)."""
+    ``conversation``: (agent, id, evidence) of the conversation the command launches (_send_launch).
+    ``account``: the operator's alias whose folder the agent runs with (account_environment), None: the default."""
     if not LAUNCH_SETTINGS.allows_cwd(cwd):
         raise web.HTTPForbidden(text=OUTSIDE_WORKSPACE_ROOTS)
     if known_agent == "gemini" and _is_home_directory(cwd):
         raise web.HTTPBadRequest(text=GEMINI_IN_HOME)
+    account_env = await account_environment(account, known_agent if command else None)
     if exact:
         if any(s.get("name") == base for s in await host({"op": "list"})):
             raise web.HTTPConflict(text=NAME_TAKEN)
@@ -699,9 +831,11 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
     nonce = nonce or sessiontoken.new_nonce()
     if known_agent == "claude" and command:
         command = await asyncio.to_thread(claudewake.launch_command, command, nonce, CLAUDE_WAKE_DIR,
-                                          cwd, ptyhost.clean_env())
+                                          cwd, ptyhost.clean_env(account_env))
+    command = with_account(command, account_env)
     env = {"MESH_SESSION": name, "MESH_SESSION_TOKEN": sessiontoken.issue(name, nonce), **_mesh_reach_env()}
-    meta = {"agent": agent, "known_agent": known_agent, "nonce": nonce, **({"notice": notice} if notice else {})}
+    meta = {"agent": agent, "known_agent": known_agent, "nonce": nonce, **({"notice": notice} if notice else {}),
+            **({"account": account} if account_env else {})}
     if vibe and vibe.hooks:
         meta["vibe_hooks"] = vibe.hooks
     await _send_launch({"op": "new", "name": name, "cwd": cwd, "command": command, "env": env, "meta": meta},
@@ -858,6 +992,12 @@ def _mesh_order(d):
     return d["rank"] is not None, d["rank"] if d["rank"] is not None else -d["created"]
 
 
+def _account_fields(session):
+    """A listed session's alias and its label (shown on the row and the pane header), or nothing."""
+    account = session_account(session)
+    return {"account": account, "account_label": account_label(account)} if account else {}
+
+
 def list_sessions(mesh_raw, listed=True):
     with discover.listing_scope():      # one codex process scan for the whole listing
         return _list_sessions(mesh_raw, listed)
@@ -876,7 +1016,7 @@ def _list_sessions(mesh_raw, listed):
         d.update(id=s["name"], name=s["name"], kind="mesh", created=s["created"],
                  attached=s["attached"], activity=s["activity"],
                  known_agent=known_agent if known_agent in AGENT_TYPES else None,
-                 notice=_session_notice(s),
+                 notice=_session_notice(s), **_account_fields(s),
                  **org["sessions"][s["name"]])
         if d["notice"]:     # launched bare: no state, no conversation, nothing to resume or restore
             d["agent"] = None
@@ -1255,6 +1395,7 @@ class SessionsState:
             rows.append({"id": s["name"], "name": s["name"], "kind": "mesh", "created": s["created"], "pid": s["pid"],
                          "cwd": s["cwd"], "cmd": entry["cmd"] or "", "attached": s["attached"], "activity": s["activity"],
                          "known_agent": kind if kind in AGENT_TYPES else None, "notice": notice, "agent": agent or None,
+                         **_account_fields(s),
                          "ready": False, **org["sessions"][s["name"]]})
         self.publish(self.live([*self._attached(raw), *self.rows.values(), *rows]), self.top or {
             "external": [], "folders": org["folders"], "home": str(Path.home()), "restorable": [],
@@ -2204,13 +2345,16 @@ async def api_new(request):
     if name and not NAME_RE.fullmatch(name):
         raise web.HTTPBadRequest(text="Invalid name (letters, digits, - and _)")
     agent = launchplan.agent_type(kind) if kind in AGENT_PRESETS else None
+    account = body.get("account") or None
+    if account is not None and not (isinstance(account, str) and ACCOUNT_ID_RE.fullmatch(account)):
+        raise web.HTTPBadRequest(text=ACCOUNT_UNKNOWN)
     conversation = None
     if agent:
         argv, conversation = _chosen_launch(agent, AGENT_PRESETS[kind])
         command = shlex.join(argv)
     name = await new_session(name or f"{Path(cwd).name}-{kind if kind != 'custom' else 'cmd'}",
                              cwd, command, agent if agent in RESUMABLE_AGENT_PRESETS else None,
-                             agent, conversation=conversation)
+                             agent, conversation=conversation, account=account)
     await _record_recent_folder(request, cwd)
     return web.json_response({"id": name})
 
@@ -2264,11 +2408,12 @@ def _not_relaunched_line(agent, reason):
     return shlex.join(["printf", "%s\\n", f"Session Mesh: {agent['type']} not relaunched: {NOT_RELAUNCHED[reason][1]}"])
 
 
-def _conversation_missing(kind, sid):
+def _conversation_missing(kind, sid, account=None):
     """Whether the conversation is known to be gone: no Claude transcript, no Codex rollout of that id.
     Pi and OpenCode are checked when their launch line is built; the others are not checked. Claude's and
     Codex's data folders are looked for in ``$CLAUDE_CONFIG_DIR`` and ``$CODEX_HOME`` (absolute) and in
-    the home folder; with none of them present, nothing is known to be gone."""
+    the home folder; with none of them present, nothing is known to be gone. A session of an alias
+    (``account``) is looked for in that alias's folder only: never in the default account's."""
     layout = {"claude": ("CLAUDE_CONFIG_DIR", ".claude", "projects", ("*", f"{sid}.jsonl")),
               "codex": ("CODEX_HOME", ".codex", "sessions", ("*", "*", "*", f"rollout-*-{sid}.jsonl"))}.get(kind)
     if layout is None:
@@ -2277,6 +2422,9 @@ def _conversation_missing(kind, sid):
     configured = os.environ.get(variable) or ""
     roots = [configured] if os.path.isabs(configured) else []
     folders = [os.path.join(root, data) for root in [*roots, os.path.join(discover.HOME, default)]]
+    if account is not None:
+        folder = account_folder(account, kind)
+        folders = [os.path.join(folder, data)] if folder else []
     present = [folder for folder in folders if os.path.isdir(folder)]
     return bool(present) and not any(os.path.isfile(match) for folder in present   # a dangling link is no transcript
                                      for match in glob.glob(os.path.join(glob.escape(folder), *pattern)))
@@ -2291,7 +2439,7 @@ def _restore_identity(entry):
     """respawn.restore_identity, then the conversation looked for on disk (blocking: run it in a worker)."""
     entry, reason = respawn.restore_identity(entry)
     agent = entry["agent"]
-    if agent and agent["session_id"] and _conversation_missing(agent["type"], agent["session_id"]):
+    if agent and agent["session_id"] and _conversation_missing(agent["type"], agent["session_id"], entry.get("account")):
         return {**entry, "agent": {**agent, "session_id": None}}, "not found"
     return entry, reason
 
@@ -4174,6 +4322,8 @@ async def api_config(request):
     if request.query:
         raise web.HTTPBadRequest()
     report = await asyncio.to_thread(config_report, public_origin(request), await _config_host())
+    await declared_accounts()
+    report["accounts"] = accounts_projection()
     report["elevation"] = {"active": (left := elevation_seconds_left(request)) > 0, "seconds_left": left,
                            "duration": ELEVATION_SECONDS}
     return web.json_response(report, headers={"Cache-Control": "no-store"})
@@ -4540,7 +4690,8 @@ async def _create_restored(name, entry, running, reason=None):
         command = shlex.join(_resume_argv(agent)) if resumable else _not_relaunched_line(agent, reason)
         new = await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
                                 agent["type"] if resumable else None, keep=48,
-                                conversation=_restored_conversation(agent) if resumable else None)
+                                conversation=_restored_conversation(agent) if resumable else None,
+                                account=entry.get("account") if resumable else None)
     except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, GeminiSettingsRefused) as e:
         return None, {"ok": False, "error": e.text}
     except (CreationUncertain, asyncio.CancelledError):   # sent, outcome unknown: the agent may still start
@@ -4607,6 +4758,7 @@ async def _complete_restored(name, entry, new, resumable, reason=None):
 
 async def api_restore(request):
     body = await json_object(request)
+    await declared_accounts()   # the folders a restored alias session is looked for in
     if "expected" in body:
         expected = _expected_body(body)
         return web.json_response({"results": {expected["name"]: await restore_exact(request.app, expected)}})
@@ -4695,7 +4847,8 @@ async def _create_exact(name, entry, nonce):
         command = shlex.join(_resume_argv(agent)) if resumable else None
         await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
                           agent["type"] if resumable else None, keep=48, exact=True, nonce=nonce,
-                          conversation=_restored_conversation(agent) if resumable else None)
+                          conversation=_restored_conversation(agent) if resumable else None,
+                          account=entry.get("account") if resumable else None)
     except CreationUncertain:
         raise
     except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, web.HTTPServiceUnavailable) as e:
@@ -5304,6 +5457,7 @@ def make_app(*, session_request_path=None):
         lambda: _agent_wake_live(app["pi_wakes"], app["event_state"], app["claude_wakes"], app["codex_wakes"]),
         wake_notify)
     app.on_startup.append(start_agent_wakes)
+    app.on_startup.append(lambda _app: declared_accounts())   # the labels of the listing's alias sessions
     app.on_cleanup.append(stop_agent_wakes)
     app.on_startup.append(start_watcher)
     app.on_shutdown.append(close_sockets)

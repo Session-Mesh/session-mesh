@@ -1761,6 +1761,7 @@ class Pane {
       unread: !!(mesh && s && lastSeen(s) > (seen[s.id] ?? seenSince ?? Infinity) + 1),
       boardModified: !!(mesh && boardModified.has(this.id)),
     });
+    showAccountBadge($(".p-account", this.el), mesh ? s : null);
     // Only a session launched as a messaging agent has a mailbox; a plain shell does not.
     $('[data-act="compose"]', this.el).hidden = !mesh || !localMeshEffectsAllowed() || !MeshPaneActions.hasMailbox(s);
     $('[data-act="compose"]', this.el).disabled = !localMeshEffectsAllowed();
@@ -3392,6 +3393,19 @@ function pinnedHtml(query) {
     }).join("")) + `</section>`;
 }
 
+// The operator's account alias a session runs with (accounts.json on the runner): its label, as text, never a colour alone.
+const accountLabel = (s) => (typeof s?.account === "string" && s.account ? String(s.account_label || s.account).slice(0, 24) : "");
+function accountBadgeHtml(s) {
+  const shown = accountLabel(s);
+  return shown ? `<span class="account-badge" title="${esc(t("list.accountTitle", { label: shown }))}">${esc(shown)}</span>` : "";
+}
+function showAccountBadge(element, s) {
+  const shown = accountLabel(s);
+  element.hidden = !shown;
+  element.textContent = shown;
+  element.title = shown ? t("list.accountTitle", { label: shown }) : "";
+}
+
 function itemHtml(s, opts = {}) {
   const a = s.agent;
   // A Mesh-launched CLI can be known even when it has no transcript/status or
@@ -3411,7 +3425,7 @@ function itemHtml(s, opts = {}) {
   const preview = mine ? a.said || a.last : a?.last;
   const rowBadge = rowSt === "ready" ? "" : `<span class="row-state ${rowSt}">${esc(t(`sessions.row.${rowSt}`))}</span>`;
   const row = `<button class="item ${here ? "sel" : shown ? "shown" : ""}${s.folder ? " in-folder" : ""}${mine ? ` ${st}` : ""}${rowSt === "ready" ? "" : ` row-${rowSt}`}" data-id="${esc(s.id)}"${opts.todo ? "" : drag}>
-    <div class="top"><span class="dot ${rowSt === "ready" ? st : "pending"}" aria-hidden="true"></span><span class="name">${esc(label(s))}</span>${changed ? `<span class="board-badge" aria-label="${esc(t("list.boardModified"))}" title="${esc(t("list.boardModified"))}"></span>` : ""}${s.pending ? `<span class="tag" title="${esc(t("list.pendingRestart"))}">⏳</span>` : ""}${s.wake_unconfirmed === true ? `<span class="tag wake-unconfirmed" role="img" aria-label="${esc(t("list.wakeUnconfirmed"))}" title="${esc(t("list.wakeUnconfirmed"))}">✉?</span>` : ""}${questionBadgeHtml(s)}${tag}<span class="ago">${esc(ago(lastSeen(s)))}</span></div>
+    <div class="top"><span class="dot ${rowSt === "ready" ? st : "pending"}" aria-hidden="true"></span><span class="name">${esc(label(s))}</span>${accountBadgeHtml(s)}${changed ? `<span class="board-badge" aria-label="${esc(t("list.boardModified"))}" title="${esc(t("list.boardModified"))}"></span>` : ""}${s.pending ? `<span class="tag" title="${esc(t("list.pendingRestart"))}">⏳</span>` : ""}${s.wake_unconfirmed === true ? `<span class="tag wake-unconfirmed" role="img" aria-label="${esc(t("list.wakeUnconfirmed"))}" title="${esc(t("list.wakeUnconfirmed"))}">✉?</span>` : ""}${questionBadgeHtml(s)}${tag}<span class="ago">${esc(ago(lastSeen(s)))}</span></div>
     <div class="meta">${rowBadge}${stText}${esc(where)}</div>
     ${s.notice === "opencode-unsupported" ? `<div class="last">${esc(t("list.opencodeUnsupportedNotice"))}</div>` : ""}
     ${s.notice === "opencode-unreadable" ? `<div class="last">${esc(t("list.opencodeUnreadableNotice"))}</div>` : ""}
@@ -7243,12 +7257,32 @@ async function openNew() {
   renderFolderList();
   const [listed, config] = await Promise.allSettled([readJson("/api/dirs"),   // the moved folders are in the config's answer
     moveRecentFoldersToRunner().then(() => readJson("/api/config", { cache: "no-store" }))]);
+  fillAccounts(config.status === "fulfilled" && Array.isArray(config.value?.accounts) ? config.value.accounts : []);
   folderField.roots = config.status === "fulfilled" ? MeshFolderState.workspaceRoots(config.value) : [];
   const recent = (config.status === "fulfilled" && MeshFolderState.runnerRecentFolders(config.value)) || [];
   folderField.known = knownFoldersFrom(listed.status === "fulfilled" && Array.isArray(listed.value) ? listed.value : [], folderField.roots, recent);
   renderFolderList();   // keeps what was typed while the requests were pending
 }
 window.openNew = openNew;
+
+// The "Account" choice: shown only when the operator declared aliases on the runner, for Claude and Codex only;
+// the last alias chosen on this device is chosen again. The page sends an alias id, never a folder.
+const ACCOUNT_PRESETS = { claude: "claude", codex: "codex", "codex-yolo": "codex" };
+let newAccounts = [];
+function fillAccounts(accounts) {
+  newAccounts = accounts.filter((a) => typeof a?.id === "string" && typeof a?.label === "string");
+  const select = form.account, last = store.get("account", "");
+  select.replaceChildren(new Option(t("new.accountDefault"), ""),
+    ...newAccounts.map((a) => new Option(a.label.slice(0, 24), a.id)));
+  select.value = newAccounts.some((a) => a.id === last) ? last : "";
+  syncAccountChoice();
+}
+function syncAccountChoice() {
+  const agent = ACCOUNT_PRESETS[form.preset.value];
+  $("#new-account-row").hidden = !newAccounts.length;
+  form.account.disabled = !newAccounts.length || !agent;
+  for (const option of form.account.options) option.disabled = !!option.value && !!agent && !newAccounts.find((a) => a.id === option.value)?.[agent];
+}
 
 // The recent folders were kept in this browser before they became a runner setting (recorded by the server when a
 // session starts, shared by every device). The list kept here is sent once, then removed from this browser; it is
@@ -7357,7 +7391,7 @@ folderList.addEventListener("click", (e) => {
 });
 dlg.addEventListener("close", () => folderSuggester.reset());   // no pending timer or answer after the dialog closes
 $("#btn-new").addEventListener("click", () => { if (projecting) projectsController?.create(); else openNew(); });
-form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; });
+form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; syncAccountChoice(); });
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const body = Object.fromEntries(new FormData(form));
@@ -7365,6 +7399,7 @@ form.addEventListener("submit", async (e) => {
   if (!r.ok) { $("#new-err").textContent = serverText(await r.text()); return; }
   const { id } = await r.json();
   store.set("preset", body.preset);
+  if (!form.account.disabled) store.set("account", body.account || "");
   if (body.preset === "custom") store.set("command", body.command || "");   // the folder: recorded by the server
   dlg.close();
   await refresh();

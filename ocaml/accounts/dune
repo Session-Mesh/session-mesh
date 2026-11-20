@@ -1,0 +1,6 @@
+; Agent account aliases declared by the operator (accounts.json): validated
+; here, used by `mesh-platform accounts` for the web server.
+
+(library
+ (name mesh_accounts)
+ (libraries unix yojson mesh_safe_file))

@@ -47,7 +47,7 @@ let usage =
   "usage: mesh-platform capabilities | runtime-dir | snapshot | process PID | \
    command-line PID | require isolated-agent|demo-sandbox | update-check \
    [--refresh] [--cache-only] [--line] [--debug] [--release-dir DIR] | \
-   update-image"
+   update-image | accounts list FILE | accounts prepare FILE ID"
 
 let ex_config = 78
 
@@ -332,7 +332,55 @@ let update_image () =
     0;
   0
 
+(* [accounts list FILE] prints {"accounts": [...]} (Mesh_accounts.to_json) once
+   the operator's file and every folder it declares are valid; [accounts
+   prepare FILE ID] also creates that account's missing folders (mode 0700)
+   and prints {"account": {...}}. A refusal exits 1 with {"kind": "accounts",
+   "error": "..."}: the web server then offers no alias. *)
+let accounts_failure message =
+  print_error ("mesh-platform: " ^ message);
+  print_json
+    (`Assoc [ ("kind", `String "accounts"); ("error", `String message) ]);
+  1
+
+let accounts_list file =
+  match Mesh_accounts.load ~uid:(Unix.geteuid ()) file with
+  | Ok accounts ->
+      print_json
+        (`Assoc
+           [ ("accounts", `List (List.map Mesh_accounts.to_json accounts)) ]);
+      0
+  | Error message -> accounts_failure message
+
+let accounts_prepare file id =
+  let uid = Unix.geteuid () in
+  match Mesh_accounts.load ~uid file with
+  | Error message -> accounts_failure message
+  | Ok accounts -> (
+      match
+        List.find_opt (fun (a : Mesh_accounts.account) -> a.id = id) accounts
+      with
+      | None -> accounts_failure "unknown account"
+      | Some account -> (
+          let folders =
+            List.filter_map Fun.id
+              [ account.claude_config_dir; account.codex_home ]
+          in
+          match
+            List.fold_left
+              (fun result folder ->
+                Result.bind result (fun () ->
+                    Mesh_accounts.prepare_directory ~uid folder))
+              (Ok ()) folders
+          with
+          | Ok () ->
+              print_json (`Assoc [ ("account", Mesh_accounts.to_json account) ]);
+              0
+          | Error message -> accounts_failure message))
+
 let run = function
+  | [ "accounts"; "list"; file ] -> accounts_list file
+  | [ "accounts"; "prepare"; file; id ] -> accounts_prepare file id
   | "update-check" :: options -> update_check options
   | [ "update-image" ] -> update_image ()
   | [ "require"; name ] -> with_feature name (require_feature name)

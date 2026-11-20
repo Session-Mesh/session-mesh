@@ -1575,6 +1575,85 @@ not start when the variable names a missing, malformed or symbolic-link file (th
 `journalctl --user -u session-mesh`). `python3 launchsettings.py`, run from the checkout with the
 same variable set, prints the settings as the server reads them.
 
+## Account aliases: separate Claude and Codex accounts
+
+An account alias lets a session run Claude or Codex under another login than your usual one, for
+example a work account beside a personal one. An alias has an id, a label and up to two folders: a
+Claude configuration folder (given to Claude as `CLAUDE_CONFIG_DIR`) and a Codex home (given to
+Codex as `CODEX_HOME`). A session started without an alias, and every session when no alias is
+declared, runs exactly as before.
+
+Each folder holds that account's own login, settings, history and conversations: a conversation
+started under an alias is not in the default account's history, and the reverse. Mesh never reads,
+copies, logs or shows what is in these folders; it checks the folders and passes their paths to
+the agent.
+
+### Declaring aliases
+
+Write `accounts.json` in the Mesh configuration folder (`~/.config/session-mesh/`, or
+`$MESH_CONF_DIR`) on the runner, by hand:
+
+```json
+{"v": 1, "accounts": [
+  {"id": "work", "label": "Atacama",
+   "claude_config_dir": "/home/USER/.agent-accounts/work/.claude",
+   "codex_home": "/home/USER/.agent-accounts/work/.codex"},
+  {"id": "perso", "label": "Perso", "codex_home": "/home/USER/.agent-accounts/perso/.codex"}]}
+```
+
+- `id`: 1 to 32 characters among `a-z`, `0-9` and `-`; `default` is reserved.
+- `label`: what the session list and the pane header show, 1 to 24 characters.
+- `claude_config_dir`, `codex_home`: at least one. An absolute path made of `A-Z a-z 0-9 . _ + @ / -`
+  only (it is written on the agent's command line), with no symbolic link in it. An existing
+  folder must be yours and not writable by group or others; a missing one is created with mode
+  0700 at the first launch, if its parent exists and is yours.
+
+The file is checked by `mesh-platform accounts list ~/.config/session-mesh/accounts.json`, which
+prints the aliases as Mesh reads them, or why the file is refused. An invalid file offers no alias
+at all (the reason is in `journalctl --user -u session-mesh`). The web server reads the file again
+when it changes, the next time the New session dialog opens: no restart is needed.
+
+Do not point an alias at a folder made of symbolic links into `~/.claude`: Claude keeps the
+account's identity in `.claude.json` inside the folder, and a shared file would switch every
+account at the next login.
+
+### Logging in once per account
+
+Mesh does not handle logins. Log in once per alias, in any terminal on the runner (a Mesh shell
+session works):
+
+```sh
+CLAUDE_CONFIG_DIR=/home/USER/.agent-accounts/work/.claude claude    # then /login, and /exit
+CODEX_HOME=/home/USER/.agent-accounts/work/.codex codex login
+```
+
+Create the folders first (`mkdir -p -m 700 ...`) if no session has used the alias yet. `claude`
+then `/status`, or `codex login status`, run with the same variable, shows which account the folder
+holds.
+
+### Using an alias
+
+When at least one alias is declared, New session shows an **Account** choice for Claude and Codex.
+The browser remembers the last alias chosen on that device. A session started with an alias shows
+its label as a badge on its row in the session list and in its pane header. The alias is fixed
+when the session starts; to change it, start another session.
+
+The page only sends the alias id; the folders stay on the runner. A launch is refused, never moved
+to the default account, when the alias is unknown, has no folder for that agent, or is chosen for
+a shell, a custom command or another agent.
+
+A restore after a PTY host restart keeps the alias: the conversation is looked for in the alias's
+folder only, and the agent is relaunched with it. If the alias was removed from `accounts.json`
+meanwhile, the restore of that session is refused.
+
+Limits of this version:
+
+- The variable is set on the agent's command line, not in the session's shell: after the agent
+  exits, a `claude` typed in the same pane runs under the default account.
+- The history panel, "Resume" from the history, and moving in an agent running in another terminal
+  only know the default account's folders.
+- Waking Codex with `codex queue` (below) reaches the default Codex home, not an alias's.
+
 ## Debugging the agent hook
 
 Claude Code sessions started by the mesh report their state (busy, waiting, finished) through the

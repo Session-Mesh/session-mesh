@@ -29,7 +29,8 @@ or restored, since it may have gone since.
 
     entry = {"name", "cwd", "created", "agent": None | {"type", "session_id", "argv"},
              "cmd": None | "<foreground command, shown only>", "lost_at": None | float,
-             "org": {"label": None | str, "folder": None | str, "rank": None | int}}
+             "org": {"label": None | str, "folder": None | str, "rank": None | int},
+             "account": "<alias id>" (only for a session started with an operator's account alias)}
 
 "org" is the session's label, folder and rank as organize.view showed them while it lived. organize
 forgets a session as soon as ptyhost no longer lists it, so a restart wipes mesh.json's sessions at
@@ -55,6 +56,7 @@ FILE = meshpaths.CONF_DIR / "sessions-snapshot.json"
 NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,48}")
 SID_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{7,63}")   # never an option: it ends up in argv
 NONCE_RE = re.compile(r"[0-9a-f]{32}")                    # sessiontoken.new_nonce()
+ACCOUNT_RE = re.compile(r"[a-z0-9-]{1,32}")               # an operator's alias id (server.ACCOUNT_ID_RE)
 HOST_RE = re.compile(r"[0-9]{1,10}:[0-9]{1,20}")         # ptyhost.host_identity(): pid:start ticks
 AGENT_TYPES = ("claude", "codex", "pi", "opencode", "gemini", "agy", "copilot", "vibe")
 SHELL_KIND = "shell"        # the agent_kind of an offer with no agent
@@ -113,6 +115,9 @@ def valid_entry(raw):
     entry = {"name": name, "cwd": cwd, "created": raw["created"], "agent": agent,
              "cmd": organize.clean(cmd) or None if cmd is not None else None, "lost_at": lost_at,
              "org": valid_org(raw.get("org"))}
+    account = raw.get("account")    # the operator's alias the agent ran with (server.account_environment)
+    if isinstance(account, str) and ACCOUNT_RE.fullmatch(account):
+        entry["account"] = account
     marker = _valid_marker(raw.get("restoring"))   # set by begin_restoring only; absent otherwise
     if marker:
         entry["restoring"] = marker
@@ -182,7 +187,8 @@ def entry_of(session):
                                    "started": agent.get("started")}
     return valid_entry({"name": session.get("name"), "cwd": session.get("cwd"), "created": session.get("created"),
                         "agent": kept, "cmd": None if agent else _running(session.get("cmd")), "lost_at": None,
-                        "org": {key: session.get(key) for key in ("label", "folder", "rank")}})
+                        "org": {key: session.get(key) for key in ("label", "folder", "rank")},
+                        "account": session.get("account")})
 
 
 def public(entries, registry=None):
