@@ -611,10 +611,15 @@ setting: the server keeps it in `settings.json` of the configuration folder (`ME
 every device signed in to this runner shows the same name; the page reads it through the
 configuration API each time Projects opens, and at once after a save. Saving asks for the master
 token when editing is not unlocked yet, as the launch settings do; it works without a launch
-settings file. The name is trimmed, holds at most 40 characters and no control, invisible or
-bidirectional character; an empty name, or one that cannot be read, gives the wording without a
-name. The page shows it as text only and never sends it anywhere else: it is not written to the
-project tracker.
+settings file. Editing unlocked this way serves that one save and is locked again right after it;
+editing you had already unlocked from the launch settings stays unlocked. The name is normalised
+to NFC and trimmed, then holds at most 40 characters (counted as Unicode code points), no control,
+invisible, filler or bidirectional character, and at most three combining marks in a row; an
+empty name, or one that cannot be read, gives the wording without a name. The page shows it as
+text only, isolated from the direction of the sentence around it, and never sends it anywhere
+else: it is not written to the project tracker. In French, "de" becomes "d'" before a vowel, an
+"h" (taken as mute, as in most first names: "d'Hélène") and a "y" followed by a consonant
+("d'Yves", but "de Yann").
 
 The port, listen address, trusted proxy and notification settings live in the server's environment
 and stay read-only, as do the system folders. Each read-only value says where it is stored and
