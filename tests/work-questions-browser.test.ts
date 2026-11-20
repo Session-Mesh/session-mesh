@@ -142,6 +142,19 @@ const card = (scope: Locator | Page, id: string): Locator => scope.locator(`[dat
 const badge = (page: Page): Promise<string | null> => page.locator('#btn-projects .projects-question-badge')
   .evaluate((node: HTMLElement) => (node.hidden ? null : node.textContent));
 
+// app.js script-scope binding, read inside page functions.
+declare const sessionMarker: { openQuestions: () => number | null } | null;
+
+/** After a failed read of the view the badge shows no number the view did not read: nothing, or (once the session
+ *  marker, told of the failure, has read the tracker again) the count the marker read. */
+async function onlyReadCount(page: Page): Promise<void> {
+  const [shown, read] = await page.evaluate(() => [
+    (document.querySelector('#btn-projects .projects-question-badge') as HTMLElement).hidden
+      ? null : document.querySelector('#btn-projects .projects-question-badge')!.textContent,
+    sessionMarker?.openQuestions() ?? null]);
+  assert.ok(shown === null || shown === String(read), `badge ${shown}, marker ${read}`);
+}
+
 /** The open questions of the tracker now, as the reader counts them (other tests may have answered some). */
 async function openCount(page: Page): Promise<number> {
   return page.evaluate(async () => (await (await fetch('/api/work/v1', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -305,7 +318,12 @@ describe('open questions in the Projects view', { skip }, () => {
     const error = page.locator('.work-entry-questions .work-error[data-kind="busy"]');
     await error.waitFor();
     assert.ok(await page.locator('.work-entry-project', { hasText: 'Delivery rollout' }).count() > 0, 'the products are shown');
-    assert.equal(await badge(page), null, 'no number that was not read');
+    await onlyReadCount(page);
+    // The view's failure is news for the session marker: it reads at once, and its read writes the count even
+    // though its own markers did not change.
+    await page.waitForFunction(() => !(document.querySelector('#btn-projects .projects-question-badge') as HTMLElement).hidden,
+      undefined, { timeout: 15_000 });
+    await onlyReadCount(page);
     fail = false;
     await error.getByRole('button', { name: 'Try again' }).click();
     await page.locator('.work-entry-questions .work-qcard').first().waitFor();
@@ -354,7 +372,7 @@ describe('open questions in the Projects view', { skip }, () => {
     assert.equal(await error.count(), 1, 'the failed re-read says so, with a retry');
     assert.equal(await card(page, 'N-0000c0c5').getByLabel('Your answer').inputValue(), 'precious draft', 'the cards stay');
     assert.equal(await card(page, 'N-0000c0ca').count(), 0, 'the answered question left the list');
-    assert.equal(await badge(page), null, 'no number that was not read');
+    await onlyReadCount(page);
     failResume = false;
     await error.getByRole('button', { name: 'Try again' }).click();
     await error.waitFor({ state: 'detached' });

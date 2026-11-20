@@ -21,6 +21,8 @@ const RENDERERS: Readonly<Record<TabKey, (ctx: ViewContext, doc: ProjectDoc) => 
 
 export type ProjectView = Readonly<{
   root: HTMLElement;
+  /** The project's title, as the header shows it. */
+  title: string;
   detailSlot: HTMLElement;
   showDetail: (open: boolean) => void;
   activate: (key: TabKey, focus: boolean) => void;
@@ -68,7 +70,9 @@ function nextTab(key: TabKey, event: KeyboardEvent): TabKey | null {
 /** The context of a panel: the Questions tab gets its own prefix of answer form ids (the sheet may show the same question). */
 const panelContext = (ctx: ViewContext, key: TabKey): ViewContext => (key === 'questions' ? { ...ctx, answerScope: 'tab-' } : ctx);
 
-export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial: TabKey, back: () => void): ProjectView {
+/** `onTab` hears each tab shown, the first one included (the sheet's way back names the tab it returns to). */
+export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial: TabKey, back: () => void,
+  onTab?: (key: TabKey) => void): ProjectView {
   let doc = initialDoc;
   const root = el('div', 'work-project');
   const tabs = el('div', 'work-tabs');
@@ -88,6 +92,7 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
     }
     if (!built.has(key)) build(key);
     if (focus) buttons.get(key)!.focus();
+    onTab?.(key);
   };
   for (const [key, node] of buttons) {
     node.addEventListener('click', () => activate(key, false));
@@ -106,6 +111,7 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
   if (doc.truncated) root.append(notice('work-omitted', ctx.t('work.projectTruncated')));
   root.append(split);
   activate(initial, false);
+  const title = doc.project.title;
   const replaceDoc = (next: ProjectDoc): void => {
     doc = next;
     // The Questions panel holds the owner's unsent answers: once built it is rebuilt now, even when hidden, so that
@@ -116,6 +122,6 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
     if (keepQuestions) build('questions');
     activate(currentKey, false);
   };
-  return { root, detailSlot, current: () => currentKey, activate, replaceDoc, panel: key => panels.get(key)!,
+  return { root, title, detailSlot, current: () => currentKey, activate, replaceDoc, panel: key => panels.get(key)!,
     showDetail: open => { detailSlot.hidden = !open; split.classList.toggle('detail-open', open); } };
 }

@@ -3247,7 +3247,8 @@ function saveLayout() {
   // selected column, so it must not trump workspace.v1 on reload.  A different
   // hash is an intentionally opened, shareable layout and still takes priority.
   store.set("workspace.hash", localHash);
-  history.replaceState(null, "", localHash ? localHash : location.pathname);
+  // The state of the entry stays: the Projects view marks its entries (static/work-nav.ts).
+  history.replaceState(history.state, "", localHash ? localHash : location.pathname);
 }
 
 $("#btn-split").addEventListener("click", () => {
