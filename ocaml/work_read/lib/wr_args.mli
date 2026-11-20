@@ -23,6 +23,7 @@ type command =
       (** [all]: also the [todo] section *)
   | Sessions_of of target
   | Session_questions  (** the open questions of each session, by name *)
+  | Ids  (** every task, project and question id with its title, for references *)
 
 val parse : string list -> (command, Work_mcp.Work_err.t) result
 (** The arguments after the program name. *)

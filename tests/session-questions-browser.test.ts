@@ -206,7 +206,9 @@ describe('the session marker', { skip }, () => {
     await page.waitForFunction(() => document.querySelector('#list .item[data-id="qa-linked"]') !== null);
     await page.waitForFunction(() => sessionMarker !== null, undefined, { timeout: 60_000 });
     await page.waitForTimeout(10_000);
-    assert.deepEqual(sent, ['session-questions'], 'one request, refused, then none');
+    // The terminal references read their ids once too (static/work-references.ts), refused the same way.
+    assert.deepEqual(sent.filter(op => op !== 'ids'), ['session-questions'], 'one request, refused, then none');
+    assert.ok(sent.filter(op => op === 'ids').length <= 1, 'the ids are not asked again');
     assert.equal(await page.locator('#list .question-badge').count(), 0);
     await openSession(page, 'qa-linked');
     assert.equal(await headerButton(page).isHidden(), true);

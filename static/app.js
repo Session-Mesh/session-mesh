@@ -32,6 +32,8 @@ function localActionUnavailable() {
 // that both read through the same page slots; and the session marker (see tickSessionMarker).
 let workModule = null;
 let sessionMarker = null;
+// The known tracker ids behind the T-, P- and N- references of the terminals (see tickReferences).
+let references = null;
 
 const $ = (s, root = document) => root.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -571,11 +573,12 @@ class Pane {
     t.registerLinkProvider({
       provideLinks: (y, cb) => {
         const links = [];
-        for (const { text: path, start, end, kind } of MeshTerminalLinks.linksOnRow(t.buffer.active, y - 1, t.cols)) {
+        for (const { text: path, start, end, kind } of terminalLinksOnRow(t.buffer.active, y - 1, t.cols)) {
           links.push({
             range: { start: { x: start[1] + 1, y: start[0] + 1 }, end: { x: end[1] + 1, y: end[0] + 1 } },
             text: path,
             activate: (e) => followLink(kind, path, e, this),
+            ...(kind === "ref" ? { hover: () => this.showReferenceTitle(path), leave: () => this.showReferenceTitle(null) } : {}),
           });
         }
         cb(links);
@@ -622,8 +625,10 @@ class Pane {
     }
     this.wireToBottom();
     this.termEl.addEventListener("mousemove", (e) => {
-      const over = t.modes.mouseTrackingMode !== "none" && !!this.linkAt(e);
-      this.termEl.classList.toggle("over-link", over);
+      if (t.modes.mouseTrackingMode === "none") return void this.termEl.classList.remove("over-link");
+      const link = this.linkAt(e);
+      this.termEl.classList.toggle("over-link", !!link);
+      this.showReferenceTitle(link?.kind === "ref" ? link.text : null);
     });
     // Mouse reports in xterm's default encoding come here, not through onData: dropped, as
     // there, while a replay (or a previous session's output) is parsed, since the modes
@@ -1132,9 +1137,15 @@ class Pane {
     const row = Math.floor((e.clientY - box.top) / (box.height / t.rows));
     if (col < 0 || row < 0 || col >= t.cols || row >= t.rows) return null;
     const y = t.buffer.active.viewportY + row;
-    const hit = MeshTerminalLinks.linksOnRow(t.buffer.active, y, t.cols)
+    const hit = terminalLinksOnRow(t.buffer.active, y, t.cols)
       .find((l) => MeshTerminalLinks.cellIn([y, col], l.start, l.end));
     return hit || null;
+  }
+
+  // The title of a tracker reference under the pointer (text only, from the cache of known ids), or none.
+  showReferenceTitle(id) {
+    const label = id ? referenceLabel(id) : "";
+    if (label) this.termEl.title = label; else this.termEl.removeAttribute("title");
   }
 
   // Newline without submitting. Each TUI reads a different sequence:
@@ -2140,6 +2151,7 @@ function sessionBases(id) {
 // A clicked path in a terminal: a directory opens the file tree, anything else
 // the side panel (Ctrl/Cmd: a new tab).
 function followLink(kind, text, e, pane) {
+  if (kind === "ref") return openReference(text);
   if (kind === "url") return openExternalTab(text);
   const base = sessionBases(pane.id);
   if (kind === "dir") return openTree(text, base);
@@ -4553,6 +4565,7 @@ async function loadLocalInventory(signal, attempt) {
   if (!localMeshEffectsAllowed()) return { kind: "failed", status: null };
   if (response.status === 401) {
     forgetKnownSessions();
+    references?.stop();   // the credential is gone: forget the known ids
     location.href = "/login";
     return { kind: "refused" };
   }
@@ -4711,6 +4724,7 @@ function applyInventorySnapshot(issue, { next, identities }) {
     pollWatched();
     pollHistory();
     tickSessionMarker();
+    tickReferences();
   }
   return { portfolio: data.portfolio };
 }
@@ -5644,6 +5658,47 @@ function tickSessionMarker() {
     sessionMarker.tick();
   }, () => { sessionMarkerRetryAt = Date.now() + 60_000; }).finally(() => { sessionMarkerLoading = false; });
 }
+// The T-, P- and N- references of the terminals (static/terminal-references.ts): an id is a link only when the cache
+// of known ids (static/work-references.ts, in the work view's bundle) has it. Each applied listing ticks the cache
+// while terminals are shown: it reads at most once a minute while the page is visible, and again when the Projects
+// view opens. A lookup never sends a request. Clicking a reference opens the Projects view on it.
+let referencesLoading = false;
+let referencesRetryAt = 0;
+function tickReferences() {
+  if (!panes.length) return;
+  if (references) return references.tick();
+  if (referencesLoading || Date.now() < referencesRetryAt || !localMeshEffectsAllowed()) return;
+  referencesLoading = true;
+  importWorkModule().then((module) => {
+    if (!localMeshEffectsAllowed()) return;
+    references ||= module.mountReferences({ request: requestLocal, visible: () => document.visibilityState === "visible" });
+    references.tick();
+  }, () => { referencesRetryAt = Date.now() + 60_000; }).finally(() => { referencesLoading = false; });
+}
+const knownReference = (id) => references?.lookup(id) ?? null;
+// Paths, URLs and directories first (MeshTerminalLinks.linksOnRow), then the known references that overlap none.
+function terminalLinksOnRow(buf, y, cols) {
+  const { linksOnRow, referencesOnRow, cellIn } = MeshTerminalLinks;
+  const links = linksOnRow(buf, y, cols);
+  if (!references) return links;
+  for (const ref of referencesOnRow(buf, y, (id) => knownReference(id) !== null)) {
+    if (!links.some((l) => cellIn(ref.start, l.start, l.end) || cellIn(l.start, ref.start, ref.end))) links.push(ref);
+  }
+  return links;
+}
+// The hover text of a reference: its kind, id and title, as text; empty when the id is not known.
+function referenceLabel(id) {
+  const entry = knownReference(id);
+  if (!entry) return "";
+  return entry.title ? t(`terminal.reference.${entry.kind}`, { id: entry.id, title: entry.title }) : entry.id;
+}
+function openReference(id) {
+  const entry = knownReference(id);
+  if (!entry || localActionUnavailable()) return;
+  pendingWorkTarget = entry.target;
+  setProjects(true);
+  if (!projecting) pendingWorkTarget = null;   // the view did not open: the target is not kept for a later opening
+}
 function sessionMarkerChanged() {
   listBatch.request();
   for (const pane of panes) pane.header();
@@ -5687,6 +5742,7 @@ function setProjects(on) {
   if (on) {
     document.body.classList.remove("drawer");
     $("#projects-return").focus();
+    references?.refresh();   // the tracker is being looked at: its ids are read again at the next tick
     openProjectsPresentation();
   } else {
     projectsGeneration++; workGeneration++;

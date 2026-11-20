@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
+import { referenceMatches } from "./terminal-references.ts";
+
 // Public xterm buffer shape used by this matcher; no private renderer/parser APIs.
 type CellPosition = [row: number, col: number];
 type TerminalCell = { getWidth(): number; getChars(): string };
 type TerminalLine = { length: number; isWrapped: boolean; getCell(x: number, cell?: TerminalCell): TerminalCell | undefined };
 export type TerminalBuffer = { getLine(y: number): TerminalLine | undefined };
-export type TerminalLink = { text: string; start: CellPosition; end: CellPosition; kind: "url" | "doc" | "dir" };
+export type TerminalLink = { text: string; start: CellPosition; end: CellPosition; kind: "url" | "doc" | "dir" | "ref" };
 type Continuation = { soft: boolean; lead: number };
 type Row = { text: string; cols: number[] };
 // What one hard join looks like on the page: the first word of the next row, what
@@ -276,6 +278,23 @@ export function linksOnRow(buf: TerminalBuffer, y: number, cols: number): Termin
     if (m.kind === "doc" && overLimitHardDocSuffix(lk, start[0], start[1])) continue;
     if (m.kind !== "url" && found.some((l) => cellIn(start, l.start, l.end) || cellIn(l.start, start, end))) continue;
     found.push({ text: m.text, start, end, kind: m.kind });
+  }
+  return found;
+}
+
+// Tracker references (T-, P-, N- ids) on buffer row y that `known` accepts (static/terminal-references.ts): one
+// row only, and an id that a soft wrap cuts is left out, so the start of a longer id is never offered as a shorter one.
+export function referencesOnRow(buf: TerminalBuffer, y: number, known: (id: string) => boolean): TerminalLink[] {
+  const line = buf.getLine(y);
+  if (!line) return [];
+  const row = readRow(line, false);
+  const continues = buf.getLine(y + 1)?.isWrapped === true;
+  const found: TerminalLink[] = [];
+  for (const m of referenceMatches(row.text)) {
+    const start = row.cols[m.index], end = row.cols[m.index + m.length - 1];
+    if (start === undefined || end === undefined) continue;
+    if ((line.isWrapped && m.index === 0) || (continues && m.index + m.length === row.text.length)) continue;
+    if (known(m.id)) found.push({ text: m.id, start: [y, start], end: [y, end], kind: "ref" });
   }
   return found;
 }

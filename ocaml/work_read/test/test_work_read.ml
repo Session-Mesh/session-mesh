@@ -331,4 +331,5 @@ let () =
       ("limits", Test_limits.tests);
       ("session-questions", Test_session_questions.tests);
       ("context", Test_context.tests);
+      ("ids", Test_ids.tests);
     ]

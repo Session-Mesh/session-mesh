@@ -9,6 +9,7 @@
  */
 
 import { isObj, text } from './work-parse.ts';
+import type { TabKey } from './work-project-view.ts';
 
 /** One open question of a session: what it is about (a task or a project id, or nothing) and the project it falls in. */
 export type SessionQuestion = Readonly<{ id: string; about: string | null; project: string | null }>;
@@ -25,8 +26,10 @@ export type SessionQuestionsDoc = Readonly<{
 }>;
 
 /** Where the marker's button opens the Projects view: the task sheet, the Questions tab of a project, or the entry
- *  screen and its list of open questions. */
-export type WorkTarget = Readonly<{ kind: 'task'; id: string }> | Readonly<{ kind: 'project'; id: string }> | Readonly<{ kind: 'entry' }>;
+ *  screen and its list of open questions. A terminal reference (static/work-references.ts) also names the tab: the
+ *  board for a task, the summary for a project. */
+export type WorkTarget = Readonly<{ kind: 'task'; id: string; tab?: TabKey }> | Readonly<{ kind: 'project'; id: string; tab?: TabKey }>
+  | Readonly<{ kind: 'entry' }>;
 
 export type SessionMarker = Readonly<{ count: number; target: WorkTarget }>;
 

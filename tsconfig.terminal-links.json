@@ -17,5 +17,5 @@
     "target": "ES2022",
     "verbatimModuleSyntax": true
   },
-  "files": ["static/terminal-links.ts", "static/shell-copy.ts"]
+  "files": ["static/terminal-links.ts", "static/shell-copy.ts", "static/terminal-references.ts"]
 }

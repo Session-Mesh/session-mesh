@@ -55,6 +55,7 @@ button) and none of `Ctrl`, `Meta` or `Alt` is held.
 | Terminal | Right-click on a selection | Copies it. |
 | Terminal | `Shift`+drag (`Option`+drag on macOS) | Selects text even when the program in the terminal captures the mouse. |
 | Terminal | Click on a path or link | Opens it beside the terminal: a document, a source file, or the file tree for a directory. A web URL opens in a new browser tab. |
+| Terminal | Click on a task, project or question id (`T-…`, `P-…`, `N-…`) | Opens the Projects view on it, when the tracker knows that id. |
 | Terminal | `Ctrl`+click (`Cmd`+click) on a document path | Opens the document in a new browser tab. |
 | Terminal | Right-click on a path to an HTML, Markdown or SVG file | Opens its source in the code viewer. |
 | Terminal | Right-click on a web URL | "Open in the external browser": opens it in the browser of the machine running the mesh. |
@@ -222,6 +223,19 @@ project tracker that agents write through `mesh-work`, read only:
   example after "Refresh") or fails to read it. Sessions are matched by name: a session restored
   under another name loses its questions, and a later session that takes an earlier one's name gets
   them.
+- **References in the terminals.** A task, project or question id printed in a terminal (`T-1a2b`,
+  `P-5e6f`, `N-0000abcd`, as a whole word: not inside a path, a URL or a file name) is a link when
+  the tracker has that id; any other text of that shape, such as "T-12", stays text. Hovering shows
+  its title; clicking it, with the same rules as the other links of the terminal (a program that
+  captures the mouse still lets the click through, `Shift`, or `Option` on macOS, selects text
+  instead), opens the Projects view on it: a task on its project's Board with its sheet, a project
+  on its "Pick up" tab, a question where its answer form is (the sheet of its task, the Questions
+  tab of its project, or the first screen). The page knows the ids from one read (`ids` of
+  [work-read](work-read.md)) after a session listing while terminals are shown, at most once a
+  minute while it is visible, and again when the Projects view opens; checking a word sends no
+  request. It keeps the ids and titles in memory only, and forgets them when the credential is
+  refused. When the tracker cannot be read, nothing is a link. Session names are not links: they
+  are ordinary words as often as names.
 - **Products and projects.** The first screen lists the products and their active projects, with
   each project's progress (done tasks over all tasks) and its number of blockers.
 - **A project, in five tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent
