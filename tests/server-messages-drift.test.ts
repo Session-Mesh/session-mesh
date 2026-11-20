@@ -105,6 +105,7 @@ const NOT_SHOWN: Record<string, string> = {
   'a guarded restore is exactly {names: [name], expected: {...}}': 'protocol error of the guarded restore: only a tool sends `expected`, the page never does',
   'names: exactly [expected.name]': 'protocol error of the guarded restore: only a tool sends `expected`, the page never does',
   'invalid': 'machine code of the configuration route, sent with the validation detail in its own field; not a text for a screen',
+  'settings-unreadable': 'machine code of POST /api/dirs/recent, a background request of the page that keeps its copy for a later try (static/app.js moveRecentFoldersToRunner); never shown',
 };
 
 const MAX_DISTINCT_MESSAGES_PER_ROW = 4;
