@@ -167,7 +167,7 @@ describe('folder field of the New session dialog', {skip}, () => {
     assert.equal(await listShown(page), true);
   });
 
-  test('Tab completes the first suggestion like a shell, says so, and a second Tab moves on', async () => {
+  test('Tab completes the first suggestion that extends the text, like a shell, says so, and a second Tab moves on', async () => {
     const page = await dialog();
     const before = await field(page).inputValue();
     const focused = () => page.evaluate(() => document.activeElement?.getAttribute('name') ?? document.activeElement?.tagName);
@@ -186,6 +186,17 @@ describe('folder field of the New session dialog', {skip}, () => {
     await field(page).press('Tab');                     // the list is closed: Tab moves on
     assert.notEqual(await focused(), 'cwd');
     assert.equal(await field(page).inputValue(), '~/work/alpha');
+
+    // "~/work/api" matches alpine only by its letters in order: Tab moves on and keeps the text, whether the
+    // listing of the new text has arrived or the list still shows the suggestions of "~/work/a" (debounce window)
+    await field(page).fill('');
+    await field(page).pressSequentially('~/work/a');
+    await page.waitForFunction(() => [...document.querySelectorAll('#new-folder-list [role="option"]')].slice(0, 2)
+      .map(option => option.textContent).join() === '~/work/alpha,~/work/alpine', undefined, {polling: 100, timeout: 10000});
+    await field(page).pressSequentially('pi');
+    await field(page).press('Tab');
+    assert.equal(await field(page).inputValue(), '~/work/api', 'Tab never replaces the typed text with a fuzzy match');
+    assert.notEqual(await focused(), 'cwd', 'it moves on');
 
     await typeAndWait(page, '~/work/alpine', ['~/work/alpine']);
     await field(page).press('Tab');                     // the field already holds the only suggestion: Tab moves on

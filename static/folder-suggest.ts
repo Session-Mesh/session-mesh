@@ -80,11 +80,13 @@ export function knownFolderList(known: KnownFolders, home: string): string[] {
   return out;
 }
 
-/** `~` expanded, the trailing slash kept (it means "inside"), lower case: the text a folder is matched against. */
-const typedKey = (typed: string, home: string): string => {
+/** `~` expanded, the trailing slash kept (it means "inside"), the case kept: what Tab completes (tabKey). */
+const typedPath = (typed: string, home: string): string => {
   const text = typed.trim();
-  return (text === "~" || text.startsWith("~/") ? home + text.slice(1) : text).toLowerCase();
+  return text === "~" || text.startsWith("~/") ? home + text.slice(1) : text;
 };
+/** The same in lower case: the text a folder is matched against. */
+const typedKey = (typed: string, home: string): string => typedPath(typed, home).toLowerCase();
 
 const inOrder = (wanted: string, text: string): boolean => {
   let at = 0;
@@ -147,7 +149,9 @@ export function runnerRecentFolders(config: unknown): string[] | null {
 
 /** The list this browser kept, as sent once to the runner (POST /api/dirs/recent): expanded, once each, at most 8. */
 export function recentFoldersToImport(stored: unknown, home: string): string[] {
-  const expanded = recentFolders(stored).map((folder) => expandHome(folder, home)).filter((folder) => folder.startsWith("/"));
+  const known = home.startsWith("/");   // before the first listing gave the home folder, a ~ path cannot be expanded
+  const expanded = recentFolders(stored).filter((folder) => known || folder.startsWith("/"))
+    .map((folder) => expandHome(folder, home)).filter((folder) => folder.startsWith("/"));
   return [...new Set(expanded)].slice(0, MAX_RECENT);
 }
 
@@ -187,13 +191,25 @@ export function comboboxKey(wanted: ComboState, key: string): ComboAction {
 
 export type TabContext = Readonly<{ suggestions: readonly string[]; value: string; typed: boolean; home: string }>;
 
-/** Tab on the folder field completes like a shell: with the list shown, it accepts the chosen suggestion, else
- * the first one once something was typed, and keeps the focus. It lets the focus move on (the list closed) when
- * the list is not shown, there is no suggestion, the field already holds that suggestion (so a second Tab
- * leaves), or nothing was typed: the folder the dialog opened with is not replaced by a key meant to move on. */
+/** The first suggestion that extends the typed text as a shell would: once `~` is expanded on both sides, it
+ * starts with the text exactly as typed (same case, a typed trailing slash kept). -1 when none does. The list
+ * also ranks fuzzy matches (a name prefix, a substring, letters in order) and, within the 150 ms before the
+ * listing of the new text arrives, still shows the suggestions of an earlier text: neither is a completion. */
+function prefixCompletion(suggestions: readonly string[], value: string, home: string): number {
+  const typed = typedPath(value, home);
+  if (!typed.startsWith("/")) return -1;
+  return suggestions.findIndex((suggestion) => expandHome(suggestion, home).startsWith(typed));
+}
+
+/** Tab on the folder field completes like a shell: with the list shown, it accepts the option chosen with the
+ * arrows, else, once something was typed, the first suggestion that extends the typed text (prefixCompletion),
+ * and keeps the focus. It lets the focus move on (the list closed) when the list is not shown, no suggestion
+ * extends the text, the field already holds that suggestion (so a second Tab leaves), or nothing was typed: the
+ * folder the dialog opened with is not replaced by a key meant to move on. */
 export function tabKey(wanted: ComboState, context: TabContext): ComboAction {
   const shown = wanted.open && wanted.count > 0 && context.suggestions.length > 0;
-  const index = !shown ? -1 : wanted.active >= 0 ? wanted.active : context.typed ? 0 : -1;
+  const index = !shown ? -1 : wanted.active >= 0 ? wanted.active
+    : context.typed ? prefixCompletion(context.suggestions, context.value, context.home) : -1;
   const suggestion = context.suggestions[index];
   const moveOn: ComboAction = { state: closed(wanted), accept: null, handled: false };
   if (suggestion === undefined || expandHome(suggestion, context.home) === expandHome(context.value, context.home)) return moveOn;

@@ -22,7 +22,7 @@ after(async () => { await mesh?.stop(); });
 
 describe('the runner settings', () => {
   test('read as empty with their limits before anything is saved, without a launch settings file', async () => {
-    assert.deepEqual(await runner(), {values: {operator_name: '', recent_folders: []}, max_length: {operator_name: 40, recent_folders: 8}});
+    assert.deepEqual(await runner(), {values: {operator_name: '', recent_folders: []}, max_length: {operator_name: 40}, max_entries: {recent_folders: 8}});
     assert.equal(fs.existsSync(file()), false);
   });
 
@@ -42,9 +42,9 @@ describe('the runner settings', () => {
     const saved = await write({operator_name: '  Camille  '});
     assert.equal(saved.status, 200, await saved.clone().text());
     assert.deepEqual(((await saved.json()) as {runner_settings: unknown}).runner_settings,
-      {values: {operator_name: 'Camille', recent_folders: []}, max_length: {operator_name: 40, recent_folders: 8}});
+      {values: {operator_name: 'Camille', recent_folders: []}, max_length: {operator_name: 40}, max_entries: {recent_folders: 8}});
     assert.equal((await runner()).values.operator_name, 'Camille');
-    assert.deepEqual(JSON.parse(fs.readFileSync(file(), 'utf8')), {v: 1, operator_name: 'Camille', recent_folders: []});
+    assert.deepEqual(JSON.parse(fs.readFileSync(file(), 'utf8')), {v: 1, operator_name: 'Camille'});
     assert.equal(fs.statSync(file()).mode & 0o777, 0o600);
   });
 
@@ -84,7 +84,25 @@ describe('the runner settings', () => {
     assert.equal((await runner()).values.operator_name, '', 'GET /api/config still answers');
     const repaired = await write({operator_name: 'Ana'});
     assert.equal(repaired.status, 200, await repaired.clone().text());
-    assert.deepEqual(JSON.parse(fs.readFileSync(file(), 'utf8')), {v: 1, operator_name: 'Ana', recent_folders: []});
+    assert.deepEqual(JSON.parse(fs.readFileSync(file(), 'utf8')), {v: 1, operator_name: 'Ana'});
+  });
+
+  test('a save of a valid file changes the name alone: the recent folders and unknown settings are kept', async () => {
+    fs.writeFileSync(file(), JSON.stringify({v: 1, operator_name: 'Ana', recent_folders: ['/kept'], added_later: {x: 1}}));
+    assert.equal((await write({operator_name: 'Camille'})).status, 200);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file(), 'utf8')),
+      {v: 1, operator_name: 'Camille', recent_folders: ['/kept'], added_later: {x: 1}});
+  });
+
+  test('a file written by another version of Mesh is shown but never rewritten', async () => {
+    const text = JSON.stringify({v: 2, operator_name: 'Ana', added_later: {x: 1}});
+    fs.writeFileSync(file(), text);
+    assert.equal((await runner()).values.operator_name, 'Ana');
+    const refused = await write({operator_name: 'Camille'});
+    assert.equal(refused.status, 400);
+    assert.match(((await refused.json()) as {message: string}).message, /another version/);
+    assert.equal(fs.readFileSync(file(), 'utf8'), text);
+    fs.rmSync(file());
   });
 
   test('lengths count code points: forty astral characters fit, forty-one do not', async () => {

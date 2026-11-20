@@ -27,6 +27,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import stat
 import sys
 import threading
 import time
@@ -1846,65 +1847,101 @@ async def _cancel_pending_notice(name, created):
         pass
 
 
-def _startable_dir(path, home):
+def _startable_dir(path, home, places):
     """A folder a session may start in (allows_cwd), whose resolved place stays in the home folder and is not
-    protected (view.VIEW_DENY): a symlink cannot lead the list out of them."""
+    protected (``places``: launchsettings.deny_places of view.VIEW_DENY): a symlink cannot lead the list out of
+    them. Its resolved path and modification time, or None."""
     try:
         resolved = path.resolve(strict=True)
+        info = resolved.stat()
     except (OSError, RuntimeError):
-        return False
-    return (resolved.is_dir() and resolved.is_relative_to(home) and LAUNCH_SETTINGS.allows_cwd(resolved)
-            and not launchsettings._protected(str(path), resolved, view.VIEW_DENY))
+        return None
+    if not (stat.S_ISDIR(info.st_mode) and resolved.is_relative_to(home) and LAUNCH_SETTINGS.allows_cwd(resolved)) \
+            or launchsettings.protected(str(path), resolved, places):
+        return None
+    return resolved, info.st_mtime
+
+
+def _listed_children(parent, home, places, scanned, per_parent):
+    """The visible sub-folders of one parent a session may start in, newest first: at most ``per_parent`` of its
+    first ``scanned`` entries. A file is left out before anything is resolved (DirEntry.is_dir)."""
+    with os.scandir(parent) as entries:
+        found = [Path(e.path) for e in itertools.islice(entries, scanned)
+                 if not e.name.startswith(".") and e.is_dir()]
+    dirs = [(path, checked[1]) for path in found if (checked := _startable_dir(path, home, places))]
+    return [path for path, _ in sorted(dirs, key=lambda entry: -entry[1])[:per_parent]]
 
 
 def project_dirs(per_parent=80, scanned=2000, total=200):
     """GET /api/dirs, a plain list of paths: the home folder and the allowed work folders, then the visible
     sub-folders of each work folder (of ~/dev when none is configured), newest first; at most ``per_parent``
-    of one folder among its first ``scanned`` entries, ``total`` in all."""
+    of one folder among its first ``scanned`` entries, ``total`` in all: no further folder is read once
+    ``total`` are listed. The protected places are resolved once per call."""
     home = Path.home().resolve()
+    places = launchsettings.deny_places(view.VIEW_DENY)
     parents = list(LAUNCH_SETTINGS.roots) if LAUNCH_SETTINGS.configured else [Path.home() / "dev"]
-    out = [p for p in dict.fromkeys([Path.home(), *LAUNCH_SETTINGS.roots]) if _startable_dir(p, home)]
+    out = dict.fromkeys(str(p) for p in dict.fromkeys([Path.home(), *LAUNCH_SETTINGS.roots])
+                        if _startable_dir(p, home, places))
     for parent in parents:
+        if len(out) >= total:
+            break
         with contextlib.suppress(OSError):
-            with os.scandir(parent) as entries:
-                found = [Path(e.path) for e in itertools.islice(entries, scanned) if not e.name.startswith(".")]
-            dirs = [p for p in found if _startable_dir(p, home)]
-            out += sorted(dirs, key=lambda p: -p.stat().st_mtime)[:per_parent]
-    return list(dict.fromkeys(str(p) for p in out))[:total]
+            out.update(dict.fromkeys(str(p) for p in _listed_children(parent, home, places, scanned, per_parent)))
+    return list(out)[:total]
 
 
 async def api_dirs(request):
     return web.json_response(await asyncio.to_thread(project_dirs))
 
 
+def _usable_recent_folders(folders):
+    """The folders (from a browser) that GET /api/dirs could list: plain, in the home folder, allowed, not
+    protected; resolved. Runs in a worker thread: it touches the file system."""
+    home, places = Path.home().resolve(), launchsettings.deny_places(view.VIEW_DENY)
+    return [str(checked[0]) for folder in folders
+            if launchsettings.plain_folder(folder) and (checked := _startable_dir(Path(folder), home, places))]
+
+
+def _move_recent_folders(folders):
+    return launchsettings.add_recent_folders(RUNNER_SETTINGS, _usable_recent_folders(folders), newest=False)
+
+
 async def api_dirs_recent(request):
     """A browser moves the recent folders it kept before they were a runner setting: the owner's cookie only.
-    A folder is kept only when a session may start in it, and goes after the runner's own recent folders."""
+    A folder is kept only when GET /api/dirs could list it, and goes after the runner's own recent folders. A
+    settings file that cannot be read whole is left as it is: 503, so the browser keeps its copy for later."""
     _require_owner_cookie(request)
     body = await _bounded_json_object(request, CONFIG_BODY_MAX)
     folders = body.get("folders")
     if set(body) != {"folders"} or not isinstance(folders, list) \
-            or len(folders) > launchsettings.RUNNER_LIMITS["recent_folders"]:
+            or len(folders) > launchsettings.RUNNER_MAX_ENTRIES["recent_folders"]:
         raise web.HTTPBadRequest(text="Invalid fields")
-    usable = [os.path.realpath(f) for f in folders
-              if launchsettings.plain_folder(f) and os.path.isdir(f) and LAUNCH_SETTINGS.allows_cwd(f)]
-    async with LAUNCH_WRITE_LOCK:
-        kept = await asyncio.to_thread(launchsettings.add_recent_folders, RUNNER_SETTINGS, usable, newest=False)
+    try:
+        async with LAUNCH_WRITE_LOCK:
+            kept = await asyncio.to_thread(_move_recent_folders, folders)
+    except (OSError, launchsettings.InvalidLaunchSettings) as exc:
+        print(f"dirs/recent: recent folders not moved: {exc!r}", flush=True)
+        return _json_reply({"error": "settings-unreadable"}, 503)
     return _json_reply({"recent_folders": kept})
+
+
+def _record_folder(cwd):
+    """The folder a session started in, resolved, first in the runner's recent folders (in a worker thread)."""
+    folder = os.path.realpath(cwd)
+    if launchsettings.plain_folder(folder):
+        launchsettings.add_recent_folders(RUNNER_SETTINGS, [folder], newest=True)
 
 
 async def _record_recent_folder(request, cwd):
     """After the owner's browser started a session (POST /api/new, cookie and no Authorization header): its
-    folder, resolved, goes first in the runner's recent folders. A failure here never fails the start."""
+    folder goes first in the runner's recent folders. A failure here (a settings file that cannot be read
+    whole is left as it is) is logged and never fails the start."""
     if request.headers.get("Authorization") or not has_owner_cookie(request):
-        return
-    folder = os.path.realpath(cwd)
-    if not launchsettings.plain_folder(folder):
         return
     try:
         async with LAUNCH_WRITE_LOCK:
-            await asyncio.to_thread(launchsettings.add_recent_folders, RUNNER_SETTINGS, [folder], newest=True)
-    except OSError as exc:
+            await asyncio.to_thread(_record_folder, cwd)
+    except Exception as exc:   # noqa: BLE001 -- the session has started: report, never turn it into a 500
         print(f"new: recent folder not recorded: {exc!r}", flush=True)
 
 
@@ -4106,9 +4143,10 @@ RUNNER_SETTINGS = CONF_DIR / launchsettings.RUNNER_SETTINGS_FILE
 
 
 def runner_settings_projection(values=None):
-    """The runner settings shared by every device (launchsettings.RUNNER_LIMITS) and their limits."""
+    """The runner settings shared by every device and their bounds: characters of a text (max_length), entries
+    of a list (max_entries)."""
     return {"values": launchsettings.read_runner_settings(RUNNER_SETTINGS) if values is None else values,
-            "max_length": launchsettings.RUNNER_LIMITS}
+            "max_length": launchsettings.RUNNER_MAX_LENGTH, "max_entries": launchsettings.RUNNER_MAX_ENTRIES}
 
 
 def _owner_binding():
