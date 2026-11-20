@@ -448,11 +448,12 @@ DEFAULT_ACCOUNT = {"id": "default", "label": "Default account", "claude": True, 
 
 class AccountsUnavailable(Exception):
     """accounts.json, one of its folders, or the program that checks them was refused; ``code``: the program's
-    refusal code when it gave one (accounts carry)."""
+    refusal code when it gave one (accounts carry, accounts resolve); ``candidates``: the accounts an ambiguous
+    name matched (accounts resolve), as the program printed them."""
 
-    def __init__(self, reason, code=None):
+    def __init__(self, reason, code=None, candidates=None):
         super().__init__(reason)
-        self.code = code
+        self.code, self.candidates = code, candidates
 
 
 def _accounts_signature():
@@ -482,8 +483,10 @@ async def _accounts_program(*args, timeout=10, env=None):
             proc.kill()
     if proc.returncode != 0 or not isinstance(answer, dict):
         code = answer.get("code") if isinstance(answer, dict) else None
+        candidates = answer.get("candidates") if isinstance(answer, dict) else None
         raise AccountsUnavailable(str(answer.get("error") if isinstance(answer, dict) else answer),
-                                  code if isinstance(code, str) else None)
+                                  code if isinstance(code, str) else None,
+                                  candidates if isinstance(candidates, list) else None)
     return answer
 
 
@@ -4101,7 +4104,6 @@ async def api_session_action_request(request):
 # conversation under another account. Checked here before it is queued, then, once the owner approved it: the
 # exact source stopped, `mesh-platform accounts carry` copies the conversation, the agent resumes under the target;
 # a failed carry resumes it under its own account. The agent kind is the session's (its token), never the body's.
-_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 CARRY_TIMEOUT = 300
 # The carry's refusal codes (Mesh_accounts_carry): these two may pass when asked again later; these two leave
 # something in the target folder for the operator to look at (named in the service log). Every other code is a
@@ -4126,35 +4128,68 @@ def _switch_refusal(code, message):
                               content_type="application/json")
 
 
-def _switch_target(name, kind):
-    """The account ``name`` designates for a ``kind`` agent: an exact id, else the one label equal to it ignoring
-    ASCII case (among the accounts serving ``kind`` when several share it). No prefix, no guess."""
-    offered = [DEFAULT_ACCOUNT, *accounts_projection()]
-    available = ", ".join(f"{a['id']} ({a['label']})" for a in offered)
-    shown = name if isinstance(name, str) and name.isprintable() and len(name) <= 64 else "?"
-    found = [a for a in offered if a["id"] == name] if isinstance(name, str) else []
-    if not found and isinstance(name, str):
-        labelled = [a for a in offered if a["label"].translate(_ASCII_LOWER) == name.translate(_ASCII_LOWER)]
-        found = [a for a in labelled if a[kind]] or labelled
-    if not found:
-        raise _switch_refusal("account_unknown", f"No account “{shown}” is declared. Available: {available}.")
-    if len(found) > 1:
-        raise _switch_refusal("account_ambiguous",
-                              f"“{shown}” matches several accounts ({', '.join(a['id'] for a in found)}); give the id.")
-    target = found[0]
-    if not target[kind]:
-        serves = ", ".join(ACCOUNT_MEMBER[k][2] for k in ACCOUNT_MEMBER if target[k])
-        raise _switch_refusal("account_no_agent",
-                              f"Account {target['label']} has no {ACCOUNT_MEMBER[kind][2]} folder; it serves: {serves}.")
-    return target
+_ACCOUNTS_REFUSED_TEXT = "accounts.json is missing or refused on the runner; no alias is offered (details in the " \
+                         "service log)."
+
+
+def _shown_accounts(accounts):
+    """``id (label), …`` of accounts as a refusal lists them: ids and labels, never a folder."""
+    return ", ".join(f"{a['id']} ({a['label']})" for a in accounts
+                     if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("label"), str))
+
+
+def _resolve_refusal(exc, name, kind, unknown):
+    """The coded refusal of a name `mesh-platform accounts resolve` refused; its reason goes to the log only."""
+    print(f"account name for a switch refused: {exc.code}: {exc}", flush=True)
+    if exc.code == "account_ambiguous":
+        return _switch_refusal("account_ambiguous", f"“{name}” matches several accounts: "
+                               f"{_shown_accounts(exc.candidates or [])}. Name one by an id that is no other "
+                               "account's label, or ask the operator to change a label.")
+    if exc.code == "account_no_agent":
+        declared = next((a for a in accounts_projection() if a["id"] == name), None)
+        if declared is not None:
+            serves = ", ".join(ACCOUNT_MEMBER[k][2] for k in ACCOUNT_MEMBER if declared[k])
+            return _switch_refusal("account_no_agent", f"Account {declared['label']} has no "
+                                   f"{ACCOUNT_MEMBER[kind][2]} folder; it serves: {serves}.")
+        return _switch_refusal("account_no_agent", f"Account {name} has no {ACCOUNT_MEMBER[kind][2]} folder.")
+    if exc.code == "account_unknown":
+        return unknown
+    return _switch_refusal("accounts_refused", _ACCOUNTS_REFUSED_TEXT)
+
+
+async def _switch_target(name, kind):
+    """{"id", "label"} of the account ``name`` designates for a ``kind`` agent, as `mesh-platform accounts resolve`
+    answers (Mesh_account_resolver, the one place that matches names): its exact id, else the one label equal to it
+    ignoring ASCII case; never a prefix, never another agent's account, and a name that is one account's id and
+    another's label designates neither. Without a usable accounts.json only ``default`` can be named."""
+    shown = name if isinstance(name, str) and 0 < len(name) <= 64 and name.isprintable() else None
+    offered = [DEFAULT_ACCOUNT, *(a for a in accounts_projection() if a[kind])]
+    unknown = _switch_refusal("account_unknown", f"No {ACCOUNT_MEMBER[kind][2]} account “{shown or '?'}” is "
+                              f"declared. Available: {_shown_accounts(offered)}.")
+    if shown is None:
+        raise unknown
+    if _ACCOUNTS["file"] != "ok":
+        if name == DEFAULT_ACCOUNT["id"]:
+            return DEFAULT_ACCOUNT
+        raise _switch_refusal("accounts_refused", _ACCOUNTS_REFUSED_TEXT) if _ACCOUNTS["file"] == "refused" else unknown
+    try:
+        answer = (await _accounts_program("resolve", str(ACCOUNTS_FILE), kind, name)).get("account")
+    except AccountsUnavailable as exc:
+        raise _resolve_refusal(exc, shown, kind, unknown) from exc
+    if (not isinstance(answer, dict) or answer.get("backend") != kind or not isinstance(answer.get("label"), str)
+            or not (answer.get("id") == DEFAULT_ACCOUNT["id"] or ACCOUNT_ID_RE.fullmatch(str(answer.get("id"))))):
+        print(f"accounts resolve answered an unexpected account for a switch: {answer!r}", flush=True)
+        raise _switch_refusal("accounts_refused", _ACCOUNTS_REFUSED_TEXT)
+    return {"id": answer["id"], "label": answer["label"]}
 
 
 def _switch_conversation(described, source):
-    """The exact conversation id of the source's agent, or None (unknown, guessed, or another agent running)."""
+    """The exact conversation id of the source's agent, or None (unknown, another agent running, or guessed: every
+    source the listing counts as a guess, Codex's cwd_unique included, since a guess may be another conversation)."""
     entry = next((e for e in described["mesh"] if e["id"] == source["id"] and e["created"] == source["created"]), None)
     agent = entry and entry.get("agent")
     if (not agent or agent.get("type") != source["agent"] or not agent.get("session_id")
-            or agent.get("identity_source") in respawn.GUESSED_SOURCES):
+            or discover._guessed_source(agent.get("identity_source"))):
         return None
     return agent["session_id"]
 
@@ -4166,10 +4201,7 @@ async def _switch_request(source, body):
     if kind not in ACCOUNT_MEMBER:
         raise _switch_refusal("agent_unsupported", "Account switching applies to Claude and Codex only.")
     await declared_accounts()
-    if _ACCOUNTS["file"] == "refused" and body["account"] != DEFAULT_ACCOUNT["id"]:
-        raise _switch_refusal("accounts_refused", "accounts.json is missing or refused on the runner; no alias is "
-                              "offered (details in the service log).")
-    target = _switch_target(body["account"], kind)
+    target = await _switch_target(body["account"], kind)
     listed = await host({"op": "list"})
     raw = next((item for item in listed if item["name"] == source["id"] and item["created"] == source["created"]), None)
     if raw is None:
@@ -4305,7 +4337,9 @@ async def _execute_session_action(item):
     if not agent or agent.get("type") != source["agent"]:
         raise web.HTTPConflict(text="Agent to resume unavailable")
     argv = _model_argv(_resume_argv(agent), item["model"])
-    if item["action"] == "switch_account":
+    if item["action"] == "switch_account":   # checked again: the conversation may only be guessed by now
+        if _switch_conversation(described, source) is None:
+            raise web.HTTPConflict(text="The exact conversation id is unknown; it cannot be resumed elsewhere")
         return await _switch_session(item, raw, agent["session_id"], argv)
     name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"],
                                  shlex.join(argv), source["agent"], source["agent"], account=session_account(raw))

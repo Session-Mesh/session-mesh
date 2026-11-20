@@ -35,13 +35,18 @@ let cookie = '';
 let host: ChildProcess | undefined;
 let travelHome: string, workHome: string, clientClaude: string;
 
-// codex|CODEX_HOME|session|arguments|session token. The rollout is held open (fd 3) by a process named codex.
+// codex|CODEX_HOME|session|arguments|session token. The rollout is held open (fd 3) by a process named codex,
+// except in a session named x-guess*: that one writes its folder in the rollout and closes it, so the listing can
+// only guess its conversation from the folder (cwd_unique).
 const fakeCodex = (logFile: string, real: string) => [
   '#!/bin/sh',
   `printf '%s|%s|%s|%s|%s\\n' codex "\${CODEX_HOME-unset}" "$MESH_SESSION" "$*" "$MESH_SESSION_TOKEN" >> '${logFile}'`,
   'if [ "$1" = resume ]; then id=$2; else id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr A-F a-f); fi',
   'folder="${CODEX_HOME:-$HOME/.codex}/sessions/2026/11/20"; mkdir -p "$folder"',
   'rollout="$folder/rollout-2026-11-20T10-00-00-$id.jsonl"',
+  'case "$MESH_SESSION" in x-guess*)',
+  `  printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\\n' "$id" "$(pwd -P)" >> "$rollout"; exec '${real}/codex' 300;;`,
+  'esac',
   `printf '{"type":"session_meta","payload":{"id":"%s","home":"%s"}}\\n' "$id" "\${CODEX_HOME-default}" >> "$rollout"`,
   `exec 3<"$rollout"; exec '${real}/codex' 300`, ''].join('\n');
 
@@ -61,7 +66,7 @@ before(async () => {
   travelHome = path.join(accounts, 'travel', '.codex');   // missing: created when a request names it
   workHome = path.join(accounts, 'work', '.codex');
   clientClaude = path.join(accounts, 'client', '.claude');
-  for (const folder of ['travel', 'work', 'client', 'twin']) fs.mkdirSync(path.join(accounts, folder), {mode: 0o700});
+  for (const folder of ['travel', 'work', 'client', 'twin', 'spare', 'mirror']) fs.mkdirSync(path.join(accounts, folder), {mode: 0o700});
   fs.mkdirSync(workHome, {mode: 0o700});
   fs.mkdirSync(clientClaude, {mode: 0o700});
   fs.writeFileSync(path.join(mesh.confDir, 'accounts.json'), JSON.stringify({v: 1, accounts: [
@@ -70,6 +75,9 @@ before(async () => {
     {id: 'client', label: 'Client', claude_config_dir: clientClaude},
     // labels are unique among the aliases, but one can equal the default account's
     {id: 'twin', label: 'Default Account', codex_home: path.join(accounts, 'twin', '.codex')},
+    // one account's label is another's id: that name designates neither (Mesh_account_resolver)
+    {id: 'spare', label: 'Reserve', codex_home: path.join(accounts, 'spare', '.codex')},
+    {id: 'mirror', label: 'spare', codex_home: path.join(accounts, 'mirror', '.codex')},
   ]}), {mode: 0o600});
   const [command, ...args] = ptyhostArgv();
   host = spawn(command!, args, {cwd: REPO, stdio: 'ignore',
@@ -100,8 +108,8 @@ const owner = () => ({Cookie: cookie, Origin: mesh.base, 'Content-Type': 'applic
 type Session = {name: string; token: string; sid: string};
 
 /** A Codex session started under ``account`` (absent: the default one), once the listing knows its conversation. */
-async function codexSession(name: string, account?: string): Promise<Session> {
-  const response = await fetch(`${mesh.base}/api/new`, {method: 'POST', body: JSON.stringify({cwd: mesh.home,
+async function codexSession(name: string, account?: string, cwd?: string): Promise<Session> {
+  const response = await fetch(`${mesh.base}/api/new`, {method: 'POST', body: JSON.stringify({cwd: cwd ?? mesh.home,
     preset: 'codex', name, ...account ? {account} : {}}),
   headers: {Authorization: `Bearer ${mesh.token()}`, Origin: mesh.base, 'Content-Type': 'application/json'}});
   assert.equal(response.status, 200, await response.clone().text());
@@ -174,14 +182,16 @@ describe('account switch requests', {skip: SKIP}, () => {
     source = await codexSession('x-ask');
     const [unknown, listing] = await refused(source, 'trav');
     assert.equal(unknown, 'account_unknown', 'no prefix match');
-    assert.match(listing, /Available: default \(Default account\), travel \(Travel\), work \(Work\)/);
+    assert.match(listing, /^No Codex account “trav” is declared\. Available: default \(Default account\), travel \(Travel\), work \(Work\), twin/);
+    assert.doesNotMatch(listing, /client/, 'only the accounts of the session\'s agent are offered');
     assert.ok(!listing.includes('.agent-accounts') && !listing.includes(mesh.home), 'no folder in a refusal');
     const [ambiguous, candidates] = await refused(source, 'default ACCOUNT');
     assert.equal(ambiguous, 'account_ambiguous', 'two labels equal without case: none is chosen');
-    assert.match(candidates, /\(default, twin\); give the id\.$/);
-    const [noAgent, noAgentText] = await refused(source, 'Client');
+    assert.match(candidates, /matches several accounts: default \(Default account\), twin \(Default Account\)\./);
+    const [noAgent, noAgentText] = await refused(source, 'client');
     assert.equal(noAgent, 'account_no_agent');
     assert.match(noAgentText, /^Account Client has no Codex folder; it serves: Claude\.$/);
+    assert.equal((await refused(source, 'Client'))[0], 'account_unknown', 'a label names an account of this agent only');
     assert.equal((await refused(source, 'default'))[0], 'account_same');
     assert.equal((await refused(source, 'work '))[0], 'account_unknown', 'no trimming');
     for (const bad of ['', 'x'.repeat(65), 42, null, ['travel'], {id: 'travel'}]) {
@@ -190,6 +200,16 @@ describe('account switch requests', {skip: SKIP}, () => {
     const byLabel = await requested(source, 'TRAVEL');
     assert.deepEqual([byLabel.account, byLabel.from_account, byLabel.state], ['travel', 'default', 'pending']);
     assert.equal(fs.statSync(travelHome).mode & 0o777, 0o700, "the target's folder is prepared, private");
+  });
+
+  test("an id that is also another account's label designates neither: refused, both listed", async () => {
+    const [code, message] = await refused(source, 'spare');
+    assert.equal(code, 'account_ambiguous');
+    assert.match(message, /^“spare” matches several accounts: spare \(Reserve\), mirror \(spare\)\./);
+    assert.ok(!message.includes('.agent-accounts') && !message.includes(mesh.home), 'no folder');
+    // an id is matched with its case, a label ignoring it: SPARE is only mirror's label
+    assert.equal((await requested(source, 'SPARE')).account, 'mirror');
+    assert.equal((await requested(source, 'Reserve')).account, 'spare', 'its label alone still names it');
   });
 
   test('the agent kind is the session\'s: a body naming another agent or session is refused, and no other action names an account', async () => {
@@ -210,6 +230,15 @@ describe('account switch requests', {skip: SKIP}, () => {
     }
     await sleep(300);
     assert.equal(launches().length, before, 'nothing started');
+  });
+
+  test('a conversation the listing only guesses from the folder is never carried to another account', async () => {
+    const folder = path.join(mesh.home, 'guess');
+    fs.mkdirSync(folder, {mode: 0o700});
+    const session = await codexSession('x-guess', undefined, folder);
+    assert.equal(((await listed('x-guess'))?.agent as {identity_source?: string}).identity_source, 'cwd_unique');
+    const [code] = await refused(session, 'travel');
+    assert.equal(code, 'conversation_unknown', 'a guess (cwd_unique) is not the exact conversation');
   });
 
   test('nothing is stopped or launched without the owner: a pending request waits, a declined one ends', async () => {
