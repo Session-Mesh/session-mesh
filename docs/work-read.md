@@ -15,7 +15,10 @@ work-read resume [--product P] [--project P-ID] [--all]
 work-read sessions-of (--product P | --project P-ID | --task T-ID)
 work-read session-questions
 work-read --request
+work-read context --format claude|vibe|text|json
 ```
+
+`work-read context` is the session-start hook of [agent-hooks.md](agent-hooks.md#the-project-context-hook), not a document subcommand: it prints at most one line (task ids, counts and a fixed sentence, in the agent's format), always exits 0, prints nothing on any failure, stops after 1.5 s, and is not accepted by `--request`. The rest of this page is about the document subcommands.
 
 Arguments are parsed strictly: an unknown or repeated flag, a flag without value, a stray argument, a value longer than 100 bytes or holding a control character, and a malformed identifier (`T-` or `P-` and 2 to 32 hexadecimal digits, a product of letters, digits, `.`, `_` and `-`) are refused.
 
@@ -63,6 +66,6 @@ Packaging: a source install gets `work-read` from `dune install` in the opam swi
 
 ## Tests
 
-`dune runtest work_read` runs the real executable against temporary copies of the worklog fixture: every subcommand, strict arguments, the `--request` form (including a NUL, a lone surrogate, a repeated field and an oversized request), a missing repository (exit 6, nothing created), the absence of any write, the absence of paths (the session folder, the home and the data directory), text cleaning, the caps, a project of 402 tasks with 100 maximal questions of five answers each (the documents stay under the bound and are cut, never refused), the one meaning of "blocked", the columns, the scope of `resume` questions, and the counts of `session-questions` (asked, about a linked task, about the project of a linked task, never twice, not a sibling task).
+`dune runtest work_read` runs the real executable against temporary copies of the worklog fixture: every subcommand, strict arguments, the `--request` form (including a NUL, a lone surrogate, a repeated field and an oversized request), a missing repository (exit 6, nothing created), the absence of any write, the absence of paths (the session folder, the home and the data directory), text cleaning, the caps, a project of 402 tasks with 100 maximal questions of five answers each (the documents stay under the bound and are cut, never refused), the one meaning of "blocked", the columns, the scope of `resume` questions, the counts of `session-questions` (asked, about a linked task, about the project of a linked task, never twice, not a sibling task); and `context`: its formats, its silence outside a Mesh session, without a tracker or on bad arguments, no tracker text or token in its output, no write, no wait on a locked tracker, and the 1.5 s cap on a read that hangs.
 
 `tests/work-read-api.test.ts` runs the route against the real server on a free port, with a temporary `MESH_CONF_DIR` and a fixture copy: authentication, the documents, the refusals, the absence of paths, and with a stand-in program the timeout, the output cap, a failing program, a process left behind, the concurrency limit, and a bad `MESH_WORK_READ_CMD`. It needs `MESH_PYTHON` and a built `work-read`, else it is skipped; `MESH_REQUIRE_WORK_READ=1`, or `CI` set, makes a missing prerequisite fail instead. Public CI runs it in the frontend job, against the `work-read` and `work-write` that the native job builds and hands over as an artifact (`MESH_WORK_READ_CMD`, `MESH_WORK_WRITE_CMD`, `MESH_REQUIRE_WORK_READ=1`); the browser jobs run the Projects view tests against the same programs.

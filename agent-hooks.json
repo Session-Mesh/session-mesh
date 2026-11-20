@@ -1,0 +1,201 @@
+{
+  "schema": 1,
+  "doc": "docs/agent-hooks.md",
+  "events": [
+    {"name": "session_start", "fires": "the agent opens or resumes a conversation, before the first prompt"},
+    {"name": "prompt_submit", "fires": "the user's prompt is accepted, before the model works on it"},
+    {"name": "tool_before", "fires": "a tool call is about to run"},
+    {"name": "tool_after", "fires": "a tool call has returned"},
+    {"name": "tool_failure", "fires": "a tool call has failed"},
+    {"name": "permission_request", "fires": "the agent asks the user to allow an action"},
+    {"name": "notification", "fires": "the agent shows the user a notice (a prompt opened, a turn ended)"},
+    {"name": "turn_end", "fires": "the agent is back at its prompt"},
+    {"name": "turn_end_failure", "fires": "the turn ended on an error"},
+    {"name": "session_end", "fires": "the conversation or the process ends"}
+  ],
+  "reactions": {
+    "observe": "permitted",
+    "inject_context": "permitted",
+    "block": "not_permitted"
+  },
+  "payload": {
+    "schema": {"type": "integer", "value": 1},
+    "event": {"type": "event"},
+    "agent": {"type": "agent"},
+    "native": {"type": "string", "max": 64},
+    "at": {"type": "number"},
+    "conversation": {"type": "string", "max": 256, "optional": true},
+    "occurrence": {"type": "string", "max": 64, "optional": true},
+    "tool": {"type": "string", "max": 256, "optional": true},
+    "tool_use": {"type": "string", "max": 256, "optional": true},
+    "notice": {"type": "enum", "values": ["permission", "question", "turn_completed", "turn_failed"], "optional": true},
+    "error": {"type": "string", "max": 256, "optional": true}
+  },
+  "consumers": [
+    {
+      "name": "state",
+      "reaction": "observe",
+      "program": "mesh-event",
+      "switch": null,
+      "kinds": {
+        "session_start": "done",
+        "prompt_submit": "working",
+        "tool_before": "working",
+        "tool_after": "working",
+        "tool_failure": "working",
+        "permission_request": "waiting_permission",
+        "turn_end": "done",
+        "turn_end_failure": "error"
+      },
+      "notice_kinds": {
+        "permission": "waiting_permission",
+        "question": "waiting_question",
+        "turn_completed": "done",
+        "turn_failed": "error"
+      }
+    },
+    {
+      "name": "project_context",
+      "reaction": "inject_context",
+      "program": "work-read",
+      "args": ["context", "--format"],
+      "switch": "MESH_PROJECT_HOOKS",
+      "cap_seconds": 1.5
+    }
+  ],
+  "sources": [
+    {
+      "agent": "claude",
+      "kind": "native_config",
+      "install": "inline_settings",
+      "timeout": {"value": 5, "unit": "s"},
+      "state_args": ["claude"],
+      "inject": {"session_start": "claude"},
+      "events": [
+        {"event": "session_start", "native": "SessionStart"},
+        {"event": "prompt_submit", "native": "UserPromptSubmit"},
+        {"event": "tool_before", "native": "PreToolUse"},
+        {"event": "permission_request", "native": "PermissionRequest"},
+        {"event": "tool_after", "native": "PostToolUse"},
+        {"event": "turn_end", "native": "Stop"},
+        {"event": "turn_end_failure", "native": "StopFailure"}
+      ],
+      "subscriptions": {
+        "state": ["prompt_submit", "tool_before", "permission_request", "tool_after", "turn_end", "turn_end_failure"],
+        "project_context": ["session_start"]
+      }
+    },
+    {
+      "agent": "gemini",
+      "kind": "native_config",
+      "install": "private_overlay",
+      "timeout": {"value": 5000, "unit": "ms"},
+      "state_args": ["gemini"],
+      "inject": {},
+      "events": [
+        {"event": "prompt_submit", "native": "BeforeAgent"},
+        {"event": "tool_before", "native": "BeforeTool"},
+        {"event": "tool_after", "native": "AfterTool"},
+        {"event": "notification", "native": "Notification"},
+        {"event": "turn_end", "native": "AfterAgent"}
+      ],
+      "subscriptions": {
+        "state": ["prompt_submit", "tool_before", "tool_after", "notification", "turn_end"]
+      }
+    },
+    {
+      "agent": "agy",
+      "kind": "plugin",
+      "install": "user_installed_plugin",
+      "timeout": {"value": 5, "unit": "s"},
+      "state_args": ["agy", "{native}"],
+      "inject": {},
+      "events": [
+        {"event": "prompt_submit", "native": "PreInvocation"},
+        {"event": "turn_end", "native": "Stop"}
+      ],
+      "subscriptions": {
+        "state": ["prompt_submit", "turn_end"]
+      }
+    },
+    {
+      "agent": "copilot",
+      "kind": "plugin",
+      "install": "session_plugin_dir",
+      "timeout": {"value": 5, "unit": "s"},
+      "state_args": ["copilot", "{native}"],
+      "inject": {},
+      "events": [
+        {"event": "prompt_submit", "native": "userPromptSubmitted"},
+        {"event": "tool_after", "native": "postToolUse"},
+        {"event": "tool_failure", "native": "postToolUseFailure"},
+        {"event": "notification", "native": "notification"},
+        {"event": "turn_end", "native": "agentStop"},
+        {"event": "turn_end_failure", "native": "errorOccurred"}
+      ],
+      "subscriptions": {
+        "state": ["prompt_submit", "tool_after", "tool_failure", "notification", "turn_end", "turn_end_failure"]
+      }
+    },
+    {
+      "agent": "vibe",
+      "kind": "native_config",
+      "install": "private_overlay",
+      "timeout": {"value": 5, "unit": "s"},
+      "state_args": ["vibe"],
+      "inject": {"session_start": "vibe"},
+      "events": [
+        {"event": "session_start", "native": "session_start", "label": "session-start"},
+        {"event": "prompt_submit", "native": "pre_agent", "label": "prompt"},
+        {"event": "tool_before", "native": "pre_tool", "label": "tool"},
+        {"event": "tool_after", "native": "post_tool", "label": "tool-done"},
+        {"event": "notification", "native": "notification", "label": "notify"}
+      ],
+      "subscriptions": {
+        "state": ["session_start", "prompt_submit", "tool_before", "tool_after", "notification"],
+        "project_context": ["session_start"]
+      }
+    },
+    {
+      "agent": "opencode",
+      "kind": "plugin",
+      "install": "session_plugin_code",
+      "timeout": null,
+      "state_args": null,
+      "inject": {},
+      "events": [
+        {"event": "prompt_submit", "native": "session.status"},
+        {"event": "permission_request", "native": "permission.asked"},
+        {"event": "notification", "native": "question.asked"},
+        {"event": "turn_end", "native": "session.idle"},
+        {"event": "turn_end_failure", "native": "session.error"}
+      ],
+      "subscriptions": {}
+    },
+    {
+      "agent": "pi",
+      "kind": "extension",
+      "install": "session_extension_code",
+      "timeout": null,
+      "state_args": null,
+      "inject": {},
+      "events": [
+        {"event": "session_start", "native": "session_start"},
+        {"event": "prompt_submit", "native": "message_end"},
+        {"event": "session_end", "native": "session_shutdown"}
+      ],
+      "subscriptions": {}
+    },
+    {
+      "agent": "codex",
+      "kind": "none",
+      "install": "none",
+      "timeout": null,
+      "state_args": null,
+      "inject": {},
+      "events": [],
+      "subscriptions": {},
+      "reason": "Codex reads its hooks (notify, and SessionStart since 0.170) only from the user's own configuration, and a hook added there must be reviewed by the user before it runs: Mesh has no per-session place to declare one, so it installs none (notify would also replace the user's own)."
+    }
+  ]
+}

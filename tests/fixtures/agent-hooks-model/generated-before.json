@@ -1,0 +1,72 @@
+{
+  "claude_inline": "{\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}],\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}],\"PermissionRequest\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}]},\"tui\":\"default\"}",
+  "claude_merge": "{\"model\":\"x\",\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/home/u/own-stop\",\"timeout\":3}]},{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}],\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"/old/install/bin/mesh-event claude\"}]},{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}],\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/home/u/own-start\"}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}],\"PermissionRequest\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"@BIN@/mesh-event claude\",\"timeout\":5}]}]},\"tui\":\"default\"}",
+  "gemini": {
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/u/own"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BIN@/mesh-event gemini >/dev/null 2>&1 || true",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BIN@/mesh-event gemini >/dev/null 2>&1 || true",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BIN@/mesh-event gemini >/dev/null 2>&1 || true",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BIN@/mesh-event gemini >/dev/null 2>&1 || true",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@BIN@/mesh-event gemini >/dev/null 2>&1 || true",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  },
+  "agy": "{\n  \"session-mesh\": {\n    \"PreInvocation\": [\n      {\n        \"command\": \"@BIN@/mesh-event agy PreInvocation\",\n        \"timeout\": 5\n      }\n    ],\n    \"Stop\": [\n      {\n        \"command\": \"@BIN@/mesh-event agy Stop\",\n        \"timeout\": 5\n      }\n    ]\n  }\n}\n",
+  "vibe": "[[hooks]]\nname = \"session-mesh-session-start\"\ntype = \"session_start\"\ncommand = \"@BIN@/mesh-event vibe\"\ntimeout = 5\n\n[[hooks]]\nname = \"session-mesh-prompt\"\ntype = \"pre_agent\"\ncommand = \"@BIN@/mesh-event vibe\"\ntimeout = 5\n\n[[hooks]]\nname = \"session-mesh-tool\"\ntype = \"pre_tool\"\ncommand = \"@BIN@/mesh-event vibe\"\ntimeout = 5\n\n[[hooks]]\nname = \"session-mesh-tool-done\"\ntype = \"post_tool\"\ncommand = \"@BIN@/mesh-event vibe\"\ntimeout = 5\n\n[[hooks]]\nname = \"session-mesh-notify\"\ntype = \"notification\"\ncommand = \"@BIN@/mesh-event vibe\"\ntimeout = 5\n",
+  "copilot": "{\n  \"version\": 1,\n  \"hooks\": {\n    \"userPromptSubmitted\": [\n      {\"type\": \"command\", \"bash\": \"[ -x \\\"$MESH_EVENT_BIN\\\" ] && exec \\\"$MESH_EVENT_BIN\\\" copilot userPromptSubmitted; exit 0\", \"timeoutSec\": 5}\n    ],\n    \"postToolUse\": [\n      {\"type\": \"command\", \"bash\": \"[ -x \\\"$MESH_EVENT_BIN\\\" ] && exec \\\"$MESH_EVENT_BIN\\\" copilot postToolUse; exit 0\", \"timeoutSec\": 5}\n    ],\n    \"postToolUseFailure\": [\n      {\"type\": \"command\", \"bash\": \"[ -x \\\"$MESH_EVENT_BIN\\\" ] && exec \\\"$MESH_EVENT_BIN\\\" copilot postToolUseFailure; exit 0\", \"timeoutSec\": 5}\n    ],\n    \"notification\": [\n      {\"type\": \"command\", \"bash\": \"[ -x \\\"$MESH_EVENT_BIN\\\" ] && exec \\\"$MESH_EVENT_BIN\\\" copilot notification; exit 0\", \"timeoutSec\": 5}\n    ],\n    \"agentStop\": [\n      {\"type\": \"command\", \"bash\": \"[ -x \\\"$MESH_EVENT_BIN\\\" ] && exec \\\"$MESH_EVENT_BIN\\\" copilot agentStop; exit 0\", \"timeoutSec\": 5}\n    ],\n    \"errorOccurred\": [\n      {\"type\": \"command\", \"bash\": \"[ -x \\\"$MESH_EVENT_BIN\\\" ] && exec \\\"$MESH_EVENT_BIN\\\" copilot errorOccurred; exit 0\", \"timeoutSec\": 5}\n    ]\n  }\n}\n"
+}

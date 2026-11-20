@@ -124,6 +124,9 @@ and the agent guide's "Track your work" section says which system to use for wha
 for the agent's own work, the Projects view's projects for the owner's configuration, Roster's
 commands for a Roster pipeline. The tracker adds its tool declarations (about 4,000 tokens) and its
 server instructions (about 1,000) to an agent's context. See [work-mcp.md](work-mcp.md#registration).
+At the start of a Claude or Vibe session, a read-only hook adds one sentence with the ids and counts of the
+session's tasks and questions, never their text ([The project context hook](agent-hooks.md#the-project-context-hook);
+`MESH_PROJECT_HOOKS=0` turns it off). Which hooks each agent receives is in [agent-hooks.md](agent-hooks.md).
 
 The "Folder" field of the "New session" dialog starts with the folder of the session you are
 looking at (the home folder when there is none). It is a combobox: its list of suggestions opens
@@ -1068,7 +1071,7 @@ reported and no notice is typed).
 "New session" offers Mistral Vibe (`vibe`, the `mistral-vibe` package, tested on 3.1.2). For that session
 only, the mesh sets `VIBE_MCP_SERVERS` (the `mesh-board` MCP server) and gives Vibe one extra directory with
 `--add-dir`: Vibe reads the `.vibe/hooks.toml` of every directory it is given, and the mesh's file there
-holds the state hooks. That flag also makes the directory a workspace root of the agent, so the mesh creates
+holds the state hooks and the project context hook ([agent-hooks.md](agent-hooks.md)). That flag also makes the directory a workspace root of the agent, so the mesh creates
 one read-only directory per session, holding nothing else, and deletes it when the session ends. Your `~/.vibe/config.toml`, `~/.vibe/hooks.toml` and project `.vibe` directory are
 changed in no way, and no credential is read. Vibe replaces a configured MCP server of the same name as a
 whole, so what you set on `mesh-board` (`disabled`, `disabled_tools`, in your user or project

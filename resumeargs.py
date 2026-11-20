@@ -49,15 +49,19 @@ CODEX_STANDARD_OUTPUT = "tui.raw_output_mode=false"
 # release install unresolved), never looked up in PATH: a hook runs inside the
 # agent's process, whose PATH is user-controlled and unrelated to this mesh.
 MESH_EVENT = str(agentmcp.runtime_bin() / "mesh-event")
-_CLAUDE_HOOK_EVENTS = ("UserPromptSubmit", "PreToolUse", "PermissionRequest",
-                       "PostToolUse", "Stop", "StopFailure")
+_CLAUDE_HOOK_EVENTS = agentmcp.hook_events("claude", "state")
 _MAX_SETTINGS_BYTES = 1024 * 1024
 
 
 def _mesh_hooks():
-    """A fresh hook fragment: callers may merge it without sharing lists."""
-    hook = {"hooks": [{"type": "command", "command": f"{shlex.quote(MESH_EVENT)} claude", "timeout": 5}]}
-    return {"hooks": {event: [copy.deepcopy(hook)] for event in _CLAUDE_HOOK_EVENTS}}
+    """A fresh hook fragment: callers may merge it without sharing lists.  The state hooks, then the
+    read-only project context hook (agentmcp.project_context_hooks: SessionStart, when it is on)."""
+    timeout = agentmcp.hook_timeout("claude")
+    hook = {"hooks": [{"type": "command", "command": f"{shlex.quote(MESH_EVENT)} claude", "timeout": timeout}]}
+    hooks = {event: [copy.deepcopy(hook)] for event in _CLAUDE_HOOK_EVENTS}
+    for event, argv in agentmcp.project_context_hooks("claude"):
+        hooks.setdefault(event, []).append({"hooks": [{"type": "command", "command": shlex.join(argv), "timeout": timeout}]})
+    return {"hooks": hooks}
 
 
 def _settings_object(value):
@@ -131,14 +135,27 @@ def _installed_helpers(hooks):
     return {MESH_EVENT, *set.intersection(*others)}
 
 
+def _is_project_hook(hook):
+    """A project context hook of any installation: ``<absolute dir>/work-read context --format claude``."""
+    command = hook.get("command") if isinstance(hook, dict) and hook.get("type") == "command" else None
+    try:
+        words = shlex.split(command) if isinstance(command, str) else []
+    except ValueError:
+        return False
+    return (len(words) == 4 and os.path.isabs(words[0]) and os.path.basename(words[0]) == "work-read"
+            and words[1:] == ["context", "--format", "claude"])
+
+
 def _without_event_hooks(entries, helpers):
-    """One event's hook groups without the hooks running one of helpers: a
-    restored command must report to this deployment only.  A group left with
-    no hook is dropped; everything else is kept as it is."""
+    """One event's hook groups without the hooks running one of helpers or a
+    project context hook: a restored command must report to this deployment
+    only, under its current switch.  A group left with no hook is dropped;
+    everything else is kept as it is."""
     kept = []
     for group in entries:
         inner = group.get("hooks") if isinstance(group, dict) else None
-        remaining = [hook for hook in inner if _event_helper(hook) not in helpers] if isinstance(inner, list) else None
+        remaining = ([hook for hook in inner if _event_helper(hook) not in helpers and not _is_project_hook(hook)]
+                     if isinstance(inner, list) else None)
         if remaining is None or len(remaining) == len(inner):
             kept.append(group)
         elif remaining:

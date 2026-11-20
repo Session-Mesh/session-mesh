@@ -101,6 +101,43 @@ WORK_ENV_VARS = ["MESH_SESSION", "WL_HOME"]
 # off, tools disabled, approvals required) are kept.  The recognisers and the removal on resume use this list.
 MESH_SERVER_NAMES = (SERVER_NAME, WORK_SERVER_NAME)
 
+# The agent hook model (docs/agent-hooks.md): which native hook of each agent every Mesh consumer is
+# installed on, and its timeout, come from this one table; each generator below only shapes them.
+AGENT_HOOKS = json.loads((Path(__file__).resolve().parent / "agent-hooks.json").read_text(encoding="utf-8"))
+PROJECT_HOOKS_ENV = "MESH_PROJECT_HOOKS"
+
+
+def hook_source(agent):
+    return next(row for row in AGENT_HOOKS["sources"] if row["agent"] == agent)
+
+
+def hook_entries(agent, consumer):
+    """The table entries (event, native, label) of ``agent`` that ``consumer`` is installed on, in order."""
+    row = hook_source(agent)
+    return tuple(next(e for e in row["events"] if e["event"] == event) for event in row["subscriptions"].get(consumer, ()))
+
+
+def hook_events(agent, consumer):
+    return tuple(entry["native"] for entry in hook_entries(agent, consumer))
+
+
+def hook_timeout(agent):
+    return hook_source(agent)["timeout"]["value"]
+
+
+def project_context_hooks(agent, environ=os.environ):
+    """``((native event, argv), ...)`` of the read-only project context hook of ``agent``: none when the
+    switch is off (MESH_PROJECT_HOOKS=0), when work-read is not installed, or for an agent not wired."""
+    if environ.get(PROJECT_HOOKS_ENV, "1").strip().lower() in ("0", "off", "false", "no"):
+        return ()
+    reader = mesh_executable("work-read", environ)
+    if not _is_executable(reader):
+        return ()
+    consumer = next(c for c in AGENT_HOOKS["consumers"] if c["name"] == "project_context")
+    row = hook_source(agent)
+    return tuple((entry["native"], [str(reader), *consumer["args"], row["inject"][entry["event"]]])
+                 for entry in hook_entries(agent, "project_context"))
+
 
 _missing_board_reported = False
 
@@ -368,7 +405,7 @@ GEMINI_TRUST_ENV = "GEMINI_CLI_TRUSTED_FOLDERS_PATH"
 GEMINI_SETTINGS_MAX_BYTES = 1024 * 1024
 _GEMINI_PRIVATE = {"settings.json", "tmp", "history", "projects.json", "state.json"}
 _GEMINI_REDIRECTED = {"trustedFolders.json"}
-_GEMINI_HOOK_EVENTS = ("BeforeAgent", "BeforeTool", "AfterTool", "Notification", "AfterAgent")
+_GEMINI_HOOK_EVENTS = hook_events("gemini", "state")
 # Gemini runs a hook through a shell and denies the prompt or the tool when the command fails with output:
 # a hook must never become a dependency of the agent (see bin/mesh-event), so the command always succeeds
 # silently, whatever happens to mesh-event (moved, python3 not on Gemini's PATH, a sandbox...).
@@ -461,7 +498,7 @@ def gemini_settings(user, reach=None):
                     kept.append({**group, "hooks": inner})
             else:
                 kept.append(group)
-        kept.append({"hooks": [{"type": "command", "command": _gemini_hook_command(), "timeout": 5000}]})
+        kept.append({"hooks": [{"type": "command", "command": _gemini_hook_command(), "timeout": hook_timeout("gemini")}]})
         hooks[event] = kept
     return settings
 
@@ -532,7 +569,7 @@ def gemini_environment(home, environ=os.environ):
 # plugin is global, so an agy started inside a terminal (agy -p run by another agent) inherits the
 # token too: the server keeps only the events of the session's own agy (server.EventState.foreign).
 AGY_PLUGIN_NAME = "session-mesh"
-AGY_HOOKS = ("PreInvocation", "Stop")
+AGY_HOOKS = hook_events("agy", "state")
 
 
 def agy_plugin_files(bridge=None, event=None):
@@ -543,7 +580,7 @@ def agy_plugin_files(bridge=None, event=None):
         "plugin.json": {"name": AGY_PLUGIN_NAME, "displayName": "Session Mesh", "version": "1.0.0",
                         "description": "Board tools and state reports for terminals started by Session Mesh."},
         "hooks.json": {AGY_PLUGIN_NAME: {
-            hook: [{"command": f"{shlex.quote(event)} agy {hook}", "timeout": 5}] for hook in AGY_HOOKS}},
+            hook: [{"command": f"{shlex.quote(event)} agy {hook}", "timeout": hook_timeout("agy")}] for hook in AGY_HOOKS}},
     }
     if bridge and (servers := mesh_servers("agy", bridge=bridge)):
         files["mcp_config.json"] = {"mcpServers": {server.name: _stdio_entry(server) for server in servers}}
@@ -577,8 +614,7 @@ def write_agy_plugin(directory):
 # and no process argument (the shell of the pty would otherwise expand it into the argv of ``env``).
 VIBE_MCP_ENV = "VIBE_MCP_SERVERS"
 VIBE_HOOKS_DIRNAME = "mesh-vibe-hooks"
-_VIBE_HOOK_EVENTS = (("session_start", "session-start"), ("pre_agent", "prompt"), ("pre_tool", "tool"),
-                     ("post_tool", "tool-done"), ("notification", "notify"))
+_VIBE_HOOK_EVENTS = tuple((entry["native"], entry["label"]) for entry in hook_entries("vibe", "state"))
 _VIBE_MARK = "@@mesh-env:{}@@"
 _VIBE_MARKS = re.compile(r"@@mesh-env:([A-Z_]+)@@")
 _TOKEN_MARK = _VIBE_MARK.format("MESH_SESSION_TOKEN")
@@ -759,7 +795,10 @@ def vibe_hooks_dir(conf_dir, launch_id, event_command=None):
     lines = []
     for point, name in _VIBE_HOOK_EVENTS:
         lines += ["[[hooks]]", f'name = "session-mesh-{name}"', f'type = "{point}"',
-                  f"command = {json.dumps(shlex.quote(str(command)) + ' vibe')}", "timeout = 5", ""]
+                  f"command = {json.dumps(shlex.quote(str(command)) + ' vibe')}", f"timeout = {hook_timeout('vibe')}", ""]
+    for point, argv in project_context_hooks("vibe"):       # read-only; its JSON output reaches the model
+        lines += ["[[hooks]]", 'name = "session-mesh-project-context"', f'type = "{point}"',
+                  f"command = {json.dumps(shlex.join(argv))}", f"timeout = {hook_timeout('vibe')}", ""]
     root = Path(conf_dir) / VIBE_HOOKS_DIRNAME
     directory = root / launch_id
     try:
