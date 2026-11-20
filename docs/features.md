@@ -293,7 +293,10 @@ project tracker that agents write through `mesh-work`, read only:
 - **A project, in five tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent
   activity, open questions, milestones, risks), "Board" (columns to do, in progress, blocked or
   waiting, done, and "Other" for any other status, shown only when it holds tasks), "Timeline"
-  (a bar from creation to done or today, with due dates and estimates), "Dependencies" (the tasks
+  (a bar from creation to done or today, with due dates and estimates; each bar takes the colour and
+  pattern of its task's status, to do hatched, in progress and done solid, waiting dashed, blocked
+  with an end cap, dropped hollow, a legend line lists them, and each bar is named with its status
+  for screen readers), "Dependencies" (the tasks
   by dependency level, cycles labelled) and "Questions" (the project's questions, open and
   answered, grouped by task, then "Without a task" for those about the project itself, each with
   the answer form; at most 20, open ones first). The French interface names them "Reprise",
