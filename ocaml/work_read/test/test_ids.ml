@@ -166,6 +166,56 @@ let test_caps () =
     (U.to_int (U.member "tasks_omitted" doc) >= extra);
   Alcotest.(check bool) "truncated" true (U.to_bool (U.member "truncated" doc))
 
+(* Hostile titles (every byte a quote, which JSON doubles) on a large tracker:
+   the output bound is shared fairly, so the short lists stay whole and only
+   the long one is cut, instead of the questions and projects going first. *)
+let test_fair_bound () =
+  let repo = copy_fixture () in
+  let quotes = String.concat "" (List.init 100 (fun _ -> {|\"|})) in
+  let ts i =
+    Printf.sprintf "2026-11-09T%02d:%02d:%02dZ"
+      (i / 3600 mod 24)
+      (i / 60 mod 60)
+      (i mod 60)
+  in
+  let task i =
+    Printf.sprintf
+      {|{"ts":"%s","task":"T-%06x","type":"created","title":"%s","project":"gateway","category":"platform","priority":"P2","status":"todo"}|}
+      (ts i) (0x100000 + i) quotes
+  in
+  let project i =
+    Printf.sprintf
+      {|{"ts":"%s","task":"P-%06x","type":"project_created","title":"%s","product":"relay","category":"platform"}|}
+      (ts i) (0x200000 + i) quotes
+  in
+  let question i =
+    Printf.sprintf
+      {|{"ts":"%s","task":"T-%06x","type":"question","id":"N-%08x","text":"%s","agent":"codex","session":"s-q"}|}
+      (ts i) (0x100000 + i) (0x30000000 + i) quotes
+  in
+  append_events repo
+    (List.init 4500 task @ List.init 1200 project @ List.init 1200 question);
+  let r = run repo [ "ids" ] in
+  if r.code <> 0 then Alcotest.failf "ids: exit %d" r.code;
+  let doc = json r in
+  let count key = List.length (entries key doc) in
+  Alcotest.(check bool)
+    "under the bound" true
+    (String.length r.out <= Work_read.Wr_out.max_output_bytes + 1);
+  Alcotest.(check int)
+    "projects whole (up to their cap)" Work_read.Wr_ids.max_projects
+    (count "projects");
+  Alcotest.(check int)
+    "questions whole (up to their cap)" Work_read.Wr_ids.max_questions
+    (count "questions");
+  Alcotest.(check bool)
+    "tasks cut, not emptied" true
+    (count "tasks" >= 1000 && count "tasks" < Work_read.Wr_ids.max_tasks);
+  Alcotest.(check bool)
+    "the cut tasks counted" true
+    (U.to_int (U.member "tasks_omitted" doc) >= 4500 - count "tasks");
+  Alcotest.(check bool) "truncated" true (U.to_bool (U.member "truncated" doc))
+
 let tests =
   [
     Alcotest.test_case "ids and titles" `Quick test_document;
@@ -176,4 +226,5 @@ let tests =
       test_request_form;
     Alcotest.test_case "read only" `Quick test_read_only;
     Alcotest.test_case "caps" `Slow test_caps;
+    Alcotest.test_case "fair share of the output bound" `Slow test_fair_bound;
   ]

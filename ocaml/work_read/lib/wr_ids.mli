@@ -14,7 +14,13 @@
     [questions[] {id, title, about?, project?}], answered ones included, newest
     first, where [title] is the start of the question's text and [project] the
     project it is about, directly or through its task. Nothing else: no status,
-    note, session, folder or timeline. Titles are cut at {!max_title} bytes. *)
+    note, session, folder or timeline. Titles are cut at {!max_title} bytes.
+
+    The three lists share the output bound fairly: the shorter ones are kept
+    whole when they fit in an equal share, and a longer one keeps its head
+    (most recent first); what is left out is counted in [<list>_omitted] and
+    sets [truncated]. A client must treat an id missing from a truncated
+    document as not known yet, not as unknown for good. *)
 
 val max_tasks : int
 (** 4000; the others are counted in [tasks_omitted]. *)

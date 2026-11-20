@@ -49,11 +49,66 @@ let question (world : W.Model.world) (q : Q.question) =
     @ R.opt_tstr ~max:40 "about" q.about
     @ R.opt_tstr ~max:40 "project" (project_of world q.about))
 
+(* The three lists share the output bound fairly (max-min): taken from the
+   shortest to the longest, a list is kept whole when it fits in an equal share
+   of what is left, else it keeps the head (the most recent items) that fits.
+   Without this, the generic cut of {!Wr_fit} would empty the questions and the
+   projects first. The slack leaves room for the rest of the document. *)
+let budget = Wr_out.max_output_bytes - 10_000
+let item_size item = String.length (Yojson.Safe.to_string item) + 1
+
+let head_within share items =
+  let rec go used acc = function
+    | item :: rest when used + item_size item <= share ->
+        go (used + item_size item) (item :: acc) rest
+    | _ -> List.rev acc
+  in
+  go 0 [] items
+
+let fair_shares lists =
+  let sized =
+    List.map
+      (fun (key, items) ->
+        (key, items, List.fold_left (fun n i -> n + item_size i) 0 items))
+      lists
+  in
+  let rec go remaining left acc = function
+    | [] -> acc
+    | (key, items, size) :: rest ->
+        let share = remaining / left in
+        let kept, used =
+          if size <= share then (items, size)
+          else
+            let kept = head_within share items in
+            (kept, List.fold_left (fun n i -> n + item_size i) 0 kept)
+        in
+        go (remaining - used) (left - 1) ((key, kept) :: acc) rest
+  in
+  go budget (List.length sized) []
+    (List.stable_sort (fun (_, _, a) (_, _, b) -> compare a b) sized)
+
+(* [key: kept] and, when some were left out (by the count cap or the fair
+   share), [key_omitted]. *)
+let field shares (key, _, items) =
+  let kept = List.assoc key shares in
+  let omitted = List.length items - List.length kept in
+  if omitted > 0 then Wr_out.mark_truncated ();
+  (key, `List kept)
+  :: (if omitted > 0 then [ (key ^ "_omitted", `Int omitted) ] else [])
+
 let run (loaded : Wr_load.t) =
   let world = Wr_load.world loaded in
-  Ok
-    (Wr_out.document "ids"
-       (Wr_out.list "tasks" max_tasks (tasks world)
-       @ Wr_out.list "projects" max_projects (projects world)
-       @ Wr_out.list "questions" max_questions
-           (List.rev_map (question world) loaded.questions)))
+  let lists =
+    [
+      ("tasks", max_tasks, tasks world);
+      ("projects", max_projects, projects world);
+      ( "questions",
+        max_questions,
+        List.rev_map (question world) loaded.questions );
+    ]
+  in
+  let capped =
+    List.map (fun (key, cap, items) -> (key, fst (R.cap cap items))) lists
+  in
+  let shares = fair_shares capped in
+  Ok (Wr_out.document "ids" (List.concat_map (field shares) lists))
