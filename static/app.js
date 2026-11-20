@@ -3792,7 +3792,8 @@ function itemHtml(s, opts = {}) {
   const preview = mine ? a.said || a.last : a?.last;
   const nativeVoice = s.kind === "mesh" && inlineDictation?.peekSession(s.name, s.created);
   const voice = nativeVoice?.outstanding ? nativeVoice : s.kind === "mesh" && dictation?.peekSession(s.name, s.created);
-  const voiceLabel = nativeVoice?.outstanding ? inlineStateLabel(nativeVoice) : voice ? MeshPaneActions.dictationLabel(voice.state) : "";
+  const voiceLabel = nativeVoice?.outstanding ? inlineStateLabel(nativeVoice)
+    : voice ? MeshPaneActions.dictationLabel(voice.state) : "";
   const voiceBadge = voice?.outstanding ? `<span class="dictation-label" data-state="${esc(voice.state)}">${esc(voiceLabel)}</span>` : "";
   const rowBadge = rowSt === "ready" ? "" : `<span class="row-state ${rowSt}">${esc(t(`sessions.row.${rowSt}`))}</span>`;
   const row = `<button class="item ${here ? "sel" : shown ? "shown" : ""}${s.folder ? " in-folder" : ""}${mine ? ` ${st}` : ""}${rowSt === "ready" ? "" : ` row-${rowSt}`}" data-id="${esc(s.id)}"${opts.todo ? "" : drag}>
@@ -4685,7 +4686,9 @@ let pendingClientVersion = "";
 function reloadHolds() {
   const holds = [];
   const add = (kind, label, owner = null) => holds.push({ kind, label, owner });
-  for (const session of dictation?.holds() || []) add("dictation", t("dictation.reloadHold", {session: session.name}), session);
+  for (const session of dictation?.holds() || []) {
+    add("dictation", t("dictation.reloadHold", {session: session.name}), session);
+  }
   for (const session of inlineDictation?.holds() || []) add("dictation", t("dictation.reloadHold", {session: session.name}), session);
   if (fieldHoldsText()) add("draft", t("reload.hold.draft"));
   if (linePending) add("line-pending", t("reload.hold.linePending"), linePending);
@@ -7087,7 +7090,8 @@ function dictationCaptureEligible(session) {
     && owner.target.name === session.name && owner.target.created === session.created
     && identity?.created === session.created && connection?.created === session.created
     && row && rowAuthoritative(row) && row.agent?.status !== "busy"
-    && !connection.closed && !connection.ended && !connection.replaying && !connection.draining && !connection.replayPending
+    && !connection.closed && !connection.ended && !connection.replaying
+    && !connection.draining && !connection.replayPending
     && connection.terminal?.isOpen() && connection.terminal.dictationMode.valid
     && pane.inputOrigin?.supported && !pane.inputLease?.inputDirty);
 }
@@ -7111,7 +7115,8 @@ function retainDictationChannel(session) {
       if (!localMeshEffectsAllowed() || !dictationInventoryReady || !terminal.isOpen()
           || !rowAuthoritative(find(owner.target.sessionId))
           || connection.ended || connection.ws !== socket || identity?.created !== session.created
-          || identity?.name !== session.name || session.discard || session.sent && session.state !== "delivering") return false;
+          || identity?.name !== session.name || session.discard
+          || session.sent && session.state !== "delivering") return false;
       if (session.state === "delivering") {
         sendRevision ??= session.revision;
         if (session.revision !== sendRevision) return false;
@@ -7130,7 +7135,8 @@ function startDictation() {
       write: (enabled) => localStorage.setItem(preferenceKey, JSON.stringify(enabled))},
     changed: () => {renderComposeStatus(); renderLists(); renderDictationBadges();},
     retain: retainDictationChannel, request: (path, init) => requestLocal(path, init),
-    schedule: (callback, ms) => setTimeout(callback, ms), unschedule: (id) => clearTimeout(id), now: () => performance.now(),
+    schedule: (callback, ms) => setTimeout(callback, ms), unschedule: (id) => clearTimeout(id),
+    now: () => performance.now(),
   });
   void dictation.start();
   startInlineDictation();
@@ -7324,7 +7330,8 @@ function renderDictationBadges(onlyPane = null) {
     const s = find(pane.id), native = s?.kind === "mesh" && inlineDictation?.peekSession(s.name, s.created);
     const session = native?.outstanding ? native : s?.kind === "mesh" && dictation?.peekSession(s.name, s.created);
     badge.hidden = !session?.outstanding; badge.dataset.state = session?.state || "idle";
-    badge.textContent = native?.outstanding ? inlineStateLabel(native) : session ? MeshPaneActions.dictationLabel(session.state) : "";
+    badge.textContent = native?.outstanding ? inlineStateLabel(native)
+      : session ? MeshPaneActions.dictationLabel(session.state) : "";
   }
   renderInlineDictation(onlyPane);
 }
@@ -7465,7 +7472,11 @@ function openCompose(preset = "", fromRecovery = false) {
 }
 function retireComposeOwner(owner) {
   if (!owner) return;
-  if (composeOwner === owner) {syncDictationDraft(); const s = composeDictationSession(owner); if (s) dictation?.detach(s);}
+  if (composeOwner === owner) {
+    syncDictationDraft();
+    const s = composeDictationSession(owner);
+    if (s) dictation?.detach(s);
+  }
   owner.close(); owner.operation?.cancel(); paneTargets.release(owner.target);
   if (composeOwner !== owner) return;
   composeOwner = null; ctext.value = ""; renderComposeStatus();

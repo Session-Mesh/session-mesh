@@ -13,6 +13,7 @@ const flush = async () => {for (let i = 0; i < 20; i++) await Promise.resolve();
 function backgroundFixture(saved = false) {
   const jobs = new Map<string, any>(), delivered: {session: string; text: string}[] = [];
   const requests: string[] = [], fresh = new Map<string, boolean>();
+  const channelCalls: string[] = [];
   let permission = async () => ({getTracks: () => [{stop() {}}]}) as any;
   const recorder: any = {state: 'inactive', mimeType: 'audio/webm', start() {this.state = 'recording';},
     stop() {this.state = 'inactive'; queueMicrotask(() => {
@@ -21,8 +22,13 @@ function backgroundFixture(saved = false) {
   const controller = createDictationController({namespace: 'local', uuid: () => crypto.randomUUID(),
     allowed: () => true, changed() {}, preference: {read: () => saved, write: value => {saved = value;}},
     media: {supported: () => true, permission: () => permission(), recorder: () => recorder},
-    retain: s => ({valid: () => true, captureFresh: () => fresh.get(s.name) !== false, claim: () => true, release() {},
-      deliver(text, done, guard) {if (guard()) delivered.push({session: s.name, text}); done({kind: guard() ? 'submitted' : 'uncertain'});}}),
+    retain: s => ({valid: () => true, captureFresh: () => fresh.get(s.name) !== false,
+      claim() {channelCalls.push('claim'); return true;}, release() {},
+      deliver(text, done, guard) {
+        channelCalls.push('deliver');
+        if (guard()) delivered.push({session: s.name, text});
+        done({kind: guard() ? 'submitted' : 'uncertain'});
+      }}),
     request: async (path, init) => {
       requests.push(path);
       if (path.endsWith('/config')) return Response.json({enabled: true, max_bytes: 100, capture_seconds: 2});
@@ -37,7 +43,7 @@ function backgroundFixture(saved = false) {
       if (path.endsWith('/settle') || path.endsWith('/cancel')) job.state = path.endsWith('/settle') ? 'settled' : 'cancelled';
       return Response.json(job);
     }, schedule: () => 1, unschedule() {}, now: () => 0});
-  return {controller, delivered, jobs, requests, fresh, saved: () => saved,
+  return {controller, delivered, jobs, requests, fresh, channelCalls, saved: () => saved,
     setPermission(fn: typeof permission) {permission = fn;}};
 }
 async function record(f: ReturnType<typeof backgroundFixture>, name: string): Promise<DictationSession> {
@@ -90,6 +96,67 @@ test('changed original terminal history or changed draft prevents automatic deli
   const b = await record(f, 'B'); b.edit('human draft'); await ready(f, b);
   assert.equal(b.state, 'recovery'); assert.equal(b.text, 'human draft'); assert.equal(b.transcript, 'spoken B');
   assert.deepEqual(f.delivered, []); f.controller.dispose();
+});
+
+for (const autoSend of [false, true]) {
+  test(`ready transcripts reject every C1 control without input or automatic recovery (autoSend=${autoSend})`, async () => {
+    const controls = [0x00, 0x08, 0x0b, 0x0c, 0x0d, 0x1b, 0x1f, 0x7f,
+      ...Array.from({length: 0x20}, (_, index) => 0x80 + index)];
+    for (const point of controls) {
+      const f = backgroundFixture(autoSend);
+      try {
+        await f.controller.start();
+        const s = await record(f, 'A'), requestId = s.requestId;
+        const text = `before${String.fromCodePoint(point)}after`;
+        Object.assign(f.jobs.get(s.name), {state: 'ready', text});
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await f.controller.reconcile(s); await flush();
+          assert.equal(s.state, 'recovery', `U+${point.toString(16)}`);
+          assert.equal(s.message, 'statusUnavailable');
+          assert.equal(s.text, '', 'invalid text is rejected, never stripped into a draft');
+          assert.equal(s.transcript, '');
+          assert.equal(s.insertionRevision, null);
+          assert.equal(s.autoAttempted, false);
+          assert.equal(s.requestId, requestId, 'recovery keeps the original request binding');
+          assert.equal(f.controller.send(s), false);
+          assert.equal(f.controller.send(s, true), false);
+        }
+        assert.deepEqual(f.channelCalls, [], 'invalid results cannot claim or deliver on the channel');
+        assert.deepEqual(f.delivered, [], 'no terminal write or submit');
+        assert.equal(f.requests.filter(path => path === '/api/transcribe').length, 1);
+        assert.equal(f.requests.some(path => path.endsWith('/settle')), false);
+      } finally {f.controller.dispose();}
+    }
+  });
+
+  test(`TAB/LF and printable C1 boundaries remain exact and sendable (autoSend=${autoSend})`, async () => {
+    const f = backgroundFixture(autoSend), text = 'before\x7e\tline\n\xa0été';
+    try {
+      await f.controller.start();
+      const s = await record(f, 'A');
+      Object.assign(f.jobs.get(s.name), {state: 'ready', text});
+      await f.controller.reconcile(s); await flush();
+      if (!autoSend) {
+        assert.equal(s.state, 'ready');
+        assert.equal(s.text, text);
+        assert.equal(f.controller.send(s), true); await flush();
+      }
+      assert.deepEqual(f.delivered, [{session: 'A', text}]);
+      assert.deepEqual(f.channelCalls, ['claim', 'deliver']);
+    } finally {f.controller.dispose();}
+  });
+}
+
+test('ready transcript validation does not narrow explicit manual draft edits', async () => {
+  const f = backgroundFixture();
+  try {
+    await f.controller.start();
+    const s = await record(f, 'A'); await ready(f, s);
+    const text = 'explicit manual edit\x85\r';
+    s.edit(text);
+    assert.equal(f.controller.send(s), true); await flush();
+    assert.deepEqual(f.delivered, [{session: 'A', text}]);
+  } finally {f.controller.dispose();}
 });
 
 function channelFixture() {
