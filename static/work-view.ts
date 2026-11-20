@@ -193,8 +193,16 @@ class WorkView implements WorkViewController {
     const node = this.entryQuestionsNode, shown = this.entryQuestions;
     if (!this.active || this.project || this.entryReads > 0 || !node?.isConnected || shown.kind !== 'ready') return;
     if (typeof change.openQuestions !== 'number' || change.openQuestions === shown.doc.openQuestions) return;
-    if (document.activeElement && node.contains(document.activeElement)) return;
-    void this.rereadEntryQuestions(null, false);
+    if (document.activeElement && node.contains(document.activeElement)) return this.whenLeft(node);
+    void this.rereadEntryQuestions(null, false, undefined, true);
+  }
+
+  /** Read the entry screen's questions again once the focus has left `node` (the owner was answering there). */
+  private whenLeft(node: HTMLElement): void {
+    node.addEventListener('focusout', event => {
+      if (event.relatedTarget instanceof Node && node.contains(event.relatedTarget)) return this.whenLeft(node);
+      if (node === this.entryQuestionsNode && !this.project) void this.rereadEntryQuestions(null, false, undefined, true);
+    }, { once: true });
   }
 
   /** Read the count again for the badge (Refresh and answers in a project; the entry screen reads it with its list). */
@@ -267,17 +275,20 @@ class WorkView implements WorkViewController {
    *  unsent drafts (but the one of `answered`); focus goes to the answered question, or to the block after a retry.
    *  Only the read started last is shown, so an older answer never replaces a newer one. False when the read failed. */
   private async rereadEntryQuestions(answered: string | null, focus = true,
-    pending?: Promise<WorkResult<OpenQuestionsDoc>>): Promise<boolean> {
+    pending?: Promise<WorkResult<OpenQuestionsDoc>>, passive = false): Promise<boolean> {
     const token = this.generation, sequence = ++this.questionsSequence;
     this.entryReads++;
     const result = await (pending ?? this.api.openQuestions(this.controller?.signal)).finally(() => { this.entryReads--; });
-    if (token !== this.generation || sequence !== this.questionsSequence || this.project || !this.entryQuestionsNode) return true;
+    const node = this.entryQuestionsNode;
+    if (token !== this.generation || sequence !== this.questionsSequence || this.project || !node) return true;
     this.report(result);
-    const drafts = unsentDrafts(this.entryQuestionsNode, answered ?? '');
+    // A read the owner did not ask for never redraws under a field being typed in: it waits for the focus to leave.
+    if (passive && document.activeElement && node.contains(document.activeElement)) { this.whenLeft(node); return true; }
+    const drafts = unsentDrafts(node, answered ?? '');
     this.entryQuestions = this.nextQuestionsState(result, answered);
     const next = this.entryQuestionsBlock();
     restoreDrafts(next, drafts);
-    this.entryQuestionsNode.replaceWith(next);
+    node.replaceWith(next);
     this.entryQuestionsNode = next;
     if (focus) {
       const question = answered ? next.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(answered)}"]`) : null;
@@ -471,9 +482,9 @@ class WorkView implements WorkViewController {
     if (target !== document.body && !(target instanceof Node && this.options.root.contains(target))) return;   // a dialog or field elsewhere keeps its own Escape
     const project = this.project;
     if (escapeKeepsField(target)) { event.stopPropagation(); return; }
-    if (!project) return;
+    if (!project && this.nav.level() === 0) return;   // a project still read (or that failed) is level 1 already
     event.stopPropagation();
-    if (!project.view.detailSlot.hidden) this.closeDetail(project.view); else void this.backToEntry();
+    if (project && !project.view.detailSlot.hidden) this.closeDetail(project.view); else void this.backToEntry();
   }
 }
 

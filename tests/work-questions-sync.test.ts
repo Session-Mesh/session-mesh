@@ -177,6 +177,7 @@ function fakeHistory() {
   return {
     entries, index: () => index, queued,
     port: {
+      state: () => entries[index],
       pushState: (state: unknown) => { entries.splice(index + 1); entries.push(state); index++; },
       go: (delta: number) => { index = Math.max(0, Math.min(entries.length - 1, index + delta)); queued.push(entries[index]); },
     },
@@ -229,6 +230,21 @@ describe('the way back of the Projects view', () => {
     nav.popped(history.queued.shift());
     assert.equal(history.index(), 1);
     assert.deepEqual(history.entries.map(levelOf), [0, 1], 'pushed from the entry screen once there');
+  });
+
+  test('after a reload in a project, the entries of the previous load are reused, not stacked under new ones', () => {
+    const history = fakeHistory();
+    createWorkNav(history.port).at(1);
+    const nav = createWorkNav(history.port);   // the page reloaded on the project's entry
+    nav.at(1);                                 // the view opens a project again
+    assert.deepEqual(history.entries.map(levelOf), [0, 1], 'no second level-1 entry');
+    assert.equal(nav.popped(history.back()), 0, 'Back returns to the entry screen');
+    const fresh = fakeHistory();
+    createWorkNav(fresh.port).at(2);
+    const again = createWorkNav(fresh.port);
+    again.at(0);                               // the view opens on the entry screen: the old entries are taken back
+    assert.equal(fresh.index(), 0);
+    assert.equal(again.popped(fresh.queued.shift()), null);
   });
 
   test('an entry of the page that is not one of the view stands for the entry screen', () => {

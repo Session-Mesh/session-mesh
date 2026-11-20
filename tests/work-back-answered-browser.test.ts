@@ -130,6 +130,10 @@ const where = (page: Page) => page.evaluate(() => ({
   level: (history.state as { meshWorkLevel?: number } | null)?.meshWorkLevel ?? 0,
 }));
 
+/** The view's own moves through the history land a moment later (`history.go`): wait for the entry's level. */
+const atLevel = (page: Page, level: number) => page.waitForFunction(
+  expected => ((history.state as { meshWorkLevel?: number } | null)?.meshWorkLevel ?? 0) === expected, level);
+
 /** No element of a question card is drawn in the pending colour (--wait), text or border. */
 async function pendingColoured(page: Page, selector: string): Promise<string[]> {
   return page.evaluate(scope => {
@@ -183,13 +187,16 @@ describe('the way back inside a project', { skip }, () => {
       await sheetBack(page).focus();
       await page.keyboard.press('Enter');
       assert.equal((await where(page)).sheet, false);
+      await atLevel(page, 1);
       await card.click();
       await page.locator('.work-detail-heading').waitFor();
       await page.keyboard.press('Escape');
+      await atLevel(page, 1);
       assert.deepEqual(await where(page), { projecting: true, entry: false, tab: 'work-tab-board', sheet: false, path: '/', level: 1 });
       // Escape in a project goes to the entry screen (it used to leave Projects).
       await page.keyboard.press('Escape');
       await page.locator('.work-entry-questions h2 .work-count').waitFor();
+      await atLevel(page, 0);
       assert.deepEqual(await where(page), { projecting: true, entry: true, tab: null, sheet: false, path: '/', level: 0 });
       await page.waitForFunction(id => document.activeElement?.getAttribute('data-project') === id, OTHER_PROJECT);
 
@@ -203,6 +210,7 @@ describe('the way back inside a project', { skip }, () => {
       await page.waitForFunction(() => (document.querySelector('#work-root .work-detail-pane') as HTMLElement).hidden);
       await page.goBack();
       await page.locator('.work-entry-questions h2 .work-count').waitFor();
+      await atLevel(page, 0);
       assert.deepEqual(await where(page), { projecting: true, entry: true, tab: null, sheet: false, path: '/', level: 0 });
 
       // Leaving Projects from a sheet takes the view's history entries back: the next Back is not a dead one.
@@ -224,9 +232,37 @@ describe('the way back inside a project', { skip }, () => {
       await page.locator('#work-tab-board').focus();
       await page.keyboard.press('Escape');
       await page.locator('.work-entry-questions h2 .work-count').waitFor();
+      await atLevel(page, 0);
       assert.deepEqual(await where(page), { projecting: true, entry: true, tab: null, sheet: false, path: '/', level: 0 });
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => !document.body.classList.contains('projecting'));
+      if (!phone) {
+        // A reload inside a project keeps the history entry; the new page reuses it rather than stacking a second
+        // project entry, so Back from a project opened after the reload still reaches the entry screen.
+        await enterProjects(page, width);
+        await page.locator(`.work-entry-project[data-project="${OTHER_PROJECT}"]`).click();
+        await atLevel(page, 1);
+        await page.reload();
+        await page.locator('.work-entry-questions h2 .work-count').waitFor();
+        await atLevel(page, 0);
+        await page.locator(`.work-entry-project[data-project="${OTHER_PROJECT}"]`).click();
+        await atLevel(page, 1);
+        await page.goBack();
+        await page.locator('.work-entry-questions h2 .work-count').waitFor();
+        assert.deepEqual(await where(page), { projecting: true, entry: true, tab: null, sheet: false, path: '/', level: 0 });
+        // Escape while the project is still being read goes back to the entry screen too, not out of Projects.
+        await page.route('**/api/work/v1', async route => {
+          if (route.request().postData()?.includes('"op":"project"')) await new Promise(resolve => setTimeout(resolve, 3000));
+          await route.continue().catch(() => undefined);
+        });
+        await page.locator(`.work-entry-project[data-project="${OTHER_PROJECT}"]`).click();
+        await page.locator('#work-root .work-loading').waitFor();
+        await page.keyboard.press('Escape');
+        await page.locator('.work-entry-questions h2 .work-count').waitFor();
+        await atLevel(page, 0);
+        assert.equal((await where(page)).projecting, true, 'still in Projects');
+        await page.unroute('**/api/work/v1');
+      }
       await page.context().close();
     });
   }
