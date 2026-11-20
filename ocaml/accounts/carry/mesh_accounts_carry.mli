@@ -55,6 +55,15 @@
     conversation id taken without case; the second is refused with
     [carry_in_progress]. The lock file stays in the folder.
 
+    {b The lock excludes processes, not callers inside one process.} POSIX fcntl
+    locks belong to the process: two carries running in the same process (threads,
+    domains, Lwt) do not exclude each other, and closing any descriptor of the
+    lock file drops all of that process's locks. A caller that runs carries
+    in its own process (the web server) must therefore run one process per carry
+    (call [mesh-platform accounts carry]) or add its own in-process mutex. Nothing
+    is guaranteed on NFS, FUSE or SMB: locking may fail there (a [carry_failed]
+    refusal) or exclude nothing between machines.
+
     A carry killed half way can leave [.<name>.carry-new-<16 hex>] and
     [.<name>.carry-old-<16 hex>] next to the files it was writing. The next
     carry of that conversation into that folder removes the new ones, under the
@@ -75,6 +84,12 @@ type error = { code : string; message : string }
     [account_folder_refused], [account_unknown], [account_no_agent],
     [accounts_refused], [target_no_space], [carry_in_progress],
     [carry_restore_failed], [carry_rollback_incomplete], [carry_failed].
+    A caller can retry [carry_in_progress] (another carry holds the lock) and
+    [target_no_space] (once space is freed) as is; [carry_restore_failed] and
+    [carry_rollback_incomplete] name a file left in place and need someone to
+    step in; the others refuse the request as given. The CLI adds
+    [agent_unsupported] (an agent other than claude or codex) and exits 2 on a
+    usage error (wrong number of arguments), 1 on any refusal, 0 on success.
     [message] names paths relative to the account folders only: an absolute path
     is replaced by [<path>], a control character by [?], and an unknown alias is
     not repeated. *)
