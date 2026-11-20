@@ -20,11 +20,12 @@ type command =
   | Sessions_of of target
   | Session_questions
   | Ids
+  | Open_questions of { after : string option; limit : int }
 
 let usage =
   "usage: work-read products | projects [--product P] [--all] | project P-ID | task T-ID | resume \
    [--product P] [--project P-ID] [--all] | sessions-of (--product P | --project P-ID | --task T-ID) | \
-   session-questions | ids"
+   session-questions | ids | open-questions [--after N-ID] [--limit N]"
 
 let max_value = 100
 let is_hex c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
@@ -98,6 +99,21 @@ let resume args =
   let* project = value_of parsed "project" project_value in
   Ok (Resume { product; project; all = switch parsed "all" })
 
+let question_value = check "after" Work_mcp.Work_questions.valid_id
+
+(* A page size: one to {!Wr_open_questions.max_limit}, in decimal digits. *)
+let limit_value s =
+  let* s = safe_value "limit" s in
+  match int_of_string_opt s with
+  | Some n when String.for_all (fun c -> c >= '0' && c <= '9') s && n >= 1 && n <= Wr_open_questions.max_limit -> Ok n
+  | _ -> Error (invalid "limit must be a number from 1 to %d" Wr_open_questions.max_limit)
+
+let open_questions args =
+  let* parsed = flags [ ("after", Value); ("limit", Value) ] args in
+  let* after = value_of parsed "after" question_value in
+  let* limit = value_of parsed "limit" limit_value in
+  Ok (Open_questions { after; limit = Option.value limit ~default:Wr_open_questions.default_limit })
+
 let sessions_of args =
   let* parsed = flags [ ("product", Value); ("project", Value); ("task", Value) ] args in
   let* product = value_of parsed "product" product_value in
@@ -128,4 +144,5 @@ let parse = function
   | "session-questions" :: _ -> Error (invalid "session-questions takes no argument")
   | [ "ids" ] -> Ok Ids
   | "ids" :: _ -> Error (invalid "ids takes no argument")
+  | "open-questions" :: rest -> open_questions rest
   | cmd :: _ -> Error (invalid "unknown subcommand %s; %s" (T.clean (String.escaped cmd)) usage)

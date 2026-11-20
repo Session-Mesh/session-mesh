@@ -5,7 +5,7 @@
 (*                                                                            *)
 (******************************************************************************)
 
-(* The [context] of the questions of [resume]: where each open question stands
+(* The [context] of the questions of [resume] and [open-questions]: where each open question stands
    (task title, project, product, category), for the Projects view's list. The
    fixture has T-3c4d in P-5e6f (moved to product relay-edge, category platform) and
    T-6b7c in no project (relay-edge); T-9c0d is in the legacy category office. *)
@@ -53,7 +53,9 @@ let test_task_in_project () =
       ("task_title", "Book the harbour slot");
       ("project", "P-5e6f");
       ("project_title", "Delivery rollout");
-      ("product", "relay-edge");
+      (* the project's product, not relay-edge, where the task was moved: the
+         project is shown once, under its own product *)
+      ("product", "relay");
       ("category", "platform");
     ]
     (context (resume (tracker ())) "N-0000c001")

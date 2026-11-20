@@ -24,6 +24,9 @@ type command =
   | Sessions_of of target
   | Session_questions  (** the open questions of each session, by name *)
   | Ids  (** every task, project and question id with its title, for references *)
+  | Open_questions of { after : string option; limit : int }
+      (** a page of the open questions, oldest first: those asked after the
+          question [after] ([N-<hex>]), at most [limit] (1 to 100, default 20) *)
 
 val parse : string list -> (command, Work_mcp.Work_err.t) result
 (** The arguments after the program name. *)
