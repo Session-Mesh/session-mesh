@@ -235,7 +235,19 @@ project tracker that agents write through `mesh-work`, read only:
   other than `owner` (free text) appears only as the stated answerer. Under an open question, and
   under one answered only by relayed answers, the sheet has an answer form; your answer then
   replaces the relayed one, which stays visible, struck through. The answer is the only thing
-  the view writes (next paragraph but one).
+  the view writes (next paragraph but one). The sheet also lists the task's links (`links`).
+- **Links and documents.** In question, answer, note, blocker and event text, and in a task's
+  links, a web address (`https://` or `http://`) becomes a link that opens in a new tab, and the
+  path of a document (`~/…` or `/…`, ending in `.html`, `.htm`, `.md`, `.markdown`, `.svg`,
+  `.pdf`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.txt`, `.diff` or `.patch`) becomes a button
+  with the file's name. The button opens the document in a panel beside the view (over it on a
+  phone); Escape or "Close the document" closes it and gives the focus back to the button, and
+  "Open in a new tab" shows it alone. The panel shows the files the [document
+  panel](#documents-beside-the-terminals) shows, with the same limits; any other path shows "not
+  available". An HTML or SVG page is shown as a picture: its styles and inline diagrams, never its
+  scripts. Markdown, diffs and text use the document panel's viewers. Only plain ASCII text is
+  recognised: a path with a space, an accent or a relative path, and an address with another
+  scheme (`javascript:`, `data:`, `file:`) or a user name, stay text.
 - **The old view.** The "Old view" button in the Projects header shows the previous Projects
   workspace (next section) and "New view" comes back; the choice is remembered by the browser.
 

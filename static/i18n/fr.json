@@ -1793,10 +1793,18 @@
   "work.detail.events": "Événements",
   "work.detail.label": "Détail de la tâche",
   "work.detail.legend": "En pointillé : fait déduit, non confirmé.",
+  "work.detail.links": "Liens",
   "work.detail.notes": "Notes",
   "work.detail.openBlockers": "Blocages ouverts",
   "work.detail.questions": "Questions",
   "work.detail.sessions": "Sessions",
+  "work.doc.close": "Fermer le document",
+  "work.doc.label": "Document {name}",
+  "work.doc.loading": "Chargement du document…",
+  "work.doc.newTab": "Ouvrir dans un nouvel onglet",
+  "work.doc.newTabLabel": "Ouvrir {name} dans un nouvel onglet",
+  "work.doc.openLabel": "Ouvrir le document {name} ({path}) à côté de la vue",
+  "work.doc.unavailable": "Ce document n’est pas disponible : il n’existe pas, ou il est hors des dossiers que le panneau des documents peut montrer.",
   "work.doneOfTotal": {
     "one": "{done} faite sur {total}",
     "other": "{done} faites sur {total}"

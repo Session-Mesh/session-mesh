@@ -5,6 +5,7 @@
 
 import { el, notice, omittedNote } from './work-dom.ts';
 import type { ViewContext } from './work-dom.ts';
+import { linkText } from './work-linkify.ts';
 import { taskList } from './work-task-card.ts';
 import type { ProjectDoc, Question, TaskRow } from './work-types.ts';
 
@@ -28,7 +29,7 @@ function section(ctx: ViewContext, doc: ProjectDoc, spec: Section): HTMLElement 
 }
 
 function questionItem(ctx: ViewContext, question: Question): HTMLElement {
-  const item = el('li', 'work-question', el('span', 'work-question-text', question.text));
+  const item = el('li', 'work-question', el('span', 'work-question-text', linkText(ctx.t, question.text)));
   if (question.about) item.append(el('span', 'work-question-about', ctx.t('work.questionAbout', { id: question.about })));
   return item;
 }

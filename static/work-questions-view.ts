@@ -13,6 +13,7 @@ import { answerArea } from './work-detail-view.ts';
 import { button, el, notice, omittedNote } from './work-dom.ts';
 import type { Child, ViewContext } from './work-dom.ts';
 import { errorBlock } from './work-error-view.ts';
+import { linkText } from './work-linkify.ts';
 import { aboutKind, ageOf, formatAge, groupProjectQuestions, splitEntryQuestions } from './work-questions.ts';
 import type { QuestionGroup } from './work-questions.ts';
 import type { OpenQuestionsDoc, ProjectDoc, Question } from './work-types.ts';
@@ -44,9 +45,9 @@ function metaLine(ctx: ViewContext, question: Question, about: Child): HTMLEleme
 /** One question: text, facts, options and assumption when the agent gave them, then answers and the answer form. */
 export function questionCard(ctx: ViewContext, question: Question, about: Child = null): HTMLElement {
   const item = el('li', `work-qcard work-question-${question.open ? 'open' : 'answered'}`,
-    el('p', 'work-question-text', question.text), metaLine(ctx, question, about));
+    el('p', 'work-question-text', linkText(ctx.t, question.text)), metaLine(ctx, question, about));
   if (question.options.length > 0) item.append(el('p', 'work-qcard-extra', ctx.t('work.questions.options', { options: question.options.join(' · ') })));
-  if (question.assumption) item.append(el('p', 'work-qcard-extra', ctx.t('work.questions.assumption', { text: question.assumption })));
+  if (question.assumption) item.append(el('p', 'work-qcard-extra', linkText(ctx.t, ctx.t('work.questions.assumption', { text: question.assumption }))));
   item.append(answerArea(ctx, question));
   item.dataset.questionId = question.id;
   return item;

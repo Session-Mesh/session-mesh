@@ -1778,10 +1778,18 @@
   "work.detail.events": "Events",
   "work.detail.label": "Task detail",
   "work.detail.legend": "Dashed: inferred, not confirmed.",
+  "work.detail.links": "Links",
   "work.detail.notes": "Notes",
   "work.detail.openBlockers": "Open blockers",
   "work.detail.questions": "Questions",
   "work.detail.sessions": "Sessions",
+  "work.doc.close": "Close the document",
+  "work.doc.label": "Document {name}",
+  "work.doc.loading": "Loading the document…",
+  "work.doc.newTab": "Open in a new tab",
+  "work.doc.newTabLabel": "Open {name} in a new tab",
+  "work.doc.openLabel": "Open the document {name} ({path}) beside the view",
+  "work.doc.unavailable": "This document is not available: it does not exist, or it is outside the folders the documents panel may show.",
   "work.doneOfTotal": {
     "one": "{done} done of {total}",
     "other": "{done} done of {total}"

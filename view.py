@@ -948,6 +948,8 @@ SOURCE_LANG = {".md": "markdown", ".markdown": "markdown", ".html": "html", ".ht
 async def _respond(request, path, handle):
     headers = dict(VIEW_HEADERS)
     ext = path.suffix.lower()
+    if "static" in request.query and ext in STATIC_EXT:
+        return _static_response(path, handle, headers)
     if "source" in request.query and ext in SOURCE_LANG and _is_navigation(request):
         return await _code_response(request, path, handle, headers, SOURCE_LANG[ext])
     if ext in MD_EXT and "raw" not in request.query and _size(handle) <= MD_MAX_BYTES:
@@ -987,6 +989,20 @@ async def _respond(request, path, handle):
         # listed PDF and image types are left alone for the browser's viewer
         headers["Content-Security-Policy"] = active_csp()
     return _DescriptorResponse(handle, served_type, headers)
+
+
+# ?static=1, asked for by the Projects document panel (static/work-doc-panel.ts): an HTML or SVG page shown as a
+# picture. It can only take privileges away, so it needs no signature: no script at all, no plugin, frame or form.
+STATIC_EXT = {".html", ".htm", ".svg"}
+STATIC_MAX_BYTES = 8 * 1024 * 1024
+CSP_STATIC = f"sandbox; {_NO_DATA_OUT}; script-src 'none'; media-src 'self' data: blob:; frame-src 'none'; manifest-src 'none'"
+
+
+def _static_response(path, handle, headers):
+    if _size(handle) > STATIC_MAX_BYTES:
+        handle.close()
+        raise web.HTTPNotFound()   # too large for the panel
+    return _DescriptorResponse(handle, content_type(path), {**headers, "Content-Security-Policy": CSP_STATIC})
 
 
 def _is_navigation(request):
