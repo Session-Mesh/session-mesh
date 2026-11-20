@@ -18,13 +18,16 @@ let directory_opt ~uid path relative =
       let* () = private_folder ~uid relative stats in
       Ok (Some ())
 
-(* A regular file of the operator's with no other name (a hard link to a file
-   elsewhere is refused) and not named as a login file. *)
+(* A regular file of the operator's that neither group nor others can write,
+   with no other name (a hard link to a file elsewhere is refused), and not
+   named as a login file. *)
 let regular_file ~uid relative (stats : Unix.stats) =
   if stats.st_kind <> Unix.S_REG then
     fail "unsafe_entry" (relative ^ " is a link or not a regular file")
   else if stats.st_uid <> uid then
     fail "unsafe_entry" (relative ^ " is not the operator's")
+  else if stats.st_perm land 0o022 <> 0 then
+    fail "unsafe_entry" (relative ^ " can be written by other users")
   else if stats.st_nlink > 1 then
     fail "unsafe_entry" (relative ^ " has another name (a hard link)")
   else if is_login_file (Filename.basename relative) then
@@ -131,31 +134,35 @@ let claude_files ~uid ~source id =
   let* () = check_folders ~uid ~source files in
   Ok files
 
-(* The plain folders of [relative]; a folder that is a link is not one. *)
-let subfolders ~source relative =
+(* The plain folders of [relative] whose name has [shape]; a folder that is a
+   link is not one. *)
+let subfolders ~source shape relative =
   let* names = readdir (join source relative) in
   Ok
     (List.filter_map
        (fun name ->
          let child = relative ^ "/" ^ name in
-         match Unix.lstat (join source child) with
-         | { Unix.st_kind = Unix.S_DIR; _ } -> Some child
-         | _ | (exception Unix.Unix_error _) -> None)
+         if not (has_shape shape name) then None
+         else
+           match Unix.lstat (join source child) with
+           | { Unix.st_kind = Unix.S_DIR; _ } -> Some child
+           | _ | (exception Unix.Unix_error _) -> None)
        names)
 
-(* The folders [levels] below [relatives]: sessions/YYYY/MM/DD. *)
-let rec down ~source relatives levels =
-  if levels = 0 then Ok relatives
-  else
-    let* next =
-      List.fold_left
-        (fun acc relative ->
-          let* acc = acc in
-          let* children = subfolders ~source relative in
-          Ok (acc @ children))
-        (Ok []) relatives
-    in
-    down ~source next (levels - 1)
+(* The folders below [relatives] named after [shapes] in turn:
+   sessions/YYYY/MM/DD. *)
+let rec down ~source relatives = function
+  | [] -> Ok relatives
+  | shape :: shapes ->
+      let* next =
+        List.fold_left
+          (fun acc relative ->
+            let* acc = acc in
+            let* children = subfolders ~source shape relative in
+            Ok (acc @ children))
+          (Ok []) relatives
+      in
+      down ~source next shapes
 
 (* Exactly [rollout-YYYY-MM-DDTHH-MM-SS-<id>.jsonl]: a name that merely ends
    with the id is another conversation's. *)
@@ -190,7 +197,8 @@ let rollouts_of ~uid ~source id day acc =
 let codex_files ~uid ~source id =
   let* sessions = directory_opt ~uid (join source "sessions") "sessions" in
   let* days =
-    if sessions = None then Ok [] else down ~source [ "sessions" ] 3
+    if sessions = None then Ok []
+    else down ~source [ "sessions" ] [ "dddd"; "dd"; "dd" ]
   in
   let* found =
     List.fold_left

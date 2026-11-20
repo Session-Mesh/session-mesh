@@ -4,7 +4,8 @@
  (libraries mesh_accounts alcotest unix))
 
 ; Carrying a conversation between account folders, on temporary folders:
-; the copy itself (test_carry) and its guards (test_carry_guards), sharing
+; the copy itself (test_carry), its guards (test_carry_guards) and the
+; follow-ups of its second review (test_carry_hardening), sharing
 ; the folders and failing operations of carry_fixture.
 
 (library
@@ -20,6 +21,11 @@
 (test
  (name test_carry_guards)
  (modules test_carry_guards)
+ (libraries carry_fixture mesh_accounts_carry alcotest unix))
+
+(test
+ (name test_carry_hardening)
+ (modules test_carry_hardening)
  (libraries carry_fixture mesh_accounts_carry alcotest unix))
 
 ; `mesh-platform accounts carry` run as the web server runs it.
