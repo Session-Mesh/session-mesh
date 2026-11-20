@@ -190,7 +190,8 @@ print(json.dumps(agentmcp.copilot_args(reach={"MESH_PORT": "7701", "MESH_CONF_DI
     // A bin directory that holds the bridge and no work-mcp. Without MESH_BIN_DIR, agentmcp looks for
     // work-mcp in the opam switch (the checkout's _opam on the macOS CI job, which installs it there), so
     // the tracker entry would depend on the host. That entry is covered by tests/work-mcp-injection.test.ts.
-    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-bin-'));
+    // Absolute even when TMPDIR is relative: agentmcp refuses a relative MESH_BIN_DIR.
+    const bin = path.resolve(fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-bin-')));
     let withBridge: string[];
     try {
       fs.writeFileSync(path.join(bin, 'mesh-board-mcp'), '#!/bin/sh\n', {mode: 0o755});
