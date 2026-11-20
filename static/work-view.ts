@@ -29,11 +29,12 @@ import type { Scroll, ViewMemory } from './work-view-memory.ts';
 import type { Place } from './work-view-state.ts';
 import { pageQuestionsSync } from './work-questions-sync.ts';
 import type { QuestionsChange, QuestionsSync } from './work-questions-sync.ts';
-import { renderEntryQuestions } from './work-questions-view.ts';
+import { renderAnsweredSheet, renderLoneTaskSheet, renderQuestionSheet } from './work-question-sheet.ts';
+import { renderEntryQuestions } from './work-questions-triage-view.ts';
 import type { EntryQuestionsState } from './work-questions-view.ts';
 import { withoutQuestion } from './work-questions.ts';
 import type { WorkTarget } from './work-session-questions.ts';
-import type { OpenQuestionsDoc, ProductsDoc, ProjectsDoc } from './work-types.ts';
+import type { OpenQuestionsDoc, ProductsDoc, ProjectsDoc, Question, TaskDetail } from './work-types.ts';
 
 export type WorkViewOptions = Readonly<{
   root: HTMLElement;
@@ -62,22 +63,33 @@ export type WorkViewController = Readonly<{ open: (target?: WorkTarget) => void;
 
 type EntryData = Readonly<{ products: ProductsDoc; projects: ProjectsDoc }>;
 type OpenProject = Readonly<{ id: string; view: ProjectView }>;
-/** After an answer: the question answered, and whether focus goes to it once the task is read again. */
-type AfterAnswer = Readonly<{ question: string; focus: boolean }>;
-/** Where an answer form was sent from: the task sheet, the Questions tab of a project, or the entry screen. */
-type Surface = 'detail' | 'questions' | 'entry';
+/** After an answer (or on opening the sheet at a question, `fresh`): the question, and whether focus goes to it once
+ *  the task is read. */
+type AfterAnswer = Readonly<{ question: string; focus: boolean; fresh?: boolean }>;
+/** Where an answer form was sent from: the task sheet, the Questions tab of a project, or a sheet opened from the
+ *  entry screen (a question about nothing, a task in no project). */
+type Surface = 'detail' | 'questions' | 'sheet';
+/** What a sheet opened from the entry screen shows: a question about nothing, or a task in no project. */
+type EntrySheet = Readonly<{ kind: 'question'; question: Question }> | Readonly<{ kind: 'task'; id: string }>;
+
+function sessionStore(): Storage | null {
+  try { return window.sessionStorage; } catch { return null; }
+}
 
 class WorkView implements WorkViewController {
   private readonly api: WorkApi;
   private readonly t: Translate;
   private readonly content = el('div', 'work-content');
   private readonly expanded = new Set<string>();
-  /** The context of the task sheet; `panelCtx` is the one of the project tabs and `entryCtx` the one of the entry screen,
-   *  each with its own answer sender, so that the view knows where an answer was sent from. */
+  /** The context of the task sheet; `panelCtx` is the one of the project tabs and `sheetCtx` the one of the sheets opened
+   *  from the entry screen, each with its own answer sender, so that the view knows where an answer was sent from. */
   private readonly ctx: ViewContext;
   private readonly panelCtx: ViewContext;
-  private readonly entryCtx: ViewContext;
+  private readonly sheetCtx: ViewContext;
   private entry: EntryData | null = null;
+  private sheet: EntrySheet | null = null;
+  /** The question of the entry screen last opened: focus goes back to it on the way back. */
+  private lastQuestion: string | null = null;
   private entryQuestions: EntryQuestionsState = { kind: 'loading' };
   private entryQuestionsNode: HTMLElement | null = null;
   private project: OpenProject | null = null;
@@ -122,7 +134,7 @@ class WorkView implements WorkViewController {
       nowMs: options.now ?? (() => Date.now()), selectedTask: () => this.selected, selectTask: id => void this.selectTask(id),
       answers: this.sender('detail') };
     this.panelCtx = { ...this.ctx, answers: this.sender('questions') };
-    this.entryCtx = { ...this.ctx, answers: this.sender('entry'), answerScope: 'entry-' };
+    this.sheetCtx = { ...this.ctx, answers: this.sender('sheet'), answerScope: 'sheet-' };
     const refresh = button('btn work-refresh', this.t('work.refresh'), () => void this.reload());
     this.announcer.setAttribute('role', 'status');
     this.announcer.setAttribute('aria-live', 'polite');
@@ -220,6 +232,7 @@ class WorkView implements WorkViewController {
   private begin(): { token: number; signal: AbortSignal } {
     this.controller?.abort(); this.detailController?.abort();
     this.controller = new AbortController();
+    this.sheet = null;
     return { token: ++this.generation, signal: this.controller.signal };
   }
 
@@ -243,23 +256,22 @@ class WorkView implements WorkViewController {
   }
 
   /** The marker read another count: the entry screen, when it shows the questions, is not reading them already (an
-   *  answer's read would lose its notice and focus to a newer one) and the owner is not answering one of them, reads
-   *  them again. Elsewhere the view reads again when the owner moves (Back, Refresh, a sheet). */
+   *  answer's read would lose its notice and focus to a newer one) and the focus is not in the list, reads them again. Elsewhere the view reads again when the owner moves (Back, Refresh, a sheet). */
   private heard(change: QuestionsChange): void {
     const node = this.entryQuestionsNode, shown = this.entryQuestions;
     if (!this.active || this.project || this.entryReads > 0 || !node?.isConnected || shown.kind !== 'ready') return;
     if (typeof change.openQuestions !== 'number' || change.openQuestions === shown.doc.openQuestions) return;
     if (document.activeElement && node.contains(document.activeElement)) return this.whenLeft(node);
-    void this.rereadEntryQuestions(null, false, undefined, true);
+    void this.rereadEntryQuestions(false, undefined, true);
   }
 
-  /** Read the entry screen's questions again once the focus has left `node` (the owner was answering there), unless
+  /** Read the entry screen's questions again once the focus has left `node` (the owner was in the list), unless
    *  a read is under way then (an answer's): it shows the questions itself and must not be replaced. */
   private whenLeft(node: HTMLElement): void {
     node.addEventListener('focusout', event => {
       if (event.relatedTarget instanceof Node && node.contains(event.relatedTarget)) return this.whenLeft(node);
       if (node !== this.entryQuestionsNode || this.project || this.entryReads > 0) return;
-      void this.rereadEntryQuestions(null, false, undefined, true);
+      void this.rereadEntryQuestions(false, undefined, true);
     }, { once: true });
   }
 
@@ -286,17 +298,23 @@ class WorkView implements WorkViewController {
     this.entry = { products: products.value, projects: projects.value };
     this.entryQuestions = { kind: 'loading' };
     this.renderEntryScreen();
-    await this.rereadEntryQuestions(null, false, questions);
+    await this.rereadEntryQuestions(false, questions);
   }
 
   /** What the entry screen shows after a read of the open questions. A failed read keeps the questions already shown
-   *  (and so the drafts under them) with the error and its retry; the one just answered leaves the list. */
-  private nextQuestionsState(result: WorkResult<OpenQuestionsDoc>, answered: string | null): EntryQuestionsState {
+   *  (less those answered since, see `forgetAnswered`) with the error and its retry. */
+  private nextQuestionsState(result: WorkResult<OpenQuestionsDoc>): EntryQuestionsState {
     if (result.ok) return { kind: 'ready', doc: result.value };
-    const retry = (): void => void this.rereadEntryQuestions(null);
+    const retry = (): void => void this.rereadEntryQuestions();
     const shown = this.entryQuestions;
-    if (shown.kind === 'ready' || shown.kind === 'stale') return { kind: 'stale', doc: withoutQuestion(shown.doc, answered), error: result.error, retry };
+    if (shown.kind === 'ready' || shown.kind === 'stale') return { kind: 'stale', doc: shown.doc, error: result.error, retry };
     return { kind: 'failed', error: result.error, retry };
+  }
+
+  /** A question answered anywhere leaves the entry screen's list kept in memory, so a failed read never brings it back. */
+  private forgetAnswered(question: string): void {
+    const shown = this.entryQuestions;
+    if (shown.kind === 'ready' || shown.kind === 'stale') this.entryQuestions = { ...shown, doc: withoutQuestion(shown.doc, question) };
   }
 
   /** A missing reader program lets the host show the old view (once); any other failure is shown here with its buttons. */
@@ -327,36 +345,51 @@ class WorkView implements WorkViewController {
   /** The entry screen's questions, with the owner's unsent drafts. */
   private entryQuestionsBlock(): HTMLElement {
     const titles = new Map((this.entry?.projects.projects ?? []).map(project => [project.id, project.title]));
-    const block = renderEntryQuestions(this.entryCtx, { projectTitle: id => titles.get(id) ?? null,
-      openProject: id => void this.openProject(id, 'questions'), openTask: id => void this.openTask(id) }, this.entryQuestions);
-    this.memory.fill(block);
-    return block;
+    const zones = (this.entry?.products.categories ?? []).map(category => ({ key: category.key, name: category.name }));
+    const from = (question: string): void => { this.lastQuestion = question; };
+    // No answer form here (the operator answers where the context is): no draft to put back.
+    return renderEntryQuestions(this.ctx, { zones, projectTitle: id => titles.get(id) ?? null, storage: sessionStore(),
+      openProject: (id, question) => { from(question); void this.openProject(id, 'questions'); },
+      openTask: (id, question) => { from(question); void this.openTask(id, 'questions', question); },
+      openQuestion: question => { from(question.id); this.openQuestionSheet(question); } }, this.entryQuestions);
   }
 
-  /** Read the open questions of the entry screen again (or take the read `pending`) and redraw them in place, keeping
-   *  unsent drafts (but the one of `answered`); focus goes to the answered question, or to the block after a retry.
-   *  Only the read started last is shown, so an older answer never replaces a newer one. False when the read failed. */
-  private async rereadEntryQuestions(answered: string | null, focus = true,
-    pending?: Promise<WorkResult<OpenQuestionsDoc>>, passive = false): Promise<boolean> {
+  /** Read the open questions of the entry screen again (or take the read `pending`) and redraw them in place; focus
+   *  goes to the block after a retry. Only the read started last is shown, so an older answer never replaces a newer
+   *  one. */
+  private async rereadEntryQuestions(focus = true, pending?: Promise<WorkResult<OpenQuestionsDoc>>, passive = false): Promise<void> {
     const token = this.generation, sequence = ++this.questionsSequence;
     this.entryReads++;
     const result = await (pending ?? this.api.openQuestions(this.controller?.signal)).finally(() => { this.entryReads--; });
     const node = this.entryQuestionsNode;
-    if (token !== this.generation || sequence !== this.questionsSequence || this.project || !node) return true;
+    if (token !== this.generation || sequence !== this.questionsSequence || this.project || this.sheet || !node) return;
     this.report(result);
-    // A read the owner did not ask for never redraws under a field being typed in: it waits for the focus to leave.
-    if (passive && document.activeElement && node.contains(document.activeElement)) { this.whenLeft(node); return true; }
-    const drafts = unsentDrafts(node, answered ?? '');
-    this.entryQuestions = this.nextQuestionsState(result, answered);
+    // A read the owner did not ask for never redraws under the focus (a row being read): it waits for the focus to leave.
+    if (passive && document.activeElement && node.contains(document.activeElement)) return this.whenLeft(node);
+    this.entryQuestions = this.nextQuestionsState(result);
     const next = this.entryQuestionsBlock();
-    restoreDrafts(next, drafts);
     node.replaceWith(next);
     this.entryQuestionsNode = next;
-    if (focus) {
-      const question = answered ? next.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(answered)}"]`) : null;
-      focusFirst(question ?? next.querySelector<HTMLElement>('h2'));
-    }
-    return result.ok;
+    if (focus) focusFirst(next.querySelector<HTMLElement>('.work-qsection-toggle') ?? next.querySelector<HTMLElement>('h2'));
+  }
+
+  /** A question about no task or project: its own sheet, one level above the entry screen, where it is answered. */
+  private openQuestionSheet(question: Question): void {
+    this.begin();
+    this.project = null; this.selected = null;
+    this.sheet = { kind: 'question', question };
+    this.nav.at(1);
+    this.show(renderQuestionSheet(this.sheetCtx, question, () => void this.backToEntry()));
+    focusFirst(this.content.querySelector<HTMLElement>('.work-detail-heading'));
+  }
+
+  /** A task in no project has no project view: its sheet alone, one level above the entry screen, at `question`. */
+  private showLoneTask(detail: TaskDetail, question: string | null): void {
+    this.sheet = { kind: 'task', id: detail.task.id };
+    this.nav.at(1);
+    this.show(renderLoneTaskSheet(this.sheetCtx, detail, () => void this.backToEntry()));
+    const card = question ? this.content.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(question)}"]`) : null;
+    focusFirst(card ?? this.content.querySelector<HTMLElement>('.work-detail-heading'));
   }
 
   /** True when the project is shown. `resuming` (the place the owner left): a project gone since shows the entry screen. */
@@ -391,22 +424,23 @@ class WorkView implements WorkViewController {
   }
 
   /** From a question of the entry screen (or a terminal reference): read the task to learn its project, then open that
-   *  project on its Questions tab (or `tab`) with the task's sheet. A task outside any project says so, with the way back. */
-  private async openTask(id: string, tab: TabKey = 'questions'): Promise<void> {
+   *  project on its Questions tab (or `tab`) with the task's sheet, at `question` when given. A task outside any project
+   *  opens its sheet alone for its questions; from a reference it says so, with the way back. */
+  private async openTask(id: string, tab: TabKey = 'questions', question: string | null = null): Promise<void> {
     const { token, signal } = this.begin();
     this.show(loadingBlock(this.t));
     const result = await this.api.task(id, signal);
     if (token !== this.generation) return;
-    if (!result.ok) return this.failure(result.error, () => void this.openTask(id, tab), () => void this.backToEntry());
+    if (!result.ok) return this.failure(result.error, () => void this.openTask(id, tab, question), () => void this.backToEntry());
     const project = result.value.task.project;
+    if (!project && tab === 'questions') return this.showLoneTask(result.value, question);
     if (!project) {
       const back = button('btn work-back', this.t('work.back'), () => void this.backToEntry());
-      const why = tab === 'questions' ? 'work.questions.taskNoProject' : 'work.references.taskNoProject';
-      this.show(el('div', 'work-error', el('p', 'work-error-text', this.t(why, { id })), el('div', 'work-actions', back)));
+      this.show(el('div', 'work-error', el('p', 'work-error-text', this.t('work.references.taskNoProject', { id })), el('div', 'work-actions', back)));
       return focusFirst(back);
     }
     await this.openProject(project, tab);
-    if (this.project?.id === project) await this.selectTask(id);
+    if (this.project?.id === project) await this.selectTask(id, question ? { question, focus: true, fresh: true } : undefined);
   }
 
   /** Back to the entry screen as it was, then its open questions read again (an answer may have closed some). */
@@ -416,15 +450,18 @@ class WorkView implements WorkViewController {
     this.docs.close();
     this.nav.at(0);
     this.controller = new AbortController();   // the project's signal is aborted; the questions read needs a live one
-    const from = this.project?.id;
-    this.project = null; this.selected = null; this.reading = null;
+    const from = this.project?.id, question = this.lastQuestion;
+    this.project = null; this.selected = null; this.reading = null; this.sheet = null; this.lastQuestion = null;
     this.renderEntryScreen();
-    focusFirst(this.entryFocusTarget(from));
-    await this.rereadEntryQuestions(null, false);
+    focusFirst(this.entryFocusTarget(from, question));
+    await this.rereadEntryQuestions(false);
   }
 
-  /** Where focus goes when the project view is left: the row of that project, else the first product button. */
-  private entryFocusTarget(projectId: string | undefined): HTMLElement | null {
+  /** Where focus goes when a project or sheet is left: the question row that opened it (when its list is unfolded), the
+   *  row of that project, else the first product button. */
+  private entryFocusTarget(projectId: string | undefined, question: string | null): HTMLElement | null {
+    const opener = question ? this.content.querySelector<HTMLElement>(`.work-qrow[data-question-id="${CSS.escape(question)}"] .work-qrow-open`) : null;
+    if (opener && !opener.closest('[hidden]')) return opener;
     const row = projectId ? this.content.querySelector<HTMLElement>(`.work-entry-project[data-project="${CSS.escape(projectId)}"]`) : null;
     if (row && !row.closest('[hidden]')) return row;
     return this.content.querySelector<HTMLElement>('.work-entry-toggle') ?? this.content.querySelector<HTMLElement>('.work-entry-category-name');
@@ -440,14 +477,38 @@ class WorkView implements WorkViewController {
     }
     this.memory.sent(question);   // recorded: its draft is not kept, nor put back by the reads that follow
     this.sync.publish({ source: 'view', answered: question });   // the marker drops it now, wherever the view is
+    this.forgetAnswered(question);
     // The write stands whatever happened meanwhile; a view closed (or reloaded) since shows nothing and reads nothing.
     if (token !== this.generation) return null;
     const notice = this.t(!result.ok ? 'work.answer.already' : result.value.uncommitted ? 'work.answer.sentUncommitted' : 'work.answer.sent');
-    const shown = surface === 'entry' ? await this.rereadEntryQuestions(question) : await this.showRecordedInProject(question, surface, task);
+    const shown = surface === 'sheet' ? await this.showRecordedInSheet(question) : await this.showRecordedInProject(question, surface, task);
     // The write stands; when what shows it could not be read again, the notice says that rather than only "recorded".
-    const failed = surface === 'entry' ? 'work.questions.entryRereadFailed' : 'work.questions.rereadFailed';
+    const failed = surface === 'sheet' ? 'work.triage.rereadFailed' : 'work.questions.rereadFailed';
     if (token === this.generation) this.announce(shown ? notice : this.t(failed));
     return null;
+  }
+
+  /** In a question's own sheet the question shows as answered; in the sheet of a task in no project the task is read
+   *  again (drafts of its other questions kept). Then the count. False when the task could not be read again. */
+  private async showRecordedInSheet(question: string): Promise<boolean> {
+    const sheet = this.sheet, token = this.generation, back = (): void => void this.backToEntry();
+    let shown = true;
+    if (sheet?.kind === 'question') {
+      this.show(renderAnsweredSheet(this.sheetCtx, sheet.question, back));
+      focusFirst(this.content.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(question)}"]`));
+    } else if (sheet?.kind === 'task') {
+      const result = await this.api.task(sheet.id, this.controller?.signal);
+      if (token !== this.generation || this.sheet !== sheet) return true;
+      shown = result.ok;
+      if (result.ok) {
+        const drafts = unsentDrafts(this.content, question);
+        this.show(renderLoneTaskSheet(this.sheetCtx, result.value, back));
+        restoreDrafts(this.content, drafts);
+        focusFirst(this.content.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(question)}"]`));
+      }
+    }
+    await this.refreshCount();
+    return shown;
   }
 
   /** In a project, the surface the answer came from is read first (focus on the question), then the other, then the
@@ -497,7 +558,7 @@ class WorkView implements WorkViewController {
     this.selected = id;
     markSelected(view.root, id);
     if (view.detailSlot.hidden) this.tabScroll = scrollerOf(view.root).scrollTop;
-    if (!after) view.detailSlot.replaceChildren(this.closeButton(view), loadingBlock(this.t));
+    if (!after || after.fresh) view.detailSlot.replaceChildren(this.closeButton(view), loadingBlock(this.t));
     view.showDetail(true);
     this.nav.at(2);
     this.memory.note();
@@ -514,7 +575,7 @@ class WorkView implements WorkViewController {
     const body = renderDetail(this.ctx, result.value);
     // The reload after an answer keeps what the owner was typing under the other questions; the drafts kept while
     // away (this sheet's, or one typed in another place) come back too.
-    if (after) restoreDrafts(body, unsentDrafts(view.detailSlot, after.question));
+    if (after && !after.fresh) restoreDrafts(body, unsentDrafts(view.detailSlot, after.question));
     this.memory.fill(body);
     view.detailSlot.replaceChildren(this.closeButton(view), body);
     if (after && !after.focus) return;

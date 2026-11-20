@@ -119,11 +119,15 @@ async function openProjects(page: Page, width: number): Promise<void> {
     await page.locator('#btn-mobile-actions').click();
     await page.locator('[data-mobile-action="btn-projects"]').click();
   } else await page.locator('#btn-projects').click();
+  // The pending questions are one folded line: unfold them (the state is kept for the tab of the browser).
+  const toggle = page.locator('.work-qsection-toggle');
+  await toggle.waitFor();
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
   await page.locator('.work-entry-questions .work-qcard').first().waitFor();
 }
 
 async function openTaskSheet(page: Page): Promise<void> {
-  await page.locator(`.work-entry-questions .work-qcard-about[data-task="${TASK}"]`).first().click();
+  await page.locator(`.work-entry-questions .work-qrow-open[data-task="${TASK}"]`).first().click();
   await page.locator('.work-detail-pane .work-detail-heading', { hasText: 'Layout task' }).waitFor();
 }
 

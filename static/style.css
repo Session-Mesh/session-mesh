@@ -1195,9 +1195,39 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .work-qcard-extra { margin: 4px 0 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .work-qcard-open { color: var(--wait); }
 .work-qcard-answered { color: var(--accent); }
-.work-qcard-about, .work-qgroup-task { max-width: 100%; padding: 0 4px; font: inherit; text-align: start; color: var(--fg); background: none; border: 0; text-decoration: underline; overflow-wrap: anywhere; cursor: pointer; }
+.work-qgroup-task { max-width: 100%; padding: 0 4px; font: inherit; text-align: start; color: var(--fg); background: none; border: 0; text-decoration: underline; overflow-wrap: anywhere; cursor: pointer; }
 .work-qgroup-task { text-transform: none; letter-spacing: normal; font-size: 13px; }
-.work-qcard-about:focus-visible, .work-qgroup-task:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.work-qgroup-task:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* the pending questions of the entry screen: one folded line, then the list classified by zone, product, project, task */
+.work-qsection-title { margin: 8px 0; }
+.work-qsection-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 14px; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: start; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.work-qsection-toggle:hover { background: var(--panel-2); }
+.work-qsection-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.work-qsection-toggle[aria-expanded="true"] .work-chev::before { content: "\25BE"; }
+.work-qsection-name { flex: 1 1 auto; }
+.work-qsection-toggle .work-count { min-width: 1.6em; padding: 0 6px; border-radius: 999px; text-align: center; color: var(--bg); background: var(--wait); }
+.work-qsection-body { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.work-qzone { min-width: 0; }
+.work-qzone-title, .work-qproduct-title, .work-qproject-title { margin: 6px 0; overflow-wrap: anywhere; }
+.work-qzone-title { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); }
+.work-qproduct { min-width: 0; margin-inline-start: 8px; }
+.work-qproduct-title { font-size: 13px; font-weight: 600; }
+.work-qproject { min-width: 0; margin-inline-start: 8px; padding-inline-start: 8px; border-inline-start: 2px solid var(--line); }
+.work-qproject-title { font-size: 13px; font-weight: 400; color: var(--mute); }
+.work-qtask { min-width: 0; margin: 0 0 8px; }
+.work-qtask-title { margin: 4px 0; font-size: 13px; overflow-wrap: anywhere; }
+.work-qzone-hint { margin: 0 0 8px; font-size: 13px; }
+.work-qrow-text { font-size: 14px; }
+.work-qrow-folded { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden; }
+.work-qrow-more { padding: 0 4px; font: inherit; font-size: 12px; color: var(--fg); background: none; border: 0; text-decoration: underline; cursor: pointer; }
+.work-qkind { color: var(--fg); }
+.work-qkind-choice { color: var(--wait); }
+.work-qrow-context { margin: 4px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.work-qrow-assumption { margin: 4px 0 0; font-size: 13px; }
+.work-qrow-assumption > summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--mute); }
+.work-qrow-actions { margin-top: 4px; }
+.work-qsheet { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.work-answer-recorded { margin: 6px 0 0; color: var(--accent); }
 /* timeline */
 .work-frise-axis { color: var(--mute); font-size: 12px; margin-bottom: 4px; }
 .work-frise-today-row { position: relative; height: 18px; }

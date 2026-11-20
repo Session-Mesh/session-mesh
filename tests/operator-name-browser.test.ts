@@ -97,7 +97,16 @@ async function tap(page: Page, id: string, width: number): Promise<void> {
 
 async function openProjects(page: Page, width: number): Promise<void> {
   await tap(page, 'btn-projects', width);
-  await page.locator('.work-entry-questions .work-qcard').first().waitFor();
+  await openSheet(page);
+}
+
+/** The question (about no task) has no answer form on the entry screen: unfold the pending questions and open its sheet. */
+async function openSheet(page: Page): Promise<void> {
+  const toggle = page.locator('.work-qsection-toggle');
+  await toggle.waitFor();
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  await page.locator('.work-entry-questions .work-qrow-open').first().click();
+  await page.locator('.work-qsheet .work-question-waiting').waitFor();
 }
 
 /** Type `name` in the Appearance card and save, unlocking with the master token when the server asks for it. */
@@ -130,7 +139,7 @@ async function saveName(page: Page, width: number, name: string, expected: strin
   await page.locator('#dlg-config [data-close-dialog]').click();
 }
 
-const waiting = (page: Page) => page.locator('.work-entry-questions .work-question-waiting').first();
+const waiting = (page: Page) => page.locator('.work-qsheet .work-question-waiting').first();
 
 async function fits(page: Page): Promise<void> {
   const result = await page.evaluate(() => {
@@ -157,21 +166,22 @@ describe('the operator name', { skip }, () => {
       assert.equal(await waiting(page).textContent(), UNNAMED, 'no name yet: the wording without one');
 
       await saveName(page, width, '  Camille  ', 'Camille');
-      await page.waitForFunction(text => document.querySelector('.work-entry-questions .work-question-waiting')?.textContent === text, NAMED);
+      await page.waitForFunction(text => document.querySelector('.work-qsheet .work-question-waiting')?.textContent === text, NAMED);
       await fits(page);
       await shot(page, `projects-${width}-named`);
 
       const fresh = await signedIn(width);
       await openProjects(fresh.page, width);
       // Shared by the runner: another browser sees it once its own read of the configuration arrives.
-      await fresh.page.waitForFunction(text => document.querySelector('.work-entry-questions .work-question-waiting')?.textContent === text, NAMED);
+      await fresh.page.waitForFunction(text => document.querySelector('.work-qsheet .work-question-waiting')?.textContent === text, NAMED);
 
       await saveName(page, width, '', '');
-      await page.waitForFunction(text => document.querySelector('.work-entry-questions .work-question-waiting')?.textContent === text, UNNAMED);
+      await page.waitForFunction(text => document.querySelector('.work-qsheet .work-question-waiting')?.textContent === text, UNNAMED);
       await fresh.page.reload();
       await fresh.page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');
-      if (!(await fresh.page.locator('#projects').isVisible())) await openProjects(fresh.page, width);
-      await fresh.page.waitForFunction(text => document.querySelector('.work-entry-questions .work-question-waiting')?.textContent === text, UNNAMED);
+      if (!(await fresh.page.locator('#projects').isVisible())) await tap(fresh.page, 'btn-projects', width);
+      if (!(await fresh.page.locator('.work-qsheet').isVisible())) await openSheet(fresh.page);
+      await fresh.page.waitForFunction(text => document.querySelector('.work-qsheet .work-question-waiting')?.textContent === text, UNNAMED);
       await shot(page, `projects-${width}-unnamed`);
 
       assert.deepEqual([...problems, ...fresh.problems], []);
@@ -194,7 +204,7 @@ describe('the operator name', { skip }, () => {
     await page.locator('#dlg-config [data-close-dialog]').click();
     fs.writeFileSync(path.join(mesh.confDir, 'settings.json'), JSON.stringify({ v: 1, operator_name: '<img src=x onerror=window.__pwn=1>' }));
     await openProjects(page, 1440);
-    await page.waitForFunction(() => document.querySelector('.work-entry-questions .work-question-waiting')?.textContent?.includes('<img'));
+    await page.waitForFunction(() => document.querySelector('.work-qsheet .work-question-waiting')?.textContent?.includes('<img'));
     assert.equal(await page.evaluate(() => (window as unknown as { __pwn?: number }).__pwn), undefined);
     assert.equal(await page.locator('.work-question-waiting img').count(), 0);
     fs.rmSync(path.join(mesh.confDir, 'settings.json'), { force: true });

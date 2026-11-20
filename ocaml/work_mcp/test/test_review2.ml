@@ -233,7 +233,9 @@ let test_error_text_is_sanitised () =
       Alcotest.(check bool) "no path in the text content" false (contains r.text "/srv/secret");
       Alcotest.(check bool) "no path in the structured content" false (contains (Yojson.Safe.to_string r.json) "/srv/secret"));
   Alcotest.(check bool) "the instructions list work_ask among the linking writes" true
-    (contains Work_mcp.Work_instructions.text "work_ask with a task")
+    (contains Work_mcp.Work_instructions.text "work_ask with a task");
+  Alcotest.(check bool) "the instructions ask to attach each question to its task or project" true
+    (contains Work_mcp.Work_instructions.text "Attach each question to the task or project it concerns")
 
 (* ---- N7, N8, minor: identity, stalls, first use ----------------------- *)
 

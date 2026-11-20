@@ -235,13 +235,21 @@ joins an existing one; see the [command-line tools](configuration.md#command-lin
 **Projects**, the main mode beside **Sessions**, opens on the Projects view by default. It shows the
 project tracker that agents write through `mesh-work`, read only:
 
-- **Open questions.** The first screen starts with the questions agents asked with `work_ask` that
-  are still open, in two lists: "Without a task" (about a project or about nothing) and "About a
-  task". Each shows its text, what it is about (a button opens that project, or that task in its
-  project), its age, the session and agent that asked it, the options and the assumption the agent
-  gave, and the answer form of the task sheet. The list holds the 20 newest open questions; a note
-  counts the others, which show in their project. The **Projects** button (and its entry in the
-  phone's menu) carries the number of open questions, as read the last time the view or the session
+- **Pending questions.** Above the products, one folded line "Pending questions n" counts the
+  questions agents asked with `work_ask` that are still open; the browser tab remembers whether it
+  is unfolded. Unfolded, it lists them classified by zone (the category of the product), product,
+  project and task, each group with its count, the oldest question first. A row shows the text (up to
+  300 characters, whole in the task sheet; a long one folded behind "Show more"), "Decision" when the agent offered options and "Open
+  question" otherwise, its age, the session and agent that asked it, where it stands (product,
+  project, task), the options, the assumption (folded), and one way in: "Open in task" opens the task
+  sheet over its project's Questions tab, at that question, beside the task's notes, blockers and
+  events; a question about a project opens that project's Questions tab; a task in no project opens
+  its sheet alone. The list has no answer form: the operator answers where the context is. Questions
+  attached to no task or project are grouped under "Without context" by the session that asked
+  them, with a note that they should be attached; each opens its own sheet with its answer form.
+  Back (the view's button, the browser's, or Escape) returns to the list. The list holds the 20
+  newest open questions; a note counts the others, which show in their project. The **Projects**
+  button (and its entry in the phone's menu) carries the number of open questions, as read the last time the view or the session
   marker read it: when the view opens, on "Refresh", after an answer, and with the marker below. An
   unknown number shows nothing.
 - **Questions on the sessions.** In the Sessions view, a session with open questions shows "? n" on

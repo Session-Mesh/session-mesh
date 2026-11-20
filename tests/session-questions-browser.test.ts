@@ -119,7 +119,7 @@ describe('the session marker', { skip }, () => {
     assert.equal(reads(), first, 'eight clicks on Sessions while it is the view in use: no read');
 
     await page.locator('#btn-projects').click();
-    await page.locator('#work-root .work-detail-pane, #work-root .work-entry, #work-root [data-question-id]').first().waitFor({ timeout: 60_000 });
+    await page.locator('#work-root .work-detail-pane, #work-root .work-entry, #work-root .work-qsection-toggle').first().waitFor({ timeout: 60_000 });
     await page.waitForTimeout(1_000);
     assert.equal(await page.locator('#btn-projects .projects-question-badge').textContent(), '3');
 
