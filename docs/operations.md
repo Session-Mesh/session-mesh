@@ -1143,7 +1143,7 @@ session can be refused as busy.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `MESH_WHISPER_URL` | unset | Complete transcription endpoint; unset disables dictation. |
-| `MESH_WHISPER_LANGUAGE` | `fr` | Language forwarded to the endpoint. |
+| `MESH_WHISPER_LANGUAGE` | unset | Auto-detect when unset; an explicit language (for example `fr`) is forwarded. |
 | `MESH_WHISPER_MAX_BYTES` | `8388608` | Maximum audio bytes per recording (8 MiB). |
 | `MESH_WHISPER_AGGREGATE_BYTES` | `67108864` | Maximum retained audio bytes (64 MiB). |
 | `MESH_WHISPER_QUEUE_SIZE` | `16` | Maximum queued jobs. |
@@ -1153,8 +1153,9 @@ session can be refused as busy.
 | `MESH_WHISPER_RESULT_TTL` | `1800` | Ready-result retention, seconds. |
 | `MESH_WHISPER_CAPTURE_SECONDS` | `120` | Recording-duration limit, seconds. |
 
-The endpoint receives a multipart POST containing only `file`, `language` and
-`response_format=json`, without Mesh credentials. A successful response must have status 200 and
+The endpoint receives a multipart POST containing only `file`, `response_format=json` and,
+when explicitly configured, `language`, without Mesh credentials. Enabled public configuration
+reports `language: null` for auto-detection, or the configured language string. A successful response must have status 200 and
 contain JSON with a `text` string, or `text/plain`. The response body is capped at 64 KiB and the
 normalized transcript at 32 KiB; terminal control characters are rejected. API-key headers, model
 selection and provider-specific parameters are not implemented.

@@ -142,11 +142,12 @@ test('bundle smoke accepts only the exact multipart whitelist and synthetic audi
   const validate=vm.runInNewContext(`(${validator})`,{assert,Buffer}) as (type:string,body:Buffer,audio:Buffer)=>void;
   const audio=Buffer.from('synthetic bundle audio'),boundary='mesh-fixture';
   const type=`multipart/form-data; boundary=${boundary}`;
-  const prefix=`--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\nfr\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.webm"\r\nContent-Type: audio/webm\r\n\r\n`;
+  const prefix=`--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.webm"\r\nContent-Type: audio/webm\r\n\r\n`;
   const body=Buffer.concat([Buffer.from(prefix),audio,Buffer.from(`\r\n--${boundary}--\r\n`)]);
   validate(type,body,audio);
   for(const invalid of [Buffer.from('anything'),body.subarray(1),Buffer.concat([body,Buffer.from('extra')]),
-    Buffer.from(body.toString().replace('name="language"','name="extra"')),Buffer.from(body.toString().replace('\r\nfr\r\n','\r\nen\r\n')),
+    Buffer.from(body.toString().replace('name="file"','name="extra"')),
+    Buffer.from(body.toString().replace(`--${boundary}\r\n`, `--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\nfr\r\n--${boundary}\r\n`)),
     Buffer.from(body.toString().replace('audio/webm','audio/wav')),Buffer.from(body.toString().replace('synthetic bundle audio','wrong audio')),
     Buffer.from(body.toString().replace('json\r\n','text\r\n')),Buffer.from(body.toString().replace(/\r\n/g,'\n'))])
     assert.throws(()=>validate(type,invalid,audio));

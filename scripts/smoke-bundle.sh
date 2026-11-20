@@ -71,7 +71,6 @@ function assertWhisperMultipart(contentType, body, audio) {
   assert.ok(match, 'multipart Content-Type with exactly one boundary');
   const boundary = match[1];
   const fields = `--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n` +
-    `--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\nfr\r\n` +
     `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.webm"\r\nContent-Type: audio/webm\r\n\r\n`;
   assert.deepEqual(body, Buffer.concat([Buffer.from(fields), audio, Buffer.from(`\r\n--${boundary}--\r\n`)]));
 }
@@ -167,6 +166,7 @@ try {
   });
   await new Promise(resolve => whisper.listen(0, '127.0.0.1', resolve));
   env.MESH_WHISPER_URL = `http://127.0.0.1:${whisper.address().port}/fixed-whisper`;
+  delete env.MESH_WHISPER_LANGUAGE; // Exercise auto-detection, independent of the invoking environment.
   app = spawn(path.join(bundle, 'mesh'), ['run'], {env, stdio: ['ignore', 'pipe', 'pipe']});
   for (const stream of [app.stdout, app.stderr]) stream.on('data', chunk => logs.push(chunk.toString()));
   await until('HTTP server', async () => {
