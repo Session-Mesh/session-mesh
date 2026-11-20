@@ -6,6 +6,8 @@
 import asyncio
 import os
 import signal
+import subprocess
+import sys
 import time
 
 import discover
@@ -35,6 +37,8 @@ def session_members(sid):
     is the sid of everything it spawns. Interactive sh puts foreground jobs in
     their own process group, so killing the shell's pgrp is not enough.
     """
+    if sys.platform != "linux":
+        return _session_members_ps(sid)
     members = []
     for entry in os.listdir("/proc"):
         if not entry.isdigit():
@@ -42,6 +46,24 @@ def session_members(sid):
         stat = discover.read_stat(int(entry))
         if stat and stat[4] == sid and stat[1] != "Z":
             members.append(int(entry))
+    return members
+
+
+def _session_members_ps(sid):
+    """session_members without /proc (macOS): ps lists the pids and their state, getsid gives the session.
+
+    The PTY host that could describe them through discover may already be stopped at teardown."""
+    listing = subprocess.run(["ps", "-A", "-o", "pid=,stat="], capture_output=True, text=True, check=True).stdout
+    members = []
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) != 2 or not fields[0].isdigit() or fields[1].startswith("Z"):
+            continue
+        try:
+            if os.getsid(int(fields[0])) == sid:
+                members.append(int(fields[0]))
+        except OSError:   # exited since the listing, or not ours to inspect
+            pass
     return members
 
 

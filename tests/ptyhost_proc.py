@@ -248,6 +248,9 @@ def _interop_main():
     runtime = home / "runtime"
     runtime.mkdir(mode=0o700)
     handle = Daemon(runtime, home=home)
+    # As the daemon fixture does: outside Linux, teardown's discover.snapshot() asks the host on
+    # ptyhost.SOCK, which must be this daemon and never the user's own host on the default socket.
+    ptyhost.SOCK = handle.sock
     try:
         cleanup_ready = True
         if interrupted:
