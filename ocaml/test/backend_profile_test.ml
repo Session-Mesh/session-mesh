@@ -17,7 +17,8 @@ let roots kind prefix =
   in
   `Assoc (List.map (fun key -> (key, s (prefix ^ "/" ^ key))) names)
 
-let entry ?(label = "Work") ?(enabled = true) kind id prefix =
+let entry ?label ?(enabled = true) kind id prefix =
+  let label = Option.value label ~default:id in
   `Assoc
     [
       ("id", s id);

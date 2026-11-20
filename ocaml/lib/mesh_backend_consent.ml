@@ -15,7 +15,12 @@ type error =
   | Revision_exhausted
   | Capacity
 
-type account = { id : string; context_revision : string }
+type account = {
+  backend : Mesh_backend_profile.backend;
+  id : string;
+  context_revision : string;
+}
+
 type rule = { a : account; b : account; confirmation : confirmation }
 type t = { revision : int; global : confirmation; pairs : rule list }
 type decision = { confirmation : confirmation; basis : basis; revision : int }
@@ -31,25 +36,28 @@ let error_code = function
   | Revision_exhausted -> "consent-revision-exhausted"
   | Capacity -> "consent-rule-capacity"
 
-let account ~id ~context_revision =
+let account ~backend ~id ~context_revision =
   if
     Mesh_backend_profile.valid_id id
     && String.length context_revision = 64
     && String.for_all
          (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false)
          context_revision
-  then Ok { id; context_revision }
+  then Ok { backend; id; context_revision }
   else Error Invalid_account
 
 let empty () = { revision = 0; global = Ask; pairs = [] }
 let revision (state : t) = state.revision
 
 let pair source target =
-  if source.id = target.id then Error Invalid_pair
+  if source.backend <> target.backend || source.id = target.id then
+    Error Invalid_pair
   else if String.compare source.id target.id < 0 then Ok (source, target)
   else Ok (target, source)
 
-let same rule a b = rule.a.id = a.id && rule.b.id = b.id
+let same rule a b =
+  rule.a.backend = a.backend && rule.b.backend = b.backend && rule.a.id = a.id
+  && rule.b.id = b.id
 
 let decide state ~source ~target =
   let* a, b = pair source target in
@@ -93,7 +101,7 @@ let remove_pair state ~expected_revision ~source ~target =
       pairs = List.filter (fun r -> not (same r a b)) state.pairs;
     }
 
-let remove_pair_ids state ~expected_revision ~source_id ~target_id =
+let remove_pair_ids state ~expected_revision ~backend ~source_id ~target_id =
   let* revision = advance state ~expected_revision in
   if
     (not (Mesh_backend_profile.valid_id source_id))
@@ -109,7 +117,10 @@ let remove_pair_ids state ~expected_revision ~source_id ~target_id =
       {
         state with
         revision;
-        pairs = List.filter (fun r -> r.a.id <> a || r.b.id <> b) state.pairs;
+        pairs =
+          List.filter
+            (fun r -> r.a.backend <> backend || r.a.id <> a || r.b.id <> b)
+            state.pairs;
       }
 
 let reset state ~expected_revision =
@@ -130,12 +141,26 @@ let encoded_confirmation = function
   | Skip -> `String "skip"
 
 let encoded_account a =
+  let backend =
+    match a.backend with
+    | Mesh_backend_profile.Claude -> "claude"
+    | Codex -> "codex"
+    | Opencode_v2 -> "opencode-v2"
+    | Pi -> "pi"
+  in
   `Assoc
-    [ ("id", `String a.id); ("context_revision", `String a.context_revision) ]
+    [
+      ("backend", `String backend);
+      ("id", `String a.id);
+      ("context_revision", `String a.context_revision);
+    ]
 
 let to_string state =
   let pairs =
-    List.sort (fun x y -> compare (x.a.id, x.b.id) (y.a.id, y.b.id)) state.pairs
+    List.sort
+      (fun x y ->
+        compare (x.a.backend, x.a.id, x.b.id) (y.a.backend, y.a.id, y.b.id))
+      state.pairs
   in
   Yojson.Safe.to_string
     (`Assoc
@@ -175,12 +200,23 @@ let confirmation = function
   | _ -> Error Invalid_policy
 
 let decode_account value =
-  let* fields = keys [ "id"; "context_revision" ] value in
+  let* fields = keys [ "backend"; "id"; "context_revision" ] value in
+  let* raw_backend = field "backend" fields in
+  let* backend =
+    match raw_backend with
+    | `String "claude" -> Ok Mesh_backend_profile.Claude
+    | `String "codex" -> Ok Mesh_backend_profile.Codex
+    | `String "opencode-v2" -> Ok Mesh_backend_profile.Opencode_v2
+    | `String "pi" -> Ok Mesh_backend_profile.Pi
+    | _ -> Error Invalid_policy
+  in
   let* id = field "id" fields in
   let* revision = field "context_revision" fields in
   match (id, revision) with
   | `String id, `String context_revision ->
-      Result.map_error (fun _ -> Invalid_policy) (account ~id ~context_revision)
+      Result.map_error
+        (fun _ -> Invalid_policy)
+        (account ~backend ~id ~context_revision)
   | _ -> Error Invalid_policy
 
 let decode_rule value =

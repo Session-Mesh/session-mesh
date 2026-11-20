@@ -66,6 +66,8 @@ let policy_json policy = Yojson.Safe.from_string (C.to_string policy)
 let registry root = project P.error_code (P.load ~root)
 
 let pair_accounts configured fields =
+  let* raw_backend = field "backend" fields in
+  let* backend = parse_backend raw_backend in
   let* source_id = id "source_id" fields in
   let* target_id = id "target_id" fields in
   let* () =
@@ -82,7 +84,11 @@ let pair_accounts configured fields =
     Error "profile-registry-changed"
   else
     let find id =
-      match List.find_opt (fun p -> P.id p = id) (P.profiles registry) with
+      match
+        List.find_opt
+          (fun p -> P.id p = id && P.backend p = backend)
+          (P.profiles registry)
+      with
       | Some p -> Ok p
       | None -> Error "unknown-profile"
     in
@@ -93,12 +99,12 @@ let pair_accounts configured fields =
     else
       let* source =
         project C.error_code
-          (C.account ~id:(P.id source)
+          (C.account ~backend ~id:(P.id source)
              ~context_revision:(P.context_revision source))
       in
       let* target =
         project C.error_code
-          (C.account ~id:(P.id target)
+          (C.account ~backend ~id:(P.id target)
              ~context_revision:(P.context_revision target))
       in
       Ok (source, target)
@@ -204,6 +210,7 @@ let handle root raw =
               "expected_revision";
               "source_id";
               "target_id";
+              "backend";
               "registry_revision";
               "confirmation";
             ]
@@ -218,16 +225,26 @@ let handle root raw =
     | `String "consent.remove_pair" ->
         let* fields =
           exact
-            [ "version"; "op"; "expected_revision"; "source_id"; "target_id" ]
+            [
+              "version";
+              "op";
+              "expected_revision";
+              "backend";
+              "source_id";
+              "target_id";
+            ]
             raw
         in
         let* expected_revision = revision fields in
+        let* raw_backend = field "backend" fields in
+        let* backend = parse_backend raw_backend in
         let* source_id = id "source_id" fields in
         let* target_id = id "target_id" fields in
         if source_id = target_id then Error "invalid-account-pair"
         else
           manage root expected_revision (fun state ->
-              C.remove_pair_ids state ~expected_revision ~source_id ~target_id)
+              C.remove_pair_ids state ~expected_revision ~backend ~source_id
+                ~target_id)
     | `String "consent.reset" ->
         let* fields = exact [ "version"; "op"; "expected_revision" ] raw in
         let* expected_revision = revision fields in

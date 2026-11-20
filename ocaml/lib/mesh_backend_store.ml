@@ -76,14 +76,25 @@ let write =
 let changes = (unit ->! int) "SELECT changes()"
 
 let find_operation =
-  (string ->? string) "SELECT payload FROM backend_operations WHERE id=?"
+  (string ->? t2 string bool)
+    "SELECT payload,finished FROM backend_operations WHERE id=?"
 
 let count_operations = (unit ->! int) "SELECT count(*) FROM backend_operations"
+
+let unfinished_schema =
+  (unit ->! int)
+    "SELECT count(*) FROM backend_operations WHERE finished NOT IN (0,1)"
 
 let write_operation =
   (t2 string string ->. unit)
     "INSERT INTO backend_operations (id,payload) VALUES (?,?) ON CONFLICT(id) \
      DO UPDATE SET payload=excluded.payload"
+
+let finish_operation_query =
+  (string ->. unit) "UPDATE backend_operations SET finished=1 WHERE id=?"
+
+let purge_finished_query =
+  (unit ->. unit) "DELETE FROM backend_operations WHERE finished=1"
 
 let insert_policy =
   (string ->. unit)
@@ -105,7 +116,7 @@ let schema =
        INTEGER NOT NULL CHECK(revision>=0),payload TEXT NOT NULL)";
     ddl
       "CREATE TABLE backend_operations(id TEXT PRIMARY KEY,payload TEXT NOT \
-       NULL)";
+       NULL,finished INTEGER NOT NULL DEFAULT 0 CHECK(finished IN (0,1)))";
     ddl "PRAGMA user_version=1";
   ]
 
@@ -183,10 +194,15 @@ let initialize conn =
             ignore (C.rollback ());
             error
   in
-  let* _ = read_connection conn in
-  let* _ = lift (C.collect_list busy_timeout ()) in
-  let* _ = lift (C.collect_list wal ()) in
-  lift (C.exec (ddl "PRAGMA synchronous=FULL") ())
+  let* invalid_journal =
+    Result.map_error (fun _ -> Invalid_state) (C.find unfinished_schema ())
+  in
+  if invalid_journal <> 0 then Error Invalid_state
+  else
+    let* _ = read_connection conn in
+    let* _ = lift (C.collect_list busy_timeout ()) in
+    let* _ = lift (C.collect_list wal ()) in
+    lift (C.exec (ddl "PRAGMA synchronous=FULL") ())
 
 let custody store =
   let* () =
@@ -211,35 +227,39 @@ let open_ ~root () =
       lift (Caqti_blocking.connect (Uri.make ~scheme:"sqlite3" ~path ()))
     in
     let (module C : Caqti_blocking.CONNECTION) = conn in
-    let valid =
-      try
-        let actual = Unix.lstat path in
-        same expected actual && private_file actual
-      with Unix.Unix_error _ -> false
-    in
-    let store =
-      {
-        conn;
-        mutex = Mutex.create ();
-        closed = false;
-        root;
-        path;
-        root_identity;
-        file_identity = expected;
-      }
-    in
-    let result =
-      if valid then
-        let* () = custody store in
-        let* () = initialize conn in
-        custody store
-      else Error Unsafe_store
-    in
-    match result with
-    | Ok () -> Ok store
-    | Error _ as error ->
-        C.disconnect ();
-        error
+    let accepted = ref false in
+    Fun.protect
+      ~finally:(fun () -> if not !accepted then C.disconnect ())
+      (fun () ->
+        let valid =
+          try
+            let actual = Unix.lstat path in
+            same expected actual && private_file actual
+          with Unix.Unix_error _ -> false
+        in
+        let store =
+          {
+            conn;
+            mutex = Mutex.create ();
+            closed = false;
+            root;
+            path;
+            root_identity;
+            file_identity = expected;
+          }
+        in
+        let result =
+          if valid then
+            let* () = custody store in
+            let* () = initialize conn in
+            custody store
+          else Error Unsafe_store
+        in
+        match result with
+        | Ok () ->
+            accepted := true;
+            Ok store
+        | Error _ as error -> error)
   with
   | (Out_of_memory | Stack_overflow) as exn -> raise exn
   | _ -> Error Unavailable
@@ -303,6 +323,14 @@ let utf8 text =
   in
   loop 0
 
+let valid_key text =
+  String.length text > 0
+  && String.length text <= 80
+  && String.for_all
+       (function
+         | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' -> true | _ -> false)
+       text
+
 let rec valid_json depth = function
   | _ when depth > 32 -> false
   | `Null | `Bool _ | `Int _ -> true
@@ -315,20 +343,19 @@ let rec valid_json depth = function
       && List.length fields
          = List.length (List.sort_uniq String.compare (List.map fst fields))
       && List.for_all
-           (fun (key, value) ->
-             Mesh_backend_profile.valid_id key && valid_json (depth + 1) value)
+           (fun (key, value) -> valid_key key && valid_json (depth + 1) value)
            fields
   | _ -> false
 
 let get_operation tx ~id =
   in_transaction tx (fun () ->
-      if not (Mesh_backend_profile.valid_id id) then Error Invalid_state
+      if not (valid_key id) then Error Invalid_state
       else
         let (module C : Caqti_blocking.CONNECTION) = tx.store.conn in
         let* raw = lift (C.find_opt find_operation id) in
         match raw with
         | None -> Ok None
-        | Some raw when String.length raw <= 65536 -> (
+        | Some (raw, _) when String.length raw <= 65536 -> (
             try
               let body = Yojson.Safe.from_string raw in
               match body with
@@ -340,10 +367,7 @@ let get_operation tx ~id =
 let put_operation tx ~id body =
   in_transaction tx (fun () ->
       let object_body = match body with `Assoc _ -> true | _ -> false in
-      if
-        (not (Mesh_backend_profile.valid_id id))
-        || (not object_body)
-        || not (valid_json 0 body)
+      if (not (valid_key id)) || (not object_body) || not (valid_json 0 body)
       then Error Invalid_state
       else
         let raw = Yojson.Safe.to_string body in
@@ -352,8 +376,25 @@ let put_operation tx ~id body =
           let (module C : Caqti_blocking.CONNECTION) = tx.store.conn in
           let* existing = lift (C.find_opt find_operation id) in
           let* count = lift (C.find count_operations ()) in
-          if existing = None && count >= 1024 then Error Capacity
+          if Option.fold ~none:false ~some:snd existing then Error Invalid_state
+          else if existing = None && count >= 1024 then Error Capacity
           else lift (C.exec write_operation (id, raw)))
+
+let finish_operation tx ~id =
+  in_transaction tx (fun () ->
+      if not (valid_key id) then Error Invalid_state
+      else
+        let (module C : Caqti_blocking.CONNECTION) = tx.store.conn in
+        let* existing = lift (C.find_opt find_operation id) in
+        match existing with
+        | None -> Error Invalid_state
+        | Some _ -> lift (C.exec finish_operation_query id))
+
+let purge_finished tx =
+  in_transaction tx (fun () ->
+      let (module C : Caqti_blocking.CONNECTION) = tx.store.conn in
+      let* () = lift (C.exec purge_finished_query ()) in
+      lift (C.find changes ()))
 
 let transaction store ~expected_revision callback =
   with_lock store (fun () ->

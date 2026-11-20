@@ -101,7 +101,7 @@
 (library
  (name mesh_backend_profile)
  (modules mesh_backend_profile)
- (libraries yojson digestif unix))
+ (libraries mesh_accounts yojson digestif unix))
 
 (library
  (name mesh_backend_consent)

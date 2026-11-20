@@ -20,11 +20,13 @@ val error_code : error -> string
 (** Fixed public error code; never includes authored configuration or paths. *)
 
 val valid_id : string -> bool
-(** Bounded ASCII identifier, not a label or an authentication capability. *)
+(** Existing alias grammar: [[a-z0-9-]{1,32}], never [default]. Not a label or
+    authentication capability. *)
 
 val of_string : string -> (registry, error) result
-(** Strict version-one registry decoding, including finite bounds and aliases.
-*)
+(** Strict version-one registry decoding. IDs and ASCII-case-insensitive labels
+    are unique within each backend, not across different backends. Paths reuse
+    the restricted alias path grammar; finite bounds and aliases are checked. *)
 
 val profiles : registry -> t list
 (** Immutable profiles in authored display order. *)
@@ -33,7 +35,7 @@ val registry_revision : registry -> string
 (** Hash of the authored registry bytes for optimistic configuration updates. *)
 
 val id : t -> string
-(** Stable configured profile ID. *)
+(** Stable configured ID, qualified by {!backend} for identity. *)
 
 val label : t -> string
 (** Display text, never an identity or permission resource. *)

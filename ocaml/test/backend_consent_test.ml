@@ -6,9 +6,10 @@
 module C = Mesh_backend_consent
 
 let value = function Ok v -> v | Error e -> Alcotest.fail (C.error_code e)
-let a = value (C.account ~id:"work" ~context_revision:(String.make 64 'a'))
-let b = value (C.account ~id:"personal" ~context_revision:(String.make 64 'b'))
-let c = value (C.account ~id:"limited" ~context_revision:(String.make 64 'c'))
+let account = C.account ~backend:Mesh_backend_profile.Pi
+let a = value (account ~id:"work" ~context_revision:(String.make 64 'a'))
+let b = value (account ~id:"personal" ~context_revision:(String.make 64 'b'))
+let c = value (account ~id:"limited" ~context_revision:(String.make 64 'c'))
 
 let decide state source target =
   (value (C.decide state ~source ~target)).C.confirmation
@@ -65,7 +66,7 @@ let changed_context () =
          ~confirmation:C.Skip)
   in
   let changed =
-    value (C.account ~id:"personal" ~context_revision:(String.make 64 'd'))
+    value (account ~id:"personal" ~context_revision:(String.make 64 'd'))
   in
   check C.Ask (decide state a changed);
   let state =
@@ -129,7 +130,7 @@ let accounts () =
     (fun (id, revision) ->
       Alcotest.(check bool)
         "bad account" true
-        (Result.is_error (C.account ~id ~context_revision:revision)))
+        (Result.is_error (account ~id ~context_revision:revision)))
     [
       ("", String.make 64 'a');
       ("a/b", String.make 64 'a');
@@ -163,7 +164,7 @@ let duplicate_and_capacity () =
       (fun state i ->
         let target =
           value
-            (C.account
+            (account
                ~id:("p" ^ string_of_int i)
                ~context_revision:(String.make 64 'a'))
         in
@@ -173,7 +174,7 @@ let duplicate_and_capacity () =
       (C.empty ()) (List.init 1024 Fun.id)
   in
   let extra =
-    value (C.account ~id:"overflow" ~context_revision:(String.make 64 'b'))
+    value (account ~id:"overflow" ~context_revision:(String.make 64 'b'))
   in
   Alcotest.(check bool)
     "bounded rules" true
@@ -181,12 +182,38 @@ let duplicate_and_capacity () =
        ~confirmation:C.Skip
     = Error C.Capacity);
   let existing =
-    value (C.account ~id:"p0" ~context_revision:(String.make 64 'a'))
+    value (account ~id:"p0" ~context_revision:(String.make 64 'a'))
   in
   ignore
     (value
        (C.set_pair full ~expected_revision:1024 ~source:a ~target:existing
           ~confirmation:C.Ask))
+
+let backend_identity () =
+  let other id =
+    value
+      (C.account ~backend:Mesh_backend_profile.Claude ~id
+         ~context_revision:(String.make 64 'a'))
+  in
+  let state =
+    value
+      (C.set_pair (C.empty ()) ~expected_revision:0 ~source:a ~target:b
+         ~confirmation:C.Skip)
+  in
+  check C.Ask (decide state (other "work") (other "personal"));
+  Alcotest.(check bool)
+    "cross-backend pair forbidden" true
+    (C.decide state ~source:a ~target:(other "personal") = Error C.Invalid_pair);
+  let state =
+    value
+      (C.remove_pair_ids state ~expected_revision:1
+         ~backend:Mesh_backend_profile.Claude ~source_id:"work"
+         ~target_id:"personal")
+  in
+  check C.Skip (decide state a b);
+  let state = value (C.of_string (C.to_string state)) in
+  check C.Skip (decide state a b);
+  check C.Ask (decide state (other "work") (other "personal"))
 
 let () =
   Alcotest.run "backend consent"
@@ -201,6 +228,8 @@ let () =
           Alcotest.test_case "CAS and same-account refusal" `Quick conflicts;
           Alcotest.test_case "strict codec and exhaustion" `Quick codec;
           Alcotest.test_case "validated references" `Quick accounts;
+          Alcotest.test_case "backend-qualified pair identity" `Quick
+            backend_identity;
           Alcotest.test_case "duplicates and finite capacity" `Quick
             duplicate_and_capacity;
         ] );

@@ -56,3 +56,13 @@ val put_operation :
 (** Bounded internal journal storage, not an external API or switch
     authorization. Actual phase/authority validation belongs to the qualified
     switch coordinator. *)
+
+val finish_operation : transaction -> id:string -> (unit, error) result
+(** Mark an existing journal row terminal and immutable. Only the qualified
+    coordinator may call this after establishing no recovery is pending; the
+    store cannot infer completion from the opaque payload. No external API. *)
+
+val purge_finished : transaction -> (int, error) result
+(** Remove terminal rows only, returning the count. Active or uncertain rows are
+    never evicted to make capacity. This rolls back with policy/journal writes
+    on failure; retention timing belongs to the coordinator. *)

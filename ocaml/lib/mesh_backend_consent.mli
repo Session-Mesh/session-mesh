@@ -22,7 +22,11 @@ type decision = { confirmation : confirmation; basis : basis; revision : int }
 val error_code : error -> string
 (** Fixed error projection, without authored input or account paths. *)
 
-val account : id:string -> context_revision:string -> (account, error) result
+val account :
+  backend:Mesh_backend_profile.backend ->
+  id:string ->
+  context_revision:string ->
+  (account, error) result
 (** Validated reference, not proof of native account identity or authority. *)
 
 val empty : unit -> t
@@ -66,6 +70,7 @@ val remove_pair :
 val remove_pair_ids :
   t ->
   expected_revision:int ->
+  backend:Mesh_backend_profile.backend ->
   source_id:string ->
   target_id:string ->
   (t, error) result
