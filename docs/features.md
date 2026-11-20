@@ -257,8 +257,8 @@ project tracker that agents write through `mesh-work`, read only:
   the open questions the session asked, those about a task it is linked to, and those about the
   project of such a task. The button opens the Projects view where the questions are: the task's
   sheet with its answer form when they are all about one task of a project, the project's Questions
-  tab when they are all in one project, else the first screen (also for a task in no project, which
-  has no sheet). The page reads them (`session-questions` of [work-read](work-read.md)) after a
+  tab when they are all in one project, else the first screen (also for a task in no project,
+  whose sheet opens from the first screen's list). The page reads them (`session-questions` of [work-read](work-read.md)) after a
   session listing, at most once a minute while it is visible, and again when the Projects view is
   left (the Sessions button alone does not read); when the tracker cannot be read, nothing is shown.
   The count on the Projects button is written by this read and by the Projects view. A question
@@ -273,9 +273,9 @@ project tracker that agents write through `mesh-work`, read only:
   its title; clicking it, with the same rules as the other links of the terminal (a program that
   captures the mouse still lets the click through, `Shift`, or `Option` on macOS, selects text
   instead), opens the Projects view on it: a task on its project's Board with its sheet, a project
-  on its "Pick up" tab, a question where its answer form is (the sheet of its task, the Questions
-  tab of its project, or the first screen, which is also where a question about a task in no
-  project goes). The page knows the ids from one read (`ids` of [work-read](work-read.md)) after a
+  on its "Pick up" tab, a question where it is answered (the sheet of its task, the Questions tab
+  of its project, or the first screen, whose list opens the sheet of a question about a task in no
+  project or about nothing). The page knows the ids from one read (`ids` of [work-read](work-read.md)) after a
   session listing while terminals are shown, at most once a minute while it is visible, and again
   when the Projects view opens; checking a word sends no request. It keeps the ids and titles in
   memory only, and forgets them when the credential is refused. When the tracker cannot be read,
@@ -292,7 +292,8 @@ project tracker that agents write through `mesh-work`, read only:
   answered, grouped by task, then "Without a task" for those about the project itself, each with
   the answer form; at most 20, open ones first). The French interface names them "Reprise",
   "Tableau", "Frise", "Dépendances" and "Questions". An answer given in the Questions tab, in the
-  task sheet or on the first screen shows in the other places once they are read again; an
+  task sheet or in a sheet opened from the first screen shows in the other places once they are
+  read again; an
   answered question is never shown in the colour of the open ones.
 - **The way back.** The view has three levels: the first screen, a project on one of its tabs, and
   a task sheet over that tab. The sheet's first button ("Back to the Board tab", named after the
@@ -301,12 +302,17 @@ project tracker that agents write through `mesh-work`, read only:
   and the browser's Back (a phone's back gesture) go up one level the same way; on the first
   screen `Esc` leaves Projects, and the browser's Back does what it did before. A sheet opened from
   a session's "? n" button or from the first screen's questions returns to its project's Questions
-  tab. `Esc` in a text field that holds text does nothing, so a draft answer is not lost.
+  tab. The sheet of a task in no project and the sheet of a question about nothing, opened from the
+  first screen's list, are one level above it: going back returns to the list, with the focus on
+  the question's "Open" button. `Esc` in a text field that holds text does nothing, so a draft
+  answer is not lost.
 - **Coming back.** Leaving Projects (the Sessions button, a session, `Esc`, a link) and coming
   back, or reloading the tab, shows the view as it was left, read again: the project, its tab, the
-  open task sheet (with its level of the way back), where they were scrolled, and every answer not
-  yet sent, under each question typed in, in any sheet or on the first screen. A project that no
-  longer exists shows the first screen; a session's "? n" button still opens its own place. The
+  open task sheet (with its level of the way back), or the sheet opened from the first screen,
+  where they were scrolled, the pending questions unfolded or not, and every answer not yet sent,
+  under each question typed in, in any sheet or tab. A project or a task that no longer exists, or
+  a question answered since, shows the first screen; a session's "? n" button still opens its own
+  place. The
   drafts stay in the browser tab only (its `sessionStorage`, at most 40 of them and 64 KiB): they
   are never sent until the answer is, and they are removed when it is recorded, when the field is
   emptied, and when the browser signs out or shows the sign-in page.
