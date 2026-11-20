@@ -349,7 +349,7 @@ describe("a session's own accounts, read with its session token", {skip: SKIP}, 
     const response = await selfAccounts(await tokenOf('a-work'));
     const text = await response.text();
     assert.equal(response.status, 200, text);
-    assert.deepEqual(JSON.parse(text), {agent: 'claude', switch_supported: true, accounts_file: 'ok',
+    assert.deepEqual(JSON.parse(text), {agent: 'claude', aliases_supported: true, accounts_file: 'ok',
       current: {id: 'work', label: 'Atacama', declared: true},
       accounts: [DEFAULT, {id: 'work', label: 'Atacama', claude: true, codex: true},
         {id: 'perso', label: 'Perso', claude: false, codex: true}]});
