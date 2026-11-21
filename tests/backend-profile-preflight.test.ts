@@ -21,15 +21,16 @@ function fixture() {
   const home = path.join(root, 'home'), bin = path.join(home, '.local/bin');
   const cwd = path.join(root, 'project'), record = path.join(root, 'calls.jsonl');
   const mesh = path.join(root, 'mesh');
+  const runtime = path.join(root, 'run');
   const directories = (name: string) => Object.fromEntries(['config', 'data', 'state', 'cache'].map(role =>
     [`XDG_${role.toUpperCase()}_HOME`, path.join(root, name, role)])) as Record<string, string>;
   const ambient = directories('ambient'), selected = directories('selected');
   const piAmbient = path.join(root, 'pi-ambient'), piSelected = path.join(root, 'pi-selected');
-  for (const directory of [bin, cwd, mesh, piAmbient, piSelected, ...Object.values(ambient), ...Object.values(selected)]) {
+  for (const directory of [bin, cwd, mesh, runtime, piAmbient, piSelected, ...Object.values(ambient), ...Object.values(selected)]) {
     fs.mkdirSync(directory, {recursive: true, mode: 0o700});
   }
   const env = {PATH: `${bin}:/usr/bin:/bin`, HOME: home, TMPDIR: root, MESH_CONF_DIR: mesh,
-    MESH_BIN_DIR: bin, MESH_SESSION_TOKEN: 'fixture-token-never-probed',
+    MESH_BIN_DIR: bin, XDG_RUNTIME_DIR: runtime, MESH_SESSION_TOKEN: 'fixture-token-never-probed',
     OPENAI_API_KEY: 'fixture-provider-key-never-probed', ...ambient, PI_CODING_AGENT_DIR: piAmbient};
   const context = {...env, ...selected, PI_CODING_AGENT_DIR: piSelected};
   fs.writeFileSync(record, '');
