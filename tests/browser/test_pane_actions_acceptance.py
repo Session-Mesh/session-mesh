@@ -119,6 +119,12 @@ async def test_old_attach_keeps_input_across_reconnect_and_reload(
                     "active?.id === 'old-input' && active.conn?.ws?.readyState === WebSocket.OPEN")
             # Limited hosts admit immediate xterm keys on either form factor;
             # the phone's buffered line requires verified deferred input.
+            await tab.wait_for_function("""() => {
+              const c = active?.conn;
+              return active?.id === 'old-input' && c?.ws?.readyState === WebSocket.OPEN
+                && c.terminal?.socket === c.ws && c.terminal.limited && !c.closed && !c.ended
+                && !c.replayPending && !c.replaying && !c.draining;
+            }""")
             await _type_terminal(tab, False, marker)
             script, argument = _terminal_text_script(marker)
             await tab.wait_for_function(script, arg=argument)

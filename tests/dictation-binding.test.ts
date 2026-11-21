@@ -500,7 +500,15 @@ test('AC-7: conditional incarnation binding acknowledgement', {timeout: 30000}, 
       assert.deepEqual(await native(socketPath, {op: 'new', name: 'alpha', cwd: where.home,
         command: `exec ${quote(process.execPath)} ${quote(editor)}`}), {ok: true, name: 'alpha'});
       await until(() => fs.existsSync(oracle));
-      const [session] = await native(socketPath, {op: 'list'}); return session.created as number;
+      const [session] = await native(socketPath, {op: 'list'});
+      const created = session.created as number;
+      const size = JSON.parse(fs.readFileSync(oracle, 'utf8'));
+      const marker = `EDITOR_READY:${size.rows}x${size.cols}`;
+      await until(async () => {
+        const captured = await nativeReplay(socketPath, {op: 'attach_if', name: 'alpha', created});
+        return captured.reply.ok === true && captured.replay.includes(marker);
+      });
+      return created;
     };
     const first = await create();
     assert.deepEqual(await native(socketPath, {op: 'kill', name: 'alpha'}), {ok: true});

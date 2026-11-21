@@ -204,12 +204,50 @@ let await_size socket rows owner =
   let rec read () =
     let head = read_exactly socket 5 in
     let payload = read_exactly socket (Int32.to_int (Bytes.get_int32_be head 1)) in
-    if Bytes.get head 0 = 'S' then
+    if Bytes.get head 0 = 'S' then (
       let size = Yojson.Basic.from_string (Bytes.to_string payload) in
-      if member "rows" size <> `Int rows || member "owner" size <> `String owner then read ()
+      if member "rows" size <> `Int rows || member "owner" size <> `String owner then read ())
     else read ()
   in
   read ()
+
+let await_size_reads_matching_frame () =
+  let size rows owner = Printf.sprintf {|{"rows":%d,"owner":"%s"}|} rows owner in
+  List.iter
+    (fun (label, frames, expected) ->
+      let reader, writer = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      Fun.protect
+        ~finally:(fun () -> Unix.close reader; Unix.close writer)
+        (fun () ->
+          List.iter
+            (fun (kind, payload) ->
+              let head = Bytes.create 5 in
+              Bytes.set head 0 kind;
+              Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
+              let wire = Bytes.to_string head ^ payload in
+              expect "probe frame written"
+                (Unix.write_substring writer wire 0 (String.length wire)
+                = String.length wire))
+            frames;
+          Unix.shutdown writer Unix.SHUTDOWN_SEND;
+          let matched =
+            try
+              await_size reader 26 "you";
+              true
+            with Failure message when message = "the host closed the connection" -> false
+          in
+          expect label (matched = expected)))
+    [
+      ("C is not a size barrier", [ ('C', "{}") ], false);
+      ("empty D is not a size barrier", [ ('D', "") ], false);
+      ("different rows are not the requested size", [ ('S', size 25 "you") ], false);
+      ("different owner is not the requested size", [ ('S', size 26 "other") ], false);
+      ("matching S completes", [ ('S', size 26 "you") ], true);
+      ( "C, empty D and mismatching S are skipped",
+        [ ('C', "{}"); ('D', ""); ('S', size 25 "you");
+          ('S', size 26 "other"); ('S', size 26 "you") ],
+        true );
+    ]
 
 let conditional_attachment_is_retired () =
   with_host (fun fixture ->
@@ -494,6 +532,8 @@ let () =
     [
       ( "stop_agent_if",
         [
+          Alcotest.test_case "await_size waits for the requested S" `Quick
+            await_size_reads_matching_frame;
           Alcotest.test_case "the agent restarts in the same terminal" `Slow
             same_terminal;
           Alcotest.test_case "conditional attachments retire, legacy attachments stay" `Slow
