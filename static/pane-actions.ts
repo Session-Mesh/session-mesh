@@ -730,6 +730,8 @@ type SessionActionRequest = Readonly<{
   state: "pending" | "claimed";
   preset: string | null;
   model: string | null;
+  // The option tokens the server will add to this launch, already joined for display ('' when none).
+  options?: string | null;
   lease_expires_at?: number | null;
   source: Readonly<{ id: string }>;
   // switch_account: the account ids, and their labels as the server knows them
@@ -755,6 +757,11 @@ function accountName(id: string, label: string | null | undefined): string {
 
 function describeSessionRequest(request: SessionActionRequest): string {
   const params = { agent: request.source.id, model: request.model, preset: presetLabel(request.preset) };
+  // The owner's stored options run too, so the confirmation names them: consent covers what will run.
+  const withOptions = (text: string): string => {
+    const options = typeof request.options === "string" ? request.options.trim() : "";
+    return options ? translate("paneActions.sessionRequest.withOptions", { text, options }) : text;
+  };
   if (request.action === "switch_account") {
     // The owner approves sending the whole conversation to the other account's provider: the text says so.
     return translate("paneActions.sessionRequest.switchAccount", { agent: request.source.id,
@@ -765,8 +772,8 @@ function describeSessionRequest(request: SessionActionRequest): string {
     return request.model ? translate("paneActions.sessionRequest.restartWithModel", params)
       : translate("paneActions.sessionRequest.restart", params);
   }
-  return request.model ? translate("paneActions.sessionRequest.createWithModel", params)
-    : translate("paneActions.sessionRequest.create", params);
+  return withOptions(request.model ? translate("paneActions.sessionRequest.createWithModel", params)
+    : translate("paneActions.sessionRequest.create", params));
 }
 
 type SessionRequestClaim = Readonly<{kind: "claimed"; claimNonce: string}>;

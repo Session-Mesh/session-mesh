@@ -2100,5 +2100,6 @@
   "config.launch.optionsHelp": "Arguments supplémentaires ajoutés après ceux de l’agent, enregistrés par agent. Ils s’appliquent à chaque nouveau lancement de cet agent, y compris une session demandée par un agent.",
   "config.launch.optionsPlaceholder": "--option valeur",
   "config.launch.saveOptions": "Enregistrer les options",
-  "config.launch.optionsUnchanged": "Rien à enregistrer."
+  "config.launch.optionsUnchanged": "Rien à enregistrer.",
+  "paneActions.sessionRequest.withOptions": "{text} (options : {options})"
 }

@@ -1695,7 +1695,8 @@ class SessionsState:
         reads = {"update": _update_notice(self.extras["update"])}   # a failed read keeps the notice shown
         if app:
             reads |= {"sessionRequests": asyncio.to_thread(
-                          lambda: [_with_account_labels(item) for item in app["session_requests"].pending()]),
+                          lambda: [_with_launch_options(_with_account_labels(item))
+                                   for item in app["session_requests"].pending()]),
                       "agentMailConsent": asyncio.to_thread(lambda: agentmail.consent_projection()["requests"])}
         for key, value in zip(reads, await asyncio.gather(*reads.values(), return_exceptions=True)):
             if isinstance(value, BaseException):   # also a child cancelled on its own
@@ -4550,6 +4551,19 @@ def _account_label_of(account):
     return DEFAULT_ACCOUNT["label"] if account == DEFAULT_ACCOUNT["id"] else account_label(account)
 
 
+def _with_launch_options(item):
+    """A pending create as the page shows it: the option tokens the launch will add, so the owner's
+    confirmation covers what will run and not only which agent. A stored file that cannot be read
+    leaves the field empty here; the launch itself then refuses (stored_options)."""
+    if item.get("action") != "create" or not item.get("preset"):
+        return item
+    try:
+        tokens = stored_options(item["preset"])
+    except web.HTTPConflict:
+        return {**item, "options": ""}
+    return {**item, "options": shlex.join(tokens) if tokens else ""}
+
+
 def _with_account_labels(item):
     """A pending request as the page shows it: a switch carries the labels of both accounts."""
     if item.get("action") != "switch_account":
@@ -4614,7 +4628,8 @@ async def _execute_session_action(item):
         if item["preset"] not in AGENT_PRESETS:
             raise web.HTTPConflict(text=f"Agent {item['preset']} is disabled in the configuration")
         agent = launchplan.agent_type(item["preset"])
-        argv, conversation = _chosen_launch(agent, _model_argv(AGENT_PRESETS[item["preset"]], item["model"]))
+        argv, conversation = _chosen_launch(agent, _model_argv(
+            effective_launch(item["preset"], stored_options(item["preset"]), ()), item["model"]))
         name = await new_session(item["name"] or f"{Path(raw['cwd']).name}-{item['preset']}",
                                  raw["cwd"], shlex.join(argv),
                                  agent if agent in RESUMABLE_AGENT_PRESETS else None, agent,

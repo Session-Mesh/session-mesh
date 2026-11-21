@@ -2085,5 +2085,6 @@
   "config.launch.optionsHelp": "Extra arguments Mesh appends after the agent's own, stored per agent. They apply to every new launch of that agent, including a session an agent asks for.",
   "config.launch.optionsPlaceholder": "--flag value",
   "config.launch.saveOptions": "Save options",
-  "config.launch.optionsUnchanged": "Nothing to save."
+  "config.launch.optionsUnchanged": "Nothing to save.",
+  "paneActions.sessionRequest.withOptions": "{text} (options: {options})"
 }

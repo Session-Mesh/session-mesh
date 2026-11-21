@@ -21,6 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {REPO, type Mesh, startMesh} from '../tests/mesh-server-lib.ts';
 import {ptyhostArgv} from '../tests/ptyhost-command.ts';
+import {createSessionRequestGate, setTranslator} from '../static/pane-actions.ts';
 
 type Harness = {mesh: Mesh; host: ChildProcess; argvLog: string; cookie: string; elevation: string; output: () => string};
 
@@ -40,7 +41,9 @@ async function harness(prefix: string, enabled?: string[]): Promise<Harness> {
     `#!/bin/sh\nif [ "$1" = --version ]; then echo 1.4.0; exit 0; fi\n` +
     `for a in "$@"; do printf '%s\\n' "$a" >> '${argvLog}'; done\nprintf -- '---\\n' >> '${argvLog}'\nexec sleep 30\n`,
     {mode: 0o755});
-  fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\nexec sleep 30\n', {mode: 0o755});
+  fs.writeFileSync(path.join(bin, 'codex'),
+    `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> '${argvLog}.codex'; done\nprintf -- '---\\n' >> '${argvLog}.codex'\n` +
+    `printf "%s" "$MESH_SESSION_TOKEN" > ./token.tmp && mv ./token.tmp ./token\nexec sleep 30\n`, {mode: 0o755});
   const PATH = `${bin}:${process.env.PATH}`;
   const mesh = await startMesh(prefix, {PATH, MESH_OPAM_SWITCH: path.join(scratch, 'switch')}, (where) => {
     if (!enabled) return;
@@ -91,6 +94,45 @@ async function saveOptions(h: Harness, agentOptions: Record<string, string>, rev
   return {status: response.status, body, text};
 }
 
+
+async function agentToken(h: Harness, name: string): Promise<string> {
+  const folder = path.join(h.mesh.home, name);
+  fs.mkdirSync(folder, {recursive: true});
+  const answer = await launch(h.mesh, {preset: 'codex', name, cwd: folder});
+  assert.equal(answer.status, 200, answer.text);
+  const file = path.join(folder, 'token');
+  for (let attempt = 0; attempt < 200 && !fs.existsSync(file); attempt += 1) await sleep(100);
+  if (!fs.existsSync(file)) throw new Error('the fake codex did not record a session token');
+  return fs.readFileSync(file, 'utf8').trim();
+}
+
+async function requestCreate(h: Harness, token: string, body: Record<string, unknown>): Promise<{status: number; text: string; request?: Record<string, any>}> {
+  const response = await fetch(`${h.mesh.base}/api/session-actions/@self/request`, {method: 'POST',
+    headers: {Authorization: `MeshSession ${token}`, 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const text = await response.text();
+  let parsed: Record<string, any> = {};
+  try { parsed = JSON.parse(text) as Record<string, any>; } catch { parsed = {}; }
+  return {status: response.status, text, request: (parsed.request as Record<string, any>) ?? undefined};
+}
+
+/** The owner approves a pending request the way the page does: claim, then decide. */
+async function approve(h: Harness, id: string): Promise<void> {
+  const claim = await fetch(`${h.mesh.base}/api/session-actions/${id}/claim`, {method: 'POST', headers: ownerHeaders(h, false),
+    body: JSON.stringify({tab_nonce: 'c'.repeat(32)})});
+  const nonce = ((await claim.json()) as {claim_nonce?: string}).claim_nonce;
+  if (!nonce) throw new Error(`claim refused: ${claim.status}`);
+  const decided = await fetch(`${h.mesh.base}/api/session-actions/${id}/decision`, {method: 'POST', headers: ownerHeaders(h, false),
+    body: JSON.stringify({approve: true, claim_nonce: nonce})});
+  if (decided.status !== 200) throw new Error(`decision refused: ${decided.status} ${await decided.text()}`);
+}
+
+/** The pending requests the page receives with a listing. */
+async function pendingRequests(h: Harness): Promise<Record<string, any>[]> {
+  const response = await fetch(`${h.mesh.base}/api/sessions`, {headers: headers(h.mesh)});
+  const data = await response.json() as {sessionRequests?: Record<string, any>[]};
+  return data.sessionRequests ?? [];
+}
+
 async function launch(mesh: Mesh, body: Record<string, unknown>): Promise<{status: number; text: string}> {
   const cwd = fs.mkdtempSync(path.join(mesh.home, 'folder-'));
   const response = await fetch(`${mesh.base}/api/new`, {
@@ -116,6 +158,26 @@ async function waitRecorded(file: string, count: number): Promise<string[][]> {
     await sleep(100);
   }
   throw new Error(`the fake pi recorded ${recorded(file).length} launch(es), expected ${count}`);
+}
+
+/** The text the owner's confirmation shows for a pending request, from the page's own module. */
+async function described(request: Record<string, any>): Promise<string> {
+  setTranslator((key: string, params?: Record<string, string | number>) => {
+    const templates: Record<string, string> = {
+      'paneActions.sessionRequest.create': 'Create a {preset} session for {agent}',
+      'paneActions.sessionRequest.createWithModel': 'Create a {preset} session for {agent} with model {model}',
+      'paneActions.sessionRequest.withOptions': '{text} (options: {options})',
+      'paneActions.sessionRequest.confirm': '{description}',
+    };
+    const template = templates[key] ?? key;
+    return template.replace(/\{(\w+)\}/g, (_match, name: string) => String(params?.[name] ?? ''));
+  });
+  let shown = '';
+  const gate = createSessionRequestGate({claim: async () => ({kind: 'claimed', claimNonce: 'n'.repeat(32)}),
+    confirm: (message: string) => { shown = message; return false; }, decide: async () => 'settled', notify: () => {}});
+  await gate.consider([{id: 'x', action: 'create', state: 'pending', preset: request.preset, model: request.model ?? null,
+    options: request.options, source: {id: request.source?.id ?? 'agent'}}]);
+  return shown;
 }
 
 const CASES: Record<string, (h: Harness) => Promise<void>> = {
@@ -266,6 +328,70 @@ const CASES: Record<string, (h: Harness) => Promise<void>> = {
       restricted.host.kill('SIGKILL');
       await restricted.mesh.stop();
     }
+  },
+
+  // CHECK-11 [AC-11]: an agent cannot supply option tokens; the body is refused and nothing is queued.
+  async 'agent-supplied-options'(h) {
+    const token = await agentToken(h, 'requester-options');
+    const answer = await requestCreate(h, token, {action: 'create', preset: 'pi', options: '-e /tmp/x.mjs'});
+    assert.equal(answer.status, 400, answer.text);
+    assert.equal((await pendingRequests(h)).length, 0, 'no request may be created');
+    assert.equal(recorded(h.argvLog).length, 0, 'nothing may be launched');
+  },
+
+  // CHECK-10 [AC-10]: the owner's confirmation names the tokens, and the approved launch runs them.
+  async 'consent-projection'(h) {
+    await elevate(h);
+    const saved = await saveOptions(h, {pi: '-e /tmp/stored.mjs'});
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    const token = await agentToken(h, 'requester-consent');
+    const asked = await requestCreate(h, token, {action: 'create', preset: 'pi', name: 'wanted-pi'});
+    assert.equal(asked.status, 202, asked.text);
+    const pending = (await pendingRequests(h)).find(item => item.id === asked.request?.id);
+    assert.ok(pending, 'the pending request reaches the page');
+    assert.equal(pending.options, '-e /tmp/stored.mjs', JSON.stringify(pending));
+    const text = await described(pending);
+    assert.match(text, /-e \/tmp\/stored\.mjs/, text);
+    await approve(h, asked.request!.id);
+    const [argv] = await waitRecorded(h.argvLog, 1);
+    assert.deepEqual(argv!.slice(-2), ['-e', '/tmp/stored.mjs'], JSON.stringify(argv));
+  },
+
+  // CHECK-2 [AC-2]: a model the agent asks for wins over a stored --model.
+  async 'requested-model-wins'(h) {
+    await elevate(h);
+    const saved = await saveOptions(h, {codex: '--model old'});
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    const token = await agentToken(h, 'requester-model');
+    const asked = await requestCreate(h, token, {action: 'create', preset: 'codex', model: 'gpt-5', name: 'wanted-codex'});
+    assert.equal(asked.status, 202, asked.text);
+    await approve(h, asked.request!.id);
+    for (let attempt = 0; attempt < 200 && recorded(`${h.argvLog}.codex`).length < 2; attempt += 1) await sleep(100);
+    const launches = recorded(`${h.argvLog}.codex`);
+    const argv = launches[launches.length - 1]!;
+    const model = argv!.indexOf('--model');
+    assert.notEqual(model, -1, JSON.stringify(argv));
+    assert.equal(argv![model + 1], 'gpt-5', JSON.stringify(argv));
+    assert.ok(!argv!.includes('old'), JSON.stringify(argv));
+  },
+
+  // CHECK-15 [AC-15]: the stored options cannot reach a reopen. The reopen paths (resume, restore,
+  // move-in) rebuild a conversation's own argv and read AGENT_PRESETS; the compositor is the only
+  // place owner options enter a launch, so this asserts it is called from the two fresh-launch sites
+  // and from nowhere near a reopen. It is a source invariant, not a runtime observation: the resume
+  // path needs a real provider conversation, which this harness cannot produce.
+  async 'resume-untouched'() {
+    const source = fs.readFileSync(path.join(REPO, 'server.py'), 'utf8').split('\n');
+    const calls = source.map((line, index) => ({line, number: index + 1}))
+      .filter(({line}) => /\beffective_launch\(/.test(line) && !/^def /.test(line));
+    assert.equal(calls.length, 2, `effective_launch is called ${calls.length} time(s): ${JSON.stringify(calls)}`);
+    for (const {line, number} of calls) {
+      assert.ok(!/resum|respawn|new_session\(/.test(line), `line ${number} reopens a conversation: ${line.trim()}`);
+    }
+    const presets = source.filter((line) => /AGENT_PRESETS\s*=/.test(line));
+    assert.ok(presets.length >= 1, 'AGENT_PRESETS is assigned somewhere');
+    assert.ok(!presets.some((line) => /AGENT_OPTIONS|stored_options/.test(line)),
+      `the stored options must never be spliced into AGENT_PRESETS: ${JSON.stringify(presets)}`);
   },
 };
 
