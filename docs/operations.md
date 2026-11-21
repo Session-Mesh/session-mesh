@@ -1715,10 +1715,12 @@ SIGHUP to the agent's foreground job, then SIGKILL after 3 seconds, and answers 
 the terminal again and no process of that job is left; only then is the conversation copied and
 the agent started again, so two processes never run one conversation. The session then counts as
 a new incarnation, as after a new launch: what belonged to the previous one (its wake state, the
-status of a request it made) is not carried over. This needs a PTY host from this release or later
-(restarting it ends every mesh session, see
+status of a request it made) is not carried over, except the name you gave the session, its folder
+and its place in the list, which the new incarnation keeps. This needs a PTY host from this release
+or later (restarting it ends every mesh session, see
 [Restoring sessions](#restoring-sessions-after-a-pty-host-restart)); with an older one, the agent
-still resumes in a new session.
+still resumes in a new session, which takes that name, folder and place. A session replaced as a
+whole (`no_shell` below) also gives its name, folder and place to the new one.
 
 While the agent is stopped and its conversation copied, open tabs show the shell's prompt. A line
 someone starts typing there is erased before the agent's command is typed (Ctrl-E then Ctrl-U:

@@ -29,8 +29,10 @@ const LOOP = 'while IFS= read -r line; do :; done';
 const UUID = '????????-????-????-????-????????????';
 
 function fakeAgents(bin: string): void {
+  // the session token, which the session's own requests (a restart) carry
+  const TOKEN = `[ -n "$MESH_SESSION" ] && printf '%s' "$MESH_SESSION_TOKEN" > "${bin}/token-$MESH_SESSION"`;
   const write = (name: string, lines: string[]): void =>
-    fs.writeFileSync(path.join(bin, name), ['#!/bin/sh', ...lines, LOOP, ''].join('\n'), {mode: 0o755});
+    fs.writeFileSync(path.join(bin, name), ['#!/bin/sh', TOKEN, ...lines, LOOP, ''].join('\n'), {mode: 0o755});
   write('claude', [
     '[ "$1" = "--version" ] && exit 0',
     'sid=""; prev=""; for a in "$@"; do [ "$prev" = "--resume" ] && sid="$a"; prev="$a"; done',
@@ -82,18 +84,35 @@ export class HistoryLab {
       fs.writeFileSync(path.join(bin, `sid-${kind}`), SIDS[kind]);
       lab.writeTranscript(kind, dir);
     }
-    const [command, ...args] = nativePtyhost();
     const runtime = where.env.XDG_RUNTIME_DIR!;
     // With an intercept, the server talks to a proxy and the real host listens in a sub-directory.
     const hostRuntime = intercept ? path.join(runtime, 'real') : runtime;
     fs.mkdirSync(hostRuntime, {recursive: true, mode: 0o700});
-    lab.host = spawn(command!, args, {cwd: REPO, stdio: 'ignore',
-      env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: hostRuntime, LANG: 'C', SHELL: '/bin/bash'}});
-    const hostSocket = path.join(hostRuntime, 'session-mesh', 'ptyhost.sock');
-    await waitFor('ptyhost answering', 10000, () => fs.existsSync(hostSocket));
+    const hostSocket = await lab.startHost(hostRuntime);
     if (intercept) lab.proxy = await startProxy(path.join(runtime, 'session-mesh', 'ptyhost.sock'), hostSocket, intercept);
     await lab.startServer();
     return lab;
+  }
+
+  /** Start the native PTY host listening in `hostRuntime`; its control socket once it answers. */
+  private async startHost(hostRuntime: string): Promise<string> {
+    const [command, ...args] = nativePtyhost();
+    this.host = spawn(command!, args, {cwd: REPO, stdio: 'ignore',
+      env: {PATH: this.where.env.PATH, HOME: this.where.home, XDG_RUNTIME_DIR: hostRuntime, LANG: 'C', SHELL: '/bin/bash'}});
+    const hostSocket = path.join(hostRuntime, 'session-mesh', 'ptyhost.sock');
+    await waitFor('ptyhost answering', 10000, () => fs.existsSync(hostSocket));
+    return hostSocket;
+  }
+
+  /** Stop the PTY host (every session ends with it) and start another one: what a restart of its unit does.
+   * Only without an intercept. */
+  async restartHost(): Promise<void> {
+    assert.equal(this.proxy, null, 'restartHost runs without an intercept');
+    const gone = new Promise(resolve => this.host.once('close', resolve));
+    this.host.kill('SIGTERM');
+    await gone;
+    fs.rmSync(path.join(this.where.env.XDG_RUNTIME_DIR!, 'session-mesh', 'ptyhost.sock'), {force: true});
+    await this.startHost(this.where.env.XDG_RUNTIME_DIR!);
   }
 
   workDir(kind: Kind): string { return path.join(this.where.home, `work-${kind}`); }
@@ -157,7 +176,7 @@ export class HistoryLab {
     fs.rmSync(this.bin, {recursive: true, force: true});
   }
 
-  private async call(method: string, route: string, body?: unknown): Promise<{status: number; json: any; text: string}> {
+  async call(method: string, route: string, body?: unknown): Promise<{status: number; json: any; text: string}> {
     const token = fs.readFileSync(path.join(this.where.confDir, 'token'), 'utf8').trim();
     const base = `http://127.0.0.1:${this.where.port}`;
     const response = await fetch(base + route, {method, headers: {Authorization: `Bearer ${token}`, Origin: base,
