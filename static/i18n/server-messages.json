@@ -68,6 +68,14 @@
     "key": "server.conversationStoppedFallback"
   },
   {
+    "pattern": "^The agent was not stopped \\((?<reason>.+)\\): nothing was started$",
+    "key": "server.agentNotStopped"
+  },
+  {
+    "pattern": "^Conversation stopped; its agent could not be started again in session (?<name>.+)$",
+    "key": "server.agentNotStartedAgain"
+  },
+  {
     "pattern": "^Non-canonical Pi command$",
     "key": "server.piCommandNotCanonical"
   },

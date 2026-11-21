@@ -752,6 +752,8 @@
   "server.conversationRunningElsewhere": "This conversation is running in {host}: use “Restart” on that terminal",
   "server.conversationStillActive": "Conversation still active; standby session waiting: {name}",
   "server.conversationStoppedFallback": "Conversation stopped, but a standby session is available: {name}",
+  "server.agentNotStopped": "The agent was not stopped ({reason}): nothing was started",
+  "server.agentNotStartedAgain": "Conversation stopped; its agent could not be started again in session {name}",
   "server.createdRequired": "created required",
   "server.decisionInvalid": "Invalid decision",
   "server.demoArchiveChanged": "Archive missing or revision changed",
