@@ -148,3 +148,45 @@ test('an agent restarted in a replacement session (Pi: not restarted in place) g
   await relaunched(lab, 'pi', replacement, session.created);
   assert.deepEqual(await arrangement(lab, replacement), [LABEL, FOLDER, 0]);
 }));
+
+test('after a restart of the agent in place and a PTY host restart, a History resume shows the name', () => withHistoryLab(async lab => {
+  const session = await arranged(lab, 'codex');
+  await restartApproved(lab, session.name);
+  await relaunched(lab, 'codex', session.name, session.created);
+  await arrangement(lab, session.name);   // the conversation names record the new incarnation
+  await lab.restartHost();
+  await waitFor('the agent of the ended session gone', 20000, async () => {
+    const answer = await lab.call('GET', '/api/sessions');
+    return !(answer.json?.external as Listed[] | undefined)?.some(item => item.agent?.session_id === SIDS.codex);
+  });
+  const answer = await lab.resume('codex');
+  assert.equal(answer.status, 200, answer.text);
+  assert.equal((await lab.resumed('codex', answer.id!)).label, LABEL);
+}));
+
+test('several renamed sessions restored together after both restart, one whose name was taken meanwhile', () => withHistoryLab(async lab => {
+  const agent = await arranged(lab, 'codex');
+  await lab.shell('notes', 'My notes');
+  await lab.shell('scratch', 'Scratch pad');
+  await arrangement(lab, agent.name);   // the snapshot records the three
+  await lab.restartHost();
+  await lab.restartServer();   // a switch of the installation restarts both
+  const names = [agent.name, 'notes', 'scratch'];
+  await waitFor('the three offered', 20000, async () => {
+    const answer = await lab.call('GET', '/api/sessions');
+    const offered = new Set((answer.json?.restorable as {name: string}[] | undefined)?.map(offer => offer.name));
+    const running = (answer.json?.external as Listed[] | undefined)?.some(item => item.agent?.session_id === SIDS.codex);
+    return names.every(name => offered.has(name)) && !running;
+  });
+  const taken = await lab.call('POST', '/api/new', {preset: 'shell', cwd: lab.where.home, name: 'scratch'});
+  assert.equal(taken.status, 200, taken.text);
+  const restored = await lab.call('POST', '/api/restore', {names});
+  assert.equal(restored.status, 200, restored.text);
+  assert.ok(names.every(name => restored.json.results[name]?.ok), restored.text);
+  const ids = names.map(name => restored.json.results[name].id as string);
+  assert.notEqual(ids[2], 'scratch', 'restored under another name');
+  assert.deepEqual(await arrangement(lab, ids[0]!), [LABEL, FOLDER, 0]);
+  assert.equal((await listed(lab, ids[1]!))?.label, 'My notes');
+  assert.equal((await listed(lab, ids[2]!))?.label, 'Scratch pad');
+  assert.equal((await listed(lab, 'scratch'))?.label, null, 'the session that took the name keeps its own');
+}));
