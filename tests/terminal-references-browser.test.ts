@@ -116,7 +116,9 @@ async function printIds(page: Page, command = PRINT, output = OUTPUT): Promise<n
   }, output, { timeout: 20_000 });
   await typeLine(page, command);
   await waitForRow(page, output);
-  return rowOf(page, output);
+  const row = await rowOf(page, output);
+  assert.ok(row >= 0, 'the printed output still exists when its cell coordinates are captured');
+  return row;
 }
 
 /** The last buffer row whose text is `wanted`, or -1. */
@@ -290,5 +292,52 @@ describe('tracker references in the terminal', { skip }, () => {
     assert.equal(await page.evaluate(() => projecting), false, 'a click on an unknown id opens nothing');
     assert.equal(sent.filter(entry => entry.op === 'ids').length, 1, 'one read, then none within the minute');
     await page.context().close();
+  });
+
+  test('a fresh print waits for clear instead of reusing an identical replay row', { timeout: 600_000 }, async () => {
+    const page = await openWide(watch([]));
+    const wait = page.waitForFunction.bind(page);
+    try {
+      await printIds(page);
+      await page.evaluate(({command, output}) => {
+        const pane = active as any, socket = pane.conn.ws, receive = socket.onmessage, send = pane.send;
+        const held: MessageEvent[] = [];
+        socket.onmessage = (event: MessageEvent) => held.push(event);
+        pane.send = function(text: string, ...args: unknown[]) {
+          if (text === command + '\r') {
+            const buffer = pane.term.buffer.active;
+            for (let y = 0; y < buffer.length; y++) {
+              if (buffer.getLine(y)?.translateToString(true) === output)
+                throw Error('the old replay row still satisfies the next print');
+            }
+          }
+          return send.call(this, text, ...args);
+        };
+        (window as any).referencePrintGate = {
+          held,
+          release() {socket.onmessage = receive; for (const event of held.splice(0)) receive.call(socket, event);},
+          dispose() {this.release(); pane.send = send;},
+        };
+      }, {command: PRINT, output: OUTPUT});
+      // Deliver the real clear response when the helper first asks for readiness.
+      // The old helper sends PRINT first and fails the stale-row guard above.
+      page.waitForFunction = (async (...args: Parameters<Page['waitForFunction']>) => {
+        page.waitForFunction = wait;
+        await wait(() => (window as any).referencePrintGate.held.length > 0);
+        await page.evaluate(() => (window as any).referencePrintGate.release());
+        return wait(...args);
+      }) as typeof page.waitForFunction;
+      const y = await printIds(page);
+      assert.equal((await linksOn(page, y))[0]?.text, TASK);
+      const point = await cellPoint(page, y, columnOf(TASK) + 2);
+      await page.mouse.move(point.x, point.y);
+      await wait(() => active!.termEl.title === 'Task T-7b7b: Reference task');
+      await page.mouse.click(point.x, point.y);
+      await wait(() => projecting);
+    } finally {
+      page.waitForFunction = wait;
+      try {await page.evaluate(() => (window as any).referencePrintGate?.dispose());}
+      finally {await page.context().close();}
+    }
   });
 });
