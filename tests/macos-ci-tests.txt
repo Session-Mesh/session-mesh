@@ -48,6 +48,7 @@ tests/copilot-resume.test.ts
 tests/direct-line.test.ts
 tests/dictation-projects-lifecycle.test.ts
 tests/dictation-review-pane-replay.test.ts
+tests/dictation-state.test.ts
 tests/login-path-fixture.test.ts
 tests/event-sequence.test.ts
 tests/flow-build.test.ts
@@ -156,6 +157,7 @@ tests/server-robustness.test.ts
 tests/session-activity-idle.test.ts
 tests/shortcuts.test.ts
 tests/site-workflow.test.ts
+tests/terminal-cache-lifecycle.test.ts
 tests/terminal-links.test.ts
 tests/terminal-replay.test.ts
 tests/test-local-python.test.ts
