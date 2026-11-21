@@ -454,6 +454,67 @@ let finish_unknown () =
                       "no row is manufactured" true (row = None);
                     Ok ())))))
 
+(* First-use peers take the write lock in turn. A peer that wanted it while this
+   process initialized the store takes it as soon as the initialization commits,
+   before the switch from the rollback journal to WAL. SQLite then refuses that
+   switch at once, without the busy handler. The open must wait for the peer, not
+   report the store unavailable. *)
+let take_write_lock_after_contention file ready =
+  let db = Sqlite3.db_open file in
+  let deadline = Unix.gettimeofday () +. 2.0 in
+  let rec loop ~contended ~signalled =
+    if Unix.gettimeofday () < deadline then
+      if Sqlite3.exec db "BEGIN IMMEDIATE" <> Sqlite3.Rc.OK then
+        loop ~contended:true ~signalled
+      else if contended then (
+        Unix.sleepf 0.2;
+        ignore (Sqlite3.exec db "COMMIT"))
+      else (
+        ignore (Sqlite3.exec db "COMMIT");
+        if not signalled then ignore (Unix.write_substring ready "1" 0 1);
+        Unix.sleepf 0.00005;
+        loop ~contended ~signalled:true)
+  in
+  loop ~contended:false ~signalled:false;
+  ignore (Sqlite3.db_close db)
+
+(* Leaving WAL needs the only connection: it also fails if the previous store
+   kept its connection open. *)
+let rollback_journal file =
+  let db = Sqlite3.db_open file in
+  if Sqlite3.exec db "PRAGMA journal_mode=DELETE" <> Sqlite3.Rc.OK then
+    Alcotest.fail "fixture journal mode";
+  ignore (Sqlite3.db_close db)
+
+let wal_switch_waits_for_writer () =
+  with_root (fun root ->
+      let file = Filename.concat root "backend-accounts.sqlite" in
+      with_store root (fun _ -> ());
+      for _ = 1 to 3 do
+        rollback_journal file;
+        let ready_out, ready_in = Unix.pipe () in
+        match Unix.fork () with
+        | 0 ->
+            Unix.close ready_out;
+            take_write_lock_after_contention file ready_in;
+            Unix._exit 0
+        | peer ->
+            Unix.close ready_in;
+            let byte = Bytes.create 1 in
+            let ready = Unix.read ready_out byte 0 1 = 1 in
+            Unix.close ready_out;
+            let result = S.open_ ~root () in
+            ignore (Unix.waitpid [] peer);
+            Alcotest.(check bool) "peer took the write lock" true ready;
+            let store = value result in
+            Fun.protect
+              ~finally:(fun () -> ignore (S.close store))
+              (fun () ->
+                Alcotest.(check int)
+                  "initial policy" 0
+                  (C.revision (value (S.read_policy store))))
+      done)
+
 let () =
   Alcotest.run "backend state store"
     [
@@ -493,5 +554,7 @@ let () =
             old_draft_schema;
           Alcotest.test_case "unknown terminal operation refuses and poisons"
             `Quick finish_unknown;
+          Alcotest.test_case "WAL switch waits for a first-use writer" `Quick
+            wal_switch_waits_for_writer;
         ] );
     ]
