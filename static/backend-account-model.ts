@@ -26,7 +26,7 @@ export type BackendAccountPorts = Readonly<{
   timeoutMs?: number;
 }>;
 export type AccountState = Readonly<{
-  phase: 'closed' | 'loading' | 'ready' | 'saving' | 'saved' | 'conflict' | 'error';
+  phase: 'closed' | 'loading' | 'ready' | 'saving' | 'saved' | 'conflict' | 'refused' | 'error';
   snapshot: Snapshot | null;
 }>;
 
@@ -51,12 +51,20 @@ function label(value: unknown): string {
 }
 const asciiLower = (text: string): string => text.replace(/[A-Z]/g, c => c.toLowerCase());
 const CONFLICTS = new Set(['consent-revision-conflict', 'profile-registry-changed', 'profile-context-changed',
-  'unknown-profile', 'profiles-unconfigured', 'disabled-profile']);
-const ERRORS = new Set([...CONFLICTS, 'request-too-large', 'invalid-request', 'unsupported-request-version', 'invalid-account-pair',
-  'invalid-account-reference', 'profile-backend-mismatch', 'unsupported-operation', 'consent-rule-capacity',
-  'consent-revision-exhausted', 'invalid-consent-policy', 'invalid-profile-config', 'unsafe-profile-roots',
-  'unsafe-configuration-root', 'backend-helper-unavailable', 'backend-store-unavailable', 'unsafe-backend-store',
-  'invalid-backend-state', 'unsupported-backend-store-version', 'backend-transaction-aborted', 'backend-store-busy', 'backend-journal-capacity']);
+  'consent-rule-capacity', 'consent-revision-exhausted']);
+// mesh_profile_main.http_status and its precommit error paths. Generic helper failure
+// (including the HTTP adapter losing an ACK) and store/commit failure are NOT refusals.
+const REFUSALS = new Map<string, number>([
+  ...[...CONFLICTS].map(code => [code, 409] as const),
+  ...['unknown-profile', 'profiles-unconfigured'].map(code => [code, 404] as const),
+  ['request-too-large', 413],
+  ['unsupported-media-type', 415],
+  ...['invalid-request', 'unsupported-request-version', 'invalid-account-pair', 'invalid-account-reference',
+    'profile-backend-mismatch', 'unsupported-operation'].map(code => [code, 400] as const),
+  ...['disabled-profile', 'invalid-consent-policy', 'invalid-profile-config', 'unsafe-profile-roots',
+    'unsafe-configuration-root', 'unsafe-backend-store', 'invalid-backend-state', 'unsupported-backend-store-version',
+    'backend-transaction-aborted', 'backend-store-busy', 'backend-journal-capacity'].map(code => [code, 503] as const),
+]);
 class ReplyFailure extends Error {
   readonly conflict: boolean;
   constructor(code: string) { super('request-refused'); this.conflict = CONFLICTS.has(code); }
@@ -67,9 +75,10 @@ function data(value: unknown): unknown {
   const ok = (value as Record<string, unknown>).ok;
   const row = exact(value, ['version', 'ok', ok === true ? 'data' : 'code', ...(hasStatus ? ['http_status'] : [])]);
   if (row.version !== 1 || typeof ok !== 'boolean') return invalid();
-  if (hasStatus && (ok ? row.http_status !== 200 : ![400, 404, 409, 413, 503].includes(row.http_status as number))) return invalid();
+  if (hasStatus && (ok ? row.http_status !== 200 : ![400, 404, 409, 413, 415, 503].includes(row.http_status as number))) return invalid();
   if (!ok) {
-    if (typeof row.code !== 'string' || !ERRORS.has(row.code)) return invalid();
+    if (typeof row.code !== 'string' || !REFUSALS.has(row.code)
+      || (hasStatus && row.http_status !== REFUSALS.get(row.code))) return invalid();
     throw new ReplyFailure(row.code);
   }
   return row.data;
@@ -87,7 +96,7 @@ export function parseProfilesReply(value: unknown): Registry {
   const row = exact(data(value), ['configured', 'registry_revision', 'profiles']);
   const configured = flag(row.configured);
   const registry_revision = configured ? digest(row.registry_revision) : row.registry_revision === null ? null : invalid();
-  if (!Array.isArray(row.profiles) || row.profiles.length > 64 || (!configured && row.profiles.length !== 0)) return invalid();
+  if (!Array.isArray(row.profiles) || row.profiles.length > 128 || (!configured && row.profiles.length !== 0)) return invalid();
   const profiles: Profile[] = [];
   for (const raw of row.profiles) {
     const p = exact(raw, ['backend', 'id', 'context_revision', 'label', 'enabled', 'switch_qualified']);
@@ -182,7 +191,7 @@ export function createBackendAccountController(ports: BackendAccountPorts) {
       if (token !== generation) return false;
       publish({phase: 'saved', snapshot: {...snapshot, policy: next}}); return true;
     } catch (error) {
-      if (token === generation) publish({phase: error instanceof ReplyFailure && error.conflict ? 'conflict' : 'error', snapshot});
+      if (token === generation) publish({phase: error instanceof ReplyFailure ? error.conflict ? 'conflict' : 'refused' : 'error', snapshot});
       return false;
     } finally { if (active === abort) active = null; }
   }

@@ -22,7 +22,7 @@ export function createBackendAccountApi(request: AccountFetch): Pick<BackendAcco
       headers: body === undefined ? {Accept: 'application/json'} : {Accept: 'application/json', 'Content-Type': 'application/json'},
       ...(body === undefined ? {} : {body}),
     });
-    if (![200, 400, 404, 409, 413, 503].includes(response.status)
+    if (![200, 400, 404, 409, 413, 415, 503].includes(response.status)
       || response.headers.get('Content-Type')?.split(';')[0]?.trim() !== 'application/json') {
       throw new Error('account-response-unavailable');
     }
