@@ -1586,9 +1586,11 @@ for Pi it loads an extension without losing the two Mesh adds.
 -e /home/USER/dev/my-extension.mjs
 ```
 
-The field applies to that session only. Tick **Make this the default for `<agent>`** to store it:
-the same options are then added to every new session of that agent, including a session an agent
-asks Mesh to create. Storing needs the master token, typed in the dialog once (ten minutes of
+The field applies to that session only, and holds only these arguments: the stored default is shown
+beside it and is added by the server, so it is never sent twice. Tick **Make this the default for
+`<agent>`** to store what the field holds as that agent's default (an empty field clears it): the
+same arguments are then added to every new session of that agent, including a session an agent asks
+Mesh to create. Storing needs the master token, typed in the dialog once (ten minutes of
 grace, as in Configuration); if it is refused the session still starts and the dialog says the
 default was not saved.
 
