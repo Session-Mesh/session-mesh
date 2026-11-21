@@ -78,8 +78,55 @@ Cross-backend pairs refuse. Global edits/reset remain global and do not take a b
 `mesh-profile --http <operation>` is a native transport mode, **not an authenticated HTTP server**.
 It accepts the same fields without `version` and `op`, adds those fields internally and projects an
 `http_status` in the response. Its whitelist excludes private `profiles.resolve` and every native
-process action. A future HTTP binding must authenticate the human browser and enforce origin/body
+process action. The HTTP binding below authenticates the human browser and enforces origin and body
 bounds; the transport mode grants none of that authority.
+
+## HTTP routes
+
+The web server binds six routes to the transport mode, one operation each. Nothing else is
+exposed: `profiles.resolve` (its reply holds folders) and every switch stay on the host, and the
+path chooses the operation, never the body.
+
+| Route | Operation |
+| --- | --- |
+| `GET /api/accounts/profiles` | `profiles.list` |
+| `GET /api/accounts/consent` | `consent.get` |
+| `POST /api/accounts/consent/set-global` | `consent.set_global` |
+| `POST /api/accounts/consent/set-pair` | `consent.set_pair` |
+| `POST /api/accounts/consent/remove-pair` | `consent.remove_pair` |
+| `POST /api/accounts/consent/reset` | `consent.reset` |
+
+- **Caller.** The owner's browser only: the owner cookie, and no `Authorization` header of any
+  kind. The master Bearer token, a session token, and a missing or wrong cookie are all `401`. A
+  foreign `Origin`, or a `Sec-Fetch-Site` other than `same-origin` or `none`, is a bare `403`,
+  reads included.
+- **Request.** A `POST` body holds the operation's fields without `version` and `op`, as in the
+  transport mode, sent as `application/json`, at most 16 KiB. A read takes no query string.
+- **Reply.** The helper's envelope, byte for byte, with the HTTP status equal to its
+  `http_status`: `{"http_status":200,"version":1,"ok":true,"data":…}` or
+  `{"http_status":409,"version":1,"ok":false,"code":"consent-revision-conflict"}`. Statuses and
+  codes are those of the transport mode: 409 for a stale `expected_revision`, a changed registry or
+  context, a full rule set or an exhausted revision; 404 for an unknown profile or no registry; 400
+  for a refused request; 413; 503.
+- **Refusals the server gives itself**, in the same envelope, before the helper runs:
+  `400 invalid-request` (a query string, or a body that is not a JSON object's text),
+  `413 request-too-large` and `415 unsupported-media-type`.
+- **Fail closed.** No helper, no complete line within 5 s, or a reply that is not exactly the
+  envelope gives `503 backend-helper-unavailable`, and the helper's output is not relayed. Not
+  exactly the envelope means: an unknown key, a status outside 200/400/404/409/413/503, `ok` or
+  the exit code disagreeing with the status, or a `profiles.list` profile with more than its
+  public fields.
+
+The server runs `mesh-profile --http <operation>` as an argument vector, never through a shell, in
+its own process group, with an environment of `MESH_CONF_DIR` (the server's configuration folder,
+so the registry and the store sit beside `accounts.json`), `PATH=/usr/bin:/bin` and `LANG` only.
+At most four run at once. The program is `MESH_MESH_PROFILE_CMD` when set (an absolute path to an
+existing file, else none), otherwise `mesh-profile` in `MESH_BIN_DIR`, or in the opam switch's
+`bin` when `MESH_BIN_DIR` is unset.
+
+These routes change preferences only. They never switch an account, and in this version a
+session's request to change its account is always put to the owner, whatever the global or pair
+preference says: the session-action path does not read the consent store.
 
 ## Policy and journal transactions
 

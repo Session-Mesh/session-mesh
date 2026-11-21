@@ -56,6 +56,9 @@ const CONCRETE: Record<string, string> = {
   '/api/board/@self/revision': '/api/board/@self/revision?version=0',
   '/api/board/@self/revision/diff': '/api/board/@self/revision/diff?from_version=0&to_version=0',
   '/api/demo-scene/@self/selected/revisions': '/api/demo-scene/@self/selected/revisions?demo_id=x',
+  // The account reads refuse any query before running mesh-profile, so the answer does not depend on the helper.
+  '/api/accounts/profiles': '/api/accounts/profiles?probe=1',
+  '/api/accounts/consent': '/api/accounts/consent?probe=1',
 };
 
 // A concrete request path for a canonical resource: other placeholders take a value nothing has.
@@ -173,6 +176,12 @@ const ACCEPTED_STATUS = `
   POST /api/config/launch 403 elevation-required
   POST /api/agent-mail/consent/{request_id}/decision 400
   POST /api/agent-mail/consent/revoke 400
+  GET /api/accounts/profiles 400 invalid-request
+  GET /api/accounts/consent 400 invalid-request
+  POST /api/accounts/consent/set-global 400 invalid-request
+  POST /api/accounts/consent/set-pair 400 invalid-request
+  POST /api/accounts/consent/remove-pair 400 invalid-request
+  POST /api/accounts/consent/reset 400 invalid-request
   POST /api/open 400
   POST /api/stat 400
   GET /api/board/@self 200
