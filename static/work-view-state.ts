@@ -27,10 +27,8 @@ export const MAX_DRAFT_CHARS = 4000;
 const MAX_PICKED = 32, MAX_OPEN = 400, MAX_ID = 64;
 /** The longest product, project or zone id the server gives (ocaml/work_read/lib/wr_products.ml). */
 const MAX_ENTITY_ID = 100;
-/** A key of the rail's tree (static/work-tree.ts `treeKey`): its kind, a colon and the id, empty for the zone of the
- *  projects of no listed product. */
-const RAIL_KEY = /^(?:zone|product|project):(?:[A-Za-z0-9][A-Za-z0-9_.:-]*)?$/;
-const MAX_RAIL_KEY = 'product:'.length + MAX_ENTITY_ID;
+/** The kinds of the keys of the rail's tree (static/work-tree.ts `treeKey`). */
+const RAIL_KINDS: ReadonlySet<string> = new Set(['zone', 'product', 'project']);
 
 export type Draft = Readonly<{
   /** The text of the answer field. */
@@ -89,7 +87,14 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 const isId = (value: unknown, max = MAX_ID): value is string => typeof value === 'string' && value.length <= max && ID.test(value);
 const idOrNull = (value: unknown): string | null => (isId(value) ? value : null);
 const productOrNull = (value: unknown): string | null => (isId(value, MAX_ENTITY_ID) ? value : null);
-const isRailKey = (value: unknown): value is string => typeof value === 'string' && value.length <= MAX_RAIL_KEY && RAIL_KEY.test(value);
+/** A key of the rail: its kind, a colon and an id as long as the server's, empty only for the zone of the projects of
+ *  no listed product. */
+function isRailKey(value: unknown): value is string {
+  const colon = typeof value === 'string' ? value.indexOf(':') : -1;
+  if (colon <= 0) return false;
+  const kind = (value as string).slice(0, colon), id = (value as string).slice(colon + 1);
+  return RAIL_KINDS.has(kind) && (id === '' ? kind === 'zone' : isId(id, MAX_ENTITY_ID));
+}
 const offset = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.round(value), 1e7) : 0);
 /** A time in epoch milliseconds (the latest a Date can hold), 0 for anything else. */
 const stamp = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.round(value), 8.64e15) : 0);
