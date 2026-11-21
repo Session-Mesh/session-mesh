@@ -12,6 +12,7 @@ export { parsePtySize, sendsSize, sizePlan } from "./terminal-size-owner.ts";
 export * from "./mailbox-panel.ts";
 export * from "./config-panel.ts";
 export * from "./session-artifacts.ts";
+export * from "./session-project-tools.ts";
 export * from "./agent-mail-consent.ts";
 export * from "./narrow-drawer.ts";
 export { holdLineForTarget } from "./held-line.ts";

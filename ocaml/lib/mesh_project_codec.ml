@@ -245,6 +245,33 @@ let patch_repository original value =
       let rest = List.remove_assoc key fields in
       if value = `Null then rest else (key, value) :: rest) previous repository)
 
+let same_session a b =
+  let a = obj a and b = obj b in
+  let same_epoch a b = match a, b with
+    | `Int a, `Int b -> a = b
+    | `Float a, `Float b -> a = b
+    | `Int n, `Float f | `Float f, `Int n ->
+        Float.is_integer f && f >= 0. && f <= float_of_int max_int
+        && Int64.of_float f = Int64.of_int n
+    | _ -> false
+  in
+  get a "name" = get b "name" && List.assoc_opt "machine_id" a = List.assoc_opt "machine_id" b
+  && same_epoch (get a "created") (get b "created")
+
+let patch_sessions original value =
+  let previous = match List.assoc_opt "sessions" original with Some (`List xs) -> xs | _ -> [] in
+  let changes = list 40 (fun change ->
+      let fields = obj change in
+      keys fields ["type"; "session"];
+      let reference = get fields "session" in
+      session reference;
+      ignore (id (get (obj reference) "machine_id"));
+      (choice ["attach"; "detach"] (get fields "type"), reference)) value in
+  `List (List.fold_left (fun sessions (operation, reference) ->
+      if operation = "detach" then List.filter (fun old -> not (same_session old reference)) sessions
+      else if List.exists (same_session reference) sessions then sessions
+      else sessions @ [reference]) previous changes)
+
 let patch_field original fields (key, value) =
   let set value = (key, value) :: List.remove_assoc key fields in
   match (key, value) with
@@ -264,12 +291,15 @@ let patch_field original fields (key, value) =
   | "source_changes", value ->
       ("sources", patch_sources original value)
       :: List.remove_assoc "sources" fields
+  | "session_changes", value ->
+      ("sessions", patch_sessions original value)
+      :: List.remove_assoc "sessions" fields
   | _ -> fail "invalid-request"
 
 let patch original value =
   let changes = obj value and original = obj original in
   keys changes
-    [ "title"; "description"; "folders"; "repository"; "source_changes"; "observation" ];
+    [ "title"; "description"; "folders"; "repository"; "source_changes"; "session_changes"; "observation" ];
   if changes = [] then fail "invalid-request";
   let result =
     `Assoc (List.fold_left (patch_field original) original changes)

@@ -29,7 +29,7 @@ test("Artifacts dialog: keyboard, narrow viewport, untrusted text, external link
   await new Promise<void>(resolve => server.listen(0,"127.0.0.1",resolve));
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
-    browser = await chromium.launch({...chromiumLaunchOptions(process.env.MESH_CHROMIUM || "", ["--no-sandbox"]),headless:true});
+    browser = await chromium.launch(chromiumLaunchOptions(process.env.MESH_CHROMIUM || "", ["--no-sandbox"]));
     const page = await browser.newPage({viewport:{width:390,height:844}});
     await page.goto(`http://127.0.0.1:${(server.address() as {port:number}).port}`);
     await page.evaluate((catalogue) => {

@@ -83,6 +83,11 @@ export function samples(literal: Literal): string[] {
 // text. No catalog key exists for them; add a row and a key if a screen starts
 // displaying one. Each entry states why it has no row.
 const NOT_SHOWN: Record<string, string> = {
+  'Artifacts unavailable': 'artifact reader shows its own localized unavailable state; connector calls are agent-only',
+  'Artifact transfer completion unverified': 'internal completion exception, converted to the guarded result or translated transfer warning',
+  'Connector busy; do not automatically replay': 'Notes connector operation, agent-only; no screen sends operations',
+  'Invalid Notes operation': 'Notes connector operation validation, agent-only',
+  'Notes operation not granted': 'Notes connector grant refusal, agent-only',
   'Invalid project issue request': 'issue reader route: the client treats any non-OK reply as "unavailable" and shows its own text',
   'Pi wake stream already connected': 'answer to the Pi extension opening a second wake stream, never a screen',
   'Invalid detail': 'agent event ingestion (hooks post events): validation answer read by the hook',

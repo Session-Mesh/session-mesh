@@ -99,6 +99,11 @@ class FakeHost:
 def install(fake):
     ptyhost.request = fake.request
     server._conversation_missing = lambda kind, sid, account=None: False   # no transcript files in this home
+    # Mail-only fixture: affirmative empty-source evidence, never catalogue absence.
+    async def empty_artifacts(op, name, created, target=None):
+        assert op in ('list', 'restore-probe')
+        return {'required': False} if op == 'restore-probe' else {'catalogue_present': True, 'source_present': True, 'references': []}
+    server.artifact_lifecycle = empty_artifacts
 
 def live_session(name, created, agent='claude', nonce='n0'):
     return {'name': name, 'pid': 999998, 'cwd': '/tmp', 'created': created, 'activity': 0,

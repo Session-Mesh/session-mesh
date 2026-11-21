@@ -636,6 +636,22 @@
     "key": "server.organisationNotRestored"
   },
   {
+    "pattern": "^Artifact references not transferred; kept for the old identity$",
+    "key": "artifacts.transferPending"
+  },
+  {
+    "pattern": "^Artifact reference cleanup unavailable; private references retained$",
+    "key": "artifacts.cleanupPending"
+  },
+  {
+    "pattern": "^The bound restored session is unavailable; nothing was restarted$",
+    "key": "artifacts.restoreUnavailable"
+  },
+  {
+    "pattern": "^Restored incarnation changed; nothing was restarted$",
+    "key": "artifacts.restoreChanged"
+  },
+  {
     "pattern": "^Push unavailable \\(Python cryptography package missing\\)$",
     "key": "server.pushUnavailable"
   },

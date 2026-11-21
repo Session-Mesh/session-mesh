@@ -174,7 +174,8 @@ for (const width of [1280, 390]) test(`actual native Projects create/settings/co
       const page = await a.newPage(), other = await b.newPage();
       const foreign: string[] = [];
       page.on('request', request => { if (new URL(request.url()).origin !== origin) foreign.push(request.url()); });
-      await page.goto(origin); await page.waitForFunction(() => typeof panes !== 'undefined' && panes.length > 0);
+       await page.goto(origin); await page.waitForFunction(() => typeof panes !== 'undefined' && panes.length > 0);
+       await page.waitForFunction(() => data.mesh.some((row: {id: string}) => row.id === 'p1-quiet'));
       await page.evaluate('openSession("p1-quiet")');
       await page.waitForFunction(() => active?.conn?.terminal?.isOpen() && active.term.buffer.active.length > 80);
       await page.evaluate(`(() => {
@@ -378,7 +379,9 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
       window.projectContextDeadlines = () => [...timers.values()].map(timer => timer.delay);
     });
     await page.goto(origin);
-    await page.waitForFunction(() => typeof panes !== 'undefined' && panes.length > 0); await page.evaluate('openSession("i1-live")');
+    await page.waitForFunction(() => typeof panes !== 'undefined' && panes.length > 0);
+    await page.waitForFunction(() => data.mesh.some((row: {id: string}) => row.id === 'i1-live'));
+    await page.evaluate('openSession("i1-live")');
     await page.waitForFunction(() => active?.conn?.terminal?.isOpen());
     await page.evaluate('window.i1Saved={pane:active,term:active.term,conn:active.conn,target:paneTargets.capture(active,true)}');
     const requests: Record<string, unknown>[] = [];
@@ -485,7 +488,8 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
       const starts = () => requests.filter(value => value.op === 'project_observation_start');
       const settled = async () => { await page.waitForFunction(() => document.querySelector('#project-overview > p[role="status"]')?.textContent?.startsWith('Context observed')); };
       let before = starts().length;
-      const stamp = await page.locator('#project-overview > p[role="status"]').textContent();
+      const stamp = await page.locator('#project-overview > p[role="status"]').getAttribute('data-observed-at');
+      assert.ok(stamp, 'the displayed context retains its precise native observation time');
       const taskControls=page.locator('.project-followup [data-followup-key^="row-"]');
       if(REAL_ROSTER)assert.ok(await taskControls.count()>0,'real Roster task controls are mounted before refresh');
       else assert.equal(await taskControls.count(),0,'Git-only observation has no Roster task controls');
@@ -494,7 +498,11 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
       if(REAL_ROSTER)assert.ok(await taskControls.count()>0,'old task controls remain mounted while refreshing in list or clock view');
       else assert.equal(await taskControls.count(),0,'Git-only refresh does not create Roster task controls');
       await settled(); assert.equal(starts().length, before + 1, 'settled observation refreshes on the thirty second cadence');
-      assert.notEqual(await page.locator('#project-overview > p[role="status"]').textContent(), stamp);
+      await page.waitForFunction(previous => {
+        const current = document.querySelector<HTMLElement>('#project-overview > p[role="status"]')?.dataset.observedAt;
+        return typeof current === 'string' && current !== previous;
+      }, stamp);
+      assert.notEqual(await page.locator('#project-overview > p[role="status"]').getAttribute('data-observed-at'), stamp);
       await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); window.tickProjectContext(30000); });
       assert.equal(starts().length, before + 1, 'hidden document does not start captures');
       const resume = page.waitForRequest(request => request.url().endsWith('/api/projects/v1') && request.postDataJSON()?.op === 'project_observation_start');

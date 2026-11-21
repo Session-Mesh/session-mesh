@@ -59,9 +59,9 @@ async def main():
             return target
         async def nothing(*args,**kwargs): return None
         async def lifecycle(op,*args,**kwargs):
-            if op == "transfer": transfers.append(op)
+            if op == "restore-transfer": transfers.append(op)
             result = await actual(op,*args,**kwargs)
-            if op == "list" and fault == "helper-after-empty": os.environ["MESH_ARTIFACTS_CMD"] = missing
+            if op == "restore-probe" and fault == "helper-after-empty": os.environ["MESH_ARTIFACTS_CMD"] = missing
             return result
         def unavailable_intent(*args,**kwargs): intent_attempts.append(True); raise OSError("fixture snapshot failure")
         server.host = host; server.new_session = create; server._restore_identity = lambda e:(e,None)

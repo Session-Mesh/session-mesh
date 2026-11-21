@@ -3453,23 +3453,17 @@ async def artifact_lifecycle(op, name, created, target=None):
 
 
 async def artifact_transfer_complete(name, created, target):
-    """Return only for proven moved, already-moved or source-empty outcomes."""
-    result = await artifact_lifecycle("transfer", name, created, target)
-    if result.get("catalogue_present") is True:
-        status = result.get("transfer_status")
-        if ((status == "moved" and result.get("transferred") is True)
-                or (status in ("already-moved", "source-empty") and result.get("transferred") is False)):
-            return
+    """Only the native worker can attest completion of the exact transfer."""
+    result = await artifact_lifecycle("restore-transfer", name, created, target)
+    if result.get("complete") is True:
+        return
     raise web.HTTPServiceUnavailable(text="Artifact transfer completion unverified")
 
 
 async def artifact_transfer_required(name, created):
     try:
-        result = await artifact_lifecycle("list", name, created)
-        references = result.get("references")
-        empty_confirmed = (result.get("catalogue_present") is True and result.get("source_present") is True
-                           and isinstance(references, list) and not references)
-        return not empty_confirmed
+        result = await artifact_lifecycle("restore-probe", name, created)
+        return result.get("required") is not False
     except web.HTTPException:
         return True
 
@@ -3513,16 +3507,15 @@ async def api_session_notes(request):
     identity = {"name": original[0], "created": original[1]}
     nonce = request["mesh_session_nonce"]
     try:
-        grant = await artifact_command({"op": "notes-authorize", "session": identity,
-                                        "nonce": nonce, "tool": body["tool"]})
+        async with ARTIFACTS_LOCK:
+            grant = await artifact_command({"op": "notes-prepare", "session": identity,
+                                             "nonce": nonce, "tool": body["tool"]})
     except web.HTTPException:
         raise web.HTTPForbidden(text="Notes operation not granted") from None
     if grant.get("allowed") is not True:
         raise web.HTTPForbidden(text="Notes operation not granted")
-    generation = None
-    if body["tool"] in ("mint_share", "revoke_share"):
-        async with ARTIFACTS_LOCK:
-            generation = (await artifact_command({"op": "begin"}))["generation"]
+    if grant.get("status") == "unavailable":
+        raise web.HTTPServiceUnavailable(text="Artifacts unavailable")
     current = await sessionauth.authenticate(request, lambda: host({"op": "list"}))
     if current != original:
         raise web.HTTPUnauthorized()
@@ -3537,24 +3530,16 @@ async def api_session_notes(request):
     finally:
         ARTIFACTS_ACTIVE -= 1
     if outcome.get("status") == "success":
-        observation = outcome.pop("observation", None)
         try:
             async with ARTIFACTS_LOCK:
-                # A confirmed account-wide revocation clears known capabilities even
-                # if its originally authorised session ended during the request.
-                if not isinstance(observation, dict) or observation.get("action") != "revoke":
+                try:
                     current = await sessionauth.authenticate(request, lambda: host({"op": "list"}))
-                    if current != original:
-                        raise web.HTTPUnauthorized()
-                if isinstance(observation, dict):
-                    await artifact_command({"op": observation["action"],
-                                            "session": identity,
-                                            **({"generation": generation} if observation["action"] == "observe" else {}),
-                                            **{k: v for k, v in observation.items() if k != "action"}})
-                elif observation is not None:
-                    raise ValueError("unvalidated reference")
-            outcome["catalogue"] = "recorded" if observation else "not-applicable"
-        except (web.HTTPException, ValueError, KeyError):
+                except web.HTTPException:
+                    current = None
+                outcome = await artifact_command({"op": "notes-record", "session": identity,
+                    "generation": grant.get("generation"), "outcome": outcome, "attributed": current == original})
+        except web.HTTPException:
+            outcome.pop("observation", None)
             outcome["catalogue"] = "not-recorded"
             outcome["warning"] = "Upstream succeeded; reference not recorded. Do not replay the operation."
     return web.json_response(outcome, status=403 if outcome.get("status") == "denied" else 200,
@@ -5252,7 +5237,7 @@ async def _create_restored(name, entry, running, reason=None, nonce=None):
     except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, web.HTTPServiceUnavailable, GeminiSettingsRefused) as e:
         if nonce is not None:
             await _withdraw_intent(name, entry)
-        if isinstance(e, web.HTTPServiceUnavailable):
+        if isinstance(e, web.HTTPServiceUnavailable) and not isinstance(e, GeminiSettingsRefused):
             raise
         return None, {"ok": False, "error": e.text}
     if resumable:

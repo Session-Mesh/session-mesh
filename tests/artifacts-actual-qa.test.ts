@@ -14,7 +14,7 @@ const missingHelper=!fs.existsSync(helper) && !process.env.MESH_REQUIRE_ARTIFACT
 
 // Auto-discovered by test-local-node.sh and the existing CI Node browser inventory
 // (terminal-browser-lib import). No manual browser/macOS allow-list is required.
-test('actual Info -> Artifacts, synthetic Notes, durable restart and restore, desktop/mobile EN/FR', {timeout:180000,skip:missingHelper || skip}, async () => {
+test('actual Tools -> Artifacts, synthetic Notes, durable restart and restore, desktop/mobile EN/FR', {timeout:180000,skip:missingHelper || skip}, async () => {
   const calls:string[] = []; let outage=false; let failStorage=()=>{};
   const upstream=http.createServer(async(req,res)=>{
     assert.equal(req.headers.authorization,'Bearer synthetic-only');
@@ -55,11 +55,12 @@ test('actual Info -> Artifacts, synthetic Notes, durable restart and restore, de
       const text=await res.text();assert.equal(res.status,200,tool+' failed with status '+res.status);return JSON.parse(text);
     };
     const open=async()=>{
-      await page.locator('.p-provenance summary').first().click();
-      await page.locator('.p-provenance-body button').filter({hasText:/^(Artifacts|Artefacts)$/}).click();
+      assert.equal(await page.locator('.p-provenance-body button').filter({hasText:/^(Artifacts|Artefacts)$/}).count(),0);
+      await page.locator('.p-tools summary').first().click();
+      await page.locator('.p-tools-body button').filter({hasText:/^(Artifacts|Artefacts)$/}).click();
       await page.locator('dialog.session-artifacts').waitFor();
     };
-    const close=async()=>{await page.keyboard.press('Escape');await page.locator('dialog.session-artifacts').waitFor({state:'detached'});assert.match(await page.evaluate(()=>document.activeElement?.textContent||''),/Artifacts|Artefacts/);await page.locator('.p-provenance summary').first().click();};
+    const close=async()=>{await page.keyboard.press('Escape');await page.locator('dialog.session-artifacts').waitFor({state:'detached'});assert.match(await page.evaluate(()=>document.activeElement?.textContent||''),/Artifacts|Artefacts/);await page.locator('.p-tools summary').first().click();};
     assert.equal((await op('create_note',{path:'qa.md',content:'synthetic'})).catalogue,'not-applicable');
     await open();await page.getByText('No confirmed share references for this session.',{exact:true}).waitFor();assert.equal(await page.locator('dialog.session-artifacts a').count(),0);await close();
     const minted=await op('mint_share',{path:'qa.md',label:'QA'});assert.equal(minted.catalogue,'recorded');

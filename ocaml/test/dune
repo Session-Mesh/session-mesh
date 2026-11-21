@@ -1,7 +1,7 @@
 (test
  (name session_artifacts_test)
  (modules session_artifacts_test)
- (libraries mesh_session_artifacts mesh_notes_connector alcotest yojson unix uri))
+ (libraries mesh_session_artifacts mesh_notes_connector mesh_artifacts_worker alcotest yojson unix uri))
 
 (test
  (name mesh_history_test)

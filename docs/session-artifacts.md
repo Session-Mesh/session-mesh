@@ -1,8 +1,35 @@
 # Session Artifacts and Notes
 
-The **Artifacts** button inside a live session's **Info** disclosure opens a catalogue
+The **Artifacts** button inside a live session's **Tools** menu opens a catalogue
 of confirmed connector references. It does not copy note contents, scan conversations,
 fetch share links or widen the separate Projects/Roster artifact permissions.
+
+## Attach session tools to a local project
+
+Choose **Tools → Project attachment**, select a **local Mesh project**, then explicitly
+attach or detach the session. This uses the native project registry, not tracker/worklog
+projects; names or IDs from those separate registries are never matched implicitly.
+The native workspace (**Projects → Old view**) shows the attached session Tools menus without requiring a Roster
+observation. The reference records the project, machine ID, exact session name and creation
+time. It contains no share capability or Notes grant.
+
+Attachments are owner-authored metadata, not evidence that a terminal is live. Opening
+Artifacts still resolves the exact live incarnation through Mesh. An offline host or a
+same-name replacement cannot turn the recorded reference into access to another session.
+Missing machine identity and incomplete owner reads stay unavailable, never an empty or
+live-session claim. References are not rebound automatically after restore; explicitly
+reattach the restored incarnation when appropriate. Artifact catalogue transfer itself
+continues to use the separate restore completion proof described below.
+
+Attachment changes use the existing native revision checks and request receipts. A lost
+save response is uncertain: **Check uncertain save** reads its receipt without replaying
+the mutation. Confirmed changes and recovered receipts invalidate and reread the owning
+workspace projection; a detached row is not left active until navigation. Valid legacy
+projects with no session field can receive their first attachment. Bounded omissions stay
+unavailable rather than being interpreted as an empty field.
+Changing the selected project discards old read results, and changing the
+workspace project invalidates a dialog opened from its old context. Session/project
+attachment never transfers, creates or broadens Notes permissions.
 
 ## Configure Notes explicitly
 
@@ -45,6 +72,11 @@ The built `mesh-board-mcp` also supplies its internal `--artifacts-worker` mode,
 packaging needs no extra runtime. A source build uses its corresponding dune executable.
 `MESH_ARTIFACTS_CMD` can select an explicit user-managed standalone helper for tests;
 it must be an executable path, not a shell command.
+
+Native worker operations also decide admission generations, observation/revocation recording,
+and source-empty/restore-completion evidence. The existing Python bridge retains HTTP limits,
+session authentication, live-host rechecks around awaited work and restore journal integration;
+it is a compatibility boundary, not a second implementation of connector policy.
 
 ## Sharing and outcomes
 

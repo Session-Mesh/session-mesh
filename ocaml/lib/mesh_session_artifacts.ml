@@ -470,6 +470,30 @@ let transfer root before after =
                 barriers,
                 counter ) ))
 
+let restore_probe root id =
+  let empty =
+    try
+      let value = catalogue root id in
+      get "catalogue_present" value = `Bool true
+      && get "source_present" value = `Bool true
+      && get "references" value = `List []
+    with _ -> false
+  in
+  `Assoc [ ("required", `Bool (not empty)) ]
+
+let restore_transfer root before after =
+  let value = transfer root before after in
+  let complete =
+    get "catalogue_present" value = `Bool true
+    &&
+    match (get "transfer_status" value, get "transferred" value) with
+    | `String "moved", `Bool true
+    | `String ("already-moved" | "source-empty"), `Bool false ->
+        true
+    | _ -> false
+  in
+  `Assoc [ ("complete", `Bool complete) ]
+
 let notes_authorized root id nonce tool =
   try
     ignore (identity id);

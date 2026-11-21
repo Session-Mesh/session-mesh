@@ -43,7 +43,8 @@ const snapshot = (): string => fs.readdirSync(userDir()).sort().map(name => {
 function startHost(): ChildProcess {
   const argv = nativePtyhost();
   return spawn(argv[0], argv.slice(1), {cwd: REPO, stdio: 'ignore',
-    env: {PATH: pathEnv, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C'}});
+    env: {PATH: pathEnv, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C',
+      SHELL: path.join(fakes, 'plain-bash')}});
 }
 
 async function until<T>(what: string, probe: () => T | undefined | false | Promise<T | undefined | false>): Promise<T> {
@@ -57,6 +58,8 @@ async function until<T>(what: string, probe: () => T | undefined | false | Promi
 
 before(async () => {
   fakes = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-gemini-'));
+  // Keep fake commands on PATH; this suite does not test machine login profiles.
+  fs.writeFileSync(path.join(fakes, 'plain-bash'), '#!/bin/sh\nexec /bin/bash --noprofile --norc -i\n', {mode: 0o755});
   const bin = path.join(fakes, 'bin');
   const meshBin = path.join(fakes, 'meshbin');
   fs.mkdirSync(bin);
