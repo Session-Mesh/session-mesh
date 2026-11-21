@@ -483,7 +483,9 @@ connectors, harness installation and advanced workflow actions remain future wor
   default. From inside a session, `mesh-rename NAME` and
   `mesh-rename --folder FOLDER` do the same.
 - **Shared by every device.** Names, folders and order are kept by the server, so every device sees
-  the same list; only which groups are folded is kept per browser.
+  the same list; only which groups are folded is kept per browser. They survive a restart of the
+  web server and a restart of the session's agent (an account switch or an approved restart), and
+  come back with a session restored after a PTY host restart.
 - **Pins.** "Pin on this device", in the session menu or on a history card, keeps a conversation of any
   supported agent (Claude, Codex, Pi, OpenCode, Gemini, Antigravity, Copilot, Vibe) in a "Pinned · this
   device" group, even after its session has ended. Pins are kept in this browser only, up to 100. The

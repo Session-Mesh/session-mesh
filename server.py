@@ -1040,10 +1040,12 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
     replacement = next((item for item in listed if item.get("name") == name), None)
     if replacement is None:
         raise web.HTTPServiceUnavailable(text="ptyhost did not confirm the prepared session")
+    saved = await asyncio.to_thread(organize.arrangement, old_name, old_created)
     killed = await host({"op": "kill_if", "name": old_name, "created": old_created})
     if killed != {"ok": True}:
         await host({"op": "kill_if", "name": name, "created": replacement["created"]})
         raise web.HTTPConflict(text="Session replaced or stop already requested")
+    await _carry_arrangement((old_name, old_created), name, saved, replacement["created"])
     await _wait_source_gone(old_name, old_created, name)
     if switch:
         try:
@@ -1053,18 +1055,37 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
             await host({"op": "kill_if", "name": name, "created": replacement["created"]})
             resumed = await new_session(base, cwd, command, agent, known_agent, keep=48, account=account,
                                         account_env=source_env)
+            await _carry_arrangement((old_name, old_created), resumed, saved)
             raise AccountSwitchUndone(resumed, exc.code or "carry_failed", str(exc)) from exc
+    await _start_replacement(replacement, cwd, command, known_agent, account_env)
+    return name
+
+
+async def _start_replacement(replacement, cwd, command, known_agent, account_env):
+    """Start the agent in the prepared ``replacement`` session (its listing item), once its source is gone."""
     if known_agent == "claude":
         command = await asyncio.to_thread(claudewake.launch_command, command,
                                           replacement["meta"].get("nonce"), CLAUDE_WAKE_DIR,
                                           cwd, ptyhost.clean_env(account_env))
     command = with_account(command, account_env)
-    started = await host({"op": "start_if", "name": name,
+    started = await host({"op": "start_if", "name": replacement["name"],
                           "created": replacement["created"], "command": command})
     if started != {"ok": True}:
         raise web.HTTPServiceUnavailable(
-            text=f"Conversation stopped, but a standby session is available: {name}")
-    return name
+            text=f"Conversation stopped, but a standby session is available: {replacement['name']}")
+
+
+async def _carry_arrangement(source, name, saved, created=None):
+    """Give session ``name`` (incarnation ``created``, else the one the host lists now) the label, folder and rank
+    of the incarnation ``source`` (name, created) it continues; ``saved``: organize.arrangement of ``source`` read
+    before it stopped. A failure is logged: the restart itself goes on."""
+    try:
+        if created is None:
+            created = next((s["created"] for s in await host({"op": "list"}) if s.get("name") == name), None)
+        if created is not None:
+            await asyncio.to_thread(organize.carry, source, (name, created), saved)
+    except (OSError, ValueError, web.HTTPException) as exc:
+        print(f"organisation of {source[0]} not carried to {name}: {exc!r}", flush=True)
 
 
 # The agents the PTY host recognises in a terminal's foreground (mesh_ptyhost.ml, is_agent_name): only these
@@ -1121,7 +1142,15 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     account_env = await account_environment(target, known_agent)
     source_env = await account_environment(account, known_agent) if switch else account_env
     command, notice, vibe = await _prepared_launch(known_agent, command, cwd)
-    created = await _stop_agent(source, known_agent)
+    saved = await asyncio.to_thread(organize.arrangement, source["name"], source["created"])
+    incarnation = (source["name"], source["created"])
+    try:
+        created = await _stop_agent(source, known_agent)
+    except web.HTTPServiceUnavailable:   # a late reply: the agent may be stopped all the same, the session moved on
+        await _carry_arrangement(incarnation, source["name"], saved)
+        raise
+    # the new incarnation keeps the session's label, folder and rank (bound to ``created``, which moved on)
+    await _carry_arrangement(incarnation, source["name"], saved, created)
     launch = (source, created, cwd, command, agent, known_agent, notice, vibe)
     if switch:
         try:

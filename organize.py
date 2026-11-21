@@ -8,7 +8,9 @@ ptyhost names a session once, at creation, and is not restarted lightly
 generated name. Labels, folder membership and order are kept server-side in
 ~/.config/session-mesh/mesh.json so every device shows the same list. Each
 entry is bound to the session's creation time: a later session that reuses
-a name does not inherit a stale label or folder. Folding a folder is a
+a name does not inherit a stale label or folder; a session that continues
+another incarnation (its agent restarted in the same terminal, or a
+replacement session) takes that entry over (carry). Folding a folder is a
 per-browser preference and lives in the page, not here.
 
     {"folders": ["projects", "notes"],          # folder order
@@ -133,6 +135,59 @@ def _entry(data, name, created):
     if not e or e.get("created") != created:
         e = data["sessions"][name] = {"created": created}
     return e
+
+
+def _carried_rank(data, source, saved):
+    """Where the session ``source`` (name, created) stood in the order: its place there while its entry is still
+    bound to it (it then leaves the order), else the rank ``saved`` gives; None for an unranked one."""
+    name, created = source
+    entry = data["sessions"].get(name)
+    if name in data["order"] and isinstance(entry, dict) and entry.get("created") == created:
+        rank = data["order"].index(name)
+        data["order"].remove(name)
+        return rank
+    rank = saved.get("rank")
+    return rank if isinstance(rank, int) and not isinstance(rank, bool) and rank >= 0 else None
+
+
+def arrangement(name, created):
+    """The label, folder and rank of the session (name, created), None when it has no entry bound to it."""
+    with _locked():
+        data = _load()
+    entry = data["sessions"].get(name)
+    if not isinstance(entry, dict) or entry.get("created") != created:
+        return None
+    return {"label": entry.get("label"), "folder": entry.get("folder"),
+            "rank": data["order"].index(name) if name in data["order"] else None}
+
+
+def carry(source, target, saved):
+    """Give the session ``target`` (name, created) the label, folder and rank of ``source`` (name, created), which
+    it continues: the new incarnation of a session whose agent restarted in the same terminal (same name, a new
+    created), or the session that replaced it. They come from the entry of ``source`` while it is still bound to
+    it, else from ``saved`` (arrangement() of ``source`` read before the restart: a listing may have pruned the
+    entry since). An arrangement already bound to ``target`` is the owner's latest word and stays."""
+    saved = saved if isinstance(saved, dict) else {}
+    with _locked():
+        data = _load()
+        current = data["sessions"].get(target[0])
+        if isinstance(current, dict) and current.get("created") == target[1]:
+            return
+        old =data["sessions"].get(source[0])
+        old = old if isinstance(old, dict) and old.get("created") == source[1] else saved
+        if not old:
+            return
+        label, folder = (clean(old[key]) if isinstance(old.get(key), str) else "" for key in ("label", "folder"))
+        rank = _carried_rank(data, source, saved)
+        entry = data["sessions"][target[0]] = {"created": target[1],
+                                               "folder": folder if folder in data["folders"] else None}
+        if label:
+            entry["label"] = label
+        if target[0] in data["order"]:
+            data["order"].remove(target[0])
+        if rank is not None:
+            data["order"].insert(min(rank, len(data["order"])), target[0])
+        _save(data)
 
 
 def _place(order, name, before):
