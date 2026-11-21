@@ -51,7 +51,7 @@ def test_private_overlay_keeps_ambient_configuration_and_sessions(tmp_path, monk
     board.write_text("binary")
     board.chmod(0o700)
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(base))
-    monkeypatch.setattr(pimcp, "binary", lambda: "/tmp/pi")
+    monkeypatch.setattr(pimcp, "binary", lambda _environ=None: "/tmp/pi")
     monkeypatch.setattr(agentmcp, "BOARD_MCP", str(board))
     executable, overlay = pimcp.prepare(tmp_path / "mesh")
     assert executable == "/tmp/pi"
@@ -74,7 +74,7 @@ def test_invalid_ambient_configuration_fails_without_rewriting_it(tmp_path, monk
     board = tmp_path / "mesh-board-mcp"
     board.touch(mode=0o700)
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(base))
-    monkeypatch.setattr(pimcp, "binary", lambda: "/tmp/pi")
+    monkeypatch.setattr(pimcp, "binary", lambda _environ=None: "/tmp/pi")
     monkeypatch.setattr(agentmcp, "BOARD_MCP", str(board))
     with pytest.raises(pimcp.PiUnavailable, match="Invalid Pi MCP configuration"):
         pimcp.prepare(tmp_path / "mesh")
@@ -82,7 +82,7 @@ def test_invalid_ambient_configuration_fails_without_rewriting_it(tmp_path, monk
 
 
 def test_missing_bridge_refuses_overlay(tmp_path, monkeypatch):
-    monkeypatch.setattr(pimcp, "binary", lambda: "/tmp/pi")
+    monkeypatch.setattr(pimcp, "binary", lambda _environ=None: "/tmp/pi")
     monkeypatch.setattr(agentmcp, "BOARD_MCP", str(tmp_path / "missing"))
     with pytest.raises(pimcp.PiUnavailable, match="Mesh MCP server unavailable"):
         pimcp.prepare(tmp_path)

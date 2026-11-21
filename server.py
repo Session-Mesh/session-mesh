@@ -640,7 +640,7 @@ def _opencode_resumed_id(words):
     return None
 
 
-async def _opencode_command(command, cwd="/"):
+async def _opencode_command(command, cwd="/", environ=None):
     """The command line of an OpenCode session and the notice it carries (None when supported).
 
     The per-session configuration (board server, Mesh event plugin) travels in the environment, and
@@ -657,7 +657,9 @@ async def _opencode_command(command, cwd="/"):
     version that cannot be read, gets no injection at all (see agentmcp): the line is
     ``env -u MESH_SESSION_TOKEN opencode ...`` so the shell's session token is not inherited, and a request
     to resume a conversation is refused."""
-    executable, major = await asyncio.to_thread(agentmcp.opencode_resolved)
+    # The caller's selected context must stay the same across the asynchronous preflight steps.
+    environ = dict(os.environ if environ is None else environ)
+    executable, major = await asyncio.to_thread(agentmcp.opencode_resolved, environ)
     words = shlex.split(command)
     if executable and words and words[0] == "opencode":
         # The binary that was read is the one that runs, not whatever the terminal's shell finds first.
@@ -666,7 +668,7 @@ async def _opencode_command(command, cwd="/"):
         config = agentmcp.opencode_config(reach=_mesh_reach_env())
         return f"env {agentmcp.OPENCODE_CONFIG_ENV}={shlex.quote(config)} {shlex.join(words)}", None
     if major == 2:
-        return await _opencode_v2_command(words, cwd), None
+        return await _opencode_v2_command(words, cwd, environ), None
     unreadable = major is None
     if any(word.split("=", 1)[0] in _OPENCODE_RESUME_ARGS for word in words):
         raise web.HTTPConflict(text=OPENCODE_UNREADABLE_RESUME_REFUSED if unreadable
@@ -675,15 +677,16 @@ async def _opencode_command(command, cwd="/"):
     return f"env -u MESH_SESSION_TOKEN {shlex.join(words)}", notice
 
 
-async def _opencode_v2_command(words, cwd):
+async def _opencode_v2_command(words, cwd, environ=None):
+    environ = dict(os.environ if environ is None else environ)
     try:
         words = resumeargs.opencode2_command(words)
     except resumeargs.OpenCode2Refused as exc:
         raise web.HTTPConflict(text=str(exc)) from exc
     resumed = _opencode_resumed_id(words)
-    if resumed is not None and not await asyncio.to_thread(discover.opencode_session_exists, resumed):
+    if resumed is not None and not await asyncio.to_thread(discover.opencode_session_exists, resumed, environ):
         raise web.HTTPConflict(text=OPENCODE_UNKNOWN_SESSION)
-    off = await asyncio.to_thread(agentmcp.opencode_user_disabled_servers, cwd)
+    off = await asyncio.to_thread(agentmcp.opencode_user_disabled_servers, cwd, environ)
     config = agentmcp.opencode_config_v2(reach=_mesh_reach_env(),     # unreadable: no server is injected
                                          disabled=agentmcp.MESH_SERVER_NAMES if off is None else off)
     return f"env {agentmcp.OPENCODE_CONFIG_ENV}={shlex.quote(config)} {shlex.join(words)}"

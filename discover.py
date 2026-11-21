@@ -1113,18 +1113,20 @@ def pi_info(pid):
 OPENCODE_ID = re.compile(r"ses_[0-9A-Za-z]{8,60}")
 
 
-def _opencode_db():
-    base = os.environ.get("XDG_DATA_HOME") or f"{HOME}/.local/share"
+def _opencode_db(environ=None):
+    home = HOME if environ is None else environ.get("HOME") or HOME
+    environ = os.environ if environ is None else environ
+    base = environ.get("XDG_DATA_HOME") or f"{home}/.local/share"
     return f"{os.path.expanduser(base)}/opencode/opencode.db"
 
 
-def _opencode_query(sql, args=()):
+def _opencode_query(sql, args=(), environ=None):
     """Rows of one read-only query on OpenCode's SQLite store, [] when it cannot be read.
     That file also holds the user's provider credentials: only the session, message and part tables (1.x),
     session_v2 and session_message (2.x) are queried."""
     import sqlite3
     try:
-        con = sqlite3.connect(f"file:{_opencode_db()}?mode=ro", uri=True, timeout=0.5)
+        con = sqlite3.connect(f"file:{_opencode_db(environ)}?mode=ro", uri=True, timeout=0.5)
         try:
             return con.execute(sql, args).fetchall()
         finally:
@@ -1170,11 +1172,11 @@ def _opencode_sessions(where, args=()):
     return []
 
 
-def opencode_session_exists(sid):
+def opencode_session_exists(sid, environ=None):
     """True when OpenCode's store holds the conversation ``sid``.  OpenCode 2 creates an empty conversation
     for an unknown ``--session`` instead of failing, so a resume checks first."""
     return bool(OPENCODE_ID.fullmatch(sid or "")) and any(
-        _opencode_query(f"SELECT 1 FROM {table} WHERE id = ?", (sid,)) for table in _OPENCODE_SESSION_TABLES)
+        _opencode_query(f"SELECT 1 FROM {table} WHERE id = ?", (sid,), environ) for table in _OPENCODE_SESSION_TABLES)
 
 
 def _opencode_texts(sid):

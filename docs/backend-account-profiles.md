@@ -49,6 +49,19 @@ For migration of an existing Claude/Codex alias, the conventional declared conve
 `<CLAUDE_CONFIG_DIR>/projects` and `<CODEX_HOME>/sessions`. Declaring those paths does not copy any
 conversation or change where the CLI writes it.
 
+### Selected-context preflight seam
+
+The OpenCode command builder accepts an explicit environment snapshot. Its version/configuration
+probes and resume-existence check use that same context; finding a conversation in the ambient
+store cannot admit a resume under another profile. Pi's overlay builder likewise accepts an explicit
+environment and reads only that context's agent directory. Its version probe receives only its
+search path, home and selected Pi directory, not Mesh or provider credentials.
+
+These are internal adapter inputs, not browser-supplied environment maps. Existing callers still use
+their ambient context. The coordinator must resolve and validate a profile, construct its launch
+environment, and pass it to both preflight and launch before this seam implements a profile choice.
+It neither transfers conversations nor establishes an interactive checkpoint.
+
 ## One-shot protocol
 
 The default invocation reads one bounded JSON request from stdin and writes one versioned JSON line.
