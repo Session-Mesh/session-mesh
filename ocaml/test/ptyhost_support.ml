@@ -46,7 +46,7 @@ let retire_conditional_input () =
       ((), Eio.Resource.handler [Eio.Resource.H (Eio.Flow.Pi.Sink, (module Sink))])
   in
   ignore (Input.enqueue ~current:(fun () -> !live) queue "blocked");
-  ignore (Input.enqueue ~current:(fun () -> !live) queue "old-queued");
+  ignore (Input.enqueue ~current:(fun () -> true) queue "old-queued");
   ignore (Input.enqueue queue "legacy");
   Eio.Fiber.fork ~sw (fun () -> Input.run queue (Eio.Stdenv.clock env) sink);
   Eio.Promise.await began;
@@ -58,7 +58,18 @@ let retire_conditional_input () =
   Eio.Promise.await done_;
   expect "retirement joins the blocked write and preserves only legacy/fresh input"
     (Buffer.contents output = "bl|new|legacyfresh");
-  Input.close queue
+  Input.close queue;
+  let budget = Input.create "retirement-accounting" in
+  let maximum = String.make (8 * 1024 * 1024) 'x' in
+  expect "guarded queue fills capacity"
+    (Input.enqueue ~current:(fun () -> true) budget maximum);
+  Input.retire_guarded budget;
+  Input.retire_guarded budget;
+  expect "retirement restores guarded byte capacity exactly once"
+    (Input.enqueue budget maximum);
+  expect "retirement does not over-credit capacity"
+    (not (Input.enqueue budget "x"));
+  Input.close budget
 
 let () =
   retire_conditional_input ();
