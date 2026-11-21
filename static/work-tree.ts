@@ -7,7 +7,8 @@
  * product. A project whose product the products document does not list stands in a last zone of its own. Each node
  * carries the counters the entry screen shows: the open tasks of the product's tree or of the project (the documents'
  * counts) and the open questions of the classification of the entry screen (static/work-questions-triage.ts) of the
- * questions last read, or null when none were read. static/work-tree-view.ts draws it.
+ * questions last read, or null when none were read; a product's questions, like its tasks, include its child
+ * products'. static/work-tree-view.ts draws it.
  */
 
 import type { EntryCategory, EntryProduct } from './work-derive.ts';
@@ -65,15 +66,18 @@ function projectNode(project: ProjectSummary, counts: QuestionCounts | null): Tr
     openTasks: project.counts.open, questions: countOf(counts, 'projects', project.id), children: [] };
 }
 
-function productNode(node: EntryProduct, counts: QuestionCounts | null): TreeNode {
-  const id = node.product.id;
-  return { key: treeKey('product', id), kind: 'product', id, label: id, openTasks: node.product.tree.open,
-    questions: countOf(counts, 'products', id),
-    children: [...node.projects.map(project => projectNode(project, counts)), ...node.children.map(child => productNode(child, counts))] };
-}
-
 const sum = (nodes: readonly TreeNode[], pick: (node: TreeNode) => number | null): number =>
   nodes.reduce((total, node) => total + (pick(node) ?? 0), 0);
+
+/** A product covers its child products: its open tasks are its tree's (the document's count), its open questions its
+ *  own and those of its child products, so both counters of a row have the same scope. */
+function productNode(node: EntryProduct, counts: QuestionCounts | null): TreeNode {
+  const id = node.product.id, own = countOf(counts, 'products', id);
+  const products = node.children.map(child => productNode(child, counts));
+  return { key: treeKey('product', id), kind: 'product', id, label: id, openTasks: node.product.tree.open,
+    questions: own === null ? null : own + sum(products, child => child.questions),
+    children: [...node.projects.map(project => projectNode(project, counts)), ...products] };
+}
 
 /** The products listed anywhere in the entry tree. */
 function listedProducts(categories: readonly EntryCategory[]): Set<string> {
@@ -143,7 +147,27 @@ export function findProduct(categories: readonly EntryCategory[], id: string): E
   return null;
 }
 
-export type MoveKey = 'ArrowDown' | 'ArrowUp' | 'Home' | 'End';
+const holds = (node: EntryProduct, id: string): boolean => node.product.id === id || node.children.some(child => holds(child, id));
+
+/** The product of the entry tree's first level whose tree holds product `id` (its row on the overview), or null when
+ *  no listed product is `id`. */
+export function topProduct(categories: readonly EntryCategory[], id: string): string | null {
+  for (const category of categories) {
+    const top = category.products.find(node => holds(node, id));
+    if (top) return top.product.id;
+  }
+  return null;
+}
+
+/** The keys of `keys` that name a node of the tree, in their order: an item gone from the documents is dropped. */
+export function liveKeys(tree: readonly TreeNode[], keys: Iterable<string>): string[] {
+  const known = new Set<string>();
+  const visit = (node: TreeNode): void => { known.add(node.key); node.children.forEach(visit); };
+  tree.forEach(visit);
+  return [...keys].filter(key => known.has(key));
+}
+
+export type MoveKey ='ArrowDown' | 'ArrowUp' | 'Home' | 'End';
 
 /** The key the focus moves to among the visible keys; the first when `current` is not visible. */
 export function moveFocus(visible: readonly string[], current: string | null, move: MoveKey): string | null {

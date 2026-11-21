@@ -148,6 +148,22 @@ describe('the stored state', () => {
     }
   });
 
+  test('the keys of the rail hold ids as long as the server\'s; the newest unfolded are kept at the bound', () => {
+    const long = 'p'.repeat(100);
+    const place: Place = { ...ENTRY_PLACE, product: long, rail: [`product:${long}`, `project:${'P'.repeat(100)}`, `zone:${'z'.repeat(100)}`] };
+    assert.deepEqual(parseState(serializeState(withPlace(EMPTY_STATE, place))).place, place, 'a product id of 100 characters round-trips');
+    const read = (value: object): Place => parseState(JSON.stringify({ schema: STATE_SCHEMA, place: value, drafts: {} })).place;
+    assert.deepEqual(read({ rail: [`product:${long}x`, long, 'task:T-1', 'product:../x', 'product:a b', 'zone:'] }).rail, ['zone:'],
+      'too long, no kind, another kind, not an id');
+    assert.equal(read({ product: `${long}x` }).product, null, 'a product id longer than the server allows');
+    const many = Array.from({ length: 500 }, (_, index) => `product:p${index}`);
+    assert.deepEqual(read({ rail: many }).rail, many.slice(100), 'the last 400 (the newest unfolded) are kept');
+    assert.deepEqual(read({ rail: ['zone:a', 'zone:b', 'zone:a'] }).rail, ['zone:a', 'zone:b'], 'each key once');
+    for (const hostile of [{ rail: [`product:${'x'.repeat(1e5)}`] }, { rail: new Array(1e4).fill('zone:') }, { rail: ['product:\u0000'] }]) {
+      assert.doesNotThrow(() => read(hostile));
+    }
+  });
+
   test('a state of schema 1 still reads: its drafts and place stay, the products it unfolded on the entry screen go', () => {
     const raw = JSON.stringify({ schema: 1, place: { project: 'P-7a7a', tab: 'board', task: null, scroll: 10, expanded: ['relay'] },
       drafts: { 'N-1': { text: 'kept', picked: [], at: 5 } } });

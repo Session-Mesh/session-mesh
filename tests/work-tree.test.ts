@@ -10,7 +10,7 @@ import { describe, test } from 'node:test';
 import { entryTree } from '../static/work-derive.ts';
 import { triageQuestions } from '../static/work-questions-triage.ts';
 import {
-  ENTRY_KEY, buildTree, findProduct, locate, moveFocus, questionCounts, seedOpen, treeKey, visibleKeys,
+  ENTRY_KEY, buildTree, findProduct, liveKeys, locate, moveFocus, questionCounts, seedOpen, topProduct, treeKey, visibleKeys,
 } from '../static/work-tree.ts';
 import type { TreeNode } from '../static/work-tree.ts';
 import type { Counts, Product, ProductsDoc, ProjectSummary, ProjectsDoc, Question } from '../static/work-types.ts';
@@ -135,5 +135,31 @@ describe('the tree of the rail', () => {
     assert.equal(findProduct(categories, 'relay-agent')?.product.id, 'relay-agent');
     assert.equal(findProduct(categories, 'garden')?.projects[0]?.id, 'P-0003');
     assert.equal(findProduct(categories, 'unlisted'), null);
+  });
+
+  test('a parent product counts the open questions of its child products, as its open tasks count their tasks', () => {
+    const asked = [...QUESTIONS, ask('N-6', true, 'T-0006', 'P-0002', 'relay-agent', 'atlas'),
+      ask('N-7', false, 'T-0007', 'P-0002', 'relay-agent', 'atlas')];
+    const nodes = buildTree(entryTree(PRODUCTS, PROJECTS), PROJECTS, questionCounts(triageQuestions(asked, ZONES)));
+    assert.equal(node(nodes, 'product:relay-agent').questions, 1, 'the child alone; an answered question is not counted');
+    assert.equal(node(nodes, 'product:relay').questions, 4, 'its own three and its child\'s one');
+    assert.equal(node(nodes, 'zone:atlas').questions, 4, 'the zone counts each question once');
+    assert.equal(node(nodes, 'project:P-0002').questions, 1);
+  });
+
+  test('the top product of a product is the row of the overview that holds it', () => {
+    const categories = entryTree(PRODUCTS, PROJECTS);
+    assert.equal(topProduct(categories, 'relay-agent'), 'relay', 'a child product: its parent');
+    assert.equal(topProduct(categories, 'relay'), 'relay');
+    assert.equal(topProduct(categories, 'garden'), 'garden');
+    assert.equal(topProduct(categories, 'unlisted'), null, 'a product the documents do not list');
+    assert.equal(topProduct(categories, ''), null);
+  });
+
+  test('the unfolded keys of items gone from the tree are dropped, the others kept in their order', () => {
+    const nodes = tree(false);
+    assert.deepEqual(liveKeys(nodes, ['product:gone', 'zone:atlas', 'project:P-0002', 'project:P-9999', 'zone:', 'zone:empty', ENTRY_KEY]),
+      ['zone:atlas', 'project:P-0002', 'zone:']);
+    assert.deepEqual(liveKeys([], ['zone:atlas']), []);
   });
 });

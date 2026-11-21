@@ -15,7 +15,7 @@ import type { EntryCategory } from './work-derive.ts';
 import { el, setAttributes } from './work-dom.ts';
 import type { Translate } from './work-dom.ts';
 import { triageQuestions } from './work-questions-triage.ts';
-import { ENTRY_KEY, buildTree, locate, moveFocus, questionCounts, seedOpen, visibleKeys } from './work-tree.ts';
+import { ENTRY_KEY, buildTree, liveKeys, locate, moveFocus, questionCounts, seedOpen, visibleKeys } from './work-tree.ts';
 import type { MoveKey, TreeNode } from './work-tree.ts';
 import type { ProductsDoc, ProjectsDoc, Question } from './work-types.ts';
 
@@ -53,13 +53,24 @@ export class WorkRail {
     setAttributes(this.list, { role: 'tree', 'aria-label': host.t('work.tree.label') });
     this.list.addEventListener('keydown', event => this.keydown(event));
     this.list.addEventListener('click', event => this.click(event));
+    // An item focused from elsewhere (the way back of the view) becomes the one Tab reaches.
+    this.list.addEventListener('focusin', event => {
+      const key = this.keyOf(event.target);
+      if (key !== null && key !== this.current) this.focus(key);
+    });
     host.root.replaceChildren(this.list);
   }
 
-  /** The products and projects read: the tree is drawn again. */
+  /** The products and projects read: the tree is drawn again. The unfolded items gone from them are forgotten, unless
+   *  a document was cut (an item left out may still exist). */
   entry(products: ProductsDoc, projects: ProjectsDoc): void {
     this.docs = { products, projects, categories: entryTree(products, projects) };
     this.rebuild();
+    if (!this.open || products.truncated || projects.truncated) return;
+    const live = liveKeys(this.tree, this.open);
+    if (live.length === this.open.size) return;
+    this.open = new Set(live);
+    this.host.folded();
   }
 
   /** The open questions last read (the page the entry screen shows): their counts, classified as it does, are drawn. */
@@ -134,13 +145,22 @@ export class WorkRail {
     const t = this.host.t, counts = el('span', 'work-tree-counts');
     const parts = [label];
     if (node && node.openTasks > 0) { counts.append(el('span', 'work-tree-tasks', String(node.openTasks))); parts.push(t('work.openTasks', { n: node.openTasks })); }
-    if (node?.questions) { counts.append(el('span', 'work-tree-questions', `? ${node.questions}`)); parts.push(t('work.questions.badge', { n: node.questions })); }
+    if (node?.questions) {
+      counts.append(el('span', 'work-tree-questions', t('work.tree.questionCount', { n: node.questions })));
+      parts.push(t('work.questions.badge', { n: node.questions }));
+    }
     const row = el('div', 'work-tree-row', el('span', 'work-tree-chev'), el('span', 'work-tree-name', label), counts);
     row.style.setProperty('--level', String(level));
     const item = el('li', `work-tree-item work-tree-${node?.kind ?? 'entry'}`, row);
     setAttributes(item, { role: 'treeitem', 'aria-level': String(level), 'aria-label': parts.join(', '), 'data-key': key,
       'aria-selected': String(key === this.selected), tabindex: key === this.current ? '0' : '-1' });
     return item;
+  }
+
+  /** The item of `key` when the owner can see it (the drawer of a phone open), or null. */
+  shownItem(key: string): HTMLElement | null {
+    const item = this.itemOf(key);
+    return item && item.offsetParent !== null && item.getBoundingClientRect().right > 0 ? item : null;
   }
 
   private itemOf(key: string): HTMLElement | null {

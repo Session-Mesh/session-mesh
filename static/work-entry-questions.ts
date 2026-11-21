@@ -117,8 +117,9 @@ export class EntryQuestions {
     else if (kept !== null) focusFirst((kept ? opener(next, kept) : null) ?? toggle ?? next.querySelector<HTMLElement>('h2'));
   }
 
-  /** As many questions as the list shows (pages read with "Show more" stay shown), between one page and the bound. */
-  private shownLimit(): number {
+  /** As many questions as the list shows (pages read with "Show more" stay shown), between one page and the bound. The
+   *  view reads as many for the counts of the rail. */
+  shownLimit(): number {
     const shown = this.state;
     const count = shown.kind === 'ready' || shown.kind === 'stale' ? shown.doc.questions.length : 0;
     return Math.min(MAX_PAGE, Math.max(PAGE, count));

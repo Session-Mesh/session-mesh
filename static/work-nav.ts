@@ -94,6 +94,8 @@ export function escapeKeepsField(target: EventTarget | null): boolean {
 export type LevelHost = Readonly<{
   nav: WorkNav;
   root: HTMLElement;
+  /** The tree of the left rail (static/work-tree-view.ts), when the view has one: Escape there acts as in `root`. */
+  rail?: HTMLElement | undefined;
   /** Between the view's `open` and `close`. */
   active: () => boolean;
   inProject: () => boolean;
@@ -109,12 +111,14 @@ export function wentBack(host: LevelHost, state: unknown): void {
   if (level === 0) host.toEntry(); else host.closeSheet();
 }
 
-/** Escape goes up one level: sheet to tab, project (or a sheet opened from the entry screen) to the entry screen; on
- *  the entry screen the page's own Escape leaves Projects. A text field holding text keeps it (nothing happens). */
+/** Escape goes up one level: sheet to tab, product or project (or a sheet opened from the entry screen) to the entry
+ *  screen; on the entry screen the page's own Escape leaves Projects. The same from the view's tree in the rail. A text
+ *  field holding text keeps it (nothing happens). */
 export function upOnEscape(host: LevelHost, event: KeyboardEvent): void {
   if (event.key !== 'Escape' || !host.active()) return;
   const target = event.target;
-  if (target !== document.body && !(target instanceof Node && host.root.contains(target))) return;   // a dialog or field elsewhere keeps its own Escape
+  const ours = target instanceof Node && (host.root.contains(target) || host.rail?.contains(target) === true);
+  if (target !== document.body && !ours) return;   // a dialog or field elsewhere keeps its own Escape
   if (escapeKeepsField(target)) { event.stopPropagation(); return; }
   if (!host.inProject() && host.nav.level() === 0) return;   // a project still read (or that failed) is level 1 already
   event.stopPropagation();

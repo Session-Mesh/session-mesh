@@ -23,6 +23,7 @@ const FREE = 24;                // questions about nothing, one a minute
 const free = (n: number): string => `N-0000e${n.toString(16).padStart(3, '0')}`;
 const LONG = `Which crane? ${'The harbour schedule, the tide and the berth all weigh on it. '.repeat(10)}End.`;
 const PAGE = 20;
+const LATE_TASK = 'T-3c4d', LATE_QUESTION = 'N-0000e300';
 
 // Oldest first: the task question, the one about an unknown task, then the free ones. Each test answers its own.
 const EVENTS = [
@@ -32,8 +33,10 @@ const EVENTS = [
   { ts: '2026-11-01T09:00:00Z', task: UNKNOWN, type: 'question', id: 'N-0000e100', text: 'About a task nobody knows?', agent: 'claude', session: 'asking-session' },
   ...Array.from({ length: FREE }, (_, i) => ({ ts: `2026-11-01T10:${String(i).padStart(2, '0')}:00Z`, task: free(i + 1), type: 'question',
     id: free(i + 1), text: i === 0 ? LONG : `Free question ${i + 1}?`, agent: 'claude', session: 'asking-session' })),
+  // The newest, beyond the first page: about T-3c4d of the fixture, in project P-5e6f of product relay.
+  { ts: '2026-11-01T11:00:00Z', task: LATE_TASK, type: 'question', id: LATE_QUESTION, text: 'Which berth?', agent: 'claude', session: 'asking-session' },
 ];
-const TOTAL = FREE + 2;
+const TOTAL = FREE + 3;
 
 let mesh: Mesh;
 let routes: { failTask: boolean };
@@ -59,7 +62,7 @@ describe('more than one page of pending questions', { skip }, () => {
     assert.equal(first.length, PAGE, 'one page');
     assert.ok(first.includes(free(1)), 'the oldest question is shown (resume kept only the 20 newest)');
     assert.ok(!first.includes(free(FREE)), 'the newest waits for the next page');
-    assert.match((await page.locator('.work-qmore .work-omitted').textContent())!, /^6 more open questions, more recent, are not shown yet\./);
+    assert.match((await page.locator('.work-qmore .work-omitted').textContent())!, /^7 more open questions, more recent, are not shown yet\./);
     await shot(page, 'questions-pages-first-1440');
     await page.getByRole('button', { name: 'Show more questions' }).click();
     await page.locator('.work-entry-questions .work-qrow').nth(TOTAL - 1).waitFor();
@@ -134,6 +137,31 @@ describe('more than one page of pending questions', { skip }, () => {
     await retry.click();
     await card(pane, 'N-0000e200').locator('.work-answer-verified').waitFor();
     assert.equal(await pane.locator('.work-qsheet-reread').count(), 0);
+    assert.deepEqual(problems, []);
+  });
+
+  test('the counts of the tree keep the questions shown with "Show more" when a project reads the count again', { timeout: 900_000 }, async () => {
+    const { page, problems } = await entry(mesh, 1440);
+    await unfold(page);
+    // relay counts the questions of the first page (the tests above may have answered them) and, once its page is
+    // shown, the newest one.
+    const relayCount = (): Promise<number> => page.evaluate(() => Number(document.querySelector(
+      '#work-rail [data-key="product:relay"] > .work-tree-row .work-tree-questions')?.textContent?.replace(/\D/g, '') || 0));
+    await page.locator('#work-rail [data-key="product:relay"]').waitFor();
+    const first = await relayCount();
+    await page.getByRole('button', { name: 'Show more questions' }).click();
+    await row(page, LATE_QUESTION).waitFor();
+    await page.waitForFunction(count => Number(document.querySelector('#work-rail [data-key="product:relay"] > .work-tree-row .work-tree-questions')
+      ?.textContent?.replace(/\D/g, '') || 0) === count, first + 1);
+    await page.locator('#work-rail [data-key="product:relay"] > .work-tree-row .work-tree-chev').click();
+    await page.locator('#work-rail [data-key="project:P-5e6f"]').click();
+    await page.locator('#work-root .work-tab[aria-selected="true"]').waitFor();
+    const reread = page.waitForResponse(response => response.request().postData()?.includes('"op":"open-questions"') === true);
+    await page.locator('#work-root .work-refresh').click();
+    await reread;
+    await page.locator('#work-root .work-tab[aria-selected="true"]').waitFor();
+    await page.waitForTimeout(300);
+    assert.equal(await relayCount(), first + 1, 'the count of a question beyond the first page stays');
     assert.deepEqual(problems, []);
   });
 });

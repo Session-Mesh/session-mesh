@@ -42,7 +42,7 @@ import { renderEntryQuestions } from './work-questions-triage-view.ts';
 import type { EntryQuestionsState } from './work-questions-view.ts';
 import type { WorkTarget } from './work-session-questions.ts';
 import { TaskSheet } from './work-task-sheet.ts';
-import { ENTRY_KEY, findProduct, treeKey } from './work-tree.ts';
+import { ENTRY_KEY, findProduct, topProduct, treeKey } from './work-tree.ts';
 import { WorkRail } from './work-tree-view.ts';
 import type { RailChoice } from './work-tree-view.ts';
 import type { OpenQuestionsDoc, ProductsDoc, ProjectsDoc, Question } from './work-types.ts';
@@ -80,6 +80,8 @@ class WorkView implements WorkViewController {
   private set selected(id: string | null) { this.sheet.selected = id; }
   private generation = 0;
   private controller: AbortController | null = null;
+  /** The read of the rail's documents under way (readRail). */
+  private railRead: AbortController | null = null;
   private writeUnavailable = false;
   private readonly announcer = el('p', 'sr-only work-announcer');
   /** The document panel of the references in tracker text (static/work-doc-panel.ts). */
@@ -130,7 +132,7 @@ class WorkView implements WorkViewController {
       generation, signal, back: () => void this.backToEntry(), memory: this.memory });
     this.projectAnswers = { api: this.api, generation, signal, project: () => this.project, selected: () => this.selected,
       selectTask: (id, after) => this.sheet.select(id, after), fillDrafts: (scope, read) => this.memory.fill(scope, read) };
-    this.levels = { nav: this.nav, root: options.root, active: () => this.active, inProject: () => this.project !== null || this.product !== null,
+    this.levels = { nav: this.nav, root: options.root, rail: options.rail, active: () => this.active, inProject: () => this.project !== null || this.product !== null,
       closeSheet: () => this.sheet.closeShown(), toEntry: () => void this.backToEntry() };
     this.unsubscribe = this.sync.subscribe('view', change => this.questions.heard(change));
     window.addEventListener('popstate', this.onPopState);
@@ -153,10 +155,13 @@ class WorkView implements WorkViewController {
     if (this.active && opening === this.openings && !this.rail.hasEntry()) await this.readRail();
   }
 
-  /** The products and projects for the rail, when the view opened on a project without the entry screen. */
+  /** The products and projects for the rail, when the view opened on a project without the entry screen. A read the
+   *  view no longer waits for (it closed, or a newer read started) is dropped, and the entry screen may read them first. */
   private async readRail(): Promise<void> {
-    const [products, projects] = await Promise.all([this.api.products(), this.api.projects()]);
-    if (!products.ok || !projects.ok || this.rail.hasEntry()) return;   // the entry screen may have read them meanwhile
+    this.railRead?.abort();
+    const read = this.railRead = new AbortController();
+    const [products, projects] = await Promise.all([this.api.products(read.signal), this.api.projects(read.signal)]);
+    if (read !== this.railRead || read.signal.aborted || !products.ok || !projects.ok || this.rail.hasEntry()) return;
     this.entry = { products: products.value, projects: projects.value };
     this.rail.entry(products.value, projects.value);
   }
@@ -225,6 +230,7 @@ class WorkView implements WorkViewController {
   close = (): void => {
     this.memory.listen(false);
     this.stopRequests();
+    this.railRead?.abort();
     this.active = false;
     document.removeEventListener('keydown', this.onEscape, true);
     this.docs.close();
@@ -281,10 +287,11 @@ class WorkView implements WorkViewController {
     this.sync.publish({ source: 'view', openQuestions: count });   // the marker reads again when the count moved
   }
 
-  /** Read the count again for the badge (Refresh and answers in a project; the entry screen reads it with its list). */
+  /** Read the count again for the badge (Refresh and answers in a project; the entry screen reads it with its list),
+   *  with as many questions as the entry screen shows, for the counts of the rail. */
   private async refreshCount(): Promise<void> {
     const token = this.generation;
-    const result = await this.api.openQuestions(this.controller?.signal);
+    const result = await this.api.openQuestions(this.controller?.signal, { limit: this.questions.shownLimit() });
     if (token !== this.generation) return;
     this.report(result);
     if (result.ok) this.rail.questions(result.value.questions);
@@ -445,7 +452,10 @@ class WorkView implements WorkViewController {
     this.project = null; this.selected = null; this.reading = null; this.lastQuestion = null; this.product = null;
     this.sheets.clear();
     this.renderEntryScreen();
-    this.focusMain(entryFocusTarget(this.content, from, question));
+    // The row of the overview holding the place left; a project of no listed product has its group in the rail only.
+    const top = from === null ? null : topProduct(entryTree(this.entry.products, this.entry.projects), from);
+    const orphan = from !== null && top === null ? this.rail.shownItem(treeKey('zone', '')) : null;
+    this.focusMain(entryFocusTarget(this.content, top, question, orphan));
     await this.questions.reread(false);   // the focus stays on that row's way in when the row is still there
   }
 
