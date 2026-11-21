@@ -6,13 +6,14 @@
 // for that width. Before the size owner rule, each pane sent its own size when focused: the
 // narrower one received rows drawn for a wider PTY, wrapped them, and kept a copy of the
 // footer in its scrollback at every redraw (31 on a phone beside a desktop). Now the first
-// pane owns the size, the other shows the PTY at that size with a banner, and only the
-// banner's button moves the size.
+// pane owns the size, the other shows the PTY at that size. In the manual mode (the browser
+// preference sizeTakeover, set here) it shows a banner, and only the banner's button moves the
+// size; the automatic mode, the default, is in tests/terminal-size-takeover-browser.test.ts.
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import type {Page} from 'playwright-core';
-import {type PaneView, recordControlMessages, REPO, rows, skip, TerminalMesh, typeLine, waitForRow} from './terminal-browser-lib.ts';
+import {type PaneView, recordControlMessages, recordControlMessagesManual, REPO, rows, skip, TerminalMesh, typeLine, waitForRow} from './terminal-browser-lib.ts';
 
 declare const active: PaneView & {el: HTMLElement};
 const TUI = path.join(REPO, 'tests', 'fixtures', 'footer-tui.mjs');
@@ -49,11 +50,11 @@ describe('two browsers of different widths on one session', {skip}, () => {
   before(() => mesh.start());
   after(() => mesh.stop());
 
-  test('the phone follows the desktop: one footer, a banner, and the size taken back on request', async () => {
+  test('manual mode: the phone follows the desktop: one footer, a banner, and the size taken back on request', async () => {
     await mesh.newShell('shared');
-    const desk = await mesh.openPage('shared', DESKTOP, recordControlMessages);
+    const desk = await mesh.openPage('shared', DESKTOP, recordControlMessagesManual);
     const deskSize = await size(desk);
-    const phone = await mesh.openPage('shared', PHONE, recordControlMessages, undefined, {phone: true});
+    const phone = await mesh.openPage('shared', PHONE, recordControlMessagesManual, undefined, {phone: true});
 
     await run(phone, 'D');
     for (let i = 0; i < 4; i += 1) {

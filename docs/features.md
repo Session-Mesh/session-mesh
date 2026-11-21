@@ -551,15 +551,22 @@ session had before this browser attached, then rewrapped to the browser's width.
 - **Several browsers on one session: who sets the size.** A session has one terminal size, and a
   program such as Claude Code redraws its footer for that width only; a browser narrower than it
   used to keep copies of the footer in its scrollback. So one browser owns the size, and the
-  others show the terminal at that size, clipped (the last rows stay visible), with the banner
-  "Terminal sized by another device" and its button "Take the size back". The rule, applied by
-  the PTY host:
+  others show the terminal at that size, clipped (the last rows stay visible). By default the
+  device in use takes the size by itself, with no banner: a click, a tap or a key in its terminal
+  (or in the phone input line and key bar), its terminal getting the focus, or its page shown
+  again while its window has the focus, sends a take-over. A timer, a window resize or a page
+  that only stays open and visible sends none, so two open devices do not fight; a browser sends
+  at most one take-over every two seconds per pane. The per-browser preference "Terminal size
+  with several devices" (Configuration, Terminal section; client store key `sizeTakeover`,
+  `"manual"` or `"auto"`, the default) switches a browser to the manual mode: the banner
+  "Terminal sized by another device" and its button "Take the size back", the only way it then
+  takes the size. The rule, applied by the PTY host:
   - the first browser that opens the session while no other one owns the size sets it and owns
     it; a browser that opens it later does not change it;
   - the owner's own changes (window resized, phone keyboard, font size) apply; a size sent by a
     browser that does not own it (a fit, a focus, the page coming back) changes nothing;
-  - "Take the size back" always applies and makes that browser the owner: the last take-over
-    wins. `mesh-attach` and other clients that predate this rule take the size when they attach
+  - a take-over (automatic, or "Take the size back") always applies and makes that browser the
+    owner: the last take-over wins. `mesh-attach` and other clients that predate this rule take the size when they attach
     or resize, as before;
   - when the owner closes the session (or its page), nobody owns the size, and the next browser
     that sends its size takes it.

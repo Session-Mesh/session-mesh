@@ -460,6 +460,8 @@ class Pane {
     this.sizeBanner = $(".size-banner", this.el);   // another device owns the PTY size (followPtySize)
     this.ptyFollowing = false;
     $("button", this.sizeBanner).addEventListener("click", () => this.takeSize());
+    this.lastAutoTake = null;   // automatic take-over (static/size-takeover.ts)
+    MeshPaneActions.listenForActivation($(".pane-body", this.el), (event) => this.autoTakeSize(event));
     $(".web", this.el).addEventListener("load", () => this.frameLoaded());
     this.id = null;
     this.layoutTarget = null;
@@ -813,7 +815,7 @@ class Pane {
     this.ptyFollowing = plan.follow;
     this.termEl.classList.toggle("pty-follow", plan.follow);
     this.termEl.classList.toggle("pty-tall", plan.follow && plan.term.rows > own.rows);
-    this.sizeBanner.hidden = !plan.banner;
+    this.sizeBanner.hidden = !MeshPaneActions.showsSizeBanner(sizeTakeoverMode(), plan.banner);
     if (plan.follow && (plan.term.rows !== this.term.rows || plan.term.cols !== this.term.cols))
       this.term.resize(plan.term.cols, plan.term.rows);
     return plan.follow;
@@ -823,12 +825,22 @@ class Pane {
   // a claim, reaches the host after it.
   takeSize() {
     const c = this.conn, own = this.fitSize();
-    if (localActionUnavailable() || !own || c?.initializing || c?.replaySize || !c?.terminal?.isOpen()) return;
+    if (localActionUnavailable() || !own || c?.initializing || c?.replaySize || !c?.terminal?.isOpen()) return false;
     if (c.pty) c.pty = { ...c.pty, owner: "you" };
     c.lastSize = own;
     c.away = null;
     c.terminal.resize(own.rows, own.cols, "take");
     this.refit();
+    return true;
+  }
+  // The automatic mode (per-browser preference "sizeTakeover"): the same take-over, sent when the
+  // person uses this device (MeshPaneActions.shouldTakeSize decides; never a timer or a resize).
+  autoTakeSize(event) {
+    const now = performance.now();
+    if (this.termEl.hidden || !MeshPaneActions.shouldTakeSize({ mode: sizeTakeoverMode(), owner: this.conn?.pty?.owner ?? null,
+      event: event.type, trusted: event.isTrusted, visible: document.visibilityState === "visible",
+      focused: document.hasFocus(), activated: navigator.userActivation?.isActive === true, now, lastTake: this.lastAutoTake })) return;
+    if (this.takeSize()) this.lastAutoTake = now;
   }
   // The pane's fitted size; while a replay is parsed at its own geometry (enterReplayGeometry),
   // the size xterm returns to afterwards, never the replay's.
@@ -3841,10 +3853,10 @@ function markSeen() {
   for (const id of onScreen()) if (ids.has(id)) seen[id] = now;
   saveSeen();
 }
-document.addEventListener("visibilitychange", () => {
+document.addEventListener("visibilitychange", (event) => {
   // going hidden: what was on screen was read until now
   if (document.visibilityState === "hidden") see(onScreen(true), true);
-  else { markSeen(); for (const p of panes) p.retakeSize(); }   // this device is the one in use now
+  else { markSeen(); for (const p of panes) { p.retakeSize(); p.autoTakeSize(event); } }   // this device is the one in use now
   renderList();
 });
 
@@ -4642,7 +4654,15 @@ const configPanel = MeshPaneActions.createConfigPanel({ dialog: $("#dlg-config")
     const body = await response.json().catch(() => ({}));
     return response.ok ? { ok: true, value: body } : { ok: false, error: String(body.error || response.status) };
   },
-}, () => MeshI18n.locale());
+}, () => MeshI18n.locale(), {
+  // Per browser (client store): who takes the shared terminal size (static/size-takeover.ts).
+  get: sizeTakeoverMode,
+  set: (mode) => {
+    store.set(MeshPaneActions.SIZE_TAKEOVER_KEY, mode);
+    for (const p of panes) if (p.conn && !p.termEl.hidden) p.followPtySize(p.conn);   // the banner, at once
+  },
+});
+function sizeTakeoverMode() { return MeshPaneActions.sizeTakeoverMode(store.get(MeshPaneActions.SIZE_TAKEOVER_KEY, "auto")); }
 $("#btn-config").addEventListener("click", () => configPanel.open());
 
 // Local transport owns local account navigation. A loader returns a LoadOutcome
@@ -6273,6 +6293,8 @@ function insertAtCursor(el, text) {
 // empty line sends Enter alone.
 
 const line = $("#line-text");
+// Typing in the input line or on the key bar is using this device (automatic size take-over).
+for (const bar of [$("#line"), $("#keys")]) MeshPaneActions.listenForActivation(bar, (event) => active?.autoTakeSize(event));
 function fitLine() { line.style.height = "auto"; line.style.height = `${line.scrollHeight}px`; }
 const lineStatus = document.createElement("section");
 lineStatus.setAttribute("aria-live", "polite");

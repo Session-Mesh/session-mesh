@@ -6,13 +6,15 @@
 // screen never holds output drawn for another width: alone, it sends its size, as before;
 // following another client that took the size, it sends nothing (only the banner takes the
 // size back, terminal-shared-size-browser.test.ts). The repaint on evidence that the screen may
-// hold such output remains for a host without the rule (Pane.retakeSize).
+// hold such output remains for a host without the rule (Pane.retakeSize). The pages are in the
+// manual size mode: in the automatic one (terminal-size-takeover-browser.test.ts), the focus a
+// person gives the terminal takes the size.
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import {after, before, describe, test} from 'node:test';
 import type {Page} from 'playwright-core';
 import {Attachment} from './ptyhost-wire-lib.ts';
-import {type PaneView, recordControlMessages, skip, TerminalMesh, typeLine, waitForRow} from './terminal-browser-lib.ts';
+import {type PaneView, recordControlMessagesManual, skip, TerminalMesh, typeLine, waitForRow} from './terminal-browser-lib.ts';
 
 declare const active: PaneView;
 declare function refresh(): Promise<void>;
@@ -61,7 +63,7 @@ describe('taking the terminal size back repaints only on evidence', {skip}, () =
 
   test('another client took the size: the pane follows it, and a focus neither resizes nor redraws', async () => {
     await mesh.newShell('shared');
-    const page = await mesh.openPage('shared', viewport, recordControlMessages);
+    const page = await mesh.openPage('shared', viewport, recordControlMessagesManual);
     const own = await paneSize(page);
     await leave(page);
     // A client without the size field (mesh-attach) takes the size when it attaches.
@@ -80,7 +82,7 @@ describe('taking the terminal size back repaints only on evidence', {skip}, () =
 
   test('output while away with no other client attached: the size only', async () => {
     await mesh.newShell('alone');
-    const page = await mesh.openPage('alone', viewport, recordControlMessages);
+    const page = await mesh.openPage('alone', viewport, recordControlMessagesManual);
     const own = await paneSize(page);
     await leave(page);
     await typeLine(page, "printf 'AL''ONE-away\\n'");
@@ -98,7 +100,7 @@ describe('taking the terminal size back repaints only on evidence', {skip}, () =
 
   test('another client attached at this size and nothing written: no repaint', async () => {
     await mesh.newShell('quiet');
-    const page = await mesh.openPage('quiet', viewport, recordControlMessages);
+    const page = await mesh.openPage('quiet', viewport, recordControlMessagesManual);
     const own = await paneSize(page);
     await leave(page);
     clients.push(await otherClient(mesh, 'quiet', own));
