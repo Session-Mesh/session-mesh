@@ -104,7 +104,7 @@ let plan io ~uid ~source ~target (relative, size) =
 (* ----------------------------------------------------------- the writing *)
 
 type state = {
-  mutable created : string list;  (** folders made, newest first *)
+  mutable created : (string * Unix.stats) list;  (** folders made, newest first *)
   mutable temporary : string list;
   mutable committed : (string * string * string option) list;
       (** relative, final, backup *)
@@ -129,19 +129,20 @@ let relative_sibling relative path =
 
 let make_folder ~uid state ~target path =
   let full = join target path in
-  let* () =
+  let* created =
     match Unix.mkdir full 0o700 with
-    | () ->
-        state.created <- full :: state.created;
-        Ok ()
-    | exception Unix.Unix_error (Unix.EEXIST, _, _) -> Ok ()
+    | () -> Ok true
+    | exception Unix.Unix_error (Unix.EEXIST, _, _) -> Ok false
     | exception Unix.Unix_error (error, _, _) ->
         fail "carry_failed" (path ^ ": " ^ Unix.error_message error)
   in
   let* stats = lstat_opt full in
   match stats with
   | None -> fail "carry_failed" ("target " ^ path ^ " went away")
-  | Some stats -> private_folder ~uid ("target " ^ path) stats
+  | Some stats ->
+      let* () = private_folder ~uid ("target " ^ path) stats in
+      if created then state.created <- (full, stats) :: state.created;
+      Ok ()
 
 let make_folders ~uid state ~target relative =
   List.fold_left
@@ -220,12 +221,22 @@ let undo io undone (relative, final, backup) =
       )
 
 (* Undo everything, newest first, and report what could not be undone. *)
-let roll_back io state =
+let roll_back ?(check_roots = fun () -> Ok ()) io state =
   let undone =
     List.fold_left (undo io) { kept = []; left = [] } state.committed
   in
-  List.iter (fun path -> quietly (fun () -> Unix.unlink path)) state.temporary;
-  List.iter (fun path -> quietly (fun () -> Unix.rmdir path)) state.created;
+  List.iter
+    (fun path ->
+      if Result.is_ok (check_roots ()) then
+        quietly (fun () -> Unix.unlink path))
+    state.temporary;
+  List.iter
+    (fun (path, identity) ->
+      if
+        Result.is_ok (check_roots ())
+        && Carry_target.same_directory ~target:path identity
+      then quietly (fun () -> Unix.rmdir path))
+    state.created;
   undone
 
 let stage_all io ~uid state ~source ~target planned =
@@ -259,9 +270,21 @@ let incomplete error { kept; left } =
         ("the carry failed and an older copy could not be put back; it is kept \
           as " ^ String.concat ", " kept ^ not_removed)
 
-let write_plan io ~uid ~source ~target planned =
+let write_plan ?(check_roots = fun () -> Ok ()) io ~uid ~source ~target planned =
   let state = { created = []; temporary = []; committed = [] } in
-  let failed error = incomplete error (roll_back io state) in
+  let root_changed () =
+    fail "carry_rollback_incomplete"
+      "an account folder changed during the copy; cleanup requires review"
+  in
+  let failed error =
+    match check_roots () with
+    | Ok () ->
+        let undone = roll_back ~check_roots io state in
+        (match check_roots () with
+        | Ok () -> incomplete error undone
+        | Error _ -> root_changed ())
+    | Error _ -> root_changed ()
+  in
   let unix error =
     { code = "carry_failed"; message = Unix.error_message error }
   in
@@ -271,17 +294,29 @@ let write_plan io ~uid ~source ~target planned =
     Ok ()
   with
   | Ok () ->
-      List.iter
-        (fun (_, _, backup) ->
-          Option.iter (fun b -> quietly (fun () -> Unix.unlink b)) backup)
-        state.committed;
-      Ok ()
+      (match check_roots () with
+      | Error _ -> root_changed ()
+      | Ok () ->
+          List.iter
+            (fun (_, _, backup) ->
+              if Result.is_ok (check_roots ()) then
+                Option.iter (fun b -> quietly (fun () -> Unix.unlink b)) backup)
+            state.committed;
+          (match check_roots () with
+          | Ok () -> Ok ()
+          | Error _ -> root_changed ()))
   | Error error -> failed error
   | exception Restore_failed kept ->
-      let undone = roll_back io state in
-      incomplete
-        { code = "carry_failed"; message = "a rename failed" }
-        { undone with kept = kept :: undone.kept }
+      (match check_roots () with
+      | Error _ -> root_changed ()
+      | Ok () ->
+          let undone = roll_back ~check_roots io state in
+          (match check_roots () with
+          | Error _ -> root_changed ()
+          | Ok () ->
+              incomplete
+                { code = "carry_failed"; message = "a rename failed" }
+                { undone with kept = kept :: undone.kept }))
   | exception Unix.Unix_error (error, _, _) -> failed (unix error)
   | exception Fun.Finally_raised (Unix.Unix_error (error, _, _)) ->
       failed (unix error)

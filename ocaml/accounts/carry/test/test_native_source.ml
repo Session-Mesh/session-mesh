@@ -1,0 +1,440 @@
+(******************************************************************************)
+(* SPDX-License-Identifier: AGPL-3.0-or-later                                  *)
+(* Copyright (c) 2026 Atacama <contact@atacama.tech>                            *)
+(******************************************************************************)
+
+open Carry_fixture
+
+let with_native_root test () =
+  with_root (fun root ->
+      let root = Unix.realpath root in
+      Unix.chmod root 0o700;
+      test root)
+
+let path = Filename.concat
+let file root = path root "accounts.json"
+let registry_file root = path root "backend-profiles.json"
+let getenv _ = None
+
+let profile ?(enabled = true) backend id label config =
+  let role, child =
+    if backend = "codex" then ("state", "sessions") else ("history", "projects")
+  in
+  `Assoc
+    [
+      ("id", `String id);
+      ("label", `String label);
+      ("backend", `String backend);
+      ("enabled", `Bool enabled);
+      ( "roots",
+        `Assoc
+          [
+            ("config", `String config);
+            (role, `String (path config child));
+          ] );
+    ]
+
+let registry root profiles =
+  write (registry_file root)
+    (Yojson.Safe.to_string
+       (`Assoc [ ("version", `Int 1); ("profiles", `List profiles) ]))
+
+let native_pair ?(source_enabled = true) ?(target_enabled = true) root =
+  registry root
+    [
+      profile ~enabled:source_enabled "claude" "work" "other"
+        (path root "native-source");
+      profile ~enabled:target_enabled "claude" "other" "work"
+        (path root "native-target");
+    ]
+
+let legacy_pair root =
+  write (file root)
+    (Printf.sprintf
+       {|{"v":1,"accounts":[{"id":"work","label":"Legacy source","claude_config_dir":"%s/legacy-source","codex_home":"%s/legacy-codex-source"},{"id":"other","label":"Legacy target","claude_config_dir":"%s/legacy-target","codex_home":"%s/legacy-codex-target"}]}|}
+       root root root root)
+
+let carry_named ?(io = failing_io ()) ?(kind = C.Claude) root =
+  C.carry_accounts ~io ~uid ~getenv ~file:(file root) ~kind ~conversation:sid
+    ~from_account:"work" ~to_account:"other" ()
+
+let folder ?(create = false) ?(kind = C.Claude) root account =
+  C.account_folder ~uid ~getenv ~file:(file root) ~kind ~create account
+
+let resolved = function
+  | Ok value -> value
+  | Error { C.code; message } -> Alcotest.failf "%s: %s" code message
+
+let test_migrated_actual_carry root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  write (path source transcript) "{\"native\":\"claude\"}\n";
+  Unix.chmod (path source ".credentials.json") 0o000;
+  let stale = claude_account root "legacy-source" in
+  with_conversation stale;
+  write (path stale transcript) "{\"stale\":true}\n";
+  legacy_pair root;
+  registry root
+    [
+      profile "claude" "work" "other" source;
+      profile "codex" "work" "Codex source" (path root "native-codex-source");
+      profile "claude" "other" "work" (path root "native-target");
+      profile "codex" "other" "Codex target" (path root "native-codex-target");
+    ];
+  let outcome = carried (carry_named root) in
+  Alcotest.(check int) "actual Claude conversation copied" 3 outcome.C.files;
+  Alcotest.(check string) "native source selected despite stale legacy"
+    (read (path source transcript))
+    (read (path root ("native-target/" ^ transcript)));
+  Alcotest.(check bool) "stale legacy target not prepared" false
+    (exists (path root "legacy-target"));
+  Alcotest.(check bool) "other backend source not prepared" false
+    (exists (path root "native-codex-source"));
+  Alcotest.(check bool) "other backend target not prepared" false
+    (exists (path root "native-codex-target"));
+  Alcotest.(check bool) "source credentials not copied" false
+    (exists (path root "native-target/.credentials.json"));
+  Alcotest.(check int) "source credential mode untouched" 0
+    ((Unix.lstat (path source ".credentials.json")).Unix.st_perm land 0o777);
+  let codex_source = path root "native-codex-source" in
+  write (path codex_source rollout) "{\"native\":\"codex\"}\n";
+  let codex = carried (carry_named ~kind:C.Codex root) in
+  Alcotest.(check int) "same source/target IDs independently select Codex" 1
+    codex.C.files;
+  Alcotest.(check string) "Codex copied to its own target"
+    (read (path codex_source rollout))
+    (read (path root ("native-codex-target/" ^ rollout)));
+  Alcotest.(check bool) "stale Codex target not prepared" false
+    (exists (path root "legacy-codex-target"));
+  refused_with "account_unknown" (folder root "Legacy source");
+  refused_with "account_unknown" (folder root "wor");
+  Alcotest.(check string) "id lookup is not confused by the other profile's label"
+    source (resolved (folder root "work"))
+
+let test_malformed_never_falls_back root =
+  let stale = claude_account root "legacy-source" in
+  with_conversation stale;
+  legacy_pair root;
+  write (registry_file root) "{";
+  refused_with "accounts_refused" (carry_named root);
+  refused_with "accounts_refused" (folder ~create:true root "work");
+  Alcotest.(check bool) "legacy target untouched" false
+    (exists (path root "legacy-target"));
+  Alcotest.(check bool) "no native target created" false
+    (exists (path root "native-target"));
+  Unix.unlink (registry_file root);
+  Unix.symlink (path root "absent-registry") (registry_file root);
+  refused_with "accounts_refused" (carry_named root);
+  Alcotest.(check bool) "dangling registry is not legacy permission" false
+    (exists (path root "legacy-target"))
+
+let test_disabled_named_accounts root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  legacy_pair root;
+  native_pair ~source_enabled:false root;
+  refused_with "account_unknown" (carry_named root);
+  native_pair ~target_enabled:false root;
+  refused_with "account_unknown" (carry_named root);
+  refused_with "account_unknown" (folder ~create:true root "other");
+  Alcotest.(check bool) "disabled target not prepared" false
+    (exists (path root "native-target"));
+  Alcotest.(check bool) "disabled lookup never falls back to legacy" false
+    (exists (path root "legacy-target"));
+  registry root [ profile "codex" "work" "Codex source" (path root "codex-only") ];
+  refused_with "account_no_agent" (folder root "work");
+  Alcotest.(check bool) "wrong-backend lookup does not prepare" false
+    (exists (path root "codex-only"))
+
+let test_missing_source_not_prepared root =
+  native_pair root;
+  Alcotest.(check string) "non-creating source lookup"
+    (path root "native-source") (resolved (folder root "work"));
+  refused_with "account_folder_refused" (carry_named root);
+  Alcotest.(check bool) "source remains absent" false
+    (exists (path root "native-source"));
+  Alcotest.(check bool) "target not created for missing source" false
+    (exists (path root "native-target"))
+
+let test_created_target_rollback root =
+  let source = claude_account root "native-source" in
+  native_pair root;
+  refused_with "conversation_not_found" (carry_named root);
+  Alcotest.(check bool) "target removed when no conversation found" false
+    (exists (path root "native-target"));
+  with_conversation source;
+  refused_with "carry_failed" (carry_named ~io:(failing_io ~writes:0 ()) root);
+  Alcotest.(check bool) "new target removed after failed write" false
+    (exists (path root "native-target"));
+  ignore (carried (carry_named root));
+  Alcotest.(check bool) "successful created target retained" true
+    (exists (path root ("native-target/" ^ transcript)))
+
+let test_existing_target_retention root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  let target = claude_account root "native-target" in
+  let before = listing target in
+  native_pair root;
+  refused_with "carry_failed" (carry_named ~io:(failing_io ~writes:0 ()) root);
+  Alcotest.(check bool) "pre-existing target retained" true (exists target);
+  Alcotest.(check (list string)) "target content unchanged" before (listing target);
+  Alcotest.(check string) "target login unchanged" "{\"secret\":1}"
+    (read (path target ".credentials.json"))
+
+let test_explicit_default_without_registry root =
+  let default = claude_account root ".claude" in
+  with_conversation default;
+  let getenv = function "HOME" -> Some root | _ -> None in
+  let folder account =
+    C.account_folder ~uid ~getenv ~file:(file root) ~kind:C.Claude ~create:false
+      account
+  in
+  Alcotest.(check string) "explicit default needs no accounts file" default
+    (resolved (folder "default"));
+  write (registry_file root) "{";
+  Alcotest.(check string) "explicit default preserves independent source" default
+    (resolved (folder "default"));
+  refused_with "accounts_refused" (folder "unknown-named-account");
+  refused_with "account_same"
+    (C.carry_accounts ~uid ~getenv ~file:(file root) ~kind:C.Claude
+       ~conversation:sid ~from_account:"default" ~to_account:"default" ());
+  refused_with "accounts_refused"
+    (C.carry_accounts ~uid ~getenv ~file:(file root) ~kind:C.Claude
+       ~conversation:sid ~from_account:"default" ~to_account:"work" ());
+  Alcotest.(check bool) "named target never defaulted" false
+    (exists (path root "native-target"))
+
+(* The existing environment callback is a deterministic boundary between folder
+   lookups. Configuration must already have been read, even for a default source.
+   Changing it here must not select a target from a second snapshot. *)
+let test_one_snapshot_before_folder_lookup root =
+  let source = claude_account root ".claude" in
+  with_conversation source;
+  native_pair root;
+  let changed = ref false in
+  let getenv name =
+    if not !changed then begin
+      changed := true;
+      registry root
+        [ profile "claude" "other" "Replacement" (path root "replacement-target") ]
+    end;
+    if name = "HOME" then Some root else None
+  in
+  ignore
+    (carried
+       (C.carry_accounts ~io:(failing_io ()) ~uid ~getenv ~file:(file root)
+          ~kind:C.Claude ~conversation:sid ~from_account:"default"
+          ~to_account:"other" ()));
+  Alcotest.(check bool) "registry changed during folder lookup" true !changed;
+  Alcotest.(check string) "target comes from the original snapshot"
+    (read (path source transcript))
+    (read (path root ("native-target/" ^ transcript)));
+  Alcotest.(check bool) "second snapshot target never prepared" false
+    (exists (path root "replacement-target"))
+
+let test_registry_change_during_copy_stays_pinned root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  native_pair root;
+  let changed = ref false in
+  let io =
+    {
+      (failing_io ()) with
+      C.free_bytes =
+        (fun _ ->
+          changed := true;
+          registry root
+            [
+              profile "claude" "work" "New source" (path root "new-source");
+              profile "claude" "other" "New target" (path root "new-target");
+            ];
+          Some max_int);
+    }
+  in
+  ignore (carried (carry_named ~io root));
+  Alcotest.(check bool) "registry edited through existing IO hook" true !changed;
+  Alcotest.(check string) "entire copy uses pinned old pair"
+    (read (path source transcript))
+    (read (path root ("native-target/" ^ transcript)));
+  Alcotest.(check bool) "new source untouched" false (exists (path root "new-source"));
+  Alcotest.(check bool) "new target untouched" false (exists (path root "new-target"))
+
+let check_identity name expected folder =
+  let current = Unix.lstat folder in
+  Alcotest.(check (pair int int)) name
+    (expected.Unix.st_dev, expected.Unix.st_ino)
+    (current.Unix.st_dev, current.Unix.st_ino)
+
+let test_default_target_environment_is_pinned root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  native_pair root;
+  let chosen = path root "chosen-default-target" in
+  let preexisting = path root "preexisting-default-target" in
+  Unix.mkdir preexisting 0o700;
+  let identity = Unix.lstat preexisting in
+  let selections = ref 0 in
+  let getenv = function
+    | "CLAUDE_CONFIG_DIR" ->
+        incr selections;
+        Some (if !selections = 1 then chosen else preexisting)
+    | "HOME" -> Some root
+    | _ -> None
+  in
+  refused_with "target_no_space"
+    (C.carry_accounts ~io:(failing_io ~free:(Some 0) ()) ~uid ~getenv
+       ~file:(file root) ~kind:C.Claude ~conversation:sid ~from_account:"work"
+       ~to_account:"default" ());
+  Alcotest.(check int) "default selector read only once" 1 !selections;
+  Alcotest.(check bool) "our newly created target rolled back" false (exists chosen);
+  check_identity "pre-existing empty alternative never removed" identity preexisting;
+  Alcotest.(check (list string)) "pre-existing alternative untouched" []
+    (Array.to_list (Sys.readdir preexisting))
+
+let test_replaced_target_is_not_cleaned root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  native_pair root;
+  let target = path root "native-target" in
+  let moved = path root "original-created-target" in
+  let replacement = ref None in
+  let io =
+    {
+      (failing_io ()) with
+      C.free_bytes =
+        (fun actual ->
+          Alcotest.(check string) "hook sees pinned actual target" target actual;
+          Unix.rename target moved;
+          Unix.mkdir target 0o700;
+          replacement := Some (Unix.lstat target);
+          Some 0);
+    }
+  in
+  refused_with "account_folder_refused" (carry_named ~io root);
+  (match !replacement with
+  | None -> Alcotest.fail "target was not replaced"
+  | Some identity -> check_identity "foreign empty replacement retained" identity target);
+  Alcotest.(check (list string)) "foreign root still empty" []
+    (Array.to_list (Sys.readdir target));
+  Alcotest.(check bool) "original created root remains identifiable" true
+    (exists (path moved C.lock_name))
+
+let test_replaced_target_during_write_retains_recovery root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  native_pair root;
+  let target = path root "native-target" in
+  let moved = path root "original-writing-target" in
+  let replacement = ref None in
+  let io =
+    {
+      (failing_io ()) with
+      C.write =
+        (fun fd bytes offset length ->
+          let written = Unix.write fd bytes offset length in
+          if !replacement = None then begin
+            Unix.rename target moved;
+            Unix.mkdir target 0o700;
+            replacement := Some (Unix.lstat target)
+          end;
+          written);
+    }
+  in
+  refused_with "carry_rollback_incomplete" (carry_named ~io root);
+  (match !replacement with
+  | None -> Alcotest.fail "write hook did not replace target"
+  | Some identity -> check_identity "replacement not removed by rollback" identity target);
+  Alcotest.(check (list string)) "replacement receives no cleanup or writes" []
+    (Array.to_list (Sys.readdir target));
+  Alcotest.(check bool) "uncertain temporary retained under original root" true
+    (List.exists (fun relative -> contains relative ".carry-new-") (listing moved))
+
+(* Exercise the private functional binding seam, not a public IO test hook or
+   process-wide descriptor exhaustion. The real binder maps open errors such
+   as EMFILE to a refusal before invoking the carry callback. *)
+let test_target_bind_failure_cleanup root =
+  let module Target = Mesh_accounts_carry__Carry_target in
+  let run name ~created ~replace ~enter =
+    let target = path root name in
+    Unix.mkdir target 0o700;
+    let identity = Unix.lstat target in
+    let entered = ref false in
+    let replacement = ref None in
+    let bind callback =
+      if replace then begin
+        Unix.rename target (path root (name ^ "-original"));
+        Unix.mkdir target 0o700;
+        replacement := Some (Unix.lstat target)
+      end;
+      if enter then callback identity else Error "EMFILE"
+    in
+    let result =
+      Target.with_target_binding ~target ~created ~identity bind (fun _ ->
+          entered := true;
+          Error "callback refusal")
+    in
+    Alcotest.(check (result unit string))
+      "original refusal preserved"
+      (Error (if enter then "callback refusal" else "EMFILE"))
+      result;
+    Alcotest.(check bool) "callback boundary" enter !entered;
+    Alcotest.(check bool)
+      name
+      ((not created) || replace || enter)
+      (exists target);
+    match !replacement with
+    | Some replacement ->
+        check_identity "foreign replacement identity retained" replacement
+          target;
+        Alcotest.(check (list string))
+          "foreign replacement left empty" []
+          (Array.to_list (Sys.readdir target))
+    | None ->
+        if (not created) || enter then
+          check_identity "pre-existing or entered directory retained" identity
+            target
+  in
+  run "created-bind-failure" ~created:true ~replace:false ~enter:false;
+  run "preexisting-bind-failure" ~created:false ~replace:false ~enter:false;
+  run "replaced-bind-failure" ~created:true ~replace:true ~enter:false;
+  run "callback-handles-own-cleanup" ~created:true ~replace:false ~enter:true;
+  let target = path root "raised-bind-failure" in
+  Unix.mkdir target 0o700;
+  let identity = Unix.lstat target in
+  let caught =
+    try
+      ignore
+        (Target.with_target_binding ~target ~created:true ~identity
+           (fun _ -> raise (Unix.Unix_error (Unix.EMFILE, "open", "")))
+           (fun _ -> Alcotest.fail "callback entered after failed open"));
+      false
+    with Unix.Unix_error (Unix.EMFILE, _, _) -> true
+  in
+  Alcotest.(check bool) "binding exception preserved" true caught;
+  Alcotest.(check bool)
+    "raised pre-callback failure removes own empty root" false (exists target)
+
+let () =
+  Alcotest.run "native registry carry convergence"
+    [
+      ( "source and transactions",
+        List.map
+          (fun (name, test) ->
+            Alcotest.test_case name `Quick (with_native_root test))
+          [
+            ("migrated actual Claude/Codex carry", test_migrated_actual_carry);
+            ("malformed and symlink registry never fall back", test_malformed_never_falls_back);
+            ("disabled accounts refuse", test_disabled_named_accounts);
+            ("missing source is never prepared", test_missing_source_not_prepared);
+            ("created target rollback and success retention", test_created_target_rollback);
+            ("existing target failure retention", test_existing_target_retention);
+            ("explicit default remains source-independent", test_explicit_default_without_registry);
+            ("one snapshot precedes both folder lookups", test_one_snapshot_before_folder_lookup);
+            ("registry edit during copy stays pinned", test_registry_change_during_copy_stays_pinned);
+            ("default target environment is pinned", test_default_target_environment_is_pinned);
+            ("replacement target is not cleaned", test_replaced_target_is_not_cleaned);
+            ("replacement during write retains recovery", test_replaced_target_during_write_retains_recovery);
+            ("target bind failure cleanup", test_target_bind_failure_cleanup);
+          ] );
+    ]

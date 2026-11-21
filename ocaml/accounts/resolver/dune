@@ -1,6 +1,6 @@
 ; Which agent accounts exist and where the account (backend, id) lives: the one
-; seam `mesh-platform accounts` reads them through (source: accounts.json).
+; seam `mesh-platform accounts` reads them through (native profiles, or legacy).
 
 (library
  (name mesh_account_resolver)
- (libraries mesh_accounts unix yojson))
+ (libraries mesh_accounts mesh_backend_profile unix yojson))

@@ -24,11 +24,11 @@ import {linkSystemTools} from './helpers/system-tool.ts';
 
 export const SOURCE = process.env.MESH_INSTALL_SOURCE || path.resolve(import.meta.dirname, '..');
 // The native programs of a release, and of a bundle.
-export const PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp', 'work-write'];
+export const PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'mesh-profile', 'work-read', 'work-mcp', 'work-write'];
 // Where each native program sits in a bundle (scripts/build-bundle.sh).
 export const NATIVE: Record<string, string> = {'mesh-ptyhost': 'libexec/mesh-ptyhost', 'mesh-board-mcp': 'bin/mesh-board-mcp',
   'mesh-read': 'bin/mesh-read', 'mesh-platform': 'bin/mesh-platform', 'mesh-history': 'bin/mesh-history',
-  'mesh-logout-all': 'bin/mesh-logout-all', 'work-read': 'bin/work-read', 'work-mcp': 'bin/work-mcp',
+  'mesh-logout-all': 'bin/mesh-logout-all', 'mesh-profile': 'bin/mesh-profile', 'work-read': 'bin/work-read', 'work-mcp': 'bin/work-mcp',
   'work-write': 'bin/work-write'};
 export const PLATFORMS = ['linux-x86_64', 'linux-arm64', 'macos-arm64'];
 // The Python commands of the code (app/bin), which a bundle runs through its wrapper (bin/).

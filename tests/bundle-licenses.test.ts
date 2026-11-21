@@ -12,7 +12,7 @@ import path from 'node:path';
 import {afterEach, describe, test} from 'node:test';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {CPYTHON_CHANGES, indexProblems, ocamlComponents, otherComponents, sqliteComponent, pythonCatalogue, pythonComponents, recipeComponent, renderIndex, sourceStatement,
+import {CPYTHON_CHANGES, NATIVE_TARGETS, indexProblems, ocamlComponents, otherComponents, sqliteComponent, pythonCatalogue, pythonComponents, recipeComponent, renderIndex, sourceStatement,
   writeNotices} from '../scripts/bundle-licenses.mjs';
 import {applyLicencePolicy, BUNDLE_LICENCES, labelProblems, REVIEWED_EXCEPTIONS} from '../scripts/bundle/licence-policy.mjs';
 import {wheelComponents} from '../scripts/bundle/wheel-licences.mjs';
@@ -53,6 +53,7 @@ describe('the index of third-party components', () => {
     const text = sourceStatement({sourceUrl: 'https://example.invalid/session-mesh', revision: 'f00d', dirty: true});
     assert.match(text, /https:\/\/example\.invalid\/session-mesh\n {2}revision f00d/);
     assert.match(text, /built from ocaml\/\nat that revision/);
+    assert.match(text, /bin\/mesh-profile/);
     assert.match(text, /local changes that are not part of that revision/);
     const runtime = sourceStatement({sourceUrl: 'https://example.invalid/session-mesh', revision: 'f00d', runtime: {release: '20250317',
       provenance: 'From downloads.py.', recipe: {name: 'python-build-standalone 20250317', commit: 'c0ffee', url: 'https://example.invalid/r.tar.gz', sha256: 'aa'},
@@ -89,6 +90,9 @@ esac`, 0o755);
 }
 
 describe('the OCaml packages of the native programs', () => {
+  test('the profile helper is included in native dependency and licence discovery', () => {
+    assert.equal(NATIVE_TARGETS['bin/mesh_profile_main.exe'], 'mesh-profile');
+  });
   const withPath = <T>(fakes: string, body: () => T): T => {
     const saved = process.env.PATH;
     process.env.PATH = `${fakes}:${saved}`;

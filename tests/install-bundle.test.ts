@@ -96,6 +96,20 @@ describe('./mesh install: an extracted bundle installed in place', () => {
     assert.match(result.stdout, /Release v1\.0\.0 is already on disk, bundle checked/);
     assert.equal(current(fx), 'releases/v1.0.0');
   });
+
+  test('a missing or modified mesh-profile refuses the extracted bundle before installation', () => {
+    for (const missing of [true, false]) {
+      const fx = fixture();
+      const bundle = extracted(fx, 'mesh-linux-x86_64');
+      const helper = path.join(bundle, 'bin/mesh-profile');
+      if (missing) fs.unlinkSync(helper);
+      else fs.writeFileSync(helper, 'modified');
+      const result = launch(fx, bundle);
+      assert.equal(result.status, 1, result.output);
+      assert.match(result.stderr, /is not a complete bundle .*extract the archive again/);
+      assert.ok(!fs.existsSync(fx.units));
+    }
+  });
 });
 
 describe('an account whose services run another extracted bundle (~/.local/libexec/session-mesh)', () => {
