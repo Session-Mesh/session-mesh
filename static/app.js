@@ -429,7 +429,7 @@ function localTerminalBinding(name, created, bytes, geometry, ptySize = () => {}
           && typeof message.created === "number" && Number.isFinite(message.created)
           && message.created > 0 && message.created === created;
         binding = binding === "pending" && !replayStarted && exact ? "bound" : "invalid";
-      } else if (!size && !ownedSize) binding = "invalid";
+      } else if (!size && !MeshPaneActions.isPtySizeFrame(message)) binding = "invalid";
       if (size) geometry(size);
       if (ownedSize) ptySize(ownedSize);
     },

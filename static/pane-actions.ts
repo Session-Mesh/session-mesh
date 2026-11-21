@@ -7,7 +7,7 @@ export {createTerminalInputOrigin} from './terminal-origin.ts';
 // Pane-local presentation only. The app supplies data and keeps action authority.
 
 export { replayPrefix } from "./terminal-replay.ts";
-export { parsePtySize, sendsSize, sizePlan } from "./terminal-size-owner.ts";
+export { isPtySizeFrame, parsePtySize, sendsSize, sizePlan } from "./terminal-size-owner.ts";
 export { SIZE_TAKEOVER_KEY, listenForActivation, shouldTakeSize, showsSizeBanner, sizeTakeoverMode } from "./size-takeover.ts";
 
 // Displayed text comes from the app's catalogs. The app installs its translator
