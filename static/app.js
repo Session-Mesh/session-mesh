@@ -19,6 +19,7 @@ let meshContext = null;
 let meshStopped = false;
 let meshPageSuspended = false, meshPageFinal = false, meshPageEpoch = 0;
 let meshPageCache = null;
+let meshCacheFocusRevision = 0;
 function localMeshEffectsAllowed() { return meshContext !== null && !meshStopped && !meshPageSuspended; }
 function requireLocalMesh() {
   if (!localMeshEffectsAllowed()) throw new Error(t("mesh.localStopped"));
@@ -2269,7 +2270,8 @@ class Pane {
           if (!this.termEl.hidden && !focusedXterm) this.sendSize(true);
           this.armAutoRedraw(c);
           if (touch) this.applySelectedTerminalFocus(c);
-          if (opts.cacheFocus && canFocusPaneAction(opts.cacheFocus)) opts.cacheFocus.focus({preventScroll: true});
+          if (opts.cacheFocus && opts.cacheFocusRevision === meshCacheFocusRevision
+              && canFocusPaneAction(opts.cacheFocus)) opts.cacheFocus.focus({preventScroll: true});
         },
         replayGeometry: (_terminal, geometry) => {
           if (c.replayPending) c.replayGeometry = geometry;
@@ -8594,6 +8596,8 @@ window.addEventListener("pagehide", (event) => {
   else disposeLocalPage();
 });
 window.addEventListener("pageshow", (event) => {if (event.persisted) void resumeLocalPage();});
+// Cached focus must not overtake a choice made while inventory or the socket waited.
+document.addEventListener("focusin", () => { meshCacheFocusRevision++; });
 function retirePageInput() {
   endDirectLine();
   if (capActive && !capActive.file) resetCapture(capActive);
@@ -8633,6 +8637,7 @@ function suspendLocalPage() {
 async function resumeLocalPage() {
   if (!meshPageSuspended || meshStopped || meshPageFinal || !meshPageCache) return;
   const epoch = meshPageEpoch, context = meshContext;
+  meshPageCache.focusRevision = meshCacheFocusRevision;
   meshPageSuspended = false;
   renderComposeStatus(); listBatch.request();
   await startInventory(context, true);
@@ -8643,15 +8648,15 @@ function restorePendingCachedTerminals() {
   if (!meshPageCache || !localMeshEffectsAllowed() || meshPageFinal) return;
   const cached = meshPageCache;
   meshPageCache = null;
-  for (const binding of cached.bindings) restoreCachedTerminal(binding, cached.focus);
+  for (const binding of cached.bindings) restoreCachedTerminal(binding, cached.focus, cached.focusRevision);
 }
-function restoreCachedTerminal({pane, id, name, created}, focus) {
+function restoreCachedTerminal({pane, id, name, created}, focus, focusRevision) {
   // A live reconnect can follow a restarted name; a frozen page may only restore
   // its original target. pageshow is not user authority to select a replacement.
   const identity = paneTargets.identity(id);
   if (!panes.includes(pane) || pane.id !== id || pane.actionDisposed || pane.conn
       || !Number.isFinite(created) || created <= 0 || identity?.name !== name || identity.created !== created) return;
-  pane.attach(id, {cacheFocus: pane.el.contains(focus) ? focus : null});
+  pane.attach(id, {cacheFocus: pane.el.contains(focus) ? focus : null, cacheFocusRevision: focusRevision});
 }
 function disposeLocalInputScopes() {
   for (const scope of humanInputScopes.values()) scope.dispose();
