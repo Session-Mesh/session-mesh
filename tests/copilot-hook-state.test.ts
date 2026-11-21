@@ -43,7 +43,7 @@ async def host_request(request): return RAW
 server.ptyhost.host_identity = host_identity
 server.ptyhost.request = host_request
 ARGV_ONLY = {"session_id": ARGV_SID}
-server.list_sessions = lambda raw, listed=True: described(ARGV_ONLY["session_id"])
+server.list_sessions = lambda raw, listed=True, read_at=None: described(ARGV_ONLY["session_id"])
 
 def hook(state, session, kind="done"):
     event = {"type": kind, "at": time.time(), "received": time.time(), "received_steady": time.monotonic(),
