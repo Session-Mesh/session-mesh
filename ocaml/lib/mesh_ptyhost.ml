@@ -504,8 +504,9 @@ let orphan_grace = 0.5
 
 (* Type a command once the program has drawn its prompt and gone quiet for
    0.8 s, as a person would, or after ten seconds; for both [new] and
-   [start_if]. *)
-let type_when_ready env s command =
+   [start_if]. [clear_line]: first erase what a person may have left on the
+   shell's line (after [stop_agent_if], attached clients see the prompt). *)
+let type_when_ready ?(clear_line = false) env s command =
   let clock = Eio.Stdenv.clock env in
   let start = Eio.Time.now clock in
   (* A command still waiting when [stop_agent_if] moved the incarnation on
@@ -523,7 +524,10 @@ let type_when_ready env s command =
          && Eio.Time.now clock -. s.activity > 0.8
     then (
       s.last_input <- Eio.Time.now clock;
-      ignore (Mesh_pty_input.enqueue s.input (command ^ "\r")))
+      let line = command ^ "\r" in
+      ignore
+        (Mesh_pty_input.enqueue s.input
+           (if clear_line then Mesh_pty_agent_stop.clear_line ^ line else line)))
     else wait ()
   in
   wait ()
@@ -1021,9 +1025,11 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                       invalid_arg "meta";
                     s.meta <- value)
                   meta;
+                let clear_line = s.agent_stopped in
                 s.agent_stopped <- false;
                 s.command_started <- true;
-                Eio.Fiber.fork ~sw (fun () -> type_when_ready env s command);
+                Eio.Fiber.fork ~sw (fun () ->
+                    type_when_ready ~clear_line env s command);
                 `Assoc [ ("ok", `Bool true) ]
             | _ -> `Assoc [ ("ok", `Bool false) ])
         | _ -> invalid_arg "name")

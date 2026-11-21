@@ -105,9 +105,11 @@ let started fixture count =
     (wait_until "agent started" 15. (fun () ->
          List.length (agent_pids fixture) >= count))
 
-let new_agent ?(mode = "graceful") ?(background = false) fixture =
+let new_agent ?(mode = "graceful") ?(background = false) ?(prefix = "") fixture
+    =
   let command =
-    Printf.sprintf "CLAUDE_CONFIG_DIR=/accounts/a %s %s%s" fixture.agent mode
+    Printf.sprintf "%sCLAUDE_CONFIG_DIR=/accounts/a %s %s%s" prefix
+      fixture.agent mode
       (if background then " &" else "")
   in
   let reply =
@@ -158,6 +160,14 @@ let attach fixture =
        0
        (5 + String.length payload));
   socket
+
+(* What a person types in an attachment (one D frame). *)
+let type_in socket text =
+  let head = Bytes.create 5 in
+  Bytes.set head 0 'D';
+  Bytes.set_int32_be head 1 (Int32.of_int (String.length text));
+  let frame = Bytes.to_string head ^ text in
+  ignore (Unix.write_substring socket frame 0 (String.length frame))
 
 let received socket =
   let buffer = Buffer.create 4096 and chunk = Bytes.create 4096 in
@@ -257,6 +267,41 @@ let refusals_signal_nothing () =
       expect "no meta on an incarnation whose agent was not stopped"
         (member "ok" (start_again fixture created) = `Bool false))
 
+(* A shell without job control runs the agent in its own group: only a stop
+   of the whole session could reach it, so nothing is signalled. *)
+let no_job_control_signals_nothing () =
+  with_host (fun fixture ->
+      let session = new_agent ~prefix:"set +m; " fixture in
+      let created = member "created" session in
+      let agent = List.hd (agent_pids fixture) in
+      let refused = stop_agent fixture created in
+      expect
+        ("the agent in the shell's group: " ^ Yojson.Basic.to_string refused)
+        (member "reason" refused = `String "no_job_control");
+      expect "still running" (alive agent);
+      expect "same incarnation"
+        (member "created" (the_session fixture) = created))
+
+(* During the stop a person typed half a line at the prompt: the launch
+   erases it first instead of appending the command to it. *)
+let half_typed_line_is_erased () =
+  with_host (fun fixture ->
+      let session = new_agent fixture in
+      let desk = attach fixture in
+      let stopped = stop_agent fixture (member "created" session) in
+      expect "stopped" (member "ok" stopped = `Bool true);
+      type_in desk "echo HALF-TYPED";
+      Unix.sleepf 0.3;
+      expect "started"
+        (member "ok" (start_again fixture (member "created" stopped))
+        = `Bool true);
+      started fixture 2;
+      expect "the new agent runs under the new folder"
+        (List.exists
+           (fun line -> contains line "/accounts/b")
+           (log_lines fixture));
+      Unix.close desk)
+
 let meta_keeps_the_nonce () =
   with_host (fun fixture ->
       let session = new_agent fixture in
@@ -324,6 +369,10 @@ let () =
             stubborn_agent_is_killed;
           Alcotest.test_case "refusals signal nothing" `Slow
             refusals_signal_nothing;
+          Alcotest.test_case "a shell without job control: nothing signalled"
+            `Slow no_job_control_signals_nothing;
+          Alcotest.test_case "a half-typed line is erased before the launch"
+            `Slow half_typed_line_is_erased;
           Alcotest.test_case "the new meta keeps the nonce" `Slow
             meta_keeps_the_nonce;
           Alcotest.test_case "a pending launch is dropped by a stop" `Slow

@@ -46,6 +46,16 @@ let foreground () =
     [ shell ~tpgid:300 (); process ~tpgid:300 ~pid:300 ~pgrp:300 "vim" ];
   check_foreground "an agent in the background" "refused agent_not_foreground"
     [ shell (); process ~pid:200 ~pgrp:200 "claude" ];
+  check_foreground "a shell without job control runs the agent in its group"
+    "refused no_job_control"
+    [ shell (); process ~pid:200 ~pgrp:100 "claude" ];
+  check_foreground "one agent in the shell's group, one in the background"
+    "refused agent_not_foreground"
+    [
+      shell ();
+      process ~pid:200 ~pgrp:100 "claude";
+      process ~pid:300 ~pgrp:300 "claude";
+    ];
   check_foreground "a second agent beside the foreground one"
     "refused agent_not_foreground"
     [

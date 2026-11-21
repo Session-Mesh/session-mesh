@@ -753,6 +753,8 @@
   "server.conversationStillActive": "Conversation still active; standby session waiting: {name}",
   "server.conversationStoppedFallback": "Conversation stopped, but a standby session is available: {name}",
   "server.agentNotStopped": "The agent was not stopped ({reason}): nothing was started",
+  "server.agentForegroundTaken": "Another program holds the terminal of session {name}: nothing was stopped. Quit it, or bring the agent back to the foreground, then ask again",
+  "server.agentInBackground": "The agent of session {name} does not hold its terminal (it runs in the background, or beside another agent): nothing was stopped. Bring it to the foreground, then ask again",
   "server.agentNotStartedAgain": "Conversation stopped; its agent could not be started again in session {name}",
   "server.createdRequired": "created required",
   "server.decisionInvalid": "Invalid decision",

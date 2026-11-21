@@ -27,10 +27,18 @@ type foreground =
           - [no_terminal]: the leader has no controlling terminal;
           - [no_shell]: the leader is the agent itself, so stopping it would end
             the session;
+          - [no_job_control]: the shell holds the terminal and every process
+            that runs the agent is in the shell's own group (a shell without
+            job control): only the whole session could be signalled;
           - [unsupported_foreground]: another program holds the terminal;
           - [agent_not_foreground]: a process of the session runs the agent
-            outside the foreground job (in the background, or in the shell's own
-            group). *)
+            outside the foreground job (in the background, or beside the
+            foreground one).
+
+          The server falls back to a new session (its stop of the whole
+          session, as before [stop_agent_if]) after [process_scan_failed],
+          [no_terminal], [no_shell] and [no_job_control], and refuses the
+          request after the other reasons. *)
 
 val classify :
   runs_agent:(Mesh_platform.process -> bool) ->
@@ -50,6 +58,12 @@ val gone :
     zombie runs nothing) remains in [group], and no live process of the session
     other than the leader runs the agent. *)
 
+val clear_line : string
+(** The keys typed before the command that starts the agent again: Ctrl-E then
+    Ctrl-U, which erase a line a person may have left at the shell's prompt
+    during the stop (readline, zsh and fish in their default emacs mode; the
+    terminal's own line-kill key for a shell without a line editor). *)
+
 type timing = {
   grace : float;  (** Seconds between SIGHUP and SIGKILL. *)
   kill_wait : float;  (** Seconds after SIGKILL before giving up. *)
@@ -57,8 +71,8 @@ type timing = {
 }
 
 val default_timing : timing
-(** 3 s, 1 s and 0.05 s: the whole stop fits in the 5 s a client of the host
-    waits for a reply. [MESH_PTYHOST_AGENT_STOP_GRACE] replaces [grace] when it
+(** 3 s, 1 s and 0.05 s: the whole stop takes about 4 s at most, well within
+    the 15 s the server waits for this reply. [MESH_PTYHOST_AGENT_STOP_GRACE] replaces [grace] when it
     is a finite number between 0 and 3. *)
 
 val stop :

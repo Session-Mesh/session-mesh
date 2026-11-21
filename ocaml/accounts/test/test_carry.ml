@@ -350,6 +350,38 @@ let test_account_folders () =
       Alcotest.(check (result string string))
         "refused file" (Error "accounts_refused") (code "work" C.Claude))
 
+(* An agent killed while writing (a restart sends SIGKILL to an agent still
+   running 3 s after SIGHUP) can leave its last line cut. The carry copies the
+   file byte for byte: the other account reads exactly what this one would,
+   the source is untouched, and once the source is whole again a later carry
+   replaces the cut copy (a prefix). *)
+let test_cut_last_line () =
+  with_root (fun root ->
+      let check_cut kind source target relative =
+        let path = Filename.concat source relative in
+        let cut = "{\"type\":\"session_meta\"}\n{\"type\":\"user\",\"mess" in
+        write path cut;
+        ignore (carried (carry ~source ~target kind));
+        Alcotest.(check string)
+          "the same bytes, cut line included" cut
+          (read (Filename.concat target relative));
+        Alcotest.(check string) "the source is untouched" cut (read path);
+        write path (cut ^ "age\":1}\n");
+        let whole = carried (carry ~source ~target kind) in
+        Alcotest.(check int) "the cut copy is replaced" 1 whole.C.replaced;
+        Alcotest.(check string)
+          "by the whole one" (read path)
+          (read (Filename.concat target relative))
+      in
+      check_cut C.Claude (claude_account root "a") (claude_account root "b")
+        transcript;
+      let codex name =
+        let folder = Filename.concat root name in
+        mkdirs folder;
+        folder
+      in
+      check_cut C.Codex (codex "c") (codex "d") rollout)
+
 let () =
   Alcotest.run "mesh-accounts-carry"
     [
@@ -377,5 +409,7 @@ let () =
           Alcotest.test_case "unchecked folders" `Quick
             test_unchecked_folders_are_refused;
           Alcotest.test_case "account folders" `Quick test_account_folders;
+          Alcotest.test_case "a cut last line is carried as it is" `Quick
+            test_cut_last_line;
         ] );
     ]
