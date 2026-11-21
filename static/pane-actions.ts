@@ -7,7 +7,7 @@ export {createTerminalInputOrigin} from './terminal-origin.ts';
 // Pane-local presentation only. The app supplies data and keeps action authority.
 
 export { replayPrefix } from "./terminal-replay.ts";
-export { parsePtySize, sendsSize, sizePlan } from "./terminal-size-owner.ts";
+export { isPtySizeFrame, parsePtySize, sendsSize, sizePlan } from "./terminal-size-owner.ts";
 
 // Displayed text comes from the app's catalogs. The app installs its translator
 // once they are loaded; until then (and in Node checks without one) a key reads

@@ -5,7 +5,7 @@
 // shows, when it shows the banner, and which resizes it sends.
 import assert from 'node:assert/strict';
 import {describe, test} from 'node:test';
-import {parsePtySize, sendsSize, sizePlan} from '../static/terminal-size-owner.ts';
+import {isPtySizeFrame, parsePtySize, sendsSize, sizePlan} from '../static/terminal-size-owner.ts';
 
 const phone = {rows: 33, cols: 52};
 const desk = {rows: 40, cols: 116};
@@ -42,8 +42,28 @@ describe('the resizes a pane sends', () => {
 });
 
 describe('the message server.py relays', () => {
+  test('wire validity is independent of the browser render cap', () => {
+    for (const dimension of ['rows', 'cols']) {
+      for (const owner of ['you', 'other', 'none']) for (const value of [2, 1000, 1001, 65535])
+        assert.equal(isPtySizeFrame({t: 's', rows: 40, cols: 116, [dimension]: value, owner}), true);
+      for (const value of [0, 1, -1, 65536, 2.5, NaN, Infinity, '40', true, null, undefined])
+        assert.equal(isPtySizeFrame({t: 's', rows: 40, cols: 116, [dimension]: value, owner: 'you'}), false);
+    }
+    for (const message of [null, [], 's', {t: 's'}, {t: 'g', rows: 40, cols: 116, owner: 'you'},
+      {t: 's', rows: 40, cols: 116, owner: 'invalid'}]) assert.equal(isPtySizeFrame(message), false);
+  });
   test('a valid one', () => {
     assert.deepEqual(parsePtySize('{"t":"s","rows":40,"cols":116,"owner":"other"}'), {rows: 40, cols: 116, owner: 'other'});
+  });
+  test('the render cap stays at 1000 in both dimensions', () => {
+    for (const dimension of ['rows', 'cols']) {
+      for (const value of [2, 1000]) {
+        const size = {rows: 40, cols: 116, [dimension]: value, owner: 'other'};
+        assert.deepEqual(parsePtySize(JSON.stringify({t: 's', ...size})), size);
+      }
+      for (const value of [1, 1001, 65535, 65536])
+        assert.equal(parsePtySize(JSON.stringify({t: 's', rows: 40, cols: 116, [dimension]: value, owner: 'other'})), null);
+    }
   });
   test('anything else is ignored', () => {
     for (const text of ['', 'null', '{"t":"g","rows":40,"cols":116}', '{"t":"s","rows":40,"cols":116,"owner":"me"}',

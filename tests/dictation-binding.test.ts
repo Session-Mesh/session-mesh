@@ -115,12 +115,73 @@ test('PTY ownership updates preserve exact binding and stay fenced from a detach
   ]);
   const release = f.handle.retain();
   f.hide(); f.handle.close();
+  f.message(JSON.stringify({t: 's', rows: 65535, cols: 1001, owner: 'other'}));
+  assert.equal(f.handle.isBound('alpha', 1), true, 'oversized metadata does not revoke a retained binding');
   f.message(JSON.stringify({t: 's', rows: 31, cols: 91, owner: 'you'}));
   assert.equal(f.ptySizes.length, 1, 'a retained socket cannot resize a reused view');
   assert.equal(f.handle.isBound('alpha', 1), true);
   f.message(JSON.stringify({t: 's', rows: 31, cols: 91, owner: 'invalid'}));
   assert.equal(f.handle.isBound('alpha', 1), false, 'malformed controls still revoke authority');
   release();
+});
+
+for (const dimension of ['rows', 'cols'] as const) for (const value of [1001, 65535]) {
+  test(`wire-valid PTY ${dimension}=${value} preserves binding without resizing the view`, () => {
+    for (const owner of ['you', 'other', 'none']) {
+      const f = browserHandle();
+      try {
+        f.bound(); f.replay();
+        f.message(JSON.stringify({t: 's', rows: 37, cols: 101, [dimension]: value, owner}));
+        assert.equal(f.handle.isBound('alpha', 1), true, `${owner}: renderability is not identity authority`);
+        assert.deepEqual(f.ptySizes, [], 'oversized metadata never reaches the size/view callback');
+        assert.deepEqual(f.geometry, [], 'ownership metadata does not change replay geometry');
+        assert.deepEqual(f.output, [[]], 'the admitted empty replay is unchanged');
+        for (const size of [{rows: 2, cols: 1000}, {rows: 1000, cols: 2}]) {
+          f.message(JSON.stringify({t: 's', ...size, owner}));
+          assert.equal(f.handle.isBound('alpha', 1), true);
+        }
+        assert.deepEqual(JSON.parse(JSON.stringify(f.ptySizes)), [
+          {rows: 2, cols: 1000, owner}, {rows: 1000, cols: 2, owner},
+        ], 'ordinary renderable size updates resume on the same socket');
+      } finally {f.handle.dispose();}
+    }
+  });
+}
+
+test('PTY size metadata never establishes binding or admits a late acknowledgement', () => {
+  for (const missingBeforeReplay of [false, true]) {
+    const f = browserHandle();
+    try {
+      f.message(JSON.stringify({t: 's', rows: 1001, cols: 65535, owner: 'other'}));
+      assert.equal(f.handle.isBound('alpha', 1), false, 'size metadata is not an acknowledgement');
+      assert.deepEqual(f.ptySizes, []);
+      if (missingBeforeReplay) f.replay();
+      f.bound();
+      assert.equal(f.handle.isBound('alpha', 1), !missingBeforeReplay);
+      f.replay();
+      assert.equal(f.handle.isBound('alpha', 1), !missingBeforeReplay);
+    } finally {f.handle.dispose();}
+  }
+});
+
+test('malformed PTY controls still revoke binding irreversibly', () => {
+  const size = {t: 's', rows: 37, cols: 101, owner: 'other'};
+  const invalid = [0, 1, -1, 65536, 2.5, '37', true, null, [], {}];
+  const messages = [
+    ...(['rows', 'cols'] as const).flatMap(dimension => invalid.map(value => ({...size, [dimension]: value}))),
+    ...['invalid', 1, null].map(owner => ({...size, owner})),
+    {...size, t: 'unexpected'}, {t: 's'}, null, [], 's',
+  ];
+  for (const message of messages) {
+    const f = browserHandle();
+    try {
+      f.bound(); f.replay(); f.message(JSON.stringify(message));
+      assert.equal(f.handle.isBound('alpha', 1), false, JSON.stringify(message));
+      assert.deepEqual(f.ptySizes, [], 'malformed metadata is not rendered');
+      f.message(JSON.stringify(size)); f.bound();
+      assert.equal(f.handle.isBound('alpha', 1), false, 'ordinary metadata and another acknowledgement cannot restore authority');
+    } finally {f.handle.dispose();}
+  }
 });
 
 test('null and omitted inventory incarnations support ordinary lease I/O without dictation authority', () => {
