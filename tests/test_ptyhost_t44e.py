@@ -50,8 +50,10 @@ async def _exercise_disposable_host(monkeypatch, *, enabled):
         attached = (await handle.request({"op": "list"}))[0]["attached"]
         # A normal shell command and resize still cross the same PTY. Their
         # content and identifying values must never enter the trace.
-        await ptyhost.read_frame(reader)
-        await ptyhost.read_frame(reader)
+        # attach consumed C; the one D replay may already contain all startup
+        # output. A second unsolicited frame is not guaranteed before input.
+        kind, _snapshot = await asyncio.wait_for(ptyhost.read_frame(reader), timeout=5)
+        assert kind == b"D"
         writer.write(ptyhost.frame(b"D", b"stty size\r"))
         await writer.drain()
         initial_size = b"31 71" in await read_until(reader, b"31 71", timeout=10)
