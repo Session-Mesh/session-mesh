@@ -1,0 +1,14 @@
+OK PR open: open, not a draft
+OK head: head f9c45553deadbeefdeadbeefdeadbeefdeadbeef matches f9c45553
+WARN merge state: UNSTABLE only because of the informational macOS job
+OK base branch: main
+WARN CI checks: all green or skipped except the informational job: macos (arm64, informational)=pending
+OK base CI run: completed/success on main
+OK required checks: all present
+OK forbidden words and leaks: none detected
+OK attribution footers: none
+OK added Python files: none
+OK .github files: unchanged
+OK semver label: semver: patch
+OK changelog: changelog.d/418-thing.md added
+GO

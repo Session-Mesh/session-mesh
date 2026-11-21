@@ -1,1 +1,1 @@
-{"jobs":[{"name":"build","status":"in_progress","conclusion":null},{"name":"lint","status":"completed","conclusion":"success"}]}
+{"jobs":[{"name":"build","status":"in_progress","conclusion":""},{"name":"lint","status":"completed","conclusion":"success"}]}

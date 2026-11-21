@@ -50,6 +50,10 @@ run_case 411 f9c45553 deny-words.txt expected-nogo-411.txt 1
 run_case 412 f9c45553 deny-words.txt expected-nogo-412.txt 1
 run_case 413 f9c45553 deny-words.txt expected-nogo-413.txt 1
 run_case 414 f9c45553 deny-words.txt expected-nogo-414.txt 1
+run_case 415 f9c45553 deny-words.txt expected-415.txt 0
+run_case 418 f9c45553 deny-words.txt expected-418.txt 0
+run_case 419 f9c45553 deny-words.txt expected-nogo-419.txt 1
+run_case 421 f9c45553 deny-words.txt expected-nogo-421.txt 1
 
 # A non-numeric PR argument (a URL) is refused by usage; the fake gh would follow it.
 rc=0
@@ -97,13 +101,17 @@ if ! diff_expected "$saved_fixtures/expected-406.txt" "$TEST_LIB_SCRATCH/o406"; 
 fi
 FIXTURES=$saved_fixtures
 
-# 409: a token built at runtime (no token literal in the fixtures) -> KO and the value
-# must never reach the output.
+# 409: tokens built at runtime (no token literal in the fixtures) of several kinds ->
+# KO by type with line numbers, and no value must ever reach the output.
 cp -r "$FIXTURES" "$TEST_LIB_SCRATCH/fg409"
 tok="ghp_$(printf 'x%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)"
-sed_body=$(printf 'The bot published %s on the tracker.' "$tok")
-jq --arg b "$sed_body" '.body = $b' "$TEST_LIB_SCRATCH/fg409/pr-view-401.json" \
-    > "$TEST_LIB_SCRATCH/fg409/pr-view-409.json"
+aws="AK""IA""ABCDEFGHIJKLMNOP"
+slack="xox""b-1234-5678-abcdefghijklmnop"
+pem='-----BEGIN RSA PRIVATE ''KEY-----'
+base=$(cat "$TEST_LIB_SCRATCH/fg409/pr-view-401.json")
+printf '%s\n' "$base" \
+    | jq --arg b "The bot published $tok on the tracker. AWS key: $aws. Slack: $slack. $pem" \
+        '.body = $b' > "$TEST_LIB_SCRATCH/fg409/pr-view-409.json"
 saved_fixtures=$FIXTURES
 FIXTURES="$TEST_LIB_SCRATCH/fg409"
 rc=0
@@ -113,12 +121,32 @@ if [ "$rc" -ne 1 ]; then
     echo 'merge-gate 409: expected exit 1' >&2
     status=1
 fi
-grep -q 'token-like string (ghp_) on line 2' "$TEST_LIB_SCRATCH/o409" \
-    || { echo 'merge-gate 409: missing token report' >&2; status=1; }
-if grep -q "$tok" "$TEST_LIB_SCRATCH/o409" "$TEST_LIB_SCRATCH/e409"; then
-    echo 'merge-gate 409: the token value leaked into the output' >&2
+for t in 'token-like string (ghp_) on line 2' 'token-like string (AKIA) on line 2' 'token-like string (xoxb-) on line 2' 'token-like string (private key) on line 2'; do
+    grep -q "$t" "$TEST_LIB_SCRATCH/o409" \
+        || { echo "merge-gate 409: missing report '$t'" >&2; status=1; }
+done
+if grep -qE "$tok|$aws|$slack|BEGIN RSA" "$TEST_LIB_SCRATCH/o409" "$TEST_LIB_SCRATCH/e409"; then
+    echo 'merge-gate 409: a token value leaked into the output' >&2
     status=1
 fi
+FIXTURES=$saved_fixtures
+
+# gh cannot even answer (view fails) -> exit 2, with the exact wording.
+cp -r "$FIXTURES" "$TEST_LIB_SCRATCH/fgvf"
+: > "$TEST_LIB_SCRATCH/fgvf/view-fails"
+saved_fixtures=$FIXTURES
+FIXTURES="$TEST_LIB_SCRATCH/fgvf"
+rc=0
+if AGENT_TOOLS_DENY_FILE="$FIXTURES/deny-words.txt" "$tool" 401 f9c45553 \
+    > "$TEST_LIB_SCRATCH/ovf" 2> "$TEST_LIB_SCRATCH/evf"; then
+    echo 'merge-gate view-fails: expected exit 2, got 0' >&2
+    status=1
+else
+    rc=$?
+    [ "$rc" -eq 2 ] || { echo "merge-gate view-fails: expected exit 2, got $rc" >&2; status=1; }
+fi
+grep -q 'could not read PR #401 (gh exited with 3)' "$TEST_LIB_SCRATCH/evf" \
+    || { echo 'merge-gate view-fails: missing message' >&2; status=1; }
 FIXTURES=$saved_fixtures
 
 if [ "$status" -eq 0 ]; then echo 'merge-gate test: OK'; fi

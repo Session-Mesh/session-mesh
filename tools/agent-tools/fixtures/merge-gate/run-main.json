@@ -1,2 +1,3 @@
-[{"databaseId":2,"status":"completed","conclusion":"failure","headSha":"0000000000000000000000000000000000000000"},
- {"databaseId":3,"status":"completed","conclusion":"success","headSha":"f9c45553deadbeefdeadbeefdeadbeefdeadbeef"}]
+[{"databaseId":2,"workflow":"private-ci","status":"completed","conclusion":"failure","headSha":"0000000000000000000000000000000000000000"},
+ {"databaseId":3,"workflow":"private-ci","status":"completed","conclusion":"failure","headSha":"f9c45553deadbeefdeadbeefdeadbeefdeadbeef"},
+ {"databaseId":4,"workflow":"public-ci","status":"completed","conclusion":"success","headSha":"f9c45553deadbeefdeadbeefdeadbeefdeadbeef"}]

@@ -3,10 +3,12 @@
 # Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 # pr-status.sh — one line per open PR: number | title (40 bytes max) | author | draft |
-# head sha (8) | mergeStateStatus | checks that are not "pass" (draft PRs: "-"; lines whose
-# name contains "matrix.shard" are ignored). Last line: the time of the reading.
-# Env: REPO (default Session-Mesh/session-mesh). Exit codes: 0 = OK, 1 = finding,
-# 2 = usage or environment error (missing tool, gh error while reading the checks).
+# head sha (8) | mergeStateStatus | checks that are not "pass" (draft PRs: "-"; a PR
+# without any check: "(no checks yet)"; lines whose name contains "matrix.shard" are
+# ignored). Last line: the time of the reading.
+# Env: REPO (default Session-Mesh/session-mesh). Exit codes: 0 = OK, 2 = environment or
+# usage error (this tool never exits 1: it lists, it does not judge); gh pr list is given
+# --limit 200 so the count is not silently capped at 30.
 
 set -euo pipefail
 
@@ -24,7 +26,7 @@ need jq
 # One line per open PR, sorted by descending number, as TSV:
 # number<TAB>title<TAB>draft<TAB>sha<TAB>mergeState<TAB>author
 pr_rows() {
-    gh pr list -R "$REPO" --state open \
+    gh pr list -R "$REPO" --state open --limit 200 \
         --json number,title,isDraft,headRefOid,mergeStateStatus,author \
         --jq 'sort_by(-.number)[] | [.number, .title, .isDraft, .headRefOid, .mergeStateStatus, .author.login] | @tsv'
 }

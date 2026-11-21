@@ -1,6 +1,11 @@
-ruff and pytest	pytest	2026-11-21T13:59:26.5701340Z ================= FAILURES =================
-ruff and pytest	pytest	2026-11-21T13:59:26.5712276Z ESC[31mEESC[0m       AssertionError: route has no auth class.
-ruff and pytest	pytest	2026-11-21T13:59:26.5799999Z ESC[1mESC[31m##[error]ESC[0mProcess completed with exit code 1.
-frontend and Node tests	Node tests	2026-11-21T13:57:03.6582576Z   ✔ agent hooks: the guide fails gracefully (2.5ms)
-frontend and Node tests	Node tests	2026-11-21T13:57:04.4710000Z   ✔ pipefail handling: keeps the stream open and fails cleanly (1.2ms)
-frontend and Node tests	Node tests	2026-11-21T13:57:05.4799530Z ESC[33m✖ESC[0m the table is not broader (419ms)
+ruff and pytest	pytest	2026-11-21T13:59:26.0101340Z ============================= 1 failed, 100 passed in 61s =============================
+ruff and pytest	pytest	2026-11-21T13:59:26.0201340Z ESC[1m=== ESC[36mshort test summary info ESC[0m ESC[1m=== ESC[0m
+ruff and pytest	pytest	2026-11-21T13:59:26.0301340Z FAILED tests/x.py::test_y - TimeoutError: connection timed out after 30s
+ruff and pytest	pytest	2026-11-21T13:59:26.0401340Z ERROR tests/sub/dir/test_z.py - fixture "db" not found
+frontend and Node tests	Node tests	2026-11-21T13:59:26.0501340Z ESC[31mTypeErrorESC[0m: cannot read properties of undefined (reading "state")
+frontend and Node tests	Node tests	2026-11-21T13:59:26.0601340Z   ✔ agent hooks: the guide fails gracefully (2.5ms)
+frontend and Node tests	Node tests	2026-11-21T13:59:26.0701340Z   ✔ pipefail handling: keeps the stream open and fails cleanly (1.2ms)
+frontend and Node tests	Node tests	2026-11-21T13:59:26.0801340Z ESC[33m✖ESC[0m the table is not broader (419ms)
+ruff and pytest	pytest	2026-11-21T13:59:26.0901340Z ESC[1mESC[31m##[error]ESC[0mProcess completed with exit code 1.
+frontend and Node tests	Node tests	2026-11-21T13:59:26.1001340Z   ✔ agent hooks: the run fails fast when gh is missing (1.5ms)
+ruff and pytest	pytest	2026-11-21T13:59:26.1101340Z ESC[31m FAILED ESC[0m inside a mid-line marker must also match

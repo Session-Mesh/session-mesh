@@ -123,10 +123,11 @@ serve_view() {
     apply_jq "pr-view-$n.json"
 }
 
-head_for_merge() {
-    local n=$1
-    if [ -f "$STATE/seen-head-$n" ]; then
-        cat "$STATE/seen-head-$n"
+head_current() {
+    local n
+    n=$(pr_num)
+    if [ -e "$FIXTURES/head-moves-$n" ] && [ -f "$STATE/seen-head-$n" ]; then
+        printf 'f9c45553aaaaaaaabbbbbbbbccccccccdddddddd\n'
     else
         jq -r .headRefOid "$FIXTURES/pr-view-$n.json"
     fi
@@ -146,12 +147,23 @@ sub=${2:-}
 case "$cmd" in
     pr)
         check_repo_flag
+        if [ -e "$FIXTURES/view-fails" ]; then
+            echo 'gh: could not resolve the repository' >&2
+            exit 3
+        fi
         case "$sub" in
             list) apply_jq pr-list.json ;;
             checks)
-                # A PR without any check: gh exits 1 with no output.
+                # gh exits 0 with every check green, 8 when one is pending, and 1 both
+                # when a check failed and for a PR without any check (output empty).
                 if [ -f "$FIXTURES/checks-$(pr_num).txt" ]; then
                     cat "$FIXTURES/checks-$(pr_num).txt"
+                    state_column=$(cut -f2 "$FIXTURES/checks-$(pr_num).txt")
+                    if printf '%s\n' "$state_column" | grep -qE '^(fail|cancel)$'; then
+                        exit 1
+                    elif printf '%s\n' "$state_column" | grep -qE '^(pending)$'; then
+                        exit 8
+                    fi
                 else
                     exit 1
                 fi
@@ -172,8 +184,8 @@ case "$cmd" in
                     echo 'fake-gh: merge without --match-head-commit' >&2
                     exit 1
                 }
-                if [ "$mhc" != "$(head_for_merge "$(pr_num)")" ]; then
-                    echo 'fake-gh: --match-head-commit does not match the head read at gate time' >&2
+                if [ "$mhc" != "$(head_current "$(pr_num)")" ]; then
+                    echo 'fake-gh: --match-head-commit does not match the current head' >&2
                     exit 1
                 fi
                 if [ "$local_check" -lt 1 ]; then
@@ -198,13 +210,34 @@ case "$cmd" in
         ;;
     run)
         check_repo_flag
+        if [ -e "$FIXTURES/view-fails" ]; then
+            echo 'gh: could not resolve the repository' >&2
+            exit 3
+        fi
         case "$sub" in
-            list) branch_json ;;
+            list)
+                # Real gh honors --workflow and --limit; the fixtures carry a workflow
+                # field so the stub can filter, newest first.
+                w=$(after_arg --workflow)
+                lim=$(after_arg --limit)
+                b=$(after_arg --branch) || exit 1
+                f="run-$(printf '%s' "$b" | tr '/' '_').json"
+                if [ -n "$w" ]; then
+                    jq --arg w "$w" --argjson lim "${lim:-30}" \
+                        'map(select(.workflow == $w)) | .[0:$lim]' "$FIXTURES/$f"
+                else
+                    head -n "${lim:-30}" "$FIXTURES/$f"
+                fi
+                ;;
             view)
                 id=$(pr_arg)
                 # The ESC token stands for an ANSI escape sequence, so the tests check
                 # that tools strip them; the BOM models real --log-failed output.
                 if printf '%s\n' "${args[@]}" | grep -q -- '--log-failed'; then
+                    if [ -e "$FIXTURES/log-fails-$id" ]; then
+                        echo 'gh: the log dump could not be produced' >&2
+                        exit 4
+                    fi
                     printf '\xef\xbb\xbf'
                     sed 's/ESC/\x1b/g' "$FIXTURES/log-failed-$id.txt"
                 else

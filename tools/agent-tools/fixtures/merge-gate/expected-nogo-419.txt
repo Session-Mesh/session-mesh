@@ -1,0 +1,14 @@
+OK PR open: open, not a draft
+OK head: head f9c45553deadbeefdeadbeefdeadbeefdeadbeef matches f9c45553
+KO merge state: UNSTABLE with not-green checks: frontend and Node tests=fail
+OK base branch: main
+KO CI checks: not green: frontend and Node tests=fail
+OK base CI run: completed/success on main
+OK required checks: all present
+OK forbidden words and leaks: none detected
+OK attribution footers: none
+OK added Python files: none
+OK .github files: unchanged
+OK semver label: semver: patch
+OK changelog: changelog.d/419-thing.md added
+NO-GO

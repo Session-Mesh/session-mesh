@@ -10,9 +10,20 @@ export REPO=Session-Mesh/session-mesh
 export AGENT_TOOLS_DENY_FILE="$FIXTURES/deny-words.txt"
 status=0
 label='merge-do'
+tool="$here/../merge-do.sh"
+
+# A non-numeric PR argument is refused by usage (the real gh would follow the URL).
+if "$tool" 'https://github.com/Session-Mesh/session-mesh/pull/401' f9c45553 \
+    > "$TEST_LIB_SCRATCH/ourl" 2> "$TEST_LIB_SCRATCH/eurl"; then
+    echo "$label url: expected exit 2, got 0" >&2
+    status=1
+else
+    rc=$?
+    [ "$rc" -eq 2 ] || { echo "$label url: expected exit 2, got $rc" >&2; status=1; }
+fi
 
 # Without --yes: dry run, nothing is merged, exit 0.
-if "$here/../merge-do.sh" 401 f9c45553 \
+if "$tool" 401 f9c45553 \
     > "$TEST_LIB_SCRATCH/dry" 2> "$TEST_LIB_SCRATCH/dry.err"; then
     :
 else
@@ -23,8 +34,8 @@ if ! diff_expected "$FIXTURES/expected-dryrun.txt" "$TEST_LIB_SCRATCH/dry"; then
     status=1
 fi
 
-# With --yes: the gate gives GO, the merge happens, the merge sha is printed.
-if "$here/../merge-do.sh" 401 f9c45553 --yes \
+# With --yes: the gate gives GO, the merge pins the head read before the gate.
+if "$tool" 401 f9c45553 --yes \
     > "$TEST_LIB_SCRATCH/merge" 2> "$TEST_LIB_SCRATCH/merge.err"; then
     :
 else
@@ -40,8 +51,8 @@ if ! diff_expected "$FIXTURES/expected-merge.txt" "$TEST_LIB_SCRATCH/merge"; the
 fi
 
 # Head mismatch: the full head is read BEFORE the gate; it must start with <head8>.
-if "$here/../merge-do.sh" 403 f9c45553 --yes \
-    > "$TEST_LIB_SCRATCH/mismatch" 2> "$TEST_LIB_SCRATCH/mismatch.err"; then
+if "$tool" 403 f9c45553 --yes \
+    > "$TEST_LIB_SCRATCH/mismatch.out" 2> "$TEST_LIB_SCRATCH/mismatch.err"; then
     echo "$label mismatch: expected exit 1, got 0" >&2
     status=1
 fi
@@ -49,9 +60,9 @@ if ! diff_expected "$FIXTURES/expected-mismatch.err" "$TEST_LIB_SCRATCH/mismatch
     status=1
 fi
 
-# The stubbed gh pr merge fails (as it does when the head moved between the gate and
-# the merge): the tool must tell it and exit 1 while the gate said GO.
-if "$here/../merge-do.sh" 404 f9c45553 --yes \
+# The stubbed gh pr merge fails even with the pinned head (as it does for other
+# merge-time failures): the tool tells it and exits 1 while the gate said GO.
+if "$tool" 404 f9c45553 --yes \
     > "$TEST_LIB_SCRATCH/failmerge.out" 2> "$TEST_LIB_SCRATCH/failmerge.err"; then
     echo "$label fail-merge: expected exit 1, got 0" >&2
     status=1
@@ -63,20 +74,21 @@ if ! diff_expected "$FIXTURES/expected-failmerge.err" "$TEST_LIB_SCRATCH/failmer
     status=1
 fi
 
-# The head moves between the reading and the merge: the gate sees the moved head (which
-# still starts with <head8>), and the merge must stay pinned to the head read before.
-if "$here/../merge-do.sh" 405 f9c45553 --yes \
+# The head moves between the reading and the merge: the stub serves a new head
+# after the first view; real gh refuses --match-head-commit that no longer matches
+# the current head, so the pinned merge must be refused.
+if "$tool" 405 f9c45553 --yes \
     > "$TEST_LIB_SCRATCH/moves.out" 2> "$TEST_LIB_SCRATCH/moves.err"; then
-    :
+    echo "$label moves: expected exit 1, got 0" >&2
+    status=1
 else
-    echo "$label moves: expected exit 0" >&2
-    status=1
-fi
-if [ -s "$TEST_LIB_SCRATCH/moves.err" ]; then
-    echo "$label moves: unexpected stderr" >&2
-    status=1
+    rc=$?
+    [ "$rc" -eq 1 ] || { echo "$label moves: expected exit 1, got $rc" >&2; status=1; }
 fi
 if ! diff_expected "$FIXTURES/expected-moves.out" "$TEST_LIB_SCRATCH/moves.out"; then
+    status=1
+fi
+if ! diff_expected "$FIXTURES/expected-moves.err" "$TEST_LIB_SCRATCH/moves.err"; then
     status=1
 fi
 

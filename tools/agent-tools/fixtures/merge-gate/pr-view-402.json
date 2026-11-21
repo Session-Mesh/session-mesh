@@ -1,7 +1,7 @@
 {
   "state": "OPEN",
   "isDraft": false,
-  "headRefOid": "a1b2c3d4eeeeffff",
+  "headRefOid": "a1b2c3d4eeeeffffaaaaaaaa55555555bbbbbbbb",
   "mergeStateStatus": "BLOCKED",
   "title": "feat(accounts): thing two",
   "baseRefName": "main",

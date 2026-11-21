@@ -1,0 +1,2 @@
+fake-gh: --match-head-commit does not match the current head
+merge-do.sh: gh pr merge failed (the branch head may have moved); nothing was merged.

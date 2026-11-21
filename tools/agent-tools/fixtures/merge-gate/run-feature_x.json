@@ -1,1 +1,1 @@
-[{"databaseId":8,"status":"completed","conclusion":"success","headSha":"aaaa0000bbbb1111cccc2222dddd3333eeee4444"}]
+[{"databaseId":8,"workflow":"public-ci","status":"completed","conclusion":"success","headSha":"aaaa0000bbbb1111cccc2222dddd3333eeee4444"}]
