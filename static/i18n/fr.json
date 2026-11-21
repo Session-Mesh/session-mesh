@@ -974,6 +974,8 @@
   "terminal.sizeTake": "Reprendre la taille",
   "terminal.limited": "Terminal en direct en mode limité : taille automatique, saisie différée et dictée indisponibles.",
   "terminal.limitedResize": "Adapter à ce panneau",
+  "terminal.limitedKeyboard": "Utiliser le clavier en direct",
+  "terminal.limitedKeyboardWaiting": "Attendez la fin du chargement du terminal, puis choisissez à nouveau Utiliser le clavier en direct.",
   "terminal.limitedInput": "Cette connexion ne peut pas vérifier les saisies différées. Le texte est conservé ; saisissez directement dans le terminal en direct.",
   "paneActions.inputIdentityInvalid": "Identité de saisie du terminal invalide.",
   "time.daysShort": "{n} j",

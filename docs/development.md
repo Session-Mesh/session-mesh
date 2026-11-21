@@ -94,7 +94,10 @@ incarnation-fenced, size-watching stream. Only that acknowledgment authorizes th
 Without confirmation, the browser receives `limited` before replay, keeps ordinary immediate
 keyboard input/output and exposes an explicit resize button. Automatic resize, parser replies,
 composer/attachment insertion and deferred phone input do not use that transport. No S ownership
-is invented. Reported geometry is a current pre-attach snapshot, not per-byte replay history or a
+is invented. On touch devices, **Use live keyboard** explicitly focuses xterm's keyboard after
+replay has finished. It sends immediate keys, keeps any buffered phone draft separate, and resets
+on a new socket; it does not enable capture, retention or deferred delivery. Reported geometry
+is a current pre-attach snapshot, not per-byte replay history or a
 promise of size updates from an old host. Unrenderable initial G metadata still revokes automation
 binding; the browser render cap remains 1000 per axis.
 
