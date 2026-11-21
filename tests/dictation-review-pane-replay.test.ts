@@ -127,7 +127,7 @@ test('Direct paste refuses replay before enqueue, retaining the field and Direct
   assert.equal(released, 1); assert.equal(f.scheduled.length, 0, 'Direct paste never invents Enter');
 });
 
-for (const kind of ['replacement', 'refused', 'multiline']) test(`Direct ${kind} refusal clears the field without sending hidden input`, () => {
+for (const kind of ['replacement', 'refused', 'multiline']) test(`Direct ${kind} refusal retains visible text and its origin without sending input`, () => {
   const f = fixture(), messages: [string, boolean][] = [];
   f.pane.conn.replaying = false; f.pane.term.modes = {bracketedPasteMode: false};
   Object.assign(f.context, {directInputCount: 0, lineDirect: {pane: f.pane}, line: {value: 'refused field text'},
@@ -136,7 +136,8 @@ for (const kind of ['replacement', 'refused', 'multiline']) test(`Direct ${kind}
   vm.runInContext(source.slice(source.indexOf('function pasteDirect('), source.indexOf('// Ctrl armed: the letter')), f.context);
   vm.runInContext(source.slice(source.indexOf('function flushDirectField('), source.indexOf('// The field changed and no composition')), f.context);
   assert.equal(f.context.flushDirectField('input', true), false);
-  assert.equal(f.context.line.value, '', 'a definite semantic refusal is not retained as hidden Direct text');
+  assert.equal(f.context.line.value, 'refused field text', 'refused text stays visible for review');
+  assert.equal(f.context.lineDirect.heldInputType, 'input', 'a later key must not reclassify it as typed text');
   assert.ok(f.context.lineDirect); assert.deepEqual(f.frames, []);
   assert.equal(messages.length, 1); assert.equal(messages[0]![1], true, 'the rejected following key is reported');
 });
