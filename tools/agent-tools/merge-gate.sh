@@ -9,11 +9,15 @@
 # Env: REPO, REQUIRED_CHECKS (one check name per line; the default below is used when
 # unset), AGENT_TOOLS_DENY_FILE (private deny list, one word per line, not in this repo;
 # comments and blank lines are ignored; a missing or empty list is a WARN).
-# Leak rules: forbidden words and token-like strings (ghp_, github_pat_, sk- preceded by a
-# non-alphanumeric character) fail the gate, and a token is NEVER printed, only its type
-# and the line; home paths (only /home/user and /home/USER are excused) and long runs of
-# hexadecimal characters are WARN only; in the diff the token scan only looks at added
-# lines.
+# Leak rules: forbidden words and token-like strings fail the gate, and a token is NEVER
+# printed, only its type and the line; a token type is one of ghp_, gho_/ghu_/ghs_/ghr_,
+# github_pat_, sk- (preceded by a non-alphanumeric character), xoxb-/xoxp- (Slack),
+# AKIA + 16 uppercase alphanumerics (AWS) and a "-----BEGIN ... PRIVATE KEY-----" block;
+# home-directory paths (only /home/user and /home/USER are excused; /Users/ and /root/
+# are flagged like /home/) and long runs of hexadecimal characters are WARN only;
+# in the diff the token scan only looks at added lines of a hunk; any zero-width
+# character (U+200B, U+200C, U+200D, U+2060, U+FEFF) is removed from the scanned text
+# so it cannot hide a word from the list.
 
 set -euo pipefail
 
@@ -54,6 +58,53 @@ fi
 join2() {
     awk '{ if (NR > 1) printf "; "; printf "%s", $0 } END { printf "\n" }'
 }
+# Control characters (except newline) never land in a printed filename.
+clean() {
+    tr '\000-\010\013\014\016-\037' '?'
+}
+# A token value is never printed: mask every token shape before showing a line.
+# shellcheck disable=SC2016
+mask() {
+    sed -E \
+        -e 's/gh[psour]_[A-Za-z0-9]+/[token]/g' \
+        -e 's/github_pat_[A-Za-z0-9_]+/[token]/g' \
+        -e 's/(^|[^A-Za-z0-9])(sk-[A-Za-z0-9][A-Za-z0-9_-]*)/\1[token]/g' \
+        -e 's/xox[bp]-[A-Za-z0-9-]+/[token]/g' \
+        -e 's/AKIA[0-9A-Z]+/[token]/g' \
+        -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----[[:print:][:space:]]*-----END [A-Z ]*PRIVATE KEY-----/[private key]/g' \
+        -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----/[private key]/g'
+}
+# Zero-width characters are invisible but defeat substring matching: drop them.
+no_zero_width() {
+    sed -e 's/\xe2\x80\x8b//g' -e 's/\xe2\x80\x8c//g' -e 's/\xe2\x80\x8d//g' \
+        -e 's/\xe2\x81\xa0//g' -e 's/\xef\xbb\xbf//g'
+}
+
+# Token types, each with its detection expression (grep -E, POSIX portable: no awk
+# interval that an old mawk silently ignores).
+declare -a TOKEN_NAMES=(ghp_ gho_ github_pat_ sk- xoxb- AKIA 'private key')
+declare -a TOKEN_RES=(
+    'ghp_[A-Za-z0-9]{16,}'
+    'gh[ours]_[A-Za-z0-9]{16,}'
+    'github_pat_[A-Za-z0-9_]{20,}'
+    '(^|[^A-Za-z0-9])sk-[A-Za-z0-9][A-Za-z0-9_-]{19,}'
+    'xox[bp]-[A-Za-z0-9-]{10,}'
+    'AKIA[0-9A-Z]{16}'
+    '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+)
+
+report_tokens() { # report_tokens <text>: "token-like string (<type>) on line N" lines
+    local text=$1 i name re
+    for i in "${!TOKEN_NAMES[@]}"; do
+        name=${TOKEN_NAMES[$i]}
+        re=${TOKEN_RES[$i]}
+        if printf '%s\n' "$text" | grep -nE -e "$re" >/dev/null 2>&1; then
+            printf '%s\n' "$text" | grep -nE -e "$re" | cut -d: -f1 | while read -r ln; do
+                printf 'token-like string (%s) on line %s\n' "$name" "$ln"
+            done
+        fi
+    done
+}
 
 view_rc=0
 view=$(gh pr view "$pr" -R "$REPO" \
@@ -69,9 +120,9 @@ is_draft=$(jq -r .isDraft <<< "$view")
 head=$(jq -r .headRefOid <<< "$view")
 base=$(jq -r .baseRefName <<< "$view")
 merge_state=$(jq -r .mergeStateStatus <<< "$view")
-title=$(jq -r .title <<< "$view")
-body=$(jq -r .body <<< "$view")
-commit_msgs=$(jq -r '.commits[] | .messageHeadline + "\n" + (.messageBody // "")' <<< "$view")
+title=$(no_zero_width <<< "$(jq -r .title <<< "$view")")
+body=$(no_zero_width <<< "$(jq -r .body <<< "$view")")
+commit_msgs=$(no_zero_width <<< "$(jq -r '.commits[] | .messageHeadline + "\n" + (.messageBody // "")' <<< "$view")")
 
 verdict=GO
 ok() { printf 'OK %s: %s\n' "$1" "$2"; }
@@ -89,19 +140,7 @@ case $head in
     *) ko 'head' "head $head does not match $head8" ;;
 esac
 
-if [ "$merge_state" = "CLEAN" ]; then
-    ok 'merge state' 'CLEAN'
-else
-    ko 'merge state' "$merge_state"
-fi
-
-if [ "$base" = "main" ] || [[ $base == release/* ]]; then
-    ok 'base branch' "$base"
-else
-    ko 'base branch' "not main or release/*: $base"
-fi
-
-# gh pr checks exits 0 when everything passes, 8 with pending checks, and 1 both for
+# gh pr checks exits 0 with everything green, 8 with pending checks, and 1 both for
 # failing checks and for a PR without any check (output empty). Any other code means the
 # check data could not be read at all (network, authentication).
 checks_out=''
@@ -133,11 +172,26 @@ while IFS= read -r line; do
 done <<< "$checks_out" || true
 if [ -n "$bad_checks" ]; then bad_checks=$(printf '%s' "$bad_checks" | join2); fi
 if [ -n "$tolerated" ]; then tolerated=$(printf '%s' "$tolerated" | join2); fi
+
+if [ "$merge_state" = "CLEAN" ]; then
+    ok 'merge state' 'CLEAN'
+elif [ "$merge_state" = "UNSTABLE" ] && [ -z "$bad_checks" ] && [ -n "$tolerated" ]; then
+    warn 'merge state' 'UNSTABLE only because of the informational macOS job'
+elif [ "$merge_state" = "UNSTABLE" ]; then
+    ko 'merge state' "UNSTABLE with not-green checks: $bad_checks"
+else
+    ko 'merge state' "$merge_state"
+fi
+
+if [ "$base" = "main" ] || [[ $base == release/* ]]; then
+    ok 'base branch' "$base"
+else
+    ko 'base branch' "not main or release/*: $base"
+fi
+
 if [ -n "$bad_checks" ]; then
-    bad_checks=$(printf '%s' "$bad_checks" | join2)
     ko 'CI checks' "not green: $bad_checks"
 elif [ -n "$tolerated" ]; then
-    tolerated=$(printf '%s' "$tolerated" | join2)
     warn 'CI checks' "all green or skipped except the informational job: $tolerated"
 else
     ok 'CI checks' 'all green'
@@ -148,11 +202,13 @@ base_sha=$(gh api "repos/$REPO/branches/$base" --jq .commit.sha) || {
     echo "error: could not read branch $base (gh exited with $?)." >&2
     exit 2
 }
+runs_rc=0
 runs=$(gh run list -R "$REPO" --branch "$base" --workflow public-ci --limit 20 \
-        --json databaseId,status,conclusion,headSha) || {
-    echo "error: could not read the public-ci runs of $base (gh exited with $?)." >&2
+        --json databaseId,status,conclusion,headSha) && runs_rc=0 || runs_rc=$?
+if [ "$runs_rc" -ne 0 ]; then
+    echo "error: could not read the public-ci runs of $base (gh exited with $runs_rc)." >&2
     exit 2
-}
+fi
 read -r run_status run_concl < <(
     jq -r --arg sha "$base_sha" \
         '([.[] | select(.headSha == $sha)][0] // null |
@@ -207,40 +263,39 @@ if [ "$diff_rc" -ne 0 ]; then
     exit 2
 fi
 
-# Only added lines of the diff (out of the +++ header) enter the leak scans.
-added_lines=$(printf '%s\n' "$diff" | awk '/^\+\+\+/ {next} /^\+/ {print substr($0, 2)}')
+# Added lines are the "+" lines of a hunk (tracked from the @@ header), so a content
+# line that starts with "+++" is NOT mistaken for a file header.
+added_lines=$(printf '%s\n' "$diff" | awk '
+    /^diff --git/ { inhunk = 0; next }
+    /^--- /       { next }
+    /^\+\+\+ /    { next }
+    /^@@/         { inhunk = 1; next }
+    /^\+/         { if (inhunk) print substr($0, 2) }
+')
+diff=$(no_zero_width <<< "$diff")
 
 full_text=$(printf '%s\n%s\n%s\n%s\n' "$title" "$body" "$commit_msgs" "$diff")
 token_scan=$(printf '%s\n%s\n%s\n%s\n' "$title" "$body" "$commit_msgs" "$added_lines")
 
-# Tokens are reported by TYPE and line, never by value.
-token_re='(^|[^A-Za-z0-9])(ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9][A-Za-z0-9_-]{19,})'
-token_hits=$(printf '%s\n' "$token_scan" \
-    | awk -v re="$token_re" \
-        '$0 ~ re {
-            if ($0 ~ /ghp_[A-Za-z0-9]{16,}/) t = "ghp_"
-            else if ($0 ~ /github_pat_[A-Za-z0-9_]{20,}/) t = "github_pat_"
-            else t = "sk-"
-            print "token-like string (" t ") on line " NR
-        }' || true)
+token_reports=$(report_tokens "$token_scan")
 forbidden=''
 if [ -s "$patterns" ]; then
     forbidden=$(grep -iF -f "$patterns" <<< "$full_text" || true)
     if [ -n "$forbidden" ]; then
-        forbidden=$(printf '%s\n' "$forbidden" | head -n 3)
+        forbidden=$(printf '%s\n' "$forbidden" | head -n 3 | mask)
     fi
 fi
-report=$(printf '%s\n%s\n' "$token_hits" "$forbidden" | awk 'length($0) > 0 {print}' || true)
-if [ -n "$report" ]; then
-    ko 'forbidden words and leaks' "$(printf '%s\n' "$report" | head -n 3 | join2)"
+combined=$(printf '%s\n%s\n' "$token_reports" "$forbidden" | awk 'length($0) > 0')
+if [ -n "$combined" ]; then
+    ko 'forbidden words and leaks' "$(printf '%s\n' "$combined" | head -n 6 | join2 | mask)"
 else
     home_paths=$(printf '%s\n' "$full_text" \
-        | grep -oE '[/]home[/][^[:space:]/"]*' || true)
+        | grep -oE '[/](home|Users|root)[/][^[:space:]/"]*' || true)
     home_paths=$(printf '%s\n' "$home_paths" | grep -vE '^[/]home[/](user|USER)$' || true)
     hex_hits=$(printf '%s\n' "$added_lines" | grep -ioE '[a-f0-9]{40,}' || true)
-    soft_lines=$(printf '%s\n%s\n' "$home_paths" "$hex_hits" | awk 'length($0) > 0 {print}' || true)
+    soft_lines=$(printf '%s\n%s\n' "$home_paths" "$hex_hits" | awk 'length($0) > 0')
     if [ -n "$soft_lines" ]; then
-        warn 'forbidden words and leaks' "non-blocking leaks (home paths, long hex): $(printf '%s\n' "$soft_lines" | head -n 4 | join2)"
+        warn 'forbidden words and leaks' "non-blocking leaks (home paths, long hex): $(printf '%s\n' "$soft_lines" | head -n 4 | join2 | mask)"
     elif [ ! -s "$patterns" ]; then
         warn 'forbidden words and leaks' 'private deny list missing or empty; generic leaks: none'
     else
@@ -251,7 +306,7 @@ fi
 attr=$(printf '%s\n' "$commit_msgs" \
     | grep -iE '^[[:space:]]*co-authored-by:|generated with \[claude|🤖[[:space:]]*generated with' || true)
 if [ -n "$attr" ]; then
-    ko 'attribution footers' "$(printf '%s\n' "$attr" | head -n 3 | join2)"
+    ko 'attribution footers' "$(printf '%s\n' "$attr" | head -n 3 | join2 | mask)"
 else
     ok 'attribution footers' 'none'
 fi
@@ -265,25 +320,32 @@ if [ "$files_rc" -ne 0 ]; then
 fi
 files=$(jq -s 'add' <<< "$files_raw")
 
-py_added=$(jq -r '.[] | select((.status == "added" and (.filename | endswith(".py"))) or (.status == "renamed" and (.previous_filename == null) and (.filename | endswith(".py")))) | .filename' <<< "$files")
-if [ "${py_added:-}" ]; then
-    if [ "$allow_new_python" = "yes" ]; then
-        ok 'added Python files' "allowed by --allow-new-python: $(printf '%s\n' "$py_added" | join2)"
-    else
-        ko 'added Python files' "$(printf '%s\n' "$py_added" | join2)"
-    fi
+# A .py that arrived by rename is new Python unless the previous path was already .py.
+py_added=$(jq -r '.[] | select(.status == "added" and (.filename | endswith(".py"))) | .filename' <<< "$files")
+py_renamed_new=$(jq -r '.[] | select(.status == "renamed" and (.filename | endswith(".py")) and (((.previous_filename // "") | endswith(".py")) | not)) | .filename' <<< "$files")
+py_moved=$(jq -r '.[] | select(.status == "renamed" and (.filename | endswith(".py")) and ((.previous_filename // "") | endswith(".py"))) | .filename + " moved from " + (.previous_filename // "?") + " (was already .py)"' <<< "$files")
+py_list=$(printf '%s\n%s\n' "$py_added" "$py_renamed_new" | awk 'length($0) > 0' | clean | join2)
+py_moved_list=$(printf '%s\n' "${py_moved:-}" | clean | join2)
+if [ -n "$py_list" ] && [ "$allow_new_python" != "yes" ]; then
+    ko 'added Python files' "$py_list"
+    [ "${py_moved:-}" ] && warn 'added Python files' "$py_moved_list"
+elif [ -n "$py_list" ]; then
+    ok 'added Python files' "allowed by --allow-new-python: $py_list"
+elif [ "${py_moved:-}" ]; then
+    warn 'added Python files' "$py_moved_list"
 else
     ok 'added Python files' 'none'
 fi
 
-workflows=$(jq -r '.[] | select(.filename | startswith(".github/workflows/")) | .filename' <<< "$files")
-other_github=$(jq -r '.[] | select((.filename | startswith(".github/")) and ((.filename | startswith(".github/workflows/")) | not)) | .filename' <<< "$files")
+# A workflow file that was renamed OUT of .github/workflows/ is still a workflow change.
+workflows=$(jq -r '.[] | select(((.filename | startswith(".github/workflows/")) or ((.previous_filename // "") | startswith(".github/workflows/")))) | .filename' <<< "$files")
+other_github=$(jq -r '.[] | select((.filename | startswith(".github/")) and ((.filename | startswith(".github/workflows/")) | not) and (((.previous_filename // "") | startswith(".github/workflows/")) | not)) | .filename' <<< "$files")
 if [ "${workflows:-}" ] && [ "$allow_workflow" != "yes" ]; then
-    ko '.github files' "workflow files changed: $(printf '%s\n' "$workflows" | join2)"
+    ko '.github files' "workflow files changed: $(printf '%s\n' "$workflows" | clean | join2)"
 elif [ "${workflows:-}" ]; then
-    warn '.github files' "workflow changes allowed: $(printf '%s\n' "$workflows" | join2)"
+    warn '.github files' "workflow changes allowed: $(printf '%s\n' "$workflows" | clean | join2)"
 elif [ "${other_github:-}" ]; then
-    warn '.github files' "outside workflows changed: $(printf '%s\n' "$other_github" | join2)"
+    warn '.github files' "outside workflows changed: $(printf '%s\n' "$other_github" | clean | join2)"
 else
     ok '.github files' 'unchanged'
 fi
@@ -297,7 +359,7 @@ fi
 
 changelog_file=$(jq -r '.[] | select(.status == "added" and (.filename | startswith("changelog.d/"))) | .filename' <<< "$files")
 if [ "${changelog_file:-}" ]; then
-    ok 'changelog' "$changelog_file added"
+    ok 'changelog' "$(printf '%s' "$changelog_file" | clean) added"
 elif printf '%s' "$body" | grep -q 'Changelog: none'; then
     ok 'changelog' 'the body contains Changelog: none'
 else

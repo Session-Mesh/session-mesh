@@ -1,0 +1,9 @@
+cla	pass	15s	https://ci/url
+ruff and pytest (without browser)	pass	6m0s	https://ci/url
+frontend and Node tests	pass	8m0s	https://ci/url
+OCaml build, tests and native ptyhost gate	pass	6m30s	https://ci/url
+native PTY host (linux-x86_64)	pass	22s	https://ci/url
+leak check (public rules)	pass	20s	https://ci/url
+CodeRabbit	pass	10m0s	https://ci/url
+browser tests (Chromium, shard 0 of 4)	pass	6m40s	https://ci/url
+macos (arm64, informational)	pending	0	https://ci/url

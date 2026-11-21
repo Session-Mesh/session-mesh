@@ -1,7 +1,7 @@
 {
   "state": "OPEN",
   "isDraft": false,
-  "headRefOid": "eeeeeeee00000000ffffffff00001111",
+  "headRefOid": "eeeeeeee00000000ffffffff0000111122223333",
   "mergeStateStatus": "CLEAN",
   "baseRefName": "main",
   "title": "fix(sessions): keep a renamed session's name",

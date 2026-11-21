@@ -1,4 +1,6 @@
 [{"filename":"tests/new_thing.py","status":"added"},
- {"filename":"renamed_py.py","status":"renamed"},
+ {"filename":"renamed_py.py","status":"renamed","previous_filename":"renamed_py.txt"},
+ {"filename":"moved_dupe.py","status":"renamed","previous_filename":"old/moved_dupe.py"},
+ {"filename":"repo-ci.yml","status":"renamed","previous_filename":".github/workflows/ci.yml"},
  {"filename":"docs/x.md","status":"modified"},
- {"filename":".github/workflows/ci.yml","status":"modified"}]
+ {"filename":".github/workflows/release.yml","status":"modified"}]

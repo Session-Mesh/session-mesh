@@ -1,5 +1,5 @@
 OK PR open: open, not a draft
-OK head: head f9c45553deadbeef matches f9c45553
+OK head: head f9c45553deadbeefdeadbeefdeadbeefdeadbeef matches f9c45553
 OK merge state: CLEAN
 OK base branch: main
 OK CI checks: all green

@@ -1,4 +1,4 @@
-KO forbidden word: A word: Example-Private-Repository
-KO token-like string (ghp_) on line 2
-KO /home/ path: /home/alice
+KO forbidden word: A word: Example-Private-Repository [token]
+KO token-like string (ghp_) on line 1
+KO user-directory path: /home/alice
 comment-do.sh refuses to post (see the KO above).

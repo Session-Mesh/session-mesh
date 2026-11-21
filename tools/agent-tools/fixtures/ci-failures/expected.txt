@@ -1,5 +1,8 @@
 === ruff and pytest ===
-E       AssertionError: route has no auth class.
+FAILED tests/x.py::test_y - TimeoutError: connection timed out after 30s
+ERROR tests/sub/dir/test_z.py - fixture "db" not found
 ##[error]Process completed with exit code 1.
+ FAILED  inside a mid-line marker must also match
 === frontend and Node tests ===
+TypeError: cannot read properties of undefined (reading "state")
 ✖ the table is not broader (419ms)

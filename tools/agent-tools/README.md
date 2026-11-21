@@ -9,12 +9,13 @@ judgement, so work goes faster, costs fewer tokens and has fewer mistakes.
 - Language: bash, `gh`, `jq`, `sed`, `awk`. No Python. A tool that outgrows bash is rewritten in OCaml or TypeScript.
 - **Read-only by default.** A tool that writes (merge, post a comment) has a name ending in `-do` and also needs
   `--yes`. Without `--yes` it prints what it would do.
-- A tool never prints a secret or a token (it prints only the type and the line) and never reads credentials
-  or any agent's configuration folder.
+- A tool never prints a secret or a token (only the type and the line, and every displayed line has token
+  shapes masked with `[token]`); it never reads credentials or any agent's configuration folder.
 - No path of one person's machine inside a tool: locations come from the environment (see each tool's header).
-- Exit codes: 0 = OK or GO, 1 = NO-GO or finding, 2 = usage or environment error.
-- Every tool has a test, `tests/<tool>.test.sh`, that runs it against a fake `gh` (a stub placed first on `PATH`)
-  with files from `fixtures/<tool>/` and compares with an expected output. `./selftest-all.sh` runs them all.
+- Exit codes: 0 = OK or GO, 1 = NO-GO or finding, 2 = usage or environment error (`pr-status.sh` never exits 1:
+  it lists, it does not judge). `gh pr list` is given `--limit 200`.
+- Every tool has a test, `tests/<tool>.test.sh`, that runs it against a fake `gh` (a stub placed first on `PATH`
+  with files from `fixtures/<tool>/`) and compares with an expected output. `./selftest-all.sh` runs them all.
 - A tool is trusted once its test passes, `shellcheck` is silent (when installed) and a person other than its author
   has read it.
 
@@ -22,17 +23,20 @@ judgement, so work goes faster, costs fewer tokens and has fewer mistakes.
 
 `merge-gate.sh` and `comment-do.sh` refuse text that contains a word from a private list. The list is **not in this
 repository**: put one word per line, case-insensitive, in the file named by `AGENT_TOOLS_DENY_FILE` (default
-`${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/deny-words.txt`). `deny-words.example.txt` shows the format. Without
-the file the generic checks still run (token-like strings, home-directory paths, attribution footers) and the tool
-says that the private list is missing.
+`${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/deny-words.txt`). `deny-words.example.txt` shows the format. Zero-width
+characters are stripped before matching. Without the file the generic checks still run (token-like strings,
+home-directory paths, attribution footers) and the tool says that the private list is missing.
+Token-like strings: `ghp_`, `gho_`/`ghu_`/`ghs_`/`ghr_`, `github_pat_`, `sk-` (preceded by a non-alphanumeric
+character), `xoxb-`/`xoxp-` (Slack), `AKIA` + 16 uppercase alphanumerics (AWS) and `-----BEGIN ... PRIVATE KEY-----`
+blocks. Home-directory paths: `/home/`, `/Users/`, `/root/` (only `/home/user` and `/home/USER` are excused).
 
 ## Tools
 
 | Tool | What it does | Writes? |
 |---|---|---|
-| `pr-status.sh` | open PRs: head, merge state, checks that are not green | no |
-| `ci-failures.sh <pr>` | failing jobs of a run of the PR head: fixed-pattern log lines (✖, " FAILED ", AssertionError, TypeError, ##[error], lines starting with `not ok`) | no |
-| `merge-gate.sh <pr> <head8>` | GO / NO-GO checklist before a merge (checks, run of the base head, required checks, leaks, Python, .github, semver, changelog) | no |
+| `pr-status.sh` | open PRs (up to 200): head, merge state, checks that are not green | no |
+| `ci-failures.sh <pr>` | failing jobs of the run of the PR head: fixed-pattern log lines (`^FAILED `, `^ERROR `, " FAILED ", ✖, AssertionError, TypeError, ##[error], `^not ok`), a run still in progress prints the job states, a green run prints one line | no |
+| `merge-gate.sh <pr> <head8>` | GO / NO-GO checklist before a merge (checks, run of the base head, required checks, leaks, Python (renames included), .github/workflows, semver, changelog; UNSTABLE accepted when the informational macOS job is the single non-green one) | no |
 | `merge-do.sh <pr> <head8> --yes` | merge (rebase) after a GO, pinned to the head commit read before the gate | yes |
 | `comment-do.sh <pr\|issue> <number> <file> --yes` | post a comment after the leak checks | yes |
 
