@@ -4677,6 +4677,119 @@ def _require_owner_cookie(request):
         raise web.HTTPUnauthorized()
 
 
+# ---- Account profiles and confirmation preferences (docs/backend-account-profiles.md, "HTTP routes"): the owner's
+# browser reads and edits them through `mesh-profile --http OP`, which holds the registry, the store and every
+# refusal. Only these six operations have a route: profiles.resolve (it returns folders) and any switch stay on the
+# host. The server checks the caller and the request's bounds, then relays the helper's envelope and its status.
+ACCOUNTS_ROUTES = {"/api/accounts/profiles": "profiles.list", "/api/accounts/consent": "consent.get",
+                   "/api/accounts/consent/set-global": "consent.set_global",
+                   "/api/accounts/consent/set-pair": "consent.set_pair",
+                   "/api/accounts/consent/remove-pair": "consent.remove_pair",
+                   "/api/accounts/consent/reset": "consent.reset"}
+ACCOUNTS_MAX_BODY, ACCOUNTS_TIMEOUT, ACCOUNTS_MAX_REPLY = 16384, 5.0, 1024 * 1024
+ACCOUNTS_SLOTS = asyncio.Semaphore(4)
+_ACCOUNTS_STATUSES = frozenset((200, 400, 404, 409, 413, 503))
+_ACCOUNTS_PUBLIC_PROFILE = {"id", "label", "backend", "enabled", "context_revision", "switch_qualified"}
+_ACCOUNTS_CODE_RE = re.compile(r"[a-z0-9-]{1,64}")
+
+
+def accounts_refusal(status, code):
+    """A refusal the server gives itself, in the helper's envelope (the page reads both the same way)."""
+    return web.json_response({"http_status": status, "version": 1, "ok": False, "code": code}, status=status,
+                             headers={"Cache-Control": "no-store"})
+
+
+async def _profile_run(op, body):
+    """(exit code, first line) of `mesh-profile --http OP` given BODY, or None: no helper, no start, no complete
+    line within the time limit. Closed argv, its own process group, an environment that names the config folder
+    only (no token, credential or provider variable of the server's)."""
+    command, proc = work_command("mesh-profile"), None
+    if command is None:
+        return None
+    async with ACCOUNTS_SLOTS:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                command, "--http", op, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL, limit=ACCOUNTS_MAX_REPLY, start_new_session=True,
+                env={"MESH_CONF_DIR": str(CONF_DIR), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"})
+            proc.stdin.write(body)
+            proc.stdin.close()
+            out, code = await asyncio.wait_for(asyncio.gather(proc.stdout.readline(), proc.wait()), ACCOUNTS_TIMEOUT)
+        except (OSError, ValueError, asyncio.TimeoutError) as exc:   # ValueError: a line over the cap
+            print(f"accounts: mesh-profile {op} gave no answer: {type(exc).__name__}", flush=True)
+            return None
+        finally:
+            if proc is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                proc._transport.close()  # unread output would keep wait() pending (Python 3.11, 3.12)
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(proc.wait(), 5)
+    return code, out
+
+
+def _profile_envelope(op, code, out):
+    """The helper's reply when it is exactly its envelope (closed keys, a known status that agrees with `ok` and
+    with the exit code; public profile fields only for profiles.list), else None."""
+    try:
+        reply = json.loads(out)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(reply, dict) or reply.get("version") != 1 or reply.get("ok") not in (True, False):
+        return None
+    ok, status = reply["ok"] is True, reply.get("http_status")
+    if set(reply) != {"http_status", "version", "ok", "data" if ok else "code"} or type(status) is not int:
+        return None
+    if status not in _ACCOUNTS_STATUSES or ok != (status == 200) or code != (0 if ok else 1):
+        return None
+    if not ok:
+        return reply if isinstance(reply["code"], str) and _ACCOUNTS_CODE_RE.fullmatch(reply["code"]) else None
+    if op == "profiles.list":
+        profiles = reply["data"].get("profiles") if isinstance(reply["data"], dict) else None
+        if not isinstance(profiles, list) or not all(isinstance(p, dict) and set(p) == _ACCOUNTS_PUBLIC_PROFILE
+                                                     for p in profiles):
+            return None
+    return reply
+
+
+async def _accounts_body(request):
+    """(body, None) for the helper, or (None, refusal): a JSON content type, 16 KiB at most, an object's text."""
+    if request.content_type != "application/json":
+        return None, accounts_refusal(415, "unsupported-media-type")
+    body = b""   # read at most one byte over the cap: a larger body is refused unread
+    while len(body) <= ACCOUNTS_MAX_BODY and (chunk := await request.content.read(ACCOUNTS_MAX_BODY + 1 - len(body))):
+        body += chunk
+    if len(body) > ACCOUNTS_MAX_BODY:
+        return None, accounts_refusal(413, "request-too-large")
+    if not body.lstrip().startswith(b"{"):   # the helper checks the rest
+        return None, accounts_refusal(400, "invalid-request")
+    return body, None
+
+
+async def api_accounts(request):
+    """The six account routes: the owner's browser only (no Authorization header at all, the owner cookie, this
+    server's Origin on reads too, as for the update notes), then the helper's envelope with the status it names."""
+    _require_owner_cookie(request)
+    if not same_origin(request) or request.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+        raise web.HTTPForbidden()
+    op = ACCOUNTS_ROUTES[request.path]
+    if request.query:
+        return accounts_refusal(400, "invalid-request")
+    body = b"{}"
+    if request.method == "POST":
+        body, refusal = await _accounts_body(request)
+        if refusal is not None:
+            return refusal
+    ran = await _profile_run(op, body)
+    reply = _profile_envelope(op, *ran) if ran is not None else None
+    if reply is None:
+        if ran is not None:
+            print(f"accounts: mesh-profile {op} answered outside its envelope (exit {ran[0]})", flush=True)
+        return accounts_refusal(503, "backend-helper-unavailable")
+    return web.Response(body=ran[1], status=reply["http_status"], content_type="application/json",
+                        headers={"Cache-Control": "no-store"})
+
+
 async def api_agent_mail_consent(request):
     _require_owner_cookie(request)
     if request.query:
@@ -6063,6 +6176,13 @@ def make_app(*, session_request_path=None):
     app.router.add_post("/api/agent-mail/consent/{request_id}/decision",
                         api_agent_mail_consent_decision)
     app.router.add_post("/api/agent-mail/consent/revoke", api_agent_mail_consent_revoke)
+    # account profiles and confirmation preferences: no route for profiles.resolve, nor for any switch
+    app.router.add_get("/api/accounts/profiles", api_accounts)
+    app.router.add_get("/api/accounts/consent", api_accounts)
+    app.router.add_post("/api/accounts/consent/set-global", api_accounts)
+    app.router.add_post("/api/accounts/consent/set-pair", api_accounts)
+    app.router.add_post("/api/accounts/consent/remove-pair", api_accounts)
+    app.router.add_post("/api/accounts/consent/reset", api_accounts)
     app.router.add_get("/api/session-actions/@self/request", api_session_action_request)
     app.router.add_post("/api/session-actions/@self/request", api_session_action_request)
     app.router.add_get("/api/session-actions/@self/accounts", api_session_accounts)
