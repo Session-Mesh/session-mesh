@@ -1485,7 +1485,18 @@ class Pane {
     }
   }
   async pasteClipboard() {
-    try { this.term.paste(await navigator.clipboard.readText()); }
+    const c = this.conn, terminal = c?.terminal, socket = c?.ws, view = this.actionView;
+    const term = this.term, name = c?.name, created = c?.created;
+    const current = () => c && !c.closed && !c.ended && this.conn === c && c.terminal === terminal
+      && c.ws === socket && c.name === name && c.created === created && this.id === name
+      && this.term === term && this.actionView === view && !this.actionDisposed
+      && !this.termEl.hidden && localMeshEffectsAllowed() && terminal?.isBound(name, created);
+    if (!terminal?.isBound(name, created)) { flash(t("terminal.limitedInput")); return; }
+    if (!current()) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (current()) term.paste(text);
+    }
     catch { flash(t("clipboard.pasteDenied")); }
   }
   filesIn(files) {
