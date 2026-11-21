@@ -252,6 +252,19 @@ export function recordControlMessages(): void {
   };
 }
 
+/** recordControlMessages, in a browser set to the manual size mode (the client store key
+ * sizeTakeover, static/size-takeover.ts): the banner and its button, no automatic take-over.
+ * Self-contained, as it runs in the page. */
+export function recordControlMessagesManual(): void {
+  localStorage.setItem('mesh.sizeTakeover', '"manual"');
+  window.__sent = [];
+  const send = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (data) {
+    if (typeof data === 'string') window.__sent.push(JSON.parse(data));
+    return send.call(this, data);
+  };
+}
+
 function freePort(): Promise<number> {
   return new Promise(resolve => {
     const probe = net.createServer().listen(0, '127.0.0.1', () => {

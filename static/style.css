@@ -925,6 +925,11 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .config-card h4 { margin-top: 10px; }
 .config-card.config-launch, .config-card[data-section="paths"] { grid-column: 1 / -1; }
 .config-soon p { margin: 0; font-size: 13px; }
+.config-size-takeover fieldset { border: 0; margin: 10px 0 0; padding: 0; min-width: 0; }
+.config-size-takeover legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+.config-size-takeover .config-choice { display: flex; align-items: flex-start; gap: 8px; min-height: 32px; margin: 2px 0; font-size: 13px; overflow-wrap: anywhere; }
+.config-size-takeover .config-choice input { accent-color: var(--accent); flex: none; margin: 2px 0 0; }
+.config-size-takeover p { margin: 6px 0 0; font-size: 12px; }
 @media (max-width: 760px), (max-height: 500px) {
   #dlg-config { width: 100vw; height: 100dvh; max-height: none; border-radius: 0; border-width: 0; padding: 14px; margin: 0; }
   #dlg-config[open] { height: 100dvh; }

@@ -12,6 +12,7 @@
 import { SettingsShell, type ShellSection } from "./settings-shell.ts";
 import { LaunchEditor, parseElevation, parseLaunch, type LaunchNotice, type LaunchPorts } from "./config-launch-editor.ts";
 import { OperatorNameCard, type OperatorNamePorts } from "./config-operator-name.ts";
+import { sizeTakeoverCard, type SizeTakeoverPorts } from "./size-takeover.ts";
 
 export type ConfigTranslate = (key: string, params?: Record<string, string | number>) => string;
 export type ConfigLoad = () => Promise<{ state: "ok"; value: unknown } | { state: "error" }>;
@@ -154,8 +155,10 @@ export class ConfigPanel {
   private readonly elements: ConfigElements;
   private readonly ports: ConfigPorts;
   private readonly language: () => string;
-  constructor(elements: ConfigElements, ports: ConfigPorts, language: () => string) {
-    this.elements = elements; this.ports = ports; this.language = language;
+  /** This browser's own preferences (client store), applied at once, never sent to the server. */
+  private readonly device: SizeTakeoverPorts | null;
+  constructor(elements: ConfigElements, ports: ConfigPorts, language: () => string, device: SizeTakeoverPorts | null = null) {
+    this.elements = elements; this.ports = ports; this.language = language; this.device = device;
     elements.dialog.addEventListener("close", () => {
       this.generation += 1; this.editor?.dispose(); this.editor = null; this.disposeShell(); this.selected = null;
       elements.body.replaceChildren();
@@ -207,13 +210,18 @@ export class ConfigPanel {
     return card;
   }
 
+  private terminalCard(): HTMLElement {
+    const { device } = this;
+    return device === null ? this.soon("terminal") : sizeTakeoverCard(this.elements.dialog.ownerDocument, this.ports.t, device);
+  }
+
   // Where each existing card lives. Nothing moves between cards, only between sections.
   private layout(cards: readonly HTMLElement[], launch: HTMLElement, operator: HTMLElement): ShellSection[] {
     const { t } = this.ports;
     const pick = (...ids: string[]) => cards.filter((card) => ids.includes(card.dataset.section ?? ""));
     return [
       { id: "appearance", title: t("config.section.appearance"), cards: [operator, this.soon("appearance")] },
-      { id: "terminal", title: t("config.section.terminal"), cards: [this.soon("terminal")] },
+      { id: "terminal", title: t("config.section.terminal"), cards: [this.terminalCard()] },
       { id: "notifications", title: t("config.section.notifications"), cards: pick("notifications") },
       { id: "updates", title: t("config.section.updates"), cards: [this.soon("updates")] },
       { id: "agents", title: t("config.section.agents"), cards: [...pick("agents"), launch] },
@@ -264,6 +272,7 @@ export class ConfigPanel {
   }
 }
 
-export function createConfigPanel(elements: ConfigElements, ports: ConfigPorts, language: () => string): ConfigPanel {
-  return new ConfigPanel(elements, ports, language);
+export function createConfigPanel(elements: ConfigElements, ports: ConfigPorts, language: () => string,
+  device: SizeTakeoverPorts | null = null): ConfigPanel {
+  return new ConfigPanel(elements, ports, language, device);
 }

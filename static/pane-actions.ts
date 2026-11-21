@@ -5,6 +5,7 @@
 
 export { replayPrefix } from "./terminal-replay.ts";
 export { parsePtySize, sendsSize, sizePlan } from "./terminal-size-owner.ts";
+export { SIZE_TAKEOVER_KEY, listenForActivation, shouldTakeSize, showsSizeBanner, sizeTakeoverMode } from "./size-takeover.ts";
 
 // Displayed text comes from the app's catalogs. The app installs its translator
 // once they are loaded; until then (and in Node checks without one) a key reads
