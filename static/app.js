@@ -8360,7 +8360,11 @@ window.addEventListener("pagehide", (event) => {
 window.addEventListener("pageshow", (event) => {if (event.persisted) void resumeLocalPage();});
 // Cached focus must not overtake a choice made while inventory or the socket waited.
 document.addEventListener("focusin", () => { meshCacheFocusRevision++; });
-function retirePageInput() {
+function retirePageInput(preserveDraft = false) {
+  if (preserveDraft && composeOwner?.open && !composeOwner.pending && cdlg.open && ctext.value) {
+    composeRecovery.push({target: composeOwner.target, text: ctext.value,
+      result: {kind: "refused", frames: 0, wireBytes: 0, reason: t("compose.recovery.pageSuspended")}});
+  }
   endDirectLine();
   if (capActive && !capActive.file) resetCapture(capActive);
   linePending?.operation?.cancel();
@@ -8391,7 +8395,7 @@ function suspendLocalPage() {
   projectsGeneration++; workGeneration++;
   projectsController?.close(); workController?.close();
   inventoryPoller?.stop(); listBatch.cancel(); pageSignals?.dispose();
-  retirePageInput();
+  retirePageInput(true);
   for (const pane of panes) {
     pane.invalidateActionView(); pane.detach();
     const binding = bindings.get(pane);

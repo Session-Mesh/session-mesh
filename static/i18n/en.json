@@ -111,6 +111,7 @@
   "compose.recovery.refusedOutcome": "No frame queued locally; text kept.",
   "compose.recovery.summary": "To check: {target} · {kind}",
   "compose.recovery.unknownReason": "unknown",
+  "compose.recovery.pageSuspended": "Page suspended; unsent draft kept for review.",
   "compose.reviewPrevious": "review the previous result before creating a new draft",
   "compose.send": "Send ⏎",
   "compose.title": "Write in the terminal",
