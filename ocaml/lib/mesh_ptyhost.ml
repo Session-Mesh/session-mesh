@@ -514,6 +514,9 @@ let type_when_ready env s command =
   let rec wait () =
     Eio.Time.sleep clock 0.2;
     if s.finishing || s.created <> incarnation then ()
+      (* Nothing is typed during a stop: once it succeeds the command is
+         dropped above; if it fails, the command is typed as before. *)
+    else if s.agent_stopping then wait ()
     else if
       Eio.Time.now clock -. start >= 10.
       || (not (Mesh_pty_replay.is_empty s.replay))
