@@ -19,6 +19,7 @@ function fixture() {
     inventoryPoller: null, listBatch: {cancel() {}, request() {}}, pageSignals: null,
     localTerminalHandles: [], retirePageInput() {}, renderComposeStatus() {}, projecting: false,
     inlineDictation: null, renderInlineDictation() {},
+    dictation: null, syncDictationDraft() {},
     startInventory: async () => {}});
   vm.runInContext(source.slice(source.indexOf('function suspendLocalPage()'), source.indexOf('function disposeLocalInputScopes()')), context);
   function pane(id: string, created: number | null) {
