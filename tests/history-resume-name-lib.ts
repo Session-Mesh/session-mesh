@@ -6,6 +6,7 @@
 // make themselves identifiable the way the real ones are (a pid file, an open rollout, a fresh transcript).
 import assert from 'node:assert/strict';
 import {type ChildProcess, spawn} from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,10 +17,13 @@ import {waitFor} from './ptyhost-wire-lib.ts';
 
 export type Kind = 'claude' | 'codex' | 'pi';
 export const KINDS: Kind[] = ['claude', 'codex', 'pi'];
+// One prefix per test process: the fake agents of the files that run at the same time are seen by each other's
+// listings (a process named claude, an open rollout), and must not hold the same conversation.
+const RUN = crypto.randomBytes(4).toString('hex');
 export const SIDS: Record<Kind, string> = {
-  claude: '0a1b2c3d-1111-2222-3333-444444444441',
-  codex: '0a1b2c3d-1111-2222-3333-444444444442',
-  pi: '0a1b2c3d-1111-2222-3333-444444444443',
+  claude: `${RUN}-1111-2222-3333-444444444441`,
+  codex: `${RUN}-1111-2222-3333-444444444442`,
+  pi: `${RUN}-1111-2222-3333-444444444443`,
 };
 
 export type Mesh = {name: string; created: number; label: string | null;
@@ -33,13 +37,17 @@ function fakeAgents(bin: string): void {
   const TOKEN = `[ -n "$MESH_SESSION" ] && printf '%s' "$MESH_SESSION_TOKEN" > "${bin}/token-$MESH_SESSION"`;
   const write = (name: string, lines: string[]): void =>
     fs.writeFileSync(path.join(bin, name), ['#!/bin/sh', TOKEN, ...lines, LOOP, ''].join('\n'), {mode: 0o755});
-  write('claude', [
+  write('claude-body', [
     '[ "$1" = "--version" ] && exit 0',
     'sid=""; prev=""; for a in "$@"; do [ "$prev" = "--resume" ] && sid="$a"; prev="$a"; done',
     `[ -n "$sid" ] || sid=$(cat "${bin}/sid-claude")`,
     'mkdir -p "$HOME/.claude/sessions"',
     'printf \'{"sessionId":"%s","status":"idle"}\' "$sid" > "$HOME/.claude/sessions/$$.json"',
   ]);
+  // Started under the name claude, as the real one is: a restart or a restore reads its saved command, and refuses
+  // one run through a launcher it cannot read (`sh <script>`). bash, not sh: dash has no `exec -a`.
+  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/bash\nexec -a claude /bin/sh '${path.join(bin, 'claude-body')}' "$@"\n`,
+    {mode: 0o755});
   write('codex', [
     '[ "$1" = "--version" ] && { echo "codex-cli 0.1.0"; exit 0; }',
     `sid=""; for a in "$@"; do case "$a" in ${UUID}) sid="$a";; esac; done`,
