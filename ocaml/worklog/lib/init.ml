@@ -58,7 +58,7 @@ let init ~root ?(category = "main") ?(category_name = "Main") ?(product = "gener
       let text = taxonomy_text ~category ~category_name ~product in
       check_readable ~category ~category_name ~product text;
       Appendfile.mkdir_p root;
-      Appendfile.create_exclusive taxonomy text;
+      Appendfile.create_whole taxonomy text;
       write_new (Filename.concat root ".gitignore") gitignore_text;
       List.iter
         (fun d -> write_new (Filename.concat (Filename.concat root d) ".gitkeep") "")
