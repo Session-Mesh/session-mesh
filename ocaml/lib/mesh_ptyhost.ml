@@ -508,9 +508,12 @@ let orphan_grace = 0.5
 let type_when_ready env s command =
   let clock = Eio.Stdenv.clock env in
   let start = Eio.Time.now clock in
+  (* A command still waiting when [stop_agent_if] moved the incarnation on
+     belongs to the stopped agent: it is dropped, never typed later. *)
+  let incarnation = s.created in
   let rec wait () =
     Eio.Time.sleep clock 0.2;
-    if s.finishing then ()
+    if s.finishing || s.created <> incarnation then ()
     else if
       Eio.Time.now clock -. start >= 10.
       || (not (Mesh_pty_replay.is_empty s.replay))
@@ -542,6 +545,10 @@ let end_failed_session sessions owned s finish failure =
   List.iter Mesh_pty_output.close s.clients;
   ignore (Eio.Promise.try_resolve finish ())
 
+(* Seconds after a line was typed during which an idle shell is not taken
+   as running no agent ([stop_agent_if] answers [agent_starting]). *)
+let agent_start_window = 2.
+
 let agent_refusal reason =
   `Assoc [ ("ok", `Bool false); ("reason", `String reason) ]
 
@@ -564,6 +571,12 @@ let stop_agent env s agent =
   with
   | None -> agent_refusal "process_scan_failed"
   | Some (Mesh_pty_agent_stop.Refused reason) -> agent_refusal reason
+  (* An idle shell that was just sent a line may be about to start the agent:
+     the table read now would miss it. *)
+  | Some Mesh_pty_agent_stop.Idle
+    when Eio.Time.now (Eio.Stdenv.clock env) -. s.last_input
+         < agent_start_window ->
+      agent_refusal "agent_starting"
   | Some foreground -> (
       let group =
         match foreground with

@@ -320,6 +320,7 @@ describe('account switch requests', {skip: SKIP}, () => {
     // the carried copy first, then what the resumed agent wrote: the conversation was there before it started
     assert.ok(fs.readFileSync(carried, 'utf8').startsWith(original), 'the conversation was carried before the resume');
     const after = await listed('x-move');
+    assert.ok(after, 'the session is still listed');
     assert.equal(after?.account, 'travel');
     // a new session would have a new nonce, so a new token in its shell's environment
     assert.equal(launches().findLast(fields => fields[2] === 'x-move')?.[4], session.token,
@@ -348,6 +349,7 @@ describe('account switch requests', {skip: SKIP}, () => {
     assert.equal(launches().findLast(fields => fields[2] === 'x-undone')?.[5], 'no', 'the old agent was gone before the resume');
     assert.equal(fs.readFileSync(target, 'utf8'), '{"type":"session_meta","payload":{"other":"copy"}}\n', 'the target copy is untouched');
     const after = await listed('x-undone');
+    assert.ok(after, 'the session is still listed');
     assert.equal(after?.account, undefined, 'the resumed session runs under the default account');
     assert.equal(launches().findLast(fields => fields[2] === 'x-undone')?.[4], session.token,
       'in the same shell and terminal');

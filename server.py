@@ -1063,6 +1063,8 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     session continues as a new incarnation (its ``created``) with its name, attachments and output. Everything that
     can fail is prepared before the stop. ``switch``: as for replace_session; the carry runs between the stop and
     the start, and when it fails the agent resumes under ``account`` in the same terminal (AccountSwitchUndone)."""
+    if known_agent == "gemini" and _is_home_directory(cwd):   # new_session's refusal, before anything stops
+        raise web.HTTPBadRequest(text=GEMINI_IN_HOME)
     target = switch[0] if switch else account
     account_env = await account_environment(target, known_agent)
     source_env = await account_environment(account, known_agent) if switch else account_env

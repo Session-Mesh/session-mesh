@@ -260,6 +260,41 @@ let meta_keeps_the_nonce () =
       expect "the same nonce is accepted"
         (member "ok" (start_again fixture fresh) = `Bool true))
 
+(* A stop that comes while the launch command still waits for the prompt:
+   the stopped incarnation's command is dropped, and only the new one is
+   typed. *)
+let pending_launch_is_dropped () =
+  with_host (fun fixture ->
+      let reply =
+        send fixture
+          [
+            ("op", `String "new");
+            ("name", `String "relaunch");
+            ("cwd", `String fixture.home);
+            ("command", `String (fixture.agent ^ " graceful"));
+            ("meta", `Assoc [ ("nonce", `String "n1") ]);
+          ]
+      in
+      expect "created" (member "ok" reply = `Bool true);
+      let stopped =
+        stop_agent fixture (member "created" (the_session fixture))
+      in
+      expect
+        ("stopped before the launch: " ^ Yojson.Basic.to_string stopped)
+        (member "ok" stopped = `Bool true);
+      Unix.sleepf 2.5;
+      expect "the stopped launch never ran" (agent_pids fixture = []);
+      expect "the new incarnation starts its command"
+        (member "ok" (start_again fixture (member "created" stopped))
+        = `Bool true);
+      started fixture 1;
+      Unix.sleepf 1.;
+      expect "only the new launch ran" (List.length (agent_pids fixture) = 1);
+      expect "it runs under the new folder"
+        (List.exists
+           (fun line -> contains line "/accounts/b")
+           (log_lines fixture)))
+
 let () =
   host_argv := [| Sys.argv.(1) |];
   Alcotest.run
@@ -279,5 +314,7 @@ let () =
             refusals_signal_nothing;
           Alcotest.test_case "the new meta keeps the nonce" `Slow
             meta_keeps_the_nonce;
+          Alcotest.test_case "a pending launch is dropped by a stop" `Slow
+            pending_launch_is_dropped;
         ] );
     ]
