@@ -627,7 +627,10 @@ async def api_dictation(request):
     if (not same_origin(request) or len(request.headers.getall("Origin", [])) > 1
             or len(request.headers.getall("Host", [])) != 1):
         raise web.HTTPForbidden()
-    if request.query_string or request.headers.getall("Content-Encoding", []):
+    # Reject worker-forbidden raw syntax before streaming a body: an immediate
+    # private rejection can otherwise race the upload and mask its 400 as EPIPE.
+    if (request.query_string or request.headers.getall("Content-Encoding", [])
+            or re.search(r"[?#%\\]", request.rel_url.raw_path)):
         return _dictation_error("invalid_request", 400)
     client = request.app.get("dictation_client")
     if client is None:

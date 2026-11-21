@@ -10,7 +10,7 @@ import http from 'node:http';
 import {spawn} from 'node:child_process';
 import {randomBytes,randomUUID} from 'node:crypto';
 import vm from 'node:vm';
-import {fixture,identityHeaders,request,until} from '../checks/dictation-fixture.ts';
+import {fixture,identityHeaders,processBirth,request,until} from '../checks/dictation-fixture.ts';
 import {Dictation,configuration,Fault} from '../backend/dictation.ts';
 
 const insertedConfig=(extra={})=>configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed',...extra})!;
@@ -231,8 +231,21 @@ for(const [label,type,text] of [
   }finally{await f.close();}
 });
 
-test('actual adapter isolates every public operation from decoded URL syntax',async()=>{
-  const f=await fixture();
+test('actual adapter isolates every public operation from decoded URL syntax',async t=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-raw-path-'));
+  fs.chmodSync(directory,0o700);t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const preload=path.join(directory,'observe.cjs'),trace=path.join(directory,'trace'),identity=path.join(directory,'identity');
+  fs.writeFileSync(trace,'');
+  // Observe only our disposable worker. No secret headers or bootstrap values
+  // are recorded; a malformed public route must be rejected before any relay.
+  fs.writeFileSync(preload,`const fs=require('node:fs'),http=require('node:http'),create=http.createServer;
+process.stdin.once('data',part=>fs.writeFileSync(${JSON.stringify(identity)},String(process.pid)));
+http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
+ fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({method:req.method,encoded:/[%?#\\\\]/.test(req.url),admission:req.url==='/api/transcribe'})+'\\n');
+ return listener(req,res);
+});};`);
+  const f=await fixture(true,false,undefined,{workerPreload:preload});
+  const worker=Number(fs.readFileSync(identity,'utf8')),birth=processBirth(worker);assert.ok(birth);
   try{
     const headers={...f.auth,...identityHeaders(),'X-Mesh-Session':'nonexistent'};
     const ordinary=await f.call('/api/transcribe','POST',headers,'audio');
@@ -259,11 +272,17 @@ test('actual adapter isolates every public operation from decoded URL syntax',as
         if(![400,404,405].includes(result.status)||result.body?.preparation||result.body?.job)leaks.push(`${method} ${route}: ${result.status} ${JSON.stringify(result.body)}`);
       }
     }
-    assert.deepEqual(leaks,[],'encoded public route reached a different private operation');
+    const relayed=fs.readFileSync(trace,'utf8').trim();
+    assert.equal((await f.call('/api/transcribe/config','GET',f.auth)).body.enabled,true);
+    assert.equal(processBirth(worker),birth,'malformed probes must not replace or kill the worker');
     assert.equal(f.upstreamCalls,0);
+    assert.deepEqual(leaks,[],'encoded public route reached a different private operation');
+    assert.equal(relayed,'','reject malformed raw paths before starting any private HTTP upload');
     const valid={...f.auth,...identityHeaders()};
     const job=await f.call('/api/transcribe','POST',valid,'audio');assert.equal(job.status,202);
     const id=job.body.job_id.toUpperCase();
+    await until(async()=>(await f.call(`/api/transcribe/${id}`,'GET',valid)).body.state==='ready');
+    assert.equal(f.upstreamCalls,1,'only the subsequent normal recording may reach inference');
     assert.equal((await f.call(`/api/transcribe/${id}`,'GET',valid)).status,200);
     assert.equal((await f.call(`/api/transcribe/request/${valid['X-Mesh-Request-Id'].toUpperCase()}`,'GET',valid)).status,200);
     assert.equal((await f.call(`/api/transcribe/${id}/cancel`,'POST',{...valid,'Content-Type':'application/json'},'{}')).status,200);
