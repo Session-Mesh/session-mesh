@@ -200,12 +200,26 @@ module Raw = struct
       Ok (Bytes.unsafe_to_string result, count > 0 && offset < t.replay_end)
 end
 
+(* The modes where the window starts and the bytes of the window that start
+   the replay. A cut inside an escape sequence (a line feed inside it) leaves
+   its end at the start of the window: that end is parsed here, not sent, so
+   that the client never receives half a sequence. Within [span] bytes only;
+   past that the window is sent whole, as before. *)
+let window_start t =
+  let modes = Mesh_pty_modes.copy t.modes in
+  match
+    Mesh_pty_modes.finish_sequence modes t.window t.off (min t.len span)
+  with
+  | Some skip -> (modes, skip)
+  | None -> (t.modes, 0)
+
 let replay t =
-  let prefix = if t.trimmed then Mesh_pty_modes.prefix t.modes else "" in
-  if prefix = "" then snapshot t
+  if not t.trimmed then snapshot t
   else
+    let modes, skip = window_start t in
+    let prefix = Mesh_pty_modes.prefix modes in
     let length = String.length prefix in
-    let bytes = Bytes.create (length + t.len) in
+    let bytes = Bytes.create (length + t.len - skip) in
     Bytes.blit_string prefix 0 bytes 0 length;
-    Bytes.blit t.window t.off bytes length t.len;
+    Bytes.blit t.window (t.off + skip) bytes length (t.len - skip);
     Bytes.unsafe_to_string bytes
