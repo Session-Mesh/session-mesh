@@ -110,14 +110,22 @@ async def test_pi_fullscreen_scroll_recovers_trimmed_modes_without_pty_input(pho
     # A returning browser gets the replay window, which no longer holds the startup bytes.
     await tab.reload()
     await tab.wait_for_function("active?.conn?.ws?.readyState === 1", timeout=10000)
-    await tab.wait_for_timeout(1200)
-    # The host starts a cut replay with the modes the output had set (alternate screen, mouse).
-    assert await tab.evaluate("active.term.buffer.active.type") == "alternate"
-    assert await tab.evaluate("active.term.modes.mouseTrackingMode") == "any"
-    # An older host did not: leave them locally, as its replay did, to check the manual recovery.
-    await tab.evaluate("new Promise(r => active.term.write('\\x1b[?1049l\\x1b[?1003l\\x1b[?1006l', r))")
+    # The host starts a cut replay with the modes the output had set (alternate screen, mouse);
+    # FLOOD-END is the last line of the replay.
+    await tab.wait_for_function("""(() => {
+      const b = active.term.buffer.active;
+      if (b.type !== 'alternate' || active.term.modes.mouseTrackingMode !== 'any') return false;
+      for (let y = 0; y < b.length; y++) if (b.getLine(y).translateToString(true).includes('FLOOD-END')) return true;
+      return false;
+    })()""", timeout=10000)
+    await tab.wait_for_timeout(1200)   # the attach's own resizes and redraw are over
+    # An older host did not: its replay left the client on the normal screen, mouse off, with the
+    # replayed text there. Reproduce that locally to check the manual recovery.
+    await tab.evaluate("new Promise(r => active.term.write("
+                       "'\\x1b[?1049l\\x1b[?1003l\\x1b[?1006lPI-NORMAL-SCREEN replayed line\\r\\n', r))")
     assert await tab.evaluate("active.term.buffer.active.type") == "normal"
     assert await tab.evaluate("active.term.modes.mouseTrackingMode") == "none"
+    assert any("PI-NORMAL-SCREEN" in line for line in await tab.evaluate(BUFFER_LINES))
     winches_before = winches.read_text() if winches.exists() else ""
     before = await tab.evaluate(BUFFER_LINES)
     x, top, bottom = await terminal_touch_path(tab, 180)
