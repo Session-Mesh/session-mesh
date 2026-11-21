@@ -523,7 +523,9 @@ stays, for older hosts.
 The modes are those of the terminal in the browser (xterm.js 5.5), which the host follows as that
 terminal parses the output. Alternate scroll (mode 1007) is not restored, because xterm.js 5.5 does
 not implement it. When the replay starts inside a title, a DCS payload or another string sequence,
-the rest of that sequence is not sent, so it does not appear as text. One case is not followed: a
+the rest of that sequence is not sent, so it does not appear as text, provided its end (or the
+start of another sequence) lies within the first 4096 bytes of the replay; otherwise the replay is
+sent whole and that rest may appear as text. One case is not followed: a
 mode set by an eight-bit control sequence introducer written as UTF-8 (bytes C2 9B, rather than
 `ESC [`) outside any other sequence. Programs do not send it, and looking for it would slow the
 host's scan of all non-ASCII output.
