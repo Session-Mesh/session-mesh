@@ -18,6 +18,7 @@ import type {Page} from 'playwright-core';
 import {FakeProvider} from './helpers/fake-copilot-provider.ts';
 import {REPO, rows, settle, skip, TerminalMesh, typeLine} from './terminal-browser-lib.ts';
 import {READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
+import {usableCopilot} from './helpers/copilot-availability.ts';
 
 type Line = {translateToString(trim: boolean): string};
 type Pane = {term: {buffer: {active: {type: string; length: number; getLine(y: number): Line | undefined}};
@@ -27,15 +28,7 @@ declare const active: Pane;
 const WITNESS = path.join(REPO, 'tests', 'fixtures', 'alt-screen-witness.mjs');
 const DESKTOP = {width: 1100, height: 700};
 const PHONE = {width: 390, height: 780};
-const REAL = (() => {
-  try {
-    const executable = execFileSync('which', ['copilot'], {encoding: 'utf8'}).trim();
-    // Some editors install a launcher even when the CLI itself is absent. Do not
-    // mistake its installer TUI for the real CLI covered by this optional group.
-    execFileSync(executable, ['--version'], {stdio: 'pipe', timeout: 10000});
-    return executable;
-  } catch { return ''; }
-})();
+const REAL = usableCopilot(process.env.PATH ?? '');
 let mesh: TerminalMesh;
 const provider = new FakeProvider();
 
