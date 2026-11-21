@@ -19,6 +19,7 @@ import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {REPO, type Mesh, startMesh} from '../tests/mesh-server-lib.ts';
 import {ptyhostArgv} from '../tests/ptyhost-command.ts';
 import {createSessionRequestGate, setTranslator} from '../static/pane-actions.ts';
@@ -180,7 +181,7 @@ async function described(request: Record<string, any>): Promise<string> {
   return shown;
 }
 
-const CASES: Record<string, (h: Harness) => Promise<void>> = {
+export const CASES: Record<string, (h: Harness) => Promise<void>> = {
   // CHECK-1 [AC-1]: the owner's extension composes with the two the server injects.
   async 'pi-extension'(h) {
     const answer = await launch(h.mesh, {preset: 'pi', options: '-e /tmp/ext.mjs'});
@@ -395,6 +396,19 @@ const CASES: Record<string, (h: Harness) => Promise<void>> = {
   },
 };
 
+/** One named case, with its own throwaway mesh; a failure is the assertion that fired. */
+export async function runCase(name: string): Promise<void> {
+  const run = CASES[name];
+  if (!run) throw new Error(`unknown case: ${name}`);
+  const h = await harness(`check-launch-options-${name}-`);
+  try {
+    await run(h);
+  } finally {
+    h.host.kill('SIGKILL');
+    await h.mesh.stop();
+  }
+}
+
 async function main(): Promise<number> {
   const name = process.argv[2] ?? '';
   const run = CASES[name];
@@ -422,4 +436,7 @@ async function main(): Promise<number> {
   }
 }
 
-process.exitCode = await main();
+// Only when run as a program: tests/launch-options-checks.test.ts imports the cases.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = await main();
+}
