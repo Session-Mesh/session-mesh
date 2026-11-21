@@ -4,7 +4,7 @@
 // What the mesh launches for each OpenCode major: 1.x (v1 configuration), 2.x (--standalone, the v2
 // configuration and plugin, the user's choices kept, a resumed conversation checked first), any other or
 // unreadable version (bare, no token, a notice). A fake `opencode` that answers --version and
-// `debug config --standalone` stands in for the binary (no real OpenCode, no model, no service).
+// the private config API stands in for the binary (no real OpenCode, no model, no service).
 // The Python modules the server uses are run with an isolated HOME and a PATH that holds only the fake.
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
@@ -34,14 +34,14 @@ function fakeOpencode(body: string): string {
   return dir;
 }
 const answering = (text: string): string => fakeOpencode(`[ "$1" = "--version" ] && echo '${text}'`);
-/** An OpenCode 2 whose `debug config --standalone` prints `documents` (JSON), or fails when it is null. */
+/** An OpenCode 2 whose private config API prints `documents` (JSON), or fails when it is null. */
 function v2With(documents: unknown[] | null): string {
   const dir = fakeOpencode('');
   const config = path.join(dir, 'documents.json');
   fs.writeFileSync(config, JSON.stringify(documents ?? []));
   fs.writeFileSync(path.join(dir, 'opencode'), `#!/bin/sh
 [ "$1" = "--version" ] && { echo 'opencode v2.3.0'; exit 0; }
-[ "$1 $2 $3" = "debug config --standalone" ] || exit 9
+[ "$#" = 4 ] && [ "$1 $2 $3 $4" = "api get /api/config?location%5Bdirectory%5D=%2F --standalone" ] || exit 9
 ${documents === null ? 'exit 3' : `cat '${config}'`}
 `, {mode: 0o755});
   return dir;
@@ -147,7 +147,7 @@ describe('OpenCode 2.x', () => {
 
   test('the configuration probe runs with no Mesh variable and never starts the shared service', () => {
     const bin = fakeOpencode(`[ "$1" = "--version" ] && { echo 'opencode v2.3.0'; exit 0; }
-[ "$1 $2 $3" = "debug config --standalone" ] || exit 9
+[ "$#" = 4 ] && [ "$1 $2 $3 $4" = "api get /api/config?location%5Bdirectory%5D=%2F --standalone" ] || exit 9
 env | grep -c '^MESH_' >&2 && exit 4
 echo '[]'`);
     const result = launch(bin, 'opencode', {MESH_SESSION_TOKEN: 'secret', MESH_PORT: '7690'});

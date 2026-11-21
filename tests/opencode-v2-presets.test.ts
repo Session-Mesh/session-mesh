@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 // OpenCode 2 in the mesh without a model: a fake `opencode` (it answers `--version` with a 2.x version and
-// `debug config --standalone` with no document) on PATH records its argv, its environment and what is typed
+// a private config API with no document) on PATH records its argv, its environment and what is typed
 // into it, and the real Mesh OpenCode 2 plugin reports hook events to a real server and PTY host.
 // Covered: launch from "+ New" with --standalone, the v2 configuration (no credential in it), the state and
 // conversation the plugin reports (working, permission, question, sub-agents), the wake notice typed only while
@@ -61,7 +61,12 @@ before(async () => {
   // The mesh reads the version and the configuration before it launches: those probes are not launches.
   fs.writeFileSync(path.join(bin, 'opencode'), `#!/bin/sh
 [ "$1" = "--version" ] && { echo 'opencode v2.3.0'; exit 0; }
-[ "$1" = "debug" ] && { echo '[]'; exit 0; }
+if [ "$1" = "api" ]; then
+  [ "$#" = 4 ] && [ "$2" = get ] && [ "$4" = --standalone ] || exit 9
+  case "$3" in '/api/config?location%5Bdirectory%5D='*) ;; *) exit 9 ;; esac
+  env | grep -q '^MESH_' && exit 4
+  echo '[]'; exit 0
+fi
 printf 'argv:%s\\n' "$*" >> '${log('argv.log')}'
 printf '%s\\n' "$OPENCODE_CONFIG_CONTENT" >> '${log('config.log')}'
 printf '%s\\n' "$MESH_SESSION_TOKEN" >> '${log('token.log')}'
