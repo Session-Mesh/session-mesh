@@ -16,6 +16,7 @@ launcher=$(find "$scratch" -maxdepth 3 -type f -name mesh -print)
 bundle=$(dirname "$launcher")
 mkdir -p "$scratch/home" "$scratch/run" "$scratch/work"
 chmod 700 "$scratch/run"
+bash "$(dirname "$0")/smoke-profile.sh" "$bundle/bin/mesh-profile" "$scratch"
 # mesh-history carries its own pinned SQLite: on Linux it must not need a libsqlite3 shared library
 # (readelf -d, which must succeed; when binutils is missing, the first libsqlite3 name found by
 # searching the whole binary), and it must pass the History probe whatever the system's SQLite is.

@@ -65,6 +65,35 @@ describe('a release without a bundle for this platform', () => {
     assert.ok(fs.existsSync(path.join(fx.share, 'releases/v1.0.0/libexec/mesh-ptyhost')));
   });
 
+  test('below the glibc floor, the staged app finds mesh-profile without command overrides', () => {
+    const fx = fixture();
+    const response = {version: 1, ok: true, data: {configured: false, registry_revision: null, profiles: []}};
+    const helper = `#!/bin/sh
+test -z "\${MESH_BIN_DIR+x}" && test -z "\${MESH_PROFILE_CMD+x}" || exit 90
+test "$#" -eq 2 && test "$1" = --http && test "$2" = profiles.list || exit 91
+IFS= read -r request
+test "$request" = '{}' || exit 92
+printf '%s\\n' '${JSON.stringify(response)}'
+`;
+    publish(fx, 'v1.0.0', {programs: PROGRAM_PLATFORMS,
+      program: (program) => program === 'mesh-profile' ? helper : `v1.0.0 ${program}`});
+    const result = run(fx, downloaded(fx, 'v1.0.0'), [], {FAKE_GLIBC: '2.17'});
+    assert.equal(result.status, 0, result.output);
+    assert.deepEqual(fetched(result.calls), ['session-mesh-v1.0.0.tar.gz', ...PROGRAMS.map((program) => `${program}-linux-x86_64`)].sort());
+    const release = path.join(fx.share, 'releases/v1.0.0');
+    const appHelper = path.join(release, 'app/bin/mesh-profile');
+    assert.equal(fs.readlinkSync(appHelper), '../../bin/mesh-profile');
+    assert.equal(fs.realpathSync(appHelper), path.join(release, 'bin/mesh-profile'));
+    assert.match(fs.readFileSync(path.join(release, 'app.manifest'), 'utf8'), /^link \.\/bin\/mesh-profile -> \.\.\/\.\.\/bin\/mesh-profile$/m);
+    const probe = spawnSync(appHelper, ['--http', 'profiles.list'], {input: '{}\n', encoding: 'utf8', timeout: 5000,
+      env: {HOME: fx.home, PATH: '/usr/bin:/bin', MESH_CONF_DIR: path.join(fx.home, 'profile-config')}});
+    assert.equal(probe.status, 0, probe.stderr);
+    assert.deepEqual(JSON.parse(probe.stdout), response);
+    const again = run(fx, downloaded(fx, 'v1.0.0'), [], {FAKE_GLIBC: '2.17'});
+    assert.equal(again.status, 0, again.output);
+    assert.match(again.stdout, /already on disk, programs and code checked/);
+  });
+
   test('a tampered program refuses the whole release: nothing installed, no unit', () => {
     const fx = fixture();
     publish(fx, 'v1.0.0', {platforms: [], programs: PROGRAM_PLATFORMS, tamper: 'mesh-read-linux-x86_64'});
@@ -100,6 +129,7 @@ describe('a release without a bundle for this platform', () => {
     ['an added file', (app) => fs.writeFileSync(path.join(app, 'json.py'), 'import os\n')],
     ['a removed file', (app) => fs.unlinkSync(path.join(app, 'agentmcp.py'))],
     ['a changed link', (app) => { fs.unlinkSync(path.join(app, 'bin/mesh-board-mcp')); fs.symlinkSync('/bin/sh', path.join(app, 'bin/mesh-board-mcp')); }],
+    ['a changed profile helper link', (app) => { fs.unlinkSync(path.join(app, 'bin/mesh-profile')); fs.symlinkSync('../../bin/mesh-read', path.join(app, 'bin/mesh-profile')); }],
     ['no manifest', (_app, release) => fs.unlinkSync(path.join(release, 'app.manifest'))],
   ];
   for (const [label, change] of codeChanges) {

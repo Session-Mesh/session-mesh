@@ -33,14 +33,17 @@ export class AgentMesh {
       'while IFS= read -r line; do :; done',
       '',
     ].join('\n'), {mode: 0o755});
+    // A login profile must not replace the fixture PATH with the caller's real agents.
+    const shell = path.join(bin, 'bash');
+    fs.writeFileSync(shell, '#!/bin/sh\nexec /bin/bash --noprofile --norc "$@"\n', {mode: 0o755});
     const PATH = `${bin}:${process.env.PATH}`;
-    const mesh = await startMesh(prefix, {PATH, MESH_SESSION_TOKEN: undefined, MESH_SESSION: undefined, MESH_BIN_DIR: undefined});
+    const mesh = await startMesh(prefix, {PATH, SHELL: shell, MESH_SESSION_TOKEN: undefined, MESH_SESSION: undefined, MESH_BIN_DIR: undefined});
     const lab = new AgentMesh(mesh);
     lab.scratches.push(bin);
     const runtime = path.join(mesh.home, 'run');
     const nativeHost = nativePtyhost();
     lab.hosts.push(spawn(nativeHost[0], nativeHost.slice(1), {cwd: REPO, stdio: 'ignore',
-      env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: runtime, LANG: 'C', SHELL: '/bin/bash'}}));
+      env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: runtime, LANG: 'C', SHELL: shell}}));
     const socketPath = path.join(runtime, 'session-mesh', 'ptyhost.sock');
     await waitFor('ptyhost answering', 10000, () => request(socketPath, {op: 'list'}).then(() => true, () => false));
     const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',

@@ -1,0 +1,4 @@
+(test
+ (name test_native_source)
+ (modules test_native_source)
+ (libraries carry_fixture mesh_accounts_carry alcotest unix yojson))

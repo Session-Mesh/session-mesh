@@ -425,7 +425,7 @@ ACCOUNTS_FILE = CONF_DIR / "accounts.json"
 # Every folder an alias has declared while this runner ran: /view keeps refusing their login files even when
 # accounts.json is later refused or the alias removed (the folders and the logins stay on disk).
 ACCOUNTS_PROTECTED_FILE = CONF_DIR / "accounts-protected.json"
-_ACCOUNTS_PROTECTED_MAX = 256
+_ACCOUNTS_PROTECTED_MAX = 1024  # fits every credential root of a 128-profile registry, plus historical roots
 ACCOUNT_ID_RE = re.compile(r"[a-z0-9-]{1,32}")
 _ACCOUNT_PATH_RE = re.compile(r"/[A-Za-z0-9._+@/-]{1,1023}")
 ACCOUNT_MEMBER = {"claude": ("claude_config_dir", "CLAUDE_CONFIG_DIR", "Claude"),
@@ -458,13 +458,16 @@ class AccountsUnavailable(Exception):
 
 
 def _accounts_signature():
-    try:
-        st = os.lstat(ACCOUNTS_FILE)
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        return ("unreadable", repr(exc))
-    return (st.st_ino, st.st_size, st.st_mtime_ns)
+    signatures = []
+    for file in (CONF_DIR / "backend-profiles.json", CONF_DIR / "backend-profiles.migrated", ACCOUNTS_FILE):
+        try:
+            st = os.lstat(file)
+            signatures.append((st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_mode))
+        except FileNotFoundError:
+            signatures.append(None)
+        except OSError as exc:
+            signatures.append(("unreadable", repr(exc)))
+    return tuple(signatures) if any(value is not None for value in signatures) else None
 
 
 async def _accounts_program(*args, timeout=10, env=None):
@@ -500,10 +503,14 @@ def _valid_account(value):
                   for field, _, _ in ACCOUNT_MEMBER.values()))
     if not ok:
         raise AccountsUnavailable("unexpected answer")
+    labels = value.get("backend_labels", {})
+    if (not isinstance(labels, dict) or not labels.keys() <= ACCOUNT_MEMBER.keys()
+            or not all(isinstance(label, str) and 0 < len(label) <= 24 for label in labels.values())):
+        raise AccountsUnavailable("unexpected backend labels")
     return value
 
 
-def _protected_folders(accounts):
+def _protected_folders(accounts, profile_roots=()):
     """The folders whose login files /view refuses: the ones declared now and every one declared before, kept in
     accounts-protected.json (never shrunk: a refused accounts.json or a removed alias leaves the logins on disk).
     A file that cannot be read or written only loses the earlier runs' folders, never this run's."""
@@ -519,6 +526,7 @@ def _protected_folders(accounts):
         except (OSError, ValueError) as exc:
             print(f"accounts-protected.json unreadable: {exc!r}", flush=True)
     declared = [a[field] for a in accounts for field, _, _ in ACCOUNT_MEMBER.values() if a.get(field)]
+    declared.extend(p for p in profile_roots if isinstance(p, str) and _ACCOUNT_PATH_RE.fullmatch(p))
     merged = list(dict.fromkeys([*known, *declared]))[-_ACCOUNTS_PROTECTED_MAX:]
     if merged != known:
         try:
@@ -526,36 +534,41 @@ def _protected_folders(accounts):
         except OSError as exc:
             print(f"accounts-protected.json not written: {exc!r}", flush=True)
     _ACCOUNTS["protected"] = merged
-    return merged
+    return list(dict.fromkeys([*merged, *declared]))  # never truncate a currently declared credential root
 
 
 async def declared_accounts():
-    """The operator's aliases, read again whenever accounts.json changed; none when it is absent or refused
-    (the refusal is logged: the default account stays what it always was)."""
+    """The native resolver's aliases; a configured profile registry supersedes legacy accounts.json.
+    An invalid registry never silently falls back to legacy credentials."""
     signature = await asyncio.to_thread(_accounts_signature)
     if signature != _ACCOUNTS["signature"]:
-        accounts, state = [], "absent"
+        accounts, state, protected = [], "absent", []
         if signature is not None:
             try:
                 answer = await _accounts_program("list", str(ACCOUNTS_FILE))
                 accounts, state = [_valid_account(value) for value in answer.get("accounts") or []], "ok"
+                protected = answer.get("protected_roots", [])
+                if not isinstance(protected, list) or not all(isinstance(p, str) and _ACCOUNT_PATH_RE.fullmatch(p) for p in protected):
+                    raise AccountsUnavailable("unexpected protected roots")
             except AccountsUnavailable as exc:
                 print(f"accounts.json refused, no alias offered: {exc}", flush=True)
-                accounts, state = [], "refused"
+                accounts, state, protected = [], "refused", []
         _ACCOUNTS.update(signature=signature, accounts=accounts, file=state)
-        view.deny_account_files(await asyncio.to_thread(_protected_folders, accounts))
+        view.deny_account_files(await asyncio.to_thread(_protected_folders, accounts, protected))
     return _ACCOUNTS["accounts"]
 
 
 def accounts_projection():
     """What a page is told of the aliases: id, label and which agents each serves, never a folder."""
     return [{"id": a["id"], "label": a["label"], "claude": bool(a.get("claude_config_dir")),
-             "codex": bool(a.get("codex_home"))} for a in _ACCOUNTS["accounts"]]
+             "codex": bool(a.get("codex_home")),
+             **({"backend_labels": a["backend_labels"]} if "backend_labels" in a else {})} for a in _ACCOUNTS["accounts"]]
 
 
-def account_label(account):
+def account_label(account, backend=None):
     """The label of a known alias, or its id (an alias removed from the file since)."""
-    return next((a["label"] for a in _ACCOUNTS["accounts"] if a["id"] == account), account)
+    return next((a.get("backend_labels", {}).get(backend, a["label"])
+                 for a in _ACCOUNTS["accounts"] if a["id"] == account), account)
 
 
 def session_account(session):
@@ -1275,7 +1288,8 @@ def _mesh_order(d):
 def _account_fields(session):
     """A listed session's alias and its label (shown on the row and the pane header), or nothing."""
     account = session_account(session)
-    return {"account": account, "account_label": account_label(account)} if account else {}
+    meta = session.get("meta") or {}
+    return {"account": account, "account_label": account_label(account, meta.get("known_agent") or meta.get("agent"))} if account else {}
 
 
 def list_sessions(mesh_raw, listed=True, read_at=None):
@@ -1385,6 +1399,7 @@ async def _listing(event_state=None, organisation_lock=None, read=None):
     """One full listing, and whether the host listed. ``read``: the host's listing, already read."""
     if event_state is None:
         event_state = _LIVE_EVENT_STATE
+    await declared_accounts()
     read_at = None if read else time.time()   # what a restart's carry bound after it is not judged by this list
     read = read or await _read_host()
     raw, listed, _, observed_at, order = read
@@ -4375,7 +4390,7 @@ async def _switch_target(name, kind):
     ignoring ASCII case; never a prefix, never another agent's account, and a name that is one account's id and
     another's label designates neither. Without a usable accounts.json only ``default`` can be named."""
     shown = name if isinstance(name, str) and 0 < len(name) <= 64 and name.isprintable() else None
-    offered = [DEFAULT_ACCOUNT, *(a for a in accounts_projection() if a[kind])]
+    offered = [DEFAULT_ACCOUNT, *({**a, "label": account_label(a["id"], kind)} for a in accounts_projection() if a[kind])]
     unknown = _switch_refusal("account_unknown", f"No {ACCOUNT_MEMBER[kind][2]} account “{shown or '?'}” is "
                               f"declared. Available: {_shown_accounts(offered)}.")
     if shown is None:
@@ -4466,17 +4481,18 @@ async def _switch_session(item, raw, conversation, argv):
     return {"id": name, "account": item["account"]}
 
 
-def _account_label_of(account):
+def _account_label_of(account, backend=None):
     """The label of an account id of a request, "default" included."""
-    return DEFAULT_ACCOUNT["label"] if account == DEFAULT_ACCOUNT["id"] else account_label(account)
+    return DEFAULT_ACCOUNT["label"] if account == DEFAULT_ACCOUNT["id"] else account_label(account, backend)
 
 
 def _with_account_labels(item):
     """A pending request as the page shows it: a switch carries the labels of both accounts."""
     if item.get("action") != "switch_account":
         return item
-    return {**item, "account_label": _account_label_of(item["account"]),
-            "from_label": _account_label_of(item["from_account"])}
+    backend = item["source"]["agent"]
+    return {**item, "account_label": _account_label_of(item["account"], backend),
+            "from_label": _account_label_of(item["from_account"], backend)}
 
 
 async def api_session_accounts(request):
@@ -4497,7 +4513,7 @@ async def api_session_accounts(request):
         "agent": source["agent"],
         "switch_qualified": False,
         "accounts_file": _ACCOUNTS["file"],
-        "current": ({"id": current, "label": account_label(current),
+        "current": ({"id": current, "label": account_label(current, source["agent"]),
                      "declared": any(a["id"] == current for a in declared)} if current
                     else {"id": DEFAULT_ACCOUNT["id"], "label": DEFAULT_ACCOUNT["label"], "declared": True}),
         "accounts": [DEFAULT_ACCOUNT, *accounts_projection()],
@@ -5014,6 +5030,7 @@ def config_report(origin, host_report):
             "board_mcp": str(board_bin), "board_mcp_present": agentmcp.board_available(),
         },
         "version": {"client": client_version(), "install_name": ROOT.name or None},
+        "capabilities": {"account_settings": True},
         "host": host_report,
         "agents": agents,
         "launch": launch_projection(),

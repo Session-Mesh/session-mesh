@@ -42,6 +42,34 @@ let lock_failure error =
 let same_file (a : Unix.stats) (b : Unix.stats) =
   a.st_dev = b.st_dev && a.st_ino = b.st_ino
 
+let same_directory ~target identity =
+  match Unix.lstat target with
+  | named -> named.Unix.st_kind = Unix.S_DIR && same_file named identity
+  | exception Unix.Unix_error _ -> false
+
+(* Binding can refuse before its callback starts (for example, open can return
+   EMFILE). Only this run's still-identical empty directory can be removed then;
+   once entered, the callback keeps cleanup inside its bound-directory scope.
+   These path-based identity checks are not an atomic same-user race sandbox. *)
+let with_target_binding ~target ~created ~identity bind callback =
+  let entered = ref false in
+  let cleanup_unbound () =
+    if created && (not !entered) && same_directory ~target identity then
+      quietly (fun () -> Unix.rmdir target)
+  in
+  match
+    bind (fun bound ->
+        entered := true;
+        callback bound)
+  with
+  | Error _ as refused ->
+      cleanup_unbound ();
+      refused
+  | Ok _ as result -> result
+  | exception error ->
+      cleanup_unbound ();
+      raise error
+
 (* An existing lock file: a regular file of the operator's, 0600 at most,
    with no other name, opened as the one lstat saw. *)
 let open_existing_lock ~uid path =
@@ -108,16 +136,24 @@ let with_lock ~uid ~target conversation f =
 (* Remove the target folder a refused carry created, with its lock file, when
    no other carry holds any byte of the lock: the whole file is locked first,
    and a carry that opened the file before it went away sees it with
-   {!still_named}. [rmdir] removes the folder only when it is empty. *)
-let remove_created ~target descriptor =
-  match
-    ignore (Unix.lseek descriptor 0 Unix.SEEK_SET);
-    Unix.lockf descriptor Unix.F_TLOCK 0
-  with
-  | () ->
-      quietly (fun () -> Unix.unlink (join target lock_name));
-      quietly (fun () -> Unix.rmdir target)
-  | exception Unix.Unix_error _ -> ()
+    {!still_named}. The directory must still be the one this run created and
+    the lock must still be its opened lock. [rmdir] removes it only when empty. *)
+let remove_created ~target ~identity descriptor =
+  let still_ours () =
+    same_directory ~target identity
+    && still_named ~path:(join target lock_name) descriptor
+  in
+  if still_ours () then
+    match
+      ignore (Unix.lseek descriptor 0 Unix.SEEK_SET);
+      Unix.lockf descriptor Unix.F_TLOCK 0
+    with
+    | () when still_ours () ->
+        quietly (fun () -> Unix.unlink (join target lock_name));
+        if same_directory ~target identity then
+          quietly (fun () -> Unix.rmdir target)
+    | () -> ()
+    | exception Unix.Unix_error _ -> ()
 
 (* -------------------------------------------------- a killed carry's files *)
 

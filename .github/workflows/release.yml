@@ -1,7 +1,7 @@
 # A release of session-mesh, built and published by this workflow when a tag is pushed, with no
 # step by hand. Its files:
 # - the prebuilt native programs (mesh-ptyhost, mesh-board-mcp, mesh-read, mesh-platform, mesh-history,
-#   mesh-logout-all, work-read, work-mcp, work-write) for linux-x86_64, linux-aarch64 and macos-arm64, named <program>-<os>-<arch>;
+#   mesh-logout-all, mesh-profile, work-read, work-mcp, work-write) for linux-x86_64, linux-aarch64 and macos-arm64, named <program>-<os>-<arch>;
 # - session-mesh-<tag>.tar.gz, the `git archive` of the built commit;
 # - the bundle of each platform, mesh-<os>-<arch>.tar.gz (scripts/build-bundle.sh), for
 #   linux-x86_64, linux-arm64 and macos-arm64: session-mesh with its own Python and Node runtimes,
@@ -234,7 +234,7 @@ jobs:
           key: ${{ steps.opam-cache.outputs.cache-primary-key }}
       - name: Check that the executables are static
         run: |
-          for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp work-write; do
+          for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all mesh-profile work-read work-mcp work-write; do
             info="$(file "$RUNNER_TEMP/out/$program")"
             echo "$info"
             [[ "$info" == *"statically linked"* ]]
@@ -312,7 +312,7 @@ jobs:
         run: |
           (cd ocaml && opam exec -- dune build -p session_mesh @install 2>&1) | tee "$RUNNER_TEMP/build.log"
           mkdir -p "$RUNNER_TEMP/out"
-          for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp work-write; do
+          for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all mesh-profile work-read work-mcp work-write; do
             cp -L "ocaml/_build/install/default/bin/$program" "$RUNNER_TEMP/out/$program"
             chmod u+w "$RUNNER_TEMP/out/$program"
             strip "$RUNNER_TEMP/out/$program"
@@ -324,7 +324,7 @@ jobs:
           bash scripts/release-check-macos.sh links \
             "$RUNNER_TEMP/out/mesh-ptyhost" "$RUNNER_TEMP/out/mesh-board-mcp" \
             "$RUNNER_TEMP/out/mesh-read" "$RUNNER_TEMP/out/mesh-platform" "$RUNNER_TEMP/out/mesh-history" \
-            "$RUNNER_TEMP/out/mesh-logout-all" "$RUNNER_TEMP/out/work-read" "$RUNNER_TEMP/out/work-mcp" "$RUNNER_TEMP/out/work-write"
+            "$RUNNER_TEMP/out/mesh-logout-all" "$RUNNER_TEMP/out/mesh-profile" "$RUNNER_TEMP/out/work-read" "$RUNNER_TEMP/out/work-mcp" "$RUNNER_TEMP/out/work-write"
       # A binary holding objects built for a newer macOS than MACOSX_DEPLOYMENT_TARGET may fail
       # to load on the oldest supported version. The linker says so in the build output; the
       # OCaml runtime of a restored switch is checked directly, from its own load commands.
@@ -510,7 +510,7 @@ jobs:
           bin="$(opam var bin)"
           bash scripts/release-check-macos.sh links \
             "$bin/mesh-ptyhost" "$bin/mesh-board-mcp" "$bin/mesh-read" "$bin/mesh-platform" "$bin/mesh-history" \
-            "$bin/mesh-logout-all" "$bin/work-read" "$bin/work-mcp" "$bin/work-write"
+            "$bin/mesh-logout-all" "$bin/mesh-profile" "$bin/work-read" "$bin/work-mcp" "$bin/work-write"
           bash scripts/release-check-macos.sh linker-log "$RUNNER_TEMP/build.log"
           opam exec -- bash scripts/release-check-macos.sh runtime-minos "$MACOSX_DEPLOYMENT_TARGET"
       - name: Build the bundle
@@ -637,9 +637,9 @@ jobs:
         with:
           name: release-files
           path: dist
-      # Exactly the 27 programs, the 2 Linux bundles, the macOS bundle or not, the code archive of
-      # this tag, install.sh and SHA256SUMS, which lists every other file and matches each: 33 or
-      # 32 files, and no other set.
+      # Exactly the 30 programs, the 2 Linux bundles, the macOS bundle or not, the code archive of
+      # this tag, install.sh and SHA256SUMS, which lists every other file and matches each: 36 or
+      # 35 files, and no other set.
       - name: Check the release files
         run: |
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::not a release tag name: $RELEASE_TAG"; exit 1; }
@@ -649,12 +649,12 @@ jobs:
           cd dist
           mapfile -t present < <(find . -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)
           expected=(install.sh SHA256SUMS "session-mesh-$RELEASE_TAG.tar.gz" mesh-linux-x86_64.tar.gz mesh-linux-arm64.tar.gz)
-          for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp work-write; do
+          for program in mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all mesh-profile work-read work-mcp work-write; do
             for target in linux-x86_64 linux-aarch64 macos-arm64; do expected+=("$program-$target"); done
           done
           if [ -e mesh-macos-arm64.tar.gz ]; then expected+=(mesh-macos-arm64.tar.gz); fi
           test "$(printf '%s\n' "${present[@]}")" = "$(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)"
-          test "${#present[@]}" -eq 32 || test "${#present[@]}" -eq 33
+          test "${#present[@]}" -eq 35 || test "${#present[@]}" -eq 36
           test "$(printf '%s\n' "${present[@]}" | grep -vx SHA256SUMS)" = "$(awk '{print $2}' SHA256SUMS | LC_ALL=C sort)"
           sha256sum --check --strict SHA256SUMS
       # A signed statement (Sigstore, keyless: the run's OIDC identity, no key to manage) that each
@@ -755,7 +755,7 @@ jobs:
             echo "Install with install.sh, after checking it: see \"Prebuilt binaries\" in docs/operations.md."
             echo "Files: install.sh (this release's installer, which checks every file it downloads); the bundles $bundles,"
             echo "session-mesh with its own Python and Node runtimes and native programs; the native programs mesh-ptyhost,"
-            echo "mesh-board-mcp, mesh-read, mesh-platform, mesh-history, mesh-logout-all, work-read, work-mcp and work-write for linux-x86_64, linux-aarch64 (static executables) and"
+            echo "mesh-board-mcp, mesh-read, mesh-platform, mesh-history, mesh-logout-all, mesh-profile, work-read, work-mcp and work-write for linux-x86_64, linux-aarch64 (static executables) and"
             echo "macos-arm64 (macOS $MACOS_PROGRAMS_FLOOR or newer), with the code archive session-mesh-$RELEASE_TAG.tar.gz; and SHA256SUMS."
             echo "install.sh installs the bundle of your platform when your system meets its floor, otherwise the native"
             echo "programs and the code archive. $macos Every file carries a build provenance attestation."

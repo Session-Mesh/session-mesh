@@ -87,6 +87,10 @@ The web server binds six routes to the transport mode, one operation each. Nothi
 exposed: `profiles.resolve` (its reply holds folders) and every switch stay on the host, and the
 path chooses the operation, never the body.
 
+`GET /api/config` advertises `capabilities.account_settings: true` for this binding. Clients must
+hide the settings entry when that explicit capability is absent or false; it is not a PTY-host or
+live-switch qualification flag.
+
 | Route | Operation |
 | --- | --- |
 | `GET /api/accounts/profiles` | `profiles.list` |
@@ -157,8 +161,37 @@ never evicted to admit a new one. Finishing, purge, replacement rows and policy 
 together when their enclosing transaction fails. Retention timing belongs to the future coordinator;
 there is no public journal-management operation.
 
-This is a draft v1 contract, not a migration for deployed aliases. Earlier experimental consent
+The consent/store format remains a draft v1 contract. Earlier experimental consent
 references without a backend and journal tables without terminal metadata are not reinterpreted.
 An experimental registry with labels outside the alias rules must be corrected explicitly before use;
 an invalid entry refuses the whole registry, rather than silently dropping a profile.
-Migration from `accounts.json` and the server/launch/UI bindings are separate integration work.
+
+## Explicit migration and account-source selection
+
+Run `mesh-profile migrate` on the runner with the same `MESH_CONF_DIR` as the web server. This host-only
+command converts legacy aliases without moving credentials or conversations. It is not an HTTP
+operation and opening the settings never runs it.
+
+Migration validates the complete `accounts.json` and converted registry before publishing a private
+`backend-profiles.json` without replacing an existing target. Up to 64 aliases can produce 128
+backend-qualified profiles. The original file bytes and agent directories remain unchanged; missing
+agent directories are not created. Success reports only alias/profile counts. A repeat migration or
+an existing target refuses rather than silently merging or overwriting it.
+
+After the registry is durably published, a private `backend-profiles.migrated` marker retires automatic
+legacy fallback. If the registry later disappears, resolution refuses instead of reviving stale
+aliases. Legacy-only installations retain their existing behavior only while both registry and marker
+are absent. A deliberate rollback therefore requires addressing the retirement marker as well as the
+registry.
+
+An error after publication can return `migration-publication-uncertain` while leaving a complete
+registry in place. Inspect that target before taking another action. Registry and marker publication
+are separate filesystem operations, not a crash-atomic cross-file transaction.
+
+Launch, restore and conversation-carry lookups use the native resolver's selected source. Enabled
+Claude/Codex profiles retain their existing alias IDs, with backend-specific labels. A configured
+invalid registry never falls back to legacy credentials. Disabled profiles are not offered for launch,
+but their credential roots remain protected from document viewing. A carry resolves both accounts from
+one snapshot; later registry edits apply to the next operation. This is not live checkpoint or arbitrary
+same-user filesystem-race qualification. OpenCode/Pi profiles remain visible metadata without enabling
+unqualified profile-aware launch or switching.

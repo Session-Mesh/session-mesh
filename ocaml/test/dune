@@ -9,6 +9,20 @@
  (libraries mesh_backend_profile test_scratch alcotest yojson unix))
 
 (test
+ (name backend_migration_test)
+ (modules backend_migration_test backend_migration_impl)
+ (libraries mesh_accounts mesh_backend_profile test_scratch alcotest yojson unix)
+ (action
+  (run %{test} %{exe:../bin/mesh_profile_main.exe})))
+
+; Exercise publication fault boundaries without exposing production test hooks.
+(rule
+ (target backend_migration_impl.ml)
+ (deps ../lib/mesh_backend_migration.ml)
+ (action
+  (copy %{dep:../lib/mesh_backend_migration.ml} %{target})))
+
+(test
  (name backend_consent_test)
  (modules backend_consent_test)
  (libraries mesh_backend_consent alcotest yojson))
