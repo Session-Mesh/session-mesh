@@ -7355,7 +7355,6 @@ async function openNew() {
   form.masterToken.value = "";
   delete dlg.dataset.pendingDefault;
   optionsPreset = null;
-  optionsTyped = false;
   const openButton = form.querySelector('button[value="ok"]');
   if (openButton) openButton.textContent = t("common.open");
   syncOptionsRow();
@@ -7378,36 +7377,41 @@ async function openNew() {
   renderFolderList();   // keeps what was typed while the requests were pending
 }
 window.openNew = openNew;
-form.options.addEventListener("input", () => { optionsTyped = true; });
 
 // The options field belongs to a known agent: "shell" and "custom" have no argv Mesh builds.
-// The stored default is prefilled once per preset, so typing then ticking the box keeps the text.
+// It holds only the arguments of THIS launch; the stored default is shown beside it and is added by
+// the server, so an untouched dialog never sends the default twice.
 let launchAgentOptions = {};      // preset -> the stored options, as /api/config reports them
 let launchOptionsRevision = "";
-let optionsPreset = null;         // the preset the field was last prefilled for
-let optionsTyped = false;         // the owner wrote in the field: the answer of /api/config must not overwrite it
+let optionsPreset = null;         // the preset the field and its hint were last drawn for
 
 function knownAgentPreset(value) {
   return Boolean(value) && value !== "shell" && value !== "custom";
+}
+
+function optionsText(preset) {
+  const value = launchAgentOptions[preset];
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function syncOptionsRow() {
   const value = form.preset.value, known = knownAgentPreset(value);
   $("#new-options-row").hidden = !known;
   $("#new-options-default-row").hidden = !known;
-  if (!known) { optionsPreset = null; optionsTyped = false; return; }   // the text belongs to no agent
+  $("#new-options-stored").hidden = !known;
+  if (!known) { optionsPreset = null; return; }
   $("#new-options-default").textContent = t("new.optionsDefault", { agent: value });
   if (value !== optionsPreset) {
-    // Another agent: its own default, never the text typed for the previous one, and the box starts
-    // unchecked (it asks to make this text the default, so it cannot survive a change of agent).
+    // Another agent: this launch's field starts empty and the box starts unchecked, because the box
+    // asks to make the text in the field the default of THIS agent.
     optionsPreset = value;
-    optionsTyped = false;
     form.optionsDefault.checked = false;
-    form.options.value = launchAgentOptions[value] ?? "";
-    return;
+    form.options.value = "";
   }
-  // Same agent: a late /api/config answer refreshes the field only while the owner has not written in it.
-  if (!optionsTyped) form.options.value = launchAgentOptions[value] ?? "";
+  const stored = optionsText(value);
+  $("#new-options-stored").textContent = stored
+    ? t("new.optionsStored", { options: stored })
+    : t("new.optionsStoredNone", { agent: value });
 }
 
 function rememberLaunchOptions(launch) {

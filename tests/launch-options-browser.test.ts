@@ -89,6 +89,19 @@ const stored = () => {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) as {options?: Record<string, string[]>} : null;
 };
 
+/** Store a default through the configuration route, as the Configuration dialog does. */
+async function storeDefault(page: Page, agentOptions: Record<string, string>): Promise<string> {
+  return await page.evaluate(async ({token, agentOptions: wanted}) => {
+    const json = {'Content-Type': 'application/json'};
+    const elevated = await fetch('/api/config/elevate', {method: 'POST', headers: json, body: JSON.stringify({token})});
+    if (!elevated.ok) return `elevate ${elevated.status}`;
+    const launch = (await (await fetch('/api/config', {headers: json})).json()).launch;
+    const saved = await fetch('/api/config/launch-options', {method: 'POST', headers: json,
+      body: JSON.stringify({revision: launch.agent_options_revision, agent_options: wanted})});
+    return saved.ok ? 'ok' : `save ${saved.status}`;
+  }, {token: mesh.token(), agentOptions});
+}
+
 describe('the Options field of New session', {skip}, () => {
   test('belongs to a known agent and is unchecked by default', async () => {
     const {page, problems} = await signedIn();
@@ -121,62 +134,50 @@ describe('the Options field of New session', {skip}, () => {
     assert.deepEqual(problems, []);
   });
 
-  test('prefills a stored default and leaves the box unchecked', async () => {
+  test('shows the stored default beside the field and leaves the field and the box empty', async () => {
     const {page, problems} = await signedIn();
-    // The default is stored through the configuration route, as the Configuration dialog does, so
-    // this case does not depend on the one above.
-    const stored = await page.evaluate(async (token) => {
-      const json = {'Content-Type': 'application/json'};
-      const elevated = await fetch('/api/config/elevate', {method: 'POST', headers: json, body: JSON.stringify({token})});
-      if (!elevated.ok) return `elevate ${elevated.status}`;
-      const launch = (await (await fetch('/api/config', {headers: json})).json()).launch;
-      const saved = await fetch('/api/config/launch-options', {method: 'POST', headers: json,
-        body: JSON.stringify({revision: launch.agent_options_revision, agent_options: {pi: '-e /tmp/ext.mjs'}})});
-      return saved.ok ? 'ok' : `save ${saved.status}`;
-    }, mesh.token());
-    assert.equal(stored, 'ok');
+    assert.equal(await storeDefault(page, {pi: '-e /tmp/ext.mjs'}), 'ok');
     await page.reload();
     await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');
     await openNew(page, 'pi');
-    assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/ext.mjs');
+    // The field holds only this launch's arguments: sending the default here would add it twice.
+    assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '');
+    assert.match(await page.locator('#new-options-stored').innerText(), /-e \/tmp\/ext\.mjs/);
     assert.equal(await page.locator('#form-new input[name="optionsDefault"]').isChecked(), false);
     await page.locator('#form-new label:has(input[name="preset"][value="codex"])').click();
     assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '', 'codex has no stored default');
+    assert.match(await page.locator('#new-options-stored').innerText(), /No stored default/);
     assert.deepEqual(problems, []);
   });
 
   test('a preset change starts from that agent\'s default, not from the text typed for another', async () => {
     const {page, problems} = await signedIn();
-    const stored = await page.evaluate(async (token) => {
-      const json = {'Content-Type': 'application/json'};
-      await fetch('/api/config/elevate', {method: 'POST', headers: json, body: JSON.stringify({token})});
-      const launch = (await (await fetch('/api/config', {headers: json})).json()).launch;
-      const saved = await fetch('/api/config/launch-options', {method: 'POST', headers: json,
-        body: JSON.stringify({revision: launch.agent_options_revision, agent_options: {pi: '-e /tmp/default.mjs'}})});
-      return saved.ok ? 'ok' : `save ${saved.status}`;
-    }, mesh.token());
-    assert.equal(stored, 'ok');
+    assert.equal(await storeDefault(page, {pi: '-e /tmp/default.mjs'}), 'ok');
     await page.reload();
     await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');
     await openNew(page, 'pi');
-    assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/default.mjs');
+    assert.match(await page.locator('#new-options-stored').innerText(), /-e \/tmp\/default\.mjs/);
     await page.locator('#form-new input[name="options"]').fill('-e /tmp/typed.mjs');
     await page.locator('#form-new input[name="optionsDefault"]').check();
     // Another agent: its own default (none), never Pi's text and never the "make it the default" box.
     await page.locator('#form-new label:has(input[name="preset"][value="codex"])').click();
     assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '');
     assert.equal(await page.locator('#form-new input[name="optionsDefault"]').isChecked(), false);
-    // And back: Pi's stored default, not the text typed for Pi a moment ago.
+    assert.match(await page.locator('#new-options-stored').innerText(), /No stored default/);
+    // And back to Pi: its stored default is shown, and the field is still empty (nothing to send twice).
     await page.locator('#form-new label:has(input[name="preset"][value="pi"])').click();
-    assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/default.mjs');
+    assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '');
+    assert.match(await page.locator('#new-options-stored').innerText(), /-e \/tmp\/default\.mjs/);
     assert.deepEqual(problems, []);
   });
 
   test('text typed while the configuration is still loading is kept', async () => {
     const {page, problems} = await signedIn();
+    assert.equal(await storeDefault(page, {pi: '-e /tmp/stored.mjs'}), 'ok');
+    await page.reload();
+    await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');
     // The dialog asks /api/config on open; hold that answer so the typing happens before it lands.
-    // The hold is bounded: a route handler that never answers would keep context.close() (and so the
-    // whole job) waiting.
+    // The hold is bounded: a route handler that never answers would keep context.close() waiting.
     let release: () => void = () => undefined;
     const held = new Promise<void>(resolve => { release = resolve; });
     const bounded = Promise.race([held, new Promise<void>(resolve => setTimeout(resolve, 5000))]);
@@ -188,8 +189,11 @@ describe('the Options field of New session', {skip}, () => {
       await page.locator('#form-new label:has(input[name="preset"][value="pi"])').click();
       await page.locator('#form-new input[name="options"]').fill('-e /tmp/typed-early.mjs');
       release();
-      await page.waitForTimeout(700);   // the answer lands and must not overwrite what the owner typed
-      assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/typed-early.mjs');
+      // The hint names the stored default only once the answer landed: that is the completion signal,
+      // not a delay.
+      await page.locator('#new-options-stored').filter({hasText: '/tmp/stored.mjs'}).waitFor();
+      assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/typed-early.mjs',
+        'the configuration answer must not touch the typed field');
       assert.deepEqual(problems, []);
     } finally {
       release();

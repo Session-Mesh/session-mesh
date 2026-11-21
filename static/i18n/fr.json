@@ -2113,5 +2113,7 @@
   "server.optionsNotString": "Les options doivent être une chaîne de caractères",
   "server.optionsAgentOnly": "Les options ne s'appliquent qu'à un agent connu",
   "server.optionsUnknownPreset": "Preset d'agent inconnu : {preset}",
-  "server.optionsEmptyArgument": "Une option est vide : mettez sa valeur entre guillemets si elle doit être vide."
+  "server.optionsEmptyArgument": "Une option est vide : mettez sa valeur entre guillemets si elle doit être vide.",
+  "new.optionsStored": "Défaut enregistré, appliqué d’abord : {options}",
+  "new.optionsStoredNone": "Aucun défaut enregistré pour {agent}."
 }

@@ -2606,6 +2606,12 @@ except launchsettings.InvalidLaunchSettings as exc:
     print(f"launch options: {exc}", flush=True)
 
 
+# The stored options an approval covered, captured when the decision is taken and used by the execution
+# that follows: a save between the approval and the launch must not change the arguments the owner saw.
+# A request recovered after a restart has no entry here and uses the current options, as before.
+APPROVED_LAUNCH_OPTIONS = {}
+
+
 def apply_agent_options(stored, revision):
     """Make the owner's saved options effective for the next launch, without a restart."""
     global AGENT_OPTIONS, AGENT_OPTIONS_REVISION, AGENT_OPTIONS_ERROR
@@ -4631,8 +4637,10 @@ async def _execute_session_action(item):
         if item["preset"] not in AGENT_PRESETS:
             raise web.HTTPConflict(text=f"Agent {item['preset']} is disabled in the configuration")
         agent = launchplan.agent_type(item["preset"])
+        approved = APPROVED_LAUNCH_OPTIONS.get(item["id"])
+        options = approved if approved is not None else stored_options(item["preset"])
         argv, conversation = _chosen_launch(agent, _model_argv(
-            effective_launch(item["preset"], stored_options(item["preset"]), ()), item["model"]))
+            effective_launch(item["preset"], options, ()), item["model"]))
         name = await new_session(item["name"] or f"{Path(raw['cwd']).name}-{item['preset']}",
                                  raw["cwd"], shlex.join(argv),
                                  agent if agent in RESUMABLE_AGENT_PRESETS else None, agent,
@@ -4662,6 +4670,13 @@ async def _execute_session_action(item):
 
 async def _run_session_action(app, request_id):
     """Cross the durable execution boundary once, then record its outcome."""
+    try:
+        return await _run_session_action_once(app, request_id)
+    finally:
+        APPROVED_LAUNCH_OPTIONS.pop(request_id, None)   # the snapshot lives as long as the execution
+
+
+async def _run_session_action_once(app, request_id):
     item = app["session_requests"].begin_execution(request_id)
     if item is None:
         return app["session_requests"].status(request_id)
@@ -4728,6 +4743,13 @@ async def api_session_action_decision(request):
         request_id, body["approve"], body["claim_nonce"])
     if item is None:
         raise web.HTTPConflict(text="Request missing, lease lost or incompatible decision")
+    if body["approve"] and item.get("action") == "create" and item.get("preset"):
+        # No await between the revision check above and this capture: what the owner approved is what
+        # the execution will run, whatever is saved meanwhile.
+        try:
+            APPROVED_LAUNCH_OPTIONS[request_id] = stored_options(item["preset"])
+        except web.HTTPConflict:
+            APPROVED_LAUNCH_OPTIONS.pop(request_id, None)
     if not body["approve"]:
         return web.json_response({"request": item})
     if item["state"] != "approved":

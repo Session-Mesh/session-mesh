@@ -2098,5 +2098,7 @@
   "server.optionsNotString": "Options must be a string",
   "server.optionsAgentOnly": "Options are for a known agent only",
   "server.optionsUnknownPreset": "Unknown agent preset: {preset}",
-  "server.optionsEmptyArgument": "An option is empty: quote its value if it is meant to be empty."
+  "server.optionsEmptyArgument": "An option is empty: quote its value if it is meant to be empty.",
+  "new.optionsStored": "Stored default, applied first: {options}",
+  "new.optionsStoredNone": "No stored default for {agent}."
 }

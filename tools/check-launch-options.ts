@@ -294,6 +294,13 @@ export const CASES: Record<string, (h: Harness) => Promise<void>> = {
     const [argv] = await waitRecorded(h.argvLog, 1);
     assert.ok(argv!.includes('builtin:mcp'), JSON.stringify(argv));
     assert.deepEqual(argv!.slice(-2), ['-e', '/tmp/stored.mjs'], JSON.stringify(argv));
+    assert.equal(argv!.filter(token => token === '/tmp/stored.mjs').length, 1,
+      `the stored default must reach the argv once: ${JSON.stringify(argv)}`);
+    // And a launch that also types options adds them after the stored ones, not instead.
+    const withExtra = await launch(h.mesh, {preset: 'pi', options: '-e /tmp/extra.mjs'});
+    assert.equal(withExtra.status, 200, withExtra.text);
+    const launches = await waitRecorded(h.argvLog, 2);
+    assert.deepEqual(launches[1]!.slice(-4), ['-e', '/tmp/stored.mjs', '-e', '/tmp/extra.mjs'], JSON.stringify(launches[1]));
   },
 
   // CHECK-4 [AC-4]: two writers from the same revision; the second is refused and the first value stays.
