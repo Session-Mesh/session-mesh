@@ -117,6 +117,7 @@
   "compose.title": "Write in the terminal",
   "conn.connecting": "connecting…",
   "conn.disconnected": "disconnected",
+  "conn.cachedUnconfirmed": "Restored terminal not confirmed — select the session again",
   "conn.ended": "ended",
   "conn.reconnecting": "reconnecting…",
   "conn.sessionEnded": "session ended",
