@@ -1,0 +1,1 @@
+{"jobs":[{"name":"ruff and pytest","status":"completed","conclusion":"failure"},{"name":"frontend and Node tests","status":"completed","conclusion":"failure"}]}

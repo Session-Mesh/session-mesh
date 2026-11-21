@@ -1,1 +1,2 @@
-[{"databaseId":555,"status":"completed","conclusion":"failure"}]
+[{"databaseId":551,"status":"completed","conclusion":"failure","headSha":"9999000011112222333344445555666677778888"},
+ {"databaseId":555,"status":"completed","conclusion":"failure","headSha":"aaaabbbbccccddddeeeeffff0000111122223333"}]

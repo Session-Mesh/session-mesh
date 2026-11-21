@@ -1,3 +1,4 @@
 KO forbidden word: A word: Example-Private-Repository
-KO token-like string: See ghp_ABCDEFGHIJKLMNOPQRSTUVWX in the logs
+KO token-like string (ghp_) on line 2
+KO /home/ path: /home/alice
 comment-do.sh refuses to post (see the KO above).

@@ -63,5 +63,22 @@ if ! diff_expected "$FIXTURES/expected-failmerge.err" "$TEST_LIB_SCRATCH/failmer
     status=1
 fi
 
+# The head moves between the reading and the merge: the gate sees the moved head (which
+# still starts with <head8>), and the merge must stay pinned to the head read before.
+if "$here/../merge-do.sh" 405 f9c45553 --yes \
+    > "$TEST_LIB_SCRATCH/moves.out" 2> "$TEST_LIB_SCRATCH/moves.err"; then
+    :
+else
+    echo "$label moves: expected exit 0" >&2
+    status=1
+fi
+if [ -s "$TEST_LIB_SCRATCH/moves.err" ]; then
+    echo "$label moves: unexpected stderr" >&2
+    status=1
+fi
+if ! diff_expected "$FIXTURES/expected-moves.out" "$TEST_LIB_SCRATCH/moves.out"; then
+    status=1
+fi
+
 if [ "$status" -eq 0 ]; then echo 'merge-do test: OK'; fi
 exit "$status"

@@ -1,4 +1,5 @@
 [
+  {"number":13,"title":"fix: minor thing","isDraft":false,"headRefOid":"deadbeefcafe0000111122223333444455556666","mergeStateStatus":"CLEAN","author":{"login":"carol"}},
   {"number":12,"title":"feat: add the launch settings editor","isDraft":false,"headRefOid":"abcdef1234567890","mergeStateStatus":"BLOCKED","author":{"login":"alice"}},
   {"number":11,"title":"docs: short note","isDraft":true,"headRefOid":"1234567890abcdef","mergeStateStatus":"CLEAN","author":{"login":"bob"}}
 ]

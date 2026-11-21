@@ -29,15 +29,17 @@ pr_rows() {
         --jq 'sort_by(-.number)[] | [.number, .title, .isDraft, .headRefOid, .mergeStateStatus, .author.login] | @tsv'
 }
 
-# Checks of one PR that are not "pass" (gh pr checks exits non-zero when there are
-# failures or pending checks: accepted).
+# Checks of one PR that are not "pass" (gh pr checks exits 0 with failures, 8 with
+# pending checks and 1 both for a PR without any check (output empty) and for other
+# failures; a PR without checks just gets a column.
 non_pass_checks() {
     local pr=$1 line name state rc=0 out
-    # gh pr checks exits 0 when everything passes and 8 when some checks are pending;
-    # any other code with empty output means the check data could not be read at all
-    # (network, authentication): report it instead of printing an empty column.
     out=$(gh pr checks "$pr" -R "$REPO" 2>/dev/null) && rc=0 || rc=$?
-    if [ -z "$out" ] && [ "$rc" -ne 0 ] && [ "$rc" -ne 8 ]; then
+    if [ -z "$out" ]; then
+        if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ] || [ "$rc" -eq 8 ]; then
+            printf '%s\n' '(no checks yet)'
+            return 0
+        fi
         echo "error: could not read the CI checks of PR #$pr (gh exited with $rc)." >&2
         exit 2
     fi

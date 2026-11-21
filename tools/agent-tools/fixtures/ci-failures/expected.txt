@@ -1,4 +1,5 @@
 === ruff and pytest ===
-2026-11-21T13:59:26.5712276Z E       AssertionError: route has no auth class.
-2026-11-21T13:59:26.5722790Z E       assert not ok
-2026-11-21T13:59:26.5799999Z ##[error]Process completed with exit code 1.
+E       AssertionError: route has no auth class.
+##[error]Process completed with exit code 1.
+=== frontend and Node tests ===
+✖ the table is not broader (419ms)

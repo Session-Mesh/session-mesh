@@ -1,13 +1,14 @@
 OK PR open: open, not a draft
 OK head: head a1b2c3d4eeeeffff matches a1b2c3d4
 KO merge state: BLOCKED
-KO CI checks: not green: browser tests (Chromium, shard 3 of 4)=pending
+OK base branch: main
+KO CI checks: not green: frontend and Node tests=pending; matrix.shard regression check=fail
 OK base CI run: completed/success on main
-OK readable diff: readable
+KO required checks: missing: leak check (public rules)
 WARN forbidden words and leaks: private deny list missing or empty; generic leaks: none
 OK attribution footers: none
-KO added Python files: tests/new_thing.py
-OK .github files: unchanged
+KO added Python files: tests/new_thing.py; renamed_py.py
+KO .github files: workflow files changed: .github/workflows/ci.yml
 OK semver label: semver: minor
 OK changelog: the body contains Changelog: none
 NO-GO

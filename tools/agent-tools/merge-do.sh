@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-# merge-do.sh <pr> <head8> --yes [--allow-new-python] — rebase-merge a PR after a GO.
+# merge-do.sh <pr> <head8> --yes [--allow-new-python] [--allow-workflow-change] —
+# rebase-merge a PR after a GO.
 # Without --yes: prints what it would do and merges nothing. With --yes: reads the full
 # head FIRST, refuses when it does not start with <head8>, runs merge-gate.sh, refuses on
 # anything but GO, then gh pr merge <pr> --rebase --match-head-commit <the head read before
@@ -28,8 +29,9 @@ for arg in "$@"; do
         *) gate_args+=("$arg") ;;
     esac
 done
-if [ "${#gate_args[@]}" -lt 2 ]; then
-    echo "usage: $0 <pr number> <head8> --yes [--allow-new-python]" >&2
+if [ "${#gate_args[@]}" -lt 2 ] || [[ ! ${gate_args[0]} =~ ^[0-9]+$ ]] \
+    || [[ ! ${gate_args[1]} =~ ^[0-9a-f]{8}$ ]]; then
+    echo "usage: $0 <pr number> <head8> --yes [--allow-new-python] [--allow-workflow-change]" >&2
     exit 2
 fi
 pr=${gate_args[0]}
@@ -44,10 +46,13 @@ fi
 
 # Read the full head BEFORE the gate and pin the merge to exactly this commit, so a push
 # during the gate cannot make us merge something else than what was reviewed.
-full_head=$(gh pr view "$pr" -R "$REPO" --json headRefOid --jq .headRefOid) || {
-    echo "error: could not read the head of PR #$pr on $REPO." >&2
+head_rc=0
+full_head=$(gh pr view "$pr" -R "$REPO" --json headRefOid --jq .headRefOid) \
+    && head_rc=0 || head_rc=$?
+if [ "$head_rc" -ne 0 ]; then
+    echo "error: could not read the head of PR #$pr (gh exited with $head_rc)." >&2
     exit 2
-}
+fi
 case $full_head in
     "$head8"*) ;;
     *)

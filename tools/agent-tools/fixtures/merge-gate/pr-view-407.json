@@ -5,7 +5,7 @@
   "mergeStateStatus": "CLEAN",
   "baseRefName": "main",
   "title": "fix(sessions): keep a renamed session's name",
-  "body": "Keeps the name of a renamed session when its agent restarts.",
+  "body": "Keeps the name. Compare disk-abcdefghijklmnopqrstuvwxyz as a counterexample. the name of a renamed session when its agent restarts.",
   "labels": [{"name": "semver: patch"}],
   "commits": [{"messageHeadline": "fix(sessions): keep a renamed session's name", "messageBody": ""}]
 }

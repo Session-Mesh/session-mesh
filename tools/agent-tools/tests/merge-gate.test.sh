@@ -8,48 +8,118 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 setup_dir merge-gate
 export REPO=Session-Mesh/session-mesh
 status=0
+tool="$here/../merge-gate.sh"
 
 run_case() {
-    # run_case <pr> <head8> <deny file or "none"> <expected file> <expected rc>
+    # run_case <pr> <head8> <deny file or "none"> <expected stdout or ""> <expected rc>
     local pr=$1 head8=$2 deny=$3 expected=$4 rc_want=$5 rc=0
     if [ "$deny" = "none" ]; then
         AGENT_TOOLS_DENY_FILE="$TEST_LIB_SCRATCH/no-such-deny-words.txt" \
-            "$here/../merge-gate.sh" "$pr" "$head8" \
-            > "$TEST_LIB_SCRATCH/out" 2> "$TEST_LIB_SCRATCH/err.err" || rc=$?
+            "$tool" "$pr" "$head8" \
+            > "$TEST_LIB_SCRATCH/out" 2> "$TEST_LIB_SCRATCH/err" || rc=$?
     else
         AGENT_TOOLS_DENY_FILE="$FIXTURES/$deny" \
-            "$here/../merge-gate.sh" "$pr" "$head8" \
-            > "$TEST_LIB_SCRATCH/out" 2> "$TEST_LIB_SCRATCH/err.err" || rc=$?
+            "$tool" "$pr" "$head8" \
+            > "$TEST_LIB_SCRATCH/out" 2> "$TEST_LIB_SCRATCH/err" || rc=$?
     fi
     local label="merge-gate $pr"
     if [ "$rc" -ne "$rc_want" ]; then
         echo "$label: expected exit $rc_want, got $rc" >&2
         status=1
     fi
-    if [ -s "$TEST_LIB_SCRATCH/err.err" ]; then
-        echo "$label: unexpected stderr" >&2
-        cat "$TEST_LIB_SCRATCH/err.err" >&2
-        status=1
-    fi
-    if ! diff_expected "$FIXTURES/$expected" "$TEST_LIB_SCRATCH/out"; then
-        status=1
+    if [ "$rc_want" -eq 2 ]; then
+        # Environment errors: no stdout, and the message explains what gh could not give.
+        [ -s "$TEST_LIB_SCRATCH/out" ] && { echo "$label: expected no stdout" >&2; status=1; }
+        grep -q 'error:' "$TEST_LIB_SCRATCH/err" || { echo "$label: expected an error message" >&2; status=1; }
+    else
+        [ -s "$TEST_LIB_SCRATCH/err" ] && { echo "$label: unexpected stderr" >&2; cat "$TEST_LIB_SCRATCH/err" >&2; status=1; }
+        if ! diff_expected "$FIXTURES/$expected" "$TEST_LIB_SCRATCH/out"; then
+            status=1
+        fi
     fi
 }
 
-# 401: green PR -> GO (exit 0).
 run_case 401 f9c45553 deny-words.txt expected-go.txt 0
-# 402: blocked merge, pending check, added .py, no deny list -> NO-GO (exit 1).
 run_case 402 a1b2c3d4 none expected-nogo.txt 1
-# 403: a paginated files API (added .py on page 2) must be seen -> NO-GO (exit 1).
 run_case 403 f9c45553 deny-words.txt expected-403.txt 1
-# 404: unreadable diff -> KO readable diff, NO-GO (exit 1).
-run_case 404 f9c45553 deny-words.txt expected-404.txt 1
-# 405: a deny file of comments and blank lines matches nothing -> WARN, GO (exit 0).
 run_case 405 f9c45553 deny-words-blanks.txt expected-405.txt 0
-# 406: the PR targets release/latest: the base branch decides which run is checked -> GO.
-run_case 406 f9c45553 deny-words.txt expected-406.txt 0
-# 407: /home/user and a long hex in added lines are WARN only; still GO (exit 0).
 run_case 407 f9c45553 deny-words.txt expected-407.txt 0
+run_case 408 f9c45553 deny-words.txt expected-408.txt 0
+run_case 410 f9c45553 deny-words.txt expected-nogo-410.txt 1
+run_case 411 f9c45553 deny-words.txt expected-nogo-411.txt 1
+run_case 412 f9c45553 deny-words.txt expected-nogo-412.txt 1
+run_case 413 f9c45553 deny-words.txt expected-nogo-413.txt 1
+run_case 414 f9c45553 deny-words.txt expected-nogo-414.txt 1
+
+# A non-numeric PR argument (a URL) is refused by usage; the fake gh would follow it.
+rc=0
+if "$tool" "https://github.com/Session-Mesh/session-mesh/pull/14" f9c45553 \
+    > "$TEST_LIB_SCRATCH/ourl" 2> "$TEST_LIB_SCRATCH/eurl"; then
+    echo "merge-gate url: expected exit 2, got 0" >&2
+    status=1
+else
+    rc=$?
+    [ "$rc" -eq 2 ] || { echo "merge-gate url: expected exit 2, got $rc" >&2; status=1; }
+fi
+
+# 404: gh cannot render the diff -> exit 2, no stdout, a clear error on stderr.
+rc=0
+AGENT_TOOLS_DENY_FILE="$FIXTURES/deny-words.txt" "$tool" 404 f9c45553 \
+    > "$TEST_LIB_SCRATCH/o404" 2> "$TEST_LIB_SCRATCH/e404" || rc=$?
+if [ "$rc" -ne 2 ]; then
+    echo 'merge-gate 404: expected exit 2 with no stdout' >&2
+    status=1
+fi
+grep -q 'could not read the diff of PR #404' "$TEST_LIB_SCRATCH/e404" \
+    || { echo 'merge-gate 404: missing diff error message' >&2; status=1; }
+
+# 406: the base branch is release/latest; a copy of the fixtures makes the main run a
+# failure for the same sha, so running the check against main (hardcoded branch) goes red.
+cp -r "$FIXTURES" "$TEST_LIB_SCRATCH/fg406"
+printf '%s\n' \
+  '[{"databaseId":9,"status":"completed","conclusion":"failure","headSha":"f9c45553deadbeefdeadbeefdeadbeefdeadbeef"}]' \
+  > "$TEST_LIB_SCRATCH/fg406/run-main.json"
+saved_fixtures=$FIXTURES
+FIXTURES="$TEST_LIB_SCRATCH/fg406"
+rc=0
+AGENT_TOOLS_DENY_FILE="$FIXTURES/deny-words.txt" "$tool" 406 f9c45553 \
+    > "$TEST_LIB_SCRATCH/o406" 2> "$TEST_LIB_SCRATCH/e406" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo 'merge-gate 406: expected exit 0' >&2
+    status=1
+fi
+if [ -s "$TEST_LIB_SCRATCH/e406" ]; then
+    echo 'merge-gate 406: unexpected stderr' >&2
+    status=1
+fi
+if ! diff_expected "$saved_fixtures/expected-406.txt" "$TEST_LIB_SCRATCH/o406"; then
+    status=1
+fi
+FIXTURES=$saved_fixtures
+
+# 409: a token built at runtime (no token literal in the fixtures) -> KO and the value
+# must never reach the output.
+cp -r "$FIXTURES" "$TEST_LIB_SCRATCH/fg409"
+tok="ghp_$(printf 'x%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)"
+sed_body=$(printf 'The bot published %s on the tracker.' "$tok")
+jq --arg b "$sed_body" '.body = $b' "$TEST_LIB_SCRATCH/fg409/pr-view-401.json" \
+    > "$TEST_LIB_SCRATCH/fg409/pr-view-409.json"
+saved_fixtures=$FIXTURES
+FIXTURES="$TEST_LIB_SCRATCH/fg409"
+rc=0
+AGENT_TOOLS_DENY_FILE="$FIXTURES/deny-words.txt" "$tool" 409 f9c45553 --allow-new-python \
+    > "$TEST_LIB_SCRATCH/o409" 2> "$TEST_LIB_SCRATCH/e409" || rc=$?
+if [ "$rc" -ne 1 ]; then
+    echo 'merge-gate 409: expected exit 1' >&2
+    status=1
+fi
+grep -q 'token-like string (ghp_) on line 2' "$TEST_LIB_SCRATCH/o409" \
+    || { echo 'merge-gate 409: missing token report' >&2; status=1; }
+if grep -q "$tok" "$TEST_LIB_SCRATCH/o409" "$TEST_LIB_SCRATCH/e409"; then
+    echo 'merge-gate 409: the token value leaked into the output' >&2
+    status=1
+fi
+FIXTURES=$saved_fixtures
 
 if [ "$status" -eq 0 ]; then echo 'merge-gate test: OK'; fi
 exit "$status"

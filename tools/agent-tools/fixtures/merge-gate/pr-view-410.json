@@ -1,0 +1,11 @@
+{
+  "state": "OPEN",
+  "isDraft": false,
+  "headRefOid": "eeeeeeee00000000ffffffff00001111",
+  "mergeStateStatus": "CLEAN",
+  "baseRefName": "main",
+  "title": "fix(sessions): keep a renamed session's name",
+  "body": "Keeps the name of a renamed session when its agent restarts.",
+  "labels": [{"name": "semver: patch"}],
+  "commits": [{"messageHeadline": "fix(sessions): keep a renamed session's name", "messageBody": ""}]
+}
