@@ -539,6 +539,10 @@ class Pane {
     this.sizeBanner = $(".size-banner", this.el);   // another device owns the PTY size (followPtySize)
     this.limitedBanner = $(".limited-banner", this.el);
     $("button", this.limitedBanner).addEventListener("click", () => this.takeSize());
+    this.limitedKeyboard = $(".limited-keyboard", this.el);
+    this.limitedKeyboard.addEventListener("click", (event) => {
+      event.stopPropagation(); this.focusLimitedKeyboard();
+    });
     this.ptyFollowing = false;
     $("button", this.sizeBanner).addEventListener("click", () => this.takeSize());
     this.lastAutoTake = null;   // automatic take-over (static/size-takeover.ts)
@@ -1315,17 +1319,29 @@ class Pane {
     try { this.fit.fit(); } catch {}
     this.sendSize();
   }
-  // on a phone the keyboard types in the input line (see "phone input line")
+  focusLimitedKeyboard() {
+    const c = this.conn;
+    if (!touch || !localMeshEffectsAllowed() || !c?.terminal?.limited || c.closed || c.ended
+        || this.termEl.hidden) return false;
+    if (directPasteWaits(this)) { flash(t("terminal.limitedKeyboardWaiting")); return false; }
+    setActive(this);
+    if (this.conn !== c) return false;
+    c.liveKeyboard = true;   // focus intent only, never retained/deferred input authority
+    this.term.textarea.setAttribute("inputmode", "text");
+    this.term.focus();
+    return true;
+  }
+  // Phones normally type in the input line; limited mode offers an explicit live keyboard.
   focus() {
     if (this.termEl.hidden) return;
-    if (touch && !$("#line").hidden) $("#line-text").focus();
+    if (touch && !$("#line").hidden && !(this.conn?.liveKeyboard && this.conn.terminal?.limited)) $("#line-text").focus();
     else this.term.focus();
   }
 
   // Focus is an effect of a person choosing a live terminal, not of showing or
   // restoring one.  An attach hides xterm for its first fit, so retain that
-  // narrow intent until it becomes focusable.  On a phone, Mesh owns the
-  // editable field; xterm's helper textarea is deliberately not the target.
+  // narrow intent until it becomes focusable. On a phone the editable field
+  // stays the target unless the person explicitly chose the limited live keyboard.
   focusSelectedTerminal() {
     const c = this.conn;
     if (!c || c.closed || this.id !== c.name || active !== this) return false;
@@ -1341,7 +1357,7 @@ class Pane {
     // A focused but connecting terminal drops input because there is no socket
     // to send it on yet.  Waiting for onopen keeps "ready to type" literal.
     if (!c.terminal?.isOpen()) return false;
-    if (touch) {
+    if (touch && !(c.liveKeyboard && c.terminal.limited)) {
       if ($("#line").hidden) return false;
       $("#line-text").focus();
     } else {
@@ -2318,6 +2334,8 @@ class Pane {
           c.initialSizeClaim = false;
           c.limitedGeometry = null;
           this.limitedBanner.hidden = true;
+          this.limitedKeyboard.hidden = true; c.liveKeyboard = false;
+          if (touch) this.term.textarea.setAttribute("inputmode", "none");
           c.retry = 0; this.setConn("●");
           this.inputLease.reconnect();
           if (this.inputLease.dirty)
@@ -2336,6 +2354,7 @@ class Pane {
         },
         protocol: (_terminal, limited) => {
           this.limitedBanner.hidden = !limited;
+          this.limitedKeyboard.hidden = !limited || !touch;
           if (!limited) { c.cacheRestore = false; this.sendSize(true); this.armAutoRedraw(c); }
         },
         ptySize: (_terminal, size) => {
@@ -2391,6 +2410,8 @@ class Pane {
   detach() {
     if (!this.conn) return;
     this.limitedBanner.hidden = true;
+    this.limitedKeyboard.hidden = true;
+    if (touch) this.term.textarea.setAttribute("inputmode", "none");
     // The session left keeps no focus-in: its focus-out goes on its own connection. The pane's
     // focus state is then reset, so the next session starts unreported (whatever the pane
     // reported to the previous one) and gets a focus-in only per the rules above.

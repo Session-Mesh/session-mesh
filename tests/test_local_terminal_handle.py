@@ -61,6 +61,7 @@ vm.runInContext(app.slice(start, end) + '\nglobalThis.TestPane = Pane;', context
 const pane = Object.assign(Object.create(context.TestPane.prototype), {
   id: 'shell/name', conn: null, inputLeases: new Map(), inputLeaseSlot: 7,
   limitedBanner: {hidden: true},
+  limitedKeyboard: {hidden: true},
   termEl: {hidden: false, classList: {remove() {}}, removeAttribute() {}},
   term: {rows: 24, cols: 80, reset() { this.rows = 24; this.cols = 80; }, write(_data, done) { done?.(); }},
   fit: {fit() { fits++; pane.term.rows = 37; pane.term.cols = 143; }},
