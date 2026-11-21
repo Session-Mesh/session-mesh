@@ -229,8 +229,8 @@ async def test_listing_cannot_restore_a_stale_folder_after_a_rename(
     original = server.list_sessions
     entered, release = threading.Event(), threading.Event()
 
-    def pause_after_observing_the_old_folder(raw, listed=True):
-        observed = original(raw, listed)
+    def pause_after_observing_the_old_folder(raw, listed=True, read_at=None):
+        observed = original(raw, listed, read_at)
         entered.set()
         assert release.wait(2), "test did not release the stale listing"
         return observed
@@ -358,10 +358,10 @@ async def test_a_read_slower_than_a_publish_never_puts_older_rows_back(snapshot_
     # A read's awaits (organisation, snapshot) let a round, or a newer read, publish in between.
     entered, release, view = threading.Event(), threading.Event(), server.organize.view
 
-    def slow_view(raw, prune=True):
+    def slow_view(raw, prune=True, read_at=None):
         entered.set()
         assert release.wait(5)
-        return view(raw, prune)
+        return view(raw, prune, read_at)
 
     async def held(state, raw, order):
         entered.clear()

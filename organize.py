@@ -105,15 +105,22 @@ def _number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _later(created, than):
+    """Whether ``created`` is a later incarnation than ``than`` (both creation times)."""
+    return _number(created) and _number(than) and created > than
+
+
 def _kept(entry, listed, read_at):
     """Whether ``entry`` stays for ``listed``, the incarnation of its name in a listing of the host read at
-    ``read_at`` (None: not listed; unknown time). It does for that incarnation, and for an entry the listing cannot
-    judge: bound to a later incarnation of the name, or bound (carry) after the host was read, maybe to a
-    replacement session the listing does not show yet."""
+    ``read_at`` (None: not listed). It does for that incarnation, and for an entry the listing cannot judge: bound
+    to a later incarnation of the name, or bound (carry) after the host was read, maybe to a replacement session
+    the listing does not show yet. A listed later incarnation proves the entry's session gone."""
     created = entry.get("created")
-    if listed is not None and (created == listed or (_number(created) and _number(listed) and created > listed)):
+    if listed is not None and (created == listed or _later(created, listed)):
         return True
-    return _number(read_at) and _number(entry.get("bound_at")) and entry["bound_at"] > read_at
+    if listed is not None and _later(listed, created):
+        return False
+    return _number(entry.get("bound_at")) and entry["bound_at"] > read_at
 
 
 def _forget_dead(data, live, read_at=None):
@@ -149,7 +156,11 @@ def view(sessions, prune=True, read_at=None):
 
 
 def _entry(data, name, created):
+    """The entry of the session ``name`` listed as incarnation ``created``, made when it has none. An entry bound to
+    a later incarnation (a restart's carry, after that list was read) is the same session's: it is the one changed."""
     e = data["sessions"].get(name)
+    if isinstance(e, dict) and _later(e.get("created"), created):
+        return e
     if not e or e.get("created") != created:
         e = data["sessions"][name] = {"created": created}
     return e

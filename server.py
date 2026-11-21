@@ -1278,18 +1278,18 @@ def _account_fields(session):
     return {"account": account, "account_label": account_label(account)} if account else {}
 
 
-def list_sessions(mesh_raw, listed=True):
+def list_sessions(mesh_raw, listed=True, read_at=None):
     with discover.listing_scope():      # one codex process scan for the whole listing
-        return _list_sessions(mesh_raw, listed)
+        return _list_sessions(mesh_raw, listed, read_at)
 
 
-def _list_sessions(mesh_raw, listed):
+def _list_sessions(mesh_raw, listed, read_at=None):
     procs = discover.snapshot()
     for s in mesh_raw:
         if s["pid"] in procs:
             HOST_PIDS.add(procs[s["pid"]][2])
     mesh = []
-    org = organize.view(mesh_raw, prune=listed)
+    org = organize.view(mesh_raw, prune=listed, read_at=read_at)
     for s in mesh_raw:
         d = discover.describe(procs, s["pid"])
         known_agent = (s.get("meta") or {}).get("known_agent")
@@ -1385,12 +1385,13 @@ async def _listing(event_state=None, organisation_lock=None, read=None):
     """One full listing, and whether the host listed. ``read``: the host's listing, already read."""
     if event_state is None:
         event_state = _LIVE_EVENT_STATE
+    read_at = None if read else time.time()   # what a restart's carry bound after it is not judged by this list
     read = read or await _read_host()
     raw, listed, _, observed_at, order = read
     # ``list_sessions`` does CPU/filesystem discovery in a worker.  With a lock, it only reads: the
     # prune of the organisation is a write, made under the lock (_record_listing).  Keep the mutable
     # open queue on the event-loop thread: pruning it from the worker could race a board-open request.
-    data = await asyncio.to_thread(list_sessions, raw, listed and organisation_lock is None)
+    data = await asyncio.to_thread(list_sessions, raw, listed and organisation_lock is None, read_at)
     if event_state is not None and listed:
         # Before the recovery snapshot below: the conversation an OpenCode plugin reported is
         # what a restart restores.

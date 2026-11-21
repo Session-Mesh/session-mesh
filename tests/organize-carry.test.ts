@@ -146,6 +146,22 @@ test('a listing read before a carry keeps a replacement it does not show; one re
   }
 });
 
+test('a listing that shows a later incarnation of the name forgets a recently carried entry', () => {
+  const carriedRecently = arranged();
+  carriedRecently.sessions.work = {created: NEW, label: 'Chosen name', bound_at: Date.now() / 1000};
+  const [, after] = organize(carriedRecently, 'view', [[{name: 'work', created: NEW + 100}], true]);
+  assert.equal(after.sessions.work, undefined, 'the name now belongs to another session');
+});
+
+test('a rename read against the incarnation before the carry changes the carried entry', () => {
+  const carriedAlready = arranged();
+  carriedAlready.sessions.work!.created = NEW;
+  const live = [{name: 'first', created: 1}, {name: 'work', created: OLD}, {name: 'last', created: 2}];
+  const [, after] = organize(carriedAlready, 'apply', [{op: 'rename', id: 'work', label: 'Renamed'}, live]);
+  assert.deepEqual(after.sessions.work, {created: NEW, label: 'Renamed', folder: 'Projects'});
+  assert.deepEqual(after.order, ['first', 'work', 'last']);
+});
+
 test('a listing of a later incarnation, or without the session, still forgets an earlier entry', () => {
   for (const listing of [[{name: 'work', created: NEW}], []]) {
     const [, after] = organize(arranged(), 'view', [[{name: 'first', created: 1}, {name: 'last', created: 2}, ...listing], true]);

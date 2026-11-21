@@ -323,7 +323,7 @@ async def test_authenticated_session_snapshot_embeds_the_closed_management_proje
         return [{"name": "alpha", "pid": 999_991, "cwd": str(work), "created": 100.0,
                  "activity": 0, "attached": 0, "meta": {}}]
 
-    def listed(_raw, _listed=True):
+    def listed(_raw, _listed=True, _read_at=None):
         return {"mesh": [{**mesh_session(), "id": "alpha", "cwd": str(work),
                           "agent": {"status": "busy", "title": "private title"}}],
                 "external": [], "folders": [], "moved": {}, "opens": {}, "home": str(tmp_path), "now": 1_000.0}
@@ -389,7 +389,7 @@ async def test_server_enriches_only_the_existing_management_snapshot(tmp_path, m
         assert request == {"op": "list"}
         return raw
 
-    def listed(_raw, _listed=True):
+    def listed(_raw, _listed=True, _read_at=None):
         return {"mesh": [mesh_session()], "external": [], "folders": [], "moved": {},
                 "opens": {}, "home": str(tmp_path), "now": 1_000.0}
 
@@ -431,7 +431,7 @@ async def test_server_sessions_preserves_a_baseline_across_outage_then_records_o
             raise reply
         return reply
 
-    def fake_list_sessions(raw, listed=True):
+    def fake_list_sessions(raw, listed=True, read_at=None):
         observed_listed.append(listed)
         return {"mesh": [mesh_session()] if raw else [], "external": [], "folders": [],
                 "moved": {}, "opens": {}, "home": str(tmp_path), "now": next(times)}
@@ -478,7 +478,7 @@ async def test_an_older_listing_finishing_last_witnesses_no_stop_and_prunes_no_o
         assert request == {"op": "list"}
         return list(hosted)
 
-    def fake_list_sessions(raw, listed=True):
+    def fake_list_sessions(raw, listed=True, read_at=None):
         return {"mesh": [mesh_session(item["name"], item["created"]) for item in raw], "external": [], "folders": [],
                 "moved": {}, "opens": {}, "home": str(tmp_path),
                 "now": 1_001.0 if any(item["name"] == "x" for item in raw) else 1_000.5}
@@ -540,7 +540,7 @@ async def test_malformed_ptyhost_list_preserves_management_authority_and_ledger(
             raise reply
         return reply
 
-    def fake_list_sessions(raw, listed=True):
+    def fake_list_sessions(raw, listed=True, read_at=None):
         observed_listed.append(listed)
         return {"mesh": [mesh_session()] if raw else [], "external": [], "folders": [],
                 "moved": {}, "opens": {}, "home": str(tmp_path), "now": next(times)}
@@ -592,7 +592,7 @@ async def test_corrupt_respawn_recovery_is_bounded_through_server_management(tmp
         assert request == {"op": "list"}
         raise OSError("ptyhost unavailable")
 
-    def empty_list_sessions(raw, listed=True):
+    def empty_list_sessions(raw, listed=True, read_at=None):
         assert (raw, listed) == ([], False)
         return {"mesh": [], "external": [], "folders": [], "moved": {}, "opens": {},
                 "home": str(tmp_path), "now": now}
