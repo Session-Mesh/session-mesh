@@ -171,6 +171,7 @@
   "compose.recovery.refusedOutcome": "Aucune trame mise en file localement ; texte conservé.",
   "compose.recovery.summary": "À vérifier : {target} · {kind}",
   "compose.recovery.unknownReason": "inconnue",
+  "compose.recovery.pageSuspended": "Page suspendue ; brouillon non envoyé conservé pour examen.",
   "compose.reviewPrevious": "examine le résultat précédent avant de créer un nouveau brouillon",
   "compose.send": "Envoyer ⏎",
   "compose.title": "Écrire dans le terminal",
