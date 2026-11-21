@@ -26,15 +26,20 @@ class PiUnavailable(RuntimeError):
     pass
 
 
-def binary():
+def binary(environ=None):
+    environ = os.environ if environ is None else environ
+    home = environ.get("HOME") or str(Path.home())
     # ptyhost puts ~/.local/bin first even if the Web process PATH omits it.
-    search = str(Path.home() / ".local/bin") + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin")
+    search = str(Path(home) / ".local/bin") + os.pathsep + environ.get("PATH", "/usr/bin:/bin")
     executable = shutil.which("pi", path=search)
     if not executable:
         raise PiUnavailable("Pi not found in ~/.local/bin or PATH")
     try:
+        probe = {"HOME": home, "PATH": search}
+        if directory := environ.get("PI_CODING_AGENT_DIR"):
+            probe["PI_CODING_AGENT_DIR"] = directory
         result = subprocess.run([executable, "--version"], capture_output=True, text=True,
-                                timeout=3, check=True)
+                                timeout=3, check=True, env=probe, cwd="/")
     except (OSError, subprocess.SubprocessError) as exc:
         raise PiUnavailable("Could not check the Pi version") from exc
     match = _VERSION.fullmatch(result.stdout.strip())
@@ -46,13 +51,15 @@ def binary():
     return executable
 
 
-def prepare(config_dir):
-    """Return (absolute Pi executable, private overlay), or fail before launch."""
-    executable = binary()
+def prepare(config_dir, environ=None):
+    """Return (absolute Pi executable, private overlay) from one selected environment, or fail before launch."""
+    environ = dict(os.environ if environ is None else environ)
+    executable = binary(environ)
     board = Path(agentmcp.BOARD_MCP)
     if not board.is_file() or not os.access(board, os.X_OK):
         raise PiUnavailable(f"Mesh MCP server unavailable: {board}")
-    base = Path(os.environ.get("PI_CODING_AGENT_DIR") or Path.home() / ".pi/agent").expanduser()
+    home = Path(environ.get("HOME") or Path.home())
+    base = Path(environ.get("PI_CODING_AGENT_DIR") or home / ".pi/agent").expanduser()
     sessions = base / "sessions"
     try:
         base.mkdir(mode=0o700, parents=True, exist_ok=True)
