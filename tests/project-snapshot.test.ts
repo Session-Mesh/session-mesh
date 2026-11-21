@@ -588,8 +588,10 @@ test("I1 disabled selectors and repository plan never invoke inspection; missing
 });
 test("I1 cancellation waits for actual delayed child termination and pipe drain before witness", async t => {
   const root = await fixture(t), ready = join(root, "ready"), closed = join(root, "closed");
-  const cli = await executable(root, `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));
-    process.on("SIGTERM",()=>{setTimeout(()=>{fs.writeFileSync(${JSON.stringify(closed)},"done");process.exit(0)},180)});setInterval(()=>{},1000);`);
+  // Ready must mean the delayed-termination handler is installed, not merely that Node started.
+  const cli = await executable(root, `import fs from "node:fs";
+    process.on("SIGTERM",()=>{setTimeout(()=>{fs.writeFileSync(${JSON.stringify(closed)},"done");process.exit(0)},180)});setInterval(()=>{},1000);
+    fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));`);
   const controller = new AbortController(); let settled = false;
   const pending = collectObservation(observationInput([{ id: "one", kind: "roster", label: "One", board_path: root }], undefined, { repository: false, source_ids: ["one"] }),
     { rosterCLI: cli, signal: controller.signal }).then(output => { settled = true; return output; });
