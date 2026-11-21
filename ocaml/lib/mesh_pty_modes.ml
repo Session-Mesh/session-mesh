@@ -265,8 +265,12 @@ let finish_sequence t bytes offset length =
     invalid_arg "Mesh_pty_modes.finish_sequence";
   let count = ref 0 in
   while !count < length && t.phase <> ground do
-    step t (Bytes.unsafe_get bytes (offset + !count));
-    incr count
+    let c = Bytes.unsafe_get bytes (offset + !count) in
+    (* A new ESC cancels the sequence and starts one that is sent. *)
+    if c = '\027' then t.phase <- ground
+    else (
+      step t c;
+      incr count)
   done;
   if t.phase = ground then Some !count else None
 
