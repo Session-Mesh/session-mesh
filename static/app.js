@@ -4645,6 +4645,46 @@ const configPanel = MeshPaneActions.createConfigPanel({ dialog: $("#dlg-config")
 }, () => MeshI18n.locale());
 $("#btn-config").addEventListener("click", () => configPanel.open());
 
+let backendAccountPanel = null;
+let backendAccountCapabilityRead = null;
+let backendAccountGeneration = 0;
+function showBackendAccountEntries(available) {
+  for (const entry of document.querySelectorAll('#btn-accounts, [data-mobile-action="btn-accounts"]')) entry.hidden = !available;
+}
+async function startBackendAccountSettings() {
+  if (!localMeshEffectsAllowed()) return;
+  const generation = ++backendAccountGeneration, abort = new AbortController();
+  backendAccountCapabilityRead = abort;
+  const timer = setTimeout(() => abort.abort(), 15_000);
+  try {
+    const response = await requestLocal("/api/config", { method: "GET", signal: abort.signal, credentials: "same-origin",
+      mode: "same-origin", redirect: "error", cache: "no-store", headers: { Accept: "application/json" } });
+    if (!response.ok || response.headers.get("Content-Type")?.split(";")[0]?.trim() !== "application/json") return;
+    const config = await response.json();
+    if (abort.signal.aborted || generation !== backendAccountGeneration || !localMeshEffectsAllowed()
+      || config?.capabilities?.account_settings !== true) return;
+    const ports = MeshPaneActions.createBackendAccountApi((url, init) => requestLocal(url, init));
+    backendAccountPanel = MeshPaneActions.createBackendAccountPanel(document.body, { t, ...ports });
+    showBackendAccountEntries(true);
+  } catch { /* An absent, refused or unreadable capability leaves account settings unavailable. */ }
+  finally {
+    clearTimeout(timer);
+    if (backendAccountCapabilityRead === abort) backendAccountCapabilityRead = null;
+  }
+}
+function disposeBackendAccountSettings() {
+  ++backendAccountGeneration;
+  backendAccountCapabilityRead?.abort(); backendAccountCapabilityRead = null;
+  showBackendAccountEntries(false);
+  backendAccountPanel?.dispose(); backendAccountPanel = null;
+}
+whenTranslated(() => { void startBackendAccountSettings(); });
+$("#btn-accounts").addEventListener("click", (event) => {
+  if (localActionUnavailable() || !backendAccountPanel) return;
+  const trigger = event.currentTarget.getClientRects().length ? event.currentTarget : $("#btn-mobile-actions");
+  void backendAccountPanel?.open(trigger);
+});
+
 // Local transport owns local account navigation. A loader returns a LoadOutcome
 // (static/single-flight-poller.ts); a failure or a refusal is never an observed empty snapshot.
 // A server that numbers its listings gets `since` and `focus` (docs/sessions-loading.md); the
@@ -8025,6 +8065,7 @@ async function startMesh(context) {
     refresh,
     dispose() {
       meshStopped = true;
+      disposeBackendAccountSettings();
       projectsGeneration++; workGeneration++;
       projectsController?.close(); workController?.close();
       inventoryPoller?.stop();

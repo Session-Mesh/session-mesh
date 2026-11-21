@@ -42,11 +42,30 @@ async function signedIn(locale: string, width: number, height = 900): Promise<{p
   const page = await context.newPage();
   const problems: string[] = [];
   const calls: string[] = [];
+  const accountCalls: string[] = [];
   page.on('pageerror', error => problems.push(String(error)));
   page.on('console', message => { if (/Content Security Policy|violat/i.test(message.text())) problems.push(message.text()); });
-  page.on('request', request => { const {pathname} = new URL(request.url()); if (pathname === '/api/config') calls.push(request.method()); });
+  page.on('request', request => {
+    const {pathname} = new URL(request.url());
+    if (pathname === '/api/config' || pathname.startsWith('/api/config/')) calls.push(request.method());
+    if (pathname.startsWith('/api/accounts/')) accountCalls.push(request.method());
+  });
+  const bootstrap = page.waitForResponse(response => new URL(response.url()).pathname === '/api/config');
+  // Token sign-in already redirects to the app: a second navigation would start another bootstrap.
   await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
-  await page.goto(`${mesh.base}/`);
+  const response = await bootstrap;
+  assert.equal(response.status(), 200);
+  assert.equal(await response.finished(), null, 'the startup config body completed');
+  const config = await response.json();
+  assert.ok(config.capabilities?.account_settings === undefined || config.capabilities.account_settings === false,
+    'this fixture does not advertise account settings');
+  await page.waitForFunction('backendAccountCapabilityRead === null');
+  assert.deepEqual(calls, ['GET'], 'startup performs exactly one config read and no config writes');
+  assert.deepEqual(accountCalls, [], 'an absent/false capability causes no account probes or writes');
+  assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+  assert.equal(await page.locator('[data-mobile-action="btn-accounts"]').getAttribute('hidden'), '');
+  // Only completed startup traffic is removed; every dialog read/write remains observable.
+  calls.length = 0;
   await page.waitForSelector('#btn-config', {state: 'attached'});
   return {page, problems, calls};
 }
@@ -126,10 +145,12 @@ describe('the Configuration dialog', {skip}, () => {
   test('is closed with Escape and reopens with fresh data', async () => {
     const {page, calls} = await signedIn('en-US', 1440);
     await openConfig(page, 1440);
+    assert.deepEqual(calls, ['GET'], 'the first open reads once and writes nothing');
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#dlg-config').evaluate((node: HTMLDialogElement) => node.open), false);
+    assert.deepEqual(calls, ['GET'], 'closing performs no read or write');
     await openConfig(page, 1440);
-    assert.equal(calls.length, 2);
+    assert.deepEqual(calls, ['GET', 'GET'], 'reopening adds exactly one fresh read and no writes');
   });
 
   // Every hostile value is in the System section, the only one read here (the others show no server data).
