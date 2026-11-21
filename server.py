@@ -5789,11 +5789,19 @@ def releases_human_input(text):
 
 def attach_supports(reply, capability):
     """Fail closed for optional frames not announced by this exact attach."""
-    capabilities = reply.get("pty_capabilities") if isinstance(reply, dict) else None
-    return (isinstance(capabilities, list)
-            and all(isinstance(value, str) for value in capabilities)
-            and len(capabilities) == len(set(capabilities))
-            and capability in capabilities)
+    return ptyhost.supports(reply, capability)
+
+
+def attached_control(text, pty_size, human_input_lease, limited):
+    """An old R may ignore Claim/Keep: only an explicit Take may resize it."""
+    control = browser_control_frame(text, pty_size)
+    if not control or (control[:1] == b"H" and not human_input_lease):
+        return None
+    if limited and control[:1] == b"R":
+        message = json.loads(text)   # browser_control_frame already validated it
+        if message.get("size") != "take":
+            return None
+    return control
 
 
 async def ws_term(request):
@@ -5826,8 +5834,10 @@ async def ws_term(request):
         # IncompleteReadError: an older ptyhost closes some failed requests without replying
         raise web.HTTPNotFound()
     human_input_lease = attach_supports(attach_reply, "human_input_lease_v1")
-    # The geometry the host's replay was produced at, for a browser that asks for it; the
-    # browser validates it. A host that does not give it sends nothing more.
+    verified = created is not None and attach_reply.get("_conditional_input_verified") is True
+    limited = created is not None and not verified
+    # Current geometry captured before this attach, not historical per-byte
+    # geometry of the retained replay. The browser validates its render bounds.
     geometry = attach_reply.get("replay_geometry") if request.query.get("replay_geometry") == "1" else None
     try:
         await ws.prepare(request)
@@ -5838,15 +5848,17 @@ async def ws_term(request):
 
     async def downstream():
         try:
-            if created is not None:   # only after the native attach_if handshake succeeded
+            if verified:   # exact connected host confirms lifetime fencing and size watching
                 await ws.send_str(json.dumps({"t": "bound", "name": name, "created": created}))
+            elif limited:
+                await ws.send_str(json.dumps({"t": "limited"}))
             if isinstance(geometry, dict):   # before the replay, the host's first D frame
                 await ws.send_str(json.dumps({"t": "g", "rows": geometry.get("rows"), "cols": geometry.get("cols")}))
             while True:
                 kind, payload = await ptyhost.read_frame(reader)
                 if kind == b"D":
                     await ws.send_bytes(payload)
-                elif kind == b"S" and pty_size:
+                elif kind == b"S" and pty_size and not limited:
                     size = pty_size_message(payload)
                     if size:
                         await ws.send_str(size)
@@ -5862,11 +5874,11 @@ async def ws_term(request):
             if msg.type == web.WSMsgType.BINARY:
                 writer.write(ptyhost.frame(b"D", msg.data))
             elif msg.type == web.WSMsgType.TEXT:
-                control = browser_control_frame(msg.data, pty_size)
+                control = attached_control(msg.data, pty_size, human_input_lease, limited)
                 # H is an optional extension.  Forwarding it to the former
                 # OCaml owner closes the whole attachment, including ordinary
                 # keyboard D frames.  R remains part of the baseline protocol.
-                if control and (control[:1] != b"H" or human_input_lease):
+                if control:
                     writer.write(control)
                     if human_input_lease and releases_human_input(msg.data):
                         request.app["agent_wakes"].trigger()

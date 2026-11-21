@@ -389,6 +389,11 @@ let supported_foreground s requested =
               && runs_agent found requested)
             processes)
 
+(* Conditional attach may subscribe to size ownership without resizing. Its
+   D/H/R input and queued D writes retire at an incarnation change. In a C ack
+   this capability describes this exact, conditional size-watching stream. *)
+let conditional_input_capability = `String "conditional_input_v1"
+
 (* [agent_relaunch_v1]: [stop_agent_if] and a [start_if] with [meta] are
    served (not in the Unix identity split, whose sessions are another
    account's processes). *)
@@ -404,7 +409,11 @@ let session_json ?(relaunch = true) s =
       ("attached", `Int (List.length s.clients));
       ( "pty_capabilities",
         `List
-          ([ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
+          ([
+             `String "agent_wake_v1";
+             `String "human_input_lease_v1";
+             conditional_input_capability;
+           ]
           @ if relaunch then [ `String "agent_relaunch_v1" ] else []) );
     ]
 
@@ -1687,9 +1696,9 @@ let prepare_attach env observer sessions fields =
               None
           | _ -> Some (size fields)
         in
-        (* The replay and the geometry it was last produced at, both taken
-           before this client's geometry is applied, as ptyhost.py does; the
-           reply names the geometry when it can be read. *)
+        (* Retained bytes and current geometry, captured before this attach's
+           resize. This is not per-byte historical geometry: replay can span
+           several resize epochs. *)
         let snapshot = Mesh_pty_replay.replay s.replay in
         let replay_geometry =
           try Some (s.geometry ())
@@ -1764,8 +1773,11 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach ?incarnatio
          ([
             ("ok", `Bool true);
             ( "pty_capabilities",
-              `List [ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
-            );
+              `List
+                ([ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
+                @ if Option.is_some incarnation && watch then
+                    [ conditional_input_capability ]
+                  else []) );
           ]
          @ optional "replay_geometry"
              (Option.map
@@ -1971,7 +1983,7 @@ let conditional_attach env observer sessions fields flow =
       try
         let snapshot, replay_geometry =
           if List.assoc_opt "op" fields = Some (`String "attach_if") then
-            (* Keep the replay and its geometry paired before resizing, as for
+            (* Capture retained bytes and current pre-attach geometry, as for
                ordinary attach, but only after strict incarnation selection. *)
             let snapshot = Mesh_pty_replay.snapshot s.replay in
             let replay_geometry =

@@ -93,6 +93,7 @@ const MAX_PANES = 3;
 const paneTargets = MeshPaneActions.createTargetRegistry();
 const paneInput = MeshPaneActions.createPasteDelivery({
   valid: (target) => paneTargets.valid(target)
+    && (target.kind !== "mesh" || target.pane.conn?.terminal?.isBound(target.name, target.created))
     && !(composeOwner?.target === target && (!composeOwner.open || !cdlg.open)),
   connection: (pane) => pane.conn,
   open: (socket) => localTerminalSocketReady(socket),
@@ -397,7 +398,8 @@ function prefixedBytes(prefix, bytes) {
 
 function localTerminalSocket(name, { rows, cols, created }) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  // replay_geometry=1: server.py sends, before the replay, the geometry it was produced at.
+  // replay_geometry=1: current PTY geometry captured before this attach's resize,
+  // not historical per-byte geometry of a replay spanning several resize epochs.
   // pty_size=1: this pane follows the PTY size another device owns ({t:"s"}, Pane.applyPtySize).
   const conditional = typeof created === "number" && Number.isFinite(created) && created > 0;
   if (created != null && !conditional) throw new TypeError(t("dictation.inline.invalidIncarnation"));
@@ -407,9 +409,9 @@ function localTerminalSocket(name, { rows, cols, created }) {
   return socket;
 }
 
-// Original-socket identity only. Callers must additionally guard replay/drain,
-// inventory, mode and input revision. View detachment alone does not revoke it.
-function localTerminalBinding(name, created, bytes, geometry, ptySize = () => {}) {
+// Original-socket binding with admitted control frames, not replay confidence.
+// Callers additionally guard replay/drain, inventory, modes and input revision.
+function localTerminalBinding(name, created, bytes, geometry, ptySize = () => {}, protocol = () => {}) {
   let binding = created != null ? "pending" : "invalid";
   let replayStarted = false;
   return {
@@ -430,6 +432,10 @@ function localTerminalBinding(name, created, bytes, geometry, ptySize = () => {}
           && typeof message.created === "number" && Number.isFinite(message.created)
           && message.created > 0 && message.created === created;
         binding = binding === "pending" && !replayStarted && exact ? "bound" : "invalid";
+        if (binding === "bound") protocol(false);
+      } else if (message?.t === "limited" && Object.keys(message).length === 1) {
+        binding = "invalid";
+        protocol(true);
       } else if (!size && !MeshPaneActions.isPtySizeFrame(message)) binding = "invalid";
       if (size) geometry(size);
       if (ownedSize) ptySize(ownedSize);
@@ -442,6 +448,7 @@ function openLocalTerminal(name, size, observer) {
   const socket = localTerminalSocket(name, size), {created} = size;
   let disposed = false;
   let attached = true;
+  let limited = false;
   let dictationMode = MeshPaneActions.createDictationModeObserver(observer.modeSource?.modes?.bracketedPasteMode === true, observer.modeSource);
   const lifetime = MeshPaneActions.createRetainedLifetime(() => {
     disposed = true; dictationMode.dispose(); localTerminalHandles.delete(handle); socket.close();
@@ -459,15 +466,18 @@ function openLocalTerminal(name, size, observer) {
       dictationMode.bytes(prefixedBytes(prefix, bytes));
     },
     isOpen: () => !disposed && localTerminalSocketReady(socket),
+    get limited() { return limited; },
     isBound: (expectedName, expectedCreated) => handle.isOpen() && binding.isBound()
       && expectedName === name && expectedCreated === created,
     queueInput: (bytes) => send(bytes),
     lease: (clientId, dirty) => send(JSON.stringify({ t: "h", client_id: clientId, dirty })),
     // mode "claim" (the default, no field): applied only while no other device owns the size;
     // "take": the banner's take-over; "keep": a redraw at the PTY's size.
-    resize: (rows, cols, mode = "claim") =>
-      send(JSON.stringify(mode === "claim" ? { t: "r", rows, cols } : { t: "r", rows, cols, size: mode })),
-    retain: () => lifetime.retain(),
+    resize: (rows, cols, mode = "claim") => {
+      if (binding.isBound() || (limited && mode === "take"))
+        send(JSON.stringify(mode === "claim" ? { t: "r", rows, cols } : { t: "r", rows, cols, size: mode }));
+    },
+    retain: () => binding.isBound() ? lifetime.retain() : null,
     close: () => { attached = false; lifetime.detach(); },
     dispose: () => lifetime.dispose(),
   };
@@ -477,7 +487,11 @@ function openLocalTerminal(name, size, observer) {
     dictationMode.bytes(bytes);
     if (current()) observer.bytes(handle, bytes);
   }, (geometry) => {if (current()) observer.replayGeometry(handle, geometry);},
-  (ptySize) => {if (current()) observer.ptySize?.(handle, ptySize);});
+  (ptySize) => {if (current()) observer.ptySize?.(handle, ptySize);},
+  (isLimited) => {
+    limited = isLimited;
+    if (current()) observer.protocol?.(handle, isLimited);
+  });
   socket.onopen = () => {
     if (!current()) { try { handle.close(); } catch {} return; }
     observer.opened(handle);
@@ -493,9 +507,8 @@ function openLocalTerminal(name, size, observer) {
 }
 const localTerminalHandles = new Set();
 
-// {t:"g", rows, cols} from server.py: the PTY's geometry when the replay that follows was
-// last produced. Anything else, or a size beyond what the server accepts from a browser, is
-// ignored, and the replay is parsed at the pane's own size as before.
+// {t:"g", rows, cols}: the current pre-attach geometry, not per-byte replay
+// history. Initial unrenderable geometry deliberately revokes automation binding.
 function replayGeometry(text) {
   let message;
   try { message = JSON.parse(text); } catch { return null; }
@@ -524,6 +537,8 @@ class Pane {
     });
     $(".demo-history", this.el).addEventListener("click", () => openDemoHistory(this));
     this.sizeBanner = $(".size-banner", this.el);   // another device owns the PTY size (followPtySize)
+    this.limitedBanner = $(".limited-banner", this.el);
+    $("button", this.limitedBanner).addEventListener("click", () => this.takeSize());
     this.ptyFollowing = false;
     $("button", this.sizeBanner).addEventListener("click", () => this.takeSize());
     $(".web", this.el).addEventListener("load", () => this.frameLoaded());
@@ -664,7 +679,8 @@ class Pane {
           setCtrl(false);
         }
         if (human) this.send(d);
-        else if (currentReply(reply)) reply.terminal.queueInput(enc.encode(d));
+        else if (currentReply(reply) && reply.terminal.isBound(this.conn.name, this.conn.created))
+          reply.terminal.queueInput(enc.encode(d));
       });
     });
     // file paths of viewable documents are clickable: they open in a web pane,
@@ -855,13 +871,14 @@ class Pane {
       while (!c.activeHumanInput && !c.replaying && !c.draining && !c.replayPending && c.queuedHumanInput?.length) {
         const entry = c.queuedHumanInput.shift();
         if (localMeshEffectsAllowed() && this.conn === c && !c.closed && c.ws === entry.socket
-            && c.terminal?.isOpen()) entry.input.flush();
+            && c.terminal?.isBound(c.name, c.created)) entry.input.flush();
         else entry.input.cancel();
       }
     } finally {c.flushingHumanInput = false;}
   }
   deferReplayPaste(binding, text, resume, cancel) {
     const c = binding.connection;
+    if (!c.terminal?.isBound(c.name, c.created)) { cancel(); return {start() {}, settle() {}}; }
     // Keep the FIFO barrier through settlement, including delayed Enter.
     // Later human keys must not overtake a submitted paste, even after replay.
     const reservation = this.inputLease.defer(enc.encode(text || "\r"), false);
@@ -892,6 +909,7 @@ class Pane {
     if (!c?.terminal?.isOpen() || c.closed || c.ended) return false;
     if ((c.replaying || c.draining || c.replayPending || c.activeHumanInput || c.flushingHumanInput
         || c.queuedHumanInput?.length) && this.inputLease) {
+      if (!c.terminal.isBound(c.name, c.created)) { flash(t("terminal.limitedInput")); return false; }
       const input = this.inputLease.defer(bytes, complete);
       (c.queuedHumanInput ||= []).push({socket: c.ws, input});
       return true;
@@ -910,10 +928,9 @@ class Pane {
       humanInputScopes.set(key, scope);
     }
     let lease = this.inputLeases.get(key);
-    // The PTY host stores leases per session, so the client id need only be
-    // stable for this tab/pane/name. A replacement incarnation starts with a
-    // fresh host-side table while the map key prevents a dirty bit transfer.
-    const clientId = `${inputLeaseTab.slice(0, 32)}_${this.inputLeaseSlot}_${name.slice(0, 32)}`;
+    // Old same-PTY relaunch hosts do not scope leases by created. An old H(false)
+    // must not clear the new incarnation's dirty barrier on such a host.
+    const clientId = MeshPaneActions.humanInputClientId(inputLeaseTab, this.inputLeaseSlot, name, incarnation);
     const transport = {
       control: (id, dirty) => {
         const terminal = this.conn?.terminal;
@@ -947,6 +964,7 @@ class Pane {
     if (!localMeshEffectsAllowed()) return;
     const c = this.conn;
     if (c?.initializing || !c?.terminal?.isOpen()) return;
+    if (!c.terminal.isBound(c.name, c.created) && !(c.terminal.limited && mode === "take")) return;
     if (!MeshPaneActions.sendsSize(c.pty ?? null, mode)) return;
     const cols = this.ownSize().cols, last = c.lastSize;
     if (!force && last && last.rows === rows && last.cols === cols) return;
@@ -972,6 +990,14 @@ class Pane {
   // True when another device owns the size: xterm takes the PTY's size, clipped by the pane
   // (the bottom rows kept when it is taller), and the banner offers to take the size back.
   followPtySize(c) {
+    if (c?.terminal?.limited) {
+      const size = c.limitedGeometry;
+      this.sizeBanner.hidden = true;
+      this.ptyFollowing = !!size;
+      this.termEl.classList.toggle("pty-tall", !!size && size.rows > (this.fitSize()?.rows ?? this.term.rows));
+      if (size && (this.term.cols !== size.cols || this.term.rows !== size.rows)) this.term.resize(size.cols, size.rows);
+      return !!size;
+    }
     if (!c?.pty && !this.ptyFollowing) return false;   // a host without the rule: nothing to show
     const own = this.fitSize() ?? { rows: this.term.rows, cols: this.term.cols };
     const plan = MeshPaneActions.sizePlan(c?.pty ?? null, own);
@@ -989,6 +1015,11 @@ class Pane {
   takeSize() {
     const c = this.conn, own = this.fitSize();
     if (localActionUnavailable() || !own || c?.initializing || c?.replaySize || !c?.terminal?.isOpen()) return;
+    if (c.terminal.limited) {
+      c.limitedGeometry = own;
+      c.terminal.resize(own.rows, own.cols, "take");
+      this.refit(); return;
+    }
     if (c.pty) c.pty = { ...c.pty, owner: "you" };
     c.lastSize = own;
     c.away = null;
@@ -1000,7 +1031,7 @@ class Pane {
   ownSize() {
     return this.conn?.replaySize ?? { rows: this.term.rows, cols: this.term.cols };
   }
-  // A replay is parsed at the geometry it was produced at (from the host, through server.py),
+  // A replay is parsed at the current pre-attach geometry (a best-effort hint),
   // then xterm takes this pane's size back and rewraps its rows (leaveReplayGeometry). The
   // resize is done now, not in a write of its own: output still queued before the replay is
   // wiped by the reset the replay starts with (replayPrefix). Meanwhile sizes sent are the
@@ -1019,7 +1050,8 @@ class Pane {
     if (!own) return;
     c.replaySize = null;
     // A pane that follows another device's size goes straight to the PTY's (one rewrap).
-    const back = c.pty?.owner === "other" ? c.pty : own;
+    const back = c.terminal?.limited && c.limitedGeometry
+      ? c.limitedGeometry : c.pty?.owner === "other" ? c.pty : own;
     this.term.resize(back.cols, back.rows);
     this.refit();   // the layout may have changed meanwhile
   }
@@ -1057,6 +1089,7 @@ class Pane {
     if (localActionUnavailable()) return;
     const c = this.conn;
     if (!c?.terminal?.isOpen()) return;
+    if (!c.terminal.isBound(c.name, c.created)) { flash(t("terminal.limitedInput")); return; }
     const rows = this.ownSize().rows;
     // A pane that follows another device's size redraws at the PTY's size, which stays that
     // device's ("keep"); the second size is the one read now, as the first changes xterm's.
@@ -2248,6 +2281,8 @@ class Pane {
           c.replayGeometry = null;   // until server.py names it, before the replay
           c.away = null;   // this socket sends its size and redraws (armAutoRedraw)
           c.pty = null;    // until the host tells this socket (ptySize, after the replay)
+          c.limitedGeometry = null;
+          this.limitedBanner.hidden = true;
           c.retry = 0; this.setConn("●");
           this.inputLease.reconnect();
           if (this.inputLease.dirty)
@@ -2256,13 +2291,17 @@ class Pane {
           // handler. Let that be the socket-open resize, not a duplicate R.
           const focusedXterm = !touch && this.applySelectedTerminalFocus(c);
           if (!this.termEl.hidden && !focusedXterm) this.sendSize(true);
-          this.armAutoRedraw(c);
           if (touch) this.applySelectedTerminalFocus(c);
           if (opts.cacheFocus && opts.cacheFocusRevision === meshCacheFocusRevision
               && canFocusPaneAction(opts.cacheFocus)) opts.cacheFocus.focus({preventScroll: true});
         },
         replayGeometry: (_terminal, geometry) => {
           if (c.replayPending) c.replayGeometry = geometry;
+          if (_terminal.limited) c.limitedGeometry = geometry;
+        },
+        protocol: (_terminal, limited) => {
+          this.limitedBanner.hidden = !limited;
+          if (!limited) { this.sendSize(true); this.armAutoRedraw(c); }
         },
         ptySize: (_terminal, size) => {
           c.pty = size;
@@ -2313,6 +2352,7 @@ class Pane {
 
   detach() {
     if (!this.conn) return;
+    this.limitedBanner.hidden = true;
     // The session left keeps no focus-in: its focus-out goes on its own connection. The pane's
     // focus state is then reset, so the next session starts unreported (whatever the pane
     // reported to the previous one) and gets a focus-in only per the rules above.
@@ -6720,6 +6760,7 @@ function settleLine(inputType, composedOn = active) {
     return true;
   }
   if (ctrlArmed || !lineWasEmpty || composedOn !== active || !active?.conn?.terminal?.isOpen()   // a connection not open yet cannot take the word: it stays in the field
+      || !active.conn.terminal.isBound(active.conn.name, active.conn.created)
       || !MeshPaneActions.directLineStarts(MeshPaneActions.foregroundAgent(find(active.id)), line.value, inputType)) return false;
   lineDirect = { pane: active, conn: active.conn, session: active.id };
   renderLineDirect();
@@ -6811,6 +6852,7 @@ function cancelLinePending(owner) {
 }
 async function sendLine() {
   if (linePending || lineRecovery || !active?.conn) return;
+  if (active.conn.terminal?.limited) { flash(t("terminal.limitedInput")); return; }
   const pane = active;
   if (residueHolds(pane)) return;   // once: the next Enter sends
   const text = line.value;
@@ -6991,6 +7033,7 @@ function renderComposeUpload(record) {
 }
 function openCompose(preset = "", fromRecovery = false) {
   if (localActionUnavailable()) return;
+  if (active?.conn?.terminal?.limited) { flash(t("terminal.limitedInput")); return false; }
   if (cdlg.open) return false;
   // A terminal-origin native picker may stay pending without a browser cancel
   // event. Keep its Reset outside the top-layer composer instead of hiding it.
@@ -7116,6 +7159,7 @@ function capturePickerDestination() {
 
 function captureTerminalDestination(pane) {
   if (!pane?.conn) return null;
+  if (pane.conn.terminal?.limited) { flash(t("terminal.limitedInput")); return null; }
   observePaneActions(pane);
   const target = paneTargets.capture(pane);
   if (!target) return null;

@@ -31,6 +31,17 @@ export interface HumanInputTransport {
   control(clientId: string, dirty: boolean): void;
   data(bytes: Uint8Array): void;
 }
+
+/** Stable across reconnects, distinct across same-PTY incarnations even on old
+ * hosts whose human-lease table is keyed only by this opaque id (96 bytes max). */
+export function humanInputClientId(tab: string, slot: number, name: string, created: number | null): string {
+  if (!Number.isSafeInteger(slot) || slot < 1 || (created !== null && (!Number.isFinite(created) || created <= 0)))
+    throw new TypeError(translate("paneActions.inputIdentityInvalid"));
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setFloat64(0, created ?? 0, false);
+  const epoch = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+  return `${tab.slice(0, 32)}_${slot.toString(36)}_${name.slice(0, 32)}_${epoch}`;
+}
 export interface DeferredHumanInput {flush(): boolean; cancel(): void}
 export interface HumanInputLease {
   readonly dirty: boolean;
