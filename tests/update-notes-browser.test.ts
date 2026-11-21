@@ -155,8 +155,13 @@ describe('update notes panel', {skip}, () => {
     assert.equal(await pull.getAttribute('target'), '_blank');
     assert.equal(await pull.getAttribute('rel'), 'noopener noreferrer');
     // the hostile parts: nothing ran, nothing was asked of another origin, nothing reached the interface
-    // (the images load lazily: bring each one into view)
-    for (const shown of await body.locator('img').all()) await shown.scrollIntoViewIfNeeded();
+    // (the images load lazily: bring each one into view until every one has loaded or been replaced by its link;
+    // a refused image leaves the list as soon as its error arrives, so the list is read again at every step)
+    await page.waitForFunction(() => {
+      const waiting = [...document.querySelectorAll<HTMLImageElement>('.update-notes-markdown img')].find(image => !image.complete);
+      waiting?.scrollIntoView({block: 'center'});
+      return !waiting;
+    });
     const fallbacks = [...(imaging ? [] : ['A diagram of the relay']), 'vector', 'a huge picture', 'a tracker'];
     await page.waitForFunction(count => document.querySelectorAll('.update-notes-markdown .update-notes-image').length === count,
       fallbacks.length);

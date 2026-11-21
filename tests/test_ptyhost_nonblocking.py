@@ -143,7 +143,10 @@ async def test_input_overflow_log_rearms_after_the_queue_drains(daemon):
 
 async def test_input_to_an_exited_program_is_harmless(daemon):
     await daemon.new("leaver")
-    reader, writer = await daemon.attach("leaver")
+    # The exit is read on a connection that writes nothing: the one that floods the input can find the host's end
+    # closed in the middle of a write, and that broken pipe ends its own connection before its exit frame is read.
+    reader, _ = await daemon.attach("leaver")
+    _, writer = await daemon.attach("leaver")
     writer.write(ptyhost.frame(b"D", b"exit 0\r"))
     for _ in range(64):
         writer.write(ptyhost.frame(b"D", b"y" * 65536))

@@ -12,6 +12,7 @@
 //   firstList   names: the first two `list` replies of this process (a request's read and a round's) hold only these
 //   silent      accept requests and never answer
 //   slowFrom    the `list` requests from this number on (1 is the first) wait `delayMs` before the reply
+//   held        a `list` request waits, after its delay, until the control file no longer says held
 //   update      the update notice (null: none)
 //   notes       the `update_notes` reply: the notes of the announced release (null: none)
 // Every request's `op` is appended to `<control>.log`, one per line, so that a test can count them, and
@@ -24,7 +25,7 @@ import path from 'node:path';
 export type FakeSession = {name: string; pid: number; cwd: string; created: number; activity: number;
   attached: number; meta: Record<string, unknown>};
 export type FakeControl = {sessions: FakeSession[]; firstList?: string[]; silent?: boolean; slowFrom?: number;
-  delayMs?: number; update?: Record<string, unknown> | null; notes?: Record<string, unknown> | null};
+  delayMs?: number; held?: boolean; update?: Record<string, unknown> | null; notes?: Record<string, unknown> | null};
 
 function frame(body: unknown): Buffer {
   const payload = Buffer.from(JSON.stringify(body));
@@ -60,7 +61,13 @@ function serve(socketPath: string, controlPath: string): void {
       } else if (request.op === 'update_notes') {
         reply = {ok: true, notes: control.notes ?? null};
       }
-      setTimeout(() => { connection.end(frame(reply)); fs.appendFileSync(`${controlPath}.log`, `${request.op} answered\n`); }, delay);
+      const held = () => request.op === 'list' && (JSON.parse(fs.readFileSync(controlPath, 'utf8')) as FakeControl).held === true;
+      const answer = () => {
+        if (held()) { setTimeout(answer, 20); return; }
+        connection.end(frame(reply));
+        fs.appendFileSync(`${controlPath}.log`, `${request.op} answered\n`);
+      };
+      setTimeout(answer, delay);
     });
   }).listen(socketPath);
 }
