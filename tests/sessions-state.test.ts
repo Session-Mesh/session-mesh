@@ -190,7 +190,11 @@ describe('300 sessions', () => {
 
   test('16 simultaneous requests share the rounds: no host list per request', async () => {
     const before = await quiet(mesh);
+    // The host holds its lists until all 16 have been answered (each after its wait, from the state): the 16 are
+    // then in the server together, whatever the order and the pace at which it reads them.
+    mesh.host.control({sessions, held: true});
     const replies = await Promise.all(Array.from({length: 16}, () => get(mesh)));
+    mesh.host.control({sessions});
     for (const {body} of replies) assert.equal(body.mesh.length, N);
     const made = await quiet(mesh) - before;
     // A round lists twice (once to describe, once under the organisation lock to write) and a read once: the

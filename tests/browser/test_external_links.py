@@ -39,5 +39,7 @@ async def test_context_action_posts_only_the_clicked_http_url(page, mesh):
 
     await page.route("**/api/external-open", intercepted)
     await page.evaluate("openExternalLinkMenu('https://example.test/from-terminal', 8, 8)")
-    await page.get_by_role("menuitem", name=ui("link.openExternal")).click()
+    # The click only starts the request: wait for its answer, which the route gives once it has recorded it.
+    async with page.expect_response("**/api/external-open"):
+        await page.get_by_role("menuitem", name=ui("link.openExternal")).click()
     assert posted == [{"url": "https://example.test/from-terminal"}]
