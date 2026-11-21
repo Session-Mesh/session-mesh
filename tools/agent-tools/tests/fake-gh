@@ -152,19 +152,43 @@ case "$cmd" in
             exit 3
         fi
         case "$sub" in
-            list) apply_jq pr-list.json ;;
+            list)
+                if [ -e "$FIXTURES/pr-list-fails" ]; then
+                    echo 'gh: HTTP 502: bad gateway' >&2
+                    exit 2
+                fi
+                # Real gh honors --limit (30 without it);
+                # the --jq expression still applies to the limited list.
+                if lim=$(after_arg --limit); then
+                    [ -n "$lim" ] || lim=30
+                else
+                    lim=30
+                fi
+                if [ -n "$jqexpr" ]; then
+                    jq -r --argjson lim "$lim" "(.[0:$lim]) | $jqexpr" "$FIXTURES/pr-list.json"
+                else
+                    jq --argjson lim "$lim" '.[0:$lim]' "$FIXTURES/pr-list.json"
+                fi
+                ;;
             checks)
                 # gh exits 0 with every check green, 8 when one is pending, and 1 both
-                # when a check failed and for a PR without any check (output empty).
-                if [ -f "$FIXTURES/checks-$(pr_num).txt" ]; then
-                    cat "$FIXTURES/checks-$(pr_num).txt"
-                    state_column=$(cut -f2 "$FIXTURES/checks-$(pr_num).txt")
+                # when a check failed and for a PR without any check (output empty). An
+                # API error also exits 1 with a message (the fixture flag models it).
+                n=$(pr_num)
+                if [ -e "$FIXTURES/checks-$n-apifail" ]; then
+                    echo 'gh: HTTP 502: bad gateway' >&2
+                    exit 1
+                fi
+                if [ -f "$FIXTURES/checks-$n.txt" ]; then
+                    cat "$FIXTURES/checks-$n.txt"
+                    state_column=$(cut -f2 "$FIXTURES/checks-$n.txt")
                     if printf '%s\n' "$state_column" | grep -qE '^(fail|cancel)$'; then
                         exit 1
                     elif printf '%s\n' "$state_column" | grep -qE '^(pending)$'; then
                         exit 8
                     fi
                 else
+                    echo 'gh: no checks reported on the pull request' >&2
                     exit 1
                 fi
                 ;;
@@ -176,8 +200,15 @@ case "$cmd" in
                     exit 1
                 fi
                 cat "$FIXTURES/diff-$(pr_num).txt"
-                ;;
-            comment) printf 'stub: comment posted\n' ;;
+;;
+comment)
+    bf=$(after_arg --body-file) || { echo 'fake-gh: comment without --body-file' >&2; exit 64; }
+    if LC_ALL=C grep -q -e $'\xe2\x80\x8b' -e $'\xe2\x80\x8c' -e $'\xe2\x80\x8d' -e $'\xe2\x81\xa0' -e $'\xc2\xad' -e $'\xe2\x81\xa3' -e $'\xcc\x8f' -e $'\xef\xbb\xbf' "$bf"; then
+        echo 'fake-gh: the posted body still contains zero-width characters (post the checked copy)' >&2
+        exit 1
+    fi
+    printf 'stub: comment posted\n'
+    ;;
             merge)
                 local_check=$(printf '%s\n' "${args[@]}" | grep -c -- '--rebase' || true)
                 mhc=$(after_arg --match-head-commit) || {
@@ -204,7 +235,14 @@ case "$cmd" in
     issue)
         check_repo_flag
         case "$sub" in
-            comment) printf 'stub: comment posted\n' ;;
+comment)
+    bf=$(after_arg --body-file) || { echo 'fake-gh: comment without --body-file' >&2; exit 64; }
+    if LC_ALL=C grep -q -e $'\xe2\x80\x8b' -e $'\xe2\x80\x8c' -e $'\xe2\x80\x8d' -e $'\xe2\x81\xa0' -e $'\xc2\xad' -e $'\xe2\x81\xa3' -e $'\xcc\x8f' -e $'\xef\xbb\xbf' "$bf"; then
+        echo 'fake-gh: the posted body still contains zero-width characters (post the checked copy)' >&2
+        exit 1
+    fi
+    printf 'stub: comment posted\n'
+    ;;
             *) echo "fake-gh: unexpected issue/$sub" >&2; exit 64 ;;
         esac
         ;;
@@ -239,7 +277,7 @@ case "$cmd" in
                         exit 4
                     fi
                     printf '\xef\xbb\xbf'
-                    sed 's/ESC/\x1b/g' "$FIXTURES/log-failed-$id.txt"
+                    sed 's/ESC/\x1b/g' "$( [ -f "${GEN_DIR:-/nonexistent}/log-failed-$id.txt" ] && echo "$GEN_DIR/log-failed-$id.txt" || echo "$FIXTURES/log-failed-$id.txt" )"
                 else
                     apply_jq "jobs-$id.json"
                 fi

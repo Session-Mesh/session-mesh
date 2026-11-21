@@ -54,3 +54,16 @@ tools/agent-tools/selftest-all.sh
 ```
 
 Planned: `worktrees-report.sh`, `live-state.sh`, `disk-report.sh` (read-only reports for an operator's machine).
+
+## Known limits
+
+- Long hexadecimal runs are shown in the WARN detail unmasked (an sha is not a secret); a token that shares the
+  line is still masked.
+- Token types not detected: `xoxa-`/`xoxs-`/`xoxr-` (Slack) and the AWS session keys starting with `ASIA`.
+- A BOM at the very start of the private deny file hides its first word.
+- `.github/scripts` and `CODEOWNERS` are only WARNs (only `.github/workflows/` can turn the gate KO).
+- A `.py` file with the API status `copied`, and a `.pyi` file, are not counted as added Python.
+- A newline inside a changelog filename could inject false OK/GO lines in the output (the verdict and the exit
+  code stay computed from the real data; this is a display-only risk).
+- The fake gh does not model "the head moves BETWEEN the gate and the merge"; it models a push before the gate
+  and a merge-time refusal otherwise.

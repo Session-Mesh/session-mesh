@@ -1,2 +1,3 @@
-[{"databaseId":552,"workflow":"private-ci","status":"completed","conclusion":"failure","headSha":"aaaabbbbccccddddeeeeffff0000111122223333"},
+[{"databaseId":556,"workflow":"public-ci","status":"completed","conclusion":"failure","headSha":"b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"},
+ {"databaseId":552,"workflow":"private-ci","status":"completed","conclusion":"failure","headSha":"aaaabbbbccccddddeeeeffff0000111122223333"},
  {"databaseId":555,"workflow":"public-ci","status":"completed","conclusion":"failure","headSha":"aaaabbbbccccddddeeeeffff0000111122223333"}]

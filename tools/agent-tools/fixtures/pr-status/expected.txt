@@ -1,4 +1,36 @@
-13 | fix: minor thing | carol | no | deadbeef | CLEAN | (no checks yet)
-12 | feat: add the launch settings editor | alice | no | abcdef12 | BLOCKED | browser tests (Chromium, shard 2 of 4)=fail; frontend tests=pending
-11 | docs: short note | bob | yes | 12345678 | CLEAN | -
+35 | feat: generated pr 35 | user35 | yes | ab000000 | CLEAN | -
+34 | feat: generated pr 34 | user34 | no | ab000000 | CLEAN | (no checks yet)
+33 | feat: generated pr 33 | user33 | no | ab000000 | CLEAN | (no checks yet)
+32 | feat: generated pr 32 | user32 | no | ab000000 | CLEAN | (no checks yet)
+31 | feat: generated pr 31 | user31 | no | ab000000 | CLEAN | (no checks yet)
+30 | feat: generated pr 30 | user30 | yes | ab000000 | CLEAN | -
+29 | feat: generated pr 29 | user29 | no | ab000000 | CLEAN | (no checks yet)
+28 | feat: generated pr 28 | user28 | no | ab000000 | CLEAN | (no checks yet)
+27 | feat: generated pr 27 | user27 | no | ab000000 | CLEAN | (no checks yet)
+26 | feat: generated pr 26 | user26 | no | ab000000 | CLEAN | (no checks yet)
+25 | feat: generated pr 25 | user25 | yes | ab000000 | CLEAN | -
+24 | feat: generated pr 24 | user24 | no | ab000000 | CLEAN | (no checks yet)
+23 | feat: generated pr 23 | user23 | no | ab000000 | CLEAN | (no checks yet)
+22 | feat: generated pr 22 | user22 | no | ab000000 | CLEAN | (no checks yet)
+21 | feat: generated pr 21 | user21 | no | ab000000 | CLEAN | (no checks yet)
+20 | feat: generated pr 20 | user20 | yes | ab000000 | CLEAN | -
+19 | feat: generated pr 19 | user19 | no | ab000000 | CLEAN | (no checks yet)
+18 | feat: generated pr 18 | user18 | no | ab000000 | CLEAN | (no checks yet)
+17 | feat: generated pr 17 | user17 | no | ab000000 | CLEAN | (no checks yet)
+16 | feat: generated pr 16 | user16 | no | ab000000 | CLEAN | (no checks yet)
+15 | feat: generated pr 15 | user15 | yes | ab000000 | CLEAN | -
+14 | feat: generated pr 14 | user14 | no | ab000000 | CLEAN | (no checks yet)
+13 | feat: generated pr 13 | user13 | no | ab000000 | CLEAN | (no checks yet)
+12 | feat: generated pr 12 | user12 | no | ab000000 | CLEAN | (no checks yet)
+11 | feat: generated pr 11 | user11 | no | ab000000 | CLEAN | (no checks yet)
+10 | feat: generated pr 10 | user10 | yes | ab000000 | CLEAN | -
+9 | feat: generated pr 9 | user9 | no | ab000000 | CLEAN | (no checks yet)
+8 | feat: generated pr 8 | user8 | no | ab000000 | CLEAN | (no checks yet)
+7 | feat: generated pr 7 | user7 | no | ab000000 | CLEAN | (no checks yet)
+6 | feat: generated pr 6 | user6 | no | ab000000 | CLEAN | (no checks yet)
+5 | feat: generated pr 5 | user5 | yes | ab000000 | CLEAN | -
+4 | feat: generated pr 4 | user4 | no | ab000000 | CLEAN | (no checks yet)
+3 | feat: generated pr 3 | user3 | no | ab000000 | CLEAN | (no checks yet)
+2 | feat: generated pr 2 | user2 | no | ab000000 | CLEAN | (no checks yet)
+1 | feat: generated pr 1 | user1 | no | ab000000 | CLEAN | (no checks yet)
 time of the reading: fixed-time

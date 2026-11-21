@@ -162,5 +162,21 @@ else
     [ "$rc" -eq 2 ] || { echo "$label dash file: expected exit 2, got $rc" >&2; status=1; }
 fi
 
+# A comment whose text holds a zero-width character (not forming a forbidden word)
+# still posts, but the POSTED copy must be the cleaned one: the stub gh refuses a body
+# that still contains zero-width bytes, so posting the original would go red.
+printf 'Some tes%s\n' $'\xe2\x80\x8bt note' > "$TEST_LIB_SCRATCH/postzw-comment.txt"
+if (cd "$TEST_LIB_SCRATCH" && "$tool" issue 7 postzw-comment.txt --yes \
+        > "$TEST_LIB_SCRATCH/postzw.out" 2> "$TEST_LIB_SCRATCH/postzw.err"); then
+    :
+else
+    rc=$?
+    echo "$label postzw: expected exit 0, got $rc" >&2
+    status=1
+fi
+if ! diff_expected "$FIXTURES/expected-post.txt" "$TEST_LIB_SCRATCH/postzw.out"; then
+    status=1
+fi
+
 if [ "$status" -eq 0 ]; then echo 'comment-do test: OK'; fi
 exit "$status"
