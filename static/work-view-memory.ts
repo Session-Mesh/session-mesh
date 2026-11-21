@@ -10,7 +10,7 @@
 
 import { draftIn, fillDrafts, slotOf } from './work-view-drafts.ts';
 import { EMPTY_STATE, clearState, loadState, pageStorage, saveState, withDraft, withPlace } from './work-view-state.ts';
-import type { Place, StoragePort, ViewState } from './work-view-state.ts';
+import type { Draft, Place, StoragePort, ViewState } from './work-view-state.ts';
 
 /** How long after the last keystroke the state is written. */
 export const SAVE_DELAY_MS = 300;
@@ -18,8 +18,9 @@ export const SAVE_DELAY_MS = 300;
 export type ViewMemory = Readonly<{
   /** Where the owner was when last seen in the view. */
   place: () => Place;
-  /** Put the stored drafts back into the answer forms of `scope`. */
-  fill: (scope: HTMLElement) => void;
+  /** Put the stored drafts back into the answer forms of `scope`; `read` (what `scope` showed before it was drawn
+   *  again) only for the questions the store holds no draft of: one draft per question, the newest, wherever typed. */
+  fill: (scope: HTMLElement, read?: ReadonlyMap<string, Draft>) => void;
   /** The answer of `question` was recorded: its draft goes, now. */
   sent: (question: string) => void;
   /** The view now shows a place the owner moved to (or is leaving it): note it and write it. */
@@ -83,7 +84,7 @@ export function createViewMemory(options: MemoryOptions): ViewMemory {
   window.addEventListener('pagehide', leaving);
   return {
     place: () => state.place,
-    fill: scope => fillDrafts(scope, state.drafts),
+    fill: (scope, read) => fillDrafts(scope, read ? new Map([...read, ...state.drafts]) : state.drafts),
     sent: question => { state = withDraft(state, question, null); write(); },
     note: () => { note(); write(); },
     listen: on => {

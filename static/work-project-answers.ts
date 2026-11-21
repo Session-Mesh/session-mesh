@@ -9,8 +9,9 @@
 
 import type { WorkApi } from './work-api.ts';
 import { focusFirst, markSelected } from './work-dom.ts';
-import { fillDrafts, unsentDrafts } from './work-view-drafts.ts';
+import { unsentDrafts } from './work-view-drafts.ts';
 import type { ProjectView } from './work-project-view.ts';
+import type { Draft } from './work-view-state.ts';
 
 export type ProjectAnswersHost = Readonly<{
   api: WorkApi;
@@ -22,6 +23,9 @@ export type ProjectAnswersHost = Readonly<{
   selected: () => string | null;
   /** Read the task sheet again, at the question (focus on it when asked); false when the task could not be read. */
   selectTask: (id: string, after: Readonly<{ question: string; focus: boolean }>) => Promise<boolean>;
+  /** Put the drafts back into `scope` after its redraw: the stored ones, and those `read` before it for the questions
+   *  the store has none of (static/work-view-memory.ts). */
+  fillDrafts: (scope: HTMLElement, read: ReadonlyMap<string, Draft>) => void;
 }>;
 
 /** What could not be read again after an answer (the task sheet first), or null when everything was. */
@@ -50,7 +54,7 @@ async function rereadProject(host: ProjectAnswersHost, question: string, focus: 
   const panel = project.view.panel('questions');
   const drafts = unsentDrafts(panel, question);
   project.view.replaceDoc(result.value);
-  fillDrafts(panel, drafts);
+  host.fillDrafts(panel, drafts);   // the tab's stored draft of a question wins: it is the newest, wherever typed
   markSelected(project.view.root, host.selected());
   if (focus) focusFirst(panel.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(question)}"]`) ?? panel);
   return true;

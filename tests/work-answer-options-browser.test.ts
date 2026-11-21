@@ -54,6 +54,10 @@ const EVENTS = [
   question('N-0000d0e1', 'Which locale first?', { options: ['fr', 'en'], kind: 'single' }),
   ownerAnswer('N-0000d0e1', 'en', { choices: ['en'] }),
   ownerAnswer('N-0000d0e1', 'fr', { ts: '2026-11-08T11:00:00Z', choices: ['fr'] }),
+  // One correction open in both the Questions tab and the task sheet, and a question answered meanwhile.
+  question('N-0000d0e2', 'Which shell?', { options: ['bash', 'zsh'], kind: 'single' }),
+  ownerAnswer('N-0000d0e2', 'bash', { choices: ['bash'] }),
+  question('N-0000d0e3', 'Keep the logs?', { kind: 'yes_no' }),
   // About no task or project: the sheet the entry screen opens (static/work-question-sheet.ts), cued as a decision.
   { ts: '2026-11-08T09:00:00Z', task: 'N-0000d0dc', type: 'question', id: 'N-0000d0dc', text: 'Freeze the release branch?',
     kind: 'yes_no', agent: 'claude', session: 'asking-session' },
@@ -331,6 +335,30 @@ describe('pre-built answers, question kinds and the owner\'s edit', { skip }, ()
     await item(tab, 'N-0000d0d9').locator('.work-answer-verified').waitFor();
     assert.equal(await item(tab, 'N-0000d0d8').getByRole('checkbox', { name: 'eu' }).isChecked(), true);
     assert.deepEqual(answersOf('N-0000d0d9').map(event => event.choices), [['info']]);
+  });
+
+  test('a correction open in the Questions tab and in the task sheet shows the newest draft in both after a redraw', { timeout: 900_000 }, async () => {
+    const { page, pane, problems } = await taskSheet(1440);
+    await page.locator('#work-tab-questions').click();
+    const tab = page.locator('#work-panel-questions');
+    await item(tab, 'N-0000d0e2').getByRole('button', { name: 'Edit answer' }).click();
+    await item(tab, 'N-0000d0e2').locator('textarea').fill('older in the tab');
+    await page.waitForFunction(([key, text]) => (sessionStorage.getItem(key) ?? '').includes(text), [KEY, 'older in the tab'] as const);
+    const sheet = item(pane, 'N-0000d0e2');
+    await sheet.getByRole('button', { name: 'Edit answer' }).click();
+    await sheet.locator('textarea').fill('newer in the sheet');
+    await page.waitForFunction(([key, text]) => (sessionStorage.getItem(key) ?? '').includes(text), [KEY, 'newer in the sheet'] as const);
+    // Another question answered from the sheet: the sheet and the tab are both read again.
+    const logs = item(pane, 'N-0000d0e3');
+    await logs.getByText('Yes', { exact: true }).click();
+    await logs.getByRole('button', { name: 'Send answer' }).click();
+    await item(pane, 'N-0000d0e3').locator('.work-answer-verified').waitFor();
+    await item(tab, 'N-0000d0e3').locator('.work-answer-verified').waitFor();
+    // One draft per question (the tab's storage): both forms show the newest one.
+    assert.equal(await item(pane, 'N-0000d0e2').locator('textarea').inputValue(), 'newer in the sheet', 'the sheet');
+    assert.equal(await item(tab, 'N-0000d0e2').locator('textarea').inputValue(), 'newer in the sheet', 'the tab');
+    assert.deepEqual(answersOf('N-0000d0e2').length, 1, 'nothing sent for the correction');
+    assert.deepEqual(problems, []);
   });
 
   test('a question about nothing: its cue is the kind of its form, its sheet offers the choices and keeps the draft', { timeout: 900_000 }, async () => {
