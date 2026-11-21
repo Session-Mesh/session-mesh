@@ -5,7 +5,8 @@ OK base branch: main
 KO CI checks: not green: frontend and Node tests=pending; matrix.shard regression check=fail
 OK base CI run: completed/success on main
 KO required checks: missing: leak check (public rules)
-WARN forbidden words and leaks: private deny list missing or empty; generic leaks: none
+WARN private list: private deny list missing or empty
+OK forbidden words and leaks: none detected
 OK attribution footers: none
 KO added Python files: tests/new_thing.py; renamed_py.py
 WARN added Python files: moved_dupe.py moved from old/moved_dupe.py (was already .py)

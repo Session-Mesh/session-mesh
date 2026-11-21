@@ -20,6 +20,9 @@
 # so it cannot hide a word from the list.
 
 set -euo pipefail
+# Byte-wise scanning: a raw byte like 0xFF must not flip GNU grep into
+# "binary file matches", and case-insensitive matching stays ASCII-only.
+export LC_ALL=C
 
 REPO=${REPO:-Session-Mesh/session-mesh}
 DENY_FILE=${AGENT_TOOLS_DENY_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/deny-words.txt}
@@ -47,11 +50,24 @@ fi
 pr=${positional[0]}
 head8=${positional[1]}
 
+no_zero_width() {
+    sed -e 's/\xe2\x80\x8b//g' -e 's/\xe2\x80\x8c//g' -e 's/\xe2\x80\x8d//g' \
+        -e 's/\xe2\x81\xa0//g' -e 's/\xef\xbb\xbf//g' -e 's/\xc2\xad//g' \
+        -e 's/\xe2\x81\xa3//g' -e 's/\xcc\x8f//g'
+}
 patterns=$(mktemp)
 patterns2=$(mktemp)
 trap 'rm -f "$patterns" "$patterns2"' EXIT
+# Drop NUL bytes and invalid UTF-8, so the greps never see a "binary" line.
+san() {
+    local t
+    t=$(cat)
+    printf '%s' "$t" | tr -d '\000' | iconv -c -f UTF-8 -t UTF-8 2>/dev/null \
+        || printf '%s' "$t"
+}
 if [ -f "$DENY_FILE" ]; then
-    grep -v -e '^#' -e '^[[:space:]]*$' "$DENY_FILE" 2>/dev/null | tr -d '\r' > "$patterns" || true
+    grep -v -e '^#' -e '^[[:space:]]*$' "$DENY_FILE" 2>/dev/null \
+        | tr -d '\r\000' | no_zero_width > "$patterns" || true
 fi
 
 # Join lines into one detail line, "a; b".
@@ -74,11 +90,8 @@ mask() {
         -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----[[:print:][:space:]]*-----END [A-Z ]*PRIVATE KEY-----/[private key]/g' \
         -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----/[private key]/g'
 }
-# Zero-width characters are invisible but defeat substring matching: drop them.
-no_zero_width() {
-    sed -e 's/\xe2\x80\x8b//g' -e 's/\xe2\x80\x8c//g' -e 's/\xe2\x80\x8d//g' \
-        -e 's/\xe2\x81\xa0//g' -e 's/\xef\xbb\xbf//g'
-}
+# Zero-width and invisible characters are invisible but defeat substring matching: drop
+# them (U+200B, U+200C, U+200D, U+2060, U+FEFF, U+00AD, U+2063, U+034F).
 
 # Token types, each with its detection expression (grep -E, POSIX portable: no awk
 # interval that an old mawk silently ignores).
@@ -93,15 +106,15 @@ declare -a TOKEN_RES=(
     '-----BEGIN [A-Z ]*PRIVATE KEY-----'
 )
 
-report_tokens() { # report_tokens <text>: "token-like string (<type>) on line N" lines
-    local text=$1 i name re
+report_tokens() { # report_tokens <text>: "token-like string (<type>) on line N" lines,
+    # once per type (the first line where it appears)
+    local text=$1 i name re ln
     for i in "${!TOKEN_NAMES[@]}"; do
         name=${TOKEN_NAMES[$i]}
         re=${TOKEN_RES[$i]}
-        if printf '%s\n' "$text" | grep -nE -e "$re" >/dev/null 2>&1; then
-            printf '%s\n' "$text" | grep -nE -e "$re" | cut -d: -f1 | while read -r ln; do
-                printf 'token-like string (%s) on line %s\n' "$name" "$ln"
-            done
+        if printf '%s\n' "$text" | grep -anE -e "$re" >/dev/null 2>&1; then
+            ln=$(printf '%s\n' "$text" | grep -anE -e "$re" | cut -d: -f1 | head -n 1)
+            printf 'token-like string (%s) on line %s\n' "$name" "$ln"
         fi
     done
 }
@@ -262,42 +275,50 @@ if [ "$diff_rc" -ne 0 ]; then
     echo "error: could not read the diff of PR #$pr (gh exited with $diff_rc)." >&2
     exit 2
 fi
+# Binary and zero-width noise first, THEN the added lines are extracted
+diff=$(no_zero_width <<< "$(san <<< "$diff")")
 
-# Added lines are the "+" lines of a hunk (tracked from the @@ header), so a content
-# line that starts with "+++" is NOT mistaken for a file header.
+# Added lines are the "+" lines of a hunk. A "+++ " line only counts as a file header
+# outside a hunk (before the first @@ of the file, right after a "--- " line), so a
+# content line starting with "+++ " inside a hunk is still scanned as an added line.
 added_lines=$(printf '%s\n' "$diff" | awk '
-    /^diff --git/ { inhunk = 0; next }
-    /^--- /       { next }
-    /^\+\+\+ /    { next }
+    /^diff --git/ { inhunk = 0; sawminus = 0; next }
+    /^--- /       { sawminus = 1; next }
+    /^\+\+\+ /    { if (!inhunk && sawminus) next }
     /^@@/         { inhunk = 1; next }
     /^\+/         { if (inhunk) print substr($0, 2) }
 ')
-diff=$(no_zero_width <<< "$diff")
 
 full_text=$(printf '%s\n%s\n%s\n%s\n' "$title" "$body" "$commit_msgs" "$diff")
 token_scan=$(printf '%s\n%s\n%s\n%s\n' "$title" "$body" "$commit_msgs" "$added_lines")
 
+# The missing private list is always announced as its own line, regardless of the
+# verdict of the control.
+private_list_missing=no
+[ -s "$patterns" ] || private_list_missing=yes
+if [ "$private_list_missing" = "yes" ]; then
+    warn 'private list' 'private deny list missing or empty'
+fi
+
 token_reports=$(report_tokens "$token_scan")
 forbidden=''
 if [ -s "$patterns" ]; then
-    forbidden=$(grep -iF -f "$patterns" <<< "$full_text" || true)
+    forbidden=$(grep -aiF -f "$patterns" <<< "$full_text" || true)
     if [ -n "$forbidden" ]; then
         forbidden=$(printf '%s\n' "$forbidden" | head -n 3 | mask)
     fi
 fi
 combined=$(printf '%s\n%s\n' "$token_reports" "$forbidden" | awk 'length($0) > 0')
 if [ -n "$combined" ]; then
-    ko 'forbidden words and leaks' "$(printf '%s\n' "$combined" | head -n 6 | join2 | mask)"
+    ko 'forbidden words and leaks' "$(printf '%s\n' "$combined" | head -n 8 | join2 | mask)"
 else
     home_paths=$(printf '%s\n' "$full_text" \
-        | grep -oE '[/](home|Users|root)[/][^[:space:]/"]*' || true)
-    home_paths=$(printf '%s\n' "$home_paths" | grep -vE '^[/]home[/](user|USER)$' || true)
-    hex_hits=$(printf '%s\n' "$added_lines" | grep -ioE '[a-f0-9]{40,}' || true)
+        | grep -aoE '[/](home|Users|root)[/][^[:space:]/"]*' || true)
+    home_paths=$(printf '%s\n' "$home_paths" | grep -avE '^[/]home[/](user|USER)$' || true)
+    hex_hits=$(printf '%s\n' "$added_lines" | grep -aioE '[a-f0-9]{40,}' || true)
     soft_lines=$(printf '%s\n%s\n' "$home_paths" "$hex_hits" | awk 'length($0) > 0')
     if [ -n "$soft_lines" ]; then
         warn 'forbidden words and leaks' "non-blocking leaks (home paths, long hex): $(printf '%s\n' "$soft_lines" | head -n 4 | join2 | mask)"
-    elif [ ! -s "$patterns" ]; then
-        warn 'forbidden words and leaks' 'private deny list missing or empty; generic leaks: none'
     else
         ok 'forbidden words and leaks' 'none detected'
     fi

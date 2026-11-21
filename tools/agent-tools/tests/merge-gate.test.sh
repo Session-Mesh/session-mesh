@@ -102,16 +102,23 @@ fi
 FIXTURES=$saved_fixtures
 
 # 409: tokens built at runtime (no token literal in the fixtures) of several kinds ->
-# KO by type with line numbers, and no value must ever reach the output.
+# KO by type with line numbers, and no value must ever reach the output. The diff also
+# exercises: a raw non-UTF-8 byte on the token line, a content line starting with "+++",
+# a token cut by a zero-width character, and the deny word masked next to a token.
 cp -r "$FIXTURES" "$TEST_LIB_SCRATCH/fg409"
 tok="ghp_$(printf 'x%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)"
+gho="gho_$(printf 'o%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18)"
 aws="AK""IA""ABCDEFGHIJKLMNOP"
 slack="xox""b-1234-5678-abcdefghijklmnop"
 pem='-----BEGIN RSA PRIVATE ''KEY-----'
+zwsp=$'\xe2\x80\x8b'
 base=$(cat "$TEST_LIB_SCRATCH/fg409/pr-view-401.json")
 printf '%s\n' "$base" \
-    | jq --arg b "The bot published $tok on the tracker. AWS key: $aws. Slack: $slack. $pem" \
+    | jq --arg b "The bot published $tok on the tracker. AWS key: $aws. Slack: $slack. $pem. A word: Example-Private-Repository $tok. Hidden: gh${zwsp}o_$gho and ${tok:0:9}${zwsp}${tok:9}" \
         '.body = $b' > "$TEST_LIB_SCRATCH/fg409/pr-view-409.json"
+zw_tok="${tok:0:9}${zwsp}${tok:9}"
+printf 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n+raw byte: %b and %s\n+++ %s inside a hunk\n+split token %s and %s\n' \
+    '\377' "$tok" "$tok" "$zw_tok" "$gho" > "$TEST_LIB_SCRATCH/fg409/diff-409.txt"
 saved_fixtures=$FIXTURES
 FIXTURES="$TEST_LIB_SCRATCH/fg409"
 rc=0
@@ -121,11 +128,11 @@ if [ "$rc" -ne 1 ]; then
     echo 'merge-gate 409: expected exit 1' >&2
     status=1
 fi
-for t in 'token-like string (ghp_) on line 2' 'token-like string (AKIA) on line 2' 'token-like string (xoxb-) on line 2' 'token-like string (private key) on line 2'; do
-    grep -q "$t" "$TEST_LIB_SCRATCH/o409" \
+for t in 'token-like string (ghp_) on line 2' 'token-like string (AKIA) on line 2' 'token-like string (xoxb-) on line 2' 'token-like string (private key) on line 2' 'token-like string (gho_)' 'A word: Example-Private-Repository [token]'; do
+    grep -qF "$t" "$TEST_LIB_SCRATCH/o409" \
         || { echo "merge-gate 409: missing report '$t'" >&2; status=1; }
 done
-if grep -qE "$tok|$aws|$slack|BEGIN RSA" "$TEST_LIB_SCRATCH/o409" "$TEST_LIB_SCRATCH/e409"; then
+if grep -qE "$tok|$gho|$aws|$slack|BEGIN RSA" "$TEST_LIB_SCRATCH/o409" "$TEST_LIB_SCRATCH/e409"; then
     echo 'merge-gate 409: a token value leaked into the output' >&2
     status=1
 fi

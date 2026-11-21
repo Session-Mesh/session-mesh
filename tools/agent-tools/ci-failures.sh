@@ -101,13 +101,16 @@ fi
 while IFS= read -r job; do
     [ -n "$job" ] || continue
     printf '=== %s ===\n' "$job"
+    # head -n cuts here AFTER the capture: grep would only SIGPIPE (141) mid-pipeline and,
+    # under pipefail, kill the loop and lose the following jobs. The || true keeps them.
     matched=$(printf '%s\n' "$log" \
         | awk -F'\t' -v job="$job" '$1 == job { sub(/^[^\t]*\t[^\t]*\t/, ""); sub(/^[^ ]+ /, ""); print }' \
-        | grep -vE '^ *✔' \
-        | grep -E '✖| FAILED |AssertionError|TypeError|##\[error\]|^FAILED |^ERROR |^not ok' || true)
+        | grep -avE '^ *✔' \
+        | grep -aE '✖| FAILED |AssertionError|TypeError|##\[error\]|^FAILED |^ERROR |^not ok' \
+        | head -n "$MAX_LINES" || true)
     if [ -z "$matched" ]; then
         echo '(no log line matches the fixed patterns)'
     else
-        printf '%s\n' "$matched" | head -n "$MAX_LINES"
+        printf '%s\n' "$matched"
     fi
 done <<< "$failed_jobs"

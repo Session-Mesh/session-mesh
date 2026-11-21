@@ -34,6 +34,15 @@ if ! diff_expected "$FIXTURES/expected-green.txt" "$TEST_LIB_SCRATCH/out16"; the
     status=1
 fi
 
+# PR 17: a 3000-line matched log must not kill, through SIGPIPE, the following jobs.
+GEN_DIR=$TEST_LIB_SCRATCH; export GEN_DIR
+awk 'BEGIN { for (i = 1; i <= 3000; i++) printf "jobA\tstep\t2026-11-21T10:00:00.000Z \342\234\226 leak scan line %d\n", i; printf "jobB\tstep\t2026-11-21T11:00:00.000Z \342\234\226 the last leak line\n" }' > "$GEN_DIR/log-failed-777888.txt"
+"$tool" 17 > "$TEST_LIB_SCRATCH/out17" 2> "$TEST_LIB_SCRATCH/err17"
+[ -s "$TEST_LIB_SCRATCH/err17" ] && { echo 'ci-failures 17: unexpected stderr' >&2; status=1; }
+if ! diff_expected "$FIXTURES/expected-biglog.txt" "$TEST_LIB_SCRATCH/out17"; then
+    status=1
+fi
+
 # PR 18: the log dump cannot be produced -> exit 2 with a clear message.
 if "$tool" 18 > "$TEST_LIB_SCRATCH/out18" 2> "$TEST_LIB_SCRATCH/err18"; then
     echo 'ci-failures 18: expected exit 2, got 0' >&2

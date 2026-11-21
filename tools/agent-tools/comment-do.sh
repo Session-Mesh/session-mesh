@@ -21,6 +21,9 @@
 # 2 = usage or environment error.
 
 set -euo pipefail
+# Byte-wise scanning: a raw byte like 0xFF must not flip GNU grep into
+# "binary file matches", and case-insensitive matching stays ASCII-only.
+export LC_ALL=C
 
 REPO=${REPO:-Session-Mesh/session-mesh}
 DENY_FILE=${AGENT_TOOLS_DENY_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/deny-words.txt}
@@ -56,9 +59,17 @@ body_copy=$(mktemp)
 trap 'rm -f "$body_copy"' EXIT
 no_zero_width() {
     sed -e 's/\xe2\x80\x8b//g' -e 's/\xe2\x80\x8c//g' -e 's/\xe2\x80\x8d//g' \
-        -e 's/\xe2\x81\xa0//g' -e 's/\xef\xbb\xbf//g'
+        -e 's/\xe2\x81\xa0//g' -e 's/\xef\xbb\xbf//g' -e 's/\xc2\xad//g' \
+        -e 's/\xe2\x81\xa3//g' -e 's/\xcc\x8f//g'
 }
-content=$(no_zero_width < "$file")
+# Drop NUL bytes and invalid UTF-8, so the greps never see a "binary" line.
+san() {
+    local t
+    t=$(cat)
+    printf '%s' "$t" | tr -d '\000' | iconv -c -f UTF-8 -t UTF-8 2>/dev/null \
+        || printf '%s' "$t"
+}
+content=$(no_zero_width < <(san < "$file"))
 printf '%s\n' "$content" > "$body_copy"
 
 patterns=$(mktemp)
@@ -82,7 +93,7 @@ mask() {
 refusals=''
 if [ -s "$patterns" ]; then
     deny_hits=$(printf '%s\n' "$content" \
-        | grep -iF -f "$patterns" || true)
+        | grep -aiF -f "$patterns" || true)
     if [ -n "$deny_hits" ]; then
         refusals="${refusals}KO forbidden word: $(printf '%s\n' "$deny_hits" | head -n 1 | mask)"$'\n'
     fi
@@ -104,13 +115,13 @@ declare -a TOKEN_RES=(
 for i in "${!TOKEN_NAMES[@]}"; do
     name=${TOKEN_NAMES[$i]}
     re=${TOKEN_RES[$i]}
-    if printf '%s\n' "$content" | grep -nE -e "$re" >/dev/null 2>&1; then
-        line=$(printf '%s\n' "$content" | grep -nE -e "$re" | cut -d: -f1 | head -n 1)
+    if printf '%s\n' "$content" | grep -anE -e "$re" >/dev/null 2>&1; then
+        line=$(printf '%s\n' "$content" | grep -anE -e "$re" | cut -d: -f1 | head -n 1)
         refusals="${refusals}KO token-like string ($name) on line $line"$'\n'
     fi
 done
 
-home_paths=$(printf '%s\n' "$content" | grep -oE '[/](home|Users|root)[/][^[:space:]/"]*' || true)
+home_paths=$(printf '%s\n' "$content" | grep -aoE '[/](home|Users|root)[/][^[:space:]/"]*' || true)
 home_hits=$(printf '%s\n' "$home_paths" | grep -vE '^[/]home[/](user|USER)$' || true)
 if [ -n "$home_hits" ]; then
     shown=0
@@ -128,7 +139,7 @@ if [ -n "$attr_hits" ]; then
     refusals="${refusals}KO attribution footer: $(printf '%s\n' "$attr_hits" | head -n 1 | mask)"$'\n'
 fi
 
-hex_hits=$(printf '%s\n' "$content" | grep -iE '[a-f0-9]{40,}' || true)
+hex_hits=$(printf '%s\n' "$content" | grep -aiE '[a-f0-9]{40,}' || true)
 if [ -n "$hex_hits" ]; then
     printf 'WARN long hexadecimal string: %s\n' "$(printf '%s\n' "$hex_hits" | head -n 1 | mask)" >&2
 fi
