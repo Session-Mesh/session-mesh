@@ -95,7 +95,7 @@ describe('full-screen agent TUI in the page', {skip}, () => {
     await page.context().close();
   });
 
-  test('after a replay cut at 2 MiB the modes are lost; the explicit Antigravity recovery restores the wheel', async () => {
+  test('after a replay cut at 2 MiB the host restores the modes; the explicit Antigravity recovery stays harmless', async () => {
     await mesh.newShell('recovery');
     const named = path.join(mesh.scratch, 'agy');   // a program the kernel names agy, as discovery sees Antigravity
     fs.copyFileSync(process.execPath, named);
@@ -113,18 +113,19 @@ describe('full-screen agent TUI in the page', {skip}, () => {
     const page = await mesh.openPage('recovery', DESKTOP);
     await page.waitForFunction(() => find('recovery')?.agent?.type === 'agy', undefined, {timeout: 20000});
     const [type, mouse] = await bufferKind(page);
-    assert.deepEqual([type, mouse], ['normal', 'none'], 'the replay no longer carries the program modes');
+    assert.deepEqual([type, mouse], ['alternate', 'any'], 'the host replays the program modes before the cut window');
     const box = (await page.locator('.pane.active .xterm-screen').boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     const before = await offsetOf(page);
     for (let notch = 0; notch < 4; notch += 1) { await page.mouse.wheel(0, -120); await page.waitForTimeout(80); }
     await page.waitForTimeout(300);
-    assert.equal(await offsetOf(page), before, 'without the recovery the wheel does not reach the program');
+    const scrolled = await offsetOf(page);
+    assert.ok(scrolled < before, `the wheel reaches the program without the recovery (${before} -> ${scrolled})`);
     await page.evaluate(() => restorePiFullscreenScroll('recovery', find('recovery')!.created));
     await page.waitForTimeout(300);
     for (let notch = 0; notch < 4; notch += 1) { await page.mouse.wheel(0, -120); await page.waitForTimeout(80); }
     await page.waitForTimeout(500);
-    assert.ok(await offsetOf(page) < before, 'after the recovery it does');
+    assert.ok(await offsetOf(page) < scrolled, 'the recovery, kept for older hosts, leaves the wheel working');
     await page.context().close();
   });
 

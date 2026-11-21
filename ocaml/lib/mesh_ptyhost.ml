@@ -1675,7 +1675,7 @@ let prepare_attach env observer sessions fields =
         (* The replay and the geometry it was last produced at, both taken
            before this client's geometry is applied, as ptyhost.py does; the
            reply names the geometry when it can be read. *)
-        let snapshot = Mesh_pty_replay.snapshot s.replay in
+        let snapshot = Mesh_pty_replay.replay s.replay in
         let replay_geometry =
           try Some (s.geometry ())
           with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None
@@ -1713,7 +1713,7 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
     if not origin then
       ( (match snapshot with
         | Some bytes -> bytes
-        | None -> Mesh_pty_replay.snapshot s.replay),
+        | None -> Mesh_pty_replay.replay s.replay),
         None,
         false )
     else
@@ -1731,7 +1731,7 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
                  ]),
             true )
       | _ ->
-          ( Mesh_pty_replay.snapshot s.replay,
+          ( Mesh_pty_replay.replay s.replay,
             Some (`Assoc [ ("status", `String "unavailable") ]),
             false )
   in

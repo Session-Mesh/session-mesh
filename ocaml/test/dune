@@ -121,6 +121,18 @@
  (modules pty_replay_window_test)
  (libraries mesh_pty_support alcotest))
 
+; The terminal modes output leaves set, and the prefix a cut replay starts with.
+
+(test
+ (name pty_modes_test)
+ (modules pty_modes_test)
+ (libraries mesh_pty_support alcotest))
+
+(test
+ (name pty_replay_modes_test)
+ (modules pty_replay_modes_test)
+ (libraries mesh_pty_support alcotest))
+
 ; Who owns the size of a shared PTY, through the host: two attachments, their
 ; S frames, claims, take-overs and redraws.
 
@@ -246,6 +258,16 @@
 (test
  (name ptyhost_replay_geometry_test)
  (modules ptyhost_replay_geometry_test)
+ (libraries ptyhost_blackbox test_scratch alcotest unix yojson)
+ (action
+  (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
+
+; Black-box: a client attaching after a cut replay receives the terminal modes
+; first; a client attached from the start, or a replay never cut, nothing more.
+
+(test
+ (name ptyhost_replay_modes_test)
+ (modules ptyhost_replay_modes_test)
  (libraries ptyhost_blackbox test_scratch alcotest unix yojson)
  (action
   (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
