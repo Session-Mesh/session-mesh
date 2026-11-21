@@ -12,8 +12,8 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {REPO} from './mesh-server-lib.ts';
 
-type MeshJson = {folders: string[]; sessions: Record<string, {created: number; label?: string; folder?: string | null}>;
-  order: string[]};
+type MeshJson = {folders: string[]; order: string[];
+  sessions: Record<string, {created: number; label?: string; folder?: string | null; bound_at?: number}>};
 
 const OLD = 100.5;
 const NEW = 200.25;
@@ -34,9 +34,16 @@ function organize(before: MeshJson, call: string, args: unknown[]): [unknown, Me
   }
 }
 
-/** mesh.json after `organize.carry(source, target, saved)` ran on `before`; the file's mode too. */
+/** mesh.json after `organize.carry(source, target, saved)` ran on `before`, without the time an entry was bound at
+ * (checked: the time of the carry); the file's mode too. */
 function carried(before: MeshJson, source: [string, number], target: [string, number], saved: unknown): [MeshJson, number] {
+  const start = Date.now() / 1000;
   const [, after, mode] = organize(before, 'carry', [source, target, saved]);
+  for (const entry of Object.values(after.sessions)) {
+    if (entry.bound_at === undefined) continue;
+    assert.ok(entry.bound_at >= start - 1 && entry.bound_at <= Date.now() / 1000 + 1, 'bound at the carry');
+    delete entry.bound_at;
+  }
   return [after, mode];
 }
 
@@ -48,6 +55,8 @@ test('a new incarnation of the same session takes its label, folder and place in
   assert.deepEqual(after.sessions.work, {created: NEW, label: 'Chosen name', folder: 'Projects'});
   assert.deepEqual(after.order, ['first', 'work', 'last']);
   assert.equal(mode, 0o600, 'written as the other organisation files: private');
+  const [, raw] = organize(arranged(), 'carry', [['work', OLD], ['work', NEW], null]);
+  assert.equal(typeof raw.sessions.work!.bound_at, 'number', 'when it was bound: a listing read before cannot judge it');
 });
 
 test('a replacement session under another name takes the place of the one it replaces', () => {
@@ -112,6 +121,29 @@ test('a listing read before the restart keeps the arrangement carried to the nex
   assert.equal((shown as {sessions: Record<string, {label: string}>}).sessions.work!.label, 'Chosen name');
   assert.deepEqual(after.sessions.work, {created: NEW, label: 'Chosen name', folder: 'Projects'});
   assert.deepEqual(after.order, ['first', 'work', 'last']);
+});
+
+test('a listing of unknown read time keeps a replacement bound in the last 30 seconds only', () => {
+  const now = Date.now() / 1000;
+  for (const [boundAt, kept] of [[now - 5, true], [now - 60, false]] as const) {
+    const replaced = arranged();
+    replaced.sessions['work-2'] = {created: NEW, label: 'Chosen name', bound_at: boundAt};
+    const [, after] = organize(replaced, 'view', [[{name: 'first', created: 1}], true]);
+    assert.equal(after.sessions['work-2'] !== undefined, kept, `bound ${Math.round(now - boundAt)} s ago`);
+  }
+});
+
+test('a listing read before a carry keeps a replacement it does not show; one read after it does not', () => {
+  const replaced = arranged();
+  replaced.sessions['work-2'] = {created: NEW, label: 'Chosen name', folder: 'Projects', bound_at: 1000};
+  replaced.order.push('work-2');
+  const listing = [{name: 'first', created: 1}, {name: 'last', created: 2}];
+  for (const [readAt, kept] of [[999, true], [1001, false]] as const) {
+    const [, after] = organize(replaced, 'view', [listing, true, readAt]);
+    assert.equal(after.sessions['work-2'] !== undefined, kept, `read at ${readAt}`);
+    assert.equal(after.order.includes('work-2'), kept, `read at ${readAt}`);
+    assert.equal(after.sessions.work, undefined, 'an entry bound before the read is judged as before');
+  }
 });
 
 test('a listing of a later incarnation, or without the session, still forgets an earlier entry', () => {

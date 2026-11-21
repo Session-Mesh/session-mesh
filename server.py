@@ -1357,12 +1357,13 @@ async def _record_listing(data, read, order):
     ``seen`` by the snapshot, also one the listing did not describe: its previous entry is
     kept, it is never taken for a lost one. A description of an older host list (``order``) than the
     one already recorded is never written over it."""
+    read_at = time.time()   # an organisation bound after this (a restart's carry) is not judged by this list
     raw, listed, host, _, _ = read or await _read_host()
     if not listed:
         return [], False
     seen = {(s["name"], s["created"]) for s in raw}
     if read is None:
-        org = await asyncio.to_thread(organize.view, raw, True)
+        org = await asyncio.to_thread(organize.view, raw, True, read_at)
         data["mesh"] = [d for d in data["mesh"] if (d["name"], d["created"]) in seen]
         for d in data["mesh"]:
             d.update(org["sessions"][d["name"]])

@@ -32,6 +32,7 @@ import conversation_names
 
 FILE = meshpaths.CONF_DIR / "mesh.json"
 MAX_LEN = 60
+CARRY_GRACE = 30    # seconds: how old a listing of unknown read time may be (_forget_dead)
 _lock = threading.Lock()
 
 
@@ -100,34 +101,43 @@ def _save(data):
     fsutil.atomic_write(FILE, json.dumps(data, ensure_ascii=False, indent=1))
 
 
-def _kept(created, listed):
-    """Whether an entry bound to ``created`` stays for ``listed``, the incarnation of its name in a listing (None:
-    not listed): the same one, or a later one, which a restart bound it to (carry) after that listing was read."""
-    if listed is None or created == listed:
-        return listed is not None
-    numbers = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (created, listed))
-    return numbers and created > listed
+def _number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _forget_dead(data, live):
-    """Drop entries of sessions that ended (or whose name was reused)."""
+def _kept(entry, listed, read_at):
+    """Whether ``entry`` stays for ``listed``, the incarnation of its name in a listing of the host read at
+    ``read_at`` (None: not listed; unknown time). It does for that incarnation, and for an entry the listing cannot
+    judge: bound to a later incarnation of the name, or bound (carry) after the host was read, maybe to a
+    replacement session the listing does not show yet."""
+    created = entry.get("created")
+    if listed is not None and (created == listed or (_number(created) and _number(listed) and created > listed)):
+        return True
+    return _number(read_at) and _number(entry.get("bound_at")) and entry["bound_at"] > read_at
+
+
+def _forget_dead(data, live, read_at=None):
+    """Drop entries of sessions that ended (or whose name was reused). ``read_at``: when the host was asked for
+    ``live``; unknown, it is taken as CARRY_GRACE seconds ago (a listing is read within the host's timeout)."""
+    read_at = time.time() - CARRY_GRACE if read_at is None else read_at
     data["sessions"] = {n: v for n, v in data["sessions"].items()
-                        if isinstance(v, dict) and _kept(v.get("created"), live.get(n))}
+                        if isinstance(v, dict) and _kept(v, live.get(n), read_at)}
     # bound to the creation time like the rest: a reused name starts unranked
     data["order"] = [n for n in data["order"] if n in data["sessions"]]
 
 
-def view(sessions, prune=True):
+def view(sessions, prune=True, read_at=None):
     """Organisation for the live ptyhost sessions: folders in order, and per
     session its label, folder and rank. With prune, entries of sessions that
     ended are forgotten and saved; only pass it for a listing that succeeded
-    (an empty list from a failed request would wipe everything)."""
+    (an empty list from a failed request would wipe everything). ``read_at``:
+    the wall-clock time just before the host was asked for that listing."""
     live = {s["name"]: s["created"] for s in sessions}
     with _locked():
         data = _load()
         if prune:
             before = json.dumps(data, sort_keys=True)
-            _forget_dead(data, live)
+            _forget_dead(data, live, read_at)
             if json.dumps(data, sort_keys=True) != before:
                 _save(data)
     rank = {n: i for i, n in enumerate(data["order"])}
@@ -189,7 +199,7 @@ def carry(source, target, saved):
         if target[0] != source[0] and target[0] in data["order"]:   # a stale place must not shift the source's
             data["order"].remove(target[0])
         rank = _carried_rank(data, source, saved)
-        entry = data["sessions"][target[0]] = {"created": target[1],
+        entry = data["sessions"][target[0]] = {"created": target[1], "bound_at": time.time(),
                                                "folder": folder if folder in data["folders"] else None}
         if label:
             entry["label"] = label
