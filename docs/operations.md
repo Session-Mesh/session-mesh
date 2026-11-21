@@ -1598,6 +1598,9 @@ them, and refuses them in `/view`. It does read, as it does for the default acco
 
 ### Declaring aliases
 
+This legacy format applies before explicit migration to `backend-profiles.json`. A configured profile
+registry takes precedence; editing `accounts.json` after migration does not update that registry.
+
 Write `accounts.json` in the Mesh configuration folder (`~/.config/session-mesh/`, or
 `$MESH_CONF_DIR`) on the runner, by hand:
 
@@ -1650,6 +1653,18 @@ file refused: the logins stay on disk until you delete them.
 Do not point an alias at a folder made of symbolic links into `~/.claude`: Claude keeps the
 account's identity in `.claude.json` inside the folder, and a shared file would switch every
 account at the next login.
+
+### Moving aliases to backend profiles
+
+With the same `MESH_CONF_DIR` as the web server, run `mesh-profile migrate` on the runner. It preserves
+alias IDs, creates one profile per declared backend, and leaves the original file and agent folders
+unchanged. It does not log in, copy conversations, stop agents or restart the PTY host. An existing
+registry refuses instead of being overwritten.
+
+Success reports alias/profile counts. The retirement marker prevents a removed registry from silently
+reactivating legacy aliases; an uncertain publication needs inspection, not a blind repeat. See the
+[native migration contract](backend-account-profiles.md#explicit-migration-and-account-source-selection)
+for source selection, recovery limits and deliberate rollback.
 
 ### Logging in once per account
 

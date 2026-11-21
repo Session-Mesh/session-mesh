@@ -1,0 +1,148 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+// Real native resolver behind the server's existing account projection. No live agents or credentials.
+import assert from 'node:assert/strict';
+import {createHmac} from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import {test} from 'node:test';
+import {REPO, startMesh, scratchHome, runServer, stopServer, removeScratch, type Mesh, type Scratch} from './mesh-server-lib.ts';
+import {startFakeHost} from './fake-pty-host.ts';
+
+const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD || path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
+const required = process.env.MESH_REQUIRE_MESH_PLATFORM === '1';
+const skip = fs.existsSync(PLATFORM) || required ? false : 'build mesh-platform or set MESH_MESH_PLATFORM_CMD';
+function prepare(where: Scratch) {
+  fs.mkdirSync(where.confDir, {recursive: true, mode: 0o700});
+  fs.chmodSync(where.confDir, 0o700);
+  const root = fs.realpathSync(where.confDir);
+  const profiles = ['claude', 'codex'].map(backend => {
+    const config = path.join(root, backend), role = backend === 'claude' ? 'history' : 'state';
+    const history = path.join(config, backend === 'claude' ? 'projects' : 'sessions');
+    fs.mkdirSync(history, {recursive: true, mode: 0o700});
+    return {backend, id: 'work', label: `${backend} Work`, enabled: true, roots: {config, [role]: history}};
+  });
+  fs.writeFileSync(path.join(root, 'backend-profiles.json'), JSON.stringify({version: 1, profiles}), {mode: 0o600});
+  const legacy = path.join(root, 'obsolete'); fs.mkdirSync(legacy, {mode: 0o700});
+  fs.writeFileSync(path.join(root, 'accounts.json'), JSON.stringify({v: 1, accounts: [
+    {id: 'legacy', label: 'Obsolete', claude_config_dir: legacy},
+  ]}), {mode: 0o600});
+}
+async function config(mesh: Mesh) {
+  const cookie = createHmac('sha256', mesh.token()).update('session-mesh').digest('hex');
+  const result = await fetch(`${mesh.base}/api/config`, {headers: {Cookie: `mesh_auth=${cookie}`}});
+  assert.equal(result.status, 200); return result.json();
+}
+test('registry becomes the server source; backend labels survive and file edits invalidate its cache', {skip, timeout: 45000}, async () => {
+  fs.accessSync(PLATFORM, fs.constants.X_OK);
+  const mesh = await startMesh('accounts-registry-http-', {MESH_MESH_PLATFORM_CMD: PLATFORM, PATH: '/usr/bin:/bin',
+    MESH_SESSION: undefined, MESH_SESSION_TOKEN: undefined}, prepare);
+  try {
+    const first = await config(mesh);
+    assert.deepEqual(first.capabilities, {account_settings: true});
+    assert.equal(first.accounts.length, 1); assert.equal(first.accounts[0].id, 'work');
+    assert.deepEqual(first.accounts[0].backend_labels, {claude: 'claude Work', codex: 'codex Work'});
+    assert.equal(first.accounts[0].claude, true); assert.equal(first.accounts[0].codex, true);
+    assert.ok(!JSON.stringify(first.accounts).includes(mesh.confDir));
+    const file = path.join(mesh.confDir, 'backend-profiles.json');
+    const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+    registry.profiles[1].label = 'New Codex'; fs.writeFileSync(file, JSON.stringify(registry));
+    const changed = await config(mesh);
+    assert.equal(changed.accounts[0].backend_labels.codex, 'New Codex');
+    registry.profiles[0].enabled = false; fs.writeFileSync(file, JSON.stringify(registry));
+    const disabled = await config(mesh);
+    assert.equal(disabled.accounts[0].claude, false); assert.equal(disabled.accounts[0].codex, true);
+    fs.writeFileSync(file, '{');
+    assert.deepEqual((await config(mesh)).accounts, [], 'a malformed registry never revives the legacy account');
+  } finally { await mesh.stop(); }
+});
+
+test('declared XDG data bases protect OpenCode login files and hard links without hiding ordinary documents', {skip, timeout: 45000}, async () => {
+  const mesh = await startMesh('accounts-registry-view-', {MESH_MESH_PLATFORM_CMD: PLATFORM, PATH: '/usr/bin:/bin'}, where => {
+    prepare(where);
+    const file = path.join(where.confDir, 'backend-profiles.json');
+    const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const roots = Object.fromEntries(['config', 'data', 'state', 'cache'].map(role => {
+      const folder = path.join(where.home, 'oc-profile', role);
+      fs.mkdirSync(folder, {recursive: true, mode: 0o700}); return [role, folder];
+    }));
+    fs.mkdirSync(path.join(roots.data!, 'opencode'), {mode: 0o700});
+    const auth = path.join(roots.data!, 'opencode/auth.json');
+    fs.writeFileSync(auth, '{"fixture":"private-do-not-display"}', {mode: 0o600});
+    fs.linkSync(auth, path.join(where.home, 'public-hardlink.md'));
+    fs.writeFileSync(path.join(where.home, 'ordinary.md'), 'Ordinary fixture');
+    registry.profiles.push({id: 'oc', label: 'OC', backend: 'opencode-v2', enabled: false, roots});
+    fs.writeFileSync(file, JSON.stringify(registry));
+  });
+  try {
+    const describe = (target: string) => fetch(`${mesh.base}/api/view`, {method: 'POST',
+      headers: {Authorization: `Bearer ${mesh.token()}`, 'Content-Type': 'application/json'}, body: JSON.stringify({target})});
+    const ordinary = await describe(path.join(mesh.home, 'ordinary.md'));
+    assert.equal(ordinary.status, 200, await ordinary.text());
+    for (const name of ['oc-profile/data/opencode/auth.json', 'public-hardlink.md']) {
+      const response = await describe(path.join(mesh.home, name));
+      assert.equal(response.status, 403, name); assert.ok(!(await response.text()).includes('private-do-not-display'));
+    }
+  } finally { await mesh.stop(); }
+});
+
+test('a session-list read refreshes backend-specific labels without a configuration request', {skip, timeout: 45000}, async () => {
+  const where = await scratchHome('accounts-label-list-', {MESH_MESH_PLATFORM_CMD: PLATFORM, PATH: '/usr/bin:/bin'});
+  prepare(where);
+  const host = await startFakeHost(path.join(where.env.XDG_RUNTIME_DIR!, 'session-mesh/ptyhost.sock'), {sessions: [{
+    name: 'alpha', pid: process.pid, cwd: where.home, created: 1700000000, activity: 1700000000, attached: 0,
+    meta: {account: 'work', known_agent: 'codex'},
+  }]});
+  let server: Awaited<ReturnType<typeof runServer>> | undefined;
+  try {
+    server = await runServer(where); assert.equal(server.result.listened, true, server.result.output);
+    const token = fs.readFileSync(path.join(where.confDir, 'token'), 'utf8').trim();
+    const cookie = createHmac('sha256', token).update('session-mesh').digest('hex');
+    const label = async () => {
+      const response = await fetch(`http://127.0.0.1:${where.port}/api/sessions`, {headers: {Cookie: `mesh_auth=${cookie}`}});
+      assert.equal(response.status, 200); const data = await response.json();
+      return data.mesh.find((s: any) => s.id === 'alpha' || s.name === 'alpha')?.account_label;
+    };
+    assert.equal(await label(), 'codex Work');
+    const file = path.join(where.confDir, 'backend-profiles.json');
+    const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+    registry.profiles[1].label = 'Refreshed Codex'; fs.writeFileSync(file, JSON.stringify(registry));
+    const deadline = Date.now() + 8000;
+    while (await label() !== 'Refreshed Codex') {
+      assert.ok(Date.now() < deadline, 'session-list reads must refresh the profile label without /api/config');
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  } finally {
+    try { if (server) await stopServer(server.child); } finally { await host.stop(); removeScratch(where.scratch); }
+  }
+});
+
+test('a full registry retains all credential protections after a later configuration refusal', {skip, timeout: 45000}, async () => {
+  const mesh = await startMesh('accounts-registry-retention-', {MESH_MESH_PLATFORM_CMD: PLATFORM, PATH: '/usr/bin:/bin'}, where => {
+    fs.mkdirSync(where.confDir, {recursive: true, mode: 0o700});
+    const profiles = Array.from({length: 128}, (_, index) => {
+      const roots = Object.fromEntries(['config', 'data', 'state', 'cache'].map(role => {
+        const directory = path.join(where.home, 'profiles', `a${index}`, role);
+        fs.mkdirSync(directory, {recursive: true, mode: 0o700}); return [role, directory];
+      }));
+      return {id: `a${index}`, label: `Account ${index}`, backend: 'opencode-v2', enabled: false, roots};
+    });
+    fs.writeFileSync(path.join(where.confDir, 'backend-profiles.json'), JSON.stringify({version: 1, profiles}), {mode: 0o600});
+    fs.writeFileSync(path.join(where.home, 'profiles/a0/config/auth.json'), 'private-fixture', {mode: 0o600});
+    fs.writeFileSync(path.join(where.home, 'ordinary.md'), 'Ordinary document');
+  });
+  try {
+    await config(mesh);
+    const remembered = JSON.parse(fs.readFileSync(path.join(mesh.confDir, 'accounts-protected.json'), 'utf8'));
+    assert.equal(remembered.length, 384, 'every config/data/state root survives the persistence bound');
+    fs.writeFileSync(path.join(mesh.confDir, 'backend-profiles.json'), '{');
+    assert.deepEqual((await config(mesh)).accounts, []);
+    for (const [name, expected] of [['profiles/a0/config/auth.json', 403], ['ordinary.md', 200]] as const) {
+      const response = await fetch(`${mesh.base}/api/view`, {method: 'POST',
+        headers: {Authorization: `Bearer ${mesh.token()}`, 'Content-Type': 'application/json'},
+        body: JSON.stringify({target: path.join(mesh.home, name)})});
+      assert.equal(response.status, expected, name);
+    }
+  } finally { await mesh.stop(); }
+});

@@ -7,6 +7,7 @@
 // macOS bundle is there. The rest of the workflow is checked in tests/release-workflow.test.ts.
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,18 +24,21 @@ describe('the publish job of release.yml', () => {
 
   test('the publish job accepts exactly the two sets of files, with or without the macOS bundle', () => {
     const index = lines.findIndex((line) => job(RELEASE_WRITE_JOB).includes(line) && line.raw.includes('expected=(install.sh'));
-    const script = scriptOf(lines, index).split('\n').map((line) => line.trim())
-      .filter((line) => !line.startsWith('sha256sum') && !line.includes('SHA256SUMS | LC_ALL'));
-    const PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp', 'work-write']
+    const script = scriptOf(lines, index);
+    const PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'mesh-profile', 'work-read', 'work-mcp', 'work-write']
       .flatMap((program) => ['linux-x86_64', 'linux-aarch64', 'macos-arm64'].map((target) => `${program}-${target}`));
     const full = ['install.sh', 'SHA256SUMS', 'session-mesh-v1.0.0.tar.gz', 'mesh-linux-x86_64.tar.gz', 'mesh-linux-arm64.tar.gz',
       'mesh-macos-arm64.tar.gz', ...PROGRAMS];
-    const check = (files: string[]) => {
+    const check = (files: string[], tamper = '', unlisted = '') => {
       const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'release-publish-'));
       try {
         fs.mkdirSync(path.join(dir, 'dist'));
         for (const file of files) fs.writeFileSync(path.join(dir, 'dist', file), '');
-        return spawnSync('bash', ['-euo', 'pipefail', '-c', script.join('\n')], {cwd: dir, encoding: 'utf8',
+        const hash = createHash('sha256').update('').digest('hex');
+        fs.writeFileSync(path.join(dir, 'dist/SHA256SUMS'), files.filter((file) => file !== 'SHA256SUMS' && file !== unlisted)
+          .map((file) => `${hash}  ${file}\n`).join(''));
+        if (tamper) fs.writeFileSync(path.join(dir, 'dist', tamper), 'modified');
+        return spawnSync('bash', ['-euo', 'pipefail', '-c', script], {cwd: dir, encoding: 'utf8',
           env: {...process.env, RELEASE_TAG: 'v1.0.0', GLIBC_FLOOR: '2.28', MACOS_BUNDLE_FLOOR: '13.5', MACOS_PROGRAMS_FLOOR: '13.0'}}).status;
       } finally {
         fs.rmSync(dir, {recursive: true, force: true});
@@ -46,6 +50,11 @@ describe('the publish job of release.yml', () => {
     assert.notEqual(check(full.filter((file) => file !== PROGRAMS[0])), 0, 'without a program');
     assert.notEqual(check([...full, 'mesh-macos-x86_64.tar.gz']), 0, 'with an extra file');
     assert.notEqual(check(full.filter((file) => file !== 'mesh-macos-arm64.tar.gz' && file !== PROGRAMS[0])), 0, 'without the macOS bundle and a program');
+    for (const target of ['linux-x86_64', 'linux-aarch64', 'macos-arm64']) {
+      assert.notEqual(check(full.filter((file) => file !== `mesh-profile-${target}`)), 0, `without mesh-profile for ${target}`);
+      assert.notEqual(check(full, `mesh-profile-${target}`), 0, `tampered mesh-profile for ${target}`);
+      assert.notEqual(check(full, '', `mesh-profile-${target}`), 0, `mesh-profile missing from SHA256SUMS for ${target}`);
+    }
   });
 
   test('the release notes give the floors of install.sh and say whether the macOS bundle is there', () => {

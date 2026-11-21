@@ -4,6 +4,11 @@
  (libraries mesh_account_resolver mesh_accounts alcotest unix yojson))
 
 (test
+ (name test_registry)
+ (modules test_registry)
+ (libraries mesh_account_resolver alcotest unix yojson))
+
+(test
  (name test_golden)
  (modules test_golden)
  (deps ../../../platform/cli/mesh_platform_main.exe)

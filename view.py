@@ -209,7 +209,7 @@ def configure(token, conf_dir):
 # The login files of the operator's account aliases (server._protected_folders: every folder an alias
 # declared, now or before): refused as the default account's ~/.claude/.credentials.json, ~/.claude.json
 # and ~/.codex/auth.json are. Claude's and Codex's names are refused in every folder, whichever agent it serves.
-ACCOUNT_LOGIN_FILES = (".credentials.json", ".claude.json", "auth.json")
+ACCOUNT_LOGIN_FILES = (".credentials.json", ".claude.json", "auth.json", "opencode/auth.json")
 _ACCOUNT_DENY = []
 
 

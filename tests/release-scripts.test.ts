@@ -10,6 +10,7 @@
 //   refusal of any non-system library in a macOS bundle.
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -88,6 +89,50 @@ describe('release-stamp-installer.sh', () => {
   }
 });
 
+describe('smoke-profile.sh: the release helper protocol', () => {
+  const expected = '{"version":1,"ok":true,"data":{"configured":false,"registry_revision":null,"profiles":[]}}';
+  function probe(output = expected, status = 0) {
+    const dir = fs.mkdtempSync(path.join(scratch, 'profile-smoke-'));
+    const helper = path.join(dir, 'mesh-profile');
+    const request = path.join(dir, 'request');
+    fs.writeFileSync(helper, `#!/bin/sh
+test "$HOME" = '${dir}' || exit 95
+test "$MESH_CONF_DIR" = '${dir}/profile-config' || exit 95
+test -z "\${MESH_PROFILE_CMD:-}" || exit 95
+cat > '${request}'
+printf '%s\\n' '${output}'
+exit ${status}
+`, {mode: 0o755});
+    const result = spawnSync('bash', [path.join(REPO, 'scripts/smoke-profile.sh'), helper, dir], {encoding: 'utf8',
+      env: {...process.env, MESH_PROFILE_CMD: '/must-not-run', MESH_CONF_DIR: '/must-not-read'}});
+    return {...result, dir, request};
+  }
+
+  test('reads the packaged helper protocol with only a fresh private configuration', () => {
+    const result = probe();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.readFileSync(result.request, 'utf8'), '{"version":1,"op":"profiles.list"}\n');
+    assert.equal(fs.statSync(path.join(result.dir, 'profile-config')).mode & 0o777, 0o700);
+  });
+
+  test('a missing helper, wrong protocol or failing helper refuses qualification', () => {
+    for (const [output, status] of [['{}', 0], [expected, 1]] as const) {
+      const result = probe(output, status);
+      assert.notEqual(result.status, 0, result.stderr);
+    }
+    const dir = fs.mkdtempSync(path.join(scratch, 'profile-missing-'));
+    const result = spawnSync('bash', [path.join(REPO, 'scripts/smoke-profile.sh'), path.join(dir, 'absent'), dir]);
+    assert.notEqual(result.status, 0);
+  });
+
+  test('both native release and bundle qualification invoke the profile protocol check', () => {
+    assert.match(fs.readFileSync(path.join(REPO, 'scripts/release-smoke.sh'), 'utf8'),
+      /bash "\$\(dirname "\$0"\)\/smoke-profile\.sh" "\$bin\/mesh-profile" "\$runtime"/);
+    assert.match(fs.readFileSync(path.join(REPO, 'scripts/smoke-bundle.sh'), 'utf8'),
+      /bash "\$\(dirname "\$0"\)\/smoke-profile\.sh" "\$bundle\/bin\/mesh-profile" "\$scratch"/);
+  });
+});
+
 // scripts/build-bundle.sh downloads Node, whose archive must match the SHA-256 pinned in the
 // repository (scripts/bundle/node.sha256), never a checksum list from the same server. Run up to
 // that check with stand-ins: uv and patchelf only need to exist, curl serves other bytes.
@@ -95,7 +140,7 @@ describe('build-bundle.sh: the Node archive', () => {
   const PINS = path.join(REPO, 'scripts', 'bundle', 'node.sha256');
   const version = /NODE_VERSION=\$\{MESH_BUNDLE_NODE_VERSION:-([0-9.]+)\}/.exec(fs.readFileSync(path.join(REPO, 'scripts', 'build-bundle.sh'), 'utf8'))?.[1];
 
-  function build(nodeVersion: string) {
+  function build(nodeVersion: string, profile: 'present' | 'missing' | 'not-executable' = 'present', inspectCopy = false) {
     const dir = fs.mkdtempSync(path.join(scratch, 'build-'));
     const fakes = path.join(dir, 'fakes');
     const native = path.join(dir, 'native');
@@ -103,12 +148,64 @@ describe('build-bundle.sh: the Node archive', () => {
     fs.mkdirSync(native);
     const log = path.join(dir, 'curl.log');
     fs.writeFileSync(path.join(fakes, 'curl'), `#!/bin/bash\necho "$*" >> '${log}'\nwhile (($#)); do [[ $1 == -o ]] && printf other > "$2"; shift; done\n`, {mode: 0o755});
-    for (const name of ['uv', 'patchelf']) fs.writeFileSync(path.join(fakes, name), '#!/bin/sh\nexit 97\n', {mode: 0o755});
-    for (const name of ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp', 'work-write']) fs.writeFileSync(path.join(native, name), '', {mode: 0o755});
-    const result = spawnSync('bash', [path.join(REPO, 'scripts', 'build-bundle.sh'), '--output', path.join(dir, 'out'), '--native-bin', native],
+    for (const name of ['uv', 'patchelf', 'zstd']) fs.writeFileSync(path.join(fakes, name), '#!/bin/sh\nexit 97\n', {mode: 0o755});
+    for (const name of ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'mesh-profile', 'work-read', 'work-mcp', 'work-write']) {
+      if (name === 'mesh-profile' && profile === 'missing') continue;
+      fs.writeFileSync(path.join(native, name), `fixture ${name}`, {mode: name === 'mesh-profile' && profile === 'not-executable' ? 0o644 : 0o755});
+    }
+    const copied = path.join(dir, 'copied-profile');
+    // Stop at the first dependency installation, after the real bundle's copy phase.
+    fs.writeFileSync(path.join(fakes, 'npm'), `#!/bin/bash
+while (($#)); do [[ $1 == --prefix ]] && app=$2; shift; done
+MESH_BUNDLE_ROOT=\${app%/app/demo-compiler}
+source "$MESH_BUNDLE_ROOT/env.sh"
+cp -p "$MESH_BIN_DIR/mesh-profile" '${copied}' || exit 96
+exit 97
+`, {mode: 0o755});
+    const args = inspectCopy ? ['--node', process.execPath, '--skip-compiler-test'] : [];
+    const result = spawnSync('bash', [path.join(REPO, 'scripts', 'build-bundle.sh'), '--output', path.join(dir, 'out'), '--native-bin', native, ...args],
       {env: {...process.env, PATH: `${fakes}:/usr/bin:/bin`, TMPDIR: dir, MESH_BUNDLE_NODE_VERSION: nodeVersion}, encoding: 'utf8', timeout: 60000});
-    return {...result, curl: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''};
+    return {...result, dir, native, copied, curl: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''};
   }
+
+  for (const profile of ['missing', 'not-executable'] as const) {
+    test(`a ${profile} mesh-profile refuses the bundle before downloads or output`, () => {
+      const result = build(version ?? '', profile);
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /bundle: missing executable mesh-profile/);
+      assert.equal(result.curl, '');
+      assert.ok(!fs.existsSync(path.join(result.dir, 'out')));
+    });
+  }
+
+  test('the real copy phase places mesh-profile in bin/, found through bundled MESH_BIN_DIR', () => {
+    const result = build(version ?? '', 'present', true);
+    assert.equal(result.status, 97, result.stderr);
+    assert.deepEqual(fs.readFileSync(result.copied), fs.readFileSync(path.join(result.native, 'mesh-profile')));
+    fs.accessSync(result.copied, fs.constants.X_OK);
+    assert.equal(result.curl, '', 'no download or runtime dependency installation was attempted');
+  });
+
+  test('bundle.json records the profile helper hash along with every native program', () => {
+    const source = fs.readFileSync(path.join(REPO, 'scripts/build-bundle.sh'), 'utf8');
+    const script = /<<'JS'\n([\s\S]*?)\nJS/.exec(source)?.[1];
+    assert.ok(script, 'the production bundle manifest writer');
+    const root = fs.mkdtempSync(path.join(scratch, 'manifest-'));
+    const native = ['libexec/mesh-ptyhost', 'bin/mesh-board-mcp', 'bin/mesh-read', 'bin/mesh-platform', 'bin/mesh-history',
+      'bin/mesh-logout-all', 'bin/mesh-profile', 'bin/work-read', 'bin/work-mcp', 'bin/work-write'];
+    for (const file of [...native, 'runtime/python/bin/python3']) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), {recursive: true});
+      fs.writeFileSync(path.join(root, file), file.endsWith('python3') ? '#!/bin/sh\necho Python-fixture\n' : file, {mode: 0o755});
+    }
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {encoding: 'utf8',
+      env: {...process.env, MESH_BUNDLE_ROOT: root, MESH_BUNDLE_SOURCE_REV: 'fixture'}});
+    assert.equal(result.status, 0, result.stderr);
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'bundle.json'), 'utf8'));
+    assert.deepEqual(Object.keys(manifest.native).sort(), native.sort());
+    for (const file of native) {
+      assert.equal(manifest.native[file], createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex'));
+    }
+  });
 
   test('the pins list the default version for every platform a bundle is built on', () => {
     const pinned = fs.readFileSync(PINS, 'utf8').trim().split('\n').map((line) => line.split('  ')[1]);

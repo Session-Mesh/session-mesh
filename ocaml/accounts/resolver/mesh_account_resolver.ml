@@ -5,6 +5,8 @@
 (*                                                                            *)
 (******************************************************************************)
 
+module P = Mesh_backend_profile
+
 type backend = Claude | Codex
 
 let backend_of_string = function
@@ -28,9 +30,15 @@ type entry = {
   id : string;
   label : string;
   folder : string option;
+  profile : (P.registry * P.t) option;
 }
 
-type t = { aliases : Mesh_accounts.account list; entries : entry list }
+type t = {
+  aliases : Mesh_accounts.account list;
+  entries : entry list;
+  registry : P.registry option;
+}
+
 type error = { code : string; message : string }
 
 let default_id = "default"
@@ -40,13 +48,27 @@ let refused message = fail "accounts_refused" message
 let ( let* ) = Result.bind
 
 let default_entry backend =
-  { backend; id = default_id; label = default_label; folder = None }
+  {
+    backend;
+    id = default_id;
+    label = default_label;
+    folder = None;
+    profile = None;
+  }
 
 let entries_of (alias : Mesh_accounts.account) =
   let entry backend = function
     | None -> []
     | Some folder ->
-        [ { backend; id = alias.id; label = alias.label; folder = Some folder } ]
+        [
+          {
+            backend;
+            id = alias.id;
+            label = alias.label;
+            folder = Some folder;
+            profile = None;
+          };
+        ]
   in
   entry Claude alias.claude_config_dir @ entry Codex alias.codex_home
 
@@ -91,12 +113,130 @@ let of_accounts aliases =
   let entries = List.concat_map entries_of aliases in
   let* () = check_backend entries Claude in
   let* () = check_backend entries Codex in
-  Ok { aliases; entries }
+  Ok { aliases; entries; registry = None }
+
+let profile_error error = "backend-profiles.json: " ^ P.error_code error
+
+(* Missing roots may be prepared, as in accounts.json. A conversation root
+   directly under a missing declared config root can be prepared after it;
+   arbitrary missing ancestors are not created. Existing roots use the native
+   validator too, including its physical-alias and ancestor custody checks. *)
+let check_profile ~uid registry profile =
+  let roots = List.map snd (P.roots profile) in
+  let rec check path =
+    match Unix.lstat path with
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
+        let parent = Filename.dirname path in
+        if List.mem parent roots then check parent
+        else Mesh_accounts.check_directory ~uid path
+    | exception Unix.Unix_error _ -> Error (profile_error P.Unsafe_roots)
+    | _ -> Mesh_accounts.check_directory ~uid path
+  in
+  let* () =
+    List.fold_left
+      (fun result path ->
+        let* () = result in
+        check path)
+      (Ok ()) roots
+  in
+  if List.for_all Sys.file_exists roots then
+    Result.map_error profile_error (P.validate_roots ~registry profile)
+  else Ok ()
+
+let aliases_of_entries entries =
+  List.fold_left
+    (fun aliases (entry : entry) ->
+      let update (alias : Mesh_accounts.account) =
+        match entry.backend with
+        | Claude -> { alias with claude_config_dir = entry.folder }
+        | Codex -> { alias with codex_home = entry.folder }
+      in
+      if
+        List.exists (fun (a : Mesh_accounts.account) -> a.id = entry.id) aliases
+      then
+        List.map
+          (fun (a : Mesh_accounts.account) ->
+            if a.id = entry.id then update a else a)
+          aliases
+      else
+        aliases
+        @ [
+            update
+              {
+                Mesh_accounts.id = entry.id;
+                label = entry.label;
+                claude_config_dir = None;
+                codex_home = None;
+              };
+          ])
+    [] entries
+
+let of_registry ~uid registry =
+  let* () =
+    List.fold_left
+      (fun result profile ->
+        let* () = result in
+        Result.map_error
+          (fun message -> { code = "accounts_refused"; message })
+          (check_profile ~uid registry profile))
+      (Ok ()) (P.profiles registry)
+  in
+  let entries =
+    List.filter_map
+      (fun profile ->
+        let backend =
+          match P.backend profile with
+          | P.Claude -> Some Claude
+          | P.Codex -> Some Codex
+          | P.Opencode_v2 | P.Pi -> None
+        in
+        if not (P.enabled profile) then None
+        else
+          Option.map
+            (fun backend ->
+              {
+                backend;
+                id = P.id profile;
+                label = P.label profile;
+                folder = List.assoc_opt "config" (P.roots profile);
+                profile = Some (registry, profile);
+              })
+            backend)
+      (P.profiles registry)
+  in
+  Ok { aliases = aliases_of_entries entries; entries; registry = Some registry }
 
 let load ~uid ~file =
-  match Mesh_accounts.load ~uid file with
-  | Error message -> refused message
-  | Ok aliases -> of_accounts aliases
+  let legacy () =
+    match Mesh_accounts.load ~uid file with
+    | Error message -> refused message
+    | Ok aliases -> of_accounts aliases
+  in
+  let root = Filename.dirname file in
+  let root =
+    if root = "." then Sys.getcwd ()
+    else if Filename.is_relative root then Filename.concat (Sys.getcwd ()) root
+    else root
+  in
+  let registry_file = Filename.concat root "backend-profiles.json" in
+  (* lstat, not file_exists: dangling links are configured-but-refused, never
+     permission to fall back to legacy credentials. *)
+  match Unix.lstat registry_file with
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> (
+      match Unix.lstat (Filename.concat root "backend-profiles.migrated") with
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> legacy ()
+      | _ | (exception Unix.Unix_error _) ->
+          refused
+            "the migrated profile registry is missing; legacy fallback is \
+             retired")
+  | exception Unix.Unix_error _ -> refused (profile_error P.Unsafe_roots)
+  | _ -> (
+      if uid <> Unix.geteuid () then refused (profile_error P.Unsafe_roots)
+      else
+        match P.load ~root with
+        | Error error -> refused (profile_error error)
+        | Ok None -> refused (profile_error P.Invalid_config)
+        | Ok (Some registry) -> of_registry ~uid registry)
 
 let list t = t.entries
 
@@ -120,7 +260,9 @@ let find t ({ backend; id } : account_ref) =
 let candidates_message entries =
   "several accounts match: "
   ^ String.concat ", "
-      (List.map (fun (e : entry) -> Printf.sprintf "%s (%s)" e.id e.label) entries)
+      (List.map
+         (fun (e : entry) -> Printf.sprintf "%s (%s)" e.id e.label)
+         entries)
 
 (* The accounts of [backend], default first. *)
 let accounts_of t backend =
@@ -190,7 +332,10 @@ let resolve ~uid ~file backend name =
       | Error error -> Error (sanitized error, []))
 
 let serves t ~id backend = Result.is_ok (find t ({ backend; id } : account_ref))
-let ref_ (entry : entry) : account_ref = { backend = entry.backend; id = entry.id }
+
+let ref_ (entry : entry) : account_ref =
+  { backend = entry.backend; id = entry.id }
+
 let label (entry : entry) = entry.label
 
 let launch_env (entry : entry) =
@@ -203,12 +348,57 @@ let launch_env (entry : entry) =
 let folder_refused message = fail "account_folder_refused" message
 
 let prepare ~uid (entry : entry) =
-  match entry.folder with
-  | None -> Ok entry
-  | Some folder -> (
+  match (entry.profile, entry.folder) with
+  | Some (registry, profile), _ ->
+      let* () =
+        if uid = Unix.geteuid () then Ok ()
+        else folder_refused (profile_error P.Unsafe_roots)
+      in
+      let* () =
+        Result.map_error
+          (fun message -> { code = "account_folder_refused"; message })
+          (check_profile ~uid registry profile)
+      in
+      let* () =
+        List.fold_left
+          (fun result folder ->
+            let* () = result in
+            Result.map_error
+              (fun message -> { code = "account_folder_refused"; message })
+              (Mesh_accounts.prepare_directory ~uid folder))
+          (Ok ())
+          (List.sort
+             (fun a b -> Int.compare (String.length a) (String.length b))
+             (List.map snd (P.roots profile)))
+      in
+      let* () =
+        Result.map_error
+          (fun error ->
+            { code = "account_folder_refused"; message = profile_error error })
+          (P.validate_roots ~registry profile)
+      in
+      Ok entry
+  | None, None -> Ok entry
+  | None, Some folder -> (
       match Mesh_accounts.prepare_directory ~uid folder with
       | Ok () -> Ok entry
       | Error message -> folder_refused message)
+
+let alias_json t (alias : Mesh_accounts.account) =
+  let json = Mesh_accounts.to_json alias in
+  match (t.registry, json) with
+  | None, _ -> json
+  | Some _, `Assoc fields ->
+      let labels =
+        List.filter_map
+          (fun (entry : entry) ->
+            if entry.id = alias.id then
+              Some (backend_to_string entry.backend, `String entry.label)
+            else None)
+          t.entries
+      in
+      `Assoc (fields @ [ ("backend_labels", `Assoc labels) ])
+  | _ -> json
 
 let prepare_id ~uid t id =
   match
@@ -224,7 +414,7 @@ let prepare_id ~uid t id =
             else Ok ())
           (Ok ()) t.entries
       in
-      Ok (Mesh_accounts.to_json alias)
+      Ok (alias_json t alias)
 
 let default_folder ~getenv backend =
   let variable, default_name, _ = agent_names backend in
@@ -236,6 +426,18 @@ let default_folder ~getenv backend =
   | _ -> folder_refused "no home folder for the default account"
 
 let carry_folder ~uid ~getenv ~create (entry : entry) =
+  let* () =
+    match entry.profile with
+    | None -> Ok ()
+    | Some (registry, profile) ->
+        let* () =
+          if uid = Unix.geteuid () then Ok ()
+          else folder_refused (profile_error P.Unsafe_roots)
+        in
+        Result.map_error
+          (fun message -> { code = "account_folder_refused"; message })
+          (check_profile ~uid registry profile)
+  in
   let* folder =
     match entry.folder with
     | Some folder -> Ok folder
@@ -246,10 +448,34 @@ let carry_folder ~uid ~getenv ~create (entry : entry) =
     else Mesh_accounts.check_directory ~uid folder
   in
   match checked with
-  | Ok () -> Ok folder
+  | Ok () ->
+      let* () =
+        match entry.profile with
+        | None -> Ok ()
+        | Some (registry, profile) ->
+            Result.map_error
+              (fun message -> { code = "account_folder_refused"; message })
+              (check_profile ~uid registry profile)
+      in
+      Ok folder
   | Error message -> folder_refused message
 
-let protected_roots t = List.filter_map (fun (e : entry) -> e.folder) t.entries
+let protected_roots t =
+  match t.registry with
+  | None -> List.filter_map (fun (e : entry) -> e.folder) t.entries
+  | Some registry ->
+      List.concat_map
+        (fun profile ->
+          List.filter_map
+            (fun (role, path) ->
+              if
+                role = "config"
+                || P.backend profile = P.Opencode_v2
+                   && (role = "data" || role = "state")
+              then Some path
+              else None)
+            (P.roots profile))
+        (P.profiles registry)
 
 let describe_current t backend current =
   let id = Option.value current ~default:default_id in
@@ -259,10 +485,21 @@ let describe_current t backend current =
     | Error _ -> (id, false)
   in
   `Assoc
-    [ ("id", `String id); ("label", `String label); ("declared", `Bool declared) ]
+    [
+      ("id", `String id); ("label", `String label); ("declared", `Bool declared);
+    ]
 
 let to_host_json t =
-  `Assoc [ ("accounts", `List (List.map Mesh_accounts.to_json t.aliases)) ]
+  let fields = [ ("accounts", `List (List.map (alias_json t) t.aliases)) ] in
+  `Assoc
+    (match t.registry with
+    | None -> fields
+    | Some _ ->
+        fields
+        @ [
+            ( "protected_roots",
+              `List (List.map (fun p -> `String p) (protected_roots t)) );
+          ])
 
 let entry_json (entry : entry) =
   `Assoc

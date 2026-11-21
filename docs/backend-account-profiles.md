@@ -78,8 +78,59 @@ Cross-backend pairs refuse. Global edits/reset remain global and do not take a b
 `mesh-profile --http <operation>` is a native transport mode, **not an authenticated HTTP server**.
 It accepts the same fields without `version` and `op`, adds those fields internally and projects an
 `http_status` in the response. Its whitelist excludes private `profiles.resolve` and every native
-process action. A future HTTP binding must authenticate the human browser and enforce origin/body
+process action. The HTTP binding below authenticates the human browser and enforces origin and body
 bounds; the transport mode grants none of that authority.
+
+## HTTP routes
+
+The web server binds six routes to the transport mode, one operation each. Nothing else is
+exposed: `profiles.resolve` (its reply holds folders) and every switch stay on the host, and the
+path chooses the operation, never the body.
+
+`GET /api/config` advertises `capabilities.account_settings: true` for this binding. Clients must
+hide the settings entry when that explicit capability is absent or false; it is not a PTY-host or
+live-switch qualification flag.
+
+| Route | Operation |
+| --- | --- |
+| `GET /api/accounts/profiles` | `profiles.list` |
+| `GET /api/accounts/consent` | `consent.get` |
+| `POST /api/accounts/consent/set-global` | `consent.set_global` |
+| `POST /api/accounts/consent/set-pair` | `consent.set_pair` |
+| `POST /api/accounts/consent/remove-pair` | `consent.remove_pair` |
+| `POST /api/accounts/consent/reset` | `consent.reset` |
+
+- **Caller.** The owner's browser only: the owner cookie, and no `Authorization` header of any
+  kind. The master Bearer token, a session token, and a missing or wrong cookie are all `401`. A
+  foreign `Origin`, or a `Sec-Fetch-Site` other than `same-origin` or `none`, is a bare `403`,
+  reads included.
+- **Request.** A `POST` body holds the operation's fields without `version` and `op`, as in the
+  transport mode, sent as `application/json`, at most 16 KiB. A read takes no query string.
+- **Reply.** The helper's envelope, byte for byte, with the HTTP status equal to its
+  `http_status`: `{"http_status":200,"version":1,"ok":true,"data":…}` or
+  `{"http_status":409,"version":1,"ok":false,"code":"consent-revision-conflict"}`. Statuses and
+  codes are those of the transport mode: 409 for a stale `expected_revision`, a changed registry or
+  context, a full rule set or an exhausted revision; 404 for an unknown profile or no registry; 400
+  for a refused request; 413; 503.
+- **Refusals the server gives itself**, in the same envelope, before the helper runs:
+  `400 invalid-request` (a query string, or a body that is not a JSON object's text),
+  `413 request-too-large` and `415 unsupported-media-type`.
+- **Fail closed.** No helper, no complete line within 5 s, or a reply that is not exactly the
+  envelope gives `503 backend-helper-unavailable`, and the helper's output is not relayed. Not
+  exactly the envelope means: an unknown key, a status outside 200/400/404/409/413/503, `ok` or
+  the exit code disagreeing with the status, or a `profiles.list` profile with more than its
+  public fields.
+
+The server runs `mesh-profile --http <operation>` as an argument vector, never through a shell, in
+its own process group, with an environment of `MESH_CONF_DIR` (the server's configuration folder,
+so the registry and the store sit beside `accounts.json`), `PATH=/usr/bin:/bin` and `LANG` only.
+At most four run at once. The program is `MESH_MESH_PROFILE_CMD` when set (an absolute path to an
+existing file, else none), otherwise `mesh-profile` in `MESH_BIN_DIR`, or in the opam switch's
+`bin` when `MESH_BIN_DIR` is unset.
+
+These routes change preferences only. They never switch an account, and in this version a
+session's request to change its account is always put to the owner, whatever the global or pair
+preference says: the session-action path does not read the consent store.
 
 ## Policy and journal transactions
 
@@ -95,8 +146,37 @@ never evicted to admit a new one. Finishing, purge, replacement rows and policy 
 together when their enclosing transaction fails. Retention timing belongs to the future coordinator;
 there is no public journal-management operation.
 
-This is a draft v1 contract, not a migration for deployed aliases. Earlier experimental consent
+The consent/store format remains a draft v1 contract. Earlier experimental consent
 references without a backend and journal tables without terminal metadata are not reinterpreted.
 An experimental registry with labels outside the alias rules must be corrected explicitly before use;
 an invalid entry refuses the whole registry, rather than silently dropping a profile.
-Migration from `accounts.json` and the server/launch/UI bindings are separate integration work.
+
+## Explicit migration and account-source selection
+
+Run `mesh-profile migrate` on the runner with the same `MESH_CONF_DIR` as the web server. This host-only
+command converts legacy aliases without moving credentials or conversations. It is not an HTTP
+operation and opening the settings never runs it.
+
+Migration validates the complete `accounts.json` and converted registry before publishing a private
+`backend-profiles.json` without replacing an existing target. Up to 64 aliases can produce 128
+backend-qualified profiles. The original file bytes and agent directories remain unchanged; missing
+agent directories are not created. Success reports only alias/profile counts. A repeat migration or
+an existing target refuses rather than silently merging or overwriting it.
+
+After the registry is durably published, a private `backend-profiles.migrated` marker retires automatic
+legacy fallback. If the registry later disappears, resolution refuses instead of reviving stale
+aliases. Legacy-only installations retain their existing behavior only while both registry and marker
+are absent. A deliberate rollback therefore requires addressing the retirement marker as well as the
+registry.
+
+An error after publication can return `migration-publication-uncertain` while leaving a complete
+registry in place. Inspect that target before taking another action. Registry and marker publication
+are separate filesystem operations, not a crash-atomic cross-file transaction.
+
+Launch, restore and conversation-carry lookups use the native resolver's selected source. Enabled
+Claude/Codex profiles retain their existing alias IDs, with backend-specific labels. A configured
+invalid registry never falls back to legacy credentials. Disabled profiles are not offered for launch,
+but their credential roots remain protected from document viewing. A carry resolves both accounts from
+one snapshot; later registry edits apply to the next operation. This is not live checkpoint or arbitrary
+same-user filesystem-race qualification. OpenCode/Pi profiles remain visible metadata without enabling
+unqualified profile-aware launch or switching.

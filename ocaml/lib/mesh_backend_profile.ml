@@ -196,7 +196,7 @@ let of_json revision value =
     let* raw = field "profiles" fields in
     let* rows =
       match raw with
-      | `List xs when List.length xs <= 64 -> Ok xs
+      | `List xs when List.length xs <= 128 -> Ok xs
       | _ -> Error Invalid_config
     in
     let rec loop acc = function

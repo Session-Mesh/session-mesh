@@ -6,6 +6,7 @@
 module P = Mesh_backend_profile
 module C = Mesh_backend_consent
 module S = Mesh_backend_store
+module M = Mesh_backend_migration
 
 let ( let* ) = Result.bind
 let project error result = Result.map_error error result
@@ -291,41 +292,77 @@ let http_status = function
       400
   | Error _ -> 503
 
+let request root selected =
+  let* bytes = read_input () in
+  let* raw =
+    try Ok (Yojson.Safe.from_string bytes)
+    with Yojson.Json_error _ -> Error "invalid-request"
+  in
+  let* request =
+    match (selected, raw) with
+    | None, raw -> Ok raw
+    | Some operation, `Assoc fields
+      when not (List.mem_assoc "op" fields || List.mem_assoc "version" fields)
+      ->
+        Ok (`Assoc (("version", `Int 1) :: ("op", `String operation) :: fields))
+    | _ -> Error "invalid-request"
+  in
+  handle root request
+
 let () =
+  if Array.to_list Sys.argv = [ Sys.argv.(0); "--help" ] then (
+    print_endline
+      "Usage: mesh-profile [--http <operation>]\n\
+      \       mesh-profile migrate\n\n\
+       Default/--http: one JSON request on stdin.\n\
+       migrate: host-only accounts.json conversion; no stdin request, no \
+       overwrite.\n\
+       Success: \
+       {\"version\":1,\"ok\":true,\"data\":{\"aliases\":N,\"profiles\":N}}\n\
+       Failure: {\"version\":1,\"ok\":false,\"code\":\"migration-...\"}\n\
+       Limits: 64 legacy aliases, up to 128 native profiles (both backends).\n\
+       Success also durably creates backend-profiles.migrated; an existing \
+       marker refuses with migration-already-retired.\n\
+       Manual rollback requires deliberate marker removal as well as registry \
+       removal.\n\
+       Registry and marker are separate durable publications: a crash between \
+       them can leave a registry without a marker. Reconcile before rollback.\n\
+       Marker publication failure reports migration-publication-uncertain and \
+       retains the complete registry.\n\
+       No credentials/history copied; no agent directories created; no live \
+       switch.";
+    exit 0);
   let selected =
     match Array.to_list Sys.argv with
-    | [ _ ] -> Ok None
+    | [ _ ] -> Ok `Request
+    | [ _; "migrate" ] -> Ok `Migrate
     | [ _; "--http"; operation ] when List.mem operation http_operations ->
-        Ok (Some operation)
+        Ok (`Http operation)
     | _ -> Error "unsupported-arguments"
   in
-  let is_http = match selected with Ok (Some _) -> true | _ -> false in
+  let is_http = match selected with Ok (`Http _) -> true | _ -> false in
   let result =
     try
       let* selected = selected in
-      let* bytes = read_input () in
-      let* raw =
-        try Ok (Yojson.Safe.from_string bytes)
-        with Yojson.Json_error _ -> Error "invalid-request"
-      in
-      let* request =
-        match (selected, raw) with
-        | None, raw -> Ok raw
-        | Some operation, `Assoc fields
-          when not
-                 (List.mem_assoc "op" fields || List.mem_assoc "version" fields)
-          ->
-            Ok
-              (`Assoc
-                 (("version", `Int 1) :: ("op", `String operation) :: fields))
-        | _ -> Error "invalid-request"
-      in
       let* root =
         project
-          (fun _ -> "unsafe-configuration-root")
+          (fun _ ->
+            match selected with
+            | `Migrate -> M.error_code M.Unsafe_configuration_root
+            | _ -> "unsafe-configuration-root")
           (Mesh_paths.conf_dir Sys.getenv_opt)
       in
-      handle root request
+      match selected with
+      | `Request -> request root None
+      | `Http operation -> request root (Some operation)
+      | `Migrate ->
+          let* report = project M.error_code (M.migrate ~root) in
+          Ok
+            (`Assoc
+               [
+                 ("aliases", `Int report.aliases);
+                 ("profiles", `Int report.profiles);
+               ])
     with
     | (Out_of_memory | Stack_overflow) as exn -> raise exn
     | _ -> Error "backend-helper-unavailable"
