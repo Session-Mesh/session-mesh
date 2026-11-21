@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler",
+    "strict": true, "noEmit": true, "esModuleInterop": true,
+    "allowImportingTsExtensions": true, "erasableSyntaxOnly": true,
+    "types": ["node"], "skipLibCheck": true
+  },
+  "include": ["backend/dictation*.ts", "tests/dictation.test.ts", "tests/dictation-auth.test.ts", "tests/dictation-service*.test.ts", "tests/dictation-startup.test.ts", "tests/dictation-check-chain.test.ts", "tests/dictation-review-server.test.ts", "checks/dictation-fixture.ts", "checks/dictation-pty*.ts"]
+}

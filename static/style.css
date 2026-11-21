@@ -211,10 +211,11 @@ body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--mono); ove
    pane on the right and, when it is taller, at the top, so the prompt and the last rows stay
    visible. The banner offers to take the size back. */
 .pane-body .term.pty-tall .xterm { position: absolute; left: 8px; bottom: 0; height: auto; }
-.pane-body .size-banner { position: absolute; top: 6px; right: 18px; z-index: 3; max-width: calc(100% - 36px);
+.pane-body .size-banner, .pane-body .limited-banner { position: absolute; top: 6px; right: 18px; z-index: 3; max-width: calc(100% - 36px);
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 6px 4px 10px; border-radius: 6px;
   border: 1px solid var(--accent); background: var(--panel); color: var(--fg); font-size: 12px; box-shadow: 0 2px 8px #0008; }
-.pane-body .size-banner[hidden], .pane-body .term[hidden] ~ .size-banner { display: none; }
+.pane-body .size-banner[hidden], .pane-body .term[hidden] ~ .size-banner,
+.pane-body .limited-banner[hidden], .pane-body .term[hidden] ~ .limited-banner { display: none; }
 @media (hover: none) { .pane-body .to-bottom { width: 44px; height: 44px; font-size: 22px; right: 20px; bottom: 14px; } }
 .pane-body .empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; color: var(--mute); gap: 12px; padding: 16px; }
 .grip { background: var(--line); cursor: col-resize; flex: none; width: 5px; transition: background .1s; touch-action: none; }

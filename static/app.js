@@ -17,12 +17,18 @@ const whenTranslated = (init) => { translatedInits.push(init); };
 // disposal) no local request or transport is permitted.
 let meshContext = null;
 let meshStopped = false;
-function localMeshEffectsAllowed() { return meshContext !== null && !meshStopped; }
+let meshPageSuspended = false, meshPageFinal = false, meshPageEpoch = 0;
+let meshPageCache = null;
+let meshCacheFocusRevision = 0;
+function localMeshEffectsAllowed() { return meshContext !== null && !meshStopped && !meshPageSuspended; }
 function requireLocalMesh() {
   if (!localMeshEffectsAllowed()) throw new Error(t("mesh.localStopped"));
 }
 function requestLocal(...args) {
   requireLocalMesh();
+  if (args[0] === "/api/logout" || args[0] === "/api/logout-all") {
+    meshPageFinal = true;
+  }
   return fetch(...args);
 }
 function localActionUnavailable() {
@@ -86,12 +92,17 @@ const folded = new Set(store.get("folded", []));
 const MAX_PANES = 3;
 const paneTargets = MeshPaneActions.createTargetRegistry();
 const paneInput = MeshPaneActions.createPasteDelivery({
-  valid: (target) => paneTargets.valid(target),
+  valid: (target) => paneTargets.valid(target)
+    && (target.kind !== "mesh" || target.pane.conn?.terminal?.isBound(target.name, target.created))
+    && !(composeOwner?.target === target && (!composeOwner.open || !cdlg.open)),
   connection: (pane) => pane.conn,
   open: (socket) => localTerminalSocketReady(socket),
   paste: (pane, text) => pane.term.paste(text),
   encode: (text) => enc.encode(text),
-  send: (pane, socket, bytes, complete) => pane.conn?.ws === socket && pane.sendRaw(bytes, complete),
+  send: (pane, socket, bytes, complete) => pane.conn?.ws === socket
+    && !pane.conn.replaying && !pane.conn.draining && !pane.conn.replayPending
+    && (pane.inputLease?.write(bytes, complete) ?? false),
+  defer: (binding, text, resume, cancel) => binding.pane.deferReplayPaste(binding, text, resume, cancel),
   schedule: (callback) => { setTimeout(callback, 60); },
 });
 const paneMenuHolds = new Set();
@@ -361,6 +372,7 @@ const FRAME_NAVIGATION_TIMEOUT_MS = 5000;
 // through the PTY, and is only used by the explicit recovery action below.
 const TERMINAL_INTERACTION_MODE_RESET = "\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1007l\x1b[?1015l";
 let inputLeaseSerial = 0;
+const humanInputScopes = new Map();
 let inputLeaseTab = null;
 function initializeLocalInputTab() {
   try {
@@ -384,52 +396,119 @@ function prefixedBytes(prefix, bytes) {
   return joined;
 }
 
-function openLocalTerminal(name, { rows, cols }, observer) {
-  requireLocalMesh();
+function localTerminalSocket(name, { rows, cols, created }) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  // replay_geometry=1: server.py sends, before the replay, the geometry it was produced at.
+  // replay_geometry=1: current PTY geometry captured before this attach's resize,
+  // not historical per-byte geometry of a replay spanning several resize epochs.
   // pty_size=1: this pane follows the PTY size another device owns ({t:"s"}, Pane.applyPtySize).
-  const socket = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(name)}?rows=${rows}&cols=${cols}&replay_geometry=1&pty_size=1`);
+  const conditional = typeof created === "number" && Number.isFinite(created) && created > 0;
+  if (created != null && !conditional) throw new TypeError(t("dictation.inline.invalidIncarnation"));
+  const incarnation = conditional ? `&created=${encodeURIComponent(created)}` : "";
+  const socket = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(name)}?rows=${rows}&cols=${cols}&replay_geometry=1&pty_size=1${incarnation}`);
   socket.binaryType = "arraybuffer";
+  return socket;
+}
+
+// Original-socket binding with admitted control frames, not replay confidence.
+// Callers additionally guard replay/drain, inventory, modes and input revision.
+function localTerminalBinding(name, created, bytes, geometry, ptySize = () => {}, protocol = () => {}) {
+  let binding = created != null ? "pending" : "invalid";
+  let replayStarted = false;
+  return {
+    isBound: () => binding === "bound",
+    receive(data) {
+      if (typeof data !== "string") {
+        replayStarted = true;   // the first D is a boundary even when its payload is empty
+        if (binding === "pending") binding = "invalid";
+        bytes(new Uint8Array(data));
+        return;
+      }
+      const size = replayGeometry(data);
+      const ownedSize = MeshPaneActions.parsePtySize(data);
+      let message;
+      try { message = JSON.parse(data); } catch { binding = "invalid"; return; }
+      if (message?.t === "bound") {
+        const exact = Object.keys(message).length === 3 && message.name === name
+          && typeof message.created === "number" && Number.isFinite(message.created)
+          && message.created > 0 && message.created === created;
+        binding = binding === "pending" && !replayStarted && exact ? "bound" : "invalid";
+        if (binding === "bound") protocol(false);
+      } else if (message?.t === "limited" && Object.keys(message).length === 1) {
+        binding = "invalid";
+        protocol(true);
+      } else if (!size && !MeshPaneActions.isPtySizeFrame(message)) binding = "invalid";
+      if (size) geometry(size);
+      if (ownedSize) ptySize(ownedSize);
+    },
+  };
+}
+
+function openLocalTerminal(name, size, observer) {
+  requireLocalMesh();
+  const socket = localTerminalSocket(name, size), {created} = size;
   let disposed = false;
+  let attached = true;
+  let limited = false;
+  let dictationMode = MeshPaneActions.createDictationModeObserver(observer.modeSource?.modes?.bracketedPasteMode === true, observer.modeSource);
+  const lifetime = MeshPaneActions.createRetainedLifetime(() => {
+    disposed = true; dictationMode.dispose(); localTerminalHandles.delete(handle); socket.close();
+  });
   const send = (payload) => {
     if (!handle.isOpen()) throw new Error("terminal disconnected");
     socket.send(payload); // queued locally; this is not a PTY delivery receipt
   };
   const handle = {
     socket,
+    get dictationMode() { return dictationMode; },
+    replayMode: (prefix, bytes) => {
+      dictationMode.dispose();
+      dictationMode = MeshPaneActions.createDictationModeObserver(false, observer.modeSource);
+      dictationMode.bytes(prefixedBytes(prefix, bytes));
+    },
     isOpen: () => !disposed && localTerminalSocketReady(socket),
+    get limited() { return limited; },
+    isBound: (expectedName, expectedCreated) => handle.isOpen() && binding.isBound()
+      && expectedName === name && expectedCreated === created,
     queueInput: (bytes) => send(bytes),
     lease: (clientId, dirty) => send(JSON.stringify({ t: "h", client_id: clientId, dirty })),
     // mode "claim" (the default, no field): applied only while no other device owns the size;
     // "take": the banner's take-over; "keep": a redraw at the PTY's size.
-    resize: (rows, cols, mode = "claim") =>
-      send(JSON.stringify(mode === "claim" ? { t: "r", rows, cols } : { t: "r", rows, cols, size: mode })),
-    close: () => { disposed = true; socket.close(); },
+    resize: (rows, cols, mode = "claim") => {
+      if (binding.isBound() || (limited && mode === "take"))
+        send(JSON.stringify(mode === "claim" ? { t: "r", rows, cols } : { t: "r", rows, cols, size: mode }));
+    },
+    retain: () => binding.isBound() ? lifetime.retain() : null,
+    close: () => { attached = false; lifetime.detach(); },
+    dispose: () => lifetime.dispose(),
   };
-  const current = () => !disposed && observer.current(handle);
+  localTerminalHandles.add(handle);
+  const current = () => !disposed && attached && observer.current(handle);
+  const binding = localTerminalBinding(name, created, (bytes) => {
+    dictationMode.bytes(bytes);
+    if (current()) observer.bytes(handle, bytes);
+  }, (geometry) => {if (current()) observer.replayGeometry(handle, geometry);},
+  (ptySize) => {if (current()) observer.ptySize?.(handle, ptySize);},
+  (isLimited) => {
+    limited = isLimited;
+    if (current()) observer.protocol?.(handle, isLimited);
+  });
   socket.onopen = () => {
     if (!current()) { try { handle.close(); } catch {} return; }
     observer.opened(handle);
   };
-  socket.onmessage = (event) => {
-    if (!current()) return;
-    if (typeof event.data !== "string") return observer.bytes(handle, new Uint8Array(event.data));
-    const geometry = replayGeometry(event.data);
-    if (geometry) return observer.replayGeometry(handle, geometry);
-    const ptySize = MeshPaneActions.parsePtySize(event.data);
-    if (ptySize) observer.ptySize?.(handle, ptySize);
-  };
+  socket.onmessage = (event) => {if (!disposed) binding.receive(event.data);};
   socket.onclose = (event) => {
     if (event?.code === 1012) inventoryPoller?.noteRestart();   // the server closes its sockets as it restarts
-    if (current()) return observer.closed(handle);
+    const notify = current();
+    lifetime.dispose();
+    if (notify) return observer.closed(handle);
   };
   return handle;
 }
+const localTerminalHandles = new Set();
 
-// {t:"g", rows, cols} from server.py: the PTY's geometry when the replay that follows was
-// last produced. Anything else, or a size beyond what the server accepts from a browser, is
-// ignored, and the replay is parsed at the pane's own size as before.
+// {t:"g", rows, cols}: the current pre-attach geometry, not per-byte replay
+// history. Initial unrenderable geometry deliberately revokes automation binding.
 function replayGeometry(text) {
   let message;
   try { message = JSON.parse(text); } catch { return null; }
@@ -458,6 +537,12 @@ class Pane {
     });
     $(".demo-history", this.el).addEventListener("click", () => openDemoHistory(this));
     this.sizeBanner = $(".size-banner", this.el);   // another device owns the PTY size (followPtySize)
+    this.limitedBanner = $(".limited-banner", this.el);
+    $("button", this.limitedBanner).addEventListener("click", () => this.takeSize());
+    this.limitedKeyboard = $(".limited-keyboard", this.el);
+    this.limitedKeyboard.addEventListener("click", (event) => {
+      event.stopPropagation(); this.focusLimitedKeyboard();
+    });
     this.ptyFollowing = false;
     $("button", this.sizeBanner).addEventListener("click", () => this.takeSize());
     $(".web", this.el).addEventListener("load", () => this.frameLoaded());
@@ -562,21 +647,44 @@ class Pane {
 
   wire() {
     const t = this.term;
+    const currentReply = (reply) => reply?.connection === this.conn && reply.terminal === this.conn?.terminal
+      && reply.view === this.actionView && !this.actionDisposed && !this.conn?.closed && reply.terminal?.isOpen();
+    this.inputOrigin = MeshPaneActions.createTerminalInputOrigin(t._core?.coreService, t._core?._inputHandler, currentReply);
+    for (const event of ["focus", "blur"]) t.textarea?.addEventListener(event, () => {
+      this.inputOrigin.focus({connection: this.conn, terminal: this.conn?.terminal, view: this.actionView});
+    }, true);
+    for (const event of ["focus", "blur"]) t.textarea?.addEventListener(event, () => this.inputOrigin.clearFocus());
+    this.wireReplayInput();
     t.onData((d) => {
+      const human = this.inputOrigin.consume();
+      const reply = this.inputOrigin.target();
       if (!localMeshEffectsAllowed()) return;
       // xterm answers the queries (device attributes, cursor position...) the replayed output
       // contains: they were asked long ago, and their answers would land at the prompt.
       // While draining, xterm is still parsing output written for the previous session
       // (see attach()): its answers would land at this session's prompt.
-      if (this.conn?.replaying || this.conn?.draining) return;
+      if (this.conn?.replaying || this.conn?.draining || this.conn?.replayPending) {
+        if (human && this.replayKeyboard) {
+          this.replayKeyboard = false;
+          if (ctrlArmed && d.length === 1) {
+            const c = d.toUpperCase().charCodeAt(0);
+            if (c >= 64 && c <= 95) d = String.fromCharCode(c - 64);
+            setCtrl(false);
+          }
+          this.send(d);
+        }
+        return;
+      }
       if (this.filterFocusReport(d)) return;
       paneInput.onData(this, d, () => {
-        if (ctrlArmed && d.length === 1) {
+        if (human && ctrlArmed && d.length === 1) {
           const c = d.toUpperCase().charCodeAt(0);
           if (c >= 64 && c <= 95) d = String.fromCharCode(c - 64);
           setCtrl(false);
         }
-        this.send(d);
+        if (human) this.send(d);
+        else if (currentReply(reply) && reply.terminal.isBound(this.conn.name, this.conn.created))
+          reply.terminal.queueInput(enc.encode(d));
       });
     });
     // file paths of viewable documents are clickable: they open in a web pane,
@@ -735,40 +843,118 @@ class Pane {
   }
 
   // ---- io
+  wireReplayInput() {
+    // xterm handles keydown in capture on its own root; observe on the outer
+    // pane terminal element, before that handler can synchronously emit data.
+    const input = this.termEl;
+    for (const type of ["keydown", "keypress"]) {
+      input.addEventListener(type, () => { this.replayKeyboard = true; }, true);
+      input.addEventListener(type, () => { this.replayKeyboard = false; });
+    }
+    // IME/mobile text can arrive without a keydown xterm can use. Take it
+    // before xterm's input listener, so it is queued once, not dropped there.
+    input.addEventListener("beforeinput", (event) => {
+      const c = this.conn;
+      if (!localMeshEffectsAllowed() || !(c?.replaying || c?.draining || c?.replayPending)
+          || event.isComposing || !event.data || !["insertText", "insertCompositionText"].includes(event.inputType)) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      this.sendRaw(enc.encode(event.data), false);
+    }, true);
+  }
+  cancelReplayInput(c) {
+    const queue = c.queuedHumanInput || [], running = c.activeHumanInput;
+    c.queuedHumanInput = [];
+    c.cancellingHumanInput = true;
+    try {running?.cancel(); for (const entry of queue) entry.input.cancel();}
+    finally {c.cancellingHumanInput = false;}
+  }
+  flushReplayInput(c) {
+    if (c.replaying || c.draining || c.replayPending || c.flushingHumanInput || c.cancellingHumanInput) return;
+    c.flushingHumanInput = true;
+    try {
+      while (!c.activeHumanInput && !c.replaying && !c.draining && !c.replayPending && c.queuedHumanInput?.length) {
+        const entry = c.queuedHumanInput.shift();
+        if (localMeshEffectsAllowed() && this.conn === c && !c.closed && c.ws === entry.socket
+            && c.terminal?.isBound(c.name, c.created)) entry.input.flush();
+        else entry.input.cancel();
+      }
+    } finally {c.flushingHumanInput = false;}
+  }
+  deferReplayPaste(binding, text, resume, cancel) {
+    const c = binding.connection;
+    if (!c.terminal?.isBound(c.name, c.created)) { cancel(); return {start() {}, settle() {}}; }
+    // Keep the FIFO barrier through settlement, including delayed Enter.
+    // Later human keys must not overtake a submitted paste, even after replay.
+    const reservation = this.inputLease.defer(enc.encode(text || "\r"), false);
+    let held = true;
+    const settle = () => {
+      if (!held) return;
+      held = false; reservation.cancel();
+      if (c.activeHumanInput === input) c.activeHumanInput = null;
+      this.flushReplayInput(c);
+    };
+    const input = {
+      flush: () => {
+        if (!held) return false;
+        c.activeHumanInput = input;
+        resume(); return true;
+      },
+      cancel: () => {if (!held) return; try {cancel();} finally {settle();}},
+    };
+    (c.queuedHumanInput ||= []).push({socket: binding.socket, input});
+    return {start: () => this.flushReplayInput(c), settle};
+  }
   send(str, complete = completesInput(str)) {
     this.sendRaw(enc.encode(str), complete);
   }
   sendRaw(bytes, complete = false) {
     if (!localMeshEffectsAllowed()) return false;
+    const c = this.conn;
+    if (!c?.terminal?.isOpen() || c.closed || c.ended) return false;
+    if ((c.replaying || c.draining || c.replayPending || c.activeHumanInput || c.flushingHumanInput
+        || c.queuedHumanInput?.length) && this.inputLease) {
+      if (!c.terminal.isBound(c.name, c.created)) { flash(t("terminal.limitedInput")); return false; }
+      const input = this.inputLease.defer(bytes, complete);
+      (c.queuedHumanInput ||= []).push({socket: c.ws, input});
+      return true;
+    }
     return this.inputLease?.write(bytes, complete) ?? false;
   }
 
   inputLeaseFor(name) {
     requireLocalMesh();
     const session = find(name);
-    const incarnation = session?.created ?? "unknown";
+    const incarnation = session?.created ?? null;
     const key = `${name}\0${incarnation}`;
+    let scope = humanInputScopes.get(key);
+    if (!scope) {
+      scope = MeshPaneActions.createHumanInputScope(() => {if (humanInputScopes.get(key) === scope) humanInputScopes.delete(key);});
+      humanInputScopes.set(key, scope);
+    }
     let lease = this.inputLeases.get(key);
-    if (lease) return lease;
-    // The PTY host stores leases per session, so the client id need only be
-    // stable for this tab/pane/name. A replacement incarnation starts with a
-    // fresh host-side table while the map key prevents a dirty bit transfer.
-    const clientId = `${inputLeaseTab.slice(0, 32)}_${this.inputLeaseSlot}_${name.slice(0, 32)}`;
-    lease = MeshPaneActions.createHumanInputLease({
-      clientId,
+    // Old same-PTY relaunch hosts do not scope leases by created. An old H(false)
+    // must not clear the new incarnation's dirty barrier on such a host.
+    const clientId = MeshPaneActions.humanInputClientId(inputLeaseTab, this.inputLeaseSlot, name, incarnation);
+    const transport = {
       control: (id, dirty) => {
         const terminal = this.conn?.terminal;
-        if (this.conn?.name !== name || !terminal?.isOpen())
+        if (this.conn?.name !== name || (this.conn?.created ?? null) !== incarnation || !terminal?.isOpen())
           throw new Error("terminal disconnected");
         terminal.lease(id, dirty);
       },
       data: (bytes) => {
         const terminal = this.conn?.terminal;
-        if (this.conn?.name !== name || !terminal?.isOpen())
+        if (this.conn?.name !== name || (this.conn?.created ?? null) !== incarnation || !terminal?.isOpen())
           throw new Error("terminal disconnected");
         terminal.queueInput(bytes);
       },
-    });
+    };
+    // A user-opened replacement view adopts before its first H. Retained jobs
+    // keep their explicit original transport; ordinary typing shares revision/owner.
+    const adopted = !lease?.dirty && scope.adopt(transport, {retained: true});
+    if (adopted && adopted !== lease) {lease?.retire(); lease = adopted;}
+    if (lease) lease.bind(transport);
+    else lease = MeshPaneActions.createHumanInputLease({clientId, scope, ...transport});
     this.inputLeases.set(key, lease);
     return lease;
   }
@@ -782,21 +968,25 @@ class Pane {
     if (!localMeshEffectsAllowed()) return;
     const c = this.conn;
     if (c?.initializing || !c?.terminal?.isOpen()) return;
+    if (!c.terminal.isBound(c.name, c.created) && !(c.terminal.limited && mode === "take")) return;
     if (!MeshPaneActions.sendsSize(c.pty ?? null, mode)) return;
     const cols = this.ownSize().cols, last = c.lastSize;
     if (!force && last && last.rows === rows && last.cols === cols) return;
     c.lastSize = { rows, cols };
     c.terminal.resize(rows, cols, mode);
+    if (mode === "claim" && c.pty === null) c.initialSizeClaim = true;
   }
   // The PTY size and its owner, from the host ({t:"s"}, at each change). Another device owns
   // it: the pane shows the PTY at that size (followPtySize). Nobody owns it: the pane fits and
   // claims. This pane owns it: nothing to change, unless it followed until now.
-  applyPtySize(c) {
+  applyPtySize(c, initialClaim = false) {
     if (c !== this.conn || c.replaySize || this.termEl.hidden) return;
     const owner = c.pty?.owner;
     if (owner === "you" && !this.ptyFollowing) return;
     this.refit();
-    if (owner === "none") this.sendSize(true);
+    // The first snapshot may precede our already-queued claim. A later release
+    // must still claim even when its dimensions equal the last size sent.
+    if (owner === "none" && !initialClaim) this.sendSize(true);
   }
   // The size the pane's area fits, without applying it; null when it cannot be measured.
   fitSize() {
@@ -807,6 +997,14 @@ class Pane {
   // True when another device owns the size: xterm takes the PTY's size, clipped by the pane
   // (the bottom rows kept when it is taller), and the banner offers to take the size back.
   followPtySize(c) {
+    if (c?.terminal?.limited) {
+      const size = c.limitedGeometry;
+      this.sizeBanner.hidden = true;
+      this.ptyFollowing = !!size;
+      this.termEl.classList.toggle("pty-tall", !!size && size.rows > (this.fitSize()?.rows ?? this.term.rows));
+      if (size && (this.term.cols !== size.cols || this.term.rows !== size.rows)) this.term.resize(size.cols, size.rows);
+      return !!size;
+    }
     if (!c?.pty && !this.ptyFollowing) return false;   // a host without the rule: nothing to show
     const own = this.fitSize() ?? { rows: this.term.rows, cols: this.term.cols };
     const plan = MeshPaneActions.sizePlan(c?.pty ?? null, own);
@@ -824,6 +1022,11 @@ class Pane {
   takeSize() {
     const c = this.conn, own = this.fitSize();
     if (localActionUnavailable() || !own || c?.initializing || c?.replaySize || !c?.terminal?.isOpen()) return;
+    if (c.terminal.limited) {
+      c.limitedGeometry = own;
+      c.terminal.resize(own.rows, own.cols, "take");
+      this.refit(); return;
+    }
     if (c.pty) c.pty = { ...c.pty, owner: "you" };
     c.lastSize = own;
     c.away = null;
@@ -835,7 +1038,7 @@ class Pane {
   ownSize() {
     return this.conn?.replaySize ?? { rows: this.term.rows, cols: this.term.cols };
   }
-  // A replay is parsed at the geometry it was produced at (from the host, through server.py),
+  // A replay is parsed at the current pre-attach geometry (a best-effort hint),
   // then xterm takes this pane's size back and rewraps its rows (leaveReplayGeometry). The
   // resize is done now, not in a write of its own: output still queued before the replay is
   // wiped by the reset the replay starts with (replayPrefix). Meanwhile sizes sent are the
@@ -854,7 +1057,8 @@ class Pane {
     if (!own) return;
     c.replaySize = null;
     // A pane that follows another device's size goes straight to the PTY's (one rewrap).
-    const back = c.pty?.owner === "other" ? c.pty : own;
+    const back = c.terminal?.limited && c.limitedGeometry
+      ? c.limitedGeometry : c.pty?.owner === "other" ? c.pty : own;
     this.term.resize(back.cols, back.rows);
     this.refit();   // the layout may have changed meanwhile
   }
@@ -871,19 +1075,28 @@ class Pane {
     const geometry = c.replayGeometry;
     c.replayed = true;
     c.replayGeometry = null;
-    if (prefix === null) return this.output(bytes, () => { c.replaying = false; });
+    if (prefix === null) return this.output(bytes, () => {
+      if (!stillCurrent()) return;
+      c.replaying = false; this.flushReplayInput(c);
+    });
+    // The retained socket observer sees raw output. A visible replay also has
+    // a local reset/mode prefix; mirror that prefix before its raw bytes.
+    c.terminal.replayMode(prefix, bytes);
     this.resumeFollowing(c);
     this.enterReplayGeometry(c, geometry);
     this.output(prefixedBytes(prefix, bytes), () => {
+      if (!stillCurrent()) return;
       c.replaying = false;
-      if (stillCurrent()) this.leaveReplayGeometry(c);
-    });
+      this.leaveReplayGeometry(c);
+      this.flushReplayInput(c);
+        });
   }
   // A real size change and back: the program gets a genuine SIGWINCH and repaints.
   redraw() {
     if (localActionUnavailable()) return;
     const c = this.conn;
     if (!c?.terminal?.isOpen()) return;
+    if (!c.terminal.isBound(c.name, c.created)) { flash(t("terminal.limitedInput")); return; }
     const rows = this.ownSize().rows;
     // A pane that follows another device's size redraws at the PTY's size, which stays that
     // device's ("keep"); the second size is the one read now, as the first changes xterm's.
@@ -1092,17 +1305,29 @@ class Pane {
     try { this.fit.fit(); } catch {}
     this.sendSize();
   }
-  // on a phone the keyboard types in the input line (see "phone input line")
+  focusLimitedKeyboard() {
+    const c = this.conn;
+    if (!touch || !localMeshEffectsAllowed() || !c?.terminal?.limited || c.closed || c.ended
+        || this.termEl.hidden) return false;
+    if (directPasteWaits(this)) { flash(t("terminal.limitedKeyboardWaiting")); return false; }
+    setActive(this);
+    if (this.conn !== c) return false;
+    c.liveKeyboard = true;   // focus intent only, never retained/deferred input authority
+    this.term.textarea.setAttribute("inputmode", "text");
+    this.term.focus();
+    return true;
+  }
+  // Phones normally type in the input line; limited mode offers an explicit live keyboard.
   focus() {
     if (this.termEl.hidden) return;
-    if (touch && !$("#line").hidden) $("#line-text").focus();
+    if (touch && !$("#line").hidden && !(this.conn?.liveKeyboard && this.conn.terminal?.limited)) $("#line-text").focus();
     else this.term.focus();
   }
 
   // Focus is an effect of a person choosing a live terminal, not of showing or
   // restoring one.  An attach hides xterm for its first fit, so retain that
-  // narrow intent until it becomes focusable.  On a phone, Mesh owns the
-  // editable field; xterm's helper textarea is deliberately not the target.
+  // narrow intent until it becomes focusable. On a phone the editable field
+  // stays the target unless the person explicitly chose the limited live keyboard.
   focusSelectedTerminal() {
     const c = this.conn;
     if (!c || c.closed || this.id !== c.name || active !== this) return false;
@@ -1118,7 +1343,7 @@ class Pane {
     // A focused but connecting terminal drops input because there is no socket
     // to send it on yet.  Waiting for onopen keeps "ready to type" literal.
     if (!c.terminal?.isOpen()) return false;
-    if (touch) {
+    if (touch && !(c.liveKeyboard && c.terminal.limited)) {
       if ($("#line").hidden) return false;
       $("#line-text").focus();
     } else {
@@ -1279,7 +1504,18 @@ class Pane {
     }
   }
   async pasteClipboard() {
-    try { this.term.paste(await navigator.clipboard.readText()); }
+    const c = this.conn, terminal = c?.terminal, socket = c?.ws, view = this.actionView;
+    const term = this.term, name = c?.name, created = c?.created;
+    const current = () => c && !c.closed && !c.ended && this.conn === c && c.terminal === terminal
+      && c.ws === socket && c.name === name && c.created === created && this.id === name
+      && this.term === term && this.actionView === view && !this.actionDisposed
+      && !this.termEl.hidden && localMeshEffectsAllowed() && terminal?.isBound(name, created);
+    if (!terminal?.isBound(name, created)) { flash(t("terminal.limitedInput")); return; }
+    if (!current()) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (current()) term.paste(text);
+    }
     catch { flash(t("clipboard.pasteDenied")); }
   }
   filesIn(files) {
@@ -1586,6 +1822,7 @@ class Pane {
   // the gesture ends, and at least every HOLD_MS (or HOLD_BYTES) during a long one.
   // `done` runs once xterm has parsed these bytes.
   output(bytes, done) {
+    this.inputOrigin?.tag(bytes, {connection: this.conn, terminal: this.conn?.terminal, view: this.actionView});
     this.commitFollowAtBottom();
     if (!this.holdTimer) {
       this.preserveReaderViewport();
@@ -2020,6 +2257,12 @@ class Pane {
     this.paneHeader.setConnection(text, !!bad);
   }
 
+  cancelCachedRestore(c) {
+    if (this.conn !== c || !c.cacheRestore) return;
+    this.detach();
+    this.setConn(t("conn.cachedUnconfirmed"), true);
+  }
+
   attach(name, opts = {}) {
     if (localActionUnavailable()) return;
     this.detach();
@@ -2029,20 +2272,21 @@ class Pane {
     // xterm divides its scrollTop by that zero height and corrupts ydisp with
     // NaN.  Reset while hidden, then fit only after its next frame.
     this.termEl.hidden = true;
+    this.inputOrigin?.reset();
     this.term.reset();
     // Output held for a finger belongs to the previous session: flushed later, it would be
     // parsed after the draining below and its queries answered to this session.
     this.queuedOutput = []; this.queuedBytes = 0;
     const c = { name, created: find(name)?.created, piFullscreenScroll: false, retry: 0, closed: false, terminal: null,
       ws: null, // real local socket: legacy paste identity/diagnostic compatibility only
-      initializing: true,
+      initializing: true, cacheRestore: opts.cacheRestore === true,
       followOutput: true, followCandidate: false, followFrame: 0, preserveViewport: null, bottomSync: false,
       focusRequested: opts.focusTerminal === true, draining: true };
     this.conn = c;
     // reset() does not empty xterm's write queue: output of the previous session may
     // still be parsed after this point. xterm parses writes in order, so this empty
     // write's callback runs once all of it has been parsed.
-    this.term.write("", () => { c.draining = false; });
+    this.term.write("", () => { c.draining = false; this.flushReplayInput(c); });
     requestAnimationFrame(() => {
       if (c.closed || this.conn !== c) return;
       this.termEl.hidden = false;
@@ -2063,14 +2307,21 @@ class Pane {
       if (c.closed) return;
       this.setConn(c.retry ? t("conn.reconnecting") : t("conn.connecting"));
       const current = (terminal) => !c.closed && this.conn === c && c.terminal === terminal;
-      const terminal = openLocalTerminal(name, this.ownSize(), {
+      const terminal = openLocalTerminal(name, { ...this.ownSize(), created: c.created }, {
+        modeSource: this.term,
         current,
         opened: () => {
+          this.cancelReplayInput(c);
           this.queuedOutput = []; this.queuedBytes = 0;   // the old connection's output is wiped with the screen
           c.replayPending = true;   // the host's first frame is the replay (see onData)
           c.replayGeometry = null;   // until server.py names it, before the replay
           c.away = null;   // this socket sends its size and redraws (armAutoRedraw)
           c.pty = null;    // until the host tells this socket (ptySize, after the replay)
+          c.initialSizeClaim = false;
+          c.limitedGeometry = null;
+          this.limitedBanner.hidden = true;
+          this.limitedKeyboard.hidden = true; c.liveKeyboard = false;
+          if (touch) this.term.textarea.setAttribute("inputmode", "none");
           c.retry = 0; this.setConn("●");
           this.inputLease.reconnect();
           if (this.inputLease.dirty)
@@ -2079,15 +2330,24 @@ class Pane {
           // handler. Let that be the socket-open resize, not a duplicate R.
           const focusedXterm = !touch && this.applySelectedTerminalFocus(c);
           if (!this.termEl.hidden && !focusedXterm) this.sendSize(true);
-          this.armAutoRedraw(c);
           if (touch) this.applySelectedTerminalFocus(c);
+          if (opts.cacheFocus && opts.cacheFocusRevision === meshCacheFocusRevision
+              && canFocusPaneAction(opts.cacheFocus)) opts.cacheFocus.focus({preventScroll: true});
         },
         replayGeometry: (_terminal, geometry) => {
           if (c.replayPending) c.replayGeometry = geometry;
+          if (_terminal.limited) c.limitedGeometry = geometry;
+        },
+        protocol: (_terminal, limited) => {
+          this.limitedBanner.hidden = !limited;
+          this.limitedKeyboard.hidden = !limited || !touch;
+          if (!limited) { c.cacheRestore = false; this.sendSize(true); this.armAutoRedraw(c); }
         },
         ptySize: (_terminal, size) => {
+          const initialClaim = c.pty === null && c.initialSizeClaim;
           c.pty = size;
-          this.applyPtySize(c);
+          c.initialSizeClaim = false;
+          this.applyPtySize(c, initialClaim);
         },
         bytes: (terminal, bytes) => {
           // A closing browser socket may already have a replay frame queued.
@@ -2111,11 +2371,17 @@ class Pane {
           // refresh yields to the browser. The pane may have been detached or
           // reattached while it was in flight; recheck before changing or retrying.
           if (!current(terminal)) return;
-          if (!data.mesh.some((s) => s.id === name)) {
+          if (c.cacheRestore) { this.cancelCachedRestore(c); return; }
+          const session = data.mesh.find((s) => s.id === name);
+          if (!session) {
             c.ended = true;   // a restored session of this name lets refresh() reattach the pane
+            this.cancelReplayInput(c);
             this.setConn(t("conn.ended"), true);
             this.output(`\r\n\x1b[2m[${t("conn.sessionEnded")}]\x1b[0m\r\n`);
             return;
+          }
+          if ((session.created ?? null) !== (c.created ?? null)) {
+            this.attach(name); return;
           }
           c.retry++;
           this.setConn(t("conn.disconnected"), true);
@@ -2129,11 +2395,15 @@ class Pane {
 
   detach() {
     if (!this.conn) return;
+    this.limitedBanner.hidden = true;
+    this.limitedKeyboard.hidden = true;
+    if (touch) this.term.textarea.setAttribute("inputmode", "none");
     // The session left keeps no focus-in: its focus-out goes on its own connection. The pane's
     // focus state is then reset, so the next session starts unreported (whatever the pane
     // reported to the previous one) and gets a focus-in only per the rules above.
     if (this.focusReported === true) this.reportFocus(false);
     this.focusReported = null; this.heldFocusIn = false;
+    this.cancelReplayInput(this.conn);
     this.dropReaderAnchor(this.conn);
     this.conn.closed = true;
     if (this.conn.autoRedraw) clearTimeout(this.conn.autoRedraw.timer);
@@ -2198,7 +2468,15 @@ class Pane {
   dispose() {
     this.invalidateActionView(); this.actionDisposed = true; this.abandonCopyOnSelect?.();
     observePaneActions(this); this.paneMenu.dispose();
-    this.resetFrameHistory(); this.detach(); this.term.dispose();
+    this.resetFrameHistory(); this.detach();
+    // Pinned xterm reset queues viewport syncs that dispose does not cancel.
+    // Retire only this closed viewport before its renderer is destroyed.
+    const viewport = this.term._core?.viewport;
+    if (viewport) viewport.syncScrollArea = () => {};
+    this.term.dispose();
+    this.inputOrigin?.dispose();
+    for (const lease of this.inputLeases.values()) lease.retire();
+    this.inputLeases.clear();
   }
 }
 
@@ -4019,6 +4297,10 @@ function openSession(id, opts = {}) {
   if (there) {
     setActive(there, true);
     if (!localMeshEffectsAllowed()) return;
+    const session = find(id);
+    if (!there.conn && session?.kind === "mesh" && rowAuthoritative(session)) {
+      there.attach(id, {focusTerminal: focus});
+    }
     if (isHist(id) && there.hist?.key !== id) there.showHist(id);
     else if (focus) there.focusSelectedTerminal();
     return;
@@ -4392,7 +4674,7 @@ function reloadHolds() {
   if (lineRecovery) add("line-recovery", t("reload.hold.lineRecovery"), lineRecovery);
   if (composeOwner?.pending) add("compose-pending", t("reload.hold.composePending", { target: composeOwner.target.displayName }), composeOwner);
   for (const record of composeRecovery) add("compose-recovery", t("reload.hold.composeRecovery", { target: record.target.displayName }), record);
-  for (const record of composeUploads) add(record.batch.complete || record.batch.abandoned ? "upload-recovery" : "upload-pending",
+  for (const record of composeUploads) add((record.batch.complete && !record.inserting) || record.batch.abandoned ? "upload-recovery" : "upload-pending",
     t("reload.hold.attachments", { target: record.target.displayName, files: record.batch.items.map((item) => item.name).join(", ") }), record);
   for (const record of uploadHolds) if (!composeUploads.includes(record))
     add("upload-pending", t("reload.hold.uploadActive", { target: record.target.displayName }), record);
@@ -4651,9 +4933,11 @@ $("#btn-config").addEventListener("click", () => configPanel.open());
 // answer is merged into the last listing here, so the rest of the page always sees a whole one. A
 // requested load (refresh() after a change) sends no `since`, so its answer holds that change.
 async function loadLocalInventory(signal, attempt) {
-  const { url, since } = Progress.inventoryUrl("/api/sessions", lastListing, focusNames(), attempt?.requested === true);
+  const epoch = meshPageEpoch, previous = lastListing;
+  const current = () => localMeshEffectsAllowed() && !signal?.aborted && epoch === meshPageEpoch;
+  const { url, since } = Progress.inventoryUrl("/api/sessions", previous, focusNames(), attempt?.requested === true);
   const response = await requestLocal(url, { signal });
-  if (!localMeshEffectsAllowed()) return { kind: "failed", status: null };
+  if (!current()) return { kind: "failed", status: null };
   if (response.status === 401) {
     forgetKnownSessions();
     location.href = "/login";
@@ -4661,7 +4945,9 @@ async function loadLocalInventory(signal, attempt) {
   }
   if (!response.ok) return { kind: "failed", status: response.status };
   const dropped = (row) => console.debug("session-mesh: a listing row without an id was dropped", row);
-  return { kind: "loaded", value: Progress.mergeListing(lastListing, await response.json(), since, dropped) };
+  const value = await response.json();
+  if (!current()) return { kind: "failed", status: null };
+  return { kind: "loaded", value: Progress.mergeListing(previous, value, since, dropped) };
 }
 
 // The sessions this page wants described first (`focus`, static/sessions-priority.ts).
@@ -4723,20 +5009,58 @@ function validateInventorySnapshot(next) {
 // in flight, or the single follow-up that starts after it; the poll waits as long as the server took
 // to answer (1 s base while the server says its listing is incomplete, 4 s otherwise, at least 30 s
 // while the tab is hidden); becoming visible or getting the network back asks at once.
-function startInventory(context) {
+function startInventory(context, cacheResume = false) {
+  inventoryPoller?.stop();
+  pageSignals?.dispose();
+  const epoch = meshPageEpoch;
+  let shortRecoveryDeadline = cacheResume;
+  const current = () => localMeshEffectsAllowed() && meshContext === context && epoch === meshPageEpoch;
+  let issue = paneInventoryIssue;
   inventoryPoller = Progress.createPoller({
-    load: (signal, attempt) => context.inventory(signal, attempt),
+    load: async (signal, attempt) => {
+      issue = ++paneInventoryIssue;
+      let aborted;
+      try {
+        // The poller aborts at its deadline. Race even a loader/body adapter
+        // that ignores abort, so a cached page can resume polling afterwards.
+        const outcome = await Promise.race([
+          Promise.resolve().then(() => context.inventory(signal, attempt)),
+          new Promise(resolve => {
+            aborted = () => resolve({kind: "failed", status: null});
+            if (signal.aborted) aborted();
+            else signal.addEventListener("abort", aborted, {once: true});
+          }),
+        ]);
+        return outcome;
+      } catch (error) {
+        throw error;
+      } finally {if (aborted) signal.removeEventListener("abort", aborted);}
+    },
     apply: (value) => {
-      if (meshStopped || meshContext !== context) return undefined;
-      if (Progress.holdKnownRows(value, data)) { lastListing = value; sessionsStatus.render(); return undefined; }
+      if (!current()) return undefined;
+      if (Progress.holdKnownRows(value, data)) {
+        lastListing = value; sessionsStatus.render(); return undefined;
+      }
       const snapshot = validateInventorySnapshot(value);
-      return snapshot ? applyInventorySnapshot(++paneInventoryIssue, snapshot) : undefined;
+      if (!snapshot) {return undefined;}
+      const applied = applyInventorySnapshot(issue, snapshot);
+      return applied;
     },
     clock: { now: () => Date.now(), setTimeout: (run, ms) => setTimeout(run, ms), clearTimeout: (handle) => clearTimeout(handle) },
     baseIntervalMs: () => (Progress.complete(lastListing) ? 4000 : 1000),
     minDelayMs: () => pageSignals?.minDelayMs() ?? 0,
-    onChange: () => sessionsStatus.render(),
-    onApplyError: (error) => console.error("session-mesh: the session list could not be applied", error),
+    timeoutMs: () => {
+      const timeout = shortRecoveryDeadline ? 5000 : Progress.TIMEOUT_MS;
+      shortRecoveryDeadline = false;
+      return timeout;
+    },
+    onChange: () => {
+      if (!current() || state.stopped) return;
+      sessionsStatus.render();
+    },
+    onApplyError: (error) => {
+      console.error("session-mesh: the session list could not be applied", error);
+    },
   });
   pageSignals = Progress.watchPageSignals({ win: window, doc: document, wake: () => void refresh(), changed: () => sessionsStatus.render() });
   return inventoryPoller.start();
@@ -4754,7 +5078,7 @@ const sessionsStatus = Progress.createStatusView({ box: $("#sessions-status"), t
   } });
 
 function refresh() {
-  if (!meshContext || meshStopped || !inventoryPoller) return Promise.resolve();
+  if (!localMeshEffectsAllowed() || !inventoryPoller) return Promise.resolve();
   return inventoryPoller.request();
 }
 
@@ -4800,6 +5124,7 @@ function applyInventorySnapshot(issue, { next, identities }) {
     activityRanking = MeshSessionActivity.update(activityRanking, [...next.mesh, ...next.external],
       next.management, typeof next.now === "number" ? next.now : Date.now() / 1000);
   } catch { return; }
+  if (observedInventory) restorePendingCachedTerminals();
   if (observedInventory && localMeshEffectsAllowed()) receiveBoardSignals(data.signals);
   if (localMeshEffectsAllowed()) checkClientVersion(data.client_version);
   showUpdateNotice(data.update);
@@ -4840,16 +5165,29 @@ function syncPanesWithListing(observedInventory) {
     if (p.back && data.moved?.[p.back]) p.back = data.moved[p.back];   // adopted: back to its new id
     if (!p.id || isAdjacentPane(p.id)) { p.header(); continue; }
     const moved = data.moved?.[p.id];
-    if (moved && find(moved)) { p.show(moved); continue; }
+    if (moved && find(moved)) {
+      if (p.conn?.cacheRestore) p.cancelCachedRestore(p.conn);
+      else p.show(moved);
+      continue;
+    }
     if (isHist(p.id)) {
       p.header();
       if (p.hist?.d && (liveOf(p.hist.d.id, p.hist.d.agent)?.id || null) !== p.hist.live) p.renderHist();
       continue;
     }
     const s = find(p.id);
+    if (!s && observedInventory && p.conn?.cacheRestore) {
+      p.cancelCachedRestore(p.conn); p.header(); continue;
+    }
     if (!s && observedInventory && p.id.startsWith("t")) p.clear();
     else if (s) {
-      if (localMeshEffectsAllowed() && p.conn?.ended && s.kind === "mesh") p.attach(p.id);
+      if (localMeshEffectsAllowed() && s.kind === "mesh") {
+        if (p.conn?.cacheRestore) {
+          if (observedInventory && Number.isFinite(s.created) && s.created > 0 && s.created !== p.conn.created)
+            p.cancelCachedRestore(p.conn);
+        } else if (p.conn?.ended || observedInventory && p.conn
+            && (p.conn.created ?? null) !== (s.created ?? null)) p.attach(p.id);
+      }
       p.header();
       if (s.kind === "external") p.renderDetail(s);
     }
@@ -6223,9 +6561,10 @@ async function uploadFiles(files, record) {
 }
 
 function abandonUploadRecord(record) {
-  if (!record.batch.abandon()) return;
+  if (!record.batch.abandon() && !record.inserting) return;
   uploadHolds.delete(record);
   record.finalized = true; // no late result may insert into any destination
+  if (record.inserting) {record.operation?.cancel(); return;}
   releasePickerDestination(record.destination);
   renderComposeStatus();
 }
@@ -6243,10 +6582,21 @@ function finishUploadRecord(record) {
     }
   } else if (record.paths && paneTargets.valid(destination.target)) {
     endDirectLine();   // like the composer: the paths are not typed at the agent's line
-    const result = [];
-    paneInput.deliver(destination.binding, record.paths + " ", false, (outcome) => result.push(outcome));
-    record.inserted = result[0]?.kind === "paste";
-    record.delivery = result[0] || null;
+    record.inserting = true; uploadHolds.add(record);
+    let settled = false;
+    const operation = paneInput.deliver(destination.binding, record.paths + " ", false, (outcome) => {
+      if (settled) return;
+      settled = true; record.inserting = false; record.operation = null;
+      record.inserted = outcome.kind === "paste"; record.delivery = outcome;
+      uploadHolds.delete(record); releasePickerDestination(destination);
+      if (record.inserted && record.batch.items.every((item) => item.status === "uploaded")) {
+        const index = composeUploads.indexOf(record);
+        if (index >= 0) composeUploads.splice(index, 1);
+      }
+      renderComposeStatus(); renderReloadStatus();
+    });
+    if (!settled) record.operation = operation;
+    return;
   }
   releasePickerDestination(destination);
   if (record.inserted && record.batch.items.every((item) => item.status === "uploaded")) {
@@ -6411,6 +6761,9 @@ function writeDirect(text, complete = false, held = false) {
 function pasteDirect(text, kind, held = false) {
   directInputCount += 1;
   const { pane } = lineDirect;
+  if (directPasteWaits(pane)) {
+    reportDirect("line.directPasteFailed", held); return false;
+  }
   const refusal = kind === "refused" ? "line.directRefused" : kind === "replacement" ? "line.directReplacement"
     : kind === "multiline" && !pane.term.modes.bracketedPasteMode ? "line.directNoBracket" : null;
   if (refusal) { reportDirect(refusal, held); return false; }
@@ -6423,6 +6776,11 @@ function pasteDirect(text, kind, held = false) {
   endDirectLine("line.directPasteFailed", held);
   return false;
 }
+function directPasteWaits(pane) {
+  const c = pane.conn;
+  return !!(!c?.terminal?.isOpen() || c.replaying || c.draining || c.replayPending || c.activeHumanInput
+    || c.flushingHumanInput || c.queuedHumanInput?.length);
+}
 // Ctrl armed: the letter is a control key, and that ends the mode. True when it was sent.
 function sendDirectControl(letter, held = false) {
   setCtrl(false);
@@ -6434,14 +6792,21 @@ function sendDirectControl(letter, held = false) {
   return true;
 }
 // Sends what the field received, then empties it. True when the text was delivered as typed
-// (or as one paste); otherwise a message says why, and the text is gone from the field.
+// (or as one paste); otherwise the text remains for explicit review or retry.
 function flushDirectField(inputType, held = false) {
   const text = line.value;
-  if (!text) return true;
+  if (!text) {delete lineDirect.heldInputType; return true;}
+  const direct = lineDirect, origin = direct.heldInputType ?? inputType;
+  const kind = MeshPaneActions.directInput(text, origin);
+  if (kind !== "typed") {
+    const delivered = pasteDirect(text, kind, held);
+    if (delivered) {line.value = ""; delete direct.heldInputType; fitLine();}
+    else if (lineDirect === direct) direct.heldInputType = origin;
+    return delivered;
+  }
+  delete direct.heldInputType;
   line.value = "";
   fitLine();
-  const kind = MeshPaneActions.directInput(text, inputType);
-  if (kind !== "typed") return pasteDirect(text, kind, held);
   if (ctrlArmed && Array.from(text).length === 1) return sendDirectControl(text, held);
   return writeDirect(text, false, held);
 }
@@ -6454,6 +6819,7 @@ function settleLine(inputType, composedOn = active) {
     return true;
   }
   if (ctrlArmed || !lineWasEmpty || composedOn !== active || !active?.conn?.terminal?.isOpen()   // a connection not open yet cannot take the word: it stays in the field
+      || !active.conn.terminal.isBound(active.conn.name, active.conn.created)
       || !MeshPaneActions.directLineStarts(MeshPaneActions.foregroundAgent(find(active.id)), line.value, inputType)) return false;
   lineDirect = { pane: active, conn: active.conn, session: active.id };
   renderLineDirect();
@@ -6545,6 +6911,7 @@ function cancelLinePending(owner) {
 }
 async function sendLine() {
   if (linePending || lineRecovery || !active?.conn) return;
+  if (active.conn.terminal?.limited) { flash(t("terminal.limitedInput")); return; }
   const pane = active;
   if (residueHolds(pane)) return;   // once: the next Enter sends
   const text = line.value;
@@ -6689,7 +7056,7 @@ function renderComposeRecovery(record) {
 function renderComposeUpload(record) {
   const row = document.createElement("section");
   const state = record.batch.abandoned ? t("upload.state.abandoned")
-    : !record.batch.complete ? t("upload.state.inProgress")
+    : !record.batch.complete || record.inserting ? t("upload.state.inProgress")
       : record.inserted ? t("upload.state.inserted")
         : t("upload.state.notInserted");
   const title = document.createElement("p");
@@ -6713,17 +7080,19 @@ function renderComposeUpload(record) {
   const discard = document.createElement("button");
   discard.type = "button"; discard.textContent = t("compose.discardResult");
   discard.addEventListener("click", () => {
+    if (record.inserting) record.operation?.cancel();
     const index = composeUploads.indexOf(record);
     if (index >= 0) composeUploads.splice(index, 1);
     renderComposeStatus();
   });
   row.append(copy);
-  if (!record.batch.complete && !record.batch.abandoned) row.append(cancel);
+  if ((!record.batch.complete || record.inserting) && !record.batch.abandoned) row.append(cancel);
   else row.append(discard);
   composeStatus.append(row);
 }
 function openCompose(preset = "", fromRecovery = false) {
   if (localActionUnavailable()) return;
+  if (active?.conn?.terminal?.limited) { flash(t("terminal.limitedInput")); return false; }
   if (cdlg.open) return false;
   // A terminal-origin native picker may stay pending without a browser cancel
   // event. Keep its Reset outside the top-layer composer instead of hiding it.
@@ -6756,6 +7125,7 @@ function retireComposeOwner(owner) {
   composeOwner = null; ctext.value = ""; renderComposeStatus();
 }
 function sendCompose(submit) {
+  if (!localMeshEffectsAllowed()) return;
   const owner = composeOwner, text = ctext.value;
   if (!owner?.open || !cdlg.open || owner.pending || composeRecovery.length || !text) return;
   const revision = owner.begin();
@@ -6848,6 +7218,7 @@ function capturePickerDestination() {
 
 function captureTerminalDestination(pane) {
   if (!pane?.conn) return null;
+  if (pane.conn.terminal?.limited) { flash(t("terminal.limitedInput")); return null; }
   observePaneActions(pane);
   const target = paneTargets.capture(pane);
   if (!target) return null;
@@ -8023,18 +8394,95 @@ async function startMesh(context) {
   await firstListing;
   return Object.freeze({
     refresh,
-    dispose() {
-      meshStopped = true;
-      projectsGeneration++; workGeneration++;
-      projectsController?.close(); workController?.close();
-      inventoryPoller?.stop();
-      listBatch.cancel();
-      sessionsStatus.dispose();
-      pageSignals?.dispose();
-      navigator.serviceWorker?.removeEventListener("message", handleLocalServiceWorkerMessage);
-      for (const pane of panes) pane.detach();
-    },
+    dispose: disposeLocalPage,
   });
 }
 
 globalThis.MeshUI = Object.freeze({ startLocalMesh, forgetKnownSessions });
+window.addEventListener("pagehide", (event) => {
+  if (event.persisted && !meshPageFinal) suspendLocalPage();
+  else disposeLocalPage();
+});
+window.addEventListener("pageshow", (event) => {if (event.persisted) void resumeLocalPage();});
+// Cached focus must not overtake a choice made while inventory or the socket waited.
+document.addEventListener("focusin", () => { meshCacheFocusRevision++; });
+function retirePageInput(preserveDraft = false) {
+  if (preserveDraft && composeOwner?.open && !composeOwner.pending && cdlg.open && ctext.value) {
+    composeRecovery.push({target: composeOwner.target, text: ctext.value,
+      result: {kind: "refused", frames: 0, wireBytes: 0, reason: t("compose.recovery.pageSuspended")}});
+  }
+  endDirectLine();
+  if (capActive && !capActive.file) resetCapture(capActive);
+  linePending?.operation?.cancel();
+  for (const record of composeUploads) if (record.inserting) record.operation?.cancel();
+  retireComposeOwner(composeOwner);
+  if (cdlg.open) cdlg.close();
+}
+function disposeLocalPage() {
+  meshPageFinal = true; meshStopped = true; meshPageEpoch++;
+  meshPageCache = null;
+  projectsGeneration++; workGeneration++;
+  projectsController?.close(); workController?.close();
+  retirePageInput();
+  inventoryPoller?.stop(); listBatch.cancel(); sessionsStatus.dispose(); pageSignals?.dispose();
+  navigator.serviceWorker?.removeEventListener("message", handleLocalServiceWorkerMessage);
+  for (const pane of panes) {pane.invalidateActionView(); pane.detach();}
+  for (const handle of localTerminalHandles) handle.dispose();
+  disposeLocalInputScopes();
+}
+function suspendLocalPage() {
+  if (!localMeshEffectsAllowed()) return;
+  const bindings = new Map((meshPageCache?.bindings || []).filter(cachedTerminalCurrent)
+    .map(binding => [binding.pane, {...binding}]));
+  for (const pane of panes) if (pane.conn) bindings.set(pane, {pane, id: pane.id,
+    name: pane.conn.name, created: pane.conn.created});
+  meshPageCache = {bindings: [...bindings.values()], focus: document.activeElement};
+  meshPageSuspended = true; meshPageEpoch++;
+  projectsGeneration++; workGeneration++;
+  projectsController?.close(); workController?.close();
+  inventoryPoller?.stop(); listBatch.cancel(); pageSignals?.dispose();
+  retirePageInput(true);
+  for (const pane of panes) {
+    pane.invalidateActionView(); pane.detach();
+    const binding = bindings.get(pane);
+    if (binding) binding.view = pane.actionView;
+  }
+  for (const handle of localTerminalHandles) handle.dispose();
+  // Keep native lease history viable for fresh, inventory-validated sockets.
+}
+async function resumeLocalPage() {
+  if (!meshPageSuspended || meshStopped || meshPageFinal || !meshPageCache) return;
+  const epoch = meshPageEpoch, context = meshContext;
+  meshPageCache.focusRevision = meshCacheFocusRevision;
+  meshPageSuspended = false;
+  renderComposeStatus(); listBatch.request();
+  await startInventory(context, true);
+  if (!localMeshEffectsAllowed() || meshPageFinal || meshContext !== context || epoch !== meshPageEpoch) return;
+  if (projecting) openProjectsPresentation();
+}
+function restorePendingCachedTerminals() {
+  if (!meshPageCache || !localMeshEffectsAllowed() || meshPageFinal) return;
+  const cached = meshPageCache;
+  meshPageCache = null;
+  const bindings = cached.bindings.filter(binding => restoreCachedTerminal(binding, cached.focus, cached.focusRevision));
+  if (bindings.length) meshPageCache = {...cached, bindings};
+}
+function cachedTerminalCurrent({pane, id, view}) {
+  return panes.includes(pane) && pane.id === id && !pane.actionDisposed && pane.actionView === view;
+}
+function restoreCachedTerminal(binding, focus, focusRevision) {
+  const {pane, id, name, created} = binding;
+  // A live reconnect can follow a restarted name; a frozen page may only restore
+  // its original target. pageshow is not user authority to select a replacement.
+  if (!cachedTerminalCurrent(binding) || pane.conn || !Number.isFinite(created) || created <= 0) return false;
+  const identity = paneTargets.identity(id);
+  if (identity?.name !== name) return false;
+  if (identity.created === null) return true;   // listed, but not yet an identified incarnation
+  if (identity.created !== created) return false;
+  pane.attach(id, {cacheRestore: true, cacheFocus: pane.el.contains(focus) ? focus : null, cacheFocusRevision: focusRevision});
+  return false;
+}
+function disposeLocalInputScopes() {
+  for (const scope of humanInputScopes.values()) scope.dispose();
+  humanInputScopes.clear();
+}
