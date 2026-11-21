@@ -12,6 +12,8 @@ export { SIZE_TAKEOVER_KEY, listenForActivation, shouldTakeSize, showsSizeBanner
 // as itself. Text is always translated when it is produced, never at load.
 export * from "./mailbox-panel.ts";
 export * from "./config-panel.ts";
+export * from "./backend-account-panel.ts";
+export { createBackendAccountApi } from "./backend-account-api.ts";
 export * from "./agent-mail-consent.ts";
 export * from "./narrow-drawer.ts";
 export { holdLineForTarget } from "./held-line.ts";
