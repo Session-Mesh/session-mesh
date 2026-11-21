@@ -318,7 +318,7 @@ project tracker that agents write through `mesh-work`, read only:
   for project, status, priority, owner and tag (a filter whose value no task has is left out),
   "Clear the filters", and the number of tasks shown. A column or a group shows 50 tasks, then
   "Show more". The reader lists at most 1000 tasks of a product: beyond, a notice says the view is
-  partial, the column counters still count every task, and the filters and the Timeline see the
+  partial, without a filter the column counters still count every task, and the filters and the Timeline see the
   tasks read. A card or a row opens the task sheet, as in a project. The filters of each product
   (the last 20 products filtered) are kept with the place.
 - **A project, in five tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent

@@ -17,10 +17,13 @@ export const FILTER_KEYS = ['projects', 'statuses', 'priorities', 'owners', 'tag
 export type FilterKey = (typeof FILTER_KEYS)[number];
 export type Filters = Readonly<Record<FilterKey, readonly string[]> & { text: string }>;
 
+/** The owner of a task whose row names none: the tracker's default owner, which rows leave out. */
+export const DEFAULT_OWNER = 'me';
 /** The value of the project filter for the tasks in no project. */
 export const NO_PROJECT = '';
 export const MAX_FILTER_VALUES = 50;
-export const MAX_FILTER_VALUE_CHARS = 100;
+/** A value as the server gives it: at most 100 bytes, then the mark of a cut. */
+export const MAX_FILTER_VALUE_CHARS = 120;
 export const MAX_FILTER_TEXT = 200;
 
 export const EMPTY_FILTERS: Filters = Object.freeze({ projects: [], statuses: [], priorities: [], owners: [], tags: [], text: '' });
@@ -54,7 +57,7 @@ function taskValues(doc: ProductDoc, task: TaskRow, key: FilterKey): readonly st
   if (key === 'projects') return [task.project ?? NO_PROJECT];
   if (key === 'statuses') return [task.status];
   if (key === 'priorities') return task.priority ? [task.priority] : [];
-  if (key === 'owners') return task.owner ? [task.owner] : [];
+  if (key === 'owners') return [task.owner ?? DEFAULT_OWNER];
   return doc.tagsOf.get(task.id) ?? [];
 }
 

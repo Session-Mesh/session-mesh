@@ -103,21 +103,23 @@ describe('filters', () => {
       [['P-0001', 3], ['P-0002', 1], ['P-0009', 1], [NO_PROJECT, 2]]);
     assert.deepEqual(choices(product, 'tags').map(choice => choice.value), ['night', 'quay']);
     assert.deepEqual(choices(product, 'owners', filters({ owners: ['gone'] })).map(choice => [choice.value, choice.count]),
-      [['ana', 2], ['ben', 1], ['gone', 0]], 'a value chosen before stays, to be unticked');
+      [['ana', 2], ['ben', 1], ['gone', 0], ['me', 4]], 'a value chosen before stays; a row without owner is the default owner');
+    assert.deepEqual(ids(filterTasks(product, filters({ owners: ['me'] }))), ['T-0003', 'T-0004', 'T-0006', 'T-0007']);
   });
 
   test('stored filters are read without throwing, bounded, and hostile values dropped', () => {
     for (const value of [null, 7, 'x', [], { projects: 'P-1' }, { statuses: [null, {}, 1e999] }, { text: 5 }, { ['__proto__']: { text: 'x' } }]) {
       assert.doesNotThrow(() => readFilters(value));
     }
-    const read = readFilters({ statuses: ['todo', 'nope', 'todo', '<b>'], owners: ['', 'ana', 'b‮ob', 'x'.repeat(101)],
+    const read = readFilters({ statuses: ['todo', 'nope', 'todo', '<b>'], owners: ['', 'ana', 'b‮ob', 'x'.repeat(121)],
       projects: [NO_PROJECT, 'P-1'], tags: Array.from({ length: 80 }, (_, index) => `t${index}`), text: 'y'.repeat(500) });
     assert.deepEqual(read.statuses, ['todo']);
-    assert.deepEqual(read.owners, ['ana'], 'no empty value, no bidirectional character, nothing longer than 100');
+    assert.deepEqual(read.owners, ['ana'], 'no empty value, no bidirectional character, nothing longer than 120');
     assert.deepEqual(read.projects, [NO_PROJECT, 'P-1']);
     assert.equal(read.tags.length, MAX_FILTER_VALUES);
     assert.equal(read.text.length, MAX_FILTER_TEXT);
     assert.equal(readFilters({ text: 'a\u0000b' }).text, '', 'a control character is not typed text');
+    assert.deepEqual(readFilters({ tags: [`${'t'.repeat(100)}...`] }).tags.length, 1, 'a tag the server cut is kept');
   });
 });
 

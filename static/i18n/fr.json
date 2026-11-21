@@ -2083,8 +2083,8 @@
     "other": "Afficher {n} de plus"
   },
   "work.product.partial": {
-    "one": "Vue partielle : {n} tâche lue sur {total}, la limite du lecteur. Les compteurs des colonnes comptent toutes les tâches ; les filtres et la frise ne voient que les tâches lues.",
-    "other": "Vue partielle : {n} tâches lues sur {total}, la limite du lecteur. Les compteurs des colonnes comptent toutes les tâches ; les filtres et la frise ne voient que les tâches lues."
+    "one": "Vue partielle : {n} tâche lue sur {total}, la limite du lecteur. Sans filtre, les compteurs des colonnes comptent toutes les tâches ; les filtres et la frise ne voient que les tâches lues.",
+    "other": "Vue partielle : {n} tâches lues sur {total}, la limite du lecteur. Sans filtre, les compteurs des colonnes comptent toutes les tâches ; les filtres et la frise ne voient que les tâches lues."
   },
   "work.product.noMatch": "Aucune tâche ne correspond à ces filtres.",
   "work.product.noDates": "Aucune de ces tâches n’a de date : aucune barre à tracer."

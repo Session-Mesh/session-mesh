@@ -268,6 +268,10 @@ async function truncatedProduct(page: Page, width: number): Promise<void> {
   assert.equal(await todo.locator('.work-card').count(), 50, 'the first 50 cards');
   await todo.locator('.work-more').click();
   assert.equal(await todo.locator('.work-card').count(), 100, 'then 50 more');
+  await tab(page, 'frise').click();
+  await panel(page, 'frise').locator('.work-pfrise-group').first().waitFor();
+  await tab(page, 'board').click();
+  assert.equal(await todo.locator('.work-card').count(), 100, 'the pages shown are kept across the tabs');
   const ms = await page.evaluate(async () => {
     const box = document.querySelector<HTMLInputElement>('#work-root .work-filter[data-filter="owners"] input[value="ana"]')!;
     const start = performance.now();

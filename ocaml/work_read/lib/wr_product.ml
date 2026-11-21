@@ -45,6 +45,10 @@ let column_counts tasks =
        Wr_projects.column_names)
 
 let run (loaded : Wr_load.t) product =
+  let* () =
+    if loaded.snapshot.taxonomy = None then Error (E.make "repository" "taxonomy.yaml cannot be read")
+    else Ok ()
+  in
   let* () = Wr_scope.check_product loaded (Some product) in
   let world = Wr_load.world loaded and taxonomy = loaded.snapshot.taxonomy in
   let tasks = List.sort order (Wr_scope.tasks_of_product loaded product) in
