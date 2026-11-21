@@ -103,6 +103,30 @@ let split_reads () =
     (fullscreen_prefix ^ L.snapshot replay)
     (L.replay replay)
 
+(* A line feed inside a sequence is executed, not an end: the window can be
+   cut there. The end of that sequence is applied to the prefix, not sent. *)
+let cut_inside_a_sequence () =
+  let replay = L.create () in
+  L.feed replay (set 1049);
+  L.feed replay (String.make (2 * 1024 * 1024) 'x');
+  L.feed replay "\027[?10\n49l";
+  L.feed replay "tail\n";
+  Alcotest.(check string)
+    "the window starts inside the sequence" "49ltail\n" (L.snapshot replay);
+  Alcotest.(check string) "its end applied, not sent" "tail\n" (L.replay replay)
+
+(* An unfinished sequence longer than the scan leaves the window whole. *)
+let unfinished_sequence_at_the_cut () =
+  let replay = L.create () in
+  L.feed replay (set 2004);
+  L.feed replay (String.make (2 * 1024 * 1024) 'x');
+  L.feed replay "\027[?1\n";
+  L.feed replay (String.make 5000 '0');
+  Alcotest.(check string)
+    "the prefix and the whole window"
+    (set 2004 ^ L.snapshot replay)
+    (L.replay replay)
+
 let late_clients_see_their_own_start () =
   let replay = L.create () in
   let early = L.replay replay in
@@ -135,6 +159,10 @@ let () =
           Alcotest.test_case "a reset before the cut" `Quick
             reset_before_the_cut;
           Alcotest.test_case "sequences split across reads" `Quick split_reads;
+          Alcotest.test_case "a cut inside a sequence" `Quick
+            cut_inside_a_sequence;
+          Alcotest.test_case "an unfinished sequence at the cut" `Quick
+            unfinished_sequence_at_the_cut;
           Alcotest.test_case "clients attaching at different times" `Quick
             late_clients_see_their_own_start;
         ] );
