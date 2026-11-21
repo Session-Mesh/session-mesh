@@ -185,6 +185,64 @@ test('successful deferred paste reserves native authority and reports submission
   assert.equal(f.pane.inputLease.inputDirty, false);
 });
 
+test('ended queue cancellation settles once without flushing queued text, keys or Enter', () => {
+  const f = fixture(), c = f.pane.conn;
+  f.deliver(); f.pane.sendRaw(Uint8Array.of(120)); f.pane.sendRaw(Uint8Array.of(13), true);
+  c.ended = true;
+  f.pane.cancelReplayInput(c); f.pane.cancelReplayInput(c); f.finishReplay();
+  for (const callback of f.scheduled) callback();
+  assert.equal(f.results.length, 1); assert.equal(f.results[0].kind, 'refused');
+  assert.equal(f.pane.inputLease.inputDirty, false); assert.deepEqual(f.frames, []);
+});
+
+test('ended running submission cancellation stays uncertain and never sends its delayed Enter', () => {
+  const f = fixture(), c = f.pane.conn;
+  f.deliver(); f.finishReplay(); assert.equal(f.scheduled.length, 1);
+  c.ended = true; f.pane.cancelReplayInput(c);
+  for (const callback of f.scheduled) callback();
+  assert.equal(f.results.length, 1); assert.equal(f.results[0].kind, 'uncertain');
+  assert.deepEqual(f.frames, [[...new TextEncoder().encode('prompt')]]);
+});
+
+test('old queue cancellation releases its original reservation, not new-incarnation lease authority', () => {
+  const f = fixture(), old = f.pane.conn, originalLease = f.pane.inputLease;
+  f.deliver();
+  const next = createHumanInputLease({clientId: 'new-incarnation', control() {}, data() {throw Error('must not send');}});
+  const claim = next.claim()!, revision = next.revision;
+  f.pane.inputLease = next;
+  f.pane.conn = {ws: {}, terminal: {isOpen: () => true}, replayPending: true};
+  f.pane.cancelReplayInput(old);
+  assert.equal(claim.valid(), true); assert.equal(next.revision, revision); assert.equal(next.inputDirty, false);
+  assert.equal(originalLease.inputDirty, false); assert.deepEqual(f.frames, []);
+});
+
+test('old closed callback cannot cancel a replacement queue after awaited inventory', async () => {
+  const f = fixture(), c = f.pane.conn;
+  f.deliver();
+  let release!: () => void;
+  Object.assign(f.context, {c, name: 'A', lineDirect: null, data: {mesh: []}, t: (key: string) => key,
+    refresh: () => new Promise<void>(resolve => {release = resolve;}),
+    current: (terminal: any) => f.pane.conn === c && c.terminal === terminal && !c.closed});
+  f.pane.leaveReplayGeometry = () => {};
+  let cancellations = 0;
+  const cancel = f.pane.cancelReplayInput.bind(f.pane);
+  f.pane.cancelReplayInput = (connection: any) => {cancellations++; cancel(connection);};
+  const marker = '        closed: async (terminal) => {';
+  const start = source.indexOf(marker) + marker.length;
+  const end = source.indexOf('\n        },\n      });', start);
+  const closed = vm.runInContext(`(async function(terminal) {${source.slice(start, end)}\n})`, f.context);
+  const pending = closed.call(f.pane, c.terminal);
+  cancel(c); // Replacement attach detaches and settles its predecessor first.
+  const next = createHumanInputLease({clientId: 'replacement', control() {}, data() {throw Error('unexpected new D');}});
+  f.pane.inputLease = next;
+  const reservation = next.defer(Uint8Array.of(120), false);
+  f.pane.conn = {ws: {}, terminal: {isOpen: () => true}, replayPending: true, queuedHumanInput: [{input: reservation}]};
+  const revision = next.revision;
+  release(); await pending;
+  assert.equal(cancellations, 0); assert.equal(next.revision, revision); assert.equal(next.inputDirty, true);
+  assert.equal(f.pane.conn.queuedHumanInput.length, 1); reservation.cancel();
+});
+
 for (const prefix of [null, 'reset']) test(`obsolete replay callback cannot flush a current socket (${prefix ?? 'alternate screen'})`, () => {
   const callbacks: (() => void)[] = [];
   let flushes = 0;

@@ -2293,6 +2293,7 @@ class Pane {
           const session = data.mesh.find((s) => s.id === name);
           if (!session) {
             c.ended = true;   // a restored session of this name lets refresh() reattach the pane
+            this.cancelReplayInput(c);
             this.setConn(t("conn.ended"), true);
             this.output(`\r\n\x1b[2m[${t("conn.sessionEnded")}]\x1b[0m\r\n`);
             return;
