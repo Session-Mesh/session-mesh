@@ -4536,13 +4536,20 @@ const sessionRequestGate = MeshPaneActions.createSessionRequestGate({
         ? { kind: "claimed", claimNonce: body.claim_nonce } : "retry";
     } catch { return "retry"; }
   },
-  decide: async (id, approve, claimNonce) => {
+  decide: async (id, approve, claimNonce, optionsRevision) => {
     try {
       const response = await requestLocal(`/api/session-actions/${encodeURIComponent(id)}/decision`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approve, claim_nonce: claimNonce }),
+        // The revision is the one the confirmation showed: a save since then makes the server refuse
+        // and ask again, rather than launch options the owner never saw.
+        body: JSON.stringify({ approve, claim_nonce: claimNonce,
+          ...(typeof optionsRevision === "string" ? { options_revision: optionsRevision } : {}) }),
       });
-      return response.ok ? "settled" : response.status === 409 ? "stale" : "retry";
+      if (response.status === 409) {
+        const body = await response.json().catch(() => null);
+        return body?.error === "stale-options" ? "retry" : "stale";   // retry: the new options are shown first
+      }
+      return response.ok ? "settled" : "retry";
     } catch { return "retry"; }
   },
 });
@@ -7357,14 +7364,13 @@ async function openNew() {
   dlg.showModal();
   form.cwd.select();
   folderSuggester.reset();
-  optionsPreset = null;   // the preset is the one form.reset() restored: prefill it again when the answer arrives
   Object.assign(folderField, { known: [], roots: [], walked: [], pristine: true, combo: { open: false, active: -1, count: 0 } });
   $("#new-folder-status").textContent = "";
   folderField.known = knownFoldersFrom([], [], []);
   renderFolderList();
   const [listed, config] = await Promise.allSettled([readJson("/api/dirs"),   // the moved folders are in the config's answer
     moveRecentFoldersToRunner().then(() => readJson("/api/config", { cache: "no-store" }))]);
-  if (config.status === "fulfilled") { rememberLaunchOptions(config.value?.launch); optionsPreset = null; syncOptionsRow(); }
+  if (config.status === "fulfilled") { rememberLaunchOptions(config.value?.launch); syncOptionsRow(); }
   fillAccounts(config.status === "fulfilled" && Array.isArray(config.value?.accounts) ? config.value.accounts : []);
   folderField.roots = config.status === "fulfilled" ? MeshFolderState.workspaceRoots(config.value) : [];
   const recent = (config.status === "fulfilled" && MeshFolderState.runnerRecentFolders(config.value)) || [];
@@ -7389,13 +7395,19 @@ function syncOptionsRow() {
   const value = form.preset.value, known = knownAgentPreset(value);
   $("#new-options-row").hidden = !known;
   $("#new-options-default-row").hidden = !known;
-  if (!known) { optionsPreset = null; return; }
+  if (!known) { optionsPreset = null; optionsTyped = false; return; }   // the text belongs to no agent
   $("#new-options-default").textContent = t("new.optionsDefault", { agent: value });
-  if (value !== optionsPreset && !optionsTyped) {   // a preset change prefills; a typed text stays
-    form.options.value = launchAgentOptions[value] ?? "";
+  if (value !== optionsPreset) {
+    // Another agent: its own default, never the text typed for the previous one, and the box starts
+    // unchecked (it asks to make this text the default, so it cannot survive a change of agent).
+    optionsPreset = value;
+    optionsTyped = false;
     form.optionsDefault.checked = false;
+    form.options.value = launchAgentOptions[value] ?? "";
+    return;
   }
-  optionsPreset = value;
+  // Same agent: a late /api/config answer refreshes the field only while the owner has not written in it.
+  if (!optionsTyped) form.options.value = launchAgentOptions[value] ?? "";
 }
 
 function rememberLaunchOptions(launch) {
@@ -7567,8 +7579,20 @@ folderList.addEventListener("click", (e) => {
 dlg.addEventListener("close", () => folderSuggester.reset());   // no pending timer or answer after the dialog closes
 $("#btn-new").addEventListener("click", () => { if (projecting) projectsController?.create(); else openNew(); });
 form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; syncOptionsRow(); syncAccountChoice(); });
+let newSubmitInFlight = false;   // set before the first await: a double click never starts two sessions
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (newSubmitInFlight) return;   // the session is starting, or its default is still being saved
+  newSubmitInFlight = true;
+  try {
+    await submitNew();
+  } finally {
+    newSubmitInFlight = false;
+  }
+});
+
+async function submitNew() {
   // A session was already started and only its default is left to store: this click finishes that,
   // and never starts a second session.
   const pending = dlg.dataset.pendingDefault ? JSON.parse(dlg.dataset.pendingDefault) : null;
@@ -7578,7 +7602,7 @@ form.addEventListener("submit", async (e) => {
     form.masterToken.value = "";
     if (!token) { $("#new-err").textContent = t("new.optionsCancelled"); return; }
     const saved = await saveAgentOptions(pending.preset, pending.options, token)
-      .catch(() => ({ ok: false, error: "network" }));
+      .catch(() => ({ ok: false, error: t("config.launch.err.network") }));
     if (!saved.ok) {
       $("#new-err").textContent = saved.error === "wrong-token"
         ? t("config.launch.err.wrongToken") : t("new.optionsNotSaved", { message: saved.message || saved.error });
@@ -7609,7 +7633,7 @@ form.addEventListener("submit", async (e) => {
     ? { preset: body.preset, options: body.options || "", id } : null;
   if (wanted) {
     const saved = await saveAgentOptions(wanted.preset, wanted.options)
-      .catch(() => ({ ok: false, error: "network" }));
+      .catch(() => ({ ok: false, error: t("config.launch.err.network") }));
     if (!saved.ok) {
       if (saved.error === "elevation-required") {
         $("#new-elevation-row").hidden = false;
@@ -7629,7 +7653,7 @@ form.addEventListener("submit", async (e) => {
   dlg.close();
   await refresh();
   active.show(id, false, { focusTerminal: true });
-});
+}
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && projecting && !document.querySelector("dialog[open]")) { e.preventDefault(); return setProjects(false); }

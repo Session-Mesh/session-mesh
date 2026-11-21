@@ -144,4 +144,49 @@ describe('the Options field of New session', {skip}, () => {
     assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '', 'codex has no stored default');
     assert.deepEqual(problems, []);
   });
+
+  test('a preset change starts from that agent\'s default, not from the text typed for another', async () => {
+    const {page, problems} = await signedIn();
+    const stored = await page.evaluate(async (token) => {
+      const json = {'Content-Type': 'application/json'};
+      await fetch('/api/config/elevate', {method: 'POST', headers: json, body: JSON.stringify({token})});
+      const launch = (await (await fetch('/api/config', {headers: json})).json()).launch;
+      const saved = await fetch('/api/config/launch-options', {method: 'POST', headers: json,
+        body: JSON.stringify({revision: launch.agent_options_revision, agent_options: {pi: '-e /tmp/default.mjs'}})});
+      return saved.ok ? 'ok' : `save ${saved.status}`;
+    }, mesh.token());
+    assert.equal(stored, 'ok');
+    await page.reload();
+    await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');
+    await openNew(page, 'pi');
+    assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/default.mjs');
+    await page.locator('#form-new input[name="options"]').fill('-e /tmp/typed.mjs');
+    await page.locator('#form-new input[name="optionsDefault"]').check();
+    // Another agent: its own default (none), never Pi's text and never the "make it the default" box.
+    await page.locator('#form-new label:has(input[name="preset"][value="codex"])').click();
+    assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '');
+    assert.equal(await page.locator('#form-new input[name="optionsDefault"]').isChecked(), false);
+    // And back: Pi's stored default, not the text typed for Pi a moment ago.
+    await page.locator('#form-new label:has(input[name="preset"][value="pi"])').click();
+    assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/default.mjs');
+    assert.deepEqual(problems, []);
+  });
+
+  test('text typed while the configuration is still loading is kept', async () => {
+    const {page, problems} = await signedIn();
+    // The dialog asks /api/config on open; hold that answer so the typing happens before it lands.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/api/config', async route => { await held; await route.continue(); });
+    await page.locator('#btn-new').click();
+    await page.locator('#dlg-new[open]').waitFor();
+    await page.locator('#form-new input[name="cwd"]').fill(fs.mkdtempSync(path.join(mesh.home, 'work-')));
+    await page.locator('#form-new label:has(input[name="preset"][value="pi"])').click();
+    await page.locator('#form-new input[name="options"]').fill('-e /tmp/typed-early.mjs');
+    release();
+    await page.waitForTimeout(500);   // the answer lands and must not overwrite what the owner typed
+    assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/typed-early.mjs');
+    assert.deepEqual(problems, []);
+    await page.unroute('**/api/config');
+  });
 });

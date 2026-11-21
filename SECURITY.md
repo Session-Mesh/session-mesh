@@ -515,7 +515,9 @@ They go through the same route family and the same elevation as the launch setti
   prompt, and a session an agent asks for inherits it: the owner authorised it once, in the
   configuration. Treat this file as owner-trusted configuration, like a shell rc file, and keep it
   out of reach of anything you would not let run commands as you. The confirmation of an
-  agent-requested session names the stored arguments, so consent covers what will actually run.
+  agent-requested session names the stored arguments, so consent covers what will actually run; the
+  approval carries the revision of the options file it was shown, and a save in between makes the
+  server refuse it and ask again rather than launch arguments the owner never saw.
 - **A file that cannot be read** refuses agent launches rather than dropping the arguments, because
   one of them may be restrictive (`--no-tools`); the shell keeps working.
 

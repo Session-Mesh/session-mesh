@@ -1621,6 +1621,9 @@ configuration folder (`~/.config/session-mesh`), one JSON array of arguments per
   the reason: Mesh cannot know which presets an unreadable file grants options to, and starting
   without a restrictive argument would widen what the agent may do. The shell and `other` still
   start. Fix the file, or remove it, then restart the web server to read it again.
+- **A session an agent asks for** is shown with the stored arguments of its preset; the approval is
+  bound to the revision of that file, so a save made after the confirmation is shown asks again
+  instead of launching the new arguments unseen.
 - **Edits made by hand** are read at startup. A save from Configuration or a session dialog is
   refused while the file holds bytes this server did not write (the page says the revision is
   stale), so restart the web server after editing the file.

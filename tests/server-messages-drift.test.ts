@@ -104,6 +104,7 @@ const NOT_SHOWN: Record<string, string> = {
   'Content-Type must be application/json': 'protocol error of the JSON routes: the page always sends JSON, a client that does not is not a screen',
   'Invalid fields': 'request-shape validation of the elevation and configuration routes: the page sends fixed fields, a mismatch is a client bug',
   unwritable: 'machine code of the launch options route, whose message carries the readable reason',
+  'stale-options': 'machine code of the session-request decision, handled by static/app.js (the request stays claimed and is asked again with the current options)',
   'too-many-attempts': 'machine code of the elevation route, mapped to its own label by static/config-launch-editor.ts (config.launch.err.tooMany)',
   'wrong-token': 'machine code of the elevation route, mapped to its own label by static/config-launch-editor.ts',
   'elevation-required': 'machine code of the configuration routes, mapped to the elevation prompt by static/config-launch-editor.ts',

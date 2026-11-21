@@ -4553,16 +4553,18 @@ def _account_label_of(account):
 
 
 def _with_launch_options(item):
-    """A pending create as the page shows it: the option tokens the launch will add, so the owner's
-    confirmation covers what will run and not only which agent. A stored file that cannot be read
-    leaves the field empty here; the launch itself then refuses (stored_options)."""
+    """A pending create as the page shows it: the option tokens the launch will add, and the revision
+    of the file they came from, so the owner's confirmation covers what will run and the approval can
+    say which version it saw. A stored file that cannot be read leaves the field empty here; the
+    launch itself then refuses (stored_options)."""
     if item.get("action") != "create" or not item.get("preset"):
         return item
+    revision = AGENT_OPTIONS_REVISION or ""
     try:
         tokens = stored_options(item["preset"])
     except web.HTTPConflict:
-        return {**item, "options": ""}
-    return {**item, "options": shlex.join(tokens) if tokens else ""}
+        return {**item, "options": "", "options_revision": revision}
+    return {**item, "options": shlex.join(tokens) if tokens else "", "options_revision": revision}
 
 
 def _with_account_labels(item):
@@ -4711,9 +4713,17 @@ async def stop_session_actions(app):
 async def api_session_action_decision(request):
     request_id = request.match_info["request_id"]
     body = await json_object(request)
-    if (set(body) != {"approve", "claim_nonce"} or not isinstance(body["approve"], bool)
-            or not isinstance(body["claim_nonce"], str)):
+    # `options_revision` is optional (a restart, a switch or a client without the field), but when it is
+    # sent it must be the revision of the stored options this server holds now: the confirmation named
+    # those tokens, and the launch must not run others. A mismatch leaves the request claimed, so the
+    # page can show the new options and ask again.
+    if (set(body) not in ({"approve", "claim_nonce"}, {"approve", "claim_nonce", "options_revision"})
+            or not isinstance(body["approve"], bool)
+            or not isinstance(body["claim_nonce"], str)
+            or ("options_revision" in body and not isinstance(body["options_revision"], str))):
         raise web.HTTPBadRequest(text="Invalid decision")
+    if body["approve"] and body.get("options_revision", AGENT_OPTIONS_REVISION or "") != (AGENT_OPTIONS_REVISION or ""):
+        return _json_reply({"error": "stale-options", "revision": AGENT_OPTIONS_REVISION or ""}, 409)
     item = request.app["session_requests"].decide(
         request_id, body["approve"], body["claim_nonce"])
     if item is None:

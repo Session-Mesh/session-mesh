@@ -730,8 +730,10 @@ type SessionActionRequest = Readonly<{
   state: "pending" | "claimed";
   preset: string | null;
   model: string | null;
-  // The option tokens the server will add to this launch, already joined for display ('' when none).
+  // The option tokens the server will add to this launch, already joined for display ('' when none),
+  // and the revision of the file they were read from: the approval names the version it saw.
   options?: string | null;
+  options_revision?: string | null;
   lease_expires_at?: number | null;
   source: Readonly<{ id: string }>;
   // switch_account: the account ids, and their labels as the server knows them
@@ -783,7 +785,7 @@ type SessionRequestBusy = Readonly<{kind: "busy"; leaseExpiresAt: number | null}
 export function createSessionRequestGate(ports: Readonly<{
   claim: (id: string, claimNonce?: string) => Promise<SessionRequestClaim | SessionRequestBusy | "stale" | "retry">;
   confirm: (message: string) => boolean;
-  decide: (id: string, approve: boolean, claimNonce: string) => Promise<"settled" | "stale" | "retry">;
+  decide: (id: string, approve: boolean, claimNonce: string, optionsRevision?: string) => Promise<"settled" | "stale" | "retry">;
   notify: (message: string) => void;
   now?: () => number;
   jitterMs?: (id: string) => number;
@@ -861,7 +863,8 @@ export function createSessionRequestGate(ports: Readonly<{
         const approve = answered !== undefined && answered.description === description ? answered.approve
           : ports.confirm(translate("paneActions.sessionRequest.confirm", { description }));
         decisions.set(value.id, { approve, description });
-        const outcome = await ports.decide(value.id, approve, claim.claimNonce);
+        const outcome = await ports.decide(value.id, approve, claim.claimNonce,
+          typeof value.options_revision === "string" ? value.options_revision : undefined);
         if (outcome === "settled") handled.add(value.id);
         if (outcome === "stale") {
           handled.add(value.id);

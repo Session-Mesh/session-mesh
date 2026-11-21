@@ -40,40 +40,56 @@ async function harness(prefix: string, enabled?: string[]): Promise<Harness> {
 }
 
 async function startHarness(scratch: string, prefix: string, enabled?: string[]): Promise<Harness> {
-  const bin = path.join(scratch, 'bin');
-  const board = path.join(scratch, 'switch', '_opam', 'bin', 'mesh-board-mcp');
-  fs.mkdirSync(bin, {recursive: true});
-  fs.mkdirSync(path.dirname(board), {recursive: true});
-  fs.writeFileSync(board, '#!/bin/sh\nexit 0\n', {mode: 0o755});
-  const argvLog = path.join(scratch, 'argv.log');
-  // `pi --version` is how pimcp checks the agent it is about to launch: answer it, record the rest.
-  fs.writeFileSync(path.join(bin, 'pi'),
-    `#!/bin/sh\nif [ "$1" = --version ]; then echo 1.4.0; exit 0; fi\n` +
-    `for a in "$@"; do printf '%s\\n' "$a" >> '${argvLog}'; done\nprintf -- '---\\n' >> '${argvLog}'\nexec sleep 30\n`,
-    {mode: 0o755});
-  fs.writeFileSync(path.join(bin, 'codex'),
-    `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> '${argvLog}.codex'; done\nprintf -- '---\\n' >> '${argvLog}.codex'\n` +
-    `printf "%s" "$MESH_SESSION_TOKEN" > ./token.tmp && mv ./token.tmp ./token\nexec sleep 30\n`, {mode: 0o755});
-  const PATH = `${bin}:${process.env.PATH}`;
-  const mesh = await startMesh(prefix, {PATH, MESH_OPAM_SWITCH: path.join(scratch, 'switch')}, (where) => {
-    if (!enabled) return;
-    const settings = path.join(where.scratch, 'launch-settings.json');
-    fs.writeFileSync(settings, JSON.stringify({v: 1, workspace_roots: [where.home], enabled_agents: enabled}));
-    where.env.MESH_LAUNCH_SETTINGS = settings;
-  });
-  const [hostCommand, ...hostArguments] = ptyhostArgv();
-  const host = spawn(hostCommand!, hostArguments, {
-    cwd: REPO, stdio: 'ignore',
-    env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C'}});
-  const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: new URLSearchParams({token: mesh.token()})});
-  const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
-  if (!cookie) throw new Error('the owner could not sign in');
-  const socket = path.join(mesh.home, 'run', 'session-mesh', 'ptyhost.sock');
-  for (let attempt = 0; attempt < 150 && !fs.existsSync(socket); attempt += 1) await sleep(100);
-  if (!fs.existsSync(socket)) throw new Error(`PTY host did not start:\n${mesh.output().slice(-2000)}`);
-  return {mesh, host, argvLog, cookie, elevation: '', output: mesh.output};
+  // Ownership of whatever is started stays with this function until it returns: a failure anywhere
+  // below (a missing PTY host command, a refused sign-in, a socket that never appears) stops the
+  // server and the host it started, so a red case never leaves a process behind.
+  let mesh: Mesh | undefined;
+  let host: ChildProcess | undefined;
+  try {
+    return await setUp();
+  } catch (error) {
+    host?.kill('SIGKILL');
+    await mesh?.stop().catch(() => undefined);
+    throw error;
+  }
+
+  async function setUp(): Promise<Harness> {
+    const bin = path.join(scratch, 'bin');
+    const board = path.join(scratch, 'switch', '_opam', 'bin', 'mesh-board-mcp');
+    fs.mkdirSync(bin, {recursive: true});
+    fs.mkdirSync(path.dirname(board), {recursive: true});
+    fs.writeFileSync(board, '#!/bin/sh\nexit 0\n', {mode: 0o755});
+    const argvLog = path.join(scratch, 'argv.log');
+    // `pi --version` is how pimcp checks the agent it is about to launch: answer it, record the rest.
+    fs.writeFileSync(path.join(bin, 'pi'),
+      `#!/bin/sh\nif [ "$1" = --version ]; then echo 1.4.0; exit 0; fi\n` +
+      `for a in "$@"; do printf '%s\\n' "$a" >> '${argvLog}'; done\nprintf -- '---\\n' >> '${argvLog}'\nexec sleep 30\n`,
+      {mode: 0o755});
+    fs.writeFileSync(path.join(bin, 'codex'),
+      `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> '${argvLog}.codex'; done\nprintf -- '---\\n' >> '${argvLog}.codex'\n` +
+      `printf "%s" "$MESH_SESSION_TOKEN" > ./token.tmp && mv ./token.tmp ./token\nexec sleep 30\n`, {mode: 0o755});
+    const PATH = `${bin}:${process.env.PATH}`;
+    const started = await startMesh(prefix, {PATH, MESH_OPAM_SWITCH: path.join(scratch, 'switch')}, (where) => {
+      if (!enabled) return;
+      const settings = path.join(where.scratch, 'launch-settings.json');
+      fs.writeFileSync(settings, JSON.stringify({v: 1, workspace_roots: [where.home], enabled_agents: enabled}));
+      where.env.MESH_LAUNCH_SETTINGS = settings;
+    });
+    const [hostCommand, ...hostArguments] = ptyhostArgv();
+    host = spawn(hostCommand!, hostArguments, {
+      cwd: REPO, stdio: 'ignore',
+      env: {PATH, HOME: started.home, XDG_RUNTIME_DIR: path.join(started.home, 'run'), LANG: 'C'}});
+    const login = await fetch(`${started.base}/login`, {method: 'POST', redirect: 'manual',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({token: started.token()})});
+    const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+    if (!cookie) throw new Error('the owner could not sign in');
+    const socket = path.join(started.home, 'run', 'session-mesh', 'ptyhost.sock');
+    for (let attempt = 0; attempt < 150 && !fs.existsSync(socket); attempt += 1) await sleep(100);
+    if (!fs.existsSync(socket)) throw new Error(`PTY host did not start:\n${started.output().slice(-2000)}`);
+    mesh = started;   // from here on the harness owns both processes
+    return {mesh: started, host, argvLog, cookie, elevation: '', output: started.output};
+  }
 }
 
 const headers = (mesh: Mesh) => ({Authorization: `Bearer ${mesh.token()}`, Origin: mesh.base, 'Content-Type': 'application/json'});
@@ -125,15 +141,18 @@ async function requestCreate(h: Harness, token: string, body: Record<string, unk
   return {status: response.status, text, request: (parsed.request as Record<string, any>) ?? undefined};
 }
 
-/** The owner approves a pending request the way the page does: claim, then decide. */
-async function approve(h: Harness, id: string): Promise<void> {
+/** The owner approves a pending request the way the page does: claim (renewing an existing lease with
+ *  its nonce), then decide with the options revision the confirmation showed. */
+async function approve(h: Harness, id: string, optionsRevision?: string,
+                       claimNonce?: string): Promise<{status: number; nonce: string}> {
   const claim = await fetch(`${h.mesh.base}/api/session-actions/${id}/claim`, {method: 'POST', headers: ownerHeaders(h, false),
-    body: JSON.stringify({tab_nonce: 'c'.repeat(32)})});
+    body: JSON.stringify({tab_nonce: 'c'.repeat(32), ...(claimNonce ? {claim_nonce: claimNonce} : {})})});
   const nonce = ((await claim.json()) as {claim_nonce?: string}).claim_nonce;
   if (!nonce) throw new Error(`claim refused: ${claim.status}`);
   const decided = await fetch(`${h.mesh.base}/api/session-actions/${id}/decision`, {method: 'POST', headers: ownerHeaders(h, false),
-    body: JSON.stringify({approve: true, claim_nonce: nonce})});
-  if (decided.status !== 200) throw new Error(`decision refused: ${decided.status} ${await decided.text()}`);
+    body: JSON.stringify({approve: true, claim_nonce: nonce,
+      ...(optionsRevision === undefined ? {} : {options_revision: optionsRevision})})});
+  return {status: decided.status, nonce};
 }
 
 /** The pending requests the page receives with a listing. */
@@ -363,7 +382,7 @@ export const CASES: Record<string, (h: Harness) => Promise<void>> = {
     assert.equal(pending.options, '-e /tmp/stored.mjs', JSON.stringify(pending));
     const text = await described(pending);
     assert.match(text, /-e \/tmp\/stored\.mjs/, text);
-    await approve(h, asked.request!.id);
+    assert.equal((await approve(h, asked.request!.id, pending.options_revision)).status, 200);
     const [argv] = await waitRecorded(h.argvLog, 1);
     assert.deepEqual(argv!.slice(-2), ['-e', '/tmp/stored.mjs'], JSON.stringify(argv));
   },
@@ -376,7 +395,7 @@ export const CASES: Record<string, (h: Harness) => Promise<void>> = {
     const token = await agentToken(h, 'requester-model');
     const asked = await requestCreate(h, token, {action: 'create', preset: 'codex', model: 'gpt-5', name: 'wanted-codex'});
     assert.equal(asked.status, 202, asked.text);
-    await approve(h, asked.request!.id);
+    assert.equal((await approve(h, asked.request!.id)).status, 200);
     for (let attempt = 0; attempt < 200 && recorded(`${h.argvLog}.codex`).length < 2; attempt += 1) await sleep(100);
     const launches = recorded(`${h.argvLog}.codex`);
     const argv = launches[launches.length - 1]!;
@@ -384,6 +403,59 @@ export const CASES: Record<string, (h: Harness) => Promise<void>> = {
     assert.notEqual(model, -1, JSON.stringify(argv));
     assert.equal(argv![model + 1], 'gpt-5', JSON.stringify(argv));
     assert.ok(!argv!.includes('old'), JSON.stringify(argv));
+  },
+
+  // CHECK-16 [AC-16]: an approval names the options revision it saw. A save in between makes the
+  // server refuse (409) instead of launching arguments the confirmation did not show; the request
+  // stays claimed, and approving again with the current revision runs exactly the new tokens.
+  async 'approval-bound-to-options'(h) {
+    await elevate(h);
+    assert.equal((await saveOptions(h, {pi: '-e /tmp/before.mjs'})).status, 200);
+    const token = await agentToken(h, 'requester-revision');
+    const asked = await requestCreate(h, token, {action: 'create', preset: 'pi', name: 'revision-pi'});
+    assert.equal(asked.status, 202, asked.text);
+    const shown = (await pendingRequests(h)).find(item => item.id === asked.request?.id);
+    assert.ok(shown, 'the pending request reaches the page');
+    assert.equal(shown.options, '-e /tmp/before.mjs', JSON.stringify(shown));
+    // The owner saves another default after the confirmation was shown.
+    const changed = await saveOptions(h, {pi: '-e /tmp/after.mjs'}, shown.options_revision);
+    assert.equal(changed.status, 200, JSON.stringify(changed.body));
+    assert.notEqual(changed.body.launch.agent_options_revision, shown.options_revision);
+    const refused = await approve(h, asked.request!.id, shown.options_revision);
+    assert.equal(refused.status, 409, 'an approval whose options changed must be refused');
+    assert.equal(recorded(h.argvLog).length, 0, 'nothing may be launched by the refused approval');
+    const fresh = (await pendingRequests(h)).find(item => item.id === asked.request?.id);
+    assert.equal(fresh?.options, '-e /tmp/after.mjs', JSON.stringify(fresh));
+    assert.equal((await approve(h, asked.request!.id, fresh!.options_revision, refused.nonce)).status, 200);
+    const [argv] = await waitRecorded(h.argvLog, 1);
+    assert.deepEqual(argv!.slice(-2), ['-e', '/tmp/after.mjs'], JSON.stringify(argv));
+  },
+
+  // CHECK-17 [AC-5]: an argument that shlex empties ("--name \"\"") is refused before it is stored,
+  // so the file can never hold what the startup parser rejects.
+  async 'empty-token'(h) {
+    await elevate(h);
+    for (const options of ['--name ""', "-e ''"]) {
+      const answer = await saveOptions(h, {pi: options});
+      assert.equal(answer.status, 400, `${options}: ${answer.status} ${answer.text}`);
+    }
+    const launched = await launch(h.mesh, {preset: 'pi', options: '--name ""'});
+    assert.equal(launched.status, 400, launched.text);
+    assert.equal(fs.existsSync(path.join(h.mesh.confDir, 'agent-launch-options.json')), false,
+      'a refused save writes nothing');
+  },
+
+  // CHECK-18 [AC-6]: every agent's conversation-selection options are refused, and a Codex subcommand
+  // hidden behind a valueless flag (--search resume) is still read as a subcommand.
+  async 'conversation-options-per-agent'(h) {
+    for (const [preset, options] of [['opencode', '--session ses_12'], ['opencode', '--continue'],
+      ['gemini', '--resume'], ['copilot', '--resume'], ['agy', '--conversation x'],
+      ['codex', '--search resume'], ['codex', '--debug exec']] as const) {
+      const answer = await launch(h.mesh, {preset, options});
+      assert.equal(answer.status, 400, `${preset} ${options}: ${answer.status} ${answer.text}`);
+    }
+    const allowed = await launch(h.mesh, {preset: 'codex', options: '--search'});
+    assert.equal(allowed.status, 200, allowed.text);
   },
 
   // CHECK-15 [AC-15]: the stored options cannot reach a reopen. The reopen paths (resume, restore,
