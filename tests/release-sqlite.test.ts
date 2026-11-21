@@ -292,6 +292,11 @@ describe('smoke-history.sh and the bundle check of mesh-history', () => {
     const tree = path.join(dir, 'tree', 'mesh-linux-x86_64');
     tool(tree, 'mesh', '#!/bin/sh\necho DOCTOR-REACHED >&2\nexit 1\n');
     tool(path.join(tree, 'bin'), 'mesh-history', history(reply));
+    tool(path.join(tree, 'bin'), 'mesh-profile', `#!/bin/sh
+read -r request
+[ "$request" = '{"version":1,"op":"profiles.list"}' ] || exit 1
+printf '%s\\n' '{"version":1,"ok":true,"data":{"configured":false,"registry_revision":null,"profiles":[]}}'
+`);
     const archive = path.join(dir, 'mesh.tar.gz');
     assert.equal(spawnSync('tar', ['-czf', archive, '-C', path.join(dir, 'tree'), 'mesh-linux-x86_64']).status, 0);
     const bin = path.join(dir, 'bin');

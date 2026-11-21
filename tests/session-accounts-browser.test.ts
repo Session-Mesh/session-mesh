@@ -18,6 +18,7 @@ import type {Page} from 'playwright-core';
 import {REPO, TerminalMesh, skip} from './terminal-browser-lib.ts';
 
 declare function openNew(): Promise<void>;
+declare function fillAccounts(accounts: unknown[]): void;
 declare const meshContext: {storagePrefix: string};
 
 const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD
@@ -98,6 +99,21 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.deepEqual(sent, [], 'no session requested, under no account');
     assert.equal(await page.locator('#dlg-new[open]').count(), 1, 'the dialog stays open');
+  });
+
+  test('backend-qualified labels follow the preset without changing the selected account id', async () => {
+    declare(three());
+    const {page, sent} = await dialog(4, {remembered: 'work'});
+    await page.evaluate(() => fillAccounts([{id: 'work', label: 'Fallback', claude: true, codex: true,
+      backend_labels: {claude: 'Claude Work', codex: '<img> Codex Work'}}]));
+    await preset(page, 'claude');
+    assert.equal(await account(page).inputValue(), 'work');
+    assert.equal(await account(page).locator('option:checked').textContent(), 'Claude Work');
+    await preset(page, 'codex');
+    assert.equal(await account(page).inputValue(), 'work');
+    assert.equal(await account(page).locator('option:checked').textContent(), '<img> Codex Work');
+    assert.equal(await account(page).locator('img').count(), 0);
+    assert.deepEqual(sent, [], 'changing the displayed backend label must not launch a session');
   });
 
   test('the default account sends no account; an alias sends its id only', async () => {

@@ -7418,7 +7418,12 @@ function syncAccountChoice() {
   $("#new-account-row").hidden = !offered;
   form.account.disabled = !offered || !agent;
   for (const option of form.account.options) {
-    option.disabled = !!option.value && !!agent && (!!option.dataset.gone || !newAccounts.find((a) => a.id === option.value)?.[agent]);
+    const account = newAccounts.find((a) => a.id === option.value);
+    option.disabled = !!option.value && !!agent && (!!option.dataset.gone || !account?.[agent]);
+    if (account) {
+      const label = account.backend_labels?.[agent];
+      option.textContent = (typeof label === "string" ? label : account.label).slice(0, 24);
+    }
   }
 }
 // The alias to send: {} for the default account (or an agent without aliases), {id}, or {refused: message} when the
