@@ -38,7 +38,8 @@ val finish_sequence : t -> Bytes.t -> int -> int -> int option
 (** [finish_sequence t bytes offset length] feeds bytes from [offset] only while
     a sequence is under way: [Some n] when it ended after [n] bytes ([0] when
     none was under way), [None] when it is still under way after [length] bytes.
-    Raises [Invalid_argument] like [feed]. *)
+    An ESC is not fed: it cancels the sequence under way and starts one that the
+    caller keeps. Raises [Invalid_argument] like [feed]. *)
 
 val prefix : t -> string
 (** The sequences that take a terminal from its defaults to the modes of [t]:
