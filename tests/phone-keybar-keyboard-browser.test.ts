@@ -126,6 +126,28 @@ describe('phone key bar: a tap never changes the soft keyboard state', {skip}, (
     assert.equal(await direct(page), true);
   });
 
+  test('keyboard open with a word still composing: the word goes first, then the key, and the line keeps the keyboard', async () => {
+    const page = await phone('composing-key', 'claude');
+    const cdp = await page.context().newCDPSession(page);
+    await page.keyboard.type('/');
+    await forget(page);
+    await cdp.send('Input.imeSetComposition', {text: 'rev', selectionStart: 3, selectionEnd: 3});
+    await tap(page, 'down');
+    await page.waitForFunction(() => window.__input.length > 1);
+    assert.deepEqual(await frames(page), ['rev', '\x1b[B']);
+    assert.equal(await keyboardOpen(page), true);
+  });
+
+  test('✎ keeps the browser focus handling: the composer takes the focus and gives it back on close', async () => {
+    const page = await phone('composer-focus', null);
+    await closeKeyboard(page);
+    await tap(page, 'compose');
+    await page.waitForFunction(() => document.activeElement?.id === 'compose-text');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !(document.querySelector('#dlg-compose') as HTMLDialogElement).open);
+    assert.equal(await editableFocused(page), false, 'the keyboard closed with the composer');
+  });
+
   test('Paste with the keyboard closed reads the clipboard from the tap itself', async () => {
     const page = await phone('closed-paste', null);
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
