@@ -972,16 +972,19 @@ class Pane {
     if (!force && last && last.rows === rows && last.cols === cols) return;
     c.lastSize = { rows, cols };
     c.terminal.resize(rows, cols, mode);
+    if (mode === "claim" && c.pty === null) c.initialSizeClaim = true;
   }
   // The PTY size and its owner, from the host ({t:"s"}, at each change). Another device owns
   // it: the pane shows the PTY at that size (followPtySize). Nobody owns it: the pane fits and
   // claims. This pane owns it: nothing to change, unless it followed until now.
-  applyPtySize(c) {
+  applyPtySize(c, initialClaim = false) {
     if (c !== this.conn || c.replaySize || this.termEl.hidden) return;
     const owner = c.pty?.owner;
     if (owner === "you" && !this.ptyFollowing) return;
     this.refit();
-    if (owner === "none") this.sendSize(true);
+    // The first snapshot may precede our already-queued claim. A later release
+    // must still claim even when its dimensions equal the last size sent.
+    if (owner === "none" && !initialClaim) this.sendSize(true);
   }
   // The size the pane's area fits, without applying it; null when it cannot be measured.
   fitSize() {
@@ -2312,6 +2315,7 @@ class Pane {
           c.replayGeometry = null;   // until server.py names it, before the replay
           c.away = null;   // this socket sends its size and redraws (armAutoRedraw)
           c.pty = null;    // until the host tells this socket (ptySize, after the replay)
+          c.initialSizeClaim = false;
           c.limitedGeometry = null;
           this.limitedBanner.hidden = true;
           c.retry = 0; this.setConn("●");
@@ -2335,8 +2339,10 @@ class Pane {
           if (!limited) { c.cacheRestore = false; this.sendSize(true); this.armAutoRedraw(c); }
         },
         ptySize: (_terminal, size) => {
+          const initialClaim = c.pty === null && c.initialSizeClaim;
           c.pty = size;
-          this.applyPtySize(c);
+          c.initialSizeClaim = false;
+          this.applyPtySize(c, initialClaim);
         },
         bytes: (terminal, bytes) => {
           // A closing browser socket may already have a replay frame queued.
