@@ -60,10 +60,17 @@ Planned: `worktrees-report.sh`, `live-state.sh`, `disk-report.sh` (read-only rep
 - Long hexadecimal runs are shown in the WARN detail unmasked (an sha is not a secret); a token that shares the
   line is still masked.
 - Token types not detected: `xoxa-`/`xoxs-`/`xoxr-` (Slack) and the AWS session keys starting with `ASIA`.
-- A BOM at the very start of the private deny file hides its first word.
 - `.github/scripts` and `CODEOWNERS` are only WARNs (only `.github/workflows/` can turn the gate KO).
 - A `.py` file with the API status `copied`, and a `.pyi` file, are not counted as added Python.
 - A newline inside a changelog filename could inject false OK/GO lines in the output (the verdict and the exit
   code stay computed from the real data; this is a display-only risk).
 - The fake gh does not model "the head moves BETWEEN the gate and the merge"; it models a push before the gate
   and a merge-time refusal otherwise.
+- Case-insensitive matching of non-ASCII private words needs a UTF-8 locale (the tools ask for `C.UTF-8`; where it
+  does not exist the match is ASCII-only).
+- Not detected: other invisible characters (U+200E, U+2062, U+FE0F, tag characters), look-alike letters (for
+  example a Cyrillic letter in place of a Latin one), Markdown or HTML escapes that GitHub displays as the word
+  (`\-`, `&#45;`, `<!-- -->`), a token split by a tab or a newline, base64-wrapped values, binary-diff content and
+  a token inside an added file's name.
+- A trailing space in a deny-list entry stops it matching; ESC and OSC sequences in a title or file name are
+  printed raw in the KO lines and in the pr-status listing.
