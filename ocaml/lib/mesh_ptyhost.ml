@@ -303,17 +303,18 @@ type session = {
   mutable last_input : float;
       (** Wall-clock time of the last bytes queued for the program (keystrokes,
           a typed command, a wake). A wake's idle evidence must postdate it. *)
-  human_leases : (string, bool) Hashtbl.t;
-  lease_connections : (string, int) Hashtbl.t;
-      (** Client id -> its attached connections that named it. *)
-  lease_expires : (string, Mtime.t) Hashtbl.t;
-      (** Client id -> end of its lease, while none of its connections is
+  human_leases : (float option * string, bool) Hashtbl.t;
+  lease_connections : (float option * string, int) Hashtbl.t;
+      (** Conditional incarnation (or legacy) and client id -> connections. *)
+  lease_expires : (float option * string, Mtime.t) Hashtbl.t;
+      (** Incarnation/client id -> end of its lease, while no connection is
           attached. *)
   notified : (string, unit) Hashtbl.t;
   notified_order : string Queue.t;
   input : Mesh_pty_input.t;
   replay : Mesh_pty_replay.t;
   mutable clients : Mesh_pty_output.t list;
+  mutable conditional_clients : (Mesh_pty_output.t * (unit -> unit)) list;
   mutable size_owner : Mesh_pty_output.t option;
       (** The attachment that owns the PTY size (Mesh_pty_size). *)
   mutable size_watchers : Mesh_pty_output.t list;
@@ -388,6 +389,11 @@ let supported_foreground s requested =
               && runs_agent found requested)
             processes)
 
+(* Conditional attach may subscribe to size ownership without resizing. Its
+   D/H/R input and queued D writes retire at an incarnation change. In a C ack
+   this capability describes this exact, conditional size-watching stream. *)
+let conditional_input_capability = `String "conditional_input_v1"
+
 (* [agent_relaunch_v1]: [stop_agent_if] and a [start_if] with [meta] are
    served (not in the Unix identity split, whose sessions are another
    account's processes). *)
@@ -403,7 +409,11 @@ let session_json ?(relaunch = true) s =
       ("attached", `Int (List.length s.clients));
       ( "pty_capabilities",
         `List
-          ([ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
+          ([
+             `String "agent_wake_v1";
+             `String "human_input_lease_v1";
+             conditional_input_capability;
+           ]
           @ if relaunch then [ `String "agent_relaunch_v1" ] else []) );
     ]
 
@@ -613,11 +623,24 @@ let stop_agent env s agent =
       | `Stopped when (not s.alive) || s.finishing || s.kill_requested ->
           agent_refusal "stale_incarnation"
       | `Stopped ->
-          let now = Eio.Time.now clock in
-          s.created <- (if now > s.created then now else Float.succ s.created);
-          s.command_started <- false;
-          s.agent_stopped <- true;
-          `Assoc [ ("ok", `Bool true); ("created", `Float s.created) ])
+          (* Join any conditional PTY write before moving the incarnation on.
+             No new conditional data is admitted while [agent_stopping]. *)
+          Mesh_pty_input.retire_guarded s.input;
+          if (not s.alive) || s.finishing || s.kill_requested then
+            agent_refusal "stale_incarnation"
+          else (
+            List.iter (fun (_, retire) -> retire ()) s.conditional_clients;
+            let legacy (incarnation, _) value =
+              if Option.is_none incarnation then Some value else None
+            in
+            Hashtbl.filter_map_inplace legacy s.human_leases;
+            Hashtbl.filter_map_inplace legacy s.lease_connections;
+            Hashtbl.filter_map_inplace legacy s.lease_expires;
+            let now = Eio.Time.now clock in
+            s.created <- (if now > s.created then now else Float.succ s.created);
+            s.command_started <- false;
+            s.agent_stopped <- true;
+            `Assoc [ ("ok", `Bool true); ("created", `Float s.created) ]))
 
 let nonce_of = function
   | `Assoc fields -> List.assoc_opt "nonce" fields
@@ -1448,6 +1471,7 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                           input;
                           replay = Mesh_pty_replay.create ();
                           clients = [];
+                          conditional_clients = [];
                           size_owner = None;
                           size_watchers = [];
                           geometry;
@@ -1672,9 +1696,9 @@ let prepare_attach env observer sessions fields =
               None
           | _ -> Some (size fields)
         in
-        (* The replay and the geometry it was last produced at, both taken
-           before this client's geometry is applied, as ptyhost.py does; the
-           reply names the geometry when it can be read. *)
+        (* Retained bytes and current geometry, captured before this attach's
+           resize. This is not per-byte historical geometry: replay can span
+           several resize epochs. *)
         let snapshot = Mesh_pty_replay.replay s.replay in
         let replay_geometry =
           try Some (s.geometry ())
@@ -1700,7 +1724,7 @@ let prepare_attach env observer sessions fields =
         Some (s, snapshot, replay_geometry, { client; claimed; watch })
       with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None)
 
-let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
+let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach ?incarnation env
     observer s flow =
   let { client; claimed; watch } =
     match size_attach with
@@ -1709,6 +1733,11 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
         { client = Mesh_pty_output.create (); claimed = false; watch = false }
   in
   let input_client_id = ref None in
+  let current () =
+    Option.fold ~none:true
+      ~some:(fun created -> s.created = created && not s.agent_stopping)
+      incarnation
+  in
   let snapshot, origin_metadata, ready =
     if not origin then
       ( (match snapshot with
@@ -1744,8 +1773,11 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
          ([
             ("ok", `Bool true);
             ( "pty_capabilities",
-              `List [ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
-            );
+              `List
+                ([ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
+                @ if Option.is_some incarnation && watch then
+                    [ conditional_input_capability ]
+                  else []) );
           ]
          @ optional "replay_geometry"
              (Option.map
@@ -1768,8 +1800,12 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
   if watch then s.size_watchers <- client :: s.size_watchers;
   if claimed || watch then announce_size s;
   observe observer env Observe.Attach;
-  Fun.protect
-    ~finally:(fun () ->
+  let released = ref false in
+  let release () =
+    if not !released then (
+      released := true;
+      s.conditional_clients <-
+        List.filter (fun (other, _) -> other != client) s.conditional_clients;
       s.clients <- List.filter (fun other -> other != client) s.clients;
       s.birth_clients :=
         List.filter (fun other -> other != client) !(s.birth_clients);
@@ -1781,11 +1817,18 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
           announce_size s
       | _ -> ());
       Option.iter
-        (lease_connection_closed s
-           ~now:(Eio.Time.Mono.now (Eio.Stdenv.mono_clock env)))
+        (fun client_id ->
+          lease_connection_closed s
+            ~now:(Eio.Time.Mono.now (Eio.Stdenv.mono_clock env))
+            (incarnation, client_id))
         !input_client_id;
       observe observer env Observe.Detach;
       Mesh_pty_output.detached client)
+  in
+  Option.iter
+    (fun _ -> s.conditional_clients <- (client, release) :: s.conditional_clients)
+    incarnation;
+  Fun.protect ~finally:release
     (fun () ->
       let rec output () =
         match Mesh_pty_output.next client with
@@ -1797,7 +1840,10 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
       in
       let rec input () =
         let frame = read_frame flow in
-        if frame.kind = 'R' then (
+        if not (Option.fold ~none:true ~some:(( = ) s.created) incarnation) then
+          Mesh_pty_output.close client
+        else if not (current ()) then input ()
+        else if frame.kind = 'R' then (
           (match parse frame.payload with
           | Ok (`Assoc fields) -> (
               try
@@ -1821,7 +1867,11 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
         else if frame.kind = 'D' then (
           if not s.finishing then (
             s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);
-            if Mesh_pty_input.enqueue s.input frame.payload then
+            if
+              Mesh_pty_input.enqueue
+                ?current:(Option.map (fun _ -> current) incarnation)
+                s.input frame.payload
+            then
               observe observer env (Observe.Input (String.length frame.payload)));
           input ())
         else if frame.kind = 'H' then (
@@ -1838,9 +1888,9 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
                      && Option.fold ~none:true ~some:(String.equal client_id)
                           !input_client_id ->
                   if Option.is_none !input_client_id then
-                    lease_connection_opened s client_id;
+                    lease_connection_opened s (incarnation, client_id);
                   input_client_id := Some client_id;
-                  Hashtbl.replace s.human_leases client_id dirty
+                  Hashtbl.replace s.human_leases (incarnation, client_id) dirty
               | _ -> ())
           | _ -> ());
           input ())
@@ -1859,7 +1909,7 @@ let write_reply flow reply =
   Eio.Flow.copy_string (Mesh_wire.encode { kind = 'C'; payload }) flow
 
 let conditional_selection sessions fields =
-  let allowed = [ "op"; "name"; "created"; "rows"; "cols" ] in
+  let allowed = [ "op"; "name"; "created"; "rows"; "cols"; "size" ] in
   let rec keys seen = function
     | [] -> ()
     | (key, _) :: rest ->
@@ -1870,6 +1920,9 @@ let conditional_selection sessions fields =
   keys [] fields;
   if List.assoc_opt "op" fields <> Some (`String "attach_if") then
     invalid_arg "op";
+  (match List.assoc_opt "size" fields with
+  | None | Some (`String "claim") -> ()
+  | _ -> invalid_arg "size");
   let name =
     match List.assoc_opt "name" fields with
     | Some (`String name) when name <> "" && valid_string ~maximum:max_int name
@@ -1899,7 +1952,7 @@ let conditional_selection sessions fields =
     List.find_opt
       (fun s ->
         s.name = name && s.created = created && (not s.finishing)
-        && not s.kill_requested)
+        && not s.kill_requested && not s.agent_stopping)
       !sessions
   with
   | None -> invalid_arg "incarnation"
@@ -1928,24 +1981,42 @@ let conditional_attach env observer sessions fields flow =
   | Some (s, geometry) -> (
       let streaming = ref false in
       try
+        let snapshot, replay_geometry =
+          if List.assoc_opt "op" fields = Some (`String "attach_if") then
+            (* Capture retained bytes and current pre-attach geometry, as for
+               ordinary attach, but only after strict incarnation selection. *)
+            let snapshot = Mesh_pty_replay.replay s.replay in
+            let replay_geometry =
+              try Some (s.geometry ())
+              with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None
+            in
+            (Some snapshot, replay_geometry)
+          else (None, None)
+        in
+        let watch = List.assoc_opt "size" fields = Some (`String "claim") in
+        let client = Mesh_pty_output.create () in
+        let claimed =
+          Option.is_some geometry
+          && (Mesh_pty_size.resize ~same:( == ) ~owner:s.size_owner ~client
+                (if watch then Mesh_pty_size.Claim else Mesh_pty_size.Take))
+               .apply
+        in
+        let size_attach = { client; claimed; watch } in
         Option.iter
           (fun (rows, cols) ->
-            s.resize rows cols;
-            observe observer env Observe.Resize)
+            if claimed then (
+              s.resize rows cols;
+              observe observer env Observe.Resize))
           geometry;
         if (not s.alive) || s.finishing || s.kill_requested then
           refusal "indeterminate"
         else (
           streaming := true;
-          (* As before the size owner rule, a geometry here takes the size. *)
-          let size_attach =
-            {
-              client = Mesh_pty_output.create ();
-              claimed = Option.is_some geometry;
-              watch = false;
-            }
-          in
-          attach
+          attach ?snapshot ?replay_geometry
+            ?incarnation:
+              (if List.assoc_opt "op" fields = Some (`String "attach_if") then
+                 Some s.created
+               else None)
             ~origin:
               (List.assoc_opt "op" fields = Some (`String "attach_origin_bound"))
             ~size_attach env observer s flow)

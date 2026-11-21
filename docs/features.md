@@ -17,6 +17,7 @@ Interface labels are quoted as they appear in the English interface.
 - [Organising the sidebar](#organising-the-sidebar)
 - [Observed directories](#observed-directories)
 - [Working in a terminal](#working-in-a-terminal)
+- [Voice dictation](#voice-dictation)
 - [Columns and panes](#columns-and-panes)
 - [Documents beside the terminals](#documents-beside-the-terminals)
 - [Browsing files](#browsing-files)
@@ -615,6 +616,36 @@ session had before this browser attached, then rewrapped to the browser's width.
   Codex scrollback explicitly enables `/raw on`; you can also enter `/raw on` yourself.
 - **Stopping.** "Close pane" only hides the pane; the session keeps running. "Stop the session…"
   in the "More" menu kills it after a confirmation.
+
+## Voice dictation
+
+Hold the microphone in a local terminal's header to record; release it to transcribe. The operator
+must first [enable the Whisper relay](operations.md#whisper-dictation), and the browser must allow
+microphone access in a secure context (HTTPS, or a browser-trusted local origin). The initial
+supported targets are foreground Claude Code, Codex and Pi sessions at their normal input prompt.
+A disabled microphone has an explanatory title and status message.
+
+- **Desktop:** the transcript is inserted into the original terminal prompt without Enter. Edit it
+  there and submit manually. Recognition can finish on a retained original connection after you
+  switch panes; it never reconnects by name to send a late result.
+- **Phone:** the transcript fills the existing editable input line. Correct it and press Send or
+  Enter yourself; dictation never activates Direct mode. The field must be empty, Direct and Ctrl
+  modes must be off, and no native input may be pending. Editing the field or changing the active
+  session during recognition prevents a late result from replacing the current input. Once staged,
+  the draft stays bound to its original pane and session incarnation, including after corrections.
+  Switching panes or replacing that session refuses Send without deleting the text; return to the
+  original destination or explicitly clear the field before starting a different message.
+
+Transcription-job cleanup is automatic; it does not submit or clear the terminal's pending input.
+Clearing a phone draft permits another recording without a separate Discard action. Speech that is
+already in a native prompt is not moved back into the phone field.
+
+An upload whose acknowledgement is lost is recovered by its original request id, never by uploading
+the audio again. A first "not found" response does not prove that the upload was never admitted.
+After its 30-second recovery window, explicit Discard (or a fresh header-microphone recovery hold)
+can release the local recording after its delivery channel is revoked; a late result cannot be
+inserted. This is local abandonment, not proof that the remote job never existed, and the service
+can still report that the original session is busy.
 
 ## Columns and panes
 
@@ -1324,6 +1355,12 @@ line ("Write to the agent… (⏎ sends)") replaces typing into the terminal, an
 Esc, Tab, Ctrl, arrows, "↵ line", ^C, "Copy", "Paste", ✎ (the multi-line composer), 📎 and ⏎.
 "Panes" lists the open panes and "Actions" holds the top-bar buttons. A long press on a session
 opens its menu.
+
+When an older terminal host is in **limited mode**, buffered Send and composer insertion are
+unavailable on that connection. **Use live keyboard** in the terminal's banner opens its direct
+keyboard once replay has finished. Keys go immediately to that live terminal; any text already
+in the phone input line stays there and is not submitted. Selecting another connection restores
+the ordinary phone input line. This does not enable dictation or queued input on a limited host.
 
 **Direct writing.** A phone keyboard composes words and corrects them, so the input line holds
 your text and sends it as one paste. Agents, however, show their command and skill completion

@@ -12,7 +12,14 @@
 type t
 
 val create : string -> t
-val enqueue : t -> string -> bool
+val enqueue : ?current:(unit -> bool) -> t -> string -> bool
+(** [current] fences conditional attachment data at dispatch. Before changing
+    the incarnation, call {!retire_guarded} to cancel and join an in-flight
+    conditional write as well as discard queued conditional data. *)
+val retire_guarded : t -> unit
+(** Discard only conditional data and wait until its active write has stopped.
+    Ordinary input and wake frames are retained. Callers must prevent new
+    conditional admissions until the incarnation transition is complete. *)
 val enqueue_submit : t -> string -> bool
 (** [enqueue_submit t text] queues [text], a short delay, then an Enter key.
     Any later {!enqueue} while that Enter is still queued withdraws it and
