@@ -2112,5 +2112,6 @@
   "server.optionsUnwritable": "Le fichier d’options ne peut pas être écrit : {reason}",
   "server.optionsNotString": "Les options doivent être une chaîne de caractères",
   "server.optionsAgentOnly": "Les options ne s'appliquent qu'à un agent connu",
-  "server.optionsUnknownPreset": "Preset d'agent inconnu : {preset}"
+  "server.optionsUnknownPreset": "Preset d'agent inconnu : {preset}",
+  "server.optionsEmptyArgument": "Une option est vide : mettez sa valeur entre guillemets si elle doit être vide."
 }

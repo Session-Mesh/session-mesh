@@ -31,6 +31,15 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 /** A mesh whose fake `pi` records its arguments, one per line, a `---` closing each launch. */
 async function harness(prefix: string, enabled?: string[]): Promise<Harness> {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  try {
+    return await startHarness(scratch, prefix, enabled);
+  } catch (error) {
+    fs.rmSync(scratch, {recursive: true, force: true});   // a setup that fails leaves nothing behind
+    throw error;
+  }
+}
+
+async function startHarness(scratch: string, prefix: string, enabled?: string[]): Promise<Harness> {
   const bin = path.join(scratch, 'bin');
   const board = path.join(scratch, 'switch', '_opam', 'bin', 'mesh-board-mcp');
   fs.mkdirSync(bin, {recursive: true});
@@ -201,6 +210,7 @@ export const CASES: Record<string, (h: Harness) => Promise<void>> = {
       [tooMany, '33 tokens'],
       [`--name ${'x'.repeat(520)}`, 'a 513-byte token'],
       ['-e "/tmp/unbalanced', 'an unbalanced quote'],
+      ['--name ""', 'an empty token, which the options file refuses to load'],
     ] as const) {
       const answer = await launch(h.mesh, {preset: 'pi', options});
       assert.equal(answer.status, 400, `${why}: ${answer.status} ${answer.text}`);

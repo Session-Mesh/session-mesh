@@ -82,12 +82,23 @@ _YOLO_OVERRIDES = frozenset({("approval_policy", "never"), ("ask_for_approval", 
                              ("sandbox", "danger-full-access")})
 _CONVERSATION_OPTIONS = MappingProxyType({
     "claude": frozenset({"--session-id", "--continue", "-c", "--resume", "-r", "--fork-session"}),
-    "codex": frozenset(),      # ``codex resume`` is a subcommand: refused as a positional below
+    "codex": frozenset(),      # ``codex resume`` is a subcommand: refused by _SUBCOMMANDS below
     "pi": frozenset({"--session-id", "--session", "--session-dir", "--continue", "-c",
                       "--resume", "-r", "--fork"}),
+    # Read from each CLI's --help: the option that reopens a conversation instead of starting one.
+    "opencode": frozenset({"--continue", "-c", "--session", "-s", "--fork"}),
+    "gemini": frozenset({"--resume", "-r", "--session-file", "--session-id"}),
+    "agy": frozenset({"--continue", "-c", "--conversation"}),
+    "copilot": frozenset({"--resume", "--connect"}),
 })
-# The agents whose positional argument is a subcommand rather than a first prompt.
-_SUBCOMMAND_AGENTS = frozenset({"codex"})
+# The agents whose first argument is a subcommand rather than a prompt. A word from this set anywhere in
+# the owner's options is refused: an option's value (``--search resume``) is not a token Mesh can tell
+# from a subcommand without modelling every flag's arity, and refusing one word too many is safe here.
+_SUBCOMMANDS = MappingProxyType({
+    "codex": frozenset({"exec", "review", "resume", "apply", "mcp", "mcp-server", "completion",
+                        "login", "logout", "app-server", "proto", "cloud", "sandbox", "debug"}),
+    "opencode": frozenset({"session", "export", "import"}),
+})
 
 
 def _option_pairs(tokens: tuple[str, ...]) -> tuple[list[tuple[str, str | None]], tuple[str, ...]]:
@@ -144,8 +155,9 @@ def refusal(kind: str, tokens) -> str | None:
                 return f"{name} {value}"
         if name in conversation:
             return name
-    if agent in _SUBCOMMAND_AGENTS and positional:
-        return positional[0]
+    for token in options:
+        if token in _SUBCOMMANDS.get(agent, frozenset()):
+            return token
     return None
 
 

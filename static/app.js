@@ -7348,6 +7348,7 @@ async function openNew() {
   form.masterToken.value = "";
   delete dlg.dataset.pendingDefault;
   optionsPreset = null;
+  optionsTyped = false;
   const openButton = form.querySelector('button[value="ok"]');
   if (openButton) openButton.textContent = t("common.open");
   syncOptionsRow();
@@ -7356,6 +7357,7 @@ async function openNew() {
   dlg.showModal();
   form.cwd.select();
   folderSuggester.reset();
+  optionsPreset = null;   // the preset is the one form.reset() restored: prefill it again when the answer arrives
   Object.assign(folderField, { known: [], roots: [], walked: [], pristine: true, combo: { open: false, active: -1, count: 0 } });
   $("#new-folder-status").textContent = "";
   folderField.known = knownFoldersFrom([], [], []);
@@ -7370,12 +7372,14 @@ async function openNew() {
   renderFolderList();   // keeps what was typed while the requests were pending
 }
 window.openNew = openNew;
+form.options.addEventListener("input", () => { optionsTyped = true; });
 
 // The options field belongs to a known agent: "shell" and "custom" have no argv Mesh builds.
 // The stored default is prefilled once per preset, so typing then ticking the box keeps the text.
 let launchAgentOptions = {};      // preset -> the stored options, as /api/config reports them
 let launchOptionsRevision = "";
 let optionsPreset = null;         // the preset the field was last prefilled for
+let optionsTyped = false;         // the owner wrote in the field: the answer of /api/config must not overwrite it
 
 function knownAgentPreset(value) {
   return Boolean(value) && value !== "shell" && value !== "custom";
@@ -7387,11 +7391,11 @@ function syncOptionsRow() {
   $("#new-options-default-row").hidden = !known;
   if (!known) { optionsPreset = null; return; }
   $("#new-options-default").textContent = t("new.optionsDefault", { agent: value });
-  if (value !== optionsPreset) {          // a preset change prefills; any other change keeps the text
+  if (value !== optionsPreset && !optionsTyped) {   // a preset change prefills; a typed text stays
     form.options.value = launchAgentOptions[value] ?? "";
     form.optionsDefault.checked = false;
-    optionsPreset = value;
   }
+  optionsPreset = value;
 }
 
 function rememberLaunchOptions(launch) {
@@ -7573,7 +7577,8 @@ form.addEventListener("submit", async (e) => {
     const token = form.masterToken.value;
     form.masterToken.value = "";
     if (!token) { $("#new-err").textContent = t("new.optionsCancelled"); return; }
-    const saved = await saveAgentOptions(pending.preset, pending.options, token);
+    const saved = await saveAgentOptions(pending.preset, pending.options, token)
+      .catch(() => ({ ok: false, error: "network" }));
     if (!saved.ok) {
       $("#new-err").textContent = saved.error === "wrong-token"
         ? t("config.launch.err.wrongToken") : t("new.optionsNotSaved", { message: saved.message || saved.error });
@@ -7589,6 +7594,7 @@ form.addEventListener("submit", async (e) => {
   delete body.account;   // "" for the default account: the server takes an alias id or nothing
   delete body.masterToken;
   delete body.optionsDefault;
+  if (!knownAgentPreset(body.preset)) delete body.options;   // hidden for shell and other: never sent
   const account = accountChoice();
   if (account.refused) { $("#new-err").textContent = account.refused; return; }
   if (account.id) body.account = account.id;
@@ -7602,7 +7608,8 @@ form.addEventListener("submit", async (e) => {
   const wanted = form.optionsDefault.checked && knownAgentPreset(body.preset)
     ? { preset: body.preset, options: body.options || "", id } : null;
   if (wanted) {
-    const saved = await saveAgentOptions(wanted.preset, wanted.options);
+    const saved = await saveAgentOptions(wanted.preset, wanted.options)
+      .catch(() => ({ ok: false, error: "network" }));
     if (!saved.ok) {
       if (saved.error === "elevation-required") {
         $("#new-elevation-row").hidden = false;

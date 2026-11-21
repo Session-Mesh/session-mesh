@@ -866,5 +866,9 @@
   {
     "pattern": "^Unknown agent preset: (?<preset>.+)$",
     "key": "server.optionsUnknownPreset"
+  },
+  {
+    "pattern": "^Options hold an empty argument$",
+    "key": "server.optionsEmptyArgument"
   }
 ]

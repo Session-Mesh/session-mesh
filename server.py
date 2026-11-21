@@ -2668,6 +2668,8 @@ def parse_launch_options(kind, value, *, agents=None):
         tokens = shlex.split(value)
     except ValueError as exc:
         raise web.HTTPBadRequest(text=f"Options cannot be read: {exc}") from exc
+    if any(not token for token in tokens):
+        raise web.HTTPBadRequest(text="Options hold an empty argument")
     if len(tokens) > OPTIONS_MAX_TOKENS:
         raise web.HTTPBadRequest(text=f"Options are more than {OPTIONS_MAX_TOKENS} tokens")
     if any(len(token) > OPTIONS_MAX_TOKEN for token in tokens):
