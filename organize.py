@@ -299,5 +299,5 @@ def apply(op, sessions):
             raise ValueError(f"Unknown operation: {kind}")
         _save(data)
         if kind == "rename":
-            conversation_names.rename(name, live[name], previous_label, label)
+            conversation_names.rename(name, e["created"], previous_label, label)
     return view(sessions)

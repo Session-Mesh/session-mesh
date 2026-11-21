@@ -18,8 +18,9 @@ type MeshJson = {folders: string[]; order: string[];
 const OLD = 100.5;
 const NEW = 200.25;
 
-/** Run `organize.<call>(*args)` on mesh.json `before`: [its result, mesh.json after, the file's mode]. */
-function organize(before: MeshJson, call: string, args: unknown[]): [unknown, MeshJson, number] {
+/** Run `organize.<call>(*args)` on mesh.json `before`: [its result, mesh.json after, the file's mode, the
+ * conversation names it recorded (conversation-names.json, [] when none)]. */
+function organize(before: MeshJson, call: string, args: unknown[]): [unknown, MeshJson, number, {created: number; label: string}[]] {
   const conf = fs.mkdtempSync(path.join(os.tmpdir(), 'organize-carry-'));
   try {
     const file = path.join(conf, 'mesh.json');
@@ -28,7 +29,9 @@ function organize(before: MeshJson, call: string, args: unknown[]): [unknown, Me
       `import sys, json; sys.path.insert(0, ${JSON.stringify(REPO)})\nimport organize\n`
       + `print(json.dumps(organize.${call}(*json.loads(sys.argv[1]))))`, JSON.stringify(args)],
     {cwd: REPO, env: {PATH: process.env.PATH, HOME: conf, MESH_CONF_DIR: conf}, encoding: 'utf8'});
-    return [JSON.parse(output), JSON.parse(fs.readFileSync(file, 'utf8')), fs.statSync(file).mode & 0o777];
+    const names = path.join(conf, 'conversation-names.json');
+    return [JSON.parse(output), JSON.parse(fs.readFileSync(file, 'utf8')), fs.statSync(file).mode & 0o777,
+      fs.existsSync(names) ? JSON.parse(fs.readFileSync(names, 'utf8')) : []];
   } finally {
     fs.rmSync(conf, {recursive: true, force: true});
   }
@@ -157,9 +160,11 @@ test('a rename read against the incarnation before the carry changes the carried
   const carriedAlready = arranged();
   carriedAlready.sessions.work!.created = NEW;
   const live = [{name: 'first', created: 1}, {name: 'work', created: OLD}, {name: 'last', created: 2}];
-  const [, after] = organize(carriedAlready, 'apply', [{op: 'rename', id: 'work', label: 'Renamed'}, live]);
+  const [, after, , names] = organize(carriedAlready, 'apply', [{op: 'rename', id: 'work', label: 'Renamed'}, live]);
   assert.deepEqual(after.sessions.work, {created: NEW, label: 'Renamed', folder: 'Projects'});
   assert.deepEqual(after.order, ['first', 'work', 'last']);
+  assert.deepEqual(names.map(entry => [entry.created, entry.label]), [[NEW, 'Renamed']],
+    'the conversation name is recorded for the incarnation the session is in now');
 });
 
 test('a listing of a later incarnation, or without the session, still forgets an earlier entry', () => {
