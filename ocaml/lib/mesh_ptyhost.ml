@@ -2088,7 +2088,7 @@ let conditional_attach env observer sessions fields flow =
           if List.assoc_opt "op" fields = Some (`String "attach_if") then
             (* Capture retained bytes and current pre-attach geometry, as for
                ordinary attach, but only after strict incarnation selection. *)
-            let snapshot = Mesh_pty_replay.snapshot s.replay in
+            let snapshot = Mesh_pty_replay.replay s.replay in
             let replay_geometry =
               try Some (s.geometry ())
               with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None
