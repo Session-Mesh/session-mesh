@@ -19,9 +19,18 @@
 
     {b Codex: only the rollout file is copied.} Codex also keeps
     [state_5.sqlite], [session_index.jsonl] and [thread_history_1.sqlite], which
-    are not copied. Whether [codex resume <id>] under the other [CODEX_HOME]
-    works with the rollout alone is {b not verified}: it is to be tried on
-    throwaway accounts before a caller carries Codex conversations.
+    are not copied and are not needed: with codex-cli 0.170.0,
+    [codex resume <id>] and [codex exec resume <id>] under a [CODEX_HOME]
+    holding only its [config.toml] and the carried rollout send the earlier
+    turns to the model. Claude resumes from [<id>.jsonl] alone; the [<id>/]
+    folder keeps the subagents' transcripts, and a large tool output stays named
+    in the transcript by its path in the source folder.
+
+    Neither agent's folder trust is carried: the first launch of an account in a
+    working folder it never opened asks whether to trust that folder (Claude:
+    any folder, the answer kept in the account's [.claude.json]; Codex: a git
+    repository, kept in its [config.toml]). The operator answers it once per
+    account and folder; a carry never writes those files.
 
     Nothing else is copied: not the login files, not the settings, not the
     project's memory or its other conversations. A symbolic link, a file that is

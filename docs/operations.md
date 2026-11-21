@@ -1704,9 +1704,22 @@ sent to that account's provider. Once approved, Mesh stops the session, copies t
 with `mesh-platform accounts carry` (the transcript only, never a login or settings file) and
 resumes it in a new session under the other account. When the copy fails (for example the other
 account already holds a different copy of that conversation), the conversation resumes under its
-own account and the request records why. Resuming a Codex conversation from its copied rollout
-alone, and Claude from its copied transcript, is not yet verified on real accounts:
-`session_accounts` reports `switch_qualified: false`.
+own account and the request records why. Codex resumes a conversation from its copied rollout alone, and Claude from its copied
+transcript alone (tried with codex-cli 0.170.0 and Claude Code 2.1.330 on throwaway accounts);
+`session_accounts` still reports `switch_qualified: false`.
+
+**First launch of an alias in a folder.** The first time an alias opens a working folder, the agent
+asks in the session's terminal whether you trust that folder: Claude shows "Accessing workspace"
+with "Yes, I trust this folder" (the preselected answer is "No, exit"), Codex shows "Trust this
+folder?" with "1. Trust and continue" (in a git repository). Answer it once per alias and folder:
+the agent keeps the answer in that alias's own files (`.claude.json` in the Claude folder,
+`config.toml` in the Codex folder) and does not ask again. Mesh never writes these answers for you.
+A conversation carried to another account (`mesh-platform accounts carry`) meets the same
+question when that account resumes it; if "No, exit" is chosen by mistake, the conversation is
+already in the account's folder and a restart resumes it. To avoid the question, open each alias
+once in the folders you use, for example `cd <folder>`, then
+`CLAUDE_CONFIG_DIR=/home/USER/.agent-accounts/work/.claude claude` or
+`CODEX_HOME=/home/USER/.agent-accounts/work/.codex codex`, answer, and exit.
 
 Limits of this version:
 
