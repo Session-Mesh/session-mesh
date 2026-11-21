@@ -992,8 +992,11 @@ class AccountSwitchUndone(Exception):
 
 
 async def replace_session(old_name, old_created, base, cwd, command, agent, known_agent, account=None,
-                          switch=None):
+                          switch=None, source=None):
     """Prepare a dormant shell, retire the source, then start the replacement.
+
+    ``source``: the source's listing item. When its PTY host serves ``agent_relaunch_v1``, the agent restarts in
+    the same session and terminal instead (relaunch_in_place), under the same rules.
 
     A failed spawn leaves the source intact.  The replacement receives no
     agent command until ``kill_if`` has claimed the exact old incarnation, so
@@ -1004,6 +1007,8 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
     under the target once ``await carry()`` copied the conversation, after the source stopped. When the carry
     fails, the conversation resumes under ``account`` and AccountSwitchUndone names that session.
     """
+    if known_agent in IN_PLACE_AGENTS and _relaunches_in_place(source):
+        return await relaunch_in_place(source, cwd, command, agent, known_agent, account, switch)
     target = switch[0] if switch else account
     account_env = await account_environment(target, known_agent)
     source_env = await account_environment(account, known_agent) if switch else account_env
@@ -1039,6 +1044,61 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
         raise web.HTTPServiceUnavailable(
             text=f"Conversation stopped, but a standby session is available: {name}")
     return name
+
+
+# The agents the PTY host recognises in a terminal's foreground (mesh_ptyhost.ml, is_agent_name): only these
+# restart in place. Pi is not among them.
+IN_PLACE_AGENTS = frozenset(("claude", "codex", "opencode", "gemini", "copilot", "vibe"))
+
+
+def _relaunches_in_place(source):
+    """Whether the PTY host serving ``source`` (a listing item) can restart its agent in the same terminal."""
+    capabilities = source.get("pty_capabilities") if isinstance(source, dict) else None
+    return isinstance(capabilities, list) and "agent_relaunch_v1" in capabilities
+
+
+async def relaunch_in_place(source, cwd, command, agent, known_agent, account=None, switch=None):
+    """Stop the agent of session ``source`` and start it again in the same session, shell and terminal: the PTY host
+    (stop_agent_if) answers once the old agent is gone, so no two processes ever run the conversation, and the
+    session continues as a new incarnation (its ``created``) with its name, attachments and output. Everything that
+    can fail is prepared before the stop. ``switch``: as for replace_session; the carry runs between the stop and
+    the start, and when it fails the agent resumes under ``account`` in the same terminal (AccountSwitchUndone)."""
+    target = switch[0] if switch else account
+    account_env = await account_environment(target, known_agent)
+    source_env = await account_environment(account, known_agent) if switch else account_env
+    command, notice, vibe = await _prepared_launch(known_agent, command, cwd)
+    stopped = await host({"op": "stop_agent_if", "name": source["name"], "created": source["created"],
+                          "agent": known_agent})
+    if not (isinstance(stopped, dict) and stopped.get("ok") is True and _finite_number(stopped.get("created"))):
+        reason = stopped.get("reason") if isinstance(stopped, dict) else None
+        raise web.HTTPConflict(text=f"The agent was not stopped ({reason or 'refused'}): nothing was started")
+    launch = (source, stopped["created"], cwd, command, agent, known_agent, notice, vibe)
+    if switch:
+        try:
+            await switch[1]()
+        except AccountsUnavailable as exc:   # nothing changed under the source account: the conversation goes on there
+            print(f"account switch of {source['name']} undone: {exc}", flush=True)
+            await _start_in_place(*launch, account, source_env)
+            raise AccountSwitchUndone(source["name"], exc.code or "carry_failed", str(exc)) from exc
+    await _start_in_place(*launch, target, account_env)
+    return source["name"]
+
+
+async def _start_in_place(source, created, cwd, command, agent, known_agent, notice, vibe, account, account_env):
+    """Start the agent in the incarnation stop_agent_if left (``created``), under ``account``, with the session's
+    meta for that launch (as new_session writes it; the nonce, hence the session token, is kept)."""
+    nonce = (source.get("meta") or {}).get("nonce")
+    if known_agent == "claude":
+        command = await asyncio.to_thread(claudewake.launch_command, command, nonce, CLAUDE_WAKE_DIR,
+                                          cwd, ptyhost.clean_env(account_env))
+    meta = {"agent": agent, "known_agent": known_agent, **({"nonce": nonce} if nonce else {}),
+            **({"notice": notice} if notice else {}), **({"account": account} if account_env else {}),
+            **({"vibe_hooks": vibe.hooks} if vibe and vibe.hooks else {})}
+    started = await host({"op": "start_if", "name": source["name"], "created": created,
+                          "command": with_account(command, account_env), "meta": meta})
+    if started != {"ok": True}:
+        raise web.HTTPServiceUnavailable(
+            text=f"Conversation stopped; its agent could not be started again in session {source['name']}")
 
 
 # ---------------------------------------------------------------- listing
@@ -4266,7 +4326,7 @@ async def _switch_session(item, raw, conversation, argv):
     target = None if item["account"] == DEFAULT_ACCOUNT["id"] else item["account"]
     try:
         name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"], shlex.join(argv), kind,
-                                     kind, account=account, switch=(target, carry))
+                                     kind, account=account, switch=(target, carry), source=raw)
     except AccountSwitchUndone:   # the source was stopped all the same
         await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
         raise
@@ -4365,7 +4425,8 @@ async def _execute_session_action(item):
             raise web.HTTPConflict(text="The conversation is not in the current account's folder")
         return await _switch_session(item, raw, agent["session_id"], argv)
     name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"],
-                                 shlex.join(argv), source["agent"], source["agent"], account=session_account(raw))
+                                 shlex.join(argv), source["agent"], source["agent"], account=session_account(raw),
+                                 source=raw)
     await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
     return {"id": name}
 

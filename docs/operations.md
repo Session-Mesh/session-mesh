@@ -1700,13 +1700,27 @@ approve keeps the alias of the session too.
 A Claude or Codex agent can also ask to continue its conversation under another account (its
 `session_account_switch_request` tool, used when you ask for it in the conversation). The page
 asks for your approval: the whole conversation is then copied into the other account's folder and
-sent to that account's provider. Once approved, Mesh stops the session, copies the conversation
+sent to that account's provider. Once approved, Mesh stops the agent, copies the conversation
 with `mesh-platform accounts carry` (the transcript only, never a login or settings file) and
-resumes it in a new session under the other account. When the copy fails (for example the other
-account already holds a different copy of that conversation), the conversation resumes under its
-own account and the request records why. Codex resumes a conversation from its copied rollout alone, and Claude from its copied
+resumes it under the other account in the same session and terminal. When the copy fails (for
+example the other account already holds a different copy of that conversation), the conversation
+resumes under its own account, in the same terminal too, and the request records why. Codex
+resumes a conversation from its copied rollout alone, and Claude from its copied
 transcript alone (tried with codex-cli 0.170.0 and Claude Code 2.1.330 on throwaway accounts);
 `session_accounts` still reports `switch_qualified: false`.
+
+**Same terminal.** A switch, and a restart an agent requests, stop only the agent: the session
+keeps its name, its shell, its terminal output and every open tab or pane. The PTY host sends
+SIGHUP to the agent's foreground job, then SIGKILL after 3 seconds, and answers once the shell holds
+the terminal again and no process of that job is left; only then is the conversation copied and
+the agent started again, so two processes never run one conversation. When the terminal's
+foreground is another program, or an agent runs in the background of that shell, nothing is
+stopped and the request fails. The session then counts as a new incarnation, as after a new
+launch: what belonged to the previous one (its wake state, the status of a request it made) is
+not carried over. This needs a PTY
+host from this release or later (restarting it ends every mesh session, see
+[Restoring sessions](#restoring-sessions-after-a-pty-host-restart)); with an older one, the agent
+still resumes in a new session.
 
 **First launch of an alias in a folder.** The first time an alias opens a working folder, the agent
 asks in the session's terminal whether you trust that folder: Claude shows "Accessing workspace"

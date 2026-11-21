@@ -284,8 +284,16 @@ type session = {
   demo_capability : string option;
   pid : int;
   cwd : string;
-  meta : Yojson.Basic.t;
-  created : float;
+  mutable meta : Yojson.Basic.t;
+      (** Replaced only by the [start_if] that follows a [stop_agent_if]. *)
+  mutable created : float;
+      (** The incarnation. [stop_agent_if] moves it on: the shell and its
+          terminal stay, the agent is a new one. *)
+  mutable agent_stopping : bool;
+      (** A [stop_agent_if] is under way: nothing is typed or started. *)
+  mutable agent_stopped : bool;
+      (** The agent was stopped and none was started since: the next
+          [start_if] may replace [meta]. *)
   mutable activity : float;
   mutable alive : bool;
   mutable finishing : bool;
@@ -380,7 +388,10 @@ let supported_foreground s requested =
               && runs_agent found requested)
             processes)
 
-let session_json s =
+(* [agent_relaunch_v1]: [stop_agent_if] and a [start_if] with [meta] are
+   served (not in the Unix identity split, whose sessions are another
+   account's processes). *)
+let session_json ?(relaunch = true) s =
   `Assoc
     [
       ("name", `String s.name);
@@ -391,7 +402,9 @@ let session_json s =
       ("activity", `Float s.activity);
       ("attached", `Int (List.length s.clients));
       ( "pty_capabilities",
-        `List [ `String "agent_wake_v1"; `String "human_input_lease_v1" ] );
+        `List
+          ([ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
+          @ if relaunch then [ `String "agent_relaunch_v1" ] else []) );
     ]
 
 (* A dirty human-input lease defers agent wakes. Its client may never come
@@ -528,6 +541,67 @@ let end_failed_session sessions owned s finish failure =
   owned := List.filter (fun other -> other != s) !owned;
   List.iter Mesh_pty_output.close s.clients;
   ignore (Eio.Promise.try_resolve finish ())
+
+let agent_refusal reason =
+  `Assoc [ ("ok", `Bool false); ("reason", `String reason) ]
+
+(* One reading of the process table, off the fiber that serves sessions. *)
+let read_table check =
+  Eio_unix.run_in_systhread ~label:"agent-stop" (fun () ->
+      match Mesh_platform.snapshot () with
+      | Ok table -> Some (check table)
+      | Error _ -> None)
+
+(* [stop_agent_if]: stop the agent that the shell of [s] runs in the
+   foreground, and keep the shell, its terminal, its output and its
+   attachments (Mesh_pty_agent_stop). On success the session is a new
+   incarnation: [created] moves on, and one command may be started again
+   ([start_if], which may then replace [meta]). Nothing is started here. *)
+let stop_agent env s agent =
+  let runs_agent found = runs_agent found agent in
+  match
+    read_table (Mesh_pty_agent_stop.classify ~runs_agent ~leader:s.pid)
+  with
+  | None -> agent_refusal "process_scan_failed"
+  | Some (Mesh_pty_agent_stop.Refused reason) -> agent_refusal reason
+  | Some foreground -> (
+      let group =
+        match foreground with
+        | Mesh_pty_agent_stop.Running group -> Some group
+        | Idle | Refused _ -> None
+      in
+      (* Never the shell's own group: [classify] names another one. *)
+      let signal signum =
+        Option.iter
+          (fun group ->
+            if s.alive then
+              try Unix.kill (-group) signum with Unix.Unix_error _ -> ())
+          group
+      in
+      let clock = Eio.Stdenv.clock env in
+      let stopped () =
+        read_table (Mesh_pty_agent_stop.gone ~runs_agent ~leader:s.pid ~group)
+        = Some true
+      in
+      match
+        Mesh_pty_agent_stop.stop Mesh_pty_agent_stop.default_timing ~signal
+          ~sleep:(Eio.Time.sleep clock)
+          ~now:(fun () -> Eio.Time.now clock)
+          ~stopped
+      with
+      | `Still_running -> agent_refusal "agent_still_running"
+      | `Stopped when (not s.alive) || s.finishing || s.kill_requested ->
+          agent_refusal "stale_incarnation"
+      | `Stopped ->
+          let now = Eio.Time.now clock in
+          s.created <- (if now > s.created then now else Float.succ s.created);
+          s.command_started <- false;
+          s.agent_stopped <- true;
+          `Assoc [ ("ok", `Bool true); ("created", `Float s.created) ])
+
+let nonce_of = function
+  | `Assoc fields -> List.assoc_opt "nonce" fields
+  | _ -> None
 
 let valid_creation_receipt value =
   let hex = function '0' .. '9' | 'a' .. 'f' -> true | _ -> false in
@@ -734,7 +808,11 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
               || actual.perm land 0o077 <> 0
             then invalid_arg "private preset identity");
         `Assoc [ ("version", `Int 1); ("ready", `Bool true) ]
-    | Some (`String "list") -> `List (List.map session_json !sessions)
+    | Some (`String "list") ->
+        `List
+          (List.map
+             (session_json ~relaunch:(Option.is_none isolated_agent))
+             !sessions)
     | Some (`String "update_notice") ->
         (* The latest answer of the release check, from memory: no request, no
            file. [null] when no newer release is announced. *)
@@ -855,11 +933,51 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                 `Assoc [ ("ok", `Bool true) ]
             | _ -> `Assoc [ ("ok", `Bool false) ])
         | _ -> invalid_arg "name")
-    | Some (`String "start_if") -> (
+    | Some (`String "stop_agent_if") -> (
         if
           List.sort String.compare (List.map fst fields)
-          <> [ "command"; "created"; "name"; "op" ]
+          <> [ "agent"; "created"; "name"; "op" ]
         then invalid_arg "keys";
+        if Option.is_some isolated_agent || !stopping then
+          invalid_arg "stop_agent_if";
+        let created =
+          match get "created" with
+          | Some (`Float value) when Float.is_finite value -> value
+          | Some (`Int value) -> float_of_int value
+          | _ -> invalid_arg "created"
+        in
+        let agent =
+          match get "agent" with
+          | Some (`String value) when is_agent_name value -> value
+          | _ -> invalid_arg "agent"
+        in
+        match get "name" with
+        | Some (`String name) when name <> "" -> (
+            match List.find_opt (fun s -> s.name = name) !sessions with
+            | Some s
+              when s.created = created && s.alive && (not s.finishing)
+                   && (not s.kill_requested) && not s.agent_stopping ->
+                s.agent_stopping <- true;
+                Fun.protect
+                  ~finally:(fun () -> s.agent_stopping <- false)
+                  (fun () -> stop_agent env s agent)
+            | _ -> agent_refusal "stale_incarnation")
+        | _ -> invalid_arg "name")
+    | Some (`String "start_if") -> (
+        (* [meta] replaces the session's, on an incarnation whose agent
+           [stop_agent_if] stopped, with the same nonce (the session token
+           the shell holds stays valid). *)
+        let keys = List.sort String.compare (List.map fst fields) in
+        if
+          keys <> [ "command"; "created"; "name"; "op" ]
+          && keys <> [ "command"; "created"; "meta"; "name"; "op" ]
+        then invalid_arg "keys";
+        let meta =
+          match get "meta" with
+          | None -> None
+          | Some (`Assoc _ as value) -> Some value
+          | Some _ -> invalid_arg "meta"
+        in
         let created =
           match get "created" with
           | Some (`Float value) when Float.is_finite value -> value
@@ -878,7 +996,16 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
             match List.find_opt (fun s -> s.name = name) !sessions with
             | Some s
               when s.created = created && s.alive && (not s.finishing)
-                   && (not s.kill_requested) && not s.command_started ->
+                   && (not s.kill_requested) && (not s.agent_stopping)
+                   && (not s.command_started)
+                   && (Option.is_none meta || s.agent_stopped) ->
+                Option.iter
+                  (fun value ->
+                    if nonce_of value <> nonce_of s.meta then
+                      invalid_arg "meta";
+                    s.meta <- value)
+                  meta;
+                s.agent_stopped <- false;
                 s.command_started <- true;
                 Eio.Fiber.fork ~sw (fun () -> type_when_ready env s command);
                 `Assoc [ ("ok", `Bool true) ]
@@ -965,7 +1092,7 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                   ]
             | Some s
               when s.created <> created || (not s.alive) || s.finishing
-                   || s.kill_requested ->
+                   || s.kill_requested || s.agent_stopping ->
                 `Assoc
                   [
                     ("ok", `Bool false); ("reason", `String "stale_incarnation");
@@ -1288,6 +1415,8 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                           kill_requested = false;
                           hangup_resending = false;
                           command_started = Option.is_some command;
+                          agent_stopping = false;
+                          agent_stopped = false;
                           last_input = 0.;
                           human_leases = Hashtbl.create 4;
                           lease_connections = Hashtbl.create 4;

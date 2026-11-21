@@ -183,8 +183,8 @@ describe('Codex launches carry the project context hook', () => {
       const decided = await fetch(`${rigged!.mesh.base}/api/session-actions/${request.id}/decision`, {method: 'POST',
         headers: owner, body: JSON.stringify({approve: true, claim_nonce: claimNonce})});
       const result = (await decided.json() as {request: {result: {id?: string; error?: string}}}).request.result;
-      assert.ok(result.id, JSON.stringify(result));
-      const resumed = await launchOf(rigged!, result.id);
+      assert.equal(result.id, 'h-alias', `restarted in the same session: ${JSON.stringify(result)}`);
+      const resumed = await launchOf(rigged!, result.id, 1);   // the second launch of that session
       assert.deepEqual(resumed.args.slice(0, 2), ['resume', sid]);
       assert.equal(resumed.codexHome, alias, 'the resume runs under the alias\'s Codex home');
       assert.deepEqual(resumed.credentials, []);
