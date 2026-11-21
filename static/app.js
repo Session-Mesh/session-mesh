@@ -3212,16 +3212,30 @@ const KEYS = { esc: "\x1b", tab: "\t", up: "\x1b[A", down: "\x1b[B", right: "\x1
 const ACTIONS = { nl: () => sendKeyToAgent(active.newlineSeq()), copy: () => active.copySelection(), paste: () => (lineDirect ? pasteClipboardDirect() : active.pasteClipboard()),
                   compose: () => openCompose(), file: () => openAttach() };
 function setCtrl(on) { ctrlArmed = on; $('#keys [data-k="ctrl"]').classList.toggle("on", on); }
-// A tap on the bar never moves the focus, so it never opens or closes the soft
-// keyboard: the input line keeps the focus when it has it, and nothing editable
-// takes it otherwise. A tap's mousedown comes only after the finger lifted
-// without panning, so this leaves the strip's horizontal scroll alone.
-$("#keys").addEventListener("mousedown", (e) => { if (e.target.closest("button")) e.preventDefault(); });
+// A tap on a key of the bar never moves the focus, so it never opens or closes the
+// soft keyboard: the input line keeps the focus when it has it, and nothing
+// editable takes it otherwise. A tap's mousedown comes only after the finger
+// lifted without panning, so this leaves the strip's horizontal scroll alone.
+// ✎ and 📎 open a dialog, which takes the focus and gives it back on close: they
+// keep the browser's own handling. A word the keyboard is still composing ends
+// only when the line loses the focus: that tap lets the button take it, so the
+// word goes before the key, and the line gets it back right after.
+const KEYS_OWN_FOCUS = new Set(["compose", "file"]);
+let keyTapRefocus = false;
+function keepFocusOnKeyTap(e) {
+  const k = e.target.closest("button")?.dataset.k;
+  keyTapRefocus = false;
+  if (!k || KEYS_OWN_FOCUS.has(k)) return;
+  if (document.activeElement === line && lineComposing) keyTapRefocus = true;
+  else e.preventDefault();
+}
+$("#keys").addEventListener("mousedown", keepFocusOnKeyTap);
 // Let the browser distinguish a tap from a horizontal pan.  Activating on
 // pointerdown made every swipe across this overflow strip send the key that
 // happened to be under the finger when the gesture started.
 $("#keys").addEventListener("click", (e) => {
   const k = e.target.closest("button")?.dataset.k;
+  if (keyTapRefocus) { keyTapRefocus = false; line.focus(); }
   if (!k || !active) return;
   e.preventDefault();
   if (k === "ctrl") { if (ctrlArmed || !lineDirect || directKeyAllowed()) setCtrl(!ctrlArmed); }   // arming it: the held text goes first, as typed
