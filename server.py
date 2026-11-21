@@ -1073,7 +1073,8 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
                           "agent": known_agent})
     if not (isinstance(stopped, dict) and stopped.get("ok") is True and _finite_number(stopped.get("created"))):
         reason = stopped.get("reason") if isinstance(stopped, dict) else None
-        raise web.HTTPConflict(text=f"The agent was not stopped ({reason or 'refused'}): nothing was started")
+        reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,40}", reason) else "refused"
+        raise web.HTTPConflict(text=f"The agent was not stopped ({reason}): nothing was started")
     launch = (source, stopped["created"], cwd, command, agent, known_agent, notice, vibe)
     if switch:
         try:

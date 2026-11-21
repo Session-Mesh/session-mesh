@@ -54,13 +54,21 @@ let with_host ?(grace = "0.5") f =
     {
       home = Filename.concat scratch "home";
       socket_path = Filename.concat scratch "run/session-mesh/ptyhost.sock";
-      agent = Filename.concat scratch "bin/claude";
+      agent =
+        Filename.concat scratch "bin/claude"
+        ^ " "
+        ^ Filename.concat scratch "bin/agent.sh";
     }
   in
   List.iter
     (fun dir -> Unix.mkdir (Filename.concat scratch dir) 0o700)
     [ "home"; "run"; "bin" ];
-  write_shell fixture.agent agent_script;
+  write_shell (Filename.concat scratch "bin/agent.sh") agent_script;
+  (* A copy of bash named claude runs the script: its process is named claude
+     on Linux and macOS alike (a script's own name is not, on macOS). *)
+  write_shell
+    (Filename.concat scratch "bin/claude")
+    (file_contents (Unix.realpath "/bin/bash"));
   let shell = Filename.concat scratch "shell.sh" in
   write_shell shell "#!/bin/sh\nexec /bin/sh -i\n";
   let pid =

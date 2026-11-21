@@ -761,6 +761,8 @@
   "server.conversationRunningElsewhere": "cette conversation tourne dans {host} : utilise « Relancer » sur ce terminal",
   "server.conversationStillActive": "conversation encore active ; session de secours en attente : {name}",
   "server.conversationStoppedFallback": "conversation arrêtée mais session de secours disponible : {name}",
+  "server.agentNotStopped": "l’agent n’a pas été arrêté ({reason}) : rien n’a été lancé",
+  "server.agentNotStartedAgain": "conversation arrêtée ; son agent n’a pas pu être relancé dans la session {name}",
   "server.createdRequired": "created requis",
   "server.decisionInvalid": "décision invalide",
   "server.demoArchiveChanged": "archive absente ou révision modifiée",
