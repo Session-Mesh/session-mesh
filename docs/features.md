@@ -19,6 +19,7 @@ Interface labels are quoted as they appear in the English interface.
 - [Working in a terminal](#working-in-a-terminal)
 - [Columns and panes](#columns-and-panes)
 - [Documents beside the terminals](#documents-beside-the-terminals)
+- [Session tools and artifacts](#session-tools-and-artifacts)
 - [Browsing files](#browsing-files)
 - [Conversation history](#conversation-history)
 - [Whiteboard and demos](#whiteboard-and-demos)
@@ -699,6 +700,23 @@ files can be served, and how long a document link lasts, are described in
 The few labels of the Markdown, code and diff viewers ("source", "↩ wrap", "N lines", "split")
 and of demo scenes stay in English whatever the interface language: these pages run in the
 sandbox, which has no access to the interface's language catalogs.
+
+## Session tools and artifacts
+
+A live session's **Tools → Artifacts** opens its catalogue of confirmed Notes share references.
+Creating or replacing a note does not publish it: a reference appears only after an explicit,
+successful share operation. Notes must be configured separately, and each session operation needs
+an explicit grant. A pending share target is not presented as an existing document.
+
+**Tools → Project attachment** records an exact session reference in a local Mesh project. Its
+Tools menu is then available in **Projects → Old view**, independently of Roster observations.
+This is project metadata, not a Notes permission or a liveness assertion: opening artifacts still
+checks the exact live incarnation. A same-name replacement is not followed, and Notes grants never
+transfer. Uncertain saves are checked by receipt rather than replayed automatically.
+
+Confirmed artifact references survive restart and use an explicit transfer on restore. Unknown or
+unavailable catalogue state retains a completion warning instead of being treated as empty. For
+configuration, sharing outcomes and recovery, read [Session Artifacts and Notes](session-artifacts.md).
 
 ## Browsing files
 
