@@ -970,11 +970,17 @@ async def _prepared_launch(known_agent, command, cwd):
     return command, notice, vibe
 
 
+# How long _wait_source_gone waits: past the PTY host's SIGKILL of a session that ignores SIGHUP (kill_if: SIGHUP
+# again after 0.25, 0.5, 1, 2 and 4 s, then SIGKILL 4 s later, 11.75 s after the first), so that such a source,
+# an agent that is the session's program among them, ends before the replacement starts instead of leaving it dormant.
+SOURCE_GONE_TIMEOUT = 15
+
+
 async def _wait_source_gone(old_name, old_created, standby):
-    """Wait (5 s at most) until the stopped incarnation is no longer listed; 503 naming the standby session
-    when it is still there."""
+    """Wait (SOURCE_GONE_TIMEOUT at most) until the stopped incarnation is no longer listed; 503 naming the standby
+    session when it is still there."""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + 5.0
+    deadline = loop.time() + SOURCE_GONE_TIMEOUT
     while True:
         listed = await host({"op": "list"})
         if not any(item.get("name") == old_name and item.get("created") == old_created for item in listed):
@@ -1077,15 +1083,14 @@ STOP_AGENT_TIMEOUT = 15
 WHOLE_SESSION_REASONS = frozenset(("no_shell",))
 
 _NOT_SEEN = ("ptyhost cannot tell what holds the terminal of session {name}: nothing was stopped. Quit the agent "
-             "there, or close the session, then resume the conversation")
+             "there, then resume the conversation")
 
 # What the operator can do about the other refusals.
 STOP_REFUSALS = {
     "process_scan_failed": _NOT_SEEN,
     "no_terminal": _NOT_SEEN,
     "no_job_control": "The shell of session {name} runs the agent without job control: it cannot be stopped alone, "
-                      "and nothing was stopped. Quit the agent there, or close the session, then resume the "
-                      "conversation",
+                      "and nothing was stopped. Quit the agent there, then resume the conversation",
     "unsupported_foreground": "Another program holds the terminal of session {name}: nothing was stopped. Quit it, or "
                               "bring the agent back to the foreground, then ask again",
     "agent_not_foreground": "The agent of session {name} does not hold its terminal (it runs in the background, or "
