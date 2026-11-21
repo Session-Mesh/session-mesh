@@ -22,8 +22,14 @@ val birth_bytes : t -> string option
 
 val feed : t -> string -> unit
 (** Append opaque output, trimming on a newline or after a crossing escape
-    sequence/UTF-8 continuation. No decoding or screen emulation is performed.
-*)
+    sequence/UTF-8 continuation. No screen emulation is performed: the bytes
+    trimmed are only scanned for the terminal modes of {!Mesh_pty_modes}. *)
+
+val replay : t -> string
+(** What an attaching client receives: [snapshot], preceded, once a trim has cut
+    the start of the output, by the {!Mesh_pty_modes.prefix} of the bytes
+    trimmed, so that the client parses the window in the modes it was written
+    in. Exactly [snapshot] while nothing was trimmed. *)
 
 module Raw : sig
   type t
