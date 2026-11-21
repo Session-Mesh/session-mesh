@@ -22,7 +22,11 @@ async def plain_shell_daemon(monkeypatch, tmp_path):
     # Exercise real early shell input without owner login profiles or startup
     # commands changing terminal state. Ignore the host's added -l argument.
     shell = tmp_path / "plain-bash"
-    shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc -i\n")
+    # This test requires an initially empty replay. An interactive prompt (and
+    # readline's bracketed-paste escape) can otherwise race the first attach.
+    shell.write_text(
+        "#!/bin/sh\nexport PS1='' PS2=''\nexec /bin/bash --noprofile --norc --noediting -i\n"
+    )
     shell.chmod(0o700)
     runtime = Path(tempfile.mkdtemp(prefix="t43-plain-", dir=os.environ["SMESH_TEST_ROOT"]))
     handle = Daemon(runtime, home=tmp_path, parent_env={**os.environ, "SHELL": str(shell)})

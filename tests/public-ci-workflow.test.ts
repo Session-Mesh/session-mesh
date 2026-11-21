@@ -362,7 +362,7 @@ describe('the public CI as committed', () => {
       };
       const native = body('native');
       for (const needle of ['cp -L ocaml/_build/install/default/bin/mesh-platform native-host/mesh-platform',
-        'test -x native-host/mesh-platform', '            native-host/mesh-platform', 'key: native-programs-v3-']) {
+        'test -x native-host/mesh-platform', '            native-host/mesh-platform', 'key: native-programs-v4-']) {
         assert.ok(native.includes(needle), `${needle} missing from the native job`);
       }
       for (const jobName of ['frontend', 'browser']) {
@@ -385,13 +385,35 @@ describe('the public CI as committed', () => {
       };
       const native = body('native');
       for (const needle of ['cp -L ocaml/_build/install/default/bin/mesh-profile native-host/mesh-profile',
-        'test -x native-host/mesh-profile', '            native-host/mesh-profile', 'key: native-programs-v3-']) {
+        'test -x native-host/mesh-profile', '            native-host/mesh-profile', 'key: native-programs-v4-']) {
         assert.ok(native.includes(needle), `${needle} missing from the native job`);
       }
       const frontend = body('frontend');
       for (const needle of ['"$RUNNER_TEMP/native-work/mesh-profile"', 'MESH_PROFILE_CMD=$RUNNER_TEMP/native-work/mesh-profile',
         'MESH_REQUIRE_MESH_PROFILE=1']) {
         assert.ok(frontend.includes(needle), `${needle} missing from the frontend job`);
+      }
+    });
+    test(`${name} delivers artifact workers to every Linux test job without skips`, () => {
+      const jobs = jobBlocks(parseLines(text));
+      const body = (jobName: string): string => {
+        const job = jobs.find(item => item.name === jobName);
+        assert.ok(job, `no ${jobName} job`);
+        return job.block.map(line => line.raw).join('\n');
+      };
+      const native = body('native');
+      assert.ok(native.includes('key: native-programs-v4-'));
+      for (const binary of ['mesh-artifacts', 'mesh-board-mcp']) {
+        assert.ok(native.includes(`cp -L ocaml/_build/install/default/bin/${binary} native-host/${binary}`));
+        assert.ok(native.includes(`test -x native-host/${binary}`));
+        assert.ok(native.includes(`            native-host/${binary}`));
+      }
+      for (const jobName of ['frontend', 'python', 'browser']) {
+        const job = body(jobName);
+        assert.ok(job.includes('MESH_REQUIRE_ARTIFACTS=1'));
+        assert.ok(job.includes('cp "$RUNNER_TEMP/native-host/mesh-artifacts" ocaml/_build/default/bin/mesh_artifacts_main.exe'));
+        assert.ok(job.includes('cp "$RUNNER_TEMP/native-host/mesh-board-mcp" ocaml/_build/default/bin/mesh_board_mcp_main.exe'));
+        assert.ok(job.includes('chmod +x ocaml/_build/default/bin/mesh_{artifacts,board_mcp}_main.exe'));
       }
     });
   }
