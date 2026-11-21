@@ -2075,5 +2075,15 @@
     "other": "Partial view: {n} tasks of {total} were read, the reader's limit. Without a filter, the column counters count every task; the filters and the timeline see only the tasks read."
   },
   "work.product.noMatch": "No task matches these filters.",
-  "work.product.noDates": "None of these tasks has a date: there is no bar to draw."
+  "work.product.noDates": "None of these tasks has a date: there is no bar to draw.",
+  "new.optionsDefault": "Make this the default for {agent}",
+  "new.optionsNotSaved": "Session started. The default was not saved: {message}",
+  "new.optionsToken": "Master token",
+  "new.optionsSaveDefault": "Save the default",
+  "new.optionsCancelled": "Session started. The default was not saved.",
+  "config.launch.options": "Options per agent",
+  "config.launch.optionsHelp": "Extra arguments Mesh appends after the agent's own, stored per agent. They apply to every new launch of that agent, including a session an agent asks for.",
+  "config.launch.optionsPlaceholder": "--flag value",
+  "config.launch.saveOptions": "Save options",
+  "config.launch.optionsUnchanged": "Nothing to save."
 }

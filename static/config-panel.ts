@@ -19,6 +19,7 @@ export type ConfigElements = Readonly<{ dialog: HTMLDialogElement; body: HTMLEle
 export type ConfigPorts = Readonly<{
   t: ConfigTranslate; load: ConfigLoad; copy: (text: string) => Promise<boolean>;
   elevate: LaunchPorts["elevate"]; revoke: LaunchPorts["revoke"]; save: LaunchPorts["save"];
+  saveOptions: LaunchPorts["saveOptions"];
   saveSettings: OperatorNamePorts["saveSettings"];
 }>;
 
@@ -244,9 +245,9 @@ export class ConfigPanel {
     this.editor?.dispose(); this.editor = null; this.disposeShell();
     if (result.state !== "ok") { body.replaceChildren(this.note(this.ports.t("config.loadFailed"))); return; }
     const raw = record(result.value);
-    const { t, elevate, revoke, save, saveSettings } = this.ports;
+    const { t, elevate, revoke, save, saveOptions, saveSettings } = this.ports;
     this.editor = new LaunchEditor(dialog.ownerDocument, parseLaunch(raw.launch), parseElevation(raw.elevation),
-      { t, elevate, revoke, save, reload: (next) => { void this.load(next); } }, notice);
+      { t, elevate, revoke, save, saveOptions, reload: (next) => { void this.load(next); } }, notice);
     const cards = this.render(buildSections(result.value, t, this.language()));
     this.operator = new OperatorNameCard(dialog.ownerDocument, raw, { t, elevate, revoke, saveSettings });
     this.shell = new SettingsShell(dialog.ownerDocument, { nav: t("config.nav"), back: t("config.back") },

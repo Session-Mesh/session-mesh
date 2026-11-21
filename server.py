@@ -2593,6 +2593,32 @@ CLAUDE_WAKE_DIR = claudewake.wake_directory(ptyhost.SOCK.parent / claudewake.DIR
 AGENT_WAKE_PRESETS = frozenset(("claude", "opencode", "gemini", "vibe"))
 PRESETS = {"shell": None, **{kind: shlex.join(argv) for kind, argv in AGENT_PRESETS.items()}}
 
+# The options the owner stored for a preset. Unlike the launch settings, a bad file does not stop
+# the server: it makes every agent launch refuse, because Mesh cannot know which presets an unreadable
+# file grants options to, and launching without a restrictive option would widen what the agent may do.
+AGENT_OPTIONS_PATH = CONF_DIR / launchsettings.AGENT_OPTIONS_FILE
+try:
+    AGENT_OPTIONS, AGENT_OPTIONS_REVISION = launchsettings.load_agent_options(AGENT_OPTIONS_PATH)
+    AGENT_OPTIONS_ERROR = None
+except launchsettings.InvalidLaunchSettings as exc:
+    AGENT_OPTIONS, AGENT_OPTIONS_REVISION, AGENT_OPTIONS_ERROR = {}, None, str(exc)
+    print(f"launch options: {exc}", flush=True)
+
+
+def apply_agent_options(stored, revision):
+    """Make the owner's saved options effective for the next launch, without a restart."""
+    global AGENT_OPTIONS, AGENT_OPTIONS_REVISION, AGENT_OPTIONS_ERROR
+    AGENT_OPTIONS, AGENT_OPTIONS_REVISION, AGENT_OPTIONS_ERROR = stored, revision, None
+
+
+def stored_options(kind):
+    """The stored tokens of ``kind``, or refuse the launch when the file cannot be read."""
+    if AGENT_OPTIONS_ERROR:
+        raise web.HTTPConflict(text=("The stored launch options cannot be read "
+                                     f"({AGENT_OPTIONS_ERROR}): fix or remove "
+                                     f"{launchsettings.AGENT_OPTIONS_FILE}"))
+    return AGENT_OPTIONS.get(kind, ())
+
 
 def apply_launch_settings(settings, revision):
     """Make owner-edited launch settings effective for the next launch, without a restart.
@@ -2620,7 +2646,7 @@ OPTIONS_REFUSED = ("Launch refused: {option} is not allowed in the launch option
                    "agent's approvals or its sandbox, or it picks its conversation)")
 
 
-def parse_launch_options(kind, value):
+def parse_launch_options(kind, value, *, agents=None):
     """The owner's options field as argv tokens.
 
     Never a shell fragment: the command reaches the PTY host as one shell string, so a newline would
@@ -2633,7 +2659,7 @@ def parse_launch_options(kind, value):
         raise web.HTTPBadRequest(text="Options must be a string")
     if not value.strip():
         return ()
-    if kind not in AGENT_PRESETS:
+    if kind not in (AGENT_PRESETS if agents is None else agents):
         raise web.HTTPBadRequest(text="Options are for a known agent only")
     if len(value) > OPTIONS_MAX_CHARS:
         raise web.HTTPBadRequest(text=f"Options are longer than {OPTIONS_MAX_CHARS} characters")
@@ -2686,7 +2712,7 @@ async def api_new(request):
         raise web.HTTPBadRequest(text=ACCOUNT_UNKNOWN)
     conversation = None
     if agent:
-        argv, conversation = _chosen_launch(agent, effective_launch(kind, (), options))
+        argv, conversation = _chosen_launch(agent, effective_launch(kind, stored_options(kind), options))
         command = shlex.join(argv)
     name = await new_session(name or f"{Path(cwd).name}-{kind if kind != 'custom' else 'cmd'}",
                              cwd, command, agent if agent in RESUMABLE_AGENT_PRESETS else None,
@@ -4844,7 +4870,10 @@ def launch_projection():
             "known_agents": sorted(launchsettings.KNOWN_AGENTS),
             "editable": LAUNCH_REVISION is not None, "revision": LAUNCH_REVISION,
             "limits": {"max_roots": launchsettings.MAX_ROOTS, "max_path": launchsettings.MAX_PATH},
-            "defaults": launchsettings.defaults()}
+            "defaults": launchsettings.defaults(),
+            "agent_options": {kind: shlex.join(tokens) for kind, tokens in sorted(AGENT_OPTIONS.items())},
+            "agent_options_revision": AGENT_OPTIONS_REVISION or "",
+            "agent_options_error": AGENT_OPTIONS_ERROR}
 
 
 def config_report(origin, host_report):
@@ -5023,6 +5052,56 @@ async def api_config_launch(request):
         except launchsettings.InvalidLaunchSettings as exc:
             return _json_reply({"error": "invalid", "message": str(exc)}, 400)
         apply_launch_settings(settings, revision)
+    return _json_reply({"launch": launch_projection()})
+
+
+def _agent_option_changes(value):
+    """The body's preset -> tokens, validated like the launch field, refusal included."""
+    if not isinstance(value, dict) or len(value) > len(launchsettings.KNOWN_AGENTS):
+        raise web.HTTPBadRequest(text="Invalid fields")
+    changes = {}
+    for kind, options in value.items():
+        if kind not in launchsettings.KNOWN_AGENTS:
+            raise web.HTTPBadRequest(text=f"Unknown agent preset: {kind}")
+        tokens = parse_launch_options(kind, options, agents=launchsettings.KNOWN_AGENTS)
+        refused = launchplan.refusal(kind, tokens)
+        if refused:
+            raise web.HTTPBadRequest(text=OPTIONS_REFUSED.format(option=refused))
+        changes[kind] = tokens
+    return changes
+
+
+async def api_config_launch_options(request):
+    """Store the owner's per-agent launch options.
+
+    Owner cookie plus an active elevation; the file is replaced atomically and only when its revision
+    is the one the page read. The change applies to the next launch, and no running session is touched.
+    """
+    _require_owner_cookie(request)
+    if elevation_seconds_left(request) <= 0:
+        return _json_reply({"error": "elevation-required"}, 403)
+    body = await _bounded_json_object(request, CONFIG_BODY_MAX)
+    if set(body) != {"revision", "agent_options"} or not isinstance(body["revision"], str):
+        raise web.HTTPBadRequest(text="Invalid fields")
+    changes = _agent_option_changes(body["agent_options"])
+    async with LAUNCH_WRITE_LOCK:
+        # The elevation can end while the body is read or the lock is awaited: ask again, last thing
+        # before the write.
+        if elevation_seconds_left(request) <= 0:
+            return _json_reply({"error": "elevation-required"}, 403)
+        try:
+            stored, revision = await asyncio.to_thread(
+                launchsettings.write_agent_options, AGENT_OPTIONS_PATH, changes,
+                body["revision"] or None)
+        except launchsettings.ConflictError as exc:
+            return _json_reply({"error": exc.code, "message": str(exc),
+                                "revision": AGENT_OPTIONS_REVISION or ""}, 409)
+        except launchsettings.InvalidLaunchSettings as exc:
+            return _json_reply({"error": "invalid", "message": str(exc)}, 400)
+        except OSError as exc:
+            return _json_reply({"error": "unwritable",
+                                "message": f"the options file cannot be written: {exc.strerror or exc}"}, 500)
+        apply_agent_options(stored, revision)
     return _json_reply({"launch": launch_projection()})
 
 
@@ -6113,6 +6192,7 @@ def make_app(*, session_request_path=None):
     app.router.add_post("/api/config/elevate", api_config_elevate)
     app.router.add_post("/api/config/elevate/revoke", api_config_elevate_revoke)
     app.router.add_post("/api/config/launch", api_config_launch)
+    app.router.add_post("/api/config/launch-options", api_config_launch_options)
     app.router.add_post("/api/agent-mail/consent/{request_id}/decision",
                         api_agent_mail_consent_decision)
     app.router.add_post("/api/agent-mail/consent/revoke", api_agent_mail_consent_revoke)

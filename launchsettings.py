@@ -370,5 +370,70 @@ def add_recent_folders(path: Path, folders: list, *, newest: bool) -> list:
     return recent
 
 
+# Per-agent launch options: the extra argv tokens the owner stores for a preset, in one JSON object in
+# Mesh's configuration folder. Unlike the launch settings above, this file is written from the web
+# interface under an elevation; it holds what the owner typed, never what an agent asked for. The
+# refused class is decided by launchplan.refusal, and the tokens are stored as they were validated.
+AGENT_OPTIONS_FILE = "agent-launch-options.json"
+OPTIONS_MAX_BYTES = 16 * 1024
+OPTIONS_MAX_TOKENS = 32
+OPTIONS_MAX_TOKEN = 512
+
+
+def parse_agent_options(value: object) -> dict[str, tuple[str, ...]]:
+    """The v1 object as preset -> tokens; unknown fields, presets and tokens fail closed."""
+    if not isinstance(value, dict) or set(value) != {"v", "options"} or value.get("v") != VERSION:
+        raise InvalidLaunchSettings(f"{AGENT_OPTIONS_FILE} must be exactly v1")
+    options = value.get("options")
+    if not isinstance(options, dict) or len(options) > len(KNOWN_AGENTS):
+        raise InvalidLaunchSettings(f"{AGENT_OPTIONS_FILE}: options must map known presets to tokens")
+    parsed: dict[str, tuple[str, ...]] = {}
+    for kind, tokens in options.items():
+        if kind not in KNOWN_AGENTS:
+            raise InvalidLaunchSettings(f"{AGENT_OPTIONS_FILE}: {kind!r} is not a known agent preset")
+        if (not isinstance(tokens, list) or not 1 <= len(tokens) <= OPTIONS_MAX_TOKENS
+                or any(not isinstance(token, str) or not token or len(token) > OPTIONS_MAX_TOKEN
+                       or any(character in token for character in "\n\r\0") for token in tokens)):
+            raise InvalidLaunchSettings(f"{AGENT_OPTIONS_FILE}: {kind!r} has an invalid token list")
+        parsed[kind] = tuple(tokens)
+    return parsed
+
+
+def load_agent_options(path: Path) -> tuple[dict[str, tuple[str, ...]], str | None]:
+    """(preset -> tokens, revision of the exact bytes); ({}, None) when no file exists yet."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {}, None
+    except OSError as exc:
+        raise InvalidLaunchSettings(f"{AGENT_OPTIONS_FILE} is unavailable") from exc
+    if len(raw) > OPTIONS_MAX_BYTES:
+        raise InvalidLaunchSettings(f"{AGENT_OPTIONS_FILE} is too large")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise InvalidLaunchSettings(f"{AGENT_OPTIONS_FILE} is not JSON") from exc
+    return parse_agent_options(value), revision_of(raw)
+
+
+def write_agent_options(path: Path, changes: dict[str, tuple[str, ...]],
+                        expected_revision: str | None) -> tuple[dict[str, tuple[str, ...]], str]:
+    """Merge ``changes`` into the file and replace it atomically. The caller serialises calls.
+
+    ``expected_revision`` is the revision the page read; ``None`` means "no file yet". An empty
+    token list removes the entry, which is how the owner clears one."""
+    stored, current = load_agent_options(path)
+    if expected_revision != current:
+        raise ConflictError("stale-revision", "the launch options changed since this page loaded")
+    merged = {kind: tokens for kind, tokens in {**stored, **changes}.items() if tokens}
+    text = json.dumps({"v": VERSION, "options": {kind: list(tokens) for kind, tokens in sorted(merged.items())}},
+                      indent=2) + "\n"
+    if len(text.encode("utf-8")) > OPTIONS_MAX_BYTES:
+        raise InvalidLaunchSettings(f"{AGENT_OPTIONS_FILE}: the options would be too large")
+    mode = (path.stat().st_mode & 0o777) if path.exists() else 0o600
+    fsutil.atomic_write(path, text, mode)
+    return merged, revision_of(text.encode("utf-8"))
+
+
 if __name__ == "__main__":
     print(json.dumps(load_from_env().doctor(), separators=(",", ":")))

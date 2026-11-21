@@ -2090,5 +2090,15 @@
     "other": "Vue partielle : {n} tâches lues sur {total}, la limite du lecteur. Sans filtre, les compteurs des colonnes comptent toutes les tâches ; les filtres et la frise ne voient que les tâches lues."
   },
   "work.product.noMatch": "Aucune tâche ne correspond à ces filtres.",
-  "work.product.noDates": "Aucune de ces tâches n’a de date : aucune barre à tracer."
+  "work.product.noDates": "Aucune de ces tâches n’a de date : aucune barre à tracer.",
+  "new.optionsDefault": "Faire de ceci le défaut pour {agent}",
+  "new.optionsNotSaved": "Session lancée. Le défaut n’a pas été enregistré : {message}",
+  "new.optionsToken": "Jeton maître",
+  "new.optionsSaveDefault": "Enregistrer le défaut",
+  "new.optionsCancelled": "Session lancée. Le défaut n’a pas été enregistré.",
+  "config.launch.options": "Options par agent",
+  "config.launch.optionsHelp": "Arguments supplémentaires ajoutés après ceux de l’agent, enregistrés par agent. Ils s’appliquent à chaque nouveau lancement de cet agent, y compris une session demandée par un agent.",
+  "config.launch.optionsPlaceholder": "--option valeur",
+  "config.launch.saveOptions": "Enregistrer les options",
+  "config.launch.optionsUnchanged": "Rien à enregistrer."
 }

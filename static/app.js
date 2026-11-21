@@ -4636,6 +4636,12 @@ const configPanel = MeshPaneActions.createConfigPanel({ dialog: $("#dlg-config")
     const body = await response.json().catch(() => ({}));
     return { ok: false, error: String(body.error || response.status), message: typeof body.message === "string" ? body.message : null };
   },
+  // The per-agent launch options have their own route and their own revision.
+  saveOptions: async (payload) => {
+    const response = await requestLocal("/api/config/launch-options", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const body = await response.json().catch(() => ({}));
+    return response.ok ? { ok: true } : { ok: false, error: String(body.error || response.status), message: typeof body.message === "string" ? body.message : null };
+  },
   // The runner settings (the operator's display name) share the launch route and its elevation.
   saveSettings: async (settings) => {
     const response = await requestLocal("/api/config/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings }) });
@@ -7337,6 +7343,13 @@ async function openNew() {
   form.command.value = store.get("command", "");
   form.command.hidden = form.preset.value !== "custom";
   form.options.value = "";
+  form.optionsDefault.checked = false;
+  $("#new-elevation-row").hidden = true;
+  form.masterToken.value = "";
+  delete dlg.dataset.pendingDefault;
+  optionsPreset = null;
+  const openButton = form.querySelector('button[value="ok"]');
+  if (openButton) openButton.textContent = t("common.open");
   syncOptionsRow();
   const cur = active?.id && find(active.id);
   form.cwd.value = short(cur?.cwd || data.home).replace(/^~/, data.home);
@@ -7349,6 +7362,7 @@ async function openNew() {
   renderFolderList();
   const [listed, config] = await Promise.allSettled([readJson("/api/dirs"),   // the moved folders are in the config's answer
     moveRecentFoldersToRunner().then(() => readJson("/api/config", { cache: "no-store" }))]);
+  if (config.status === "fulfilled") { rememberLaunchOptions(config.value?.launch); optionsPreset = null; syncOptionsRow(); }
   fillAccounts(config.status === "fulfilled" && Array.isArray(config.value?.accounts) ? config.value.accounts : []);
   folderField.roots = config.status === "fulfilled" ? MeshFolderState.workspaceRoots(config.value) : [];
   const recent = (config.status === "fulfilled" && MeshFolderState.runnerRecentFolders(config.value)) || [];
@@ -7358,9 +7372,49 @@ async function openNew() {
 window.openNew = openNew;
 
 // The options field belongs to a known agent: "shell" and "custom" have no argv Mesh builds.
+// The stored default is prefilled once per preset, so typing then ticking the box keeps the text.
+let launchAgentOptions = {};      // preset -> the stored options, as /api/config reports them
+let launchOptionsRevision = "";
+let optionsPreset = null;         // the preset the field was last prefilled for
+
+function knownAgentPreset(value) {
+  return Boolean(value) && value !== "shell" && value !== "custom";
+}
+
 function syncOptionsRow() {
-  const value = form.preset.value;
-  $("#new-options-row").hidden = !value || value === "shell" || value === "custom";
+  const value = form.preset.value, known = knownAgentPreset(value);
+  $("#new-options-row").hidden = !known;
+  $("#new-options-default-row").hidden = !known;
+  if (!known) { optionsPreset = null; return; }
+  $("#new-options-default").textContent = t("new.optionsDefault", { agent: value });
+  if (value !== optionsPreset) {          // a preset change prefills; any other change keeps the text
+    form.options.value = launchAgentOptions[value] ?? "";
+    form.optionsDefault.checked = false;
+    optionsPreset = value;
+  }
+}
+
+function rememberLaunchOptions(launch) {
+  launchAgentOptions = launch && launch.agent_options && typeof launch.agent_options === "object" ? launch.agent_options : {};
+  launchOptionsRevision = launch && typeof launch.agent_options_revision === "string" ? launch.agent_options_revision : "";
+}
+
+// Store (or clear) one agent's options. The elevation is asked for here, once, and only when the
+// server says it is missing: the token is typed in the dialog and never kept by the page.
+async function saveAgentOptions(preset, options, token) {
+  const send = () => requestLocal("/api/config/launch-options", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ revision: launchOptionsRevision, agent_options: { [preset]: options } }),
+  });
+  if (token) {
+    const elevated = await requestLocal("/api/config/elevate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+    if (!elevated.ok) return { ok: false, error: "wrong-token" };
+  }
+  const response = await send();
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) { rememberLaunchOptions(body.launch); return { ok: true }; }
+  return { ok: false, error: String(body.error || response.status), message: typeof body.message === "string" ? body.message : null,
+    revision: typeof body.revision === "string" ? body.revision : null };
 }
 
 // The "Account" choice: shown when the operator declared aliases on the runner (any number), for Claude and Codex
@@ -7511,8 +7565,30 @@ $("#btn-new").addEventListener("click", () => { if (projecting) projectsControll
 form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; syncOptionsRow(); syncAccountChoice(); });
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
+  // A session was already started and only its default is left to store: this click finishes that,
+  // and never starts a second session.
+  const pending = dlg.dataset.pendingDefault ? JSON.parse(dlg.dataset.pendingDefault) : null;
+  if (pending) {
+    if (pending.close) { delete dlg.dataset.pendingDefault; dlg.close(); return; }
+    const token = form.masterToken.value;
+    form.masterToken.value = "";
+    if (!token) { $("#new-err").textContent = t("new.optionsCancelled"); return; }
+    const saved = await saveAgentOptions(pending.preset, pending.options, token);
+    if (!saved.ok) {
+      $("#new-err").textContent = saved.error === "wrong-token"
+        ? t("config.launch.err.wrongToken") : t("new.optionsNotSaved", { message: saved.message || saved.error });
+      return;
+    }
+    delete dlg.dataset.pendingDefault;
+    dlg.close();
+    await refresh();
+    active.show(pending.id, false, { focusTerminal: true });
+    return;
+  }
   const body = Object.fromEntries(new FormData(form));
   delete body.account;   // "" for the default account: the server takes an alias id or nothing
+  delete body.masterToken;
+  delete body.optionsDefault;
   const account = accountChoice();
   if (account.refused) { $("#new-err").textContent = account.refused; return; }
   if (account.id) body.account = account.id;
@@ -7522,6 +7598,27 @@ form.addEventListener("submit", async (e) => {
   store.set("preset", body.preset);
   if (!form.account.disabled) store.set("account", body.account || "");
   if (body.preset === "custom") store.set("command", body.command || "");   // the folder: recorded by the server
+  // The session is started whatever happens next: a default that cannot be stored never blocks it.
+  const wanted = form.optionsDefault.checked && knownAgentPreset(body.preset)
+    ? { preset: body.preset, options: body.options || "", id } : null;
+  if (wanted) {
+    const saved = await saveAgentOptions(wanted.preset, wanted.options);
+    if (!saved.ok) {
+      if (saved.error === "elevation-required") {
+        $("#new-elevation-row").hidden = false;
+        dlg.dataset.pendingDefault = JSON.stringify(wanted);
+        const saveButton = form.querySelector('button[value="ok"]');
+        if (saveButton) saveButton.textContent = t("new.optionsSaveDefault");
+        $("#new-err").textContent = t("new.optionsNotSaved", { message: t("config.launch.err.expired") });
+        form.masterToken.focus();
+        return;   // the dialog stays open: the next click stores the default, with the token
+      }
+      if (saved.error === "stale-revision") launchOptionsRevision = saved.revision ?? launchOptionsRevision;
+      $("#new-err").textContent = t("new.optionsNotSaved", { message: saved.message || saved.error });
+      dlg.dataset.pendingDefault = JSON.stringify({ close: true });   // the next click only closes
+      return;
+    }
+  }
   dlg.close();
   await refresh();
   active.show(id, false, { focusTerminal: true });
