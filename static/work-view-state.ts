@@ -3,8 +3,8 @@
 
 /**
  * What the Projects view puts back when the owner comes back to it: the place (the project, its tab, the task sheet,
- * or a sheet opened from the entry screen, where they were scrolled, the products and the pending questions unfolded on
- * the entry screen) and the unsent answer drafts of every question
+ * a product, or a sheet opened from the entry screen, where they were scrolled, the items unfolded in the tree of the
+ * left rail and the pending questions unfolded on the entry screen) and the unsent answer drafts of every question
  * the owner typed under, by question id. Kept in this tab's sessionStorage under one key, never in localStorage and
  * never sent anywhere: a draft may hold sensitive text, so it lives no longer than the tab and is removed when the
  * answer is sent, when the owner empties the field, and when the browser signs out (static/app.js, static/login.js).
@@ -15,13 +15,16 @@
 
 /** The sessionStorage key. static/login.js removes it by this name too. */
 export const STATE_KEY = 'mesh.workView';
-export const STATE_SCHEMA = 1;
+export const STATE_SCHEMA = 2;
+/** The schemas read: 1 had no product and kept the products unfolded on the entry screen (`expanded`), which the tree
+ *  of the rail replaces; its place reads with no product and the tree folded as on a first visit. */
+const READ_SCHEMAS: ReadonlySet<unknown> = new Set([1, STATE_SCHEMA]);
 /** The bound of the stored value, in UTF-16 units; the oldest drafts go first when it is exceeded. */
 export const MAX_STATE_CHARS = 64 * 1024;
 export const MAX_DRAFTS = 40;
 /** The answer field holds at most 4000 UTF-16 units (work-answer-form.ts); a longer stored text is not ours. */
 export const MAX_DRAFT_CHARS = 4000;
-const MAX_PICKED = 32, MAX_EXPANDED = 200, MAX_ID = 64;
+const MAX_PICKED = 32, MAX_OPEN = 400, MAX_ID = 64;
 
 export type Draft = Readonly<{
   /** The text of the answer field. */
@@ -44,6 +47,8 @@ export const sameSheet = (left: EntrySheetPlace | null, right: EntrySheetPlace |
 export type Place = Readonly<{
   /** The open project, or null for the entry screen. */
   project: string | null;
+  /** Without a project nor a sheet: the product whose view is shown, or null for the entry screen. */
+  product: string | null;
   tab: string | null;
   /** The task whose sheet is open. */
   task: string | null;
@@ -54,8 +59,8 @@ export type Place = Readonly<{
   scroll: number;
   sheetScroll: number;
   tabScroll: number | null;
-  /** The products unfolded on the entry screen; null until the owner's first visit seeds them. */
-  expanded: readonly string[] | null;
+  /** The items unfolded in the tree of the rail (static/work-tree.ts keys); null until the first visit seeds them. */
+  rail: readonly string[] | null;
   /** The pending questions of the entry screen unfolded (folded by default). */
   questionsOpen: boolean;
 }>;
@@ -69,8 +74,8 @@ export type StoragePort = Readonly<{
   removeItem: (key: string) => void;
 }>;
 
-export const ENTRY_PLACE: Place = { project: null, tab: null, task: null, sheet: null, scroll: 0, sheetScroll: 0, tabScroll: null,
-  expanded: null, questionsOpen: false };
+export const ENTRY_PLACE: Place = { project: null, product: null, tab: null, task: null, sheet: null, scroll: 0, sheetScroll: 0,
+  tabScroll: null, rail: null, questionsOpen: false };
 export const EMPTY_STATE: ViewState = { place: ENTRY_PLACE, drafts: new Map() };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -93,13 +98,13 @@ function readSheet(value: unknown): EntrySheetPlace | null {
 
 function readPlace(value: unknown): Place {
   if (!isRecord(value)) return ENTRY_PLACE;
-  const project = idOrNull(value.project);
+  const project = idOrNull(value.project), sheet = project ? null : readSheet(value.sheet);
   return {
-    project, tab: project ? idOrNull(value.tab) : null, task: project ? idOrNull(value.task) : null,
-    sheet: project ? null : readSheet(value.sheet),
+    project, product: project || sheet ? null : idOrNull(value.product),
+    tab: project ? idOrNull(value.tab) : null, task: project ? idOrNull(value.task) : null, sheet,
     scroll: offset(value.scroll), sheetScroll: offset(value.sheetScroll),
     tabScroll: value.tabScroll === null || value.tabScroll === undefined ? null : offset(value.tabScroll),
-    expanded: ids(value.expanded, MAX_EXPANDED), questionsOpen: value.questionsOpen === true,
+    rail: ids(value.rail, MAX_OPEN), questionsOpen: value.questionsOpen === true,
   };
 }
 
@@ -126,7 +131,7 @@ export function parseState(raw: string | null): ViewState {
   if (typeof raw !== 'string' || raw.length > MAX_STATE_CHARS) return EMPTY_STATE;
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return EMPTY_STATE; }
-  if (!isRecord(value) || value.schema !== STATE_SCHEMA) return EMPTY_STATE;
+  if (!isRecord(value) || !READ_SCHEMAS.has(value.schema)) return EMPTY_STATE;
   return { place: readPlace(value.place), drafts: readDrafts(value.drafts) };
 }
 

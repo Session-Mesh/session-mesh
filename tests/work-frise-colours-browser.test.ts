@@ -79,6 +79,7 @@ async function openTimeline(locale: string, width: number, theme: string): Promi
   } else {
     await page.locator('#btn-projects').click();
   }
+  await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
   await page.locator('.work-entry-project', { hasText: 'Delivery rollout' }).click();
   await page.locator('.work-tab').nth(2).click();
   await page.locator('#work-panel-frise .work-bar-span').first().waitFor();

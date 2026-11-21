@@ -12,8 +12,8 @@ import {
 } from '../static/work-view-state.ts';
 import type { Draft, Place, StoragePort, ViewState } from '../static/work-view-state.ts';
 
-const PLACE: Place = { project: 'P-7a7a', tab: 'board', task: 'T-7b7b', sheet: null, scroll: 420, sheetScroll: 30, tabScroll: 812,
-  expanded: ['relay', 'kiln'], questionsOpen: true };
+const PLACE: Place = { project: 'P-7a7a', product: null, tab: 'board', task: 'T-7b7b', sheet: null, scroll: 420, sheetScroll: 30,
+  tabScroll: 812, rail: ['zone:atacama', 'product:relay', 'product:kiln'], questionsOpen: true };
 const draft = (text: string, at: number, extra: Partial<Draft> = {}): Draft => ({ text, picked: [], edit: false, at, ...extra });
 
 function memoryStorage(): StoragePort & { items: Map<string, string> } {
@@ -92,19 +92,20 @@ describe('the stored state', () => {
 
   test('another schema version reads as the empty state', () => {
     const stored = JSON.parse(serializeState(sample()));
-    for (const schema of [0, 2, '1', null]) {
+    for (const schema of [0, 3, '1', '2', null]) {
       assert.deepEqual(parseState(JSON.stringify({ ...stored, schema })), EMPTY_STATE, `schema ${String(schema)}`);
     }
   });
 
   test('fields of the wrong shape are dropped one by one; the rest is kept', () => {
     const raw = JSON.stringify({ schema: STATE_SCHEMA,
-      place: { project: 'P-1', tab: '<b>', task: 42, scroll: -5, sheetScroll: 'far', tabScroll: '1e999', expanded: ['ok', 7, '../x'] },
+      place: { project: 'P-1', product: 'relay', tab: '<b>', task: 42, scroll: -5, sheetScroll: 'far', tabScroll: '1e999',
+        rail: ['zone:ok', 7, '../x', { key: 'x' }, '', 'p'.repeat(65)] },
       drafts: { 'N-1': { text: 'kept', picked: ['a', 3], at: 9 }, 'not an id!': { text: 'dropped', at: 1 }, 'N-2': { text: 5 },
         'N-3': 'text', '__proto__': { text: 'dropped' } } });
     const state = parseState(raw);
-    assert.deepEqual(state.place, { project: 'P-1', tab: null, task: null, sheet: null, scroll: 0, sheetScroll: 0, tabScroll: 0,
-      expanded: ['ok'], questionsOpen: false });
+    assert.deepEqual(state.place, { project: 'P-1', product: null, tab: null, task: null, sheet: null, scroll: 0, sheetScroll: 0,
+      tabScroll: 0, rail: ['zone:ok'], questionsOpen: false });
     assert.deepEqual([...state.drafts], [['N-1', { text: 'kept', picked: ['a'], edit: false, at: 9 }]]);
   });
 
@@ -130,6 +131,31 @@ describe('the stored state', () => {
     assert.deepEqual([read(true), read('1'), read(1), read(null)], [true, false, false, false]);
     clearState(() => storage);
     assert.equal(storage.items.size, 0);
+  });
+
+  test('a product view is a place, with the unfolded items of the rail; hostile values never throw', () => {
+    const place: Place = { ...ENTRY_PLACE, product: 'relay', rail: ['zone:atacama', 'product:relay', 'zone:'], scroll: 64 };
+    assert.deepEqual(parseState(serializeState(withPlace(EMPTY_STATE, place))).place, place);
+    const read = (value: object): Place => parseState(JSON.stringify({ schema: STATE_SCHEMA, place: value, drafts: {} })).place;
+    assert.equal(read({ product: '<img onerror=x>' }).product, null, 'not an id');
+    assert.equal(read({ product: ['relay'] }).product, null, 'not a string');
+    assert.equal(read({ project: 'P-1', product: 'relay' }).product, null, 'a project is shown, not a product');
+    assert.equal(read({ product: 'relay', sheet: { kind: 'task', id: 'T-1' } }).product, null, 'a sheet is shown, not a product');
+    assert.equal(read({ rail: 'zone:atacama' }).rail, null, 'not a list');
+    assert.equal(read({ rail: Array.from({ length: 500 }, (_, index) => `product:p${index}`) }).rail?.length, 400, 'bounded');
+    for (const hostile of [{ product: { toString: null } }, { rail: [null, {}, [], 1e999] }, { product: '__proto__', rail: ['__proto__'] }]) {
+      assert.doesNotThrow(() => read(hostile));
+    }
+  });
+
+  test('a state of schema 1 still reads: its drafts and place stay, the products it unfolded on the entry screen go', () => {
+    const raw = JSON.stringify({ schema: 1, place: { project: 'P-7a7a', tab: 'board', task: null, scroll: 10, expanded: ['relay'] },
+      drafts: { 'N-1': { text: 'kept', picked: [], at: 5 } } });
+    const state = parseState(raw);
+    assert.equal(state.place.project, 'P-7a7a');
+    assert.equal(state.place.rail, null, 'the tree is folded as on a first visit');
+    assert.equal(state.drafts.get('N-1')?.text, 'kept');
+    assert.equal(JSON.parse(serializeState(state)).schema, 2, 'written again with the current schema');
   });
 
   test('a task or tab without a project is not a place: the entry screen', () => {

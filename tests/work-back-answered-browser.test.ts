@@ -156,6 +156,7 @@ describe('the way back inside a project', { skip }, () => {
       const page = await signIn(width);
       const phone = width < 600;
       await enterProjects(page, width);
+      await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
       await page.locator(`.work-entry-project[data-project="${OTHER_PROJECT}"]`).click();
       await page.locator('#work-tab-board').click();
       const card = page.locator(`#work-panel-board [data-task="${TASK}"]`);
@@ -199,9 +200,11 @@ describe('the way back inside a project', { skip }, () => {
       await page.locator('.work-entry-questions h2 .work-count').waitFor();
       await atLevel(page, 0);
       assert.deepEqual(await where(page), { projecting: true, entry: true, tab: null, sheet: false, path: '/', level: 0 });
-      await page.waitForFunction(id => document.activeElement?.getAttribute('data-project') === id, OTHER_PROJECT);
+      // The focus is on the row of the project's product in the overview.
+      await page.waitForFunction(() => document.activeElement?.getAttribute('data-product') === 'relay');
 
       // Back twice: sheet, tab, entry screen; the page is never left.
+      await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
       await page.locator(`.work-entry-project[data-project="${OTHER_PROJECT}"]`).click();
       await page.locator(`#work-panel-reprise`).waitFor();
       await page.locator('#work-tab-board').click();
@@ -215,6 +218,7 @@ describe('the way back inside a project', { skip }, () => {
       assert.deepEqual(await where(page), { projecting: true, entry: true, tab: null, sheet: false, path: '/', level: 0 });
 
       // Leaving Projects from a sheet takes the view's history entries back: the next Back is not a dead one.
+      await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
       await page.locator(`.work-entry-project[data-project="${OTHER_PROJECT}"]`).click();
       await page.locator('#work-tab-board').click();
       await card.click();
@@ -245,6 +249,7 @@ describe('the way back inside a project', { skip }, () => {
         // A reload inside a project keeps the history entry; the new page shows the project again on it rather than
         // stacking a second project entry, so Back still reaches the entry screen.
         await enterProjects(page, width);
+        await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
         await page.locator(`.work-entry-project[data-project="${OTHER_PROJECT}"]`).click();
         await atLevel(page, 1);
         await page.reload();
@@ -258,6 +263,7 @@ describe('the way back inside a project', { skip }, () => {
           if (route.request().postData()?.includes('"op":"project"')) await new Promise(resolve => setTimeout(resolve, 3000));
           await route.continue().catch(() => undefined);
         });
+        await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
         await page.locator(`.work-entry-project[data-project="${OTHER_PROJECT}"]`).click();
         await page.locator('#work-root .work-loading').waitFor();
         await page.keyboard.press('Escape');

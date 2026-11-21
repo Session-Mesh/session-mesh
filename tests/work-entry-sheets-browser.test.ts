@@ -184,6 +184,7 @@ describe('the sheets opened from the entry screen', { skip }, () => {
   test('a task in no project opened while a project is shown replaces it', { timeout: 300_000 }, async () => {
     const page = await signIn();
     await toEntry(page);
+    await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
     await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
     await page.locator('.work-project-head').waitFor();
     await toSessions(page);

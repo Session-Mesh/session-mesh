@@ -164,6 +164,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
         await page.locator('.work-entry-questions h2 .work-count').waitFor();
 
         // A draft in the project's Questions tab, under the second question; then the first task's sheet from the Board.
+        await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
         await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
         await page.locator('#work-tab-questions').click();
         await tabField(page, Q_SECOND).fill(DRAFT_ENTRY);
@@ -198,6 +199,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
         await escape(page);
         await page.locator('.work-entry-questions h2 .work-count').waitFor();
         await atLevel(page, 0);
+        await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
         await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
         await page.locator('#work-tab-questions').click();
         assert.equal(await tabField(page, Q_SECOND).inputValue(), DRAFT_ENTRY);
@@ -291,6 +293,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     const page = await signIn(1440, []);
     const { first: FIRST, titles: [TITLE_FIRST] } = SETS[1440];
     await toProjects(page, false);
+    await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
     await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
     await page.locator('#work-tab-board').click();
     await card(page, FIRST).scrollIntoViewIfNeeded();
@@ -322,6 +325,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
   test('a refused read of the history signs out: the drafts of the view go too', { timeout: 300_000 }, async () => {
     const page = await signIn(1440, []);
     await toProjects(page, false);
+    await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
     await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
     await page.locator('#work-tab-questions').click();
     await tabField(page, Q_GONE).fill('fictional refused draft');

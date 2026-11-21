@@ -93,7 +93,7 @@ describe('pending questions in the Projects view', { skip }, () => {
     assert.equal(await toggle(page).textContent(), `Pending questions${total}`);
     assert.equal(await page.locator('#work-entry-questions-body').isHidden(), true);
     const section = await page.locator('.work-entry-questions').boundingBox();
-    const product = await page.locator('.work-entry-toggle').first().boundingBox();
+    const product = await page.locator('.work-overview-product').first().boundingBox();
     assert.ok(section && section.height < 100, `the folded section is one line (${section?.height} px)`);
     assert.ok(product && product.y < 300, `the products are on the first screen (${product?.y} px)`);
     const forms = '.work-entry-questions textarea, .work-entry-questions .work-answer-form, .work-entry-questions .work-answer-area';
@@ -321,7 +321,7 @@ describe('pending questions in the Projects view', { skip }, () => {
     }));
     const error = page.locator('.work-entry-questions .work-error[data-kind="busy"]');
     await error.waitFor();
-    assert.ok(await page.locator('.work-entry-project', { hasText: 'Delivery rollout' }).count() > 0, 'the products are shown');
+    assert.ok(await page.locator('.work-overview-product[data-product="relay"]').count() > 0, 'the products are shown');
     await onlyReadCount(page);
     await page.waitForFunction(() => !(document.querySelector('#btn-projects .projects-question-badge') as HTMLElement).hidden,
       undefined, { timeout: 15_000 });
@@ -338,6 +338,7 @@ describe('pending questions in the Projects view', { skip }, () => {
     assert.equal(await toggle(page).count(), 0, 'nothing to unfold');
     assert.equal(await badge(page), null);
     assert.equal(await page.locator('#btn-projects').getAttribute('aria-describedby'), null);
+    await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
     await page.locator('.work-entry-project', { hasText: 'Delivery rollout' }).click();
     await page.locator('#work-tab-questions').click();
     assert.equal(await page.locator('#work-panel-questions .work-empty').textContent(), 'No question about this project or its tasks.');
