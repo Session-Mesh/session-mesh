@@ -124,6 +124,12 @@ function fakeHelper(directory: string): string {
       + `{"a":{"backend":"claude","id":"a","context_revision":"0","root":"/x"},"b":{"backend":"claude","id":"b",`
       + `"context_revision":"0"},"confirmation":"ask"}]}}'; exit 0`,
     revision: `echo '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":"/x","global":"ask","pairs":[]}}'; exit 0`,
+    // A duplicated `data` (JSON keeps the last one, the relayed bytes hold both), `version`/`ok` of the wrong type,
+    // and a known code under another status than the helper gives it.
+    dupdata: `echo '{"http_status":200,"version":1,"ok":true,"data":{"path":"/x"},"data":{"version":1,"revision":0,`
+      + `"global":"ask","pairs":[]}}'; exit 0`,
+    types: `echo '{"http_status":503,"version":true,"ok":0,"code":"backend-store-busy"}'; exit 1`,
+    codestatus: `echo '{"http_status":404,"version":1,"ok":false,"code":"consent-revision-conflict"}'; exit 1`,
     // A helper that answers after 2 s (the queue test), or after 6 s with its own coded busy answer (the store's
     // SQLite busy timeout is 5 s: the server must wait longer than that).
     hold: `sleep 2; echo '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":0,"global":"ask","pairs":[]}}'; exit 0`,
@@ -293,7 +299,8 @@ describe('fail closed', {skip}, () => {
   for (const [name, route] of [['garbage', '/api/accounts/consent'], ['mismatch', '/api/accounts/consent'],
     ['exitcode', '/api/accounts/consent'], ['status', '/api/accounts/consent'], ['extra', '/api/accounts/consent'],
     ['roots', '/api/accounts/profiles'], ['nonewline', '/api/accounts/consent'], ['beside', '/api/accounts/profiles'],
-    ['secret', '/api/accounts/consent'], ['pairpath', '/api/accounts/consent'], ['revision', '/api/accounts/consent']]) {
+    ['secret', '/api/accounts/consent'], ['pairpath', '/api/accounts/consent'], ['revision', '/api/accounts/consent'],
+    ['dupdata', '/api/accounts/consent'], ['types', '/api/accounts/consent'], ['codestatus', '/api/accounts/consent']]) {
     test(`a helper answer that is not its envelope (${name}) is 503, never relayed`, async () => {
       mode(name!);
       const reply = await call(fake, 'GET', route!);
@@ -382,5 +389,20 @@ describe('scope', {skip}, () => {
     });
     assert.deepEqual(callers, ['api_accounts']);
     assert.doesNotMatch(source, /"profiles\.resolve"/, 'profiles.resolve is never named by the server');
+  });
+
+  test('the server knows each refusal code under the status the helper gives it, no more and no less', () => {
+    const ocaml = fs.readFileSync(path.join(REPO, 'ocaml/bin/mesh_profile_main.ml'), 'utf8');
+    const mapping = /let http_status = function([\s\S]*?)\| Error _ -> 503/.exec(ocaml)?.[1] ?? '';
+    const helper: Record<string, number> = {};
+    for (const arm of mapping.split(/\|\s*Error\b/).slice(1)) {
+      const status = Number(/->\s*(\d{3})/.exec(arm)?.[1]);
+      for (const code of arm.matchAll(/"([a-z0-9-]+)"/g)) helper[code[1]!] = status;
+    }
+    const source = fs.readFileSync(path.join(REPO, 'server.py'), 'utf8');
+    const block = /_ACCOUNTS_CODE_STATUS = \{([\s\S]*?)\}/.exec(source)?.[1] ?? '';
+    const server = Object.fromEntries([...block.matchAll(/"([a-z0-9-]+)": (\d{3})/g)].map(m => [m[1], Number(m[2])]));
+    assert.ok(Object.keys(helper).length >= 14, JSON.stringify(helper));
+    assert.deepEqual(server, helper);
   });
 });

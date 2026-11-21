@@ -4698,6 +4698,15 @@ _ACCOUNTS_PUBLIC_PROFILE = {"id", "label", "backend", "enabled", "context_revisi
 _ACCOUNTS_POLICY, _ACCOUNTS_PAIR = {"version", "revision", "global", "pairs"}, {"a", "b", "confirmation"}
 _ACCOUNTS_ACCOUNT, _ACCOUNTS_BACKENDS = {"backend", "id", "context_revision"}, ("claude", "codex", "opencode-v2", "pi")
 _ACCOUNTS_CONFIRMATIONS = ("ask", "skip")
+# A refusal's code and status as the helper pairs them (http_status in ocaml/bin/mesh_profile_main.ml; any other
+# code is 503). tests/accounts-routes.test.ts compares the two.
+_ACCOUNTS_CODE_STATUS = {
+    "request-too-large": 413,
+    "consent-revision-conflict": 409, "profile-registry-changed": 409, "profile-context-changed": 409,
+    "consent-rule-capacity": 409, "consent-revision-exhausted": 409,
+    "unknown-profile": 404, "profiles-unconfigured": 404,
+    "invalid-request": 400, "unsupported-request-version": 400, "invalid-account-pair": 400,
+    "invalid-account-reference": 400, "profile-backend-mismatch": 400, "unsupported-operation": 400}
 _ACCOUNTS_CODE_RE = re.compile(r"[a-z0-9-]{1,64}")
 
 
@@ -4743,20 +4752,31 @@ def _profile_envelope(op, code, out):
     if not out.endswith(b"\n"):
         return None
     try:
-        reply = json.loads(out)
+        reply = json.loads(out, object_pairs_hook=_accounts_unique_keys)
     except (ValueError, RecursionError):
         return None
-    if not isinstance(reply, dict) or reply.get("version") != 1 or reply.get("ok") not in (True, False):
+    if not isinstance(reply, dict) or type(reply.get("version")) is not int or reply["version"] != 1:
         return None
-    ok, status = reply["ok"] is True, reply.get("http_status")
+    if type(reply.get("ok")) is not bool:
+        return None
+    ok, status = reply["ok"], reply.get("http_status")
     if set(reply) != {"http_status", "version", "ok", "data" if ok else "code"} or type(status) is not int:
         return None
     if status not in _ACCOUNTS_STATUSES or ok != (status == 200) or code != (0 if ok else 1):
         return None
     if not ok:
-        return reply if isinstance(reply["code"], str) and _ACCOUNTS_CODE_RE.fullmatch(reply["code"]) else None
+        code_text = reply["code"]
+        known = isinstance(code_text, str) and _ACCOUNTS_CODE_RE.fullmatch(code_text)
+        return reply if known and _ACCOUNTS_CODE_STATUS.get(code_text, 503) == status else None
     shape = _public_listing if op == "profiles.list" else _consent_policy   # every other route is a consent.* op
     return reply if shape(reply["data"]) else None
+
+
+def _accounts_unique_keys(pairs):
+    """A JSON object without a repeated name: json.loads keeps the last value, the relayed bytes would hold both."""
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError("duplicate key")
+    return dict(pairs)
 
 
 def _public_listing(data):
