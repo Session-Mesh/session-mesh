@@ -211,10 +211,11 @@ body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--mono); ove
    pane on the right and, when it is taller, at the top, so the prompt and the last rows stay
    visible. The banner offers to take the size back. */
 .pane-body .term.pty-tall .xterm { position: absolute; left: 8px; bottom: 0; height: auto; }
-.pane-body .size-banner { position: absolute; top: 6px; right: 18px; z-index: 3; max-width: calc(100% - 36px);
+.pane-body .size-banner, .pane-body .limited-banner { position: absolute; top: 6px; right: 18px; z-index: 3; max-width: calc(100% - 36px);
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 6px 4px 10px; border-radius: 6px;
   border: 1px solid var(--accent); background: var(--panel); color: var(--fg); font-size: 12px; box-shadow: 0 2px 8px #0008; }
-.pane-body .size-banner[hidden], .pane-body .term[hidden] ~ .size-banner { display: none; }
+.pane-body .size-banner[hidden], .pane-body .term[hidden] ~ .size-banner,
+.pane-body .limited-banner[hidden], .pane-body .term[hidden] ~ .limited-banner { display: none; }
 @media (hover: none) { .pane-body .to-bottom { width: 44px; height: 44px; font-size: 22px; right: 20px; bottom: 14px; } }
 .pane-body .empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; color: var(--mute); gap: 12px; padding: 16px; }
 .grip { background: var(--line); cursor: col-resize; flex: none; width: 5px; transition: background .1s; touch-action: none; }
@@ -397,10 +398,12 @@ dialog input:focus { outline: none; border-color: var(--accent); }
 .mail-badge[hidden] { display: none; }
 .projects-question-badge { display: inline-block; min-width: 18px; height: 18px; margin-inline-start: 6px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--wait); color: var(--bg); font-size: 11px; line-height: 18px; font-weight: 700; text-align: center; vertical-align: middle; }
 .projects-question-badge[hidden] { display: none; }
+.pane-head .p-actions [data-act="dictate"]::before,
 .pane-head .p-actions [data-act="compose"]::before,
 .pane-head .p-actions [data-act="board"]::before,
 .pane-head .p-actions [data-act="more"]::after,
 .pane-head .p-actions [data-act="close"]::after { position: absolute; inset: 0; display: grid; place-items: center; }
+.pane-head .p-actions [data-act="dictate"]::before { content: "🎙"; font-size: 23px; }
 .pane-head .p-actions [data-act="compose"]::before { content: "✉"; font-size: 23px; }
 .pane-head .p-actions [data-act="board"]::before { content: "✎"; font-size: 24px; }
 .pane-head .p-actions [data-act="more"]::after { content: "⋯"; font-size: 26px; line-height: 1; }
@@ -1446,3 +1449,34 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .row-retry:hover, .row-retry:focus-visible { color: var(--fg); }
 .vpad { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .dot.pending { animation: none; } }
+
+#dlg-compose .row { flex-wrap: wrap; }
+/* Blur cancellation must not move a close button between pointer down and up. */
+#dictation-status { overflow-wrap: anywhere; min-height: 3em; }
+#dlg-compose .dictation-auto { display: flex; align-items: baseline; gap: .5em; overflow-wrap: anywhere; }
+#dlg-compose #dictation-auto-send { width: auto; flex: none; margin: 0; padding: 0; }
+#dictation-auto-warning, #dictation-preference-status { overflow-wrap: anywhere; }
+#compose-mic { touch-action: none; user-select: none; -webkit-user-select: none; min-height: 44px; min-width: 44px; }
+#compose-mic[aria-disabled="true"] { opacity: .55; }
+#compose-mic[aria-pressed="true"] { outline: 2px solid var(--accent); }
+.p-native-mic { touch-action: none; user-select: none; -webkit-user-select: none; min-width: 44px; min-height: 44px; flex: none; }
+.p-native-mic[aria-disabled="true"] { opacity: .55; }
+.p-native-mic[aria-pressed="true"] { outline: 2px solid var(--accent); color: var(--accent); }
+.p-inline-dictation-status { margin: 0; padding: 3px 8px; min-height: 1.5em; font-size: .8rem; overflow-wrap: anywhere; color: var(--mute); }
+.p-inline-dictation-status[data-state="recording"] { color: var(--accent); }
+.dictation-row { padding: 8px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.dictation-row pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dictation-label { font-size: .85em; overflow-wrap: anywhere; }
+#dictation-jobs { flex: none; max-height: 30vh; overflow: auto; background: var(--panel); }
+#dictation-jobs pre { max-height: 6em; overflow: auto; }
+.p-dictation { max-width: min(35vw, 14em); white-space: normal; }
+.dictation-encoder { position: fixed; left: -10000px; top: 0; width: 800px; height: 40px; pointer-events: none; }
+.dictation-label[data-state="processing"]::before, #dictation-status[data-state="processing"]::before {
+  content: ""; display: inline-block; width: .7em; height: .7em; margin-right: .4em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: dictation-spin 1s linear infinite;
+}
+@keyframes dictation-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .dictation-label[data-state="processing"]::before, #dictation-status[data-state="processing"]::before { animation: none; }
+}

@@ -194,6 +194,7 @@
       </div>
       <span class="p-cwd mute"></span>
       <div class="p-actions">
+        <button type="button" class="btn ghost sm p-native-mic" data-act="dictate" data-i18n-aria-label="dictation.holdLabel" data-i18n-title="dictation.holdHint" aria-pressed="false" aria-disabled="true">🎙</button>
         <details class="p-provenance"><summary aria-label="Pane identity" data-i18n-aria-label="pane.identity" data-i18n="pane.info">Info</summary><div class="p-provenance-body"></div></details>
         <button type="button" class="btn ghost sm p-questions" data-act="questions" hidden><span aria-hidden="true">?</span><span class="p-questions-count" aria-hidden="true"></span></button>
         <button type="button" class="btn ghost sm p-primary" data-act="compose" title="Mailbox: messages between agents for this session" aria-label="Open the mailbox of this session" data-i18n-title="pane.mailboxTitle" data-i18n-aria-label="pane.mailboxAria"><span data-i18n="pane.mailbox">Mailbox</span><span class="mail-badge" hidden><span class="mail-badge-count" aria-hidden="true"></span><span class="sr-only" role="status"></span></span></button>
@@ -203,6 +204,7 @@
         <div class="p-menu" role="menu" aria-label="Pane actions" data-i18n-aria-label="pane.menu" hidden></div>
       </div>
     </div>
+    <p class="p-inline-dictation-status" role="status" aria-live="polite" aria-atomic="true" hidden></p>
     <div class="pane-body">
       <div class="demo-tools" hidden>
         <label class="demo-switch"><span data-i18n="demo.label">Demo</span><select aria-label="Choose a demo of this session" data-i18n-aria-label="demo.chooseAria"></select></label>
@@ -211,6 +213,7 @@
       <div class="demo-offer" hidden><span></span><button type="button" class="btn sm" data-i18n="common.show">Show</button></div>
       <div class="term" hidden></div>
       <div class="size-banner" role="status" hidden><span data-i18n="terminal.sizeForeign">Terminal sized by another device</span><button type="button" class="btn sm" data-i18n="terminal.sizeTake">Take the size back</button></div>
+      <div class="limited-banner" role="status" hidden><span data-i18n="terminal.limited">Live terminal in limited mode: automatic sizing, queued input and dictation are unavailable.</span><button type="button" class="btn sm" data-i18n="terminal.limitedResize">Resize to this pane</button><button type="button" class="btn sm limited-keyboard" hidden data-i18n="terminal.limitedKeyboard">Use live keyboard</button></div>
       <button class="to-bottom" type="button" title="Back to the bottom" aria-label="Back to the bottom" data-i18n-title="pane.toBottom" data-i18n-aria-label="pane.toBottom" tabindex="-1">↓</button>
       <iframe class="web" hidden referrerpolicy="no-referrer"></iframe>
       <div class="detail" hidden></div>
@@ -383,11 +386,17 @@
 <dialog id="dlg-compose">
   <h2 data-i18n="compose.title">Write in the terminal</h2>
   <textarea id="compose-text" rows="9" placeholder="Multi-line text: sent in one block, like a paste." data-i18n-placeholder="compose.placeholder"></textarea>
+  <p id="dictation-status" role="status" aria-live="polite" aria-atomic="true"></p>
+  <label class="dictation-auto"><input type="checkbox" id="dictation-auto-send" aria-describedby="dictation-auto-warning dictation-preference-status" disabled> <span data-i18n="dictation.autoSend"></span></label>
+  <p id="dictation-auto-warning" class="mute" data-i18n="dictation.autoWarning"></p>
+  <p id="dictation-preference-status" role="status" aria-live="polite"></p>
   <div class="row">
     <span class="mute hint-keys" data-i18n="compose.hint">Ctrl+Enter: send · pasting an image or a file inserts its path</span>
     <button type="button" class="btn ghost" id="compose-attach" title="Attach: file, photo, recording" data-i18n-title="compose.attachTitle">📎</button>
+    <button type="button" class="btn ghost" id="dictation-discard" data-i18n="dictation.discard" disabled></button>
     <button type="button" class="btn ghost" data-close-dialog data-i18n="common.cancel">Cancel</button>
     <button type="button" class="btn" id="compose-insert" data-i18n="compose.insert">Insert</button>
+    <button type="button" class="btn" id="compose-mic" data-i18n-aria-label="dictation.holdLabel" aria-pressed="false" aria-disabled="true" aria-describedby="dictation-status" data-i18n="dictation.microphone"></button>
     <button type="button" class="btn primary" id="compose-send" data-i18n="compose.send">Send ⏎</button>
   </div>
 </dialog>

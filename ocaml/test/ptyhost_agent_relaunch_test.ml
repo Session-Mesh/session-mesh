@@ -147,10 +147,17 @@ let start_again ?(meta = [ ("nonce", `String "n1"); ("account", `String "b") ])
     ]
 
 (* An attachment, and everything it has received so far. *)
-let attach fixture =
+let attach ?created fixture =
   let socket = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.connect socket (Unix.ADDR_UNIX fixture.socket_path);
-  let payload = {|{"op":"attach","name":"relaunch","rows":24,"cols":80}|} in
+  let payload =
+    Yojson.Basic.to_string
+      (`Assoc
+         ([ ("op", `String (if Option.is_some created then "attach_if" else "attach"));
+            ("name", `String "relaunch"); ("rows", `Int 24); ("cols", `Int 80) ]
+         @ Option.fold ~none:[]
+             ~some:(fun value -> [ ("created", value); ("size", `String "claim") ]) created))
+  in
   let head = Bytes.create 5 in
   Bytes.set head 0 'C';
   Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
@@ -183,6 +190,117 @@ let received socket =
   drain ();
   Unix.clear_nonblock socket;
   Buffer.contents buffer
+
+let control socket kind fields =
+  let payload = Yojson.Basic.to_string (`Assoc fields) in
+  let head = Bytes.create 5 in
+  Bytes.set head 0 kind;
+  Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
+  let bytes = Bytes.to_string head ^ payload in
+  ignore (Unix.write_substring socket bytes 0 (String.length bytes))
+
+let await_size socket rows owner =
+  Unix.setsockopt_float socket Unix.SO_RCVTIMEO 5.;
+  let rec read () =
+    let head = read_exactly socket 5 in
+    let payload = read_exactly socket (Int32.to_int (Bytes.get_int32_be head 1)) in
+    if Bytes.get head 0 = 'S' then (
+      let size = Yojson.Basic.from_string (Bytes.to_string payload) in
+      if member "rows" size <> `Int rows || member "owner" size <> `String owner then read ())
+    else read ()
+  in
+  read ()
+
+let await_size_reads_matching_frame () =
+  let size rows owner = Printf.sprintf {|{"rows":%d,"owner":"%s"}|} rows owner in
+  List.iter
+    (fun (label, frames, expected) ->
+      let reader, writer = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      Fun.protect
+        ~finally:(fun () -> Unix.close reader; Unix.close writer)
+        (fun () ->
+          List.iter
+            (fun (kind, payload) ->
+              let head = Bytes.create 5 in
+              Bytes.set head 0 kind;
+              Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
+              let wire = Bytes.to_string head ^ payload in
+              expect "probe frame written"
+                (Unix.write_substring writer wire 0 (String.length wire)
+                = String.length wire))
+            frames;
+          Unix.shutdown writer Unix.SHUTDOWN_SEND;
+          let matched =
+            try
+              await_size reader 26 "you";
+              true
+            with Failure message when message = "the host closed the connection" -> false
+          in
+          expect label (matched = expected)))
+    [
+      ("C is not a size barrier", [ ('C', "{}") ], false);
+      ("empty D is not a size barrier", [ ('D', "") ], false);
+      ("different rows are not the requested size", [ ('S', size 25 "you") ], false);
+      ("different owner is not the requested size", [ ('S', size 26 "other") ], false);
+      ("matching S completes", [ ('S', size 26 "you") ], true);
+      ( "C, empty D and mismatching S are skipped",
+        [ ('C', "{}"); ('D', ""); ('S', size 25 "you");
+          ('S', size 26 "other"); ('S', size 26 "you") ],
+        true );
+    ]
+
+let conditional_attachment_is_retired () =
+  with_host (fun fixture ->
+      let before = new_agent fixture in
+      let old = attach ~created:(member "created" before) fixture in
+      let lease dirty = [ ("client_id", `String "reused-client-identifier"); ("dirty", `Bool dirty) ] in
+      control old 'H' (lease true);
+      control old 'R' [ ("rows", `Int 26); ("cols", `Int 81); ("size", `String "take") ];
+      await_size old 26 "you";
+      let legacy = attach fixture in
+      let stopped = stop_agent fixture (member "created" before) in
+      expect "stopped" (member "ok" stopped = `Bool true);
+      let fresh = attach ~created:(member "created" stopped) fixture in
+      Fun.protect
+        ~finally:(fun () -> List.iter Unix.close [old; legacy; fresh])
+        (fun () ->
+          let stale = Filename.concat fixture.home "stale-input" in
+          (try type_in old ("printf stale > " ^ stale ^ "\r")
+           with Unix.Unix_error ((Unix.EPIPE | Unix.ECONNRESET), _, _) -> ());
+          let barrier = Filename.concat fixture.home "fresh-input" in
+          type_in fresh ("printf fresh > " ^ barrier ^ "\r");
+          ignore (wait_until "fresh conditional input" 5. (fun () -> Sys.file_exists barrier));
+          expect "old conditional D cannot enter the new incarnation" (not (Sys.file_exists stale));
+          let dirty_reason () =
+            member "reason" (send fixture [ ("op", `String "notify_if"); ("name", `String "relaunch");
+                ("created", member "created" stopped); ("agent", `String "claude");
+                ("notification_id", `String "fresh-notification"); ("through_seq", `Int 1);
+                ("count", `Int 1); ("idle_since", `Float 1e12) ])
+          in
+          expect "the old conditional dirty lease retires" (dirty_reason () <> `String "human_dirty");
+          expect "same PTY, legacy and fresh attachments only"
+            (member "pid" (the_session fixture) = member "pid" before
+             && member "attached" (the_session fixture) = `Int 2);
+          control fresh 'H' (lease true);
+          control fresh 'R' [ ("rows", `Int 41); ("cols", `Int 91); ("size", `String "take") ];
+          await_size fresh 41 "you";
+          List.iter
+            (fun send -> try send () with Unix.Unix_error ((Unix.EPIPE | Unix.ECONNRESET), _, _) -> ())
+            [ (fun () -> control old 'H' (lease false));
+              (fun () -> control old 'R' [ ("rows", `Int 65); ("cols", `Int 105); ("size", `String "take") ]) ];
+          control fresh 'R' [ ("rows", `Int 42); ("cols", `Int 92); ("size", `String "keep") ];
+          await_size fresh 42 "you";
+          expect "old H(false) cannot clear the fresh lease" (dirty_reason () = `String "human_dirty");
+          control fresh 'H' (lease false);
+          control fresh 'R' [ ("rows", `Int 43); ("cols", `Int 92); ("size", `String "keep") ];
+          await_size fresh 43 "you";
+          expect "the fresh client can release its own lease" (dirty_reason () <> `String "human_dirty");
+          let legacy_marker = Filename.concat fixture.home "legacy-input" in
+          type_in legacy ("printf legacy > " ^ legacy_marker ^ "\r");
+          ignore (wait_until "legacy attachment still types" 5. (fun () -> Sys.file_exists legacy_marker));
+          expect "the new incarnation restarts under the other account"
+            (member "ok" (start_again fixture (member "created" stopped)) = `Bool true);
+          started fixture 2))
 
 let same_terminal () =
   with_host (fun fixture ->
@@ -353,6 +471,7 @@ let pending_launch_is_dropped () =
            (log_lines fixture)))
 
 let () =
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   host_argv := [| Sys.argv.(1) |];
   Alcotest.run
     ~argv:
@@ -363,8 +482,12 @@ let () =
     [
       ( "stop_agent_if",
         [
+          Alcotest.test_case "await_size waits for the requested S" `Quick
+            await_size_reads_matching_frame;
           Alcotest.test_case "the agent restarts in the same terminal" `Slow
             same_terminal;
+          Alcotest.test_case "conditional attachments retire, legacy attachments stay" `Slow
+            conditional_attachment_is_retired;
           Alcotest.test_case "an agent that ignores SIGHUP is killed" `Slow
             stubborn_agent_is_killed;
           Alcotest.test_case "refusals signal nothing" `Slow

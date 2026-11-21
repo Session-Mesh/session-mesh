@@ -29,6 +29,7 @@ import shutil
 import signal
 import stat
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -37,6 +38,7 @@ from typing import NamedTuple
 
 import aiohttp
 from aiohttp import web
+from yarl import URL
 
 import agentmcp
 import agentmail
@@ -350,6 +352,11 @@ async def api_logout_all(request):
     ELEVATION_FAILURES.clear()
     for ws in list(request.app["sockets"]):
         await ws.close(code=aiohttp.WSCloseCode.POLICY_VIOLATION, message=b"logout")
+    try:
+        await _sync_dictation_principal(request.app)
+    except web.HTTPServiceUnavailable:
+        # Cookie revocation succeeded; dictation requests still require a successful sync.
+        print("session-mesh: dictation principal sync unavailable; requests remain gated", file=sys.stderr, flush=True)
     resp = web.json_response({"ok": True, "generation": generation})
     resp.del_cookie(COOKIE)
     return resp
@@ -374,6 +381,284 @@ async def login_post(request):
         raise resp
     await asyncio.sleep(1)
     raise web.HTTPFound("/login?bad=1")
+
+
+# ---------------------------------------------------------------- typed dictation compatibility boundary
+
+DICTATION_INTERNAL_RESPONSE_MAX_BYTES = 128 * 1024
+
+
+def _dictation_error(code, status):
+    messages = {"disabled": "Dictation is disabled.", "unavailable": "Dictation is unavailable.",
+                "invalid_request": "Invalid dictation request.", "stale_session": "The session is no longer live."}
+    return web.json_response({"error": {"code": code, "message": messages[code]}}, status=status,
+                             headers={"Cache-Control": "no-store"})
+
+
+async def start_dictation(app):
+    app["dictation_disabled_reason"] = "not_configured"
+    if not os.environ.get("MESH_WHISPER_URL"):
+        return
+    reason = "worker_failed"
+    try:
+        app["dictation_directory"] = tempfile.TemporaryDirectory(prefix="mesh-dictation-", dir="/tmp")
+        app["dictation_secret"] = secrets.token_hex(32)
+        app["dictation_principal"] = _dictation_principal(app)
+        app["dictation_revision"] = 0
+        app["dictation_principal_lock"] = asyncio.Lock()
+        socket = str(Path(app["dictation_directory"].name) / "worker.sock")
+        node = os.environ.get("MESH_NODE", "node")
+        if "MESH_NODE" in os.environ and not Path(node).is_absolute():
+            reason = "invalid_configuration"
+            raise ValueError()
+        reason = "runtime_unavailable"
+        app["dictation_worker"] = await asyncio.create_subprocess_exec(
+            node, str(ROOT / "backend" / "dictation-service.cjs"),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL, limit=128,
+            env={k: v for k, v in os.environ.items() if k == "PATH" or k.startswith("MESH_WHISPER_")})
+        reason = "worker_failed"
+        worker = app["dictation_worker"]
+        pipe_failed = False
+        try:
+            worker.stdin.write((json.dumps({"secret": app["dictation_secret"], "socket": socket,
+                                           "inventory": str(ptyhost.SOCK), "parent": os.getpid(),
+                                           "principal": app["dictation_principal"]}) + "\n").encode())
+            await asyncio.wait_for(worker.stdin.drain(), 1)
+        except (BrokenPipeError, ConnectionResetError):
+            pipe_failed = True
+        # An early configuration rejection may already have closed stdin. Read
+        # only the bounded private handshake, never stderr or exception text.
+        handshake = await asyncio.wait_for(worker.stdout.readline(), 5)
+        if pipe_failed or handshake != b"ready\n":
+            if handshake == b"invalid_configuration\n":
+                reason = "invalid_configuration"
+            raise ValueError()
+        app["dictation_client"] = aiohttp.ClientSession(
+            connector=aiohttp.UnixConnector(path=socket, limit=33),  # 32 public transfers + principal control
+            cookie_jar=aiohttp.DummyCookieJar(), trust_env=False, auto_decompress=False,
+            timeout=aiohttp.ClientTimeout(total=20))
+        app["dictation_capacity"] = asyncio.Semaphore(32)
+        app["dictation_monitor"] = asyncio.create_task(_watch_dictation(app, worker))
+    except asyncio.CancelledError:
+        await stop_dictation(app)
+        raise
+    except Exception as error:
+        if isinstance(error, asyncio.TimeoutError):
+            reason = "startup_timeout"
+        _disable_dictation(app, reason)
+        await stop_dictation(app)
+    except BaseException:
+        await stop_dictation(app)
+        raise
+
+
+def _disable_dictation(app, reason):
+    # Only internally selected closed codes, never exception text or child output.
+    app["dictation_disabled_reason"] = reason
+    print("session-mesh: dictation disabled: " + reason, file=sys.stderr, flush=True)
+
+
+async def _watch_dictation(app, worker):
+    await worker.wait()
+    if app.get("dictation_worker") is worker:
+        _disable_dictation(app, "worker_failed")
+        await stop_dictation(app)
+
+
+async def stop_dictation(app):
+    cleanup = app.get("dictation_cleanup")
+    if cleanup is None:
+        if not any(app.get(key) for key in ("dictation_client", "dictation_worker",
+                                            "dictation_directory", "dictation_monitor")):
+            return
+        # One tracked task retains detached resources across cancellation and
+        # concurrent stops. Every caller joins it before propagating cancellation.
+        monitor = app.get("dictation_monitor")
+        if monitor is asyncio.current_task():
+            monitor = None
+        cleanup = asyncio.create_task(_close_dictation(app, monitor))
+        app["dictation_cleanup"] = cleanup
+    cancelled = False
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError()
+    cleanup.result()
+
+
+async def _close_dictation(app, monitor):
+    # Detach only in the cleanup task that retains and closes these resources.
+    client = app.pop("dictation_client", None)
+    worker = app.pop("dictation_worker", None)
+    directory = app.pop("dictation_directory", None)
+    app.pop("dictation_monitor", None)
+    app.pop("dictation_capacity", None)
+    try:
+        if monitor:
+            monitor.cancel()
+            await asyncio.wait({monitor}, timeout=1)
+    finally:
+        try:
+            if client:
+                with contextlib.suppress(asyncio.TimeoutError, OSError):
+                    await asyncio.wait_for(client.close(), 1)
+        finally:
+            try:
+                if worker:
+                    if worker.stdin:
+                        worker.stdin.close()
+                    try:
+                        await asyncio.wait_for(worker.wait(), 3)
+                    except asyncio.TimeoutError:
+                        pass
+                    finally:
+                        if worker.returncode is None:
+                            with contextlib.suppress(ProcessLookupError):
+                                worker.kill()
+                            with contextlib.suppress(asyncio.TimeoutError):
+                                await asyncio.wait_for(worker.wait(), 1)
+            finally:
+                if directory:
+                    with contextlib.suppress(OSError):
+                        directory.cleanup()
+                app.pop("dictation_cleanup", None)
+
+
+def _dictation_principal(app):
+    authenticated = "mesh:" + str(GENERATION.current())
+    return hmac.new(bytes.fromhex(app["dictation_secret"]), authenticated.encode(), hashlib.sha256).hexdigest()
+
+
+async def _sync_dictation_principal(app):
+    client = app.get("dictation_client")
+    if client is None:
+        return
+    async with app["dictation_principal_lock"]:
+        principal = _dictation_principal(app)
+        if principal != app["dictation_principal"]:
+            app["dictation_revision"] += 1
+            headers = {"X-Mesh-Bridge": app["dictation_secret"], "X-Mesh-Principal": principal,
+                       "Content-Type": "application/json"}
+            try:
+                status, _ = await _dictation_exchange(client, headers, "POST", "/internal/principal",
+                                                     json.dumps({"revision": app["dictation_revision"]}).encode())
+            except (asyncio.TimeoutError, aiohttp.ClientError, OSError, ValueError):
+                raise web.HTTPServiceUnavailable() from None
+            if status != 200:
+                raise web.HTTPServiceUnavailable()
+            app["dictation_principal"] = principal
+
+
+async def _dictation_live(name, created):
+    listed = await host({"op": "list"})
+    if not _valid_ptyhost_list(listed):
+        raise web.HTTPServiceUnavailable()
+    return any(item["name"] == name and item["created"] == created for item in listed)
+
+
+async def _dictation_exchange(client, headers, method, path, data):
+    # Preserve the raw operation for typed validation, without URL normalization.
+    if client.closed:
+        raise web.HTTPServiceUnavailable()
+    async with client.request("GET" if method == "HEAD" else method,
+                              URL("http://dictation" + path, encoded=True), headers=headers,
+                              data=data, allow_redirects=False) as response:
+        payload = bytearray()
+        async for chunk in response.content.iter_chunked(65536):
+            if len(payload) + len(chunk) > DICTATION_INTERNAL_RESPONSE_MAX_BYTES:
+                raise ValueError("Dictation response limit")
+            payload.extend(chunk)
+        return response.status, json.loads(payload)
+
+
+def _dictation_internal_headers(headers, prepared):
+    internal = [(key, value) for key, value in headers if key.lower() != "content-type"]
+    internal.extend((("Content-Type", "application/json"), ("X-Mesh-Preparation", prepared["preparation"])))
+    return internal
+
+
+async def _dictation_transfer(request, headers, exchange):
+    admission = request.method == "POST" and request.path == "/api/transcribe"
+
+    def check_authority():
+        if not authed(request) or _dictation_principal(request.app) != dict(headers)["X-Mesh-Principal"]:
+            raise web.HTTPUnauthorized()
+
+    check_authority()
+    if admission:
+        names, dates = request.headers.getall("X-Mesh-Session", []), request.headers.getall("X-Mesh-Created", [])
+        if len(names) != 1 or len(dates) != 1 or not NAME_RE.fullmatch(names[0]) or not dates[0].strip():
+            return _dictation_error("invalid_request", 400)
+        try:
+            created = float(dates[0])
+        except ValueError:
+            return _dictation_error("invalid_request", 400)
+        if not math.isfinite(created):
+            return _dictation_error("invalid_request", 400)
+        live = await _dictation_live(names[0], created)
+        check_authority()
+        if not live:
+            return _dictation_error("stale_session", 409)
+    status, payload = await exchange(request.method, request.rel_url.raw_path, request.content.iter_chunked(65536))
+    check_authority()
+    if admission and status == 202:
+        # Matching attempts share a preparation. A failed attempt must leave it
+        # for another attempt to commit, or for the worker's 15-second expiry.
+        prepared = payload
+        live = await _dictation_live(names[0], created)
+        check_authority()
+        if not live:
+            return _dictation_error("stale_session", 409)
+        internal = _dictation_internal_headers(headers, prepared)
+        status, payload = await exchange("POST", "/internal/commit/" + prepared["job"]["job_id"], b"{}", internal)
+        check_authority()
+        if status == 200:
+            status = 202
+    return web.json_response(payload, status=status, headers={"Cache-Control": "no-store"})
+
+
+async def api_dictation(request):
+    # Existing auth middleware owns browser admission. No document or session
+    # capability is extended by this adapter.
+    if (not same_origin(request) or len(request.headers.getall("Origin", [])) > 1
+            or len(request.headers.getall("Host", [])) != 1):
+        raise web.HTTPForbidden()
+    # Reject worker-forbidden raw syntax before streaming a body: an immediate
+    # private rejection can otherwise race the upload and mask its 400 as EPIPE.
+    if (request.query_string or request.headers.getall("Content-Encoding", [])
+            or re.search(r"[?#%\\]", request.rel_url.raw_path)):
+        return _dictation_error("invalid_request", 400)
+    client = request.app.get("dictation_client")
+    if client is None:
+        if request.method in ("GET", "HEAD") and request.path == "/api/transcribe/config":
+            return web.json_response({"enabled": False, "disabled_reason": request.app["dictation_disabled_reason"]},
+                                     headers={"Cache-Control": "no-store"})
+        return _dictation_error("disabled", 503)
+    headers = [("X-Mesh-Bridge", request.app["dictation_secret"]),
+               ("X-Mesh-Principal", _dictation_principal(request.app))]
+    # Closed whitelist preserves duplicate public metadata for typed rejection;
+    # caller-supplied internal context is never forwarded.
+    for name in ("Content-Type", "X-Mesh-Dictation-Client", "X-Mesh-Session",
+                 "X-Mesh-Created", "X-Mesh-Request-Id"):
+        headers.extend((name, value) for value in request.headers.getall(name, []))
+    async def exchange(method, path, data, selected=headers):
+        return await _dictation_exchange(client, selected, method, path, data)
+    capacity = request.app["dictation_capacity"]
+    try:
+        await asyncio.wait_for(capacity.acquire(), 0.05)
+    except asyncio.TimeoutError:
+        return _dictation_error("unavailable", 503)
+    try:
+        await _sync_dictation_principal(request.app)
+        return await _dictation_transfer(request, headers, exchange)
+    except (asyncio.TimeoutError, aiohttp.ClientError, OSError, ValueError, web.HTTPServiceUnavailable):
+        return _dictation_error("unavailable", 503)
+    finally:
+        capacity.release()
 
 
 # ---------------------------------------------------------------- ptyhost
@@ -5789,11 +6074,19 @@ def releases_human_input(text):
 
 def attach_supports(reply, capability):
     """Fail closed for optional frames not announced by this exact attach."""
-    capabilities = reply.get("pty_capabilities") if isinstance(reply, dict) else None
-    return (isinstance(capabilities, list)
-            and all(isinstance(value, str) for value in capabilities)
-            and len(capabilities) == len(set(capabilities))
-            and capability in capabilities)
+    return ptyhost.supports(reply, capability)
+
+
+def attached_control(text, pty_size, human_input_lease, limited):
+    """An old R may ignore Claim/Keep: only an explicit Take may resize it."""
+    control = browser_control_frame(text, pty_size)
+    if not control or (control[:1] == b"H" and not human_input_lease):
+        return None
+    if limited and control[:1] == b"R":
+        message = json.loads(text)   # browser_control_frame already validated it
+        if message.get("size") != "take":
+            return None
+    return control
 
 
 async def ws_term(request):
@@ -5802,6 +6095,17 @@ async def ws_term(request):
         raise web.HTTPForbidden()
     rows = _int_param(request.query.get("rows"), 40)
     cols = _int_param(request.query.get("cols"), 120)
+    created = None
+    if "created" in request.query:
+        values = request.query.getall("created")
+        try:
+            if len(values) != 1:
+                raise ValueError("duplicate incarnation")
+            created = float(values[0])
+            if not math.isfinite(created) or created <= 0:
+                raise ValueError("invalid incarnation")
+        except ValueError:
+            raise web.HTTPBadRequest(text="Invalid terminal incarnation") from None
     ws = web.WebSocketResponse(heartbeat=25, max_msg_size=4 * 1024 * 1024)
     if not ws.can_prepare(request).ok:     # not a websocket upgrade: nothing to attach
         raise web.HTTPBadRequest(text="WebSocket expected")
@@ -5809,14 +6113,16 @@ async def ws_term(request):
     # size (applied only while no other attachment owns it) and it receives {t:"s"} messages.
     pty_size = request.query.get("pty_size") == "1"
     try:
-        reader, writer, attach_reply = await ptyhost.attach_info(name, rows, cols,
-                                                                 size="claim" if pty_size else None)
-    except (OSError, LookupError, asyncio.IncompleteReadError, asyncio.TimeoutError):
+        reader, writer, attach_reply = await ptyhost.attach_info(
+            name, rows, cols, created=created, size="claim" if pty_size else None)
+    except (OSError, LookupError, ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError):
         # IncompleteReadError: an older ptyhost closes some failed requests without replying
         raise web.HTTPNotFound()
     human_input_lease = attach_supports(attach_reply, "human_input_lease_v1")
-    # The geometry the host's replay was produced at, for a browser that asks for it; the
-    # browser validates it. A host that does not give it sends nothing more.
+    verified = created is not None and attach_reply.get("_conditional_input_verified") is True
+    limited = created is not None and not verified
+    # Current geometry captured before this attach, not historical per-byte
+    # geometry of the retained replay. The browser validates its render bounds.
     geometry = attach_reply.get("replay_geometry") if request.query.get("replay_geometry") == "1" else None
     try:
         await ws.prepare(request)
@@ -5827,13 +6133,17 @@ async def ws_term(request):
 
     async def downstream():
         try:
+            if verified:   # exact connected host confirms lifetime fencing and size watching
+                await ws.send_str(json.dumps({"t": "bound", "name": name, "created": created}))
+            elif limited:
+                await ws.send_str(json.dumps({"t": "limited"}))
             if isinstance(geometry, dict):   # before the replay, the host's first D frame
                 await ws.send_str(json.dumps({"t": "g", "rows": geometry.get("rows"), "cols": geometry.get("cols")}))
             while True:
                 kind, payload = await ptyhost.read_frame(reader)
                 if kind == b"D":
                     await ws.send_bytes(payload)
-                elif kind == b"S" and pty_size:
+                elif kind == b"S" and pty_size and not limited:
                     size = pty_size_message(payload)
                     if size:
                         await ws.send_str(size)
@@ -5849,11 +6159,11 @@ async def ws_term(request):
             if msg.type == web.WSMsgType.BINARY:
                 writer.write(ptyhost.frame(b"D", msg.data))
             elif msg.type == web.WSMsgType.TEXT:
-                control = browser_control_frame(msg.data, pty_size)
+                control = attached_control(msg.data, pty_size, human_input_lease, limited)
                 # H is an optional extension.  Forwarding it to the former
                 # OCaml owner closes the whole attachment, including ordinary
                 # keyboard D frames.  R remains part of the baseline protocol.
-                if control and (control[:1] != b"H" or human_input_lease):
+                if control:
                     writer.write(control)
                     if human_input_lease and releases_human_input(msg.data):
                         request.app["agent_wakes"].trigger()
@@ -6190,6 +6500,14 @@ def make_app(*, session_request_path=None):
     app.router.add_post("/login", login_post)
     app.router.add_post("/api/logout", api_logout)
     app.router.add_post("/api/logout-all", api_logout_all)
+    app.on_startup.append(start_dictation)
+    app.on_cleanup.append(stop_dictation)
+    app.router.add_get("/api/transcribe/config", api_dictation)
+    app.router.add_post("/api/transcribe", api_dictation)
+    app.router.add_get("/api/transcribe/request/{request_id}", api_dictation)
+    app.router.add_get("/api/transcribe/{job_id}", api_dictation)
+    app.router.add_post("/api/transcribe/{job_id}/cancel", api_dictation)
+    app.router.add_post("/api/transcribe/{job_id}/settle", api_dictation)
     app.router.add_get("/", index)
     app.router.add_get("/sw.js", service_worker)
     app.router.add_get("/manifest.webmanifest", manifest)

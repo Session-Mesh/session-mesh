@@ -158,7 +158,8 @@ async def test_conditional_attach_matching_input_and_geometry(emitting):
     reply, reader, writer = await conditional_wire(handle, {
         "op": "attach_if", "name": "emit", "created": created, "rows": 33, "cols": 91})
     assert reply == {"ok": True,
-                     "pty_capabilities": ["agent_wake_v1", "human_input_lease_v1"]}
+                     "pty_capabilities": ["agent_wake_v1", "human_input_lease_v1"],
+                     "replay_geometry": {"rows": 50, "cols": 200}}
     assert await frame(reader) == (b"D", b"")
     await wait_until(lambda: (home / "geometry").read_text() == "33:91")
     writer.write(ptyhost.frame(b"D", b"SELECTED\n"))
@@ -216,7 +217,8 @@ async def test_conditional_attach_bound_stream_never_targets_replacement(emittin
     reply, reader, writer = await conditional_wire(handle, {
         "op": "attach_if", "name": "emit", "created": created})
     assert reply == {"ok": True,
-                     "pty_capabilities": ["agent_wake_v1", "human_input_lease_v1"]}
+                     "pty_capabilities": ["agent_wake_v1", "human_input_lease_v1"],
+                     "replay_geometry": {"rows": 50, "cols": 200}}
     assert await frame(reader) == (b"D", b"")
     assert await handle.request({"op": "kill_if", "name": "emit", "created": created}) == {"ok": True}
     await wait_until(lambda: _no_emit(handle))
