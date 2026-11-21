@@ -9,14 +9,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {describe, test} from 'node:test';
+import {removeScratch} from './mesh-server-lib.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const SID = 'ses_e1ec1ceb2ffeve47ULriArjJ5g';
 
 function python(code: string, env: NodeJS.ProcessEnv = {}): unknown {
-  const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', `import sys; sys.path.insert(0, ${JSON.stringify(REPO)})\n${code}`],
-    {cwd: REPO, env: {PATH: process.env.PATH, HOME: process.env.HOME, ...env}, encoding: 'utf8'});
-  return JSON.parse(output);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-resume-home-'));
+  try {
+    const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', `import sys; sys.path.insert(0, ${JSON.stringify(REPO)})\n${code}`],
+      {cwd: REPO, env: {PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config'),
+        XDG_CACHE_HOME: path.join(home, 'cache'), XDG_DATA_HOME: path.join(home, 'data'), MESH_CONF_DIR: path.join(home, 'mesh'), ...env}, encoding: 'utf8'});
+    return JSON.parse(output);
+  } finally {removeScratch(home);}
 }
 
 const resume = (argv: string[]): unknown => python(`

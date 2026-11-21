@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {fakeAgentShell} from './helpers/fake-agent.ts';
 import {REPO, freePort, removeScratch, runServer, type Scratch, scratchHome, stopServer} from './mesh-server-lib.ts';
 import {type Intercept, type Proxy, startProxy} from './ptyhost-proxy-lib.ts';
 import {waitFor} from './ptyhost-wire-lib.ts';
@@ -118,7 +119,7 @@ export class HistoryLab {
   private async startHost(hostRuntime: string): Promise<string> {
     const [command, ...args] = nativePtyhost();
     this.host = spawn(command!, args, {cwd: REPO, stdio: 'ignore',
-      env: {PATH: this.where.env.PATH, HOME: this.where.home, XDG_RUNTIME_DIR: hostRuntime, LANG: 'C', SHELL: '/bin/bash'}});
+      env: {PATH: this.where.env.PATH, HOME: this.where.home, XDG_RUNTIME_DIR: hostRuntime, LANG: 'C', SHELL: fakeAgentShell(this.bin)}});
     const hostSocket = path.join(hostRuntime, 'session-mesh', 'ptyhost.sock');
     await waitFor('ptyhost answering', 10000, () => fs.existsSync(hostSocket));
     return hostSocket;

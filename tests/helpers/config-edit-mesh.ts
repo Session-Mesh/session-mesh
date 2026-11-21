@@ -12,6 +12,7 @@ import path from 'node:path';
 import {REPO, runServer, scratchHome, stopServer} from '../mesh-server-lib.ts';
 import {waitFor} from '../ptyhost-wire-lib.ts';
 import {nativePtyhost} from './native-ptyhost.ts';
+import {fakeAgentShell} from './fake-agent.ts';
 
 export type Settings = {v: 1; workspace_roots: string[]; enabled_agents: string[]};
 
@@ -59,7 +60,7 @@ export class ConfigMesh {
       assert.equal(result.listened, true, result.output);
       const nativeHost = nativePtyhost();
       host = spawn(nativeHost[0], nativeHost.slice(1), {cwd: REPO, stdio: 'ignore',
-        env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C'}});
+        env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C', SHELL: fakeAgentShell(bin)}});
       await new Promise<void>((resolve, reject) => {
         host!.once('spawn', resolve);
         host!.once('error', reject);

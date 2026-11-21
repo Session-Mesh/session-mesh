@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import {type ChildProcess, spawn} from 'node:child_process';
 import {createHmac} from 'node:crypto';
 import fs from 'node:fs';
+import {fakeAgentShell} from './helpers/fake-agent.ts';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -398,7 +399,7 @@ export async function startMesh(options: {session: boolean}): Promise<Mesh> {
     if (fake !== undefined) {
       const socket = path.join(home, 'run', 'session-mesh', 'ptyhost.sock');
       await startChild('the PTY host', ptyhostArgv(),
-        {PATH: env.PATH, HOME: home, XDG_RUNTIME_DIR: env.XDG_RUNTIME_DIR, LANG: 'C'}, children, () => fs.existsSync(socket));
+        {PATH: env.PATH, HOME: home, XDG_RUNTIME_DIR: env.XDG_RUNTIME_DIR, LANG: 'C', SHELL: fakeAgentShell(fake.bin)}, children, () => fs.existsSync(socket));
     }
     await startChild('the server', SERVER_COMMAND, env, children, () => accepts(port)); // limit: another listener on this port would also pass; its answers are not told apart
     const token = fs.readFileSync(path.join(env.MESH_CONF_DIR!, 'token'), 'utf8').trim();
