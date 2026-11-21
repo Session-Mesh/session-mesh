@@ -116,8 +116,10 @@ path chooses the operation, never the body.
 - **Fail closed.** No helper, no complete line within 8 s, or a reply that is not exactly the
   envelope gives `503 backend-helper-unavailable`, and the helper's output is not relayed. The
   8 s outlast the helper's own 5 s store busy timeout, so a contended store gives the helper's
-  coded answer. Not exactly the envelope means: an unknown key, a status outside
-  200/400/404/409/413/503, `ok` or the exit code disagreeing with the status, or `data` that is
+  coded answer. Not exactly the envelope means: an unknown or repeated key (at any depth), a
+  `version` that is not the integer 1 or an `ok` that is not a boolean, a status outside
+  200/400/404/409/413/503, `ok` or the exit code disagreeing with the status, a refusal code under
+  another status than the transport mode gives it (a code it does not list must be 503), or `data` that is
   not exactly its operation's shape: for `profiles.list`, `configured`, `registry_revision` and
   profiles with their six public fields; for every `consent.*` operation, the policy (`version`,
   an integer `revision`, `global` and `pairs`, each pair with its two accounts' `backend`, `id`
