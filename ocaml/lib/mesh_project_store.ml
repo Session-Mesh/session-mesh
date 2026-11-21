@@ -11,10 +11,20 @@ let upgraded config projects =
   assoc
     ([
        ("schema_version", `Int 2);
-       ("features", `List ([ s "project-metadata/1"; s "project-workspace/1" ] @
-          if List.exists (fun p -> List.mem_assoc "observation" (C.obj p)) projects
-             || (match List.assoc_opt "features" (C.obj config) with Some (`List fs) -> List.mem (s "project-observation/1") fs | _ -> false)
-          then [s "project-observation/1"] else []));
+       ( "features",
+         `List
+           ([ s "project-metadata/1"; s "project-workspace/1" ]
+           @
+           if
+             List.exists
+               (fun p -> List.mem_assoc "observation" (C.obj p))
+               projects
+             ||
+             match List.assoc_opt "features" (C.obj config) with
+             | Some (`List fs) -> List.mem (s "project-observation/1") fs
+             | _ -> false
+           then [ s "project-observation/1" ]
+           else []) );
        ("projects", `List projects);
      ]
     @ List.filter
@@ -65,9 +75,11 @@ let detail store operation config revision project =
         ])
   in
   let add_optional ((fields, omitted) as current) key =
-    let value = match List.assoc_opt key (C.obj project) with
+    let value =
+      match List.assoc_opt key (C.obj project) with
       | None when key = "sessions" -> Some (`List [])
-      | value -> value in
+      | value -> value
+    in
     match value with
     | None -> current
     | Some value ->
@@ -82,7 +94,7 @@ let detail store operation config revision project =
   reply
     (List.fold_left add_optional
        (detail_identity project, [])
-        [ "description"; "folders"; "repository"; "sources"; "sessions" ])
+       [ "description"; "folders"; "repository"; "sources"; "sessions" ])
 
 let capability store operation =
   envelope store operation "ok"
@@ -99,9 +111,9 @@ let capability store operation =
             ("config_bytes", `Int C.config_bytes);
             ("max_folders", `Int 100);
             ("max_sources", `Int 20);
-             ("max_source_changes", `Int 40);
-             ("max_sessions", `Int 100);
-             ("max_session_changes", `Int 40);
+            ("max_source_changes", `Int 40);
+            ("max_sessions", `Int 100);
+            ("max_session_changes", `Int 40);
           ] );
     ]
 
@@ -145,41 +157,97 @@ let list_projects store operation snapshot =
 let read_project store operation fields snapshot =
   let project_id = C.id (C.get fields "project_id") in
   match (find_project snapshot project_id, snapshot.config) with
-  | Some project, Some config ->
+  | Some project, Some config -> (
       let reply = detail store operation config snapshot.revision project in
-      (match List.assoc_opt "settings" fields with
+      match List.assoc_opt "settings" fields with
       | None -> reply
       | Some target ->
           let target = C.obj target and p = C.obj project in
-          let sources = match List.assoc_opt "sources" p with Some (`List xs) -> xs | _ -> [] in
+          let sources =
+            match List.assoc_opt "sources" p with
+            | Some (`List xs) -> xs
+            | _ -> []
+          in
           let selector source =
             let a = C.obj source in
-            match List.assoc_opt "board_path" a, List.assoc_opt "pipeline_root" a with
+            match
+              (List.assoc_opt "board_path" a, List.assoc_opt "pipeline_root" a)
+            with
             | Some path, _ -> assoc [ ("kind", s "board"); ("path", path) ]
-            | _, Some root -> assoc [ ("kind", s "pipeline"); ("root", root); ("task", C.get a "pipeline_task") ]
+            | _, Some root ->
+                assoc
+                  [
+                    ("kind", s "pipeline");
+                    ("root", root);
+                    ("task", C.get a "pipeline_task");
+                  ]
             | _ -> `Null
           in
           let optional k = Option.value ~default:`Null (List.assoc_opt k p) in
-          let settings = match C.get target "kind" with
+          let settings =
+            match C.get target "kind" with
             | `String "project" ->
                 C.keys target [ "kind" ];
-                let repository = match optional "repository" with
+                let repository =
+                  match optional "repository" with
                   | `Null -> `Null
-                  | repo -> assoc (List.filter (fun (k, _) -> List.mem k [ "url"; "local_path"; "primary_ref" ]) (C.obj repo)) in
-                assoc [ ("kind", s "project"); ("plan", optional "observation"); ("repository", repository);
-                  ("source_summaries", `List (List.map (fun source -> let a = C.obj source in assoc
-                    [ ("id", C.get a "id"); ("kind", C.get a "kind"); ("label", C.get a "label"); ("selector_configured", `Bool (selector source <> `Null)) ]) sources)) ]
+                  | repo ->
+                      assoc
+                        (List.filter
+                           (fun (k, _) ->
+                             List.mem k [ "url"; "local_path"; "primary_ref" ])
+                           (C.obj repo))
+                in
+                assoc
+                  [
+                    ("kind", s "project");
+                    ("plan", optional "observation");
+                    ("repository", repository);
+                    ( "source_summaries",
+                      `List
+                        (List.map
+                           (fun source ->
+                             let a = C.obj source in
+                             assoc
+                               [
+                                 ("id", C.get a "id");
+                                 ("kind", C.get a "kind");
+                                 ("label", C.get a "label");
+                                 ( "selector_configured",
+                                   `Bool (selector source <> `Null) );
+                               ])
+                           sources) );
+                  ]
             | `String "source" ->
                 C.keys target [ "kind"; "source_id" ];
                 let sid = C.id (C.get target "source_id") in
-                let source = match List.find_opt (fun v -> C.get (C.obj v) "id" = s sid) sources with
-                  | Some v -> v | None -> outcome "refused" "unknown-source" in
-                assoc [ ("kind", s "source"); ("source", assoc (("selector", selector source) ::
-                  List.filter (fun (k, _) -> List.mem k [ "id"; "kind"; "label"; "url" ]) (C.obj source))) ]
+                let source =
+                  match
+                    List.find_opt
+                      (fun v -> C.get (C.obj v) "id" = s sid)
+                      sources
+                  with
+                  | Some v -> v
+                  | None -> outcome "refused" "unknown-source"
+                in
+                assoc
+                  [
+                    ("kind", s "source");
+                    ( "source",
+                      assoc
+                        (("selector", selector source)
+                        :: List.filter
+                             (fun (k, _) ->
+                               List.mem k [ "id"; "kind"; "label"; "url" ])
+                             (C.obj source)) );
+                  ]
             | _ -> outcome "refused" "invalid-request"
           in
-          let candidate = assoc (("observation_settings", settings) :: C.obj reply) in
-          if String.length (C.encode candidate) > C.reply_bytes then outcome "refused" "result-capacity";
+          let candidate =
+            assoc (("observation_settings", settings) :: C.obj reply)
+          in
+          if String.length (C.encode candidate) > C.reply_bytes then
+            outcome "refused" "result-capacity";
           candidate)
   | _ -> outcome "refused" "unknown-project"
 
@@ -455,14 +523,40 @@ let capture store ~machine_id ~project_id ~expected_revision =
   store.observe_revision revision;
   store.hook Read;
   if revision <> expected_revision then outcome "stale" "revision-conflict";
-  let config = match config with Some v -> v | None -> outcome "failed" "unknown-project" in
+  let config =
+    match config with Some v -> v | None -> outcome "failed" "unknown-project"
+  in
   let a = C.obj config in
-  if C.get a "machine_id" <> s machine_id then outcome "failed" "identity-mismatch";
-  let project = match List.find_opt (fun p -> C.get (C.obj p) "id" = s project_id) (rows config) with
-    | Some p -> p | None -> outcome "failed" "unknown-project" in
+  if C.get a "machine_id" <> s machine_id then
+    outcome "failed" "identity-mismatch";
+  let project =
+    match
+      List.find_opt (fun p -> C.get (C.obj p) "id" = s project_id) (rows config)
+    with
+    | Some p -> p
+    | None -> outcome "failed" "unknown-project"
+  in
   let p = C.obj project in
-  let plan = match List.assoc_opt "observation" p with Some v -> v | None -> outcome "failed" "unsupported-feature" in
-  let selected = List.filter (fun (k, _) -> not (List.mem k [ "folders"; "creation"; "last_settings"; "observation" ])) p in
-  let config = assoc [ ("kind", s "mesh-project-config"); ("schema_version", `Int 2);
-    ("features", `List [s "project-metadata/1"]); ("machine_id", s machine_id); ("projects", `List [assoc selected]) ] in
+  let plan =
+    match List.assoc_opt "observation" p with
+    | Some v -> v
+    | None -> outcome "failed" "unsupported-feature"
+  in
+  let selected =
+    List.filter
+      (fun (k, _) ->
+        not
+          (List.mem k [ "folders"; "creation"; "last_settings"; "observation" ]))
+      p
+  in
+  let config =
+    assoc
+      [
+        ("kind", s "mesh-project-config");
+        ("schema_version", `Int 2);
+        ("features", `List [ s "project-metadata/1" ]);
+        ("machine_id", s machine_id);
+        ("projects", `List [ assoc selected ]);
+      ]
+  in
   (config, plan)

@@ -39,7 +39,8 @@ let project ~modern ~workspace v =
       unique (fun x -> id (get (obj x) "id")) xs;
       xs);
   opt a "folders" folders;
-  if List.mem_assoc "observation" a && not (modern && workspace) then fail "unsupported-feature";
+  if List.mem_assoc "observation" a && not (modern && workspace) then
+    fail "unsupported-feature";
   opt a "observation" (observation a);
   List.iter (fun k -> opt a k receipt) [ "creation"; "last_settings" ];
   opt a "creation" (fun v ->
@@ -59,7 +60,12 @@ let validate_config v =
           let feature = text 80 v in
           if
             not
-              (List.mem feature [ "project-metadata/1"; "project-workspace/1"; "project-observation/1" ])
+              (List.mem feature
+                 [
+                   "project-metadata/1";
+                   "project-workspace/1";
+                   "project-observation/1";
+                 ])
           then fail "unsupported-feature";
           feature)
         (get a "features")
@@ -78,10 +84,10 @@ let validate_config v =
       (get a "projects")
   in
   unique (fun x -> id (get (obj x) "id")) projects;
-  if List.exists (fun p -> List.mem_assoc "observation" (obj p)) projects then (
-    match List.assoc_opt "features" a with
-    | Some (`List fs) when List.mem (`String "project-observation/1") fs -> ()
-    | _ -> fail "unsupported-feature");
+  (if List.exists (fun p -> List.mem_assoc "observation" (obj p)) projects then
+     match List.assoc_opt "features" a with
+     | Some (`List fs) when List.mem (`String "project-observation/1") fs -> ()
+     | _ -> fail "unsupported-feature");
   if
     List.fold_left
       (fun n p ->
@@ -134,11 +140,15 @@ let parse_document ~max_bytes bytes =
   strict value;
   value
 
-let parse_config bytes = validate_config (parse_document ~max_bytes:config_bytes bytes)
+let parse_config bytes =
+  validate_config (parse_document ~max_bytes:config_bytes bytes)
 
 let normalized_create v =
   let a = obj v in
-  keys a [ "title"; "description"; "folders"; "repository"; "sources"; "observation" ];
+  keys a
+    [
+      "title"; "description"; "folders"; "repository"; "sources"; "observation";
+    ];
   let title = trim (text 240 (get a "title")) in
   if title = "" then fail "invalid-request";
   let fields =
@@ -157,25 +167,37 @@ let normalized_create v =
       | Some v -> fields := (k, v) :: List.remove_assoc k !fields)
     [ "description"; "folders"; "repository"; "sources"; "observation" ];
   (* Create accepts only the editable source/repository vocabulary. *)
-  opt a "repository" (function `Null -> () | v -> keys (obj v) [ "url"; "local_path"; "primary_ref" ]);
+  opt a "repository" (function
+    | `Null -> ()
+    | v -> keys (obj v) [ "url"; "local_path"; "primary_ref" ]);
   (match List.assoc_opt "sources" a with
   | None -> ()
   | Some value ->
-      let sources = list 20 (fun v ->
-          let source = obj v in
-          keys source [ "id"; "kind"; "label"; "url"; "selector" ];
-          let raw = List.remove_assoc "selector" source in
-          `Assoc (match List.assoc_opt "selector" source with
+      let sources =
+        list 20
+          (fun v ->
+            let source = obj v in
+            keys source [ "id"; "kind"; "label"; "url"; "selector" ];
+            let raw = List.remove_assoc "selector" source in
+            `Assoc
+              (match List.assoc_opt "selector" source with
               | None -> raw
-              | Some selected -> selector selected @ raw)) value in
-      fields := ("sources", `List sources) :: List.remove_assoc "sources" !fields);
+              | Some selected -> selector selected @ raw))
+          value
+      in
+      fields :=
+        ("sources", `List sources) :: List.remove_assoc "sources" !fields);
   let value = `Assoc !fields in
   project ~modern:true ~workspace:true
     (`Assoc (("id", `String "validation") :: !fields));
   canonical value
 
 let with_selector fields value =
-  selector value @ List.filter (fun (k, _) -> not (List.mem k [ "board_path"; "pipeline_root"; "pipeline_task" ])) fields
+  selector value
+  @ List.filter
+      (fun (k, _) ->
+        not (List.mem k [ "board_path"; "pipeline_root"; "pipeline_task" ]))
+      fields
 
 let source_put previous source_id change =
   keys change [ "type"; "id"; "kind"; "label"; "url"; "selector" ];
@@ -195,7 +217,11 @@ let source_put previous source_id change =
       if value = `Null && key = "url" then fields else (key, value) :: fields)
   in
   let fields = List.fold_left put base change in
-  let fields = match List.assoc_opt "selector" change with None -> fields | Some v -> with_selector fields v in
+  let fields =
+    match List.assoc_opt "selector" change with
+    | None -> fields
+    | Some v -> with_selector fields v
+  in
   let value = `Assoc fields in
   source ~modern:true value;
   value
@@ -214,7 +240,9 @@ let source_change sources value =
   | `String "put" -> rest @ [ source_put previous source_id change ]
   | `String "selector" ->
       keys change [ "type"; "id"; "selector" ];
-      let old = match previous with Some v -> obj v | None -> fail "unknown-project" in
+      let old =
+        match previous with Some v -> obj v | None -> fail "unknown-project"
+      in
       if get old "kind" <> `String "roster" then fail "invalid-request";
       let value = `Assoc (with_selector old (get change "selector")) in
       source ~modern:true value;
@@ -241,36 +269,54 @@ let patch_repository original value =
     | Some value -> obj value
     | None -> []
   in
-  `Assoc (List.fold_left (fun fields (key, value) ->
-      let rest = List.remove_assoc key fields in
-      if value = `Null then rest else (key, value) :: rest) previous repository)
+  `Assoc
+    (List.fold_left
+       (fun fields (key, value) ->
+         let rest = List.remove_assoc key fields in
+         if value = `Null then rest else (key, value) :: rest)
+       previous repository)
 
 let same_session a b =
   let a = obj a and b = obj b in
-  let same_epoch a b = match a, b with
+  let same_epoch a b =
+    match (a, b) with
     | `Int a, `Int b -> a = b
     | `Float a, `Float b -> a = b
     | `Int n, `Float f | `Float f, `Int n ->
-        Float.is_integer f && f >= 0. && f <= float_of_int max_int
+        Float.is_integer f && f >= 0.
+        && f <= float_of_int max_int
         && Int64.of_float f = Int64.of_int n
     | _ -> false
   in
-  get a "name" = get b "name" && List.assoc_opt "machine_id" a = List.assoc_opt "machine_id" b
+  get a "name" = get b "name"
+  && List.assoc_opt "machine_id" a = List.assoc_opt "machine_id" b
   && same_epoch (get a "created") (get b "created")
 
 let patch_sessions original value =
-  let previous = match List.assoc_opt "sessions" original with Some (`List xs) -> xs | _ -> [] in
-  let changes = list 40 (fun change ->
-      let fields = obj change in
-      keys fields ["type"; "session"];
-      let reference = get fields "session" in
-      session reference;
-      ignore (id (get (obj reference) "machine_id"));
-      (choice ["attach"; "detach"] (get fields "type"), reference)) value in
-  `List (List.fold_left (fun sessions (operation, reference) ->
-      if operation = "detach" then List.filter (fun old -> not (same_session old reference)) sessions
-      else if List.exists (same_session reference) sessions then sessions
-      else sessions @ [reference]) previous changes)
+  let previous =
+    match List.assoc_opt "sessions" original with
+    | Some (`List xs) -> xs
+    | _ -> []
+  in
+  let changes =
+    list 40
+      (fun change ->
+        let fields = obj change in
+        keys fields [ "type"; "session" ];
+        let reference = get fields "session" in
+        session reference;
+        ignore (id (get (obj reference) "machine_id"));
+        (choice [ "attach"; "detach" ] (get fields "type"), reference))
+      value
+  in
+  `List
+    (List.fold_left
+       (fun sessions (operation, reference) ->
+         if operation = "detach" then
+           List.filter (fun old -> not (same_session old reference)) sessions
+         else if List.exists (same_session reference) sessions then sessions
+         else sessions @ [ reference ])
+       previous changes)
 
 let patch_field original fields (key, value) =
   let set value = (key, value) :: List.remove_assoc key fields in
@@ -279,7 +325,8 @@ let patch_field original fields (key, value) =
       let title = trim (text 240 value) in
       if title = "" then fail "invalid-request";
       set (`String title)
-  | "description", `Null | "repository", `Null | "observation", `Null -> List.remove_assoc key fields
+  | "description", `Null | "repository", `Null | "observation", `Null ->
+      List.remove_assoc key fields
   | "observation", value -> set value
   | "description", value ->
       let description = text ~empty:true 4000 value in
@@ -299,7 +346,15 @@ let patch_field original fields (key, value) =
 let patch original value =
   let changes = obj value and original = obj original in
   keys changes
-    [ "title"; "description"; "folders"; "repository"; "source_changes"; "session_changes"; "observation" ];
+    [
+      "title";
+      "description";
+      "folders";
+      "repository";
+      "source_changes";
+      "session_changes";
+      "observation";
+    ];
   if changes = [] then fail "invalid-request";
   let result =
     `Assoc (List.fold_left (patch_field original) original changes)
