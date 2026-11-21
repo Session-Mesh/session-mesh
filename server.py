@@ -4730,7 +4730,10 @@ async def _profile_run(op, body):
 
 def _profile_envelope(op, code, out):
     """The helper's reply when it is exactly its envelope (closed keys, a known status that agrees with `ok` and
-    with the exit code; public profile fields only for profiles.list), else None."""
+    with the exit code; exactly the public listing for profiles.list), else None. A line without its newline is
+    an incomplete answer."""
+    if not out.endswith(b"\n"):
+        return None
     try:
         reply = json.loads(out)
     except (ValueError, RecursionError):
@@ -4744,12 +4747,18 @@ def _profile_envelope(op, code, out):
         return None
     if not ok:
         return reply if isinstance(reply["code"], str) and _ACCOUNTS_CODE_RE.fullmatch(reply["code"]) else None
-    if op == "profiles.list":
-        profiles = reply["data"].get("profiles") if isinstance(reply["data"], dict) else None
-        if not isinstance(profiles, list) or not all(isinstance(p, dict) and set(p) == _ACCOUNTS_PUBLIC_PROFILE
-                                                     for p in profiles):
-            return None
-    return reply
+    return reply if op != "profiles.list" or _public_listing(reply["data"]) else None
+
+
+def _public_listing(data):
+    """profiles.list data with its three keys and, for each profile, its six public fields with their types."""
+    if not isinstance(data, dict) or set(data) != {"configured", "registry_revision", "profiles"}:
+        return False
+    profiles = data["profiles"]
+    return isinstance(profiles, list) and all(
+        isinstance(p, dict) and set(p) == _ACCOUNTS_PUBLIC_PROFILE
+        and all(isinstance(p[key], str) for key in ("id", "label", "backend", "context_revision"))
+        and p["enabled"] in (True, False) and p["switch_qualified"] is False for p in profiles)
 
 
 async def _accounts_body(request):

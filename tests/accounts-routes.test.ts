@@ -96,6 +96,9 @@ function fakeHelper(directory: string): string {
     extra: `echo '{"http_status":409,"version":1,"ok":false,"code":"consent-revision-conflict","detail":"/x"}'; exit 1`,
     roots: `echo '{"http_status":200,"version":1,"ok":true,"data":{"configured":true,"registry_revision":null,"profiles":[`
       + `{"id":"a","label":"A","backend":"claude","enabled":true,"context_revision":"0","switch_qualified":false,"roots":{"config":"/x"}}]}}'; exit 0`,
+    nonewline: `printf '%s' '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":0,"global":"ask","pairs":[]}}'; exit 0`,
+    beside: `echo '{"http_status":200,"version":1,"ok":true,"data":{"configured":false,"registry_revision":null,"profiles":[],`
+      + `"roots":{"config":"/x"}}}'; exit 0`,
     conflict: `echo '{"http_status":409,"version":1,"ok":false,"code":"consent-revision-conflict"}'; exit 1`,
     ok: `echo '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":0,"global":"ask","pairs":[]}}'; exit 0`,
     list: `echo '{"http_status":200,"version":1,"ok":true,"data":{"configured":false,"registry_revision":null,"profiles":[]}}'; exit 0`,
@@ -255,7 +258,7 @@ describe('fail closed', {skip}, () => {
   const mode = (name: string) => fs.writeFileSync(path.join(fakeDir, 'mode'), name);
   for (const [name, route] of [['garbage', '/api/accounts/consent'], ['mismatch', '/api/accounts/consent'],
     ['exitcode', '/api/accounts/consent'], ['status', '/api/accounts/consent'], ['extra', '/api/accounts/consent'],
-    ['roots', '/api/accounts/profiles']]) {
+    ['roots', '/api/accounts/profiles'], ['nonewline', '/api/accounts/consent'], ['beside', '/api/accounts/profiles']]) {
     test(`a helper answer that is not its envelope (${name}) is 503, never relayed`, async () => {
       mode(name!);
       const reply = await call(fake, 'GET', route!);
