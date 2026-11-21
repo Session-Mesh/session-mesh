@@ -6746,17 +6746,19 @@ function sendDirectControl(letter, held = false) {
   return true;
 }
 // Sends what the field received, then empties it. True when the text was delivered as typed
-// (or as one paste); otherwise a message says why, and the text is gone from the field.
+// (or as one paste); otherwise the text remains for explicit review or retry.
 function flushDirectField(inputType, held = false) {
   const text = line.value;
-  if (!text) return true;
-  const kind = MeshPaneActions.directInput(text, inputType);
+  if (!text) {delete lineDirect.heldInputType; return true;}
+  const direct = lineDirect, origin = direct.heldInputType ?? inputType;
+  const kind = MeshPaneActions.directInput(text, origin);
   if (kind !== "typed") {
-    const waiting = directPasteWaits(lineDirect.pane);
     const delivered = pasteDirect(text, kind, held);
-    if (delivered || !lineDirect || !waiting) {line.value = ""; fitLine();}
+    if (delivered) {line.value = ""; delete direct.heldInputType; fitLine();}
+    else if (lineDirect === direct) direct.heldInputType = origin;
     return delivered;
   }
+  delete direct.heldInputType;
   line.value = "";
   fitLine();
   if (ctrlArmed && Array.from(text).length === 1) return sendDirectControl(text, held);
