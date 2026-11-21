@@ -126,7 +126,8 @@ for the agent's own work, the Projects view's projects for the owner's configura
 commands for a Roster pipeline. The tracker adds its tool declarations (about 4,000 tokens) and its
 server instructions (about 1,000) to an agent's context. See [work-mcp.md](work-mcp.md#registration).
 At the start of a Claude or Vibe session, a read-only hook adds one sentence with the ids of the session's
-tasks and the counts of its questions, never their text ([The project context hook](agent-hooks.md#the-project-context-hook);
+tasks and the counts of its questions, never their text; a Codex session gets the ids of its folder's tasks, once
+you have trusted the hook in Codex ([The project context hook](agent-hooks.md#the-project-context-hook);
 `MESH_PROJECT_HOOKS=0` turns it off). Which hooks each agent receives is in [agent-hooks.md](agent-hooks.md).
 
 The "Folder" field of the "New session" dialog starts with the folder of the session you are

@@ -1728,6 +1728,38 @@ Limits of this version:
 - Per-alias colours, the alias in the browser tab title, and a login helper are not part of this
   version.
 
+## Codex hooks: trust once per Codex home
+
+Mesh starts every Codex session with one hook, read-only and stopped after 1.5 s, that tells Codex which
+tracked tasks are linked to the session's folder ([Codex](agent-hooks.md#codex)). Codex runs a hook only
+once you have trusted it, and Mesh never trusts it for you. The first Codex session that Mesh starts with a
+given Codex home shows:
+
+```text
+Hooks need review
+1 hook is new or changed.
+Hooks can run outside the sandbox after you trust them.
+› 1. Review hooks
+  2. Trust all and continue
+  3. Continue without trusting (hooks won't run)
+```
+
+- **Trust all and continue** (or **Review hooks**, then trust it there): Codex records the trust in the
+  `config.toml` of that Codex home and does not ask again. The session then starts as usual; the hook's
+  sentence goes to the model, not to the screen.
+- **Continue without trusting**: the session starts without the hook and Codex records nothing, so the
+  screen comes back at the next session. Nothing else changes: Codex works as it did before.
+
+The trust belongs to one Codex home. Your default `~/.codex` (or `$CODEX_HOME`) and the Codex home of
+each account alias ([Account aliases](#account-aliases-separate-claude-and-codex-accounts)) are trusted
+separately: the first Mesh session under each alias asks once more. Codex asks again when the hook
+changes, which happens when the installation directory changes (for example after moving from a source
+install to a release) or when a later version of Mesh changes the hook.
+
+A session Codex starts without its interactive screen (`codex exec`) never shows the question and
+skips an untrusted hook silently. `MESH_PROJECT_HOOKS=0` in the web server's environment stops adding
+the hook to the Codex (and Claude and Vibe) sessions started or restored afterwards.
+
 ## Debugging the agent hook
 
 Claude Code sessions started by the mesh report their state (busy, waiting, finished) through the

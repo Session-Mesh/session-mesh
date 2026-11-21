@@ -37,7 +37,7 @@ describe('the table', () => {
     assert.throws(broken(m => { m.reactions.block = 'permitted'; }), /may not block/);
     assert.throws(broken(m => { m.sources[0].subscriptions.state.push('session_end'); }), /does not emit/);
     assert.throws(broken(m => { m.sources.find((s: any) => s.agent === 'claude').inject = {}; }), /context format/);
-    assert.throws(broken(m => { delete m.sources.find((s: any) => s.agent === 'codex').reason; }), /says why/);
+    assert.throws(broken(m => { Object.assign(m.sources.find((s: any) => s.agent === 'opencode'), {kind: 'none'}); }), /says why/);
     assert.throws(broken(m => { m.consumers[1].reaction = 'block'; }), /not permitted/);
   });
 
@@ -72,7 +72,7 @@ print(json.dumps({row["agent"]: {name: list(agentmcp.hook_events(row["agent"], n
 
   test('injects context only where a source has a verified format', () => {
     const wired = MODEL.sources.filter(s => (s.subscriptions.project_context ?? []).length > 0).map(s => s.agent);
-    assert.deepEqual(wired, ['claude', 'vibe']);
+    assert.deepEqual(wired, ['claude', 'vibe', 'codex']);
   });
 });
 

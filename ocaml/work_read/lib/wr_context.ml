@@ -8,10 +8,12 @@
 module W = Mesh_worklog
 module Q = Work_mcp.Work_questions
 
-type format = Claude | Vibe | Text | Json
+type format = Claude | Vibe | Codex | Text | Json
 
 let formats =
-  [ ("claude", Claude); ("vibe", Vibe); ("text", Text); ("json", Json) ]
+  [
+    ("claude", Claude); ("vibe", Vibe); ("codex", Codex); ("text", Text); ("json", Json);
+  ]
 
 let cap_seconds = 1.5
 let max_ids = 5
@@ -116,7 +118,7 @@ let render format s =
           Yojson.Safe.to_string
             (`Assoc
               [ ("hook_specific_output", `Assoc [ ("additional_context", `String line) ]) ])
-      | Claude ->
+      | Claude | Codex ->
           Yojson.Safe.to_string (additional_context "SessionStart" line)
       | Text -> line
       | Json -> Yojson.Safe.to_string (summary_json s line))
@@ -190,6 +192,107 @@ let summarise ~getenv () =
                   open_questions;
                   answered_questions;
                 }))
+
+(* Codex. Its hooks may be run by one shared process per Codex home, with the
+   environment of the first session it served, so no session identity is read
+   from the environment: the folder comes from the JSON Codex writes on
+   standard input, and only the tracker's own variables are read. Mesh keeps no
+   mapping from Codex's [session_id] to a Mesh session that this program could
+   read, so a Codex session is told about its folder's tasks only. *)
+let max_input = 65_536
+
+let read_input () =
+  let buf = Buffer.create 1024 and chunk = Bytes.create 4096 in
+  let rec go () =
+    if Buffer.length buf > max_input then None
+    else
+      match Unix.read Unix.stdin chunk 0 (Bytes.length chunk) with
+      | 0 -> Some (Buffer.contents buf)
+      | n ->
+          Buffer.add_subbytes buf chunk 0 n;
+          go ()
+      | exception Unix.Unix_error (Unix.EINTR, _, _) -> go ()
+  in
+  try go () with Unix.Unix_error _ -> None
+
+let is_hex c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+
+(* Codex's conversation id, the one [codex resume] takes: a lowercase UUID. *)
+let is_conversation_id s =
+  String.length s = 36
+  && Seq.for_all
+       (fun (i, c) -> if i = 8 || i = 13 || i = 18 || i = 23 then c = '-' else is_hex c)
+       (String.to_seqi s)
+
+let is_folder_text s =
+  s <> ""
+  && (not (Filename.is_relative s))
+  && String.length s <= 4096
+  && not (String.exists (fun c -> c < ' ' || c = '\127') s)
+
+let codex_folder text =
+  match Yojson.Safe.from_string text with
+  | `Assoc fields -> (
+      match
+        ( List.assoc_opt "hook_event_name" fields,
+          List.assoc_opt "session_id" fields,
+          List.assoc_opt "cwd" fields )
+      with
+      | Some (`String "SessionStart"), Some (`String id), Some (`String cwd)
+        when is_conversation_id id && is_folder_text cwd -> (
+          match Unix.realpath cwd with
+          | real when Sys.is_directory real -> Some real
+          | _ -> None
+          | exception _ -> None)
+      | _ -> None)
+  | _ -> None
+  | exception _ -> None
+
+let tracker_variables = [ "HOME"; "WL_HOME"; "WL_HOST"; "WL_NOW"; "WL_LOCK_TIMEOUT" ]
+
+let tracker_only getenv name =
+  if List.mem name tracker_variables then getenv name else None
+
+let summarise_folder ~getenv cwd =
+  let getenv = tracker_only getenv in
+  match
+    ( W.Ctx.of_env ~getenv ~commit:false ~warn:ignore (),
+      W.Session.resolve ~getenv ~agent:"codex" ~cwd () )
+  with
+  | Ok ctx, Ok session -> (
+      match W.Reader.snapshot ctx with
+      | Error _ -> None
+      | Ok snapshot ->
+          let field f = Option.bind session f in
+          let where : W.Resume.where =
+            {
+              host = ctx.host;
+              cwd;
+              home = getenv "HOME";
+              session = None;
+              repo = field (fun (s : W.Session.t) -> s.repo);
+              branch = field (fun (s : W.Session.t) -> s.branch);
+            }
+          in
+          let rows =
+            (W.Resume.build snapshot.loaded.world ~now:(ctx.now ()) ~where ()).here
+          in
+          let folder_tasks, folder_tasks_total = ids rows in
+          Some
+            {
+              session_tasks = [];
+              session_tasks_total = 0;
+              folder_tasks;
+              folder_tasks_total;
+              folder_tasks_capped = List.length rows >= W.Resume.here_cap;
+              open_questions = 0;
+              answered_questions = 0;
+            })
+  | _ -> None
+
+let codex_context () =
+  Option.bind (Option.bind (read_input ()) codex_folder) (fun cwd ->
+      Option.bind (summarise_folder ~getenv:Sys.getenv_opt cwd) (render Codex))
 
 (* The cap. The read runs in a worker, a child process in a session (so a
    process group) of its own: every process it starts, the git the library
@@ -282,10 +385,13 @@ let main args =
      match parse args with
      | None -> ()
      | Some format -> (
-         match
-           bounded (fun () ->
-               Option.bind (summarise ~getenv:Sys.getenv_opt ()) (render format))
-         with
+         let compute =
+           match format with
+           | Codex -> codex_context
+           | Claude | Vibe | Text | Json ->
+               fun () -> Option.bind (summarise ~getenv:Sys.getenv_opt ()) (render format)
+         in
+         match bounded compute with
          | Some line ->
              print_string (line ^ "\n");
              flush stdout

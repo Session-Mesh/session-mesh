@@ -165,13 +165,21 @@
     },
     {
       "agent": "codex",
-      "kind": "none",
-      "install": "none",
-      "timeout": null,
-      "inject": {},
-      "events": [],
-      "subscriptions": {},
-      "reason": "Codex reads its hooks (notify, and SessionStart since 0.170) only from the user's own configuration, and a hook added there must be reviewed by the user before it runs: Mesh has no per-session place to declare one, so it installs none (notify would also replace the user's own)."
+      "kind": "native_config",
+      "install": "session_flags",
+      "timeout": {"value": 5, "unit": "s"},
+      "inject": {"session_start": "codex"},
+      "events": [
+        {"event": "session_start", "native": "SessionStart"},
+        {"event": "prompt_submit", "native": "UserPromptSubmit"},
+        {"event": "tool_before", "native": "PreToolUse"},
+        {"event": "permission_request", "native": "PermissionRequest"},
+        {"event": "tool_after", "native": "PostToolUse"},
+        {"event": "turn_end", "native": "Stop"}
+      ],
+      "subscriptions": {
+        "project_context": ["session_start"]
+      }
     }
   ]
 }

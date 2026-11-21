@@ -854,6 +854,47 @@ def _codex_config(servers=None):
     return items
 
 
+# Codex reads hooks given as ``-c hooks.<Event>=[...]`` for one run only, and runs a hook only once the user has
+# trusted it ("Trust all" in Codex's "Hooks need review" screen; the trust is kept in that CODEX_HOME's
+# config.toml, keyed on the hook's definition).  The command therefore never changes from one launch to the next
+# and holds no token nor session name: the hook reads the folder from the JSON Codex writes on its standard input
+# (docs/agent-hooks.md, "Codex").  Mesh never writes Codex's configuration nor trusts a hook for the user.
+def _codex_hook_item(event, argv):
+    command = json.dumps(shlex.join(argv))
+    return f'hooks.{event}=[{{hooks=[{{type="command",command={command},timeout={hook_timeout("codex")}}}]}}]'
+
+
+def _is_mesh_codex_hook(value):
+    """``hooks.<Event>=`` a single command hook running a project context hook of any installation:
+    ``<absolute dir>/work-read context --format codex``."""
+    key, sep, raw = value.partition("=")
+    path = _dotted_key(key) if sep else []
+    if len(path) != 2 or path[0] != "hooks":
+        return False
+    groups = _toml_value(raw)
+    group = groups[0] if isinstance(groups, list) and len(groups) == 1 else None
+    hooks = group.get("hooks") if isinstance(group, dict) else None
+    hook = hooks[0] if isinstance(hooks, list) and len(hooks) == 1 else None
+    command = hook.get("command") if isinstance(hook, dict) and hook.get("type") == "command" else None
+    try:
+        words = shlex.split(command) if isinstance(command, str) else []
+    except ValueError:
+        return False
+    return (len(words) == 4 and os.path.isabs(words[0]) and os.path.basename(words[0]) == "work-read"
+            and words[1:] == ["context", "--format", "codex"])
+
+
+def _with_codex_hooks(argv):
+    """argv without any Mesh project hook it carried (a restored command, another installation, an earlier switch
+    value), then with the current ones; an event the user's own override already sets is left to it."""
+    kept = [word for words, value in codex_config_items(list(argv))
+            if value is None or _has_control_character(value) or not _is_mesh_codex_hook(value) for word in words]
+    taken = [_dotted_key(value.partition("=")[0]) for _, value in codex_config_items(kept) if value and "=" in value]
+    added = [_codex_hook_item(event, hook) for event, hook in project_context_hooks("codex")
+             if ["hooks"] not in taken and ["hooks", event] not in taken]
+    return [*kept, *(word for item in added for word in ("-c", item))]
+
+
 # A recorded command may come from a snapshot written by another installation,
 # under another name: its board server, executable and environment names differ.
 # Such an entry is recognised by its structure, never by a list of names: a
@@ -1266,7 +1307,8 @@ def inject(kind, argv):
         return [*kept, "--mcp-config", config] if config else kept
     if kind == "codex":
         kept = strip_board(kind, argv)
-        return [*kept, *(word for item in _codex_config(mesh_servers(kind)) for word in ("-c", item))]
+        # then the read-only project context hook (_with_codex_hooks), when it is on
+        return _with_codex_hooks([*kept, *(word for item in _codex_config(mesh_servers(kind)) for word in ("-c", item))])
     if kind in ("opencode", "gemini", "agy", "vibe"):
         # The configuration travels in the environment (opencode_config, gemini_home, vibe_mcp_value), not in argv;
         # agy has none per session: its plugin holds it (agy_plugin_files).
