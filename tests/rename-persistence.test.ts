@@ -95,9 +95,12 @@ async function restartApproved(lab: HistoryLab, name: string): Promise<Record<st
 /** Restart the PTY host, then restore the offer of `name`: the restored session, running its conversation again. */
 async function restoredAfterHostRestart(lab: HistoryLab, kind: Kind, name: string, before: number): Promise<Listed> {
   await lab.restartHost();
+  // offered, and the agent of the ended session gone (until it exits, its conversation counts as running elsewhere)
   await waitFor(`${name} offered`, 20000, async () => {
     const answer = await lab.call('GET', '/api/sessions');
-    return (answer.json?.restorable as {name: string}[] | undefined)?.some(offer => offer.name === name) ?? false;
+    const offered = (answer.json?.restorable as {name: string}[] | undefined)?.some(offer => offer.name === name);
+    const running = (answer.json?.external as Listed[] | undefined)?.some(item => item.agent?.session_id === SIDS[kind]);
+    return Boolean(offered) && !running;
   });
   const restored = await lab.call('POST', '/api/restore', {names: [name]});
   assert.equal(restored.status, 200, restored.text);
