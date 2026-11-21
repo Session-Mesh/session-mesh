@@ -396,7 +396,7 @@ let accounts_resolve file backend name =
    can be retried; "carry_restore_failed" and "carry_rollback_incomplete" name a
    file left in place and need someone to step in. One process per carry: the
    lock does not exclude carries inside one process. For Codex only the rollout is
-   copied: resuming from it alone is not verified (Mesh_accounts_carry). *)
+   copied: that is enough to resume it (Mesh_accounts_carry). *)
 let accounts_carry file kind conversation from_account to_account =
   let module Carry = Mesh_accounts_carry in
   let refuse { Carry.code; message } =
