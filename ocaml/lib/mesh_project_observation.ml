@@ -296,6 +296,12 @@ let validate_catalog t r bytes runtime entry =
   if C.get witness "providers_closed"<>`Bool true || C.get witness "provider_pipes_closed"<>`Bool true
     then raise (C.Invalid "worker-exited-unverified");
   let valid=match C.get a "valid" with `Bool value -> value | _ -> raise(C.Invalid "collector-invalid") in
+  (* Cancelled: the host stopped the validator (SIGTERM, then SIGKILL 2 s later), and a validator still exiting
+     then is killed after its settled reply. That exit status is the host's doing, not a failure of the
+     validator: the validation is cancelled. *)
+  (match cancellation t r with
+  | Some reason -> raise(S.Outcome((if reason="stale" then "stale" else "cancelled"),reason))
+  | None -> ());
   if status<>Unix.WEXITED 0 then raise(S.Outcome("failed","collector-failed"));
   valid
 
