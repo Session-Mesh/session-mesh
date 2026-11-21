@@ -44,8 +44,10 @@ let alternate_screen_first () =
 
 let every_tracked_mode () =
   check "booleans in a fixed order"
-    (set 1 ^ reset 7 ^ reset 25 ^ set 1004 ^ set 1007 ^ set 2004)
-    [ set 2004; set 1007; set 1004; reset 25; reset 7; set 1 ];
+    (set 1 ^ reset 7 ^ reset 25 ^ set 1004 ^ set 2004)
+    [ set 2004; set 1004; reset 25; reset 7; set 1 ];
+  check "alternate scroll, which xterm.js 5.5 does not implement" ""
+    [ set 1007 ];
   check "keypad" "\027=" [ "\027=" ];
   check "keypad off" "" [ "\027=\027>" ];
   check "keypad as mode 66" "\027=" [ set 66 ];
@@ -90,14 +92,80 @@ let cancelled_sequences () =
   check "ESC restarts" (set 1000) [ csi "?1049\027[?1000h" ];
   check "C0 controls inside are executed, not aborting" (set 1049)
     [ csi "?10\r\n49h" ];
-  check "an eight-bit byte aborts" "" [ csi "?1049\200h" ];
+  check "a C0 control between CSI and the question mark" (set 1049)
+    [ csi "\n?1049h" ];
+  check "C0 controls and DEL before the question mark" (set 2004)
+    [ csi "\r\127\n?2004h" ];
   check "unfinished" "" [ csi "?1049" ]
+
+(* xterm.js decodes UTF-8 before parsing: a byte that is not valid UTF-8 is
+   dropped, a decoded character from U+00A0 ends a control sequence, and
+   U+0080 to U+009F (C2 80 to C2 9F) are the C1 controls. *)
+let decoded_bytes () =
+  (* Decimal escapes: \255 is 0xFF, \128 a lone continuation byte, \200 a
+     lead byte (0xC8) without its continuation. *)
+  check "an invalid byte inside a sequence is dropped" (set 1049)
+    [ csi "?10\25549h" ];
+  check "a lone continuation byte too" (set 2004) [ csi "?20\12804h" ];
+  check "a lead byte cut short too" (set 1) [ csi "?\2001h" ];
+  check "an overlong encoding and a byte order mark too" (set 2004)
+    [ csi "?20\192\175\239\187\19104h" ];
+  check "a character ends it" "" [ csi "?10\195\16949h" ];
+  check "a lead byte cut short by ESC" (set 1049) [ csi "?1\226"; set 1049 ];
+  check "the eight-bit CSI inside a sequence"
+    (set 1049 ^ set 1006)
+    [ csi "?1\194\155?1049;1006h" ];
+  check "split between its two bytes" (set 1049) [ csi "1\194"; "\155?1049h" ];
+  check "inside an OSC title" (set 1049) [ "\027]0;\194\155?1049h" ];
+  check "another C1 control ends a sequence" "" [ csi "?10\194\13349h" ];
+  check "a character U+00A0 or above is no C1 control" ""
+    [ "\027]0;a\007"; "\027_\194\160?1049h"; "\027P\226\130\172\155?1049h" ];
+  (* Outside a sequence only ESC is looked for (docs/operations.md): no
+     program sends C1 controls as UTF-8, and looking for C2 too would slow
+     the scan of every non-ASCII text. *)
+  check "the eight-bit CSI outside a sequence is not followed" ""
+    [ "\194\155?1049h" ]
+
+(* OSC, DCS and SOS, PM, APC strings: their text is not output, whatever it
+   holds; ESC ends them and starts a sequence. *)
+let strings () =
+  check "a mode in a DCS payload" "" [ "\027Pq\n[?1049h\027\\" ];
+  check "an APC is not ended by BEL" "" [ "\027_a\007[?1049h"; "\027\\" ];
+  check "an ESC sequence ends an OSC and applies" (set 1049)
+    [ "\027]0;title\n\027[?1049h" ]
+
+let finish chunks rest =
+  let t = modes_of chunks in
+  M.finish_sequence t (Bytes.of_string rest) 0 (String.length rest)
+
+let check_end label expected chunks rest =
+  Alcotest.(check (option int)) label expected (finish chunks rest)
+
+let finished_sequences () =
+  check_end "an OSC cut after a line feed" (Some 5) [ "\027]0;head\n" ]
+    "TAIL\007next";
+  check_end "an OSC ended by ESC: the ESC is kept" (Some 4) [ "\027]0;a\n" ]
+    "TAIL\027\\next";
+  check_end "an OSC ended by eight-bit ST" (Some 6) [ "\027]0;a\n" ]
+    "TAIL\194\156next";
+  check_end "a DCS payload" (Some 4) [ "\027P1q\n" ] "DATA\027\\";
+  check_end "an APC goes on past BEL" (Some 5) [ "\027_x\n" ] "y\007z\194\156ok";
+  check_end "an APC ended by a character" (Some 2) [ "\027_x\n" ] "\195\169rest";
+  check_end "an eight-bit CSI is kept" (Some 2) [ "\027]0;a\n" ]
+    "bc\194\155?1049h";
+  check_end "a CSI after a C0 control before the question mark" (Some 6)
+    [ csi "\n" ]
+    "?1049hX";
+  check_end "an OSC longer than the bytes given" None [ "\027]0;a\n" ] "no end";
+  check_end "nothing under way" (Some 0) [ "text\n" ] "TAIL\007"
 
 let resets () =
   let all =
     [ set 1049; set 1003; set 1006; set 2004; set 1; reset 25; "\027=" ]
   in
-  check "RIS restores every default" "" (all @ [ "\027c" ]);
+  check "RIS restores every default but the cursor, as xterm.js 5.5" (reset 25)
+    (all @ [ "\027c" ]);
+  check "RIS keeps a visible cursor visible" "" [ set 1049; "\027c" ];
   check "DECSTR keeps the screen and the mouse"
     (set 1049 ^ set 1003 ^ set 1006)
     (all @ [ csi "!p" ]);
@@ -175,7 +243,10 @@ let split_everywhere () =
     (M.prefix whole)
 
 let random_streams () =
-  let alphabet = "\027[?;0123456789hl!pc=>\024\r\n:x$ 1049" in
+  let alphabet =
+    "\027[?;0123456789hl!pc=>\024\r\n\
+     :x$ 1049]P_\007\\\194\155\156\157\169\226\255"
+  in
   let state = Random.State.make [| 1903 |] in
   for _ = 1 to 2000 do
     let n = Random.State.int state 200 in
@@ -241,6 +312,10 @@ let () =
           Alcotest.test_case "parameter lists" `Quick parameter_lists;
           Alcotest.test_case "not DECSET" `Quick not_decset;
           Alcotest.test_case "cancelled sequences" `Quick cancelled_sequences;
+          Alcotest.test_case "UTF-8 and C1 controls" `Quick decoded_bytes;
+          Alcotest.test_case "string sequences" `Quick strings;
+          Alcotest.test_case "the end of a cut sequence" `Quick
+            finished_sequences;
           Alcotest.test_case "RIS and DECSTR" `Quick resets;
         ] );
       ( "robustness",

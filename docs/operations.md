@@ -512,13 +512,26 @@ A browser that opens a session first receives the last 2 MiB of its output, the 
 full-screen program such as pi, OpenCode, Copilot or Antigravity turns on the alternate screen and
 mouse reporting once, when it starts; after it has written more than 2 MiB, those sequences are no
 longer in the replay. The PTY host follows a small set of terminal modes in the output it trims
-(alternate screen, mouse tracking and its encoding, focus reports, alternate scroll, bracketed
-paste, autowrap, cursor visibility, application cursor keys and keypad) and starts a cut replay
-with the sequences that set them as they were where the replay starts. A browser opened late is
-then in the program's modes, and the wheel reaches the program. Nothing is sent to the program, and
-a replay that still holds the whole output is unchanged. This is done by the PTY host, so it takes
-effect after a PTY host restart, which ends every session. The menu action that restores the
-full-screen scroll by hand stays, for older hosts.
+(alternate screen, mouse tracking and its encoding, focus reports, bracketed paste, autowrap,
+cursor visibility, application cursor keys and keypad) and starts a cut replay with the sequences
+that set them as they were where the replay starts. A browser opened late is then in the program's
+modes, and the wheel reaches the program. Nothing is sent to the program, and a replay that still
+holds the whole output is unchanged. This is done by the PTY host, so it takes effect after a PTY
+host restart, which ends every session. The menu action that restores the full-screen scroll by hand
+stays, for older hosts.
+
+The modes are those of the terminal in the browser (xterm.js 5.5), which the host follows as that
+terminal parses the output. Alternate scroll (mode 1007) is not restored, because xterm.js 5.5 does
+not implement it. When the replay starts inside a title, a DCS payload or another string sequence,
+the rest of that sequence is not sent, so it does not appear as text, provided its end (or the
+start of another sequence) lies within the first 4096 bytes of the replay; otherwise the replay is
+sent whole and that rest may appear as text. One family of cases is not followed: an eight-bit
+control introducer written as UTF-8 (bytes C2 9B for a CSI, C2 9D for an OSC, and so on, rather than
+`ESC [` or `ESC ]`) outside any sequence. Programs do not send them, and looking for them would slow
+the host's scan of all non-ASCII output. Two consequences follow. A C2 9B inside a string that an
+eight-bit introducer opened is not seen by the host, although xterm.js applies it. And a replay
+that starts inside a string opened by an eight-bit introducer shows the rest of that string as text,
+as it did before.
 
 ## macOS
 
