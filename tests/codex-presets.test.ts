@@ -12,6 +12,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {ptyhostArgv} from './ptyhost-command.ts';
+import {fakeAgentShell} from './helpers/fake-agent.ts';
 
 let mesh: Mesh;
 let argvLog: string;
@@ -29,7 +30,7 @@ before(async () => {
   const [hostCommand, ...hostArguments] = ptyhostArgv();
   host = spawn(hostCommand, hostArguments, {
     cwd: REPO, stdio: 'ignore',
-    env: {PATH: path_, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C'}});
+    env: {PATH: path_, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C', SHELL: fakeAgentShell(bin)}});
   for (let attempt = 0; attempt < 100 && !fs.existsSync(path.join(mesh.home, 'run', 'session-mesh', 'ptyhost.sock')); attempt += 1) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }

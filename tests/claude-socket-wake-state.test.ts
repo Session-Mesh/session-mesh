@@ -11,7 +11,7 @@ import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
-import {hostArgv, installFakeClaude, MANAGED, NOTICE} from './claude-wake-lib.ts';
+import {hostArgv, installFakeClaude, fakeAgentShell, MANAGED, NOTICE} from './claude-wake-lib.ts';
 import {REPO, runServer, scratchHome, stopServer} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
@@ -67,7 +67,7 @@ describe('a lost or damaged state of the wake lines', {skip: MANAGED.length > 0 
       servers.push(run.child);
       const hostSocket = path.join(where.home, 'run', 'session-mesh', 'ptyhost.sock');
       hosts.push(spawn(hostArgv()[0], hostArgv().slice(1), {cwd: REPO, stdio: 'ignore',
-        env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C'}}));
+        env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C', SHELL: fakeAgentShell(bin)}}));
       await waitFor('ptyhost answering', 10000, () => request(hostSocket, {op: 'list'}).then(() => true, () => false));
 
       const launch = async (name: string): Promise<Agent> => {

@@ -17,7 +17,7 @@ import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
-import {hostArgv, installFakeClaude, MANAGED, NOTICE} from './claude-wake-lib.ts';
+import {hostArgv, installFakeClaude, fakeAgentShell, MANAGED, NOTICE} from './claude-wake-lib.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
@@ -96,7 +96,7 @@ describe('server: a Claude with a messaging socket', {skip: MANAGED.length > 0 &
     mesh = await startMesh('skw-', {PATH, MESH_BIN_DIR, MESH_CLAUDE_WAKE_CONFIRM_SECONDS: '2'});
     const hostSocket = path.join(mesh.home, 'run', 'session-mesh', 'ptyhost.sock');
     hosts.push(spawn(hostArgv()[0], hostArgv().slice(1), {cwd: REPO, stdio: 'ignore',
-      env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C'}}));
+      env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C', SHELL: fakeAgentShell(bin)}}));
     await waitFor('ptyhost answering', 10000, () => request(hostSocket, {op: 'list'}).then(() => true, () => false));
 
     agents.sender = await launch('sender');

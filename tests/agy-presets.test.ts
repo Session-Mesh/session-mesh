@@ -17,7 +17,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
-import {fakeAgentPrologue} from './helpers/fake-agent.ts';
+import {fakeAgentPrologue, fakeAgentShell} from './helpers/fake-agent.ts';
 
 const CONVERSATION = '0b9a1c2e-1111-4222-8333-444455556666';
 const MARKER = 'AGY-TEST-CREDENTIAL';
@@ -37,7 +37,7 @@ function startHost(): ChildProcess {
   const argv = nativePtyhost();
   return spawn(argv[0], argv.slice(1), {
     cwd: REPO, stdio: 'ignore',
-    env: {PATH: pathEnv, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C'}});
+    env: {PATH: pathEnv, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C', SHELL: path.join(fakes, 'plain-bash')}});
 }
 
 async function until<T>(what: string, probe: () => T | undefined | false | Promise<T | undefined | false>): Promise<T> {
@@ -51,6 +51,7 @@ async function until<T>(what: string, probe: () => T | undefined | false | Promi
 
 before(async () => {
   fakes = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-agy-'));
+  fakeAgentShell(fakes);
   const bin = path.join(fakes, 'bin');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'agy'), `${fakeAgentPrologue('agy')}printf 'argv:%s\\n' "$*" >> '${log('argv.log')}'

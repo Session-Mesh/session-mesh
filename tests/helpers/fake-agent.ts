@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
+import fs from 'node:fs';
+import path from 'node:path';
+
+/** Fake-agent tests exercise their own PATH, not the machine's login profiles. */
+export function fakeAgentShell(directory: string): string {
+  const shell = path.join(directory, 'plain-bash');
+  fs.writeFileSync(shell, '#!/bin/sh\nexec /bin/bash --noprofile --norc -i\n', {mode: 0o700});
+  return shell;
+}
+
 /**
  * The first lines of a fake agent written as a shell script, named `name` on every system.
  *
