@@ -110,8 +110,10 @@ class NotSent(OSError):
     """The connection to the host failed: the request was not sent, nothing happened."""
 
 
-async def request(req, timeout=REQUEST_TIMEOUT):
-    """One request and its reply, bounded by ``timeout`` seconds (an operation known to take longer passes more)."""
+async def request(req, timeout=None):
+    """One request and its reply, bounded by ``timeout`` seconds (an operation known to take longer passes more);
+    None: REQUEST_TIMEOUT, read at each call."""
+    timeout = REQUEST_TIMEOUT if timeout is None else timeout
     async def run():
         try:
             reader, writer = await asyncio.open_unix_connection(str(SOCK))
