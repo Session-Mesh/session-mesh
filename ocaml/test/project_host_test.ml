@@ -488,6 +488,8 @@ let observation_fixture mode f =
         else if mode="validator-malformed" then "process.stdout.write('{\"unexpected\":true}');"
         else if mode="validator-bad-digest" then
           "const write=process.stdout.write.bind(process.stdout);process.stdout.write=(chunk,...rest)=>{const ack=JSON.parse(String(chunk));ack.sha256='0'.repeat(64);return write(JSON.stringify(ack),...rest);};await validatorMain(['--validate-catalog']);"
+        else if mode="validator-lingering" then
+          "await validatorMain(['--validate-catalog']);fs.writeFileSync(" ^ Printf.sprintf "%S" (Filename.concat root "validator-replied") ^ ",String(process.pid));setInterval(()=>{},1000);"
         else if mode="validator-held" then
           "const iterator=process.stdin[Symbol.asyncIterator].bind(process.stdin);process.stdin[Symbol.asyncIterator]=async function*(){for await(const chunk of {[Symbol.asyncIterator]:iterator}){fs.writeFileSync(" ^ Printf.sprintf "%S" (Filename.concat root "validator-ready") ^ ",String(process.pid));while(!fs.existsSync(" ^ Printf.sprintf "%S" (Filename.concat root "validator-release") ^ "))await new Promise(resolve=>setTimeout(resolve,20));yield chunk;}};await validatorMain(['--validate-catalog']);"
         else "await validatorMain(['--validate-catalog']);" in
@@ -750,6 +752,21 @@ let observation_validator_cancel () =
           Alcotest.(check bool) "cancelled validator cannot publish payload" true (U.member "descriptor" status=`Null);
           print_endline("RECEIPT actual C validator cancellation\n"^file_contents(Filename.concat f.root "observation-events"))))
 
+(* The validator has written its settled reply and has not exited yet when the observation is cancelled: the
+   host stops it (its exit status is then a signal), and the observation ends cancelled, not failed. *)
+let observation_validator_cancel_after_reply () =
+  observation_fixture "validator-lingering" (fun fixture env ->
+      with_host ~barrier:true ~extra_environment:env (fun f ->
+          let seed=observation_seed f in
+          let a=observation_start f seed 221 in
+          ignore(wait_until "validator replied, still running" observation_liveness_s (fun () -> Sys.file_exists(Filename.concat fixture "validator-replied")));
+          check "validation still running" "running" (value(observation_control f seed a "project_observation_status" []) "observation_state");
+          ignore(observation_control f seed a "project_observation_cancel" ["cancel_token",U.member "cancel_token" a]);
+          observation_wait f seed a "cancelled";
+          let status=observation_control f seed a "project_observation_status" [] in
+          check "the cancellation is the outcome" "cancelled" (value status "code");
+          Alcotest.(check bool) "cancelled validator cannot publish payload" true (U.member "descriptor" status=`Null)))
+
 let observation_discovery () =
   with_host (fun f ->
       let c = capability f in
@@ -815,6 +832,8 @@ let () =
           Alcotest.test_case
             "real blocked native workers preserve terminal reconnect" `Quick
             blocked_workers;
+          Alcotest.test_case "a validator stopped after its reply ends cancelled" `Quick
+            observation_validator_cancel_after_reply;
         ]
         @ identity_tests );
     ]
