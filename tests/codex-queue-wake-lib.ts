@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
+import {fakeAgentShell} from './helpers/fake-agent.ts';
 import os from 'node:os';
 import path from 'node:path';
 import {hostArgv} from './claude-wake-lib.ts';
@@ -127,7 +128,7 @@ export class Rig {
     const hostSocket = path.join(this.runtime, 'session-mesh', 'ptyhost.sock');
     this.hosts.push(spawn(hostArgv()[0], hostArgv().slice(1), {cwd: REPO, stdio: 'ignore',
       env: {PATH: this.path, HOME: this.where.home, XDG_RUNTIME_DIR: path.join(this.where.home, 'run'),
-        MESH_RUNTIME_DIR: this.runtime, LANG: 'C'}}));
+         MESH_RUNTIME_DIR: this.runtime, LANG: 'C', SHELL: fakeAgentShell(bin)}}));
     await waitFor('ptyhost answering', 10000, () => request(hostSocket, {op: 'list'}).then(() => true, () => false));
   }
 
