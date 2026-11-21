@@ -249,8 +249,8 @@ describe('an approved restart or switch that cannot restart the agent in its ter
 
   const linux = process.platform === 'linux' ? false : 'reads /proc';
   const refusals: [string, RegExp][] = [
-    ['process_scan_failed', /^ptyhost cannot tell what holds the terminal of session s-process-scan-failed: nothing was stopped\. Quit the agent there, or close the session, then resume the conversation$/],
-    ['no_terminal', /^ptyhost cannot tell what holds the terminal of session s-no-terminal: nothing was stopped\. Quit the agent there, or close the session, then resume the conversation$/],
+    ['process_scan_failed', /^ptyhost cannot tell what holds the terminal of session s-process-scan-failed: nothing was stopped\. Quit the agent there, then resume the conversation$/],
+    ['no_terminal', /^ptyhost cannot tell what holds the terminal of session s-no-terminal: nothing was stopped\. Quit the agent there, then resume the conversation$/],
   ];
   for (const [reason, message] of refusals) {
     test(`${reason}: nothing is stopped, so an agent that ignores SIGHUP never runs beside a second one`, {skip: linux}, async () => {
@@ -278,24 +278,27 @@ describe('an approved restart or switch that cannot restart the agent in its ter
     const {most, result: decided} = await mostAgents(session.sid, approved(session, {action: 'restart'}), 8000);
     assert.equal(decided.state, 'failed', JSON.stringify(decided));
     assert.equal(decided.result?.error, 'The shell of session j-no-job-control runs the agent without job control: it '
-      + 'cannot be stopped alone, and nothing was stopped. Quit the agent there, or close the session, then resume the '
-      + 'conversation');
+      + 'cannot be stopped alone, and nothing was stopped. Quit the agent there, then resume the conversation');
     assert.equal(most, 1, 'one agent on the conversation at any time');
     assert.ok(!ops.slice(since).includes('kill_if') && !ops.slice(since).includes('start_if'), 'nothing signalled');
     assert.equal(launches().length, started, 'nothing started');
     assert.equal((await listed('j-no-job-control'))?.created, before?.created, 'the same incarnation');
   });
 
-  test('the agent as the session\'s program (no_shell, from the real host): never two agents, the old one is killed', {skip: linux}, async () => {
+  test('the agent as the session\'s program (no_shell, from the real host): never two agents, the old one is killed, then the conversation resumes', {skip: linux}, async () => {
     const session = await codexSession('l-agent-leader', {stubborn: true, agentLeader: true});
     const [old] = agentsOf(session.sid);
     assert.ok(old, 'the agent runs');
+    fs.rmSync(path.join(mesh.home, 'l-agent-leader', '.agent-leader'));   // the replacement gets a shell
     const since = ops.length;
-    const {most} = await mostAgents(session.sid, approved(session, {action: 'restart'}), 2000);
+    const {most, result: decided} = await mostAgents(session.sid, approved(session, {action: 'restart'}), 2000);
     assert.equal(most, 1, 'one agent on the conversation at any time');
     assert.ok(ops.slice(since).includes('kill_if'), 'the whole session was stopped');
-    await waitFor('the stubborn agent killed', 20000, () => !agentsOf(session.sid).includes(old!));
-    assert.ok(agentsOf(session.sid).length <= 1, 'still one agent at most');
+    assert.ok(!agentsOf(session.sid).includes(old!), 'the stubborn agent was killed');
+    // the server waits past the host's SIGKILL, then resumes the conversation in the replacement
+    assert.equal(decided.state, 'completed', JSON.stringify(decided));
+    await waitFor(`the resume in ${decided.result!.id}`, 10000, () => resumesIn(decided.result!.id!).length === 1);
+    assert.equal(agentsOf(session.sid).length, 1, 'the resumed agent alone');
   });
 
   test('any other refusal stops and starts nothing, and says what to do', async () => {

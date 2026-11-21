@@ -1741,9 +1741,9 @@ conversation beside the new one:
 
 | Reason | Meaning | What happens |
 | --- | --- | --- |
-| `no_shell` | The agent is the session's own program, with no shell around it. | The whole session is replaced by a new one, as before this release. |
-| `no_job_control` | The shell runs the agent in the shell's own process group (job control off), with whatever else runs there. | Nothing is stopped; the request fails: quit the agent in that terminal, or close the session, then resume the conversation. |
-| `no_terminal`, `process_scan_failed` | The host cannot see what holds the terminal. | Nothing is stopped; the request fails: quit the agent in that terminal, or close the session, then resume the conversation. |
+| `no_shell` | The agent is the session's own program, with no shell around it. | The whole session is replaced by a new one, as before this release. An agent that ignores SIGHUP is killed (about 12 s later) before the new one resumes the conversation. |
+| `no_job_control` | The shell runs the agent in the shell's own process group (job control off), with whatever else runs there. | Nothing is stopped; the request fails: quit the agent in that terminal, then resume the conversation. Closing the session is no substitute: it signals the shell's group only.. |
+| `no_terminal`, `process_scan_failed` | The host cannot see what holds the terminal. | Nothing is stopped; the request fails: quit the agent in that terminal, then resume the conversation. Closing the session is no substitute: it signals the shell's group only.. |
 | `unsupported_foreground` | Another program holds the terminal (an editor, `make`, `ssh`...), with job control on. | Nothing is stopped; the request fails: quit that program, or bring the agent back to the foreground, then ask again. |
 | `agent_not_foreground` | The agent runs in the background, or beside a second agent. | Nothing is stopped; the request fails: bring it to the foreground (`fg`), then ask again. |
 | `agent_starting`, `agent_still_running`, `stale_incarnation` | A launch is under way, the agent outlived SIGKILL, or the session changed since the request. | Nothing is started; the request fails with that reason. |

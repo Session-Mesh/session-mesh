@@ -80,11 +80,11 @@
     "key": "server.agentInBackground"
   },
   {
-    "pattern": "^ptyhost cannot tell what holds the terminal of session (?<name>.+): nothing was stopped\\. Quit the agent there, or close the session, then resume the conversation$",
+    "pattern": "^ptyhost cannot tell what holds the terminal of session (?<name>.+): nothing was stopped\\. Quit the agent there, then resume the conversation$",
     "key": "server.agentStateUnseen"
   },
   {
-    "pattern": "^The shell of session (?<name>.+) runs the agent without job control: it cannot be stopped alone, and nothing was stopped\\. Quit the agent there, or close the session, then resume the conversation$",
+    "pattern": "^The shell of session (?<name>.+) runs the agent without job control: it cannot be stopped alone, and nothing was stopped\\. Quit the agent there, then resume the conversation$",
     "key": "server.agentWithoutJobControl"
   },
   {
