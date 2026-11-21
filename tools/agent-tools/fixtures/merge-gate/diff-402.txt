@@ -1,0 +1,2 @@
+diff --git a/tests/new_thing.py b/tests/new_thing.py
+new file

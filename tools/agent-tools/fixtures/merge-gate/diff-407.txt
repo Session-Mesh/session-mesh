@@ -1,0 +1,5 @@
+diff --git a/server.py b/server.py
+--- a/server.py
++++ b/server.py
++see also /home/user/docs and the commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1234
++copy from /home/alice/notes to compare

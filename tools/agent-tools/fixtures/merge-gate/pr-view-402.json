@@ -1,0 +1,11 @@
+{
+  "state": "OPEN",
+  "isDraft": false,
+  "headRefOid": "a1b2c3d4eeeeffff",
+  "mergeStateStatus": "BLOCKED",
+  "title": "feat(accounts): thing two",
+  "baseRefName": "main",
+  "body": "Something small. Changelog: none",
+  "labels": [{"name": "semver: minor"}],
+  "commits": [{"messageHeadline": "feat(accounts): thing two", "messageBody": ""}]
+}

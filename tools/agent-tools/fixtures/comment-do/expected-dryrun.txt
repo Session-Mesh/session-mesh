@@ -1,0 +1,2 @@
+comment-do.sh (dry run, without --yes): I would post the contents of good-comment.txt on issue 7.
+Nothing was posted.

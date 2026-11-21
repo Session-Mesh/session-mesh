@@ -1,0 +1,13 @@
+OK PR open: open, not a draft
+OK head: head f9c45553deadbeef matches f9c45553
+OK merge state: CLEAN
+OK CI checks: all green
+OK base CI run: completed/success on main
+OK readable diff: readable
+OK forbidden words and leaks: none detected
+OK attribution footers: none
+KO added Python files: tests/new_thing.py
+OK .github files: unchanged
+OK semver label: semver: patch
+OK changelog: changelog.d/403-thing.md added
+NO-GO

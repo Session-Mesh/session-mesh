@@ -1,0 +1,5 @@
+# One word or phrase per line, matched case-insensitively against diffs, PR text and comments.
+# Copy to the file named by AGENT_TOOLS_DENY_FILE and fill it in. Keep that file out of every repository.
+# Lines starting with # and empty lines are ignored.
+example-private-repository
+example-client-name
