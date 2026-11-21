@@ -65,7 +65,10 @@ let detail store operation config revision project =
         ])
   in
   let add_optional ((fields, omitted) as current) key =
-    match List.assoc_opt key (C.obj project) with
+    let value = match List.assoc_opt key (C.obj project) with
+      | None when key = "sessions" -> Some (`List [])
+      | value -> value in
+    match value with
     | None -> current
     | Some value ->
         let candidate =
@@ -79,14 +82,14 @@ let detail store operation config revision project =
   reply
     (List.fold_left add_optional
        (detail_identity project, [])
-       [ "description"; "folders"; "repository"; "sources" ])
+        [ "description"; "folders"; "repository"; "sources"; "sessions" ])
 
 let capability store operation =
   envelope store operation "ok"
     [
       ("mode", s "normal");
       ("store", s "unchecked");
-      ("features", `List [ s "project-registry/1" ]);
+      ("features", `List [ s "project-registry/1"; s "project-session-tools/1" ]);
       ("operations", `List (List.map s C.operations));
       ( "limits",
         assoc
@@ -96,7 +99,9 @@ let capability store operation =
             ("config_bytes", `Int C.config_bytes);
             ("max_folders", `Int 100);
             ("max_sources", `Int 20);
-            ("max_source_changes", `Int 40);
+             ("max_source_changes", `Int 40);
+             ("max_sessions", `Int 100);
+             ("max_session_changes", `Int 40);
           ] );
     ]
 

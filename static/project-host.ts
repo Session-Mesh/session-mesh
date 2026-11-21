@@ -11,6 +11,7 @@ export interface ProjectMembership {
 // Future explicit owner capability; neither release14 nor the frozen fde advertises it.
 // Covers owner membership reads/participation changes, never liveness or session rights.
 export const PROJECT_MEMBERSHIP_FEATURE = 'project-memberships/1';
+export const PROJECT_SESSION_TOOLS_FEATURE = 'project-session-tools/1';
 export const PROJECT_REQUEST_BYTES = 128 * 1024;
 export const PROJECT_REPLY_BYTES = 192 * 1024;
 export const PROJECT_OPS = ['project_capabilities', 'project_list', 'project_read', 'project_create',
@@ -29,6 +30,7 @@ export interface ProjectDetail extends ProjectSummary {
   description?: string; folders?: string[]; repository?: { url: string; extra_fields?: number };
   sources?: SourceReference[]; folders_total: number; sources_total: number;
   sessions_total: number; participations_total: number;
+  sessions?: ProjectSession[];
 }
 export interface HostReply {
   kind: 'mesh-project-reply'; version: 1; op: string; boot: string; status: string;
@@ -77,8 +79,11 @@ function source(value: unknown): SourceReference {
 function detail(value: unknown): ProjectDetail {
   const row = record(value), base = summary(row);
   const repository = row.repository === undefined ? undefined : record(row.repository);
+  const sessions = row.sessions === undefined ? undefined : array(row.sessions, 100, membershipSession);
+  if (sessions && sessions.length !== count(row.sessions_total)) throw Error('incomplete-sessions');
   return { ...base, folders_total: count(row.folders_total), sources_total: count(row.sources_total),
     sessions_total: count(row.sessions_total), participations_total: count(row.participations_total),
+    ...(sessions === undefined ? {} : {sessions}),
     ...(row.description === undefined ? {} : { description: text(row.description, 4000) }),
     ...(row.folders === undefined ? {} : { folders: array(row.folders, 100, item => text(item, 4096)) }),
     ...(row.sources === undefined ? {} : { sources: array(row.sources, 20, source) }),

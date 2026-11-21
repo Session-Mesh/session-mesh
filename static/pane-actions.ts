@@ -18,6 +18,7 @@ export * from "./config-panel.ts";
 export * from "./backend-account-panel.ts";
 export { createBackendAccountApi } from "./backend-account-api.ts";
 export * from "./session-artifacts.ts";
+export * from "./session-project-tools.ts";
 export * from "./agent-mail-consent.ts";
 export * from "./narrow-drawer.ts";
 export { holdLineForTarget } from "./held-line.ts";

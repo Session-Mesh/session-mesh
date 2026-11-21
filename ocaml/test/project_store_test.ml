@@ -847,11 +847,96 @@ let pipeline_selector_settings () =
       check "actual empty label still refused" "refused" (value refused "status");
       check "actual empty label leaves bytes" before (bytes root))
 
+let session_tools () =
+  with_store (fun root store ->
+      let created = create store 1 in
+      let machine = U.member "machine_id" created in
+      let initial = Yojson.Basic.from_string (bytes root) in
+      let initial_project = List.hd (U.to_list (U.member "projects" initial)) in
+      let authored = `Assoc (("description", str "Preserve authored context") ::
+          ("participations", `List [`Assoc ["id", str "saved-role"; "recorded_relation", str "saved";
+            "target", `Assoc ["kind", str "mesh"; "name", str "other"; "created", `Int 12; "machine_id", str "foreign"]]]) :: C.obj initial_project) in
+      write root (C.encode (`Assoc (("projects", `List [authored]) :: List.remove_assoc "projects" (C.obj initial))));
+      let created = call store "project_list" [] in
+      let reference at = `Assoc ["machine_id", machine; "name", str "same"; "created", at] in
+      let change kind reference = `Assoc ["type", str kind; "session", reference] in
+      let mutate revision n changes = settings store revision n ["session_changes", `List changes] in
+      let read () = call store "project_read" ["project_id", str (uid 1)] in
+      let refs () = U.member "sessions" (U.member "project" (read ())) |> U.to_list in
+      let original = List.hd (U.to_list (U.member "projects" (Yojson.Basic.from_string (bytes root)))) in
+      ignore (C.patch original (`Assoc ["session_changes", `List [change "attach" (reference (`Int 123))]]));
+      let distinct = C.patch original (`Assoc ["session_changes", `List [
+          change "attach" (reference (`Int 9007199254740992));
+          change "attach" (reference (`Int 9007199254740993))]]) in
+      Alcotest.(check int) "integer identities never collapse through float rounding" 2 (List.length (U.to_list (U.member "sessions" distinct)));
+      let first = mutate (value created "revision") 2 [change "attach" (reference (`Int 123))] in
+      check "attach exact identity" "ok" (value first "status");
+      let persisted = List.hd (U.to_list (U.member "projects" (Yojson.Basic.from_string (bytes root)))) in
+      List.iter (fun (key, old) -> if key <> "sessions" then
+          Alcotest.(check bool) ("preserve " ^ key) true (C.canonical (U.member key persisted) = C.canonical old)) (C.obj authored);
+      Alcotest.(check int) "bounded owner read" 1 (List.length (refs ()));
+      let duplicate = mutate (value first "revision") 3 [change "attach" (reference (`Float 123.))] in
+      check "numeric-equivalent duplicate" "ok" (value duplicate "status");
+      Alcotest.(check int) "deduplicated" 1 (List.length (refs ()));
+      let replaced = mutate (value duplicate "revision") 4 [change "attach" (reference (`Int 124))] in
+      Alcotest.(check int) "same name distinct incarnation" 2 (List.length (refs ()));
+      let before = bytes root in
+      let stale = mutate (value duplicate "revision") 5 [change "detach" (reference (`Int 123))] in
+      check "revision checked" "conflict" (value stale "status");
+      check "conflict leaves bytes" before (bytes root);
+      let malformed = `Assoc ["name", str "same"; "created", `Int 123] in
+      check "machine required" "refused" (value (mutate (value replaced "revision") 6 [change "attach" malformed]) "status");
+      check "invalid leaves bytes" before (bytes root);
+      let detached = mutate (value replaced "revision") 7 [change "detach" (reference (`Int 123))] in
+      check "detach exact tuple" "ok" (value detached "status");
+      let remaining = refs () in
+      Alcotest.(check bool) "replacement retained" true (List.length remaining = 1 && C.canonical (List.hd remaining) = C.canonical (reference (`Int 124)));
+      let capability = call store "project_capabilities" [] in
+      Alcotest.(check bool) "feature advertised" true (List.mem (str "project-session-tools/1") (U.to_list (U.member "features" capability)));
+      let config = Yojson.Basic.from_string (bytes root) in
+      let project = List.hd (U.to_list (U.member "projects" config)) in
+      let full = List.init 100 (fun n -> reference (`Int n)) in
+      let project = `Assoc (("sessions", `List full) :: List.remove_assoc "sessions" (C.obj project)) in
+      write root (C.encode (`Assoc (("projects", `List [project]) :: List.remove_assoc "projects" (C.obj config))));
+      let listed = call store "project_list" [] and before = bytes root in
+      check "101 refused" "refused" (value (mutate (value listed "revision") 8 [change "attach" (reference (`Int 1000))]) "status");
+      check "capacity leaves bytes" before (bytes root);
+      Alcotest.(check int) "all100 read" 100 (List.length (refs ()));
+      Alcotest.(check bool) "reply bound" true (String.length (C.encode (read ())) <= C.reply_bytes);
+      let sessions = List.init 100 (fun n -> `Assoc ["name", str (String.make 240 'n'); "created", `Int n; "machine_id", str (String.make 80 'm')]) in
+      let sources = List.init 20 (fun n -> `Assoc ["id", str ("s" ^ string_of_int n); "kind", str "other"; "label", str (String.make 240 's')]) in
+      let folders = List.init 40 (fun n -> str ("/" ^ string_of_int n ^ String.make 4090 'f')) in
+      let enlarged = `Assoc (("sessions", `List sessions) :: ("sources", `List sources) :: ("folders", `List folders) ::
+          List.filter (fun (key, _) -> not (List.mem key ["sessions"; "sources"; "folders"])) (C.obj project)) in
+      write root (C.encode (`Assoc (("projects", `List [enlarged]) :: List.remove_assoc "projects" (C.obj config))));
+      let partial = read () in
+      Alcotest.(check bool) "whole session field omitted, never truncated" true
+        (U.member "sessions" (U.member "project" partial) = `Null && List.mem (str "sessions") (U.to_list (U.member "omitted_fields" partial)));
+      Alcotest.(check int) "count survives omission" 100 (U.to_int (U.member "sessions_total" (U.member "project" partial)));
+      Alcotest.(check bool) "partial reply bound" true (String.length (C.encode partial) <= C.reply_bytes))
+
+let legacy_session_tools () =
+  with_store (fun root store ->
+      let config = `Assoc ["kind", str "mesh-project-config"; "schema_version", `Int 1;
+        "machine_id", str "legacy-machine"; "projects", `List [`Assoc ["id", str "legacy"; "title", str "Legacy"]]] in
+      write root (C.encode config);
+      let before = bytes root in
+      let read = call store "project_read" ["project_id", str "legacy"] in
+      Alcotest.(check bool) "genuinely absent zero field projected" true (U.member "sessions" (U.member "project" read) = `List []);
+      Alcotest.(check int) "legacy session count zero" 0 (U.to_int (U.member "sessions_total" (U.member "project" read)));
+      check "read never rewrites legacy config" before (bytes root);
+      let attached = call store "project_settings" ["boot", str "boot1"; "expected_revision", U.member "revision" read;
+        "project_id", str "legacy"; "request_id", str (uid 2); "patch", `Assoc ["session_changes", `List [
+          `Assoc ["type", str "attach"; "session", `Assoc ["machine_id", str "legacy-machine"; "name", str "live"; "created", `Int 1]]]]] in
+      check "legacy first attachment succeeds" "ok" (value attached "status"))
+
 let () =
   Alcotest.run "native project store"
     [
       ( "store",
         [
+          Alcotest.test_case "exact session Tools attachment" `Quick session_tools;
+          Alcotest.test_case "legacy first session Tools attachment" `Quick legacy_session_tools;
           Alcotest.test_case "typed observation settings" `Quick typed_settings;
           Alcotest.test_case "pipeline source selectors" `Quick pipeline_selector_settings;
           Alcotest.test_case "lifecycle CAS replay restart" `Quick lifecycle;

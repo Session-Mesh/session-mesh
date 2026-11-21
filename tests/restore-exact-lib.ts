@@ -63,6 +63,10 @@ export class Lab {
   static async start(options: LabOptions = {}): Promise<Lab> {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'rcas-bin-'));
     const argvLog = path.join(bin, 'argv.log');
+    // This fixture tests restore custody, not login profiles. Keep the fake agent
+    // first on PATH even on machines whose /etc/profile resets it.
+    const shell = path.join(bin, 'plain-bash');
+    fs.writeFileSync(shell, '#!/bin/sh\nexec /bin/bash --noprofile --norc -i\n', {mode: 0o755});
     fs.writeFileSync(path.join(bin, 'claude'), [
       '#!/bin/sh',
       'if [ "$1" = "--version" ]; then exit 0; fi',   // the server's launch probe (claudewake) is not an agent
@@ -125,6 +129,11 @@ export class Lab {
       }
       fs.writeFileSync(path.join(where.confDir, 'sessions-snapshot.json'),
         JSON.stringify({version: 1, host: null, live: [], lost}));
+      // These core restore scenarios have affirmative empty-source records. Missing or
+      // unavailable catalogues are exercised separately by the artifact restore matrix.
+      fs.writeFileSync(path.join(where.confDir, 'session-artifacts.json'),
+        JSON.stringify({version: 1, sessions: lost.map(({name, created}) =>
+          ({session: {name, created}, references: []}))}), {mode: 0o600});
       options.prepare?.(where.home, where.confDir);
       appendFixturePath(where.home, PATH);
     });
@@ -133,7 +142,7 @@ export class Lab {
     const hostRuntime = options.intercept ? path.join(runtime, 'real') : runtime;
     fs.mkdirSync(hostRuntime, {recursive: true, mode: 0o700});
     const host = spawn(hostCommand!, hostArgs, {cwd: REPO, stdio: 'ignore',
-      env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: hostRuntime, LANG: 'C', SHELL: '/bin/bash'}});
+      env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: hostRuntime, LANG: 'C', SHELL: shell}});
     const hostSocket = path.join(hostRuntime, 'session-mesh', 'ptyhost.sock');
     await waitFor('ptyhost answering', 10000, () => request(hostSocket, {op: 'list'}).then(() => true, () => false));
     const socketPath = path.join(runtime, 'session-mesh', 'ptyhost.sock');

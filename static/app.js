@@ -2472,17 +2472,38 @@ class Pane {
         catch { flash(t("pane.copyRefused")); }
       });
       name.append(copy); identityBody.append(name);
-      if (Number.isFinite(s.created) && localMeshEffectsAllowed()) {
-        const artifacts = document.createElement("button");
-        artifacts.type = "button"; artifacts.textContent = t("artifacts.title");
-        artifacts.addEventListener("click", () => MeshPaneActions.openSessionArtifacts({
-          document, name: s.name, created: s.created, translate: t,
-          current: () => localMeshEffectsAllowed() && find(this.id)?.kind === "mesh"
-            && find(this.id)?.name === s.name && find(this.id)?.created === s.created,
-        }));
-        identityBody.append(artifacts);
-      }
     }
+    const tools = $(".p-tools", this.el);
+    tools.hidden = !(mesh && s && Number.isFinite(s.created) && localMeshEffectsAllowed());
+    const toolsBody = $(".p-tools-body", this.el);
+    const toolsIdentity = tools.hidden ? "" : JSON.stringify([s.name, s.created]);
+    if (tools.dataset.identity !== toolsIdentity) {
+      tools.dataset.identity = toolsIdentity;
+      toolsBody.replaceChildren();
+    }
+    if (!tools.hidden && !toolsBody.childElementCount) {
+      const artifacts = document.createElement("button");
+      artifacts.type = "button"; artifacts.textContent = t("artifacts.title");
+      artifacts.addEventListener("click", () => MeshPaneActions.openSessionArtifacts({
+        document, name: s.name, created: s.created, translate: t,
+        current: () => localMeshEffectsAllowed() && find(this.id)?.kind === "mesh"
+          && find(this.id)?.name === s.name && find(this.id)?.created === s.created,
+      }));
+      toolsBody.append(artifacts);
+      const attach = document.createElement("button");
+      attach.type = "button"; attach.textContent = t("artifacts.projectTitle");
+      attach.addEventListener("click", () => MeshPaneActions.openSessionProjectAttachment({
+        document, request: requestLocal, name: s.name, created: s.created, translate: t,
+        current: () => localMeshEffectsAllowed() && find(this.id)?.kind === "mesh"
+          && find(this.id)?.name === s.name && find(this.id)?.created === s.created,
+      }));
+      toolsBody.append(attach);
+    }
+    tools.onkeydown = (event) => {
+      if (event.key === "Escape" && tools.open) {
+        event.stopPropagation(); tools.open = false; $("summary", tools).focus();
+      }
+    };
     const disclosure = $(".p-provenance", this.el);
     disclosure.onkeydown = (event) => {
       if (event.key === "Escape" && disclosure.open) {
@@ -6903,6 +6924,12 @@ async function loadProjectsModule() {
     if (!projecting || issue !== projectsGeneration || !localMeshEffectsAllowed()) return;
     projectsController ||= module.mountProjectWorkspace({ root: $("#projects-root"), sidebar: $("#project-sidebar-list"),
       request: requestLocal, translate: t, availability: (ready) => { if (projecting) $("#btn-new").disabled = !ready; },
+      liveSession: (reference) => localMeshEffectsAllowed() && data.mesh.some((row) => row.name === reference.name && row.created === reference.created),
+      openSessionTools: (reference, current) => {
+        const live = () => current() && localMeshEffectsAllowed() && data.mesh.some((row) => row.name === reference.name && row.created === reference.created);
+        if (!live()) { flash(t("artifacts.stale")); return; }
+        MeshPaneActions.openSessionArtifacts({document, name: reference.name, created: reference.created, translate: t, current: live});
+      },
       mountArtifact: (root) => module.mountProjects({ root, request: requestLocal, translate: t,
         readPath: () => store.get("projects.path", ""), writePath: (path) => store.set("projects.path", path), origin: location.origin }) });
     projectsController.open();

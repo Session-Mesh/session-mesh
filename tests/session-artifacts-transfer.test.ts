@@ -32,10 +32,11 @@ async def main():
         ("absent",{"catalogue_present":False,"source_present":False,"references":[]}),
         ("legacy-empty",{"references":[]}),
         ("empty-existing-without-source",{"catalogue_present":True,"source_present":False,"references":[]}),
-        ("explicit-zero",{"catalogue_present":True,"source_present":True,"references":[]}),
+        ("explicit-zero",{"required":False}),
         ("nonempty",{"catalogue_present":True,"source_present":True,"references":[{}]}),
         ("malformed",{"catalogue_present":True,"source_present":True,"references":None}),
         ("wrong-proof-type",{"catalogue_present":1,"source_present":True,"references":[]}),
+        ("wrong-required-type",{"required":0}),
         ("unavailable",None)]:
         async def probe(*args,**kwargs):
             if value is None:raise web.HTTPServiceUnavailable()
@@ -76,8 +77,8 @@ async def main():
         async def sessions(**kwargs):return {"mesh":list(live),"external":[]}
         async def identity(e,expected):return e,None
         async def lifecycle(op,*args,**kwargs):
-            if op=="list" and fault in ("unknown-disappear","fresh-empty","unknown-probe-recovers"):raise web.HTTPServiceUnavailable()
-            if op=="transfer":
+            if op=="restore-probe" and fault in ("unknown-disappear","fresh-empty","unknown-probe-recovers"):raise web.HTTPServiceUnavailable()
+            if op=="restore-transfer":
                 transfers.append(True)
                 if once[0] and fault in ("disappear","unknown-disappear","replacement-empty"):
                     once[0]=False;store.rename(backup)
@@ -85,10 +86,10 @@ async def main():
                 if once[0] and fault.startswith("unproven-"):
                     once[0]=False;return {"transferred":fault=="unproven-true"}
             result=await actual(op,*args,**kwargs)
-            if op=="transfer" and fault=="receipt-lost" and once[0]:once[0]=False;raise web.HTTPServiceUnavailable()
+            if op=="restore-transfer" and fault=="receipt-lost" and once[0]:once[0]=False;raise web.HTTPServiceUnavailable()
             return result
         async def artifact_command(body):
-            if body["op"]=="transfer" and fault=="native-disappear" and once[0]:
+            if body["op"]=="restore-transfer" and fault=="native-disappear" and once[0]:
                 once[0]=False;store.rename(backup)  # after Python presence check, before native open
             return await command(body)
         def drop_lost(*args,**kwargs):
@@ -146,6 +147,6 @@ test("legacy required=false is not affirmative empty evidence",options,async()=>
   assert.equal(r.first_pending,true);assert.equal(r.warning,true);assert.equal(r.known_empty_flag,false);
   assert.equal(r.second_ok,true);assert.equal(r.launches,0);assert.equal(r.offer_finished,true);assert.equal(r.data_preserved,true);
 });
-test("knowledge predicate accepts only positive durable source-zero evidence",options,async()=>{
-  assert.deepEqual((await exercise()).knowledge,{absent:true,"legacy-empty":true,"empty-existing-without-source":true,"explicit-zero":false,nonempty:true,malformed:true,"wrong-proof-type":true,unavailable:true});
+test("restore bridge accepts only the native worker's explicit boolean source-zero attestation",options,async()=>{
+  assert.deepEqual((await exercise()).knowledge,{absent:true,"legacy-empty":true,"empty-existing-without-source":true,"explicit-zero":false,nonempty:true,malformed:true,"wrong-proof-type":true,"wrong-required-type":true,unavailable:true});
 });

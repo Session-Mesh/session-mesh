@@ -68,6 +68,10 @@ def fake_host(monkeypatch, snapshot_file):
     # assuming a missing optional catalogue proves that on a real installation.
     # Native knowledge/absence/repair behavior is covered by the TS integration tests.
     async def confirmed_empty(op, *args, **kwargs):
+        if op == "restore-probe":
+            return {"required": False}
+        if op == "restore-transfer":
+            return {"complete": True}
         if op == "list":
             return {"references": [], "catalogue_present": True, "source_present": True}
         return {"transferred": False, "catalogue_present": True, "transfer_status": "source-empty"}

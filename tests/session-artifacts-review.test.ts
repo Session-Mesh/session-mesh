@@ -143,7 +143,7 @@ async def main():
     server.board.transfer = lambda *args:False; server.restore_organisation = nothing
     actual = server.artifact_lifecycle; failures = [True]
     async def flaky(op,*args,**kwargs):
-        if op == "transfer" and failures[0]: failures[0] = False; raise web.HTTPServiceUnavailable()
+        if op == "restore-transfer" and failures[0]: failures[0] = False; raise web.HTTPServiceUnavailable()
         return await actual(op,*args,**kwargs)
     server.artifact_lifecycle = flaky
     first = await server.restore_one("old",set(),asyncio.Lock())

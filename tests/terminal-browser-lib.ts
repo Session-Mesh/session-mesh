@@ -80,12 +80,17 @@ export class TerminalMesh {
   private hostEnv: NodeJS.ProcessEnv = {};
 
   /** Kill the PTY host (the first child) and start another on the same socket: what a host restart is for the sessions. */
-  async restartHost(): Promise<void> {
+  async stopHost(): Promise<void> {
     const old = this.children[0];
-    const closed = new Promise(resolve => old.on('close', resolve));
-    old.kill('SIGKILL');
-    await closed;
+    if (old.exitCode === null && old.signalCode === null) {
+      const closed = new Promise(resolve => old.on('close', resolve));
+      old.kill('SIGKILL'); await closed;
+    }
     fs.rmSync(this.socketPath, {force: true});
+  }
+
+  async restartHost(): Promise<void> {
+    await this.stopHost();
     const index = this.children.length;
     this.spawn(nativePtyhost(), this.hostEnv);
     const [fresh] = this.children.splice(index, 1);

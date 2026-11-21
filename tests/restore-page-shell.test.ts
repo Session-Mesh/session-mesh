@@ -29,11 +29,13 @@ function afterNew(mode: 'error' | 'hang') {
 
 async function oneShell(lab: Lab): Promise<void> {
   await waitFor('the shell exists', 10000, async () => (await lab.listed()).some(s => s.name === 'bravo'));
+  const created = (await lab.listed()).find(s => s.name === 'bravo')!.created;
   const second = await lab.post({names: ['bravo']});
-  assert.equal(second.json.results.bravo.ok, false, second.text);
-  assert.match(second.json.results.bravo.error, /sent a moment ago/);
+  assert.deepEqual(second.json.results.bravo, {ok: true, id: 'bravo', resumed: false}, second.text);
+  assert.equal(lab.snapshotLost().some(entry => entry.name === 'bravo'), false, 'completion ends the offer');
   await new Promise(resolve => setTimeout(resolve, 1500));   // a second shell would exist by now
   assert.deepEqual((await lab.listed()).map(s => s.name), ['bravo'], 'no bravo-2');
+  assert.equal((await lab.listed())[0]!.created, created, 'completion keeps the original incarnation');
 }
 
 test('the listing that confirms a restored shell fails: a second click creates no second shell', TIMEOUT, () => withLab(async lab => {

@@ -505,6 +505,8 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
         new MutationObserver(() => { (window as any).observedStatusWrites++; })
           .observe(status, { childList: true, characterData: true, subtree: true });
       });
+      const stamp = await page.locator('#project-overview > p[role="status"]').getAttribute('data-observed-at');
+      assert.ok(stamp, 'the displayed context retains its precise native observation time');
       fs.writeFileSync(path.join(repository, 'README.md'), readme + '\nFresh observation evidence.\n');
       git('add', 'README.md'); git('-c', 'user.name=I1 Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Refresh observation fixture');
       const refreshedCommit = git('rev-parse', 'HEAD').trim();
@@ -519,6 +521,11 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
       await page.waitForFunction(commit => (window as any).observedStatusWrites > 0 &&
         document.querySelector('#project-overview > p[role="status"]')?.textContent?.startsWith('Context observed') &&
         document.querySelector('.projects-repository-observation')?.textContent?.includes(commit), refreshedCommit);
+      await page.waitForFunction(previous => {
+        const current = document.querySelector<HTMLElement>('#project-overview > p[role="status"]')?.dataset.observedAt;
+        return typeof current === 'string' && current !== previous;
+      }, stamp);
+      assert.notEqual(await page.locator('#project-overview > p[role="status"]').getAttribute('data-observed-at'), stamp);
       await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); window.tickProjectContext(30000); });
       assert.equal(starts().length, before + 1, 'hidden document does not start captures');
       const resume = page.waitForRequest(request => request.url().endsWith('/api/projects/v1') && request.postDataJSON()?.op === 'project_observation_start');

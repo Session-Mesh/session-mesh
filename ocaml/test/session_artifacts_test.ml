@@ -342,6 +342,108 @@ let knowledge_proof () =
       Alcotest.check_raises "disappearance cannot synthesize zero proof"
         A.Invalid (fun () -> ignore (A.catalogue root a)))
 
+let native_routing () =
+  temp (fun root ->
+      let module W = Mesh_artifacts_worker in
+      let before = id "source" 1 and after = id "restored" 2 in
+      let store = Filename.concat root "session-artifacts.json" in
+      let check label expected value =
+        Alcotest.(check bool) label expected value
+      in
+      check "absence stays unknown" true
+        (A.get "required" (A.restore_probe root before) = `Bool true);
+      let prepare tool =
+        W.prepare root
+          (`Assoc
+             [
+               ("op", `String "notes-prepare");
+               ("session", before);
+               ("nonce", `String "fixture");
+               ("tool", `String tool);
+             ])
+      in
+      check "missing grant denies" true
+        (A.get "allowed" (prepare "mint_share") = `Bool false);
+      check "denial creates no catalogue" false (Sys.file_exists store);
+      let path = Filename.concat root "notes-grants.json" in
+      let fd =
+        Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600
+      in
+      let channel = Unix.out_channel_of_descr fd in
+      output_string channel
+        "{\"version\":1,\"sessions\":[{\"name\":\"source\",\"created\":1,\"nonce\":\"fixture\",\"tools\":[\"create_note\",\"mint_share\",\"revoke_share\"]}]}";
+      close_out channel;
+      check "create granted without generation" true
+        (A.get "allowed" (prepare "create_note") = `Bool true);
+      check "create admission does not initialize catalogue" false
+        (Sys.file_exists store);
+      let admission = prepare "mint_share" in
+      let generation = A.get "generation" admission in
+      check "share admits durable generation" true (generation = `Int 1);
+      let record attributed observation =
+        W.record root
+          (`Assoc
+             [
+               ("op", `String "notes-record");
+               ("session", before);
+               ("generation", generation);
+               ("attributed", `Bool attributed);
+               ( "outcome",
+                 `Assoc
+                   [
+                     ("status", `String "success"); ("observation", observation);
+                   ] );
+             ])
+      in
+      let observation =
+        `Assoc
+          [
+            ("action", `String "observe");
+            ("reference", reference "notes" "fixture");
+          ]
+      in
+      check "ended source cannot record mint" true
+        (A.get "catalogue" (record false observation) = `String "not-recorded");
+      let success = record true observation in
+      check "live source records mint" true
+        (A.get "catalogue" success = `String "recorded");
+      check "internal observation removed" false
+        (List.mem_assoc "observation" (A.fields success));
+      let revoked =
+        record false
+          (`Assoc [ ("action", `String "revoke"); ("id", `String "fixture") ])
+      in
+      check "ended source still clears confirmed revoke" true
+        (A.get "catalogue" revoked = `String "recorded");
+      ignore (record true observation);
+      let saved =
+        List.hd (A.list (A.get "references" (A.catalogue root before)))
+      in
+      check "delayed mint remains revoked" true (A.get "url" saved = `Null);
+      check "unknown action refuses mutation" true
+        (A.get "catalogue"
+           (record true (`Assoc [ ("action", `String "remove") ]))
+        = `String "not-recorded");
+      ignore
+        (A.with_store root (fun (entries, barriers, counter) ->
+             ( `Null,
+               Some (A.entry (id "empty" 3) [] :: entries, barriers, counter) )));
+      check "affirmative source zero" true
+        (A.get "required" (A.restore_probe root (id "empty" 3)) = `Bool false);
+      check "native zero transfer completion" true
+        (A.get "complete" (A.restore_transfer root (id "empty" 3) after)
+        = `Bool true);
+      check "native absent source cannot complete" true
+        (A.get "complete" (A.restore_transfer root (id "absent" 4) after)
+        = `Bool false);
+      Unix.chmod store 0o644;
+      check "admission storage failure remains unavailable, not denied" true
+        (A.get "status" (prepare "mint_share") = `String "unavailable");
+      check "unsafe catalogue stays unknown" true
+        (A.get "required" (A.restore_probe root before) = `Bool true);
+      check "store failure after upstream success is partial" true
+        (A.get "catalogue" (record true observation) = `String "not-recorded"))
+
 let () =
   Alcotest.run "session artifacts"
     [
@@ -355,6 +457,8 @@ let () =
           Alcotest.test_case "legacy global revocation" `Quick legacy_revocation;
           Alcotest.test_case "transfer completion proof" `Quick transfer_proof;
           Alcotest.test_case "restore knowledge proof" `Quick knowledge_proof;
+          Alcotest.test_case "native admission recording and restore policy"
+            `Quick native_routing;
         ] );
       ( "connector",
         [

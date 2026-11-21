@@ -15,7 +15,15 @@ As an agent using Mesh tools, I can explicitly mint a Notes share and have its c
 
 ### US-2: Durable isolated inspection
 
-As the authenticated operator, I can inspect a session's references from Info after restart or explicit restore.
+As the authenticated operator, I can inspect a session's references from Tools after restart or explicit restore.
+
+Tools can be explicitly attached to a local Mesh project using revision-checked native metadata
+keyed by machine ID, exact session name and creation time. The native owner projection is bounded
+and omits whole fields rather than claiming partial data is complete. Project references carry no
+Notes grant or capability and are not liveness assertions. Opening a reference resolves the exact
+live incarnation; offline hosts and same-name replacements are refused. Unknown saves are checked
+by receipt without automatic replay; stale project reads and old project contexts cannot redirect
+a mutation. Tracker projects remain a separate identity domain.
 
 1. Same connector/upstream ID updates one entry; different connector is distinct.
 2. A new incarnation reusing a name sees no previous references.
@@ -39,7 +47,7 @@ Notes mint may precede target existence: keep pending-target state. Revocation o
 
 ## Checks
 
-`tests/session-artifacts-review.test.ts` verifies grant, Outcome, restore, normalization and ordering contracts. Native tests cover all Notes Outcome error variants, account-wide revoke, fresh ID reuse and concurrent persistence. `tests/artifacts-actual-qa.test.ts` follows real app/PTY/Info/restart/restore flows; its lifecycle sequence runs once, while rendering is EN/FR × 1440/390.
+`tests/session-artifacts-review.test.ts` verifies grant, Outcome, restore, normalization and ordering contracts. Native tests cover all Notes Outcome error variants, account-wide revoke, fresh ID reuse and concurrent persistence. `tests/artifacts-actual-qa.test.ts` follows real app/PTY/Tools/restart/restore flows; its lifecycle sequence runs once, while rendering is EN/FR × 1440/390.
 
 `tests/session-artifacts-optional-restore.test.ts` covers corrupt/unreadable/missing-helper probes with empty and populated catalogues, preserved faulted bytes, durable binding through snapshot maintenance and cleared in-memory holds, completion-only recovery after operator-like repair, helper disappearance after a known-empty probe, no-file/no-helper behavior and failure of the core intent writer. Corruption is not automatically discarded to make restoration appear successful.
 
