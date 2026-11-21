@@ -290,13 +290,17 @@ let pending_launch_is_dropped () =
       expect
         ("stopped before the launch: " ^ Yojson.Basic.to_string stopped)
         (member "ok" stopped = `Bool true);
-      Unix.sleepf 2.5;
+      (* A launch types its command at the latest 10 s after it was requested
+         (type_when_ready); past that, a dropped one never runs. *)
+      let deadline = Unix.gettimeofday () +. 11. in
+      while Unix.gettimeofday () < deadline && agent_pids fixture = [] do
+        Unix.sleepf 0.2
+      done;
       expect "the stopped launch never ran" (agent_pids fixture = []);
       expect "the new incarnation starts its command"
         (member "ok" (start_again fixture (member "created" stopped))
         = `Bool true);
       started fixture 1;
-      Unix.sleepf 1.;
       expect "only the new launch ran" (List.length (agent_pids fixture) = 1);
       expect "it runs under the new folder"
         (List.exists
