@@ -1,2 +1,0 @@
-A word: Example-Private-Repository
-See ghp_ABCDEFGHIJKLMNOPQRSTUVWX in the logs

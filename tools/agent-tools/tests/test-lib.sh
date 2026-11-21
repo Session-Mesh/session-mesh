@@ -10,6 +10,7 @@ setup_dir() {
     here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     dir=$(mktemp -d)
     TEST_LIB_SCRATCH=$dir
+    export TEST_LIB_SCRATCH
     trap 'rm -rf "$TEST_LIB_SCRATCH"' EXIT
     cp "$here/fake-gh" "$dir/gh"
     printf '#!/usr/bin/env bash\nprintf "fixed-time\\n"\n' > "$dir/date"

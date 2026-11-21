@@ -1,0 +1,14 @@
+OK PR open: open, not a draft
+OK head: head f9c45553deadbeef matches f9c45553
+OK merge state: CLEAN
+OK base branch: main
+OK CI checks: all green
+OK base CI run: completed/success on main
+OK required checks: all present
+OK forbidden words and leaks: none detected
+KO attribution footers: Co-Authored-By: assistant <assistant@example.com>
+OK added Python files: none
+OK .github files: unchanged
+OK semver label: semver: patch
+OK changelog: changelog.d/412-thing.md added
+NO-GO

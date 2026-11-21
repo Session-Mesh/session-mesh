@@ -1,4 +1,0 @@
-ruff and pytest	pytest	2026-11-21T13:59:26.5712276Z ESC[31mEESC[0m       AssertionError: route has no auth class.
-ruff and pytest	pytest	2026-11-21T13:59:26.5722790Z ESC[31mEESC[0m       assert not ok
-ruff and pytest	pytest	2026-11-21T13:59:26.5799999Z ##[error]Process completed with exit code 1.
-frontend and Node tests	Node tests	2026-11-21T14:01:34.4799530Z ESC[33m✖ESC[0m the table is not broader

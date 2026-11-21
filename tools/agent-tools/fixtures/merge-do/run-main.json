@@ -1,1 +1,2 @@
-[{"status":"completed","conclusion":"success","databaseId":1}]
+[{"databaseId":2,"status":"completed","conclusion":"failure","headSha":"0000000000000000000000000000000000000000"},
+ {"databaseId":3,"status":"completed","conclusion":"success","headSha":"f9c45553deadbeefdeadbeefdeadbeefdeadbeef"}]

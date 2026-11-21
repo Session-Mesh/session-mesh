@@ -1,1 +1,4 @@
-[{"filename":"tests/new_thing.py","status":"added"},{"filename":"docs/x.md","status":"modified"}]
+[{"filename":"tests/new_thing.py","status":"added"},
+ {"filename":"renamed_py.py","status":"renamed"},
+ {"filename":"docs/x.md","status":"modified"},
+ {"filename":".github/workflows/ci.yml","status":"modified"}]

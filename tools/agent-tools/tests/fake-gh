@@ -4,11 +4,24 @@
 
 # fake-gh — a stub `gh` used by the tests/*.test.sh: every call reads JSON or text
 # from fixtures/<tool>/ (FIXTURES must be set), so the tools' output is deterministic.
-# Repo-targeting calls MUST pass -R <REPO> (env, default Session-Mesh/session-mesh);
-# otherwise the stub fails, so a tool that forgets -R makes its test go red.
+# It models the real gh where it matters:
+# - repo-targeting calls MUST pass -R <REPO> (env, default Session-Mesh/session-mesh),
+#   else exit 65 (api calls must stay inside repos/<REPO>/...);
+# - pr checks: TSV name/state/duration/url rows; a PR with no checks exits 1 with no
+#   output (fixture file missing); cancelled state is written `cancel`;
+# - run list: several runs of DIFFERENT heads; run view uses per-run fixtures
+#   (jobs-<id>.json, log-failed-<id>.txt) whose first line starts with a BOM;
+# - pr view of a non-numeric argument "follows the URL" (real gh ignores -R then),
+#   so any tool that lets a non-numeric PR number through gets surprised;
+# - pr merge requires --rebase and --match-head-commit set to the head the tool read
+#   at the start (the fixture headRefOid, or the first head served when head-moves-<n>
+#   exists, which models a push between the gate and the merge);
+# - api --paginate serves files-<n>-p1.json, -p2.json, ... when present;
+# - api branches/<base> serves branch-<base with / replaced by _>.json.
 set -euo pipefail
 FIXTURES=${FIXTURES:?FIXTURES must be set}
 EXPECTED_REPO=${REPO:-Session-Mesh/session-mesh}
+STATE=${TEST_LIB_SCRATCH:-$(mktemp -d)}
 
 jqexpr=""
 args=("$@")
@@ -31,7 +44,6 @@ check_repo_flag() {
     fi
 }
 
-# api calls address the repo in the path: repos/<REPO>/...
 check_repo_path() {
     local path=${1:-}
     case $path in
@@ -57,28 +69,76 @@ has_arg() {
     return 1
 }
 
-pr_num() {
+after_arg() {
     local i
-    for ((i = 2; i < ${#args[@]}; i++)); do
-        if [[ ${args[i]} =~ ^[0-9]+$ ]]; then
-            printf '%s\n' "${args[i]}"
+    for ((i = 0; i < ${#args[@]} - 1; i++)); do
+        if [ "${args[i]}" = "$1" ]; then
+            printf '%s\n' "${args[i + 1]}"
             return
         fi
     done
     return 1
 }
 
-branch_json() {
-    # The --branch value decides the fixture file, slashes become underscores.
-    local b prev
-    for ((prev = 0; prev < ${#args[@]} - 1; prev++)); do
-        if [ "${args[prev]}" = "--branch" ]; then
-            b=${args[prev + 1]}
-            printf 'run-%s.json\n' "$(printf '%s' "$b" | tr '/' '_')"
-            return
-        fi
+pr_arg() {
+    local i
+    for ((i = 2; i < ${#args[@]}; i++)); do
+        case ${args[i]} in
+            -[A-Za-z]*) continue ;;
+        esac
+        printf '%s\n' "${args[i]}"
+        return
     done
     return 1
+}
+
+pr_num() {
+    local a
+    a=$(pr_arg) || return 1
+    if [[ $a =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$a"
+    else
+        # Real gh follows a URL and ignores -R; model the surprise it gives.
+        printf '%s\n' '999999'
+    fi
+}
+
+serve_view() {
+    local n=$1 head f
+    head=$(jq -r .headRefOid "$FIXTURES/pr-view-$n.json" 2>/dev/null || true)
+    if [ -e "$FIXTURES/head-moves-$n" ] && [ -f "$STATE/seen-head-$n" ]; then
+        # The head moved: every later view of this PR shows a different head.
+        f="$STATE/pr-view-$n-moved.json"
+        jq '.headRefOid = "f9c45553aaaaaaaabbbbbbbbccccccccdddddddd"' "$FIXTURES/pr-view-$n.json" > "$f"
+        if [ -n "$jqexpr" ]; then
+            jq -r "$jqexpr" "$f"
+        else
+            cat "$f"
+        fi
+        return
+    fi
+    if [ -e "$FIXTURES/head-moves-$n" ]; then
+        printf '%s' "$head" > "$STATE/seen-head-$n"
+    fi
+    apply_jq "pr-view-$n.json"
+}
+
+head_for_merge() {
+    local n=$1
+    if [ -f "$STATE/seen-head-$n" ]; then
+        cat "$STATE/seen-head-$n"
+    else
+        jq -r .headRefOid "$FIXTURES/pr-view-$n.json"
+    fi
+}
+
+branch_json() {
+    # The --branch value decides the fixture file, slashes become underscores.
+    local b f
+    b=$(after_arg --branch) || return 1
+    f="run-$(printf '%s' "$b" | tr '/' '_').json"
+    [ -f "$FIXTURES/$f" ] || return 1
+    apply_jq "$f"
 }
 
 cmd=${1:?}
@@ -88,11 +148,17 @@ case "$cmd" in
         check_repo_flag
         case "$sub" in
             list) apply_jq pr-list.json ;;
-            checks) cat "$FIXTURES/checks-$(pr_num).txt" ;;
-            view) apply_jq "pr-view-$(pr_num).json" ;;
+            checks)
+                # A PR without any check: gh exits 1 with no output.
+                if [ -f "$FIXTURES/checks-$(pr_num).txt" ]; then
+                    cat "$FIXTURES/checks-$(pr_num).txt"
+                else
+                    exit 1
+                fi
+                ;;
+            view) serve_view "$(pr_num)" ;;
             diff)
-                # A fixture file named "diff-fails" makes this call fail, like gh does
-                # for diffs it refuses to render.
+                # A fixture file named diff-fails-<n> makes this call fail, as gh does.
                 if [ -e "$FIXTURES/diff-fails-$(pr_num)" ]; then
                     echo 'gh: the diff is too large to render' >&2
                     exit 1
@@ -101,6 +167,19 @@ case "$cmd" in
                 ;;
             comment) printf 'stub: comment posted\n' ;;
             merge)
+                local_check=$(printf '%s\n' "${args[@]}" | grep -c -- '--rebase' || true)
+                mhc=$(after_arg --match-head-commit) || {
+                    echo 'fake-gh: merge without --match-head-commit' >&2
+                    exit 1
+                }
+                if [ "$mhc" != "$(head_for_merge "$(pr_num)")" ]; then
+                    echo 'fake-gh: --match-head-commit does not match the head read at gate time' >&2
+                    exit 1
+                fi
+                if [ "$local_check" -lt 1 ]; then
+                    echo 'fake-gh: merge without --rebase' >&2
+                    exit 1
+                fi
                 if [ -e "$FIXTURES/fail-merge-$(pr_num)" ]; then
                     echo 'gh: pull request is not clean or the head moved' >&2
                     exit 1
@@ -120,15 +199,16 @@ case "$cmd" in
     run)
         check_repo_flag
         case "$sub" in
-            list) apply_jq "$(branch_json)" ;;
+            list) branch_json ;;
             view)
-                check_repo_flag
+                id=$(pr_arg)
                 # The ESC token stands for an ANSI escape sequence, so the tests check
-                # that tools strip them.
+                # that tools strip them; the BOM models real --log-failed output.
                 if printf '%s\n' "${args[@]}" | grep -q -- '--log-failed'; then
-                    sed 's/ESC/\x1b/g' "$FIXTURES/run-log-failed.txt"
+                    printf '\xef\xbb\xbf'
+                    sed 's/ESC/\x1b/g' "$FIXTURES/log-failed-$id.txt"
                 else
-                    apply_jq "run-jobs.json"
+                    apply_jq "jobs-$id.json"
                 fi
                 ;;
             *) echo "fake-gh: unexpected run/$sub" >&2; exit 64 ;;
@@ -140,20 +220,27 @@ case "$cmd" in
             case $a in repos/*) path=$a; break ;; esac
         done
         check_repo_path "$path"
-        n=$(printf '%s\n' "$path" | grep -oE 'pulls/[0-9]+' | head -n 1 | cut -d/ -f2)
-        # Paginated calls: the stub serves files-<n>-p1.json, -p2.json, ... if present,
-        # one JSON array after the other, exactly as gh api --paginate does.
-        if printf '%s\n' "${args[@]}" | grep -q -- '--paginate'; then
-            if [ -f "$FIXTURES/files-$n-p1.json" ]; then
-                cat "$FIXTURES/files-$n-p1.json"
-                if [ -f "$FIXTURES/files-$n-p2.json" ]; then cat "$FIXTURES/files-$n-p2.json"; fi
-                if [ -f "$FIXTURES/files-$n-p3.json" ]; then cat "$FIXTURES/files-$n-p3.json"; fi
-            else
-                cat "$FIXTURES/files-$n.json"
-            fi
-        else
-            apply_jq "files-$n.json"
-        fi
+        case $path in
+            *"branches/"*)
+                base=${path##*branches/}
+                apply_jq "branch-$(printf '%s' "$base" | tr '/' '_').json"
+                ;;
+            *"pulls/"*)
+                n=$(printf '%s\n' "$path" | grep -oE 'pulls/[0-9]+' | head -n 1 | cut -d/ -f2)
+                if printf '%s\n' "${args[@]}" | grep -q -- '--paginate'; then
+                    if [ -f "$FIXTURES/files-$n-p1.json" ]; then
+                        cat "$FIXTURES/files-$n-p1.json"
+                        if [ -f "$FIXTURES/files-$n-p2.json" ]; then cat "$FIXTURES/files-$n-p2.json"; fi
+                        if [ -f "$FIXTURES/files-$n-p3.json" ]; then cat "$FIXTURES/files-$n-p3.json"; fi
+                    else
+                        cat "$FIXTURES/files-$n.json"
+                    fi
+                else
+                    apply_jq "files-$n.json"
+                fi
+                ;;
+            *) echo "fake-gh: unexpected api path: $path" >&2; exit 64 ;;
+        esac
         ;;
     *) echo "fake-gh: unexpected command '$cmd'" >&2; exit 64 ;;
 esac
