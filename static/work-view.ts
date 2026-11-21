@@ -124,7 +124,7 @@ class WorkView implements WorkViewController {
     this.sheets = new EntrySheets({ ctx: this.sheetCtx, api: this.api, content: this.content, show: (...nodes) => this.show(...nodes),
       generation, signal, back: () => void this.backToEntry(), memory: this.memory });
     this.projectAnswers = { api: this.api, generation, signal, project: () => this.project, selected: () => this.selected,
-      selectTask: (id, after) => this.selectTask(id, after) };
+      selectTask: (id, after) => this.selectTask(id, after), fillDrafts: (scope, read) => this.memory.fill(scope, read) };
     this.levels = { nav: this.nav, root: options.root, active: () => this.active, inProject: () => this.project !== null,
       closeSheet: () => this.closeSheet(), toEntry: () => void this.backToEntry() };
     this.unsubscribe = this.sync.subscribe('view', change => this.questions.heard(change));

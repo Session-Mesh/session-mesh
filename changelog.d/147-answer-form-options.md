@@ -8,4 +8,6 @@ kind: added
   available. "Edit answer" records a correction as a new answer, and the earlier one stays in the
   history. Ticked choices and an unsent correction come back with the other drafts when you return
   to the view. Agents set the question kind with the new `kind` field of `work_ask`. See
-  [The Projects view](docs/features.md#the-projects-view-and-the-project-tracker).
+  [The Projects view](docs/features.md#the-projects-view-and-the-project-tracker). `work_ask` now
+  refuses a question whose options repeat one (`invalid_input`), since an answer names the options
+  it picks by their text.
