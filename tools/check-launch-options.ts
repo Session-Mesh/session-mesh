@@ -356,7 +356,8 @@ export const CASES: Record<string, (h: Harness) => Promise<void>> = {
       assert.equal(recorded(restricted.argvLog).length, 0, 'nothing may be spawned for a disabled preset');
     } finally {
       restricted.host.kill('SIGKILL');
-      await restricted.mesh.stop();
+      await Promise.race([restricted.mesh.halt(true).catch(() => undefined), sleep(15_000)]);
+      fs.rmSync(path.dirname(restricted.mesh.confDir), {recursive: true, force: true});
     }
   },
 
@@ -486,9 +487,18 @@ export async function runCase(name: string): Promise<void> {
   try {
     await run(h);
   } finally {
-    h.host.kill('SIGKILL');
-    await h.mesh.stop();
+    await teardown(h);
   }
+}
+
+/** Stop what a case started, in bounded time: the PTY host first (nothing new to run), then the web
+ *  server with the hurry signal, so a request that is still in flight cannot keep it alive. A test
+ *  runner that waits forever on a stopped process is what made this suite hang in CI. */
+async function teardown(h: Harness): Promise<void> {
+  h.host.kill('SIGKILL');
+  const stopped = h.mesh.halt(true).catch(() => undefined);
+  await Promise.race([stopped, sleep(15_000)]);
+  fs.rmSync(path.dirname(h.mesh.confDir), {recursive: true, force: true});
 }
 
 async function main(): Promise<number> {
@@ -513,8 +523,7 @@ async function main(): Promise<number> {
     console.error(h ? h.output().slice(-3000) : '');
     return 2;
   } finally {
-    h?.host.kill('SIGKILL');
-    await h?.mesh.stop();
+    if (h) await teardown(h);
   }
 }
 

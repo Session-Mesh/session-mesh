@@ -175,18 +175,25 @@ describe('the Options field of New session', {skip}, () => {
   test('text typed while the configuration is still loading is kept', async () => {
     const {page, problems} = await signedIn();
     // The dialog asks /api/config on open; hold that answer so the typing happens before it lands.
+    // The hold is bounded: a route handler that never answers would keep context.close() (and so the
+    // whole job) waiting.
     let release: () => void = () => undefined;
     const held = new Promise<void>(resolve => { release = resolve; });
-    await page.route('**/api/config', async route => { await held; await route.continue(); });
-    await page.locator('#btn-new').click();
-    await page.locator('#dlg-new[open]').waitFor();
-    await page.locator('#form-new input[name="cwd"]').fill(fs.mkdtempSync(path.join(mesh.home, 'work-')));
-    await page.locator('#form-new label:has(input[name="preset"][value="pi"])').click();
-    await page.locator('#form-new input[name="options"]').fill('-e /tmp/typed-early.mjs');
-    release();
-    await page.waitForTimeout(500);   // the answer lands and must not overwrite what the owner typed
-    assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/typed-early.mjs');
-    assert.deepEqual(problems, []);
-    await page.unroute('**/api/config');
+    const bounded = Promise.race([held, new Promise<void>(resolve => setTimeout(resolve, 5000))]);
+    await page.route('**/api/config', async route => { await bounded; await route.continue(); });
+    try {
+      await page.locator('#btn-new').click();
+      await page.locator('#dlg-new[open]').waitFor();
+      await page.locator('#form-new input[name="cwd"]').fill(fs.mkdtempSync(path.join(mesh.home, 'work-')));
+      await page.locator('#form-new label:has(input[name="preset"][value="pi"])').click();
+      await page.locator('#form-new input[name="options"]').fill('-e /tmp/typed-early.mjs');
+      release();
+      await page.waitForTimeout(700);   // the answer lands and must not overwrite what the owner typed
+      assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/typed-early.mjs');
+      assert.deepEqual(problems, []);
+    } finally {
+      release();
+      await page.unroute('**/api/config').catch(() => undefined);
+    }
   });
 });

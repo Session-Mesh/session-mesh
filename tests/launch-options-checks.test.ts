@@ -9,6 +9,7 @@ import {CASES, runCase} from '../tools/check-launch-options.ts';
 
 describe('per-agent launch options', () => {
   for (const name of Object.keys(CASES)) {
-    test(name, async () => { await runCase(name); });
+    // A bounded case: a setup that cannot finish fails the test instead of holding the whole job.
+    test(name, {timeout: 180_000}, async () => { await runCase(name); });
   }
 });
