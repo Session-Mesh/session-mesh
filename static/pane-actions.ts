@@ -179,7 +179,10 @@ class NativeInputLease implements HumanInputLease {
     return delivered;
   }
   atomic(bytes: Uint8Array): boolean {return this.write(bytes, true);}
-  claim(): HumanInputAttempt | null {return this.disposed || this.scope.dirty ? null : claimHumanInput(this.scope, this.write.bind(this));}
+  claim(): HumanInputAttempt | null {
+    return this.disposed || this.scope.dirty ? null
+      : claimHumanInput(this.scope, this.write.bind(this), this.scope.revision, () => !this.disposed);
+  }
   canInsert(): boolean {return !this.disposed && this.scope.canInsert(this);}
   claimInsertion(expectedCaptureRevision: number): HumanInputAttempt | null {
     return claimHumanInput(this.scope, this.write.bind(this), expectedCaptureRevision, () => this.canInsert());

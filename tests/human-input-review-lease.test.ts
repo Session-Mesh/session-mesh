@@ -4,6 +4,23 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createHumanInputLease, createHumanInputScope} from '../static/pane-actions.ts';
 
+test('disposing a clean lease invalidates only its own claim without changing the shared revision', () => {
+  const scope = createHumanInputScope(), writes: number[][] = [];
+  const make = (clientId: string) => createHumanInputLease({clientId, scope,
+    control() {}, data(bytes) {writes.push([...bytes]);}});
+  const first = make('first'), second = make('second');
+  const oldClaim = first.claim(), currentClaim = second.claim();
+  assert.ok(oldClaim && currentClaim);
+  const revision = scope.revision;
+  first.dispose();
+  assert.equal(oldClaim.valid(), false);
+  assert.equal(oldClaim.write(Uint8Array.of(65)), false);
+  assert.equal(scope.revision, revision);
+  assert.equal(currentClaim.valid(), true);
+  assert.deepEqual(writes, []);
+  second.dispose();
+});
+
 test('accepted unfinished D stays locally dirty when advisory acquisition fails from clean state', () => {
   const events: (boolean | number[])[] = [];
   const lease = createHumanInputLease({clientId: 'human', control(_id, dirty) {
