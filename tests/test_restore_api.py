@@ -329,7 +329,7 @@ async def test_killing_a_session_through_the_mesh_means_it_is_never_offered(clie
 
 async def test_the_background_loop_writes_the_snapshot_without_any_browser(client, fake_host, snapshot_file,
                                                                            tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "list_sessions", lambda raw, listed=True: {"mesh": [mesh_item("a", tmp_path, 1.0)]})
+    monkeypatch.setattr(server, "list_sessions", lambda raw, listed=True, read_at=None: {"mesh": [mesh_item("a", tmp_path, 1.0)]})
     monkeypatch.setattr(server, "SNAPSHOT_EVERY", 0.01)
     task = asyncio.create_task(server.snapshot_loop(None))
     try:

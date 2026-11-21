@@ -266,7 +266,7 @@ async def test_restart_approval_revalidates_self_then_resumes_with_replaced_mode
         calls.append((old_name, old_created, base, cwd, shlex.split(command), agent, known_agent))
         return "alpha-2"
 
-    def described(_listed, _observed):
+    def described(_listed, _observed, _read_at=None):
         # "name" too: the hook state is applied to a real listing, whose entries all have one
         return {"mesh": [{"id": "alpha", "name": "alpha", "created": 1.0, "agent": agent_info}], "external": []}
 
