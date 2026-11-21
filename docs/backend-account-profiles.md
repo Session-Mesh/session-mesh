@@ -120,10 +120,15 @@ path chooses the operation, never the body.
   `version` that is not the integer 1 or an `ok` that is not a boolean, a status outside
   200/400/404/409/413/503, `ok` or the exit code disagreeing with the status, a refusal code under
   another status than the transport mode gives it (a code it does not list must be 503), or `data` that is
-  not exactly its operation's shape: for `profiles.list`, `configured`, `registry_revision` and
-  profiles with their six public fields; for every `consent.*` operation, the policy (`version`,
-  an integer `revision`, `global` and `pairs`, each pair with its two accounts' `backend`, `id`
-  and `context_revision`, and its `confirmation`).
+  not exactly its operation's shape: for `profiles.list`, a boolean `configured`, a
+  `registry_revision` that is `null` or a digest (64 lower-case hex digits), and profiles with
+  their six public fields: an `id`, a string `label`, a known `backend`, a boolean `enabled`, a
+  digest `context_revision` and `switch_qualified` false; for every `consent.*` operation, the
+  policy (`version`, an integer `revision`, `global` and `pairs`, each pair with its
+  `confirmation` and its two accounts' known `backend`, `id` and digest `context_revision`, both
+  accounts of one backend with two different ids). An `id` is what the helper accepts: 1 to 32
+  characters among `a`-`z`, `0`-`9` and `-`, and not `default`. The label is relayed as the
+  helper gives it; the helper checks it when it reads the registry.
 - **A failed write.** A `503` on a write does not say whether the helper committed the change.
   Read `GET /api/accounts/consent` again and send the next edit with the revision it gives.
 

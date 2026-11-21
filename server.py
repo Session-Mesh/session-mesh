@@ -4708,6 +4708,17 @@ _ACCOUNTS_CODE_STATUS = {
     "invalid-request": 400, "unsupported-request-version": 400, "invalid-account-pair": 400,
     "invalid-account-reference": 400, "profile-backend-mismatch": 400, "unsupported-operation": 400}
 _ACCOUNTS_CODE_RE = re.compile(r"[a-z0-9-]{1,64}")
+_ACCOUNTS_DIGEST_RE = re.compile(r"[0-9a-f]{64}")   # a SHA-256 digest in hex
+
+
+def _accounts_id(value):
+    """A profile id as the helper accepts one (Mesh_accounts.valid_id, ocaml/accounts/mesh_accounts.ml: the alias id
+    rule, not "default"); tests/accounts-routes.test.ts compares the two."""
+    return isinstance(value, str) and value != "default" and ACCOUNT_ID_RE.fullmatch(value) is not None
+
+
+def _accounts_digest(value):
+    return isinstance(value, str) and _ACCOUNTS_DIGEST_RE.fullmatch(value) is not None
 
 
 def accounts_refusal(status, code):
@@ -4780,14 +4791,22 @@ def _accounts_unique_keys(pairs):
 
 
 def _public_listing(data):
-    """profiles.list data with its three keys and, for each profile, its six public fields with their types."""
+    """profiles.list data with its three keys (a boolean, null or a digest, the list) and, for each profile, its six
+    public fields with their types."""
     if not isinstance(data, dict) or set(data) != {"configured", "registry_revision", "profiles"}:
         return False
-    profiles = data["profiles"]
-    return isinstance(profiles, list) and all(
-        isinstance(p, dict) and set(p) == _ACCOUNTS_PUBLIC_PROFILE
-        and all(isinstance(p[key], str) for key in ("id", "label", "backend", "context_revision"))
-        and p["enabled"] in (True, False) and p["switch_qualified"] is False for p in profiles)
+    revision, profiles = data["registry_revision"], data["profiles"]
+    if type(data["configured"]) is not bool or not (revision is None or _accounts_digest(revision)):
+        return False
+    return isinstance(profiles, list) and all(_public_profile(p) for p in profiles)
+
+
+def _public_profile(p):
+    """A listed profile: a helper id, a label, a known backend, a boolean, its context digest; never a switch."""
+    return (isinstance(p, dict) and set(p) == _ACCOUNTS_PUBLIC_PROFILE and _accounts_id(p["id"])
+            and isinstance(p["label"], str) and p["backend"] in _ACCOUNTS_BACKENDS
+            and _accounts_digest(p["context_revision"]) and type(p["enabled"]) is bool
+            and p["switch_qualified"] is False)
 
 
 def _consent_policy(data):
@@ -4801,11 +4820,16 @@ def _consent_policy(data):
 
 
 def _consent_pair(pair):
-    return (isinstance(pair, dict) and set(pair) == _ACCOUNTS_PAIR and pair["confirmation"] in _ACCOUNTS_CONFIRMATIONS
-            and all(isinstance(account, dict) and set(account) == _ACCOUNTS_ACCOUNT
-                    and account["backend"] in _ACCOUNTS_BACKENDS
-                    and isinstance(account["id"], str) and isinstance(account["context_revision"], str)
-                    for account in (pair["a"], pair["b"])))
+    """A stored pair as the helper keeps one: two accounts of one backend, two different ids."""
+    if not (isinstance(pair, dict) and set(pair) == _ACCOUNTS_PAIR and pair["confirmation"] in _ACCOUNTS_CONFIRMATIONS):
+        return False
+    a, b = pair["a"], pair["b"]
+    return (_consent_account(a) and _consent_account(b) and a["backend"] == b["backend"] and a["id"] != b["id"])
+
+
+def _consent_account(account):
+    return (isinstance(account, dict) and set(account) == _ACCOUNTS_ACCOUNT and account["backend"] in _ACCOUNTS_BACKENDS
+            and _accounts_id(account["id"]) and _accounts_digest(account["context_revision"]))
 
 
 async def _accounts_body(request):

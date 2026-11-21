@@ -133,7 +133,10 @@ function fakeHelper(directory: string): string {
     // A helper that answers after 2 s (the queue test), or after 6 s with its own coded busy answer (the store's
     // SQLite busy timeout is 5 s: the server must wait longer than that).
     hold: `sleep 2; echo '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":0,"global":"ask","pairs":[]}}'; exit 0`,
-    storebusy: `sleep 6; echo '{"http_status":503,"version":1,"ok":false,"code":"backend-store-busy"}'; exit 1`,
+    storebusy: `sleep 6; echo '{"http_status":503,"version":1,"ok":false,"code":"backend-store-unavailable"}'; exit 1`,
+    // The reply a test wrote to ./answer; a helper whose child outlives it (the whole process group must go).
+    file: `cat "$d/answer"; exit 0`,
+    orphan: `sleep 60 & echo $! > "$d/child"; wait`,
   };
   const cases = Object.entries(answers).map(([mode, action]) => `  ${mode}) ${action};;`).join('\n');
   fs.writeFileSync(script, `#!/bin/sh\nd='${directory}'\nprintf '%s\\n' "$@" > "$d/argv"\nenv > "$d/env"\n`
@@ -320,7 +323,7 @@ describe('fail closed', {skip}, () => {
 
   test('the helper outlasts its own store busy timeout: its coded answer is relayed, not a server 503', async () => {
     mode('storebusy');
-    envelope(await call(fake, 'POST', '/api/accounts/consent/reset', {body: {expected_revision: 0}}), 503, 'backend-store-busy');
+    envelope(await call(fake, 'POST', '/api/accounts/consent/reset', {body: {expected_revision: 0}}), 503, 'backend-store-unavailable');
   });
 
   test('a burst beyond four running and eight waiting is 503 busy at once, the rest is served', async () => {
@@ -347,6 +350,85 @@ describe('fail closed', {skip}, () => {
     const pid = Number(fs.readFileSync(path.join(fakeDir, 'pid'), 'utf8'));
     assert.throws(() => process.kill(pid, 0), /ESRCH/);
   });
+
+  test('a helper that does not answer in time takes its whole process group: its child is gone too', async () => {
+    mode('orphan');
+    envelope(await call(fake, 'GET', '/api/accounts/consent'), 503, 'backend-helper-unavailable');
+    const child = Number(fs.readFileSync(path.join(fakeDir, 'child'), 'utf8'));
+    const alive = () => { try { return process.kill(child, 0); } catch (error: any) { if (error.code === 'ESRCH') return false; throw error; } };
+    for (let waited = 0; alive() && waited < 3000; waited += 100) await new Promise(done => setTimeout(done, 100));
+    assert.equal(alive() && process.kill(child, 'SIGKILL'), false, 'the helper child outlived the timeout');
+  });
+});
+
+// A helper reply written to ./answer: a public listing or a consent policy with one field changed.
+const DIGEST = 'c'.repeat(64);
+const answer = (data: object) => JSON.stringify({http_status: 200, version: 1, ok: true, data});
+const profile = (change: object) => ({id: 'alpha', label: 'Alpha', backend: 'claude', enabled: true,
+  context_revision: DIGEST, switch_qualified: false, ...change});
+const listing = (change = {}, top = {}) => answer({configured: true, registry_revision: DIGEST, profiles: [profile(change)], ...top});
+const policy = (a: object = {}, b: object = {}) => answer({version: 1, revision: 1, global: 'ask', pairs: [{
+  a: {backend: 'claude', id: 'alpha', context_revision: DIGEST, ...a},
+  b: {backend: 'claude', id: 'beta', context_revision: DIGEST, ...b}, confirmation: 'skip'}]});
+function answered(route: string, text: string): Promise<Reply> {
+  for (const [name, value] of [['answer', `${text}\n`], ['mode', 'file']]) fs.writeFileSync(path.join(fakeDir, name!), value!);
+  return call(fake, 'GET', route);
+}
+
+describe('the relayed data has the types and ids the helper gives', {skip}, () => {
+  test('a well-formed listing and policy are relayed', async () => {
+    for (const text of [listing(), listing({id: 'a'.repeat(32), enabled: false})]) envelope(await answered('/api/accounts/profiles', text), 200);
+    for (const text of [policy(), policy({id: 'a-0'}, {id: 'z'.repeat(32)})]) envelope(await answered('/api/accounts/consent', text), 200);
+  });
+
+  for (const [name, text] of [
+    ['configured is a folder', listing({}, {configured: '/home/u/secret'})],
+    ['configured is NaN', listing({}, {configured: 'NAN'}).replace('"NAN"', 'NaN')],
+    ['configured is 1', listing({}, {configured: 1})],
+    ['registry_revision is an object', listing({}, {registry_revision: {roots: {config: '/x'}}})],
+    ['registry_revision is upper-case hex', listing({}, {registry_revision: 'C'.repeat(64)})],
+    ['registry_revision is 63 hex digits', listing({}, {registry_revision: 'c'.repeat(63)})],
+    ['enabled is 1', listing({enabled: 1})], ['enabled is a string', listing({enabled: 'true'})],
+    ['backend is unknown', listing({backend: '/x'})], ['id is a path', listing({id: '/x'})],
+    ['id is the reserved one', listing({id: 'default'})], ['context_revision is not a digest', listing({context_revision: '0'})],
+    ['switch_qualified is true (the route never claims a switch)', listing({switch_qualified: true})],
+  ]) {
+    test(`profiles.list: ${name} is 503, never relayed`, async () => {
+      const reply = await answered('/api/accounts/profiles', text!);
+      envelope(reply, 503, 'backend-helper-unavailable');
+      assert.doesNotMatch(reply.text, /secret|\/x|NaN/);
+    });
+  }
+
+  for (const [name, text] of [
+    ['an id that is a path', policy({id: '/x'})], ['a 900 KB id', policy({id: 'a'.repeat(900_000)})],
+    ['an id of 33 characters', policy({id: 'a'.repeat(33)})], ['a lone surrogate', policy({id: '\ud800'})],
+    ['a control character', policy({id: 'al\u0007pha'})], ['an upper-case id', policy({id: 'Alpha'})],
+    ['the reserved id', policy({id: 'default'})], ['an empty id', policy({id: ''})],
+    ['a pair of one account', policy({}, {id: 'alpha'})], ['a pair across backends', policy({}, {backend: 'codex'})],
+    ['a context revision that is not a digest', policy({context_revision: '0'})],
+  ]) {
+    test(`consent: ${name} is 503, never relayed`, async () => {
+      const reply = await answered('/api/accounts/consent', text!);
+      envelope(reply, 503, 'backend-helper-unavailable');
+      assert.doesNotMatch(reply.text, /\/x|aaaa|alpha/);
+    });
+  }
+
+  test('the server accepts exactly the ids the helper accepts', async () => {
+    const helper: Record<string, boolean> = {}, server: Record<string, boolean> = {};
+    for (const id of ['alpha', 'a', '-', '0', 'a-b', 'a'.repeat(32), 'a'.repeat(33), 'default', 'Default', 'defaults',
+      'Alpha', 'a_b', 'a.b', 'a b', '/x', '../x', '\u00e9', '\ud800', 'a\u0007', 'a\u2028', 'a\n', '']) {
+      // The helper checks both ids before the registry digest: a valid id reaches profile-registry-changed.
+      const reply = await call(real, 'POST', '/api/accounts/consent/set-pair', {body: {backend: 'claude', source_id: id,
+        target_id: 'zz-other', expected_revision: 0, registry_revision: '0'.repeat(64), confirmation: 'ask'}});
+      assert.ok([400, 409].includes(reply.status), reply.text);
+      helper[JSON.stringify(id)] = reply.json?.code === 'profile-registry-changed';
+      server[JSON.stringify(id)] = (await answered('/api/accounts/consent', policy({id}, {id: 'zz-other'}))).status === 200;
+    }
+    assert.deepEqual(server, helper);
+    assert.ok(Object.values(helper).includes(true) && Object.values(helper).includes(false));
+  });
 });
 
 describe('the helper runs as a closed argv with a scrubbed environment', {skip}, () => {
@@ -368,7 +450,19 @@ describe('the helper runs as a closed argv with a scrubbed environment', {skip},
   });
 });
 
+/** server.py's code -> status table, whatever its spacing or quoting; an entry it cannot read is a failure. */
+function serverCodes(source: string): Record<string, number> {
+  const block = /_ACCOUNTS_CODE_STATUS = \{([\s\S]*?)\}/.exec(source)?.[1] ?? '';
+  const entries = [...block.matchAll(/["']([a-z0-9-]+)["']\s*:\s*(\d{3})/g)];
+  assert.equal(entries.length, [...block.matchAll(/["'][^"']*["']/g)].length, `unread entries in ${block}`);
+  return Object.fromEntries(entries.map(m => [m[1], Number(m[2])]));
+}
+
 describe('scope', {skip}, () => {
+  test('the code table is read whatever its spacing or quoting', () => {
+    assert.deepEqual(serverCodes(`_ACCOUNTS_CODE_STATUS = {\n "a-b": 409,"x":409, 'y' :404,\n\t"z"\n:\t400}`), {'a-b': 409, x: 409, y: 404, z: 400});
+  });
+
   test('no response named a folder of the throwaway homes', () => {
     assert.ok(seen.length > 40);
     for (const mesh of [real, empty, missing, fake]) {
@@ -399,9 +493,7 @@ describe('scope', {skip}, () => {
       const status = Number(/->\s*(\d{3})/.exec(arm)?.[1]);
       for (const code of arm.matchAll(/"([a-z0-9-]+)"/g)) helper[code[1]!] = status;
     }
-    const source = fs.readFileSync(path.join(REPO, 'server.py'), 'utf8');
-    const block = /_ACCOUNTS_CODE_STATUS = \{([\s\S]*?)\}/.exec(source)?.[1] ?? '';
-    const server = Object.fromEntries([...block.matchAll(/"([a-z0-9-]+)": (\d{3})/g)].map(m => [m[1], Number(m[2])]));
+    const server = serverCodes(fs.readFileSync(path.join(REPO, 'server.py'), 'utf8'));
     assert.ok(Object.keys(helper).length >= 14, JSON.stringify(helper));
     assert.deepEqual(server, helper);
   });
