@@ -66,10 +66,10 @@ let init_first_use getenv =
 (* Another server starting at the same moment may be in the middle of its own
    creation: the repository is read again a few times before giving up. That
    is only worth waiting for when the directory looks like a repository being
-   created: it is empty, or it holds the [taxonomy.yaml] that [init] writes
-   first (or a leftover of it) and not yet all of [.git], [tasks] and
-   [events]. A directory that merely holds a [.git], [events] or [tasks] of
-   something else fails at once. *)
+   created: it is empty, or it holds the temporary file of the [taxonomy.yaml]
+   that [init] writes first (or a leftover of it), or that [taxonomy.yaml]
+   and not yet all of [.git], [tasks] and [events]. A directory that merely
+   holds a [.git], [events] or [tasks] of something else fails at once. *)
 let in_creation getenv =
   match target_root getenv with
   | None -> false
@@ -79,7 +79,7 @@ let in_creation getenv =
       | [||] -> true
       | names ->
           let has name = Array.mem name names in
-          has "taxonomy.yaml.tmp"
+          Array.exists (String.starts_with ~prefix:"taxonomy.yaml.tmp.") names
           || (has "taxonomy.yaml" && not (has ".git" && has "tasks" && has "events")))
 
 let read_again getenv =

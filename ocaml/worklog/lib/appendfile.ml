@@ -63,6 +63,23 @@ let ends_with_newline fd =
   ignore (Unix.lseek fd (len - 1) Unix.SEEK_SET);
   Unix.read fd one 0 1 = 1 && Bytes.get one 0 = '\n'
 
+(* A new file that appears whole or not at all: its bytes go to a temporary file of its own in the same
+   directory, which is then linked to its name ([link] never replaces an existing name). A reader never sees
+   it empty or cut short, and a write that fails leaves nothing under the name. *)
+let create_whole ?root path content =
+  Safefs.make_dirs ?root (Filename.dirname path);
+  let staged =
+    Printf.sprintf "%s.tmp.%d.%d" path (Unix.getpid ()) (Random.State.bits (Random.State.make_self_init ()))
+  in
+  let fd = Unix.openfile staged [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ] 0o644 in
+  Fun.protect
+    ~finally:(fun () -> try Unix.unlink staged with Unix.Unix_error _ -> ())
+    (fun () ->
+      Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> write_durably fd content);
+      match Unix.link staged path with
+      | () -> ()
+      | exception Unix.Unix_error (Unix.EEXIST, _, _) -> Err.fail Err.Other ("file already exists: " ^ path))
+
 let append ?root path blob =
   Safefs.make_dirs ?root (Filename.dirname path);
   let fd = Safefs.open_create path [ Unix.O_RDWR; Unix.O_APPEND ] in

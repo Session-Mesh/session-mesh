@@ -26,6 +26,12 @@ val create_exclusive : ?root:string -> string -> string -> unit
     then [fsync]. The directory is created (and checked) as for {!append}. Raises {!Err.E} ([Other]) if the file
     exists. *)
 
+val create_whole : ?root:string -> string -> string -> unit
+(** Write a new file whole: the bytes go to a temporary file beside it (its name is [path] followed by
+    [.tmp.] and a unique suffix), [fsync]ed, then linked to [path], which is never replaced. A reader sees no
+    file or the whole file, never a part of it, and a failed write leaves no file at [path]. Raises {!Err.E}
+    ([Other]) if [path] exists. *)
+
 val last_byte_is_newline : string -> bool
 (** [true] for a missing or empty file. *)
 

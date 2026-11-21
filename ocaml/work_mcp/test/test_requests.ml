@@ -278,6 +278,25 @@ let test_concurrent_first_use () =
   stop a;
   stop b
 
+(* A first use whose writes fail (no file may grow: a full disk, a quota) creates no taxonomy.yaml: the folder
+   is not left holding an empty one, which every later server would take for a repository it cannot read. *)
+let test_failed_creation_leaves_no_taxonomy () =
+  let home = temp_dir "work-mcp-whole" in
+  let wl_home = Filename.concat home "whole-data" in
+  let taxonomy = Filename.concat wl_home "taxonomy.yaml" in
+  let full = [ "/bin/sh"; "-c"; "trap '' XFSZ; ulimit -f 0; exec \"$0\"" ] in
+  let limited = connect ~session:"whole-a" ~wrap:full ~wl_home ~home () in
+  send limited (call_request limited "work_list_products" (`Assoc []));
+  let refused = reply_of (recv limited) in
+  stop limited;
+  Alcotest.(check bool) "the creation fails" true refused.is_error;
+  Alcotest.(check bool) "and leaves no taxonomy.yaml" false (Sys.file_exists taxonomy);
+  let c = connect ~session:"whole-b" ~wl_home ~home () in
+  send c (call_request c "work_list_products" (`Assoc []));
+  let reply = reply_of (recv c) in
+  Alcotest.(check bool) ("the next first use creates the repository: " ^ reply.text) false reply.is_error;
+  stop c
+
 let tests =
   [
     Alcotest.test_case "work_log retry" `Quick test_log_retry;
@@ -296,4 +315,5 @@ let tests =
     Alcotest.test_case "a failed link is reported" `Quick test_failed_link_is_reported;
     Alcotest.test_case "work_ask links its session" `Quick test_ask_links_its_session;
     Alcotest.test_case "two servers creating the repository" `Quick test_concurrent_first_use;
+    Alcotest.test_case "a failed creation leaves no taxonomy" `Quick test_failed_creation_leaves_no_taxonomy;
   ]

@@ -93,7 +93,8 @@ let rpc c meth params =
   send c (request c meth params);
   recv c
 
-let start ?(session = "probe-session") ?extra ?unset ?cwd ~wl_home ~home () =
+(* [wrap]: a command line the server runs under, the server's path appended (a shell that sets a limit first). *)
+let start ?(session = "probe-session") ?extra ?unset ?cwd ?(wrap = []) ~wl_home ~home () =
   let in_r, in_w = Unix.pipe ~cloexec:true () in
   let out_r, out_w = Unix.pipe ~cloexec:true () in
   let stderr_path = Filename.concat home (Printf.sprintf "stderr-%s.log" session) in
@@ -102,7 +103,8 @@ let start ?(session = "probe-session") ?extra ?unset ?cwd ~wl_home ~home () =
   let previous = Sys.getcwd () in
   Option.iter Unix.chdir cwd;
   let pid =
-    Unix.create_process_env exe [| exe |] (base_env ?extra ?unset ~home ~wl_home ~session ()) in_r out_w err
+    let argv = Array.of_list (wrap @ [ exe ]) in
+    Unix.create_process_env argv.(0) argv (base_env ?extra ?unset ~home ~wl_home ~session ()) in_r out_w err
   in
   Unix.chdir previous;
   List.iter Unix.close [ in_r; out_w; err ];
@@ -125,8 +127,8 @@ let initialize c =
   send c (`Assoc [ ("jsonrpc", `String "2.0"); ("method", `String "notifications/initialized") ]);
   reply
 
-let connect ?session ?extra ?unset ?cwd ~wl_home ~home () =
-  let c = start ?session ?extra ?unset ?cwd ~wl_home ~home () in
+let connect ?session ?extra ?unset ?cwd ?wrap ~wl_home ~home () =
+  let c = start ?session ?extra ?unset ?cwd ?wrap ~wl_home ~home () in
   ignore (initialize c);
   c
 
