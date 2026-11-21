@@ -17,6 +17,31 @@ let agents ~runs_agent ~leader table =
       && runs_agent found)
     table
 
+(* Whether [found] is an agent process or one of its descendants (its tools),
+   following [ppid] through [table]; a cycle or a missing parent ends the walk. *)
+let from_agent ~runs_agent table (found : Mesh_platform.process) =
+  let parent_of pid =
+    List.find_opt (fun (other : Mesh_platform.process) -> other.pid = pid) table
+  in
+  let rec walk (current : Mesh_platform.process) steps =
+    runs_agent current
+    || steps > 0
+       &&
+       match parent_of current.ppid with
+       | Some parent when parent.pid <> current.pid -> walk parent (steps - 1)
+       | _ -> false
+  in
+  walk found (List.length table)
+
+(* A live process of the shell's own group, other than the shell, that is
+   neither an agent nor started by one: a program a person runs there. *)
+let other_program_in_shell_group ~runs_agent ~leader table =
+  List.exists
+    (fun (found : Mesh_platform.process) ->
+      found.pgrp = leader && found.pid <> leader && live found
+      && not (from_agent ~runs_agent table found))
+    table
+
 let classify ~runs_agent ~leader table =
   match
     List.find_opt
@@ -36,8 +61,12 @@ let classify ~runs_agent ~leader table =
       with
       | [], [] when job = leader -> Idle
       (* Every agent process is in the shell's own group: a shell without job
-         control, whose group only a stop of the whole session may signal. *)
-      | _ :: _, [] when job = leader -> Refused "no_job_control"
+         control, whose group only a stop of the whole session may signal.
+         Unless another program shares that group: it is never stopped. *)
+      | _ :: _, [] when job = leader ->
+          if other_program_in_shell_group ~runs_agent ~leader table then
+            Refused "unsupported_foreground"
+          else Refused "no_job_control"
       | _ when job = leader -> Refused "agent_not_foreground"
       | [], _ -> Refused "unsupported_foreground"
       | _ :: _, [] -> Running job
