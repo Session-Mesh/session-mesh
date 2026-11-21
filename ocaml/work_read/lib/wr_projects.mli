@@ -28,6 +28,10 @@ val column_of : Mesh_worklog.Model.task -> string
     ([inbox], [todo]) by status; [other] for any other status (a hand-edited
     file). *)
 
+val light_json : Mesh_worklog.Model.world -> Mesh_worklog.Query.project_row -> Yojson.Safe.t
+(** A project of a list: [id], [title], [product], [status], [quarter],
+    [owner], its counts and [last_activity]. *)
+
 val list : Wr_load.t -> product:string option -> all:bool -> (Yojson.Safe.t, Work_mcp.Work_err.t) result
 
 val detail : Wr_load.t -> string -> (Yojson.Safe.t, Work_mcp.Work_err.t) result

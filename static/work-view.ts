@@ -20,12 +20,13 @@ import { button, el, focusFirst } from './work-dom.ts';
 import type { Translate, ViewContext } from './work-dom.ts';
 import { EntryQuestions } from './work-entry-questions.ts';
 import { EntrySheets } from './work-entry-sheets.ts';
-import { entryFocusTarget, renderOverview, renderProductView } from './work-entry-view.ts';
+import { entryFocusTarget, renderOverview } from './work-entry-view.ts';
 import type { EntryHandlers } from './work-entry-view.ts';
 import { loadOperatorName } from './work-operator-label.ts';
 import { errorBlock, loadingBlock } from './work-error-view.ts';
 import { browserHistory, createWorkNav, scrollerOf, upOnEscape, wentBack } from './work-nav.ts';
 import type { LevelHost, WorkNav } from './work-nav.ts';
+import { ProductPlace } from './work-product-place.ts';
 import type { ProjectAnswersHost } from './work-project-answers.ts';
 import { TAB_KEYS, renderProject } from './work-project-view.ts';
 import type { ProjectView, TabKey } from './work-project-view.ts';
@@ -59,8 +60,10 @@ class WorkView implements WorkViewController {
   private readonly content = el('div', 'work-content');
   /** The tree of the left rail (static/work-tree-view.ts). */
   private readonly rail: WorkRail;
-  /** The product whose view is shown (no project, no sheet). */
-  private product: string | null = null;
+  /** The product whose view is shown (no project, no sheet) with the products' filters (static/work-product-place.ts). */
+  private readonly products: ProductPlace;
+  private get product(): string | null { return this.products.view?.id ?? null; }
+  private set product(_none: null) { this.products.view = null; }
   /** The context of the task sheet; `panelCtx` is the one of the project tabs and `sheetCtx` the one of the sheets opened
    *  from the entry screen, each with its own answer sender, so that the view knows where an answer was sent from. */
   private readonly ctx: ViewContext;
@@ -119,12 +122,13 @@ class WorkView implements WorkViewController {
     options.root.replaceChildren(el('div', 'work-toolbar', refresh), this.content, this.announcer);
     this.docs = mountDocPanel({ root: options.root, request: options.request, translate: this.t });
     this.memory = createViewMemory({ root: options.root, scroller: () => scrollerOf(options.root), current: scroll => this.placeNow(scroll) });
-    const { rail, questionsOpen } = this.memory.place();
+    const { rail, questionsOpen, filters } = this.memory.place();
     this.rail = new WorkRail({ root: options.rail ?? el('div', ''), t: this.t, open: rail, folded: () => this.memory.note(),
       choose: choice => this.chosen(choice) });
     this.questionsOpen = questionsOpen;
     this.sheet = new TaskSheet({ api: this.api, t: this.t, ctx: this.ctx, nav: this.nav, memory: this.memory,
-      generation: () => this.generation, view: () => this.project?.view ?? null });
+      generation: () => this.generation, view: () => this.project?.view ?? this.products.view });
+    this.products = new ProductPlace({ api: this.api, ctx: this.panelCtx, sheet: this.sheet, note: () => this.memory.note() }, filters);
     const generation = (): number => this.generation, signal = (): AbortSignal | undefined => this.controller?.signal;
     this.questions = new EntryQuestions({ api: this.api, generation, signal, report: result => this.report(result),
       away: () => !this.active || this.project !== null || this.product !== null || this.sheets.place() !== null,
@@ -172,7 +176,7 @@ class WorkView implements WorkViewController {
     // The drawer of a phone closed over the rail: the focus goes to the main area (focusMain).
     if (this.options.onRailChoice?.() && document.activeElement instanceof HTMLElement) document.activeElement.blur();
     if (choice.kind === 'entry') void this.backToEntry();
-    else if (choice.kind === 'product') this.openProduct(choice.id);
+    else if (choice.kind === 'product') void this.openProduct(choice.id);
     else void this.openProject(choice.id);
   }
 
@@ -204,7 +208,7 @@ class WorkView implements WorkViewController {
     } else if (await this.loadEntry()) {
       const question = sheet ? this.questions.question(sheet.id) : null;
       if (question) this.openQuestionSheet(question);
-      else if (place.product && !sheet) this.openProduct(place.product);
+      else if (place.product && !sheet) await this.openProduct(place.product, place.tab, place.task);
     }
     // Not when the owner moved meanwhile, nor when the sheet or product left is not the one shown.
     if (this.project === null && this.reading === null && this.product === place.product && sameSheet(this.sheets.place(), sheet)) {
@@ -221,10 +225,11 @@ class WorkView implements WorkViewController {
 
   /** The place the view shows, as the memory keeps it. */
   private placeNow(scroll: Scroll): Place {
-    const project = this.project, task = project ? this.selected : null, reading = project ? null : this.reading;
+    const project = this.project, view = project?.view ?? this.products.view, task = view ? this.selected : null;
+    const reading = project ? null : this.reading;
     return { project: project?.id ?? reading?.id ?? null, product: project || reading ? null : this.product,
-      tab: project?.view.current() ?? reading?.tab ?? null, task, sheet: project || reading ? null : this.sheets.place(), ...scroll,
-      tabScroll: task ? this.sheet.tabScroll : null, rail: this.rail.openKeys(), questionsOpen: this.questionsOpen };
+      tab: view?.current() ?? reading?.tab ?? null, task, sheet: project || reading ? null : this.sheets.place(), ...scroll,
+      tabScroll: task ? this.sheet.tabScroll : null, rail: this.rail.openKeys(), questionsOpen: this.questionsOpen, filters: this.products.filters };
   }
 
   /** Leaving the view takes back its entries of the browser history; the place and the drafts stay in memory. */
@@ -238,7 +243,7 @@ class WorkView implements WorkViewController {
     this.nav.at(0);
   };
 
-  forget = (): void => { this.memory.forget(); this.questionsOpen = false; };
+  forget = (): void => { this.memory.forget(); this.questionsOpen = false; this.products.filters = []; };
 
   destroy = (): void => {
     this.close();
@@ -275,8 +280,8 @@ class WorkView implements WorkViewController {
   }
 
   private async reload(): Promise<void> {
-    const product = this.product;
-    if (!this.project) { if (await this.loadEntry() && product) this.openProduct(product); return; }
+    const product = this.product, tab = this.products.view?.current() ?? null;
+    if (!this.project) { if (await this.loadEntry() && product) await this.openProduct(product, tab); return; }
     await this.openProject(this.project.id, this.project.view.current());
     await this.refreshCount();
   }
@@ -335,22 +340,24 @@ class WorkView implements WorkViewController {
   }
 
   private entryHandlers(): EntryHandlers {
-    return { t: this.t, openProduct: id => this.openProduct(id), openProject: id => void this.openProject(id) };
+    return { t: this.t, openProduct: id => void this.openProduct(id), openProject: id => void this.openProject(id) };
   }
 
-  /** A product's view, one level above the entry screen (like a project); a product gone shows the entry screen. */
-  private openProduct(id: string): void {
+  /** A product's view, one level above the entry screen (like a project), on `tab` with the sheet of `task` (the place
+   *  the owner left); a product gone shows the entry screen. */
+  private async openProduct(id: string, tab: string | null = null, task: string | null = null): Promise<void> {
     const node = this.entry ? findProduct(entryTree(this.entry.products, this.entry.projects), id) : null;
     if (!node) { void this.backToEntry(); return; }
-    this.begin();
+    const { token, signal } = this.begin(), series = { live: () => token === this.generation, signal };
     this.docs.close();
-    this.project = null; this.selected = null; this.reading = null; this.product = id;
+    this.project = null; this.selected = null; this.reading = null;
     this.nav.at(1);
-    const view = renderProductView({ ...this.entryHandlers(), back: () => void this.backToEntry() }, node);
-    this.show(view);
+    const view = this.products.open(node, tab, { ...this.entryHandlers(), back: () => void this.backToEntry() }, series);
+    this.show(view.root);
     this.rail.select(treeKey('product', id));
-    this.focusMain(view.querySelector<HTMLElement>('.work-back'));
+    this.focusMain(view.root.querySelector<HTMLElement>('.work-back'));
     this.memory.note();
+    await this.products.reopen(view, task, series);
   }
 
   /** Focus a control of the main area, unless the owner moves in the rail: the focus stays on its item. */

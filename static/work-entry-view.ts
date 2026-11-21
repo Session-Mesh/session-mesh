@@ -4,7 +4,7 @@
 /**
  * The main area of the Projects view away from a project: the overview of the entry screen (each zone with its
  * products and their progress) and the view of one product (its projects, its "no project" line and its child
- * products). The tree of the left rail (static/work-tree-view.ts) leads to the same places.
+ * products, the first tab of its view). The tree of the left rail (static/work-tree-view.ts) leads to the same places.
  */
 
 import type { EntryCategory, EntryProduct } from './work-derive.ts';
@@ -57,18 +57,16 @@ export function renderOverview(handlers: EntryHandlers, tree: readonly EntryCate
   return root;
 }
 
-/** The view of one product: the way back, its name and progress, its projects, its "no project" line, its children. */
-export function renderProductView(handlers: EntryHandlers & Readonly<{ back: () => void }>, node: EntryProduct): HTMLElement {
+/** The overview of one product (the first tab of its view, static/work-product-page.ts): its projects, its "no
+ *  project" line, its child products. */
+export function productOverview(handlers: EntryHandlers, node: EntryProduct): HTMLElement {
   const body = el('div', 'work-entry-product');
   for (const project of node.projects) body.append(projectRow(handlers, project));
   const other = noProjectRow(handlers.t, node);
   if (other) body.append(other);
   for (const child of node.children) body.append(productRow(handlers, child));
   if (body.childElementCount === 0) body.append(el('p', 'work-entry-empty', handlers.t('work.noProjectsHere')));
-  const heading = el('h2', 'work-product-title', el('span', 'work-entry-name', node.product.id), progressBlock(handlers.t, node.product.tree));
-  const root = el('div', 'work-product-view', el('div', 'work-actions', button('btn work-back', handlers.t('work.back'), handlers.back)), heading, body);
-  root.setAttribute('data-product', node.product.id);
-  return root;
+  return body;
 }
 
 /** Where focus goes when a product, a project or a sheet is left for the entry screen drawn in `scope`: the question

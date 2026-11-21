@@ -9,7 +9,7 @@ module E = Work_mcp.Work_err
 open E
 
 let max_bytes = 4096
-let ops = [ "products"; "projects"; "project"; "task"; "resume"; "sessions-of"; "session-questions"; "ids"; "open-questions" ]
+let ops = [ "products"; "projects"; "product"; "project"; "task"; "resume"; "sessions-of"; "session-questions"; "ids"; "open-questions" ]
 
 let read ?(max_bytes = max_bytes) channel =
   let buffer = Buffer.create 512 and chunk = Bytes.create 1024 in
@@ -27,8 +27,9 @@ let read ?(max_bytes = max_bytes) channel =
 (* One argument as words of the command line; [Wr_args.parse] then applies
    the strict checks (names allowed per subcommand, values, identifiers). *)
 let words op = function
-  | "id", `String v when (op = "project" || op = "task") && not (String.length v > 0 && v.[0] = '-') -> Ok [ v ]
-  | "id", _ -> Error (invalid "id is one identifier, for project and task only")
+  | "id", `String v when (op = "product" || op = "project" || op = "task") && not (String.length v > 0 && v.[0] = '-') ->
+      Ok [ v ]
+  | "id", _ -> Error (invalid "id is one identifier, for product, project and task only")
   | "all", `Bool true -> Ok [ "--all" ]
   | "all", _ -> Error (invalid "all must be true")
   | "limit", `Int n when op = "open-questions" -> Ok [ "--limit"; string_of_int n ]

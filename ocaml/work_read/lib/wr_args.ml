@@ -15,6 +15,7 @@ type command =
   | Products
   | Projects of { product : string option; all : bool }
   | Project_detail of string
+  | Product_detail of string
   | Task_detail of string
   | Resume of { product : string option; project : string option; all : bool }
   | Sessions_of of target
@@ -23,7 +24,7 @@ type command =
   | Open_questions of { after : string option; limit : int }
 
 let usage =
-  "usage: work-read products | projects [--product P] [--all] | project P-ID | task T-ID | resume \
+  "usage: work-read products | projects [--product P] [--all] | product P | project P-ID | task T-ID | resume \
    [--product P] [--project P-ID] [--all] | sessions-of (--product P | --project P-ID | --task T-ID) | \
    session-questions | ids | open-questions [--after N-ID] [--limit N]"
 
@@ -136,6 +137,7 @@ let parse = function
   | [ "products" ] -> Ok Products
   | "products" :: _ -> Error (invalid "products takes no argument")
   | "projects" :: rest -> projects rest
+  | "product" :: rest -> single "product" product_value (fun id -> Product_detail id) rest
   | "project" :: rest -> single "project" project_value (fun id -> Project_detail id) rest
   | "task" :: rest -> single "task" task_value (fun id -> Task_detail id) rest
   | "resume" :: rest -> resume rest

@@ -4,6 +4,8 @@
 /** Client of `POST /api/work/v1`: same origin, page credentials, every outcome a value (never a throw). */
 
 import { isObj, parseOpenQuestions, parseProducts, parseProject, parseProjects, parseTask, text } from './work-parse.ts';
+import { parseProductDoc } from './work-product-parse.ts';
+import type { ProductDoc } from './work-product-parse.ts';
 import { parseSessionQuestions } from './work-session-questions.ts';
 import type { SessionQuestionsDoc } from './work-session-questions.ts';
 import { parseIds } from './work-references-parse.ts';
@@ -71,6 +73,8 @@ export type OpenQuestionsPage = Readonly<{ after?: string; limit?: number }>;
 export type WorkApi = Readonly<{
   products(signal?: AbortSignal): Promise<WorkResult<ProductsDoc>>;
   projects(signal?: AbortSignal): Promise<WorkResult<ProjectsDoc>>;
+  /** Every task of a product and of its child products (`product`), for its Board and Timeline. */
+  product(id: string, signal?: AbortSignal): Promise<WorkResult<ProductDoc>>;
   project(id: string, signal?: AbortSignal): Promise<WorkResult<ProjectDoc>>;
   task(id: string, signal?: AbortSignal): Promise<WorkResult<TaskDetail>>;
   /** A page of the open questions of the tracker, oldest first and in full (`open-questions`): those asked after the
@@ -180,6 +184,7 @@ export function createWorkApi(request: WorkFetch, url = '/api/work/v1', options:
   return {
     products: signal => read('products', {}, parseProducts, signal),
     projects: signal => read('projects', {}, parseProjects, signal),
+    product: (id, signal) => read('product', { id }, parseProductDoc, signal),
     project: (id, signal) => read('project', { id }, parseProject, signal),
     task: (id, signal) => read('task', { id }, parseTask, signal),
     openQuestions: (signal, page = {}) => read('open-questions', {

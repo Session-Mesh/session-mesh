@@ -336,4 +336,5 @@ let () =
       ("attempts", Test_read_attempts.tests);
       ("question context", Test_question_context.tests);
       ("open-questions", Test_open_questions.tests);
+      ("product", Test_product.tests);
     ]

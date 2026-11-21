@@ -18,6 +18,7 @@ type command =
   | Projects of { product : string option; all : bool }
       (** [all]: also [done] and [dropped] projects *)
   | Project_detail of string  (** a [P-<hex>] reference *)
+  | Product_detail of string  (** a product id: the product page *)
   | Task_detail of string  (** a [T-<hex>] reference *)
   | Resume of { product : string option; project : string option; all : bool }
       (** [all]: also the [todo] section *)

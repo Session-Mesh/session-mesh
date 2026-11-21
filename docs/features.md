@@ -297,8 +297,7 @@ project tracker that agents write through `mesh-work`, read only:
   first screen lists ("Show more" included). Both counts of a product cover its child products.
   Projects whose
   product the tracker does not list stand in a last group. Choosing "Overview" shows the first
-  screen, a product shows its view (its projects with their progress, done tasks over all tasks,
-  and number of blockers, its tasks in no project, its child products), a project opens it;
+  screen, a product shows its view, a project opens it;
   choosing a zone, or the arrow beside a product, folds or unfolds it (on a phone the arrow is a
   touch target of its own, as large as a row). The item of the place shown
   is selected and its group unfolded, whether it was reached from the tree or from the main area.
@@ -307,6 +306,21 @@ project tracker that agents write through `mesh-work`, read only:
   goes to the group), `Enter` or `Space` chooses, and the focus stays in the tree. On a phone the
   drawer closes on a choice. The first screen keeps the pending questions and, below them, an
   overview: each zone with its products and their progress, each a way to the product's view.
+- **A product, in three tabs.** "Overview" (its projects with their progress, done tasks over all
+  tasks, and number of blockers, its tasks in no project, its child products), "Board" and
+  "Timeline" (in French "Aperçu", "Tableau" and "Frise"). Board and Timeline show every task of
+  the product and of its child products, the scope of the product's count in the tree, read when
+  one of them is first shown: the Board in the columns of a project's Board, each card with its
+  project ("No project" for a task in none), the Timeline with the bars, colours and legend of a
+  project's Timeline, one group per project (its tasks in no project last), each group folded or
+  unfolded by its heading. Without a filter, the open columns add up to the product's count in the
+  tree. Above both tabs, the same filters: a search in the id and title, and lists of checkboxes
+  for project, status, priority, owner and tag (a filter whose value no task has is left out),
+  "Clear the filters", and the number of tasks shown. A column or a group shows 50 tasks, then
+  "Show more". The reader lists at most 1000 tasks of a product: beyond, a notice says the view is
+  partial, the column counters still count every task, and the filters and the Timeline see the
+  tasks read. A card or a row opens the task sheet, as in a project. The filters of each product
+  (the last 20 products filtered) are kept with the place.
 - **A project, in five tabs.** "Pick up" (in progress, blocked or waiting, due soon, no recent
   activity, open questions, milestones, risks), "Board" (columns to do, in progress, blocked or
   waiting, done, and "Other" for any other status, shown only when it holds tasks), "Timeline"
@@ -322,7 +336,7 @@ project tracker that agents write through `mesh-work`, read only:
   read again; an
   answered question is never shown in the colour of the open ones.
 - **The way back.** The view has three levels: the first screen, a product or a project on one of
-  its tabs, and a task sheet over that tab. A choice in the tree is a step like the same choice in
+  its tabs, and a task sheet over that tab (from a product's Board or Timeline too). A choice in the tree is a step like the same choice in
   the main area. The sheet's first button ("Back to the Board tab", named after the
   tab) returns to the tab, scrolled where it was on a phone, with the focus on the task that
   opened the sheet; "Back to products" in the product's view and in the project header returns to
@@ -337,8 +351,8 @@ project tracker that agents write through `mesh-work`, read only:
   the question's "Open" button. `Esc` in a text field that holds text does nothing, so a draft
   answer is not lost.
 - **Coming back.** Leaving Projects (the Sessions button, a session, `Esc`, a link) and coming
-  back, or reloading the tab, shows the view as it was left, read again: the product, or the
-  project, its tab, the open task sheet (with its level of the way back), or the sheet opened from
+  back, or reloading the tab, shows the view as it was left, read again: the product or the
+  project, its tab, the filters of the products, the open task sheet (with its level of the way back), or the sheet opened from
   the first screen, where they were scrolled, the items of the tree unfolded or folded (on the
   first visit the zones are unfolded and the products folded; those of products and projects that
   no longer exist are forgotten), the pending questions unfolded or

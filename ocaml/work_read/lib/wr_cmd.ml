@@ -12,6 +12,7 @@ let dispatch loaded = function
   | Wr_args.Products -> Wr_products.run loaded
   | Wr_args.Projects { product; all } -> Wr_projects.list loaded ~product ~all
   | Wr_args.Project_detail id -> Wr_projects.detail loaded id
+  | Wr_args.Product_detail id -> Wr_product.run loaded id
   | Wr_args.Task_detail id -> Wr_task.run loaded id
   | Wr_args.Resume { product; project; all } -> Wr_resume.run loaded ~product ~project ~all
   | Wr_args.Sessions_of target -> Wr_sessions.run loaded target

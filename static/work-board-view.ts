@@ -3,7 +3,7 @@
 
 /** The "Tableau" tab: the `columns` of the project document as four columns (one vertical list on a phone). */
 
-import { el, notice, omittedNote } from './work-dom.ts';
+import { button, el, focusFirst, notice, omittedNote } from './work-dom.ts';
 import type { ViewContext } from './work-dom.ts';
 import { taskCard } from './work-task-card.ts';
 import type { ColumnKey, ProjectDoc, TaskRow } from './work-types.ts';
@@ -12,12 +12,35 @@ const COLUMNS: readonly ColumnKey[] = ['todo', 'inProgress', 'blocked', 'done', 
 /** Names of the columns in the `columns_omitted` object of the document. */
 const OMITTED_NAME: Readonly<Record<ColumnKey, string>> = { todo: 'todo', inProgress: 'in_progress', blocked: 'blocked', done: 'done', other: 'other' };
 
-function column(ctx: ViewContext, key: ColumnKey, rows: readonly TaskRow[], missing: number): HTMLElement {
+/** How a column shows its cards: at most `limit` at first, then as many more per "Show more"; `extra` adds a line
+ *  to a card (the project of a task on a product's board). */
+export type ColumnOptions = Readonly<{ limit?: number; extra?: (row: TaskRow) => HTMLElement | null }>;
+
+function cards(ctx: ViewContext, list: HTMLElement, rows: readonly TaskRow[], options: ColumnOptions): void {
+  const step = options.limit ?? rows.length;
+  const more = (from: number): void => {
+    for (const row of rows.slice(from, from + step)) list.append(taskCard(ctx, row, options.extra?.(row) ?? undefined));
+    if (from + step >= rows.length) return;
+    const left = rows.length - from - step;
+    const showMore = button('btn work-more', ctx.t('work.product.showMore', { n: Math.min(step, left) }), () => {
+      showMore.remove();
+      more(from + step);
+      focusFirst(list.querySelectorAll<HTMLElement>('.work-card')[from + step] ?? null);
+    });
+    list.append(showMore);
+  };
+  more(0);
+}
+
+/** A column: its name and counter (`count`, by default the cards and the missing ones), its cards, a note of the
+ *  missing ones. */
+export function boardColumn(ctx: ViewContext, key: ColumnKey, rows: readonly TaskRow[], missing: number,
+  options: ColumnOptions & Readonly<{ count?: number }> = {}): HTMLElement {
   const root = el('section', `work-column work-column-${key}`);
-  const heading = el('h3', 'work-column-title', ctx.t(`work.col.${key}`), el('span', 'work-count', String(rows.length + missing)));
+  const heading = el('h3', 'work-column-title', ctx.t(`work.col.${key}`), el('span', 'work-count', String(options.count ?? rows.length + missing)));
   root.append(heading);
   const list = el('div', 'work-card-list');
-  for (const row of rows) list.append(taskCard(ctx, row));
+  cards(ctx, list, rows, options);
   if (rows.length === 0 && missing === 0) list.append(el('p', 'work-column-empty', ctx.t('work.col.empty')));
   if (missing > 0) list.append(notice('work-omitted', ctx.t('work.col.missing', { n: missing })));
   root.append(list);
@@ -34,7 +57,7 @@ export function renderBoard(ctx: ViewContext, doc: ProjectDoc): HTMLElement {
     const missing = ids.length - rows.length + (doc.omitted['columns.' + OMITTED_NAME[key]] ?? 0);
     // "other" is a guard for hand-edited data: shown only when it holds something
     if (key === 'other' && rows.length + missing === 0) continue;
-    grid.append(column(ctx, key, rows, missing));
+    grid.append(boardColumn(ctx, key, rows, missing));
   }
   root.append(grid, omittedNote(ctx.t, doc.omitted.tasks));
   return root;

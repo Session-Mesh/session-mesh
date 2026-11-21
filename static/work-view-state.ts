@@ -4,7 +4,7 @@
 /**
  * What the Projects view puts back when the owner comes back to it: the place (the project, its tab, the task sheet,
  * a product, or a sheet opened from the entry screen, where they were scrolled, the items unfolded in the tree of the
- * left rail and the pending questions unfolded on the entry screen) and the unsent answer drafts of every question
+ * left rail, the pending questions unfolded on the entry screen and the filters of the products' Board and Timeline) and the unsent answer drafts of every question
  * the owner typed under, by question id. Kept in this tab's sessionStorage under one key, never in localStorage and
  * never sent anywhere: a draft may hold sensitive text, so it lives no longer than the tab and is removed when the
  * answer is sent, when the owner empties the field, and when the browser signs out (static/app.js, static/login.js).
@@ -13,12 +13,16 @@
  * schema reads as the empty state, and a field that is not of the expected shape is dropped on its own.
  */
 
+import { readProductFilters } from './work-product-filters.ts';
+import type { ProductFilters } from './work-product-filters.ts';
+
 /** The sessionStorage key. static/login.js removes it by this name too. */
 export const STATE_KEY = 'mesh.workView';
-export const STATE_SCHEMA = 2;
+export const STATE_SCHEMA = 3;
 /** The schemas read: 1 had no product and kept the products unfolded on the entry screen (`expanded`), which the tree
- *  of the rail replaces; its place reads with no product and the tree folded as on a first visit. */
-const READ_SCHEMAS: ReadonlySet<unknown> = new Set([1, STATE_SCHEMA]);
+ *  of the rail replaces; its place reads with no product and the tree folded as on a first visit. 2 had no tab, task
+ *  nor filters for a product: its product place reads on the product's overview, unfiltered. */
+const READ_SCHEMAS: ReadonlySet<unknown> = new Set([1, 2, STATE_SCHEMA]);
 /** The bound of the stored value, in UTF-16 units; the oldest drafts go first when it is exceeded. */
 export const MAX_STATE_CHARS = 64 * 1024;
 export const MAX_DRAFTS = 40;
@@ -67,6 +71,8 @@ export type Place = Readonly<{
   rail: readonly string[] | null;
   /** The pending questions of the entry screen unfolded (folded by default). */
   questionsOpen: boolean;
+  /** The filters of the products' Board and Timeline (static/work-product-filters.ts), whatever the place. */
+  filters: ProductFilters;
 }>;
 
 export type ViewState = Readonly<{ place: Place; drafts: ReadonlyMap<string, Draft> }>;
@@ -79,14 +85,15 @@ export type StoragePort = Readonly<{
 }>;
 
 export const ENTRY_PLACE: Place = { project: null, product: null, tab: null, task: null, sheet: null, scroll: 0, sheetScroll: 0,
-  tabScroll: null, rail: null, questionsOpen: false };
+  tabScroll: null, rail: null, questionsOpen: false, filters: [] };
 export const EMPTY_STATE: ViewState = { place: ENTRY_PLACE, drafts: new Map() };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 const isId = (value: unknown, max = MAX_ID): value is string => typeof value === 'string' && value.length <= max && ID.test(value);
 const idOrNull = (value: unknown): string | null => (isId(value) ? value : null);
-const productOrNull = (value: unknown): string | null => (isId(value, MAX_ENTITY_ID) ? value : null);
+const productId = (value: unknown): value is string => isId(value, MAX_ENTITY_ID);
+const productOrNull = (value: unknown): string | null => (productId(value) ? value : null);
 /** A key of the rail: its kind, a colon and an id as long as the server's, empty only for the zone of the projects of
  *  no listed product. */
 function isRailKey(value: unknown): value is string {
@@ -113,12 +120,13 @@ function readSheet(value: unknown): EntrySheetPlace | null {
 function readPlace(value: unknown): Place {
   if (!isRecord(value)) return ENTRY_PLACE;
   const project = idOrNull(value.project), sheet = project ? null : readSheet(value.sheet);
+  const product = project || sheet ? null : productOrNull(value.product), level = project ?? product;
   return {
-    project, product: project || sheet ? null : productOrNull(value.product),
-    tab: project ? idOrNull(value.tab) : null, task: project ? idOrNull(value.task) : null, sheet,
+    project, product, tab: level ? idOrNull(value.tab) : null, task: level ? idOrNull(value.task) : null, sheet,
     scroll: offset(value.scroll), sheetScroll: offset(value.sheetScroll),
     tabScroll: value.tabScroll === null || value.tabScroll === undefined ? null : offset(value.tabScroll),
     rail: railKeys(value.rail), questionsOpen: value.questionsOpen === true,
+    filters: readProductFilters(value.filters, productId),
   };
 }
 
@@ -140,13 +148,17 @@ function readDrafts(value: unknown): Map<string, Draft> {
   return drafts;
 }
 
+/** A place of schema 2 or before: a product had no tab, task nor filters. */
+const olderPlace = (place: Place): Place => (place.product ? { ...place, tab: null, task: null } : place);
+
 /** The state a stored value holds; the empty state for anything else. Never throws. */
 export function parseState(raw: string | null): ViewState {
   if (typeof raw !== 'string' || raw.length > MAX_STATE_CHARS) return EMPTY_STATE;
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return EMPTY_STATE; }
   if (!isRecord(value) || !READ_SCHEMAS.has(value.schema)) return EMPTY_STATE;
-  return { place: readPlace(value.place), drafts: readDrafts(value.drafts) };
+  const place = readPlace(value.place);
+  return { place: value.schema === STATE_SCHEMA ? place : { ...olderPlace(place), filters: [] }, drafts: readDrafts(value.drafts) };
 }
 
 const encode = (place: Place, drafts: ReadonlyArray<readonly [string, Draft]>): string =>
@@ -162,7 +174,9 @@ export function serializeState(state: ViewState): string {
     drafts.pop();
     text = encode(place, drafts);
   }
-  return text.length > MAX_STATE_CHARS ? encode(ENTRY_PLACE, []) : text;
+  if (text.length <= MAX_STATE_CHARS) return text;
+  const unfiltered = encode({ ...place, filters: [] }, []);   // the filters go before the place itself
+  return unfiltered.length > MAX_STATE_CHARS ? encode(ENTRY_PLACE, []) : unfiltered;
 }
 
 /** The state with the draft of `question` set, or removed (null, or an empty field with nothing ticked). */

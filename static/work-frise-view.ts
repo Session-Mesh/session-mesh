@@ -58,7 +58,7 @@ function dateFacts(ctx: ViewContext, row: FriseRow): string {
   return parts.length > 0 ? parts.join(' · ') : ctx.t('work.frise.noDates');
 }
 
-function friseRow(ctx: ViewContext, frise: Frise, row: FriseRow): HTMLElement {
+export function friseRow(ctx: ViewContext, frise: Frise, row: FriseRow): HTMLElement {
   const item = el('li', 'work-frise-row');
   const label = button('work-frise-label', '', () => ctx.selectTask(row.task.id),
     statusBadge(ctx.t, row.task.status), el('span', 'work-frise-title', row.task.title));
@@ -95,6 +95,10 @@ function statusLegend(ctx: ViewContext): HTMLElement {
   return list;
 }
 
+/** The axis, the legend line and the status legend, above the rows. */
+export const friseHead = (ctx: ViewContext, frise: Frise): HTMLElement[] =>
+  [axis(ctx, frise), el('p', 'work-frise-legend', ctx.t('work.frise.legend')), statusLegend(ctx)];
+
 export function renderFrise(ctx: ViewContext, doc: ProjectDoc): HTMLElement {
   const root = el('div', 'work-frise');
   if (doc.tasks.length === 0) return notice('work-empty', ctx.t('work.frise.empty'));
@@ -102,6 +106,6 @@ export function renderFrise(ctx: ViewContext, doc: ProjectDoc): HTMLElement {
   const list = el('ul', 'work-frise-list');
   list.style.setProperty('--today', `${axisPercent(frise, frise.today).toFixed(2)}%`);
   for (const row of frise.rows) list.append(friseRow(ctx, frise, row));
-  root.append(axis(ctx, frise), el('p', 'work-frise-legend', ctx.t('work.frise.legend')), statusLegend(ctx), list, omittedNote(ctx.t, doc.omitted.tasks));
+  root.append(...friseHead(ctx, frise), list, omittedNote(ctx.t, doc.omitted.tasks));
   return root;
 }

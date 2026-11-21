@@ -69,7 +69,7 @@ export function parseProducts(value: unknown): ProductsDoc | null {
   return { categories: objects(value.categories).map(parseCategory), truncated: flag(value.truncated) };
 }
 
-function parseProjectSummary(source: Obj): ProjectSummary | null {
+export function parseProjectSummary(source: Obj): ProjectSummary | null {
   const id = text(source.id);
   if (!id) return null;
   return { id, title: text(source.title) ?? id, product: text(source.product) ?? '', status: text(source.status) ?? '',
