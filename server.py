@@ -860,7 +860,8 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
     ``vibe`` is a VibeLaunch prepared earlier (before an agent was stopped): its command replaces
     ``command``, and its hooks directory is recorded in the session so that the sweeper keeps it.
     ``opencode`` is the (command, notice) pair ``_opencode_command`` returned earlier, for the same reason:
-    its probe (``opencode debug config``) is run once per launch.
+    its private probe (``opencode api get <target> --standalone``, with ``/api/config`` and a URL-encoded
+    ``location[directory]`` query parameter for ``cwd``) is run once per launch.
     ``exact``: the name is ``base`` or nothing (409 when taken), never a suffixed one.
     ``nonce``: the session nonce, when the caller recorded it before the creation (exact restore).
     ``conversation``: (agent, id, evidence) of the conversation the command launches (_send_launch).
