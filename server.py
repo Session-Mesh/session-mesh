@@ -1040,7 +1040,7 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
     replacement = next((item for item in listed if item.get("name") == name), None)
     if replacement is None:
         raise web.HTTPServiceUnavailable(text="ptyhost did not confirm the prepared session")
-    saved = await asyncio.to_thread(organize.arrangement, old_name, old_created)
+    saved = await _arrangement_of(old_name, old_created)
     killed = await host({"op": "kill_if", "name": old_name, "created": old_created})
     if killed != {"ok": True}:
         await host({"op": "kill_if", "name": name, "created": replacement["created"]})
@@ -1052,10 +1052,12 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
             await switch[1]()
         except AccountsUnavailable as exc:   # nothing changed under the source account: the conversation goes on there
             print(f"account switch of {old_name} undone: {exc}", flush=True)
+            standby = (name, replacement["created"])   # what the owner arranged meanwhile is on the standby
+            saved = await _arrangement_of(*standby) or saved
             await host({"op": "kill_if", "name": name, "created": replacement["created"]})
             resumed = await new_session(base, cwd, command, agent, known_agent, keep=48, account=account,
                                         account_env=source_env)
-            await _carry_arrangement((old_name, old_created), resumed, saved)
+            await _carry_arrangement(standby, resumed, saved)
             raise AccountSwitchUndone(resumed, exc.code or "carry_failed", str(exc)) from exc
     await _start_replacement(replacement, cwd, command, known_agent, account_env)
     return name
@@ -1073,6 +1075,16 @@ async def _start_replacement(replacement, cwd, command, known_agent, account_env
     if started != {"ok": True}:
         raise web.HTTPServiceUnavailable(
             text=f"Conversation stopped, but a standby session is available: {replacement['name']}")
+
+
+async def _arrangement_of(name, created):
+    """organize.arrangement of the incarnation (name, created), None when it cannot be read: logged, and the restart
+    goes on without it."""
+    try:
+        return await asyncio.to_thread(organize.arrangement, name, created)
+    except (OSError, ValueError) as exc:
+        print(f"organisation of {name} not read before its restart: {exc!r}", flush=True)
+        return None
 
 
 async def _carry_arrangement(source, name, saved, created=None):
@@ -1142,7 +1154,7 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     account_env = await account_environment(target, known_agent)
     source_env = await account_environment(account, known_agent) if switch else account_env
     command, notice, vibe = await _prepared_launch(known_agent, command, cwd)
-    saved = await asyncio.to_thread(organize.arrangement, source["name"], source["created"])
+    saved = await _arrangement_of(source["name"], source["created"])
     incarnation = (source["name"], source["created"])
     try:
         created = await _stop_agent(source, known_agent)

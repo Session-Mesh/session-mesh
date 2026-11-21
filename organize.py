@@ -100,13 +100,21 @@ def _save(data):
     fsutil.atomic_write(FILE, json.dumps(data, ensure_ascii=False, indent=1))
 
 
+def _kept(created, listed):
+    """Whether an entry bound to ``created`` stays for ``listed``, the incarnation of its name in a listing (None:
+    not listed): the same one, or a later one, which a restart bound it to (carry) after that listing was read."""
+    if listed is None or created == listed:
+        return listed is not None
+    numbers = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (created, listed))
+    return numbers and created > listed
+
+
 def _forget_dead(data, live):
     """Drop entries of sessions that ended (or whose name was reused)."""
     data["sessions"] = {n: v for n, v in data["sessions"].items()
-                        if live.get(n) == v.get("created")}
+                        if isinstance(v, dict) and _kept(v.get("created"), live.get(n))}
     # bound to the creation time like the rest: a reused name starts unranked
-    data["order"] = [n for n in data["order"]
-                     if n in live and data["sessions"].get(n, {}).get("created") == live[n]]
+    data["order"] = [n for n in data["order"] if n in data["sessions"]]
 
 
 def view(sessions, prune=True):
@@ -173,11 +181,13 @@ def carry(source, target, saved):
         current = data["sessions"].get(target[0])
         if isinstance(current, dict) and current.get("created") == target[1]:
             return
-        old =data["sessions"].get(source[0])
+        old = data["sessions"].get(source[0])
         old = old if isinstance(old, dict) and old.get("created") == source[1] else saved
         if not old:
             return
         label, folder = (clean(old[key]) if isinstance(old.get(key), str) else "" for key in ("label", "folder"))
+        if target[0] != source[0] and target[0] in data["order"]:   # a stale place must not shift the source's
+            data["order"].remove(target[0])
         rank = _carried_rank(data, source, saved)
         entry = data["sessions"][target[0]] = {"created": target[1],
                                                "folder": folder if folder in data["folders"] else None}

@@ -94,3 +94,30 @@ test('what is read before a restart: the arrangement bound to that very incarnat
   assert.equal(organize(arranged(), 'arrangement', ['work', NEW])[0], null);
   assert.equal(organize(arranged(), 'arrangement', ['other', OLD])[0], null);
 });
+
+test('a stale place of the replacement name does not shift the place it takes', () => {
+  const stale = arranged();
+  stale.order.unshift('work-2');
+  stale.sessions['work-2'] = {created: 5, label: 'Someone before'};
+  const [after] = carried(stale, ['work', OLD], ['work-2', NEW], null);
+  assert.deepEqual(after.order, ['first', 'work-2', 'last']);
+  assert.equal(after.sessions['work-2']!.label, 'Chosen name');
+});
+
+test('a listing read before the restart keeps the arrangement carried to the next incarnation', () => {
+  const carriedAlready = arranged();
+  carriedAlready.sessions.work!.created = NEW;
+  const [shown, after] = organize(carriedAlready, 'view', [[{name: 'work', created: OLD}, {name: 'first', created: 1},
+    {name: 'last', created: 2}], true]);
+  assert.equal((shown as {sessions: Record<string, {label: string}>}).sessions.work!.label, 'Chosen name');
+  assert.deepEqual(after.sessions.work, {created: NEW, label: 'Chosen name', folder: 'Projects'});
+  assert.deepEqual(after.order, ['first', 'work', 'last']);
+});
+
+test('a listing of a later incarnation, or without the session, still forgets an earlier entry', () => {
+  for (const listing of [[{name: 'work', created: NEW}], []]) {
+    const [, after] = organize(arranged(), 'view', [[{name: 'first', created: 1}, {name: 'last', created: 2}, ...listing], true]);
+    assert.equal(after.sessions.work, undefined, JSON.stringify(listing));
+    assert.deepEqual(after.order, ['first', 'last']);
+  }
+});
