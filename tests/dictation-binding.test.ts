@@ -37,16 +37,17 @@ function browserHandle(created: unknown = 1, legacy = false) {
   const app = fs.readFileSync('static/app.js', 'utf8');
   vm.runInContext(app.slice(app.indexOf('function localTerminalSocketReady('), app.indexOf('class Pane {')), context);
   let visible = true;
-  const output: number[][] = [], geometry: unknown[] = [];
+  const output: number[][] = [], geometry: unknown[] = [], ptySizes: unknown[] = [];
   const handle = context.openLocalTerminal('alpha', {rows: 24, cols: 80, ...(legacy ? {} : {created})}, {
     modeSource,
     current: () => visible, opened() {}, closed() {},
     bytes: (_: unknown, bytes: Uint8Array) => output.push([...bytes]),
     replayGeometry: (_: unknown, size: unknown) => geometry.push(size),
+    ptySize: (_: unknown, size: unknown) => ptySizes.push(size),
   });
   const socket = handle.socket as Socket;
   const message = (data: unknown) => socket.onmessage({data});
-  return {handle, socket, output, geometry, hide: () => {visible = false;}, message,
+  return {handle, socket, output, geometry, ptySizes, hide: () => {visible = false;}, message,
     bound: (body: unknown = {t: 'bound', name: 'alpha', created: 1}) => message(JSON.stringify(body)),
     replay: () => message(new ArrayBuffer(0))};
 }
@@ -98,6 +99,28 @@ test('missing, late, malformed, mismatched and compatibility acknowledgements ne
 test('invalid explicit expected incarnations never fall back to a name-only browser attach', () => {
   for (const created of [true, false, 0, -1, NaN, Infinity, '1'])
     assert.throws(() => browserHandle(created), /invalid terminal incarnation/);
+});
+
+test('PTY ownership updates preserve exact binding and stay fenced from a detached pane', () => {
+  const f = browserHandle();
+  assert.equal(new URL(f.socket.url).searchParams.get('pty_size'), '1');
+  f.bound(); f.replay();
+  f.message(JSON.stringify({t: 's', rows: 37, cols: 101, owner: 'other'}));
+  assert.equal(f.handle.isBound('alpha', 1), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.ptySizes)), [{rows: 37, cols: 101, owner: 'other'}]);
+  f.handle.resize(37, 101, 'keep');
+  f.handle.resize(31, 91, 'take');
+  assert.deepEqual(f.socket.sent.map(value => JSON.parse(value as string)), [
+    {t: 'r', rows: 37, cols: 101, size: 'keep'}, {t: 'r', rows: 31, cols: 91, size: 'take'},
+  ]);
+  const release = f.handle.retain();
+  f.hide(); f.handle.close();
+  f.message(JSON.stringify({t: 's', rows: 31, cols: 91, owner: 'you'}));
+  assert.equal(f.ptySizes.length, 1, 'a retained socket cannot resize a reused view');
+  assert.equal(f.handle.isBound('alpha', 1), true);
+  f.message(JSON.stringify({t: 's', rows: 31, cols: 91, owner: 'invalid'}));
+  assert.equal(f.handle.isBound('alpha', 1), false, 'malformed controls still revoke authority');
+  release();
 });
 
 test('null and omitted inventory incarnations support ordinary lease I/O without dictation authority', () => {
@@ -326,7 +349,7 @@ test('AC-7: conditional incarnation binding acknowledgement', {timeout: 30000}, 
     await until(async () => (await native(socketPath, {op: 'list'})).length === 0);
     const replacement = await create(); assert.notEqual(first, replacement);
     const before = fs.readFileSync(oracle, 'utf8');
-    assert.equal((await relay(where.port, token, `&created=${first}`)).status, 404,
+    assert.equal((await relay(where.port, token, `&created=${first}&pty_size=1`)).status, 404,
       'stale incarnation must refuse before upgrading, resize or input');
     for (const value of ['0', '-1', 'true', 'false', 'NaN', 'Infinity', '1e999', '', '1&created=1']) {
       assert.equal((await relay(where.port, token, `&created=${value}`)).status, 400, value);
@@ -342,7 +365,7 @@ test('AC-7: conditional incarnation binding acknowledgement', {timeout: 30000}, 
     assert.ok(raw.replay.includes(`EDITOR_READY:${oldSize.rows}x${oldSize.cols}`), 'native D replays the original-size bytes');
     assert.equal(raw.replay.includes('RESIZED:37x101'), false, 'resize output cannot enter the captured initial replay');
     await until(() => JSON.parse(fs.readFileSync(oracle, 'utf8')).rows === 37);
-    const good = await relay(where.port, token, `&created=${replacement}`);
+    const good = await relay(where.port, token, `&created=${replacement}&pty_size=1`);
     assert.equal(good.status, 101); connections.push(good.socket!);
     await until(() => good.frames.some(item => item.kind === 2));
     const controls = good.frames.filter(item => item.kind === 1).map(item => JSON.parse(item.data.toString()));
@@ -358,6 +381,22 @@ test('AC-7: conditional incarnation binding acknowledgement', {timeout: 30000}, 
       const state = JSON.parse(fs.readFileSync(oracle, 'utf8'));
       return state.rows === 32 && state.cols === 92 && state.input === 'native-input';
     });
+    const follower = await relay(where.port, token, `&created=${replacement}&pty_size=1`);
+    assert.equal(follower.status, 101); connections.push(follower.socket!);
+    await until(() => follower.frames.some(item => item.kind === 1 && JSON.parse(item.data.toString()).t === 's'));
+    assert.deepEqual(follower.frames.slice(0, 4).map(item => item.kind), [1, 1, 2, 1],
+      'bound and captured geometry precede replay; ownership follows replay');
+    const ownership = (frames: typeof follower.frames) => frames.filter(item => item.kind === 1)
+      .map(item => JSON.parse(item.data.toString())).filter(item => item.t === 's');
+    assert.deepEqual(ownership(follower.frames).at(-1), {t: 's', rows: 32, cols: 92, owner: 'other'});
+    assert.equal(JSON.parse(fs.readFileSync(oracle, 'utf8')).rows, 32, 'a conditional claim cannot steal the size');
+    sendBrowser(follower.socket!, 1, Buffer.from(JSON.stringify({t: 'r', rows: 33, cols: 93})));
+    await until(() => ownership(follower.frames).length >= 2);
+    assert.deepEqual(ownership(follower.frames).at(-1), {t: 's', rows: 32, cols: 92, owner: 'other'});
+    sendBrowser(follower.socket!, 1, Buffer.from(JSON.stringify({t: 'r', rows: 33, cols: 93, size: 'take'})));
+    await until(() => ownership(follower.frames).at(-1)?.owner === 'you');
+    await until(() => JSON.parse(fs.readFileSync(oracle, 'utf8')).rows === 33);
+    assert.deepEqual(ownership(follower.frames).at(-1), {t: 's', rows: 33, cols: 93, owner: 'you'});
     const legacy = await relay(where.port, token, ''); assert.equal(legacy.status, 101); connections.push(legacy.socket!);
     await until(() => legacy.frames.some(item => item.kind === 2));
     assert.equal(legacy.frames.some(item => item.kind === 1 && JSON.parse(item.data.toString()).t === 'bound'), false);

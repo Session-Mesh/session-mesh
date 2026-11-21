@@ -16,7 +16,7 @@ function region(lines: string[]): string[] {
   return lines.slice(start, end + 1);
 }
 
-test('conditional bound then original geometry preserves narrow replay and later widening', {skip, timeout: 30000}, async () => {
+test('conditional bound preserves owned replay, explicit size takeover and later widening', {skip, timeout: 30000}, async () => {
   const mesh = new TerminalMesh();
   const wideSize = {width: 2400, height: 1000}, narrowSize = {width: 2000, height: 1000};
   try {
@@ -34,13 +34,16 @@ test('conditional bound then original geometry preserves narrow replay and later
     const frames: (string | Buffer)[] = [];
     const narrow = await mesh.openPage('binding-width', narrowSize, undefined, page => page.on('websocket', socket =>
       socket.on('framereceived', ({payload}) => {if (frames.length < 3) frames.push(payload);})));
-    assert.ok(await narrow.evaluate(() => active.term.cols) < produced);
+    assert.equal(await narrow.evaluate(() => active.term.cols), produced, 'the second pane follows the first size owner');
     assert.equal(words(region(await logicalLines(narrow)).slice(1, -1).join(' ')), source);
     assert.equal(typeof frames[0], 'string');
     assert.equal(typeof frames[1], 'string');
     assert.deepEqual(JSON.parse(frames[0] as string), {t: 'bound', name: 'binding-width', created});
     assert.deepEqual(JSON.parse(frames[1] as string), {t: 'g', ...geometry});
     assert.ok(Buffer.isBuffer(frames[2]), 'original geometry precedes binary replay');
+    await narrow.locator('.size-banner button').click();
+    await narrow.waitForFunction(width => active.term.cols < width, produced);
+    assert.equal(words(region(await logicalLines(narrow)).slice(1, -1).join(' ')), source);
     await narrow.setViewportSize(wideSize);
     await narrow.waitForFunction(width => active.term.cols === width, produced);
     await narrow.waitForTimeout(300);
