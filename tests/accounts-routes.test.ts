@@ -355,7 +355,7 @@ describe('fail closed', {skip}, () => {
     mode('orphan');
     envelope(await call(fake, 'GET', '/api/accounts/consent'), 503, 'backend-helper-unavailable');
     const child = Number(fs.readFileSync(path.join(fakeDir, 'child'), 'utf8'));
-    const alive = () => { try { return process.kill(child, 0); } catch { return false; } };
+    const alive = () => { try { return process.kill(child, 0); } catch (error: any) { if (error.code === 'ESRCH') return false; throw error; } };
     for (let waited = 0; alive() && waited < 3000; waited += 100) await new Promise(done => setTimeout(done, 100));
     assert.equal(alive() && process.kill(child, 'SIGKILL'), false, 'the helper child outlived the timeout');
   });
