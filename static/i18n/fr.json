@@ -2039,7 +2039,7 @@
   "sessions.status.readyCount": "{ready} / {total} prêtes",
   "sessions.status.slow": "Le serveur répond lentement.",
   "sessions.status.elapsed": "{seconds} s",
-  "sessions.status.retryNow": "Réessayer",
+  "sessions.status.retryNow": "Réessayer maintenant",
   "sessions.phase.focus": "sessions ouvertes et épinglées d'abord",
   "sessions.phase.recent": "sessions récemment actives",
   "sessions.phase.rest": "les autres sessions",
