@@ -50,7 +50,9 @@ let every_tracked_mode () =
   check "keypad off" "" [ "\027=\027>" ];
   check "keypad as mode 66" "\027=" [ set 66 ];
   check "x10 mouse" (set 9) [ set 9 ];
-  check "utf-8 and urxvt encodings" (set 1015) [ set 1005; set 1015 ];
+  check "utf-8 and urxvt encodings, ignored by xterm.js" ""
+    [ set 1005; set 1015 ];
+  check "they do not replace SGR" (set 1006) [ set 1006; set 1015; set 1005 ];
   check "sgr pixels" (set 1016) [ set 1016 ];
   check "untracked modes" "" [ set 12; set 2026; csi "4h"; csi "?1048h" ]
 
@@ -64,8 +66,13 @@ let parameter_lists () =
     (set 1049 ^ set 1000)
     [ csi "?12;;1049;99999999999999999999;1000;2026h" ];
   check "empty parameters" (set 1006) [ csi "?;1006;h" ];
-  check "an encoding reset only clears its own" (set 1006)
+  check "an ignored encoding reset keeps SGR" (set 1006)
     [ set 1006; reset 1015 ];
+  check "resetting 1006 or 1016 restores the default" ""
+    [ set 1016; reset 1006 ];
+  check "sub-parameters are ignored"
+    (set 1049 ^ set 1006)
+    [ csi "?1049:1;1006:2:3h" ];
   check "any tracking reset clears tracking" "" [ set 1003; reset 1000 ]
 
 let not_decset () =
@@ -73,7 +80,6 @@ let not_decset () =
   check "other private leaders" "" [ csi ">1049h"; csi "=1000h"; csi "<1006h" ];
   check "a late question mark" "" [ csi "1?1049h" ];
   check "an intermediate byte" "" [ csi "?1049 h"; csi "?1000$h" ];
-  check "a sub-parameter" "" [ csi "?1049:1h" ];
   check "other finals" "" [ csi "?1049r"; csi "?1000s"; csi "?1006p" ];
   check "an OSC title" "" [ "\027]0;[?1049h\007" ];
   check "a charset designation is no reset" (set 1049) [ set 1049; "\027(c" ]
@@ -107,9 +113,12 @@ let huge_parameters () =
   let digits = String.make 1_000_000 '9' in
   check "a million digits" (set 1006) [ csi ("?" ^ digits ^ ";1006h") ];
   let many = String.concat "" (List.init 200_000 (fun _ -> "1;")) in
-  check "two hundred thousand parameters"
-    (set 1049 ^ set 1)
+  check "two hundred thousand parameters: the first 32 count" (set 1)
     [ csi ("?" ^ many ^ "1049h") ];
+  let parameters n = String.concat "" (List.init n (fun _ -> "12;")) in
+  check "a mode as 32nd parameter" (set 1049)
+    [ csi ("?" ^ parameters 31 ^ "1049h") ];
+  check "a mode as 33rd parameter" "" [ csi ("?" ^ parameters 32 ^ "1049h") ];
   let words = Obj.reachable_words (Obj.repr (modes_of [ csi ("?" ^ many) ])) in
   Alcotest.(check bool) "the state stays small" true (words < 64)
 

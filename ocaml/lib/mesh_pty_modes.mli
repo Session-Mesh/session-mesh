@@ -8,11 +8,12 @@
 (** The terminal modes that a stream of program output leaves a terminal in, for
     the modes a late client cannot recover from a cut replay: the alternate
     screen (DEC private modes 47, 1047, 1049), mouse tracking (9, 1000, 1002,
-    1003) and its encoding (1005, 1006, 1015, 1016), focus reports (1004),
-    alternate scroll (1007), bracketed paste (2004), autowrap (7), cursor
-    visibility (25), application cursor keys (1) and the application keypad
-    ([ESC =], [ESC >], mode 66). A full reset ([ESC c]) and a soft reset
-    ([CSI ! p]) are followed as xterm.js applies them.
+    1003) and its encoding (1006, 1016; xterm.js ignores 1005 and 1015), focus
+    reports (1004), alternate scroll (1007), bracketed paste (2004), autowrap
+    (7), cursor visibility (25), application cursor keys (1) and the application
+    keypad ([ESC =], [ESC >], mode 66). A full reset ([ESC c]) and a soft reset
+    ([CSI ! p]) are followed as xterm.js applies them, as are its limits: the
+    first 32 parameters of a sequence, sub-parameters after [:] ignored.
 
     The state is fixed-size: no buffer, no allocation while scanning. A sequence
     may be split across any number of [feed] calls, and any input, hostile or
@@ -30,6 +31,14 @@ val feed : t -> Bytes.t -> int -> int -> unit
 
 val feed_string : t -> string -> unit
 (** [feed] for a whole string. *)
+
+val copy : t -> t
+
+val finish_sequence : t -> Bytes.t -> int -> int -> int option
+(** [finish_sequence t bytes offset length] feeds bytes from [offset] only while
+    a sequence is under way: [Some n] when it ended after [n] bytes ([0] when
+    none was under way), [None] when it is still under way after [length] bytes.
+    Raises [Invalid_argument] like [feed]. *)
 
 val prefix : t -> string
 (** The sequences that take a terminal from its defaults to the modes of [t]:
