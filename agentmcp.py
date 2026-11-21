@@ -860,7 +860,7 @@ def _codex_config(servers=None):
 # and holds no token nor session name: the hook reads the folder from the JSON Codex writes on its standard input
 # (docs/agent-hooks.md, "Codex").  Mesh never writes Codex's configuration nor trusts a hook for the user.
 def _codex_hook_item(event, argv):
-    command = json.dumps(shlex.join(argv))
+    command = _toml_inline(shlex.join(argv))
     return f'hooks.{event}=[{{hooks=[{{type="command",command={command},timeout={hook_timeout("codex")}}}]}}]'
 
 
