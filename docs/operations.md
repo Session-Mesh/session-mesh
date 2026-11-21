@@ -1733,7 +1733,7 @@ either falls back or refuses:
 | Reason | Meaning | What happens |
 | --- | --- | --- |
 | `no_shell` | The agent is the session's own program, with no shell around it. | The whole session is replaced by a new one, as before this release. |
-| `no_job_control` | The shell runs the agent in its own process group (job control off). | Same. |
+| `no_job_control` | The shell runs the agent in its own process group (job control off), and that group holds nothing else than the agent and the programs it started. | Same. Another program in that group gives `unsupported_foreground` instead. |
 | `no_terminal`, `process_scan_failed` | The host cannot see what holds the terminal. | Same. |
 | `unsupported_foreground` | Another program holds the terminal (an editor, `make`, `ssh`...). | Nothing is stopped; the request fails: quit that program, or bring the agent back to the foreground, then ask again. |
 | `agent_not_foreground` | The agent runs in the background, or beside a second agent. | Nothing is stopped; the request fails: bring it to the foreground (`fg`), then ask again. |
