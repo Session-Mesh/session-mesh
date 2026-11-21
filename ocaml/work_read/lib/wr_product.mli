@@ -21,4 +21,5 @@ val run : Wr_load.t -> string -> (Yojson.Safe.t, Work_mcp.Work_err.t) result
     (every task of the scope per board column, the omitted ones included) and
     [totals] ({!Wr_stats.json} of every task of the scope: [totals.open] is the
     [tree.open] of [products]). [not_found] for a product the taxonomy does not
-    know. *)
+    know; [repository] when the taxonomy cannot be read (as [products]:
+    without it there is no scope). *)

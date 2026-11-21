@@ -208,7 +208,7 @@ class WorkView implements WorkViewController {
     } else if (await this.loadEntry()) {
       const question = sheet ? this.questions.question(sheet.id) : null;
       if (question) this.openQuestionSheet(question);
-      else if (place.product && !sheet) await this.openProduct(place.product, place.tab, place.task);
+      else if (place.product && !sheet) await this.openProduct(place.product, place.tab, place.task, place.tabScroll);
     }
     // Not when the owner moved meanwhile, nor when the sheet or product left is not the one shown.
     if (this.project === null && this.reading === null && this.product === place.product && sameSheet(this.sheets.place(), sheet)) {
@@ -345,7 +345,7 @@ class WorkView implements WorkViewController {
 
   /** A product's view, one level above the entry screen (like a project), on `tab` with the sheet of `task` (the place
    *  the owner left); a product gone shows the entry screen. */
-  private async openProduct(id: string, tab: string | null = null, task: string | null = null): Promise<void> {
+  private async openProduct(id: string, tab: string | null = null, task: string | null = null, tabScroll: number | null = null): Promise<void> {
     const node = this.entry ? findProduct(entryTree(this.entry.products, this.entry.projects), id) : null;
     if (!node) { void this.backToEntry(); return; }
     const { token, signal } = this.begin(), series = { live: () => token === this.generation, signal };
@@ -357,7 +357,7 @@ class WorkView implements WorkViewController {
     this.rail.select(treeKey('product', id));
     this.focusMain(view.root.querySelector<HTMLElement>('.work-back'));
     this.memory.note();
-    await this.products.reopen(view, task, series);
+    await this.products.reopen(view, task, tabScroll, series);
   }
 
   /** Focus a control of the main area, unless the owner moves in the rail: the focus stays on its item. */

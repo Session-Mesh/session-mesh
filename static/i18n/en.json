@@ -2068,8 +2068,8 @@
     "other": "Show {n} more"
   },
   "work.product.partial": {
-    "one": "Partial view: {n} task of {total} was read, the reader's limit. The column counters count every task; the filters and the timeline see only the tasks read.",
-    "other": "Partial view: {n} tasks of {total} were read, the reader's limit. The column counters count every task; the filters and the timeline see only the tasks read."
+    "one": "Partial view: {n} task of {total} was read, the reader's limit. Without a filter, the column counters count every task; the filters and the timeline see only the tasks read.",
+    "other": "Partial view: {n} tasks of {total} were read, the reader's limit. Without a filter, the column counters count every task; the filters and the timeline see only the tasks read."
   },
   "work.product.noMatch": "No task matches these filters.",
   "work.product.noDates": "None of these tasks has a date: there is no bar to draw."

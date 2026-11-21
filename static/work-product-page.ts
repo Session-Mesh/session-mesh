@@ -75,6 +75,8 @@ class TaskTabs {
   private bar: FilterBar | null = null;
   private loading: Promise<void> | null = null;
   private readonly folded = new Set<string>();
+  /** The task tabs drawn for the filters in force: shown again as they are ("Show more" pages kept). */
+  private readonly drawn = new Set<'board' | 'frise'>();
   readonly barSlot = el('div', 'work-filter-slot');
 
   constructor(private readonly options: ProductPageOptions, private filters: Filters,
@@ -82,7 +84,7 @@ class TaskTabs {
 
   /** Draw a task tab, reading the document first when it is not read yet. */
   show(key: 'board' | 'frise'): Promise<void> {
-    if (this.doc) { this.draw(key); return Promise.resolve(); }
+    if (this.doc) { if (!this.drawn.has(key)) this.draw(key); return Promise.resolve(); }
     this.loading ??= this.load();
     return this.loading;
   }
@@ -109,6 +111,7 @@ class TaskTabs {
   private filtered(next: Filters): void {
     this.filters = next;
     this.options.onFilters(next);
+    this.drawn.clear();
     this.draw(this.taskTab());
     this.panels.get(this.taskTab() === 'board' ? 'frise' : 'board')!.replaceChildren();   // drawn again when shown
   }
@@ -119,6 +122,7 @@ class TaskTabs {
     const { ctx } = this.options;
     const body = key === 'board' ? renderProductBoard(ctx, doc, this.filters) : renderProductFrise(ctx, doc, this.filters, this.folded);
     this.panels.get(key)!.replaceChildren(...[partialNotice(ctx, doc), body].filter((node): node is HTMLElement => node !== null));
+    this.drawn.add(key);
     this.bar?.shown(filterTasks(doc, this.filters).length, doc.tasks.length);
   }
 

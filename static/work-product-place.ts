@@ -44,9 +44,12 @@ export class ProductPlace {
     return this.view;
   }
 
-  /** After the view is drawn: the sheet of `task` put back (the place the owner left), on Board or Timeline only. */
-  async reopen(view: ProductView, task: string | null, series: Series): Promise<void> {
+  /** After the view is drawn: the sheet of `task` put back (the place the owner left), on Board or Timeline only,
+   *  with where its tab was scrolled under it (`tabScroll`, a phone). */
+  async reopen(view: ProductView, task: string | null, tabScroll: number | null, series: Series): Promise<void> {
     await view.ready;
-    if (task && series.live() && view.current() !== 'overview') await this.host.sheet.select(task, undefined, true);
+    if (!task || !series.live() || view.current() === 'overview') return;
+    await this.host.sheet.select(task, undefined, true);
+    if (series.live() && this.host.sheet.selected === task) this.host.sheet.tabScroll = tabScroll;
   }
 }

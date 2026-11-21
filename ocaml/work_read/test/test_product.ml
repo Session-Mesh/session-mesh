@@ -144,6 +144,13 @@ let test_cap () =
     "within the output bound" true
     (String.length r.out < 1_000_000)
 
+(* Without a taxonomy there is no scope: a repository error, as [products]. *)
+let test_no_taxonomy () =
+  let repo = copy_fixture () in
+  Sys.remove (Filename.concat repo.wl_home "taxonomy.yaml");
+  Alcotest.(check int) "repository error" 6 (run repo [ "product"; "relay" ]).code;
+  Alcotest.(check int) "as products" 6 (run repo [ "products" ]).code
+
 let tests =
   [
     Alcotest.test_case "scope" `Quick test_scope;
@@ -152,4 +159,5 @@ let tests =
     Alcotest.test_case "tags and request" `Quick test_tags_and_request;
     Alcotest.test_case "refusals" `Quick test_refusals;
     Alcotest.test_case "cap" `Quick test_cap;
+    Alcotest.test_case "no taxonomy" `Quick test_no_taxonomy;
   ]
