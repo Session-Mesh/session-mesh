@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-// What the mesh's inline OpenCode configuration does to the user's own: run the real `opencode debug config`
-// (no model, no network) with an isolated HOME and XDG directories. Skipped when no opencode is installed
-// (MESH_OPENCODE_BIN names one; otherwise `opencode` on PATH). The first block is for OpenCode 1.x (observed on
-// 1.18.35, `debug config` merges the sources into one document) and is skipped for any other major; the second
-// is for OpenCode 2.x (observed on 2.3.0), which is only ever run with `--standalone` (its default shared
-// background service is not bound to HOME) and lists the sources one by one.
+// Legacy native merge tests, not qualification of Mesh's current private config API probe.
+// These execute the real `opencode debug config` (1.x, historically observed on 1.18.35) and
+// `opencode debug config --standalone` (2.x, historically reported on 2.3.0). Private HOME/XDG alone
+// does not establish isolation: the old 2.x command is not qualified to honour --standalone, and
+// system/ancestor configuration is not excluded here. Do not run this file against an installed
+// OpenCode 2 binary as a safe private probe. The executable test bodies below remain legacy coverage.
+// The current command is `opencode api get <target> --standalone`, with a URL-encoded
+// location[directory] query parameter on /api/config. Its historical native proof used
+// 2.0.28-native1m.1; OpenCode 2.3.0 is not verified for that command. The old merge test is not proof.
+// Use opencode-config-probe.test.ts for the fake-CLI adapter contract (no native qualification).
+// MESH_OPENCODE_BIN selects a native executable here, otherwise PATH; absent/wrong majors skip.
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import fs from 'node:fs';

@@ -511,7 +511,7 @@ sibling. Only you start one, from "New session".
 
 ### The OpenCode preset
 
-- **OpenCode 1.x and 2.x are supported (2.3.0 tested); any other major is launched bare.** The mesh
+- **OpenCode 1.x and 2.x are supported; any other major is launched bare.** The mesh
   resolves `opencode` (`~/.local/bin`, then the web server's `PATH`), reads `opencode --version` (short
   timeout, no Mesh variable in that process) and names that same executable in the launch line, so the
   version read is the one that runs. For a major other than 1 and 2, or a version it cannot read, it
@@ -525,14 +525,25 @@ sibling. Only you start one, from "New session".
   service on a fixed local port that is not bound to `HOME`: the configuration and `MESH_SESSION_TOKEN` of an
   agent would be those of the process that started the service, so one session could act with another
   session's token. With `--standalone` the server, its plugin and the board bridge are children of the
-  terminal's own process, with its environment. Tested on the real 2.3.0: two terminals at once each have
-  their own token in their bridge and their plugin reports, and a terminal without a token has none. Never
-  install OpenCode 2 with its `curl … | bash` shortcut: it replaces the 1.x binary.
+  terminal's own process, with its environment. Earlier terminal-isolation tests on 2.3.0 checked that two
+  terminals at once each had their own token in their bridge and plugin reports, and a terminal without
+  a token had none. Those tests do not qualify the configuration probe below. Never install OpenCode 2
+  with its `curl … | bash` shortcut: it replaces the 1.x binary.
 - **Your choices on the board server are kept.** OpenCode 2 replaces the whole `mesh-board` server object
   with the injected one, so a `disabled: true` (1.x: `enabled: false`) would be lost. The mesh reads the
-  documents OpenCode reads (`opencode debug config --standalone`: global, project, inline) and does not
-  inject the server when any of them disables it, or when they cannot be read; your `permissions` rules
-  are never touched. The same holds for the tracker server, `mesh-work`.
+  documents OpenCode reads (global, project, inline) with `opencode api get <target> --standalone`, where
+  `<target>` is `/api/config` with a URL-encoded `location[directory]` query parameter naming the working
+  directory. This uses a private server, the selected `HOME`, `XDG_*` and `OPENCODE_*` context, and no
+  `MESH_*` variables. The mesh does not inject the server when any document disables it, or when the
+  probe fails, times out or returns an unreadable response; there is no shared-service fallback. Your
+  `permissions` rules are never touched. The same holds for the tracker server, `mesh-work`.
+- **The private API probe has version-specific evidence.** The native check was run on
+  `2.0.28-native1m.1`, with fresh private `HOME`, XDG directories and a working directory containing
+  spaces and punctuation, without system or ancestor configuration. Both the raw API and the Mesh
+  adapter preserved disabled `mesh-board` and `mesh-work` entries; no model, account or authentication
+  request, real profile or shared service was used. OpenCode 2.3.0 is not verified for this API probe:
+  the earlier terminal-isolation and legacy merge tests do not establish that the new command exists
+  or works on that version. The fake-CLI probe tests check the adapter contract, not release compatibility.
 - **A resumed OpenCode 2 conversation is checked first.** OpenCode 2 creates an empty conversation for an
   unknown `--session`; the mesh looks the id up in OpenCode's store and refuses the resume (and a restore,
   and an adoption, which is checked before the agent is stopped) when it is not there. Options 2.x does not
