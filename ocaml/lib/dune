@@ -41,6 +41,7 @@
 (library
  (name mesh_pty_support)
  (modules
+  mesh_pty_modes
   mesh_pty_replay
   mesh_pty_output
   mesh_pty_input
