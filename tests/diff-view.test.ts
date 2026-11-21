@@ -5,6 +5,7 @@
 // changed lines and cutting them into changed words.
 import assert from 'node:assert/strict';
 import {describe, test} from 'node:test';
+import {modeLabel} from '../static/diff-file-mode.ts';
 import {countLines, displayPath, fileSegments, gitHeaderPaths, hunkRows, parseUnifiedDiff, readQuoted, tokenize, tokenizeUpTo, wordDiff, WORD_DIFF_LIMIT} from '../static/diff-view.ts';
 
 const GIT = `commit 0123456789abcdef
@@ -201,6 +202,10 @@ describe('path names', () => {
 describe('file modes', () => {
   const modes = (text: string): [string, string | null, string | null, number][] =>
     parseUnifiedDiff(text).files.map(file => [file.status, file.oldMode, file.newMode, file.hunks.length]);
+  const CHMOD_SERIES = 'From 1 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 1/2] chmod\n\n---\n'
+    + 'diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n-- \n2.47.0\n\n'
+    + 'From 2 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 2/2] notes\n\nold mode notes\nnew mode 100600 explained here\n---\n'
+    + 'diff --git a/notes b/notes\nindex 1..2 100644\n--- a/notes\n+++ b/notes\n@@ -1 +1 @@\n-a\n+b\n';
 
   test('keeps a mode-only change (chmod) and a mode change beside a content change', () => {
     assert.deepEqual(modes('diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n'
@@ -217,6 +222,25 @@ describe('file modes', () => {
 
   test('a line reading like a mode inside a hunk is content', () => {
     assert.deepEqual(modes('--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old mode 1\n+new mode 2\n'), [['modified', null, null, 1]]);
+  });
+
+  // Git writes a mode as six octal digits: any other value after the prefix is not a mode.
+  test('a value other than six octal digits is not a mode', () => {
+    for (const value of ['1'.repeat(5000), '100648', '10064x', '<img src=x onerror=alert(1)>', '10064', '1006440', '']) {
+      assert.deepEqual(modes(`diff --git a/x b/x\nold mode ${value}\nnew mode ${value}\n`), [['modified', null, null, 0]], value.slice(0, 20));
+      assert.deepEqual(modes(`diff --git a/x b/x\nnew file mode ${value}\n`), [['added', null, null, 0]], value.slice(0, 20));
+    }
+  });
+
+  // In a format-patch series, the message of the next patch follows a chmod-only patch (which has
+  // no hunk), before its own `diff --git` line.
+  test('the message of the next patch in a series does not change the mode of a chmod-only file', () => {
+    assert.deepEqual(modes(CHMOD_SERIES), [['modified', '100644', '100755', 0], ['modified', null, null, 1]]);
+  });
+
+  test('two equal modes are no change of mode', () => {
+    assert.equal(modeLabel({oldMode: '100644', newMode: '100644'}), null);
+    assert.equal(modeLabel({oldMode: '100644', newMode: '100755'}), '100644 → 100755');
   });
 });
 
