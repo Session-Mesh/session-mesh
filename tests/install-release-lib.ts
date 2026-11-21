@@ -250,7 +250,9 @@ export const setLatest = (fx: Fixture, tag: string) =>
 // Runs an installer (the downloaded install.sh of a release, or an installed one).
 export function run(fx: Fixture, installer: string, args: string[] = [], env: Record<string, string> = {}) {
   fs.rmSync(fx.log, {force: true});
-  const result = spawnSync('/bin/bash', [installer, ...args], {
+  // Archive-mode assertions model a normal installer invocation, independently of the
+  // stricter umask used by private-store tests in the surrounding suite.
+  const result = spawnSync('/bin/bash', ['-c', 'umask 022; exec /bin/bash "$@"', 'fixture-installer', installer, ...args], {
     env: {HOME: fx.home, USER: 'fixture', PATH: fx.fakes, TMPDIR: fx.root, LC_ALL: 'C', LOG: fx.log, FAKE_SERVED: fx.served,
       FAKE_STATE: fx.state, FAKE_SHARE: fx.share, XDG_RUNTIME_DIR: path.join(fx.root, 'runtime'), ...env},
     stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 30000,

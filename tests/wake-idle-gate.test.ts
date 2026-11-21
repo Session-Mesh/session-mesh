@@ -13,6 +13,7 @@
 import assert from 'node:assert/strict';
 import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
+import {fakeAgentShell} from './helpers/fake-agent.ts';
 import os from 'node:os';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
@@ -301,7 +302,7 @@ describe('server: a fake Claude is woken only once it reports a finished turn', 
     ].join('\n'), {mode: 0o755});
     const PATH = `${bin}:${process.env.PATH}`;
     mesh = await startMesh('wake-idle-', {PATH});
-    await startHost({PATH, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C'},
+    await startHost({PATH, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C', SHELL: fakeAgentShell(bin)},
       path.join(mesh.home, 'run', 'session-mesh', 'ptyhost.sock'));
 
     agents.sender = await launch('sender');

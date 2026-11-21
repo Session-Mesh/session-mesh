@@ -37,7 +37,7 @@ describe('the scripts of release.yml, run', () => {
     const file = path.join(scratch, 'step.sh');
     fs.writeFileSync(file, script);
     const result = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', file],
-      {cwd, env: {PATH: process.env.PATH ?? '', ...env}, encoding: 'utf8'});
+      {cwd, env: {PATH: process.env.PATH ?? '', ...(process.env.LOCPATH ? {LOCPATH: process.env.LOCPATH} : {}), ...env}, encoding: 'utf8'});
     return {status: result.status, output: result.stdout + result.stderr};
   }
 

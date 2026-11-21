@@ -80,15 +80,16 @@ describe('update check', () => {
     const mesh = await startMesh('upd-none-');
     try {
       assert.equal((await listing(mesh)).update, null, 'no host');
-      const source = startUpdateHost(mesh, {release: false});
+      const requestTrace = path.join(mesh.home, 'unexpected-update-request');
+      const source = startUpdateHost(mesh, {release: false, curl: `#!/bin/sh\nprintf attempted > '${requestTrace}'\nexit 97\n`});
       try {
         await until('the host', async () => fs.existsSync(source.socket));
         await new Promise(resolve => setTimeout(resolve, 500));
         assert.equal((await listing(mesh)).update, null, 'a source install');
-        // the update check's own cache file: the folder itself also holds the listing's caches, written when a
-        // test running alongside leaves a process named codex on the machine
-        assert.equal(fs.existsSync(path.join(mesh.home, '.cache', 'session-mesh', 'update-check.json')), false,
-          'and no request, no cache');
+        assert.equal(fs.existsSync(requestTrace), false, 'a source install makes no update request');
+        // The shared directory also holds history and listing caches, including those
+        // created when another test leaves a process named codex on the machine.
+        assert.equal(fs.existsSync(path.join(mesh.home, '.cache', 'session-mesh', 'update-check.json')), false, 'no update cache');
       } finally {
         await source.stop();
       }

@@ -67,7 +67,8 @@ before(async () => {
   mesh = await startMesh('accounts-', {PATH, MESH_MESH_PLATFORM_CMD: PLATFORM, CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined});
   // The default account's credentials, exported by the login shell every session starts (`$SHELL -l`).
   fs.writeFileSync(path.join(mesh.home, '.profile'),
-    PROFILE_CREDENTIALS.map(name => `export ${name}=profile-default-${name.toLowerCase()}\n`).join(''));
+    PROFILE_CREDENTIALS.map(name => `export ${name}=profile-default-${name.toLowerCase()}\n`).join('')
+    + `export PATH='${bin.replace(/'/g, "'\\''")}':"$PATH"\n`);
   const accounts = path.join(mesh.home, '.agent-accounts');
   fs.mkdirSync(path.join(accounts, 'work'), {recursive: true, mode: 0o700});
   fs.mkdirSync(path.join(accounts, 'perso'), {recursive: true, mode: 0o700});
