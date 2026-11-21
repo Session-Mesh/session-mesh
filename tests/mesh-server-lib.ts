@@ -81,6 +81,11 @@ export async function scratchHome(prefix: string, extraEnv: NodeJS.ProcessEnv = 
     ...extraEnv};
   delete env.MESH_HOST;
   delete env.MESH_ALLOW_NON_LOOPBACK;
+  if (extraEnv.PATH !== undefined) {
+    // Keep a declared fake-agent PATH after the system's login profile runs.
+    const quoted = "'" + extraEnv.PATH.replaceAll("'", "'\\''") + "'";
+    fs.writeFileSync(path.join(home, '.bash_profile'), `export PATH=${quoted}\n`, {mode: 0o600});
+  }
   return {scratch, home, confDir, env, port};
 }
 

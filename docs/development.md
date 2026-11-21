@@ -78,6 +78,34 @@ or identities.
   created `.venv/`, install them with `sudo .venv/bin/python -m playwright install-deps chromium`.
   Elsewhere, see [the Playwright system requirements](https://playwright.dev/python/docs/browsers#install-system-dependencies).
 
+## Terminal attachment compatibility
+
+The native session listing advertises `conditional_input_v1` for `attach_if` size watching and
+incarnation-fenced D/H/R input, queued writes and lease cleanup. It is an extension hint, not
+identity authority. The relay always selects an expected session atomically with `name` and
+`created`; it never retries an attachment denial with a weaker request.
+
+A conditional attach carries no initial geometry, even when the listing advertises support:
+the socket path can change between listing and attachment. Only positive metadata requests
+`size:"claim"`. The connected host's C acknowledgment advertises the capability only for an
+incarnation-fenced, size-watching stream. Only that acknowledgment authorizes the browser's
+`bound` control, automatic Claim/Keep resizing and captured or deferred input.
+
+Without confirmation, the browser receives `limited` before replay, keeps ordinary immediate
+keyboard input/output and exposes an explicit resize button. Automatic resize, parser replies,
+composer/attachment insertion and deferred phone input do not use that transport. No S ownership
+is invented. On touch devices, **Use live keyboard** explicitly focuses xterm's keyboard after
+replay has finished. It sends immediate keys, keeps any buffered phone draft separate, and resets
+on a new socket; it does not enable capture, retention or deferred delivery. Reported geometry
+is a current pre-attach snapshot, not per-byte replay history or a
+promise of size updates from an old host. Unrenderable initial G metadata still revokes automation
+binding; the browser render cap remains 1000 per axis.
+
+Human lease client IDs include the exact IEEE-754 bits of `created`, so an old unfenced host's
+lease table without incarnation keys cannot let an old H(false) clear a new incarnation's H(true).
+Reconnects of the same incarnation keep the same ID. This does not retrofit stream-lifetime
+fencing into an old host, so limited mode never grants retained/deferred input authority.
+
 ## bubblewrap and Ubuntu 24.04
 
 The demo compiler test runs `scripts/compile-demo-tsx.sh`, which compiles a TSX source inside a
