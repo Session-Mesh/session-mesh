@@ -103,6 +103,7 @@ const NOT_SHOWN: Record<string, string> = {
   'Agent session unavailable': 'agent mail API (read and acknowledge), called by the agent MCP bridge only',
   'Content-Type must be application/json': 'protocol error of the JSON routes: the page always sends JSON, a client that does not is not a screen',
   'Invalid fields': 'request-shape validation of the elevation and configuration routes: the page sends fixed fields, a mismatch is a client bug',
+  unwritable: 'machine code of the launch options route, whose message carries the readable reason',
   'too-many-attempts': 'machine code of the elevation route, mapped to its own label by static/config-launch-editor.ts (config.launch.err.tooMany)',
   'wrong-token': 'machine code of the elevation route, mapped to its own label by static/config-launch-editor.ts',
   'elevation-required': 'machine code of the configuration routes, mapped to the elevation prompt by static/config-launch-editor.ts',

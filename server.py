@@ -2643,8 +2643,6 @@ def apply_launch_settings(settings, revision):
 OPTIONS_MAX_CHARS = 2048
 OPTIONS_MAX_TOKENS = 32
 OPTIONS_MAX_TOKEN = 512
-OPTIONS_REFUSED = ("Launch refused: {option} is not allowed in the launch options (it removes the "
-                   "agent's approvals or its sandbox, or it picks its conversation)")
 
 
 def parse_launch_options(kind, value, *, agents=None):
@@ -2688,7 +2686,8 @@ def effective_launch(kind, stored, per_launch):
     options = (*stored, *per_launch)
     refused = launchplan.refusal(kind, options)
     if refused:
-        raise web.HTTPBadRequest(text=OPTIONS_REFUSED.format(option=refused))
+        raise web.HTTPBadRequest(text=f"Launch refused: {refused} is not allowed in the launch options (it removes the agent's "
+            "approvals or its sandbox, or it picks its conversation)")
     return [*AGENT_PRESETS[kind], *options]
 
 
@@ -5081,7 +5080,8 @@ def _agent_option_changes(value):
         tokens = parse_launch_options(kind, options, agents=launchsettings.KNOWN_AGENTS)
         refused = launchplan.refusal(kind, tokens)
         if refused:
-            raise web.HTTPBadRequest(text=OPTIONS_REFUSED.format(option=refused))
+            raise web.HTTPBadRequest(text=f"Launch refused: {refused} is not allowed in the launch options (it removes the agent's "
+            "approvals or its sandbox, or it picks its conversation)")
         changes[kind] = tokens
     return changes
 

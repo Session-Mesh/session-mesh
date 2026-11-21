@@ -259,7 +259,7 @@ export class LaunchEditor {
       label.append(this.el("span", "config-option-name", this.agentLabel(agent)));
       const input = this.el("input", "config-option-value");
       input.type = "text"; input.autocomplete = "off"; input.spellcheck = false;
-      input.dataset.agent = agent; input.value = this.options.get(agent) ?? "";
+      input.dataset.optionAgent = agent; input.value = this.options.get(agent) ?? "";
       input.placeholder = t("config.launch.optionsPlaceholder"); input.disabled = this.busy;
       input.setAttribute("aria-label", `${this.agentLabel(agent)}: ${t("config.launch.options")}`);
       input.addEventListener("input", () => this.options.set(agent, input.value));

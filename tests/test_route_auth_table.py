@@ -113,6 +113,7 @@ EXPECTED = {
     ("POST", "/api/config/elevate"): COOKIE_ONLY,
     ("POST", "/api/config/elevate/revoke"): COOKIE_ONLY,
     ("POST", "/api/config/launch"): COOKIE_ONLY,
+    ("POST", "/api/config/launch-options"): COOKIE_ONLY,
     ("POST", "/api/agent-mail/consent/{request_id}/decision"): COOKIE_ONLY,
     ("POST", "/api/agent-mail/consent/revoke"): COOKIE_ONLY,
     ("GET", "/api/session-actions/@self/request"): SESSION_ONLY,

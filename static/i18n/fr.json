@@ -2101,5 +2101,16 @@
   "config.launch.optionsPlaceholder": "--option valeur",
   "config.launch.saveOptions": "Enregistrer les options",
   "config.launch.optionsUnchanged": "Rien à enregistrer.",
-  "paneActions.sessionRequest.withOptions": "{text} (options : {options})"
+  "paneActions.sessionRequest.withOptions": "{text} (options : {options})",
+  "server.optionsTooLong": "Les options dépassent {max} caractères.",
+  "server.optionsOneLine": "Les options doivent tenir sur une seule ligne.",
+  "server.optionsUnreadable": "Les options sont illisibles : {reason}",
+  "server.optionsTooManyTokens": "Les options contiennent plus de {max} arguments.",
+  "server.optionsTokenTooLong": "Un argument dépasse {max} octets.",
+  "server.optionsRefused": "Lancement refusé : {option} n'est pas autorisé dans les options (il retire les approbations ou le bac à sable de l'agent, ou il choisit sa conversation)",
+  "server.optionsStoredUnreadable": "Les options enregistrées sont illisibles : corrige ou retire le fichier d’options, puis redémarre le serveur web",
+  "server.optionsUnwritable": "Le fichier d’options ne peut pas être écrit : {reason}",
+  "server.optionsNotString": "Les options doivent être une chaîne de caractères",
+  "server.optionsAgentOnly": "Les options ne s'appliquent qu'à un agent connu",
+  "server.optionsUnknownPreset": "Preset d'agent inconnu : {preset}"
 }
