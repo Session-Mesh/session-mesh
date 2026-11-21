@@ -64,6 +64,7 @@ before(async () => {
   fs.writeFileSync(path.join(bin, 'codex'), fakeCodex(log, real), {mode: 0o755});
   const PATH = `${bin}:${process.env.PATH}`;
   mesh = await startMesh('switch-', {PATH, MESH_MESH_PLATFORM_CMD: PLATFORM, CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined});
+  fs.writeFileSync(path.join(mesh.home, '.profile'), `export PATH='${bin.replace(/'/g, "'\\''")}':"$PATH"\n`);
   const accounts = path.join(mesh.home, '.agent-accounts');
   fs.mkdirSync(accounts, {mode: 0o700});
   travelHome = path.join(accounts, 'travel', '.codex');   // missing: created when a request names it

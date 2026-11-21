@@ -91,7 +91,8 @@ function answersOf(id: string): Record<string, unknown>[] {
   const dir = path.join(tracker, 'events');
   return fs.readdirSync(dir).sort().flatMap(name => fs.readFileSync(path.join(dir, name), 'utf8').split('\n'))
     .flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } })
-    .filter(event => event !== null && event.type === 'answer' && event.question === id);
+    .filter(event => event !== null && event.type === 'answer' && event.question === id)
+    .sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
 }
 
 before(async () => {

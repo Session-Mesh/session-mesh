@@ -60,7 +60,8 @@ async function rig(prefix: string, extra: NodeJS.ProcessEnv): Promise<Rig> {
   const mesh = await startMesh(`${prefix}mesh-`, {PATH, MESH_BIN_DIR: bin, MESH_MESH_PLATFORM_CMD: PLATFORM,
     CODEX_HOME: undefined, MESH_PROJECT_HOOKS: undefined, ...extra});
   // The default account's credentials, exported by the login shell every session starts.
-  fs.writeFileSync(path.join(mesh.home, '.profile'), CODEX_CREDENTIALS.map(name => `export ${name}=profile-${name}\n`).join(''));
+  fs.writeFileSync(path.join(mesh.home, '.profile'), CODEX_CREDENTIALS.map(name => `export ${name}=profile-${name}\n`).join('')
+    + `export PATH='${fake.replace(/'/g, "'\\''")}':"$PATH"\n`);
   const [command, ...args] = ptyhostArgv();
   const host = spawn(command!, args, {cwd: REPO, stdio: 'ignore',
     env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C', SHELL: '/bin/sh'}});
