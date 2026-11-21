@@ -31,6 +31,9 @@ class Socket {
   open() {
     this.readyState = 1;
     this.onopen();
+    const url = new URL(this.url);
+    this.onmessage({data: JSON.stringify({t: 'bound', name: decodeURIComponent(url.pathname.slice(4)),
+      created: Number(url.searchParams.get('created'))})});
     this.bytes(this === sockets[0] ? 'first output' : '');
   }
   bytes(text) { this.onmessage({data: new TextEncoder().encode(text).buffer}); }
@@ -57,6 +60,7 @@ assert.ok(start > 0 && end > start);
 vm.runInContext(app.slice(start, end) + '\nglobalThis.TestPane = Pane;', context);
 const pane = Object.assign(Object.create(context.TestPane.prototype), {
   id: 'shell/name', conn: null, inputLeases: new Map(), inputLeaseSlot: 7,
+  limitedBanner: {hidden: true},
   termEl: {hidden: false, classList: {remove() {}}, removeAttribute() {}},
   term: {rows: 24, cols: 80, reset() { this.rows = 24; this.cols = 80; }, write(_data, done) { done?.(); }},
   fit: {fit() { fits++; pane.term.rows = 37; pane.term.cols = 143; }},

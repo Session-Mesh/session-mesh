@@ -16,7 +16,7 @@ function fixture() {
   vm.runInContext(`class Pane {${source.slice(source.indexOf('  cancelReplayInput(c) {'), source.indexOf('  inputLeaseFor(name) {'))}}; globalThis.pane = new Pane();`, context);
   const pane = context.pane;
   let fail = false;
-  pane.conn = {ws: {send() {}}, terminal: {isOpen: () => true}, replaying: true, closed: false};
+  pane.conn = {ws: {send() {}}, terminal: {isOpen: () => true, isBound() {return this.isOpen();}}, replaying: true, closed: false};
   pane.inputLease = createHumanInputLease({clientId: 'human', control() {}, data(bytes) {
     if (!pane.conn.terminal.isOpen()) throw Error('known pre-open transport');
     if (fail) {fail = false; throw Error('one-shot D failure while still open');}

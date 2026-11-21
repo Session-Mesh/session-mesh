@@ -117,7 +117,9 @@ async def test_old_attach_keeps_input_across_reconnect_and_reload(
                 await tab.reload(wait_until="domcontentloaded")
                 await tab.wait_for_function(
                     "active?.id === 'old-input' && active.conn?.ws?.readyState === WebSocket.OPEN")
-            await _type_terminal(tab, phone, marker)
+            # Limited hosts admit immediate xterm keys on either form factor;
+            # the phone's buffered line requires verified deferred input.
+            await _type_terminal(tab, False, marker)
             script, argument = _terminal_text_script(marker)
             await tab.wait_for_function(script, arg=argument)
 

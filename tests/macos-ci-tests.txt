@@ -158,6 +158,7 @@ tests/session-activity-idle.test.ts
 tests/shortcuts.test.ts
 tests/site-workflow.test.ts
 tests/terminal-cache-lifecycle.test.ts
+tests/terminal-compat-input.test.ts
 tests/terminal-links.test.ts
 tests/terminal-replay.test.ts
 tests/test-local-python.test.ts

@@ -12,7 +12,7 @@ import {once} from 'node:events';
 import {setTimeout as delay} from 'node:timers/promises';
 import {scratchHome, runServer, stopServer, removeScratch} from './mesh-server-lib.ts';
 import {until} from '../checks/dictation-fixture.ts';
-import {createHumanInputLease, createHumanInputScope} from '../static/pane-actions.ts';
+import {createHumanInputLease, createHumanInputScope, humanInputClientId} from '../static/pane-actions.ts';
 
 function browserHandle(created: unknown = 1, legacy = false) {
   class Socket {
@@ -190,10 +190,10 @@ test('null and omitted inventory incarnations support ordinary lease I/O without
     const f = browserHandle(null, omitted);
     const session = {name: 'alpha', ...(omitted ? {} : {created: null})};
     const context = vm.createContext({requireLocalMesh() {}, find: () => session, humanInputScopes: new Map(),
-      MeshPaneActions: {createHumanInputScope, createHumanInputLease}, inputLeaseTab: 'tab'});
+      MeshPaneActions: {createHumanInputScope, createHumanInputLease, humanInputClientId}, inputLeaseTab: 'tab'});
     vm.runInContext(`class Pane {${source.slice(source.indexOf('  inputLeaseFor(name) {'), source.indexOf('  // Tell the pty this pane'))}}; globalThis.pane = new Pane();`, context);
     const pane = context.pane;
-    pane.conn = {...session, terminal: f.handle}; pane.inputLeases = new Map(); pane.inputLeaseSlot = 'pane';
+    pane.conn = {...session, terminal: f.handle}; pane.inputLeases = new Map(); pane.inputLeaseSlot = 1;
     const lease = pane.inputLeaseFor('alpha');
     assert.equal(new URL(f.socket.url).searchParams.has('created'), false);
     assert.equal(lease.write(Uint8Array.of(97)), true);
@@ -206,8 +206,10 @@ test('null and omitted inventory incarnations support ordinary lease I/O without
 
 test('retained original handle observes binding and modes while its view is detached', () => {
   const f = browserHandle();
+  assert.equal(f.handle.retain(), null, 'pending socket cannot be captured');
+  f.bound();
   const release = f.handle.retain();
-  f.hide(); f.handle.close(); f.bound(); f.replay();
+  f.hide(); f.handle.close(); f.replay();
   assert.equal(f.handle.isBound('alpha', 1), true);
   f.message(new TextEncoder().encode('\x1b[?2004h').buffer);
   assert.equal(f.handle.dictationMode.value, true);
@@ -315,6 +317,99 @@ function sendBrowser(socket: net.Socket, kind: number, data: Buffer) {
   socket.write(Buffer.concat([Buffer.from([0x80 | kind, 0x80 | data.length]), Buffer.alloc(4), data]));
 }
 
+test('unadvertised conditional hosts keep live I/O without resizing or verified binding', {timeout: 15000}, async () => {
+  const where = await scratchHome('mesh-host-compat-', {MESH_WHISPER_URL: ''});
+  const socketPath = path.join(where.env.XDG_RUNTIME_DIR!, 'session-mesh', 'ptyhost.sock');
+  fs.mkdirSync(path.dirname(socketPath), {recursive: true, mode: 0o700});
+  const requests: any[] = [], inputs: {kind: string; payload: Buffer}[] = [], peers = new Set<net.Socket>();
+  let listing: unknown = [], capabilities: unknown = ['human_input_lease_v1'];
+  const owner = net.createServer(peer => {
+    peers.add(peer); peer.on('close', () => peers.delete(peer)); peer.on('error', () => {});
+    let bytes = Buffer.alloc(0), attached = false;
+    peer.on('data', part => {
+      bytes = Buffer.concat([bytes, part]);
+      while (bytes.length >= 5 && bytes.length >= 5 + bytes.readUInt32BE(1)) {
+        const length = bytes.readUInt32BE(1), kind = String.fromCharCode(bytes[0]);
+        const payload = bytes.subarray(5, 5 + length); bytes = bytes.subarray(5 + length);
+        if (attached) {inputs.push({kind, payload}); continue;}
+        const body = JSON.parse(payload.toString());
+        if (!body.op.startsWith('attach')) {peer.end(frame('C', body.op === 'list' ? listing : [])); continue;}
+        requests.push(body); attached = true;
+        peer.write(Buffer.concat([frame('C', {ok: true, pty_capabilities: capabilities,
+          replay_geometry: {rows: 24, cols: 120}}), frame('D', Buffer.from('PRIVATE-REPLAY'))]));
+      }
+    });
+  });
+  await new Promise<void>(resolve => owner.listen(socketPath, resolve));
+  const server = await runServer(where);
+  let live: Awaited<ReturnType<typeof relay>> | undefined;
+  try {
+    assert.ok(server.result.listened, server.output());
+    const token = fs.readFileSync(path.join(where.confDir, 'token'), 'utf8').trim();
+    live = await relay(where.port, token, '&created=1&pty_size=1');
+    assert.equal(live.status, 101);
+    await until(() => live!.frames.length === 3);
+    assert.deepEqual(requests, [{op: 'attach_if', name: 'alpha', created: 1}], 'no initial size or geometry');
+    assert.deepEqual(JSON.parse(live.frames[0].data.toString()), {t: 'limited'});
+    assert.deepEqual(JSON.parse(live.frames[1].data.toString()), {t: 'g', rows: 24, cols: 120});
+    assert.equal(live.frames[2].data.toString(), 'PRIVATE-REPLAY');
+    sendBrowser(live.socket!, 1, Buffer.from(JSON.stringify({t: 'r', rows: 31, cols: 91})));
+    sendBrowser(live.socket!, 1, Buffer.from(JSON.stringify({t: 'r', rows: 30, cols: 91, size: 'keep'})));
+    sendBrowser(live.socket!, 2, Buffer.from('EXPLICIT-KEY'));
+    await until(() => inputs.some(item => item.kind === 'D'));
+    assert.deepEqual(inputs.map(item => item.kind), ['D'], 'automatic Claim and Keep never reach an unverified host');
+    assert.equal(inputs[0].payload.toString(), 'EXPLICIT-KEY');
+    sendBrowser(live.socket!, 1, Buffer.from(JSON.stringify({t: 'r', rows: 31, cols: 91, size: 'take'})));
+    await until(() => inputs.length === 2);
+    assert.deepEqual(JSON.parse(inputs[1].payload.toString()), {rows: 31, cols: 91, size: 'take'});
+    live.socket!.destroy();
+    const modern = {name: 'alpha', created: 1, pty_capabilities: ['conditional_input_v1']};
+    for (const example of [
+      {listing: [modern], ack: ['conditional_input_v1'], claim: true, bound: true},
+      {listing: [modern], ack: ['conditional_input_v1', 'future_extension'], claim: true, bound: true},
+      {listing: [{...modern, pty_capabilities: ['agent_relaunch_v1', 'human_input_lease_v1']}],
+        ack: ['agent_relaunch_v1', 'human_input_lease_v1'], claim: false, bound: false},
+      {listing: [modern], ack: [], claim: true, bound: false}, // host replacement after the read-only hint
+      {listing: [modern], ack: ['conditional_input_v1', 'conditional_input_v1'], claim: true, bound: false},
+      {listing: null, ack: ['conditional_input_v1'], claim: false, bound: false},
+      ...[null, {}, [modern, modern], [{...modern, created: 2}],
+        [{...modern, pty_capabilities: ['conditional_input_v1', 7]}],
+        [{...modern, pty_capabilities: ['conditional_input_v1', 'conditional_input_v1']}]]
+        .map(listing => ({listing, ack: [], claim: false, bound: false})),
+    ]) {
+      listing = example.listing; capabilities = example.ack;
+      const before = requests.length;
+      live = await relay(where.port, token, '&created=1&pty_size=1');
+      assert.equal(live.status, 101); await until(() => live!.frames.length === 3);
+      assert.deepEqual(requests.slice(before), [{op: 'attach_if', name: 'alpha', created: 1,
+        ...(example.claim ? {size: 'claim'} : {})}]);
+      assert.deepEqual(JSON.parse(live.frames[0].data.toString()), example.bound
+        ? {t: 'bound', name: 'alpha', created: 1} : {t: 'limited'});
+      live.socket!.destroy();
+    }
+  } finally {
+    live?.socket?.destroy(); for (const peer of peers) peer.destroy();
+    await stopServer(server.child); await new Promise<void>(resolve => owner.close(() => resolve()));
+    removeScratch(where.scratch);
+  }
+});
+
+test('limited original socket cannot grant capture authority, retention or automatic resizing', () => {
+  const f = browserHandle();
+  f.message(JSON.stringify({t: 'limited'})); f.replay();
+  assert.equal(f.handle.isBound('alpha', 1), false);
+  assert.equal(f.handle.limited, true);
+  assert.equal(f.handle.retain(), null);
+  f.handle.resize(24, 80); f.handle.resize(24, 80, 'keep');
+  assert.deepEqual(f.socket.sent, []);
+  f.handle.resize(24, 80, 'take');
+  assert.equal(f.socket.sent.length, 1);
+  f.handle.queueInput(Uint8Array.of(97));
+  assert.equal(f.socket.sent.length, 2, 'immediate explicit typing remains usable');
+  f.bound(); assert.equal(f.handle.isBound('alpha', 1), false, 'late bound cannot restore authority');
+  f.handle.dispose();
+});
+
 test('relay waits for a strict native handshake and never falls back on refusal or uncertainty', {timeout: 15000}, async () => {
   const where = await scratchHome('mesh-binding-handshake-', {MESH_WHISPER_URL: ''});
   const socketPath = path.join(where.env.XDG_RUNTIME_DIR!, 'session-mesh', 'ptyhost.sock');
@@ -329,7 +424,8 @@ test('relay waits for a strict native handshake and never falls back on refusal 
       if (bytes.length < 5 || bytes.length < 5 + bytes.readUInt32BE(1)) return;
       const body = JSON.parse(bytes.subarray(5, 5 + bytes.readUInt32BE(1)).toString());
       peer.removeAllListeners('data');
-      if (!body.op.startsWith('attach')) {peer.end(frame('C', [])); return;}
+      if (!body.op.startsWith('attach')) {peer.end(frame('C', body.op === 'list'
+        ? [{name: 'alpha', created: 1, pty_capabilities: ['conditional_input_v1']}] : [])); return;}
       requests.push(body); respond(peer);
     });
   });
@@ -342,12 +438,13 @@ test('relay waits for a strict native handshake and never falls back on refusal 
       frame('C', {ok: true, outcome: 'indeterminate'}), frame('D', {ok: true}), frame('C', {ok: 1}),
       frame('C', []), frame('C', Buffer.from('{')), Buffer.alloc(0)]) {
       respond = peer => peer.end(response);
-      assert.equal((await relay(where.port, token, '&created=1')).status, 404);
+      assert.equal((await relay(where.port, token, '&created=1&pty_size=1')).status, 404);
     }
     let release: () => void = () => {};
-    respond = peer => {release = () => peer.write(Buffer.concat([frame('C', {ok: true, replay_geometry: {rows: 50, cols: 200}}), frame('D', Buffer.alloc(0))]));};
+    respond = peer => {release = () => peer.write(Buffer.concat([frame('C', {ok: true,
+      pty_capabilities: ['conditional_input_v1'], replay_geometry: {rows: 50, cols: 200}}), frame('D', Buffer.alloc(0))]));};
     let upgraded = false;
-    const pending = relay(where.port, token, '&created=1').then(result => {upgraded = true; return result;});
+    const pending = relay(where.port, token, '&created=1&pty_size=1').then(result => {upgraded = true; return result;});
     await until(() => requests.length === 9);
     await delay(20); assert.equal(upgraded, false, 'no upgrade/bound before the native response');
     release();
@@ -356,7 +453,7 @@ test('relay waits for a strict native handshake and never falls back on refusal 
     assert.deepEqual(good.frames.map(item => item.kind), [1, 1, 2]);
     assert.deepEqual(good.frames.slice(0, 2).map(item => JSON.parse(item.data.toString())),
       [{t: 'bound', name: 'alpha', created: 1}, {t: 'g', rows: 50, cols: 200}]);
-    assert.deepEqual(requests, Array.from({length: 9}, () => ({op: 'attach_if', name: 'alpha', created: 1, rows: 31, cols: 91})));
+    assert.deepEqual(requests, Array.from({length: 9}, () => ({op: 'attach_if', name: 'alpha', created: 1, size: 'claim'})));
     good.socket!.destroy();
     for (const value of ['0', '-1', 'true', 'false', 'NaN', 'Infinity', '1e999', '', '1&created=1'])
       assert.equal((await relay(where.port, token, `&created=${value}`)).status, 400, value);
@@ -409,6 +506,8 @@ test('AC-7: conditional incarnation binding acknowledgement', {timeout: 30000}, 
     assert.deepEqual(await native(socketPath, {op: 'kill', name: 'alpha'}), {ok: true});
     await until(async () => (await native(socketPath, {op: 'list'})).length === 0);
     const replacement = await create(); assert.notEqual(first, replacement);
+    const modernListing = await native(socketPath, {op: 'list'});
+    assert.ok(modernListing[0].pty_capabilities.includes('conditional_input_v1'));
     const before = fs.readFileSync(oracle, 'utf8');
     assert.equal((await relay(where.port, token, `&created=${first}&pty_size=1`)).status, 404,
       'stale incarnation must refuse before upgrading, resize or input');
@@ -423,6 +522,9 @@ test('AC-7: conditional incarnation binding acknowledgement', {timeout: 30000}, 
     assert.deepEqual(raw.reply.replay_geometry, {rows: oldSize.rows, cols: oldSize.cols},
       'native C must name the replay geometry captured before conditional resize');
     assert.equal(raw.reply.ok, true);
+    assert.equal(raw.reply.pty_capabilities.includes('conditional_input_v1'), false, 'a non-watching attach must not claim the stream extension');
+    const watched = await nativeReplay(socketPath, {op: 'attach_if', name: 'alpha', created: replacement, size: 'claim'});
+    assert.ok(watched.reply.pty_capabilities.includes('conditional_input_v1'), 'the exact size-watching conditional stream confirms its guarantees');
     assert.ok(raw.replay.includes(`EDITOR_READY:${oldSize.rows}x${oldSize.cols}`), 'native D replays the original-size bytes');
     assert.equal(raw.replay.includes('RESIZED:37x101'), false, 'resize output cannot enter the captured initial replay');
     await until(() => JSON.parse(fs.readFileSync(oracle, 'utf8')).rows === 37);
@@ -435,6 +537,8 @@ test('AC-7: conditional incarnation binding acknowledgement', {timeout: 30000}, 
     assert.deepEqual(good.frames.slice(0, 3).map(item => item.kind), [1, 1, 2]);
     assert.equal(good.frames[0].kind, 1);
     assert.equal(JSON.parse(good.frames[0].data.toString()).t, 'bound', 'bound precedes geometry and binary replay');
+    assert.equal(JSON.parse(fs.readFileSync(oracle, 'utf8')).rows, 37, 'conditional attach never applies initial geometry');
+    sendBrowser(good.socket!, 1, Buffer.from(JSON.stringify({t: 'r', rows: 31, cols: 91})));
     await until(() => JSON.parse(fs.readFileSync(oracle, 'utf8')).rows === 31);
     sendBrowser(good.socket!, 1, Buffer.from(JSON.stringify({t: 'r', rows: 32, cols: 92})));
     sendBrowser(good.socket!, 2, Buffer.from('native-input'));
