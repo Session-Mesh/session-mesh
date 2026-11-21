@@ -46,16 +46,15 @@ let flag_of_mode = function
 
 let is_tracking = function 9 | 1000 | 1002 | 1003 -> true | _ -> false
 
-(* Encodings as bits of [encodings_named]. *)
-let encoding_bit = function
-  | 1005 -> 1
-  | 1006 -> 2
-  | 1015 -> 4
-  | 1016 -> 8
-  | _ -> 0
+(* The encodings xterm.js implements; it ignores 1005 and 1015, and the
+   reset of either of these restores the default. *)
+let is_encoding = function 1006 | 1016 -> true | _ -> false
 
 (* A parameter past this value names no mode: digits stop counting there. *)
 let too_large = 100_000
+
+(* The parameters a sequence keeps, as in xterm.js: later ones name no mode. *)
+let max_parameters = 32
 
 (* Parser phases. *)
 let ground = 0
@@ -74,9 +73,10 @@ type t = {
   mutable private_marker : bool;
   mutable intermediate : int;  (** 0, the one intermediate byte, or -1. *)
   mutable parameter : int;  (** -1 while empty. *)
+  mutable parameters : int;  (** Parameters ended, at most [max_parameters]. *)
+  mutable subparameter : bool;  (** After a [:]: digits are ignored. *)
   mutable flags_named : int;
   mutable tracking_named : int;  (** The last tracking mode named, or 0. *)
-  mutable encodings_named : int;
   mutable encoding_named : int;  (** The last encoding named, or 0. *)
 }
 
@@ -90,12 +90,14 @@ let create () =
     private_marker = false;
     intermediate = 0;
     parameter = -1;
+    parameters = 0;
+    subparameter = false;
     flags_named = 0;
     tracking_named = 0;
-    encodings_named = 0;
     encoding_named = 0;
   }
 
+let copy t = { t with flags = t.flags }
 let equal (a : t) b = a = b
 
 let full_reset t =
@@ -109,20 +111,22 @@ let start_sequence t =
   t.private_marker <- false;
   t.intermediate <- 0;
   t.parameter <- -1;
+  t.parameters <- 0;
+  t.subparameter <- false;
   t.flags_named <- 0;
   t.tracking_named <- 0;
-  t.encodings_named <- 0;
   t.encoding_named <- 0
 
 let[@inline] end_parameter t =
   let n = t.parameter in
+  let kept = t.parameters < max_parameters in
   t.parameter <- -1;
-  if t.private_marker && n >= 0 then (
+  t.subparameter <- false;
+  if kept then t.parameters <- t.parameters + 1;
+  if kept && t.private_marker && n >= 0 then (
     t.flags_named <- t.flags_named lor flag_of_mode n;
     if is_tracking n then t.tracking_named <- n;
-    if encoding_bit n <> 0 then (
-      t.encodings_named <- t.encodings_named lor encoding_bit n;
-      t.encoding_named <- n))
+    if is_encoding n then t.encoding_named <- n)
 
 let set_modes t =
   t.flags <- t.flags lor t.flags_named;
@@ -132,7 +136,7 @@ let set_modes t =
 let reset_modes t =
   t.flags <- t.flags land lnot t.flags_named;
   if t.tracking_named <> 0 then t.tracking <- 0;
-  if t.encodings_named land encoding_bit t.encoding <> 0 then t.encoding <- 0
+  if t.encoding_named <> 0 then t.encoding <- 0
 
 let dispatch t final =
   end_parameter t;
@@ -158,13 +162,14 @@ let[@inline] interrupt t c =
 let[@inline] parameter_byte t c =
   match c with
   | '0' .. '9' when t.intermediate = 0 ->
-      let digit = Char.code c - 48 in
-      t.parameter <-
-        (if t.parameter < 0 then digit
-         else if t.parameter >= too_large then too_large
-         else (t.parameter * 10) + digit)
+      if not t.subparameter then
+        let digit = Char.code c - 48 in
+        t.parameter <-
+          (if t.parameter < 0 then digit
+           else if t.parameter >= too_large then too_large
+           else (t.parameter * 10) + digit)
   | ';' when t.intermediate = 0 -> end_parameter t
-  | ':' when t.intermediate = 0 -> t.parameter <- too_large
+  | ':' when t.intermediate = 0 -> t.subparameter <- true
   | '?' when (not t.started) && t.intermediate = 0 -> t.private_marker <- true
   | _ -> t.phase <- ignored_sequence
 
@@ -254,6 +259,16 @@ let feed t bytes offset length =
 
 let feed_string t text =
   feed t (Bytes.unsafe_of_string text) 0 (String.length text)
+
+let finish_sequence t bytes offset length =
+  if offset < 0 || length < 0 || offset > Bytes.length bytes - length then
+    invalid_arg "Mesh_pty_modes.finish_sequence";
+  let count = ref 0 in
+  while !count < length && t.phase <> ground do
+    step t (Bytes.unsafe_get bytes (offset + !count));
+    incr count
+  done;
+  if t.phase = ground then Some !count else None
 
 let prefix t =
   let buffer = Buffer.create 64 in
