@@ -8324,15 +8324,21 @@ function disposeLocalPage() {
 }
 function suspendLocalPage() {
   if (!localMeshEffectsAllowed()) return;
-  const bindings = panes.filter(pane => pane.conn).map(pane => ({pane, id: pane.id,
-    name: pane.conn.name, created: pane.conn.created}));
-  meshPageCache = {bindings: bindings.length ? bindings : meshPageCache?.bindings || [], focus: document.activeElement};
+  const bindings = new Map((meshPageCache?.bindings || []).filter(cachedTerminalCurrent)
+    .map(binding => [binding.pane, {...binding}]));
+  for (const pane of panes) if (pane.conn) bindings.set(pane, {pane, id: pane.id,
+    name: pane.conn.name, created: pane.conn.created});
+  meshPageCache = {bindings: [...bindings.values()], focus: document.activeElement};
   meshPageSuspended = true; meshPageEpoch++;
   projectsGeneration++; workGeneration++;
   projectsController?.close(); workController?.close();
   inventoryPoller?.stop(); listBatch.cancel(); pageSignals?.dispose();
   retirePageInput();
-  for (const pane of panes) {pane.invalidateActionView(); pane.detach();}
+  for (const pane of panes) {
+    pane.invalidateActionView(); pane.detach();
+    const binding = bindings.get(pane);
+    if (binding) binding.view = pane.actionView;
+  }
   for (const handle of localTerminalHandles) handle.dispose();
   // Keep native lease history viable for fresh, inventory-validated sockets.
 }
@@ -8350,15 +8356,23 @@ function restorePendingCachedTerminals() {
   if (!meshPageCache || !localMeshEffectsAllowed() || meshPageFinal) return;
   const cached = meshPageCache;
   meshPageCache = null;
-  for (const binding of cached.bindings) restoreCachedTerminal(binding, cached.focus, cached.focusRevision);
+  const bindings = cached.bindings.filter(binding => restoreCachedTerminal(binding, cached.focus, cached.focusRevision));
+  if (bindings.length) meshPageCache = {...cached, bindings};
 }
-function restoreCachedTerminal({pane, id, name, created}, focus, focusRevision) {
+function cachedTerminalCurrent({pane, id, view}) {
+  return panes.includes(pane) && pane.id === id && !pane.actionDisposed && pane.actionView === view;
+}
+function restoreCachedTerminal(binding, focus, focusRevision) {
+  const {pane, id, name, created} = binding;
   // A live reconnect can follow a restarted name; a frozen page may only restore
   // its original target. pageshow is not user authority to select a replacement.
+  if (!cachedTerminalCurrent(binding) || pane.conn || !Number.isFinite(created) || created <= 0) return false;
   const identity = paneTargets.identity(id);
-  if (!panes.includes(pane) || pane.id !== id || pane.actionDisposed || pane.conn
-      || !Number.isFinite(created) || created <= 0 || identity?.name !== name || identity.created !== created) return;
+  if (identity?.name !== name) return false;
+  if (identity.created === null) return true;   // listed, but not yet an identified incarnation
+  if (identity.created !== created) return false;
   pane.attach(id, {cacheFocus: pane.el.contains(focus) ? focus : null, cacheFocusRevision: focusRevision});
+  return false;
 }
 function disposeLocalInputScopes() {
   for (const scope of humanInputScopes.values()) scope.dispose();
