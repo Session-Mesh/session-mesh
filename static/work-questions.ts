@@ -7,7 +7,27 @@
  * questions of the entry screen). No DOM here.
  */
 
+import type { WorkResult } from './work-api.ts';
 import type { OpenQuestionsDoc, Question, TaskRow } from './work-types.ts';
+
+/** One read of open questions (work-read's `open-questions`): at most `limit`, after the question `after`. */
+export type OpenQuestionsRead = (page: Readonly<{ after?: string; limit: number }>) => Promise<WorkResult<OpenQuestionsDoc>>;
+
+/** The oldest `wanted` open questions, read a page of at most `max` at a time (one read gives at most 100), each
+ *  once; the totals are the last page's. A page that fails fails the whole read. */
+export async function readOpenQuestions(read: OpenQuestionsRead, wanted: number, max = 100): Promise<WorkResult<OpenQuestionsDoc>> {
+  let result = await read({ limit: Math.min(max, wanted) });
+  if (!result.ok) return result;
+  const questions = [...result.value.questions], known = new Set(questions.map(question => question.id));
+  while (questions.length > 0 && questions.length < Math.min(wanted, result.value.openQuestions)) {
+    result = await read({ after: questions[questions.length - 1]!.id, limit: Math.min(max, wanted - questions.length) });
+    if (!result.ok) return result;
+    const added = result.value.questions.filter(question => !known.has(question.id));
+    if (added.length === 0) break;
+    for (const question of added) { known.add(question.id); questions.push(question); }
+  }
+  return { ok: true, value: { ...result.value, questions } };
+}
 
 /** What a question is about, from its `about` reference: a task (`T-`), a project (`P-`) or nothing. */
 export type AboutKind = 'task' | 'project' | 'none';
