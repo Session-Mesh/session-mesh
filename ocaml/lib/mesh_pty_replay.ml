@@ -15,11 +15,22 @@ type t = {
   mutable off : int;
   mutable len : int;
   mutable trimmed : bool;
+  modes : Mesh_pty_modes.t;
+      (** The modes of the bytes trimmed so far: those of the window start. *)
 }
 
 let capacity = 2 * 1024 * 1024
 let span = 4096
-let create () = { window = Bytes.empty; off = 0; len = 0; trimmed = false }
+
+let create () =
+  {
+    window = Bytes.empty;
+    off = 0;
+    len = 0;
+    trimmed = false;
+    modes = Mesh_pty_modes.create ();
+  }
+
 let snapshot t = Bytes.sub_string t.window t.off t.len
 let is_empty t = t.len = 0
 let birth_bytes t = if t.trimmed then None else Some (snapshot t)
@@ -95,6 +106,7 @@ let feed t data =
     t.trimmed <- true;
     let base = t.off in
     let cut = cut_point (fun i -> Bytes.unsafe_get t.window (base + i)) t.len in
+    Mesh_pty_modes.feed t.modes t.window base cut;
     t.off <- t.off + cut;
     t.len <- t.len - cut)
 
@@ -187,3 +199,13 @@ module Raw = struct
       Bytes.blit t.bytes 0 result first (count - first);
       Ok (Bytes.unsafe_to_string result, count > 0 && offset < t.replay_end)
 end
+
+let replay t =
+  let prefix = if t.trimmed then Mesh_pty_modes.prefix t.modes else "" in
+  if prefix = "" then snapshot t
+  else
+    let length = String.length prefix in
+    let bytes = Bytes.create (length + t.len) in
+    Bytes.blit_string prefix 0 bytes 0 length;
+    Bytes.blit t.window t.off bytes length t.len;
+    Bytes.unsafe_to_string bytes

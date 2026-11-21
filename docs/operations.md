@@ -506,6 +506,20 @@ connection, and says so. Otherwise it refuses and prints the remedy: check that
 `systemctl --user status session-mesh-pty` shows the unit inactive and that no PTY host started by
 hand is running, then remove the file with `rm --` and run the installer again.
 
+### Terminal modes in a cut replay
+
+A browser that opens a session first receives the last 2 MiB of its output, the replay. A
+full-screen program such as pi, OpenCode, Copilot or Antigravity turns on the alternate screen and
+mouse reporting once, when it starts; after it has written more than 2 MiB, those sequences are no
+longer in the replay. The PTY host follows a small set of terminal modes in the output it trims
+(alternate screen, mouse tracking and its encoding, focus reports, alternate scroll, bracketed
+paste, autowrap, cursor visibility, application cursor keys and keypad) and starts a cut replay
+with the sequences that set them as they were where the replay starts. A browser opened late is
+then in the program's modes, and the wheel reaches the program. Nothing is sent to the program, and
+a replay that still holds the whole output is unchanged. This is done by the PTY host, so it takes
+effect after a PTY host restart, which ends every session. The menu action that restores the
+full-screen scroll by hand stays, for older hosts.
+
 ## macOS
 
 macOS support is best effort: the project fixes what blocks it, and further work follows issues and
