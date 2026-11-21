@@ -23,6 +23,7 @@ import time
 import tomllib
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import urlencode
 
 
 # Binary distributions supply MESH_BIN_DIR; source builds install the public
@@ -327,17 +328,19 @@ def _opencode_servers(reach, disabled=()):
 
 
 def _opencode_config_sources(executable, cwd, environ):
-    """The configuration documents OpenCode 2 reads for ``cwd``, in precedence order (``debug config``
+    """The configuration documents OpenCode 2 reads for ``cwd``, in precedence order (the config API
     lists them normalised: ``mcp.servers``, ``disabled``, ``permissions``), or None when it cannot say.
 
-    ``--standalone`` keeps the probe out of the shared background service.  The environment holds the
-    locations OpenCode reads (HOME, XDG_*, OPENCODE_*) and no Mesh variable, so no credential."""
+    Use the API command: unlike ``debug config``, it accepts ``--standalone`` and passes it to server
+    resolution, keeping the probe out of the shared service. The environment holds the locations
+    OpenCode reads (HOME, XDG_*, OPENCODE_*) and no Mesh variable, so no Mesh credential."""
     probe_env = {"PATH": environ.get("PATH", "/usr/bin:/bin"), "HOME": environ.get("HOME", str(Path.home())),
                  "OPENCODE_DISABLE_AUTOUPDATE": "1"}
     probe_env.update({name: value for name, value in environ.items()
                       if name.startswith(("XDG_", "OPENCODE_")) and name != "OPENCODE_DISABLE_AUTOUPDATE"})
+    target = "/api/config?" + urlencode({"location[directory]": cwd})
     try:
-        result = subprocess.run([executable, "debug", "config", "--standalone"], stdin=subprocess.DEVNULL,
+        result = subprocess.run([executable, "api", "get", target, "--standalone"], stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=_OPENCODE_CONFIG_TIMEOUT, check=True,
                                 cwd=cwd, env=probe_env)
         sources = json.loads(result.stdout)
