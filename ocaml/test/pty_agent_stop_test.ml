@@ -49,6 +49,21 @@ let foreground () =
   check_foreground "a shell without job control runs the agent in its group"
     "refused no_job_control"
     [ shell (); process ~pid:200 ~pgrp:100 "claude" ];
+  check_foreground "the agent's own tools in the shell's group"
+    "refused no_job_control"
+    [
+      shell ();
+      process ~pid:200 ~pgrp:100 "claude";
+      { (process ~pid:201 ~pgrp:100 "bash") with ppid = 200 };
+      { (process ~pid:202 ~pgrp:100 "grep") with ppid = 201 };
+    ];
+  check_foreground "another program shares the shell's group with the agent"
+    "refused unsupported_foreground"
+    [
+      shell ();
+      process ~pid:200 ~pgrp:100 "claude";
+      { (process ~pid:300 ~pgrp:100 "vim") with ppid = 100 };
+    ];
   check_foreground "one agent in the shell's group, one in the background"
     "refused agent_not_foreground"
     [

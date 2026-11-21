@@ -29,7 +29,9 @@ type foreground =
             the session;
           - [no_job_control]: the shell holds the terminal and every process
             that runs the agent is in the shell's own group (a shell without
-            job control): only the whole session could be signalled;
+            job control) with no other program than the agent and its own
+            descendants: only the whole session could be signalled (another
+            program in that group gives [unsupported_foreground]);
           - [unsupported_foreground]: another program holds the terminal;
           - [agent_not_foreground]: a process of the session runs the agent
             outside the foreground job (in the background, or beside the
