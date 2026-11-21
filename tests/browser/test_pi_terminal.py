@@ -107,10 +107,15 @@ async def test_pi_fullscreen_scroll_recovers_trimmed_modes_without_pty_input(pho
     if gesture == "wheel":
         await tab.set_viewport_size({"width": 1200, "height": 800})
         await tab.wait_for_timeout(300)
-    # A returning browser gets the replay window, which no longer holds the startup modes.
+    # A returning browser gets the replay window, which no longer holds the startup bytes.
     await tab.reload()
     await tab.wait_for_function("active?.conn?.ws?.readyState === 1", timeout=10000)
     await tab.wait_for_timeout(1200)
+    # The host starts a cut replay with the modes the output had set (alternate screen, mouse).
+    assert await tab.evaluate("active.term.buffer.active.type") == "alternate"
+    assert await tab.evaluate("active.term.modes.mouseTrackingMode") == "any"
+    # An older host did not: leave them locally, as its replay did, to check the manual recovery.
+    await tab.evaluate("new Promise(r => active.term.write('\\x1b[?1049l\\x1b[?1003l\\x1b[?1006l', r))")
     assert await tab.evaluate("active.term.buffer.active.type") == "normal"
     assert await tab.evaluate("active.term.modes.mouseTrackingMode") == "none"
     winches_before = winches.read_text() if winches.exists() else ""
