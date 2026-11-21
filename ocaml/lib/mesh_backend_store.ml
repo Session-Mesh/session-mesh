@@ -102,7 +102,7 @@ let insert_policy =
     "INSERT INTO backend_policy(id,revision,payload) VALUES(1,0,?)"
 
 let busy_timeout = (unit ->* int) "PRAGMA busy_timeout=5000"
-let wal = (unit ->* string) "PRAGMA journal_mode=WAL"
+let wal = (unit ->* string) ~oneshot:true "PRAGMA journal_mode=WAL"
 
 let schema =
   [
@@ -164,6 +164,35 @@ let read_connection (module C : Caqti_blocking.CONNECTION) =
   let* revision, payload = lift (C.find read ()) in
   parse_policy revision payload
 
+(* Switching a rollback-journal file to WAL takes a read lock, then the write
+   lock. SQLite does not call the busy handler for a write lock asked under a read
+   lock (it could deadlock), so busy_timeout does not cover it: while another
+   first-use process holds the write lock, the pragma fails at once with
+   SQLITE_BUSY. Retry within the same 5 s. [wal] is a one-shot request: a cached
+   statement that failed stays unfinalized, and the connection then stays open
+   after [close]. *)
+let sqlite_busy = function
+  | `Request_failed
+      ({
+         msg = Caqti_driver_sqlite3.Error_msg { errcode = Sqlite3.Rc.BUSY; _ };
+         _;
+       } :
+        Caqti_error.query_error) ->
+      true
+  | _ -> false
+
+let switch_to_wal (module C : Caqti_blocking.CONNECTION) =
+  let deadline = Unix.gettimeofday () +. 5.0 in
+  let rec attempt delay =
+    match C.collect_list wal () with
+    | Ok _ -> Ok ()
+    | Error error when sqlite_busy error && Unix.gettimeofday () < deadline ->
+        Unix.sleepf delay;
+        attempt (Float.min 0.1 (delay *. 2.))
+    | Error error -> lift (Error error)
+  in
+  attempt 0.005
+
 let initialize conn =
   let (module C : Caqti_blocking.CONNECTION) = conn in
   let* _ = lift (C.collect_list busy_timeout ()) in
@@ -207,7 +236,7 @@ let initialize conn =
         ignore (C.rollback ());
         raise exn
   in
-  let* _ = lift (C.collect_list wal ()) in
+  let* () = switch_to_wal conn in
   lift (C.exec (ddl "PRAGMA synchronous=FULL") ())
 
 let custody store =

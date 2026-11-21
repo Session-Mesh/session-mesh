@@ -205,8 +205,10 @@ test('concurrent native helpers cannot both commit the same policy revision',{sk
   }finally{f.close();}
 });
 
+// About one round in a hundred lost the WAL switch race before the retry; 100 rounds (about 1 s) caught
+// it in most runs. ocaml/test/backend_store_test.ml reproduces it on every run.
 test('concurrent first-use readers all reuse one initialized private store',{skip},async()=>{
-  for(let attempt=0;attempt<4;attempt++){
+  for(let attempt=0;attempt<100;attempt++){
     const f=fixture();
     try{
       const get=()=>new Promise<Reply>((resolve,reject)=>{
