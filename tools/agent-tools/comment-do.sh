@@ -23,7 +23,7 @@
 set -euo pipefail
 # Byte-wise scanning: a raw byte like 0xFF must not flip GNU grep into
 # "binary file matches", and case-insensitive matching stays ASCII-only.
-export LC_ALL=C
+export LC_ALL=C.UTF-8
 
 REPO=${REPO:-Session-Mesh/session-mesh}
 DENY_FILE=${AGENT_TOOLS_DENY_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/deny-words.txt}
@@ -60,14 +60,14 @@ trap 'rm -f "$body_copy"' EXIT
 no_zero_width() {
     sed -e 's/\xe2\x80\x8b//g' -e 's/\xe2\x80\x8c//g' -e 's/\xe2\x80\x8d//g' \
         -e 's/\xe2\x81\xa0//g' -e 's/\xef\xbb\xbf//g' -e 's/\xc2\xad//g' \
-        -e 's/\xe2\x81\xa3//g' -e 's/\xcc\x8f//g'
+        -e 's/\xe2\x81\xa3//g' -e 's/\xcd\x8f//g'
 }
 # Drop NUL bytes and invalid UTF-8, so the greps never see a "binary" line.
 san() {
     local t
     t=$(cat)
     printf '%s' "$t" | tr -d '\000' | iconv -c -f UTF-8 -t UTF-8 2>/dev/null \
-        || printf '%s' "$t"
+        || true
 }
 content=$(no_zero_width < <(san < "$file"))
 printf '%s\n' "$content" > "$body_copy"
@@ -75,7 +75,7 @@ printf '%s\n' "$content" > "$body_copy"
 patterns=$(mktemp)
 trap 'rm -f "$patterns" "$body_copy"' EXIT
 if [ -f "$DENY_FILE" ]; then
-    grep -v -e '^#' -e '^[[:space:]]*$' "$DENY_FILE" 2>/dev/null | tr -d '\r' > "$patterns" || true
+    grep -v -e '^#' -e '^[[:space:]]*$' "$DENY_FILE" 2>/dev/null | tr -d '\r' | san | no_zero_width > "$patterns" || true
 fi
 
 # shellcheck disable=SC2016
