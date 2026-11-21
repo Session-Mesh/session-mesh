@@ -2252,6 +2252,12 @@ class Pane {
     this.paneHeader.setConnection(text, !!bad);
   }
 
+  cancelCachedRestore(c) {
+    if (this.conn !== c || !c.cacheRestore) return;
+    this.detach();
+    this.setConn(t("conn.cachedUnconfirmed"), true);
+  }
+
   attach(name, opts = {}) {
     if (localActionUnavailable()) return;
     this.detach();
@@ -2268,7 +2274,7 @@ class Pane {
     this.queuedOutput = []; this.queuedBytes = 0;
     const c = { name, created: find(name)?.created, piFullscreenScroll: false, retry: 0, closed: false, terminal: null,
       ws: null, // real local socket: legacy paste identity/diagnostic compatibility only
-      initializing: true,
+      initializing: true, cacheRestore: opts.cacheRestore === true,
       followOutput: true, followCandidate: false, followFrame: 0, preserveViewport: null, bottomSync: false,
       focusRequested: opts.focusTerminal === true, draining: true };
     this.conn = c;
@@ -2326,7 +2332,7 @@ class Pane {
         },
         protocol: (_terminal, limited) => {
           this.limitedBanner.hidden = !limited;
-          if (!limited) { this.sendSize(true); this.armAutoRedraw(c); }
+          if (!limited) { c.cacheRestore = false; this.sendSize(true); this.armAutoRedraw(c); }
         },
         ptySize: (_terminal, size) => {
           c.pty = size;
@@ -2354,6 +2360,7 @@ class Pane {
           // refresh yields to the browser. The pane may have been detached or
           // reattached while it was in flight; recheck before changing or retrying.
           if (!current(terminal)) return;
+          if (c.cacheRestore) { this.cancelCachedRestore(c); return; }
           const session = data.mesh.find((s) => s.id === name);
           if (!session) {
             c.ended = true;   // a restored session of this name lets refresh() reattach the pane
@@ -5234,17 +5241,29 @@ function syncPanesWithListing(observedInventory) {
     if (p.back && data.moved?.[p.back]) p.back = data.moved[p.back];   // adopted: back to its new id
     if (!p.id || isAdjacentPane(p.id)) { p.header(); continue; }
     const moved = data.moved?.[p.id];
-    if (moved && find(moved)) { p.show(moved); continue; }
+    if (moved && find(moved)) {
+      if (p.conn?.cacheRestore) p.cancelCachedRestore(p.conn);
+      else p.show(moved);
+      continue;
+    }
     if (isHist(p.id)) {
       p.header();
       if (p.hist?.d && (liveOf(p.hist.d.id, p.hist.d.agent)?.id || null) !== p.hist.live) p.renderHist();
       continue;
     }
     const s = find(p.id);
+    if (!s && observedInventory && p.conn?.cacheRestore) {
+      p.cancelCachedRestore(p.conn); p.header(); continue;
+    }
     if (!s && observedInventory && p.id.startsWith("t")) p.clear();
     else if (s) {
-      if (localMeshEffectsAllowed() && s.kind === "mesh" && (p.conn?.ended
-          || observedInventory && p.conn && (p.conn.created ?? null) !== (s.created ?? null))) p.attach(p.id);
+      if (localMeshEffectsAllowed() && s.kind === "mesh") {
+        if (p.conn?.cacheRestore) {
+          if (observedInventory && Number.isFinite(s.created) && s.created > 0 && s.created !== p.conn.created)
+            p.cancelCachedRestore(p.conn);
+        } else if (p.conn?.ended || observedInventory && p.conn
+            && (p.conn.created ?? null) !== (s.created ?? null)) p.attach(p.id);
+      }
       p.header();
       if (s.kind === "external") p.renderDetail(s);
     }
@@ -8733,7 +8752,7 @@ function restoreCachedTerminal(binding, focus, focusRevision) {
   if (identity?.name !== name) return false;
   if (identity.created === null) return true;   // listed, but not yet an identified incarnation
   if (identity.created !== created) return false;
-  pane.attach(id, {cacheFocus: pane.el.contains(focus) ? focus : null, cacheFocusRevision: focusRevision});
+  pane.attach(id, {cacheRestore: true, cacheFocus: pane.el.contains(focus) ? focus : null, cacheFocusRevision: focusRevision});
   return false;
 }
 function disposeLocalInputScopes() {

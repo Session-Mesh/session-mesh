@@ -177,6 +177,7 @@
   "compose.title": "Écrire dans le terminal",
   "conn.connecting": "connexion…",
   "conn.disconnected": "déconnecté",
+  "conn.cachedUnconfirmed": "Terminal restauré non confirmé — sélectionnez à nouveau la session",
   "conn.ended": "terminée",
   "conn.reconnecting": "reconnexion…",
   "conn.sessionEnded": "session terminée",
