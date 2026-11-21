@@ -67,7 +67,8 @@ try{
     try{assert.deepEqual(await control({op:'list'}),[]);ready=true;break;}catch{await delay(10);}
   }
   assert.ok(ready,'set MESH_PTYHOST_CMD to the built native executable');
+  const shutdown=new Promise<void>(resolve=>{process.stdin.resume();process.stdin.once('end',resolve);process.once('SIGTERM',resolve);process.once('SIGINT',resolve);});
   process.stdout.write(JSON.stringify({home,socket})+'\n');
-  await new Promise<void>(resolve=>{process.stdin.resume();process.stdin.once('end',resolve);process.once('SIGTERM',resolve);process.once('SIGINT',resolve);});
+  await shutdown;
 }catch(error){console.error(error);process.exitCode=1;}
 finally{process.stdin.destroy();await close();}
