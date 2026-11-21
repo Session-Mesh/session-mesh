@@ -11,7 +11,7 @@ setup_dir() {
     dir=$(mktemp -d)
     TEST_LIB_SCRATCH=$dir
     export TEST_LIB_SCRATCH
-    trap 'rm -rf "$TEST_LIB_SCRATCH"' EXIT
+    if [ "${TEST_LIB_KEEP:-0}" != 1 ]; then trap 'rm -rf "$TEST_LIB_SCRATCH"' EXIT; fi
     cp "$here/fake-gh" "$dir/gh"
     printf '#!/usr/bin/env bash\nprintf "fixed-time\\n"\n' > "$dir/date"
     chmod +x "$dir/gh" "$dir/date"

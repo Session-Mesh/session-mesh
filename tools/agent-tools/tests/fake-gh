@@ -203,10 +203,15 @@ case "$cmd" in
 ;;
 comment)
     bf=$(after_arg --body-file) || { echo 'fake-gh: comment without --body-file' >&2; exit 64; }
+    if [ ! -r "$bf" ]; then
+        echo "fake-gh: the posted body file '$bf' is missing or unreadable" >&2
+        exit 1
+    fi
     if LC_ALL=C grep -q -e $'\xe2\x80\x8b' -e $'\xe2\x80\x8c' -e $'\xe2\x80\x8d' -e $'\xe2\x81\xa0' -e $'\xc2\xad' -e $'\xe2\x81\xa3' -e $'\xcd\x8f' -e $'\xef\xbb\xbf' "$bf"; then
         echo 'fake-gh: the posted body still contains zero-width characters (post the checked copy)' >&2
         exit 1
     fi
+    cp -- "$bf" "$STATE/posted-$cmd.txt"
     printf 'stub: comment posted\n'
     ;;
             merge)
@@ -237,10 +242,15 @@ comment)
         case "$sub" in
 comment)
     bf=$(after_arg --body-file) || { echo 'fake-gh: comment without --body-file' >&2; exit 64; }
+    if [ ! -r "$bf" ]; then
+        echo "fake-gh: the posted body file '$bf' is missing or unreadable" >&2
+        exit 1
+    fi
     if LC_ALL=C grep -q -e $'\xe2\x80\x8b' -e $'\xe2\x80\x8c' -e $'\xe2\x80\x8d' -e $'\xe2\x81\xa0' -e $'\xc2\xad' -e $'\xe2\x81\xa3' -e $'\xcd\x8f' -e $'\xef\xbb\xbf' "$bf"; then
         echo 'fake-gh: the posted body still contains zero-width characters (post the checked copy)' >&2
         exit 1
     fi
+    cp -- "$bf" "$STATE/posted-$cmd.txt"
     printf 'stub: comment posted\n'
     ;;
             *) echo "fake-gh: unexpected issue/$sub" >&2; exit 64 ;;
