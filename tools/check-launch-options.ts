@@ -63,11 +63,11 @@ async function startHarness(scratch: string, prefix: string, enabled?: string[])
     // `pi --version` is how pimcp checks the agent it is about to launch: answer it, record the rest.
     fs.writeFileSync(path.join(bin, 'pi'),
       `#!/bin/sh\nif [ "$1" = --version ]; then echo 1.4.0; exit 0; fi\n` +
-      `for a in "$@"; do printf '%s\\n' "$a" >> '${argvLog}'; done\nprintf -- '---\\n' >> '${argvLog}'\nexec sleep 30\n`,
+      `for a in "$@"; do printf '%s\\n' "$a" >> '${argvLog}'; done\nprintf -- '---\\n' >> '${argvLog}'\nexec sleep 5\n`,
       {mode: 0o755});
     fs.writeFileSync(path.join(bin, 'codex'),
       `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> '${argvLog}.codex'; done\nprintf -- '---\\n' >> '${argvLog}.codex'\n` +
-      `printf "%s" "$MESH_SESSION_TOKEN" > ./token.tmp && mv ./token.tmp ./token\nexec sleep 30\n`, {mode: 0o755});
+      `printf "%s" "$MESH_SESSION_TOKEN" > ./token.tmp && mv ./token.tmp ./token\nexec sleep 5\n`, {mode: 0o755});
     const PATH = `${bin}:${process.env.PATH}`;
     const started = await startMesh(prefix, {PATH, MESH_OPAM_SWITCH: path.join(scratch, 'switch')}, (where) => {
       if (!enabled) return;

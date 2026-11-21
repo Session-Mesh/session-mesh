@@ -1624,6 +1624,10 @@ configuration folder (`~/.config/session-mesh`), one JSON array of arguments per
 - **A session an agent asks for** is shown with the stored arguments of its preset; the approval is
   bound to the revision of that file, so a save made after the confirmation is shown asks again
   instead of launching the new arguments unseen.
+- **Checking a change.** The behaviour is covered by `tools/check-launch-options.ts`, one named case
+  per check (`node --experimental-strip-types tools/check-launch-options.ts <case>`; exit 0 passes,
+  1 fails the assertion, 2 means the harness itself could not run). A representative subset runs
+  with the Node suite; the full list is in the header of `tests/launch-options-checks.test.ts`.
 - **Edits made by hand** are read at startup. A save from Configuration or a session dialog is
   refused while the file holds bytes this server did not write (the page says the revision is
   stale), so restart the web server after editing the file.
