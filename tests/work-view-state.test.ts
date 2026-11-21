@@ -153,8 +153,8 @@ describe('the stored state', () => {
     const place: Place = { ...ENTRY_PLACE, product: long, rail: [`product:${long}`, `project:${'P'.repeat(100)}`, `zone:${'z'.repeat(100)}`] };
     assert.deepEqual(parseState(serializeState(withPlace(EMPTY_STATE, place))).place, place, 'a product id of 100 characters round-trips');
     const read = (value: object): Place => parseState(JSON.stringify({ schema: STATE_SCHEMA, place: value, drafts: {} })).place;
-    assert.deepEqual(read({ rail: [`product:${long}x`, long, 'task:T-1', 'product:../x', 'product:a b', 'zone:'] }).rail, ['zone:'],
-      'too long, no kind, another kind, not an id');
+    assert.deepEqual(read({ rail: [`product:${long}x`, `zone:${long}x`, `project:${long}x`, long, 'task:T-1', 'product:../x', 'product:a b', 'zone:'] })
+      .rail, ['zone:'], 'an id too long whatever its kind, no kind, another kind, not an id');
     assert.equal(read({ product: `${long}x` }).product, null, 'a product id longer than the server allows');
     const many = Array.from({ length: 500 }, (_, index) => `product:p${index}`);
     assert.deepEqual(read({ rail: many }).rail, many.slice(100), 'the last 400 (the newest unfolded) are kept');
