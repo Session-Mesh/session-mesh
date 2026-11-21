@@ -110,6 +110,24 @@ async function listed(name: string): Promise<Record<string, unknown> | undefined
   return data.mesh.find(item => item.id === name);
 }
 
+/** Rename session ``name`` LABEL as the list does, and file it in a folder (which ranks it). */
+async function arrange(name: string): Promise<void> {
+  const headers = {Authorization: `Bearer ${mesh.token()}`, Origin: mesh.base, 'Content-Type': 'application/json'};
+  for (const op of [{op: 'folder-add', name: 'Moved'}, {op: 'move', id: name, folder: 'Moved'}, {op: 'rename', id: name, label: LABEL}]) {
+    const done = await fetch(`${mesh.base}/api/organize`, {method: 'POST', headers, body: JSON.stringify(op)});
+    assert.equal(done.status, 200, await done.text());
+  }
+}
+
+/** The label and folder of session ``name``, read twice: the second listing would prune those of an ended incarnation. */
+async function arrangement(name: string): Promise<unknown[]> {
+  await listed(name);
+  const item = await listed(name);
+  return [item?.label, item?.folder];
+}
+
+const LABEL = 'Renamed before the switch';
+
 const ask = (session: Session, body: Record<string, unknown>) => fetch(`${mesh.base}/api/session-actions/@self/request`,
   {method: 'POST', body: JSON.stringify(body),
     headers: {Authorization: `MeshSession ${session.token}`, 'Content-Type': 'application/json'}});
@@ -282,6 +300,7 @@ describe('account switch requests', {skip: SKIP}, () => {
 
   test('approved: the agent stops, its conversation is carried, and it resumes under the target in the same terminal', {skip: CARRY}, async () => {
     const session = await codexSession('x-move');
+    await arrange('x-move');
     const before = await listed('x-move');
     const carried = rolloutIn(travelHome, session.sid);
     const original = fs.readFileSync(rolloutIn(path.join(mesh.home, '.codex'), session.sid), 'utf8');
@@ -303,10 +322,12 @@ describe('account switch requests', {skip: SKIP}, () => {
       'the same shell and terminal: no new session was created');
     assert.equal(typeof before?.created, 'number');
     assert.notEqual(after?.created, before?.created, 'a new incarnation of the session');
+    assert.deepEqual(await arrangement('x-move'), [LABEL, 'Moved'], 'the new incarnation keeps the name and folder');
   });
 
   test('a carry that fails resumes the conversation under its own account and says it was undone', {skip: CARRY}, async () => {
     const session = await codexSession('x-undone');
+    await arrange('x-undone');
     const before = await listed('x-undone');
     const target = rolloutIn(workHome, session.sid);
     fs.mkdirSync(path.dirname(target), {recursive: true, mode: 0o700});
@@ -331,6 +352,7 @@ describe('account switch requests', {skip: SKIP}, () => {
       'in the same shell and terminal');
     assert.equal(typeof before?.created, 'number');
     assert.notEqual(after?.created, before?.created, 'a new incarnation of the session');
+    assert.deepEqual(await arrangement('x-undone'), [LABEL, 'Moved'], 'the resumed incarnation keeps the name and folder');
   });
 });
 
