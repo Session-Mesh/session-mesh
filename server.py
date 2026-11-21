@@ -2613,6 +2613,58 @@ def apply_launch_settings(settings, revision):
     LAUNCH_SETTINGS, LAUNCH_REVISION = settings, revision
 
 
+OPTIONS_MAX_CHARS = 2048
+OPTIONS_MAX_TOKENS = 32
+OPTIONS_MAX_TOKEN = 512
+OPTIONS_REFUSED = ("Launch refused: {option} is not allowed in the launch options (it removes the "
+                   "agent's approvals or its sandbox, or it picks its conversation)")
+
+
+def parse_launch_options(kind, value):
+    """The owner's options field as argv tokens.
+
+    Never a shell fragment: the command reaches the PTY host as one shell string, so a newline would
+    start a second command there. The tokens are split once, here, and rejoined with ``shlex.join``
+    further down, which is why what is validated is exactly what runs.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, str):
+        raise web.HTTPBadRequest(text="Options must be a string")
+    if not value.strip():
+        return ()
+    if kind not in AGENT_PRESETS:
+        raise web.HTTPBadRequest(text="Options are for a known agent only")
+    if len(value) > OPTIONS_MAX_CHARS:
+        raise web.HTTPBadRequest(text=f"Options are longer than {OPTIONS_MAX_CHARS} characters")
+    if any(character in value for character in "\n\r\0"):
+        raise web.HTTPBadRequest(text="Options must be on one line")
+    try:
+        tokens = shlex.split(value)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=f"Options cannot be read: {exc}") from exc
+    if len(tokens) > OPTIONS_MAX_TOKENS:
+        raise web.HTTPBadRequest(text=f"Options are more than {OPTIONS_MAX_TOKENS} tokens")
+    if any(len(token) > OPTIONS_MAX_TOKEN for token in tokens):
+        raise web.HTTPBadRequest(text=f"One option is longer than {OPTIONS_MAX_TOKEN} bytes")
+    return tuple(tokens)
+
+
+def effective_launch(kind, stored, per_launch):
+    """The preset's code-owned argv followed by the stored and per-launch owner options.
+
+    The only place a fresh launch adds owner options. The resume, restore and move-in paths never
+    call it, and nothing is spliced into ``AGENT_PRESETS`` -- which those paths read -- so a stored
+    default cannot follow a conversation into its reopen. The refusal is decided on the owner's
+    tokens only, so ``codex-yolo`` keeps the ``--yolo`` the catalogue gives it.
+    """
+    options = (*stored, *per_launch)
+    refused = launchplan.refusal(kind, options)
+    if refused:
+        raise web.HTTPBadRequest(text=OPTIONS_REFUSED.format(option=refused))
+    return [*AGENT_PRESETS[kind], *options]
+
+
 async def api_new(request):
     body = await json_object(request)
     cwd = os.path.expanduser(str(body.get("cwd") or "~"))
@@ -2623,6 +2675,7 @@ async def api_new(request):
     kind = body.get("preset", "shell")
     if kind not in {"shell", "custom", *AGENT_PRESETS}:
         raise web.HTTPBadRequest(text="Unknown or disabled preset")
+    options = parse_launch_options(kind, body.get("options"))
     command = str(body.get("command") or "").strip() if kind == "custom" else PRESETS.get(kind)
     name = str(body.get("name") or "").strip()
     if name and not NAME_RE.fullmatch(name):
@@ -2633,7 +2686,7 @@ async def api_new(request):
         raise web.HTTPBadRequest(text=ACCOUNT_UNKNOWN)
     conversation = None
     if agent:
-        argv, conversation = _chosen_launch(agent, AGENT_PRESETS[kind])
+        argv, conversation = _chosen_launch(agent, effective_launch(kind, (), options))
         command = shlex.join(argv)
     name = await new_session(name or f"{Path(cwd).name}-{kind if kind != 'custom' else 'cmd'}",
                              cwd, command, agent if agent in RESUMABLE_AGENT_PRESETS else None,

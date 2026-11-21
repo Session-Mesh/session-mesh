@@ -7336,6 +7336,8 @@ async function openNew() {
   if (!form.preset.value) form.preset.value = "claude";   // a stored kind that no longer exists
   form.command.value = store.get("command", "");
   form.command.hidden = form.preset.value !== "custom";
+  form.options.value = "";
+  syncOptionsRow();
   const cur = active?.id && find(active.id);
   form.cwd.value = short(cur?.cwd || data.home).replace(/^~/, data.home);
   dlg.showModal();
@@ -7354,6 +7356,12 @@ async function openNew() {
   renderFolderList();   // keeps what was typed while the requests were pending
 }
 window.openNew = openNew;
+
+// The options field belongs to a known agent: "shell" and "custom" have no argv Mesh builds.
+function syncOptionsRow() {
+  const value = form.preset.value;
+  $("#new-options-row").hidden = !value || value === "shell" || value === "custom";
+}
 
 // The "Account" choice: shown when the operator declared aliases on the runner (any number), for Claude and Codex
 // only, sorted by label (the file's order among equal labels); the last alias chosen on this device is chosen
@@ -7500,7 +7508,7 @@ folderList.addEventListener("click", (e) => {
 });
 dlg.addEventListener("close", () => folderSuggester.reset());   // no pending timer or answer after the dialog closes
 $("#btn-new").addEventListener("click", () => { if (projecting) projectsController?.create(); else openNew(); });
-form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; syncAccountChoice(); });
+form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; syncOptionsRow(); syncAccountChoice(); });
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const body = Object.fromEntries(new FormData(form));
