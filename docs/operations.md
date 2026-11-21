@@ -525,10 +525,13 @@ terminal parses the output. Alternate scroll (mode 1007) is not restored, becaus
 not implement it. When the replay starts inside a title, a DCS payload or another string sequence,
 the rest of that sequence is not sent, so it does not appear as text, provided its end (or the
 start of another sequence) lies within the first 4096 bytes of the replay; otherwise the replay is
-sent whole and that rest may appear as text. One case is not followed: a
-mode set by an eight-bit control sequence introducer written as UTF-8 (bytes C2 9B, rather than
-`ESC [`) outside any other sequence. Programs do not send it, and looking for it would slow the
-host's scan of all non-ASCII output.
+sent whole and that rest may appear as text. One family of cases is not followed: an eight-bit
+control introducer written as UTF-8 (bytes C2 9B for a CSI, C2 9D for an OSC, and so on, rather than
+`ESC [` or `ESC ]`) outside any sequence. Programs do not send them, and looking for them would slow
+the host's scan of all non-ASCII output. Two consequences follow. A C2 9B inside a string that an
+eight-bit introducer opened is not seen by the host, although xterm.js applies it. And a replay
+that starts inside a string opened by an eight-bit introducer shows the rest of that string as text,
+as it did before.
 
 ## macOS
 
