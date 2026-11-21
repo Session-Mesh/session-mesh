@@ -35,6 +35,9 @@ let classify ~runs_agent ~leader table =
           running
       with
       | [], [] when job = leader -> Idle
+      (* Every agent process is in the shell's own group: a shell without job
+         control, whose group only a stop of the whole session may signal. *)
+      | _ :: _, [] when job = leader -> Refused "no_job_control"
       | _ when job = leader -> Refused "agent_not_foreground"
       | [], _ -> Refused "unsupported_foreground"
       | _ :: _, [] -> Running job
@@ -58,6 +61,10 @@ let gone ~runs_agent ~leader ~group table =
                    found.pgrp = group && live found)
                  table))
       && agents ~runs_agent ~leader table = []
+
+(* Ctrl-E (end of line) then Ctrl-U (erase back to its start): readline, zsh
+   and fish line editors, and a terminal's own erase-line key without one. *)
+let clear_line = "\x05\x15"
 
 type timing = { grace : float; kill_wait : float; poll : float }
 

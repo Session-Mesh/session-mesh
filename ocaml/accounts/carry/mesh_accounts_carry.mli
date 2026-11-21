@@ -82,7 +82,13 @@
 
     The caller stops the agent before the carry: a transcript still being
     written could be caught half way, and an agent writing in the target between
-    the plan and the copy would lose its writes. *)
+    the plan and the copy would lose its writes.
+
+    A transcript or rollout whose last line was cut (an agent killed while
+    writing it) is copied as it is, byte for byte: the carry neither completes
+    nor drops that line, so the other account reads exactly what this one
+    would, and the source is never changed. Once the source holds the whole
+    line, a later carry replaces the cut copy, of which it is a prefix. *)
 
 type kind = Claude | Codex
 

@@ -1713,14 +1713,46 @@ transcript alone (tried with codex-cli 0.170.0 and Claude Code 2.1.330 on throwa
 keeps its name, its shell, its terminal output and every open tab or pane. The PTY host sends
 SIGHUP to the agent's foreground job, then SIGKILL after 3 seconds, and answers once the shell holds
 the terminal again and no process of that job is left; only then is the conversation copied and
-the agent started again, so two processes never run one conversation. When the terminal's
-foreground is another program, or an agent runs in the background of that shell, nothing is
-stopped and the request fails. The session then counts as a new incarnation, as after a new
-launch: what belonged to the previous one (its wake state, the status of a request it made) is
-not carried over. This needs a PTY
-host from this release or later (restarting it ends every mesh session, see
+the agent started again, so two processes never run one conversation. The session then counts as
+a new incarnation, as after a new launch: what belonged to the previous one (its wake state, the
+status of a request it made) is not carried over. This needs a PTY host from this release or later
+(restarting it ends every mesh session, see
 [Restoring sessions](#restoring-sessions-after-a-pty-host-restart)); with an older one, the agent
 still resumes in a new session.
+
+While the agent is stopped and its conversation copied, open tabs show the shell's prompt. A line
+someone starts typing there is erased before the agent's command is typed (Ctrl-E then Ctrl-U:
+readline, zsh and fish in their default emacs mode, and the terminal's own line-kill key in a
+shell without a line editor), so it is never joined to that command. A Claude restarted this way
+keeps its wake socket's path (it follows from the session): the server removes the socket file the
+stopped Claude left there before starting the next one.
+
+When the PTY host cannot stop the agent alone, it signals nothing and says why; the server then
+either falls back or refuses:
+
+| Reason | Meaning | What happens |
+| --- | --- | --- |
+| `no_shell` | The agent is the session's own program, with no shell around it. | The whole session is replaced by a new one, as before this release. |
+| `no_job_control` | The shell runs the agent in its own process group (job control off). | Same. |
+| `no_terminal`, `process_scan_failed` | The host cannot see what holds the terminal. | Same. |
+| `unsupported_foreground` | Another program holds the terminal (an editor, `make`, `ssh`...). | Nothing is stopped; the request fails: quit that program, or bring the agent back to the foreground, then ask again. |
+| `agent_not_foreground` | The agent runs in the background, or beside a second agent. | Nothing is stopped; the request fails: bring it to the foreground (`fg`), then ask again. |
+| `agent_starting`, `agent_still_running`, `stale_incarnation` | A launch is under way, the agent outlived SIGKILL, or the session changed since the request. | Nothing is started; the request fails with that reason. |
+
+A program that Mesh does not recognise as the agent is never stopped: Mesh recognises an agent by
+its process name or the name it was started under (`claude`, `codex`, ...), the same way in the
+session list and in the PTY host. A Claude started as `node cli.js` is therefore not listed as an
+agent at all, and a restart is refused before anything is stopped ("Agent to resume unavailable").
+
+The server waits up to 15 seconds for the stop (the host answers within about 4). If it still has
+no answer, it reads the session list: when the agent was stopped meanwhile, the request says so
+("Conversation stopped; its agent could not be started again in session …"): the session and its
+shell are still there, and you can resume the conversation from that terminal. Before this release
+the server waited 5 seconds and reported the PTY host as not responding.
+
+A Claude transcript or a Codex rollout whose last line was cut (an agent killed while writing it)
+is copied as it is by the switch: the other account reads exactly what this one would, and the
+source is never changed.
 
 **First launch of an alias in a folder.** The first time an alias opens a working folder, the agent
 asks in the session's terminal whether you trust that folder: Claude shows "Accessing workspace"

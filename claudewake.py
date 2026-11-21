@@ -188,6 +188,25 @@ def socket_path(directory, nonce):
     return path
 
 
+def clear_socket(directory, nonce):
+    """Remove the socket a stopped Claude of this incarnation's nonce left at its path.
+
+    A restart in the same terminal keeps the nonce, hence the path, and a Claude
+    that exited on SIGHUP or was killed leaves its socket file there: the next one
+    could not listen on it.  Call it only once that Claude is gone (stop_agent_if
+    answered).  Only a socket of this user, under Mesh's naming, in the private
+    directory is removed; anything else is left as it is."""
+    path = socket_path(directory, nonce)
+    try:
+        if path is None or not private_directory(Path(directory)):
+            return
+        info = os.lstat(path)
+        if stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid():
+            os.unlink(path)
+    except OSError:     # none there, or it cannot be removed: the launch goes on as before
+        return
+
+
 # ------------------------------------------------------------------- launching
 
 

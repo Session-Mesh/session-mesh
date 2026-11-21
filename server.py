@@ -383,9 +383,10 @@ class HostNotReached(web.HTTPServiceUnavailable):
     is safe (unlike CreationUncertain)."""
 
 
-async def host(req):
+async def host(req, timeout=None):
+    """The PTY host's reply; ``timeout``: seconds instead of ptyhost.REQUEST_TIMEOUT, for a longer operation."""
     try:
-        reply = await ptyhost.request(req)
+        reply = await (ptyhost.request(req) if timeout is None else ptyhost.request(req, timeout))
     except ptyhost.NotSent as exc:
         raise HostNotReached(text="ptyhost is not responding (systemctl --user start session-mesh-pty)") from exc
     except (OSError, asyncio.IncompleteReadError, asyncio.TimeoutError):
@@ -1008,7 +1009,16 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
     fails, the conversation resumes under ``account`` and AccountSwitchUndone names that session.
     """
     if known_agent in IN_PLACE_AGENTS and _relaunches_in_place(source):
-        return await relaunch_in_place(source, cwd, command, agent, known_agent, account, switch)
+        try:
+            return await relaunch_in_place(source, cwd, command, agent, known_agent, account, switch)
+        except WholeSessionOnly as exc:   # nothing was signalled: the whole session is replaced, as before
+            print(f"agent of {old_name} not stopped alone ({exc}): replacing the session", flush=True)
+    return await _replace_with_new_session(old_name, old_created, base, cwd, command, agent, known_agent, account,
+                                           switch)
+
+
+async def _replace_with_new_session(old_name, old_created, base, cwd, command, agent, known_agent, account, switch):
+    """replace_session in a new session: the PTY host stops the whole source (kill_if)."""
     target = switch[0] if switch else account
     account_env = await account_environment(target, known_agent)
     source_env = await account_environment(account, known_agent) if switch else account_env
@@ -1050,6 +1060,29 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
 # restart in place. Pi is not among them.
 IN_PLACE_AGENTS = frozenset(("claude", "codex", "opencode", "gemini", "copilot", "vibe"))
 
+# stop_agent_if answers within about 4 s (SIGKILL 3 s after SIGHUP, then 1 s, and its process scans): the server
+# waits well beyond that, so that a late reply is never taken for a host that does not answer.
+STOP_AGENT_TIMEOUT = 15
+
+# The refusals of stop_agent_if (mesh_pty_agent_stop.mli) after which the whole session is replaced, as before the
+# operation existed: the host cannot see or stop the agent apart from its session (no readable process table, no
+# terminal, the agent is the session's leader, or it shares the shell's process group). Nothing was signalled. After
+# any other refusal (another program holds the terminal, the agent runs in the background, a launch under way, a
+# changed incarnation) the request fails: a program that is not the agent is never stopped.
+WHOLE_SESSION_REASONS = frozenset(("process_scan_failed", "no_terminal", "no_shell", "no_job_control"))
+
+# What the operator can do about the other refusals.
+STOP_REFUSALS = {
+    "unsupported_foreground": "Another program holds the terminal of session {name}: nothing was stopped. Quit it, or "
+                              "bring the agent back to the foreground, then ask again",
+    "agent_not_foreground": "The agent of session {name} does not hold its terminal (it runs in the background, or "
+                            "beside another agent): nothing was stopped. Bring it to the foreground, then ask again",
+}
+
+
+class WholeSessionOnly(Exception):
+    """stop_agent_if refused without signalling anything, for a reason of WHOLE_SESSION_REASONS."""
+
 
 def _relaunches_in_place(source):
     """Whether the PTY host serving ``source`` (a listing item) can restart its agent in the same terminal."""
@@ -1069,13 +1102,8 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     account_env = await account_environment(target, known_agent)
     source_env = await account_environment(account, known_agent) if switch else account_env
     command, notice, vibe = await _prepared_launch(known_agent, command, cwd)
-    stopped = await host({"op": "stop_agent_if", "name": source["name"], "created": source["created"],
-                          "agent": known_agent})
-    if not (isinstance(stopped, dict) and stopped.get("ok") is True and _finite_number(stopped.get("created"))):
-        reason = stopped.get("reason") if isinstance(stopped, dict) else None
-        reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,40}", reason) else "refused"
-        raise web.HTTPConflict(text=f"The agent was not stopped ({reason}): nothing was started")
-    launch = (source, stopped["created"], cwd, command, agent, known_agent, notice, vibe)
+    created = await _stop_agent(source, known_agent)
+    launch = (source, created, cwd, command, agent, known_agent, notice, vibe)
     if switch:
         try:
             await switch[1]()
@@ -1087,11 +1115,51 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     return source["name"]
 
 
+def _not_started_again(name):
+    return web.HTTPServiceUnavailable(
+        text=f"Conversation stopped; its agent could not be started again in session {name}")
+
+
+async def _stop_agent(source, known_agent):
+    """stop_agent_if on the incarnation ``source``: the new ``created`` once the agent is gone. WholeSessionOnly or
+    HTTPConflict when the host stopped nothing. A reply that comes too late is checked in the listing: when the
+    incarnation moved on, the agent was stopped and the session is still there, and the error says so."""
+    try:
+        stopped = await host({"op": "stop_agent_if", "name": source["name"], "created": source["created"],
+                              "agent": known_agent}, timeout=STOP_AGENT_TIMEOUT)
+    except web.HTTPServiceUnavailable:
+        if await _incarnation_moved_on(source):
+            raise _not_started_again(source["name"]) from None
+        raise
+    if isinstance(stopped, dict) and stopped.get("ok") is True and _finite_number(stopped.get("created")):
+        return stopped["created"]
+    reason = stopped.get("reason") if isinstance(stopped, dict) else None
+    reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,40}", reason) else "refused"
+    if reason in WHOLE_SESSION_REASONS:
+        raise WholeSessionOnly(reason)
+    if reason in STOP_REFUSALS:
+        raise web.HTTPConflict(text=STOP_REFUSALS[reason].format(name=source["name"]))
+    raise web.HTTPConflict(text=f"The agent was not stopped ({reason}): nothing was started")
+
+
+async def _incarnation_moved_on(source):
+    """Whether session ``source`` (same name, same shell) is now listed as another incarnation."""
+    try:
+        listed = await host({"op": "list"})
+    except web.HTTPException:
+        return False
+    return any(isinstance(item, dict) and item.get("name") == source["name"] and item.get("pid") == source.get("pid")
+               and item.get("created") != source["created"] for item in listed or ())
+
+
 async def _start_in_place(source, created, cwd, command, agent, known_agent, notice, vibe, account, account_env):
     """Start the agent in the incarnation stop_agent_if left (``created``), under ``account``, with the session's
-    meta for that launch (as new_session writes it; the nonce, hence the session token, is kept)."""
+    meta for that launch (as new_session writes it; the nonce, hence the session token, is kept). A Claude's wake
+    socket path follows from the nonce: the socket the stopped Claude left there is removed first, so that the new
+    one can listen on it."""
     nonce = (source.get("meta") or {}).get("nonce")
     if known_agent == "claude":
+        await asyncio.to_thread(claudewake.clear_socket, CLAUDE_WAKE_DIR, nonce)
         command = await asyncio.to_thread(claudewake.launch_command, command, nonce, CLAUDE_WAKE_DIR,
                                           cwd, ptyhost.clean_env(account_env))
     meta = {"agent": agent, "known_agent": known_agent, **({"nonce": nonce} if nonce else {}),
@@ -1100,8 +1168,7 @@ async def _start_in_place(source, created, cwd, command, agent, known_agent, not
     started = await host({"op": "start_if", "name": source["name"], "created": created,
                           "command": with_account(command, account_env), "meta": meta})
     if started != {"ok": True}:
-        raise web.HTTPServiceUnavailable(
-            text=f"Conversation stopped; its agent could not be started again in session {source['name']}")
+        raise _not_started_again(source["name"])
 
 
 # ---------------------------------------------------------------- listing
