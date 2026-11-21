@@ -6094,7 +6094,7 @@ async def close_sockets(app):
 
 # ---------------------------------------------------------------- app
 
-CLIENT_FILES = ("index.html", "i18n.js", "folder-state.js", "history-state.js", "session-activity.js", "demo-catalog.js", "pane-actions.js", "workspace-spec.js", "terminal-links.js", "shortcuts.js", "update-notice.js", "sessions-progress.js", "projects.js", "project-catalog.js", "work-view.js", "app.js", "local-entry.js", "style.css", "themes.js", "themes.css", "sw.js", "board.html")
+CLIENT_FILES = ("index.html", "i18n.js", "folder-state.js", "history-state.js", "session-activity.js", "demo-catalog.js", "pane-actions.js", "workspace-spec.js", "terminal-links.js", "shortcuts.js", "update-notice.js", "sessions-progress.js", "projects.js", "project-catalog.js", "work-view.js", "app.js", "local-entry.js", "style.css", "backend-account-panel.css", "themes.js", "themes.css", "sw.js", "board.html")
 _client_version_cache = ((), "")   # (stat signature, version)
 
 
@@ -6122,7 +6122,7 @@ def client_version():
 async def index(request):
     # Stamp our own assets with their mtime so a browser never keeps stale code.
     html = (STATIC / "index.html").read_text().replace("__CLIENT_VERSION__", client_version())
-    for name in ("folder-state.js", "history-state.js", "session-activity.js", "demo-catalog.js", "pane-actions.js", "workspace-spec.js", "terminal-links.js", "shortcuts.js", "app.js", "local-entry.js", "style.css", "themes.js", "themes.css"):
+    for name in ("folder-state.js", "history-state.js", "session-activity.js", "demo-catalog.js", "pane-actions.js", "workspace-spec.js", "terminal-links.js", "shortcuts.js", "app.js", "local-entry.js", "style.css", "backend-account-panel.css", "themes.js", "themes.css"):
         v = int((STATIC / name).stat().st_mtime)
         html = html.replace(f"/static/{name}", f"/static/{name}?v={v}")
     return web.Response(text=html, content_type="text/html",

@@ -394,6 +394,16 @@ describe('the public CI as committed', () => {
         assert.ok(frontend.includes(needle), `${needle} missing from the frontend job`);
       }
     });
+    test(`${name} requires the real account helper for the running-app browser tests`, () => {
+      const browser = jobBlocks(parseLines(text)).find(item => item.name === 'browser');
+      assert.ok(browser);
+      const body = browser.block.map(line => line.raw).join('\n');
+      for (const needle of ['"$RUNNER_TEMP/native-work/mesh-profile"',
+        'MESH_PROFILE_CMD=$RUNNER_TEMP/native-work/mesh-profile', 'MESH_REQUIRE_MESH_PROFILE=1',
+        'MESH_BACKEND_ACCOUNT_HELPER=$RUNNER_TEMP/native-work/mesh-profile', 'MESH_REQUIRE_BACKEND_ACCOUNT_APP=1']) {
+        assert.ok(body.includes(needle), `${needle} missing from browser helper staging`);
+      }
+    });
   }
 });
 
