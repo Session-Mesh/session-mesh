@@ -307,6 +307,47 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
     await page.close();
   });
 
+  // The layout switch of #157 at a desktop and a phone width: a file fully loaded in split keeps
+  // every line in unified, past two chunks of difference too (5000 deleted, then 5000 added).
+  for (const width of [1440, 390]) {
+    test(`keeps 5000 replaced lines fully loaded in split fully shown in unified (${width} px)`, async () => {
+      const page = await open(replaced('pairs', 5000));
+      await page.setViewportSize({width, height: 900});
+      await page.waitForSelector('details.file');
+      await page.getByRole('button', {name: 'split'}).click();
+      while (await page.locator('button.more').count()) await page.locator('button.more').click();
+      assert.equal((await visibleLines(page)).length, 10_000);
+      await page.getByRole('button', {name: 'unified'}).click();
+      assert.equal(await page.locator('button.more').count(), 0);
+      assert.equal((await visibleLines(page)).length, 10_000);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal page scroll');
+      await page.close();
+    });
+  }
+
+  test('shows the mode change of a file, with or without a content change', async () => {
+    const page = await open('diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n'
+      + 'diff --git a/new.sh b/new.sh\nnew file mode 100755\n--- /dev/null\n+++ b/new.sh\n@@ -0,0 +1 @@\n+x\n'
+      + 'diff --git a/same b/same\nindex 1..2 100644\n--- a/same\n+++ b/same\n@@ -1 +1 @@\n-a\n+b\n');
+    await page.setViewportSize({width: 390, height: 800});
+    await page.waitForSelector('details.file');
+    assert.deepEqual(await page.locator('details.file').evaluateAll(nodes => nodes.map(node => node.querySelector('.badge.mode')?.textContent ?? null)),
+      ['mode 100644 → 100755', 'mode 100755', null]);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal page scroll');
+    await page.close();
+  });
+
+  test('a watched reload loads in one call every file a deep position needs', async () => {
+    const git = (name: string, count: number): string => `diff --git a/${name} b/${name}\n${added(name, count)}`;
+    const modes = Array.from({length: 1998}, (_, k) => `diff --git a/m${k} b/m${k}\nold mode 100644\nnew mode 100755\n`).join('');
+    const page = await open(git('f0', 4000) + git('f1', 4000) + modes);
+    await page.waitForSelector('details.file');
+    await page.evaluate('page.growTo(1e9)');
+    assert.equal(await page.locator('details.file[open]').count(), 2000);
+    assert.equal(await page.locator('button.more').count(), 0);
+    await page.close();
+  });
+
   test('keeps the keyboard focus on "show more", then on the first row of the last chunk', async () => {
     const page = await open(added('one', 4500));
     await page.waitForSelector('details.file');
