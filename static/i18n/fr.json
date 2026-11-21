@@ -764,6 +764,8 @@
   "server.agentNotStopped": "l’agent n’a pas été arrêté ({reason}) : rien n’a été lancé",
   "server.agentForegroundTaken": "un autre programme occupe le terminal de la session {name} : rien n’a été arrêté. Quittez-le, ou ramenez l’agent au premier plan, puis redemandez",
   "server.agentInBackground": "l’agent de la session {name} n’occupe pas son terminal (il tourne en arrière-plan, ou à côté d’un autre agent) : rien n’a été arrêté. Ramenez-le au premier plan, puis redemandez",
+  "server.agentStateUnseen": "ptyhost ne voit pas ce qui occupe le terminal de la session {name} : rien n’a été arrêté. Quittez l’agent dans ce terminal, ou fermez la session, puis reprenez la conversation",
+  "server.agentWithoutJobControl": "le shell de la session {name} lance l’agent sans contrôle des tâches : il ne peut pas être arrêté seul, et rien n’a été arrêté. Quittez l’agent dans ce terminal, ou fermez la session, puis reprenez la conversation",
   "server.agentNotStartedAgain": "conversation arrêtée ; son agent n’a pas pu être relancé dans la session {name}",
   "server.createdRequired": "created requis",
   "server.decisionInvalid": "décision invalide",

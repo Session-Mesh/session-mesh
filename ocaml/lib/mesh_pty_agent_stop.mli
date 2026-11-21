@@ -29,18 +29,19 @@ type foreground =
             the session;
           - [no_job_control]: the shell holds the terminal and every process
             that runs the agent is in the shell's own group (a shell without
-            job control) with no other program than the agent and its own
-            descendants: only the whole session could be signalled (another
-            program in that group gives [unsupported_foreground]);
+            job control): only that group, the shell and whatever else runs
+            there included, could be signalled;
           - [unsupported_foreground]: another program holds the terminal;
           - [agent_not_foreground]: a process of the session runs the agent
             outside the foreground job (in the background, or beside the
             foreground one).
 
           The server falls back to a new session (its stop of the whole
-          session, as before [stop_agent_if]) after [process_scan_failed],
-          [no_terminal], [no_shell] and [no_job_control], and refuses the
-          request after the other reasons. *)
+          session, as before [stop_agent_if]) after [no_shell] only, where the
+          agent is the leader that stop kills, and refuses the request after
+          the other reasons: a stop of the whole session signals the shell's
+          group, and an agent that ignores SIGHUP elsewhere in the session
+          would outlive its shell. *)
 
 val classify :
   runs_agent:(Mesh_platform.process -> bool) ->
