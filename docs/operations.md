@@ -1723,19 +1723,28 @@ still resumes in a new session.
 While the agent is stopped and its conversation copied, open tabs show the shell's prompt. A line
 someone starts typing there is erased before the agent's command is typed (Ctrl-E then Ctrl-U:
 readline, zsh and fish in their default emacs mode, and the terminal's own line-kill key in a
-shell without a line editor), so it is never joined to that command. A Claude restarted this way
+shell without a line editor), so it is never joined to that command. This assumes an emacs-mode
+line editor, or a vi-mode one still in insert mode. A vi-mode shell (`set -o vi`, `bindkey -v`,
+`fish_vi_key_bindings`) left in command mode (Escape pressed at that prompt) reads those keys and
+the command as vi commands: the line is not erased, and a mangled line may run instead of the
+agent's command (for example `o: command not found`). Do not leave such a shell in command mode
+during a restart. The keys typed are always the same two and the command; a line left open (an
+unclosed quote) also takes the command as its continuation. A Claude restarted this way
 keeps its wake socket's path (it follows from the session): the server removes the socket file the
 stopped Claude left there before starting the next one.
 
 When the PTY host cannot stop the agent alone, it signals nothing and says why; the server then
-either falls back or refuses:
+either falls back or refuses. It falls back only when the agent is the session's own program: a
+stop of the whole session signals the shell's process group and sends SIGKILL only while the shell
+lives, so in any other case an agent that ignores SIGHUP could outlive its shell and run the
+conversation beside the new one:
 
 | Reason | Meaning | What happens |
 | --- | --- | --- |
 | `no_shell` | The agent is the session's own program, with no shell around it. | The whole session is replaced by a new one, as before this release. |
-| `no_job_control` | The shell runs the agent in its own process group (job control off), and that group holds nothing else than the agent and the programs it started. | Same. Another program in that group gives `unsupported_foreground` instead. |
-| `no_terminal`, `process_scan_failed` | The host cannot see what holds the terminal. | Same. |
-| `unsupported_foreground` | Another program holds the terminal (an editor, `make`, `ssh`...). | Nothing is stopped; the request fails: quit that program, or bring the agent back to the foreground, then ask again. |
+| `no_job_control` | The shell runs the agent in the shell's own process group (job control off), with whatever else runs there. | Nothing is stopped; the request fails: quit the agent in that terminal, or close the session, then resume the conversation. |
+| `no_terminal`, `process_scan_failed` | The host cannot see what holds the terminal. | Nothing is stopped; the request fails: quit the agent in that terminal, or close the session, then resume the conversation. |
+| `unsupported_foreground` | Another program holds the terminal (an editor, `make`, `ssh`...), with job control on. | Nothing is stopped; the request fails: quit that program, or bring the agent back to the foreground, then ask again. |
 | `agent_not_foreground` | The agent runs in the background, or beside a second agent. | Nothing is stopped; the request fails: bring it to the foreground (`fg`), then ask again. |
 | `agent_starting`, `agent_still_running`, `stale_incarnation` | A launch is under way, the agent outlived SIGKILL, or the session changed since the request. | Nothing is started; the request fails with that reason. |
 

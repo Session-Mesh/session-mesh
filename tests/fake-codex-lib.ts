@@ -10,9 +10,11 @@ import path from 'node:path';
 // codex|CODEX_HOME|session|arguments|session token|overlap. The rollout is held open (fd 3) by a process named codex,
 // except in a session named x-guess*: that one writes its folder in the rollout and closes it, so the listing can
 // only guess its conversation from the folder (cwd_unique). overlap is "yes" when the previous codex of the same
-// session was still running at this start (its pid, kept through exec, is in a file).
+// session was still running at this start (its pid, kept through exec, is in a file). Started in a folder holding a
+// file .stubborn, it ignores SIGHUP (only SIGKILL ends it), as an agent that does not exit on a hang-up would.
 export const fakeCodex = (logFile: string, real: string) => [
   '#!/bin/sh',
+  'if [ -e ./.stubborn ]; then trap "" HUP; fi',
   `pids='${logFile}.'"$MESH_SESSION"; overlap=no`,
   'if [ -f "$pids" ] && kill -0 "$(cat "$pids")" 2>/dev/null; then overlap=yes; fi; echo $$ > "$pids"',
   `printf '%s|%s|%s|%s|%s|%s\\n' codex "\${CODEX_HOME-unset}" "$MESH_SESSION" "$*" "$MESH_SESSION_TOKEN" "$overlap" >> '${logFile}'`,

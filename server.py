@@ -1000,8 +1000,12 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
     the same session and terminal instead (relaunch_in_place), under the same rules.
 
     A failed spawn leaves the source intact.  The replacement receives no
-    agent command until ``kill_if`` has claimed the exact old incarnation, so
-    two clients never run the same provider conversation concurrently.
+    agent command until ``kill_if`` has claimed the exact old incarnation and that incarnation left the listing.
+    ``kill_if`` signals the shell's process group, and SIGKILL follows only while the shell lives: an agent that
+    ignores SIGHUP in another group of the session (job control on) or in the shell's group (job control off) can
+    outlive it and run the conversation beside the replacement.  With an older PTY host this remains possible; with
+    one that serves ``agent_relaunch_v1`` the whole session is replaced only after the ``no_shell`` refusal, where the
+    agent is the session's leader, which SIGKILL ends before the replacement starts.
     ``account``: the source's alias, kept by the replacement (refused before
     anything is stopped when it can no longer be used, never the default).
     ``switch``: (target alias or None for the default account, carry) of an account switch: the replacement runs
@@ -1065,14 +1069,23 @@ IN_PLACE_AGENTS = frozenset(("claude", "codex", "opencode", "gemini", "copilot",
 STOP_AGENT_TIMEOUT = 15
 
 # The refusals of stop_agent_if (mesh_pty_agent_stop.mli) after which the whole session is replaced, as before the
-# operation existed: the host cannot see or stop the agent apart from its session (no readable process table, no
-# terminal, the agent is the session's leader, or it shares the shell's process group). Nothing was signalled. After
-# any other refusal (another program holds the terminal, the agent runs in the background, a launch under way, a
-# changed incarnation) the request fails: a program that is not the agent is never stopped.
-WHOLE_SESSION_REASONS = frozenset(("process_scan_failed", "no_terminal", "no_shell", "no_job_control"))
+# operation existed: the agent is the session's leader, which kill_if ends (SIGKILL while it lives) before the
+# replacement starts. Nothing was signalled. After any other refusal the request fails and nothing is stopped: a
+# program that is not the agent is never stopped, and when the host cannot see what runs (process_scan_failed,
+# no_terminal) or the agent shares the shell's group (no_job_control), kill_if could leave an agent that ignores
+# SIGHUP running beside the replacement (it outlives its shell, and SIGKILL follows only while the shell lives).
+WHOLE_SESSION_REASONS = frozenset(("no_shell",))
+
+_NOT_SEEN = ("ptyhost cannot tell what holds the terminal of session {name}: nothing was stopped. Quit the agent "
+             "there, or close the session, then resume the conversation")
 
 # What the operator can do about the other refusals.
 STOP_REFUSALS = {
+    "process_scan_failed": _NOT_SEEN,
+    "no_terminal": _NOT_SEEN,
+    "no_job_control": "The shell of session {name} runs the agent without job control: it cannot be stopped alone, "
+                      "and nothing was stopped. Quit the agent there, or close the session, then resume the "
+                      "conversation",
     "unsupported_foreground": "Another program holds the terminal of session {name}: nothing was stopped. Quit it, or "
                               "bring the agent back to the foreground, then ask again",
     "agent_not_foreground": "The agent of session {name} does not hold its terminal (it runs in the background, or "

@@ -221,8 +221,9 @@ peers, send, list your inbox, read, reply and acknowledge. Message text never re
 The session request tools ask the owner to start a new agent session, in the folder where your
 session started, or to restart your own conversation. Nothing happens until the owner approves the
 request in the page, and an undecided request expires. A restart stops your agent and starts it
-again in the same session and terminal (in a new session when the agent cannot be stopped apart
-from its shell); the session is then a new incarnation.
+again in the same session and terminal (in a new session when the agent is the session's own
+program; when it cannot be stopped alone otherwise, nothing is stopped and the request fails with
+what the owner can do); the session is then a new incarnation.
 
 `session_accounts` tells you which account alias your session runs under (`default` for the default
 account) and which aliases the owner declared on the runner, with the agents each one serves. It
