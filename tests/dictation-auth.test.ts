@@ -152,7 +152,7 @@ test('logout preserves device-only semantics and closes bound sockets before ret
     await until(async()=>(await f.call(route,'GET',headers)).body.state==='ready');
     const frames:{kind:number;data:Buffer}[]=[];
     socket=await new Promise<net.Socket>((resolve,reject)=>{
-      const req=http.request({host:'127.0.0.1',port:f.port,path:'/ws/alpha?created=1',headers:{Cookie:cookie,
+      const req=http.request({host:'127.0.0.1',port:f.port,path:'/ws/alpha?created=1&pty_size=1',headers:{Cookie:cookie,
         Connection:'Upgrade',Upgrade:'websocket','Sec-WebSocket-Version':'13','Sec-WebSocket-Key':Buffer.alloc(16,7).toString('base64')}});
       req.on('response',response=>{response.resume();reject(Error(`upgrade refused: ${response.statusCode}`));});
       req.on('error',reject);req.setTimeout(5000,()=>req.destroy(Error('upgrade timeout')));
