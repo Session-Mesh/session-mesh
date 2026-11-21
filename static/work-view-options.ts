@@ -28,6 +28,10 @@ export type WorkViewOptions = Readonly<{
   history?: HistoryPort;
   /** The questions channel shared with the session marker (static/work-questions-sync.ts); the page's by default. */
   sync?: QuestionsSync;
+  /** The element of the sidebar that holds the tree of products and projects (static/work-tree-view.ts); none: no tree. */
+  rail?: HTMLElement;
+  /** The owner chose an item of the tree; returns true when the rail is then hidden (a phone's drawer closed). */
+  onRailChoice?: () => boolean;
 }>;
 
 /** `open` shows the view as the owner left it, in this page or before a reload of this tab (the entry screen the first

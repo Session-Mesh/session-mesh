@@ -143,10 +143,10 @@ async function noOverflow(page: Page): Promise<void> {
   assert.deepEqual(result.wide, [], 'nothing extends past the viewport');
 }
 
-// The entry list, or an error that says what the page showed instead (a loaded machine makes timeouts ambiguous).
+// The entry overview, or an error that says what the page showed instead (a loaded machine makes timeouts ambiguous).
 async function waitForEntry(page: Page): Promise<void> {
   try {
-    await page.locator('.work-entry-toggle').first().waitFor();
+    await page.locator('.work-overview-product').first().waitFor();
   } catch (error) {
     const shown = await page.evaluate(() => JSON.stringify({
       root: document.querySelector('#work-root')?.textContent, status: document.querySelector('#projects-module-status')?.textContent,
@@ -158,33 +158,36 @@ async function waitForEntry(page: Page): Promise<void> {
 
 async function openRelayProject(page: Page): Promise<void> {
   await waitForEntry(page);
-  await page.locator('.work-entry-toggle', { hasText: 'relay' }).first().waitFor();
-  await page.locator('.work-entry-project', { hasText: 'Delivery rollout' }).waitFor();
+  await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
   await page.locator('.work-entry-project', { hasText: 'Delivery rollout' }).click();
   await page.locator('.work-tab[aria-selected="true"]').waitFor();
 }
 
 for (const width of WIDTHS) {
   describe(`Projects view at ${width}px`, { skip }, () => {
-    test('the entry list shows products with projects, progress, blockers and a "no project" line', { timeout: 900_000 }, async () => {
+    test('the entry overview shows the products with progress and blockers, a product view its projects and "no project" line', { timeout: 900_000 }, async () => {
       const { page, problems, requests } = await signedIn(tracked, 'en-US', width);
       await enterProjects(page, width);
       await waitForEntry(page);
       assert.deepEqual(requests.filter(request => request === '/api/work/v1').length >= 2, true, 'products and projects are read');
       assert.equal(await shown(page, '#work-root'), true);
       assert.equal(await shown(page, '#projects-root'), false, 'the old workspace is not shown by default');
-      const relay = page.locator('.work-entry-toggle', { hasText: 'relay' }).first();
-      assert.equal(await relay.getAttribute('aria-expanded'), 'true', 'a product with an active project starts expanded');
-      assert.ok(await page.locator('.work-entry-project', { hasText: 'Delivery rollout' }).isVisible());
-      const gateway = page.locator('.work-entry-toggle', { hasText: 'gateway' }).first();
-      assert.equal(await gateway.getAttribute('aria-expanded'), 'false');
-      await gateway.click();
-      assert.equal(await gateway.getAttribute('aria-expanded'), 'true');
-      assert.ok(await page.locator('.work-entry-noproject', { hasText: 'No project' }).first().isVisible());
+      assert.deepEqual(await page.locator('.work-overview-product').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.product)),
+        ['gateway', 'relay', 'supplies'], 'the top products of each zone, in taxonomy order');
+      assert.equal(await page.locator('.work-entry-project').count(), 0, 'the projects are in the product views and the rail');
       assert.ok(await page.locator('.work-bar[role=progressbar]').count() > 0);
       assert.ok(await page.locator('.work-blockers.has').count() > 0, 'a blocker count is shown');
       await noOverflow(page);
       await shot(page, `entry-${width}`);
+      await page.locator('.work-overview-product[data-product="relay"]').click();
+      assert.ok(await page.locator('.work-entry-project', { hasText: 'Delivery rollout' }).isVisible());
+      assert.deepEqual(await page.locator('.work-product-view .work-overview-product').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.product)),
+        ['relay-core', 'relay-edge'], 'the child products, each a way to its view');
+      await page.locator('.work-product-view .work-back').click();
+      await page.locator('.work-overview-product[data-product="gateway"]').click();
+      assert.ok(await page.locator('.work-entry-noproject', { hasText: 'No project' }).first().isVisible());
+      assert.equal(await page.locator('.work-entry-empty').count(), 0);
+      await noOverflow(page);
       assert.deepEqual(problems, []);
     });
 
@@ -374,13 +377,13 @@ for (const width of WIDTHS) {
       assert.equal((await stored()).length, 1, 'the owner own choice is stored');
     });
 
-    test('a project opened from the list returns focus to its row after "Back to products"', { timeout: 900_000 }, async () => {
+    test('a project opened from a product returns focus to that product row after "Back to products"', { timeout: 900_000 }, async () => {
       const { page } = await signedIn(tracked, 'en-US', width);
       await enterProjects(page, width);
       await openRelayProject(page);
       await page.locator('.work-back').click();
       await waitForEntry(page);
-      assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-project') === true), true, 'focus is on the project row');
+      assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.product), 'relay', 'focus is on the row of the product of the project');
       assert.notEqual(await page.evaluate(() => document.activeElement?.tagName), 'BODY');
     });
 

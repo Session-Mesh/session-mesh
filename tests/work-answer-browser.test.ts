@@ -116,6 +116,7 @@ async function taskSheet(mesh: Mesh, width: number, locale = 'en-US', prepare?: 
     await page.locator('#btn-mobile-actions').click();
     await page.locator('[data-mobile-action="btn-projects"]').click();
   } else await page.locator('#btn-projects').click();
+  await page.locator('.work-overview-product[data-product="relay"]').click();   // the product's view lists its projects
   await page.locator('.work-entry-project', { hasText: 'Delivery rollout' }).click();
   await page.locator('.work-tab').nth(1).click();
   await page.locator(`#work-panel-board .work-card[data-task="${TASK}"]`).click();

@@ -80,7 +80,7 @@ export async function openProjects(page: Page, width: number): Promise<void> {
     await page.locator('#btn-mobile-actions').click();
     await page.locator('[data-mobile-action="btn-projects"]').click();
   } else await page.locator('#btn-projects').click();
-  await page.locator('.work-entry-toggle, .work-content > .work-error').first().waitFor();
+  await page.locator('.work-overview-product, .work-content > .work-error').first().waitFor();
   await page.locator('.work-qsection-toggle, .work-questions-none, .work-entry-questions .work-error, .work-content > .work-error')
     .first().waitFor();
 }

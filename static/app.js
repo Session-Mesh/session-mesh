@@ -5657,6 +5657,7 @@ function applyProjectsPresentation() {
   $("#work-root").hidden = legacy;
   $("#projects-root").hidden = !legacy;
   $("#project-navigation").hidden = !projecting || !legacy;
+  $("#work-rail").hidden = !projecting || legacy;   // the work view's tree of products and projects
   const key = legacy ? "work.newView" : "work.oldView";
   $("#projects-view-switch").setAttribute("data-i18n", key);
   $("#projects-view-switch").textContent = t(key);
@@ -5706,6 +5707,13 @@ async function importWorkModuleOnce() {
     return workModule;
   } finally { clearTimeout(timer); }
 }
+// A choice in the work view's tree of the sidebar: on a phone the drawer closes over it; true when it did.
+function closeDrawerAfterChoice() {
+  if (!narrow() || !document.body.classList.contains("drawer")) return false;
+  document.body.classList.remove("drawer");
+  syncMobileChrome();
+  return true;
+}
 async function loadWorkView() {
   const issue = ++workGeneration;
   const status = $("#projects-module-status");
@@ -5714,7 +5722,8 @@ async function loadWorkView() {
   try {
     const module = await importWorkModule();
     if (!projecting || issue !== workGeneration || legacyProjects() || !localMeshEffectsAllowed()) return;
-    workController ||= module.mountWorkView({ root: $("#work-root"), request: requestLocal, translate: t,
+    workController ||= module.mountWorkView({ root: $("#work-root"), rail: $("#work-rail"), onRailChoice: closeDrawerAfterChoice,
+      request: requestLocal, translate: t,
       onLegacy: () => setLegacyProjects(true), onNotAvailable: fallBackToLegacyProjects,
       onOpenQuestions: (count) => showOpenQuestions(count, module.counterText(count)) });
     const target = pendingWorkTarget ?? undefined;
