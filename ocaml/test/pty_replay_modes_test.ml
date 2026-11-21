@@ -126,6 +126,33 @@ let cancelled_at_the_cut () =
     "the cancelled sequence does not apply; the colour is kept"
     "\027[?1049h\027[31mred\n" (L.replay replay)
 
+(* A title, a DCS payload or an APC cut after a line feed: the rest of the
+   string is not shown as text. *)
+let string_cut_at_the_line_feed () =
+  let cut_inside opening rest =
+    let replay = L.create () in
+    L.feed replay (set 2004);
+    L.feed replay (String.make (2 * 1024 * 1024) 'x');
+    L.feed replay (opening ^ "\n" ^ rest);
+    L.replay replay
+  in
+  Alcotest.(check string)
+    "an OSC title"
+    (set 2004 ^ "after\n")
+    (cut_inside "\027]0;head" "TAIL\007after\n");
+  Alcotest.(check string)
+    "a DCS payload: ST is sent"
+    (set 2004 ^ "\027\\after\n")
+    (cut_inside "\027Pq#0" "#1\027\\after\n");
+  Alcotest.(check string)
+    "an APC past a BEL"
+    (set 2004 ^ "after\n")
+    (cut_inside "\027_x" "y\007z\194\156after\n");
+  Alcotest.(check string)
+    "a mode switch ends the title and is sent"
+    (set 2004 ^ set 1049 ^ "\n")
+    (cut_inside "\027]0;head" "TAIL\027[?1049h\n")
+
 (* An unfinished sequence longer than the scan leaves the window whole. *)
 let unfinished_sequence_at_the_cut () =
   let replay = L.create () in
@@ -176,6 +203,8 @@ let () =
             unfinished_sequence_at_the_cut;
           Alcotest.test_case "a sequence cancelled at the cut" `Quick
             cancelled_at_the_cut;
+          Alcotest.test_case "a string cut after a line feed" `Quick
+            string_cut_at_the_line_feed;
           Alcotest.test_case "clients attaching at different times" `Quick
             late_clients_see_their_own_start;
         ] );
