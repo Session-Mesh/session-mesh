@@ -709,7 +709,11 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .work-tree-project .work-tree-name { color: var(--fg); }
 .work-tree-counts { display: inline-flex; gap: 6px; flex: none; font-size: 11px; color: var(--mute); }
 .work-tree-questions { color: var(--wait); font-weight: 700; }
-@media (max-width: 760px) { .work-tree-row { min-height: 44px; } }
+/* on a phone the fold arrow is a touch target of its own, 44 px square like the rows, so unfolding does not choose */
+@media (max-width: 760px) {
+  .work-tree-row { min-height: 44px; }
+  .work-tree-chev { display: inline-flex; align-items: center; justify-content: center; align-self: stretch; width: 44px; min-height: 44px; margin: -4px 0 -4px -8px; }
+}
 .project-nav-item[aria-current="true"] { background: #211e2d; border-color: #42374f; box-shadow: inset 2px 0 #b7a2ee; }
 #project-overview { padding: 20px 0; }
 .project-overview-heading { display: flex; justify-content: space-between; gap: 16px; align-items: start; }

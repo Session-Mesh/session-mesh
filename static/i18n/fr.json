@@ -2005,6 +2005,7 @@
   "work.tree.label": "Produits et projets",
   "work.tree.other": "Projets d’aucun produit listé",
   "work.tree.overview": "Vue d’ensemble",
+  "work.tree.questionCount": "? {n}",
   "work.tabsLabel": "Vues du projet",
   "work.trackValue": "piste {track}",
   "work.useOldView": "Utiliser l’ancien affichage",

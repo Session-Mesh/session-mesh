@@ -293,11 +293,14 @@ project tracker that agents write through `mesh-work`, read only:
   lists its sessions; on a phone, the drawer the "Projects" button of the top bar opens) holds a
   tree: "Overview", then the zones in the order of the taxonomy, their products (a child product
   under its parent) and each product's projects, with the open tasks of each and, once the open
-  questions were read, their count as the pending questions classify them ("? n"). Projects whose
+  questions were read, their count as the pending questions classify them ("? n"), as many as the
+  first screen lists ("Show more" included). Both counts of a product cover its child products.
+  Projects whose
   product the tracker does not list stand in a last group. Choosing "Overview" shows the first
   screen, a product shows its view (its projects with their progress, done tasks over all tasks,
   and number of blockers, its tasks in no project, its child products), a project opens it;
-  choosing a zone, or the arrow beside a product, folds or unfolds it. The item of the place shown
+  choosing a zone, or the arrow beside a product, folds or unfolds it (on a phone the arrow is a
+  touch target of its own, as large as a row). The item of the place shown
   is selected and its group unfolded, whether it was reached from the tree or from the main area.
   The tree is an ARIA tree: `Tab` reaches its current item, the up and down arrows, `Home` and
   `End` move, the right arrow unfolds (or goes to the first item inside), the left arrow folds (or
@@ -323,7 +326,9 @@ project tracker that agents write through `mesh-work`, read only:
   the main area. The sheet's first button ("Back to the Board tab", named after the
   tab) returns to the tab, scrolled where it was on a phone, with the focus on the task that
   opened the sheet; "Back to products" in the product's view and in the project header returns to
-  the first screen. `Esc`
+  the first screen, with the focus on the overview's row of the product that holds the place left
+  (a child product's parent; for a project of no listed product, its group in the tree when the
+  tree is shown). `Esc`, in the main area or in the tree,
   and the browser's Back (a phone's back gesture) go up one level the same way; on the first
   screen `Esc` leaves Projects, and the browser's Back does what it did before. A sheet opened from
   a session's "? n" button or from the first screen's questions returns to its project's Questions
@@ -335,7 +340,8 @@ project tracker that agents write through `mesh-work`, read only:
   back, or reloading the tab, shows the view as it was left, read again: the product, or the
   project, its tab, the open task sheet (with its level of the way back), or the sheet opened from
   the first screen, where they were scrolled, the items of the tree unfolded or folded (on the
-  first visit the zones are unfolded and the products folded), the pending questions unfolded or
+  first visit the zones are unfolded and the products folded; those of products and projects that
+  no longer exist are forgotten), the pending questions unfolded or
   not, and every answer not yet sent,
   under each question typed in, in any sheet or tab. A project or a task that no longer exists, or
   a question answered since, shows the first screen; a session's "? n" button still opens its own

@@ -72,11 +72,13 @@ export function renderProductView(handlers: EntryHandlers & Readonly<{ back: () 
 }
 
 /** Where focus goes when a product, a project or a sheet is left for the entry screen drawn in `scope`: the question
- *  row that opened it (when its list is unfolded), the row of that product, else the first product. */
-export function entryFocusTarget(scope: HTMLElement, productId: string | null, question: string | null): HTMLElement | null {
+ *  row that opened it (when its list is unfolded), the row of the overview's product that holds the place left
+ *  (`productId`, static/work-tree.ts topProduct), else `orphan` (the group of a project of no listed product, when
+ *  shown), else the first product. */
+export function entryFocusTarget(scope: HTMLElement, productId: string | null, question: string | null,
+  orphan: HTMLElement | null = null): HTMLElement | null {
   const opener = question ? scope.querySelector<HTMLElement>(`.work-qrow[data-question-id="${CSS.escape(question)}"] .work-qrow-open`) : null;
   if (opener && !opener.closest('[hidden]')) return opener;
   const row = productId ? scope.querySelector<HTMLElement>(`.work-overview-product[data-product="${CSS.escape(productId)}"]`) : null;
-  if (row) return row;
-  return scope.querySelector<HTMLElement>('.work-overview-product') ?? scope.querySelector<HTMLElement>('.work-entry-category-name');
+  return row ?? orphan ?? scope.querySelector<HTMLElement>('.work-overview-product') ?? scope.querySelector<HTMLElement>('.work-entry-category-name');
 }

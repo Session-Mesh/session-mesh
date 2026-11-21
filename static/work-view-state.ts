@@ -25,6 +25,12 @@ export const MAX_DRAFTS = 40;
 /** The answer field holds at most 4000 UTF-16 units (work-answer-form.ts); a longer stored text is not ours. */
 export const MAX_DRAFT_CHARS = 4000;
 const MAX_PICKED = 32, MAX_OPEN = 400, MAX_ID = 64;
+/** The longest product, project or zone id the server gives (ocaml/work_read/lib/wr_products.ml). */
+const MAX_ENTITY_ID = 100;
+/** A key of the rail's tree (static/work-tree.ts `treeKey`): its kind, a colon and the id, empty for the zone of the
+ *  projects of no listed product. */
+const RAIL_KEY = /^(?:zone|product|project):(?:[A-Za-z0-9][A-Za-z0-9_.:-]*)?$/;
+const MAX_RAIL_KEY = 'product:'.length + MAX_ENTITY_ID;
 
 export type Draft = Readonly<{
   /** The text of the answer field. */
@@ -79,16 +85,19 @@ export const ENTRY_PLACE: Place = { project: null, product: null, tab: null, tas
 export const EMPTY_STATE: ViewState = { place: ENTRY_PLACE, drafts: new Map() };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-const isId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= MAX_ID
-  && /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(value);
+const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
+const isId = (value: unknown, max = MAX_ID): value is string => typeof value === 'string' && value.length <= max && ID.test(value);
 const idOrNull = (value: unknown): string | null => (isId(value) ? value : null);
+const productOrNull = (value: unknown): string | null => (isId(value, MAX_ENTITY_ID) ? value : null);
+const isRailKey = (value: unknown): value is string => typeof value === 'string' && value.length <= MAX_RAIL_KEY && RAIL_KEY.test(value);
 const offset = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.round(value), 1e7) : 0);
 /** A time in epoch milliseconds (the latest a Date can hold), 0 for anything else. */
 const stamp = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.round(value), 8.64e15) : 0);
 
-function ids(value: unknown, max: number): string[] | null {
+/** The unfolded keys of the rail, each once, in the order they were unfolded: at the bound the newest stay. */
+function railKeys(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
-  return value.filter(isId).slice(0, max);
+  return [...new Set(value.filter(isRailKey))].slice(-MAX_OPEN);
 }
 
 function readSheet(value: unknown): EntrySheetPlace | null {
@@ -100,11 +109,11 @@ function readPlace(value: unknown): Place {
   if (!isRecord(value)) return ENTRY_PLACE;
   const project = idOrNull(value.project), sheet = project ? null : readSheet(value.sheet);
   return {
-    project, product: project || sheet ? null : idOrNull(value.product),
+    project, product: project || sheet ? null : productOrNull(value.product),
     tab: project ? idOrNull(value.tab) : null, task: project ? idOrNull(value.task) : null, sheet,
     scroll: offset(value.scroll), sheetScroll: offset(value.sheetScroll),
     tabScroll: value.tabScroll === null || value.tabScroll === undefined ? null : offset(value.tabScroll),
-    rail: ids(value.rail, MAX_OPEN), questionsOpen: value.questionsOpen === true,
+    rail: railKeys(value.rail), questionsOpen: value.questionsOpen === true,
   };
 }
 
