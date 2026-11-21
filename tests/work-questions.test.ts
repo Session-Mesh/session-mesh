@@ -8,9 +8,10 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { parseOpenQuestions, parseProject } from '../static/work-parse.ts';
 import {
-  aboutKind, ageOf, counterText, formatAge, groupProjectQuestions, orderQuestions, withoutQuestion,
+  aboutKind, ageOf, counterText, formatAge, groupProjectQuestions, orderQuestions, readOpenQuestions, withoutQuestion,
 } from '../static/work-questions.ts';
-import type { Question, TaskRow } from '../static/work-types.ts';
+import type { WorkResult } from '../static/work-api.ts';
+import type { OpenQuestionsDoc, Question, TaskRow } from '../static/work-types.ts';
 
 const question = (id: string, about: string | null, askedAt: string | null, open = true): Question => ({
   id, open, text: `Question ${id}?`, options: [], assumption: null, about, askedBy: null, askedByAgent: null, askedBySession: null,
@@ -127,5 +128,43 @@ describe('parseOpenQuestions', () => {
   test('the total is never below the questions listed; a document without a list is refused', () => {
     assert.equal(parseOpenQuestions({ questions: [{ id: 'N-1', text: 'x' }] })!.openQuestions, 1);
     for (const bad of [null, [], {}, { questions: 'no' }, { open_questions: 3 }]) assert.equal(parseOpenQuestions(bad), null);
+  });
+});
+
+describe('reading more open questions than one read gives', () => {
+  // A fictional server of `total` open questions, oldest first, at most 100 a read, as work-read's `open-questions`.
+  const server = (total: number, fail: number | null = null) => {
+    const all = Array.from({ length: total }, (_, index) => question(`N-${String(index).padStart(4, '0')}`, null, null));
+    const pages: Array<{ after?: string; limit: number }> = [];
+    const read = async (page: { after?: string; limit: number }): Promise<WorkResult<OpenQuestionsDoc>> => {
+      pages.push(page);
+      if (pages.length === fail) return { ok: false, error: { kind: 'busy' } } as WorkResult<OpenQuestionsDoc>;
+      const start = page.after ? all.findIndex(item => item.id === page.after) + 1 : 0;
+      const questions = all.slice(start, start + Math.min(page.limit, 100));
+      return { ok: true, value: { openQuestions: total, questions, omitted: total - start - questions.length, truncated: false } };
+    };
+    return { read, pages };
+  };
+
+  test('the oldest questions up to the number wanted, a page of at most 100 at a time, each once', async () => {
+    const { read, pages } = server(130);
+    const result = await readOpenQuestions(read, 120);
+    assert.ok(result.ok);
+    assert.equal(result.value.questions.length, 120, 'the 120 the list shows, past one read');
+    assert.equal(new Set(result.value.questions.map(item => item.id)).size, 120);
+    assert.equal(result.value.openQuestions, 130);
+    assert.deepEqual(pages, [{ limit: 100 }, { after: 'N-0099', limit: 20 }]);
+  });
+
+  test('fewer open than wanted, a single page, or a failed page', async () => {
+    const few = server(7);
+    const result = await readOpenQuestions(few.read, 120);
+    assert.ok(result.ok);
+    assert.equal(result.value.questions.length, 7);
+    assert.equal(few.pages.length, 1, 'no read past the last question');
+    const one = server(50);
+    assert.equal((await readOpenQuestions(one.read, 20)).ok, true);
+    assert.deepEqual(one.pages, [{ limit: 20 }]);
+    assert.equal((await readOpenQuestions(server(150, 2).read, 120)).ok, false, 'a failed page fails the read');
   });
 });

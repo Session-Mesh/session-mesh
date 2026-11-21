@@ -117,12 +117,16 @@ export class EntryQuestions {
     else if (kept !== null) focusFirst((kept ? opener(next, kept) : null) ?? toggle ?? next.querySelector<HTMLElement>('h2'));
   }
 
-  /** As many questions as the list shows (pages read with "Show more" stay shown), between one page and the bound. The
-   *  view reads as many for the counts of the rail. */
-  shownLimit(): number {
+  /** As many questions as the list shows (pages read with "Show more" stay shown), at least one page. The view reads as
+   *  many, a page at a time, for the counts of the rail. */
+  shownCount(): number {
     const shown = this.state;
-    const count = shown.kind === 'ready' || shown.kind === 'stale' ? shown.doc.questions.length : 0;
-    return Math.min(MAX_PAGE, Math.max(PAGE, count));
+    return Math.max(PAGE, shown.kind === 'ready' || shown.kind === 'stale' ? shown.doc.questions.length : 0);
+  }
+
+  /** As many questions as the list shows, within the bound of one read. */
+  private shownLimit(): number {
+    return Math.min(MAX_PAGE, this.shownCount());
   }
 
   /** "Show more": the next page, after the last question shown, added under the others (a question already shown is

@@ -39,6 +39,7 @@ import type { Place } from './work-view-state.ts';
 import { pageQuestionsSync } from './work-questions-sync.ts';
 import type { QuestionsSync } from './work-questions-sync.ts';
 import { renderEntryQuestions } from './work-questions-triage-view.ts';
+import { readOpenQuestions } from './work-questions.ts';
 import type { EntryQuestionsState } from './work-questions-view.ts';
 import type { WorkTarget } from './work-session-questions.ts';
 import { TaskSheet } from './work-task-sheet.ts';
@@ -288,10 +289,10 @@ class WorkView implements WorkViewController {
   }
 
   /** Read the count again for the badge (Refresh and answers in a project; the entry screen reads it with its list),
-   *  with as many questions as the entry screen shows, for the counts of the rail. */
+   *  with as many questions as the entry screen shows ("Show more" pages included), for the counts of the rail. */
   private async refreshCount(): Promise<void> {
-    const token = this.generation;
-    const result = await this.api.openQuestions(this.controller?.signal, { limit: this.questions.shownLimit() });
+    const token = this.generation, signal = this.controller?.signal;
+    const result = await readOpenQuestions(page => this.api.openQuestions(signal, page), this.questions.shownCount());
     if (token !== this.generation) return;
     this.report(result);
     if (result.ok) this.rail.questions(result.value.questions);
