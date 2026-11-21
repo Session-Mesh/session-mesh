@@ -263,4 +263,22 @@ describe('agentmcp.inject for Codex', () => {
     assert.deepEqual(hookItems(one), hookItems(two));
     assert.ok(!one.join(' ').includes('secret'));
   });
+
+  // TOML allows only Unicode scalar values in \u escapes: a character outside the BMP must be written as is,
+  // never as a JSON surrogate pair, or Codex refuses the override.
+  test('an installation path outside the BMP gives a valid TOML override, read back as the same command', () => {
+    const odd = path.join(root, 'inst-\u{1F680}é', 'bin');
+    fs.mkdirSync(odd, {recursive: true});
+    fs.writeFileSync(path.join(odd, 'work-read'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
+    const [item] = hookItems(inject(['codex'], {MESH_BIN_DIR: odd}));
+    assert.ok(item && !item.includes('\\u'), item);
+    const script = String.raw`
+import json, sys, tomllib
+key, _, value = sys.argv[1].partition("=")
+print(json.dumps(tomllib.loads("value = " + value)["value"][0]["hooks"][0]["command"]))
+`;
+    const command = JSON.parse(execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', script, item],
+      {encoding: 'utf8'})) as string;
+    assert.equal(command, `'${odd}/work-read' context --format codex`);
+  });
 });
