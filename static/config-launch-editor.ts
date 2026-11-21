@@ -15,6 +15,9 @@ export type LaunchView = Readonly<{
   editable: boolean; revision: string | null; agents: readonly string[]; knownAgents: readonly string[];
   roots: readonly string[]; defaults: Readonly<{ agents: readonly string[]; roots: readonly string[] }>;
   maxRoots: number; maxPath: number;
+  // The extra arguments the owner stored per agent, as the text the launch field holds, and the
+  // revision of the file they live in ('' when there is no file yet).
+  agentOptions: Readonly<Record<string, string>>; agentOptionsRevision: string;
 }>;
 export type Elevation = Readonly<{ active: boolean; secondsLeft: number }>;
 export type ElevateResult = { ok: true; secondsLeft: number } | { ok: false; error: string; retryAfter: number | null };
@@ -25,6 +28,7 @@ export type LaunchPorts = Readonly<{
   elevate: (token: string) => Promise<ElevateResult>;
   revoke: () => Promise<boolean>;
   save: (body: { revision: string; enabled_agents: string[]; workspace_roots: string[] }) => Promise<SaveResult>;
+  saveOptions: (body: { revision: string; agent_options: Record<string, string> }) => Promise<SaveResult>;
   reload: (notice: LaunchNotice) => void;
 }>;
 
@@ -43,6 +47,8 @@ export function parseLaunch(raw: unknown): LaunchView {
     agents: strings(launch.enabled_agents), knownAgents: strings(launch.known_agents), roots: strings(launch.workspace_roots),
     defaults: { agents: strings(defaults.enabled_agents), roots: strings(defaults.workspace_roots) },
     maxRoots: natural(limits.max_roots, 16), maxPath: natural(limits.max_path, 1024),
+    agentOptions: Object.fromEntries(Object.entries(record(launch.agent_options)).filter(([, value]) => typeof value === 'string')) as Record<string, string>,
+    agentOptionsRevision: typeof launch.agent_options_revision === 'string' ? launch.agent_options_revision : '',
   };
 }
 
@@ -61,6 +67,7 @@ export class LaunchEditor {
   private timer: ReturnType<typeof setInterval> | null = null;
   private agents: Set<string>;
   private roots: string[];
+  private options: Map<string, string>;
   private message: { text: string; ok: boolean } | null = null;
   private busy = false;
   private clock: HTMLElement | null = null;
@@ -74,6 +81,7 @@ export class LaunchEditor {
     this.element = doc.createElement("section");
     this.element.className = "config-section config-card config-launch"; this.element.dataset.section = "launch";
     this.agents = new Set(view.agents); this.roots = [...view.roots];
+    this.options = new Map(view.knownAgents.map((agent) => [agent, view.agentOptions[agent] ?? '']));
     this.mode = elevation.active && view.editable ? "editing" : "locked";
     if (notice === "saved") this.message = { text: ports.t("config.launch.saved"), ok: true };
     if (notice === "stale") this.message = { text: ports.t("config.launch.err.stale"), ok: false };
@@ -238,7 +246,51 @@ export class LaunchEditor {
     }, "btn sm ghost config-default-roots"));
 
     const save = this.button(t("config.launch.save"), () => { void this.save(); }, "btn sm primary config-save");
-    return [bar, agents, roots, this.el("p", "mute config-help", t("config.launch.help")), save];
+    return [bar, agents, roots, this.el("p", "mute config-help", t("config.launch.help")), save, this.optionsFieldset()];
+  }
+
+  /** One text field per known agent: what the launch dialog's options field holds, stored or cleared. */
+  private optionsFieldset(): HTMLElement {
+    const { t } = this.ports;
+    const fieldset = this.el("fieldset", "config-field config-options");
+    fieldset.append(this.el("legend", "", t("config.launch.options")));
+    for (const agent of this.view.knownAgents) {
+      const label = this.el("label", "config-option");
+      label.append(this.el("span", "config-option-name", this.agentLabel(agent)));
+      const input = this.el("input", "config-option-value");
+      input.type = "text"; input.autocomplete = "off"; input.spellcheck = false;
+      input.dataset.optionAgent = agent; input.value = this.options.get(agent) ?? "";
+      input.placeholder = t("config.launch.optionsPlaceholder"); input.disabled = this.busy;
+      input.setAttribute("aria-label", `${this.agentLabel(agent)}: ${t("config.launch.options")}`);
+      input.addEventListener("input", () => this.options.set(agent, input.value));
+      label.append(input);
+      fieldset.append(label);
+    }
+    fieldset.append(this.el("p", "mute config-help", t("config.launch.optionsHelp")));
+    fieldset.append(this.button(t("config.launch.saveOptions"), () => { void this.saveOptions(); },
+      "btn sm primary config-save-options"));
+    return fieldset;
+  }
+
+  private async saveOptions(): Promise<void> {
+    const { t } = this.ports;
+    const changed: Record<string, string> = {};
+    for (const [agent, value] of this.options) {
+      if (value !== (this.view.agentOptions[agent] ?? "")) changed[agent] = value;
+    }
+    if (Object.keys(changed).length === 0) { this.message = { text: t("config.launch.optionsUnchanged"), ok: true }; this.showMessage(); return; }
+    this.busy = true; this.draw();
+    const result = await this.ports.saveOptions({ revision: this.view.agentOptionsRevision, agent_options: changed }).catch(() => null);
+    this.busy = false;
+    if (result === null) { this.message = { text: t("config.launch.err.network"), ok: false }; this.draw(); return; }
+    if (result.ok) { this.ports.reload("saved"); return; }
+    if (result.error === "stale-revision") { this.stopClock(); this.ports.reload("stale"); return; }
+    if (result.error === "elevation-required") {
+      this.stopClock(); this.mode = "locked"; this.message = { text: t("config.launch.err.expired"), ok: false };
+    } else {
+      this.message = { text: result.message ?? t("config.launch.err.generic", { message: result.message ?? result.error }), ok: false };
+    }
+    this.draw();
   }
 
   private showMessage(): void {

@@ -495,6 +495,32 @@ does not come from a page of another site, and the `SameSite=Strict` cookies are
   current mode, and only if the page's revision is the current one; two tabs cannot overwrite each
   other silently.
 
+### Extra launch options per agent
+
+The "Options" field of "New session" and the per-agent editor of "Configuration" store arguments
+Mesh adds to an agent at every new launch of that preset, including a session an agent asks for.
+They go through the same route family and the same elevation as the launch settings
+(`POST /api/config/launch-options`, owner cookie only, elevation re-checked inside the write lock,
+32 KiB body, revision checked so two tabs cannot overwrite each other).
+
+- **What is checked.** Only the arguments that would make the agent run without approvals and
+  without a sandbox (the "codex-yolo" class, listed in
+  [Extra options per agent](docs/operations.md#extra-options-per-agent)) and the ones that pick a
+  conversation. The check reads the parsed arguments and runs again before each launch, so a
+  hand-edited file cannot carry `--yolo` or `-c 'approval_policy="never"'` into a session.
+- **What is not checked, and what it means.** Everything else is accepted, by design: `--settings`
+  (Claude hooks), `--mcp-config` (an MCP server naming any command), `codex -c mcp_servers.…`
+  overrides, an extension path for Pi, or a flag an extension registers. Each of those is code the
+  agent or its tooling will run. Stored, it runs at **every** launch of that preset, without a new
+  prompt, and a session an agent asks for inherits it: the owner authorised it once, in the
+  configuration. Treat this file as owner-trusted configuration, like a shell rc file, and keep it
+  out of reach of anything you would not let run commands as you. The confirmation of an
+  agent-requested session names the stored arguments, so consent covers what will actually run; the
+  approval carries the revision of the options file it was shown, and a save in between makes the
+  server refuse it and ask again rather than launch arguments the owner never saw.
+- **A file that cannot be read** refuses agent launches rather than dropping the arguments, because
+  one of them may be restrictive (`--no-tools`); the shell keeps working.
+
 ### The Codex preset
 
 The "Codex" preset of "New session" starts Codex with its own approvals and sandbox defaults. The
