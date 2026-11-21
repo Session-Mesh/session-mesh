@@ -1,0 +1,2 @@
+gh: pull request is not clean or the head moved
+merge-do.sh: gh pr merge failed (the branch head may have moved); nothing was merged.

@@ -1,0 +1,4 @@
+diff --git a/server.py b/server.py
+--- a/server.py
++++ b/server.py
++keeps the name of a renamed session when its agent restarts

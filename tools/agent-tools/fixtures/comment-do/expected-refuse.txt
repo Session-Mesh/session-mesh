@@ -1,0 +1,3 @@
+KO forbidden word: A word: Example-Private-Repository
+KO token-like string: See ghp_ABCDEFGHIJKLMNOPQRSTUVWX in the logs
+comment-do.sh refuses to post (see the KO above).

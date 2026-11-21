@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+# fake-gh — a stub `gh` used by the tests/*.test.sh: every call reads JSON or text
+# from fixtures/<tool>/ (FIXTURES must be set), so the tools' output is deterministic.
+# Repo-targeting calls MUST pass -R <REPO> (env, default Session-Mesh/session-mesh);
+# otherwise the stub fails, so a tool that forgets -R makes its test go red.
+set -euo pipefail
+FIXTURES=${FIXTURES:?FIXTURES must be set}
+EXPECTED_REPO=${REPO:-Session-Mesh/session-mesh}
+
+jqexpr=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+    if [ "${args[i]}" = "--jq" ]; then
+        jqexpr="${args[i + 1]:-}"
+    fi
+done
+
+check_repo_flag() {
+    local i val=""
+    for ((i = 0; i < ${#args[@]}; i++)); do
+        if [ "${args[i]}" = "-R" ]; then
+            val="${args[i + 1]:-}"
+        fi
+    done
+    if [ "$val" != "$EXPECTED_REPO" ]; then
+        echo "fake-gh: repo-targeting call without -R $EXPECTED_REPO" >&2
+        exit 65
+    fi
+}
+
+# api calls address the repo in the path: repos/<REPO>/...
+check_repo_path() {
+    local path=${1:-}
+    case $path in
+        "repos/$EXPECTED_REPO/"*) ;;
+        *) echo "fake-gh: api call outside repos/$EXPECTED_REPO: $path" >&2; exit 65 ;;
+    esac
+}
+
+apply_jq() {
+    local name=$1
+    if [ -n "$jqexpr" ]; then
+        jq -r "$jqexpr" "$FIXTURES/$name"
+    else
+        cat "$FIXTURES/$name"
+    fi
+}
+
+has_arg() {
+    local a
+    for a in "${args[@]}"; do
+        [ "$a" = "$1" ] && return 0
+    done
+    return 1
+}
+
+pr_num() {
+    local i
+    for ((i = 2; i < ${#args[@]}; i++)); do
+        if [[ ${args[i]} =~ ^[0-9]+$ ]]; then
+            printf '%s\n' "${args[i]}"
+            return
+        fi
+    done
+    return 1
+}
+
+branch_json() {
+    # The --branch value decides the fixture file, slashes become underscores.
+    local b prev
+    for ((prev = 0; prev < ${#args[@]} - 1; prev++)); do
+        if [ "${args[prev]}" = "--branch" ]; then
+            b=${args[prev + 1]}
+            printf 'run-%s.json\n' "$(printf '%s' "$b" | tr '/' '_')"
+            return
+        fi
+    done
+    return 1
+}
+
+cmd=${1:?}
+sub=${2:-}
+case "$cmd" in
+    pr)
+        check_repo_flag
+        case "$sub" in
+            list) apply_jq pr-list.json ;;
+            checks) cat "$FIXTURES/checks-$(pr_num).txt" ;;
+            view) apply_jq "pr-view-$(pr_num).json" ;;
+            diff)
+                # A fixture file named "diff-fails" makes this call fail, like gh does
+                # for diffs it refuses to render.
+                if [ -e "$FIXTURES/diff-fails-$(pr_num)" ]; then
+                    echo 'gh: the diff is too large to render' >&2
+                    exit 1
+                fi
+                cat "$FIXTURES/diff-$(pr_num).txt"
+                ;;
+            comment) printf 'stub: comment posted\n' ;;
+            merge)
+                if [ -e "$FIXTURES/fail-merge-$(pr_num)" ]; then
+                    echo 'gh: pull request is not clean or the head moved' >&2
+                    exit 1
+                fi
+                printf 'stub: merged\n'
+                ;;
+            *) echo "fake-gh: unexpected pr/$sub" >&2; exit 64 ;;
+        esac
+        ;;
+    issue)
+        check_repo_flag
+        case "$sub" in
+            comment) printf 'stub: comment posted\n' ;;
+            *) echo "fake-gh: unexpected issue/$sub" >&2; exit 64 ;;
+        esac
+        ;;
+    run)
+        check_repo_flag
+        case "$sub" in
+            list) apply_jq "$(branch_json)" ;;
+            view)
+                check_repo_flag
+                # The ESC token stands for an ANSI escape sequence, so the tests check
+                # that tools strip them.
+                if printf '%s\n' "${args[@]}" | grep -q -- '--log-failed'; then
+                    sed 's/ESC/\x1b/g' "$FIXTURES/run-log-failed.txt"
+                else
+                    apply_jq "run-jobs.json"
+                fi
+                ;;
+            *) echo "fake-gh: unexpected run/$sub" >&2; exit 64 ;;
+        esac
+        ;;
+    api)
+        path=""
+        for a in "${args[@]}"; do
+            case $a in repos/*) path=$a; break ;; esac
+        done
+        check_repo_path "$path"
+        n=$(printf '%s\n' "$path" | grep -oE 'pulls/[0-9]+' | head -n 1 | cut -d/ -f2)
+        # Paginated calls: the stub serves files-<n>-p1.json, -p2.json, ... if present,
+        # one JSON array after the other, exactly as gh api --paginate does.
+        if printf '%s\n' "${args[@]}" | grep -q -- '--paginate'; then
+            if [ -f "$FIXTURES/files-$n-p1.json" ]; then
+                cat "$FIXTURES/files-$n-p1.json"
+                if [ -f "$FIXTURES/files-$n-p2.json" ]; then cat "$FIXTURES/files-$n-p2.json"; fi
+                if [ -f "$FIXTURES/files-$n-p3.json" ]; then cat "$FIXTURES/files-$n-p3.json"; fi
+            else
+                cat "$FIXTURES/files-$n.json"
+            fi
+        else
+            apply_jq "files-$n.json"
+        fi
+        ;;
+    *) echo "fake-gh: unexpected command '$cmd'" >&2; exit 64 ;;
+esac

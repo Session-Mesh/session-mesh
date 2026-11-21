@@ -1,0 +1,4 @@
+browser tests (Chromium, shard 2 of 4)	fail	5m28s	https://ci/url/1
+ruff and pytest (without browser)	pass	6m26s	https://ci/url/2
+matrix.shard ghost	cancelled	0	https://ci/url/3
+frontend tests	pending	0	https://ci/url/4

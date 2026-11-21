@@ -1,0 +1,2 @@
+# Example deny list for tests only. One word per line.
+example-private-repository

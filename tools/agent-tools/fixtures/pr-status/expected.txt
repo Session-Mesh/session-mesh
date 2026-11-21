@@ -1,0 +1,3 @@
+12 | feat: add the launch settings editor | alice | no | abcdef12 | BLOCKED | browser tests (Chromium, shard 2 of 4)=fail; frontend tests=pending
+11 | docs: short note | bob | yes | 12345678 | CLEAN | -
+time of the reading: fixed-time
