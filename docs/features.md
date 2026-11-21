@@ -652,11 +652,14 @@ line or range. Files over 4 MiB are served as plain text.
 
 Unified diffs (`.diff` and `.patch` files, as written by `git diff`, `git show`,
 `git format-patch` or `diff -u`) open in a diff viewer: one block per file, folded with a click,
-with its status (renamed, copied, new, deleted, binary) and its count of added and removed lines; line
+with its status (renamed, copied, new, deleted, binary), its mode when the diff gives one (such as
+`mode 100644 → 100755` for a file made executable, even without a change in the content) and its
+count of added and removed lines; line
 numbers on both sides; the changed words of each modified line highlighted; and "unified" and
 "split" buttons to switch between one column and two columns side by side. A commit message
 before the first file is shown above it. A large diff is built in parts: "show more" adds the
-next lines of a file, and the files past the first screens start folded. "source" shows the plain
+next lines of a file, and the files past the first screens start folded; switching from "split" to
+"unified" keeps a fully loaded file fully shown. "source" shows the plain
 text; a line target such as `changes.diff:42` opens the code viewer at that line of the patch
 (up to 4 MiB, without a NUL byte). Diffs over 4 MiB, or holding a NUL byte, are served as plain text; a diff of more
 than 50,000 lines or 2,000 files is not rendered: the page says so and links to its plain text. The agent guide

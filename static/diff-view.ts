@@ -15,6 +15,8 @@
 // files past the first screens start folded and are built when unfolded, and switching views
 // rebuilds only the rows already shown.
 
+import {modeLabel, readModeLine, type FileModes} from './diff-file-mode.ts';
+
 export type LineKind = 'context' | 'add' | 'del';
 
 export interface DiffLine {
@@ -36,7 +38,7 @@ export interface Hunk {
 
 export type FileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'binary';
 
-export interface FileDiff {
+export interface FileDiff extends FileModes {
   oldPath: string | null;
   newPath: string | null;
   status: FileStatus;
@@ -146,7 +148,8 @@ function headerPath(raw: string, prefix: string, git: boolean): string | null {
 // ---------------------------------------------------------------- parser
 
 function newFile(git: boolean): FileDiff {
-  return {oldPath: null, newPath: null, status: 'modified', hunks: [], added: 0, deleted: 0, git, binary: false};
+  return {oldPath: null, newPath: null, status: 'modified', hunks: [], added: 0, deleted: 0, git, binary: false,
+    oldMode: null, newMode: null};
 }
 
 export function parseUnifiedDiff(text: string): ParsedDiff {
@@ -196,6 +199,7 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       continue;
     }
     if (file && file.hunks.length === 0) {
+      readModeLine(line, file);
       if (line.startsWith('new file mode')) file.status = 'added';
       else if (line.startsWith('deleted file mode')) file.status = 'deleted';
       else if (line.startsWith('copy from ')) { file.oldPath = unquoteWhole(line.slice('copy from '.length)); file.status = 'copied'; }
@@ -453,6 +457,10 @@ export const ROW_CHUNK = 2_000;
 // Positions built when the page opens, over all files: the files past them start folded and are
 // built when unfolded.
 export const INITIAL_ROWS = 4_000;
+// The steps a watched reload may take to load rows again (DiffPage.growTo): each unfolds a file or
+// builds a chunk of one. A file takes at most one chunk per ROW_CHUNK positions, plus one, and has
+// at most as many positions as lines: so at most two steps per file and one per ROW_CHUNK lines.
+export const GROW_STEPS = 2 * MAX_DIFF_FILES + Math.ceil(MAX_DIFF_LINES / ROW_CHUNK);
 
 // The lines of a file's hunks (without the hunk headers).
 export function fileLines(file: FileDiff): number {
@@ -609,6 +617,7 @@ class FileView {
   private items: Item[] = [];
   private next = 0;          // the first item not built yet
   private reach = 0;         // one past the last position shown (past the cursor in split)
+  private built = 0;         // the positions shown (hunk headers and lines)
   private shown = 0;         // the diff lines shown
 
   constructor(file: FileDiff, view: Viewer, open: boolean, loaded: number) {
@@ -619,6 +628,8 @@ class FileView {
     summary.append(el('span', 'path', displayPath(file)));
     if (STATUS_LABEL[file.status]) summary.append(el('span', `badge ${file.status}`, STATUS_LABEL[file.status]));
     if (file.binary && file.status !== 'binary') summary.append(el('span', 'badge binary', STATUS_LABEL.binary));
+    const mode = modeLabel(file);
+    if (mode) summary.append(el('span', 'badge mode', `mode ${mode}`));
     summary.append(stat(file.added, file.deleted));
     this.details.append(summary, this.body);
     this.details.open = open;
@@ -642,8 +653,11 @@ class FileView {
   // not built for, and on a view change.
   render(): void {
     const {mode} = this.view.options;
-    // from split to unified, keep the later lines split showed, unless they are too far ahead
-    if (this.builtMode === 'split' && mode === 'unified' && this.reach > this.cursor && this.reach - this.cursor <= 2 * ROW_CHUNK) {
+    // from split to unified, keep the later lines split showed, unless they are too far ahead and
+    // split skipped lines before them (when split showed every position up to its reach, unified
+    // builds no more lines than split showed, so the whole loaded range is kept)
+    if (this.builtMode === 'split' && mode === 'unified' && this.reach > this.cursor
+      && (this.reach - this.cursor <= 2 * ROW_CHUNK || this.built === this.reach)) {
       this.cursor = this.reach;
     }
     this.builtMode = mode;
@@ -659,6 +673,7 @@ class FileView {
     this.items = fileItems(this.file, mode);
     this.next = 0;
     this.reach = 0;
+    this.built = 0;
     this.shown = 0;
     this.table = el('table', mode);
     columns(this.table, mode === 'unified' ? ['ln', 'ln', 'code'] : ['ln', 'code', 'ln', 'code']);
@@ -701,6 +716,7 @@ class FileView {
       firstNew ??= row;
       table.append(row);
       this.reach = Math.max(this.reach, last + 1);
+      this.built += item.type === 'hunk' ? 1 : itemLines(item);
       this.shown += itemLines(item);
       this.next += 1;
     }
@@ -794,10 +810,11 @@ class Viewer {
     for (const file of this.files) if (file.details.open) file.render();
   }
 
-  // Loads rows ("show more", then the next folded file) until the page is `height` tall.
+  // Loads rows ("show more", then the next folded file) until the page is `height` tall, or all is
+  // loaded: GROW_STEPS covers the largest diff rendered.
   growTo(height: number): void {
     const page = document.documentElement;
-    for (let step = 0; step < 1000 && page.scrollHeight < height; step++) {
+    for (let step = 0; step < GROW_STEPS && page.scrollHeight < height; step++) {
       const open = this.files.find(file => file.remaining > 0);
       if (open) { open.more(); continue; }
       const folded = this.files.find(file => !file.details.open);

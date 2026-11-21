@@ -198,6 +198,28 @@ describe('path names', () => {
   });
 });
 
+describe('file modes', () => {
+  const modes = (text: string): [string, string | null, string | null, number][] =>
+    parseUnifiedDiff(text).files.map(file => [file.status, file.oldMode, file.newMode, file.hunks.length]);
+
+  test('keeps a mode-only change (chmod) and a mode change beside a content change', () => {
+    assert.deepEqual(modes('diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n'
+      + 'diff --git a/x b/x\nold mode 100755\nnew mode 100644\nindex 1..2\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n'),
+    [['modified', '100644', '100755', 0], ['modified', '100755', '100644', 1]]);
+  });
+
+  test('keeps the mode of a created or deleted file, and of a renamed one', () => {
+    assert.deepEqual(modes('diff --git a/new.sh b/new.sh\nnew file mode 100755\nindex 0..1\n--- /dev/null\n+++ b/new.sh\n@@ -0,0 +1 @@\n+x\n'
+      + 'diff --git a/gone.sh b/gone.sh\ndeleted file mode 100755\nindex 1..0\n'
+      + 'diff --git a/a.sh b/b.sh\nold mode 100644\nnew mode 100755\nsimilarity index 100%\nrename from a.sh\nrename to b.sh\n'),
+    [['added', null, '100755', 1], ['deleted', '100755', null, 0], ['renamed', '100644', '100755', 0]]);
+  });
+
+  test('a line reading like a mode inside a hunk is content', () => {
+    assert.deepEqual(modes('--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old mode 1\n+new mode 2\n'), [['modified', null, null, 1]]);
+  });
+});
+
 describe('carriage returns', () => {
   test('in an LF patch, a CR that belongs to the file is kept: a CRLF to LF change shows', () => {
     const parsed = parseUnifiedDiff('--- a/x\n+++ b/x\n@@ -1 +1 @@\n-line\r\n+line\n');
