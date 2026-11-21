@@ -2048,5 +2048,29 @@
   "sessions.row.unreachable": "unreachable",
   "sessions.row.error": "error",
   "sessions.row.retry": "Retry loading {name}",
-  "sessions.row.loadingList": "Loading the session list…"
+  "sessions.row.loadingList": "Loading the session list…",
+  "work.tab.overview": "Overview",
+  "work.product.tabsLabel": "Views of the product",
+  "work.product.filters": "Filters of the board and timeline",
+  "work.product.search": "Search the tasks",
+  "work.product.filter.projects": "Project",
+  "work.product.filter.statuses": "Status",
+  "work.product.filter.priorities": "Priority",
+  "work.product.filter.owners": "Owner",
+  "work.product.filter.tags": "Tag",
+  "work.product.clear": "Clear the filters",
+  "work.product.shown": {
+    "one": "{n} task shown out of {total}",
+    "other": "{n} tasks shown out of {total}"
+  },
+  "work.product.showMore": {
+    "one": "Show {n} more",
+    "other": "Show {n} more"
+  },
+  "work.product.partial": {
+    "one": "Partial view: {n} task of {total} was read, the reader's limit. The column counters count every task; the filters and the timeline see only the tasks read.",
+    "other": "Partial view: {n} tasks of {total} were read, the reader's limit. The column counters count every task; the filters and the timeline see only the tasks read."
+  },
+  "work.product.noMatch": "No task matches these filters.",
+  "work.product.noDates": "None of these tasks has a date: there is no bar to draw."
 }

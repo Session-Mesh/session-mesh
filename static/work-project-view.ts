@@ -19,12 +19,19 @@ const RENDERERS: Readonly<Record<TabKey, (ctx: ViewContext, doc: ProjectDoc) => 
   reprise: renderReprise, board: renderBoard, frise: renderFrise, deps: renderDependencies, questions: renderQuestionsTab,
 };
 
-export type ProjectView = Readonly<{
+/** A view a task sheet opens over (static/work-task-sheet.ts): a project's, or a product's (static/work-product-page.ts). */
+export type SheetView = Readonly<{
   root: HTMLElement;
-  /** The project's title, as the header shows it. */
+  /** The project's (or product's) title, as the header shows it. */
   title: string;
   detailSlot: HTMLElement;
   showDetail: (open: boolean) => void;
+  /** The tab shown, and its panel. */
+  current: () => string;
+  currentPanel: () => HTMLElement;
+}>;
+
+export type ProjectView = Omit<SheetView, 'current'> & Readonly<{
   activate: (key: TabKey, focus: boolean) => void;
   current: () => TabKey;
   /** The panel of a tab (built or not). */
@@ -35,7 +42,7 @@ export type ProjectView = Readonly<{
 }>;
 
 /** The task sheet's way back names the tab it returns to (and, for a screen reader, the project). */
-export function nameSheetBack(t: Translate, back: HTMLElement, view: ProjectView): void {
+export function nameSheetBack(t: Translate, back: HTMLElement, view: SheetView): void {
   const tab = t(`work.tab.${view.current()}`);
   back.textContent = t('work.detail.back', { tab });
   back.setAttribute('aria-label', t('work.detail.backLabel', { tab, project: view.title }));
@@ -50,27 +57,28 @@ function header(ctx: ViewContext, head: ProjectHead, back: () => void): HTMLElem
   return el('header', 'work-project-head', button('btn work-back', ctx.t('work.back'), back), crumb, progressBlock(ctx.t, counts), waiting);
 }
 
-function tabButton(ctx: ViewContext, key: TabKey): HTMLButtonElement {
+export function tabButton(ctx: ViewContext, key: string): HTMLButtonElement {
   const tab = el('button', 'work-tab', ctx.t(`work.tab.${key}`));
   tab.type = 'button';
   setAttributes(tab, { role: 'tab', id: `work-tab-${key}`, 'aria-controls': `work-panel-${key}`, 'aria-selected': 'false', tabindex: '-1' });
   return tab;
 }
 
-function panelFor(key: TabKey): HTMLElement {
+export function panelFor(key: string): HTMLElement {
   const panel = el('div', 'work-panel');
   setAttributes(panel, { role: 'tabpanel', id: `work-panel-${key}`, 'aria-labelledby': `work-tab-${key}`, tabindex: '0' });
   panel.hidden = true;
   return panel;
 }
 
-function nextTab(key: TabKey, event: KeyboardEvent): TabKey | null {
-  const index = TAB_KEYS.indexOf(key);
-  const last = TAB_KEYS.length - 1;
-  if (event.key === 'ArrowRight') return TAB_KEYS[index === last ? 0 : index + 1] ?? null;
-  if (event.key === 'ArrowLeft') return TAB_KEYS[index === 0 ? last : index - 1] ?? null;
-  if (event.key === 'Home') return TAB_KEYS[0];
-  if (event.key === 'End') return TAB_KEYS[last] ?? null;
+/** The tab an arrow key, Home or End moves to from `key` among `keys`, or null for another key. */
+export function nextTab<K extends string>(keys: readonly K[], key: K, event: KeyboardEvent): K | null {
+  const index = keys.indexOf(key);
+  const last = keys.length - 1;
+  if (event.key === 'ArrowRight') return keys[index === last ? 0 : index + 1] ?? null;
+  if (event.key === 'ArrowLeft') return keys[index === 0 ? last : index - 1] ?? null;
+  if (event.key === 'Home') return keys[0] ?? null;
+  if (event.key === 'End') return keys[last] ?? null;
   return null;
 }
 
@@ -104,7 +112,7 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
   for (const [key, node] of buttons) {
     node.addEventListener('click', () => activate(key, false));
     node.addEventListener('keydown', event => {
-      const target = nextTab(key, event);
+      const target = nextTab(TAB_KEYS, key, event);
       if (target) { event.preventDefault(); activate(target, true); }
     });
     tabs.append(node);
@@ -129,6 +137,7 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
     if (keepQuestions) build('questions');
     activate(currentKey, false);
   };
-  return { root, title, detailSlot, current: () => currentKey, activate, replaceDoc, panel: key => panels.get(key)!,
+  return { root, title, detailSlot, current: () => currentKey, currentPanel: () => panels.get(currentKey)!, activate, replaceDoc,
+    panel: key => panels.get(key)!,
     showDetail: open => { detailSlot.hidden = !open; split.classList.toggle('detail-open', open); } };
 }

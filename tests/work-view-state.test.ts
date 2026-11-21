@@ -13,7 +13,7 @@ import {
 import type { Draft, Place, StoragePort, ViewState } from '../static/work-view-state.ts';
 
 const PLACE: Place = { project: 'P-7a7a', product: null, tab: 'board', task: 'T-7b7b', sheet: null, scroll: 420, sheetScroll: 30,
-  tabScroll: 812, rail: ['zone:atacama', 'product:relay', 'product:kiln'], questionsOpen: true };
+  tabScroll: 812, rail: ['zone:atacama', 'product:relay', 'product:kiln'], questionsOpen: true, filters: [] };
 const draft = (text: string, at: number, extra: Partial<Draft> = {}): Draft => ({ text, picked: [], edit: false, at, ...extra });
 
 function memoryStorage(): StoragePort & { items: Map<string, string> } {
@@ -92,7 +92,7 @@ describe('the stored state', () => {
 
   test('another schema version reads as the empty state', () => {
     const stored = JSON.parse(serializeState(sample()));
-    for (const schema of [0, 3, '1', '2', null]) {
+    for (const schema of [0, 4, '1', '2', '3', null]) {
       assert.deepEqual(parseState(JSON.stringify({ ...stored, schema })), EMPTY_STATE, `schema ${String(schema)}`);
     }
   });
@@ -105,7 +105,7 @@ describe('the stored state', () => {
         'N-3': 'text', '__proto__': { text: 'dropped' } } });
     const state = parseState(raw);
     assert.deepEqual(state.place, { project: 'P-1', product: null, tab: null, task: null, sheet: null, scroll: 0, sheetScroll: 0,
-      tabScroll: 0, rail: ['zone:ok'], questionsOpen: false });
+      tabScroll: 0, rail: ['zone:ok'], questionsOpen: false, filters: [] });
     assert.deepEqual([...state.drafts], [['N-1', { text: 'kept', picked: ['a'], edit: false, at: 9 }]]);
   });
 
@@ -171,7 +171,7 @@ describe('the stored state', () => {
     assert.equal(state.place.project, 'P-7a7a');
     assert.equal(state.place.rail, null, 'the tree is folded as on a first visit');
     assert.equal(state.drafts.get('N-1')?.text, 'kept');
-    assert.equal(JSON.parse(serializeState(state)).schema, 2, 'written again with the current schema');
+    assert.equal(JSON.parse(serializeState(state)).schema, STATE_SCHEMA, 'written again with the current schema');
   });
 
   test('a task or tab without a project is not a place: the entry screen', () => {

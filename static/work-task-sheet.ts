@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 /**
- * The task sheet of the Projects view's project page (static/work-view.ts): the detail of one task shown over the
+ * The task sheet of the Projects view's project and product pages (static/work-view.ts): the detail of one task shown over the
  * project's tab, at level 2 of the way back (static/work-nav.ts), read again after an answer, closed back to the tab
  * scrolled where it was with the focus on the control that opened it.
  */
@@ -15,7 +15,7 @@ import { errorBlock, loadingBlock, recordedButUnread } from './work-error-view.t
 import { scrollerOf, tabsHidden } from './work-nav.ts';
 import type { WorkNav } from './work-nav.ts';
 import { nameSheetBack } from './work-project-view.ts';
-import type { ProjectView } from './work-project-view.ts';
+import type { SheetView } from './work-project-view.ts';
 import { fillDrafts, unsentDrafts } from './work-view-drafts.ts';
 import type { ViewMemory } from './work-view-memory.ts';
 
@@ -31,8 +31,8 @@ export type TaskSheetHost = Readonly<{
   memory: ViewMemory;
   /** The view's request generation: a read started under another one is not shown. */
   generation: () => number;
-  /** The project view shown, or null. */
-  view: () => ProjectView | null;
+  /** The project or product view shown, or null. */
+  view: () => SheetView | null;
 }>;
 
 export class TaskSheet {
@@ -50,7 +50,7 @@ export class TaskSheet {
   stop(): void { this.controller?.abort(); this.sequence++; }
 
   /** A tab shown: the sheet's way back names it. */
-  tabShown(view: ProjectView): void { if (this.sheetBack) nameSheetBack(this.host.t, this.sheetBack, view); }
+  tabShown(view: SheetView): void { if (this.sheetBack) nameSheetBack(this.host.t, this.sheetBack, view); }
 
   /** `resuming` (the sheet the owner left): a task gone since closes the sheet. False when the task could not be read
    *  (a view moved meanwhile is not a failure); after an answer the sheet then says it is recorded, with "Try again". */
@@ -90,14 +90,14 @@ export class TaskSheet {
   }
 
   /** The sheet's way back: it names the tab it returns to (and, for a screen reader, the project). */
-  private closeButton(view: ProjectView): HTMLElement {
+  private closeButton(view: SheetView): HTMLElement {
     this.sheetBack = button('btn work-detail-close', '', () => this.close(view));
     nameSheetBack(this.host.t, this.sheetBack, view);
     return this.sheetBack;
   }
 
   /** Back from the sheet to the tab it covered, scrolled where it was, focus on the control that opened it. */
-  close(view: ProjectView): void {
+  close(view: SheetView): void {
     const previous = this.selected, restore = tabsHidden(view.root) ? this.tabScroll : null;
     this.selected = null; this.tabScroll = null; this.sheetBack = null;
     this.stop();
@@ -109,7 +109,7 @@ export class TaskSheet {
     this.host.memory.note();
     // The control that opened the sheet is in the tab shown (a card, or a task heading of the Questions tab).
     const selector = `[data-task="${CSS.escape(previous ?? '')}"]`;
-    if (previous) focusFirst(view.panel(view.current()).querySelector<HTMLElement>(selector) ?? view.root.querySelector<HTMLElement>(selector), restore !== null);
+    if (previous) focusFirst(view.currentPanel().querySelector<HTMLElement>(selector) ?? view.root.querySelector<HTMLElement>(selector), restore !== null);
   }
 
   /** Close the sheet shown over the project's tab (Escape, Back); false when none is shown. */
