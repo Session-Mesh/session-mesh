@@ -55,11 +55,17 @@
  (libraries mesh_platform mesh_wire yojson unix))
 
 (library
+ (name mesh_pty_agent_stop)
+ (modules mesh_pty_agent_stop)
+ (libraries mesh_platform))
+
+(library
  (name mesh_ptyhost)
  (modules mesh_ptyhost)
  (libraries
   mesh_agent_resume_preset
   mesh_platform
+  mesh_pty_agent_stop
   mesh_project_store
   mesh_project_observation
   mesh_pty_processes

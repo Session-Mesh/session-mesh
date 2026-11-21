@@ -35,12 +35,15 @@ let cookie = '';
 let host: ChildProcess | undefined;
 let travelHome: string, workHome: string, clientClaude: string;
 
-// codex|CODEX_HOME|session|arguments|session token. The rollout is held open (fd 3) by a process named codex,
+// codex|CODEX_HOME|session|arguments|session token|overlap. The rollout is held open (fd 3) by a process named codex,
 // except in a session named x-guess*: that one writes its folder in the rollout and closes it, so the listing can
-// only guess its conversation from the folder (cwd_unique).
+// only guess its conversation from the folder (cwd_unique). overlap is "yes" when the previous codex of the same
+// session was still running at this start (its pid, kept through exec, is in a file).
 const fakeCodex = (logFile: string, real: string) => [
   '#!/bin/sh',
-  `printf '%s|%s|%s|%s|%s\\n' codex "\${CODEX_HOME-unset}" "$MESH_SESSION" "$*" "$MESH_SESSION_TOKEN" >> '${logFile}'`,
+  `pids='${logFile}.'"$MESH_SESSION"; overlap=no`,
+  'if [ -f "$pids" ] && kill -0 "$(cat "$pids")" 2>/dev/null; then overlap=yes; fi; echo $$ > "$pids"',
+  `printf '%s|%s|%s|%s|%s|%s\\n' codex "\${CODEX_HOME-unset}" "$MESH_SESSION" "$*" "$MESH_SESSION_TOKEN" "$overlap" >> '${logFile}'`,
   'if [ "$1" = resume ]; then id=$2; else id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr A-F a-f); fi',
   'folder="${CODEX_HOME:-$HOME/.codex}/sessions/2026/11/20"; mkdir -p "$folder"',
   'rollout="$folder/rollout-2026-11-20T10-00-00-$id.jsonl"',
@@ -301,25 +304,33 @@ describe('account switch requests', {skip: SKIP}, () => {
     assert.ok(await listed('x-refused'), 'the source still runs');
   });
 
-  test('approved: the source stops, its conversation is carried, and it resumes under the target', {skip: CARRY}, async () => {
+  test('approved: the agent stops, its conversation is carried, and it resumes under the target in the same terminal', {skip: CARRY}, async () => {
     const session = await codexSession('x-move');
+    const before = await listed('x-move');
     const carried = rolloutIn(travelHome, session.sid);
     const original = fs.readFileSync(rolloutIn(path.join(mesh.home, '.codex'), session.sid), 'utf8');
     const decided = await decide(await requested(session, 'Travel'), true);
     assert.equal(decided.state, 'completed', JSON.stringify(decided));
     assert.equal(decided.result?.account, 'travel');
-    const name = decided.result!.id!;
-    const [home, argv] = await launchOf(name);
-    assert.equal(home, travelHome, "the replacement runs with the target's Codex home");
+    assert.equal(decided.result?.id, 'x-move', 'the same session, under its own name');
+    const [home, argv] = await launchOf('x-move');
+    assert.equal(home, travelHome, "the resumed agent runs with the target's Codex home");
     assert.match(argv, new RegExp(`^resume ${session.sid}`));
+    assert.equal(launches().findLast(fields => fields[2] === 'x-move')?.[5], 'no', 'the old agent was gone before the resume');
     // the carried copy first, then what the resumed agent wrote: the conversation was there before it started
     assert.ok(fs.readFileSync(carried, 'utf8').startsWith(original), 'the conversation was carried before the resume');
-    assert.equal((await listed(name))?.account, 'travel');
-    assert.equal(await listed('x-move'), undefined, 'the source is gone');
+    const after = await listed('x-move');
+    assert.equal(after?.account, 'travel');
+    // a new session would have a new nonce, so a new token in its shell's environment
+    assert.equal(launches().findLast(fields => fields[2] === 'x-move')?.[4], session.token,
+      'the same shell and terminal: no new session was created');
+    assert.equal(typeof before?.created, 'number');
+    assert.notEqual(after?.created, before?.created, 'a new incarnation of the session');
   });
 
   test('a carry that fails resumes the conversation under its own account and says it was undone', {skip: CARRY}, async () => {
     const session = await codexSession('x-undone');
+    const before = await listed('x-undone');
     const target = rolloutIn(workHome, session.sid);
     fs.mkdirSync(path.dirname(target), {recursive: true, mode: 0o700});
     fs.writeFileSync(target, '{"type":"session_meta","payload":{"other":"copy"}}\n', {mode: 0o600});   // a divergent copy
@@ -330,12 +341,18 @@ describe('account switch requests', {skip: SKIP}, () => {
     assert.match(decided.result!.error!, /^Switch undone: the conversation resumed under account default\. Cause: conversation_diverged/);
     assert.match(decided.result!.error!, /Asking again does not change this\.$/, 'a refusal, not a retryable failure');
     assert.deepEqual([decided.result?.retryable, decided.result?.operator_action], [false, false]);
-    const name = decided.result!.id!;
-    const [home, argv] = await launchOf(name);
+    assert.equal(decided.result?.id, 'x-undone', 'resumed in the same session');
+    const [home, argv] = await launchOf('x-undone');
     assert.equal(home, 'unset', "resumed under its own (default) account, never the target's");
     assert.match(argv, new RegExp(`^resume ${session.sid}`));
+    assert.equal(launches().findLast(fields => fields[2] === 'x-undone')?.[5], 'no', 'the old agent was gone before the resume');
     assert.equal(fs.readFileSync(target, 'utf8'), '{"type":"session_meta","payload":{"other":"copy"}}\n', 'the target copy is untouched');
-    assert.equal((await listed(name))?.account, undefined, 'the resumed session runs under the default account');
+    const after = await listed('x-undone');
+    assert.equal(after?.account, undefined, 'the resumed session runs under the default account');
+    assert.equal(launches().findLast(fields => fields[2] === 'x-undone')?.[4], session.token,
+      'in the same shell and terminal');
+    assert.equal(typeof before?.created, 'number');
+    assert.notEqual(after?.created, before?.created, 'a new incarnation of the session');
   });
 });
 
