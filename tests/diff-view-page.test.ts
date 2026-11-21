@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
-import {chromium, type Browser} from 'playwright-core';
+import {chromium, type Browser, type Page} from 'playwright-core';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..');
@@ -209,6 +209,13 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
 
   const added = (name: string, count: number): string =>
     `--- /dev/null\n+++ b/${name}\n@@ -0,0 +1,${count} @@\n${Array.from({length: count}, (_, k) => `+line ${k}\n`).join('')}`;
+  const git = (name: string, count: number): string => `diff --git a/${name} b/${name}\n${added(name, count)}`;
+  // `count` files whose mode only changed (no hunk)
+  const chmods = (count: number): string =>
+    Array.from({length: count}, (_, k) => `diff --git a/m${k} b/m${k}\nold mode 100644\nnew mode 100755\n`).join('');
+  // the mode badge of each file (null without one)
+  const modeBadges = (page: Page): Promise<(string | null)[]> =>
+    page.locator('details.file').evaluateAll(nodes => nodes.map(node => node.querySelector('.badge.mode')?.textContent ?? null));
 
   test('builds a large diff in parts, and the files past the first screens folded', async () => {
     const page = await open(added('one', 4500) + added('two', 3000) + added('three', 10));
@@ -328,23 +335,83 @@ describe('the diff page in a browser', {skip: skipBrowser}, () => {
   test('shows the mode change of a file, with or without a content change', async () => {
     const page = await open('diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n'
       + 'diff --git a/new.sh b/new.sh\nnew file mode 100755\n--- /dev/null\n+++ b/new.sh\n@@ -0,0 +1 @@\n+x\n'
-      + 'diff --git a/same b/same\nindex 1..2 100644\n--- a/same\n+++ b/same\n@@ -1 +1 @@\n-a\n+b\n');
+      + 'diff --git a/same b/same\nindex 1..2 100644\n--- a/same\n+++ b/same\n@@ -1 +1 @@\n-a\n+b\n'
+      + 'diff --git a/kept b/kept\nold mode 100644\nnew mode 100644\n');
     await page.setViewportSize({width: 390, height: 800});
     await page.waitForSelector('details.file');
-    assert.deepEqual(await page.locator('details.file').evaluateAll(nodes => nodes.map(node => node.querySelector('.badge.mode')?.textContent ?? null)),
-      ['mode 100644 → 100755', 'mode 100755', null]);
+    assert.deepEqual(await modeBadges(page), ['mode 100644 → 100755', 'mode 100755', null, null]);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal page scroll');
     await page.close();
   });
 
+  // A format-patch series: the message of the second patch (lines that read like modes, one of
+  // them very long) follows the chmod-only first patch and is not shown as its mode.
+  test('shows no mode from the message of the next patch in a series', async () => {
+    const page = await open('From 1 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 1/2] chmod\n\n---\n'
+      + 'diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n-- \n2.47.0\n\n'
+      + `From 2 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 2/2] notes\n\nold mode notes\nnew mode 100600 explained here ${'7'.repeat(5000)}\n---\n`
+      + 'diff --git a/notes b/notes\nindex 1..2 100644\n--- a/notes\n+++ b/notes\n@@ -1 +1 @@\n-a\n+b\n');
+    await page.setViewportSize({width: 390, height: 800});
+    await page.waitForSelector('details.file');
+    assert.deepEqual(await modeBadges(page), ['mode 100644 → 100755', null]);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal page scroll');
+    await page.close();
+  });
+
+  // The worst case of GROW_STEPS: a file of 4000 lines and one of 24000 take 14 "show more" steps,
+  // then 1998 folded files one step each, more than MAX_DIFF_FILES + 5 steps in all.
   test('a watched reload loads in one call every file a deep position needs', async () => {
-    const git = (name: string, count: number): string => `diff --git a/${name} b/${name}\n${added(name, count)}`;
-    const modes = Array.from({length: 1998}, (_, k) => `diff --git a/m${k} b/m${k}\nold mode 100644\nnew mode 100755\n`).join('');
-    const page = await open(git('f0', 4000) + git('f1', 4000) + modes);
+    const page = await open(git('f0', 4000) + git('f1', 24_000) + chmods(1998));
     await page.waitForSelector('details.file');
     await page.evaluate('page.growTo(1e9)');
     assert.equal(await page.locator('details.file[open]').count(), 2000);
     assert.equal(await page.locator('button.more').count(), 0);
+    await page.close();
+  });
+
+  // Reading the page height lays the page out: a watched reload reads it once every few steps, not
+  // after each one (2000 files of 20 lines took about 29 s that way), and still opens every file.
+  test('a watched reload of 2000 small files reads the page height only every few steps', async () => {
+    const page = await open(Array.from({length: 2000}, (_, k) => git(`s${k}`, 20)).join(''));
+    await page.waitForSelector('details.file');
+    const reads = await page.evaluate(`(() => {
+      const read = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight').get;
+      let reads = 0;
+      Object.defineProperty(document.documentElement, 'scrollHeight', {configurable: true, get() { reads += 1; return read.call(this); }});
+      page.growTo(1e9);
+      return reads;
+    })()`) as number;
+    assert.equal(await page.locator('details.file[open]').count(), 2000);
+    assert.equal(await page.locator('button.more').count(), 0);
+    assert.ok(reads > 0 && reads <= 2000 / 8, `${reads} height reads`);
+    await page.close();
+  });
+
+  // A height within reach stops the loading soon after it: at most GROW_MEASURE_STEPS (32) steps
+  // more than it needs (about six files of 20 lines make 2000 px).
+  test('a watched reload stops loading a few steps after the height it needs', async () => {
+    const page = await open(Array.from({length: 2000}, (_, k) => git(`s${k}`, 20)).join(''));
+    await page.waitForSelector('details.file');
+    const before = await page.locator('details.file[open]').count();
+    const [height, reached] = await page.evaluate(`(() => {
+      const height = document.documentElement.scrollHeight + 2000;
+      page.growTo(height);
+      return [height, document.documentElement.scrollHeight];
+    })()`) as [number, number];
+    const after = await page.locator('details.file[open]').count();
+    assert.ok(reached >= height, `${reached} px for ${height}`);
+    assert.ok(after > before + 1 && after <= before + 64, `${before} then ${after} files open`);
+    await page.close();
+  });
+
+  // Large files are not unfolded a few at a time: the height is read again once a chunk's worth of
+  // positions was built (here, the rest of the third file and the fourth one).
+  test('a watched reload reads the height again after a chunk of large files', async () => {
+    const page = await open(Array.from({length: 30}, (_, k) => git(`l${k}`, 1500)).join(''));
+    await page.waitForSelector('details.file');
+    assert.equal(await page.locator('details.file[open]').count(), 3);
+    await page.evaluate('page.growTo(document.documentElement.scrollHeight + 1)');
+    assert.equal(await page.locator('details.file[open]').count(), 4);
     await page.close();
   });
 
