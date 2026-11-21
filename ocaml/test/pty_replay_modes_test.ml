@@ -115,6 +115,17 @@ let cut_inside_a_sequence () =
     "the window starts inside the sequence" "49ltail\n" (L.snapshot replay);
   Alcotest.(check string) "its end applied, not sent" "tail\n" (L.replay replay)
 
+(* A sequence cancelled by a new ESC at the start of the window: the new
+   sequence (a colour here) is sent, not consumed. *)
+let cancelled_at_the_cut () =
+  let replay = L.create () in
+  L.feed replay (set 1049);
+  L.feed replay (String.make (2 * 1024 * 1024) 'x');
+  L.feed replay "\027[?10\n\027[31mred\n";
+  Alcotest.(check string)
+    "the cancelled sequence does not apply; the colour is kept"
+    "\027[?1049h\027[31mred\n" (L.replay replay)
+
 (* An unfinished sequence longer than the scan leaves the window whole. *)
 let unfinished_sequence_at_the_cut () =
   let replay = L.create () in
@@ -163,6 +174,8 @@ let () =
             cut_inside_a_sequence;
           Alcotest.test_case "an unfinished sequence at the cut" `Quick
             unfinished_sequence_at_the_cut;
+          Alcotest.test_case "a sequence cancelled at the cut" `Quick
+            cancelled_at_the_cut;
           Alcotest.test_case "clients attaching at different times" `Quick
             late_clients_see_their_own_start;
         ] );
