@@ -8,7 +8,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 setup_dir merge-gate
 export REPO=Session-Mesh/session-mesh
 status=0
-tool="$here/../merge-gate.sh"
+tool="${MERGE_GATE_BIN:-$here/../merge-gate.sh}"
 
 run_case() {
     # run_case <pr> <head8> <deny file or "none"> <expected stdout or ""> <expected rc>
@@ -155,6 +155,65 @@ fi
 grep -q 'could not read PR #401 (gh exited with 3)' "$TEST_LIB_SCRATCH/evf" \
     || { echo 'merge-gate view-fails: missing message' >&2; status=1; }
 FIXTURES=$saved_fixtures
+
+# 415-419 (diff-only, un cas par mutation): the PR body is clean and each token variant
+# lives ONLY in the diff's added lines: cut by U+00AD, U+2063, U+034F, U+200B, or a
+# content line starting with "+++" inside a hunk. A tool that drops the zero-width
+# cleaning of the diff, or that treats "+++ " as a header anywhere, goes red here.
+tokD="ghp_$(printf 'd%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)"
+for variant in cut-ad cut-2063 cut-034f cut-200b plus-in-hunk; do
+    case $variant in
+        cut-ad) added='+'"${tokD:0:9}"$'\xc2\xad'"${tokD:9} hidden in the diff" ;;
+        cut-2063) added='+'"${tokD:0:9}"$'\xe2\x81\xa3'"${tokD:9} hidden in the diff" ;;
+        cut-034f) added='+'"${tokD:0:9}"$'\xcd\x8f'"${tokD:9} hidden in the diff" ;;
+        cut-200b) added='+'"${tokD:0:9}"$'\xe2\x80\x8b'"${tokD:9} hidden in the diff" ;;
+        plus-in-hunk) added="+ plain line"$'\n'"+++ $tokD inside a hunk" ;;
+    esac
+    cp -r "$FIXTURES" "$TEST_LIB_SCRATCH/fg-$variant"
+    jq --arg b 'A perfectly clean body with no token anywhere.' '.body = $b' \
+        "$TEST_LIB_SCRATCH/fg-$variant/pr-view-401.json" \
+        > "$TEST_LIB_SCRATCH/fg-$variant/pr-view-409.json"
+    printf 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n%s\n' "$added" \
+        > "$TEST_LIB_SCRATCH/fg-$variant/diff-409.txt"
+    saved_fixtures=$FIXTURES
+    FIXTURES="$TEST_LIB_SCRATCH/fg-$variant"
+    rc=0
+    AGENT_TOOLS_DENY_FILE="$FIXTURES/deny-words.txt" "$tool" 409 f9c45553 --allow-new-python \
+        > "$TEST_LIB_SCRATCH/o-$variant" 2> "$TEST_LIB_SCRATCH/e-$variant" || rc=$?
+    if [ "$rc" -ne 1 ]; then
+        echo "merge-gate $variant: expected exit 1, got $rc" >&2
+        status=1
+    fi
+    if ! grep -qF 'token-like string (ghp_)' "$TEST_LIB_SCRATCH/o-$variant"; then
+        echo "merge-gate $variant: the diff-only token was not detected" >&2
+        status=1
+    fi
+    if grep -qF "$tokD" "$TEST_LIB_SCRATCH/o-$variant" "$TEST_LIB_SCRATCH/e-$variant"; then
+        echo "merge-gate $variant: the token value leaked" >&2
+        status=1
+    fi
+    FIXTURES=$saved_fixtures
+done
+
+# 420 (list-only): a runtime deny file that begins with a BOM still detects the plain
+# accented word in the PR body (kills "list cleaning removed").
+cp -r "$FIXTURES" "$TEST_LIB_SCRATCH/fg-bomlist"
+printf '\xef\xbb\xbfzo\xc3\xa9-dossier\n' > "$TEST_LIB_SCRATCH/fg-bomlist-deny.txt"
+saved_fixtures=$FIXTURES
+FIXTURES="$TEST_LIB_SCRATCH/fg-bomlist"
+jq --arg b "Use the zoé-dossier folder." '.body = $b' \
+    "$TEST_LIB_SCRATCH/fg-bomlist/pr-view-401.json" > "$TEST_LIB_SCRATCH/fg-bomlist/pr-view-409.json"
+rc=0
+AGENT_TOOLS_DENY_FILE="$TEST_LIB_SCRATCH/fg-bomlist-deny.txt" "$tool" 409 f9c45553 \
+    > "$TEST_LIB_SCRATCH/o-bomlist" 2> "$TEST_LIB_SCRATCH/e-bomlist" || rc=$?
+if [ "$rc" -ne 1 ]; then
+    echo "merge-gate bomlist: expected exit 1, got $rc" >&2
+    status=1
+fi
+if ! grep -qF 'KO forbidden words and leaks' "$TEST_LIB_SCRATCH/o-bomlist"; then
+    echo 'merge-gate bomlist: the BOM-led list missed the word' >&2
+    status=1
+fi
 
 if [ "$status" -eq 0 ]; then echo 'merge-gate test: OK'; fi
 exit "$status"
