@@ -4645,6 +4645,17 @@ const configPanel = MeshPaneActions.createConfigPanel({ dialog: $("#dlg-config")
 }, () => MeshI18n.locale());
 $("#btn-config").addEventListener("click", () => configPanel.open());
 
+let backendAccountPanel = null;
+whenTranslated(() => {
+  const ports = MeshPaneActions.createBackendAccountApi((url, init) => requestLocal(url, init));
+  backendAccountPanel = MeshPaneActions.createBackendAccountPanel(document.body, { t, ...ports });
+});
+$("#btn-accounts").addEventListener("click", (event) => {
+  if (localActionUnavailable()) return;
+  const trigger = event.currentTarget.getClientRects().length ? event.currentTarget : $("#btn-mobile-actions");
+  void backendAccountPanel?.open(trigger);
+});
+
 // Local transport owns local account navigation. A loader returns a LoadOutcome
 // (static/single-flight-poller.ts); a failure or a refusal is never an observed empty snapshot.
 // A server that numbers its listings gets `since` and `focus` (docs/sessions-loading.md); the
@@ -8025,6 +8036,7 @@ async function startMesh(context) {
     refresh,
     dispose() {
       meshStopped = true;
+      backendAccountPanel?.dispose(); backendAccountPanel = null;
       projectsGeneration++; workGeneration++;
       projectsController?.close(); workController?.close();
       inventoryPoller?.stop();
