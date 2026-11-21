@@ -6,12 +6,16 @@
 // keeps: the stopped Claude's socket file is still there when the next one starts, whether it ended on SIGHUP or was
 // killed. A real server, a real native PTY host (SIGKILL 0.5 s after SIGHUP here), and a fake Claude (Node run under
 // the name claude) that names its conversation as Claude does, listens on --messaging-socket-path, logs whether it
-// could, and never removes its socket file. Nothing in this file writes outside its own scratch directories.
+// could, and never removes its socket file. What else lies at that path (a regular file, a directory, a symbolic link
+// to a live socket) stays, and so does a stale socket in a wake directory others can read: only a socket of this user
+// in the private directory is removed. (A socket of another user cannot be made without privileges: not tested.)
+// Nothing in this file writes outside its own scratch directories.
 import assert from 'node:assert/strict';
 import {type ChildProcess, spawn, spawnSync} from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
 import {after, before, describe, test} from 'node:test';
 import {hostArgv, MANAGED} from './claude-wake-lib.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
@@ -118,6 +122,18 @@ async function restarted(agent: Agent): Promise<{state: string; result: {id?: st
   return (await decided.json() as {request: {state: string; result: {id?: string; error?: string} | null}}).request;
 }
 
+/** Restart ``agent`` in its terminal once ``plant(socket path)`` put something at its socket path: what
+ * ``survives(socket path)`` checks is still there afterwards (the server removes only a stale socket of this user in
+ * its private directory). */
+async function restartKeeps(agent: Agent, plant: (socket: string) => void, survives: (socket: string) => void): Promise<void> {
+  const socket = events(agent)[0]!.split(' ')[2]!;
+  plant(socket);
+  const decided = await restarted(agent);
+  assert.equal(decided.state, 'completed', JSON.stringify(decided));
+  await waitFor(`the second Claude of ${agent.name}`, 20000, () => events(agent).length >= 2);
+  survives(socket);
+}
+
 /** Restart ``agent`` in its terminal: the next Claude must listen on the same path as the stopped one. */
 async function restartBinds(agent: Agent): Promise<void> {
   const sid = await sessionId(agent);
@@ -165,5 +181,59 @@ describe('a Claude restarted in its terminal listens on its wake socket again',
 
     test('one that ignored SIGHUP and was killed: the next one listens there too', async () => {
       await restartBinds(await launch('w-kill', true));
+    });
+  });
+
+describe('a restart in place removes nothing but a stale socket at the wake path',
+  {skip: MANAGED.length > 0 && `managed Claude settings at ${MANAGED[0]}`}, () => {
+    test('a regular file at that path stays', async () => {
+      await restartKeeps(await launch('k-file'), socket => {
+        fs.rmSync(socket);
+        fs.writeFileSync(socket, 'not a socket');
+      }, socket => assert.equal(fs.readFileSync(socket, 'utf8'), 'not a socket'));
+    });
+
+    test('a directory at that path stays, with what it holds', async () => {
+      await restartKeeps(await launch('k-dir'), socket => {
+        fs.rmSync(socket);
+        fs.mkdirSync(socket);
+        fs.writeFileSync(path.join(socket, 'kept'), 'kept');
+      }, socket => assert.equal(fs.readFileSync(path.join(socket, 'kept'), 'utf8'), 'kept'));
+    });
+
+    test('a symbolic link to a live socket stays, and so does that socket', async () => {
+      const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'crw-live-'));
+      const live = path.join(elsewhere, 'live.sock');
+      const server = net.createServer(connection => connection.end('alive\n'));
+      await new Promise<void>(resolve => server.listen(live, resolve));
+      try {
+        await restartKeeps(await launch('k-link'), socket => {
+          fs.rmSync(socket);
+          fs.symlinkSync(live, socket);
+        }, socket => {
+          assert.equal(fs.readlinkSync(socket), live, 'the link stays');
+          assert.ok(fs.lstatSync(live).isSocket(), 'its target stays');
+        });
+        const answer = await new Promise<string>((resolve, reject) => {
+          const connection = net.connect(live, () => connection.once('data', data => resolve(String(data))));
+          connection.on('error', reject);
+        });
+        assert.equal(answer, 'alive\n', 'the linked socket still answers');
+      } finally {
+        server.close();
+        fs.rmSync(elsewhere, {recursive: true, force: true});
+      }
+    });
+
+    test('in a wake directory others can read (0755), even the stale socket stays', async () => {
+      const agent = await launch('k-shared-dir');
+      let before = 0;
+      const directory = path.dirname(events(agent)[0]!.split(' ')[2]!);
+      try {
+        await restartKeeps(agent, socket => {
+          before = fs.lstatSync(socket).ino;
+          fs.chmodSync(directory, 0o755);
+        }, socket => assert.equal(fs.lstatSync(socket).ino, before, 'the same socket file'));
+      } finally { fs.chmodSync(directory, 0o700); }
     });
   });
