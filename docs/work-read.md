@@ -17,10 +17,10 @@ work-read session-questions
 work-read ids
 work-read open-questions [--after N-ID] [--limit N]
 work-read --request
-work-read context --format claude|vibe|text|json
+work-read context --format claude|vibe|codex|text|json
 ```
 
-`work-read context` is the session-start hook of [agent-hooks.md](agent-hooks.md#the-project-context-hook), not a document subcommand: it prints at most one line (task ids, counts and a fixed sentence, in the agent's format), always exits 0, prints nothing on any failure, stops after 1.5 s, and is not accepted by `--request`. The rest of this page is about the document subcommands.
+`work-read context` is the session-start hook of [agent-hooks.md](agent-hooks.md#the-project-context-hook), not a document subcommand: it prints at most one line (task ids, counts and a fixed sentence, in the agent's format), always exits 0, prints nothing on any failure, stops after 1.5 s, and is not accepted by `--request`. With `--format codex` it reads its folder from the JSON Codex writes on standard input, never a session from its environment ([Codex](agent-hooks.md#codex)). The rest of this page is about the document subcommands.
 
 Arguments are parsed strictly: an unknown or repeated flag, a flag without value, a stray argument, a value longer than 100 bytes or holding a control character, and a malformed identifier (`T-` or `P-` and 2 to 32 hexadecimal digits, a product of letters, digits, `.`, `_` and `-`) are refused.
 

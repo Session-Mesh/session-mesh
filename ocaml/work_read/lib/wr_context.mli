@@ -16,7 +16,8 @@
     that whole process group, so nothing it started (the [git] the library runs
     to find the session's repository) outlives the cap. The timer works even
     when the inherited signal mask blocks SIGALRM. It never fails visibly: no
-    Mesh session ([MESH_SESSION] unset), no repository, an unreadable one, an
+    Mesh session ([MESH_SESSION] unset; for Codex, no valid standard input),
+    no repository, an unreadable one, an
     error or an exception all end with exit 0 and nothing on standard output or
     standard error.
 
@@ -33,6 +34,15 @@ type format =
   | Vibe
       (** Mistral Vibe [session_start]:
           [hook_specific_output.additional_context] *)
+  | Codex
+      (** Codex [SessionStart]: [hookSpecificOutput.additionalContext]. Codex
+          may run its hooks from one process shared by every session of a
+          Codex home, with the environment of the first session it served: no
+          session identity is read from the environment. The hook reads the
+          JSON Codex writes on standard input (at most 64 KiB, event
+          [SessionStart], [session_id] a lowercase UUID, [cwd] an absolute
+          existing folder; anything else: nothing printed) and reports the
+          tasks of that folder only. *)
   | Text
       (** the sentence alone, one line (an agent that adds a hook's stdout) *)
   | Json  (** the agent-independent document, for tests and future adapters *)

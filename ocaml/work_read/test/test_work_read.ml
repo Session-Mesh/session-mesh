@@ -331,6 +331,7 @@ let () =
       ("limits", Test_limits.tests);
       ("session-questions", Test_session_questions.tests);
       ("context", Test_context.tests);
+      ("context codex", Test_context_codex.tests);
       ("ids", Test_ids.tests);
       ("attempts", Test_read_attempts.tests);
       ("question context", Test_question_context.tests);

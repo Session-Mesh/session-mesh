@@ -112,12 +112,12 @@ A source is how one agent emits the generic events. Its `kind` is one of:
 
 | Kind | Mesh declares the hooks in | Today |
 |---|---|---|
-| `native_config` | a configuration the agent reads for this session only | Claude (inline `--settings`), Gemini (a private `GEMINI_CLI_HOME`), Vibe (a private `--add-dir` holding `.vibe/hooks.toml`) |
+| `native_config` | a configuration the agent reads for this session only | Claude (inline `--settings`), Gemini (a private `GEMINI_CLI_HOME`), Vibe (a private `--add-dir` holding `.vibe/hooks.toml`), Codex (`-c hooks.<Event>=...` on its command line, run once the user has trusted them) |
 | `plugin` | a plugin directory the agent loads | Copilot (`--plugin-dir`, shipped as is), agy (installed once by the user), OpenCode (code) |
 | `extension` | extension code loaded into the agent | Pi |
 | `wrapper` | a program around the agent | none |
 | `protocol` | a client of an agent protocol (ACP) that emits normalised events | none; ACP is set aside |
-| `none` | nowhere | Codex |
+| `none` | nowhere | none |
 
 A source row gives its `events` (generic event, native hook name), the `subscriptions` (which consumer is
 installed on which events, in the order the configuration is written), its `timeout` (value and unit, as
@@ -144,7 +144,7 @@ with a temporary home, no model), **read** (read in the installed package or bin
 | Antigravity (agy) 1.5.9 | plugin, installed once by the user, timeout 5 s | `SessionStart`, probably not on resume (read, not verified) | `injectSteps` (read) | 2 hooks (code) | not wired |
 | OpenCode 1.18.35 | plugin code | none (read) | `experimental.chat.system.transform` in plugin code (read) | translated in the plugin (code) | not wired |
 | Pi 1.5.2 | extension code | `session_start` (read) | `pi.sendMessage(..., {deliverAs: "nextTurn"})` in extension code (read) | none; the extension wakes Pi (code) | not wired |
-| Codex 0.170.0 | none | `SessionStart` (read) | `hookSpecificOutput.additionalContext` (read) | none | not wired |
+| Codex 0.170.0 | native_config, per-run `-c` overrides, timeout 5 s, run only once trusted by the user | `SessionStart`, also on resume (run) | `hookSpecificOutput.additionalContext`, added as a developer message (run) | none | **wired**, folder only (run: after "Trust all", the sentence reached the request of a local stand-in model; see [Codex](#codex)) |
 
 Why the others are not wired in this first slice:
 
@@ -158,12 +158,13 @@ Why the others are not wired in this first slice:
   `SessionStart` probably does not fire on resume: a reinstall by the user and a verification first.
 - **OpenCode and Pi.** No configurable session-start hook: injection means changing the plugin or the
   extension code to run `work-read context`, a source of kind `plugin`/`extension`, not a table line.
-- **Codex.** Its hooks live in the user's own configuration and a new hook must be reviewed by the user
-  before it runs; Mesh has no per-session place to declare one, and its `notify` would replace the user's.
+- **Codex, state.** `bin/mesh-event` finds its session through `MESH_SESSION_TOKEN` in its environment,
+  which Codex's shared process can hold from another session (see [Codex](#codex)); a `Stop` hook must
+  also print nothing or valid JSON. Not installed until the state hook identifies its session another way.
 
 ## The project context hook
 
-At the start (or resume) of a Claude or Vibe session started by Mesh, `work-read context` reads the project
+At the start (or resume) of a Claude, Vibe or Codex session started by Mesh, `work-read context` reads the project
 tracker ([work-read.md](work-read.md)) and adds one sentence to the agent's context, for example:
 
 ```text
@@ -187,19 +188,56 @@ Project tracker: 2 tasks linked to this session (T-4f5a, T-1a2b), 1 open questio
 - **Only where the table wires it**, only when `work-read` is installed (in `MESH_BIN_DIR`, or the opam
   switch of a source install), and only while `MESH_PROJECT_HOOKS` is not `0`, `off`, `false` or `no`. The
   switch is read by the web server when it builds a session's configuration: a change applies to the
-  sessions started (or restored) after it. A restored Claude command drops a project hook it carried from
-  an earlier switch value or another installation before adding the current one.
+  sessions started (or restored) after it. A restored Claude or Codex command drops a project hook it
+  carried from an earlier switch value or another installation before adding the current one.
 
 The hook is on by default because it is read-only and bounded in time, which the tests prove: a missing
 tracker, a locked tracker, a hanging read, `work-read` absent from the installation, and a terminal outside
 Mesh all leave the agent's start undelayed beyond the cap and its output unchanged.
+
+### Codex
+
+Mesh adds the hook to every Codex command it starts (both presets, a resume, a restore, an account alias)
+as one override for that run only:
+
+```text
+codex ... -c 'hooks.SessionStart=[{hooks=[{type="command",command="<bin>/work-read context --format codex",timeout=5}]}]'
+```
+
+Mesh writes no Codex file: not `config.toml`, not `hooks.json`, nothing under `/etc`.
+
+- **Codex runs it only once you trust it.** A new or changed hook definition is held back until the user
+  answers Codex's "Hooks need review" screen with "Trust all and continue" (or trusts it from "Review
+  hooks"). Codex then records the trust itself in the `config.toml` of that Codex home
+  (`[hooks.state."/<session-flags>/config.toml:session_start:0:0"] trusted_hash = "sha256:..."`) and does
+  not ask again while the definition stays the same. Mesh never answers that screen and never writes that
+  record. Untrusted, the hook does not run: `codex exec` skips it without a word, and "Continue without
+  trusting" starts the session without it. [operations.md](operations.md#codex-hooks-trust-once-per-codex-home)
+  says what the operator does.
+- **A stable definition.** The trust covers the command, so the command holds nothing that changes from one
+  launch to the next: no session name, no token, no environment value. It does change with the
+  installation directory (a move from a source install to a release, say), which asks for the trust again.
+  A user's own `-c hooks.SessionStart` (or `-c hooks={...}`) in a saved command is kept, and Mesh then adds
+  none.
+- **No identity from the environment.** Codex may run hooks from one process shared by every session of a
+  Codex home, started with the environment of the first session it served (observed with a bare `codex`,
+  codex-cli 0.170.0): a hook there would see another session's `MESH_SESSION` and `MESH_SESSION_TOKEN`. So
+  `--format codex` reads neither. It reads the JSON Codex writes on its standard input (at most 64 KiB):
+  the event must be `SessionStart`, `session_id` a lowercase UUID (Codex's conversation id) and `cwd` an
+  absolute existing folder; anything else prints nothing. Of the environment it reads only the tracker's own
+  variables (`HOME`, `WL_HOME`, `WL_HOST`, `WL_NOW`, `WL_LOCK_TIMEOUT`).
+- **Folder only.** Mesh keeps no mapping from Codex's `session_id` to a Mesh session that the hook could
+  read, so a Codex session is told about the tasks linked to its folder (or its repository and branch) and
+  not about the tasks and questions of its Mesh session, which `work_resume` gives.
+- **Outside Codex's sandbox.** Codex runs hooks outside its sandbox, which is why only this read-only,
+  bounded program is installed.
 
 ## Adding a hook or an agent
 
 - **A consumer on more events of an agent.** Add the event to the source's `subscriptions`: the
   generator installs every subscribed event of the consumers it handles. The `state` consumer is handled
   by the Claude, Gemini, agy and Vibe generators (Copilot's file is checked against the table), the
-  `project_context` consumer by the Claude and Vibe generators (`agentmcp.project_context_hooks`).
+  `project_context` consumer by the Claude, Vibe and Codex generators (`agentmcp.project_context_hooks`).
 - **A consumer on a new agent.** Subscribe it and, for `inject_context`, add the format to `inject`. If
   that agent's generator does not handle the consumer yet, add the call there too (for `project_context`,
   one call to `project_context_hooks` and the agent's way of writing a command hook), and make the
@@ -222,6 +260,13 @@ Mesh all leave the agent's start undelayed beyond the cap and its output unchang
   `work-read` or with the switch off, and differ by the project hook alone otherwise.
 - `tests/agent-hooks-fake-agent.test.ts`: a stand-in for Claude's and Vibe's hook runners runs the generated
   session-start hooks with the real `work-read` on a fictional tracker.
+- `tests/codex-hooks-launch.test.ts`: with a stand-in `codex` started by the real server and PTY host, the
+  exact `-c hooks.SessionStart` item on both presets, on an alias launch (its `CODEX_HOME`, its credentials
+  unset) and on its resume, no token or session name in it, none with `MESH_PROJECT_HOOKS=0`; and on
+  `agentmcp.inject`: an earlier Mesh hook replaced or removed, a user's own override kept.
+- `ocaml/work_read/test/test_context_codex.ml`: `--format codex` takes its folder from standard input and no
+  identity from the environment (another session's `MESH_SESSION` and token are ignored), refuses malformed
+  input silently, and keeps the cap.
 - `ocaml/work_read/test/test_context.ml`: the program itself (formats, silence, read-only, lock, cap); a
   hanging `git` killed with the program, also with SIGALRM blocked; ill-formed task ids never printed nor
   counted; the session token emptied in the `git` it starts.
