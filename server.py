@@ -4670,8 +4670,9 @@ async def api_agent_mail_read(request):
 
 
 def _require_owner_cookie(request):
-    """Consent is a human-browser decision, never a master/session bearer action."""
-    if request.headers.get("Authorization"):
+    """Consent is a human-browser decision, never a master/session bearer action: any Authorization header, even
+    an empty one, is refused (a browser sends none on these routes)."""
+    if "Authorization" in request.headers:
         raise web.HTTPUnauthorized()
     if not has_owner_cookie(request):
         raise web.HTTPUnauthorized()
@@ -4686,10 +4687,17 @@ ACCOUNTS_ROUTES = {"/api/accounts/profiles": "profiles.list", "/api/accounts/con
                    "/api/accounts/consent/set-pair": "consent.set_pair",
                    "/api/accounts/consent/remove-pair": "consent.remove_pair",
                    "/api/accounts/consent/reset": "consent.reset"}
-ACCOUNTS_MAX_BODY, ACCOUNTS_TIMEOUT, ACCOUNTS_MAX_REPLY = 16384, 5.0, 1024 * 1024
+# The time limit outlasts the helper's own SQLite busy timeout (5 s, ocaml/lib/mesh_backend_store.ml), so that a
+# contended store gives the helper's coded answer rather than ours.
+ACCOUNTS_MAX_BODY, ACCOUNTS_TIMEOUT, ACCOUNTS_MAX_REPLY = 16384, 8.0, 1024 * 1024
 ACCOUNTS_SLOTS = asyncio.Semaphore(4)
+# Four helpers run and eight requests wait at most: one more is 503 busy at once, so a burst cannot pile up.
+ACCOUNTS_MAX_PENDING, ACCOUNTS_QUEUE = 4 + 8, {"pending": 0}
 _ACCOUNTS_STATUSES = frozenset((200, 400, 404, 409, 413, 503))
 _ACCOUNTS_PUBLIC_PROFILE = {"id", "label", "backend", "enabled", "context_revision", "switch_qualified"}
+_ACCOUNTS_POLICY, _ACCOUNTS_PAIR = {"version", "revision", "global", "pairs"}, {"a", "b", "confirmation"}
+_ACCOUNTS_ACCOUNT, _ACCOUNTS_BACKENDS = {"backend", "id", "context_revision"}, ("claude", "codex", "opencode-v2", "pi")
+_ACCOUNTS_CONFIRMATIONS = ("ask", "skip")
 _ACCOUNTS_CODE_RE = re.compile(r"[a-z0-9-]{1,64}")
 
 
@@ -4747,7 +4755,8 @@ def _profile_envelope(op, code, out):
         return None
     if not ok:
         return reply if isinstance(reply["code"], str) and _ACCOUNTS_CODE_RE.fullmatch(reply["code"]) else None
-    return reply if op != "profiles.list" or _public_listing(reply["data"]) else None
+    shape = _public_listing if op == "profiles.list" else _consent_policy   # every other route is a consent.* op
+    return reply if shape(reply["data"]) else None
 
 
 def _public_listing(data):
@@ -4759,6 +4768,24 @@ def _public_listing(data):
         isinstance(p, dict) and set(p) == _ACCOUNTS_PUBLIC_PROFILE
         and all(isinstance(p[key], str) for key in ("id", "label", "backend", "context_revision"))
         and p["enabled"] in (True, False) and p["switch_qualified"] is False for p in profiles)
+
+
+def _consent_policy(data):
+    """consent.* data: the store's policy exactly, its four keys, an integer revision, the global choice and the
+    pairs, each with its two accounts (backend, id, context revision) and its choice."""
+    if not isinstance(data, dict) or set(data) != _ACCOUNTS_POLICY or not isinstance(data["pairs"], list):
+        return False
+    revision = data["revision"]
+    return (type(data["version"]) is int and data["version"] == 1 and type(revision) is int and revision >= 0
+            and data["global"] in _ACCOUNTS_CONFIRMATIONS and all(_consent_pair(pair) for pair in data["pairs"]))
+
+
+def _consent_pair(pair):
+    return (isinstance(pair, dict) and set(pair) == _ACCOUNTS_PAIR and pair["confirmation"] in _ACCOUNTS_CONFIRMATIONS
+            and all(isinstance(account, dict) and set(account) == _ACCOUNTS_ACCOUNT
+                    and account["backend"] in _ACCOUNTS_BACKENDS
+                    and isinstance(account["id"], str) and isinstance(account["context_revision"], str)
+                    for account in (pair["a"], pair["b"])))
 
 
 async def _accounts_body(request):
@@ -4789,7 +4816,13 @@ async def api_accounts(request):
         body, refusal = await _accounts_body(request)
         if refusal is not None:
             return refusal
-    ran = await _profile_run(op, body)
+    if ACCOUNTS_QUEUE["pending"] >= ACCOUNTS_MAX_PENDING:   # no await between this check and the count
+        return accounts_refusal(503, "busy")
+    ACCOUNTS_QUEUE["pending"] += 1
+    try:
+        ran = await _profile_run(op, body)
+    finally:
+        ACCOUNTS_QUEUE["pending"] -= 1
     reply = _profile_envelope(op, *ran) if ran is not None else None
     if reply is None:
         if ran is not None:

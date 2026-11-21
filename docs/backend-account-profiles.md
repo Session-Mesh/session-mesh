@@ -97,7 +97,8 @@ path chooses the operation, never the body.
 | `POST /api/accounts/consent/reset` | `consent.reset` |
 
 - **Caller.** The owner's browser only: the owner cookie, and no `Authorization` header of any
-  kind. The master Bearer token, a session token, and a missing or wrong cookie are all `401`. A
+  kind. The master Bearer token, a session token, an empty or all-space `Authorization` header
+  beside the cookie, and a missing or wrong cookie are all `401`, as on every owner-only route. A
   foreign `Origin`, or a `Sec-Fetch-Site` other than `same-origin` or `none`, is a bare `403`,
   reads included.
 - **Request.** A `POST` body holds the operation's fields without `version` and `op`, as in the
@@ -110,12 +111,19 @@ path chooses the operation, never the body.
   for a refused request; 413; 503.
 - **Refusals the server gives itself**, in the same envelope, before the helper runs:
   `400 invalid-request` (a query string, or a body that is not a JSON object's text),
-  `413 request-too-large` and `415 unsupported-media-type`.
-- **Fail closed.** No helper, no complete line within 5 s, or a reply that is not exactly the
-  envelope gives `503 backend-helper-unavailable`, and the helper's output is not relayed. Not
-  exactly the envelope means: an unknown key, a status outside 200/400/404/409/413/503, `ok` or
-  the exit code disagreeing with the status, or a `profiles.list` profile with more than its
-  public fields.
+  `413 request-too-large` and `415 unsupported-media-type`. When four helpers are running and eight
+  more requests are waiting for one, the next request is `503 busy` at once.
+- **Fail closed.** No helper, no complete line within 8 s, or a reply that is not exactly the
+  envelope gives `503 backend-helper-unavailable`, and the helper's output is not relayed. The
+  8 s outlast the helper's own 5 s store busy timeout, so a contended store gives the helper's
+  coded answer. Not exactly the envelope means: an unknown key, a status outside
+  200/400/404/409/413/503, `ok` or the exit code disagreeing with the status, or `data` that is
+  not exactly its operation's shape: for `profiles.list`, `configured`, `registry_revision` and
+  profiles with their six public fields; for every `consent.*` operation, the policy (`version`,
+  an integer `revision`, `global` and `pairs`, each pair with its two accounts' `backend`, `id`
+  and `context_revision`, and its `confirmation`).
+- **A failed write.** A `503` on a write does not say whether the helper committed the change.
+  Read `GET /api/accounts/consent` again and send the next edit with the revision it gives.
 
 The server runs `mesh-profile --http <operation>` as an argument vector, never through a shell, in
 its own process group, with an environment of `MESH_CONF_DIR` (the server's configuration folder,

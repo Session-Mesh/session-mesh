@@ -11,6 +11,7 @@
 import assert from 'node:assert/strict';
 import {createHmac} from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, type Scratch, startMesh} from './mesh-server-lib.ts';
@@ -54,6 +55,20 @@ async function call(mesh: Mesh, method: string, route: string, options: {
   let json: any = null;
   try { json = JSON.parse(text); } catch { /* a framework answer is plain text */ }
   return {status: response.status, text, json, type: response.headers.get('content-type')};
+}
+
+/** The status of a request sent with node:http, which keeps a header value as given (fetch trims it). */
+function rawCall(mesh: Mesh, method: string, route: string, headers: Record<string, string>): Promise<number> {
+  const body = method === 'POST' ? '{"expected_revision":0}' : '';
+  return new Promise((resolve, reject) => {
+    const request = http.request(`${mesh.base}${route}`, {method, headers: {...headers, Cookie: ownerCookie(mesh),
+      Origin: mesh.base, 'Content-Type': 'application/json', 'Content-Length': String(body.length)}}, response => {
+      response.resume();
+      response.on('end', () => resolve(response.statusCode ?? 0));
+    });
+    request.on('error', reject);
+    request.end(body);
+  });
 }
 
 /** A coded refusal or answer in the helper's envelope, with HTTP status === http_status. */
@@ -103,6 +118,16 @@ function fakeHelper(directory: string): string {
     ok: `echo '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":0,"global":"ask","pairs":[]}}'; exit 0`,
     list: `echo '{"http_status":200,"version":1,"ok":true,"data":{"configured":false,"registry_revision":null,"profiles":[]}}'; exit 0`,
     sleep: 'exec sleep 60',
+    // consent.* data that is not the store's policy: a folder instead, or a pair account with one more key.
+    secret: `echo '{"http_status":200,"version":1,"ok":true,"data":{"path":"/some/secret"}}'; exit 0`,
+    pairpath: `echo '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":2,"global":"skip","pairs":[`
+      + `{"a":{"backend":"claude","id":"a","context_revision":"0","root":"/x"},"b":{"backend":"claude","id":"b",`
+      + `"context_revision":"0"},"confirmation":"ask"}]}}'; exit 0`,
+    revision: `echo '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":"/x","global":"ask","pairs":[]}}'; exit 0`,
+    // A helper that answers after 2 s (the queue test), or after 6 s with its own coded busy answer (the store's
+    // SQLite busy timeout is 5 s: the server must wait longer than that).
+    hold: `sleep 2; echo '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":0,"global":"ask","pairs":[]}}'; exit 0`,
+    storebusy: `sleep 6; echo '{"http_status":503,"version":1,"ok":false,"code":"backend-store-busy"}'; exit 1`,
   };
   const cases = Object.entries(answers).map(([mode, action]) => `  ${mode}) ${action};;`).join('\n');
   fs.writeFileSync(script, `#!/bin/sh\nd='${directory}'\nprintf '%s\\n' "$@" > "$d/argv"\nenv > "$d/env"\n`
@@ -143,6 +168,15 @@ describe('only the owner browser crosses', {skip}, () => {
       assert.equal((await call(real, method, route, {body, cookie: null, headers: bearer})).status, 401);
       assert.equal((await call(real, method, route, {body, headers: bearer})).status, 401);
       assert.equal((await call(real, method, route, {body, headers: {Authorization: 'MeshSession forged.token'}})).status, 401);
+    }
+  });
+
+  test('an empty or all-space Authorization header beside the valid cookie is 401 too', async () => {
+    for (const [method, route] of ROUTES) {
+      for (const value of ['', '   ']) {
+        const reply = await rawCall(real, method, route, {Authorization: value});
+        assert.equal(reply, 401, `${method} ${route} Authorization=${JSON.stringify(value)}`);
+      }
     }
   });
 
@@ -258,14 +292,38 @@ describe('fail closed', {skip}, () => {
   const mode = (name: string) => fs.writeFileSync(path.join(fakeDir, 'mode'), name);
   for (const [name, route] of [['garbage', '/api/accounts/consent'], ['mismatch', '/api/accounts/consent'],
     ['exitcode', '/api/accounts/consent'], ['status', '/api/accounts/consent'], ['extra', '/api/accounts/consent'],
-    ['roots', '/api/accounts/profiles'], ['nonewline', '/api/accounts/consent'], ['beside', '/api/accounts/profiles']]) {
+    ['roots', '/api/accounts/profiles'], ['nonewline', '/api/accounts/consent'], ['beside', '/api/accounts/profiles'],
+    ['secret', '/api/accounts/consent'], ['pairpath', '/api/accounts/consent'], ['revision', '/api/accounts/consent']]) {
     test(`a helper answer that is not its envelope (${name}) is 503, never relayed`, async () => {
       mode(name!);
       const reply = await call(fake, 'GET', route!);
       envelope(reply, 503, 'backend-helper-unavailable');
-      assert.doesNotMatch(reply.text, /roots|detail|teapot/);
+      assert.doesNotMatch(reply.text, /roots|detail|teapot|secret|\/x/);
     });
   }
+
+  test('a write op whose data is not the policy is 503 too: each consent op has the closed policy shape', async () => {
+    mode('secret');
+    for (const route of Object.keys(WRITES)) {
+      const reply = await call(fake, 'POST', route, {body: {expected_revision: 0}});
+      envelope(reply, 503, 'backend-helper-unavailable');
+      assert.doesNotMatch(reply.text, /secret/);
+    }
+  });
+
+  test('the helper outlasts its own store busy timeout: its coded answer is relayed, not a server 503', async () => {
+    mode('storebusy');
+    envelope(await call(fake, 'POST', '/api/accounts/consent/reset', {body: {expected_revision: 0}}), 503, 'backend-store-busy');
+  });
+
+  test('a burst beyond four running and eight waiting is 503 busy at once, the rest is served', async () => {
+    mode('hold');
+    const replies = await Promise.all(Array.from({length: 16}, () => call(fake, 'GET', '/api/accounts/consent')));
+    const busy = replies.filter(reply => reply.status === 503);
+    for (const reply of busy) envelope(reply, 503, 'busy');
+    assert.equal(busy.length, 4, replies.map(reply => reply.status).join(' '));
+    for (const reply of replies.filter(reply => reply.status !== 503)) envelope(reply, 200);
+  });
 
   test('a refusal keeps its status: a 409 is never turned into a 200', async () => {
     mode('conflict');

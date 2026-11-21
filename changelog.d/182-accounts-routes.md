@@ -7,5 +7,6 @@ kind: added
   `/api/accounts/consent*`, which run `mesh-profile` and return its answer with its own status. Only
   the owner cookie is accepted, the profile lookup that returns folders has no route, and no route
   switches an account; a session's switch request is still always put to the owner. Without
-  `mesh-profile` the routes answer 503. See
+  `mesh-profile` the routes answer 503, and beyond four running and eight waiting requests they
+  answer `503 busy`. See
   [the HTTP routes](docs/backend-account-profiles.md#http-routes).
