@@ -171,6 +171,7 @@ const ACCEPTED_STATUS = `
   POST /api/config/elevate 400
   POST /api/config/elevate/revoke 400
   POST /api/config/launch 403 elevation-required
+  POST /api/config/launch-options 403 elevation-required
   POST /api/agent-mail/consent/{request_id}/decision 400
   POST /api/agent-mail/consent/revoke 400
   POST /api/open 400
