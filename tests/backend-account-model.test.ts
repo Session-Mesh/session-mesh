@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {readFileSync} from 'node:fs';
 import {BACKENDS, parseProfilesReply, parsePolicyReply, effectiveConfirmation, pairKey,
   createBackendAccountController, type Backend, type Profile, type Policy} from '../static/backend-account-model.ts';
 
@@ -47,6 +48,13 @@ test('public labels match the canonical alias Unicode rules', () => {
   for (const label of ['x'.repeat(25), '😀'.repeat(25), 'ab\u202e', 'ab\u200b', ' Work ', '\u00a0']) {
     assert.throws(() => parseProfilesReply(listing([{...profile('a'), label}])));
   }
+});
+
+test('all 64 dual-backend aliases fit the bounded migrated registry', () => {
+  const profiles = (['claude', 'codex'] as const).flatMap(backend =>
+    Array.from({length: 64}, (_, index) => profile(`alias-${index}`, backend)));
+  assert.equal(parseProfilesReply(listing(profiles)).profiles.length, 128);
+  assert.throws(() => parseProfilesReply(listing([...profiles, profile('extra', 'pi')])));
 });
 
 test('pairs are unordered, backend-scoped and nontransitive; stale Skip falls back, stale Ask restricts', () => {
@@ -108,10 +116,10 @@ test('set/remove canonicalize IDs; retired rules can be removed without a regist
 });
 
 test('conflicts require an explicit refresh/review, never retry; errors do not echo private diagnostics', async () => {
-  for (const code of ['consent-revision-conflict', 'profile-registry-changed', 'unknown-profile']) {
+  for (const code of ['consent-revision-conflict', 'profile-registry-changed', 'profile-context-changed', 'consent-rule-capacity', 'consent-revision-exhausted']) {
     let mutations = 0;
     const controller = createBackendAccountController({load: async () => ({profiles: listing(), policy: reply(policy())}),
-      mutate: async () => { mutations++; return {version: 1, ok: false, code}; }});
+      mutate: async () => { mutations++; return {version: 1, ok: false, http_status: 409, code}; }});
     await controller.open();
     assert.equal(await controller.saveGlobal('skip'), false);
     assert.equal(controller.state.phase, 'conflict');
@@ -122,6 +130,60 @@ test('conflicts require an explicit refresh/review, never retry; errors do not e
     controller.close();
   }
   assert.throws(() => parsePolicyReply({version: 1, ok: false, code: '/private/credentials'}), /invalid-response/);
+});
+
+test('closed native precommit refusals are not uncertain writes; codes and HTTP status must agree', async () => {
+  const refused = {400: ['invalid-request', 'unsupported-request-version', 'invalid-account-pair', 'invalid-account-reference',
+    'profile-backend-mismatch', 'unsupported-operation'], 404: ['unknown-profile', 'profiles-unconfigured'], 413: ['request-too-large'],
+  503: ['disabled-profile', 'invalid-consent-policy', 'invalid-profile-config', 'unsafe-profile-roots', 'unsafe-configuration-root',
+    'unsafe-backend-store', 'invalid-backend-state', 'unsupported-backend-store-version', 'backend-transaction-aborted',
+    'backend-store-busy', 'backend-journal-capacity']};
+  for (const [http_status, codes] of Object.entries(refused)) for (const code of codes) {
+    let calls = 0;
+    const controller = createBackendAccountController({load: async () => ({profiles: listing(), policy: reply(policy())}),
+      mutate: async () => { calls++; return {version: 1, ok: false, http_status: Number(http_status), code}; }});
+    await controller.open(); assert.equal(await controller.saveGlobal('skip'), false);
+    assert.equal(controller.state.phase, 'refused', code);
+    assert.equal(controller.state.snapshot?.policy.revision, 0);
+    assert.equal(await controller.reset(), false); assert.equal(calls, 1);
+    await controller.refresh(); assert.equal(controller.state.phase, 'ready'); assert.equal(calls, 1); controller.close();
+  }
+  for (const envelope of [
+    {version: 1, ok: false, http_status: 503, code: 'backend-helper-unavailable'},
+    {version: 1, ok: false, http_status: 503, code: 'backend-store-unavailable'},
+    {version: 1, ok: false, http_status: 503, code: 'new-error-code'},
+    {version: 1, ok: false, http_status: 503, code: 'invalid-request'},
+    {version: 1, ok: false, http_status: 400, code: 'invalid-request', path: 'private'},
+  ]) {
+    const controller = createBackendAccountController({load: async () => ({profiles: listing(), policy: reply(policy())}), mutate: async () => envelope});
+    await controller.open(); assert.equal(await controller.reset(), false); assert.equal(controller.state.phase, 'error'); controller.close();
+  }
+});
+
+test('helper unavailable after a committed write is uncertain even with a closed coded envelope', async () => {
+  let committed = policy(), calls = 0;
+  const controller = createBackendAccountController({load: async () => ({profiles: listing(), policy: reply(committed)}),
+    mutate: async () => { calls++; committed = {...policy('skip'), revision: 1};
+      return {version: 1, ok: false, http_status: 503, code: 'backend-helper-unavailable'}; }});
+  await controller.open(); assert.equal(await controller.saveGlobal('skip'), false);
+  assert.equal(controller.state.phase, 'error'); assert.equal(committed.global, 'skip');
+  assert.equal(await controller.reset(), false); assert.equal(calls, 1);
+  await controller.refresh(); assert.equal(controller.state.snapshot?.policy.global, 'skip'); assert.equal(calls, 1); controller.close();
+});
+
+test('EN/FR consent wording limits Skip to operator UI switches and retains unconditional session approval', () => {
+  for (const lang of ['en', 'fr']) {
+    const catalog = JSON.parse(readFileSync(new URL(`../static/i18n/${lang}.json`, import.meta.url), 'utf8'));
+    const global = catalog['backendAccounts.globalWarning'], pair = catalog['backendAccounts.pairScope'];
+    assert.match(catalog['backendAccounts.skip'], lang === 'en' ? /UI/i : /interface/i);
+    for (const text of [global, pair]) {
+      assert.match(text, lang === 'en' ? /operator.initiated.*UI/i : /initiées.*opérateur.*interface/i);
+      assert.match(text, lang === 'en' ? /agent.*session.*always.*human approval.*v1/i : /agent.*session.*toujours.*approbation humaine.*v1/i);
+    }
+    assert.match(global, lang === 'en' ? /current and future compatible profiles/i : /profils compatibles actuels et futurs/i);
+    assert.match(pair, lang === 'en' ? /remembered.*not proof.*human initiative/i : /mémorisée.*ne prouve pas.*initiative humaine/i);
+    assert.match(catalog['backendAccounts.status.refused'], lang === 'en' ? /refused.*not saved.*refresh.*review/i : /refusée.*non enregistrée.*actualisez.*vérifiez/i);
+  }
 });
 
 test('writes are single-flight; late responses after close/reopen cannot change the current generation', async () => {

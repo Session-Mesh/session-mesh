@@ -185,7 +185,7 @@ for (const lang of ['en', 'fr']) for (const width of [1440, 390]) {
 test('component: conflict and leaking/malformed success disable edits until explicit refresh; no replay', {skip}, async () => {
   const {page, errors, context} = await fixture();
   try {
-    for (const failure of ['consent-revision-conflict', 'profile-registry-changed', 'private']) {
+    for (const failure of ['consent-revision-conflict', 'profile-registry-changed', 'consent-rule-capacity', 'consent-revision-exhausted', 'private']) {
       await page.evaluate(f => { lab.fail = f; }, failure);
       await addPair(page, 'pi'); await control(page, 'save-pair').click();
       await statusIs(page, 'en', failure === 'private' ? 'error' : 'conflict');
@@ -200,6 +200,27 @@ test('component: conflict and leaking/malformed success disable edits until expl
     }
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
+});
+
+test('component: definite native refusals have their own not-saved status in both catalogs, never uncertain-write text', {skip}, async () => {
+  for (const lang of ['en', 'fr']) {
+    const {page, errors, context} = await fixture(lang, 390);
+    try {
+      for (const code of ['invalid-request', 'unknown-profile', 'request-too-large', 'unsafe-configuration-root', 'backend-transaction-aborted']) {
+        await page.evaluate(code => { lab.fail = code; }, code);
+        await control(page, 'global-skip').check(); await control(page, 'save-global').click(); await statusIs(page, lang, 'refused');
+        assert.equal(await control(page, 'save-global').isDisabled(), true);
+        assert.equal(await control(page, 'add-pair').isDisabled(), true);
+        assert.ok(!(await page.getByRole('status').textContent())!.includes(catalogs[lang]!['backendAccounts.status.error']!));
+        const calls = await page.evaluate(() => lab.calls.length);
+        await page.evaluate(() => { lab.fail = null; });
+        await control(page, 'refresh').click(); await statusIs(page, lang, 'ready');
+        assert.equal(await page.evaluate(() => lab.calls.length), calls);
+        assert.equal(await control(page, 'global-ask').isChecked(), true);
+      }
+      assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+  }
 });
 
 test('component: rejected public listing never reveals private fields or offers mutation controls', {skip}, async () => {

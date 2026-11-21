@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createBackendAccountApi} from '../static/backend-account-api.ts';
-import type {ConsentMutation} from '../static/backend-account-model.ts';
+import {createBackendAccountController, type ConsentMutation} from '../static/backend-account-model.ts';
 
 const signal = () => new AbortController().signal;
 const reply = (status = 200) => new Response(JSON.stringify({version: 1, ok: status === 200, http_status: status,
@@ -44,6 +44,23 @@ test('a native conflict remains a native reply, not a transport retry', async ()
   const response = await api.mutate({version: 1, op: 'consent.reset', expected_revision: 0}, signal()) as any;
   assert.equal(response.code, 'consent-revision-conflict'); assert.equal(calls, 1);
 });
+
+test('the companion route media-type refusal is certain and never retried', async () => {
+  let writes = 0;
+  const api = createBackendAccountApi(async () => {
+    writes++;
+    return new Response(JSON.stringify({version: 1, ok: false, http_status: 415, code: 'unsupported-media-type'}),
+      {status: 415, headers: {'Content-Type': 'application/json'}});
+  });
+  const controller = createBackendAccountController({mutate: api.mutate, load: async () => ({
+    profiles: {version: 1, ok: true, data: {configured: false, registry_revision: null, profiles: []}},
+    policy: {version: 1, ok: true, data: {version: 1, revision: 0, global: 'ask', pairs: []}},
+  })});
+  await controller.open();
+  assert.equal(await controller.saveGlobal('skip'), false);
+  assert.equal(controller.state.phase, 'refused');
+  assert.equal(await controller.reset(), false); assert.equal(writes, 1); controller.close();
+});
 test('a refused profile listing never starts the consent read', async () => {
   let calls = 0;
   const api = createBackendAccountApi(async () => { calls++; return new Response(JSON.stringify({
@@ -64,4 +81,26 @@ test('aborted or unsupported requests do not reach the transport', async () => {
   await assert.rejects(api.load(abort.signal));
   await assert.rejects(api.mutate({version: 1, op: 'switch.start', expected_revision: 0} as any, signal()));
   assert.equal(calls, 0);
+});
+
+test('401/403 reads remain read failures; submitted writes remain uncertain without an authoritative ACK', async () => {
+  for (const status of [401, 403]) {
+    let calls = 0, reading = true;
+    const api = createBackendAccountApi(async () => {
+      calls++;
+      if (!reading || calls === 1) return new Response('not authenticated', {status});
+      throw new Error('a refused profile read must not start a policy read');
+    });
+    const controller = createBackendAccountController({...api});
+    await controller.open(); assert.equal(calls, 1); assert.equal(controller.state.phase, 'error');
+    assert.equal(controller.state.snapshot, null, 'the panel selects loadError, not uncertain-write text');
+    controller.close(); reading = false;
+    const writer = createBackendAccountController({mutate: api.mutate, load: async () => ({
+      profiles: {version: 1, ok: true, data: {configured: false, registry_revision: null, profiles: []}},
+      policy: {version: 1, ok: true, data: {version: 1, revision: 0, global: 'ask', pairs: []}},
+    })});
+    await writer.open(); assert.equal(await writer.saveGlobal('skip'), false);
+    assert.equal(writer.state.phase, 'error'); assert.notEqual(writer.state.snapshot, null);
+    assert.equal(await writer.reset(), false); assert.equal(calls, 2); writer.close();
+  }
 });

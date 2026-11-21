@@ -2,9 +2,11 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 // Actual Mesh app/navigation + checked-in generated assets + real mesh-profile/SQLite.
-// /api/accounts/** is intercepted using the agreed fixed HTTP contract below. One explicit
-// lifecycle case also serves a benign local-entry.js so the unchanged app can be tested before
-// its real MeshUI.startLocalMesh() is called; every other case serves all real generated assets.
+// GET /api/config is intercepted to advertise the TEST capability account_settings:true;
+// the real server at this base does NOT advertise it. The SIX /api/accounts/** routes are
+// intercepted using the agreed fixed HTTP contract below. Lifecycle cases also serve a benign
+// local-entry.js so the actual app can be tested before its real MeshUI.startLocalMesh() is
+// called; every other case serves all real generated assets.
 // This does NOT qualify the real server accounts routes/authentication, or provider launch/switching.
 // MESH_BACKEND_ACCOUNT_HELPER explicitly selects a built mesh-profile (never MESH_PROFILE_CMD).
 // Without that artifact/Chromium this qualification skips; MESH_REQUIRE_BACKEND_ACCOUNT_APP=1
@@ -115,7 +117,9 @@ async function fixture() {
   }, prepare);
   const children = new Set<ChildProcess>(), contexts = new Set<BrowserContext>(), tasks = new Set<Promise<void>>();
   const problems: string[] = [], calls: Call[] = [];
-  let fault: {op: Operation; kind: 'private' | 'version'} | null = null;
+  let fault: {op: Operation; kind: 'private' | 'version' | 'helper-unavailable'} | null = null;
+  const configRequests: string[] = [];
+  const configHolds = new Set<ReturnType<typeof deferred<void>>>();
   type Hold = {committed: ReturnType<typeof deferred<NativeReply>>; release: ReturnType<typeof deferred<'reply' | 'drop'>>;
     finished: ReturnType<typeof deferred<void>>};
   let nextHold: Hold | null = null, nextProfilesHold: Hold | null = null;
@@ -171,6 +175,12 @@ async function fixture() {
       } finally { holds.delete(hold); hold.finished.resolve(); }
     }
     if (fault?.op === op) {
+      if (fault.kind === 'helper-unavailable') {
+        fault = null;
+        await route.fulfill({status: 503, contentType: 'application/json', body: JSON.stringify({
+          version: 1, ok: false, http_status: 503, code: 'backend-helper-unavailable',
+        })}); return;
+      }
       if (fault.kind === 'version') reply.version = 2;
       else if (op === 'profiles.list') reply.data!.profiles![0]!.roots = {config: path.join(mesh.confDir, 'private-reply-marker')};
       else Object.assign(reply.data!, {credentials: path.join(mesh.confDir, 'private-reply-marker')});
@@ -178,16 +188,28 @@ async function fixture() {
     }
     await route.fulfill({status: reply.http_status, contentType: 'application/json', headers: {'cache-control': 'no-store'}, body: JSON.stringify(reply)});
   }
-  async function context(lang = 'en', width = 1440): Promise<BrowserContext> {
+  async function context(lang = 'en', width = 1440, config: {flag?: unknown; status?: number;
+    hold?: ReturnType<typeof deferred<void>>} = {flag: true}): Promise<BrowserContext> {
     const context = await browser.newContext({locale: lang, viewport: {width, height: 900}, serviceWorkers: 'block'});
     contexts.add(context); context.setDefaultTimeout(8000); context.setDefaultNavigationTimeout(READY_TIMEOUT_MS);
+    await context.route(`${mesh.base}/api/config`, route => {
+      const task = (async () => {
+        assert.equal(route.request().method(), 'GET'); configRequests.push(route.request().url());
+        if (config.hold) { configHolds.add(config.hold); await config.hold.promise; configHolds.delete(config.hold); }
+        // A private configuration value must never be rendered by this availability check.
+        await route.fulfill({status: config.status ?? 200, contentType: 'application/json', body: JSON.stringify({
+          private_marker: mesh.confDir, capabilities: config.flag === undefined ? {} : {account_settings: config.flag},
+        })}).catch(() => undefined); // Disposal can abort a held config fetch.
+      })();
+      tasks.add(task); void task.finally(() => tasks.delete(task)); return task;
+    });
     await context.route(`${mesh.base}/api/accounts/**`, route => {
       const task = handle(route).catch(async error => { problems.push(String(error)); await route.abort('failed').catch(() => undefined); });
       tasks.add(task); void task.finally(() => tasks.delete(task)); return task;
     });
     return context;
   }
-  async function page(context: BrowserContext, lang = 'en', started = true): Promise<Page> {
+  async function page(context: BrowserContext, lang = 'en', started = true, available = true): Promise<Page> {
     const page = await context.newPage();
     page.on('pageerror', error => problems.push(String(error)));
     page.on('console', message => { if (/Content Security Policy|violat/i.test(message.text())) problems.push(message.text()); });
@@ -198,8 +220,10 @@ async function fixture() {
     assert.equal((await (await bundle).body()).toString(), fs.readFileSync(path.join(REPO, 'static/pane-actions.js'), 'utf8'), 'served generated bundle is the current worktree asset');
     if (started) {
       await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null && !meshStopped', undefined, {timeout: READY_TIMEOUT_MS});
-      await page.locator('dialog.backend-account-panel').waitFor({state: 'attached'});
-      assert.equal(await page.locator('#btn-accounts').textContent(), text(lang, 'title'));
+      if (available) {
+        await page.locator('dialog.backend-account-panel').waitFor({state: 'attached'});
+        assert.equal(await page.locator('#btn-accounts').textContent(), text(lang, 'title'));
+      }
     } else {
       await page.waitForFunction('typeof MeshUI !== "undefined" && typeof MeshUI.startLocalMesh === "function"', undefined, {timeout: READY_TIMEOUT_MS});
       assert.equal(await page.evaluate('meshContext === null && !meshStopped'), true, 'the actual Mesh runtime has not started');
@@ -208,6 +232,7 @@ async function fixture() {
   }
   async function dispose(): Promise<void> {
     for (const hold of holds) hold.release.resolve('drop');
+    for (const hold of configHolds) hold.resolve();
     await cleanupAccountsFixture({
       contexts: () => Promise.all(Array.from(contexts, context => context.close())),
       routes: () => Promise.all(Array.from(tasks)),
@@ -232,9 +257,9 @@ async function fixture() {
       release: (mode: 'reply' | 'drop') => hold.release.resolve(mode),
       finished: () => bounded(hold.finished.promise, 8000, 'held route completion')};
   }
-  return {mesh, native, context, page, dispose, calls,
+  return {mesh, native, context, page, dispose, calls, configRequests,
     posts: () => calls.filter(call => call.op.startsWith('consent.') && call.op !== 'consent.get'),
-    fault(op: Operation, kind: 'private' | 'version') { fault = {op, kind}; },
+    fault(op: Operation, kind: 'private' | 'version' | 'helper-unavailable') { fault = {op, kind}; },
     holdWrite() { const pending = newHold(); nextHold = pending.hold;
       return {committed: pending.received, release: pending.release}; },
     holdProfiles() { const pending = newHold(); nextProfilesHold = pending.hold;
@@ -402,11 +427,15 @@ test('running app: pre-start and post-dispose account clicks issue no requests; 
     });
     const page = await lab.page(context, 'en', false);
     assert.ok(entries > 0, 'the entry route, not app.js, withheld startup');
-    await page.locator('#btn-accounts').click();
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+    assert.equal(await page.locator('[data-mobile-action="btn-accounts"]').getAttribute('hidden'), '');
+    await page.locator('#btn-accounts').dispatchEvent('click');
     await bounded(page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))), 2000, 'pre-start click effects');
     assert.deepEqual(requests, []); assert.equal(lab.calls.length, 0); assert.equal(lab.posts().length, 0);
+    assert.equal(lab.configRequests.length, 0, 'no config request before start');
     assert.equal(await dialog(page).count(), 0);
     await bounded(page.evaluate(async () => { window.backendAccountsTestRuntime = await MeshUI.startLocalMesh(); }), READY_TIMEOUT_MS, 'actual Mesh runtime startup');
+    await page.locator('dialog.backend-account-panel').waitFor({state: 'attached'});
     const pending = lab.holdProfiles();
     await page.locator('#btn-accounts').click(); await status(page, 'en', 'loading');
     assert.equal((await pending.received()).ok, true);
@@ -420,10 +449,87 @@ test('running app: pre-start and post-dispose account clicks issue no requests; 
     assert.match((await aborted).failure()?.errorText ?? '', /ERR_ABORTED/, 'the real disposal aborted the fetch before the fixture dropped its late answer');
     pending.release('drop'); await pending.finished();
     const count = requests.length;
-    await page.locator('#btn-accounts').click();
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+    assert.equal(await page.locator('[data-mobile-action="btn-accounts"]').getAttribute('hidden'), '');
+    await page.locator('#btn-accounts').dispatchEvent('click');
     await bounded(page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))), 2000, 'post-dispose click effects');
     assert.equal(requests.length, count); assert.equal(lab.calls.length, 1); assert.equal(lab.posts().length, 0);
+    assert.equal(lab.configRequests.length, 1, 'no config request after dispose');
     assert.equal(await dialog(page).count(), 0, 'neither the late answer nor the click recreated the disposed panel');
+  });
+});
+
+test('running app: absent/false/nonboolean or refused config capability hides both entries without account probes', {skip, timeout: 120_000}, async () => {
+  await withFixture(async lab => {
+    for (const config of [{}, {flag: false}, {flag: 'true'}, {flag: true, status: 401}, {flag: true, status: 403}, {flag: true, status: 503}]) {
+      const context = await lab.context('fr', 900, config);
+      const response = context.waitForEvent('response', {predicate: r => new URL(r.url()).pathname === '/api/config'});
+      const page = await lab.page(context, 'fr', true, false); await (await response).finished();
+      await page.locator('#btn-accounts').dispatchEvent('click');
+      await page.locator('[data-mobile-action="btn-accounts"]').dispatchEvent('click');
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+      assert.equal(await page.locator('[data-mobile-action="btn-accounts"]').getAttribute('hidden'), '');
+      assert.equal(await dialog(page).count(), 0); assert.deepEqual(lab.calls, []);
+      await context.close();
+    }
+    assert.equal(lab.configRequests.length, 6);
+  });
+});
+
+test('running app: disposal aborts capability read and fences a late private config reply', {skip, timeout: 60_000}, async () => {
+  await withFixture(async lab => {
+    const hold = deferred<void>(), context = await lab.context('en', 1440, {flag: true, hold});
+    await context.route(`${lab.mesh.base}/static/local-entry.js*`, route => route.fulfill({contentType: 'text/javascript', body: '// Startup held.\n'}));
+    const page = await lab.page(context, 'en', false);
+    assert.equal(lab.configRequests.length, 0);
+    const requested = page.waitForRequest(r => new URL(r.url()).pathname === '/api/config');
+    await page.evaluate(async () => { window.backendAccountsTestRuntime = await MeshUI.startLocalMesh(); }); await requested;
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+    assert.equal(await dialog(page).count(), 0);
+    const aborted = page.waitForEvent('requestfailed', {predicate: r => new URL(r.url()).pathname === '/api/config'});
+    await page.evaluate(() => window.backendAccountsTestRuntime!.dispose());
+    assert.match((await aborted).failure()?.errorText ?? '', /ERR_ABORTED/);
+    hold.resolve();
+    await page.locator('#btn-accounts').dispatchEvent('click');
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+    assert.equal(await page.locator('[data-mobile-action="btn-accounts"]').getAttribute('hidden'), '');
+    assert.equal(await dialog(page).count(), 0); assert.equal(lab.configRequests.length, 1); assert.deepEqual(lab.calls, []);
+    assert.ok(!(await page.locator('body').textContent())!.includes(lab.mesh.confDir));
+  });
+});
+
+test('running app: coded helper-unavailable after real SQLite commit remains uncertain and requires explicit review', {skip, timeout: 60_000}, async t => {
+  await withFixture(async lab => {
+    const context = await lab.context(), page = await lab.page(context); await open(page);
+    lab.fault('consent.set_global', 'helper-unavailable');
+    await control(page, 'global-skip').check(); await control(page, 'save-global').click(); await status(page, 'en', 'error');
+    const persisted = (await lab.native('consent.get')).data!;
+    const displayed = await dialog(page).getByRole('status').textContent();
+    assert.equal(persisted.global, 'skip'); assert.equal(persisted.revision, 1);
+    assert.equal(lab.posts()[0]!.reply?.ok, true, 'native success receipt precedes the simulated missing-ACK 503');
+    assert.equal(await control(page, 'save-global').isDisabled(), true); assert.equal(lab.posts().length, 1);
+    await control(page, 'refresh').click(); await status(page, 'en', 'ready');
+    assert.equal(await control(page, 'global-skip').isChecked(), true); assert.equal(lab.posts().length, 1);
+    t.diagnostic(JSON.stringify({native_write: lab.posts()[0]!.reply, persisted, displayed, mutation_count: lab.posts().length}));
+  });
+});
+
+test('running app: French toolbar controls remain inside the bar at 390/900/1100/1300/1440px', {skip, timeout: 90_000}, async () => {
+  await withFixture(async lab => {
+    for (const width of [390, 900, 1100, 1300, 1440]) {
+      const context = await lab.context('fr', width), page = await lab.page(context, 'fr');
+      const clipped = await page.locator('.bar').evaluate(bar => {
+        const bounds = bar.getBoundingClientRect();
+        return Array.from(bar.querySelectorAll('button')).filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden')
+          .filter(el => { const b = el.getBoundingClientRect(); return b.left < bounds.left || b.right > bounds.right || b.top < bounds.top || b.bottom > bounds.bottom
+            || b.right > innerWidth || el.scrollWidth > el.clientWidth; }).map(el => el.id);
+      });
+      assert.deepEqual(clipped, [], `French toolbar at ${width}px`);
+      await open(page, 'fr', width); await fits(page); await control(page, 'close').click();
+      assert.equal(lab.posts().length, 0); await context.close();
+    }
   });
 });
 

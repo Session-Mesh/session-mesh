@@ -10,13 +10,13 @@
   overflow: auto;
   color: inherit;
   background: var(--bg, Canvas);
-  border: 1px solid var(--border, GrayText);
+  border: 1px solid var(--line, GrayText);
   border-radius: .5rem;
   overflow-wrap: anywhere;
 }
 .backend-account-panel * { box-sizing: border-box; min-width: 0; }
 .backend-account-panel fieldset { margin: 1rem 0; max-width: 100%; }
-.backend-account-panel section { padding-block: .5rem; border-bottom: 1px solid var(--border, GrayText); }
+.backend-account-panel section { padding-block: .5rem; border-bottom: 1px solid var(--line, GrayText); }
 .backend-account-panel h4, .backend-account-panel p, .backend-account-panel li { white-space: normal; overflow-wrap: anywhere; }
 .backend-account-panel label { display: block; margin-block: .5rem; }
 .backend-account-panel select { display: block; width: 100%; max-width: 100%; min-height: 44px; }
