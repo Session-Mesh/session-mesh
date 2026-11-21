@@ -49,7 +49,8 @@ export class ProductPlace {
   async reopen(view: ProductView, task: string | null, tabScroll: number | null, series: Series): Promise<void> {
     await view.ready;
     if (!task || !series.live() || view.current() === 'overview') return;
-    await this.host.sheet.select(task, undefined, true);
-    if (series.live() && this.host.sheet.selected === task) this.host.sheet.tabScroll = tabScroll;
+    const reading = this.host.sheet.select(task, undefined, true);   // notes the scroll under the sheet before its read
+    this.host.sheet.tabScroll = tabScroll;   // the stored one instead; a sheet opened later notes its own
+    await reading;
   }
 }

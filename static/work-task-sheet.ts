@@ -109,7 +109,8 @@ export class TaskSheet {
     this.host.memory.note();
     // The control that opened the sheet is in the tab shown (a card, or a task heading of the Questions tab).
     const selector = `[data-task="${CSS.escape(previous ?? '')}"]`;
-    if (previous) focusFirst(view.currentPanel().querySelector<HTMLElement>(selector) ?? view.root.querySelector<HTMLElement>(selector)
+    const shown = [...view.root.querySelectorAll<HTMLElement>(selector)].find(node => !node.closest('[hidden]')) ?? null;
+    if (previous) focusFirst(view.currentPanel().querySelector<HTMLElement>(selector) ?? shown
       ?? view.currentPanel(), restore !== null);   // a task past those drawn ("Show more"): its tab
   }
 
