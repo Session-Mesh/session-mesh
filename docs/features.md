@@ -1335,11 +1335,11 @@ project editing. Existing catalogs remain readable. See [Projects](projects.md).
 On a narrow screen the page shows one column, and "Sessions" opens the sidebar as a drawer. An input
 line ("Write to the agent… (⏎ sends)") replaces typing into the terminal, and a key bar provides
 Esc, Tab, Ctrl, arrows, "↵ line", ^C, "Copy", "Paste", ✎ (the multi-line composer), 📎 and ⏎.
-A tap on the key bar never opens or closes the phone keyboard: the focus stays where it was. With
-the keyboard closed, the arrows move through an agent's menus and lists with the whole screen
-visible; with it open, it stays open. After arming Ctrl with the keyboard closed, tap the input
-line to type the letter. "Panes" lists the open panes and "Actions" holds the top-bar buttons. A long press on a session
-opens its menu.
+A key of the bar other than ✎ and 📎 (which open their own dialog) never opens or closes the
+phone keyboard: the focus stays where it was. With the keyboard closed, the arrows move through
+an agent's menus and lists with the whole screen visible; with it open, it stays open. After
+arming Ctrl with the keyboard closed, tap the input line to type the letter. "Panes" lists the
+open panes and "Actions" holds the top-bar buttons. A long press on a session opens its menu.
 
 **Direct writing.** A phone keyboard composes words and corrects them, so the input line holds
 your text and sends it as one paste. Agents, however, show their command and skill completion
