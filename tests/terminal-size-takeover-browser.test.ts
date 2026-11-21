@@ -12,6 +12,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import type {Page} from 'playwright-core';
 import {showSection} from './helpers/config-sections.ts';
+import {findTheme} from '../static/themes.ts';
 import {type PaneView, recordControlMessages, REPO, rows, skip, TerminalMesh, typeLine, waitForRow} from './terminal-browser-lib.ts';
 
 declare const active: PaneView & {el: HTMLElement; focus(): void; fit: {proposeDimensions(): {cols: number; rows: number}}};
@@ -220,3 +221,63 @@ async function assertNoOverflow(page: Page): Promise<void> {
   });
   assert.deepEqual(overflow, {page: false, dialog: false, card: false, cardRight: true});
 }
+
+const themeColours = (id: 'light'): Record<string, string> => ({...findTheme(id)!.colours});
+
+type RingStyle = {outline: string; width: number; offset: number; ring: string; background: string; boxShadow: string};
+
+/** The focus indicator of the radio button `mode`, and the colour it is drawn on (the first
+ * ancestor with a background). `palette` replaces the theme's colours first, as a theme does. */
+function ringOf(page: Page, mode: string, palette: Record<string, string> = {}): Promise<RingStyle> {
+  return page.evaluate(([value, colours]) => {
+    for (const [name, colour] of Object.entries(colours)) document.documentElement.style.setProperty(name, colour);
+    const input = document.querySelector<HTMLInputElement>(`#dlg-config input[name="size-takeover"][value="${value}"]`)!;
+    const style = getComputedStyle(input);
+    let behind: Element | null = input;
+    while (behind && /rgba\(.*, 0\)|transparent/.test(getComputedStyle(behind).backgroundColor)) behind = behind.parentElement;
+    return {outline: style.outlineStyle, width: parseFloat(style.outlineWidth), offset: parseFloat(style.outlineOffset),
+      ring: style.outlineColor, background: behind ? getComputedStyle(behind).backgroundColor : 'rgb(0, 0, 0)',
+      boxShadow: style.boxShadow};
+  }, [mode, palette] as const);
+}
+
+const channels = (colour: string): number[] => (colour.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+function luminance(colour: string): number {
+  const [r, g, b] = channels(colour).map(c => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
+const contrast = (a: string, b: string): number => {
+  const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (light! + 0.05) / (dark! + 0.05);
+};
+const visibleRing = (style: RingStyle): boolean => style.outline !== 'none' && style.width >= 2;
+
+describe('keyboard focus ring of the Configuration size radios', {skip}, () => {
+  const mesh = new TerminalMesh();
+  before(() => mesh.start());
+  after(() => mesh.stop());
+
+  test('Tab shows a ring on the radio, in the dark and light themes; a mouse click shows none', async () => {
+    await mesh.newShell('ring');
+    const page = await mesh.openPage('ring', DESKTOP, recordControlMessages);
+    await openTerminalSettings(page);
+    const radio = page.locator('#dlg-config input[name="size-takeover"][value="auto"]');
+    assert.equal(await page.evaluate(() => document.querySelector('#dlg-config input[name="size-takeover"][value="auto"]')!.matches(':focus-visible')), false);
+
+    await radio.click();   // the pointer: the browser shows no ring for a mouse press on a radio
+    assert.equal(visibleRing(await ringOf(page, 'auto')), false, 'a mouse click shows no ring');
+
+    await page.locator('#dlg-config .config-nav-button[data-section-id="terminal"]').focus();
+    for (let step = 0; step < 60; step += 1) {
+      await page.keyboard.press('Tab');
+      if (await radio.evaluate(element => element === document.activeElement)) break;
+    }
+    assert.equal(await radio.evaluate(element => element === document.activeElement && element.matches(':focus-visible')), true, 'Tab reached the radio');
+    for (const [label, theme] of [['dark', {}], ['light', themeColours('light')]] as const) {
+      const style = await ringOf(page, 'auto', theme);
+      assert.equal(visibleRing(style), true, `${label}: a visible outline on keyboard focus (${JSON.stringify(style)})`);
+      assert.ok(contrast(style.ring, style.background) >= 3, `${label}: ring ${style.ring} on ${style.background} reaches 3:1`);
+    }
+    await page.context().close();
+  });
+});

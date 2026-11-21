@@ -553,10 +553,16 @@ session had before this browser attached, then rewrapped to the browser's width.
   used to keep copies of the footer in its scrollback. So one browser owns the size, and the
   others show the terminal at that size, clipped (the last rows stay visible). By default the
   device in use takes the size by itself, with no banner: a click, a tap or a key in its terminal
-  (or in the phone input line and key bar), its terminal getting the focus, or its page shown
-  again while its window has the focus, sends a take-over. A timer, a window resize or a page
+  (or in the phone input line and key bar) sends a take-over. So does its terminal getting the
+  focus, or its page shown again, but only while its window has the focus and only right after a
+  person's action on that page (the browser's `navigator.userActivation.isActive`): a focus
+  that a script gives the terminal takes nothing. A timer, a window resize or a page
   that only stays open and visible sends none, so two open devices do not fight; a browser sends
-  at most one take-over every two seconds per pane. The per-browser preference "Terminal size
+  at most one take-over every two seconds per pane. A program that does not redraw when its
+  window size changes (it ignores SIGWINCH) can leave copies of its footer in a device's
+  scrollback after automatic switches (measured: 39 copies after 4 switches, with a footer
+  redrawn in place every 250 ms by such a program); a program that redraws on resize leaves
+  exactly one, and the manual mode never resizes. The per-browser preference "Terminal size
   with several devices" (Configuration, Terminal section; client store key `sizeTakeover`,
   `"manual"` or `"auto"`, the default) switches a browser to the manual mode: the banner
   "Terminal sized by another device" and its button "Take the size back", the only way it then
@@ -566,8 +572,8 @@ session had before this browser attached, then rewrapped to the browser's width.
   - the owner's own changes (window resized, phone keyboard, font size) apply; a size sent by a
     browser that does not own it (a fit, a focus, the page coming back) changes nothing;
   - a take-over (automatic, or "Take the size back") always applies and makes that browser the
-    owner: the last take-over wins. `mesh-attach` and other clients that predate this rule take the size when they attach
-    or resize, as before;
+    owner: the last take-over wins. `mesh-attach` and other clients that predate this rule take
+    the size when they attach or resize, as before;
   - when the owner closes the session (or its page), nobody owns the size, and the next browser
     that sends its size takes it.
 
