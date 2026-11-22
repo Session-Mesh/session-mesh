@@ -391,7 +391,10 @@ let write_plan ?(check_roots = fun () -> Ok ()) io ~uid ~source ~target planned 
     | Ok () ->
         let uncertain = unresolved_rename state in
         let undone = roll_back ~check_roots io ~target state in
-        let undone = { undone with uncertain } in
+        let undone =
+          { undone with
+            uncertain = List.sort_uniq String.compare (uncertain @ undone.uncertain) }
+        in
         (match check_roots () with
         | Ok () -> incomplete error undone
         | Error _ -> root_changed undone)

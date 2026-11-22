@@ -410,6 +410,42 @@ let test_transient_root_check_reports_skipped_cleanup root =
     (contains message project);
   Alcotest.(check bool) "no absolute paths" false (contains message root)
 
+let test_transient_committed_cleanup_remains_reported root =
+  let source = claude_account root "native-source" in
+  let target = claude_account root "native-target" in
+  write (path source "first.jsonl") "first\n";
+  write (path source "second.jsonl") "second\n";
+  let renames = ref 0 and checks = ref 0 in
+  let io =
+    {
+      (failing_io ()) with
+      C.rename =
+        (fun before after ->
+          incr renames;
+          if !renames = 2 then
+            raise (Unix.Unix_error (Unix.EIO, "rename", ""));
+          Unix.rename before after);
+    }
+  in
+  let check_roots () =
+    incr checks;
+    if !checks = 3 then
+      Error { C.code = "account_folder_refused"; message = "changed" }
+    else Ok ()
+  in
+  let refusal =
+    Write.write_plan ~check_roots (writer_io io) ~uid ~source ~target
+      [ ("first.jsonl", 6, Write.Copy); ("second.jsonl", 7, Write.Copy) ]
+    |> expose_refusal
+  in
+  refused_with "carry_rollback_incomplete" refusal;
+  Alcotest.(check bool) "first committed copy remains" true
+    (exists (path target "first.jsonl"));
+  Alcotest.(check bool) "skipped committed cleanup remains in the report" true
+    (contains (message_of refusal) "first.jsonl");
+  Alcotest.(check bool) "no absolute paths" false
+    (contains (message_of refusal) root)
+
 let test_failed_temporary_and_folder_cleanup_are_reported root =
   let source = claude_account root "native-source" in
   with_conversation source;
@@ -731,7 +767,8 @@ let () =
             ("default target environment is pinned", test_default_target_environment_is_pinned);
             ("replacement target is not cleaned", test_replaced_target_is_not_cleaned);
             ("replacement during write retains recovery", test_replaced_target_during_write_retains_recovery);
-            ("transient root check reports skipped cleanup", test_transient_root_check_reports_skipped_cleanup);
+             ("transient root check reports skipped cleanup", test_transient_root_check_reports_skipped_cleanup);
+             ("transient committed cleanup remains reported", test_transient_committed_cleanup_remains_reported);
             ("failed staged unlink and rmdir are reported", test_failed_temporary_and_folder_cleanup_are_reported);
             ("failed rmdir without staged leftovers", test_failed_folder_cleanup_without_temporary);
             ("copy rename changes root after install", test_rename_transition Copy_installed);
