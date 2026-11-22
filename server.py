@@ -444,6 +444,7 @@ ACCOUNT_UNKNOWN = "Unknown account alias (accounts.json on the runner)"
 ACCOUNT_REFUSED = "Account alias refused: check accounts.json and its folders on the runner (details in the server log)"
 # the first reading always runs; "file": absent, refused or ok (what an agent is told of accounts.json)
 _ACCOUNTS = {"signature": "not read yet", "accounts": [], "protected": None, "file": "absent"}
+_ACCOUNTS_REFRESH_LOCK = asyncio.Lock()
 DEFAULT_ACCOUNT = {"id": "default", "label": "Default account", "claude": True, "codex": True}
 
 
@@ -542,6 +543,11 @@ def _protected_folders(accounts, profile_roots=()):
 
 
 async def declared_accounts():
+    async with _ACCOUNTS_REFRESH_LOCK:
+        return await _refresh_declared_accounts()
+
+
+async def _refresh_declared_accounts():
     """The native resolver's aliases; a configured profile registry supersedes legacy accounts.json.
     An invalid registry never silently falls back to legacy credentials."""
     signature = await asyncio.to_thread(_accounts_signature)
@@ -6152,6 +6158,7 @@ async def manifest(request):
 def make_app(*, session_request_path=None):
     # 1 MB for every body (login form, JSON); uploads stream their own (_read_upload)
     app = web.Application(middlewares=[auth_mw], client_max_size=BODY_MAX)
+    app["refresh_view_protection"] = declared_accounts
     app[projectartifacts.READER] = projectartifacts.Reader(lambda body: host(body))
     app[projectissues.KEY] = projectissues.Reader(lambda body: host(body))
     app["sockets"] = set()

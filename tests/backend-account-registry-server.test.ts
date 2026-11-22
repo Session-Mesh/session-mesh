@@ -35,6 +35,96 @@ async function config(mesh: Mesh) {
   const result = await fetch(`${mesh.base}/api/config`, {headers: {Cookie: `mesh_auth=${cookie}`}});
   assert.equal(result.status, 200); return result.json();
 }
+
+for (const backend of ['pi', 'opencode-v2']) for (const access of ['describe', 'open', 'stat']) {
+  test(`document protection refreshes a changed ${backend} registry before ${access} access`, {skip, timeout: 45000}, async () => {
+    const mesh = await startMesh('accounts-view-refresh-', {MESH_MESH_PLATFORM_CMD: PLATFORM, PATH: '/usr/bin:/bin'}, prepare);
+    try {
+      const docs = path.join(fs.realpathSync(mesh.home), 'documents');
+      fs.mkdirSync(docs, {mode: 0o700});
+      fs.writeFileSync(path.join(docs, 'index.html'), '<!doctype html><title>Fixture document</title>');
+      const describe = (target: string) => fetch(`${mesh.base}/api/view`, {method: 'POST',
+        headers: {Authorization: `Bearer ${mesh.token()}`, 'Content-Type': 'application/json'},
+        body: JSON.stringify({target})});
+      const roles = backend === 'pi' ? ['config', 'history'] : ['config', 'data', 'state', 'cache'];
+      const roots = Object.fromEntries(roles.map(role => {
+        const folder = path.join(docs, backend, role);
+        fs.mkdirSync(folder, {recursive: true, mode: 0o700});
+        return [role, folder];
+      }));
+      const auth = backend === 'pi' ? path.join(roots.config!, 'auth.json')
+        : path.join(roots.data!, 'opencode/auth.json');
+      fs.mkdirSync(path.dirname(auth), {recursive: true, mode: 0o700});
+      fs.writeFileSync(auth, 'profile-protection-fixture', {mode: 0o600});
+      const hardlink = path.join(docs, 'linked-login.txt');
+      fs.linkSync(auth, hardlink);
+      const file = path.join(mesh.confDir, 'backend-profiles.json');
+      const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+      registry.profiles.push({backend, id: 'recent', label: 'Recent', enabled: true, roots});
+      fs.writeFileSync(file, JSON.stringify(registry), {mode: 0o600});
+      // No configuration or session-list request may refresh protection on this test's behalf.
+      const read = (target: string) => access === 'describe' ? describe(target)
+        : fetch(`${mesh.base}/api/${access}`, {method: 'POST',
+          headers: {Authorization: `Bearer ${mesh.token()}`, 'Content-Type': 'application/json'},
+          body: JSON.stringify(access === 'stat' ? {targets: [target]} : {target})});
+      for (const target of [auth, hardlink]) {
+        const refused = await read(target);
+        if (access === 'stat') {
+          assert.equal(refused.status, 200);
+          assert.equal((await refused.json() as any).mtimes[target], null);
+        } else {
+          assert.equal(refused.status, 403,
+            `${access} must refresh declared credential protection (got ${refused.status})`);
+          assert.ok(!(await refused.text()).includes('profile-protection-fixture'));
+        }
+      }
+      const ordinary = await describe(path.join(docs, 'index.html'));
+      assert.equal(ordinary.status, 200);
+      const document = await ordinary.json() as {url: string};
+      assert.equal((await fetch(`${mesh.base}${document.url}`)).status, 200, 'ordinary documents remain readable');
+    } finally { await mesh.stop(); }
+  });
+}
+
+test('concurrent account protection refreshes share one installed registry snapshot', () => {
+  const script = `
+import asyncio,json,sys
+sys.path.insert(0, ${JSON.stringify(REPO)})
+import server
+async def main():
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls, installed = [], []
+    async def inline(function, *args, **kwargs):
+        return function(*args, **kwargs)
+    async def program(*args):
+        calls.append(args)
+        entered.set()
+        await release.wait()
+        return {'accounts': [], 'state': 'ok', 'protected_roots': []}
+    server.asyncio.to_thread = inline
+    server._accounts_signature = lambda: ('fixture-signature',)
+    server._accounts_program = program
+    server._protected_folders = lambda *args: []
+    server.view.deny_account_files = lambda roots: installed.append(roots)
+    first = asyncio.create_task(server.declared_accounts())
+    await entered.wait()
+    second = asyncio.create_task(server.declared_accounts())
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, second)
+    assert len(calls) == 1, calls
+    assert len(installed) == 1, installed
+asyncio.run(main())
+`;
+  const where = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'accounts-refresh-serial-'));
+  try {
+    execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', script], {
+      cwd: REPO, env: {...process.env, HOME: where, MESH_CONF_DIR: path.join(where, 'config')},
+      timeout: 10000,
+    });
+  } finally { fs.rmSync(where, {recursive: true, force: true}); }
+});
+
 test('registry becomes the server source; backend labels survive and file edits invalidate its cache', {skip, timeout: 45000}, async () => {
   fs.accessSync(PLATFORM, fs.constants.X_OK);
   const mesh = await startMesh('accounts-registry-http-', {MESH_MESH_PLATFORM_CMD: PLATFORM, PATH: '/usr/bin:/bin',
