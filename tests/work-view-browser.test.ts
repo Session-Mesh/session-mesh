@@ -38,6 +38,7 @@ const HOSTILE_EVENTS = [
   { ts: '2026-11-07T09:00:00Z', task: 'T-8e8e', type: 'created', title: HOSTILE_TITLE, project: 'gateway', category: 'platform', priority: 'P1', status: 'todo' },
   { ts: '2026-11-07T09:01:00Z', task: 'T-8e8e', type: 'set', field: 'project', to: 'P-5e6f' },
   { ts: '2026-11-07T09:02:00Z', task: 'T-8e8e', type: 'session_linked', agent: 'claude', session: '<b>hostile-session</b>', host: 'hostc', repo: null, branch: `feat/<i>x</i>-${LONG_WORD}` },
+  { ts: '2026-11-07T09:02:30Z', task: 'T-8e8e', type: 'session_linked', agent: 'codex', session: 'repo-session', host: 'hostc', repo: '/example/project', branch: null },
   { ts: '2026-11-07T09:03:00Z', task: 'T-8e8e', type: 'progress', text: '<script>window.__pwn=3</script> noted', prov: 'inferred' },
   { ts: '2026-11-08T08:00:00Z', task: 'T-3c4d', type: 'add', field: 'blocked_by', value: 'T-1a2b' },
   { ts: '2026-11-08T08:01:00Z', task: 'T-8e8e', type: 'add', field: 'blocked_by', value: 'T-3c4d' },
@@ -329,6 +330,16 @@ for (const width of WIDTHS) {
       await pane.locator('.work-detail-heading').waitFor();
       assert.ok((await pane.textContent())!.includes('hostile-session'), 'the session name is shown');
       assert.ok((await pane.textContent())!.includes('<b>hostile-session</b>'), 'as text, not as markup');
+      const recorded = pane.locator('.work-task-session');
+      assert.equal(await recorded.count(), 2);
+      const branch = recorded.filter({ hasText: 'hostile-session' });
+      assert.ok((await branch.textContent())!.includes('Branch: feat/<i>x</i>'));
+      assert.ok(!(await branch.textContent())!.includes('Repository:'), 'missing repository has no label');
+      const repo = recorded.filter({ hasText: 'repo-session' });
+      assert.ok((await repo.textContent())!.includes('Repository: project'), 'the reader supplies the repository basename');
+      assert.ok(!(await repo.textContent())!.includes('Branch:'), 'missing branch has no label');
+      assert.ok((await pane.textContent())!.includes('current activity is unknown'));
+      await noOverflow(page);
       assert.equal(await pane.locator('a, button:not(.work-detail-close):not(.work-answer-send)').count(), 0, 'sessions are plain text, not clickable');
       assert.ok(await pane.locator('.work-event-inferred').count() >= 1, 'an inferred event is marked');
       assert.ok(await pane.locator('.work-prov-inferred').count() >= 1, 'with a word as well as a style');

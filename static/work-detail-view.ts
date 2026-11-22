@@ -42,9 +42,11 @@ function targetItem(ctx: ViewContext, target: TargetRef): HTMLElement {
 }
 
 function sessionItem(ctx: ViewContext, session: LinkedSession): HTMLElement {
-  const parts = [session.name, session.agent, session.branch, session.repo].filter((part): part is string => !!part);
-  const item = el('li', 'work-detail-item', parts.join(' · '));
-  if (session.lastActivity) item.append(el('span', 'work-mute', ` ${formatDateTime(session.lastActivity, ctx.locale)}`));
+  const item = el('li', 'work-detail-item work-task-session', el('span', '', session.name));
+  if (session.agent) item.append(el('span', 'work-mute', ` · ${session.agent}`));
+  if (session.branch) item.append(el('div', 'work-mute', ctx.t('work.detail.sessionBranch', { value: session.branch })));
+  if (session.repo) item.append(el('div', 'work-mute', ctx.t('work.detail.sessionRepo', { value: session.repo })));
+  if (session.lastActivity) item.append(el('div', 'work-mute', ctx.t('work.detail.sessionRecorded', { date: formatDateTime(session.lastActivity, ctx.locale) })));
   return item;
 }
 
@@ -157,7 +159,8 @@ export function renderDetail(ctx: ViewContext, detail: TaskDetail): HTMLElement 
     section(ctx, 'work.detail.openBlockers', detail.openBlockers.map(blocker => blockerItem(ctx, blocker)), omittedNote(ctx.t, detail.omitted.open_blockers)),
     section(ctx, 'work.detail.blockedBy', detail.blockedBy.map(target => targetItem(ctx, target)), omittedNote(ctx.t, detail.omitted.blocked_by)),
     section(ctx, 'work.detail.blocking', detail.blocking.map(target => targetItem(ctx, target)), omittedNote(ctx.t, detail.omitted.blocking)),
-    section(ctx, 'work.detail.sessions', detail.sessions.map(session => sessionItem(ctx, session)), omittedNote(ctx.t, detail.omitted.sessions)),
+    section(ctx, 'work.detail.sessions', detail.sessions.map(session => sessionItem(ctx, session)),
+      el('div', '', el('p', 'work-mute', ctx.t('work.detail.sessionScope')), omittedNote(ctx.t, detail.omitted.sessions))),
     notesSection(ctx, detail.notes),
     section(ctx, 'work.detail.links', detail.links.map(link => el('li', 'work-detail-item work-detail-link', linkText(ctx.t, link)))),
     section(ctx, 'work.detail.questions', detail.questions.map(question => questionItem(ctx, question)), omittedNote(ctx.t, detail.omitted.questions)),
