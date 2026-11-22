@@ -293,7 +293,7 @@ class WorkView implements WorkViewController {
   }
 
   private stopRequests(): void {
-    this.controller?.abort(); this.sheet.stop();
+    this.controller?.abort(); this.sheet.stop(); this.sheets.stopPreviews();
     this.generation++;
   }
 

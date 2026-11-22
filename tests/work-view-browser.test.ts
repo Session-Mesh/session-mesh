@@ -42,7 +42,6 @@ const HOSTILE_EVENTS = [
   { ts: '2026-11-07T09:03:00Z', task: 'T-8e8e', type: 'progress', text: '<script>window.__pwn=3</script> noted', prov: 'inferred' },
   { ts: '2026-11-08T08:00:00Z', task: 'T-3c4d', type: 'add', field: 'blocked_by', value: 'T-1a2b' },
   { ts: '2026-11-08T08:01:00Z', task: 'T-8e8e', type: 'add', field: 'blocked_by', value: 'T-3c4d' },
-  { ts: '2026-11-08T08:02:00Z', task: 'T-8e8e', type: 'add', field: 'blocked_by', value: 'T-1a2b' },
   // Two questions (work_ask), one answered (work_answer relaying the owner's words, with a hostile text).
   { ts: '2026-11-08T09:00:00Z', task: 'T-8e8e', type: 'question', id: 'N-0000a0a1', text: 'Keep the old endpoint?', agent: 'claude', session: 'asking-session' },
   { ts: '2026-11-08T09:01:00Z', task: 'T-8e8e', type: 'question', id: 'N-0000a0a2', text: 'Which port?', agent: 'claude', session: 'asking-session' },
@@ -56,14 +55,21 @@ let browser: Browser;
 const contexts: BrowserContext[] = [];
 const meshes: Mesh[] = [];
 const scratch: string[] = [];
-let tracked: Mesh, untracked: Mesh, noReader: Mesh;
+let tracked: Mesh, untracked: Mesh, noReader: Mesh, orphanTracked: Mesh;
 
-function temporaryTracker(): string {
+function temporaryTracker(orphan = false): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'work-view-tracker-'));
   scratch.push(directory);
   const tracker = path.join(directory, 'tracker');
   fs.cpSync(FIXTURE, tracker, { recursive: true });
-  fs.writeFileSync(path.join(tracker, 'events', '2026-11.hostc.jsonl'), HOSTILE_EVENTS.map(event => JSON.stringify(event)).join('\n') + '\n');
+  const orphanEvents = [
+  { ts: '2026-11-08T08:02:00Z', task: 'T-8e8e', type: 'add', field: 'blocked_by', value: 'T-1a2b' },
+  { ts: '2026-11-07T08:00:00Z', task: 'T-7e7e', type: 'created', title: 'Unassigned preview source', project: 'gateway', category: 'platform', priority: 'P1', status: 'todo' },
+  { ts: '2026-11-07T08:01:00Z', task: 'T-7e7e', type: 'add', field: 'blocked_by', value: 'T-3c4d' },
+  { ts: '2026-11-07T08:02:00Z', task: 'T-7e7e', type: 'add', field: 'blocked_by', value: 'T-1a2b' },
+  { ts: '2026-11-08T08:00:00Z', task: 'T-7e7e', type: 'question', id: 'N-0000a0a4', text: 'Check unassigned task?', agent: 'claude', session: 'asking-session' },
+  ];
+  fs.writeFileSync(path.join(tracker, 'events', '2026-11.hostc.jsonl'), [...HOSTILE_EVENTS, ...(orphan ? orphanEvents : [])].map(event => JSON.stringify(event)).join('\n') + '\n');
   return tracker;
 }
 
@@ -80,6 +86,7 @@ async function start(prefix: string, extra: NodeJS.ProcessEnv): Promise<Mesh> {
 before(async () => {
   if (skip) return;
   tracked = await start('workui-', { WL_HOME: temporaryTracker() });
+  orphanTracked = await start('workui-orphan-', { WL_HOME: temporaryTracker(true) });
   untracked = await start('workui-none-', { WL_HOME: path.join(os.tmpdir(), 'work-view-no-such-tracker') });
   noReader = await start('workui-503-', { WL_HOME: temporaryTracker(), MESH_WORK_READ_CMD: path.join(os.tmpdir(), 'work-view-no-such-program') });
   browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
@@ -316,7 +323,7 @@ for (const width of WIDTHS) {
     });
 
     test('a dependency preview preserves the source answer draft and can retry a failed read', { timeout: 900_000 }, async () => {
-      const { page } = await signedIn(tracked, 'en-US', width);
+      const { page } = await signedIn(orphanTracked, 'en-US', width);
       await enterProjects(page, width);
       await openRelayProject(page);
       await page.locator('.work-tab').nth(1).click();
@@ -362,7 +369,7 @@ for (const width of WIDTHS) {
     });
 
     test('closing a task aborts held previews and frees the shared read slots', { timeout: 900_000 }, async () => {
-      const { page } = await signedIn(tracked, 'en-US', width);
+      const { page } = await signedIn(orphanTracked, 'en-US', width);
       await enterProjects(page, width);
       await openRelayProject(page);
       await page.locator('.work-tab').nth(1).click();
@@ -388,6 +395,38 @@ for (const width of WIDTHS) {
       await page.locator('.work-refresh').click();
       assert.equal((await read).status(), 200, 'a later project read acquires a freed slot');
       assert.equal(count, 2, 'both preview reads were started');
+      release();
+      await page.unroute('**/api/work/v1');
+    });
+
+    test('leaving an unassigned task aborts its previews without losing its place', { timeout: 900_000 }, async () => {
+      const { page } = await signedIn(orphanTracked, 'en-US', width);
+      await enterProjects(page, width);
+      const toggle = page.locator('.work-qsection-toggle');
+      await toggle.waitFor();
+      if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+      await page.locator('.work-entry-questions .work-qrow-open[data-task="T-7e7e"]').click();
+      await page.locator('.work-detail-heading', { hasText: 'Unassigned preview source' }).waitFor();
+      let release!: () => void, started!: () => void, count = 0;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      const both = new Promise<void>(resolve => { started = resolve; });
+      await page.route('**/api/work/v1', async route => {
+        const request = route.request().postDataJSON();
+        if (request?.op === 'task' && ['T-3c4d', 'T-1a2b'].includes(request?.args?.id)) {
+          if (++count === 2) started();
+          await held; await route.continue().catch(() => undefined);
+        } else await route.continue();
+      });
+      await page.locator('.work-dep-preview', { hasText: 'Preview T-3c4d' }).locator('summary').click();
+      await page.locator('.work-dep-preview', { hasText: 'Preview T-1a2b' }).locator('summary').click();
+      await both;
+      await page.locator('#projects-return').click();
+      await page.waitForFunction(() => !document.body.classList.contains('projecting'));
+      const read = page.waitForResponse(response => response.url().endsWith('/api/work/v1')
+        && response.request().postDataJSON()?.op === 'task', { timeout: 5000 });
+      await enterProjects(page, width);
+      assert.equal((await read).status(), 200, 'reopening reads the remembered task through a freed slot');
+      await page.locator('.work-detail-heading', { hasText: 'Unassigned preview source' }).waitFor({ timeout: 5000 });
       release();
       await page.unroute('**/api/work/v1');
     });
