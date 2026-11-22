@@ -209,6 +209,16 @@ for (const width of WIDTHS) {
       await block.getByText(/current activity is unknown/).waitFor();
       await block.getByText('<b>hostile-session</b>', { exact: true }).waitFor();
       assert.equal(await block.locator('b, a, button').count(), 0, 'tracker text stays inert and no live session is inferred');
+      await block.locator('summary').click();
+      await page.route('**/api/work/v1', async route => {
+        if (route.request().postDataJSON()?.op !== 'sessions-of') return route.continue();
+        const response = await route.fetch(), body = await response.json();
+        body.truncated = true;
+        await route.fulfill({ response, body: JSON.stringify(body) });
+      });
+      await block.locator('summary').click();
+      await block.getByText('The source is incomplete or reported warnings; names or the list may be partial.').waitFor();
+      await page.unroute('**/api/work/v1');
       await noOverflow(page);
     });
 

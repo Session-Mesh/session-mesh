@@ -6,10 +6,11 @@ import { el, formatDateTime } from './work-dom.ts';
 import type { ViewContext } from './work-dom.ts';
 import { isObj, text } from './work-parse.ts';
 
-export type RecordedSessions = Readonly<{ sessions: readonly Readonly<{ name: string; agent: string; last: string | null }>[]; total: number; omitted: number }>;
+export type RecordedSessions = Readonly<{ sessions: readonly Readonly<{ name: string; agent: string; last: string | null }>[]; total: number; omitted: number; partial: boolean }>;
 
 export function parseRecordedSessions(value: unknown, project: string): RecordedSessions | null {
-  if (!isObj(value) || !isObj(value.scope) || value.scope.kind !== 'project' || value.scope.id !== project
+  if (!isObj(value) || value.schema !== 1 || value.command !== 'sessions-of' || typeof value.truncated !== 'boolean'
+      || !isObj(value.scope) || value.scope.kind !== 'project' || value.scope.id !== project
       || !Array.isArray(value.sessions) || value.sessions.length > 100 || !Number.isSafeInteger(value.total) || (value.total as number) < 0) return null;
   const sessions: { name: string; agent: string; last: string | null }[] = [];
   for (const row of value.sessions) {
@@ -22,7 +23,11 @@ export function parseRecordedSessions(value: unknown, project: string): Recorded
   if (total < sessions.length) return null;
   const reported = value.sessions_omitted;
   if (reported !== undefined && (!Number.isSafeInteger(reported) || (reported as number) < 0)) return null;
-  return { sessions, total, omitted: Math.max(total - sessions.length, (reported as number | undefined) ?? 0) };
+  const warnings = value.data_warnings, warningsOmitted = value.data_warnings_omitted;
+  if (warnings !== undefined && (!Array.isArray(warnings) || warnings.length > 10 || warnings.some(warning => typeof warning !== 'string'))) return null;
+  if (warningsOmitted !== undefined && (!Number.isSafeInteger(warningsOmitted) || (warningsOmitted as number) < 0)) return null;
+  const omitted = Math.max(total - sessions.length, (reported as number | undefined) ?? 0);
+  return { sessions, total, omitted, partial: value.truncated || omitted > 0 || (Array.isArray(warnings) && warnings.length > 0) || (warningsOmitted as number | undefined || 0) > 0 };
 }
 
 export function projectSessions(ctx: ViewContext, project: string): HTMLElement {
@@ -47,7 +52,8 @@ export function projectSessions(ctx: ViewContext, project: string): HTMLElement 
           session.last ? el('span', 'work-mute', ctx.t('work.sessions.last', { date: formatDateTime(session.last, ctx.locale) })) : null));
       }
       content.replaceChildren(note, result.value.sessions.length ? list : el('p', '', ctx.t('work.sessions.empty')));
-      if (result.value.omitted) content.append(el('p', 'work-mute', ctx.t('work.sessions.omitted', { n: result.value.omitted }))); 
+      if (result.value.omitted) content.append(el('p', 'work-mute', ctx.t('work.sessions.omitted', { n: result.value.omitted })));
+      if (result.value.partial) content.append(el('p', 'work-mute', ctx.t('work.sessions.partial'))); 
     }, () => { if (!signal.aborted && current === sequence && details.open && details.isConnected)
       content.replaceChildren(el('p', '', ctx.t('work.sessions.unavailable'))); });
   });

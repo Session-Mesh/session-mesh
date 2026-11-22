@@ -1812,6 +1812,7 @@
   },
   "work.col.todo": "To do",
   "work.daysAgo": "{n} d ago",
+  "work.sessions.partial": "The source is incomplete or reported warnings; names or the list may be partial.",
   "work.sessions.title": "Sessions recorded on these tasks",
   "work.sessions.loading": "Loading recorded sessions…",
   "work.sessions.scope": "From task links in this Work project. Names may refer to several sessions; current activity is unknown.",
