@@ -8,6 +8,7 @@ import { renderDependencies } from './work-deps-view.ts';
 import { button, el, notice, progressBlock, setAttributes } from './work-dom.ts';
 import type { Translate, ViewContext } from './work-dom.ts';
 import { renderFrise } from './work-frise-view.ts';
+import { projectSessions } from './work-project-sessions.ts';
 import { renderQuestionsTab } from './work-questions-view.ts';
 import { renderReprise } from './work-reprise-view.ts';
 import type { ProjectDoc, ProjectHead } from './work-types.ts';
@@ -54,7 +55,8 @@ function header(ctx: ViewContext, head: ProjectHead, back: () => void): HTMLElem
   const crumb = el('h2', 'work-crumb', el('span', 'work-crumb-product', head.product), ' / ', el('span', 'work-crumb-title', head.title),
     head.quarter ? el('span', 'work-crumb-quarter', head.quarter) : null);
   const waiting = head.dependencyOpenTasks > 0 ? el('span', 'work-mute', ctx.t('work.dependencyOpen', { n: head.dependencyOpenTasks })) : null;
-  return el('header', 'work-project-head', button('btn work-back', ctx.t('work.back'), back), crumb, progressBlock(ctx.t, counts), waiting);
+  return el('header', 'work-project-head', button('btn work-back', ctx.t('work.back'), back), crumb, progressBlock(ctx.t, counts), waiting,
+    ctx.projectSessions && ctx.scopeSignal ? projectSessions(ctx, head.id) : null);
 }
 
 export function tabButton(ctx: ViewContext, key: string): HTMLButtonElement {
