@@ -76,12 +76,125 @@ let with_host ?argv_prefix fixture f =
       wait_answering fixture.socket_path;
       f pid)
 
-let sessions fixture =
-  match request fixture.socket_path {|{"op":"list"}|} with
+let list_sessions_at path =
+  match request path {|{"op":"list"}|} with
   | `List sessions -> sessions
   | _ -> failwith "list reply"
 
+let sessions fixture = list_sessions_at fixture.socket_path
+
 let member key json = Yojson.Basic.Util.member key json
+
+let retained_session_appears ~timeout list =
+  ignore
+    (wait_until "host serving again" timeout (fun () ->
+         try
+           match list () with
+           | [ session ] -> member "name" session = `String "kept"
+           | _ -> false
+         with
+         | Unix.Unix_error ((Unix.EAGAIN | Unix.ECONNREFUSED), _, _) ->
+             false
+         | Connection_closed
+         | Unix.Unix_error ((Unix.ECONNRESET | Unix.EPIPE), _, _) -> false))
+
+(* A peer can accept a recovery probe and drop it before sending a reply.
+   Fake replies exercise the actual request decoder, not a simulated exception. *)
+let with_fake_recovery_peer replies f =
+  let scratch =
+    Filename.temp_dir ~temp_dir:(Test_scratch.short_temp_root ()) "pty-probe-" ""
+  in
+  let path = Filename.concat scratch "peer.sock" in
+  let listener = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.close listener;
+      remove_tree scratch)
+    (fun () ->
+      Unix.bind listener (Unix.ADDR_UNIX path);
+      Unix.listen listener 8;
+      let child = Unix.fork () in
+      if child = 0 then (
+        let count = ref 0 in
+        (try
+           List.iter
+             (fun reply ->
+               let ready, _, _ = Unix.select [ listener ] [] [] 0.4 in
+               if ready = [] then raise Exit;
+               let peer, _ = Unix.accept listener in
+               incr count;
+               Fun.protect
+                 ~finally:(fun () -> Unix.close peer)
+                 (fun () ->
+                   let head = read_exactly peer 5 in
+                   ignore
+                     (read_exactly peer
+                        (Int32.to_int (Bytes.get_int32_be head 1)));
+                   match reply with
+                   | None -> ()
+                   | Some body ->
+                       let head = Bytes.create 5 in
+                       Bytes.set head 0 'C';
+                       Bytes.set_int32_be head 1
+                         (Int32.of_int (String.length body));
+                       let message = Bytes.to_string head ^ body in
+                       ignore
+                         (Unix.write_substring peer message 0
+                            (String.length message))))
+             replies
+         with Exit -> ());
+        Unix._exit !count);
+      let reaped = ref false in
+      Fun.protect
+        ~finally:(fun () ->
+          if not !reaped then (
+            (try Unix.kill child Sys.sigkill
+             with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+            ignore (Unix.waitpid [] child)))
+        (fun () ->
+          f path;
+          let _, status = Unix.waitpid [] child in
+          reaped := true;
+          match status with
+          | Unix.WEXITED count ->
+              expect "fake peer observed the expected probes"
+                (count >= min 2 (List.length replies))
+          | _ -> failwith "fake peer did not finish"))
+
+let probe_recovers_after_eof () =
+  with_fake_recovery_peer
+    [ None; Some {|[{"name":"kept"}]|} ]
+    (fun path ->
+      retained_session_appears ~timeout:0.5 (fun () -> list_sessions_at path))
+
+let probe_rejects_malformed_reply () =
+  with_fake_recovery_peer [ Some "{invalid" ] (fun path ->
+      match
+        retained_session_appears ~timeout:0.2 (fun () ->
+            list_sessions_at path)
+      with
+      | exception Yojson.Json_error _ -> ()
+      | _ -> failwith "malformed reply was accepted")
+
+let probe_rejects_unexpected_shape () =
+  with_fake_recovery_peer [ Some {|{"ok":true}|} ] (fun path ->
+      match
+        retained_session_appears ~timeout:0.2 (fun () ->
+            list_sessions_at path)
+      with
+      | exception Failure message when String.equal message "list reply" -> ()
+      | _ -> failwith "wrong reply shape was accepted")
+
+let probe_closed_peer_has_deadline () =
+  with_fake_recovery_peer (List.init 20 (fun _ -> None)) (fun path ->
+      match
+        retained_session_appears ~timeout:0.15 (fun () ->
+            list_sessions_at path)
+      with
+      | exception Failure message ->
+          expect "deadline is enforced"
+            (contains message "host serving again: not within")
+      | _ -> failwith "always-closed peer passed")
 
 let new_session fixture session_pids payload =
   let reply = request fixture.socket_path payload in
@@ -162,15 +275,7 @@ let accept_failure_keeps_serving () =
                   failwith
                     ("the host ended when out of descriptors: "
                    ^ file_contents fixture.log));
-          ignore
-            (wait_until "host serving again" 10. (fun () ->
-                 try
-                   match sessions fixture with
-                   | [ session ] -> member "name" session = `String "kept"
-                   | _ -> false
-                 with
-                 | Unix.Unix_error ((Unix.EAGAIN | Unix.ECONNREFUSED), _, _) ->
-                   false));
+          retained_session_appears ~timeout:10. (fun () -> sessions fixture);
           match
             List.find_opt
               (fun line -> contains line "accept")
@@ -618,6 +723,14 @@ let () =
         [
           Alcotest.test_case "an accept failure keeps the host serving" `Quick
             accept_failure_keeps_serving;
+          Alcotest.test_case "a dropped recovery probe is retried" `Quick
+            probe_recovers_after_eof;
+          Alcotest.test_case "a malformed recovery reply fails" `Quick
+            probe_rejects_malformed_reply;
+          Alcotest.test_case "a wrong recovery reply shape fails" `Quick
+            probe_rejects_unexpected_shape;
+          Alcotest.test_case "closed recovery peers respect the deadline" `Quick
+            probe_closed_peer_has_deadline;
           Alcotest.test_case "a stale socket is replaced" `Quick
             stale_socket_is_replaced;
           Alcotest.test_case "a live host's socket is not taken" `Quick
