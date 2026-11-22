@@ -15,7 +15,7 @@
 //    commit of its holder or of a maintainer; a line it adds was added by a commit authored with
 //    the line's address (or is a maintainer's correction that keeps the address).
 //
-// Usage: node --experimental-strip-types tools/cla-check/cla-check.ts --base SHA --head SHA --merge SHA [--repo DIR]
+// Usage: node --experimental-strip-types tools/cla-check/cla-check.ts --base SHA --head SHA --merge SHA [--repo DIR] [--queue true]
 // Exit status: 0 accepted, 1 refused, 2 usage or git error (including an unreadable commit header,
 // or a test merge tree different from the head's).
 //
@@ -38,7 +38,7 @@ const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 // lower-cases to an ASCII one (the Kelvin sign gives `k`).
 const ADDRESS = /^(?=[\x21-\x7e]+$)[^@<>`|]+@[^@<>`|]+$/;
 const MAX_BUFFER = 1 << 28;
-const USAGE = 'usage: cla-check.ts --base SHA --head SHA --merge SHA [--repo DIR]';
+const USAGE = 'usage: cla-check.ts --base SHA --head SHA --merge SHA [--repo DIR] [--queue true]';
 
 export class CheckError extends Error {}
 
@@ -233,11 +233,22 @@ function addressesToCheck(commit: Commit): [string, 'author' | 'committer'][] {
   return web ? [[commit.author.email, 'author']] : [[commit.author.email, 'author'], [committer.email, 'committer']];
 }
 
-function identityOffenders(commits: Commit[], accepted: Set<string>): Offender[] {
+/** Queue rebases use GitHub's login-only noreply address. Derive it only from the base's
+ *  ID-qualified maintainer addresses; it is valid only for that login's committer identity. */
+function queueCommitters(maintainers: Set<string>): Map<string, string> {
+  const aliases = new Map<string, string>();
+  for (const address of maintainers) {
+    const match = /^[0-9]+\+([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)@users\.noreply\.github\.com$/.exec(address);
+    if (match) aliases.set(`${match[1]}@users.noreply.github.com`, match[1]!);
+  }
+  return aliases;
+}
+
+function identityOffenders(commits: Commit[], accepted: Set<string>, queueAliases: Map<string, string>): Offender[] {
   const offenders = new Map<string, Offender>();
   for (const commit of commits) {
     for (const [email, role] of addressesToCheck(commit)) {
-      if (accepted.has(email)) continue;
+      if (accepted.has(email) || (role === 'committer' && queueAliases.get(email) === lowerAscii(commit.committer.name))) continue;
       const offender = offenders.get(email) ?? {email, roles: []};
       if (!offender.roles.includes(role)) offender.roles.push(role);
       offenders.set(email, offender);
@@ -291,7 +302,7 @@ function verifyTestMerge(repo: string, base: string, head: string, merge: string
 }
 
 // `merge` is the test merge commit of the pull request: its parents are the base, then the head.
-export function checkPullRequest(repo: string, base: string, head: string, merge: string): Result {
+export function checkPullRequest(repo: string, base: string, head: string, merge: string, queue = false): Result {
   for (const id of [base, head, merge]) {
     if (!OBJECT_ID.test(id)) throw new CheckError('base, head and merge must be full object ids');
   }
@@ -309,7 +320,7 @@ export function checkPullRequest(repo: string, base: string, head: string, merge
   const merged = rowsAt(repo, merge);
   const violations = registerViolations(rowsAt(repo, base), merged, registerChanges(repo, commits), maintainers);
   const accepted = new Set([...maintainers, ...[...merged.values()].map((row) => row.email)]);
-  return {history, offenders: identityOffenders(commits, accepted), violations};
+  return {history, offenders: identityOffenders(commits, accepted, queue ? queueCommitters(maintainers) : new Map()), violations};
 }
 
 // Printable form of an address taken from a commit: no control character, bounded length.
@@ -386,22 +397,23 @@ export function report(result: Result): string {
   return lines.join('\n');
 }
 
-function parseArgs(argv: string[]): {repo: string; base: string; head: string; merge: string} {
+function parseArgs(argv: string[]): {repo: string; base: string; head: string; merge: string; queue: boolean} {
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
     const [flag, value] = [argv[index], argv[index + 1]];
-    if (!['--repo', '--base', '--head', '--merge'].includes(flag) || value === undefined) throw new CheckError(USAGE);
+    if (!['--repo', '--base', '--head', '--merge', '--queue'].includes(flag) || value === undefined) throw new CheckError(USAGE);
     values.set(flag, value);
   }
   const [base, head, merge] = ['--base', '--head', '--merge'].map((flag) => values.get(flag));
   if (!base || !head || !merge) throw new CheckError(USAGE);
-  return {repo: values.get('--repo') ?? '.', base, head, merge};
+  if (values.has('--queue') && values.get('--queue') !== 'true') throw new CheckError(USAGE);
+  return {repo: values.get('--repo') ?? '.', base, head, merge, queue: values.has('--queue')};
 }
 
 function main(argv: string[]): number {
   try {
-    const {repo, base, head, merge} = parseArgs(argv);
-    const result = checkPullRequest(repo, base, head, merge);
+    const {repo, base, head, merge, queue} = parseArgs(argv);
+    const result = checkPullRequest(repo, base, head, merge, queue);
     process.stdout.write(report(result));
     return result.history.length === 0 && result.offenders.length === 0 && result.violations.length === 0 ? 0 : 1;
   } catch (error) {

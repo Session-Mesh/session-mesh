@@ -49,7 +49,7 @@ In both cases the verdict is about the base the check ran on; when `main` moves 
 ## Inputs
 
 ```text
-node --experimental-strip-types cla-check.ts --base SHA --head SHA --merge SHA [--repo DIR]
+node --experimental-strip-types cla-check.ts --base SHA --head SHA --merge SHA [--repo DIR] [--queue true]
 ```
 
 - `--base`: the tip of the base branch.
@@ -116,6 +116,12 @@ For every commit of `base..head`, the author address and the committer address m
 maintainer's or carry a signatory line in the register of the test merge commit. The committer
 `GitHub <noreply@github.com>` (web edits) is accepted, as committer only.
 
+For a `merge_group` check only, the checker additionally accepts a committer named `login` at
+`login@users.noreply.github.com` when the base's maintainer list contains the corresponding
+`numeric-id+login@users.noreply.github.com`. The login-only form is not accepted as an author,
+signatory or maintainer for register changes, nor on a pull-request check. No alias is derived
+from changes in the queued commits.
+
 ## Rule 2: integrity of the register
 
 Compare the signatory lines of the base (B) with those of the test merge commit (M). A commit of
@@ -179,6 +185,7 @@ base never applies, and the run judges the exact commits and tree that land.
 ## Known limits
 
 - **Git does not verify addresses.** A commit can carry anyone's address, a maintainer's included.
+  The queue-only committer alias is also an address convention, not proof of GitHub account ownership.
   The maintainers compare the account that opened the pull request with the addresses its commits
   use; signed commits make that immediate. "Rebase and merge" rewrites the commits: new ids, the
   maintainer who integrates as committer (with their account's commit address), no signature. A

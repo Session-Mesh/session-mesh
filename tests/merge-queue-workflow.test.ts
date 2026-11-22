@@ -380,6 +380,46 @@ describe('merge queue: the cla job', () => {
     assert.equal(result.status, 0, result.out);
   });
 
+  test('accepts a base maintainer login-only noreply as queue committer', () => {
+    const result = queued(repo => repo.commit(MAINTAINER, {'a.txt': 'a\n'},
+      {name: 'mathiasbourgoin', email: 'mathiasbourgoin@users.noreply.github.com'}));
+    assert.equal(result.status, 0, result.out);
+  });
+
+  test('rejects a login-only maintainer address as an author', () => {
+    const result = queued(repo => repo.commit({name: 'mathiasbourgoin', email: 'mathiasbourgoin@users.noreply.github.com'},
+      {'a.txt': 'a\n'}, MAINTAINER));
+    assert.equal(result.status, 1, result.out);
+  });
+
+  test('does not derive queue committer aliases from CLA signatories', () => {
+    const result = queued(repo => {
+      repo.commit(ADA, {[REGISTER_FILE]: HEADER + row(ADA)}, ADA);
+      repo.commit(ADA, {'a.txt': 'a\n'}, {name: 'ada', email: 'ada@users.noreply.github.com'});
+    });
+    assert.equal(result.status, 1, result.out);
+  });
+
+  test('rejects an unknown or mismatched queue committer', () => {
+    for (const committer of [
+      {name: 'someone', email: 'someone@users.noreply.github.com'},
+      {name: 'someone', email: 'mathiasbourgoin@users.noreply.github.com'},
+      {name: 'mathiasbourgoin', email: 'mathiasbourgoin@example.com'},
+    ]) {
+      const result = queued(repo => repo.commit(MAINTAINER, {'a.txt': 'a\n'}, committer));
+      assert.equal(result.status, 1, result.out);
+    }
+  });
+
+  test('does not derive queue committer aliases from a maintainer added by the queued commit', () => {
+    const result = queued(repo => {
+      const list = fs.readFileSync(path.join(ROOT, MAINTAINERS_FILE), 'utf8');
+      repo.commit(MAINTAINER, {[MAINTAINERS_FILE]: `${list}Ada Example <1001+ada@users.noreply.github.com>\n`},
+        {name: 'ada', email: 'ada@users.noreply.github.com'});
+    });
+    assert.equal(result.status, 1, result.out);
+  });
+
   test('refuses a commit by an address that is neither a maintainer nor a signatory', () => {
     const result = queued((repo) => repo.commit(ADA, {'a.txt': 'a\n'}));
     assert.equal(result.status, 1, result.out);
