@@ -122,7 +122,7 @@ class WorkView implements WorkViewController {
     this.sync = options.sync ?? pageQuestionsSync;
     this.ctx = { t: this.t, locale: options.locale ?? (document.documentElement.lang || undefined),
       nowMs: options.now ?? (() => Date.now()), selectedTask: () => this.selected, selectTask: id => void this.sheet.select(id),
-      answers: this.sender('detail'), projectSessions: (id, signal) => this.api.projectSessions(id, signal) };
+      answers: this.sender('detail'), projectSessions: (id, signal) => this.api.projectSessions(id, signal), previewTask: (id, signal) => this.api.task(id, signal) };
     this.panelCtx = { ...this.ctx, answers: this.sender('questions') };
     this.sheetCtx = { ...this.ctx, answers: this.sender('sheet'), answerScope: 'sheet-' };
     const refresh = button('btn work-refresh', this.t('work.refresh'), () => void this.reload());

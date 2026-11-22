@@ -314,6 +314,52 @@ for (const width of WIDTHS) {
       assert.notEqual(outline, 'none');
     });
 
+    test('a dependency preview preserves the source answer draft and can retry a failed read', { timeout: 900_000 }, async () => {
+      const { page } = await signedIn(tracked, 'en-US', width);
+      await enterProjects(page, width);
+      await openRelayProject(page);
+      await page.locator('.work-tab').nth(1).click();
+      await page.locator('#work-panel-board .work-card', { hasText: '<script>window.__pwn=2</script>' }).click();
+      const pane = page.locator('.work-detail-pane');
+      await pane.locator('.work-detail-heading').waitFor();
+      const draft = pane.getByLabel('Your answer').first();
+      await draft.fill('retain draft');
+      const preview = pane.locator('.work-dep-preview').first();
+      await page.route('**/api/work/v1', async route => {
+        const request = route.request().postDataJSON();
+        if (request?.op === 'task' && request?.args?.id === 'T-3c4d')
+          await route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+        else await route.continue();
+      });
+      await preview.locator('summary').click();
+      await preview.getByText('Preview unavailable. Close and reopen to retry.').waitFor();
+      assert.equal(await draft.inputValue(), 'retain draft');
+      await preview.locator('summary').click();
+      await page.unroute('**/api/work/v1');
+      await preview.locator('summary').click();
+      await preview.locator('.work-dep-preview-content strong').waitFor();
+      assert.equal(await draft.inputValue(), 'retain draft');
+      assert.equal(await pane.locator('.work-detail-heading').count(), 1, 'source task remains open');
+      await preview.locator('summary').click();
+      let release!: () => void, started!: () => void;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      const requested = new Promise<void>(resolve => { started = resolve; });
+      await page.route('**/api/work/v1', async route => {
+        const request = route.request().postDataJSON();
+        if (request?.op === 'task' && request?.args?.id === 'T-3c4d') {
+          started(); await held; await route.continue().catch(() => undefined);
+        } else await route.continue();
+      });
+      await preview.locator('summary').click();
+      await requested;
+      await preview.locator('summary').click();
+      release();
+      await page.waitForFunction(() => document.querySelector('.work-dep-preview-content')?.childElementCount === 0);
+      assert.equal(await draft.inputValue(), 'retain draft', 'late preview cannot replace the source draft');
+      await page.unroute('**/api/work/v1');
+      await noOverflow(page);
+    });
+
     test('a task opens its detail; hostile text stays inert; Escape closes the detail first', { timeout: 900_000 }, async () => {
       const { page, problems } = await signedIn(tracked, 'en-US', width);
       await enterProjects(page, width);

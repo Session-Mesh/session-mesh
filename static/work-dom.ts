@@ -7,7 +7,7 @@
  */
 
 import { STATUSES, progressPercent } from './work-derive.ts';
-import type { Counts } from './work-types.ts';
+import type { Counts, TaskDetail } from './work-types.ts';
 import type { WorkResult } from './work-api.ts';
 import type { RecordedSessions } from './work-project-sessions.ts';
 import type { AnswerSender } from './work-answer-form.ts';
@@ -22,6 +22,7 @@ export type ViewContext = Readonly<{
   selectTask: (id: string) => void;
   projectSessions?: (id: string, signal: AbortSignal) => Promise<WorkResult<RecordedSessions>>;
   scopeSignal?: AbortSignal;
+  previewTask?: (id: string, signal: AbortSignal) => Promise<WorkResult<TaskDetail>>;
   /** Sends the owner's answer to an open question; null where the view offers no answer form. */
   answers: AnswerSender | null;
   /** Prefix of the element ids of answer forms, so that the same question shown twice (tab and sheet) keeps unique ids. */
