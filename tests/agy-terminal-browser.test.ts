@@ -140,9 +140,17 @@ describe('full-screen agent TUI in the page', {skip}, () => {
       return false;
     }, undefined, {timeout: 15000});
     const before = await offsetOf(page);
+    assert.ok(Number.isFinite(before), 'the initial offset is numeric');
     await swipe(page, 300);
-    const after = await offsetOf(page);
-    assert.ok(after < before, `a downward swipe scrolls the program view up (${before} -> ${after})`);
+    const after = await (await page.waitForFunction(previous => {
+      const buffer = active.term.buffer.active;
+      for (let y = 0; y < buffer.length; y++) {
+        const match = /^offset=(\d+)/.exec(buffer.getLine(y)!.translateToString(true));
+        if (match && Number(match[1]) < previous) return {offset: Number(match[1])};
+      }
+      return false;
+    }, before, {timeout: 5000})).jsonValue();
+    assert.ok(after && after.offset < before, `a downward swipe scrolls the program view up (${before} -> ${after && after.offset})`);
     await page.locator('#line-text').fill('/status');
     await page.locator('#line-text').press('Enter');
     await page.waitForFunction(() => {
