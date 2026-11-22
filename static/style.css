@@ -1343,6 +1343,7 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .work-fields dd { margin: 0; }
 .work-detail-section { margin: 12px 0; }
 .work-detail-item { padding: 3px 0; }
+.work-task-session { overflow-wrap: anywhere; }
 .work-question-text, .work-answer-text, .work-answer-meta, .work-answer-hint { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .work-answer-area { margin: 4px 0 6px; padding-inline-start: 10px; border-inline-start: 2px solid var(--line); }
 .work-question-answered .work-answer-area { border-inline-start-color: var(--accent); }
