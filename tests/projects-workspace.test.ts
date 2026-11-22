@@ -174,7 +174,7 @@ for (const width of [1280, 390]) test(`actual native Projects create/settings/co
       const foreign: string[] = [];
       page.on('request', request => { if (new URL(request.url()).origin !== origin) foreign.push(request.url()); });
       await page.goto(origin); await page.waitForFunction(() => typeof panes !== 'undefined' && panes.length > 0);
-      await page.evaluate('openSession("p1-quiet")');
+      await page.waitForFunction(() => typeof meshContext !== 'undefined' && meshContext !== null && !!find('p1-quiet')); await page.evaluate('openSession("p1-quiet")');
       await page.waitForFunction(() => active?.conn?.terminal?.isOpen() && active.term.buffer.active.length > 80);
       await page.evaluate(`(() => {
         active.noteUserScroll(false); active.term.scrollToLine(20);
@@ -377,7 +377,8 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
       window.projectContextDeadlines = () => [...timers.values()].map(timer => timer.delay);
     });
     await page.goto(origin);
-    await page.waitForFunction(() => typeof panes !== 'undefined' && panes.length > 0); await page.evaluate('openSession("i1-live")');
+    await page.waitForFunction(() => typeof panes !== 'undefined' && panes.length > 0 && typeof meshContext !== 'undefined' && meshContext !== null && !!find('i1-live'));
+    await page.evaluate('openSession("i1-live")');
     await page.waitForFunction(() => active?.conn?.terminal?.isOpen());
     await page.evaluate('window.i1Saved={pane:active,term:active.term,conn:active.conn,target:paneTargets.capture(active,true)}');
     const requests: Record<string, unknown>[] = [];
