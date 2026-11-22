@@ -44,6 +44,8 @@ let error_code = function
 let source root = Filename.concat root "accounts.json"
 let target root = Filename.concat root "backend-profiles.json"
 let marker root = Filename.concat root "backend-profiles.migrated"
+let intent root = Filename.concat root ".backend-profiles.migration-intent"
+let hash bytes = Digestif.SHA256.(to_hex (digest_string bytes))
 let same a b = a.Unix.st_dev = b.Unix.st_dev && a.Unix.st_ino = b.Unix.st_ino
 
 let private_file st =
@@ -260,12 +262,26 @@ let check_roots registry =
   with Unix.Unix_error _ | Sys_error _ -> Error Unsafe_agent_roots
 
 let create_temp root =
-  let random = Random.State.make_self_init () in
+  let random_hex () =
+    let fd = Unix.openfile "/dev/urandom" [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+    Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+        let bytes = Bytes.create 8 in
+        let rec fill offset =
+          if offset < 8 then
+            let count = Unix.read fd bytes offset (8 - offset) in
+            if count = 0 then raise (Unix.Unix_error (Unix.EIO, "read", ""))
+            else fill (offset + count)
+        in
+        fill 0;
+        String.concat ""
+          (List.init 8 (fun i ->
+               Printf.sprintf "%02x" (Char.code (Bytes.get bytes i)))))
+  in
   let rec attempt remaining =
     let path =
       Filename.concat root
-        (Printf.sprintf ".backend-profiles-%d-%08x.tmp" (Unix.getpid ())
-           (Random.State.bits random))
+        (Printf.sprintf ".backend-profiles-%d-%s.tmp" (Unix.getpid ())
+           (random_hex ()))
     in
     match
       Unix.openfile path
@@ -290,6 +306,68 @@ let cleanup_temp path identity =
   try if same identity (Unix.lstat path) then Unix.unlink path
   with Unix.Unix_error _ -> ()
 
+let intent_bytes ~stage ~source_identity ~source_bytes ~target_identity content =
+  Yojson.Safe.to_string
+    (`Assoc
+      [
+        ("version", `Int 1);
+        ("stage", `String (Filename.basename stage));
+        ("source_dev", `Int source_identity.Unix.st_dev);
+        ("source_ino", `Int source_identity.Unix.st_ino);
+        ("source_size", `Int source_identity.Unix.st_size);
+        ("source_digest", `String (hash source_bytes));
+        ("target_dev", `Int target_identity.Unix.st_dev);
+        ("target_ino", `Int target_identity.Unix.st_ino);
+        ("target_digest", `String (hash content));
+      ])
+  ^ "\n"
+
+let write_intent ~root ~directory bytes =
+  let path = intent root in
+  let fd =
+    Unix.openfile path
+      [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ] 0o600
+  in
+  let identity = Unix.fstat fd in
+  (try
+     Fun.protect
+       ~finally:(fun () -> Unix.close fd)
+       (fun () ->
+         write_all fd bytes 0;
+         Unix.fchmod fd 0o600;
+         Unix.fsync fd);
+     Unix.fsync directory;
+     identity
+   with exn ->
+     cleanup_temp path identity;
+     raise exn)
+
+let read_intent root =
+  try
+    let path = intent root in
+    let initial = Unix.lstat path in
+    if not (private_file initial) || initial.Unix.st_size > 1024 then None
+    else
+      let fd = Unix.openfile path [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      Fun.protect
+        ~finally:(fun () -> Unix.close fd)
+        (fun () ->
+          if not (unchanged initial (Unix.fstat fd)) then None
+          else
+            let bytes = Bytes.create initial.Unix.st_size in
+            let rec read offset =
+              if offset = Bytes.length bytes then true
+              else
+                let n = Unix.read fd bytes offset (Bytes.length bytes - offset) in
+                n > 0 && read (offset + n)
+            in
+            if
+              read 0 && unchanged initial (Unix.fstat fd)
+              && unchanged initial (Unix.lstat path)
+            then Some (initial, Bytes.to_string bytes)
+            else None)
+  with Unix.Unix_error _ -> None
+
 let stage_name name =
   let prefix = ".backend-profiles-" and suffix = ".tmp" in
   if
@@ -304,84 +382,146 @@ let stage_name name =
     | [ pid; hex ] ->
         pid <> ""
         && String.for_all (function '0' .. '9' -> true | _ -> false) pid
-        && String.length hex = 8
+        && String.length hex = 16
         && String.for_all
              (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false)
              hex
     | _ -> false
 
-(* Only the one recognized staging hard link in the same private root may be
-   removed. The expected bytes and descriptor identity must still match the
-   current source conversion; arbitrary same-user files are never unlinked. *)
-let recover_link ~root ~directory ~before_publish content =
+(* Only the staging hard link named by a durable migration intent may be
+   removed; a matching same-user name, inode and payload alone prove nothing. *)
+let recover_link ~root ~directory ~before_publish ~source_identity ~source_bytes
+    content =
   try
     let destination = target root in
     let initial = Unix.lstat destination in
+    let record = read_intent root in
     if
       initial.Unix.st_kind <> Unix.S_REG
       || initial.Unix.st_uid <> Unix.geteuid ()
       || initial.Unix.st_perm land 0o077 <> 0
-      || initial.Unix.st_nlink <> 2
+      || not (initial.Unix.st_nlink = 1 || initial.Unix.st_nlink = 2)
       || initial.Unix.st_size <> String.length content
     then Error Target_exists
     else
-      let stages =
-        Array.to_list (Sys.readdir root)
-        |> List.filter stage_name
-        |> List.filter (fun name ->
-               try same initial (Unix.lstat (Filename.concat root name))
-               with Unix.Unix_error _ -> false)
-      in
-      match stages with
-      | [ name ] ->
-          let stage = Filename.concat root name in
-          let fd =
-            Unix.openfile destination [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
+      match record with
+      | Some (record_identity, bytes) ->
+          let stages =
+            Array.to_list (Sys.readdir root)
+            |> List.filter stage_name
+            |> List.filter (fun name ->
+                   try same initial (Unix.lstat (Filename.concat root name))
+                   with Unix.Unix_error _ -> false)
           in
-          let matches =
-            Fun.protect
-              ~finally:(fun () -> Unix.close fd)
-              (fun () ->
-                let bytes = Bytes.create (String.length content) in
-                let rec read offset =
-                  if offset = Bytes.length bytes then true
-                  else
-                    let count =
-                      Unix.read fd bytes offset (Bytes.length bytes - offset)
+          let matching =
+            List.filter
+              (fun name ->
+                bytes
+                = intent_bytes ~stage:(Filename.concat root name)
+                    ~source_identity ~source_bytes ~target_identity:initial
+                    content)
+              stages
+          in
+          let recorded_stage =
+            match matching with
+            | [ name ]
+              when initial.Unix.st_nlink = 2 && List.length stages = 1 ->
+                Some name
+            | [] when initial.Unix.st_nlink = 1 ->
+                (* The stage was unlinked before the process died. Recover only
+                   the exact recorded stage, not a matching unrelated file. *)
+                (try
+                   let json = Yojson.Safe.from_string bytes in
+                   match Yojson.Safe.Util.member "stage" json with
+                   | `String name
+                     when stage_name name
+                          && (match Unix.lstat (Filename.concat root name) with
+                             | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
+                                 true
+                             | _ -> false)
+                          && bytes
+                             = intent_bytes
+                                 ~stage:(Filename.concat root name)
+                                 ~source_identity ~source_bytes
+                                 ~target_identity:initial content ->
+                       Some name
+                   | _ -> None
+                 with Yojson.Json_error _ -> None)
+            | _ -> None
+          in
+          (match recorded_stage with
+          | None -> Error Target_exists
+          | Some name ->
+              let stage = Filename.concat root name in
+              let fd =
+                Unix.openfile destination [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
+              in
+              let matches =
+                Fun.protect
+                  ~finally:(fun () -> Unix.close fd)
+                  (fun () ->
+                    let bytes = Bytes.create (String.length content) in
+                    let rec read offset =
+                      if offset = Bytes.length bytes then true
+                      else
+                        let count =
+                          Unix.read fd bytes offset (Bytes.length bytes - offset)
+                        in
+                        count > 0 && read (offset + count)
                     in
-                    count > 0 && read (offset + count)
-                in
-                same initial (Unix.fstat fd)
-                && read 0 && Bytes.to_string bytes = content
-                && same initial (Unix.fstat fd))
-          in
-          if not matches then Error Target_exists
-          else
-            let* () = before_publish () in
-            let current = Unix.lstat destination in
-            if
-              not (same initial current && current.Unix.st_nlink = 2)
-              || not (same initial (Unix.lstat stage))
-              || (Unix.lstat stage).Unix.st_nlink <> 2
-            then Error Target_exists
-            else (
-              Unix.unlink stage;
-              Unix.fsync directory;
-              if private_file (Unix.lstat destination) then Ok ()
-              else Error Publication_uncertain)
+                    same initial (Unix.fstat fd)
+                    && read 0 && Bytes.to_string bytes = content
+                    && same initial (Unix.fstat fd))
+              in
+              if not matches then Error Target_exists
+              else
+                let* () = before_publish () in
+                let current = Unix.lstat destination in
+                if
+                  not
+                    (same initial current
+                    && current.Unix.st_nlink = initial.Unix.st_nlink)
+                  || (match read_intent root with
+                     | Some (current_record, current_bytes) ->
+                         not
+                           (same record_identity current_record
+                           && private_file current_record
+                           && current_bytes = bytes)
+                     | None -> true)
+                  || (initial.Unix.st_nlink = 2
+                     && (not (same initial (Unix.lstat stage))
+                        || (Unix.lstat stage).Unix.st_nlink <> 2))
+                  || (initial.Unix.st_nlink = 1
+                     && (match Unix.lstat stage with
+                        | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false
+                        | _ -> true))
+                then Error Target_exists
+                else (
+                  if initial.Unix.st_nlink = 2 then Unix.unlink stage;
+                  Unix.fsync directory;
+                  if
+                    private_file (Unix.lstat destination)
+                    && same initial (Unix.lstat destination)
+                  then Ok ()
+                  else Error Publication_uncertain))
       | _ -> Error Target_exists
   with Unix.Unix_error _ | Sys_error _ -> Error Publication_uncertain
 
 (* [before_publish] performs the last custody revalidation. As in the native
    project store, staged bytes are fsynced before that boundary. Unlike rename,
    link never overwrites an existing target, including a concurrent winner. *)
-let publish_file ~root ~directory ~destination ~exists ~before_publish content =
+let publish_file ?origin ~root ~directory ~destination ~exists ~before_publish
+    content =
   let linked = ref false in
+  let record_identity = ref None in
   try
     let path, fd = create_temp root in
     let identity = Unix.fstat fd in
     Fun.protect
-      ~finally:(fun () -> cleanup_temp path identity)
+      ~finally:(fun () ->
+         cleanup_temp path identity;
+         if not !linked then
+           Option.iter (cleanup_temp (intent root)) !record_identity)
       (fun () ->
         Fun.protect
           ~finally:(fun () -> Unix.close fd)
@@ -389,6 +529,14 @@ let publish_file ~root ~directory ~destination ~exists ~before_publish content =
             write_all fd content 0;
             Unix.fchmod fd 0o600;
             Unix.fsync fd);
+        (match origin with
+        | None -> ()
+        | Some (source_identity, source_bytes) ->
+            let record =
+              intent_bytes ~stage:path ~source_identity ~source_bytes
+                ~target_identity:identity content
+            in
+            record_identity := Some (write_intent ~root ~directory record));
         let* () = before_publish () in
         let current = Unix.lstat path in
         if not (private_file current && same identity current) then
@@ -428,10 +576,10 @@ let publish_marker ~root ~directory ~before_publish content =
   | (Out_of_memory | Stack_overflow) as exn -> raise exn
   | _ -> Error Publication_uncertain
 
-let publish ~root ~directory ~before_publish content =
+let publish ?origin ~root ~directory ~before_publish content =
   let* () = available root in
   let* () =
-    publish_file ~root ~directory ~destination:(target root)
+    publish_file ?origin ~root ~directory ~destination:(target root)
       ~exists:Target_exists
       ~before_publish:(fun () ->
         let* () = before_publish () in
@@ -439,6 +587,38 @@ let publish ~root ~directory ~before_publish content =
       content
   in
   publish_marker ~root ~directory ~before_publish content
+
+let finish_intent ~root ~directory ~source_identity ~source_bytes content =
+  match read_intent root with
+  | None -> Error Publication_uncertain
+  | Some (identity, bytes) ->
+      (try
+         let target_identity = Unix.lstat (target root) in
+         let marker_identity = Unix.lstat (marker root) in
+         let stage =
+           match Yojson.Safe.Util.member "stage" (Yojson.Safe.from_string bytes) with
+           | `String name when stage_name name -> Some (Filename.concat root name)
+           | _ -> None
+         in
+         if
+           not (same identity (Unix.lstat (intent root)))
+           || not (private_file target_identity && private_file marker_identity)
+           || not (unchanged source_identity (Unix.lstat (source root)))
+           || not
+                (Option.fold ~none:false
+                   ~some:(fun stage ->
+                     bytes
+                     = intent_bytes ~stage ~source_identity ~source_bytes
+                         ~target_identity content)
+                   stage)
+         then
+           Error Publication_uncertain
+         else (
+           Unix.unlink (intent root);
+           Unix.fsync directory;
+           Ok ())
+       with Unix.Unix_error _ | Yojson.Json_error _ ->
+         Error Publication_uncertain)
 
 let migrate ~root =
   let* () = project Unsafe_configuration_root (P.validate_private_root root) in
@@ -466,12 +646,15 @@ let migrate ~root =
         in
         let* () =
           match existing with
-          | Some st when st.Unix.st_nlink <> 2 -> Error Target_exists
+          | Some st when st.Unix.st_nlink <> 1 && st.Unix.st_nlink <> 2 ->
+              Error Target_exists
           | Some _ ->
               (match absent (marker root) with
               | Ok () -> Ok ()
               | Error _ -> Error Target_exists)
-          | None -> absent ~error:Already_retired (marker root)
+          | None ->
+              let* () = absent ~error:Already_retired (marker root) in
+              absent (intent root)
         in
         let* bytes, source_identity = read_source root in
         let* content, registry, report = convert bytes in
@@ -485,10 +668,19 @@ let migrate ~root =
           check_roots registry
         in
         let* () =
-          if Option.is_some existing then (
-            let* () = recover_link ~root ~directory ~before_publish content in
-            publish_marker ~root ~directory ~before_publish content)
-          else publish ~root ~directory ~before_publish content
-        in
-        Ok report)
+           if Option.is_some existing then (
+             let* () =
+              recover_link ~root ~directory ~before_publish ~source_identity
+                ~source_bytes:bytes content
+            in
+             publish_marker ~root ~directory ~before_publish content)
+          else
+            publish ~origin:(source_identity, bytes) ~root ~directory
+              ~before_publish content
+         in
+         let* () =
+           finish_intent ~root ~directory ~source_identity ~source_bytes:bytes
+             content
+         in
+         Ok report)
   with Unix.Unix_error _ | Sys_error _ -> Error Publication_failed

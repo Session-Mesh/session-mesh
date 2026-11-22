@@ -11,7 +11,7 @@
 (test
  (name backend_migration_test)
  (modules backend_migration_test backend_migration_impl)
- (libraries mesh_accounts mesh_backend_profile test_scratch alcotest yojson unix)
+  (libraries mesh_accounts mesh_backend_profile test_scratch alcotest yojson unix digestif)
  (action
   (run %{test} %{exe:../bin/mesh_profile_main.exe})))
 

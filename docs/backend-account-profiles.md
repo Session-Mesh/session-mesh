@@ -177,8 +177,13 @@ Migration validates the complete `accounts.json` and converted registry before p
 backend-qualified profiles. The original file bytes and agent directories remain unchanged; missing
 agent directories are not created. Success reports only alias/profile counts. A repeat migration or
 an existing target refuses rather than silently merging or overwriting it, except when retrying
-an interrupted no-clobber publication whose private staging link, inode and exact converted bytes
-can all be verified. Other existing targets and staging files are never removed automatically.
+an interrupted no-clobber publication whose private, fsynced publication-intent record binds the
+exact stage, source and target identities and converted registry digest. A matching stage name
+and bytes alone never establish that migration created the target. A recorded target left with
+one link (after stage removal but before the marker) can also be completed on retry. If the
+intent is missing, invalid or left before the target link, migration refuses; reconcile that
+incomplete publication explicitly rather than removing an ambiguous file automatically.
+Other existing targets and staging files are never removed automatically.
 Migration rejects a trimmed label that newly collides with another ID in the same backend (or
 `default`). It also refuses a derived `config/projects` or `config/sessions` path exceeding the native
 1024-byte limit: shorten the legacy base path in `accounts.json` before migrating, and move the agent

@@ -11,12 +11,23 @@ let s x = `String x
 let source root = Filename.concat root "accounts.json"
 let target root = Filename.concat root "backend-profiles.json"
 let marker root = Filename.concat root "backend-profiles.migrated"
+let intent root = Filename.concat root ".backend-profiles.migration-intent"
 
 let write path bytes =
   Out_channel.with_open_gen [ Open_wronly; Open_creat; Open_excl ] 0o600 path
     (fun channel -> output_string channel bytes)
 
 let read path = In_channel.with_open_bin path In_channel.input_all
+
+let record_intent root stage original content =
+  let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+  Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+      ignore
+        (M.write_intent ~root ~directory
+           (M.intent_bytes ~stage
+              ~source_identity:(Unix.lstat (source root))
+              ~source_bytes:original
+              ~target_identity:(Unix.lstat stage) content)))
 
 let rec cleanup path =
   match (Unix.lstat path).Unix.st_kind with
@@ -100,6 +111,9 @@ let no_target root =
   Alcotest.(check bool)
     "no premature retirement marker" false
     (Sys.file_exists (marker root));
+  Alcotest.(check bool)
+    "no premature publication intent" false
+    (Sys.file_exists (intent root));
   Alcotest.(check bool)
     "no staging file" false
     (Array.exists
@@ -367,6 +381,42 @@ let derived_root_limit () =
 
 let interrupted_link () =
   fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
+      write stage content;
+      record_intent root stage original content;
+      Unix.link stage (target root);
+      success root 0 0;
+      Alcotest.(check bool) "recorded stage cleaned" false (Sys.file_exists stage);
+      Alcotest.(check bool) "record retired" false (Sys.file_exists (intent root));
+      Alcotest.(check bool) "marker published" true (Sys.file_exists (marker root)));
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
+      write stage content;
+      record_intent root stage original content;
+      Unix.link stage (target root);
+      Unix.unlink stage;
+      success root 0 0;
+      Alcotest.(check bool) "single-link crash record retired" false
+        (Sys.file_exists (intent root)));
+  fixture (fun root ->
       let config = Filename.concat root "claude" in
       let original = legacy [ account ~claude:config "work" ] in
       write (source root) original;
@@ -375,20 +425,25 @@ let interrupted_link () =
         | Ok result -> result
         | Error _ -> Alcotest.fail "fixture conversion"
       in
-      let stage = Filename.concat root ".backend-profiles-123-1234abcd.tmp" in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
       write stage content;
       Unix.link stage (target root);
       Alcotest.(check int) "interrupted hard link" 2
         (Unix.lstat (target root)).Unix.st_nlink;
-      success root 1 1;
-      Alcotest.(check bool) "stage removed" false (Sys.file_exists stage);
-      Alcotest.(check bool) "native registry accepted" true
-        (match P.load ~root with Ok (Some _) -> true | _ -> false);
+      refusal root "migration-target-exists";
+      Alcotest.(check bool) "foreign matching stage retained" true
+        (Sys.file_exists stage);
+      Alcotest.(check bool) "no marker for foreign matching bytes" false
+        (Sys.file_exists (marker root));
       Alcotest.(check string) "source untouched" original (read (source root)));
   fixture (fun root ->
       let original = legacy [] in
       write (source root) original;
-      let stage = Filename.concat root ".backend-profiles-123-1234abcd.tmp" in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
       write stage "foreign same-user bytes";
       Unix.link stage (target root);
       refusal root "migration-target-exists";
@@ -418,9 +473,12 @@ let interrupted_link () =
         | Ok result -> result
         | Error _ -> Alcotest.fail "fixture conversion"
       in
-      let stage = Filename.concat root ".backend-profiles-123-1234abcd.tmp" in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
       write stage content;
       Unix.link stage (target root);
+      record_intent root stage original content;
       Unix.unlink (source root);
       write (source root)
         (legacy [ account ~claude:(Filename.concat root "other") "work" ]);
@@ -436,29 +494,135 @@ let interrupted_link () =
         | Ok result -> result
         | Error _ -> Alcotest.fail "fixture conversion"
       in
-      let stage = Filename.concat root ".backend-profiles-123-1234abcd.tmp" in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
+      write stage content;
+      record_intent root stage original content;
+      Unix.link stage (target root);
+      let fd = Unix.openfile (source root) [ Unix.O_WRONLY; Unix.O_TRUNC ] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+          M.write_all fd
+            (legacy [ account ~claude:(Filename.concat root "new") "work" ])
+            0);
+      refusal root "migration-target-exists";
+      Alcotest.(check int) "changed source inode remains untouched" 2
+        (Unix.lstat stage).Unix.st_nlink);
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
+      write stage content;
+      record_intent root stage original content;
+      Unix.link stage (target root);
+      write (marker root) "foreign marker";
+      refusal root "migration-target-exists";
+      Alcotest.(check string) "marker not overwritten" "foreign marker"
+        (read (marker root));
+      Alcotest.(check int) "stage not unlinked after marker refusal" 2
+        (Unix.lstat stage).Unix.st_nlink);
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
+      write stage content;
+      record_intent root stage original content;
+      Unix.link stage (target root);
+      let bytes = read (intent root) in
+      Unix.unlink (intent root);
+      write (intent root) (bytes ^ "tampered");
+      refusal root "migration-target-exists";
+      Alcotest.(check int) "tampered record leaves both links" 2
+        (Unix.lstat stage).Unix.st_nlink);
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
+      write stage content;
+      record_intent root stage original content;
+      Unix.unlink stage;
       write stage content;
       Unix.link stage (target root);
+      refusal root "migration-target-exists";
+      Alcotest.(check int) "recorded wrong inode never cleaned" 2
+        (Unix.lstat stage).Unix.st_nlink);
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage = Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp" in
+      write stage content;
+      record_intent root stage original content;
+      refusal root "migration-target-exists";
+      Alcotest.(check bool) "prelink intent retained for operator" true
+        (Sys.file_exists (intent root));
+      Alcotest.(check bool) "no target created behind stale intent" false
+        (Sys.file_exists (target root)));
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
+      write stage content;
+      Unix.link stage (target root);
+      record_intent root stage original content;
       let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
       Unix.close directory;
       Alcotest.(check bool) "failed post-unlink sync is uncertain" true
         (M.recover_link ~root ~directory ~before_publish:(fun () -> Ok ())
+           ~source_identity:(Unix.lstat (source root)) ~source_bytes:original
            content
         = Error M.Publication_uncertain);
-      Alcotest.(check int) "valid single-link target retained" 1
+      Alcotest.(check int) "recorded target single link" 1
         (Unix.lstat (target root)).Unix.st_nlink;
-      refusal root "migration-target-exists";
-      Alcotest.(check bool) "no retirement after failed sync" false
-        (Sys.file_exists (marker root)));
+      success root 0 0;
+      Alcotest.(check bool) "record removed on recovery" false
+        (Sys.file_exists (intent root)));
   fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
       let content, _, _ =
-        match M.convert (legacy []) with
+        match M.convert original with
         | Ok result -> result
         | Error _ -> Alcotest.fail "fixture conversion"
       in
-      let stage = Filename.concat root ".backend-profiles-123-1234abcd.tmp" in
+      let stage =
+        Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
+      in
       write stage content;
       Unix.link stage (target root);
+      record_intent root stage original content;
       let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
       Fun.protect
         ~finally:(fun () -> Unix.close directory)
@@ -469,7 +633,8 @@ let interrupted_link () =
                  Unix.unlink stage;
                  write stage "foreign replacement";
                  Ok ())
-               content
+               ~source_identity:(Unix.lstat (source root))
+               ~source_bytes:original content
             = Error M.Target_exists);
           Alcotest.(check string) "replacement untouched" "foreign replacement"
             (read stage);
@@ -705,6 +870,35 @@ let marker_failures () =
                    (Sys.readdir root)))))
     [ `Refuse; `Race; `Sync ]
 
+let recorded_marker_failure () =
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      let calls = ref 0 in
+      let result =
+        Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+            M.publish ~origin:(Unix.lstat (source root), original) ~root
+              ~directory ~before_publish:(fun () ->
+                incr calls;
+                if !calls = 1 then Ok () else Error M.Unsafe_source)
+              content)
+      in
+      Alcotest.(check bool) "marker refusal is uncertain" true
+        (result = Error M.Publication_uncertain);
+      Alcotest.(check int) "only one target link after interruption" 1
+        (Unix.lstat (target root)).Unix.st_nlink;
+      Alcotest.(check bool) "record retained before marker" true
+        (Sys.file_exists (intent root));
+      success root 0 0;
+      Alcotest.(check bool) "successful retry retires intent" false
+        (Sys.file_exists (intent root)))
+
 let host_only () =
   fixture (fun root ->
       write (source root) (legacy []);
@@ -860,7 +1054,8 @@ let () =
             ("all 64 dual-backend aliases migrate", capacity);
             ("concurrent no-clobber publication", concurrent);
             ("preexisting retirement marker refuses migration", already_retired);
-            ("marker publication failures retain registry", marker_failures);
+             ("marker publication failures retain registry", marker_failures);
+             ("recorded marker interruption is resumable", recorded_marker_failure);
             ("HTTP migration forbidden", host_only);
             ("prepublication rollback and racing target", publication_boundaries);
             ("postpublication durability uncertainty", uncertain_publication);

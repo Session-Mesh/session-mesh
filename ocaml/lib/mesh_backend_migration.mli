@@ -41,10 +41,14 @@ val migrate : root:string -> (report, error) result
     directories. Never read credentials or history, copy them, or modify the
     legacy file. Publish a complete 0600 target using a same-directory staged
     file, data fsync, atomic no-clobber link and directory fsync. A matching
-    interrupted two-link staging publication can be completed on retry only
-    after private-directory, source, content and inode checks; other existing
-    targets (including an equivalent registry, a link or a foreign file) are
-    refused. A preexisting [backend-profiles.migrated] entry of any kind then
+    interrupted publication can be completed on retry only when a private,
+    bounded [.backend-profiles.migration-intent] record was fsynced before
+    linking and still binds the exact random stage, source identity and digest,
+    target inode and registry digest. Recovery checks the record, current source,
+    target and optional two-link stage before cleanup; a matching unrecorded
+    stage is foreign and never unlinked. An intent without a target requires
+    operator reconciliation rather than automatic linking. Other existing
+    targets are refused. A preexisting [backend-profiles.migrated] entry then
     refuses with [Already_retired], even when the registry is absent.
 
     After the registry has been synced and published, publish the fixed private 0600
@@ -55,9 +59,10 @@ val migrate : root:string -> (report, error) result
     deliberate removal of the retirement marker by the operator.
 
     The two files are not published atomically together. A crash between them
-    can leave a registry without a retirement marker. The caller must
-    reconcile that incomplete migration before deliberately removing its
-    registry; this is not protection against same-user manual changes.
+    can leave a registry without a retirement marker; a verified intent lets a
+    retry publish the marker without replacing the registry. A missing, stale
+    or unverified intent requires operator reconciliation. This is not
+    protection against same-user manual changes.
 
     At most 64 legacy aliases expand to at most 128 native profiles, preserving
     both backends of each alias. Expansion beyond the compatibility bound fails
