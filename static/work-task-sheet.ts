@@ -44,11 +44,12 @@ export class TaskSheet {
   private controller: AbortController | null = null;
   private sequence = 0;
   private snapshot: string | null = null;
+  private previewScope: AbortController | null = null;
 
   constructor(private readonly host: TaskSheetHost) {}
 
   /** The read of the sheet under way is not shown. */
-  stop(): void { this.controller?.abort(); this.sequence++; }
+  stop(): void { this.previewScope?.abort(); this.previewScope = null; this.controller?.abort(); this.sequence++; }
 
   /** A tab shown: the sheet's way back names it. */
   tabShown(view: SheetView): void { if (this.sheetBack) nameSheetBack(this.host.t, this.sheetBack, view); }
@@ -58,6 +59,7 @@ export class TaskSheet {
   async select(id: string, after?: AfterAnswer, resuming = false): Promise<boolean> {
     const view = this.host.view();
     if (!view) return true;
+    this.previewScope?.abort(); this.previewScope = null;
     this.selected = id;
     markSelected(view.root, id);
     if (view.detailSlot.hidden) this.tabScroll = scrollerOf(view.root).scrollTop;
@@ -79,7 +81,8 @@ export class TaskSheet {
     }
     if (!result.ok) return false;
     this.snapshot = JSON.stringify(result.value);
-    const body = renderDetail(this.host.ctx, result.value);
+    this.previewScope = new AbortController();
+    const body = renderDetail({ ...this.host.ctx, previewSignal: this.previewScope.signal }, result.value);
     // The reload after an answer keeps what the owner was typing under the other questions; the drafts kept while
     // away (this sheet's, or one typed in another place) come back too.
     if (after && !after.fresh) fillDrafts(body, unsentDrafts(view.detailSlot, after.question));
@@ -123,7 +126,9 @@ export class TaskSheet {
     const opened = [...slot.querySelectorAll<HTMLDetailsElement>('.work-answer-history[open]')]
       .map(node => node.closest<HTMLElement>('[data-question-id]')?.dataset.questionId).filter((value): value is string => !!value);
     const scroll = slot.scrollTop, main = scrollerOf(view.root), mainScroll = main.scrollTop;
-    const body = renderDetail(this.host.ctx, result.value);
+    this.previewScope?.abort();
+    this.previewScope = new AbortController();
+    const body = renderDetail({ ...this.host.ctx, previewSignal: this.previewScope.signal }, result.value);
     fillDrafts(body, drafts);
     this.host.memory.fill(body);
     for (const id of opened) {

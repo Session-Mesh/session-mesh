@@ -23,6 +23,8 @@ export type ViewContext = Readonly<{
   projectSessions?: (id: string, signal: AbortSignal) => Promise<WorkResult<RecordedSessions>>;
   scopeSignal?: AbortSignal;
   previewTask?: (id: string, signal: AbortSignal) => Promise<WorkResult<TaskDetail>>;
+  /** Aborted before the sheet is replaced or closed. */
+  previewSignal?: AbortSignal;
   /** Sends the owner's answer to an open question; null where the view offers no answer form. */
   answers: AnswerSender | null;
   /** Prefix of the element ids of answer forms, so that the same question shown twice (tab and sheet) keeps unique ids. */

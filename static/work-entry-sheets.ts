@@ -47,6 +47,7 @@ export class EntrySheets {
   private rereads = 0;
   private snapshot: string | null = null;
   private answered = false;
+  private previewScope: AbortController | null = null;
 
   constructor(private readonly host: EntrySheetsHost) {}
 
@@ -58,8 +59,12 @@ export class EntrySheets {
       : { kind: shown.kind === 'task' ? 'task' : 'question', id: shown.id };
   }
 
+  /** Cancel previews without forgetting the sheet remembered across closing the view. */
+  stopPreviews(): void { this.previewScope?.abort(); this.previewScope = null; }
+
   /** The view shows something else now. */
   clear(): void {
+    this.stopPreviews();
     this.shown = null;
     this.snapshot = null;
     this.rereads++;
@@ -67,6 +72,7 @@ export class EntrySheets {
 
   /** The sheet of a question about no task or project, with its answer form (and the draft kept for it). */
   openQuestion(question: Question): void {
+    this.previewScope?.abort(); this.previewScope = null;
     this.shown = { kind: 'question', question };
     this.snapshot = JSON.stringify(question);
     this.answered = false;
@@ -115,7 +121,9 @@ export class EntrySheets {
   private drawTask(detail: TaskDetail, question: string | null, drafts: ReadonlyMap<string, Draft>): void {
     this.snapshot = JSON.stringify(detail);
     const content = this.host.content;
-    this.host.show(renderLoneTaskSheet(this.host.ctx, detail, this.host.back));
+    this.previewScope?.abort();
+    this.previewScope = new AbortController();
+    this.host.show(renderLoneTaskSheet({ ...this.host.ctx, previewSignal: this.previewScope.signal }, detail, this.host.back));
     fillDrafts(content, drafts);
     this.host.memory.fill(content);
     focusFirst((question ? card(content, question) : null) ?? content.querySelector<HTMLElement>('.work-detail-heading'));
@@ -158,8 +166,10 @@ export class EntrySheets {
     const opened = [...frame.querySelectorAll<HTMLDetailsElement>('.work-answer-history[open]')]
       .map(node => node.closest<HTMLElement>('[data-question-id]')?.dataset.questionId).filter((id): id is string => !!id);
     const scrollRoot = scrollerOf(content), scroll = scrollRoot.scrollTop;
+    this.stopPreviews();
+    if (shown.kind === 'task') this.previewScope = new AbortController();
     const replacement = shown.kind === 'task'
-      ? renderLoneTaskSheet(this.host.ctx, next as TaskDetail, this.host.back)
+      ? renderLoneTaskSheet({ ...this.host.ctx, previewSignal: this.previewScope!.signal }, next as TaskDetail, this.host.back)
       : renderQuestionSheet(this.host.ctx, next as Question, this.host.back);
     fillDrafts(replacement, drafts);
     this.host.memory.fill(replacement);
@@ -190,6 +200,7 @@ export class EntrySheets {
   /** The answer is recorded but the task could not be read again: "Answer recorded" in place of its form, and the way
    *  to read the task again (static/work-error-view.ts). */
   private rereadFailed(shown: Shown & { kind: 'task' }, question: string, error: WorkError): void {
+    this.previewScope?.abort(); this.previewScope = null;
     const content = this.host.content;
     recordedButUnread(this.host.ctx.t, content, question, error, () => void this.reread(shown, question),
       content.querySelector('.work-qsheet-actions'));
