@@ -1,3 +1,4 @@
+import {OWNER_CHECK, listensFrom} from './helpers/listener-owner.ts';
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
@@ -8,7 +9,7 @@
 // the built bundle. The browser part needs a Chromium: MESH_CHROMIUM=<path>; skipped without it
 // (MESH_REQUIRE_BROWSER=1 makes the absence a failure).
 import assert from 'node:assert/strict';
-import {type ChildProcess, spawn, spawnSync} from 'node:child_process';
+import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -47,39 +48,6 @@ const token = (): string => fs.readFileSync(path.join(confDir, 'token'), 'utf8')
 // /proc where it lists sockets (Linux, the CI), otherwise asked of lsof (macOS has it). Without
 // either, nothing can tell, and the suite is skipped rather than trusting any listener.
 // MESH_TEST_OWNER=lsof forces lsof, to test that path on Linux.
-const PROC = process.env.MESH_TEST_OWNER !== 'lsof' && fs.existsSync('/proc/net/tcp');
-const LSOF = !PROC && spawnSync('lsof', ['-v'], {stdio: 'ignore'}).error === undefined;
-const OWNER_CHECK = PROC || LSOF;
-function listensFrom(pid: number, port: number): boolean {
-  if (!PROC) {
-    // -a: the conditions together; -t: the PIDs only. Exit status 1 when nothing matches.
-    const found = spawnSync('lsof', ['-nP', '-a', '-p', String(pid), `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {encoding: 'utf8'});
-    return found.status === 0 && found.stdout.split('\n').includes(String(pid));
-  }
-  const local = `:${port.toString(16).toUpperCase().padStart(4, '0')}`;
-  const inodes = new Set<string>();
-  for (const table of ['/proc/net/tcp', '/proc/net/tcp6']) {
-    let text = '';
-    try { text = fs.readFileSync(table, 'utf8'); } catch { continue; }
-    for (const row of text.split('\n').slice(1)) {
-      const fields = row.trim().split(/\s+/);
-      // local address, state 0A (LISTEN), inode
-      if (fields[1]?.endsWith(local) && fields[3] === '0A' && fields[9]) inodes.add(fields[9]);
-    }
-  }
-  if (inodes.size === 0) return false;
-  let descriptors: string[] = [];
-  try { descriptors = fs.readdirSync(`/proc/${pid}/fd`); } catch { return false; }
-  return descriptors.some(fd => {
-    try {
-      const socket = /^socket:\[(\d+)\]$/.exec(fs.readlinkSync(`/proc/${pid}/fd/${fd}`));
-      return socket?.[1] !== undefined && inodes.has(socket[1]);
-    } catch {
-      return false;
-    }
-  });
-}
-
 // Ready only on proof that the listener is the child `pid`: the listening socket must be one of its
 // descriptors, checked before any request, so the token is never sent to another listener. Then
 // it must refuse a wrong token (401) and, with the token this child wrote under the throwaway
