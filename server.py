@@ -462,7 +462,7 @@ def _accounts_signature():
     for file in (CONF_DIR / "backend-profiles.json", CONF_DIR / "backend-profiles.migrated", ACCOUNTS_FILE):
         try:
             st = os.lstat(file)
-            signatures.append((st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_mode))
+            signatures.append((st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_mode, st.st_nlink))
         except FileNotFoundError:
             signatures.append(None)
         except OSError as exc:
@@ -512,7 +512,7 @@ def _valid_account(value):
 
 def _protected_folders(accounts, profile_roots=()):
     """The folders whose login files /view refuses: the ones declared now and every one declared before, kept in
-    accounts-protected.json (never shrunk: a refused accounts.json or a removed alias leaves the logins on disk).
+    accounts-protected.json (bounded history, with every current root retained before historical roots).
     A file that cannot be read or written only loses the earlier runs' folders, never this run's."""
     known = _ACCOUNTS["protected"]
     if known is None:
@@ -527,14 +527,18 @@ def _protected_folders(accounts, profile_roots=()):
             print(f"accounts-protected.json unreadable: {exc!r}", flush=True)
     declared = [a[field] for a in accounts for field, _, _ in ACCOUNT_MEMBER.values() if a.get(field)]
     declared.extend(p for p in profile_roots if isinstance(p, str) and _ACCOUNT_PATH_RE.fullmatch(p))
-    merged = list(dict.fromkeys([*known, *declared]))[-_ACCOUNTS_PROTECTED_MAX:]
+    declared = list(dict.fromkeys(declared))
+    current = set(declared)
+    history = [p for p in dict.fromkeys(known) if p not in current]
+    keep = max(0, _ACCOUNTS_PROTECTED_MAX - len(declared))
+    merged = history[max(0, len(history) - keep):] + declared
     if merged != known:
         try:
             fsutil.atomic_write(ACCOUNTS_PROTECTED_FILE, json.dumps(merged))
         except OSError as exc:
             print(f"accounts-protected.json not written: {exc!r}", flush=True)
     _ACCOUNTS["protected"] = merged
-    return list(dict.fromkeys([*merged, *declared]))  # never truncate a currently declared credential root
+    return merged
 
 
 async def declared_accounts():

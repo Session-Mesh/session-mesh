@@ -3,6 +3,7 @@
 
 // Real native resolver behind the server's existing account projection. No live agents or credentials.
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
 import {createHmac} from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -145,4 +146,48 @@ test('a full registry retains all credential protections after a later configura
       assert.equal(response.status, expected, name);
     }
   } finally { await mesh.stop(); }
+});
+
+test('current roots take precedence over a saturated history and remain remembered after refusal', {skip, timeout: 45000}, async () => {
+  const mesh = await startMesh('accounts-current-retention-', {MESH_MESH_PLATFORM_CMD: PLATFORM, PATH: '/usr/bin:/bin'}, where => {
+    prepare(where);
+    const current = path.join(fs.realpathSync(where.confDir), 'claude');
+    const known = [current, ...Array.from({length: 1023}, (_, index) => path.join(where.home, 'history', `h${index}`))];
+    fs.writeFileSync(path.join(where.confDir, 'accounts-protected.json'), JSON.stringify(known), {mode: 0o600});
+    fs.writeFileSync(path.join(current, 'auth.json'), 'retention-fixture', {mode: 0o600});
+    fs.writeFileSync(path.join(where.home, 'ordinary.md'), 'Ordinary fixture');
+  });
+  try {
+    await config(mesh);
+    const current = path.join(fs.realpathSync(mesh.confDir), 'claude');
+    const remembered = JSON.parse(fs.readFileSync(path.join(mesh.confDir, 'accounts-protected.json'), 'utf8')) as string[];
+    assert.equal(remembered.length, 1024);
+    assert(remembered.includes(current), 'current roots must be persisted, not only added to the immediate return value');
+    assert(remembered.includes(path.join(fs.realpathSync(mesh.confDir), 'codex')));
+    assert(!remembered.includes(path.join(mesh.home, 'history/h0')), 'only historical roots are evicted');
+    fs.writeFileSync(path.join(mesh.confDir, 'backend-profiles.json'), '{');
+    assert.deepEqual((await config(mesh)).accounts, []);
+    for (const [target, expected] of [[path.join(current, 'auth.json'), 403], [path.join(mesh.home, 'ordinary.md'), 200]] as const) {
+      const response = await fetch(`${mesh.base}/api/view`, {method: 'POST',
+        headers: {Authorization: `Bearer ${mesh.token()}`, 'Content-Type': 'application/json'},
+        body: JSON.stringify({target})});
+      assert.equal(response.status, expected);
+    }
+  } finally { await mesh.stop(); }
+});
+
+test('account cache observes a link-count change even when timestamps and all other stat fields are unchanged', () => {
+  const answer = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', `
+import json,sys
+from types import SimpleNamespace
+sys.path.insert(0, ${JSON.stringify(REPO)})
+import server
+def stat(links):
+    return SimpleNamespace(st_ino=1,st_size=100,st_mtime_ns=1,st_ctime_ns=1,st_mode=33152,st_nlink=links)
+server.os.lstat=lambda _: stat(2)
+before=server._accounts_signature()
+server.os.lstat=lambda _: stat(1)
+print(json.dumps(before != server._accounts_signature()))
+`], {encoding: 'utf8', timeout: 10000});
+  assert.equal(JSON.parse(answer), true);
 });
