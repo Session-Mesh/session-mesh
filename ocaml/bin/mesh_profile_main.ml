@@ -320,13 +320,20 @@ let () =
        Success: \
        {\"version\":1,\"ok\":true,\"data\":{\"aliases\":N,\"profiles\":N}}\n\
        Failure: {\"version\":1,\"ok\":false,\"code\":\"migration-...\"}\n\
-       Limits: 64 legacy aliases, up to 128 native profiles (both backends).\n\
-       Success also durably creates backend-profiles.migrated; an existing \
-       marker refuses with migration-already-retired.\n\
+        Limits: 64 legacy aliases, up to 128 native profiles (both backends).\n\
+        Trimmed labels must not newly collide with another ID or default \
+        in the same backend.\n\
+        Derived config/projects or config/sessions paths must fit 1024 bytes: \
+        shorten the legacy base before migrating.\n\
+        Success syncs backend-profiles.migrated; an existing \
+        marker refuses with migration-already-retired.\n\
        Manual rollback requires deliberate marker removal as well as registry \
        removal.\n\
-       Registry and marker are separate durable publications: a crash between \
-       them can leave a registry without a marker. Reconcile before rollback.\n\
+        Registry and marker are separate publications: a crash between them \
+        can leave a registry without a marker. A retry can finish only a \
+        verified interrupted staging link; otherwise reconcile before rollback.\n\
+        Directory fsync alone may not ensure power-loss persistence on macOS \
+        or every filesystem.\n\
        Marker publication failure reports migration-publication-uncertain and \
        retains the complete registry.\n\
        No credentials/history copied; no agent directories created; no live \

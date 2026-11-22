@@ -291,6 +291,190 @@ let invalid_conversion () =
       refusal root "migration-invalid-profiles";
       no_target root)
 
+let trimmed_name_collision () =
+  fixture (fun root ->
+      let original =
+        legacy
+          [
+            account ~label:"Office" ~claude:(Filename.concat root "one")
+              "work";
+            account ~label:" work " ~claude:(Filename.concat root "two")
+              "other";
+          ]
+      in
+      write (source root) original;
+      refusal root "migration-profile-name-collision";
+      no_target root;
+      Alcotest.(check string) "legacy source untouched" original
+        (read (source root)));
+  fixture (fun root ->
+      write (source root)
+        (legacy
+           [
+             account ~label:" default "
+               ~codex:(Filename.concat root "codex")
+               "other";
+           ]);
+      refusal root "migration-profile-name-collision";
+      no_target root);
+  fixture (fun root ->
+      write (source root)
+        (legacy
+           [
+             account ~label:"Office" ~claude:(Filename.concat root "one") "work";
+             account ~label:" work " ~codex:(Filename.concat root "two") "other";
+           ]);
+      success root 2 2)
+
+let derived_root_limit () =
+  let long_base root length =
+    let rec extend parent =
+      let remaining = length - String.length parent - 1 in
+      if remaining <= 100 then
+        Filename.concat parent (String.make remaining 'a')
+      else
+        let next = Filename.concat parent (String.make 100 'a') in
+        Unix.mkdir next 0o700;
+        extend next
+    in
+    extend root
+  in
+  List.iter
+    (fun backend ->
+      fixture (fun root ->
+          let base = long_base root 1024 in
+          Alcotest.(check bool) "legacy base valid" true
+            (Mesh_accounts.valid_path base);
+          write (source root)
+            (legacy
+               [
+                 (if backend = `Claude then account ~claude:base "work"
+                  else account ~codex:base "work");
+               ]);
+          refusal root "migration-derived-root-too-long";
+          no_target root);
+      fixture (fun root ->
+          let suffix = if backend = `Claude then "projects" else "sessions" in
+          let base = long_base root (1024 - 1 - String.length suffix) in
+          write (source root)
+            (legacy
+               [
+                 (if backend = `Claude then account ~claude:base "work"
+                  else account ~codex:base "work");
+               ]);
+          success root 1 1))
+    [ `Claude; `Codex ]
+
+let interrupted_link () =
+  fixture (fun root ->
+      let config = Filename.concat root "claude" in
+      let original = legacy [ account ~claude:config "work" ] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage = Filename.concat root ".backend-profiles-123-1234abcd.tmp" in
+      write stage content;
+      Unix.link stage (target root);
+      Alcotest.(check int) "interrupted hard link" 2
+        (Unix.lstat (target root)).Unix.st_nlink;
+      success root 1 1;
+      Alcotest.(check bool) "stage removed" false (Sys.file_exists stage);
+      Alcotest.(check bool) "native registry accepted" true
+        (match P.load ~root with Ok (Some _) -> true | _ -> false);
+      Alcotest.(check string) "source untouched" original (read (source root)));
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let stage = Filename.concat root ".backend-profiles-123-1234abcd.tmp" in
+      write stage "foreign same-user bytes";
+      Unix.link stage (target root);
+      refusal root "migration-target-exists";
+      Alcotest.(check string) "foreign link intact" "foreign same-user bytes"
+        (read stage);
+      Alcotest.(check int) "foreign nlink intact" 2
+        (Unix.lstat (target root)).Unix.st_nlink);
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let foreign = Filename.concat root "foreign" in
+      write foreign content;
+      Unix.link foreign (target root);
+      refusal root "migration-target-exists";
+      Alcotest.(check bool) "unrecognized sibling remains" true
+        (Sys.file_exists foreign));
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage = Filename.concat root ".backend-profiles-123-1234abcd.tmp" in
+      write stage content;
+      Unix.link stage (target root);
+      Unix.unlink (source root);
+      write (source root)
+        (legacy [ account ~claude:(Filename.concat root "other") "work" ]);
+      refusal root "migration-target-exists";
+      Alcotest.(check int) "stale stage not removed" 2
+        (Unix.lstat stage).Unix.st_nlink;
+      Alcotest.(check bool) "no retirement" false (Sys.file_exists (marker root)));
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage = Filename.concat root ".backend-profiles-123-1234abcd.tmp" in
+      write stage content;
+      Unix.link stage (target root);
+      let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      Unix.close directory;
+      Alcotest.(check bool) "failed post-unlink sync is uncertain" true
+        (M.recover_link ~root ~directory ~before_publish:(fun () -> Ok ())
+           content
+        = Error M.Publication_uncertain);
+      Alcotest.(check int) "valid single-link target retained" 1
+        (Unix.lstat (target root)).Unix.st_nlink;
+      refusal root "migration-target-exists";
+      Alcotest.(check bool) "no retirement after failed sync" false
+        (Sys.file_exists (marker root)));
+  fixture (fun root ->
+      let content, _, _ =
+        match M.convert (legacy []) with
+        | Ok result -> result
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let stage = Filename.concat root ".backend-profiles-123-1234abcd.tmp" in
+      write stage content;
+      Unix.link stage (target root);
+      let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      Fun.protect
+        ~finally:(fun () -> Unix.close directory)
+        (fun () ->
+          Alcotest.(check bool) "replaced stage refused" true
+            (M.recover_link ~root ~directory
+               ~before_publish:(fun () ->
+                 Unix.unlink stage;
+                 write stage "foreign replacement";
+                 Ok ())
+               content
+            = Error M.Target_exists);
+          Alcotest.(check string) "replacement untouched" "foreign replacement"
+            (read stage);
+          Alcotest.(check string) "target untouched" content (read (target root))))
+
 let custody () =
   fixture (fun root ->
       let bytes =
@@ -667,6 +851,9 @@ let () =
             ("24 Unicode characters", unicode);
             ("strict legacy schema", invalid_sources);
             ("full converted validation", invalid_conversion);
+            ("trimmed labels cannot introduce id ambiguity", trimmed_name_collision);
+            ("derived roots fit native limit", derived_root_limit);
+            ("interrupted no-clobber link recovery", interrupted_link);
             ("source and config custody", custody);
             ("physical alias and writable agent roots", unsafe_agent_roots);
             ("existing foreign targets", existing_targets);

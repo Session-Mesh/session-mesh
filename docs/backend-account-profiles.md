@@ -176,9 +176,15 @@ Migration validates the complete `accounts.json` and converted registry before p
 `backend-profiles.json` without replacing an existing target. Up to 64 aliases can produce 128
 backend-qualified profiles. The original file bytes and agent directories remain unchanged; missing
 agent directories are not created. Success reports only alias/profile counts. A repeat migration or
-an existing target refuses rather than silently merging or overwriting it.
+an existing target refuses rather than silently merging or overwriting it, except when retrying
+an interrupted no-clobber publication whose private staging link, inode and exact converted bytes
+can all be verified. Other existing targets and staging files are never removed automatically.
+Migration rejects a trimmed label that newly collides with another ID in the same backend (or
+`default`). It also refuses a derived `config/projects` or `config/sessions` path exceeding the native
+1024-byte limit: shorten the legacy base path in `accounts.json` before migrating, and move the agent
+directory separately if necessary. Neither a truncated path nor a changed native path limit is used.
 
-After the registry is durably published, a private `backend-profiles.migrated` marker retires automatic
+After the registry is synced and published, a private `backend-profiles.migrated` marker retires automatic
 legacy fallback. If the registry later disappears, resolution refuses instead of reviving stale
 aliases. Legacy-only installations retain their existing behavior only while both registry and marker
 are absent. A deliberate rollback therefore requires addressing the retirement marker as well as the
@@ -186,7 +192,9 @@ registry.
 
 An error after publication can return `migration-publication-uncertain` while leaving a complete
 registry in place. Inspect that target before taking another action. Registry and marker publication
-are separate filesystem operations, not a crash-atomic cross-file transaction.
+are separate filesystem operations, not a crash-atomic cross-file transaction. The file and directory
+`fsync` calls do not by themselves guarantee survival of a sudden power loss on every platform or
+filesystem (notably macOS); a success response is not a power-loss durability guarantee.
 
 Launch, restore and conversation-carry lookups use the native resolver's selected source. Enabled
 Claude/Codex profiles retain their existing alias IDs, with backend-specific labels. A configured
