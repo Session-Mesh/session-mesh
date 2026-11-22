@@ -52,13 +52,14 @@ function label(value: unknown): string {
 const asciiLower = (text: string): string => text.replace(/[A-Z]/g, c => c.toLowerCase());
 const CONFLICTS = new Set(['consent-revision-conflict', 'profile-registry-changed', 'profile-context-changed',
   'consent-rule-capacity', 'consent-revision-exhausted']);
-// mesh_profile_main.http_status and its precommit error paths. Generic helper failure
+// Native precommit errors and the HTTP route's pre-helper queue refusal. Generic helper failure
 // (including the HTTP adapter losing an ACK) and store/commit failure are NOT refusals.
 const REFUSALS = new Map<string, number>([
   ...[...CONFLICTS].map(code => [code, 409] as const),
   ...['unknown-profile', 'profiles-unconfigured'].map(code => [code, 404] as const),
   ['request-too-large', 413],
   ['unsupported-media-type', 415],
+  ['busy', 503],
   ...['invalid-request', 'unsupported-request-version', 'invalid-account-pair', 'invalid-account-reference',
     'profile-backend-mismatch', 'unsupported-operation'].map(code => [code, 400] as const),
   ...['disabled-profile', 'invalid-consent-policy', 'invalid-profile-config', 'unsafe-profile-roots',
