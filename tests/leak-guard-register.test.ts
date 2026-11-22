@@ -160,7 +160,8 @@ describe('CLA register through every gate: only a whole regular text file', () =
   // The register and README.md get the same content; README.md is the control.
   const place = (content: Buffer | {link: string}) => {
     for (const file of [REGISTER, 'README.md']) {
-      fs.rmSync(path.join(root, file), {force: true});
+      const old = path.join(root, file);
+      if (fs.lstatSync(old, {throwIfNoEntry: false})) fs.unlinkSync(old);
       if (Buffer.isBuffer(content)) write(root, file, content);
       else fs.symlinkSync(content.link, path.join(root, file));
     }
