@@ -370,6 +370,7 @@ test('binary notices require complete paths and Git wording', () => {
     ['diff --git x x', 'Binary files x and /dev/null differ'],
     ['diff --git old/x new/x', 'Binary files old/x and new/x differ'],
     ['diff --git old/x new/x', 'Binary files /dev/null and new/x differ'],
+    ['diff --git \"old\\t\" and x', 'Binary files \"old\\t\" and and x differ'],
     ['diff --git a/x b/x', 'GIT binary patch'],
   ]) {
     assert.equal(parseUnifiedDiff(`${header}\n${text}\n`).files[0]?.binary, true);
