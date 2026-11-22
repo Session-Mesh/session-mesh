@@ -53,7 +53,7 @@ export function projectSessions(ctx: ViewContext, project: string): HTMLElement 
       }
       content.replaceChildren(note, result.value.sessions.length ? list : el('p', '', ctx.t('work.sessions.empty')));
       if (result.value.omitted) content.append(el('p', 'work-mute', ctx.t('work.sessions.omitted', { n: result.value.omitted })));
-      if (result.value.partial) content.append(el('p', 'work-mute', ctx.t('work.sessions.partial'))); 
+      if (result.value.partial) content.append(el('p', 'work-mute', ctx.t('work.sessions.partial')));
     }, () => { if (!signal.aborted && current === sequence && details.open && details.isConnected)
       content.replaceChildren(el('p', '', ctx.t('work.sessions.unavailable'))); });
   });
