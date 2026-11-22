@@ -15,6 +15,8 @@ import http from 'node:http';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, type Scratch, startMesh} from './mesh-server-lib.ts';
+import {createBackendAccountApi} from '../static/backend-account-api.ts';
+import {createBackendAccountController} from '../static/backend-account-model.ts';
 
 const CANDIDATE = path.join(REPO, 'ocaml/_build/default/bin/mesh_profile_main.exe');
 const HELPER = process.env.MESH_PROFILE_CMD || (fs.existsSync(CANDIDATE) ? CANDIDATE : path.join(REPO, '_opam/bin/mesh-profile'));
@@ -133,6 +135,7 @@ function fakeHelper(directory: string): string {
     // A helper that answers after 2 s (the queue test), or after 6 s with its own coded busy answer (the store's
     // SQLite busy timeout is 5 s: the server must wait longer than that).
     hold: `sleep 2; echo '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":0,"global":"ask","pairs":[]}}'; exit 0`,
+    holdwrite: `sleep 2; echo '{"http_status":200,"version":1,"ok":true,"data":{"version":1,"revision":1,"global":"skip","pairs":[]}}'; exit 0`,
     storebusy: `sleep 6; echo '{"http_status":503,"version":1,"ok":false,"code":"backend-store-unavailable"}'; exit 1`,
     // The reply a test wrote to ./answer; a helper whose child outlives it (the whole process group must go).
     file: `cat "$d/answer"; exit 0`,
@@ -140,7 +143,7 @@ function fakeHelper(directory: string): string {
   };
   const cases = Object.entries(answers).map(([mode, action]) => `  ${mode}) ${action};;`).join('\n');
   fs.writeFileSync(script, `#!/bin/sh\nd='${directory}'\nprintf '%s\\n' "$@" > "$d/argv"\nenv > "$d/env"\n`
-    + `cat > "$d/stdin"\necho $$ > "$d/pid"\ncase "$(cat "$d/mode")" in\n${cases}\nesac\nexit 3\n`, {mode: 0o700});
+    + `cat > "$d/stdin"\necho $$ > "$d/pid"\nprintf '%s\\n' "$2" >> "$d/calls"\ncase "$(cat "$d/mode")" in\n${cases}\nesac\nexit 3\n`, {mode: 0o700});
   return script;
 }
 
@@ -333,6 +336,42 @@ describe('fail closed', {skip}, () => {
     for (const reply of busy) envelope(reply, 503, 'busy');
     assert.equal(busy.length, 4, replies.map(reply => reply.status).join(' '));
     for (const reply of replies.filter(reply => reply.status !== 503)) envelope(reply, 200);
+  });
+
+  test('saturated POSTs are definite unsaved refusals through the settings API/controller, never replayed', async () => {
+    mode('holdwrite');
+    const calls = () => fs.existsSync(path.join(fakeDir, 'calls'))
+      ? fs.readFileSync(path.join(fakeDir, 'calls'), 'utf8').trim().split('\n').length : 0;
+    const before = calls(), statuses: number[] = [];
+    const api = createBackendAccountApi(async (url, init) => {
+      const response = await fetch(`${fake.base}${url}`, {...init, headers: {...init.headers,
+        Cookie: ownerCookie(fake), Origin: fake.base}});
+      statuses.push(response.status);
+      return response;
+    });
+    const controllers = Array.from({length: 16}, () => createBackendAccountController({
+      mutate: api.mutate,
+      load: async () => ({
+        profiles: {version: 1, ok: true, data: {configured: false, registry_revision: null, profiles: []}},
+        policy: {version: 1, ok: true, data: {version: 1, revision: 0, global: 'ask', pairs: []}},
+      }),
+    }));
+    try {
+      await Promise.all(controllers.map(controller => controller.open()));
+      await Promise.all(controllers.map(controller => controller.saveGlobal('skip')));
+      assert.equal(statuses.filter(status => status === 503).length, 4);
+      assert.equal(statuses.filter(status => status === 200).length, 12);
+      assert.equal(controllers.filter(controller => controller.state.phase === 'saved').length, 12);
+      const refused = controllers.filter(controller => controller.state.phase !== 'saved');
+      for (const controller of refused) {
+        assert.equal(controller.state.phase, 'refused', 'the route refused before starting a helper');
+        assert.equal(controller.state.snapshot?.policy.revision, 0);
+        assert.equal(controller.state.snapshot?.policy.global, 'ask');
+        assert.equal(await controller.saveGlobal('skip'), false);
+      }
+      assert.equal(statuses.length, 16, 'no automatic retry after a busy refusal');
+      assert.equal(calls() - before, 12, 'only the admitted requests started helpers');
+    } finally { controllers.forEach(controller => controller.close()); }
   });
 
   test('a refusal keeps its status: a 409 is never turned into a 200', async () => {

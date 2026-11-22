@@ -137,7 +137,7 @@ test('closed native precommit refusals are not uncertain writes; codes and HTTP 
     'profile-backend-mismatch', 'unsupported-operation'], 404: ['unknown-profile', 'profiles-unconfigured'], 413: ['request-too-large'],
   503: ['disabled-profile', 'invalid-consent-policy', 'invalid-profile-config', 'unsafe-profile-roots', 'unsafe-configuration-root',
     'unsafe-backend-store', 'invalid-backend-state', 'unsupported-backend-store-version', 'backend-transaction-aborted',
-    'backend-store-busy', 'backend-journal-capacity']};
+    'backend-store-busy', 'backend-journal-capacity', 'busy']};
   for (const [http_status, codes] of Object.entries(refused)) for (const code of codes) {
     let calls = 0;
     const controller = createBackendAccountController({load: async () => ({profiles: listing(), policy: reply(policy())}),
@@ -153,6 +153,7 @@ test('closed native precommit refusals are not uncertain writes; codes and HTTP 
     {version: 1, ok: false, http_status: 503, code: 'backend-store-unavailable'},
     {version: 1, ok: false, http_status: 503, code: 'new-error-code'},
     {version: 1, ok: false, http_status: 503, code: 'invalid-request'},
+    {version: 1, ok: false, http_status: 400, code: 'busy'},
     {version: 1, ok: false, http_status: 400, code: 'invalid-request', path: 'private'},
   ]) {
     const controller = createBackendAccountController({load: async () => ({profiles: listing(), policy: reply(policy())}), mutate: async () => envelope});

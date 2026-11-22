@@ -206,7 +206,7 @@ test('component: definite native refusals have their own not-saved status in bot
   for (const lang of ['en', 'fr']) {
     const {page, errors, context} = await fixture(lang, 390);
     try {
-      for (const code of ['invalid-request', 'unknown-profile', 'request-too-large', 'unsafe-configuration-root', 'backend-transaction-aborted']) {
+      for (const code of ['invalid-request', 'unknown-profile', 'request-too-large', 'unsafe-configuration-root', 'backend-transaction-aborted', 'busy']) {
         await page.evaluate(code => { lab.fail = code; }, code);
         await control(page, 'global-skip').check(); await control(page, 'save-global').click(); await statusIs(page, lang, 'refused');
         assert.equal(await control(page, 'save-global').isDisabled(), true);
