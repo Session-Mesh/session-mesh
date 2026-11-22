@@ -59,7 +59,7 @@ export class TaskSheet {
   async select(id: string, after?: AfterAnswer, resuming = false): Promise<boolean> {
     const view = this.host.view();
     if (!view) return true;
-    this.previewScope?.abort(); this.previewScope = null;
+    if (!after || after.fresh) { this.previewScope?.abort(); this.previewScope = null; }
     this.selected = id;
     markSelected(view.root, id);
     if (view.detailSlot.hidden) this.tabScroll = scrollerOf(view.root).scrollTop;
@@ -81,6 +81,7 @@ export class TaskSheet {
     }
     if (!result.ok) return false;
     this.snapshot = JSON.stringify(result.value);
+    this.previewScope?.abort();
     this.previewScope = new AbortController();
     const body = renderDetail({ ...this.host.ctx, previewSignal: this.previewScope.signal }, result.value);
     // The reload after an answer keeps what the owner was typing under the other questions; the drafts kept while
