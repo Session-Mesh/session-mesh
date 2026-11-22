@@ -200,7 +200,6 @@ export class EntrySheets {
   /** The answer is recorded but the task could not be read again: "Answer recorded" in place of its form, and the way
    *  to read the task again (static/work-error-view.ts). */
   private rereadFailed(shown: Shown & { kind: 'task' }, question: string, error: WorkError): void {
-    this.previewScope?.abort(); this.previewScope = null;
     const content = this.host.content;
     recordedButUnread(this.host.ctx.t, content, question, error, () => void this.reread(shown, question),
       content.querySelector('.work-qsheet-actions'));

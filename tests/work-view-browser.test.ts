@@ -431,6 +431,45 @@ for (const width of WIDTHS) {
       await page.unroute('**/api/work/v1');
     });
 
+    for (const lone of [false, true]) test(`preview remains usable after answer reread fails (${lone ? 'unassigned' : 'project'})`, { timeout: 900_000 }, async () => {
+      const { page } = await signedIn(orphanTracked, 'en-US', width);
+      await enterProjects(page, width);
+      if (lone) {
+        const toggle = page.locator('.work-qsection-toggle'); await toggle.waitFor();
+        if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+        await page.locator('.work-entry-questions .work-qrow-open[data-task="T-7e7e"]').click();
+      } else {
+        await openRelayProject(page);
+        await page.locator('.work-tab').nth(1).click();
+        await page.locator('#work-panel-board .work-card', { hasText: '<script>window.__pwn=2</script>' }).click();
+      }
+      const scope = page.locator(lone ? '.work-qsheet' : '.work-detail-pane');
+      await scope.locator('.work-detail-heading').waitFor();
+      const question = lone ? 'N-0000a0a4' : 'N-0000a0a1';
+      const source = lone ? 'T-7e7e' : 'T-8e8e';
+      const preview = scope.locator('.work-dep-preview', { hasText: 'Preview T-3c4d' });
+      await preview.locator('summary').click();
+      await preview.locator('strong').waitFor();
+      let answered = false;
+      await page.route('**/api/work/v1', async route => {
+        const request = route.request().postDataJSON();
+        if (request?.op === 'answer') {
+          answered = true;
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: question, owner_verified: true }) });
+        } else if (answered && request?.op === 'task' && request?.args?.id === source)
+          await route.fulfill({ status: 503, contentType: 'application/json', body: '{}' });
+        else await route.continue();
+      });
+      const item = scope.locator(`[data-question-id="${question}"]`);
+      await item.getByLabel('Your answer').fill('recorded answer');
+      await item.getByRole('button', { name: 'Send answer' }).click();
+      await scope.locator('.work-qsheet-reread').waitFor();
+      await preview.locator('summary').click();
+      await preview.locator('summary').click();
+      await preview.locator('strong').waitFor({ timeout: 5000 });
+      await page.unroute('**/api/work/v1');
+    });
+
     test('a task opens its detail; hostile text stays inert; Escape closes the detail first', { timeout: 900_000 }, async () => {
       const { page, problems } = await signedIn(tracked, 'en-US', width);
       await enterProjects(page, width);
