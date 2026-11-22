@@ -146,9 +146,10 @@ def test_concurrent_document_and_config_refresh_across_app_loops(monkeypatch, ho
     async def run_app(number):
         client = TestClient(TestServer(server.make_app(
             session_request_path=home_dir / f"session-requests-{number}.sqlite3")))
+        original = server.declared_accounts
+        entered, release, second_entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
         await client.start_server()
         try:
-            entered, release, second_entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
             gate[0] = entered, release
             signature[0] = ("ordinary-refresh", number)
             before = len(calls)
@@ -156,8 +157,6 @@ def test_concurrent_document_and_config_refresh_across_app_loops(monkeypatch, ho
                 "/api/view", json={"target": str(doc)},
                 headers={"Authorization": f"Bearer {server.TOKEN}"}))
             await asyncio.wait_for(entered.wait(), 5)
-
-            original = server.declared_accounts
 
             async def next_refresh():
                 second_entered.set()
@@ -175,6 +174,7 @@ def test_concurrent_document_and_config_refresh_across_app_loops(monkeypatch, ho
             await configured.read()
             assert len(calls) == before + 1
         finally:
+            release.set()
             monkeypatch.setattr(server, "declared_accounts", original)
             gate[0] = None
             await client.close()
