@@ -18,6 +18,7 @@ type error =
   | Unsafe_agent_roots
   | Target_exists
   | Already_retired
+  | Migration_busy
   | Publication_failed
   | Publication_uncertain
 
@@ -38,6 +39,7 @@ let error_code = function
   | Unsafe_agent_roots -> "migration-unsafe-agent-roots"
   | Target_exists -> "migration-target-exists"
   | Already_retired -> "migration-already-retired"
+  | Migration_busy -> "migration-busy"
   | Publication_failed -> "migration-publication-failed"
   | Publication_uncertain -> "migration-publication-uncertain"
 
@@ -45,6 +47,7 @@ let source root = Filename.concat root "accounts.json"
 let target root = Filename.concat root "backend-profiles.json"
 let marker root = Filename.concat root "backend-profiles.migrated"
 let intent root = Filename.concat root ".backend-profiles.migration-intent"
+let migration_lock root = Filename.concat root ".backend-profiles.lock"
 let hash bytes = Digestif.SHA256.(to_hex (digest_string bytes))
 let same a b = a.Unix.st_dev = b.Unix.st_dev && a.Unix.st_ino = b.Unix.st_ino
 
@@ -53,6 +56,54 @@ let private_file st =
   && st.Unix.st_uid = Unix.geteuid ()
   && st.Unix.st_perm land 0o077 = 0
   && st.Unix.st_nlink = 1
+
+(* POSIX record locks are process-scoped. The host-only CLI performs one
+   migration per process; callers must not run two migrations from one process.
+   Never unlink this file: a waiting opener could otherwise lock a stale inode
+   while a newcomer locks its replacement. *)
+let acquire_migration_lock root =
+  let path = migration_lock root in
+  try
+    let open_existing () =
+      Unix.openfile path [ Unix.O_RDWR; Unix.O_CLOEXEC ] 0
+    in
+    let fd =
+      match Unix.lstat path with
+      | st when private_file st -> open_existing ()
+      | _ -> raise (Unix.Unix_error (Unix.EPERM, "migration lock", path))
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
+          (try
+             Unix.openfile path
+               [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ]
+               0o600
+           with Unix.Unix_error (Unix.EEXIST, _, _) -> open_existing ())
+    in
+    let validate () =
+      let opened = Unix.fstat fd in
+      let named = Unix.lstat path in
+      private_file opened && private_file named
+      && opened.Unix.st_perm land 0o777 = 0o600
+      && named.Unix.st_perm land 0o777 = 0o600
+      && same opened named
+    in
+    let result =
+      try
+        if not (validate ()) then Error Unsafe_configuration_root
+        else
+          match Unix.lockf fd Unix.F_TLOCK 0 with
+          | () ->
+              if validate () then Ok fd else Error Unsafe_configuration_root
+          | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EACCES), _, _) ->
+              Error Migration_busy
+      with Unix.Unix_error _ -> Error Unsafe_configuration_root
+    in
+    (match result with Ok _ -> () | Error _ -> Unix.close fd);
+    result
+  with Unix.Unix_error _ -> Error Unsafe_configuration_root
+
+let with_migration_lock ~root f =
+  let* fd = acquire_migration_lock root in
+  Fun.protect ~finally:(fun () -> Unix.close fd) f
 
 let unchanged a b =
   private_file b && same a b
@@ -638,49 +689,52 @@ let migrate ~root =
           then Ok ()
           else Error Unsafe_configuration_root
         in
-        let* () = recheck_root () in
-        let existing =
-          match Unix.lstat (target root) with
-          | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
-          | st -> Some st
-        in
-        let* () =
-          match existing with
-          | Some st when st.Unix.st_nlink <> 1 && st.Unix.st_nlink <> 2 ->
-              Error Target_exists
-          | Some _ ->
-              (match absent (marker root) with
-              | Ok () -> Ok ()
-              | Error _ -> Error Target_exists)
-          | None ->
-              let* () = absent ~error:Already_retired (marker root) in
-              absent (intent root)
-        in
-        let* bytes, source_identity = read_source root in
-        let* content, registry, report = convert bytes in
-        let* () = check_roots registry in
-        let before_publish () =
-          let* () = recheck_root () in
-          let* () =
-            if unchanged source_identity (Unix.lstat (source root)) then Ok ()
-            else Error Unsafe_source
-          in
-          check_roots registry
-        in
-        let* () =
-           if Option.is_some existing then (
+         let* () = recheck_root () in
+         with_migration_lock ~root (fun () ->
+             let* () = recheck_root () in
+             let existing =
+               match Unix.lstat (target root) with
+               | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
+               | st -> Some st
+             in
              let* () =
-              recover_link ~root ~directory ~before_publish ~source_identity
-                ~source_bytes:bytes content
-            in
-             publish_marker ~root ~directory ~before_publish content)
-          else
-            publish ~origin:(source_identity, bytes) ~root ~directory
-              ~before_publish content
-         in
-         let* () =
-           finish_intent ~root ~directory ~source_identity ~source_bytes:bytes
-             content
-         in
-         Ok report)
+               match existing with
+               | Some st when st.Unix.st_nlink <> 1 && st.Unix.st_nlink <> 2 ->
+                   Error Target_exists
+               | Some _ ->
+                   (match absent (marker root) with
+                   | Ok () -> Ok ()
+                   | Error _ -> Error Target_exists)
+               | None ->
+                   let* () = absent ~error:Already_retired (marker root) in
+                   absent (intent root)
+             in
+             let* bytes, source_identity = read_source root in
+             let* content, registry, report = convert bytes in
+             let* () = check_roots registry in
+             let before_publish () =
+               let* () = recheck_root () in
+               let* () =
+                 if unchanged source_identity (Unix.lstat (source root)) then
+                   Ok ()
+                 else Error Unsafe_source
+               in
+               check_roots registry
+             in
+             let* () =
+               if Option.is_some existing then (
+                 let* () =
+                   recover_link ~root ~directory ~before_publish ~source_identity
+                     ~source_bytes:bytes content
+                 in
+                 publish_marker ~root ~directory ~before_publish content)
+               else
+                 publish ~origin:(source_identity, bytes) ~root ~directory
+                   ~before_publish content
+             in
+             let* () =
+               finish_intent ~root ~directory ~source_identity
+                 ~source_bytes:bytes content
+             in
+             Ok report))
   with Unix.Unix_error _ | Sys_error _ -> Error Publication_failed

@@ -12,6 +12,7 @@ let source root = Filename.concat root "accounts.json"
 let target root = Filename.concat root "backend-profiles.json"
 let marker root = Filename.concat root "backend-profiles.migrated"
 let intent root = Filename.concat root ".backend-profiles.migration-intent"
+let migration_lock root = Filename.concat root ".backend-profiles.lock"
 
 let write path bytes =
   Out_channel.with_open_gen [ Open_wronly; Open_creat; Open_excl ] 0o600 path
@@ -130,8 +131,11 @@ let dual_backend () =
       write credentials "private fixture, never copied";
       let original = legacy [ account ~label:" Work " ~claude ~codex "work" ] in
       write (source root) original;
-      let source_identity = Unix.lstat (source root) in
-      success root 1 2;
+       let source_identity = Unix.lstat (source root) in
+       success root 1 2;
+       let lock_identity = Unix.lstat (migration_lock root) in
+       Alcotest.(check bool) "private persistent lock" true
+         (M.private_file lock_identity);
       Alcotest.(check string)
         "source byte unchanged" original
         (read (source root));
@@ -205,7 +209,9 @@ let dual_backend () =
         "credentials untouched" "private fixture, never copied"
         (read credentials);
       let published = read (target root) in
-      refusal root "migration-target-exists";
+       refusal root "migration-target-exists";
+       Alcotest.(check bool) "repeat retains lock inode" true
+         (M.same lock_identity (Unix.lstat (migration_lock root)));
       Alcotest.(check string)
         "repeat cannot overwrite" published
         (read (target root));
@@ -559,14 +565,20 @@ let interrupted_link () =
       let stage =
         Filename.concat root ".backend-profiles-123-1234abcd1234abcd.tmp"
       in
-      write stage content;
-      record_intent root stage original content;
-      Unix.unlink stage;
-      write stage content;
-      Unix.link stage (target root);
-      refusal root "migration-target-exists";
-      Alcotest.(check int) "recorded wrong inode never cleaned" 2
-        (Unix.lstat stage).Unix.st_nlink);
+       write stage content;
+       record_intent root stage original content;
+       let old_inode = Unix.openfile stage [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+       Fun.protect ~finally:(fun () -> Unix.close old_inode) (fun () ->
+           let original_identity = Unix.fstat old_inode in
+           Unix.unlink stage;
+           write stage content;
+           let replacement = Unix.lstat stage in
+           Alcotest.(check bool) "replacement inode differs while old is pinned"
+             false (M.same original_identity replacement);
+           Unix.link stage (target root);
+           refusal root "migration-target-exists";
+           Alcotest.(check int) "recorded wrong inode never cleaned" 2
+             (Unix.lstat stage).Unix.st_nlink));
   fixture (fun root ->
       let original = legacy [] in
       write (source root) original;
@@ -739,7 +751,9 @@ let capacity () =
       success root 64 64)
 
 let concurrent () =
-  fixture (fun root ->
+  let total_busy = ref 0 and total_existing = ref 0 in
+  for iteration = 1 to 20 do
+    fixture (fun root ->
       let original =
         legacy [ account ~claude:(Filename.concat root "claude") "work" ]
       in
@@ -752,11 +766,15 @@ let concurrent () =
            (List.filter (fun (status, _) -> status = Unix.WEXITED 0) results));
       List.iter
         (fun (status, response) ->
-          if status <> Unix.WEXITED 0 then
-            Alcotest.(check bool)
-              "losers refuse existing target" true
-              (Yojson.Safe.Util.member "code" response
-              = s "migration-target-exists"))
+          if status <> Unix.WEXITED 0 then (
+            Alcotest.(check bool) "loser exited with refusal" true
+              (status = Unix.WEXITED 1);
+            let code = Yojson.Safe.Util.member "code" response in
+            if code = s "migration-target-exists" then incr total_existing
+            else if code = s "migration-busy" then incr total_busy
+            else
+              Alcotest.failf "iteration %d: unexpected losing result %s"
+                iteration (Yojson.Safe.to_string response)))
         results;
       Alcotest.(check string)
         "source unchanged under concurrency" original
@@ -766,9 +784,130 @@ let concurrent () =
         (Result.is_ok (P.load ~root));
       Alcotest.(check int)
         "target has no staging link" 1 (Unix.stat (target root)).Unix.st_nlink;
-      Alcotest.(check int)
-        "only source, target and retirement marker" 3
-        (Array.length (Sys.readdir root)))
+      Alcotest.(check (list string))
+        "only source, target, marker and persistent lock"
+        [
+          ".backend-profiles.lock";
+          "accounts.json";
+          "backend-profiles.json";
+          "backend-profiles.migrated";
+        ]
+        (Array.to_list (Sys.readdir root) |> List.sort String.compare))
+  done;
+  Alcotest.(check int) "twenty rounds, seven refused per round" 140
+    (!total_busy + !total_existing);
+  Printf.printf "20 rounds: 20 winners, %d busy, %d existing target\n%!"
+    !total_busy !total_existing
+
+let live_publication () =
+  fixture (fun root ->
+      let original = legacy [] in
+      write (source root) original;
+      let content, _, _ =
+        match M.convert original with
+        | Ok converted -> converted
+        | Error _ -> Alcotest.fail "fixture conversion"
+      in
+      let ready_read, ready_write = Unix.pipe ~cloexec:true () in
+      let release_read, release_write = Unix.pipe ~cloexec:true () in
+      let child = Unix.fork () in
+      if child = 0 then (
+        Unix.close ready_read;
+        Unix.close release_write;
+        let status =
+          try
+            let result =
+              M.with_migration_lock ~root (fun () ->
+                  let directory =
+                    Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
+                  in
+                  Fun.protect ~finally:(fun () -> Unix.close directory)
+                    (fun () ->
+                      let stage =
+                        Filename.concat root
+                          ".backend-profiles-123-1234abcd1234abcd.tmp"
+                      in
+                      write stage content;
+                      record_intent root stage original content;
+                      Unix.link stage (target root);
+                      let signal = Bytes.of_string "1" in
+                      ignore (Unix.write ready_write signal 0 1);
+                      let received = Bytes.create 1 in
+                      if Unix.read release_read received 0 1 <> 1 then
+                        Error M.Publication_failed
+                      else (
+                        Unix.unlink stage;
+                        Unix.fsync directory;
+                        Result.bind
+                          (M.publish_marker ~root ~directory
+                             ~before_publish:(fun () -> Ok ()) content)
+                          (fun () ->
+                            M.finish_intent ~root ~directory
+                              ~source_identity:(Unix.lstat (source root))
+                              ~source_bytes:original content))))
+            in
+            if result = Ok () then 0 else 1
+          with _ -> 2
+        in
+        Unix.close ready_write;
+        Unix.close release_read;
+        Unix._exit status);
+      Unix.close ready_write;
+      Unix.close release_read;
+      let child_status = ref None in
+      Fun.protect
+        ~finally:(fun () ->
+          Unix.close ready_read;
+          (try ignore (Unix.write release_write (Bytes.of_string "1") 0 1)
+           with Unix.Unix_error (Unix.EPIPE, _, _) -> ());
+          Unix.close release_write;
+          child_status := Some (Unix.waitpid [] child))
+        (fun () ->
+          let ready = Bytes.create 1 in
+          Alcotest.(check int) "live link reached" 1
+            (Unix.read ready_read ready 0 1);
+          let before = read (intent root) in
+          refusal root "migration-busy";
+          Alcotest.(check int) "live stage still linked" 2
+            (Unix.lstat (target root)).Unix.st_nlink;
+          Alcotest.(check string) "live intent unchanged" before
+            (read (intent root));
+          Alcotest.(check string) "source unchanged" original
+            (read (source root));
+          Alcotest.(check bool) "marker not stolen" false
+            (Sys.file_exists (marker root)));
+      Alcotest.(check bool) "publisher finished" true
+        (match !child_status with
+        | Some (_, Unix.WEXITED 0) -> true
+        | _ -> false);
+      Alcotest.(check int) "linked target cleaned" 1
+        (Unix.lstat (target root)).Unix.st_nlink;
+      Alcotest.(check bool) "publisher retired marker" true
+        (Sys.file_exists (marker root));
+      Alcotest.(check bool) "lock file remains stable" true
+        (M.private_file (Unix.lstat (migration_lock root))))
+
+let unsafe_migration_lock () =
+  List.iter
+    (fun poison ->
+      fixture (fun root ->
+          let original = legacy [] in
+          write (source root) original;
+          let path = migration_lock root in
+          let foreign = Filename.concat root "foreign" in
+          (match poison with
+          | `Symlink -> Unix.symlink (source root) path
+          | `Hardlink ->
+              write foreign "foreign private file";
+              Unix.link foreign path
+          | `Mode ->
+              write path "foreign mode";
+              Unix.chmod path 0o644);
+          refusal root "migration-unsafe-configuration-root";
+          no_target root;
+          Alcotest.(check string) "legacy unchanged" original
+            (read (source root))))
+    [ `Symlink; `Hardlink; `Mode ]
 
 let already_retired () =
   fixture (fun root ->
@@ -1001,8 +1140,8 @@ let uncertain_publication () =
         (Unix.stat (target root)).Unix.st_nlink;
       refusal root "migration-target-exists";
       Alcotest.(check int)
-        "no staging debris" 2
-        (Array.length (Sys.readdir root)))
+         "no staging debris, only persistent lock" 3
+         (Array.length (Sys.readdir root)))
 
 let custody_predicate () =
   fixture (fun root ->
@@ -1052,7 +1191,9 @@ let () =
             ("physical alias and writable agent roots", unsafe_agent_roots);
             ("existing foreign targets", existing_targets);
             ("all 64 dual-backend aliases migrate", capacity);
-            ("concurrent no-clobber publication", concurrent);
+             ("concurrent no-clobber publication", concurrent);
+             ("live publisher cannot be recovered", live_publication);
+             ("unsafe migration lock refused", unsafe_migration_lock);
             ("preexisting retirement marker refuses migration", already_retired);
              ("marker publication failures retain registry", marker_failures);
              ("recorded marker interruption is resumable", recorded_marker_failure);

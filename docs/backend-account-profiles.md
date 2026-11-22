@@ -184,6 +184,13 @@ one link (after stage removal but before the marker) can also be completed on re
 intent is missing, invalid or left before the target link, migration refuses; reconcile that
 incomplete publication explicitly rather than removing an ambiguous file automatically.
 Other existing targets and staging files are never removed automatically.
+Migration and recovery hold a nonblocking advisory lock on the stable, private 0600
+`.backend-profiles.lock` throughout validation and final cleanup. A simultaneous caller returns
+`migration-busy` without changing the source or target; a later caller sees the completed target
+as `migration-target-exists`. Do not remove the lock file: its stable inode prevents two callers
+from locking different files. An unsafe lock file refuses with `migration-unsafe-configuration-root`.
+The lock is process-scoped; the host-only CLI runs one migration per process and does not qualify
+parallel calls to the migration library within the same process.
 Migration rejects a trimmed label that newly collides with another ID in the same backend (or
 `default`). It also refuses a derived `config/projects` or `config/sessions` path exceeding the native
 1024-byte limit: shorten the legacy base path in `accounts.json` before migrating, and move the agent

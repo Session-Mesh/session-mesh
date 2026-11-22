@@ -19,6 +19,7 @@ type error =
   | Unsafe_agent_roots
   | Target_exists
   | Already_retired
+  | Migration_busy
   | Publication_failed
   | Publication_uncertain
 
@@ -50,6 +51,13 @@ val migrate : root:string -> (report, error) result
     operator reconciliation rather than automatic linking. Other existing
     targets are refused. A preexisting [backend-profiles.migrated] entry then
     refuses with [Already_retired], even when the registry is absent.
+
+    A permanent, private, singly linked 0600 [.backend-profiles.lock] is
+    locked nonblockingly across validation, recovery, intent creation, linking,
+    marker publication and cleanup. Concurrent callers get [Migration_busy]
+    without modifying source or target. The lock file is never removed; invalid
+    lock custody refuses the migration. POSIX record locks are process-scoped:
+    this interface requires at most one migration call per host process.
 
     After the registry has been synced and published, publish the fixed private 0600
     [backend-profiles.migrated] marker with the same no-clobber/fsync protocol.
