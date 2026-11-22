@@ -1827,6 +1827,7 @@
   },
   "work.col.todo": "À faire",
   "work.daysAgo": "il y a {n} j",
+  "work.sessions.partial": "La source est incomplète ou signale des avertissements ; les noms ou la liste peuvent être partiels.",
   "work.sessions.title": "Sessions enregistrées sur ces tâches",
   "work.sessions.loading": "Chargement des sessions enregistrées…",
   "work.sessions.scope": "Liens des tâches de ce projet Work. Un nom peut désigner plusieurs sessions ; leur activité actuelle est inconnue.",
