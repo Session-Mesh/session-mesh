@@ -1,3 +1,4 @@
+import {OWNER_CHECK, listensFrom} from './helpers/listener-owner.ts';
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
@@ -88,6 +89,7 @@ export type Exit = {code: number | null; output: string; listened: boolean};
 
 /** Run server.py until it listens or exits; the caller decides which one is expected. */
 export async function runServer(where: Scratch): Promise<{child: ChildProcess; result: Exit; output: () => string}> {
+  if (!OWNER_CHECK) throw new Error('Cannot verify server listener ownership: /proc or lsof required');
   let output = '';
   const [program, ...args] = [PYTHON, 'server.py'];
   const child = spawn(program!, args, {cwd: REPO, env: where.env, stdio: ['ignore', 'pipe', 'pipe']});
@@ -96,7 +98,8 @@ export async function runServer(where: Scratch): Promise<{child: ChildProcess; r
   let exited = false;
   const closed = new Promise<void>(resolve => child.on('close', () => { exited = true; resolve(); }));
   for (let attempt = 0; attempt < 400 && !exited; attempt += 1) {
-    if (await accepts(where.port)) return {child, result: {code: null, output, listened: true}, output: () => output};
+    if (child.pid !== undefined && listensFrom(child.pid, where.port) && await accepts(where.port))
+      return {child, result: {code: null, output, listened: true}, output: () => output};
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   if (!exited) child.kill('SIGKILL');
