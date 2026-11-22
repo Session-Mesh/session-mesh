@@ -1,4 +1,3 @@
-import {OWNER_CHECK, listensFrom} from './helpers/listener-owner.ts';
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
@@ -13,6 +12,7 @@ import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import {OWNER_CHECK, listensFrom} from './helpers/listener-owner.ts';
 import os from 'node:os';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';

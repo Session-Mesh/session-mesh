@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Atacama <contact@atacama.tech>
+
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import test from 'node:test';
