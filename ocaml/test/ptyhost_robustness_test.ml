@@ -113,14 +113,16 @@ let with_fake_recovery_peer replies f =
     (fun () ->
       Unix.bind listener (Unix.ADDR_UNIX path);
       Unix.listen listener 8;
+      let done_read, done_write = Unix.pipe () in
       let child = Unix.fork () in
       if child = 0 then (
+        Unix.close done_write;
         let count = ref 0 in
         (try
            List.iter
              (fun reply ->
-               let ready, _, _ = Unix.select [ listener ] [] [] 0.4 in
-               if ready = [] then raise Exit;
+               let ready, _, _ = Unix.select [ listener; done_read ] [] [] (-1.) in
+               if List.mem done_read ready then raise Exit;
                let peer, _ = Unix.accept listener in
                incr count;
                Fun.protect
@@ -144,17 +146,28 @@ let with_fake_recovery_peer replies f =
              replies
          with Exit -> ());
         Unix._exit !count);
+      Unix.close done_read;
       let reaped = ref false in
+      let notified = ref false in
+      let notify_done () =
+        if not !notified then (notified := true; Unix.close done_write)
+      in
       Fun.protect
         ~finally:(fun () ->
+          notify_done ();
           if not !reaped then (
             (try Unix.kill child Sys.sigkill
              with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
             ignore (Unix.waitpid [] child)))
         (fun () ->
           f path;
-          let _, status = Unix.waitpid [] child in
-          reaped := true;
+          notify_done ();
+          let status = ref None in
+          ignore (wait_until "fake peer exit" 3. (fun () ->
+            match Unix.waitpid [ Unix.WNOHANG ] child with
+            | 0, _ -> false
+            | _, result -> reaped := true; status := Some result; true));
+          let status = Option.get !status in
           match status with
           | Unix.WEXITED count ->
               expect "fake peer observed the expected probes"
@@ -166,6 +179,24 @@ let probe_recovers_after_eof () =
     [ None; Some {|[{"name":"kept"}]|} ]
     (fun path ->
       retained_session_appears ~timeout:0.5 (fun () -> list_sessions_at path))
+
+let fake_peer_waits_for_callback () =
+  with_fake_recovery_peer
+    [ None; Some {|[{"name":"kept"}]|} ]
+    (fun path ->
+      (match list_sessions_at path with
+       | exception Connection_closed -> ()
+       | _ -> failwith "first probe should close");
+      Unix.sleepf 0.6;
+      expect "peer remains available until callback finishes"
+        (match list_sessions_at path with
+         | [ session ] -> member "name" session = `String "kept"
+         | _ -> false))
+
+let fake_peer_reaped_on_callback_failure () =
+  match with_fake_recovery_peer [ None ] (fun _ -> failwith "callback failed") with
+  | exception Failure message when String.equal message "callback failed" -> ()
+  | _ -> failwith "callback failure was not propagated"
 
 let probe_rejects_malformed_reply () =
   with_fake_recovery_peer [ Some "{invalid" ] (fun path ->
@@ -725,6 +756,10 @@ let () =
             accept_failure_keeps_serving;
           Alcotest.test_case "a dropped recovery probe is retried" `Quick
             probe_recovers_after_eof;
+          Alcotest.test_case "fake recovery peer waits for callback" `Quick
+            fake_peer_waits_for_callback;
+          Alcotest.test_case "fake recovery peer reaped on callback failure" `Quick
+            fake_peer_reaped_on_callback_failure;
           Alcotest.test_case "a malformed recovery reply fails" `Quick
             probe_rejects_malformed_reply;
           Alcotest.test_case "a wrong recovery reply shape fails" `Quick
