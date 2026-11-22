@@ -30,10 +30,12 @@ def binary(environ=None):
     environ = os.environ if environ is None else environ
     home = environ.get("HOME") or str(Path.home())
     # ptyhost puts ~/.local/bin first even if the Web process PATH omits it.
-    search = str(Path(home) / ".local/bin") + os.pathsep + environ.get("PATH", "/usr/bin:/bin")
+    search = os.pathsep.join(os.path.abspath(directory) for directory in
+                            [str(Path(home) / ".local/bin"), *environ.get("PATH", "/usr/bin:/bin").split(os.pathsep)])
     executable = shutil.which("pi", path=search)
     if not executable:
         raise PiUnavailable("Pi not found in ~/.local/bin or PATH")
+    executable = os.path.abspath(executable)
     try:
         probe = {"HOME": home, "PATH": search}
         if directory := environ.get("PI_CODING_AGENT_DIR"):
