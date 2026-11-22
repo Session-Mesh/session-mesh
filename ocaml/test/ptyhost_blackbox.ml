@@ -9,6 +9,8 @@
 
 let expect label value = if not value then failwith label
 
+exception Connection_closed
+
 let rec remove_tree path =
   match (Unix.lstat path).Unix.st_kind with
   | Unix.S_DIR ->
@@ -24,7 +26,7 @@ let read_exactly socket length =
   let rec fill offset =
     if offset < length then
       match Unix.read socket buffer offset (length - offset) with
-      | 0 -> failwith "the host closed the connection"
+      | 0 -> raise Connection_closed
       | count -> fill (offset + count)
   in
   fill 0;
