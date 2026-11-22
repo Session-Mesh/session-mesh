@@ -253,7 +253,7 @@ _OPENCODE_USER_BIN_DIRS = (".local/bin", ".opencode/bin")
 
 
 def _opencode_executable(environ=os.environ):
-    home = Path.home()
+    home = Path(environ.get("HOME") or Path.home())
     search = os.pathsep.join([*(str(home / sub) for sub in _OPENCODE_USER_BIN_DIRS),
                               environ.get("PATH", "/usr/bin:/bin")])
     return shutil.which("opencode", path=search)

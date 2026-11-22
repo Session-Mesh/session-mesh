@@ -87,6 +87,25 @@ test('OpenCode preflight reads disabled servers from the selected context withou
   } finally { f.close(); }
 });
 
+test('OpenCode resolves the selected HOME binary rather than a different major in the ambient HOME', () => {
+  const f = fixture();
+  try {
+    const ambient = path.join(f.home, '.local/bin/opencode');
+    const selectedHome = path.join(f.root, 'selected-home');
+    const selected = path.join(selectedHome, '.local/bin/opencode');
+    fs.mkdirSync(path.dirname(selected), {recursive: true, mode: 0o700});
+    const source = fs.readFileSync(ambient, 'utf8');
+    fs.writeFileSync(selected, source, {mode: 0o700});
+    fs.writeFileSync(ambient, source.replace('2.0.28-native1m.1', '1.18.35'), {mode: 0o700});
+    f.context.HOME = selectedHome;
+    const argv = f.run(`shlex.split(asyncio.run(server._opencode_command(
+      "opencode", ${JSON.stringify(f.cwd)}, context))[0])`) as string[];
+    assert(argv.includes(selected), 'preferred executable directories must come from the selected HOME');
+    assert(argv.includes('--standalone'));
+    assert(f.calls().some(call => call.argv[0] === 'api'));
+  } finally { f.close(); }
+});
+
 test('OpenCode resume admission checks the selected store, never an ambient conversation with the same id', () => {
   const f = fixture();
   try {
@@ -140,6 +159,25 @@ test('Pi prepares its overlay from the selected agent directory and does not pro
     assert.equal(call!.name, 'pi'); assert.deepEqual(call!.argv, ['--version']);
     assert.equal(call!.env.PI_CODING_AGENT_DIR, f.piSelected);
     assert.equal(call!.env.MESH_SESSION_TOKEN, undefined); assert.equal(call!.env.OPENAI_API_KEY, undefined);
+  } finally { f.close(); }
+});
+
+test('Pi resolves relative PATH entries before its neutral-directory version probe', () => {
+  const f = fixture();
+  try {
+    const selectedHome = path.join(f.root, 'other-home');
+    fs.mkdirSync(selectedHome, {mode: 0o700});
+    f.context.HOME = selectedHome;
+    f.context.PATH = path.relative(f.cwd, path.join(f.home, '.local/bin'));
+    const executable = f.run('pimcp.binary(context)');
+    assert.equal(executable, path.join(f.home, '.local/bin/pi'));
+    const [probe] = f.calls();
+    assert(probe);
+    assert.deepEqual(probe.argv, ['--version']);
+    assert(probe.env.PATH.split(path.delimiter).every(directory => path.isAbsolute(directory)));
+    assert.equal(probe.env.HOME, selectedHome);
+    assert.equal(probe.env.MESH_SESSION_TOKEN, undefined);
+    assert.equal(probe.env.OPENAI_API_KEY, undefined);
   } finally { f.close(); }
 });
 
