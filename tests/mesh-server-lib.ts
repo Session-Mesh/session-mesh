@@ -62,6 +62,14 @@ function accepts(port: number): Promise<boolean> {
   });
 }
 
+/** The listener must belong to the still-running child on both sides of the connection probe. */
+export async function listenerReady(child: Pick<ChildProcess, 'pid' | 'exitCode' | 'signalCode'>, port: number,
+  owns = listensFrom, connect = accepts): Promise<boolean> {
+  const running = (): boolean => child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+  if (!running() || !owns(child.pid!, port) || !await connect(port)) return false;
+  return running() && owns(child.pid!, port);
+}
+
 /** A fresh home and the environment that confines server.py to it. */
 export async function scratchHome(prefix: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<Scratch> {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -98,7 +106,7 @@ export async function runServer(where: Scratch): Promise<{child: ChildProcess; r
   let exited = false;
   const closed = new Promise<void>(resolve => child.on('close', () => { exited = true; resolve(); }));
   for (let attempt = 0; attempt < 400 && !exited; attempt += 1) {
-    if (child.pid !== undefined && listensFrom(child.pid, where.port) && await accepts(where.port))
+    if (await listenerReady(child, where.port))
       return {child, result: {code: null, output, listened: true}, output: () => output};
     await new Promise(resolve => setTimeout(resolve, 50));
   }
