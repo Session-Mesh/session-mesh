@@ -164,6 +164,13 @@ function binaryNotice(line: string, gitLine: string): boolean {
     return source !== '/dev/null' && validExtendedPath(source) && headerNames.startsWith(`${source} `) &&
       validExtendedPath(headerNames.slice(source.length + 1));
   }
+  // A quoted first name has an unambiguous end, even when the next name starts with "and ".
+  if (headerNames.startsWith('"')) {
+    const first = readQuoted(headerNames);
+    if (!first || !first[0] || headerNames[first[1]] !== ' ') return false;
+    const tail = headerNames.slice(first[1] + 1);
+    return validExtendedPath(tail) && `${headerNames.slice(0, first[1])} and ${tail}` === names;
+  }
   // Git prints the same two names in the header and notice, with " and " in place of one space.
   // Examine only positions near the first difference: rescanning every " and " is quadratic.
   if (names.length !== headerNames.length + 4) return false;
