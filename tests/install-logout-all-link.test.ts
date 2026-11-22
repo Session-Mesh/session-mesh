@@ -27,7 +27,7 @@ function asPythonProgramsRelease(fx: Fixture, tag: string): void {
   const release = path.join(fx.share, 'releases', tag);
   fs.rmSync(path.join(release, 'bin/mesh-logout-all'));
   writeExecutable(path.join(release, 'app/bin/mesh-logout-all'), `echo "python mesh-logout-all of ${tag}"`);
-  fs.rmSync(linkOf(fx));
+  fs.unlinkSync(linkOf(fx));
   fs.symlinkSync(PYTHON_LINK(fx), linkOf(fx));
 }
 
