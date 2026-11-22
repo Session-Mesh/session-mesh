@@ -2,7 +2,26 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import test from 'node:test';
 import {OWNER_CHECK} from './helpers/listener-owner.ts';
-import {removeScratch, runServer, scratchHome, stopServer} from './mesh-server-lib.ts';
+import {listenerReady, removeScratch, runServer, scratchHome, stopServer} from './mesh-server-lib.ts';
+
+test('a replacement listener after child exit is never reported ready', async () => {
+  const child = {pid: 123, exitCode: null as number | null, signalCode: null};
+  const result = await listenerReady(child, 1234, () => child.exitCode === null, async () => {
+    child.exitCode = 1;
+    return true;
+  });
+  assert.equal(result, false);
+});
+
+test('a listener replaced while the child is alive is never reported ready', async () => {
+  const child = {pid: 123, exitCode: null, signalCode: null};
+  let owned = true;
+  const result = await listenerReady(child, 1234, () => owned, async () => {
+    owned = false;
+    return true;
+  });
+  assert.equal(result, false);
+});
 
 test('the spawned server is recognized when it owns the port', {skip: !OWNER_CHECK}, async () => {
   const where = await scratchHome('port-owner-');
