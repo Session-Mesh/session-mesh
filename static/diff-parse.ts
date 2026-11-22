@@ -140,10 +140,43 @@ function newFile(git: boolean): FileDiff {
     oldMode: null, newMode: null};
 }
 
+/** A quoted name must be complete; unquoted names may contain spaces. */
+function validExtendedPath(raw: string): boolean {
+  if (!raw) return false;
+  if (!raw.startsWith('"')) return true;
+  const quoted = readQuoted(raw);
+  return !!quoted && quoted[1] === raw.length && quoted[0].length > 0;
+}
+
+/** Recognise the full Git notice, including quoted paths and names containing spaces. */
+function binaryNotice(line: string, file: FileDiff, gitLine: string): boolean {
+  if (!line.startsWith('Binary files ') || !line.endsWith(' differ')) return false;
+  const names = line.slice('Binary files '.length, -' differ'.length);
+  for (let at = names.indexOf(' and '); at >= 0; at = names.indexOf(' and ', at + 1)) {
+    const oldName = names.slice(0, at), newName = names.slice(at + ' and '.length);
+    if (!validExtendedPath(oldName) || !validExtendedPath(newName)) continue;
+    if (gitLine === `diff --git ${oldName} ${newName}`) return true;
+    const headerNames = gitLine.slice('diff --git '.length);
+    if (oldName === '/dev/null' && headerNames.endsWith(` ${newName}`) &&
+        validExtendedPath(headerNames.slice(0, -newName.length - 1))) return true;
+    if (newName === '/dev/null' && headerNames.startsWith(`${oldName} `) &&
+        validExtendedPath(headerNames.slice(oldName.length + 1))) return true;
+    const oldPath = unquoteWhole(oldName), newPath = unquoteWhole(newName);
+    const matches = (path: string, expected: string | null, prefix: string): boolean =>
+      path === '/dev/null' || (expected !== null && (path === expected || dropPrefix(path, prefix) === expected));
+    if (oldPath !== '/dev/null' || newPath !== '/dev/null') {
+      if (matches(oldPath, file.oldPath, 'a/') && matches(newPath, file.newPath, 'b/')) return true;
+    }
+  }
+  return false;
+}
+
 /** Git's extended header ends at the first line outside this grammar. */
-function extendedHeader(line: string): boolean {
-  return isModeLine(line) || /^(?:similarity index |dissimilarity index |rename from |rename to |copy from |copy to |index )/.test(line)
-    || line.startsWith('Binary files ') || line === 'GIT binary patch';
+function extendedHeader(line: string, file: FileDiff, gitLine: string): boolean {
+  const path = /^(?:rename|copy) (?:from|to) (.*)$/.exec(line);
+  if (path) return validExtendedPath(path[1] ?? '');
+  return isModeLine(line) || /^(?:similarity index |dissimilarity index |index )/.test(line)
+    || binaryNotice(line, file, gitLine) || line === 'GIT binary patch';
 }
 
 export function parseUnifiedDiff(text: string): ParsedDiff {
@@ -160,6 +193,8 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
   const preamble: string[] = [];
   let file: FileDiff | null = null;
   let header = false;
+  let pathsSeen = false;
+  let gitLine = '';
   let i = 0;
 
   while (i < lines.length) {
@@ -168,6 +203,8 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
     if (line.startsWith('diff --git ')) {
       file = newFile(true);
       header = true;
+      pathsSeen = false;
+      gitLine = line;
       files.push(file);
       const paths = gitHeaderPaths(line);
       if (paths) [file.oldPath, file.newPath] = paths;
@@ -187,6 +224,7 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       if (file.status !== 'renamed' && file.status !== 'copied') { file.oldPath = oldPath; file.newPath = newPath; }
       if (oldPath === null && file.status === 'modified') file.status = 'added';
       if (newPath === null && file.status === 'modified') file.status = 'deleted';
+      pathsSeen = true;
       i += 2;
       continue;
     }
@@ -196,7 +234,11 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       i = readHunk(lines, i, hunk, file);
       continue;
     }
-    if (file && header && file.git && file.hunks.length === 0 && extendedHeader(line)) {
+    if (file && header && pathsSeen && extendedHeader(line, file, gitLine)) {
+      i += 1;
+      continue;
+    }
+    if (file && header && !pathsSeen && file.git && file.hunks.length === 0 && extendedHeader(line, file, gitLine)) {
       readModeLine(line, file);
       if (line.startsWith('new file mode')) file.status = 'added';
       else if (line.startsWith('deleted file mode')) file.status = 'deleted';
@@ -204,7 +246,7 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       else if (line.startsWith('copy to ')) { file.newPath = unquoteWhole(line.slice('copy to '.length)); file.status = 'copied'; }
       else if (line.startsWith('rename from ')) { file.oldPath = unquoteWhole(line.slice('rename from '.length)); file.status = 'renamed'; }
       else if (line.startsWith('rename to ')) { file.newPath = unquoteWhole(line.slice('rename to '.length)); file.status = 'renamed'; }
-      else if (line.startsWith('Binary files ') || line === 'GIT binary patch') {
+      else if (binaryNotice(line, file, gitLine) || line === 'GIT binary patch') {
         // a binary change keeps the status of the file (a copy stays a copy, with both names)
         file.binary = true;
         if (file.status === 'modified') file.status = 'binary';
