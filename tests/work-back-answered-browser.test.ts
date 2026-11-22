@@ -278,6 +278,37 @@ describe('the way back inside a project', { skip }, () => {
 });
 
 describe('an answered question leaves every surface at once', { skip }, () => {
+  for (const width of [1440, 390] as const) for (const status of [400, 502] as const)
+    test(`at ${width} px, answer HTTP ${status} keeps the session marker and draft`, { timeout: 600_000 }, async () => {
+    const page = await signIn(width);
+    const phone = width < 600;
+    if (phone) await page.locator('#btn-menu').click();
+    await rowBadge(page, 'qa-linked').waitFor({ timeout: 60_000 });
+    assert.equal(await rowBadge(page, 'qa-linked').textContent(), '? 1');
+    const before = await projectsBadge(page);
+    await openSession(page, 'qa-linked', phone);
+    await headerButton(page).click();
+    const asked = page.locator('.work-detail-pane [data-question-id="N-0000d001"]');
+    const input = asked.getByLabel('Your answer');
+    await input.fill('keep this draft');
+    let writes = 0;
+    await page.route('**/api/work/v1', async route => {
+      const body = route.request().postDataJSON();
+      if (body?.op === 'answer') { writes++; await route.fulfill({ status, contentType: 'application/json', body: '{}' }); }
+      else await route.continue();
+    });
+    await asked.getByRole('button', { name: 'Send answer' }).click();
+    await asked.locator('.work-answer-status[data-state="error"]').waitFor();
+    assert.equal(writes, 1);
+    assert.equal(await input.inputValue(), 'keep this draft');
+    assert.equal(await page.evaluate(() => (sessionMarker?.marker('qa-linked') as { count: number } | null)?.count), 1);
+    assert.equal(await projectsBadge(page), before);
+    await page.locator('#projects-return').click();
+    if (phone) await page.locator('#btn-menu').click();
+    assert.equal(await rowBadge(page, 'qa-linked').textContent(), '? 1');
+    await page.context().close();
+  });
+
   test('at 1440 px, answered in the task sheet opened by the session marker', { timeout: 600_000 }, async () => {
     const page = await signIn(1440);
     await rowBadge(page, 'qa-linked').waitFor({ timeout: 60_000 });
