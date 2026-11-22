@@ -1329,6 +1329,11 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .work-dep-lead { display: block; margin: 4px 0 0 12px; color: var(--mute); font-size: 12px; }
 .work-dep-targets { margin: 2px 0 0 12px; padding-inline-start: 12px; border-inline-start: 1px dashed var(--line); }
 .work-dep-target { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 2px 0; }
+.work-dep-preview { flex-basis: 100%; min-width: 0; }
+.work-dep-preview summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--accent); }
+.work-dep-preview-content { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-inline-start: 2px solid var(--line); overflow-wrap: anywhere; }
+.work-dep-preview-content p { flex-basis: 100%; margin: 0; }
+
 .work-dep-id { color: var(--mute); font-size: 12px; }
 .work-dep-state { font-size: 12px; }
 .work-dep-finished .work-dep-state { color: var(--accent); }

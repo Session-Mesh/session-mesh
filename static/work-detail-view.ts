@@ -7,6 +7,7 @@ import { answerForm, unavailableNote } from './work-answer-form.ts';
 import { answerHistory, editControl } from './work-answer-edit.ts';
 import { el, formatDate, formatDateTime, omittedNote, priorityTag, statusBadge } from './work-dom.ts';
 import { linkText } from './work-linkify.ts';
+import { dependencyPreview } from './work-dependency-preview.ts';
 import type { ViewContext } from './work-dom.ts';
 import { operatorLabel } from './operator-name.ts';
 import { withOperatorName } from './work-operator-label.ts';
@@ -38,7 +39,8 @@ function blockerItem(ctx: ViewContext, blocker: Blocker): HTMLElement {
 
 function targetItem(ctx: ViewContext, target: TargetRef): HTMLElement {
   return el('li', `work-detail-item work-dep-target work-dep-${target.state}`, el('span', 'work-dep-id', target.id),
-    target.title ? el('span', 'work-dep-title', target.title) : null, el('span', 'work-dep-state', ctx.t(`work.dep.${target.state}`)));
+    target.title ? el('span', 'work-dep-title', target.title) : null, el('span', 'work-dep-state', ctx.t(`work.dep.${target.state}`)),
+    ctx.previewTask ? dependencyPreview(ctx, target.id) : null);
 }
 
 function sessionItem(ctx: ViewContext, session: LinkedSession): HTMLElement {
