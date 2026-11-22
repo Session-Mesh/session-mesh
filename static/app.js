@@ -5684,14 +5684,11 @@ async function loadProjectsModule() {
 // reachable through a persisted display preference until it is removed. Each has its own root element.
 let workGeneration = 0;
 let workController = null;
-// legacyForced: the work view found no reader program, so the old view is shown for this page load only; the stored
-// preference is not touched, and the fallback happens once (a second failure shows the error with its buttons).
-let legacyForced = false;
-let legacyFallbackUsed = false;
-const legacyProjects = () => legacyForced || store.get("projects.legacy", false) === true;
+let temporaryLegacy = false;
+const legacyProjects = () => temporaryLegacy || store.get("projects.legacy", false) === true;
 function applyProjectsPresentation() {
   const legacy = legacyProjects();
-  $("#projects-fallback-notice").hidden = !legacyForced;
+  $("#projects-fallback-notice").hidden = true;
   $("#work-root").hidden = legacy;
   $("#projects-root").hidden = !legacy;
   $("#project-navigation").hidden = !projecting || !legacy;
@@ -5700,22 +5697,15 @@ function applyProjectsPresentation() {
   $("#projects-view-switch").setAttribute("data-i18n", key);
   $("#projects-view-switch").textContent = t(key);
 }
-function setLegacyProjects(on, automatic = false) {
-  legacyForced = automatic && on;
-  if (!automatic) store.set("projects.legacy", on);
+function setLegacyProjects(on, temporary = false) {
+  temporaryLegacy = temporary && on;
+  if (!temporary) store.set("projects.legacy", on);
   if (!projecting) return;
   projectsGeneration++; workGeneration++;
   projectsController?.close(); workController?.close();
   $("#projects-module-status").textContent = ""; $("#projects-module-retry").hidden = true;
   applyProjectsPresentation();
   openProjectsPresentation();
-}
-// Called by the work view when the reader program is missing: true when the old view takes over (once per page load).
-function fallBackToLegacyProjects() {
-  if (!projecting || legacyProjects() || legacyFallbackUsed) return false;
-  legacyFallbackUsed = true;
-  setLegacyProjects(true, true);
-  return true;
 }
 // Where the work view opens next (a session marker's target, static/work-session-questions.ts), taken once.
 let pendingWorkTarget = null;
@@ -5762,7 +5752,7 @@ async function loadWorkView() {
     if (!projecting || issue !== workGeneration || legacyProjects() || !localMeshEffectsAllowed()) return;
     workController ||= module.mountWorkView({ root: $("#work-root"), rail: $("#work-rail"), onRailChoice: closeDrawerAfterChoice,
       request: requestLocal, translate: t,
-      onLegacy: () => setLegacyProjects(true), onNotAvailable: fallBackToLegacyProjects,
+      onLegacy: () => setLegacyProjects(true, true),
       onOpenQuestions: (count) => showOpenQuestions(count, module.counterText(count)) });
     const target = pendingWorkTarget ?? undefined;
     pendingWorkTarget = null;
