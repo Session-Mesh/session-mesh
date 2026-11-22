@@ -414,32 +414,47 @@ for (const width of WIDTHS) {
       assert.equal(await shown(page, '#work-root'), false);
     });
 
-    test('program missing: the old view takes over once, the stored choice is kept, then the error offers both ways out', { timeout: 900_000 }, async () => {
+    test('program missing: explain the unavailable reader and offer retry or the old view', { timeout: 900_000 }, async () => {
       const { page, requests } = await signedIn(noReader, 'en-US', width);
       await enterProjects(page, width);
-      await page.waitForFunction(() => !(document.querySelector('#projects-root') as HTMLElement).hidden);
-      assert.equal(await shown(page, '#work-root'), false, 'the old workspace is shown');
-      assert.equal(await page.locator('#projects-fallback-notice').isVisible(), true, 'with a one-line notice');
-      const stored = (): Promise<string[]> => page.evaluate(() => Object.keys(localStorage).filter(key => key.endsWith('.projects.legacy')));
-      assert.deepEqual(await stored(), [], 'the automatic fallback does not overwrite the stored preference');
-      await noOverflow(page);
-      await page.locator('#projects-view-switch').click();   // "New view": the fallback happens once per page load
       const unavailable = page.locator('.work-error[data-kind="not-available"]');
       await unavailable.waitFor();
       assert.equal((await unavailable.locator('.work-error-title').textContent())?.trim(), 'Reading failed');
+      assert.equal(await shown(page, '#work-root'), true);
+      assert.equal(await shown(page, '#projects-root'), false);
       assert.equal(await page.locator('#projects-fallback-notice').isVisible(), false);
+      const stored = (): Promise<string[]> => page.evaluate(() => Object.keys(localStorage).filter(key => key.endsWith('.projects.legacy')));
+      assert.deepEqual(await stored(), [], 'unavailability does not store a display choice');
       assert.ok(await unavailable.getByRole('button', { name: 'Try again' }).isVisible());
       assert.ok(await unavailable.getByRole('button', { name: 'Use the old view' }).isVisible());
       const before = requests.length;
       await unavailable.getByRole('button', { name: 'Try again' }).click();
       await page.waitForFunction(() => document.querySelector('.work-error[data-kind="not-available"]') !== null);
       assert.ok(requests.length > before, 'retry asks again');
-      assert.equal(await shown(page, '#work-root'), true, 'and does not fall back a second time');
       await noOverflow(page);
       await shot(page, `unavailable-${width}`);
       await unavailable.getByRole('button', { name: 'Use the old view' }).click();
       assert.equal(await shown(page, '#projects-root'), true);
-      assert.equal((await stored()).length, 1, 'the owner own choice is stored');
+      assert.deepEqual(await stored(), [], 'temporary access does not store a preference');
+      await page.reload();
+      await page.waitForFunction('typeof meshContext !== \"undefined\" && meshContext !== null');
+      await enterProjects(page, width);
+      await page.locator('.work-error[data-kind=\"not-available\"]').waitFor();
+      assert.equal(await shown(page, '#projects-root'), false, 'a reload returns to the work view');
+    });
+
+    test('a recovered reader opens the work view after retry', { timeout: 900_000 }, async () => {
+      const { page } = await signedIn(tracked, 'en-US', width);
+      await page.route('**/api/work/v1', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'not_available' } }) }));
+      await enterProjects(page, width);
+      const unavailable = page.locator('.work-error[data-kind="not-available"]');
+      await unavailable.waitFor();
+      await page.unroute('**/api/work/v1');
+      await unavailable.getByRole('button', { name: 'Try again' }).click();
+      await page.locator('.work-entry-questions').waitFor();
+      assert.equal(await shown(page, '#work-root'), true);
+      assert.equal(await shown(page, '#projects-root'), false);
+      await noOverflow(page);
     });
 
     test('a project opened from a product returns focus to that product row after "Back to products"', { timeout: 900_000 }, async () => {
