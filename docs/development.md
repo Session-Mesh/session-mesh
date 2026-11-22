@@ -451,8 +451,12 @@ This is an owner action, a reset of a protected branch:
 
 ## The merge queue
 
-For maintainers. The workflows are ready for the merge queue of the forge; it is switched on in a
-ruleset, which the workflows cannot change.
+For maintainers. As of 22 November 2026, the GitHub merge queue is enabled by a separate
+`main merge queue` ruleset for `refs/heads/main` only. It uses rebase, one pull request per
+group and one concurrent build. The existing rules require no approving review; maintainers
+still review changes before enqueueing them. Release branches are not queued. A first queued
+merge must verify the live queue and all 12 required checks; the ruleset cannot be changed by
+these workflows.
 
 **Do not enable "Require merge queue" in the existing ruleset "main and release".** That ruleset targets
 both `refs/heads/main` and `refs/heads/release/**`, so the queue rule would apply to the release
@@ -463,24 +467,17 @@ closed, nothing lands, but the release branches are blocked until the rule is re
 cannot be restricted to one branch inside a ruleset, so the queue is a separate ruleset that targets
 `main` only; or the workflows and the tool are backported to the release branches first.
 
-**Owner steps, in this order.**
+**Operating and changing the queue.**
 
-1. Merge the pull request that holds these workflows **by hand** ("Rebase and merge"), before any
-   queue exists: its own `merge_group` support cannot be tested by a queue that is not there, and the
-   pull request changes `.github/workflows/`, which is not queued (CONTRIBUTING.md, "Merge queue").
-2. If the queue is wanted on `release/latest` as well: backport it there first (the three workflows
-   and `tools/branch-policy/`, `tools/cla-check/`), merge that backport by hand, and only then
-   include `release/**` in a queue ruleset. Until then leave the release branches out.
-3. Create a **new** ruleset, targeting `refs/heads/main` only, with "Require merge queue" and the
-   settings below: merge method rebase, maximum and minimum group size 1, maximum concurrent builds 1,
-   status check timeout 60 minutes. The 12 required status checks stay in the existing ruleset "main and
-   release"; do not rename or add required names.
-4. Test with a harmless pull request (a typo in a document, `semver` label set): queue it, watch the
-   queue's checks (all 12 names must report on the queue's commit) and the landing.
-5. To disable quickly: delete the queue ruleset, or set its enforcement to "Disabled" (Settings,
-   Rules, Rulesets). Pull requests then merge by hand as before.
+1. Test the active queue with a harmless pull request (a documentation correction with a `semver`
+   label): enqueue it, check that all 12 required checks report on the queue commit, and confirm it lands.
+2. If the queue is wanted on `release/latest` as well, first backport the three workflows and
+   `tools/branch-policy/` and `tools/cla-check/`, and merge the backport by hand. Only then create or
+   extend a queue ruleset for release branches. Until then leave release branches out.
+3. To disable quickly, disable or delete the separate `main merge queue` ruleset in Settings, Rules,
+   Rulesets. Pull requests then merge by hand as before; the existing `main and release` ruleset stays.
 
-**What the owner sets in the queue ruleset** (on `main`):
+**Current queue settings** (on `main`):
 
 - merge method: **Rebase and merge** (the only method the repository allows; the `cla` check
   assumes it);
