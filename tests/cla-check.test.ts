@@ -88,6 +88,12 @@ describe('CLA check', () => {
     assert.deepEqual(offenders(repo), [`${BOB.email} committer`]);
   });
 
+  test('does not accept the queue-only maintainer alias on a pull request', () => {
+    const repo = new Repo();
+    repo.commit(MAINTAINER, {'a.txt': 'a\n'}, {name: 'mathiasbourgoin', email: 'mathiasbourgoin@users.noreply.github.com'});
+    assert.deepEqual(offenders(repo), ['mathiasbourgoin@users.noreply.github.com committer']);
+  });
+
   test('accepts GitHub as committer when the author has signed', () => {
     const repo = new Repo();
     repo.commit(ADA, {'feature.txt': 'code\n', 'CLA-SIGNATORIES.md': repo.register() + row(ADA)}, WEB);

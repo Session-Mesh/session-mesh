@@ -724,4 +724,4 @@ jobs:
             git commit-tree "$head^{tree}" -p "$base" -p "$head" -m "test merge of the merge group")
           checker="$RUNNER_TEMP/cla-check.ts"
           git cat-file blob "$base:tools/cla-check/cla-check.ts" > "$checker"
-          node --experimental-strip-types "$checker" --repo . --base "$base" --head "$head" --merge "$merge"
+          node --experimental-strip-types "$checker" --repo . --base "$base" --head "$head" --merge "$merge" --queue true
