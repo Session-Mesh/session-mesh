@@ -238,6 +238,18 @@ describe('file modes', () => {
     assert.deepEqual(modes(CHMOD_SERIES), [['modified', '100644', '100755', 0], ['modified', null, null, 1]]);
   });
 
+  test('the next patch message cannot overwrite modes or mark a previous file deleted', () => {
+    const text = 'diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n-- \n2.47.0\n\n'
+      + 'From next Mon Sep 17 00:00:00 2001\nSubject: next\n\nold mode 100600\nnew mode 100600\ndeleted file mode 100755\n'
+      + 'diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n';
+    assert.deepEqual(modes(text), [['modified', '100644', '100755', 0], ['modified', null, null, 1]]);
+  });
+
+  test('any non-header line closes an extended header even without a patch separator', () => {
+    assert.deepEqual(modes('diff --git a/x b/x\nold mode 100644\nunrelated\nnew mode 100755\ndeleted file mode 100644\n'),
+      [['modified', '100644', null, 0]]);
+  });
+
   test('two equal modes are no change of mode', () => {
     assert.equal(modeLabel({oldMode: '100644', newMode: '100644'}), null);
     assert.equal(modeLabel({oldMode: '100644', newMode: '100755'}), '100644 → 100755');
