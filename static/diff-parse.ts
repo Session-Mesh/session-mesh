@@ -149,34 +149,41 @@ function validExtendedPath(raw: string): boolean {
 }
 
 /** Recognise the full Git notice, including quoted paths and names containing spaces. */
-function binaryNotice(line: string, file: FileDiff, gitLine: string): boolean {
+function binaryNotice(line: string, gitLine: string): boolean {
   if (!line.startsWith('Binary files ') || !line.endsWith(' differ')) return false;
   const names = line.slice('Binary files '.length, -' differ'.length);
-  for (let at = names.indexOf(' and '); at >= 0; at = names.indexOf(' and ', at + 1)) {
-    const oldName = names.slice(0, at), newName = names.slice(at + ' and '.length);
-    if (!validExtendedPath(oldName) || !validExtendedPath(newName)) continue;
-    if (gitLine === `diff --git ${oldName} ${newName}`) return true;
-    const headerNames = gitLine.slice('diff --git '.length);
-    if (oldName === '/dev/null' && headerNames.endsWith(` ${newName}`) &&
-        validExtendedPath(headerNames.slice(0, -newName.length - 1))) return true;
-    if (newName === '/dev/null' && headerNames.startsWith(`${oldName} `) &&
-        validExtendedPath(headerNames.slice(oldName.length + 1))) return true;
-    const oldPath = unquoteWhole(oldName), newPath = unquoteWhole(newName);
-    const matches = (path: string, expected: string | null, prefix: string): boolean =>
-      path === '/dev/null' || (expected !== null && (path === expected || dropPrefix(path, prefix) === expected));
-    if (oldPath !== '/dev/null' || newPath !== '/dev/null') {
-      if (matches(oldPath, file.oldPath, 'a/') && matches(newPath, file.newPath, 'b/')) return true;
-    }
+  const headerNames = gitLine.slice('diff --git '.length);
+  const nullFrom = '/dev/null and ', nullTo = ' and /dev/null';
+  if (names.startsWith(nullFrom)) {
+    const target = names.slice(nullFrom.length);
+    return target !== '/dev/null' && validExtendedPath(target) && headerNames.endsWith(` ${target}`) &&
+      validExtendedPath(headerNames.slice(0, -target.length - 1));
+  }
+  if (names.endsWith(nullTo)) {
+    const source = names.slice(0, -nullTo.length);
+    return source !== '/dev/null' && validExtendedPath(source) && headerNames.startsWith(`${source} `) &&
+      validExtendedPath(headerNames.slice(source.length + 1));
+  }
+  // Git prints the same two names in the header and notice, with " and " in place of one space.
+  // Examine only positions near the first difference: rescanning every " and " is quadratic.
+  if (names.length !== headerNames.length + 4) return false;
+  let common = 0;
+  while (common < headerNames.length && names[common] === headerNames[common]) common += 1;
+  for (let at = Math.max(0, common - 4); at <= common; at += 1) {
+    if (headerNames[at] !== ' ' || names.slice(at, at + 5) !== ' and ') continue;
+    if (`${headerNames.slice(0, at)} and ${headerNames.slice(at + 1)}` !== names) continue;
+    return validExtendedPath(headerNames.slice(0, at)) && validExtendedPath(headerNames.slice(at + 1));
   }
   return false;
 }
 
 /** Git's extended header ends at the first line outside this grammar. */
-function extendedHeader(line: string, file: FileDiff, gitLine: string): boolean {
+function extendedHeader(line: string, gitLine: string): boolean {
   const path = /^(?:rename|copy) (?:from|to) (.*)$/.exec(line);
   if (path) return validExtendedPath(path[1] ?? '');
-  return isModeLine(line) || /^(?:similarity index |dissimilarity index |index )/.test(line)
-    || binaryNotice(line, file, gitLine) || line === 'GIT binary patch';
+  return isModeLine(line) || /^(?:similarity|dissimilarity) index (?:100|[1-9]?\d)%$/.test(line)
+    || /^index [0-9a-fA-F]+\.\.[0-9a-fA-F]+(?: [0-7]{6})?$/.test(line)
+    || binaryNotice(line, gitLine) || line === 'GIT binary patch';
 }
 
 export function parseUnifiedDiff(text: string): ParsedDiff {
@@ -234,11 +241,11 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       i = readHunk(lines, i, hunk, file);
       continue;
     }
-    if (file && header && pathsSeen && extendedHeader(line, file, gitLine)) {
+    if (file && header && pathsSeen && extendedHeader(line, gitLine)) {
       i += 1;
       continue;
     }
-    if (file && header && !pathsSeen && file.git && file.hunks.length === 0 && extendedHeader(line, file, gitLine)) {
+    if (file && header && !pathsSeen && file.git && file.hunks.length === 0 && extendedHeader(line, gitLine)) {
       readModeLine(line, file);
       if (line.startsWith('new file mode')) file.status = 'added';
       else if (line.startsWith('deleted file mode')) file.status = 'deleted';
@@ -246,7 +253,7 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       else if (line.startsWith('copy to ')) { file.newPath = unquoteWhole(line.slice('copy to '.length)); file.status = 'copied'; }
       else if (line.startsWith('rename from ')) { file.oldPath = unquoteWhole(line.slice('rename from '.length)); file.status = 'renamed'; }
       else if (line.startsWith('rename to ')) { file.newPath = unquoteWhole(line.slice('rename to '.length)); file.status = 'renamed'; }
-      else if (binaryNotice(line, file, gitLine) || line === 'GIT binary patch') {
+      else if (binaryNotice(line, gitLine) || line === 'GIT binary patch') {
         // a binary change keeps the status of the file (a copy stays a copy, with both names)
         file.binary = true;
         if (file.status === 'modified') file.status = 'binary';

@@ -383,3 +383,20 @@ test('extended metadata after file paths cannot alter status or prevent the hunk
   assert.equal(file?.hunks.length, 1);
   assert.equal(file?.added, 1);
 });
+
+test('malformed index and percentage lines close the extended header', () => {
+  for (const line of ['index prose', 'similarity index prose', 'dissimilarity index prose', 'similarity index 101%']) {
+    const [file] = parseUnifiedDiff(`diff --git a/x b/x\n${line}\ndeleted file mode 100644\n`).files;
+    assert.equal(file?.status, 'modified');
+  }
+  for (const line of ['index a12b..9fff 100644', `index ${'a'.repeat(64)}..${'b'.repeat(64)}`, 'similarity index 100%']) {
+    const [file] = parseUnifiedDiff(`diff --git a/x b/x\n${line}\ndeleted file mode 100644\n`).files;
+    assert.equal(file?.status, 'deleted');
+  }
+});
+
+test('a long malformed binary notice is handled in bounded time', { timeout: 1500 }, () => {
+  const line = 'Binary files "' + 'x and '.repeat(12000) + 'x differ';
+  const [file] = parseUnifiedDiff(`diff --git a/x b/x\n${line}\n`).files;
+  assert.equal(file?.binary, false);
+});
