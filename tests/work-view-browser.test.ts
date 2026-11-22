@@ -191,6 +191,50 @@ for (const width of WIDTHS) {
       assert.deepEqual(problems, []);
     });
 
+    test('recorded sessions are explicit, read-only and recover after a failed read', { timeout: 900_000 }, async () => {
+      const { page } = await signedIn(tracked, 'en-US', width);
+      await enterProjects(page, width);
+      await openRelayProject(page);
+      const block = page.locator('.work-project-sessions');
+      await page.route('**/api/work/v1', async route => {
+        const request = route.request().postDataJSON();
+        if (request?.op === 'sessions-of') await route.fulfill({ status: 503, contentType: 'application/json', body: '{}' });
+        else await route.continue();
+      });
+      await block.locator('summary').click();
+      await block.getByText('Sessions unavailable. Close and reopen to retry.').waitFor();
+      await block.locator('summary').click();
+      await page.unroute('**/api/work/v1');
+      await block.locator('summary').click();
+      await block.getByText(/current activity is unknown/).waitFor();
+      await block.getByText('<b>hostile-session</b>', { exact: true }).waitFor();
+      assert.equal(await block.locator('b, a, button').count(), 0, 'tracker text stays inert and no live session is inferred');
+      await noOverflow(page);
+    });
+
+    test('leaving a project cancels a pending recorded-sessions read', { timeout: 900_000 }, async () => {
+      const { page } = await signedIn(tracked, 'en-US', width);
+      await enterProjects(page, width);
+      await openRelayProject(page);
+      let release!: () => void, started!: () => void;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      const requested = new Promise<void>(resolve => { started = resolve; });
+      const failed = page.waitForEvent('requestfailed', { predicate: request => request.url().endsWith('/api/work/v1')
+        && request.postDataJSON()?.op === 'sessions-of', timeout: 5000 });
+      await page.route('**/api/work/v1', async route => {
+        if (route.request().postDataJSON()?.op === 'sessions-of') {
+          started(); await held; await route.continue().catch(() => undefined);
+        } else await route.continue();
+      });
+      await page.locator('.work-project-sessions summary').click();
+      await requested;
+      await page.locator('.work-project-head .work-back').click();
+      await failed;
+      release();
+      await page.unroute('**/api/work/v1');
+      await waitForEntry(page);
+    });
+
     test('a project opens on five tabs that switch by mouse and by keyboard', { timeout: 900_000 }, async () => {
       const { page, problems } = await signedIn(tracked, 'en-US', width);
       await enterProjects(page, width);

@@ -5,6 +5,8 @@
 
 import { isObj, parseOpenQuestions, parseProducts, parseProject, parseProjects, parseTask, text } from './work-parse.ts';
 import { parseProductDoc } from './work-product-parse.ts';
+import { parseRecordedSessions } from './work-project-sessions.ts';
+import type { RecordedSessions } from './work-project-sessions.ts';
 import type { ProductDoc } from './work-product-parse.ts';
 import { parseSessionQuestions } from './work-session-questions.ts';
 import type { SessionQuestionsDoc } from './work-session-questions.ts';
@@ -77,6 +79,7 @@ export type WorkApi = Readonly<{
   product(id: string, signal?: AbortSignal): Promise<WorkResult<ProductDoc>>;
   project(id: string, signal?: AbortSignal): Promise<WorkResult<ProjectDoc>>;
   task(id: string, signal?: AbortSignal): Promise<WorkResult<TaskDetail>>;
+  projectSessions(id: string, signal?: AbortSignal): Promise<WorkResult<RecordedSessions>>;
   /** A page of the open questions of the tracker, oldest first and in full (`open-questions`): those asked after the
    *  question `after` (the last one of the previous page), at most `limit` (20 by default, at most 100), the total, and
    *  how many come after the page (`omitted`). */
@@ -187,6 +190,7 @@ export function createWorkApi(request: WorkFetch, url = '/api/work/v1', options:
     product: (id, signal) => read('product', { id }, parseProductDoc, signal),
     project: (id, signal) => read('project', { id }, parseProject, signal),
     task: (id, signal) => read('task', { id }, parseTask, signal),
+    projectSessions: (id, signal) => read('sessions-of', { project: id }, value => parseRecordedSessions(value, id), signal),
     openQuestions: (signal, page = {}) => read('open-questions', {
       ...(page.after ? { after: page.after } : {}), ...(page.limit ? { limit: page.limit } : {}),
     }, parseOpenQuestions, signal),

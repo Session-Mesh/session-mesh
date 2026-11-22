@@ -112,7 +112,7 @@ class WorkView implements WorkViewController {
     this.sync = options.sync ?? pageQuestionsSync;
     this.ctx = { t: this.t, locale: options.locale ?? (document.documentElement.lang || undefined),
       nowMs: options.now ?? (() => Date.now()), selectedTask: () => this.selected, selectTask: id => void this.sheet.select(id),
-      answers: this.sender('detail') };
+      answers: this.sender('detail'), projectSessions: (id, signal) => this.api.projectSessions(id, signal) };
     this.panelCtx = { ...this.ctx, answers: this.sender('questions') };
     this.sheetCtx = { ...this.ctx, answers: this.sender('sheet'), answerScope: 'sheet-' };
     const refresh = button('btn work-refresh', this.t('work.refresh'), () => void this.reload());
@@ -407,7 +407,7 @@ class WorkView implements WorkViewController {
     this.reading = null;
     if (!result.ok && resuming && result.error.kind === 'missing') { await this.loadEntry(); return false; }
     if (!result.ok) { this.failure(result.error, () => void this.openProject(id, tab), () => void this.backToEntry()); return false; }
-    const view = renderProject(this.panelCtx, result.value, tab, () => void this.backToEntry(), key => this.tabShown(key));
+    const view = renderProject({ ...this.panelCtx, scopeSignal: signal }, result.value, tab, () => void this.backToEntry(), key => this.tabShown(key));
     this.project = { id, view };
     this.memory.fill(view.root);
     this.show(view.root);

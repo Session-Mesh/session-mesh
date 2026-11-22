@@ -1213,6 +1213,13 @@ body.projecting #btn-new { background: #c5b1f4; border-color: #c5b1f4; color: #1
 .work-entry-noproject, .work-entry-empty { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin: 0; padding: 10px 14px 10px 34px; color: var(--mute); border-top: 1px dashed var(--line); }
 /* project view */
 .work-project-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin: 8px 0 12px; }
+.work-project-sessions { flex: 1 0 100%; min-width: 0; }
+.work-project-sessions summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--accent); }
+.work-project-sessions summary::before { content: "▸"; margin-inline-end: 8px; }
+.work-project-sessions[open] summary::before { content: "▾"; }
+.work-project-sessions-content { padding: 4px 12px; border-inline-start: 2px solid var(--line); overflow-wrap: anywhere; }
+.work-project-session { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 6px 0; }
+
 .work-crumb { flex: 1 1 16ch; margin: 0; font-size: 1.05rem; font-weight: 400; color: var(--mute); }
 .work-crumb-title { color: var(--fg); font-weight: 600; }
 .work-crumb-quarter { margin-inline-start: 10px; font-size: 12px; }
