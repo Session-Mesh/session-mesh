@@ -6897,24 +6897,27 @@ function writeDirect(text, complete = false, held = false) {
   return false;
 }
 // One bracketed paste, verified by the same delivery as the ordinary line. Never raw bytes.
-// True when the text was delivered as one paste.
 function pasteDirect(text, kind, held = false) {
   directInputCount += 1;
   const { pane } = lineDirect;
-  if (directPasteWaits(pane)) {
-    reportDirect("line.directPasteFailed", held); return false;
+  if (kind === "refused" || kind === "replacement") {
+    reportDirect(kind === "refused" ? "line.directRefused" : "line.directReplacement", held);
+    return "discarded";
   }
-  const refusal = kind === "refused" ? "line.directRefused" : kind === "replacement" ? "line.directReplacement"
-    : kind === "multiline" && !pane.term.modes.bracketedPasteMode ? "line.directNoBracket" : null;
-  if (refusal) { reportDirect(refusal, held); return false; }
+  if (directPasteWaits(pane)) {
+    reportDirect("line.directPasteFailed", held); return "waiting";
+  }
+  if (kind === "multiline" && !pane.term.modes.bracketedPasteMode) {
+    reportDirect("line.directNoBracket", held); return "refused";
+  }
   const target = paneTargets.capture(pane);
   const binding = target && paneInput.capture(pane, target);
   let result = null;
   if (binding) paneInput.deliver(binding, text, false, (r) => { result = r; });   // settles synchronously
   if (target) paneTargets.release(target);
-  if (result?.kind === "paste") return true;
+  if (result?.kind === "paste") return "sent";
   endDirectLine("line.directPasteFailed", held);
-  return false;
+  return result?.kind === "refused" ? "refused" : "discarded";
 }
 function directPasteWaits(pane) {
   const c = pane.conn;
@@ -6931,22 +6934,23 @@ function sendDirectControl(letter, held = false) {
   endDirectLine();
   return true;
 }
-// Sends what the field received, then empties it. True when the text was delivered as typed
-// (or as one paste); otherwise the text remains for explicit review or retry.
+// Keep a paste held by the queue, or keep previously held text after a definite refusal.
+// Other failures clear the field so the text cannot later be sent as ordinary input.
 function flushDirectField(inputType, held = false) {
   const text = line.value;
   if (!text) {delete lineDirect.heldInputType; return true;}
-  const direct = lineDirect, origin = direct.heldInputType ?? inputType;
+  const direct = lineDirect, previousOrigin = direct.heldInputType;
+  const origin = previousOrigin ?? inputType;
   const kind = MeshPaneActions.directInput(text, origin);
-  if (kind !== "typed") {
-    const delivered = pasteDirect(text, kind, held);
-    if (delivered) {line.value = ""; delete direct.heldInputType; fitLine();}
-    else if (lineDirect === direct) direct.heldInputType = origin;
-    return delivered;
+  const paste = kind === "typed" ? null : pasteDirect(text, kind, held);
+  if (paste === "waiting" || (paste === "refused" && previousOrigin !== undefined)) {
+    if (lineDirect === direct) direct.heldInputType = origin;
+    return false;
   }
   delete direct.heldInputType;
   line.value = "";
   fitLine();
+  if (paste !== null) return paste === "sent";
   if (ctrlArmed && Array.from(text).length === 1) return sendDirectControl(text, held);
   return writeDirect(text, false, held);
 }

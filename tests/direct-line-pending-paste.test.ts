@@ -15,7 +15,7 @@ function section(from: string, to: string): string {
 }
 function fixture(text = 'draft') {
   const raw: string[] = [], pasted: string[] = [];
-  const state = {refuse: false};
+  const state = {refuse: false, uncertain: false};
   const connection = {terminal: {isOpen: () => true}, queuedHumanInput: [{}]};
   const context = vm.createContext({line: {value: text}, lineDirect: {pane: {conn: connection,
     term: {modes: {bracketedPasteMode: true}}, sendRaw(bytes: Uint8Array) {
@@ -25,6 +25,7 @@ function fixture(text = 'draft') {
     reportDirect() {}, sendDirectControl() {assert.fail('unexpected control');},
     paneTargets: {capture: () => ({}), release() {}},
     paneInput: {capture: () => ({}), deliver(_binding: unknown, value: string, _enter: boolean, complete: (result: {kind: string}) => void) {
+      if (state.uncertain) {complete({kind: 'uncertain'}); return;}
       if (!state.refuse) pasted.push(value);
       complete({kind: state.refuse ? 'refused' : 'paste'});
     }}, endDirectLine() {context.lineDirect = null;}, sendLine() {assert.fail('unexpected ordinary line');}});
@@ -76,4 +77,35 @@ test('emptying a held paste clears its provenance before new typed text', () => 
   f.connection.queuedHumanInput.length = 0;
   f.context.line.value = 'typed'; f.context.enterLine();
   assert.deepEqual(f.raw, ['typed', '\r']); assert.deepEqual(f.pasted, []);
+});
+
+for (const [type, text] of [
+  ['insertReplacementText', 'the'], ['insertFromPaste', 'bad\x01'], ['insertFromPaste', 'first\nsecond'],
+]) test(`a fresh semantic refusal is discarded rather than becoming retained input (${type}, ${JSON.stringify(text)})`, () => {
+  const f = fixture(text);
+  f.connection.queuedHumanInput.length = 0;
+  f.context.lineDirect.pane.term.modes.bracketedPasteMode = false;
+  assert.equal(f.context.flushDirectField(type, true), false);
+  assert.equal(f.context.line.value, '');
+  assert.equal(f.context.lineDirect.heldInputType, undefined);
+  assert.deepEqual(f.raw, []); assert.deepEqual(f.pasted, []);
+});
+
+test('an uncertain held-paste attempt is not left available for an implicit retry', () => {
+  const f = fixture();
+  f.context.flushDirectField('insertFromPaste');
+  f.connection.queuedHumanInput.length = 0; f.state.uncertain = true;
+  f.context.enterLine();
+  assert.equal(f.context.line.value, ''); assert.equal(f.context.lineDirect, null);
+  assert.deepEqual(f.raw, []); assert.deepEqual(f.pasted, []);
+});
+
+for (const retained of [false, true]) test(`control characters do not become retained Direct input (${retained ? 'previously held' : 'new'})`, () => {
+  const f = fixture();
+  if (retained) f.context.flushDirectField('insertFromPaste');
+  f.context.line.value = 'bad\x01';
+  assert.equal(f.context.flushDirectField('insertFromPaste'), false);
+  assert.equal(f.context.line.value, '');
+  assert.equal(f.context.lineDirect.heldInputType, undefined);
+  assert.deepEqual(f.raw, []); assert.deepEqual(f.pasted, []);
 });
