@@ -444,7 +444,8 @@ ACCOUNT_UNKNOWN = "Unknown account alias (accounts.json on the runner)"
 ACCOUNT_REFUSED = "Account alias refused: check accounts.json and its folders on the runner (details in the server log)"
 # the first reading always runs; "file": absent, refused or ok (what an agent is told of accounts.json)
 _ACCOUNTS = {"signature": "not read yet", "accounts": [], "protected": None, "file": "absent"}
-_ACCOUNTS_REFRESH_LOCK = asyncio.Lock()
+_ACCOUNTS_REFRESH = (None, None)  # (event loop, lock); the account cache is process-wide
+_ACCOUNTS_REFRESH_GUARD = threading.Lock()
 DEFAULT_ACCOUNT = {"id": "default", "label": "Default account", "claude": True, "codex": True}
 
 
@@ -543,7 +544,18 @@ def _protected_folders(accounts, profile_roots=()):
 
 
 async def declared_accounts():
-    async with _ACCOUNTS_REFRESH_LOCK:
+    global _ACCOUNTS_REFRESH
+    loop = asyncio.get_running_loop()
+    with _ACCOUNTS_REFRESH_GUARD:
+        owner, lock = _ACCOUNTS_REFRESH
+        if owner is not loop:
+            # A new app/test loop may replace a finished loop's lock, but two live
+            # loops must not refresh the shared cache without mutual exclusion.
+            if owner is not None and not owner.is_closed():
+                raise RuntimeError("account refresh is already running on another event loop")
+            lock = asyncio.Lock()
+            _ACCOUNTS_REFRESH = (loop, lock)
+    async with lock:
         return await _refresh_declared_accounts()
 
 
