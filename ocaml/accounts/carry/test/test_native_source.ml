@@ -462,6 +462,172 @@ let test_failed_folder_cleanup_without_temporary root =
   Alcotest.(check bool) "unrelated entry untouched" true (exists obstruction);
   Alcotest.(check bool) "no absolute paths" false (contains message root)
 
+type rename_transition =
+  | Copy_installed
+  | Backup_moved
+  | Replacement_installed
+  | Backup_restored
+  | Prior_replacement_committed
+
+let test_rename_transition transition root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  let target = claude_account root "native-target" in
+  native_pair root;
+  let replacing = transition <> Copy_installed in
+  let older = "{\"line\":1}\n" in
+  if replacing then write (path target transcript) older;
+  let moved = path root "original-target" in
+  let backup = ref None and temporary = ref None and last_final = ref None in
+  let replacement = ref None in
+  let relative full =
+    String.sub full (String.length target + 1)
+      (String.length full - String.length target - 1)
+  in
+  let swap () =
+    Unix.rename target moved;
+    Unix.mkdir target 0o700;
+    write (path target "foreign.txt") "untouched";
+    replacement := Some (Unix.lstat target)
+  in
+  let io =
+    {
+      (failing_io ()) with
+      C.rename =
+        (fun before after ->
+          let staged = contains before ".carry-new-" in
+          let restoring = contains before ".carry-old-" in
+          if contains after ".carry-old-" then backup := Some (relative after);
+          if staged then begin
+            temporary := Some (relative before);
+            last_final := Some (relative after)
+          end;
+          if transition = Backup_restored && staged then
+            raise (Unix.Unix_error (Unix.EIO, "rename", ""));
+          Unix.rename before after;
+          let hit =
+            match transition with
+            | Copy_installed | Replacement_installed ->
+                staged && relative after = transcript
+            | Backup_moved -> contains after ".carry-old-"
+            | Backup_restored -> restoring
+            | Prior_replacement_committed ->
+                staged && relative after <> transcript
+          in
+          if hit then swap ());
+    }
+  in
+  let refusal = carry_named ~io root in
+  refused_with "carry_rollback_incomplete" refusal;
+  (match !replacement with
+  | None -> Alcotest.fail "the rename hook did not replace the root"
+  | Some identity ->
+      check_identity "foreign root retained" identity target);
+  Alcotest.(check (list string)) "foreign root untouched" [ "foreign.txt" ]
+    (Array.to_list (Sys.readdir target));
+  Alcotest.(check string) "foreign marker retained" "untouched"
+    (read (path target "foreign.txt"));
+  let message = message_of refusal in
+  let expected =
+    transcript :: List.filter_map Fun.id [ !backup; !temporary; !last_final ]
+  in
+  List.iter
+    (fun candidate ->
+      Alcotest.(check bool) ("reports " ^ candidate) true
+        (contains message candidate))
+    expected;
+  Alcotest.(check bool) "no absolute path in report" false
+    (contains message root);
+  let original_entries = listing moved in
+  (match transition with
+  | Copy_installed | Replacement_installed | Prior_replacement_committed ->
+      Alcotest.(check bool) "installed copy retained for review" true
+        (exists (path moved transcript))
+  | Backup_moved ->
+      Alcotest.(check bool) "older backup retained for review" true
+        (List.exists (fun name -> contains name ".carry-old-") original_entries)
+  | Backup_restored ->
+      Alcotest.(check string) "older copy restored, not deleted" older
+        (read (path moved transcript)));
+  if transition = Prior_replacement_committed then
+    (match !backup with
+    | None -> Alcotest.fail "prior committed replacement lacks its backup"
+    | Some relative ->
+        Alcotest.(check bool) "prior committed backup retained" true
+          (exists (path moved relative)))
+
+let test_backup_cleanup_root_swap root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  let target = claude_account root "native-target" in
+  native_pair root;
+  write (path target transcript) "{\"line\":1}\n";
+  let moved = path root "original-target" in
+  let backup = ref None in
+  let io =
+    {
+      (failing_io ()) with
+      C.unlink =
+        (fun name ->
+          Unix.unlink name;
+          if contains name ".carry-old-" then begin
+            backup :=
+              Some
+                (String.sub name (String.length target + 1)
+                   (String.length name - String.length target - 1));
+            Unix.rename target moved;
+            Unix.mkdir target 0o700;
+            write (path target "foreign.txt") "untouched"
+          end);
+    }
+  in
+  let refusal = carry_named ~io root in
+  refused_with "carry_rollback_incomplete" refusal;
+  let message = message_of refusal in
+  Alcotest.(check bool) "installed file reported" true
+    (contains message transcript);
+  (match !backup with
+  | None -> Alcotest.fail "backup cleanup hook did not run"
+  | Some name ->
+      Alcotest.(check bool) "backup transition reported" true
+        (contains message name));
+  Alcotest.(check bool) "no absolute paths" false (contains message root);
+  Alcotest.(check (list string)) "foreign root never cleaned" [ "foreign.txt" ]
+    (Array.to_list (Sys.readdir target));
+  Alcotest.(check string) "installed original kept for review"
+    (read (path source transcript)) (read (path moved transcript))
+
+let test_backup_cleanup_failure root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  let target = claude_account root "native-target" in
+  native_pair root;
+  write (path target transcript) "{\"line\":1}\n";
+  let io =
+    {
+      (failing_io ()) with
+      C.unlink =
+        (fun name ->
+          if contains name ".carry-old-" then
+            raise (Unix.Unix_error (Unix.EIO, "unlink", ""))
+          else Unix.unlink name);
+    }
+  in
+  let refusal = carry_named ~io root in
+  refused_with "carry_rollback_incomplete" refusal;
+  let message = message_of refusal in
+  Alcotest.(check bool) "installed final reported" true
+    (contains message transcript);
+  let backups =
+    List.filter (fun name -> contains name ".carry-old-") (listing target)
+  in
+  Alcotest.(check int) "backup was not discarded" 1 (List.length backups);
+  List.iter
+    (fun name ->
+      Alcotest.(check bool) "backup reported" true (contains message name))
+    backups;
+  Alcotest.(check bool) "no absolute paths" false (contains message root)
+
 (* Exercise the private functional binding seam, not a public IO test hook or
    process-wide descriptor exhaustion. The real binder maps open errors such
    as EMFILE to a refusal before invoking the carry callback. *)
@@ -568,6 +734,13 @@ let () =
             ("transient root check reports skipped cleanup", test_transient_root_check_reports_skipped_cleanup);
             ("failed staged unlink and rmdir are reported", test_failed_temporary_and_folder_cleanup_are_reported);
             ("failed rmdir without staged leftovers", test_failed_folder_cleanup_without_temporary);
+            ("copy rename changes root after install", test_rename_transition Copy_installed);
+            ("replace rename changes root after backup", test_rename_transition Backup_moved);
+            ("replace rename changes root after install", test_rename_transition Replacement_installed);
+            ("restore rename changes root after restore", test_rename_transition Backup_restored);
+            ("prior committed backup reported after root change", test_rename_transition Prior_replacement_committed);
+            ("backup cleanup root swap reports transition", test_backup_cleanup_root_swap);
+            ("backup cleanup failure remains reportable", test_backup_cleanup_failure);
             ("target bind failure cleanup", test_target_bind_failure_cleanup);
             ("created cleanup uses original identity", test_created_cleanup_uses_original_identity);
           ] );
