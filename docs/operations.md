@@ -1686,7 +1686,8 @@ account at the next login.
 With the same `MESH_CONF_DIR` as the web server, run `mesh-profile migrate` on the runner. It preserves
 alias IDs, creates one profile per declared backend, and leaves the original file and agent folders
 unchanged. It does not log in, copy conversations, stop agents or restart the PTY host. An existing
-registry refuses instead of being overwritten.
+registry is never overwritten. A matching private migration intent can complete an interrupted
+publication after identity and content checks; other existing registries refuse.
 
 Success reports alias/profile counts. The retirement marker prevents a removed registry from silently
 reactivating legacy aliases; an uncertain publication needs inspection, not a blind repeat. See the
