@@ -266,6 +266,24 @@ let check_identity name expected folder =
     (expected.Unix.st_dev, expected.Unix.st_ino)
     (current.Unix.st_dev, current.Unix.st_ino)
 
+module Write = Mesh_accounts_carry__Carry_write
+
+let writer_io (io : C.io) : Write.io =
+  {
+    write = io.write;
+    read = io.read;
+    unlink = io.unlink;
+    rename = io.rename;
+    close = io.close;
+    free_bytes = io.free_bytes;
+  }
+
+let expose_refusal (result : (unit, Mesh_accounts_carry__Carry_base.error) result) =
+  Result.map_error
+    (fun (error : Mesh_accounts_carry__Carry_base.error) ->
+      { C.code = error.code; message = error.message })
+    result
+
 let test_default_target_environment_is_pinned root =
   let source = claude_account root "native-source" in
   with_conversation source;
@@ -341,14 +359,108 @@ let test_replaced_target_during_write_retains_recovery root =
           written);
     }
   in
-  refused_with "carry_rollback_incomplete" (carry_named ~io root);
+  let refusal = carry_named ~io root in
+  refused_with "carry_rollback_incomplete" refusal;
   (match !replacement with
   | None -> Alcotest.fail "write hook did not replace target"
   | Some identity -> check_identity "replacement not removed by rollback" identity target);
   Alcotest.(check (list string)) "replacement receives no cleanup or writes" []
     (Array.to_list (Sys.readdir target));
-  Alcotest.(check bool) "uncertain temporary retained under original root" true
-    (List.exists (fun relative -> contains relative ".carry-new-") (listing moved))
+  let temporaries =
+    List.filter (fun relative -> contains relative ".carry-new-")
+      (listing moved)
+  in
+  Alcotest.(check int) "uncertain temporary retained under original root" 1
+    (List.length temporaries);
+  List.iter
+    (fun relative ->
+      Alcotest.(check bool) "reports cleanup not attempted on replaced root" true
+        (contains (message_of refusal) relative))
+    temporaries;
+  Alcotest.(check bool) "message has no absolute path" false
+    (contains (message_of refusal) root)
+
+let test_transient_root_check_reports_skipped_cleanup root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  let target = claude_account root "native-target" in
+  let checks = ref 0 in
+  let check_roots () =
+    incr checks;
+    if !checks = 1 || !checks >= 5 then Ok ()
+    else Error { C.code = "account_folder_refused"; message = "changed" }
+  in
+  let refusal =
+    Write.write_plan ~check_roots (writer_io (failing_io ~writes:0 ())) ~uid ~source
+      ~target
+      [ (transcript, (Unix.stat (path source transcript)).Unix.st_size, Write.Copy) ]
+    |> expose_refusal
+  in
+  refused_with "carry_rollback_incomplete" refusal;
+  let message = message_of refusal in
+  let temporary =
+    List.filter (fun name -> contains name ".carry-new-") (listing target)
+  in
+  Alcotest.(check int) "one staged copy left" 1 (List.length temporary);
+  List.iter
+    (fun name ->
+      Alcotest.(check bool) "reports staged copy" true (contains message name))
+    temporary;
+  Alcotest.(check bool) "reports created folder" true
+    (contains message project);
+  Alcotest.(check bool) "no absolute paths" false (contains message root)
+
+let test_failed_temporary_and_folder_cleanup_are_reported root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  let target = claude_account root "native-target" in
+  let refusal =
+    Write.write_plan (writer_io (failing_io ~writes:0 ~unlinks:0 ())) ~uid ~source
+      ~target
+      [ (transcript, (Unix.stat (path source transcript)).Unix.st_size, Write.Copy) ]
+    |> expose_refusal
+  in
+  refused_with "carry_rollback_incomplete" refusal;
+  let message = message_of refusal in
+  let temporary =
+    List.filter (fun name -> contains name ".carry-new-") (listing target)
+  in
+  Alcotest.(check int) "staged copy not unlinked" 1 (List.length temporary);
+  List.iter
+    (fun name ->
+      Alcotest.(check bool) "reports failed unlink" true (contains message name))
+    temporary;
+  Alcotest.(check bool) "reports failed rmdir" true
+    (contains message project);
+  Alcotest.(check bool) "no absolute paths" false (contains message root)
+
+let test_failed_folder_cleanup_without_temporary root =
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  let target = claude_account root "native-target" in
+  let obstruction = path target (project ^ "/other-file") in
+  let io : C.io =
+    {
+      (failing_io ()) with
+      write =
+        (fun _ _ _ _ ->
+          write obstruction "do not remove";
+          raise (Unix.Unix_error (Unix.EIO, "write", "")));
+    }
+  in
+  let refusal =
+    Write.write_plan (writer_io io) ~uid ~source ~target
+      [ (transcript, (Unix.stat (path source transcript)).Unix.st_size, Write.Copy) ]
+    |> expose_refusal
+  in
+  refused_with "carry_rollback_incomplete" refusal;
+  let message = message_of refusal in
+  Alcotest.(check bool) "reports rmdir failure" true
+    (contains message project);
+  Alcotest.(check bool) "no staged copy left" false
+    (List.exists (fun name -> contains name ".carry-new-") (listing target));
+  Alcotest.(check bool) "unrelated entry untouched" true (exists obstruction);
+  Alcotest.(check bool) "no absolute paths" false (contains message root)
 
 (* Exercise the private functional binding seam, not a public IO test hook or
    process-wide descriptor exhaustion. The real binder maps open errors such
@@ -415,6 +527,24 @@ let test_target_bind_failure_cleanup root =
   Alcotest.(check bool)
     "raised pre-callback failure removes own empty root" false (exists target)
 
+let test_created_cleanup_uses_original_identity root =
+  let module Target = Mesh_accounts_carry__Carry_target in
+  let target = path root "new-target" in
+  let moved = path root "original-target" in
+  Unix.mkdir target 0o700;
+  let before = Unix.lstat target in
+  Unix.rename target moved;
+  Unix.mkdir target 0o700;
+  let bound = Unix.lstat target in
+  Target.remove_empty_created ~target ~identity:before;
+  check_identity "replacement must not be removed" bound target;
+  check_identity "original remains elsewhere" before moved;
+  Unix.rmdir target;
+  Unix.rename moved target;
+  Target.remove_empty_created ~target ~identity:before;
+  Alcotest.(check bool) "still-identical exclusive root removed" false
+    (exists target)
+
 let () =
   Alcotest.run "native registry carry convergence"
     [
@@ -435,6 +565,10 @@ let () =
             ("default target environment is pinned", test_default_target_environment_is_pinned);
             ("replacement target is not cleaned", test_replaced_target_is_not_cleaned);
             ("replacement during write retains recovery", test_replaced_target_during_write_retains_recovery);
+            ("transient root check reports skipped cleanup", test_transient_root_check_reports_skipped_cleanup);
+            ("failed staged unlink and rmdir are reported", test_failed_temporary_and_folder_cleanup_are_reported);
+            ("failed rmdir without staged leftovers", test_failed_folder_cleanup_without_temporary);
             ("target bind failure cleanup", test_target_bind_failure_cleanup);
+            ("created cleanup uses original identity", test_created_cleanup_uses_original_identity);
           ] );
     ]

@@ -47,6 +47,11 @@ let same_directory ~target identity =
   | named -> named.Unix.st_kind = Unix.S_DIR && same_file named identity
   | exception Unix.Unix_error _ -> false
 
+(* Only the directory created by this carry can be removed, and only empty. *)
+let remove_empty_created ~target ~identity =
+  if same_directory ~target identity then
+    quietly (fun () -> Unix.rmdir target)
+
 (* Binding can refuse before its callback starts (for example, open can return
    EMFILE). Only this run's still-identical empty directory can be removed then;
    once entered, the callback keeps cleanup inside its bound-directory scope.
@@ -54,8 +59,7 @@ let same_directory ~target identity =
 let with_target_binding ~target ~created ~identity bind callback =
   let entered = ref false in
   let cleanup_unbound () =
-    if created && (not !entered) && same_directory ~target identity then
-      quietly (fun () -> Unix.rmdir target)
+    if created && not !entered then remove_empty_created ~target ~identity
   in
   match
     bind (fun bound ->

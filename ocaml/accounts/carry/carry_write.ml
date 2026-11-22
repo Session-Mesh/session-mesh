@@ -201,10 +201,32 @@ let commit io state ~target (relative, temporary, action) =
   state.temporary <- List.filter (( <> ) temporary) state.temporary;
   state.committed <- (relative, final, backup) :: state.committed
 
-(* What a rollback could not undo, relative to the target: replaced copies
-   that could not be put back (kept under their .carry-old name), and new
-   copies that could not be removed. *)
-type undone = { kept : string list; left : string list }
+(* What a rollback could not undo or verify, relative to the target. *)
+type undone = {
+  kept : string list;
+  left : string list;
+  temporary : string list;
+  folders : string list;
+}
+
+let empty_undone = { kept = []; left = []; temporary = []; folders = [] }
+
+let relative_to_target ~target path =
+  let prefix = target ^ "/" in
+  if String.starts_with ~prefix path then
+    String.sub path (String.length prefix)
+      (String.length path - String.length prefix)
+  else Filename.basename path
+
+let pending_cleanup ~target (state : state) =
+  {
+    empty_undone with
+    temporary = List.map (relative_to_target ~target) state.temporary;
+    folders =
+      List.map
+        (fun (path, _) -> relative_to_target ~target path)
+        state.created;
+  }
 
 (* Undo one file put in place: remove a new copy, put a replaced one back. *)
 let undo io undone (relative, final, backup) =
@@ -220,24 +242,37 @@ let undo io undone (relative, final, backup) =
           { undone with kept = relative_sibling relative backup :: undone.kept }
       )
 
-(* Undo everything, newest first, and report what could not be undone. *)
-let roll_back ?(check_roots = fun () -> Ok ()) io state =
+(* Undo everything, newest first, and report skipped as well as failed cleanup. *)
+let roll_back ?(check_roots = fun () -> Ok ()) io ~target state =
   let undone =
-    List.fold_left (undo io) { kept = []; left = [] } state.committed
+    List.fold_left (undo io) empty_undone state.committed
   in
-  List.iter
-    (fun path ->
-      if Result.is_ok (check_roots ()) then
-        quietly (fun () -> Unix.unlink path))
-    state.temporary;
-  List.iter
-    (fun (path, identity) ->
-      if
+  let undone =
+    List.fold_left
+      (fun undone path ->
+        let removed =
+          Result.is_ok (check_roots ())
+          && (match io.unlink path with () -> true | exception _ -> false)
+        in
+        if removed then undone
+        else
+          {
+            undone with
+            temporary = relative_to_target ~target path :: undone.temporary;
+          })
+      undone state.temporary
+  in
+  List.fold_left
+    (fun undone (path, identity) ->
+      let removed =
         Result.is_ok (check_roots ())
         && Carry_target.same_directory ~target:path identity
-      then quietly (fun () -> Unix.rmdir path))
-    state.created;
-  undone
+        && (match Unix.rmdir path with () -> true | exception _ -> false)
+      in
+      if removed then undone
+      else
+        { undone with folders = relative_to_target ~target path :: undone.folders })
+    undone state.created
 
 let stage_all io ~uid state ~source ~target planned =
   List.fold_left
@@ -255,35 +290,48 @@ let stage_all io ~uid state ~source ~target planned =
 
 (* The refusal of a failed carry whose rollback was incomplete: an older copy
    not put back weighs more than a new copy not removed. *)
-let incomplete error { kept; left } =
+let cleanup_details { kept = _; left; temporary; folders } =
   let not_removed =
     if left = [] then ""
     else "; new copies could not be removed: " ^ String.concat ", " left
   in
-  match (kept, left) with
-  | [], [] -> Error error
-  | [], _ ->
+  let staged =
+    if temporary = [] then ""
+    else "; staged copy cleanup unconfirmed: " ^ String.concat ", " temporary
+  in
+  let created =
+    if folders = [] then ""
+    else "; created folder cleanup unconfirmed: " ^ String.concat ", " folders
+  in
+  not_removed ^ staged ^ created
+
+let incomplete error ({ kept; left; temporary; folders } as undone) =
+  let details = cleanup_details undone in
+  match (kept, left, temporary, folders) with
+  | [], [], [], [] -> Error error
+  | [], _, _, _ ->
       fail "carry_rollback_incomplete"
-        ("the carry failed" ^ not_removed ^ " (" ^ error.message ^ ")")
+        ("the carry failed" ^ details ^ " (" ^ error.message ^ ")")
   | _ ->
       fail "carry_restore_failed"
         ("the carry failed and an older copy could not be put back; it is kept \
-          as " ^ String.concat ", " kept ^ not_removed)
+          as " ^ String.concat ", " kept ^ details)
 
 let write_plan ?(check_roots = fun () -> Ok ()) io ~uid ~source ~target planned =
   let state = { created = []; temporary = []; committed = [] } in
-  let root_changed () =
+  let root_changed undone =
     fail "carry_rollback_incomplete"
-      "an account folder changed during the copy; cleanup requires review"
+      ("an account folder changed during the copy; cleanup requires review"
+      ^ cleanup_details undone)
   in
   let failed error =
     match check_roots () with
     | Ok () ->
-        let undone = roll_back ~check_roots io state in
+        let undone = roll_back ~check_roots io ~target state in
         (match check_roots () with
         | Ok () -> incomplete error undone
-        | Error _ -> root_changed ())
-    | Error _ -> root_changed ()
+        | Error _ -> root_changed undone)
+    | Error _ -> root_changed (pending_cleanup ~target state)
   in
   let unix error =
     { code = "carry_failed"; message = Unix.error_message error }
@@ -295,7 +343,7 @@ let write_plan ?(check_roots = fun () -> Ok ()) io ~uid ~source ~target planned 
   with
   | Ok () ->
       (match check_roots () with
-      | Error _ -> root_changed ()
+      | Error _ -> root_changed (pending_cleanup ~target state)
       | Ok () ->
           List.iter
             (fun (_, _, backup) ->
@@ -304,15 +352,15 @@ let write_plan ?(check_roots = fun () -> Ok ()) io ~uid ~source ~target planned 
             state.committed;
           (match check_roots () with
           | Ok () -> Ok ()
-          | Error _ -> root_changed ()))
+          | Error _ -> root_changed (pending_cleanup ~target state)))
   | Error error -> failed error
   | exception Restore_failed kept ->
       (match check_roots () with
-      | Error _ -> root_changed ()
+      | Error _ -> root_changed (pending_cleanup ~target state)
       | Ok () ->
-          let undone = roll_back ~check_roots io state in
+          let undone = roll_back ~check_roots io ~target state in
           (match check_roots () with
-          | Error _ -> root_changed ()
+          | Error _ -> root_changed undone
           | Ok () ->
               incomplete
                 { code = "carry_failed"; message = "a rename failed" }

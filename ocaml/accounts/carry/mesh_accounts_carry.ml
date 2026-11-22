@@ -328,8 +328,7 @@ let carry_into_created ~identity ~check_roots io limits ~uid ~kind ~conversation
   (match result with
   | Error { code = "carry_in_progress"; _ } | Ok _ -> ()
   | Error _ ->
-      if Carry_target.same_directory ~target identity then
-        quietly (fun () -> Unix.rmdir target));
+      Carry_target.remove_empty_created ~target ~identity);
   result
 
 (* Hooks may mutate directories too. Check on both sides of every supplied IO
@@ -386,9 +385,9 @@ let carry_accounts ?(io = default_io) ?(limits = default_limits) ~uid ~getenv
      in
      let* target =
        resolver_result (R.carry_folder ~uid ~getenv ~create:false target_entry)
-     in
-     with_bound_folder ~uid source (fun source_identity ->
-         let* () = pinned_folder ~uid source_entry source in
+      in
+      with_bound_folder ~uid source (fun source_identity ->
+          let* () = pinned_folder ~uid source_entry source in
           let* created, before =
             prepare_pinned_target ~uid target_entry target
           in
@@ -418,8 +417,8 @@ let carry_accounts ?(io = default_io) ?(limits = default_limits) ~uid ~getenv
              (match result with
              | Error { code = "carry_in_progress"; _ } | Ok _ -> ()
              | Error _ ->
-                 if created && Carry_target.same_directory ~target target_identity
-                 then quietly (fun () -> Unix.rmdir target));
+                 if created then
+                   Carry_target.remove_empty_created ~target ~identity:before);
              result)))
 
 let outcome_to_json outcome =
