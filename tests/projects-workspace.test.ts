@@ -486,7 +486,13 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
       const starts = () => requests.filter(value => value.op === 'project_observation_start');
       const settled = async () => { await page.waitForFunction(() => document.querySelector('#project-overview > p[role="status"]')?.textContent?.startsWith('Context observed')); };
       let before = starts().length;
-      const stamp = await page.locator('#project-overview > p[role="status"]').textContent();
+      // Observe writes, not formatted time: two completed captures may share one displayed minute.
+      await page.evaluate(() => {
+        const status = document.querySelector('#project-overview > p[role="status"]')!;
+        (window as any).observedStatusWrites = 0;
+        new MutationObserver(() => { (window as any).observedStatusWrites++; })
+          .observe(status, { childList: true, characterData: true, subtree: true });
+      });
       const taskControls=page.locator('.project-followup [data-followup-key^="row-"]');
       if(REAL_ROSTER)assert.ok(await taskControls.count()>0,'real Roster task controls are mounted before refresh');
       else assert.equal(await taskControls.count(),0,'Git-only observation has no Roster task controls');
@@ -495,7 +501,8 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
       if(REAL_ROSTER)assert.ok(await taskControls.count()>0,'old task controls remain mounted while refreshing in list or clock view');
       else assert.equal(await taskControls.count(),0,'Git-only refresh does not create Roster task controls');
       await settled(); assert.equal(starts().length, before + 1, 'settled observation refreshes on the thirty second cadence');
-      assert.notEqual(await page.locator('#project-overview > p[role="status"]').textContent(), stamp);
+      await page.waitForFunction(() => (window as any).observedStatusWrites > 0 &&
+        document.querySelector('#project-overview > p[role="status"]')?.textContent?.startsWith('Context observed'));
       await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); window.tickProjectContext(30000); });
       assert.equal(starts().length, before + 1, 'hidden document does not start captures');
       const resume = page.waitForRequest(request => request.url().endsWith('/api/projects/v1') && request.postDataJSON()?.op === 'project_observation_start');
