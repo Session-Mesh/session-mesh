@@ -20,6 +20,11 @@ const MODE_LINES: [string, keyof FileModes][] = [
 // Git writes a mode as six octal digits (100644, 100755, 120000, 160000, ...).
 const MODE = /^[0-7]{6}$/;
 
+/** Whether a line is a well-formed Git mode header. */
+export function isModeLine(line: string): boolean {
+  return MODE_LINES.some(([prefix]) => line.startsWith(prefix) && MODE.test(line.slice(prefix.length).trim()));
+}
+
 // Records the mode an extended header line gives, if it gives one: any other text after the
 // prefix (a commit message line of the next patch in a series, say) is not a mode.
 export function readModeLine(line: string, file: FileModes): void {

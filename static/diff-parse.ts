@@ -3,7 +3,7 @@
 
 // Unified Git and plain diff parsing; paths and patch content remain data.
 
-import {readModeLine, type FileModes} from './diff-file-mode.ts';
+import {isModeLine, readModeLine, type FileModes} from './diff-file-mode.ts';
 
 export type LineKind = 'context' | 'add' | 'del';
 
@@ -142,7 +142,7 @@ function newFile(git: boolean): FileDiff {
 
 /** Git's extended header ends at the first line outside this grammar. */
 function extendedHeader(line: string): boolean {
-  return /^(?:old mode |new mode |new file mode |deleted file mode |similarity index |dissimilarity index |rename from |rename to |copy from |copy to |index )/.test(line)
+  return isModeLine(line) || /^(?:similarity index |dissimilarity index |rename from |rename to |copy from |copy to |index )/.test(line)
     || line.startsWith('Binary files ') || line === 'GIT binary patch';
 }
 

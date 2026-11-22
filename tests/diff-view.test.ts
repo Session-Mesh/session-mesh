@@ -228,7 +228,7 @@ describe('file modes', () => {
   test('a value other than six octal digits is not a mode', () => {
     for (const value of ['1'.repeat(5000), '100648', '10064x', '<img src=x onerror=alert(1)>', '10064', '1006440', '']) {
       assert.deepEqual(modes(`diff --git a/x b/x\nold mode ${value}\nnew mode ${value}\n`), [['modified', null, null, 0]], value.slice(0, 20));
-      assert.deepEqual(modes(`diff --git a/x b/x\nnew file mode ${value}\n`), [['added', null, null, 0]], value.slice(0, 20));
+      assert.deepEqual(modes(`diff --git a/x b/x\nnew file mode ${value}\n`), [['modified', null, null, 0]], value.slice(0, 20));
     }
   });
 
@@ -248,6 +248,13 @@ describe('file modes', () => {
   test('any non-header line closes an extended header even without a patch separator', () => {
     assert.deepEqual(modes('diff --git a/x b/x\nold mode 100644\nunrelated\nnew mode 100755\ndeleted file mode 100644\n'),
       [['modified', '100644', null, 0]]);
+  });
+
+  test('an invalid mode closes the header before later mode or status lines', () => {
+    for (const prefix of ['old mode ', 'new mode ', 'new file mode ', 'deleted file mode ']) {
+      const patch = `diff --git a/x b/x\nold mode 100644\n${prefix}not-a-mode\ndeleted file mode 100644\nnew mode 100755\n`;
+      assert.deepEqual(modes(patch), [['modified', '100644', null, 0]], prefix);
+    }
   });
 
   test('two equal modes are no change of mode', () => {
