@@ -18,14 +18,15 @@ export function dependencyPreview(ctx: ViewContext, id: string): HTMLElement {
     if (!details.open) { content.replaceChildren(); return; }
     controller = new AbortController();
     content.replaceChildren(el('p', '', ctx.t('work.dep.previewLoading')));
-    void ctx.previewTask!(id, controller.signal).then(result => {
-      if (current !== sequence || !details.open || !details.isConnected) return;
+    const signal = AbortSignal.any([controller.signal, ctx.previewSignal!]);
+    void ctx.previewTask!(id, signal).then(result => {
+      if (signal.aborted || current !== sequence || !details.open || !details.isConnected) return;
       if (!result.ok) { content.replaceChildren(el('p', '', ctx.t('work.dep.previewUnavailable'))); return; }
       const { task, projectTitle } = result.value;
       content.replaceChildren(el('strong', '', task.title), statusBadge(ctx.t, task.status),
         el('p', '', projectTitle ?? task.project ?? ctx.t('work.dep.previewNoProject')));
     }, () => {
-      if (current === sequence && details.open && details.isConnected)
+      if (!signal.aborted && current === sequence && details.open && details.isConnected)
         content.replaceChildren(el('p', '', ctx.t('work.dep.previewUnavailable')));
     });
   });

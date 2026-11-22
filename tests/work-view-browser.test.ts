@@ -42,6 +42,7 @@ const HOSTILE_EVENTS = [
   { ts: '2026-11-07T09:03:00Z', task: 'T-8e8e', type: 'progress', text: '<script>window.__pwn=3</script> noted', prov: 'inferred' },
   { ts: '2026-11-08T08:00:00Z', task: 'T-3c4d', type: 'add', field: 'blocked_by', value: 'T-1a2b' },
   { ts: '2026-11-08T08:01:00Z', task: 'T-8e8e', type: 'add', field: 'blocked_by', value: 'T-3c4d' },
+  { ts: '2026-11-08T08:02:00Z', task: 'T-8e8e', type: 'add', field: 'blocked_by', value: 'T-1a2b' },
   // Two questions (work_ask), one answered (work_answer relaying the owner's words, with a hostile text).
   { ts: '2026-11-08T09:00:00Z', task: 'T-8e8e', type: 'question', id: 'N-0000a0a1', text: 'Keep the old endpoint?', agent: 'claude', session: 'asking-session' },
   { ts: '2026-11-08T09:01:00Z', task: 'T-8e8e', type: 'question', id: 'N-0000a0a2', text: 'Which port?', agent: 'claude', session: 'asking-session' },
@@ -324,7 +325,7 @@ for (const width of WIDTHS) {
       await pane.locator('.work-detail-heading').waitFor();
       const draft = pane.getByLabel('Your answer').first();
       await draft.fill('retain draft');
-      const preview = pane.locator('.work-dep-preview').first();
+      const preview = pane.locator('.work-dep-preview', { hasText: 'Preview T-3c4d' });
       await page.route('**/api/work/v1', async route => {
         const request = route.request().postDataJSON();
         if (request?.op === 'task' && request?.args?.id === 'T-3c4d')
@@ -358,6 +359,37 @@ for (const width of WIDTHS) {
       assert.equal(await draft.inputValue(), 'retain draft', 'late preview cannot replace the source draft');
       await page.unroute('**/api/work/v1');
       await noOverflow(page);
+    });
+
+    test('closing a task aborts held previews and frees the shared read slots', { timeout: 900_000 }, async () => {
+      const { page } = await signedIn(tracked, 'en-US', width);
+      await enterProjects(page, width);
+      await openRelayProject(page);
+      await page.locator('.work-tab').nth(1).click();
+      await page.locator('#work-panel-board .work-card', { hasText: '<script>window.__pwn=2</script>' }).click();
+      const pane = page.locator('.work-detail-pane');
+      await pane.locator('.work-detail-heading').waitFor();
+      let release!: () => void, started!: () => void, count = 0;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      const both = new Promise<void>(resolve => { started = resolve; });
+      await page.route('**/api/work/v1', async route => {
+        const request = route.request().postDataJSON();
+        if (request?.op === 'task' && ['T-3c4d', 'T-1a2b'].includes(request?.args?.id)) {
+          if (++count === 2) started();
+          await held; await route.continue().catch(() => undefined);
+        } else await route.continue();
+      });
+      await pane.locator('.work-dep-preview', { hasText: 'Preview T-3c4d' }).locator('summary').click();
+      await pane.locator('.work-dep-preview', { hasText: 'Preview T-1a2b' }).locator('summary').click();
+      await both;
+      await pane.locator('.work-detail-close').click();
+      const read = page.waitForResponse(response => response.url().endsWith('/api/work/v1')
+        && response.request().postDataJSON()?.op === 'project', { timeout: 5000 });
+      await page.locator('.work-refresh').click();
+      assert.equal((await read).status(), 200, 'a later project read acquires a freed slot');
+      assert.equal(count, 2, 'both preview reads were started');
+      release();
+      await page.unroute('**/api/work/v1');
     });
 
     test('a task opens its detail; hostile text stays inert; Escape closes the detail first', { timeout: 900_000 }, async () => {
