@@ -345,3 +345,41 @@ describe('countLines', () => {
     assert.deepEqual(['', 'a', 'a\n', 'a\nb', 'a\nb\n'].map(countLines), [0, 1, 1, 2, 2]);
   });
 });
+
+test('empty rename and copy paths do not change the file status', () => {
+  for (const prefix of ['rename from ', 'rename to ', 'copy from ', 'copy to ']) {
+    for (const path of ['', '""', '"unterminated']) {
+      const [file] = parseUnifiedDiff(`diff --git a/x b/x\n${prefix}${path}\n`).files;
+      assert.equal(file?.status, 'modified');
+      assert.equal(file?.oldPath, 'x');
+      assert.equal(file?.newPath, 'x');
+    }
+  }
+});
+
+test('binary notices require complete paths and Git wording', () => {
+  for (const text of ['Binary files are omitted from this message', 'Binary files  and b/x differ', 'Binary files a/x and  differ', 'Binary files "" and b/x differ', 'Binary files a/x and "" differ', 'Binary files a/ and b/x differ', 'Binary files ordinary and arbitrary differ']) {
+    assert.equal(parseUnifiedDiff(`diff --git a/x b/x\n${text}\n`).files[0]?.binary, false);
+  }
+  for (const [header, text] of [
+    ['diff --git a/a file b/a file', 'Binary files a/a file and b/a file differ'],
+    ['diff --git a/x b/x', 'Binary files /dev/null and b/x differ'],
+    ['diff --git "a/a file" "b/a file"', 'Binary files "a/a file" and "b/a file" differ'],
+    ['diff --git x x', 'Binary files x and x differ'],
+    ['diff --git x x', 'Binary files /dev/null and x differ'],
+    ['diff --git x x', 'Binary files x and /dev/null differ'],
+    ['diff --git old/x new/x', 'Binary files old/x and new/x differ'],
+    ['diff --git old/x new/x', 'Binary files /dev/null and new/x differ'],
+    ['diff --git a/x b/x', 'GIT binary patch'],
+  ]) {
+    assert.equal(parseUnifiedDiff(`${header}\n${text}\n`).files[0]?.binary, true);
+  }
+});
+
+test('extended metadata after file paths cannot alter status or prevent the hunk', () => {
+  const [file] = parseUnifiedDiff('diff --git a/x b/x\n--- a/x\n+++ b/x\ndeleted file mode 100644\n@@ -1 +1 @@\n-old\n+new\n').files;
+  assert.equal(file?.status, 'modified');
+  assert.equal(file?.oldMode, null);
+  assert.equal(file?.hunks.length, 1);
+  assert.equal(file?.added, 1);
+});
