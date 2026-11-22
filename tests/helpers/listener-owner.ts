@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Atacama <contact@atacama.tech>
+
 // Shared test-only listener ownership check.
 import fs from 'node:fs';
 import {spawnSync} from 'node:child_process';

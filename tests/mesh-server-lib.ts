@@ -1,4 +1,3 @@
-import {OWNER_CHECK, listensFrom} from './helpers/listener-owner.ts';
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
@@ -9,6 +8,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import {OWNER_CHECK, listensFrom} from './helpers/listener-owner.ts';
 
 export const REPO = path.resolve(import.meta.dirname, '..');
 const PYTHON = process.env.MESH_PYTHON || 'python3';
