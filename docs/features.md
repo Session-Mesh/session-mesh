@@ -335,6 +335,10 @@ project tracker that agents write through `mesh-work`, read only:
   task sheet or in a sheet opened from the first screen shows in the other places once they are
   read again; an
   answered question is never shown in the colour of the open ones.
+- **Recorded task sessions.** A task sheet lists the sessions recorded on that task, with the agent,
+  branch, repository name and last recorded activity when supplied. These are historical links:
+  current activity is unknown, and a name may refer to several sessions. Names stay plain text and
+  do not open a live session.
 - **The way back.** The view has three levels: the first screen, a product or a project on one of
   its tabs, and a task sheet over that tab (from a product's Board or Timeline too). A choice in the tree is a step like the same choice in
   the main area. The sheet's first button ("Back to the Board tab", named after the
