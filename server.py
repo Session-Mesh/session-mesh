@@ -4762,8 +4762,8 @@ async def api_session_action_request(request):
 # exact source stopped, `mesh-platform accounts carry` copies the conversation, the agent resumes under the target;
 # a failed carry resumes it under its own account. The agent kind is the session's (its token), never the body's.
 CARRY_TIMEOUT = 300
-# Remains false until the complete in-place path and account isolation are qualified.
-NATIVE_SWITCH_QUALIFIED = False
+# Native process environment observation and the bound switch are qualified on Linux.
+NATIVE_SWITCH_QUALIFIED = sys.platform == "linux"
 # The carry's refusal codes (Mesh_accounts_carry): these two may pass when asked again later; these two leave
 # something in the target folder for the operator to look at (named in the service log). Every other code is a
 # refusal that asking again does not change. Each carry runs as its own mesh-platform process: its fcntl lock does
@@ -4997,7 +4997,7 @@ async def api_session_accounts(request):
     current = session_account(raw)
     return web.json_response({
         "agent": source["agent"],
-        "switch_qualified": False,
+        "switch_qualified": NATIVE_SWITCH_QUALIFIED and _native_profile_mode(),
         "accounts_file": _ACCOUNTS["file"],
         "current": ({"id": current, "label": account_label(current, source["agent"]),
                      "declared": any(a["id"] == current for a in declared)} if current

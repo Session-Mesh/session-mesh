@@ -139,7 +139,7 @@ describe('account switch requests', {skip: SKIP}, () => {
   });
 
   test('native profiles refuse before queueing, across profile and default directions despite skip consent',
-    {skip: PROFILE_SKIP}, async () => {
+    {skip: process.platform === 'linux' ? 'native switches are qualified on Linux' : PROFILE_SKIP}, async () => {
     const registry = installNativeProfiles();
     try {
       await nativeProfiles();
@@ -193,7 +193,8 @@ describe('account switch requests', {skip: SKIP}, () => {
       await nativeProfiles();
       const decided = await decide(request, true);
       assert.equal(decided.state, 'failed', JSON.stringify(decided));
-      assert.equal(decided.result?.error, 'Native profile switching is not qualified');
+      assert.equal(decided.result?.error, process.platform === 'linux'
+        ? 'Native account switch request has no valid binding' : 'Native profile switching is not qualified');
       assert.ok(!decided.result?.rolled_back, 'the source was never stopped');
       await unchangedSource(session, before, launchLog);
       assert.deepEqual(fs.readFileSync(original), transcript, 'source conversation unchanged');
@@ -204,7 +205,8 @@ describe('account switch requests', {skip: SKIP}, () => {
     }
   });
 
-  test('the native migration marker refuses before preparing a missing legacy target folder', async () => {
+  test('the native migration marker refuses before preparing a missing legacy target folder',
+    {skip: process.platform === 'linux' ? 'native switches are qualified on Linux' : false}, async () => {
     const session = await codexSession('x-marker-refusal');
     const before = (await listed(session.name))!;
     const accountFile = path.join(mesh.confDir, 'accounts.json');

@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
-// Explicit opt-in until the server's native switch guard is qualified and enabled.
+// Linux end-to-end qualification with isolated account homes and fake agents.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {describe, test} from 'node:test';
 import {rolloutIn} from './fake-codex-lib.ts';
-import {PROFILE_SKIP, mesh, log, travelHome, workHome, sleep, launches, codexSession, listed,
+import {mesh, log, travelHome, workHome, sleep, launches, codexSession, listed,
   installNativeProfiles, unchangedSource, requested, decide, launchOf} from './session-account-switch-fixture.ts';
 
-describe('native switch integration', {skip: process.platform !== 'linux' ? 'process environment binding needs Linux procfs' :
-  process.env.MESH_TEST_NATIVE_SWITCH !== '1' ? 'native switching remains unqualified' : PROFILE_SKIP}, () => {
+describe('native switch integration', {skip: process.platform !== 'linux' ? 'process environment binding needs Linux procfs' : false}, () => {
   test('default to work and work to travel keeps terminal and identity', async () => {
     const registry = installNativeProfiles();
     try {
