@@ -788,15 +788,21 @@ async def _switch_profile_context(account, agent, expected_revision=None, observ
     default target is explicitly bound to this server's environment. Neither
     path is permitted to silently fall back when its binding has changed.
     """
-    if account != DEFAULT_ACCOUNT["id"]:
-        return await _profile_launch_context(account, agent, expected_revision)
     try:
-        if observed_agent is None:
-            selected = accountswitch.default_context(agent, os.environ)
-        else:
+        selected = None
+        if observed_agent is not None:
             if observed_agent.get("type") != agent or observed_agent.get("foreground") is not True:
                 raise accountswitch.UnboundDefault("Agent is not the foreground process")
             selected = await asyncio.to_thread(accountswitch.process_default_context, agent, observed_agent.get("pid"))
+        if account != DEFAULT_ACCOUNT["id"]:
+            context = await _profile_launch_context(account, agent, expected_revision)
+            if selected is not None:
+                if selected["root"] != context["roots"]["config"]:
+                    raise accountswitch.UnboundDefault("Agent account folder differs from the recorded profile")
+                context = {**context, "process_pid": selected["process_pid"], "process_start": selected["process_start"]}
+            return context
+        if selected is None:
+            selected = accountswitch.default_context(agent, os.environ)
     except accountswitch.UnboundDefault as exc:
         raise web.HTTPConflict(text="Default account context is unavailable; nothing was stopped") from exc
     revision = selected["context_revision"]
@@ -808,7 +814,9 @@ async def _switch_profile_context(account, agent, expected_revision=None, observ
     return {"backend": agent, "id": account, "label": DEFAULT_ACCOUNT["label"],
             "env": {variable: root}, "roots": {"config": root, role: os.path.join(root, child)},
             "unset": list(dict.fromkeys((*_PROFILE_PROVIDER_OVERRIDES, *ACCOUNT_OVERRIDES.get(variable, ())))),
-            "context_revision": revision}
+            "context_revision": revision,
+            **({"process_pid": selected["process_pid"], "process_start": selected["process_start"]}
+               if observed_agent is not None else {})}
 
 
 async def _validate_native_switch(source, kind, source_context, target_context):
@@ -818,7 +826,9 @@ async def _validate_native_switch(source, kind, source_context, target_context):
     observed = (entry or {}).get("agent") or {}
     if observed.get("type") != kind or observed.get("foreground") is not True:
         raise web.HTTPConflict(text="Foreground agent changed; nothing was stopped")
-    await _switch_profile_context(source_context["id"], kind, source_context["context_revision"], observed)
+    actual = await _switch_profile_context(source_context["id"], kind, source_context["context_revision"], observed)
+    if (actual["process_pid"], actual["process_start"]) != (source_context["process_pid"], source_context["process_start"]):
+        raise web.HTTPConflict(text="Foreground agent changed; nothing was stopped")
     await _switch_profile_context(target_context["id"], kind, target_context["context_revision"])
 
 
@@ -1511,19 +1521,34 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     saved = await _arrangement_of(source["name"], source["created"])
     incarnation = (source["name"], source["created"])
     if native_switch:
+        if "agent_relaunch_bound_v1" not in (source.get("pty_capabilities") or []):
+            raise web.HTTPConflict(text="This PTY host cannot bind the agent identity; nothing was stopped")
         await _validate_native_switch(source, known_agent, source_context, context)
         source_identity = _switch_root_identity(source_context)
         target_identity = _switch_root_identity(context)
     elif context:
         await _profile_launch_context(account, known_agent, context["context_revision"])
     try:
-        created = await _stop_agent(source, known_agent)
+        created = await (_stop_agent(source, known_agent, source_context) if native_switch
+                         else _stop_agent(source, known_agent))
     except web.HTTPServiceUnavailable:   # a late reply: the agent may be stopped all the same, the session moved on
         await _carry_arrangement(incarnation, source["name"], saved)
         raise
     # the new incarnation keeps the session's label, folder and rank (bound to ``created``, which moved on)
     await _carry_arrangement(incarnation, source["name"], saved, created)
     launch = (source, created, cwd, command, agent, known_agent, notice, vibe)
+
+    async def undo_native_switch(exc):
+        try:
+            if _switch_root_identity(source_context) != source_identity:
+                raise _not_started_again(source["name"])
+            if account:
+                await _profile_launch_context(account, known_agent, source_context["context_revision"])
+        except web.HTTPException as error:
+            raise _not_started_again(source["name"]) from error
+        await _start_in_place(*launch, account, source_env, context=source_context)
+        raise AccountSwitchUndone(source["name"], exc.code or "carry_failed", str(exc)) from exc
+
     if switch:
         try:
             if native_switch:
@@ -1538,13 +1563,7 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
         except AccountsUnavailable as exc:   # nothing changed under the source account: the conversation goes on there
             print(f"account switch of {source['name']} undone: {exc}", flush=True)
             if source_context:
-                try:
-                    if _switch_root_identity(source_context) != source_identity:
-                        raise _not_started_again(source["name"])
-                    if account:
-                        await _profile_launch_context(account, known_agent, source_context["context_revision"])
-                except web.HTTPException as error:
-                    raise _not_started_again(source["name"]) from error
+                await undo_native_switch(exc)
             await _start_in_place(*launch, account, source_env, context=source_context)
             raise AccountSwitchUndone(source["name"], exc.code or "carry_failed", str(exc)) from exc
     if native_switch:
@@ -1552,8 +1571,8 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
             await _switch_profile_context(context["id"], known_agent, context["context_revision"])
             if _switch_root_identity(context) != target_identity:
                 raise _not_started_again(source["name"])
-        except web.HTTPException as error:
-            raise _not_started_again(source["name"]) from error
+        except web.HTTPException:
+            await undo_native_switch(AccountsUnavailable("Target account changed after carry", "profile-context-changed"))
     await _start_in_place(*launch, target, account_env, context=context)
     return source["name"]
 
@@ -1563,13 +1582,15 @@ def _not_started_again(name):
         text=f"Conversation stopped; its agent could not be started again in session {name}")
 
 
-async def _stop_agent(source, known_agent):
+async def _stop_agent(source, known_agent, binding=None):
     """stop_agent_if on the incarnation ``source``: the new ``created`` once the agent is gone. WholeSessionOnly or
     HTTPConflict when the host stopped nothing. A reply that comes too late is checked in the listing: when the
     incarnation moved on, the agent was stopped and the session is still there, and the error says so."""
     try:
-        stopped = await host({"op": "stop_agent_if", "name": source["name"], "created": source["created"],
-                              "agent": known_agent}, timeout=STOP_AGENT_TIMEOUT)
+        message = {"op": "stop_agent_if", "name": source["name"], "created": source["created"], "agent": known_agent}
+        if binding is not None:
+            message.update(agent_pid=binding["process_pid"], agent_incarnation=binding["process_start"])
+        stopped = await host(message, timeout=STOP_AGENT_TIMEOUT)
     except web.HTTPServiceUnavailable:
         if await _incarnation_moved_on(source):
             raise _not_started_again(source["name"]) from None
@@ -4861,7 +4882,9 @@ async def _switch_request(source, body):
             raise web.HTTPConflict(text="Account profile context unknown; nothing was stopped")
         source_context = await _switch_profile_context(current, kind, source_revision, observed)
         target_context = await _switch_profile_context(target["id"], kind)
-        binding = {"backend": kind, "source": {"id": current, "context_revision": source_context["context_revision"]},
+        binding = {"backend": kind, "conversation": sid, "agent_pid": source_context["process_pid"],
+                   "agent_start": source_context["process_start"],
+                   "source": {"id": current, "context_revision": source_context["context_revision"]},
                    "target": {"id": target["id"], "context_revision": target_context["context_revision"]}}
         _, _, data, pattern = _conversation_layout(kind, sid)
         found = await asyncio.to_thread(_conversation_found_in_root, source_context["roots"]["config"], data, pattern)
@@ -4903,8 +4926,12 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
                                                                         item["account"])
         except ValueError as exc:
             raise web.HTTPConflict(text="Native account switch request has no valid binding") from exc
+        if conversation != binding["conversation"]:
+            raise web.HTTPConflict(text="Conversation changed since the request; nothing was stopped")
         source_context = await _switch_profile_context(item["from_account"], kind,
                                                        binding["source"]["context_revision"], observed_agent or {})
+        if (source_context["process_pid"], source_context["process_start"]) != (binding["agent_pid"], binding["agent_start"]):
+            raise web.HTTPConflict(text="Foreground agent changed since the request; nothing was stopped")
         target_context = await _switch_profile_context(item["account"], kind,
                                                        binding["target"]["context_revision"])
         _, _, data, pattern = _conversation_layout(kind, conversation)

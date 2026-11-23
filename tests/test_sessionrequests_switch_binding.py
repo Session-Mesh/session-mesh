@@ -11,7 +11,8 @@ import sessionrequests
 
 SOURCE = {"id": "s", "created": 1.0, "agent": "codex", "cwd": "/work"}
 BODY = {"action": "switch_account", "account": "target"}
-PAIR = {"backend": "codex", "source": {"id": "source", "context_revision": "a" * 64},
+PAIR = {"backend": "codex", "conversation": "12345678-abcd", "agent_pid": 123, "agent_start": "1234",
+        "source": {"id": "source", "context_revision": "a" * 64},
         "target": {"id": "target", "context_revision": "b" * 64}}
 
 

@@ -69,6 +69,8 @@ def process_default_context(kind, pid, proc_root=Path("/proc")):
                 if name in values:
                     raise UnboundDefault("Agent environment has duplicate keys")
                 values[name] = os.fsdecode(value)
-        return default_context(kind, values)
+        context = default_context(kind, values)
+        context.update(process_pid=pid, process_start=started.decode("ascii"))
+        return context
     except (OSError, UnicodeError, IndexError) as exc:
         raise UnboundDefault("Agent environment is unavailable") from exc

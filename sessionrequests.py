@@ -32,6 +32,7 @@ TAB_NONCE_RE = re.compile(r"[0-9a-f]{32}")
 # An account alias id (server.ACCOUNT_ID_RE) or "default", the default account.
 ACCOUNT_RE = re.compile(r"[a-z0-9-]{1,32}")
 CONTEXT_REVISION_RE = re.compile(r"[0-9a-f]{64}")
+CONVERSATION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{7,63}")
 # The agents whose conversation Mesh can carry to another account (mesh-platform accounts carry).
 SWITCHABLE_AGENTS = frozenset(("claude", "codex"))
 # Presets an agent may never request: a session without approvals or sandbox
@@ -302,7 +303,11 @@ class Requests:
     @staticmethod
     def _switch_binding(binding, source, from_account, account):
         """Validate a server-observed native pair; storing it grants no authority."""
-        if not isinstance(binding, dict) or set(binding) != {"backend", "source", "target"}:
+        if not isinstance(binding, dict) or set(binding) != {"backend", "source", "target", "conversation", "agent_pid", "agent_start"}:
+            raise ValueError("Invalid switch binding")
+        if (not isinstance(binding["conversation"], str) or not CONVERSATION_RE.fullmatch(binding["conversation"])
+                or type(binding["agent_pid"]) is not int or binding["agent_pid"] <= 0
+                or not isinstance(binding["agent_start"], str) or not re.fullmatch(r"[0-9]{1,20}", binding["agent_start"])):
             raise ValueError("Invalid switch binding")
         if binding["backend"] != source["agent"] or binding["backend"] not in SWITCHABLE_AGENTS:
             raise ValueError("Invalid switch binding")

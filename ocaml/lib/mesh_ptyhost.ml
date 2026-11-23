@@ -442,7 +442,7 @@ let session_json ?(relaunch = true) s =
            ([ `String "agent_wake_v1"; `String "human_input_lease_v1";
               `String "acknowledged_input_v1";
               `String "acknowledged_input_v2" ]
-          @ if relaunch then [ `String "agent_relaunch_v1" ] else []) );
+          @ if relaunch then [ `String "agent_relaunch_v1"; `String "agent_relaunch_bound_v1" ] else []) );
     ]
 
 (* A dirty human-input lease defers agent wakes. Its client may never come
@@ -610,10 +610,18 @@ let read_table check =
    attachments (Mesh_pty_agent_stop). On success the session is a new
    incarnation: [created] moves on, and one command may be started again
    ([start_if], which may then replace [meta]). Nothing is started here. *)
-let stop_agent env s agent =
+let stop_agent env s agent expected =
   let runs_agent found = runs_agent found agent in
   match
-    read_table (Mesh_pty_agent_stop.classify ~runs_agent ~leader:s.pid)
+    read_table (fun table ->
+        let classified = Mesh_pty_agent_stop.classify ~runs_agent ~leader:s.pid table in
+        match expected, classified with
+        | None, _ -> classified
+        | Some (pid, incarnation), Mesh_pty_agent_stop.Running group
+          when List.exists (fun (p : Mesh_platform.process) ->
+              p.pid = pid && p.incarnation = incarnation && p.pgrp = group
+              && p.sid = s.pid && p.state <> 'Z' && runs_agent p) table -> classified
+        | Some _, _ -> Mesh_pty_agent_stop.Refused "agent_changed")
   with
   | None -> agent_refusal "process_scan_failed"
   | Some (Mesh_pty_agent_stop.Refused reason) -> agent_refusal reason
@@ -1058,7 +1066,18 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
         let keys = List.sort String.compare (List.map fst fields) in
         if keys <> [ "agent"; "created"; "name"; "op" ]
            && keys <> [ "agent"; "created"; "fence_id"; "name"; "op" ]
+           && keys <> [ "agent"; "agent_incarnation"; "agent_pid"; "created"; "name"; "op" ]
+           && keys <> [ "agent"; "agent_incarnation"; "agent_pid"; "created"; "fence_id"; "name"; "op" ]
         then invalid_arg "keys";
+        let expected =
+          match get "agent_pid", get "agent_incarnation" with
+          | None, None -> None
+          | Some (`Int pid), Some (`String incarnation) when pid > 0 ->
+              (match Int64.of_string_opt incarnation with
+               | Some value when value > 0L -> Some (pid, value)
+               | _ -> invalid_arg "agent_incarnation")
+          | _ -> invalid_arg "agent_pid"
+        in
         let fence_id =
           match get "fence_id" with
           | None -> None
@@ -1088,7 +1107,7 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                 s.agent_stopping <- true;
                 Fun.protect
                   ~finally:(fun () -> s.agent_stopping <- false)
-                  (fun () -> stop_agent env s agent)
+                  (fun () -> stop_agent env s agent expected)
             | _ -> agent_refusal "stale_incarnation")
         | _ -> invalid_arg "name")
     | Some (`String "start_if") -> (

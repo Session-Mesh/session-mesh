@@ -54,7 +54,8 @@ def test_actual_process_home_is_observed():
 
 def test_server_binds_default_to_observed_agent(monkeypatch):
     observed = {"type": "codex", "pid": 42, "foreground": True}
-    selected = accountswitch.default_context("codex", {"HOME": "/tmp/alice"})
+    selected = {**accountswitch.default_context("codex", {"HOME": "/tmp/alice"}),
+                "process_pid": 42, "process_start": "1234"}
     monkeypatch.setattr(accountswitch, "process_default_context", lambda kind, pid: selected)
     context = asyncio.run(server._switch_profile_context("default", "codex", observed_agent=observed))
     assert context["env"] == {"CODEX_HOME": "/tmp/alice/.codex"}
@@ -65,11 +66,12 @@ def test_server_binds_default_to_observed_agent(monkeypatch):
         asyncio.run(server._switch_profile_context("default", "codex", observed_agent={**observed, "foreground": False}))
 
 
-@pytest.mark.parametrize("fail_carry", [False, True])
-def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, fail_carry):
-    source_context = {"id": "default", "env": {"CODEX_HOME": "/tmp/source"}, "context_revision": "a" * 64}
+@pytest.mark.parametrize("scenario", ["success", "carry_failure", "target_changed", "source_changed"])
+def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, scenario):
+    source_context = {"id": "default", "env": {"CODEX_HOME": "/tmp/source"}, "context_revision": "a" * 64,
+                      "process_pid": 123, "process_start": "456"}
     target_context = {"id": "work", "env": {"CODEX_HOME": "/tmp/target"}, "context_revision": "b" * 64}
-    source = {"name": "session", "created": 1, "meta": {}}
+    source = {"name": "session", "created": 1, "meta": {}, "pty_capabilities": ["agent_relaunch_bound_v1"]}
     events = []
 
     async def validate(*_args):
@@ -87,18 +89,27 @@ def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, f
 
     async def carry():
         events.append("carry")
-        if fail_carry:
+        if scenario == "carry_failure":
             raise server.AccountsUnavailable("failed", "carry_failed")
 
     async def context(*_args):
         events.append("target-check")
+        if scenario == "target_changed":
+            raise web.HTTPConflict(text="changed")
         return target_context
 
     async def start(*_args, context=None):
         events.append(("start", context["id"], context["env"]["CODEX_HOME"]))
 
     monkeypatch.setattr(server, "_validate_native_switch", validate)
-    monkeypatch.setattr(server, "_switch_root_identity", lambda context: context["id"])
+    identities = {"default": 0, "work": 0}
+
+    def identity(context):
+        key = context["id"]
+        identities[key] += 1
+        return "replaced" if scenario == "source_changed" and key == "default" and identities[key] > 1 else key
+
+    monkeypatch.setattr(server, "_switch_root_identity", identity)
     monkeypatch.setattr(server, "_prepared_launch", prepared)
     monkeypatch.setattr(server, "_arrangement_of", arrangement)
     monkeypatch.setattr(server, "_carry_arrangement", arrangement)
@@ -106,10 +117,39 @@ def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, f
     monkeypatch.setattr(server, "_switch_profile_context", context)
     monkeypatch.setattr(server, "_start_in_place", start)
     switch = ("work", carry, source_context, target_context)
-    if fail_carry:
+    if scenario == "source_changed":
+        with pytest.raises(web.HTTPServiceUnavailable):
+            asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
+        assert events == ["validate", "stop"]
+    elif scenario != "success":
         with pytest.raises(server.AccountSwitchUndone):
             asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
-        assert events == ["validate", "stop", "carry", ("start", "default", "/tmp/source")]
+        assert events == ["validate", "stop", "carry", *(["target-check"] if scenario == "target_changed" else []),
+                          ("start", "default", "/tmp/source")]
     else:
         assert asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch)) == "session"
         assert events == ["validate", "stop", "carry", "target-check", ("start", "work", "/tmp/target")]
+
+
+def test_approval_refuses_another_conversation(monkeypatch):
+    monkeypatch.setattr(server, "_native_profile_mode", lambda: True)
+    item = {"source": {"agent": "codex"}, "from_account": "default", "account": "work",
+            "switch_binding": {"backend": "codex", "conversation": "12345678-abcd", "agent_pid": 10,
+                "agent_start": "1", "source": {"id": "default", "context_revision": "a" * 64},
+                "target": {"id": "work", "context_revision": "b" * 64}}}
+    with pytest.raises(web.HTTPConflict) as error:
+        asyncio.run(server._switch_session(item, {"meta": {}}, "87654321-abcd", ["codex"]))
+    assert "Conversation changed" in error.value.text
+
+
+def test_named_source_home_must_match_process(monkeypatch):
+    selected = {"root": "/tmp/other", "process_pid": 42, "process_start": "1234"}
+    monkeypatch.setattr(accountswitch, "process_default_context", lambda *_args: selected)
+
+    async def launch(*_args):
+        return {"roots": {"config": "/tmp/work"}, "context_revision": "a" * 64}
+
+    monkeypatch.setattr(server, "_profile_launch_context", launch)
+    with pytest.raises(web.HTTPConflict):
+        asyncio.run(server._switch_profile_context("work", "codex", "a" * 64,
+                     {"type": "codex", "pid": 42, "foreground": True}))

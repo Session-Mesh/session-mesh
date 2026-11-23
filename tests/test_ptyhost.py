@@ -96,7 +96,7 @@ async def test_new_list_kill(daemon):  # noqa: F811
     assert {"created", "activity", "meta"} <= set(info)
     assert info["pty_capabilities"] == ["agent_wake_v1", "human_input_lease_v1",
                                        "acknowledged_input_v1", "acknowledged_input_v2",
-                                       "agent_relaunch_v1"]
+                                       "agent_relaunch_v1", "agent_relaunch_bound_v1"]
     assert await daemon.request({"op": "kill", "name": "alpha"}) == {"ok": True}
     await wait_until_gone(daemon, "alpha")
 

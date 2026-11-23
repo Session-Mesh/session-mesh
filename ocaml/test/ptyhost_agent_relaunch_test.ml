@@ -950,6 +950,18 @@ let refusals_signal_nothing () =
       expect "no meta on an incarnation whose agent was not stopped"
         (member "ok" (start_again fixture created) = `Bool false))
 
+let bound_agent_refusal_signals_nothing () =
+  with_host (fun fixture ->
+      let session = new_agent fixture in
+      let created = member "created" session in
+      let agent = List.hd (agent_pids fixture) in
+      let reply = send fixture [ ("op", `String "stop_agent_if"); ("name", `String "relaunch");
+        ("created", created); ("agent", `String "claude");
+        ("agent_pid", `Int agent); ("agent_incarnation", `String "1") ] in
+      expect "mismatched process incarnation refused" (member "reason" reply = `String "agent_changed");
+      expect "the agent still runs" (alive agent);
+      expect "session incarnation unchanged" (member "created" (the_session fixture) = created))
+
 (* A shell without job control runs the agent in its own group: only a stop
    of the whole session could reach it, so nothing is signalled. *)
 let no_job_control_signals_nothing () =
@@ -1154,6 +1166,8 @@ let () =
             stubborn_agent_is_killed;
           Alcotest.test_case "refusals signal nothing" `Slow
             refusals_signal_nothing;
+          Alcotest.test_case "bound agent mismatch signals nothing" `Slow
+            bound_agent_refusal_signals_nothing;
           Alcotest.test_case "a shell without job control: nothing signalled"
             `Slow no_job_control_signals_nothing;
           Alcotest.test_case "a half-typed line is erased before the launch"
