@@ -408,6 +408,7 @@ test('binary notices keep filenames containing deletion-like and separator text'
   for (const [header, notice] of [
     ['diff --git dir and /dev/null dir and /dev/null', 'Binary files dir and /dev/null and dir and /dev/null differ'],
     ['diff --git x and ', 'Binary files x and and  differ'],
+    ['diff --git /dev/null and x dest', 'Binary files /dev/null and x and dest differ'],
   ]) {
     assert.equal(parseUnifiedDiff(`${header}\n${notice}\n`).files[0]?.binary, true);
   }

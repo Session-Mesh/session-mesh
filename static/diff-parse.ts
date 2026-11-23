@@ -156,8 +156,8 @@ function binaryNotice(line: string, gitLine: string): boolean {
   const nullFrom = '/dev/null and ', nullTo = ' and /dev/null';
   if (names.startsWith(nullFrom)) {
     const target = names.slice(nullFrom.length);
-    return target !== '/dev/null' && validExtendedPath(target) && headerNames.endsWith(` ${target}`) &&
-      validExtendedPath(headerNames.slice(0, -target.length - 1));
+    if (target !== '/dev/null' && validExtendedPath(target) && headerNames.endsWith(` ${target}`) &&
+      validExtendedPath(headerNames.slice(0, -target.length - 1))) return true;
   }
   if (names.endsWith(nullTo)) {
     const source = names.slice(0, -nullTo.length);
