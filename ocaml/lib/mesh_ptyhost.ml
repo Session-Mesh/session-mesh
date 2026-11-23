@@ -641,7 +641,17 @@ let stop_agent env s agent expected =
       let signal signum =
         Option.iter
           (fun group ->
-            if s.alive then
+            (* The process may still exit or the group change between this
+               observation and kill(2); this check is not an atomic group signal. *)
+            let bound =
+              match expected with
+              | None -> true
+              | Some (pid, incarnation) ->
+                  read_table (List.exists (fun (p : Mesh_platform.process) ->
+                      p.pid = pid && p.incarnation = incarnation && p.pgrp = group
+                      && p.sid = s.pid && p.state <> 'Z' && runs_agent p)) = Some true
+            in
+            if s.alive && bound then
               try Unix.kill (-group) signum with Unix.Unix_error _ -> ())
           group
       in

@@ -826,6 +826,9 @@ async def _validate_native_switch(source, kind, source_context, target_context):
     observed = (entry or {}).get("agent") or {}
     if observed.get("type") != kind or observed.get("foreground") is not True:
         raise web.HTTPConflict(text="Foreground agent changed; nothing was stopped")
+    identity = {"id": source["name"], "created": source["created"], "agent": kind}
+    if _switch_conversation(described, identity) != source_context["conversation"]:
+        raise web.HTTPConflict(text="Conversation changed since the request; nothing was stopped")
     actual = await _switch_profile_context(source_context["id"], kind, source_context["context_revision"], observed)
     if (actual["process_pid"], actual["process_start"]) != (source_context["process_pid"], source_context["process_start"]):
         raise web.HTTPConflict(text="Foreground agent changed; nothing was stopped")
@@ -4918,6 +4921,8 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
         raise web.HTTPConflict(text="The session's account changed since the request")
 
     native = _native_profile_mode()
+    if native and not NATIVE_SWITCH_QUALIFIED:
+        raise web.HTTPConflict(text="Native profile switching is not qualified")
     source_context = target_context = None
     if native:
         binding = item.get("switch_binding")
@@ -4932,6 +4937,7 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
                                                        binding["source"]["context_revision"], observed_agent or {})
         if (source_context["process_pid"], source_context["process_start"]) != (binding["agent_pid"], binding["agent_start"]):
             raise web.HTTPConflict(text="Foreground agent changed since the request; nothing was stopped")
+        source_context["conversation"] = binding["conversation"]
         target_context = await _switch_profile_context(item["account"], kind,
                                                        binding["target"]["context_revision"])
         _, _, data, pattern = _conversation_layout(kind, conversation)

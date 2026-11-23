@@ -133,6 +133,7 @@ def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, s
 
 def test_approval_refuses_another_conversation(monkeypatch):
     monkeypatch.setattr(server, "_native_profile_mode", lambda: True)
+    monkeypatch.setattr(server, "NATIVE_SWITCH_QUALIFIED", True)
     item = {"source": {"agent": "codex"}, "from_account": "default", "account": "work",
             "switch_binding": {"backend": "codex", "conversation": "12345678-abcd", "agent_pid": 10,
                 "agent_start": "1", "source": {"id": "default", "context_revision": "a" * 64},
@@ -153,3 +154,14 @@ def test_named_source_home_must_match_process(monkeypatch):
     with pytest.raises(web.HTTPConflict):
         asyncio.run(server._switch_profile_context("work", "codex", "a" * 64,
                      {"type": "codex", "pid": 42, "foreground": True}))
+
+
+def test_last_check_refuses_changed_conversation(monkeypatch):
+    raw = {"name": "session", "created": 1}
+    observed = {"type": "codex", "pid": 42, "foreground": True}
+    monkeypatch.setattr(server, "_describe_with_hooks", lambda _items: {
+        "mesh": [{"id": "session", "created": 1, "agent": observed}]})
+    monkeypatch.setattr(server, "_switch_conversation", lambda *_args: "another-conversation")
+    with pytest.raises(web.HTTPConflict) as error:
+        asyncio.run(server._validate_native_switch(raw, "codex", {"conversation": "original"}, {}))
+    assert "Conversation changed" in error.value.text
