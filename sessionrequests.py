@@ -31,6 +31,7 @@ NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,48}")
 TAB_NONCE_RE = re.compile(r"[0-9a-f]{32}")
 # An account alias id (server.ACCOUNT_ID_RE) or "default", the default account.
 ACCOUNT_RE = re.compile(r"[a-z0-9-]{1,32}")
+CONTEXT_REVISION_RE = re.compile(r"[0-9a-f]{64}")
 # The agents whose conversation Mesh can carry to another account (mesh-platform accounts carry).
 SWITCHABLE_AGENTS = frozenset(("claude", "codex"))
 # Presets an agent may never request: a session without approvals or sandbox
@@ -169,7 +170,7 @@ class Requests:
                 """)
                 # A database written before account switching: the two columns are added, empty.
                 columns = {row[1] for row in self._db.execute("PRAGMA table_info(session_requests)")}
-                for column in ("account", "from_account"):
+                for column in ("account", "from_account", "switch_binding_json"):
                     if column not in columns:
                         self._db.execute(f"ALTER TABLE session_requests ADD COLUMN {column} TEXT")
             finally:
@@ -258,7 +259,7 @@ class Requests:
     def _row(cls, row):
         if row is None:
             return None
-        return {
+        item = {
             "id": row["id"], "action": row["action"],
             "source": cls._decode(row["source_json"]), "preset": row["preset"],
             "name": row["requested_name"], "model": row["model"],
@@ -269,6 +270,11 @@ class Requests:
             # owner inventory/status projection.
             "lease_expires_at": row["claim_expires_at"],
         }
+        # Internal execution evidence, never accepted from an agent's body.
+        # Legacy rows retain their original shape and public projection.
+        if row["switch_binding_json"] is not None:
+            item["switch_binding"] = cls._decode(row["switch_binding_json"])
+        return item
 
     @staticmethod
     def public(item):
@@ -293,7 +299,22 @@ class Requests:
             raise ValueError("This session already runs under this account")
         return account, current_account
 
-    def create(self, source, body, *, enabled_agents, resumable, current_account=None):
+    @staticmethod
+    def _switch_binding(binding, source, from_account, account):
+        """Validate a server-observed native pair; storing it grants no authority."""
+        if not isinstance(binding, dict) or set(binding) != {"backend", "source", "target"}:
+            raise ValueError("Invalid switch binding")
+        if binding["backend"] != source["agent"] or binding["backend"] not in SWITCHABLE_AGENTS:
+            raise ValueError("Invalid switch binding")
+        for key, expected in (("source", from_account), ("target", account)):
+            part = binding[key]
+            if (not isinstance(part, dict) or set(part) != {"id", "context_revision"}
+                    or part["id"] != expected or not isinstance(part["context_revision"], str)
+                    or not CONTEXT_REVISION_RE.fullmatch(part["context_revision"])):
+                raise ValueError("Invalid switch binding")
+        return binding
+
+    def create(self, source, body, *, enabled_agents, resumable, current_account=None, switch_binding=None):
         if not isinstance(body, dict) or set(body) - {"action", "preset", "name", "model", "account"}:
             raise ValueError("Invalid request fields")
         action = body.get("action")
@@ -302,8 +323,12 @@ class Requests:
         account = from_account = None
         if action == "switch_account":
             account, from_account = self._switch(source, body, current_account, resumable)
+            if switch_binding is not None:
+                switch_binding = self._switch_binding(switch_binding, source, from_account, account)
         elif "account" in body:
             raise ValueError("Only an account switch names an account")
+        elif switch_binding is not None:
+            raise ValueError("Only an account switch has a binding")
         model = self._optional_model(body.get("model"))
         if action == "switch_account":
             preset, name = source["agent"], None
@@ -343,9 +368,10 @@ class Requests:
                 raise ValueError("Too many active requests for this session")
             self._db.execute(
                 "INSERT INTO session_requests "
-                "(id, action, source_json, preset, requested_name, model, account, from_account, state, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-                (request_id, action, source_json, preset, name, model, account, from_account, now))
+                "(id, action, source_json, preset, requested_name, model, account, from_account, "
+                "switch_binding_json, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (request_id, action, source_json, preset, name, model, account, from_account,
+                 self._encode(switch_binding) if switch_binding is not None else None, now))
             row = self._db.execute("SELECT * FROM session_requests WHERE id = ?",
                                    (request_id,)).fetchone()
         return self._row(row)
