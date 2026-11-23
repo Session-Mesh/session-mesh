@@ -79,10 +79,10 @@ after(() => { assert.deepEqual(errors, [], 'no error in the pages'); });
 declare let pendingWorkTarget: unknown;
 declare function setProjects(on: boolean): void;
 
-async function signIn(): Promise<Page> {
-  const page = await mesh.signIn({ width: 1440, height: 900 }, undefined, watched => {
+async function signIn(width = 1440): Promise<Page> {
+  const page = await mesh.signIn({ width, height: width < 600 ? 844 : 900 }, undefined, watched => {
     watched.on('pageerror', error => errors.push(String(error)));
-  });
+  }, { phone: width < 600 });
   page.setDefaultTimeout(120_000);
   return page;
 }
@@ -192,8 +192,8 @@ describe('the sheets opened from the entry screen', { skip }, () => {
     await page.evaluate(id => { pendingWorkTarget = { kind: 'task', id }; setProjects(true); }, LONE);
     await loneShown(page);
     await page.locator('.work-refresh').click();
-    await page.locator('.work-entry-questions h2 .work-count').waitFor();
-    assert.equal(await page.locator('.work-project-head').count(), 0, 'Refresh shows the entry screen, not the project left');
+    await loneShown(page);
+    assert.equal(await page.locator('.work-project-head').count(), 0, 'Refresh retains the task sheet, not the project left');
     await page.context().close();
   });
 
@@ -249,6 +249,45 @@ describe('the sheets opened from the entry screen', { skip }, () => {
     await card(page, Q_FAIL).locator('.work-answer-verified').waitFor({ timeout: 60_000 });
     assert.equal(await page.locator('.work-qsheet-reread').count(), 0);
     assert.equal(await field(page, Q_OTHER).inputValue(), DRAFT_OTHER, 'the other draft survives the redraw');
+    await page.context().close();
+  });
+  for (const width of [1440, 390]) test(`refresh restores a question beyond the first page and retains its draft on an unavailable lookup at ${width}px`, { timeout: 120_000 }, async () => {
+    const events = path.join(scratch, 'tracker', 'events', '2026-11.hosts.jsonl');
+    const others = Array.from({ length: 25 }, (_, index) => {
+      const id = `N-${((width === 1440 ? 0xe100 : 0xe200) + index).toString(16).padStart(8, '0')}`;
+      return asked('2026-11-08T10:10:00Z', id, id);
+    });
+    const id = width === 1440 ? 'N-0000e1ff' : 'N-0000e2ff', draft = 'draft on a later page';
+    fs.appendFileSync(events, [...others, asked('2026-11-08T10:11:00Z', id, id)].map(item => JSON.stringify(item)).join('\n') + '\n');
+    const page = await signIn(width);
+    if (width < 600) {
+      await page.locator('#btn-mobile-actions').click();
+      await page.locator('[data-mobile-action="btn-projects"]').click();
+      await page.locator('.work-entry-questions h2 .work-count').waitFor();
+    } else await toEntry(page);
+    const toggle = page.locator('.work-qsection-toggle');
+    if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+    while (await page.locator(`.work-qrow[data-question-id="${id}"]`).count() === 0) {
+      const previous = await page.locator('.work-qrow').count();
+      await page.locator('.work-qmore-button').click();
+      await page.waitForFunction(count => document.querySelectorAll('.work-qrow').length > count, previous, { timeout: 10_000 });
+    }
+    await openRow(page, id);
+    await field(page, id).fill(draft);
+    await page.locator('.work-refresh').click();
+    await fieldHolds(page, id, draft);
+    await page.route('**/api/work/v1', async route => {
+      const request = JSON.parse(route.request().postData() ?? '{}');
+      if (request.op === 'open-questions' && request.args?.limit === 100)
+        return route.fulfill({ status: 503, contentType: 'application/json', body: '{}' });
+      await route.continue();
+    });
+    await page.locator('.work-refresh').click();
+    await page.locator('.work-qsheet .work-sheet-refresh-status').waitFor();
+    await storedHolds(page, draft);
+    await page.unroute('**/api/work/v1');
+    await page.locator('.work-refresh').click();
+    await fieldHolds(page, id, draft);
     await page.context().close();
   });
 });

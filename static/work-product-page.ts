@@ -50,7 +50,13 @@ export type ProductView = Omit<SheetView, 'current'> & Readonly<{
   activate: (key: ProductTab, focus: boolean) => void;
   /** Settles once the tab shown first is drawn (for Board and Timeline, once the document is read or failed). */
   ready: Promise<void>;
+  snapshot: () => string | null;
+  replaceDoc: (doc: ProductDoc) => void;
 }>;
+
+/** Maps carry task status and tags, so include their entries in change detection. */
+export const productSnapshot = (doc: ProductDoc): string => JSON.stringify(doc, (_key, value: unknown) =>
+  value instanceof Map ? [...value.entries()] : value);
 
 type Tabs = Readonly<{ list: HTMLElement; buttons: Map<ProductTab, HTMLButtonElement>; panels: Map<ProductTab, HTMLElement> }>;
 
@@ -77,10 +83,38 @@ class TaskTabs {
   private readonly folded = new Set<string>();
   /** The task tabs drawn for the filters in force: shown again as they are ("Show more" pages kept). */
   private readonly drawn = new Set<'board' | 'frise'>();
+  private readonly shown = { board: new Map<string, number>(), frise: new Map<string, number>() };
   readonly barSlot = el('div', 'work-filter-slot');
 
   constructor(private readonly options: ProductPageOptions, private filters: Filters,
     private readonly panels: Map<ProductTab, HTMLElement>, private readonly shownTab: () => ProductTab) {}
+
+  snapshot(): string | null { return this.doc ? productSnapshot(this.doc) : null; }
+
+  replaceDoc(next: ProductDoc): void {
+    const current = this.taskTab();
+    for (const key of ['board', 'frise'] as const) {
+      if (!this.drawn.has(key)) continue;
+      const panel = this.panels.get(key)!, shown = this.shown[key];
+      shown.clear();
+      if (key === 'board') {
+        for (const columnKey of ['todo', 'inProgress', 'blocked', 'done', 'other']) {
+          const column = panel.querySelector(`.work-column-${columnKey}`);
+          if (column) shown.set(columnKey, column.querySelectorAll('.work-card').length);
+        }
+      } else {
+        for (const group of panel.querySelectorAll<HTMLElement>('.work-pfrise-group')) {
+          if (group.dataset.project !== undefined) shown.set(group.dataset.project, group.querySelectorAll('.work-frise-label').length);
+        }
+      }
+    }
+    this.doc = next;
+    this.bar = renderFilterBar(this.options.ctx, next, this.filters, filters => this.filtered(filters));
+    this.barSlot.replaceChildren(this.bar.root);
+    this.drawn.clear();
+    this.draw(current);
+    this.panels.get(current === 'board' ? 'frise' : 'board')!.replaceChildren();
+  }
 
   /** Draw a task tab, reading the document first when it is not read yet. */
   show(key: 'board' | 'frise'): Promise<void> {
@@ -116,11 +150,11 @@ class TaskTabs {
     this.panels.get(this.taskTab() === 'board' ? 'frise' : 'board')!.replaceChildren();   // drawn again when shown
   }
 
-  private draw(key: 'board' | 'frise'): void {
+  private draw(key: 'board' | 'frise', shown: ReadonlyMap<string, number> = this.shown[key]): void {
     const doc = this.doc;
     if (!doc) return;
     const { ctx } = this.options;
-    const body = key === 'board' ? renderProductBoard(ctx, doc, this.filters) : renderProductFrise(ctx, doc, this.filters, this.folded);
+    const body = key === 'board' ? renderProductBoard(ctx, doc, this.filters, shown) : renderProductFrise(ctx, doc, this.filters, this.folded, shown);
     this.panels.get(key)!.replaceChildren(...[partialNotice(ctx, doc), body].filter((node): node is HTMLElement => node !== null));
     this.drawn.add(key);
     this.bar?.shown(filterTasks(doc, this.filters).length, doc.tasks.length);
@@ -166,6 +200,7 @@ export function renderProductPage(options: ProductPageOptions): ProductView {
   root.setAttribute('data-product', node.product.id);
   const ready = activate(options.tab, false);
   return { root, id: node.product.id, title: node.product.id, detailSlot, ready, current: () => currentKey,
+    snapshot: () => tasks.snapshot(), replaceDoc: doc => tasks.replaceDoc(doc),
     currentPanel: () => tabs.panels.get(currentKey)!, activate: (key, focus) => void activate(key, focus),
     showDetail: open => { detailSlot.hidden = !open; split.classList.toggle('detail-open', open); } };
 }

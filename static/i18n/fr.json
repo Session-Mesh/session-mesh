@@ -1982,6 +1982,8 @@
   "terminal.reference.project": "Projet {id} : {title}",
   "terminal.reference.question": "Question {id} : {title}",
   "work.refresh": "Actualiser",
+  "work.autoRefreshUnavailable": "Actualisation indisponible. Réessayez avec Actualiser.",
+  "work.sheetUpdatesPending": "Mise à jour disponible. Terminez votre saisie et quittez les commandes de la tâche pour l’afficher.",
   "work.reprise.blocked": "Bloquées ou en attente",
   "work.reprise.due": "Échéance proche",
   "work.reprise.empty": "Rien à reprendre : aucune tâche en cours, bloquée, proche de son échéance ou inactive.",

@@ -148,6 +148,10 @@ prepare_scratch
 build_native_host
 frontend_checks
 node_tests
+# These slow polling scenarios use their own fixture so the general browser suite remains isolated.
+MESH_ENTRY_REFRESH_TEST=1 MESH_REQUIRE_BROWSER=1 MESH_REQUIRE_WORK_READ=1 MESH_PYTHON="$PY" \
+  node --experimental-strip-types --test --test-name-pattern='entry task refresh preserves|isolated question disappearance' \
+  tests/work-view-state-browser.test.ts
 "$PY" -m ruff check .
 "$PY" -m pytest -q "$@"
 ptyhost_gate

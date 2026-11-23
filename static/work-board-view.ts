@@ -14,22 +14,22 @@ const OMITTED_NAME: Readonly<Record<ColumnKey, string>> = { todo: 'todo', inProg
 
 /** How a column shows its cards: at most `limit` at first, then as many more per "Show more"; `extra` adds a line
  *  to a card (the project of a task on a product's board). */
-export type ColumnOptions = Readonly<{ limit?: number; extra?: (row: TaskRow) => HTMLElement | null }>;
+export type ColumnOptions = Readonly<{ limit?: number; initial?: number; extra?: (row: TaskRow) => HTMLElement | null }>;
 
 function cards(ctx: ViewContext, list: HTMLElement, rows: readonly TaskRow[], options: ColumnOptions): void {
   const step = options.limit ?? rows.length;
-  const more = (from: number): void => {
-    for (const row of rows.slice(from, from + step)) list.append(taskCard(ctx, row, options.extra?.(row) ?? undefined));
-    if (from + step >= rows.length) return;
-    const left = rows.length - from - step;
+  const more = (from: number, amount = step): void => {
+    for (const row of rows.slice(from, from + amount)) list.append(taskCard(ctx, row, options.extra?.(row) ?? undefined));
+    if (from + amount >= rows.length) return;
+    const left = rows.length - from - amount;
     const showMore = button('btn work-more', ctx.t('work.product.showMore', { n: Math.min(step, left) }), () => {
       showMore.remove();
-      more(from + step);
-      focusFirst(list.querySelectorAll<HTMLElement>('.work-card')[from + step] ?? null);
+      more(from + amount);
+      focusFirst(list.querySelectorAll<HTMLElement>('.work-card')[from + amount] ?? null);
     });
     list.append(showMore);
   };
-  more(0);
+  more(0, options.initial ?? step);
 }
 
 /** A column: its name and counter (`count`, by default the cards and the missing ones), its cards, a note of the

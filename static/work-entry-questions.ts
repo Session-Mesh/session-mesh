@@ -97,16 +97,19 @@ export class EntryQuestions {
   /** Read the open questions again (or take the read `pending`) and redraw them in place. Focus goes to the block after
    *  a retry (`focus`); otherwise a focus that was in the block stays on the same control of the new one (the way in of
    *  the same question, else the section's line). */
-  async reread(focus = true, pending?: Promise<WorkResult<OpenQuestionsDoc>>, passive = false): Promise<void> {
+  async reread(focus = true, pending?: Promise<WorkResult<OpenQuestionsDoc>>, passive = false, report = true,
+    accept: () => boolean = () => true): Promise<boolean> {
+    if (passive && this.reads > 0) return false;
     const token = this.host.generation(), sequence = ++this.sequence;
     this.reads++;
     const result = await (pending ?? this.host.api.openQuestions(this.host.signal(), { limit: this.shownLimit() }))
       .finally(() => { this.reads--; });
     const node = this.node;
-    if (token !== this.host.generation() || sequence !== this.sequence || this.host.away() || !node) return;
-    this.host.report(result);
+    if (token !== this.host.generation() || sequence !== this.sequence || this.host.away() || !node || !accept()) return false;
+    if (passive && result.ok && this.state.kind === 'ready' && JSON.stringify(result.value) === JSON.stringify(this.state.doc)) return true;
     // A read the owner did not ask for never redraws under the focus (a row being read): it waits for the focus to leave.
-    if (passive && document.activeElement && node.contains(document.activeElement)) return this.whenLeft(node);
+    if (passive && document.activeElement && node.contains(document.activeElement)) { this.whenLeft(node); return false; }
+    if (report) this.host.report(result);
     const kept = focusIn(node);
     this.state = this.next(result);
     const next = this.host.render(this.state);
@@ -115,6 +118,7 @@ export class EntryQuestions {
     const toggle = next.querySelector<HTMLElement>('.work-qsection-toggle');
     if (focus) focusFirst(toggle ?? next.querySelector<HTMLElement>('h2'));
     else if (kept !== null) focusFirst((kept ? opener(next, kept) : null) ?? toggle ?? next.querySelector<HTMLElement>('h2'));
+    return true;
   }
 
   /** As many questions as the list shows (pages read with "Show more" stay shown), at least one page. The view reads as
