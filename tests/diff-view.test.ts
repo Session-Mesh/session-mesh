@@ -403,3 +403,19 @@ test('a long malformed binary notice is handled in bounded time', () => {
   assert.ok(performance.now() - started < 3000, 'parsing should not repeatedly scan the malformed name');
   assert.equal(file?.binary, false);
 });
+
+test('binary notices keep filenames containing deletion-like and separator text', () => {
+  for (const [header, notice] of [
+    ['diff --git dir and /dev/null dir and /dev/null', 'Binary files dir and /dev/null and dir and /dev/null differ'],
+    ['diff --git x and ', 'Binary files x and and  differ'],
+  ]) {
+    assert.equal(parseUnifiedDiff(`${header}\n${notice}\n`).files[0]?.binary, true);
+  }
+});
+
+test('rename paths may contain Unicode line separators', () => {
+  for (const separator of ['\u2028', '\u2029']) {
+    const [file] = parseUnifiedDiff(`diff --git a/x b/y${separator}z\nsimilarity index 100%\nrename from x\nrename to y${separator}z\n`).files;
+    assert.equal(file?.newPath, `y${separator}z`);
+  }
+});

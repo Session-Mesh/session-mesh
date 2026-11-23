@@ -161,8 +161,8 @@ function binaryNotice(line: string, gitLine: string): boolean {
   }
   if (names.endsWith(nullTo)) {
     const source = names.slice(0, -nullTo.length);
-    return source !== '/dev/null' && validExtendedPath(source) && headerNames.startsWith(`${source} `) &&
-      validExtendedPath(headerNames.slice(source.length + 1));
+    if (source !== '/dev/null' && validExtendedPath(source) && headerNames.startsWith(`${source} `) &&
+      validExtendedPath(headerNames.slice(source.length + 1))) return true;
   }
   // A quoted first name has an unambiguous end, even when the next name starts with "and ".
   if (headerNames.startsWith('"')) {
@@ -176,18 +176,18 @@ function binaryNotice(line: string, gitLine: string): boolean {
   if (names.length !== headerNames.length + 4) return false;
   let common = 0;
   while (common < headerNames.length && names[common] === headerNames[common]) common += 1;
-  for (let at = Math.max(0, common - 4); at <= common; at += 1) {
+  for (let at = Math.max(0, common - 5); at <= common; at += 1) {
     if (headerNames[at] !== ' ' || names.slice(at, at + 5) !== ' and ') continue;
     if (`${headerNames.slice(0, at)} and ${headerNames.slice(at + 1)}` !== names) continue;
-    return validExtendedPath(headerNames.slice(0, at)) && validExtendedPath(headerNames.slice(at + 1));
+    if (validExtendedPath(headerNames.slice(0, at)) && validExtendedPath(headerNames.slice(at + 1))) return true;
   }
   return false;
 }
 
 /** Git's extended header ends at the first line outside this grammar. */
 function extendedHeader(line: string, gitLine: string): boolean {
-  const path = /^(?:rename|copy) (?:from|to) (.*)$/.exec(line);
-  if (path) return validExtendedPath(path[1] ?? '');
+  const path = /^(?:rename|copy) (?:from|to) /.exec(line);
+  if (path) return validExtendedPath(line.slice(path[0].length));
   return isModeLine(line) || /^(?:similarity|dissimilarity) index (?:100|[1-9]?\d)%$/.test(line)
     || /^index [0-9a-fA-F]+\.\.[0-9a-fA-F]+(?: [0-7]{6})?$/.test(line)
     || binaryNotice(line, gitLine) || line === 'GIT binary patch';
