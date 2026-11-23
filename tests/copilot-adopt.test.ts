@@ -26,7 +26,8 @@ victim = subprocess.Popen(["sleep", "60"])
 # Reaped as soon as it exits, as a real agent is by its own parent. Unreaped, the stopped child stays a
 # zombie: /proc shows it as one on Linux, but outside Linux, with no PTY host here to describe it,
 # server._wait_dead cannot tell it from a live process and gives up.
-threading.Thread(target=victim.wait, daemon=True).start()
+reaper = threading.Thread(target=victim.wait, daemon=True)
+reaper.start()
 async def fake_host(message):
     return [] if message.get("op") == "list" else {"ok": True}
 server.host = fake_host
@@ -40,6 +41,11 @@ async def main():
         outcome = "relaunched"
     except web.HTTPException as refusal:
         outcome = [refusal.status, refusal.text]
+    if outcome == "relaunched":
+        # _wait_dead accepts a zombie before the parent thread has finished reaping it.
+        reaper.join(timeout=2)
+        if reaper.is_alive():
+            raise AssertionError("stopped agent was not reaped")
     alive = victim.poll() is None
     victim.kill()
     victim.wait()
