@@ -19,7 +19,9 @@ let observe observer env event =
 (* One line on stderr: the journal, under systemd. *)
 let log format =
   Printf.ksprintf
-    (fun message -> prerr_endline ("mesh-ptyhost: " ^ message))
+    (fun message ->
+      try prerr_endline ("mesh-ptyhost: " ^ message)
+      with Sys_error _ | Unix.Unix_error _ -> ())
     format
 
 let valid_utf8 ?(maximum = max_int) ?(nul = true) value =
