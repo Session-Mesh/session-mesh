@@ -172,7 +172,16 @@ let lost_identity_is_never_success () =
       ~signal:(fun _ -> incr signals; !signals = 1)
       ~sleep:(fun t -> clock := !clock +. t) ~now:(fun () -> !clock)
       ~stopped:(fun () -> false) in
-  Alcotest.(check bool) "refuse before escalation" true (result = `Identity_changed)
+  Alcotest.(check bool) "report uncertain after first signal" true (result = `Identity_changed_after_signal)
+
+let bound_foreground () =
+  let agent = process ~tpgid:200 ~pid:200 ~pgrp:200 "claude" in
+  let matches table = Stop.bound_foreground ~runs_agent:runs_claude ~leader:100
+      ~group:200 ~pid:200 ~incarnation:1L table in
+  Alcotest.(check bool) "matching foreground" true (matches [shell ~tpgid:200 (); agent]);
+  Alcotest.(check bool) "changed foreground is refused" false (matches [shell ~tpgid:300 (); agent]);
+  Alcotest.(check bool) "reused pid is refused" false
+    (matches [shell ~tpgid:200 (); {agent with incarnation = 2L}])
 
 let () =
   Alcotest.run "pty_agent_stop"
@@ -184,5 +193,6 @@ let () =
           Alcotest.test_case "SIGHUP, then SIGKILL, then give up" `Quick
             escalation;
           Alcotest.test_case "lost identity cannot become stopped" `Quick lost_identity_is_never_success;
+          Alcotest.test_case "bound agent must remain foreground" `Quick bound_foreground;
         ] );
     ]

@@ -69,7 +69,7 @@ def test_server_binds_default_to_observed_agent(monkeypatch):
         asyncio.run(server._switch_profile_context("default", "codex", observed_agent={**observed, "foreground": False}))
 
 
-@pytest.mark.parametrize("scenario", ["success", "carry_failure", "target_changed", "source_changed"])
+@pytest.mark.parametrize("scenario", ["success", "carry_failure", "target_changed", "source_changed", "target_changed_during_launch"])
 def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, scenario):
     source_context = {"id": "default", "env": {"CODEX_HOME": "/tmp/source"}, "context_revision": "a" * 64,
                       "process_pid": 123, "process_start": "456"}
@@ -101,8 +101,10 @@ def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, s
             raise web.HTTPConflict(text="changed")
         return target_context
 
-    async def start(*_args, context=None):
+    async def start(*_args, context=None, expected_identity=None):
         events.append(("start", context["id"], context["env"]["CODEX_HOME"]))
+        if scenario == "target_changed_during_launch" and context["id"] == "work":
+            raise server.AccountContextChanged()
 
     monkeypatch.setattr(server, "_validate_native_switch", validate)
     identities = {"default": 0, "work": 0}
@@ -127,7 +129,8 @@ def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, s
     elif scenario != "success":
         with pytest.raises(server.AccountSwitchUndone):
             asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
-        assert events == ["validate", "stop", "carry", *(["target-check"] if scenario == "target_changed" else []),
+        assert events == ["validate", "stop", "carry", *(["target-check"] if scenario in ("target_changed", "target_changed_during_launch") else []),
+                          *([("start", "work", "/tmp/target")] if scenario == "target_changed_during_launch" else []),
                           ("start", "default", "/tmp/source")]
     else:
         assert asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch)) == "session"
@@ -144,6 +147,15 @@ def test_approval_refuses_another_conversation(monkeypatch):
     with pytest.raises(web.HTTPConflict) as error:
         asyncio.run(server._switch_session(item, {"meta": {}}, "87654321-abcd", ["codex"]))
     assert "Conversation changed" in error.value.text
+
+
+def test_partial_stop_is_reported_as_uncertain(monkeypatch):
+    async def host(*_args, **_kwargs):
+        return {"ok": False, "reason": "agent_stop_uncertain"}
+    monkeypatch.setattr(server, "host", host)
+    with pytest.raises(web.HTTPServiceUnavailable) as error:
+        asyncio.run(server._stop_agent({"name": "session", "created": 1}, "codex"))
+    assert "uncertain" in error.value.text
 
 
 def test_named_source_home_must_match_process(monkeypatch):

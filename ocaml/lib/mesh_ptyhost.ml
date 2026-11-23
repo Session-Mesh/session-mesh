@@ -648,9 +648,8 @@ let stop_agent env s agent expected =
               match expected with
               | None -> true
               | Some (pid, incarnation) ->
-                  read_table (List.exists (fun (p : Mesh_platform.process) ->
-                      p.pid = pid && p.incarnation = incarnation && p.pgrp = group
-                      && p.sid = s.pid && p.state <> 'Z' && runs_agent p)) = Some true
+                  read_table (Mesh_pty_agent_stop.bound_foreground ~runs_agent
+                                ~leader:s.pid ~group ~pid ~incarnation) = Some true
             in
             if not s.alive || not bound then false
             else try Unix.kill (-group) signum; true
@@ -668,6 +667,7 @@ let stop_agent env s agent expected =
           ~stopped
       with
       | `Identity_changed -> agent_refusal "agent_changed"
+      | `Identity_changed_after_signal -> agent_refusal "agent_stop_uncertain"
       | `Still_running -> agent_refusal "agent_still_running"
       | `Stopped when (not s.alive) || s.finishing || s.kill_requested ->
           agent_refusal "stale_incarnation"

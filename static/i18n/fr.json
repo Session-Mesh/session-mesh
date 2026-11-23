@@ -959,6 +959,8 @@
   "server.accountUnknown": "alias de compte inconnu (accounts.json sur le runner)",
   "server.accountNoFolder": "l'alias de compte {label} n'a pas de dossier {agent}",
   "server.accountRefused": "alias de compte refusé : vérifiez accounts.json et ses dossiers sur le runner (détails dans le journal du serveur)",
+  "server.switchStopUncertain": "Arrêt de l’agent incertain ; vérifiez la session avant de la reprendre",
+  "server.switchDefaultRestartNeedsRelaunch": "La reprise du compte par défaut nécessite la relance dans le même terminal",
   "server.switchDefaultUnknown": "Le contexte du compte par défaut est indisponible ; rien n’a été arrêté",
   "server.switchProfileChanged": "Le contexte du profil a changé ; rien n’a été arrêté",
   "server.switchAgentChanged": "L’agent au premier plan a changé ; rien n’a été arrêté",

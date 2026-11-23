@@ -1372,6 +1372,8 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
     """replace_session in a new session: the PTY host stops the whole source (kill_if)."""
     target = switch[0] if switch else account
     context = await _restart_profile_context(source, account, known_agent, switch)
+    if context and account is None:
+        raise web.HTTPConflict(text="Bound default restart requires in-place relaunch support")
     account_env = context["env"] if context else await account_environment(target, known_agent)
     source_env = await account_environment(account, known_agent) if switch else account_env
     command, notice, vibe = await _prepared_launch(known_agent, command, cwd, context)
@@ -1530,7 +1532,10 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
         source_identity = _switch_root_identity(source_context)
         target_identity = _switch_root_identity(context)
     elif context:
-        await _profile_launch_context(account, known_agent, context["context_revision"])
+        if account is None:
+            await _restart_profile_context(source, account, known_agent, None)
+        else:
+            await _profile_launch_context(account, known_agent, context["context_revision"])
     try:
         created = await (_stop_agent(source, known_agent, source_context) if native_switch
                          else _stop_agent(source, known_agent))
@@ -1549,7 +1554,11 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
                 await _profile_launch_context(account, known_agent, source_context["context_revision"])
         except web.HTTPException as error:
             raise _not_started_again(source["name"]) from error
-        await _start_in_place(*launch, account, source_env, context=source_context)
+        try:
+            await _start_in_place(*launch, account, source_env, context=source_context,
+                                  expected_identity=source_identity)
+        except AccountContextChanged as error:
+            raise _not_started_again(source["name"]) from error
         raise AccountSwitchUndone(source["name"], exc.code or "carry_failed", str(exc)) from exc
 
     if switch:
@@ -1576,7 +1585,15 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
                 raise _not_started_again(source["name"])
         except web.HTTPException:
             await undo_native_switch(AccountsUnavailable("Target account changed after carry", "profile-context-changed"))
-    await _start_in_place(*launch, target, account_env, context=context)
+    try:
+        if native_switch:
+            await _start_in_place(*launch, target, account_env, context=context, expected_identity=target_identity)
+        else:
+            await _start_in_place(*launch, target, account_env, context=context)
+    except AccountContextChanged:
+        if native_switch:
+            await undo_native_switch(AccountsUnavailable("Target account changed before launch", "profile-context-changed"))
+        raise
     return source["name"]
 
 
@@ -1602,6 +1619,8 @@ async def _stop_agent(source, known_agent, binding=None):
         return stopped["created"]
     reason = stopped.get("reason") if isinstance(stopped, dict) else None
     reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,40}", reason) else "refused"
+    if reason == "agent_stop_uncertain":
+        raise web.HTTPServiceUnavailable(text="Agent stop outcome uncertain; inspect the session before resuming")
     if reason in WHOLE_SESSION_REASONS:
         raise WholeSessionOnly(reason)
     if reason in STOP_REFUSALS:
@@ -1619,8 +1638,12 @@ async def _incarnation_moved_on(source):
                and item.get("created") != source["created"] for item in listed or ())
 
 
+class AccountContextChanged(Exception):
+    """The verified account directory changed during launch preparation."""
+
+
 async def _start_in_place(source, created, cwd, command, agent, known_agent, notice, vibe, account, account_env,
-                          context=None):
+                          context=None, expected_identity=None):
     """Start the agent in the incarnation stop_agent_if left (``created``), under ``account``, with the session's
     meta for that launch (as new_session writes it; the nonce, hence the session token, is kept). A Claude's wake
     socket path follows from the nonce: the socket the stopped Claude left there is removed first, so that the new
@@ -1630,6 +1653,12 @@ async def _start_in_place(source, created, cwd, command, agent, known_agent, not
         await asyncio.to_thread(claudewake.clear_socket, CLAUDE_WAKE_DIR, nonce)
         command = await asyncio.to_thread(claudewake.launch_command, command, nonce, CLAUDE_WAKE_DIR,
                                           cwd, ptyhost.clean_env(account_env))
+    if expected_identity is not None:
+        try:
+            if _switch_root_identity(context) != expected_identity:
+                raise AccountContextChanged()
+        except web.HTTPException as error:
+            raise AccountContextChanged() from error
     meta = {"agent": agent, "known_agent": known_agent, **({"nonce": nonce} if nonce else {}),
             **({"notice": notice} if notice else {}), **({"account": account} if account_env else {}),
             **({"account_context_revision": context["context_revision"]} if context else {}),

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {describe, test} from 'node:test';
 import {rolloutIn} from './fake-codex-lib.ts';
-import {mesh, log, travelHome, workHome, sleep, launches, owner, codexSession, listed,
+import {mesh, log, travelHome, workHome, sleep, launches, owner, codexSession, listed, ask,
   installNativeProfiles, unchangedSource, requested, decide, launchOf} from './session-account-switch-fixture.ts';
 
 describe('native switch integration', {skip: process.platform !== 'linux' ? 'process environment binding needs Linux procfs' : false}, () => {
@@ -47,6 +47,11 @@ describe('native switch integration', {skip: process.platform !== 'linux' ? 'pro
       assert.equal(done3.state, 'completed', JSON.stringify(done3));
       for (let i = 0; i < 100 && (await launchOf(session.name))[0] !== path.join(mesh.home, '.codex'); i++) await sleep(100);
       assert.equal((await launchOf(session.name))[0], path.join(mesh.home, '.codex'));
+      const restart = await ask(session, {action: 'restart'});
+      assert.equal(restart.status, 202, await restart.clone().text());
+      const restartRequest = (await restart.json() as {request: Parameters<typeof decide>[0]}).request;
+      const restarted = await decide(restartRequest, true);
+      assert.equal(restarted.state, 'completed', JSON.stringify(restarted));
     } finally { fs.rmSync(registry); }
   });
   test('registry target changes after approval request refuse before stopping', async () => {

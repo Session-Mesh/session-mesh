@@ -168,6 +168,14 @@
     "key": "server.accountRefused"
   },
   {
+    "pattern": "^Agent stop outcome uncertain; inspect the session before resuming$",
+    "key": "server.switchStopUncertain"
+  },
+  {
+    "pattern": "^Bound default restart requires in-place relaunch support$",
+    "key": "server.switchDefaultRestartNeedsRelaunch"
+  },
+  {
     "pattern": "^Default account context is unavailable; nothing was stopped$",
     "key": "server.switchDefaultUnknown"
   },

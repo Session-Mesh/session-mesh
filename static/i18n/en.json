@@ -950,6 +950,8 @@
   "server.accountUnknown": "Unknown account alias (accounts.json on the runner)",
   "server.accountNoFolder": "The account alias {label} has no {agent} folder",
   "server.accountRefused": "Account alias refused: check accounts.json and its folders on the runner (details in the server log)",
+  "server.switchStopUncertain": "Agent stop outcome uncertain; inspect the session before resuming",
+  "server.switchDefaultRestartNeedsRelaunch": "Bound default restart requires in-place relaunch support",
   "server.switchDefaultUnknown": "Default account context is unavailable; nothing was stopped",
   "server.switchProfileChanged": "Account profile context changed; nothing was stopped",
   "server.switchAgentChanged": "Foreground agent changed; nothing was stopped",
