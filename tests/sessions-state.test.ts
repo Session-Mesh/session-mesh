@@ -46,7 +46,14 @@ async function start(prefix: string, sessions: (where: Scratch) => FakeSession[]
   earlierSnapshot(snapshot, listed, seed);
   const host = await startFakeHost(SOCKET(where), {sessions: listed, ...hostMode});
   const startedMs = Date.now();
-  const {child, result} = await runServer(where);
+  let launched: Awaited<ReturnType<typeof runServer>>;
+  try { launched = await runServer(where); }
+  catch (error) {
+    await host.stop();
+    removeScratch(where.scratch);
+    throw error;
+  }
+  const {child, result} = launched;
   if (!result.listened) {   // the suite's teardown gets no Mesh: stop the fake host here
     await host.stop();
     removeScratch(where.scratch);
