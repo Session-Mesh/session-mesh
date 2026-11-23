@@ -69,6 +69,8 @@ if [ "$1" = "api" ]; then
 fi
 printf 'argv:%s\\n' "$*" >> '${log('argv.log')}'
 printf '%s\\n' "$OPENCODE_CONFIG_CONTENT" >> '${log('config.log')}'
+# In a resumed launch, make the argv-before-token ordering observable to the test.
+if [ "$1" = "--standalone" ] && [ "$2" = "--session" ]; then sleep 0.2; fi
 printf '%s\\n' "$MESH_SESSION_TOKEN" >> '${log('token.log')}'
 printf '%s\\n' "$MESH_SESSION" >> '${log('session.log')}'
 while IFS= read -r line; do printf '%s\\n' "$line" >> '${log('input.log')}'; done
@@ -235,6 +237,7 @@ describe('OpenCode 2 preset', () => {
     });
     assert.deepEqual([restorable.agent, restorable.resumable], ['opencode', true]);
     const before = lines('argv.log').length;
+    const tokensBefore = lines('token.log').length;
     // The conversation is gone from OpenCode's store: OpenCode 2 would start an empty one, so nothing is restored.
     const storeFile = path.join(dataHome, 'opencode', 'opencode.db');
     const store = new DatabaseSync(storeFile);
@@ -252,6 +255,8 @@ describe('OpenCode 2 preset', () => {
     assert.equal(restored.status, 200, await restored.clone().text());
     assert.equal(((await restored.json()) as {results: Record<string, {ok: boolean}>}).results['oc2-main'].ok, true);
     await until('the restored opencode', () => lines('argv.log').length > before);
+    // The fake writes argv before its token. Wait for that independent write before the next test scans it.
+    await until('the restored opencode token', () => lines('token.log').length > tokensBefore);
     assert.equal(lines('argv.log')[before], `argv:--standalone --session ${CONVERSATION}`);
     assert.match(lines('config.log')[before], /"mesh-board"/);
     assert.match(lines('config.log')[before], /"plugins"/);
