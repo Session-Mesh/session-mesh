@@ -82,9 +82,11 @@ let test_expected_pair_revisions root =
   in
   refused_with "profile-context-changed" (run (String.make 64 '0', target_revision));
   refused_with "profile-context-changed" (run (source_revision, String.make 64 '0'));
+  let default_folder = claude_account root "default-source" in
+  let default_getenv name = if name = "CLAUDE_CONFIG_DIR" then Some default_folder else None in
   refused_with "profile-context-changed"
     (C.carry_accounts ~expected_contexts:(source_revision, target_revision)
-       ~uid ~getenv ~file:(file root) ~kind:C.Claude ~conversation:sid
+       ~uid ~getenv:default_getenv ~file:(file root) ~kind:C.Claude ~conversation:sid
        ~from_account:"default" ~to_account:"other" ());
   registry root
     [ profile "claude" "work" "other" (path root "native-source");
@@ -100,6 +102,24 @@ let test_expected_pair_revisions root =
   Unix.unlink (registry_file root);
   legacy_pair root;
   refused_with "profile-context-changed" (run (source_revision, target_revision))
+
+let test_bound_default root =
+  let module R = Mesh_account_resolver in
+  let source = claude_account root "default-source" in
+  with_conversation source;
+  native_pair root;
+  let accounts = Result.get_ok (R.load ~uid ~file:(file root)) in
+  let target = Result.get_ok (R.find accounts { R.backend = R.Claude; id = "other" }) in
+  let target_revision = Option.get (R.context_revision target) in
+  let source_revision = Digestif.SHA256.(to_hex (digest_string ("mesh-default-v1\000claude\000" ^ source))) in
+  let getenv name = if name = "CLAUDE_CONFIG_DIR" then Some source else None in
+  let run source_revision = C.carry_accounts ~uid ~getenv ~file:(file root) ~kind:C.Claude
+      ~expected_contexts:(source_revision, target_revision) ~conversation:sid
+      ~from_account:"default" ~to_account:"other" () in
+  refused_with "profile-context-changed" (run (String.make 64 '0'));
+  Alcotest.(check bool) "mismatch creates no target" false (exists (path root "native-target"));
+  ignore (carried (run source_revision));
+  Alcotest.(check bool) "bound default copies" true (exists (path root ("native-target/" ^ transcript)))
 
 let test_migrated_actual_carry root =
   let source = claude_account root "native-source" in
@@ -839,6 +859,7 @@ let () =
             Alcotest.test_case name `Quick (with_native_root test))
           [
             ("bound pair revisions", test_expected_pair_revisions);
+            ("bound default revision", test_bound_default);
             ("migrated actual Claude/Codex carry", test_migrated_actual_carry);
             ("malformed and symlink registry never fall back", test_malformed_never_falls_back);
             ("disabled accounts refuse", test_disabled_named_accounts);

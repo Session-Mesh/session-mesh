@@ -352,8 +352,8 @@ let carry_accounts ?(io = default_io) ?(limits = default_limits) ?expected_conte
        match expected_contexts with
        | None -> Ok ()
        | Some (source_revision, target_revision) ->
-           if R.context_revision source_entry = Some source_revision
-              && R.context_revision target_entry = Some target_revision
+           if (from_account = R.default_id || R.context_revision source_entry = Some source_revision)
+              && (to_account = R.default_id || R.context_revision target_entry = Some target_revision)
            then Ok ()
            else fail "profile-context-changed" "selected profile context changed"
      in
@@ -373,7 +373,20 @@ let carry_accounts ?(io = default_io) ?(limits = default_limits) ?expected_conte
      in
      let* target =
        resolver_result (R.carry_folder ~uid ~getenv ~create:false target_entry)
-      in
+     in
+     let* () =
+       match expected_contexts with
+       | None -> Ok ()
+       | Some (source_revision, target_revision) ->
+           let default_revision folder =
+             let backend = match kind with Claude -> "claude" | Codex -> "codex" in
+             Digestif.SHA256.(to_hex (digest_string ("mesh-default-v1\000" ^ backend ^ "\000" ^ folder)))
+           in
+           if (from_account <> R.default_id || default_revision source = source_revision)
+              && (to_account <> R.default_id || default_revision target = target_revision)
+           then Ok ()
+           else fail "profile-context-changed" "selected profile context changed"
+     in
       with_bound_folder ~uid source (fun source_identity ->
           let* () = pinned_folder ~uid source_entry source in
           let* unproven_creation, before =
