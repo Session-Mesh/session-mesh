@@ -7,7 +7,7 @@
 
 let capacity = 8 * 1024 * 1024
 
-type frame = Data of string | Submit_delay | Submit_enter
+type frame = Data of string | Control of string | Submit_delay | Submit_enter
 
 type t = {
   name : string;
@@ -18,6 +18,8 @@ type t = {
   mutable bytes : int;
   mutable dropping : bool;
   mutable closed : bool;
+  mutable fenced : bool;
+  mutable writing : bool;
 }
 
 let create name =
@@ -31,7 +33,24 @@ let create name =
     bytes = 0;
     dropping = false;
     closed = false;
+    fenced = false;
+    writing = false;
   }
+
+let acquire_fence t =
+  if t.closed || t.fenced || t.writing || not (Queue.is_empty t.frames) then
+    false
+  else (
+    t.fenced <- true;
+    true)
+
+let release_fence t =
+  if t.closed || not t.fenced || t.writing || not (Queue.is_empty t.frames) then
+    false
+  else (
+    t.fenced <- false;
+    Eio.Condition.broadcast t.wake;
+    true)
 
 let close t =
   if not t.closed then (
@@ -54,7 +73,7 @@ let cancel_submit t =
     Queue.iter
       (function
         | Submit_delay | Submit_enter -> ()
-        | Data _ as frame -> Queue.add frame kept)
+        | (Data _ | Control _) as frame -> Queue.add frame kept)
       t.frames;
     (* An Enter counts one byte; a delay counts none. *)
     t.bytes <- t.bytes - enters;
@@ -109,7 +128,7 @@ let terminal_reports_only data =
   in
   length > 0 && all 0
 
-let enqueue t data =
+let enqueue_unchecked t data =
   if t.closed then false
   else if data = "" then true
   else if String.length data > capacity - t.bytes then (
@@ -133,9 +152,22 @@ let enqueue t data =
     Eio.Condition.broadcast t.wake;
     true
 
+let enqueue t data =
+  if t.fenced then false else enqueue_unchecked t data
+
+let enqueue_fenced t data =
+  if not t.fenced || t.closed || data = ""
+     || String.length data > capacity - t.bytes
+  then false
+  else (
+    t.bytes <- t.bytes + String.length data;
+    Queue.add (Control data) t.frames;
+    Eio.Condition.broadcast t.wake;
+    true)
+
 let enqueue_submit t data =
   let length = String.length data + 1 in
-  if t.closed then false
+  if t.closed || t.fenced then false
   else if length > capacity - t.bytes then (
     if not t.dropping then (
       t.dropping <- true;
@@ -153,7 +185,9 @@ let enqueue_submit t data =
 
 let rec next t =
   if t.closed then None
-  else if Queue.is_empty t.frames then (
+  else if Queue.is_empty t.frames
+          || (t.fenced && match Queue.peek t.frames with Control _ -> false | _ -> true)
+  then (
     Eio.Condition.await_no_mutex t.wake;
     next t)
   else Some (Queue.peek t.frames)
@@ -174,11 +208,17 @@ let run t clock sink =
         ignore (Queue.take t.frames);
         t.bytes <- t.bytes - 1;
         if Queue.is_empty t.frames then t.dropping <- false;
-        Eio.Flow.write sink [ Cstruct.of_string "\r" ];
+        t.writing <- true;
+        Fun.protect
+          ~finally:(fun () -> t.writing <- false)
+          (fun () -> Eio.Flow.write sink [ Cstruct.of_string "\r" ]);
         Eio.Fiber.yield ();
         write ()
-    | Some (Data data) ->
-        Eio.Flow.write sink [ Cstruct.of_string data ];
+    | Some (Data data | Control data) ->
+        t.writing <- true;
+        Fun.protect
+          ~finally:(fun () -> t.writing <- false)
+          (fun () -> Eio.Flow.write sink [ Cstruct.of_string data ]);
         if not t.closed then (
           ignore (Queue.take t.frames);
           t.bytes <- t.bytes - String.length data;

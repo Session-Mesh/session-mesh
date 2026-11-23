@@ -21,11 +21,14 @@ pytestmark = pytest.mark.usefixtures("pty")
 class _EchoAttach:
     """In-memory attach stream: the browser and Web relay remain production code."""
 
-    def __init__(self, capabilities):
+    def __init__(self, capabilities, acknowledged=True, expect_input_ack=None):
         self.capabilities = capabilities
+        self.acknowledged = acknowledged
+        self.expect_input_ack = acknowledged if expect_input_ack is None else expect_input_ack
         self.attachments = []
 
-    async def attach_info(self, _name, _rows, _cols, size=None):
+    async def attach_info(self, _name, _rows, _cols, size=None, input_ack=None):
+        assert (input_ack is not None) == self.expect_input_ack
         reader = asyncio.StreamReader()
         record = []
         self.attachments.append(record)
@@ -37,8 +40,15 @@ class _EchoAttach:
                 payload = framed[5:5 + size]
                 assert len(framed) == 5 + size
                 record.append((kind, payload))
-                if kind == b"D":
+                if kind == b"D" and not self.acknowledged:
                     reader.feed_data(ptyhost.frame(b"D", payload))
+                if kind == b"I" and self.acknowledged:
+                    seq = int.from_bytes(payload[:4], "big")
+                    reader.feed_data(ptyhost.frame(b"D", payload[4:]))
+                    reader.feed_data(ptyhost.frame(b"C", json.dumps({
+                        "id": input_ack[1], "created": input_ack[0],
+                        "seq": seq, "input_ack": True,
+                    }).encode()))
 
             async def drain(_self):
                 return None
@@ -47,8 +57,13 @@ class _EchoAttach:
                 reader.feed_eof()
 
         reply = {"ok": True}
+        if self.acknowledged:
+            reply["input_ack"] = {"created": input_ack[0], "id": input_ack[1]}
         if self.capabilities is not None:
-            reply["pty_capabilities"] = self.capabilities
+            reply["pty_capabilities"] = [*self.capabilities,
+                                         *(["acknowledged_input_v1"] if self.acknowledged else [])]
+        elif self.acknowledged:
+            reply["pty_capabilities"] = ["acknowledged_input_v1"]
         return reader, Writer(), reply
 
 
@@ -78,11 +93,21 @@ async def _type_terminal(tab, phone, text):
 
 
 @pytest.mark.parametrize("phone", [False, True], ids=["desktop-xterm", "phone-line-text"])
-async def test_old_attach_keeps_input_across_reconnect_and_reload(
+async def test_attach_without_human_lease_keeps_input_across_reconnect_and_reload(
         browser, mesh, home_dir, monkeypatch, phone):
-    """A {ok:true} owner sees only D, while real Chromium gets its echoed bytes."""
+    """An older host without ACK in its listing accepts legacy input on each new attachment."""
     await api(mesh, "/api/new", {"preset": "shell", "cwd": str(home_dir), "name": "old-input"})
-    fake = _EchoAttach(capabilities=None)
+    fake = _EchoAttach(capabilities=None, acknowledged=False)
+    real_request = ptyhost.request
+
+    async def old_listing(req, *args, **kwargs):
+        result = await real_request(req, *args, **kwargs)
+        if req.get("op") == "list":
+            for session in result:
+                session.pop("pty_capabilities", None)
+        return result
+
+    monkeypatch.setattr(ptyhost, "request", old_listing)
     monkeypatch.setattr(ptyhost, "attach_info", fake.attach_info)
     context = await browser.new_context(viewport={"width": 390 if phone else 1280, "height": 800},
                                         has_touch=phone, is_mobile=phone)
@@ -97,6 +122,7 @@ async def test_old_attach_keeps_input_across_reconnect_and_reload(
             await tab.get_by_role("button", name=ui("bar.sessions"), exact=True).click()
         await tab.locator('#list .item[data-id="old-input"]').click()
         await tab.wait_for_function("active?.id === 'old-input' && active.conn?.ws?.readyState === WebSocket.OPEN")
+        assert "input_ack=1" not in await tab.evaluate("active.conn.ws.url")
 
         for round_, marker in enumerate(("oldone", "oldtwo", "oldthree")):
             if round_ == 1:
@@ -113,11 +139,12 @@ async def test_old_attach_keeps_input_across_reconnect_and_reload(
                 await tab.wait_for_function(
                     "active?.id === 'old-input' && active.conn?.ws?.readyState === WebSocket.OPEN")
             await _type_terminal(tab, phone, marker)
+            assert "input_ack=1" not in await tab.evaluate("active.conn.ws.url")
             script, argument = _terminal_text_script(marker)
             await tab.wait_for_function(script, arg=argument)
 
         wire = [(kind, payload) for attachment in fake.attachments for kind, payload in attachment
-                if kind in (b"H", b"D")]
+                if kind in (b"H", b"D", b"I")]
         assert all(kind == b"D" for kind, _payload in wire), wire
         joined = b"".join(payload for _kind, payload in wire)
         for marker in (b"oldone", b"oldtwo", b"oldthree"):
@@ -130,6 +157,16 @@ async def test_old_attach_keeps_input_across_reconnect_and_reload(
 async def test_current_attach_orders_advisory_lease_around_input(browser, mesh, home_dir, monkeypatch):
     await api(mesh, "/api/new", {"preset": "shell", "cwd": str(home_dir), "name": "leased-input"})
     fake = _EchoAttach(capabilities=["human_input_lease_v1"])
+    real_request = ptyhost.request
+
+    async def v1_listing(req, *args, **kwargs):
+        result = await real_request(req, *args, **kwargs)
+        if req.get("op") == "list":
+            for session in result:
+                session["pty_capabilities"] = ["human_input_lease_v1", "acknowledged_input_v1"]
+        return result
+
+    monkeypatch.setattr(ptyhost, "request", v1_listing)
     monkeypatch.setattr(ptyhost, "attach_info", fake.attach_info)
     context = await browser.new_context(viewport={"width": 1280, "height": 800})
     try:
@@ -139,17 +176,71 @@ async def test_current_attach_orders_advisory_lease_around_input(browser, mesh, 
         await tab.wait_for_function("data?.mesh?.some((session) => session.id === 'leased-input')")
         await tab.locator('#list .item[data-id="leased-input"]').click()
         await tab.wait_for_function("active?.conn?.ws?.readyState === WebSocket.OPEN")
+        assert "input_ack=1" in await tab.evaluate("active.conn.ws.url")
         await _type_terminal(tab, False, "ordered")
         script, argument = _terminal_text_script("ordered")
         await tab.wait_for_function(script, arg=argument)
         relevant = [(kind, json.loads(payload) if kind == b"H" else payload)
-                    for kind, payload in fake.attachments[-1] if kind in (b"H", b"D")]
+                    for kind, payload in fake.attachments[-1] if kind in (b"H", b"D", b"I")]
         acquired = next(index for index, (kind, payload) in enumerate(relevant)
                         if kind == b"H" and payload["dirty"] is True)
         assert relevant[-1][0] == b"H" and relevant[-1][1]["dirty"] is False, relevant
         enclosed = relevant[acquired + 1:-1]
-        assert b"ordered" in b"".join(payload for kind, payload in enclosed if kind == b"D")
-        assert enclosed and all(kind == b"D" for kind, _payload in enclosed), relevant
+        assert b"ordered" in b"".join(payload[4:] for kind, payload in enclosed if kind == b"I")
+        assert enclosed and all(kind == b"I" for kind, _payload in enclosed), relevant
+        await tab.reload(wait_until="domcontentloaded")
+        await tab.wait_for_function(
+            "active?.id === 'leased-input' && active.conn?.ws?.readyState === WebSocket.OPEN")
+        assert "input_ack=1" in await tab.evaluate("active.conn.ws.url")
+        await _type_terminal(tab, False, "again")
+        script, argument = _terminal_text_script("again")
+        await tab.wait_for_function(script, arg=argument)
+        wire = [(kind, payload) for record in fake.attachments for kind, payload in record
+                if kind in (b"H", b"D", b"I")]
+        assert not any(kind == b"D" for kind, _payload in wire), wire
+    finally:
+        await context.close()
+
+
+async def test_unannounced_ack_never_sends_legacy_input_or_claims_a_lease(
+        browser, mesh, home_dir, monkeypatch):
+    await api(mesh, "/api/new", {"preset": "shell", "cwd": str(home_dir), "name": "no-ack"})
+    fake = _EchoAttach(capabilities=["human_input_lease_v1"], acknowledged=False, expect_input_ack=True)
+    # The listing positively selects the ACK protocol; the attachment then
+    # refuses it. A failed handshake must not trigger a legacy re-attachment.
+    real_request = ptyhost.request
+
+    async def ack_listing(req, *args, **kwargs):
+        result = await real_request(req, *args, **kwargs)
+        if req.get("op") == "list":
+            for session in result:
+                session["pty_capabilities"] = ["acknowledged_input_v1"]
+        return result
+
+    monkeypatch.setattr(ptyhost, "request", ack_listing)
+    monkeypatch.setattr(ptyhost, "attach_info", fake.attach_info)
+    context = await browser.new_context()
+    try:
+        await context.add_cookies([{"name": server.COOKIE, "value": server.cookie_value(), "url": mesh.origin}])
+        tab = await context.new_page()
+        await goto(tab, mesh.origin + "/")
+        await tab.wait_for_function("data?.mesh?.some((session) => session.id === 'no-ack')")
+        await tab.locator('#list .item[data-id="no-ack"]').click()
+        await tab.wait_for_function("active?.inputAck?.state === 'halted'")
+        assert "input_ack=1" in await tab.evaluate("active.conn.ws.url")
+        await tab.evaluate("active.send('must-not-downgrade')")
+        assert await tab.evaluate("active.inputAck.pendingBytes === 0 && !active.inputLease.dirty")
+        wire = [(kind, payload) for record in fake.attachments for kind, payload in record
+                if kind in (b"H", b"D", b"I")]
+        assert wire == [], "an unconfirmed ACK incarnation cannot affect input or leases"
+        assert len(fake.attachments) == 1
+        for capabilities in ([], "acknowledged_input_v1"):
+            await tab.evaluate("""value => {
+              data.mesh.find(session => session.id === 'no-ack').pty_capabilities = value;
+            }""", capabilities)
+            await tab.locator(".pane.active .p-input-retry").click()
+            assert "input_ack=1" in await tab.evaluate("active.conn.ws.url")
+            assert len(fake.attachments) == 1
     finally:
         await context.close()
 
@@ -326,6 +417,7 @@ async def test_unfinished_input_lease_stays_with_its_session_incarnation(browser
         await tab.locator('#list .item[data-id="lease-a"]').click()
         await tab.wait_for_function("active?.id === 'lease-a' && active.conn?.ws?.readyState === WebSocket.OPEN")
         assert await tab.evaluate("active.send('partial'); active.inputLease.dirty")
+        await tab.wait_for_function("active.inputAck.pendingBytes === 0 && active.inputLease.dirty")
         await tab.evaluate("active.show('lease-b')")
         await tab.wait_for_function("active?.id === 'lease-b' && active.conn?.ws?.readyState === WebSocket.OPEN")
         state = await tab.evaluate("""() => ({
@@ -334,7 +426,9 @@ async def test_unfinished_input_lease_stays_with_its_session_incarnation(browser
           leases: active.inputLeases.size,
         })""")
         assert state == {"currentDirty": False, "retained": [True, False], "leases": 2}
-        assert await tab.evaluate("active.send('safe'); active.send('\\r'); !active.inputLease.dirty")
+        await tab.evaluate("active.send('safe'); active.send('\\r')")
+        await tab.wait_for_function("active.inputAck.pendingBytes === 0 && !active.inputLease.dirty")
+        assert await tab.evaluate("!active.inputLease.dirty")
         assert await tab.evaluate("[...active.inputLeases.values()].map(lease => lease.dirty)") == [True, False]
     finally:
         await context.close()

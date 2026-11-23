@@ -28,6 +28,9 @@ before(async () => {
 after(async () => { await mesh?.stop(); });
 
 declare const active: {conn: {ws: WebSocket | null} | null} | null;
+declare const inventoryLoaded: boolean;
+declare function listedLegacyInput(session: unknown): boolean;
+declare function find(name: string): unknown;
 const errors: string[] = [];
 const watchErrors = (page: Page): void => { page.on('pageerror', error => errors.push(String(error))); };
 after(() => { assert.deepEqual(errors, [], 'no error in the pages'); });
@@ -59,6 +62,11 @@ describe('progressive session list', {skip}, () => {
 
   test('with a slow listing, terminals attach and known rows show before the list arrives', async () => {
     const page = await mesh.openPage('alpha', VIEW, undefined, watchErrors);   // the layout and the known sessions are saved
+    await page.waitForFunction(() => {
+      const known = JSON.parse(localStorage.getItem('mesh.knownSessions') ?? '{}');
+      return known.rows?.some((row: {name: string; pty_capabilities?: string[]}) =>
+        row.name === 'alpha' && row.pty_capabilities?.includes('acknowledged_input_v2'));
+    });
     const delay = 8000;
     let answered = 0;
     await page.route('**/api/sessions*', async route => {
@@ -93,8 +101,129 @@ describe('progressive session list', {skip}, () => {
     await page.waitForFunction(() => active?.conn?.ws?.readyState === 1, undefined, {timeout: 6000});
     const attachedAfter = Date.now() - reloaded;
     assert.equal(answered, 0, `terminal attached (${attachedAfter} ms) before the listing answered`);
+    assert.match(await page.evaluate(() => active?.conn?.ws?.url ?? ''), /[?&]input_ack=2(?:&|$)/,
+      'the early attachment is ACK-bound, not raw');
     await page.waitForFunction(() => document.querySelector('#list .item.row-loading') === null, undefined, {timeout: 60_000});
     console.log(`rows ${rowsAfter} ms, terminal ${attachedAfter} ms, list ${answered - reloaded} ms after reload`);
+    await page.unrouteAll({behavior: 'ignoreErrors'});
+    await page.context().close();
+  });
+
+  test('malformed cached ACK identity cannot open a raw or ACK socket before the listing', async () => {
+    const page = await mesh.openPage('alpha', VIEW, undefined, watchErrors);
+    await page.evaluate(() => {
+      const known = JSON.parse(localStorage.getItem('mesh.knownSessions')!);
+      const alpha = known.rows.find((row: {name: string}) => row.name === 'alpha');
+      alpha.created = 'not-an-incarnation';
+      alpha.pty_capabilities = ['acknowledged_input_v2'];
+      localStorage.setItem('mesh.knownSessions', JSON.stringify(known));
+    });
+    const sockets: string[] = [];
+    page.on('websocket', socket => sockets.push(socket.url()));
+    let answered = false;
+    await page.route('**/api/sessions*', async route => {
+      const response = await route.fetch();
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      answered = true;
+      await route.fulfill({response});
+    });
+    await page.reload();
+    await page.locator('#list .item[data-id="alpha"].row-loading').waitFor();
+    await page.waitForTimeout(400);
+    assert.equal(answered, false);
+    assert.deepEqual(sockets, [], 'malformed cached capability cannot select either transport');
+    await page.waitForFunction(() => inventoryLoaded && active?.conn?.ws?.readyState === 1);
+    assert.match(await page.evaluate(() => active?.conn?.ws?.url ?? ''), /[?&]input_ack=2(?:&|$)/);
+    await page.unrouteAll({behavior: 'ignoreErrors'});
+    await page.context().close();
+  });
+
+  test('stale positive ACK cache attempts only the old incarnation, never raw fallback', async () => {
+    const page = await mesh.openPage('alpha', VIEW, undefined, watchErrors);
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('mesh.knownSessions') ?? '{}').rows
+      ?.some((row: {name: string}) => row.name === 'alpha'));
+    await page.evaluate(() => {
+      const known = JSON.parse(localStorage.getItem('mesh.knownSessions')!);
+      const alpha = known.rows.find((row: {name: string}) => row.name === 'alpha');
+      alpha.created -= 1;
+      alpha.pty_capabilities = ['acknowledged_input_v2'];
+      localStorage.setItem('mesh.knownSessions', JSON.stringify(known));
+    });
+    const sockets: string[] = [];
+    page.on('websocket', socket => sockets.push(socket.url()));
+    let answered = false;
+    await page.route('**/api/sessions*', async route => {
+      const response = await route.fetch();
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      answered = true;
+      await route.fulfill({response});
+    });
+    await page.reload();
+    await page.locator('#list .item[data-id="alpha"].row-loading').waitFor();
+    await page.waitForFunction(() => active?.conn?.ws !== null && active?.conn?.ws !== undefined);
+    assert.equal(answered, false);
+    assert.ok(sockets.length > 0, 'attempted an early attachment');
+    assert.ok(sockets.every(url => new URL(url).searchParams.get('input_ack') === '2'),
+      `no downgrade or raw fallback: ${sockets}`);
+    await page.waitForFunction(() => inventoryLoaded && active?.conn?.ws?.readyState === 1,
+      undefined, {timeout: 15_000});
+    assert.match(await page.evaluate(() => active?.conn?.ws?.url ?? ''), /[?&]input_ack=2(?:&|$)/);
+    await page.unrouteAll({behavior: 'ignoreErrors'});
+    await page.context().close();
+  });
+
+  test('legacy cache waits; a separately observed legacy listing opens raw without an ACK attempt', async () => {
+    const page = await mesh.openPage('alpha', VIEW, undefined, watchErrors);
+    await page.evaluate(() => {
+      const known = JSON.parse(localStorage.getItem('mesh.knownSessions')!);
+      const alpha = known.rows.find((row: {name: string}) => row.name === 'alpha');
+      delete alpha.pty_capabilities;
+      localStorage.setItem('mesh.knownSessions', JSON.stringify(known));
+    });
+    const sockets: string[] = [];
+    page.on('websocket', socket => sockets.push(socket.url()));
+    let answered = false;
+    await page.route('**/api/sessions*', async route => {
+      const response = await route.fetch({url: withoutSince(route.request().url())});
+      const listing = await response.json() as {mesh: Record<string, unknown>[]};
+      for (const row of listing.mesh) if (row.id === 'alpha') row.pty_capabilities = [];
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      answered = true;
+      await route.fulfill({response, json: listing});
+    });
+    await page.reload();
+    await page.locator('#list .item[data-id="alpha"].row-loading').waitFor();
+    await page.waitForTimeout(400);
+    assert.equal(answered, false);
+    assert.deepEqual(sockets, [], 'absence of cached ACK never authorizes raw input');
+    await page.waitForFunction(() => inventoryLoaded && active?.conn?.ws?.readyState === 1);
+    assert.ok(sockets.length > 0 && sockets.every(url => !new URL(url).searchParams.has('input_ack')),
+      `only the separately observed legacy row chose raw input: ${sockets}`);
+    await page.unrouteAll({behavior: 'ignoreErrors'});
+    await page.context().close();
+  });
+
+  test('a cached ACK attachment is never downgraded by a same-incarnation legacy-looking listing', async () => {
+    const page = await mesh.openPage('alpha', VIEW, undefined, watchErrors);
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('mesh.knownSessions') ?? '{}').rows
+      ?.some((row: {name: string; pty_capabilities?: string[]}) =>
+         row.name === 'alpha' && row.pty_capabilities?.includes('acknowledged_input_v2')));
+    const sockets: string[] = [];
+    page.on('websocket', socket => sockets.push(socket.url()));
+    await page.route('**/api/sessions*', async route => {
+      const response = await route.fetch({url: withoutSince(route.request().url())});
+      const listing = await response.json() as {mesh: Record<string, unknown>[]};
+      for (const row of listing.mesh) if (row.id === 'alpha') row.pty_capabilities = [];
+      await new Promise(resolve => setTimeout(resolve, 1800));
+      await route.fulfill({response, json: listing});
+    });
+    await page.reload();
+    await page.waitForFunction(() => active?.conn?.ws?.readyState === 1 && inventoryLoaded,
+      undefined, {timeout: 15_000});
+    assert.ok(sockets.length > 0 && sockets.every(url => new URL(url).searchParams.get('input_ack') === '2'),
+      `observed omission did not replace the opted-in attachment with raw: ${sockets}`);
+    assert.equal(await page.evaluate(() => listedLegacyInput(find('alpha'))), false,
+      'another pane cannot select raw for an actor that already attempted ACK');
     await page.unrouteAll({behavior: 'ignoreErrors'});
     await page.context().close();
   });

@@ -209,7 +209,7 @@ def configure(token, conf_dir):
 # The login files of the operator's account aliases (server._protected_folders: every folder an alias
 # declared, now or before): refused as the default account's ~/.claude/.credentials.json, ~/.claude.json
 # and ~/.codex/auth.json are. Claude's and Codex's names are refused in every folder, whichever agent it serves.
-ACCOUNT_LOGIN_FILES = (".credentials.json", ".claude.json", "auth.json")
+ACCOUNT_LOGIN_FILES = (".credentials.json", ".claude.json", "auth.json", "opencode/auth.json")
 _ACCOUNT_DENY = []
 
 
@@ -799,6 +799,12 @@ def stat_target(target):
         return None
 
 
+async def refresh_protection(request):
+    """Refresh the application's account protection before document access."""
+    if refresh := request.app.get("refresh_view_protection"):
+        await refresh()
+
+
 async def api_view(request):
     try:
         body = await request.json()
@@ -806,6 +812,7 @@ async def api_view(request):
         body = None
     if not isinstance(body, dict):
         raise web.HTTPBadRequest(text="JSON object expected")
+    await refresh_protection(request)
     # the lookup touches the filesystem (and may search a repository): off the event loop
     return web.json_response(await asyncio.to_thread(
         describe_target, body.get("target"), body.get("base"), body.get("bases") or []))
@@ -823,6 +830,7 @@ async def view(request):
     lexical = Path(os.path.normpath("/" + rest))
     if _lexically_denied(lexical) or not _mac_ok(lexical, mode, exp, mac):
         raise web.HTTPForbidden()
+    await refresh_protection(request)
     try:
         path = await asyncio.to_thread(resolve_doc, str(lexical))
     except web.HTTPException:

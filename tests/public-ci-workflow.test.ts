@@ -374,9 +374,8 @@ describe('the public CI as committed', () => {
       }
     });
 
-    // The backend profile tests (tests/backend-profiles.test.ts) skip without mesh-profile: it travels with the
-    // work programs, the cache key prefix changed when it joined, and the frontend job (which runs them) requires it.
-    test(`${name} hands mesh-profile to the frontend job, failing rather than skipping`, () => {
+    // The profile and account settings tests need the native helper from the work programs artifact.
+    test(`${name} hands mesh-profile to frontend and browser jobs, failing rather than skipping`, () => {
       const jobs = jobBlocks(parseLines(text));
       const body = (jobName: string): string => {
         const job = jobs.find((item) => item.name === jobName);
@@ -388,10 +387,16 @@ describe('the public CI as committed', () => {
         'test -x native-host/mesh-profile', '            native-host/mesh-profile', 'key: native-programs-v3-']) {
         assert.ok(native.includes(needle), `${needle} missing from the native job`);
       }
-      const frontend = body('frontend');
-      for (const needle of ['"$RUNNER_TEMP/native-work/mesh-profile"', 'MESH_PROFILE_CMD=$RUNNER_TEMP/native-work/mesh-profile',
-        'MESH_REQUIRE_MESH_PROFILE=1']) {
-        assert.ok(frontend.includes(needle), `${needle} missing from the frontend job`);
+      for (const jobName of ['frontend', 'browser']) {
+        const job = body(jobName);
+        for (const needle of ['"$RUNNER_TEMP/native-work/mesh-profile"', 'MESH_PROFILE_CMD=$RUNNER_TEMP/native-work/mesh-profile',
+          'MESH_REQUIRE_MESH_PROFILE=1']) {
+          assert.ok(job.includes(needle), `${needle} missing from the ${jobName} job`);
+        }
+      }
+      for (const needle of ['MESH_BACKEND_ACCOUNT_HELPER=$RUNNER_TEMP/native-work/mesh-profile',
+        'MESH_REQUIRE_BACKEND_ACCOUNT_APP=1']) {
+        assert.ok(body('browser').includes(needle), `${needle} missing from the browser job`);
       }
     });
   }

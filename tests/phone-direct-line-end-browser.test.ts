@@ -38,8 +38,10 @@ describe('phone direct writing: how it ends', {skip}, () => {
   test('^C of the key bar ends it', async () => {
     const page = await phone('leave-cc', 'claude');
     await page.keyboard.type('/c');
+    await waitForShellLine(page, '/c');
     await forget(page);
     await page.locator('#keys [data-k="cc"]').click();
+    await page.waitForFunction(() => window.__input.length >= 1);
     assert.deepEqual(await frames(page), ['\x03']);
     assert.equal(await direct(page), false);
     assert.equal(await field(page), '');
@@ -48,9 +50,11 @@ describe('phone direct writing: how it ends', {skip}, () => {
   test('an armed Ctrl and a letter send the control key and end the mode', async () => {
     const page = await phone('ctrl', 'claude');
     await page.keyboard.type('/a');
+    await waitForShellLine(page, '/a');
     await forget(page);
     await page.locator('#keys [data-k="ctrl"]').click();
     await page.keyboard.type('c');
+    await page.waitForFunction(() => window.__input.length >= 1);
     assert.deepEqual(await frames(page), ['\x03']);
     assert.equal(await direct(page), false);
     assert.equal(await field(page), '');
@@ -60,11 +64,14 @@ describe('phone direct writing: how it ends', {skip}, () => {
     const page = await phone('ctrl-m', 'claude');
     await page.keyboard.type('/a');
     assert.equal(await leaseDirty(page), true, 'a line is in progress');
+    await waitForShellLine(page, '/a');
     await forget(page);
     await page.locator('#keys [data-k="ctrl"]').click();
     await page.keyboard.type('m');
+    await page.waitForFunction(() => window.__input.length >= 1);
     assert.deepEqual(await frames(page), ['\r']);
     assert.equal(await direct(page), false);
+    await page.waitForFunction(() => !(active as unknown as {inputLease: {dirty: boolean}}).inputLease.dirty);
     assert.equal(await leaseDirty(page), false, 'the carriage return completed the line');
   });
 
@@ -112,6 +119,7 @@ describe('phone direct writing: how it ends', {skip}, () => {
   test('the agent leaving the foreground ends the mode and nothing is sent after', async () => {
     const page = await phone('foreground-lost', 'claude');
     await page.keyboard.type('/a');
+    await waitForShellLine(page, '/a');
     assert.deepEqual(await frames(page), ['/', 'a']);
     foreground.set('foreground-lost', null);   // /exit, ^C twice or a crash: the shell is back
     await page.evaluate(() => refresh());
@@ -131,6 +139,7 @@ describe('phone direct writing: how it ends', {skip}, () => {
     await waitForShellLine(page, '/rev');
     foreground.set('residue', null);   // the agent left; the page does not know yet
     await page.keyboard.type('ls');    // the residual window: these keys still go out
+    await waitForShellLine(page, '/revls');
     assert.equal((await frames(page)).join(''), '/revls');
     await page.evaluate(() => refresh());
     await page.waitForFunction(() => document.querySelector<HTMLElement>('#line-direct')!.hidden);
@@ -231,6 +240,7 @@ describe('phone direct writing: how it ends', {skip}, () => {
   test('the connection object of the pane replaced under a running mode ends it, even if the old one was not closed', async () => {
     const page = await phone('conn-identity', 'claude');
     await page.keyboard.type('/a');
+    await waitForShellLine(page, '/a');
     await forget(page);
     await page.evaluate(() => { active.conn = {...active.conn!} as typeof active.conn; });   // same session, another connection
     await page.keyboard.type('x');
@@ -243,8 +253,9 @@ describe('phone direct writing: how it ends', {skip}, () => {
   test('keys that cannot be delivered say so', async () => {
     const page = await phone('keys-fail', 'claude');
     await page.keyboard.type('/h');
+    await waitForShellLine(page, '/h');
     await page.evaluate(() => {
-      (active.conn as unknown as {terminal: {queueInput: () => never}}).terminal.queueInput = () => { throw new Error('closed'); };
+      (active as unknown as {inputAck: {write: () => boolean}}).inputAck.write = () => false;
     });
     await page.keyboard.type('e');
     await waitForFlash(page, 'keys not delivered');
@@ -256,8 +267,8 @@ describe('phone direct writing: how it ends', {skip}, () => {
     await page.keyboard.type('/he');
     await waitForShellLine(page, '/he');
     await forget(page);
-    await page.evaluate(() => {   // the socket accepts nothing from now on
-      (active.conn as unknown as {terminal: {queueInput: () => never}}).terminal.queueInput = () => { throw new Error('closed'); };
+    await page.evaluate(() => {   // acknowledged input cannot retain Enter
+      (active as unknown as {inputAck: {write: () => boolean}}).inputAck.write = () => false;
     });
     await page.keyboard.press('Enter');
     await waitForFlash(page, 'Enter was not delivered');

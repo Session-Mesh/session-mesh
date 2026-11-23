@@ -161,8 +161,8 @@
 (library
  (name mesh_cli)
  (wrapped false)
- (modules mesh_paths mesh_generation mesh_local_http)
- (libraries mesh_python_text cohttp unix))
+ (modules mesh_paths mesh_generation mesh_local_http mesh_backend_migration)
+  (libraries mesh_python_text mesh_accounts mesh_backend_profile yojson cohttp unix digestif))
 
 ; Python's text operations as the mesh's Python components apply them, on
 ; their own so that a program that only reads files does not link cohttp.

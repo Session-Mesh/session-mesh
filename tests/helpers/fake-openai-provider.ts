@@ -27,11 +27,13 @@ function textOf(content: unknown): string {
 
 type Reply = {text: string} | {tool: string; input: unknown};
 
-function script(messages: Message[]): {reply: Reply; delay: number} {
+function script(messages: Message[], compactionSummary?: string): {reply: Reply; delay: number} {
   const last = messages[messages.length - 1] ?? {};
   if (last.role === 'tool') return {reply: {text: `RESULT: ${textOf(last.content)}`}, delay: 0};
   const prompt = textOf([...messages].reverse().find(message => message.role === 'user')?.content);
   const delay = Number(/\[\[slow (\d+)\]\]/.exec(prompt)?.[1] ?? 0);
+  if (compactionSummary && prompt.includes('You MUST summarize the conversation above into a structured summary'))
+    return {reply: {text: compactionSummary}, delay: 0};
   const execute = /\[\[execute: ([\s\S]*?)\]\]/.exec(prompt);
   if (execute) return {reply: {tool: 'execute', input: {code: execute[1]}}, delay};
   const call = /\[\[call: (\S+) ([\s\S]*?)\]\]/.exec(prompt);
@@ -69,7 +71,7 @@ function respond(response: http.ServerResponse, reply: Reply, stream: boolean): 
     usage: {prompt_tokens: 1, completion_tokens: 1, total_tokens: 2}}));
 }
 
-export async function startFakeProvider(): Promise<FakeProvider> {
+export async function startFakeProvider(options: {compactionSummary?: string} = {}): Promise<FakeProvider> {
   const requests: unknown[] = [];
   const server = http.createServer((request, response) => {
     let body = '';
@@ -82,7 +84,7 @@ export async function startFakeProvider(): Promise<FakeProvider> {
       let parsed: {messages?: Message[]; stream?: boolean} = {};
       try { parsed = JSON.parse(body); } catch { /* answered as an empty conversation */ }
       requests.push(parsed);
-      const {reply, delay} = script(parsed.messages ?? []);
+      const {reply, delay} = script(parsed.messages ?? [], options.compactionSummary);
       setTimeout(() => respond(response, reply, parsed.stream === true), delay);
     });
   });

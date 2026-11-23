@@ -22,6 +22,28 @@ def live(*names, created=1.0):
     return [{"name": n, "created": created} for n in names]
 
 
+@pytest.mark.parametrize("capabilities,expected", [
+    (None, []),
+    (["human_input_lease_v1"], []),
+    (["acknowledged_input_v1"], ["acknowledged_input_v1"]),
+    (["acknowledged_input_v2"], ["acknowledged_input_v2"]),
+    (["acknowledged_input_v1", "acknowledged_input_v2"],
+     ["acknowledged_input_v2", "acknowledged_input_v1"]),
+    (["acknowledged_input_v1", "acknowledged_input_v1"], []),
+    (["acknowledged_input_v2", "acknowledged_input_v2"], []),
+    (["acknowledged_input_v1", 1], []),
+    ("acknowledged_input_v1", []),
+])
+def test_public_listing_projects_only_valid_native_ack_capability(capabilities, expected, monkeypatch):
+    monkeypatch.setattr(server.discover, "snapshot", lambda: {})
+    monkeypatch.setattr(server.discover, "external_sessions", lambda *a, **kw: [])
+    raw = {**live("s1")[0], "pid": 123, "activity": 1.0, "attached": 0, "meta": {}}
+    if capabilities is not None:
+        raw["pty_capabilities"] = capabilities
+    (session,) = server.list_sessions([raw])["mesh"]
+    assert session["pty_capabilities"] == expected
+
+
 def test_rename_and_clear_label():
     s = live("a")
     assert organize.apply({"op": "rename", "id": "a", "label": "  mon\tprojet \x07 "}, s)["sessions"]["a"]["label"] == "mon projet"
@@ -100,6 +122,7 @@ async def test_api_organize_and_listing(client, auth_cookie, pty, monkeypatch):
     assert data["folders"] == ["proj"]
     (s1,) = [s for s in data["mesh"] if s["id"] == "s1"]
     assert s1["label"] == "Mon shell" and s1["folder"] == "proj"
+    assert s1["pty_capabilities"] == ["acknowledged_input_v2", "acknowledged_input_v1"]
     bad = await client.post("/api/organize", json={"op": "move", "id": "s1", "folder": "nope"}, headers=auth_cookie)
     assert bad.status == 400
 

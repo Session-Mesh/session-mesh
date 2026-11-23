@@ -12,6 +12,8 @@ export { SIZE_TAKEOVER_KEY, listenForActivation, shouldTakeSize, showsSizeBanner
 // as itself. Text is always translated when it is produced, never at load.
 export * from "./mailbox-panel.ts";
 export * from "./config-panel.ts";
+export * from "./backend-account-panel.ts";
+export { createBackendAccountApi } from "./backend-account-api.ts";
 export * from "./agent-mail-consent.ts";
 export * from "./narrow-drawer.ts";
 export { holdLineForTarget } from "./held-line.ts";
@@ -28,6 +30,8 @@ export type AgentState = "busy" | "waiting" | "shell" | "idle" | "unknown";
 export interface HumanInputLease {
   readonly dirty: boolean;
   reconnect(): void;
+  hold(): void;
+  release(): void;
   write(bytes: Uint8Array, complete?: boolean): boolean;
   atomic(bytes: Uint8Array): boolean;
 }
@@ -64,11 +68,234 @@ export function createHumanInputLease(ports: {
   };
   return {
     get dirty() { return dirty; },
+    hold() {
+      if (dirty) return;
+      dirty = true;
+      try { ports.control(ports.clientId, true); } catch { /* Reassert on reconnect. */ }
+    },
+    release() { try { set(false); } catch { /* Retry on reconnect. */ } },
     reconnect() {
       try { ports.control(ports.clientId, dirty); } catch { /* Socket setup must continue. */ }
     },
     write,
     atomic(bytes) { return write(bytes, true); },
+  };
+}
+
+export type RetainedInputState = "ready" | "sending" | "uncertain" | "review" | "halted";
+
+// Keep the browser's lease decision in step with Mesh_pty_input's strict
+// terminal_reports_only grammar. The native host independently classifies
+// these bytes; a browser hint cannot exempt arbitrary human input.
+export function terminalReportsOnly(data: Uint8Array): boolean {
+  if (!data.length || data.length > 65536) return false;
+  const byte = (i: number) => data[i] ?? -1;
+  const digit = (i: number) => byte(i) >= 48 && byte(i) <= 57;
+  const digits = (i: number): number | null => {
+    if (!digit(i)) return null;
+    while (digit(i)) i++;
+    return i;
+  };
+  const groups = (start: number, count: number): number | null => {
+    let i = start;
+    for (let group = 0; group < count; group++) {
+      const end = digits(i);
+      if (end === null) return null;
+      i = end;
+      if (group + 1 < count) {
+        if (byte(i) !== 59) return null; // ;
+        i++;
+      }
+    }
+    return i;
+  };
+  const report = (start: number): number | null => {
+    if (byte(start) !== 27 || byte(start + 1) !== 91) return null; // ESC [
+    const i = start + 2;
+    if (byte(i) === 73 || byte(i) === 79) return i + 1; // I / O
+    if (byte(i) === 77) { // X10 mouse: M and three printable bytes
+      if (i + 3 < data.length && byte(i + 1) >= 32 &&
+          byte(i + 2) >= 32 && byte(i + 3) >= 32) return i + 4;
+      return null;
+    }
+    if (byte(i) === 60) { // < button ; column ; row M/m
+      const end = groups(i + 1, 3);
+      return end !== null && (byte(end) === 77 || byte(end) === 109) ? end + 1 : null;
+    }
+    const cursor = groups(i, 2);
+    if (cursor !== null && byte(cursor) === 82) return cursor + 1; // R
+    const status = digits(i);
+    return status !== null && byte(status) === 110 ? status + 1 : null; // n
+  };
+  for (let i = 0; i < data.length;) {
+    const end = report(i);
+    if (end === null) return false;
+    i = end;
+  }
+  return true;
+}
+
+// Only a native ACK clears bytes. The caller must supply the host-announced
+// binding, not one inferred from its own attach request. No timers or replay.
+export function createAcknowledgedInput(ports: {
+  readonly attachmentId?: string;
+  readonly version?: 1 | 2;
+  readonly created: number;
+  readonly send: (payload: Uint8Array) => void;
+  readonly state: (state: RetainedInputState) => void;
+}) {
+  const maxPending = 1024 * 1024;
+  const maxFrame = 65536;
+  type Pending = { seq: number; data: Uint8Array; complete: boolean; reportOnly: boolean };
+  const pending: Pending[] = [];
+  let nextSeq = 1;
+  let active = false;
+  let sent = false;
+  let state: RetainedInputState = "ready";
+  let completed = false;
+  let incompleteHumanInput = false;
+  let binding: { slot: number; generation: number; actorNonce: string } | null = null;
+  let blocked = false;
+  const updateState = (value: RetainedInputState) => { state = value; ports.state(value); };
+  const size = () => pending.reduce((sum, frame) => sum + frame.data.length, 0);
+  const transmit = () => {
+    if (!active || state === "halted") return;
+    const frame = pending[0];
+    if (!frame) return;
+    const payload = new Uint8Array(4 + frame.data.length);
+    new DataView(payload.buffer).setUint32(0, frame.seq);
+    payload.set(frame.data, 4);
+    // A failed/uncertain socket send must never allow automatic retry.
+    sent = true;
+    updateState("sending");
+    try { ports.send(payload); }
+    catch { updateState("uncertain"); }
+  };
+  return {
+    get version() { return ports.version ?? 1; },
+    get state() { return state; },
+    get completed() { return completed; },
+    get pendingBytes() { return size(); },
+    get deliveryUncertain() { return sent && state !== "review"; },
+    get incompleteHumanInput() { return incompleteHumanInput; },
+    get binding() { return binding && { ...binding }; },
+    get blocked() { return blocked; },
+    get pendingHumanBytes() {
+      return pending.reduce((sum, frame) => sum + (frame.reportOnly ? 0 : frame.data.length), 0);
+    },
+    connect(created: number, id: string, supported: boolean) {
+      if (ports.version === 2) return;
+      if (state === "halted") return;
+      active = supported && created === ports.created && id === ports.attachmentId;
+      if (!active) { updateState(pending.length ? "review" : "halted"); return; }
+      if (pending.length) updateState(sent ? "uncertain" : "review");
+      else updateState("ready");
+    },
+    connectV2(created: number, slot: number, generation: number, actorNonce: string, supported: boolean) {
+      if (ports.version !== 2 || blocked || state === "halted") return false;
+      if (!supported || created !== ports.created || !Number.isFinite(created) || created <= 0 ||
+          !Number.isSafeInteger(slot) || slot < 0 || slot > 63 ||
+          !Number.isSafeInteger(generation) || generation <= 0 ||
+          typeof actorNonce !== "string" || !/^[0-9a-f]{32}$/.test(actorNonce) ||
+          (binding !== null && (binding.slot !== slot || binding.generation !== generation ||
+            binding.actorNonce !== actorNonce))) {
+        blocked = true;
+        active = false;
+        updateState(pending.length ? (sent ? "uncertain" : "review") : "halted");
+        return false;
+      }
+      binding ??= {slot, generation, actorNonce};
+      active = true;
+      updateState(pending.length ? (sent ? "uncertain" : "review") : "ready");
+      return true;
+    },
+    reject() {
+      if (ports.version !== 2) return;
+      blocked = true;
+      active = false;
+      updateState(pending.length ? (sent ? "uncertain" : "review") : "halted");
+    },
+    disconnect() {
+      active = false;
+      if (pending.length && state !== "halted" && !blocked)
+        updateState(sent ? "uncertain" : "review");
+    },
+    write(bytes: Uint8Array, complete = false) {
+      if (blocked || state === "halted" || !bytes.length || bytes.length > maxPending - size() ||
+          nextSeq + Math.ceil(bytes.length / maxFrame) > 0x80000000)
+        return false;
+      const reportOnly = terminalReportsOnly(bytes);
+      const wasEmpty = pending.length === 0;
+      for (let offset = 0; offset < bytes.length; offset += maxFrame) {
+        const end = Math.min(bytes.length, offset + maxFrame);
+        pending.push({ seq: nextSeq++, data: bytes.slice(offset, end),
+          complete: complete && !reportOnly && end === bytes.length, reportOnly });
+      }
+      completed = false;
+      if (wasEmpty && active && state === "ready") transmit();
+      else if (wasEmpty && state === "ready") updateState("review");
+      return true;
+    },
+    ack(created: number, id: string, seq: number, ok: boolean, reason?: string) {
+      if (ports.version === 2 || !active || created !== ports.created || id !== ports.attachmentId ||
+          !Number.isSafeInteger(seq) || !sent ||
+          seq !== pending[0]?.seq || (state !== "sending" && state !== "uncertain")) {
+        if (pending.length && state !== "halted" && !blocked) updateState("uncertain");
+        return;
+      }
+      if (!ok) {
+        updateState(reason === undefined || reason === "switch_input_fenced" ||
+          reason === "input_pending" ? "review" : "halted");
+        return;
+      }
+      const accepted = pending.shift();
+      completed = accepted?.complete === true;
+      if (accepted && !accepted.reportOnly)
+        incompleteHumanInput = !accepted.complete;
+      sent = false;
+      if (pending.length) transmit();
+      else updateState("ready");
+    },
+    ackV2(created: number, slot: number, generation: number, seq: number, ok: boolean, reason?: string) {
+      if (ports.version !== 2 || !active || !binding ||
+          created !== ports.created || slot !== binding.slot || generation !== binding.generation ||
+          !Number.isSafeInteger(seq) || !sent || seq !== pending[0]?.seq ||
+          (state !== "sending" && state !== "uncertain")) {
+        if (pending.length && state !== "halted" && !blocked) updateState("uncertain");
+        return;
+      }
+      if (!ok) {
+        updateState(reason === undefined || reason === "switch_input_fenced" ||
+          reason === "input_pending" ? "review" : "halted");
+        return;
+      }
+      const accepted = pending.shift();
+      completed = accepted?.complete === true;
+      if (accepted && !accepted.reportOnly) incompleteHumanInput = !accepted.complete;
+      sent = false;
+      if (pending.length) transmit();
+      else updateState("ready");
+    },
+    retry() {
+      if (!active || !pending.length || (state !== "uncertain" && state !== "review"))
+        return false;
+      transmit();
+      return true;
+    },
+    discard() {
+      const head = pending[0];
+      if (!head) return false;
+      const uncertain = sent && state !== "review";
+      const first = head.seq;
+      pending.length = 0;
+      sent = false;
+      completed = false;
+      // The host may have committed the discarded sequence. Never send another
+      // frame on this actor after uncertain delivery.
+      if (uncertain || blocked) updateState("halted");
+      else { nextSeq = first; updateState(active ? "ready" : "review"); }
+      return true;
+    },
   };
 }
 

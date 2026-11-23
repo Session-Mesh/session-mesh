@@ -52,11 +52,14 @@
     nor one that group or others can write. A read that fails while comparing is
     a [carry_failed] refusal. Every file is written to a temporary file (mode
     0600, folders created 0700), then all are put in place; a failure at any
-    step (a full disk, a failed close or rename) removes what was written and
-    puts a replaced copy back, so the target is as it was. When a replaced copy
+    step (a full disk, a failed close or rename) removes proven staged files and
+    puts a replaced copy back. A newly made directory is left in place when
+    its cleanup custody cannot be proven; the refusal reports incomplete cleanup.
+    When a replaced copy
     cannot be put back, it is kept as [.<name>.carry-old-<16 hex>] next to its
     place and the refusal [carry_restore_failed] names it; when a new copy
-    cannot be removed, the refusal [carry_rollback_incomplete] names it.
+    or an uncertain folder cannot be removed, the refusal
+    [carry_rollback_incomplete] reports it.
 
     Two carries of the same conversation into the same folder never overlap:
     each holds, without waiting, an exclusive lock (fcntl, between processes) on
@@ -101,7 +104,7 @@ type error = { code : string; message : string }
     [carry_restore_failed], [carry_rollback_incomplete], [carry_failed].
     A caller can retry [carry_in_progress] (another carry holds the lock) and
     [target_no_space] (once space is freed) as is; [carry_restore_failed] and
-    [carry_rollback_incomplete] name a file left in place and need someone to
+    [carry_rollback_incomplete] report a file or folder left in place and need someone to
     step in; the others refuse the request as given. The CLI adds
     [agent_unsupported] (an agent other than claude or codex) and exits 2 on a
     usage error (wrong number of arguments), 1 on any refusal, 0 on success.
@@ -196,8 +199,9 @@ val carry_accounts :
   unit ->
   (outcome, error) result
 (** {!carry} between two accounts found by {!account_folder}. The source folder
-    must exist before a missing target folder is created; a target folder this
-    run created is removed again (with its lock file) when the carry is refused
-    and no other carry holds its lock. *)
+    must exist before a missing target folder is created. If the carry is refused
+    without proof that it can remove a newly made target, the folder and any
+    lock file remain in place; [carry_rollback_incomplete] reports the retained
+    target. *)
 
 val outcome_to_json : outcome -> Yojson.Safe.t

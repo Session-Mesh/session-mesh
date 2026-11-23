@@ -210,6 +210,7 @@ async def api_board_open(request):
 async def api_open(request):
     """mesh-open: ask the open pages to show a document in a side panel."""
     body = await _json_object(request)
+    await view.refresh_protection(request)
     description = await asyncio.to_thread(view.describe_target, body.get("target"), body.get("base"))
     session = request.get("mesh_session")
     if session is not None and description.get("ext") in view.SESSION_FILE_SCOPE_EXT:
@@ -240,5 +241,6 @@ def _mtimes(targets, session):
 
 async def api_stat(request):
     targets = _stat_targets(await _json_object(request))
+    await view.refresh_protection(request)
     mtimes = await asyncio.to_thread(_mtimes, targets, request.get("mesh_session"))
     return web.json_response({"mtimes": mtimes})

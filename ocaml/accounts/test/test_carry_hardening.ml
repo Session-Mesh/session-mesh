@@ -128,8 +128,15 @@ let test_source_changed_during_copy () =
       let target = claude_account root "b" in
       let before = listing target in
       let io = { (failing_io ()) with C.read = (fun _ _ _ _ -> 0) } in
-      refused_with "carry_failed" (carry ~io ~source ~target C.Claude);
-      Alcotest.(check (list string)) "as before" before (listing target))
+      refused_with "carry_rollback_incomplete" (carry ~io ~source ~target C.Claude);
+      let after = listing target in
+      List.iter
+        (fun relative ->
+          Alcotest.(check bool) "older entry retained" true
+            (List.mem relative after))
+        before;
+      Alcotest.(check bool) "no staged copy" false
+        (List.exists (fun relative -> contains relative ".carry-new-") after))
 
 (* A copy the rollback cannot remove is reported by name. *)
 let test_incomplete_rollback_is_reported () =

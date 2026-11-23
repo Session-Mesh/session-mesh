@@ -7,14 +7,14 @@
 #     Copy the built programs under their release names: <program>-<os>-<arch>, where <os>-<arch>
 #     is one of TARGETS (linux-x86_64, linux-aarch64, macos-arm64).
 #   release-assets.sh collect <os>-<arch> <artifact-directory> <directory>
-#     Copy the nine programs of one target from the directory its build job's artifact was
-#     downloaded into, refusing that directory unless it holds exactly those nine regular files:
+#     Copy the ten programs of one target from the directory its build job's artifact was
+#     downloaded into, refusing that directory unless it holds exactly those ten regular files:
 #     an artifact can then provide the programs of its own target only.
 #   release-assets.sh collect-bundle <platform> <artifact-directory> <directory>
 #     The same for the bundle archive mesh-<platform>.tar.gz of one of BUNDLE_PLATFORMS
 #     (linux-x86_64, linux-arm64, macos-arm64): exactly that one regular file.
 #   release-assets.sh bundle <tag> <commit> <directory>
-#     Run at the root of the repository. <directory> holds the 27 named programs and the bundle
+#     Run at the root of the repository. <directory> holds the 30 named programs and the bundle
 #     archives, and nothing else: the 3 bundles, or the 2 Linux bundles when the macOS bundle was
 #     not qualified (the one bundle a release may lack; its job is the only one allowed to fail).
 #     Adds the code archive session-mesh-<tag>.tar.gz (git archive of <commit>), install.sh of
@@ -23,7 +23,7 @@
 #     included.
 set -euo pipefail
 
-PROGRAMS="mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp work-write"
+PROGRAMS="mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all mesh-profile work-read work-mcp work-write"
 TARGETS="linux-x86_64 linux-aarch64 macos-arm64"
 BUNDLE_PLATFORMS="linux-x86_64 linux-arm64 macos-arm64"
 # The bundle a release may be published without.
@@ -58,7 +58,7 @@ name_programs() {
   ls -l "$3"
 }
 
-# The nine asset names of one target, sorted.
+# The ten asset names of one target, sorted.
 target_programs() {
   local program
   for program in $PROGRAMS; do echo "$program-$1"; done | LC_ALL=C sort
@@ -95,7 +95,7 @@ collect_bundle() {
   take_exactly "$1 bundle" "$2" "$3" 0644 "$(archive_of "$1")"
 }
 
-# The 27 program asset names and the bundle archives, sorted: all 3 bundles, or (with $1 = without)
+# The 30 program asset names and the bundle archives, sorted: all 3 bundles, or (with $1 = without)
 # all but the optional one.
 expected_assets() {
   local program target platform
@@ -120,7 +120,7 @@ check_assets() {
     echo "release-assets: no $(archive_of "$OPTIONAL_BUNDLE"): this release is published without it"
     return 0
   fi
-  echo "release-assets: $1 must hold exactly the 27 programs and the 3 bundles ($(expected_assets | tr '\n' ' ')), or the same without $(archive_of "$OPTIONAL_BUNDLE"); it holds:" >&2
+  echo "release-assets: $1 must hold exactly the 30 programs and the 3 bundles ($(expected_assets | tr '\n' ' ')), or the same without $(archive_of "$OPTIONAL_BUNDLE"); it holds:" >&2
   printf '%s\n' "$present" >&2
   exit 1
 }

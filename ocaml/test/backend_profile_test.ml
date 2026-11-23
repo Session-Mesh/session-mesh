@@ -192,11 +192,15 @@ let paths () =
 
 let bounds () =
   reject (String.make ((1024 * 1024) + 1) ' ');
-  reject
-    (config
-       (List.init 65 (fun i ->
-            let id = "a" ^ string_of_int i in
-            entry "pi" id ("/profiles/" ^ id))))
+  let entries count =
+    List.init count (fun i ->
+        let id = "a" ^ string_of_int i in
+        entry "pi" id ("/profiles/" ^ id))
+  in
+  Alcotest.(check int)
+    "64 dual-backend aliases fit" 128
+    (List.length (P.profiles (value (P.of_string (config (entries 128))))));
+  reject (config (entries 129))
 
 let filesystem_roots () =
   let root = Test_scratch.private_directory "backend-profile-" in

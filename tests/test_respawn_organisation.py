@@ -354,6 +354,21 @@ async def test_membership_never_publishes_an_older_host_list_over_a_newer_one(sn
     assert json.loads(state.answer(None))["host"] == "ok", "a successful read ends a silent host"
 
 
+async def test_membership_projects_input_ack_before_discovery_finishes(snapshot_file, tmp_path):
+    state = server.SessionsState()
+    modern = dict(hosted("modern", tmp_path, 1.0),
+                  pty_capabilities=["human_input_lease_v1", "acknowledged_input_v1"])
+    old = hosted("old", tmp_path, 2.0)
+    malformed = dict(hosted("malformed", tmp_path, 3.0), pty_capabilities="acknowledged_input_v1")
+    await state.membership(([modern, old, malformed], True, None, 0.0, 1.0))
+    assert {row["id"]: (row["ready"], row["pty_capabilities"])
+            for row in json.loads(state.answer(None))["mesh"]} == {
+                "modern": (False, ["acknowledged_input_v1"]),
+                "old": (False, []),
+                "malformed": (False, []),
+            }
+
+
 async def test_a_read_slower_than_a_publish_never_puts_older_rows_back(snapshot_file, tmp_path, monkeypatch):
     # A read's awaits (organisation, snapshot) let a round, or a newer read, publish in between.
     entered, release, view = threading.Event(), threading.Event(), server.organize.view

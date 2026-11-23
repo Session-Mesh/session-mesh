@@ -30,7 +30,7 @@ function prepare(transcript: boolean, declared = true) {
     fs.mkdirSync(folder, {recursive: true, mode: 0o700});
     if (transcript) fs.writeFileSync(path.join(folder, `${SID}.jsonl`), '{}\n');
     const accounts = declared ? [{id: 'work', label: 'Atacama', claude_config_dir: workDir(home)}] : [];
-    fs.writeFileSync(path.join(confDir, 'accounts.json'), JSON.stringify({v: 1, accounts}));
+    fs.writeFileSync(path.join(confDir, 'accounts.json'), JSON.stringify({v: 1, accounts}), {mode: 0o600});
   };
 }
 
@@ -71,3 +71,17 @@ test('an alias removed from accounts.json refuses the restore: never the default
     await new Promise(resolve => setTimeout(resolve, 1000));
     assert.equal(lab.starts(), 0, 'no agent was started');
   }, {env, alphaExtra: {account: 'work'}, prepare: prepare(true, false)}));
+
+test('a non-writable-to-others legacy registry is accepted at the first restore with mode 0644', TIMEOUT, () => {
+  const host = newRequests();
+  return withLab(async lab => {
+    const answer = await lab.post({names: ['alpha']});
+    assert.equal(answer.json.results.alpha.resumed, true, `${answer.text}\n${lab.mesh.output()}`);
+    assert.equal(host.sent.alpha.meta.account, 'work');
+    assert.ok(host.sent.alpha.command.includes(` CLAUDE_CONFIG_DIR=${workDir(lab.mesh.home)} `));
+    assert.match(host.sent.alpha.command, new RegExp(`--resume ${SID}`));
+  }, {env, alphaExtra: {account: 'work'}, prepare: (home, confDir) => {
+    prepare(true)(home, confDir);
+    fs.chmodSync(path.join(confDir, 'accounts.json'), 0o644);
+  }, intercept: host.intercept});
+});

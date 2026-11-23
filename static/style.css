@@ -387,6 +387,11 @@ dialog input:focus { outline: none; border-color: var(--accent); }
 .pane-head .conn:not(.bad) { color: var(--accent); }
 .pane-head .conn::before { content: "◉"; font-size: 17px; }
 .pane-head .conn.bad::before { content: "×"; font-size: 18px; }
+.p-input-review { display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.p-input-review[hidden], .p-input-review .p-input-retry[hidden],
+.p-input-review .p-input-discard[hidden] { display: none; }
+.p-input-state { flex: 1 1 150px; min-width: 0; overflow-wrap: anywhere; }
 .p-unread, .p-board-hint { display: none; }
 .p-actions { flex: none; flex-wrap: nowrap; gap: 4px; }
 .p-actions [data-act="close"] { display: none; }

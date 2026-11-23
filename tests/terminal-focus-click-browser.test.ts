@@ -35,7 +35,9 @@ function recordFrames(): void {
   window.__frames = [];
   const send = WebSocket.prototype.send;
   WebSocket.prototype.send = function (data) {
-    if (data instanceof Uint8Array) window.__frames.push({t: performance.now(), url: this.url, d: new TextDecoder().decode(data)});
+    const ack = new URL(this.url).searchParams.get('input_ack');
+    if (data instanceof Uint8Array) window.__frames.push({t: performance.now(), url: this.url,
+      d: new TextDecoder().decode(ack === '1' || ack === '2' ? data.subarray(4) : data)});
     return send.call(this, data);
   };
 }

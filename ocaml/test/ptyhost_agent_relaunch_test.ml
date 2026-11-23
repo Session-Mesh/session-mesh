@@ -48,7 +48,7 @@ let agent_pids fixture =
       | _ -> None)
     (log_lines fixture)
 
-let with_host ?(grace = "0.5") f =
+let with_host ?(grace = "0.5") ?lease_grace f =
   let scratch = Test_scratch.private_directory "pty-relaunch-" in
   let fixture =
     {
@@ -73,8 +73,10 @@ let with_host ?(grace = "0.5") f =
   write_shell shell "#!/bin/sh\nexec /bin/sh -i\n";
   let pid =
     host
-      (start_host
-         ~environment:[ "MESH_PTYHOST_AGENT_STOP_GRACE=" ^ grace ]
+       (start_host
+          ~environment:([ "MESH_PTYHOST_AGENT_STOP_GRACE=" ^ grace ]
+            @ Option.fold ~none:[] ~some:(fun seconds ->
+                [ "MESH_PTYHOST_HUMAN_LEASE_GRACE=" ^ seconds ]) lease_grace)
          !host_argv ~home:fixture.home
          ~runtime:(Filename.concat scratch "run")
          ~shell)
@@ -136,15 +138,28 @@ let stop_agent fixture created =
     ]
 
 let start_again ?(meta = [ ("nonce", `String "n1"); ("account", `String "b") ])
-    fixture created =
+    ?fence fixture created =
   send fixture
-    [
+    ([
       ("op", `String "start_if");
       ("name", `String "relaunch");
       ("created", created);
       ("command", `String ("env CLAUDE_CONFIG_DIR=/accounts/b " ^ fixture.agent));
       ("meta", `Assoc meta);
-    ]
+    ] @ Option.fold ~none:[] ~some:(fun id -> [("fence_id", `String id)]) fence)
+
+let switch_fence fixture op created fence_id =
+  let receipt =
+    match send fixture [ ("op", `String "list_bound") ] with
+    | `List [ session ] -> member "creation_receipt" session
+    | _ -> failwith "bound listing"
+  in
+  send fixture
+    [ ("op", `String op); ("name", `String "relaunch");
+      ("created", created); ("creation_receipt", receipt);
+      ("fence_id", `String fence_id) ]
+
+let fence_id = "switch-owner-0123456789abcdef"
 
 (* An attachment, and everything it has received so far. *)
 let attach fixture =
@@ -168,6 +183,674 @@ let type_in socket text =
   Bytes.set_int32_be head 1 (Int32.of_int (String.length text));
   let frame = Bytes.to_string head ^ text in
   ignore (Unix.write_substring socket frame 0 (String.length frame))
+
+let write_frame socket kind payload =
+  let head = Bytes.create 5 in
+  Bytes.set head 0 kind;
+  Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
+  let data = Bytes.to_string head ^ payload in
+  expect "whole frame sent"
+    (Unix.write_substring socket data 0 (String.length data)
+     = String.length data)
+
+let next_frame socket =
+  let head = read_exactly socket 5 in
+  (Bytes.get head 0,
+   Bytes.to_string (read_exactly socket
+     (Int32.to_int (Bytes.get_int32_be head 1))))
+
+let next_input_ack socket =
+  let rec loop remaining =
+    if remaining = 0 then failwith "missing native input ACK"
+    else
+      let kind, payload = next_frame socket in
+      if kind = 'C' && contains payload "input_ack" then payload
+      else loop (remaining - 1)
+  in
+  loop 100
+
+let next_control socket =
+  let rec loop remaining =
+    if remaining = 0 then failwith "missing native control frame"
+    else let kind, payload = next_frame socket in
+      if kind = 'C' then payload else loop (remaining - 1)
+  in loop 100
+
+let ack_attachment fixture created id =
+  let socket = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  Unix.setsockopt_float socket Unix.SO_RCVTIMEO 3.;
+  Unix.connect socket (Unix.ADDR_UNIX fixture.socket_path);
+  write_frame socket 'C'
+    (Yojson.Basic.to_string (`Assoc
+       [ ("op", `String "attach"); ("name", `String "relaunch");
+         ("rows", `Int 24); ("cols", `Int 80);
+         ("input_ack_created", created); ("input_ack_id", `String id) ]));
+  socket
+
+let v2_attachment ?(attach_fields = []) fixture fields =
+  let socket = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  Unix.setsockopt_float socket Unix.SO_RCVTIMEO 3.;
+  Unix.connect socket (Unix.ADDR_UNIX fixture.socket_path);
+  write_frame socket 'C'
+    (Yojson.Basic.to_string (`Assoc
+       ([ ("op", `String "attach"); ("name", `String "relaunch");
+          ("input_ack_v2", `Assoc fields) ] @ attach_fields)));
+  let greeting = Yojson.Basic.from_string (snd (next_frame socket)) in
+  if member "ok" greeting = `Bool true then ignore (next_frame socket);
+  (socket, greeting)
+
+let v2_new fixture created =
+  v2_attachment fixture
+    [ ("mode", `String "new"); ("created", created) ]
+
+(* "attached = 0" is updated in the host's handler before accept_fork closes
+   its flow. Wait for socket EOF as well before reusing a connection budget. *)
+let close_attachment socket =
+  Fun.protect
+    ~finally:(fun () -> Unix.close socket)
+    (fun () ->
+      Unix.shutdown socket Unix.SHUTDOWN_SEND;
+      let buffer = Bytes.create 4096 in
+      let rec drain () =
+        if Unix.read socket buffer 0 (Bytes.length buffer) <> 0 then drain ()
+      in
+      drain ())
+
+let v2_resume fixture created ack =
+  v2_attachment fixture
+    [ ("mode", `String "resume"); ("created", created);
+      ("slot", member "slot" ack); ("generation", member "generation" ack);
+      ("actor_nonce", member "actor_nonce" ack) ]
+
+let v2_input socket seq data =
+  let head = Bytes.create 4 in
+  Bytes.set_int32_be head 0 (Int32.of_int seq);
+  write_frame socket 'I' (Bytes.to_string head ^ data);
+  Yojson.Basic.from_string (next_input_ack socket)
+
+let resize socket ~mode rows cols =
+  write_frame socket 'R' (Yojson.Basic.to_string (`Assoc
+    [ ("rows", `Int rows); ("cols", `Int cols);
+      ("size", `String mode) ]))
+
+let rec next_size socket =
+  let kind, payload = next_frame socket in
+  if kind = 'S' then Yojson.Basic.from_string payload else next_size socket
+
+let no_size socket =
+  Unix.setsockopt_float socket Unix.SO_RCVTIMEO 0.15;
+  let rec drain () =
+    match next_frame socket with
+    | 'S', _ -> false
+    | _ -> drain ()
+    | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) ->
+        true
+  in
+  let result = drain () in
+  Unix.setsockopt_float socket Unix.SO_RCVTIMEO 3.;
+  expect "no size frame after refused resize" result
+
+let size_claim = [ ("size", `String "claim");
+                   ("rows", `Int 24); ("cols", `Int 80) ]
+
+let size_is label frame rows cols owner =
+  expect label
+    (member "rows" frame = `Int rows
+     && member "cols" frame = `Int cols
+     && member "owner" frame = `String owner)
+
+let acknowledged_v2_resize_fences () =
+  with_host (fun fixture ->
+    let created = member "created" (new_agent fixture) in
+    let owner, reply = v2_attachment ~attach_fields:size_claim fixture
+      [ ("mode", `String "new"); ("created", created) ] in
+    expect "v2 size owner bound" (member "input_ack_v2" reply <> `Null);
+    size_is "owner's initial geometry" (next_size owner) 24 80 "you";
+    let watcher, reply = v2_attachment ~attach_fields:size_claim fixture
+      [ ("mode", `String "new"); ("created", created) ] in
+    expect "watcher bound" (member "input_ack_v2" reply <> `Null);
+    size_is "watcher does not own" (next_size watcher) 24 80 "other";
+    size_is "owner informed of watcher" (next_size owner) 24 80 "you";
+    ignore (wait_until "acquire clean size-owner fence" 3. (fun () ->
+      member "ok" (switch_fence fixture "switch_input_acquire" created fence_id)
+      = `Bool true));
+    resize owner ~mode:"take" 39 101;
+    no_size watcher;
+    expect "release fence" (member "ok"
+      (switch_fence fixture "switch_input_release" created fence_id)
+      = `Bool true);
+    resize owner ~mode:"take" 33 95;
+    size_is "released size and owner" (next_size owner) 33 95 "you";
+    size_is "watcher sees only released size" (next_size watcher)
+      33 95 "other";
+    Unix.close owner;
+    Unix.close watcher)
+
+let acknowledged_v2_stale_resize () =
+  with_host (fun fixture ->
+    let created = member "created" (new_agent fixture) in
+    let old, reply = v2_attachment ~attach_fields:size_claim fixture
+      [ ("mode", `String "new"); ("created", created) ] in
+    expect "old size owner bound" (member "input_ack_v2" reply <> `Null);
+    size_is "old owner" (next_size old) 24 80 "you";
+    let fresh = member "created" (stop_agent fixture created) in
+    expect "stop advanced epoch" (fresh <> created);
+    let current, reply = v2_attachment ~attach_fields:size_claim fixture
+      [ ("mode", `String "new"); ("created", fresh) ] in
+    expect "fresh actor bound" (member "input_ack_v2" reply <> `Null);
+    size_is "old owner still attached" (next_size current) 24 80 "other";
+    size_is "old owner told of fresh watcher" (next_size old) 24 80 "you";
+    resize old ~mode:"take" 39 101;
+    expect "stale resize processed before geometry check"
+      (member "reason" (v2_input old 1 "stale")
+       = `String "stale_incarnation");
+    resize current ~mode:"claim" 24 80;
+    size_is "stale resize did not change geometry or size ownership"
+      (next_size current) 24 80 "other";
+    size_is "old owner remains before current takeover"
+      (next_size old) 24 80 "you";
+    resize current ~mode:"take" 33 95;
+    size_is "current actor takes size" (next_size current) 33 95 "you";
+    size_is "old actor becomes follower" (next_size old) 33 95 "other";
+    resize old ~mode:"take" 44 99;
+    expect "second stale resize processed before geometry check"
+      (member "reason" (v2_input old 2 "stale")
+       = `String "stale_incarnation");
+    resize current ~mode:"claim" 33 95;
+    size_is "stale actor cannot take ownership back"
+      (next_size current) 33 95 "you";
+    Unix.close old;
+    Unix.close current)
+
+let acknowledged_v2_revoked_dirty () =
+  with_host ~lease_grace:"1.5" (fun fixture ->
+    let created = member "created" (new_agent fixture) in
+    let old, reply = v2_new fixture created in
+    let actor = member "input_ack_v2" reply in
+    expect "human input admitted"
+      (member "input_ack" (v2_input old 1 "a") = `Bool true);
+    let fresh = member "created" (stop_agent fixture created) in
+    Unix.sleepf 0.4;
+    expect "old attached actor's dirty lease does not expire on stop"
+      (member "reason"
+        (switch_fence fixture "switch_input_acquire" fresh fence_id)
+       = `String "legacy_attachment");
+    write_frame old 'H' (Yojson.Basic.to_string (`Assoc
+      [ ("slot", member "slot" actor);
+        ("generation", member "generation" actor);
+        ("dirty", `Bool false) ]));
+    Unix.close old;
+    ignore (wait_until "old dirty actor detached" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    expect "old epoch H did not clear an unknown dirty draft"
+      (member "reason"
+        (switch_fence fixture "switch_input_acquire" fresh fence_id)
+       = `String "input_pending");
+    ignore (wait_until "disconnected old dirty lease has bounded grace" 4.
+      (fun () -> member "ok"
+        (switch_fence fixture "switch_input_acquire" fresh fence_id)
+        = `Bool true));
+    expect "release" (member "ok"
+      (switch_fence fixture "switch_input_release" fresh fence_id)
+      = `Bool true))
+
+let acknowledged_v2 () =
+  with_host (fun fixture ->
+    let created = member "created" (new_agent fixture) in
+    let socket, greeting = v2_new fixture created in
+    expect "v2 advertised on successful attach"
+      (contains (Yojson.Basic.to_string greeting) "acknowledged_input_v2");
+    let ack = member "input_ack_v2" greeting in
+    expect "host assigns a bounded slot and a generation"
+      (match (member "slot" ack, member "generation" ack) with
+       | `Int slot, `Int generation -> slot >= 0 && slot < 64 && generation > 0
+       | _ -> false);
+    expect "host mints lowercase 128-bit actor nonce without receipt"
+      (match member "actor_nonce" ack with
+       | `String nonce ->
+           String.length nonce = 32
+           && String.for_all
+                (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false) nonce
+           && member "creation_receipt" ack = `Null
+       | _ -> false);
+    expect "accepted input" (member "input_ack" (v2_input socket 1 "a") = `Bool true);
+    Unix.close socket;
+    ignore (wait_until "v2 detach" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let resumed, resumed_reply = v2_resume fixture created ack in
+    expect "matching generation resumes"
+      (member "input_ack_v2" resumed_reply = ack);
+    expect "exact duplicate ACKed without enqueue"
+      (member "input_ack" (v2_input resumed 1 "a") = `Bool true);
+    expect "changed duplicate rejected"
+      (member "reason" (v2_input resumed 1 "b") = `String "sequence_conflict");
+    expect "stale sequence rejected"
+      (member "reason" (v2_input resumed 0 "a") = `String "invalid_frame");
+    write_frame resumed 'H' (Yojson.Basic.to_string (`Assoc
+      [ ("slot", member "slot" ack); ("generation", member "generation" ack);
+        ("dirty", `Bool false) ]));
+    ignore (wait_until "v2 clean lease" 3. (fun () ->
+      member "ok" (switch_fence fixture "switch_input_acquire" created fence_id)
+      = `Bool true));
+    expect "fenced exact retry ACKed"
+      (member "input_ack" (v2_input resumed 1 "a") = `Bool true);
+    expect "fenced new input refused"
+      (member "reason" (v2_input resumed 2 "unadmitted")
+       = `String "switch_input_fenced");
+    expect "fenced changed retry refused"
+      (member "reason" (v2_input resumed 1 "changed")
+       = `String "switch_input_fenced");
+    Unix.close resumed;
+    ignore (wait_until "fenced actor detached" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let resumed, resumed_reply = v2_resume fixture created ack in
+    expect "previous actor may resume while fenced"
+      (member "input_ack_v2" resumed_reply = ack);
+    expect "ACK-lost retransmission after reconnect while fenced"
+      (member "input_ack" (v2_input resumed 1 "a") = `Bool true);
+    expect "release" (member "ok"
+      (switch_fence fixture "switch_input_release" created fence_id)
+      = `Bool true);
+    Unix.close resumed;
+    ignore (wait_until "v2 clean detach" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let reused, next = v2_new fixture created in
+    let next_ack = member "input_ack_v2" next in
+    expect "unused slot chosen with distinct generation"
+      (member "slot" next_ack = `Int 1
+       && member "generation" next_ack <> member "generation" ack
+       && member "actor_nonce" next_ack <> member "actor_nonce" ack);
+    expect "new generation starts at sequence one"
+      (member "input_ack" (v2_input reused 1 "b") = `Bool true);
+    write_frame reused 'H' (Yojson.Basic.to_string (`Assoc
+      [ ("slot", member "slot" next_ack);
+        ("generation", member "generation" next_ack);
+        ("dirty", `Bool false) ]));
+    Unix.close reused;
+    ignore (wait_until "current v2 actor inactive before nonce checks" 3.
+      (fun () -> member "attached" (the_session fixture) = `Int 0));
+    let wrong_nonce =
+      match member "actor_nonce" next_ack with
+      | `String nonce ->
+          let changed = Bytes.of_string nonce in
+          Bytes.set changed 0 (if nonce.[0] = '0' then '1' else '0');
+          Bytes.to_string changed
+      | _ -> failwith "missing actor nonce"
+    in
+    let wrong, denied = v2_attachment fixture
+      [ ("mode", `String "resume"); ("created", created);
+        ("slot", member "slot" next_ack);
+        ("generation", member "generation" next_ack);
+        ("actor_nonce", `String wrong_nonce) ] in
+    expect "wrong nonce cannot bind current slot/generation"
+      (member "ok" denied <> `Bool true);
+    Unix.close wrong;
+    let missing, denied = v2_attachment fixture
+      [ ("mode", `String "resume"); ("created", created);
+        ("slot", member "slot" next_ack);
+        ("generation", member "generation" next_ack) ] in
+    expect "resume without nonce refused"
+      (member "ok" denied <> `Bool true);
+    Unix.close missing;
+    let supplied, denied = v2_attachment fixture
+      [ ("mode", `String "new"); ("created", created);
+        ("actor_nonce", member "actor_nonce" next_ack) ] in
+    expect "new cannot nominate a nonce" (member "ok" denied <> `Bool true);
+    Unix.close supplied;
+    let previous, reply = v2_resume fixture created ack in
+    expect "clean actor remains resumable before its slot retires"
+      (member "input_ack_v2" reply = ack
+       && member "input_ack" (v2_input previous 1 "a") = `Bool true);
+    Unix.close previous;
+    ignore (wait_until "previous v2 actor detached" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let malformed, denied = v2_attachment fixture
+      [ ("mode", `String "new"); ("created", created);
+        ("slot", `Int 0) ] in
+    expect "new cannot nominate a slot"
+      (member "ok" denied <> `Bool true);
+    Unix.close malformed;
+    let malformed, denied = v2_attachment fixture
+      [ ("mode", `String "resume"); ("created", created);
+        ("slot", member "slot" next_ack);
+        ("generation", `Int (-1)) ] in
+    expect "malformed generation rejected"
+      (member "ok" denied <> `Bool true);
+    Unix.close malformed;
+    let duplicate, denied = v2_attachment fixture
+      [ ("mode", `String "new"); ("mode", `String "new");
+        ("created", created) ] in
+    expect "duplicate v2 keys rejected rather than last-wins"
+      (member "ok" denied <> `Bool true);
+    Unix.close duplicate;
+    let resumed, reply = v2_resume fixture created next_ack in
+    expect "correct nonce binds the same inactive slot and generation"
+      (member "input_ack_v2" reply = next_ack
+       && member "input_ack" (v2_input resumed 1 "b") = `Bool true);
+    Unix.close resumed)
+
+let acknowledged_v2_capacity () =
+  with_host (fun fixture ->
+    let created = member "created" (new_agent fixture) in
+    let legacy_id = "retained-v1-actor-0123456789abcdef" in
+    let legacy = ack_attachment fixture created legacy_id in
+    ignore (next_frame legacy);
+    ignore (next_frame legacy);
+    expect "v1 input admitted"
+      (member "input_ack" (v2_input legacy 1 "v1") = `Bool true);
+    write_frame legacy 'H' (Yojson.Basic.to_string (`Assoc
+      [ ("client_id", `String legacy_id); ("dirty", `Bool false) ]));
+    close_attachment legacy;
+    ignore (wait_until "v1 actor detached" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let lost, reply = v2_new fixture created in
+    let lost_actor = member "input_ack_v2" reply in
+    expect "report-only actor accepted before lost ACK"
+      (member "input_ack" (v2_input lost 1 "\x1b[I") = `Bool true);
+    close_attachment lost;
+    ignore (wait_until "clean report-only actor detached" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let retried, reply = v2_resume fixture created lost_actor in
+    expect "lost ACK recoverable before eligible clean actor retires"
+      (member "input_ack_v2" reply = lost_actor
+       && member "input_ack" (v2_input retried 1 "\x1b[I") = `Bool true);
+    close_attachment retried;
+    ignore (wait_until "report-only actor detached again" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    for index = 1 to 70 do
+      let socket, reply = v2_new fixture created in
+      expect "successive clean actors are admitted"
+        (member "input_ack_v2" reply <> `Null);
+      let actor = member "input_ack_v2" reply in
+      if index <= 63 then
+        expect "unused slots precede clean actor retirement"
+          (member "slot" actor = `Int index);
+      expect "each actor has accepted input"
+        (member "input_ack" (v2_input socket 1 "x") = `Bool true);
+      write_frame socket 'H' (Yojson.Basic.to_string (`Assoc
+        [ ("slot", member "slot" actor);
+          ("generation", member "generation" actor);
+          ("dirty", `Bool false) ]));
+      close_attachment socket;
+      ignore (wait_until "v2 actor detached" 3. (fun () ->
+        member "attached" (the_session fixture) = `Int 0))
+    done;
+    let retired, denied = v2_resume fixture created lost_actor in
+    expect "retired clean actor cannot resume after bounded slot reuse"
+      (member "ok" denied <> `Bool true);
+    Unix.close retired;
+    let legacy = ack_attachment fixture created legacy_id in
+    expect "v1 history retained through v2 slot turnover"
+      (contains (snd (next_frame legacy)) "acknowledged_input_v1");
+    ignore (next_frame legacy);
+    expect "v1 replayable bytes still ACK"
+      (member "input_ack" (v2_input legacy 1 "v1") = `Bool true);
+    close_attachment legacy;
+    ignore (wait_until "v1 actor detached again" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let active = ref [] in
+    for index = 1 to 64 do
+      let socket, reply = v2_new fixture created in
+      expect
+        (Printf.sprintf "active actor %d admitted: %s" index
+          (Yojson.Basic.to_string reply))
+        (member "input_ack_v2" reply <> `Null);
+      active := socket :: !active
+    done;
+    let extra, denied = v2_new fixture created in
+    expect "65th active actor refused" (member "ok" denied <> `Bool true);
+    Unix.close extra;
+    List.iter Unix.close !active;
+    ignore (wait_until "all actors detached" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let dirty = ref [] in
+    for _ = 1 to 64 do
+      let socket, reply = v2_new fixture created in
+      let actor = member "input_ack_v2" reply in
+      write_frame socket 'H' (Yojson.Basic.to_string (`Assoc
+        [ ("slot", member "slot" actor);
+          ("generation", member "generation" actor);
+          ("dirty", `Bool true) ]));
+      dirty := socket :: !dirty
+    done;
+    List.iter Unix.close !dirty;
+    ignore (wait_until "dirty actors detached" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let extra, denied = v2_new fixture created in
+    expect "65th dirty actor refused" (member "ok" denied <> `Bool true);
+    Unix.close extra)
+
+let acknowledged_v2_epochs () =
+  with_host (fun fixture ->
+    let created = member "created" (new_agent fixture) in
+    let old, response = v2_new fixture created in
+    let actor = member "input_ack_v2" response in
+    let marker = Filename.concat fixture.home "unadmitted-marker" in
+    expect "old actor assigned" (actor <> `Null);
+    let stopped = stop_agent fixture created in
+    let fresh = member "created" stopped in
+    expect "incarnation changed" (fresh <> created);
+    expect "old input refused without reaching new agent"
+      (member "reason" (v2_input old 1 "old-input")
+       = `String "stale_incarnation");
+    write_frame old 'H' (Yojson.Basic.to_string (`Assoc
+      [ ("slot", member "slot" actor);
+        ("generation", member "generation" actor); ("dirty", `Bool true) ]));
+    let stale, denied = v2_resume fixture fresh actor in
+    expect "old generation cannot resume on replacement"
+      (member "ok" denied <> `Bool true);
+    Unix.close stale;
+    Unix.close old;
+    ignore (wait_until "old epoch detached" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let current, current_reply = v2_new fixture fresh in
+    expect "new epoch admits fresh actor"
+      (member "input_ack_v2" current_reply <> `Null);
+    ignore (wait_until "stale lease control did not dirty replacement" 3.
+      (fun () -> member "ok"
+        (switch_fence fixture "switch_input_acquire" fresh fence_id)
+        = `Bool true));
+    expect "new input refused while fenced"
+      (member "reason" (v2_input current 1
+        ("echo unadmitted > " ^ Filename.quote marker ^ "\r"))
+       = `String "switch_input_fenced");
+    expect "new input can be admitted after release"
+      (member "ok"
+        (switch_fence fixture "switch_input_release" fresh fence_id)
+       = `Bool true);
+    Unix.sleepf 0.2;
+    expect "refused bytes caused no PTY command output"
+      (not (Sys.file_exists marker));
+    expect "refused input did not consume sequence"
+      (member "input_ack" (v2_input current 1 "admitted") = `Bool true);
+    Unix.close current)
+
+let acknowledged_reports () =
+  with_host (fun fixture ->
+      let created = member "created" (new_agent fixture) in
+      let id = "reports-actor-0123456789abcdef" in
+      let socket = ack_attachment fixture created id in
+      expect "report attachment negotiated"
+        (contains (snd (next_frame socket)) "acknowledged_input_v1");
+      ignore (next_frame socket);
+      let frame seq data =
+        let head = Bytes.create 4 in
+        Bytes.set_int32_be head 0 (Int32.of_int seq);
+        write_frame socket 'I' (Bytes.to_string head ^ data);
+        Yojson.Basic.from_string (next_input_ack socket)
+      in
+      let accepted seq data =
+        expect "report or human bytes ACKed"
+          (member "input_ack" (frame seq data) = `Bool true)
+      in
+      accepted 1 "\x1b[I";
+      accepted 1 "\x1b[I";
+      expect "same sequence with changed classification cannot be ACKed"
+        (member "reason" (frame 1 "human") = `String "sequence_conflict");
+      ignore (wait_until "focus-only report leaves fence acquirable" 3. (fun () ->
+        member "ok" (switch_fence fixture "switch_input_acquire" created fence_id)
+        = `Bool true));
+      expect "report still refused while fenced"
+        (member "reason" (frame 2 "\x1b[O")
+         = `String "switch_input_fenced");
+      expect "release after focus" (member "ok"
+        (switch_fence fixture "switch_input_release" created fence_id)
+        = `Bool true);
+      List.iteri (fun i report -> accepted (i + 2) report)
+        [ "\x1b[<0;5;5M"; "\x1b[<32;6;7M"; "\x1b[<0;6;7m";
+          "\x1b[7;9R"; "\x1b[0n" ];
+      ignore (wait_until "SGR and terminal replies leave fence acquirable" 3.
+        (fun () -> member "ok"
+          (switch_fence fixture "switch_input_acquire" created fence_id)
+          = `Bool true));
+      expect "release after mouse" (member "ok"
+        (switch_fence fixture "switch_input_release" created fence_id)
+        = `Bool true);
+      accepted 7 "human-draft";
+      accepted 8 "\x1b[O";
+      expect "focus report never clears a human draft"
+        (member "reason" (switch_fence fixture "switch_input_acquire" created fence_id)
+         = `String "input_pending");
+      write_frame socket 'H' (Yojson.Basic.to_string (`Assoc
+        [ ("client_id", `String id); ("dirty", `Bool false) ]));
+      ignore (wait_until "explicit human completion releases dirty lease" 3.
+        (fun () -> member "ok"
+          (switch_fence fixture "switch_input_acquire" created fence_id)
+          = `Bool true));
+      expect "release after human completion" (member "ok"
+        (switch_fence fixture "switch_input_release" created fence_id)
+        = `Bool true);
+      accepted 9 "\x1b[I\r";
+      expect "mixed focus and CR is human input"
+        (member "reason" (switch_fence fixture "switch_input_acquire" created fence_id)
+         = `String "input_pending");
+      Unix.close socket)
+
+let acknowledged_input () =
+  with_host (fun fixture ->
+      let created = member "created" (new_agent fixture) in
+      let id = "actor-0123456789abcdef" in
+      let socket = ack_attachment fixture created id in
+      let _, greeting = next_frame socket in
+      expect "native capability"
+        (contains greeting "acknowledged_input_v1");
+      ignore (next_frame socket);
+      let frame seq data =
+        let head = Bytes.create 4 in
+        Bytes.set_int32_be head 0 (Int32.of_int seq);
+        write_frame socket 'I' (Bytes.to_string head ^ data)
+      in
+      frame 1 "a";
+      let ack = next_input_ack socket in
+      expect "native ACK after enqueue" (contains ack {|input_ack|});
+      frame 1 "a";
+      let duplicate = next_input_ack socket in
+      expect "duplicate ACK" (contains duplicate {|input_ack|});
+      frame 1 "changed";
+      let refusal = next_input_ack socket in
+      expect "sequence reuse rejected" (contains refusal {|sequence_conflict|});
+      frame 3 "out-of-order";
+      expect "sequence gap rejected"
+        (contains (next_input_ack socket) {|sequence_gap|});
+      write_frame socket 'I' (String.make 4 '\000');
+      expect "missing payload rejected"
+        (contains (next_input_ack socket) {|invalid_frame|});
+      let oversized = Bytes.create 4 in
+      Bytes.set_int32_be oversized 0 2l;
+      write_frame socket 'I' (Bytes.to_string oversized ^ String.make 65537 'x');
+      expect "oversized input rejected without changing the sequence"
+        (contains (next_input_ack socket) {|invalid_frame|});
+      expect "dirty attachment refuses acquisition"
+        (member "reason" (switch_fence fixture "switch_input_acquire" created fence_id)
+         = `String "input_pending");
+      Unix.close socket;
+      ignore (wait_until "acknowledged attachment detached" 3. (fun () ->
+        member "attached" (the_session fixture) = `Int 0));
+      let reattached = ack_attachment fixture created id in
+      expect "same-incarnation reconnect keeps capability"
+        (contains (snd (next_frame reattached)) "acknowledged_input_v1");
+      ignore (next_frame reattached);
+      let head = Bytes.create 4 in
+      Bytes.set_int32_be head 0 1l;
+      write_frame reattached 'I' (Bytes.to_string head ^ "a");
+      expect "ACK-lost retry is idempotent across connections"
+        (Yojson.Basic.Util.member "input_ack"
+          (Yojson.Basic.from_string (next_input_ack reattached)) = `Bool true);
+      let second_id = "second-actor-0123456789abcdef" in
+      let second = ack_attachment fixture created second_id in
+      expect "second negotiated attachment"
+        (contains (snd (next_frame second)) "acknowledged_input_v1");
+      ignore (next_frame second);
+      write_frame second 'I' (Bytes.to_string head ^ "b");
+      expect "second actor accepted"
+        (Yojson.Basic.Util.member "input_ack"
+          (Yojson.Basic.from_string (next_input_ack second)) = `Bool true);
+      write_frame reattached 'H'
+        (Yojson.Basic.to_string (`Assoc [
+          ("client_id", `String id); ("dirty", `Bool false) ]));
+      expect "second dirty actor still defers fence"
+        (member "reason" (switch_fence fixture "switch_input_acquire" created fence_id)
+         = `String "input_pending");
+      write_frame second 'H'
+        (Yojson.Basic.to_string (`Assoc [
+          ("client_id", `String second_id); ("dirty", `Bool false) ]));
+       ignore (wait_until "acknowledged attachment acquisition" 3. (fun () ->
+         member "ok" (switch_fence fixture "switch_input_acquire" created fence_id)
+         = `Bool true));
+       Unix.close second;
+       Bytes.set_int32_be head 0 1l;
+       write_frame reattached 'I' (Bytes.to_string head ^ "a");
+       expect "exact previously accepted input can recover its ACK while fenced"
+         (member "input_ack" (Yojson.Basic.from_string (next_input_ack reattached))
+          = `Bool true);
+       write_frame reattached 'I' (Bytes.to_string head ^ "changed");
+       expect "changed retry remains refused while fenced"
+         (contains (next_input_ack reattached) "switch_input_fenced");
+       Bytes.set_int32_be head 0 2l;
+      write_frame reattached 'I' (Bytes.to_string head ^ "fenced");
+       expect "fenced input refused before enqueue"
+         (contains (next_input_ack reattached) "switch_input_fenced");
+       Unix.close reattached;
+       ignore (wait_until "fenced v1 actor detached" 3. (fun () ->
+         member "attached" (the_session fixture) = `Int 0));
+       let reattached = ack_attachment fixture created id in
+       expect "known v1 actor reconnects while fenced"
+         (contains (snd (next_frame reattached)) "acknowledged_input_v1");
+       ignore (next_frame reattached);
+       Bytes.set_int32_be head 0 1l;
+       write_frame reattached 'I' (Bytes.to_string head ^ "a");
+       expect "v1 ACK-lost retry after reconnect while fenced"
+         (member "input_ack" (Yojson.Basic.from_string (next_input_ack reattached))
+          = `Bool true);
+       Bytes.set_int32_be head 0 2l;
+      type_in reattached "raw-after-negotiation";
+      expect "raw input never bypasses negotiated fence"
+        (contains (next_control reattached) "switch_input_fenced");
+      expect "release succeeds"
+        (member "ok" (switch_fence fixture "switch_input_release" created fence_id)
+         = `Bool true);
+      write_frame reattached 'I' (Bytes.to_string head ^ "fenced");
+      expect "retry after release accepted"
+        (Yojson.Basic.Util.member "input_ack"
+          (Yojson.Basic.from_string (next_input_ack reattached)) = `Bool true);
+      let stopped = stop_agent fixture created in
+      let fresh = member "created" stopped in
+      expect "native incarnation changed" (fresh <> created);
+      write_frame reattached 'I' (Bytes.to_string head ^ "fenced");
+      expect "old attachment cannot type into new incarnation"
+        (contains (next_input_ack reattached) "stale_incarnation");
+      let stale = ack_attachment fixture created "new-actor-0123456789abcdef" in
+      let _, denied = next_frame stale in
+      expect "old created cannot reattach" (not (contains denied "acknowledged_input_v1"));
+      Unix.close stale;
+      Unix.close reattached;
+      ignore (wait_until "old actor detached" 3. (fun () ->
+        member "attached" (the_session fixture) = `Int 0));
+      let reused = ack_attachment fixture fresh id in
+      let _, denied = next_frame reused in
+      expect "an actor id with old history cannot impersonate a new incarnation"
+        (not (contains denied "acknowledged_input_v1"));
+      Unix.close reused)
 
 let received socket =
   let buffer = Buffer.create 4096 and chunk = Bytes.create 4096 in
@@ -352,6 +1035,108 @@ let pending_launch_is_dropped () =
            (fun line -> contains line "/accounts/b")
            (log_lines fixture)))
 
+let fenced_relaunch () =
+  with_host (fun fixture ->
+      let session = new_agent fixture in
+      let old = member "created" session in
+      let legacy = attach fixture in
+      ignore (wait_until "legacy attach" 3. (fun () ->
+        member "attached" (the_session fixture) = `Int 1));
+      expect "legacy attachment prevents acquisition"
+        (member "reason" (switch_fence fixture "switch_input_acquire" old fence_id)
+         = `String "legacy_attachment");
+      Unix.close legacy;
+      ignore (wait_until "legacy detach" 3. (fun () ->
+        member "attached" (the_session fixture) = `Int 0));
+      let acquired = switch_fence fixture "switch_input_acquire" old fence_id in
+      expect ("acquire: " ^ Yojson.Basic.to_string acquired)
+        (member "ok" acquired = `Bool true);
+      expect "idempotent acquire"
+        (member "ok" (switch_fence fixture "switch_input_acquire" old fence_id)
+         = `Bool true);
+      expect "another owner refused"
+        (member "ok" (switch_fence fixture "switch_input_acquire" old "other-owner-0123456789abcdef")
+         = `Bool false);
+      expect "stale acquire refused"
+        (member "ok" (switch_fence fixture "switch_input_acquire" (`Float 1.) fence_id)
+         = `Bool false);
+      expect "another host receipt cannot release"
+        (member "ok"
+           (send fixture
+              [ ("op", `String "switch_input_release");
+                ("name", `String "relaunch"); ("created", old);
+                ("creation_receipt",
+                 `String (String.make 64 '0' ^ ":0000000000000001"));
+                ("fence_id", `String fence_id) ])
+         = `Bool false);
+      let desk = attach fixture in
+      let refused_bytes = ref "" in
+      ignore (wait_until "legacy attachment refused" 3. (fun () ->
+        refused_bytes := !refused_bytes ^ received desk;
+        contains !refused_bytes "invalid request"));
+      expect "new legacy attachment refused while fenced"
+        (member "attached" (the_session fixture) = `Int 0);
+      Unix.close desk;
+      let notice =
+        send fixture
+          [ ("op", `String "notify_if"); ("name", `String "relaunch");
+            ("created", old); ("agent", `String "claude");
+            ("notification_id", `String "notice-0123456789abcdef");
+            ("count", `Int 1); ("idle_since", `Float (Unix.gettimeofday () +. 1.));
+            ("through_seq", `Int 1) ]
+      in
+      expect "wake refused while fenced"
+        (member "reason" notice = `String "switch_input_fenced");
+      expect "wrong release refused"
+        (member "ok" (switch_fence fixture "switch_input_release" old "other-owner-0123456789abcdef")
+         = `Bool false);
+      expect "unowned stop refused"
+        (member "ok" (stop_agent fixture old) = `Bool false);
+      let stopped =
+        send fixture [ ("op", `String "stop_agent_if"); ("name", `String "relaunch");
+          ("created", old); ("agent", `String "claude");
+          ("fence_id", `String fence_id) ]
+      in
+      expect "owned stop" (member "ok" stopped = `Bool true);
+      let fresh = member "created" stopped in
+      expect "old incarnation cannot release"
+        (member "ok" (switch_fence fixture "switch_input_release" old fence_id)
+         = `Bool false);
+      expect "unowned start refused"
+        (member "ok" (start_again fixture fresh) = `Bool false);
+      expect "wrong-owner start refused"
+        (member "ok"
+           (start_again ~fence:"other-owner-0123456789abcdef" fixture fresh)
+         = `Bool false);
+      expect "owned start"
+        (member "ok" (start_again ~fence:fence_id fixture fresh) = `Bool true);
+      started fixture 2;
+      expect "new agent started before release"
+        (List.exists (fun line -> contains line "/accounts/b") (log_lines fixture));
+      expect "even after control launch, wake is refused"
+        (member "reason"
+           (send fixture
+             [ ("op", `String "notify_if"); ("name", `String "relaunch");
+               ("created", fresh); ("agent", `String "claude");
+               ("notification_id", `String "notice-new-0123456789abcdef");
+               ("count", `Int 1); ("idle_since", `Float (Unix.gettimeofday () +. 1.));
+               ("through_seq", `Int 2) ])
+         = `String "switch_input_fenced");
+      expect "fence remains held across transport disconnect"
+        (member "ok" (switch_fence fixture "switch_input_acquire" fresh "other-owner-0123456789abcdef")
+         = `Bool false);
+      expect "explicit release"
+        (member "ok" (switch_fence fixture "switch_input_release" fresh fence_id)
+         = `Bool true);
+      let after = attach fixture in
+      let replay = ref "" in
+      let new_pid = List.nth (agent_pids fixture) 1 in
+      ignore (wait_until "agent output retained while fenced" 3. (fun () ->
+        replay := !replay ^ received after;
+        contains !replay (Printf.sprintf "agent-start %d /accounts/b" new_pid)));
+      Unix.close after;
+      expect "no early release left" (List.length (agent_pids fixture) = 2))
+
 let () =
   host_argv := [| Sys.argv.(1) |];
   Alcotest.run
@@ -377,5 +1162,23 @@ let () =
             meta_keeps_the_nonce;
           Alcotest.test_case "a pending launch is dropped by a stop" `Slow
             pending_launch_is_dropped;
+          Alcotest.test_case "switch input fence survives stop/start" `Slow
+            fenced_relaunch;
+           Alcotest.test_case "acknowledged human input" `Slow
+             acknowledged_input;
+           Alcotest.test_case "versioned input actor generation" `Slow
+             acknowledged_v2;
+           Alcotest.test_case "versioned bounded actor reuse" `Slow
+             acknowledged_v2_capacity;
+           Alcotest.test_case "versioned actor epoch isolation" `Slow
+             acknowledged_v2_epochs;
+           Alcotest.test_case "versioned fenced resize isolation" `Slow
+             acknowledged_v2_resize_fences;
+           Alcotest.test_case "versioned stale resize isolation" `Slow
+             acknowledged_v2_stale_resize;
+           Alcotest.test_case "revoked dirty actor keeps disconnect grace" `Slow
+             acknowledged_v2_revoked_dirty;
+          Alcotest.test_case "acknowledged terminal reports do not own a draft" `Slow
+            acknowledged_reports;
         ] );
     ]

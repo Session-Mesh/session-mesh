@@ -17,14 +17,19 @@ import os from 'node:os';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {installFakeCodex, launchesIn, rolloutIn} from './fake-codex-lib.ts';
+import {appendFixturePath} from './fixture-login-path.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {ptyhostArgv} from './ptyhost-command.ts';
 import {createSessionRequestGate, setTranslator} from '../static/pane-actions.ts';
 
 const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD
   || path.join(REPO, 'ocaml', '_build', 'default', 'platform', 'cli', 'mesh_platform_main.exe');
+const PROFILE = process.env.MESH_PROFILE_CMD
+  || path.join(REPO, 'ocaml', '_build', 'default', 'bin', 'mesh_profile_main.exe');
 const SKIP = fs.existsSync(PLATFORM) || process.env.MESH_REQUIRE_MESH_PLATFORM ? false
   : `mesh-platform not built: dune build ./platform/cli/mesh_platform_main.exe, or set MESH_MESH_PLATFORM_CMD (${PLATFORM})`;
+const PROFILE_SKIP = fs.existsSync(PROFILE) || process.env.MESH_REQUIRE_MESH_PROFILE ? false
+  : `mesh-profile not built: dune build ./bin/mesh_profile_main.exe, or set MESH_PROFILE_CMD (${PROFILE})`;
 // `accounts carry` is in the usage text of a mesh-platform that has it.
 const CARRY = SKIP ? SKIP : spawnSync(PLATFORM, [], {encoding: 'utf8'}).stderr?.includes('accounts carry') ? false
   : `this mesh-platform has no accounts carry command (${PLATFORM})`;
@@ -42,7 +47,9 @@ before(async () => {
   const installed = installFakeCodex(bin);
   log = installed.log;
   const PATH = installed.PATH;
-  mesh = await startMesh('switch-', {PATH, MESH_MESH_PLATFORM_CMD: PLATFORM, CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined});
+  mesh = await startMesh('switch-', {PATH, MESH_MESH_PLATFORM_CMD: PLATFORM, MESH_MESH_PROFILE_CMD: PROFILE,
+    CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined});
+  appendFixturePath(mesh.home, PATH);
   const accounts = path.join(mesh.home, '.agent-accounts');
   fs.mkdirSync(accounts, {mode: 0o700});
   travelHome = path.join(accounts, 'travel', '.codex');   // missing: created when a request names it
@@ -127,6 +134,47 @@ async function arrangement(name: string): Promise<unknown[]> {
 }
 
 const LABEL = 'Renamed before the switch';
+
+function installNativeProfiles(): string {
+  const registry = path.join(mesh.confDir, 'backend-profiles.json');
+  fs.chmodSync(path.dirname(mesh.confDir), 0o700);
+  fs.chmodSync(mesh.confDir, 0o700);
+  const profiles = [
+    {backend: 'codex', id: 'work', label: 'Work', enabled: true,
+      roots: {config: workHome, state: path.join(mesh.home, '.agent-accounts/work/state')}},
+    {backend: 'codex', id: 'travel', label: 'Travel', enabled: true,
+      roots: {config: travelHome, state: path.join(mesh.home, '.agent-accounts/travel/state')}},
+  ];
+  for (const profile of profiles) {
+    fs.mkdirSync(profile.roots.config, {recursive: true, mode: 0o700});
+    fs.mkdirSync(profile.roots.state, {recursive: true, mode: 0o700});
+  }
+  fs.writeFileSync(registry, JSON.stringify({version: 1, profiles}), {mode: 0o600});
+  return registry;
+}
+
+async function nativeProfiles() {
+  const response = await fetch(`${mesh.base}/api/accounts/profiles`, {headers: owner()});
+  assert.equal(response.status, 200, await response.clone().text());
+  const {data} = await response.json() as {data: {profiles: {id: string; switch_qualified: boolean}[]}};
+  assert.deepEqual(data.profiles.map(profile => [profile.id, profile.switch_qualified]),
+    [['work', false], ['travel', false]]);
+}
+
+async function consentPolicy() {
+  const response = await fetch(`${mesh.base}/api/accounts/consent`, {headers: owner()});
+  assert.equal(response.status, 200, await response.clone().text());
+  return (await response.json() as {data: unknown}).data;
+}
+
+async function unchangedSource(session: Session, before: Record<string, unknown>, launchLog: string): Promise<void> {
+  assert.equal(fs.readFileSync(log, 'utf8'), launchLog, `${session.name}: no replacement agent was launched`);
+  const still = await listed(session.name);
+  assert.equal(still?.created, before.created, `${session.name}: the same source incarnation is still running`);
+  const pid = (before.agent as {pid?: number} | undefined)?.pid;
+  assert.equal(typeof pid, 'number', `${session.name}: the source agent was live`);
+  assert.equal((still?.agent as {pid?: number} | undefined)?.pid, pid, `${session.name}: source agent was not stopped`);
+}
 
 const ask = (session: Session, body: Record<string, unknown>) => fetch(`${mesh.base}/api/session-actions/@self/request`,
   {method: 'POST', body: JSON.stringify(body),
@@ -296,6 +344,97 @@ describe('account switch requests', {skip: SKIP}, () => {
     await sleep(500);
     assert.equal(launches().length, before, 'no agent started, under no account');
     assert.ok(await listed('x-refused'), 'the source still runs');
+  });
+
+  test('native profiles refuse before queueing, across profile and default directions despite skip consent',
+    {skip: PROFILE_SKIP}, async () => {
+    const registry = installNativeProfiles();
+    try {
+      await nativeProfiles();
+      const consent = await fetch(`${mesh.base}/api/accounts/consent/set-global`, {method: 'POST', headers: owner(),
+        body: JSON.stringify({expected_revision: 0, confirmation: 'skip'})});
+      assert.equal(consent.status, 200, await consent.clone().text());
+      const policy = await consentPolicy() as {revision: number; global: string; pairs: unknown[]};
+      assert.deepEqual([policy.revision, policy.global, policy.pairs], [1, 'skip', []]);
+
+      for (const [name, from, to] of [
+        ['x-profile-switch', 'work', 'travel'],
+        ['x-default-to-profile', 'default', 'work'],
+        ['x-profile-to-default', 'work', 'default'],
+      ] as const) {
+        const session = await codexSession(name, from === 'default' ? undefined : from);
+        const before = (await listed(session.name))!;
+        if (from !== 'default') assert.match(String(before?.account_context_revision), /^[a-f0-9]{64}$/);
+        const original = rolloutIn(from === 'default' ? path.join(mesh.home, '.codex') : workHome, session.sid);
+        const target = rolloutIn(to === 'default' ? path.join(mesh.home, '.codex') : to === 'work' ? workHome : travelHome,
+          session.sid);
+        const transcript = fs.readFileSync(original);
+        assert.equal(fs.existsSync(target), false, `${name}: no target transcript before the request`);
+        const launchLog = fs.readFileSync(log, 'utf8');
+
+        assert.deepEqual(await refused(session, to),
+          ['switch_not_qualified', 'Native profile switching is not qualified']);
+        await unchangedSource(session, before, launchLog);
+        assert.deepEqual(fs.readFileSync(original), transcript, `${name}: no source transcript write`);
+        assert.equal(fs.existsSync(target), false, `${name}: no conversation copied to the target`);
+      }
+      assert.deepEqual(await consentPolicy(), policy, 'stored consent was not consumed or changed');
+    } finally {
+      fs.rmSync(registry);
+    }
+  });
+
+  test('a legacy request queued before native registry activation is refused on approval without a stop or copy',
+    {skip: PROFILE_SKIP}, async () => {
+    const session = await codexSession('x-legacy-activated');
+    const before = (await listed(session.name))!;
+    const original = rolloutIn(path.join(mesh.home, '.codex'), session.sid);
+    const target = rolloutIn(travelHome, session.sid);
+    const transcript = fs.readFileSync(original);
+    assert.equal(fs.existsSync(target), false);
+    const policy = await consentPolicy();
+    const request = await requested(session, 'travel');
+    assert.deepEqual([request.state, request.from_account, request.account], ['pending', 'default', 'travel']);
+    const launchLog = fs.readFileSync(log, 'utf8');
+    const registry = installNativeProfiles();
+    try {
+      await nativeProfiles();
+      const decided = await decide(request, true);
+      assert.equal(decided.state, 'failed', JSON.stringify(decided));
+      assert.equal(decided.result?.error, 'Native profile switching is not qualified');
+      assert.ok(!decided.result?.rolled_back, 'the source was never stopped');
+      await unchangedSource(session, before, launchLog);
+      assert.deepEqual(fs.readFileSync(original), transcript, 'source conversation unchanged');
+      assert.equal(fs.existsSync(target), false, 'no target transcript written');
+      assert.deepEqual(await consentPolicy(), policy, 'consent remains stored and unchanged');
+    } finally {
+      fs.rmSync(registry);
+    }
+  });
+
+  test('the native migration marker refuses before preparing a missing legacy target folder', async () => {
+    const session = await codexSession('x-marker-refusal');
+    const before = (await listed(session.name))!;
+    const accountFile = path.join(mesh.confDir, 'accounts.json');
+    const originalAccounts = fs.readFileSync(accountFile, 'utf8');
+    const target = path.join(mesh.home, '.agent-accounts/fresh/.codex');
+    fs.mkdirSync(path.dirname(target), {mode: 0o700});
+    const declared = JSON.parse(originalAccounts) as {v: number; accounts: Record<string, unknown>[]};
+    declared.accounts.push({id: 'fresh', label: 'Fresh', codex_home: target});
+    fs.writeFileSync(accountFile, JSON.stringify(declared), {mode: 0o600});
+    assert.equal(fs.existsSync(target), false);
+    const launchLog = fs.readFileSync(log, 'utf8');
+    const marker = path.join(mesh.confDir, 'backend-profiles.migrated');
+    fs.writeFileSync(marker, '', {mode: 0o600});
+    try {
+      assert.deepEqual(await refused(session, 'fresh'),
+        ['switch_not_qualified', 'Native profile switching is not qualified']);
+      assert.equal(fs.existsSync(target), false, 'no legacy target folder prepared');
+      await unchangedSource(session, before, launchLog);
+    } finally {
+      fs.rmSync(marker);
+      fs.writeFileSync(accountFile, originalAccounts, {mode: 0o600});
+    }
   });
 
   test('approved: the agent stops, its conversation is carried, and it resumes under the target in the same terminal', {skip: CARRY}, async () => {

@@ -377,6 +377,32 @@ function initializeLocalInputTab() {
 function localTerminalSocketReady(socket) {
   return socket?.readyState === WebSocket.OPEN;
 }
+function listedInputVersion(session) {
+  if (session?.kind !== "mesh" || !(inventoryLoaded || session.provisional === true) ||
+      !Number.isFinite(session?.created) || session.created <= 0 ||
+      !Array.isArray(session.pty_capabilities)) return 0;
+  if (session.pty_capabilities.includes("acknowledged_input_v2")) return 2;
+  if (v2Attempted.has(`${session.id}\0${session.created}`)) return 0;
+  return session.pty_capabilities.includes("acknowledged_input_v1") ? 1 : 0;
+}
+function listedInputAcknowledgement(session) { return listedInputVersion(session) !== 0; }
+const ackAttempted = new Set();
+const v2Attempted = new Set();
+function listedLegacyInput(session) {
+  // A missing cached hint is not evidence of an older host. Only an observed
+  // live incarnation that did not attempt ACK may take the legacy raw path.
+  return inventoryLoaded && lastListing?.management?.state === "observed" &&
+    !Progress.pending(lastListing) && session?.kind === "mesh" && !session.provisional &&
+    session.ready !== false &&
+    Number.isFinite(session.created) && session.created > 0 &&
+    !ackAttempted.has(`${session.id}\0${session.created}`) &&
+    (session.pty_capabilities == null || (Array.isArray(session.pty_capabilities) &&
+      session.pty_capabilities.length <= 16 &&
+      session.pty_capabilities.every((value) => typeof value === "string") &&
+      new Set(session.pty_capabilities).size === session.pty_capabilities.length &&
+      !session.pty_capabilities.includes("acknowledged_input_v1") &&
+      !session.pty_capabilities.includes("acknowledged_input_v2")));
+}
 function prefixedBytes(prefix, bytes) {
   const head = enc.encode(prefix), joined = new Uint8Array(head.length + bytes.length);
   joined.set(head);
@@ -384,12 +410,18 @@ function prefixedBytes(prefix, bytes) {
   return joined;
 }
 
-function openLocalTerminal(name, { rows, cols }, observer) {
+function openLocalTerminal(name, { rows, cols }, observer, inputBinding = null) {
   requireLocalMesh();
   const proto = location.protocol === "https:" ? "wss" : "ws";
   // replay_geometry=1: server.py sends, before the replay, the geometry it was produced at.
   // pty_size=1: this pane follows the PTY size another device owns ({t:"s"}, Pane.applyPtySize).
-  const socket = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(name)}?rows=${rows}&cols=${cols}&replay_geometry=1&pty_size=1`);
+  const inputQuery = inputBinding
+    ? inputBinding.version === 2
+      ? `&input_ack=2&input_ack_mode=${inputBinding.mode}&input_ack_created=${encodeURIComponent(inputBinding.created)}` +
+        (inputBinding.mode === "resume" ? `&input_ack_slot=${inputBinding.slot}&input_ack_generation=${inputBinding.generation}&input_ack_nonce=${inputBinding.actorNonce}` : "")
+      : `&input_ack=1&input_ack_created=${encodeURIComponent(inputBinding.created)}&input_ack_id=${encodeURIComponent(inputBinding.id)}`
+    : "";
+  const socket = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(name)}?rows=${rows}&cols=${cols}&replay_geometry=1&pty_size=1${inputQuery}`);
   socket.binaryType = "arraybuffer";
   let disposed = false;
   const send = (payload) => {
@@ -399,8 +431,23 @@ function openLocalTerminal(name, { rows, cols }, observer) {
   const handle = {
     socket,
     isOpen: () => !disposed && localTerminalSocketReady(socket),
-    queueInput: (bytes) => send(bytes),
-    lease: (clientId, dirty) => send(JSON.stringify({ t: "h", client_id: clientId, dirty })),
+    queueInput: (bytes) => {
+      if (inputBinding) throw new Error("input_ack_raw_disabled");
+      send(bytes);
+    },
+    acknowledgedInput: (bytes) => {
+      if (!inputBinding) throw new Error("input_ack_not_negotiated");
+      if (inputBinding.version === 2 && !inputBinding.current())
+        throw new Error("input_ack_v2_not_confirmed");
+      send(bytes);
+    },
+    lease: (clientId, dirty) => {
+      if (inputBinding?.version === 2) {
+        const binding = inputBinding.current();
+        if (!binding) throw new Error("input_ack_v2_not_confirmed");
+        send(JSON.stringify({ t: "h", slot: binding.slot, generation: binding.generation, dirty }));
+      } else send(JSON.stringify({ t: "h", client_id: clientId, dirty }));
+    },
     // mode "claim" (the default, no field): applied only while no other device owns the size;
     // "take": the banner's take-over; "keep": a redraw at the PTY's size.
     resize: (rows, cols, mode = "claim") =>
@@ -415,6 +462,22 @@ function openLocalTerminal(name, { rows, cols }, observer) {
   socket.onmessage = (event) => {
     if (!current()) return;
     if (typeof event.data !== "string") return observer.bytes(handle, new Uint8Array(event.data));
+    if (inputBinding) {
+      let message;
+      try { message = JSON.parse(event.data); } catch {}
+      if (message?.t === "input_capability") {
+        observer.inputCapability?.(handle, message);
+        return;
+      }
+      if (message?.t === "input_ack") {
+        observer.inputAck?.(handle, message);
+        return;
+      }
+      if (message?.t === "input_rejected") {
+        observer.inputRejected?.(handle);
+        return;
+      }
+    }
     const geometry = replayGeometry(event.data);
     if (geometry) return observer.replayGeometry(handle, geometry);
     const ptySize = MeshPaneActions.parsePtySize(event.data);
@@ -441,6 +504,56 @@ function replayGeometry(text) {
 class Pane {
   constructor() {
     this.el = $("#pane-tpl").content.firstElementChild.cloneNode(true);
+    this.inputAcks = new Map();
+    $(".p-input-retry", this.el).addEventListener("click", () => {
+      if (this.inputAck?.state === "halted" && this.inputAck.pendingBytes === 0) {
+        const c = this.conn;
+        const session = c && find(c.name);
+        if (!c || session?.created !== c.created ||
+            !listedInputAcknowledgement(session)) return;
+        const key = `${c.name}\0${c.created}`;
+        if (this.inputAck.version === 2 && this.inputLease?.dirty &&
+            !confirm(t("conn.inputRebindDraftConfirm"))) return;
+        // A discarded uncertain frame may have reached the native input queue.
+        // Do not send H(false) merely because the local copy was discarded.
+        this.inputAcks.delete(key);
+        this.inputLeases.delete(key);
+        this.attach(c.name);
+        flash(t("conn.inputNewAttachment"));
+      } else if (this.inputAck) {
+        const hold = this.inputAck.version === 2 && this.inputAck.binding &&
+          !this.conn?.v2AwaitingCapability && this.inputAck.pendingHumanBytes > 0 &&
+          !this.inputLease?.dirty;
+        if (hold) this.inputLease?.hold();
+        const retried = this.inputAck.retry();
+        if (!retried && hold) this.inputLease?.release();
+        if (retried) this.renderRetainedInput();
+      }
+    });
+    $(".p-input-discard", this.el).addEventListener("click", () => {
+      for (const entry of this.inputAcks.values()) {
+        if (entry.input.pendingBytes) {
+          const uncertain = entry.input.deliveryUncertain;
+          entry.input.discard();
+          if (!uncertain && !entry.input.incompleteHumanInput) entry.lease?.release();
+        }
+      }
+      this.renderRetainedInput();
+    });
+    const forgetDraft = document.createElement("button");
+    forgetDraft.type = "button";
+    forgetDraft.className = "p-input-forget-draft";
+    $(".p-input-review", this.el).append(forgetDraft);
+    forgetDraft.addEventListener("click", () => {
+      const obsolete = this.obsoleteDirtyInput();
+      if (!obsolete || !confirm(t("conn.inputForgetOldDraftConfirm"))) return;
+      // This forgets only the browser's stale record; it cannot release or
+      // complete the old actor's native lease or the terminal's draft.
+      this.inputAcks.delete(obsolete.key);
+      this.inputLeases.delete(obsolete.key);
+      this.renderRetainedInput();
+      renderReloadStatus();
+    });
     this.defaultEmptyHtml = $(".empty", this.el).innerHTML;
     this.termEl = $(".term", this.el);
     $(".demo-offer button", this.el).addEventListener("click", () => {
@@ -648,7 +761,7 @@ class Pane {
     // they follow are not yet the replayed program's.
     t.onBinary((d) => {
       if (!localMeshEffectsAllowed() || this.conn?.replaying || this.conn?.draining) return;
-      this.inputLease?.atomic(Uint8Array.from(d, (c) => c.charCodeAt(0)));
+      this.sendRaw(Uint8Array.from(d, (c) => c.charCodeAt(0)), true);
     });
     t.onResize(() => this.sendSize());
     t.textarea.addEventListener("focus", () => { setActive(this); this.retakeSize(); });
@@ -742,36 +855,149 @@ class Pane {
   }
   sendRaw(bytes, complete = false) {
     if (!localMeshEffectsAllowed()) return false;
+    if (this.inputAck) {
+      if (!this.conn?.terminal?.isOpen()) {
+        flash(t("conn.inputUnavailable"));
+        return false;
+      }
+      if (this.inputAck.state === "halted") {
+        flash(t("conn.inputUnavailable"));
+        return false;
+      }
+      const retainedBytes = [...this.inputAcks.values()]
+        .reduce((sum, entry) => sum + entry.input.pendingBytes, 0);
+      if (bytes.byteLength > 1024 * 1024 - retainedBytes) {
+        flash(t("conn.inputFull"));
+        return false;
+      }
+      const reportOnly = MeshPaneActions.terminalReportsOnly(bytes);
+      const wasDirty = this.inputLease?.dirty;
+      if (!reportOnly && !(this.inputAck.version === 2 && this.conn?.v2AwaitingCapability))
+        this.inputLease?.hold();
+      const retained = this.inputAck.write(bytes, complete);
+      if (!retained && !wasDirty && !reportOnly) this.inputLease?.release();
+      if (!retained) flash(t(this.inputAck.state === "halted" ? "conn.inputUnavailable" : "conn.inputFull"));
+      this.renderRetainedInput();
+      return retained;
+    }
     return this.inputLease?.write(bytes, complete) ?? false;
+  }
+
+  renderRetainedInput() {
+    const container = $(".p-input-review", this.el);
+    const entries = [...this.inputAcks.values()].filter((entry) => entry.input.pendingBytes);
+    const pending = entries.reduce((total, entry) => total + entry.input.pendingBytes, 0);
+    const current = this.inputAck;
+    const obsolete = this.obsoleteDirtyInput();
+    const forgetDraft = $(".p-input-forget-draft", container);
+    forgetDraft.textContent = t("conn.inputForgetOldDraft");
+    forgetDraft.hidden = !obsolete;
+    // Mouse/focus reports in flight are not a person's retained input. Showing
+    // the review strip for each wheel report moves the terminal under a finger.
+    // An uncertain report still needs an explicit choice, just like human input.
+    const reportOnlySending = entries.length > 0 && entries.every(({ input }) =>
+      input.pendingHumanBytes === 0 && input.state === "sending");
+    container.hidden = (!pending || reportOnlySending) && current?.state !== "halted" && !obsolete;
+    if (container.hidden) return;
+    $(".p-input-discard", container).textContent = t(entries.some((entry) =>
+      entry.input.state === "uncertain") ? "conn.inputDiscardUnknown" : "conn.inputDiscard");
+    $(".p-input-discard", container).hidden = !pending;
+    const retry = $(".p-input-retry", container);
+    retry.textContent = t(current?.state === "halted" ? "conn.inputReconnect" : "conn.inputRetry");
+    retry.hidden = !current ||
+      (current.version === 2 && current.blocked && current.state !== "halted") ||
+      (current.state === "halted" ? current.pendingBytes !== 0
+        : !current.pendingBytes || (current.state !== "review" && current.state !== "uncertain")) ||
+      (!this.conn?.terminal?.isOpen() && !(current.version === 2 && current.state === "halted"));
+    const state = entries.some((entry) => entry.input !== current)
+      ? t("conn.inputStale")
+      : obsolete ? t("conn.inputObsoleteDraft")
+      : t(current?.version === 2 && !current.binding
+        ? (current.blocked ? "conn.inputV2Unconfirmed" : "conn.inputV2Awaiting")
+        : current.state === "uncertain" ? "conn.inputUncertain"
+        : current.state === "sending" ? "conn.inputSending"
+          : current.state === "halted" ? "conn.inputHalted" : "conn.inputReview");
+    $(".p-input-state", container).textContent = pending
+      ? t("conn.inputRetained", { count: pending, state }) : state;
+  }
+
+  obsoleteDirtyInput() {
+    const c = this.conn;
+    if (!c || !this.inputAck) return null;
+    const currentKey = `${c.name}\0${c.created}`;
+    for (const [key, entry] of this.inputAcks) {
+      if (key !== currentKey && entry.input !== this.inputAck &&
+          !entry.input.pendingBytes && entry.lease?.dirty) return { key, entry };
+    }
+    return null;
   }
 
   inputLeaseFor(name) {
     requireLocalMesh();
     const session = find(name);
+    if (!listedInputAcknowledgement(session) && !listedLegacyInput(session)) {
+      this.inputAck = null;
+      return null;
+    }
     const incarnation = session?.created ?? "unknown";
     const key = `${name}\0${incarnation}`;
+    for (const [old, entry] of this.inputAcks) {
+      if (old !== key && entry.input.pendingBytes === 0 && !entry.lease?.dirty) {
+        this.inputAcks.delete(old);
+        this.inputLeases.delete(old);
+      }
+    }
     let lease = this.inputLeases.get(key);
-    if (lease) return lease;
+    const version = listedInputVersion(session);
+    const previous = this.inputAcks.get(key);
+    if (lease && previous?.input.version === 1 && version === 2 &&
+        !previous.input.pendingBytes && !lease.dirty &&
+        ![...this.inputAcks.values()].some((entry) => entry.input.pendingBytes || entry.lease?.dirty)) {
+      this.inputAcks.delete(key);
+      this.inputLeases.delete(key);
+      lease = null;
+    }
+    if (lease) {
+      this.inputAck = this.inputAcks.get(key)?.input ?? null;
+      return lease;
+    }
     // The PTY host stores leases per session, so the client id need only be
     // stable for this tab/pane/name. A replacement incarnation starts with a
     // fresh host-side table while the map key prevents a dirty bit transfer.
-    const clientId = `${inputLeaseTab.slice(0, 32)}_${this.inputLeaseSlot}_${name.slice(0, 32)}`;
+    const clientId = `${inputLeaseTab.slice(0, 32)}_${this.inputLeaseSlot}_${crypto.randomUUID().replaceAll("-", "")}`;
+    this.inputAck = version
+      ? MeshPaneActions.createAcknowledgedInput({
+        attachmentId: version === 1 ? clientId : undefined, version, created: incarnation,
+        send: (frame) => {
+          const c = this.conn;
+          if (c?.name !== name || c.created !== incarnation || !c.terminal?.isOpen())
+            throw new Error("terminal disconnected");
+          c.terminal.acknowledgedInput(frame);
+        },
+        state: () => this.renderRetainedInput(),
+      }) : null;
+    const input = this.inputAck;
     lease = MeshPaneActions.createHumanInputLease({
       clientId,
       control: (id, dirty) => {
-        const terminal = this.conn?.terminal;
-        if (this.conn?.name !== name || !terminal?.isOpen())
+        const c = this.conn, terminal = c?.terminal;
+        if (this.inputLease !== lease || this.inputAck !== input ||
+            c?.name !== name || c.created !== incarnation ||
+            (version === 2 && (c.v2AwaitingCapability || !input?.binding)) ||
+            !terminal?.isOpen())
           throw new Error("terminal disconnected");
         terminal.lease(id, dirty);
       },
       data: (bytes) => {
-        const terminal = this.conn?.terminal;
-        if (this.conn?.name !== name || !terminal?.isOpen())
+        const c = this.conn, terminal = c?.terminal;
+        if (this.inputLease !== lease || this.inputAck !== input ||
+            c?.name !== name || c.created !== incarnation || !terminal?.isOpen())
           throw new Error("terminal disconnected");
         terminal.queueInput(bytes);
       },
     });
     this.inputLeases.set(key, lease);
+    if (this.inputAck) this.inputAcks.set(key, { id: clientId, input: this.inputAck, lease });
     return lease;
   }
   // Tell the pty this pane's size. `force` is for events that mean "this device is
@@ -1204,7 +1430,11 @@ class Pane {
     if (!localMeshEffectsAllowed() || this.conn?.replaying || this.conn?.draining) return;
     const terminal = this.conn?.terminal;
     if (!terminal?.isOpen()) return;
-    try { terminal.queueInput(enc.encode(focused ? "\x1b[I" : "\x1b[O")); } catch { return; }
+    try {
+      if (this.inputAck) {
+        if (!this.sendRaw(enc.encode(focused ? "\x1b[I" : "\x1b[O"))) return;
+      } else terminal.queueInput(enc.encode(focused ? "\x1b[I" : "\x1b[O"));
+    } catch { return; }
     this.focusReported = focused;
   }
 
@@ -2036,6 +2266,7 @@ class Pane {
     if (localActionUnavailable()) return;
     this.detach();
     this.inputLease = this.inputLeaseFor(name);
+    this.renderRetainedInput();
     // xterm's reset temporarily clears the viewport row height.  If a pending
     // native scroll is delivered while an old terminal is still visible,
     // xterm divides its scrollTop by that zero height and corrupts ydisp with
@@ -2045,9 +2276,10 @@ class Pane {
     // Output held for a finger belongs to the previous session: flushed later, it would be
     // parsed after the draining below and its queries answered to this session.
     this.queuedOutput = []; this.queuedBytes = 0;
-    const c = { name, created: find(name)?.created, piFullscreenScroll: false, retry: 0, closed: false, terminal: null,
+    const c = { name, created: find(name)?.created, cachedAck: !!find(name)?.provisional && !!this.inputAck,
+      piFullscreenScroll: false, retry: 0, closed: false, terminal: null,
       ws: null, // real local socket: legacy paste identity/diagnostic compatibility only
-      initializing: true,
+      initializing: true, waitingListing: !this.inputLease,
       followOutput: true, followCandidate: false, followFrame: 0, preserveViewport: null, bottomSync: false,
       focusRequested: opts.focusTerminal === true, draining: true };
     this.conn = c;
@@ -2073,18 +2305,96 @@ class Pane {
     updateKeys();
     const open = () => {
       if (c.closed) return;
+      // A positive cached hint opens only an ACK-bound socket. Neither an absent
+      // hint nor a failed handshake can open a raw socket before the listing.
+      if (c.waitingListing) return;
       this.setConn(c.retry ? t("conn.reconnecting") : t("conn.connecting"));
+      if (this.inputAck) {
+        ackAttempted.add(`${name}\0${c.created}`);
+        if (this.inputAck.version === 2) v2Attempted.add(`${name}\0${c.created}`);
+      }
       const current = (terminal) => !c.closed && this.conn === c && c.terminal === terminal;
+      const version = this.inputAck?.version ?? 0;
+      const knownBinding = version === 2 ? this.inputAck.binding : null;
+      c.v2AwaitingCapability = version === 2;
       const terminal = openLocalTerminal(name, this.ownSize(), {
         current,
+        inputCapability: (_terminal, message) => {
+          if (version === 2) {
+            const valid = message.version === 2 && message.supported === true &&
+              message.created === c.created &&
+              Number.isSafeInteger(message.slot) && message.slot >= 0 && message.slot < 64 &&
+              Number.isSafeInteger(message.generation) && message.generation > 0 &&
+              typeof message.actor_nonce === "string" && /^[0-9a-f]{32}$/.test(message.actor_nonce) &&
+              Object.keys(message).sort().join(",") === "actor_nonce,created,generation,slot,supported,t,version";
+            if (!valid || !this.inputAck?.connectV2(message.created, message.slot, message.generation,
+              message.actor_nonce, true)) {
+              c.v2Refused = true;
+              this.inputAck?.reject();
+              _terminal.socket.close();
+            } else {
+              c.v2AwaitingCapability = false;
+              clearTimeout(c.v2AwaitTimer);
+              this.inputLease?.reconnect();
+            }
+            this.renderRetainedInput();
+            return;
+          }
+          if (message.id !== this.inputAcks.get(`${name}\0${c.created}`)?.id ||
+              message.created !== c.created || typeof message.supported !== "boolean") {
+            this.inputAck?.disconnect();
+            return;
+          }
+          this.inputAck?.connect(message.created, message.id, message.supported);
+          this.renderRetainedInput();
+        },
+        inputAck: (_terminal, message) => {
+          if (version === 2) {
+            if (message.version !== 2 || typeof message.input_ack !== "boolean" ||
+                !Number.isSafeInteger(message.seq)) {
+              c.v2Refused = true;
+              this.inputAck?.reject();
+              _terminal.socket.close();
+            } else this.inputAck?.ackV2(message.created, message.slot, message.generation,
+              message.seq, message.input_ack, message.reason);
+            if (this.inputAck?.completed && this.inputAck.pendingHumanBytes === 0)
+              this.inputLease?.release();
+            this.renderRetainedInput();
+            return;
+          }
+          if (typeof message.input_ack !== "boolean" || !Number.isSafeInteger(message.seq)) {
+            this.inputAck?.disconnect();
+            return;
+          }
+          this.inputAck?.ack(message.created, message.id, message.seq, message.input_ack, message.reason);
+          if (this.inputAck?.completed && this.inputAck.pendingHumanBytes === 0)
+            this.inputLease?.release();
+          this.renderRetainedInput();
+        },
+        inputRejected: (terminal) => {
+          if (version === 2) {
+            c.v2Refused = true;
+            this.inputAck?.reject();
+            terminal.socket.close();
+          }
+          else this.inputAck?.disconnect();
+          this.renderRetainedInput();
+        },
         opened: () => {
+          if (version === 2) c.v2AwaitTimer = setTimeout(() => {
+            if (!current(terminal) || !c.v2AwaitingCapability) return;
+            c.v2Refused = true;
+            this.inputAck?.reject();
+            this.renderRetainedInput();
+            terminal.socket.close();
+          }, 5000);
           this.queuedOutput = []; this.queuedBytes = 0;   // the old connection's output is wiped with the screen
           c.replayPending = true;   // the host's first frame is the replay (see onData)
           c.replayGeometry = null;   // until server.py names it, before the replay
           c.away = null;   // this socket sends its size and redraws (armAutoRedraw)
           c.pty = null;    // until the host tells this socket (ptySize, after the replay)
           c.retry = 0; this.setConn("●");
-          this.inputLease.reconnect();
+          if (version !== 2) this.inputLease.reconnect();
           if (this.inputLease.dirty)
             flash(t("conn.unsentInput"));
           // Desktop xterm focus emits the same forced size through its focus
@@ -2115,6 +2425,13 @@ class Pane {
           this.bumpInitialFollow(c);
         },
         closed: async (terminal) => {
+          clearTimeout(c.v2AwaitTimer);
+          if (version === 2 && c.v2AwaitingCapability && !this.inputAck?.binding) {
+            c.v2Refused = true;
+            this.inputAck?.reject();
+          }
+          this.inputAck?.disconnect();
+          this.renderRetainedInput();
           this.leaveReplayGeometry(c);
           if (lineDirect?.conn === c) endDirectLine("line.directConnection");
           if (c.autoRedraw) { clearTimeout(c.autoRedraw.timer); c.autoRedraw = null; }
@@ -2123,6 +2440,10 @@ class Pane {
           // refresh yields to the browser. The pane may have been detached or
           // reattached while it was in flight; recheck before changing or retrying.
           if (!current(terminal)) return;
+          if (c.v2Refused) {
+            this.setConn(t("conn.inputUnavailable"), true);
+            return;
+          }
           if (!data.mesh.some((s) => s.id === name)) {
             c.ended = true;   // a restored session of this name lets refresh() reattach the pane
             this.setConn(t("conn.ended"), true);
@@ -2133,7 +2454,13 @@ class Pane {
           this.setConn(t("conn.disconnected"), true);
           setTimeout(open, Math.min(8000, 400 * 2 ** c.retry));
         },
-      });
+      }, version === 2 ? {
+        version: 2, mode: knownBinding ? "resume" : "new", created: c.created,
+        slot: knownBinding?.slot, generation: knownBinding?.generation, actorNonce: knownBinding?.actorNonce,
+        current: () => c.v2AwaitingCapability ? null : this.inputAck?.binding,
+      } : this.inputAck ? this.inputAcks.get(`${name}\0${c.created}`) && {
+        version: 1, id: this.inputAcks.get(`${name}\0${c.created}`).id, created: c.created,
+      } : null);
       c.terminal = terminal;
       c.ws = terminal.socket;
     };
@@ -2148,10 +2475,12 @@ class Pane {
     this.focusReported = null; this.heldFocusIn = false;
     this.dropReaderAnchor(this.conn);
     this.conn.closed = true;
+    this.inputAck?.disconnect();
     if (this.conn.autoRedraw) clearTimeout(this.conn.autoRedraw.timer);
     if (this.conn.initialFollow) clearTimeout(this.conn.initialFollow.timer);
     if (this.conn.followFrame) cancelAnimationFrame(this.conn.followFrame);
     if (this.conn.initTimer) clearTimeout(this.conn.initTimer);
+    if (this.conn.v2AwaitTimer) clearTimeout(this.conn.v2AwaitTimer);
     try { this.conn.terminal?.close(); } catch {}
     this.conn = null;
     if (this.ptyFollowing || this.sizeBanner?.hidden === false) {
@@ -3293,6 +3622,14 @@ async function closeSession(id) {
 function closePane(p) {
   if (panes.length < 2) return;
   const i = panes.indexOf(p);
+  if (i < 0) return;
+  const pending = [...p.inputAcks.values()].reduce((sum, entry) => sum + entry.input.pendingBytes, 0);
+  const dirty = [...p.inputAcks.values()].some((entry) => entry.lease?.dirty);
+  if ((pending || dirty) && !confirm((pending ? t("conn.inputCloseConfirm", { count: pending }) : "") +
+      (dirty ? `${pending ? "\n\n" : ""}${t("conn.inputCloseDraftConfirm")}` : ""))) return;
+  if (pending) for (const entry of p.inputAcks.values()) {
+    if (entry.input.pendingBytes) entry.input.discard();
+  }
   const group = p.group;
   leaveSeen(p.id);
   panes.splice(i, 1);
@@ -3501,7 +3838,8 @@ function pinnedHtml(query) {
 }
 
 // The operator's account alias a session runs with (accounts.json on the runner): its label, as text, never a colour alone.
-const accountLabel = (s) => (typeof s?.account === "string" && s.account ? String(s.account_label || s.account).slice(0, 24) : "");
+const shortAccountLabel = (value) => [...String(value)].slice(0, 24).join("");
+const accountLabel = (s) => (typeof s?.account === "string" && s.account ? shortAccountLabel(s.account_label || s.account) : "");
 function accountBadgeHtml(s) {
   const shown = accountLabel(s);
   return shown ? `<span class="account-badge" title="${esc(t("list.accountTitle", { label: shown }))}">${esc(shown)}</span>` : "";
@@ -4417,6 +4755,12 @@ let pendingClientVersion = "";
 function reloadHolds() {
   const holds = [];
   const add = (kind, label, owner = null) => holds.push({ kind, label, owner });
+  for (const pane of panes) {
+    const count = [...pane.inputAcks.values()].reduce((sum, entry) => sum + entry.input.pendingBytes, 0);
+    if (count) add("input-ack", t("reload.hold.inputAck", { count }), pane);
+    if ([...pane.inputAcks.values()].some((entry) => entry.lease?.dirty))
+      add("input-draft", t("reload.hold.inputDraft"), pane);
+  }
   if (fieldHoldsText()) add("draft", t("reload.hold.draft"));
   if (linePending) add("line-pending", t("reload.hold.linePending"), linePending);
   if (lineRecovery) add("line-recovery", t("reload.hold.lineRecovery"), lineRecovery);
@@ -4500,7 +4844,9 @@ function reloadApp() { location.reload(); }
 
 function requestReload() {
   const holds = reloadHolds();
-  if (holds.length && !confirm(t("reload.confirmManual", { n: holds.length }))) return;
+  if (holds.length && !confirm(t("reload.confirmManual", { n: holds.length }) +
+      (holds.some((hold) => hold.kind === "input-ack") ? `\n\n${t("reload.confirmInputAck")}` : "") +
+      (holds.some((hold) => hold.kind === "input-draft") ? `\n\n${t("reload.confirmInputDraft")}` : ""))) return;
   reloadApp();
 }
 
@@ -4646,9 +4992,11 @@ const configPanel = MeshPaneActions.createConfigPanel({ dialog: $("#dlg-config")
   load: async () => {
     try {
       const response = await requestLocal("/api/config", { cache: "no-store" });
-      return response.ok ? { state: "ok", value: await response.json() } : { state: "error" };
+      return response.ok && response.headers.get("Content-Type")?.split(";")[0]?.trim() === "application/json"
+        ? { state: "ok", value: await response.json() } : { state: "error" };
     } catch { return { state: "error" }; }
   },
+  onLoad: (config) => observeBackendAccountConfig(config),
   copy: async (value) => {
     try { await navigator.clipboard.writeText(value); return true; } catch { return false; }
   },
@@ -4682,6 +5030,61 @@ const configPanel = MeshPaneActions.createConfigPanel({ dialog: $("#dlg-config")
 });
 function sizeTakeoverMode() { return MeshPaneActions.sizeTakeoverMode(store.get(MeshPaneActions.SIZE_TAKEOVER_KEY, "auto")); }
 $("#btn-config").addEventListener("click", () => configPanel.open());
+
+let backendAccountPanel = null;
+let backendAccountCapabilityRead = null;
+let backendAccountGeneration = 0;
+function showBackendAccountEntries(available) {
+  for (const entry of document.querySelectorAll('#btn-accounts, [data-mobile-action="btn-accounts"]')) entry.hidden = !available;
+}
+function enableBackendAccountSettings() {
+  if (!localMeshEffectsAllowed() || backendAccountPanel) return;
+  ++backendAccountGeneration;
+  backendAccountCapabilityRead?.abort(); backendAccountCapabilityRead = null;
+  const ports = MeshPaneActions.createBackendAccountApi((url, init) => requestLocal(url, init));
+  backendAccountPanel = MeshPaneActions.createBackendAccountPanel(document.body, { t, ...ports });
+  showBackendAccountEntries(true);
+}
+function observeBackendAccountConfig(config) {
+  if (!localMeshEffectsAllowed()) return;
+  if (config?.capabilities?.account_settings === true) {
+    enableBackendAccountSettings();
+  } else if (!backendAccountPanel) {
+    ++backendAccountGeneration;
+    backendAccountCapabilityRead?.abort(); backendAccountCapabilityRead = null;
+  }
+}
+async function startBackendAccountSettings() {
+  if (!localMeshEffectsAllowed() || backendAccountPanel) return;
+  const generation = ++backendAccountGeneration, abort = new AbortController();
+  backendAccountCapabilityRead = abort;
+  const timer = setTimeout(() => abort.abort(), 15_000);
+  try {
+    const response = await requestLocal("/api/config", { method: "GET", signal: abort.signal, credentials: "same-origin",
+      mode: "same-origin", redirect: "error", cache: "no-store", headers: { Accept: "application/json" } });
+    if (!response.ok || response.headers.get("Content-Type")?.split(";")[0]?.trim() !== "application/json") return;
+    const config = await response.json();
+    if (abort.signal.aborted || generation !== backendAccountGeneration || !localMeshEffectsAllowed()
+      || config?.capabilities?.account_settings !== true) return;
+    enableBackendAccountSettings();
+  } catch { /* An absent, refused or unreadable capability leaves account settings unavailable. */ }
+  finally {
+    clearTimeout(timer);
+    if (backendAccountCapabilityRead === abort) backendAccountCapabilityRead = null;
+  }
+}
+function disposeBackendAccountSettings() {
+  ++backendAccountGeneration;
+  backendAccountCapabilityRead?.abort(); backendAccountCapabilityRead = null;
+  showBackendAccountEntries(false);
+  backendAccountPanel?.dispose(); backendAccountPanel = null;
+}
+whenTranslated(() => { void startBackendAccountSettings(); });
+$("#btn-accounts").addEventListener("click", (event) => {
+  if (localActionUnavailable() || !backendAccountPanel) return;
+  const trigger = event.currentTarget.getClientRects().length ? event.currentTarget : $("#btn-mobile-actions");
+  void backendAccountPanel?.open(trigger);
+});
 
 // Local transport owns local account navigation. A loader returns a LoadOutcome
 // (static/single-flight-poller.ts); a failure or a refusal is never an observed empty snapshot.
@@ -4887,6 +5290,15 @@ function syncPanesWithListing(observedInventory) {
     const s = find(p.id);
     if (!s && observedInventory && p.id.startsWith("t")) p.clear();
     else if (s) {
+      if (observedInventory && s.kind === "mesh" && !s.provisional &&
+          (p.conn?.waitingListing || (Number.isFinite(s.created) && s.created > 0 &&
+            p.conn?.created !== s.created) ||
+            (p.conn?.cachedAck && p.conn?.created === s.created &&
+              p.inputAck?.version === 1 && listedInputVersion(s) === 2 &&
+              ![...p.inputAcks.values()].some((entry) => entry.input.pendingBytes || entry.lease?.dirty)))) {
+        const focusTerminal = active === p && p.conn?.name === p.id && p.conn?.focusRequested === true;
+        p.attach(p.id, { focusTerminal });
+      }
       if (localMeshEffectsAllowed() && p.conn?.ended && s.kind === "mesh") p.attach(p.id);
       p.header();
       if (s.kind === "external") p.renderDetail(s);
@@ -7395,11 +7807,11 @@ async function openNew() {
 }
 window.openNew = openNew;
 
-// The "Account" choice: shown when the operator declared aliases on the runner (any number), for Claude and Codex
-// only, sorted by label (the file's order among equal labels); the last alias chosen on this device is chosen
+// The "Account" choice: shown when the operator declared launchable profiles on the runner,
+// sorted by label (the file's order among equal labels); the last alias chosen on this device is chosen
 // again. An alias remembered here but no longer declared stays chosen, greyed, so that the session is refused
 // instead of starting under the default account. The page sends an alias id, never a folder.
-const ACCOUNT_PRESETS = { claude: "claude", codex: "codex", "codex-yolo": "codex" };
+const ACCOUNT_PRESETS = { claude: "claude", codex: "codex", "codex-yolo": "codex", opencode: "opencode", pi: "pi" };
 let newAccounts = [];
 function fillAccounts(accounts) {
   newAccounts = accounts.filter((a) => typeof a?.id === "string" && typeof a?.label === "string")
@@ -7409,7 +7821,7 @@ function fillAccounts(accounts) {
   const gone = last && !newAccounts.some((a) => a.id === last) ? new Option(t("new.accountGoneOption", { id: last }), last) : null;
   if (gone) gone.dataset.gone = "1";
   select.replaceChildren(new Option(t("new.accountDefault"), ""),
-    ...newAccounts.map((a) => new Option(a.label.slice(0, 24), a.id)), ...(gone ? [gone] : []));
+    ...newAccounts.map((a) => new Option(shortAccountLabel(a.label), a.id)), ...(gone ? [gone] : []));
   select.value = gone || newAccounts.some((a) => a.id === last) ? last : "";
   syncAccountChoice();
 }
@@ -7418,13 +7830,18 @@ function syncAccountChoice() {
   $("#new-account-row").hidden = !offered;
   form.account.disabled = !offered || !agent;
   for (const option of form.account.options) {
-    option.disabled = !!option.value && !!agent && (!!option.dataset.gone || !newAccounts.find((a) => a.id === option.value)?.[agent]);
+    const account = newAccounts.find((a) => a.id === option.value);
+    option.disabled = !!option.value && !!agent && (!!option.dataset.gone || !account?.[agent]);
+    if (account) {
+      const label = account.backend_labels?.[agent === "opencode" ? "opencode-v2" : agent];
+      option.textContent = shortAccountLabel(typeof label === "string" ? label : account.label);
+    }
   }
 }
 // The alias to send: {} for the default account (or an agent without aliases), {id}, or {refused: message} when the
 // chosen alias has no folder for this agent or is no longer declared. A greyed option stays selected but FormData
 // leaves it out: it must never become the default account silently.
-const ACCOUNT_AGENT_NAMES = { claude: "Claude", codex: "Codex" };
+const ACCOUNT_AGENT_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", pi: "Pi" };
 function accountChoice() {
   const agent = ACCOUNT_PRESETS[form.preset.value], option = form.account.selectedOptions[0];
   if (form.account.disabled || !agent || !option?.value) return {};
@@ -8065,6 +8482,7 @@ async function startMesh(context) {
     refresh,
     dispose() {
       meshStopped = true;
+      disposeBackendAccountSettings();
       projectsGeneration++; workGeneration++;
       projectsController?.close(); workController?.close();
       inventoryPoller?.stop();

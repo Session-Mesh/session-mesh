@@ -19,13 +19,13 @@ describe('phone direct writing: how it starts', {skip}, () => {
   test('/ in a Claude Code session: the characters reach the terminal one by one and the field stays empty', async () => {
     const page = await phone('slash-claude', 'claude');
     await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
     assert.deepEqual(await frames(page), ['/']);
     assert.equal(await direct(page), true, 'the mode indicator shows');
     assert.equal(await keyboardOpen(page), true, 'the field keeps the focus, so the keyboard stays open');
-    await waitForShellLine(page, '/');
     await page.keyboard.type('he');
-    assert.deepEqual(await frames(page), ['/', 'h', 'e']);
     await waitForShellLine(page, '/he');
+    assert.deepEqual(await frames(page), ['/', 'h', 'e']);
     assert.equal(await field(page), '', 'the terminal shows the line, not the field');
     assert.equal(await keyboardOpen(page), true);
   });
@@ -33,6 +33,7 @@ describe('phone direct writing: how it starts', {skip}, () => {
   test('$ starts it in Codex, and not in Claude Code', async () => {
     const codex = await phone('dollar-codex', 'codex');
     await codex.keyboard.type('$sk');
+    await waitForShellLine(codex, '$sk');
     assert.deepEqual(await frames(codex), ['$', 's', 'k']);
     assert.equal(await direct(codex), true);
     const claude = await phone('dollar-claude', 'claude');
@@ -45,6 +46,7 @@ describe('phone direct writing: how it starts', {skip}, () => {
   test('Pi takes / like the other agents', async () => {
     const page = await phone('slash-pi', 'pi');
     await page.keyboard.type('/s');
+    await waitForShellLine(page, '/s');
     assert.deepEqual(await frames(page), ['/', 's']);
   });
 
@@ -151,6 +153,9 @@ describe('phone direct writing: how it starts', {skip}, () => {
     await mesh.newShell('not-ready-other');
     await page.evaluate(() => refresh());
     await page.keyboard.type('/a');
+    await waitForShellLine(page, '/a');
+    await page.waitForFunction(() => active.inputAck?.pendingBytes === 0);
+    assert.deepEqual(await frames(page), ['/', 'a'], 'the original pane finished sending before observation is cleared');
     await forget(page);
     const open = await page.evaluate(async () => {
       const textarea = document.querySelector('#line-text') as HTMLTextAreaElement;

@@ -337,37 +337,41 @@ async def test_restart_preparation_failure_never_stops_source(monkeypatch):
 
 async def test_restart_starts_deferred_command_only_after_exact_source_is_stopped(monkeypatch):
     calls = []
+    nonce = None
 
     async def prepared(*_args, **_kwargs):
+        nonlocal nonce
+        nonce = _kwargs["nonce"]
         calls.append(("prepare", _args))
         return "old-2"
 
     async def host(request):
         calls.append((request["op"], request))
         if request["op"] == "list":
-            if sum(call[0] == "list" for call in calls) == 1:
-                return [{"name": "old-2", "created": 2.0}]
-            return [{"name": "old-2", "created": 2.0}]
+            return [{"name": "old-2", "created": 2.0, "meta": {"nonce": nonce}}]
         return {"ok": True}
 
     monkeypatch.setattr(server, "new_session", prepared)
     monkeypatch.setattr(server, "host", host)
     assert await server.replace_session("old", 1.0, "old", str(Path.home()),
                                         "codex resume sid", "codex", "codex") == "old-2"
-    assert [call[0] for call in calls] == ["prepare", "list", "kill_if", "list", "start_if"]
+    assert [call[0] for call in calls] == ["prepare", "list", "list", "kill_if", "list", "list", "start_if"]
     assert calls[-1][1]["command"] == "codex resume sid"
 
 
 async def test_restart_never_starts_replacement_before_source_exit(monkeypatch):
     calls = []
+    nonce = None
 
     async def prepared(*_args, **_kwargs):
+        nonlocal nonce
+        nonce = _kwargs["nonce"]
         return "old-2"
 
     async def host(request):
         calls.append(request["op"])
         if request["op"] == "list":
-            return [{"name": "old-2", "created": 2.0},
+            return [{"name": "old-2", "created": 2.0, "meta": {"nonce": nonce}},
                     {"name": "old", "created": 1.0}]
         return {"ok": True}
 

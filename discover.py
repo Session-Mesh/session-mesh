@@ -27,9 +27,9 @@ AGENTS = ("claude", "codex", "pi", "opencode", "gemini", "agy", "vibe", "copilot
 PROCESS_AGENTS = {"vibe-rs": "vibe"}
 
 
-def _pi_sessions():
+def _pi_sessions(session_dir=None):
     base = os.environ.get("PI_CODING_AGENT_DIR") or f"{HOME}/.pi/agent"
-    return glob.glob(f"{os.path.expanduser(base)}/sessions/*/*.jsonl")
+    return glob.glob(f"{session_dir or os.path.expanduser(base) + '/sessions'}/*/*.jsonl")
 
 
 # ---------------------------------------------------------------- /proc
@@ -1047,11 +1047,11 @@ def _pi_header(path):
     return header
 
 
-def pi_session_path(sid):
+def pi_session_path(sid, session_dir=None):
     """Only resume a unique, existing v3 transcript; Pi creates missing paths."""
     if not isinstance(sid, str) or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", sid):
         return None
-    matches = [p for p in _pi_sessions()
+    matches = [p for p in _pi_sessions(session_dir)
                if (h := _pi_header(p)) and h["id"] == sid]
     return matches[0] if len(matches) == 1 else None
 

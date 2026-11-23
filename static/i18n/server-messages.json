@@ -28,8 +28,12 @@
     "key": "server.ptyhostNotResponding"
   },
   {
-    "pattern": "^ptyhost did not confirm the prepared session$",
+    "pattern": "^ptyhost did not confirm the prepared standby$",
     "key": "server.ptyhostSessionUnconfirmed"
+  },
+  {
+    "pattern": "^Prepared standby no longer belongs to this restart$",
+    "key": "server.preparedStandbyOwnershipLost"
   },
   {
     "pattern": "^ptyhost did not confirm the restored session$",
@@ -162,6 +166,42 @@
   {
     "pattern": "^Account alias refused: check accounts\\.json and its folders on the runner \\(details in the server log\\)$",
     "key": "server.accountRefused"
+  },
+  {
+    "pattern": "^Account profile context changed; resume refused$",
+    "key": "server.accountProfileResumeChanged"
+  },
+  {
+    "pattern": "^Account profile context unknown; resume refused$",
+    "key": "server.accountProfileResumeUnknown"
+  },
+  {
+    "pattern": "^Account profile context changed; restart refused$",
+    "key": "server.accountProfileRestartChanged"
+  },
+  {
+    "pattern": "^Account profile context unknown; restart refused$",
+    "key": "server.accountProfileRestartUnknown"
+  },
+  {
+    "pattern": "^Selected Pi profile refuses competing session options$",
+    "key": "server.accountProfilePiOptions"
+  },
+  {
+    "pattern": "^Pi conversation is outside the selected profile$",
+    "key": "server.accountProfilePiConversation"
+  },
+  {
+    "pattern": "^Selected OpenCode profile requires a readable OpenCode 2 executable$",
+    "key": "server.accountProfileOpencodeExecutable"
+  },
+  {
+    "pattern": "^A prepared launch without the selected account context is refused$",
+    "key": "server.accountProfileLaunchUnbound"
+  },
+  {
+    "pattern": "^Native profile switching is not qualified$",
+    "key": "server.accountProfileSwitchUnqualified"
   },
   {
     "pattern": "^Invalid name \\(letters, digits, - and _\\)$",

@@ -52,13 +52,17 @@ describe('phone direct writing: Enter', {skip}, () => {
   test('the send button and the key bar Enter also submit and end it', async () => {
     const page = await phone('leave', 'claude');
     await page.keyboard.type('/a');
+    await waitForShellLine(page, '/a');
     await forget(page);
     await page.locator('#line button.primary').click();
+    await page.waitForFunction(() => window.__input.length >= 1);
     assert.deepEqual(await frames(page), ['\r']);
     assert.equal(await direct(page), false);
     await page.keyboard.type('/b');
+    await waitForShellLine(page, '/b');
     await forget(page);
     await page.locator('#keys [data-k="enter"]').click();
+    await page.waitForFunction(() => window.__input.length >= 1);
     assert.deepEqual(await frames(page), ['\r']);
     assert.equal(await direct(page), false);
   });
@@ -67,8 +71,10 @@ describe('phone direct writing: Enter', {skip}, () => {
     test(`Enter by ${path} right after a composition ended delivers the word first, then Enter`, async () => {
       const page = await phone(`ended-${path.replace(' ', '-')}`, 'claude');
       await page.keyboard.type('/');
+      await waitForShellLine(page, '/');
       await forget(page);
       await composeThenEnter(page, 'help', path, true);
+      await page.waitForFunction(() => window.__input.length >= 2);
       assert.deepEqual(await frames(page), ['help', '\r'], 'the word, in order, before the Enter');
       assert.equal(await field(page), '', 'nothing stays in the field');
       assert.equal(await direct(page), false);
@@ -79,6 +85,7 @@ describe('phone direct writing: Enter', {skip}, () => {
     test(`Enter by ${path} while a composition is in progress is refused, and the word is sent once when it ends`, async () => {
       const page = await phone(`composing-${path.replace(' ', '-')}`, 'claude');
       await page.keyboard.type('/');
+      await waitForShellLine(page, '/');
       await forget(page);
       await composeThenEnter(page, 'help', path, false);
       await waitForFlash(page, 'still being composed');
@@ -92,6 +99,7 @@ describe('phone direct writing: Enter', {skip}, () => {
       assert.deepEqual(await frames(page), ['help'], 'once');
       assert.equal(await field(page), '');
       await page.keyboard.press('Enter');
+      await page.waitForFunction(() => window.__input.length >= 2);
       assert.deepEqual(await frames(page), ['help', '\r']);
     });
   }
@@ -100,6 +108,7 @@ describe('phone direct writing: Enter', {skip}, () => {
     const page = await phone('ime-enter', 'claude');
     const cdp = await page.context().newCDPSession(page);
     await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
     await forget(page);
     await cdp.send('Input.imeSetComposition', {text: 'help', selectionStart: 4, selectionEnd: 4});
     await Promise.all([
@@ -116,6 +125,7 @@ describe('phone direct writing: Enter', {skip}, () => {
     const page = await phone('ime-button', 'claude');
     const cdp = await page.context().newCDPSession(page);
     await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
     await forget(page);
     await cdp.send('Input.imeSetComposition', {text: 'help', selectionStart: 4, selectionEnd: 4});
     await page.locator('#line button.primary').click();
@@ -128,9 +138,10 @@ describe('phone direct writing: Enter', {skip}, () => {
   test('held text that cannot be delivered stops Enter: nothing is sent after it', async () => {
     const page = await phone('held-fails', 'claude');
     await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
     await forget(page);
-    await page.evaluate(() => {   // the socket accepts nothing from now on
-      (active.conn as unknown as {terminal: {queueInput: () => never}}).terminal.queueInput = () => { throw new Error('closed'); };
+    await page.evaluate(() => {   // acknowledged input cannot retain the held text
+      (active as unknown as {inputAck: {write: () => boolean}}).inputAck.write = () => false;
     });
     await composeThenEnter(page, 'help', 'keydown', true);
     await waitForFlash(page, 'keys not delivered');
@@ -171,6 +182,7 @@ describe('phone direct writing: Enter', {skip}, () => {
   test('files sent from the attachment menu (📎) end the mode', async () => {
     const page = await phone('attach', 'claude');
     await page.keyboard.type('/a');
+    await waitForShellLine(page, '/a');
     await forget(page);
     await page.locator('#keys [data-k="file"]').click();
     const chooser = page.waitForEvent('filechooser');

@@ -83,45 +83,33 @@ let default_folder ~getenv kind =
       Ok (join home default_name)
   | _ -> fail "account_folder_refused" "no home folder for the default account"
 
-(* The alias is never echoed: only an id that matched a valid one is. *)
-let alias_folder ~uid ~file kind account =
-  let _, _, field = agent_names kind in
-  let* accounts =
-    Result.map_error
-      (fun message -> { code = "accounts_refused"; message })
-      (Mesh_accounts.load ~uid file)
-  in
-  let* found =
-    Option.to_result
-      ~none:{ code = "account_unknown"; message = "unknown account" }
-      (List.find_opt
-         (fun (alias : Mesh_accounts.account) -> alias.id = account)
-         accounts)
-  in
-  Option.to_result
-    ~none:
-      {
-        code = "account_no_agent";
-        message = Printf.sprintf "account %s has no %s folder" found.id field;
-      }
-    (match kind with
-    | Claude -> found.claude_config_dir
-    | Codex -> found.codex_home)
+module R = Mesh_account_resolver
 
-let resolve_folder ~uid ~getenv ~file ~kind account =
-  if account = "default" then default_folder ~getenv kind
-  else alias_folder ~uid ~file kind account
+let resolver_result result =
+  Result.map_error
+    (fun (error : R.error) -> { code = error.code; message = error.message })
+    result
+
+(* The alias is never echoed: only an id that matched a valid one is. *)
+let alias_folder ~uid ~getenv ~file ~create kind account =
+  let backend = match kind with Claude -> R.Claude | Codex -> R.Codex in
+  let* accounts = resolver_result (R.load ~uid ~file) in
+  let* entry = resolver_result (R.find accounts { backend; id = account }) in
+  resolver_result (R.carry_folder ~uid ~getenv ~create entry)
 
 let account_folder ~uid ~getenv ~file ~kind ~create account =
   sanitized
-    (let* folder = resolve_folder ~uid ~getenv ~file ~kind account in
-     let checked =
-       if create then Mesh_accounts.prepare_directory ~uid folder
-       else Mesh_accounts.check_directory ~uid folder
-     in
-     match checked with
-     | Ok () -> Ok folder
-     | Error message -> fail "account_folder_refused" message)
+    (if account <> "default" then
+       alias_folder ~uid ~getenv ~file ~create kind account
+     else
+       let* folder = default_folder ~getenv kind in
+       let checked =
+         if create then Mesh_accounts.prepare_directory ~uid folder
+         else Mesh_accounts.check_directory ~uid folder
+       in
+       match checked with
+       | Ok () -> Ok folder
+       | Error message -> fail "account_folder_refused" message)
 
 let existing_folder ~uid folder =
   let* () =
@@ -133,6 +121,81 @@ let existing_folder ~uid folder =
   | { Unix.st_kind = Unix.S_DIR; _ } -> Ok ()
   | _ | (exception Unix.Unix_error _) ->
       fail "account_folder_refused" "the account folder does not exist"
+
+let folder_changed () =
+  fail "account_folder_refused" "an account folder changed during the carry"
+
+(* Keep the directory open as well as its identity: a removed inode cannot be
+   reused for a replacement while this operation still refers to it. *)
+let with_bound_folder ~uid folder f =
+  let* () = existing_folder ~uid folder in
+  let* before = lstat_opt folder in
+  match before with
+  | None -> folder_changed ()
+  | Some before -> (
+      match Unix.openfile folder [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 with
+      | exception Unix.Unix_error _ -> folder_changed ()
+      | descriptor ->
+          Fun.protect
+            ~finally:(fun () -> Unix.close descriptor)
+            (fun () ->
+              match Unix.fstat descriptor with
+              | identity
+                when identity.Unix.st_kind = Unix.S_DIR
+                     && Carry_target.same_file before identity
+                     && Carry_target.same_directory ~target:folder identity ->
+                  f identity
+              | _ | (exception Unix.Unix_error _) -> folder_changed ()))
+
+let check_bound_folder ~uid folder identity =
+  if Carry_target.same_directory ~target:folder identity then
+    existing_folder ~uid folder
+  else folder_changed ()
+
+(* This is the only source read for one carry. Even a mixed default/named pair
+   needs one validated snapshot before either folder is looked up. All-default
+   carries retain their historical independence from account configuration.
+   Later registry edits apply to the next operation; this one keeps its selected
+   entries and rechecks directory custody/identity, never re-resolving names. *)
+let pair_entries ~uid ~file ~kind ~from_account ~to_account =
+  let backend = match kind with Claude -> R.Claude | Codex -> R.Codex in
+  let* accounts =
+    resolver_result
+      (if from_account = R.default_id && to_account = R.default_id then
+         R.of_accounts []
+       else R.load ~uid ~file)
+  in
+  let* source =
+    resolver_result (R.find accounts { backend; id = from_account })
+  in
+  let* target = resolver_result (R.find accounts { backend; id = to_account }) in
+  Ok (source, target)
+
+let pinned_folder ~uid entry folder =
+  (* A synthetic default must not query the caller's environment again. *)
+  let getenv _ = Some folder in
+  let* checked = resolver_result (R.carry_folder ~uid ~getenv ~create:false entry) in
+  if checked = folder then Ok () else folder_changed ()
+
+(* An exclusive mkdir establishes creation but does not return the directory's
+   identity. A subsequent lstat validates the path, not cleanup custody. *)
+let prepare_pinned_target ~uid entry folder =
+  let* () = pinned_folder ~uid entry folder in
+  let* before = lstat_opt folder in
+  match before with
+  | Some identity -> Ok (false, identity)
+  | None -> (
+      match Unix.mkdir folder 0o700 with
+      | () ->
+          (match lstat_opt folder with
+          | Ok (Some identity) when identity.Unix.st_kind = Unix.S_DIR ->
+              Ok (true, identity)
+          | _ ->
+              fail "carry_rollback_incomplete"
+                "account folder cleanup unconfirmed after creation")
+      | exception Unix.Unix_error (Unix.EEXIST, _, _) -> folder_changed ()
+      | exception Unix.Unix_error _ ->
+          fail "account_folder_refused" "the account folder could not be created")
 
 (* ------------------------------------------------------------- the carry *)
 
@@ -201,7 +264,9 @@ let outcome_of planned =
 
 (* Under the lock: locate, bound, clean a killed carry's files, plan, check
    the free space, write. *)
-let carry_locked io limits ~uid ~kind ~conversation ~source ~target =
+let carry_locked ?(check_roots = fun () -> Ok ()) io limits ~uid ~kind
+    ~conversation ~source ~target =
+  let* () = check_roots () in
   let* files =
     match kind with
     | Claude -> Carry_locate.claude_files ~uid ~source conversation
@@ -210,10 +275,15 @@ let carry_locked io limits ~uid ~kind ~conversation ~source ~target =
   let* () = check_bounds limits files in
   let relatives = List.map fst files in
   let* () = all (Carry_target.check_folders ~uid ~target) relatives in
+  let* () = check_roots () in
   let* olds = Carry_target.clean_leftovers ~uid ~target relatives in
   let* planned = map_all (Carry_write.plan io ~uid ~source ~target) files in
-  let* () = check_space io limits ~target planned in
-  let* () = Carry_write.write_plan io ~uid ~source ~target planned in
+  let* () = check_roots () in
+  let space = check_space io limits ~target planned in
+  let* () = check_roots () in
+  let* () = space in
+  let* () = Carry_write.write_plan ~check_roots io ~uid ~source ~target planned in
+  let* () = check_roots () in
   List.iter (fun old -> quietly (fun () -> Unix.unlink old)) olds;
   Ok (outcome_of planned)
 
@@ -240,44 +310,99 @@ let carry ?(io = default_io) ?(limits = default_limits) ~uid ~kind ~conversation
      Carry_target.with_lock ~uid ~target conversation (fun _ ->
          carry_locked io limits ~uid ~kind ~conversation ~source ~target))
 
-(* The target folder of [carry_accounts] when it was created by this run:
-   removed again when the carry is refused ({!Carry_target.remove_created}),
-   or, without a lock file, when it is still empty. *)
-let carry_into_created io limits ~uid ~kind ~conversation ~source ~target =
-  let result =
-    Carry_target.with_lock ~uid ~target conversation (fun descriptor ->
-        match
-          carry_locked io limits ~uid ~kind ~conversation ~source ~target
-        with
-        | Error _ as refused ->
-            Carry_target.remove_created ~target descriptor;
-            refused
-        | carried -> carried)
+(* Hooks may mutate directories too. Check on both sides of every supplied IO
+   operation, and let write_plan retain recovery files instead of rolling back
+   through a replaced root. Closing must still release its descriptor. *)
+let bound_io check_roots (io : io) =
+  let ensure () =
+    match check_roots () with
+    | Ok () -> ()
+    | Error _ -> raise (Unix.Unix_error (Unix.EIO, "carry", ""))
   in
-  (match result with
-  | Error { code = "carry_in_progress"; _ } | Ok _ -> ()
-  | Error _ -> quietly (fun () -> Unix.rmdir target));
-  result
+  let around f =
+    ensure ();
+    let result = f () in
+    ensure ();
+    result
+  in
+  {
+    io with
+    read =
+      (fun fd bytes offset length ->
+        around (fun () -> io.read fd bytes offset length));
+    write =
+      (fun fd bytes offset length ->
+        around (fun () -> io.write fd bytes offset length));
+    unlink = (fun path -> around (fun () -> io.unlink path));
+    rename = (fun before after -> around (fun () -> io.rename before after));
+    close =
+      (fun fd ->
+        io.close fd;
+        ensure ());
+  }
 
 let carry_accounts ?(io = default_io) ?(limits = default_limits) ~uid ~getenv
     ~file ~kind ~conversation ~from_account ~to_account () =
   sanitized
     (let* () = check_id kind conversation in
-     let folder = account_folder ~uid ~getenv ~file ~kind in
-     let* source = folder ~create:false from_account in
-     let* path = resolve_folder ~uid ~getenv ~file ~kind to_account in
-     let* () = existing_folder ~uid source in
-     let existed =
-       match Unix.lstat path with
-       | _ -> true
-       | exception Unix.Unix_error _ -> false
+     let* (source_entry, target_entry) =
+       pair_entries ~uid ~file ~kind ~from_account ~to_account
      in
-     let* target = folder ~create:true to_account in
-     let* () = check_pair ~uid ~source ~target in
-     if existed then
-       Carry_target.with_lock ~uid ~target conversation (fun _ ->
-           carry_locked io limits ~uid ~kind ~conversation ~source ~target)
-     else carry_into_created io limits ~uid ~kind ~conversation ~source ~target)
+     let getenv =
+       if from_account = R.default_id || to_account = R.default_id then
+         let variable, _, _ = agent_names kind in
+         let home = getenv "HOME" in
+         let configured = getenv variable in
+         (function
+         | "HOME" -> home
+         | name when name = variable -> configured
+         | _ -> None)
+       else getenv
+     in
+     let* source =
+       resolver_result (R.carry_folder ~uid ~getenv ~create:false source_entry)
+     in
+     let* target =
+       resolver_result (R.carry_folder ~uid ~getenv ~create:false target_entry)
+      in
+      with_bound_folder ~uid source (fun source_identity ->
+          let* () = pinned_folder ~uid source_entry source in
+          let* unproven_creation, before =
+            prepare_pinned_target ~uid target_entry target
+          in
+          let result =
+            Carry_target.with_target_binding ~target ~created:false
+              ~identity:before (with_bound_folder ~uid target)
+              (fun target_identity ->
+                let check_roots () =
+                  let* () = check_bound_folder ~uid source source_identity in
+                  check_bound_folder ~uid target target_identity
+                in
+                let* () =
+                  if Carry_target.same_file before target_identity then Ok ()
+                  else folder_changed ()
+                in
+                let* () = pinned_folder ~uid target_entry target in
+                let* () = check_roots () in
+                let* () = check_pair ~uid ~source ~target in
+                let io = bound_io check_roots io in
+                Carry_target.with_lock ~uid ~target conversation (fun _ ->
+                    carry_locked ~check_roots io limits ~uid ~kind ~conversation
+                      ~source ~target))
+          in
+          match result with
+          | Error error when unproven_creation
+                             && (error.code = "carry_rollback_incomplete"
+                                || error.code = "carry_restore_failed") ->
+              Error
+                { error with
+                  message =
+                    error.message ^ "; account folder cleanup unconfirmed" }
+          | Error error when unproven_creation ->
+              fail "carry_rollback_incomplete"
+                ("the carry failed; account folder cleanup unconfirmed ("
+               ^ error.message ^ ")")
+          | _ -> result))
 
 let outcome_to_json outcome =
   `Assoc

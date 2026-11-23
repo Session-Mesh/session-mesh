@@ -284,7 +284,7 @@ let test_messages_are_clean () =
       Alcotest.(check bool)
         "the alias is not repeated" false (contains message "RED"))
 
-(* A target folder created by a carry that is then refused is removed. *)
+(* Without cleanup custody, a newly made target remains after refusal. *)
 let test_target_created_only_for_a_carry () =
   with_root (fun root ->
       let travel = Filename.concat root "travel/.claude" in
@@ -301,8 +301,8 @@ let test_target_created_only_for_a_carry () =
           ~file ~kind:C.Claude ~conversation:sid ~from_account:"default"
           ~to_account:"travel" ()
       in
-      refused_with "conversation_not_found" (run ());
-      Alcotest.(check bool) "no target folder" false (exists travel);
+       refused_with "carry_rollback_incomplete" (run ());
+       Alcotest.(check bool) "unproven target retained" true (exists travel);
       with_conversation source;
       ignore (carried (run ()));
       Alcotest.(check bool)

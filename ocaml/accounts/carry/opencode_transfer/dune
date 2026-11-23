@@ -1,0 +1,3 @@
+(library
+ (name mesh_opencode_transfer)
+ (libraries unix yojson mesh_accounts mtime.clock.os))

@@ -42,11 +42,23 @@ async function signedIn(locale: string, width: number, height = 900): Promise<{p
   const page = await context.newPage();
   const problems: string[] = [];
   const calls: string[] = [];
+  const accountCalls: string[] = [];
   page.on('pageerror', error => problems.push(String(error)));
   page.on('console', message => { if (/Content Security Policy|violat/i.test(message.text())) problems.push(message.text()); });
-  page.on('request', request => { const {pathname} = new URL(request.url()); if (pathname === '/api/config') calls.push(request.method()); });
+  page.on('request', request => {
+    const {pathname} = new URL(request.url());
+    if (pathname === '/api/config') calls.push(request.method());
+    if (pathname.startsWith('/api/accounts/')) accountCalls.push(request.method());
+  });
+  const bootstrap = page.waitForResponse(response => new URL(response.url()).pathname === '/api/config');
   await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
-  await page.goto(`${mesh.base}/`);
+  const response = await bootstrap;
+  assert.equal(response.status(), 200);
+  assert.equal((await response.json()).capabilities.account_settings, true, 'the server advertises the literal capability');
+  await page.locator('dialog.backend-account-panel').waitFor({state: 'attached'});
+  assert.deepEqual(calls, ['GET'], 'startup reads config once');
+  assert.deepEqual(accountCalls, [], 'revealing settings does not read profiles or change preferences');
+  calls.length = 0;
   await page.waitForSelector('#btn-config', {state: 'attached'});
   return {page, problems, calls};
 }

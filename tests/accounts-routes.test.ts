@@ -151,7 +151,8 @@ before(async () => {
   const common = {MESH_PROFILE_CMD: undefined, ANTHROPIC_API_KEY: SENTINEL, MESH_TEST_ACCOUNTS_SENTINEL: SENTINEL};
   [real, empty, missing] = await Promise.all([
     startMesh('accounts-routes-real-', {...common, MESH_MESH_PROFILE_CMD: HELPER}, registry),
-    startMesh('accounts-routes-empty-', {...common, MESH_MESH_PROFILE_CMD: HELPER}),
+    startMesh('accounts-routes-empty-', {...common, MESH_MESH_PROFILE_CMD: HELPER},
+      where => fs.mkdirSync(where.confDir, {recursive: true, mode: 0o700})),
     startMesh('accounts-routes-missing-', {...common, MESH_MESH_PROFILE_CMD: '/nonexistent/mesh-profile'}),
   ]);
   let script = '';

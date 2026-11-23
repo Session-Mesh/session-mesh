@@ -1,0 +1,20 @@
+(test
+ (name test_native_source)
+ (modules test_native_source)
+ (libraries carry_fixture mesh_accounts_carry alcotest unix yojson))
+
+(test
+ (name test_pi)
+ (modules test_pi)
+ (libraries carry_fixture mesh_accounts_carry alcotest unix yojson))
+
+(test
+ (name test_opencode_transfer)
+ (modules test_opencode_transfer)
+ (libraries mesh_opencode_transfer test_scratch alcotest yojson unix))
+
+; Opt-in private native lineage proof, called by tests/opencode-lineage-real.test.ts.
+(executable
+ (name opencode_lineage_driver)
+ (modules opencode_lineage_driver)
+ (libraries mesh_opencode_transfer yojson))

@@ -116,8 +116,8 @@ let test_carry_from_default_to_alias () =
             "conversation_not_found" );
         ])
 
-(* A refused carry does not leave the alias folder it created, and its
-   message does not repeat an unknown alias. *)
+(* A refused carry leaves a directory without proven cleanup custody for
+   review, and its message does not repeat an unknown alias. *)
 let test_refusals_leave_nothing () =
   let root = Filename.temp_dir "carrycli" "" in
   Fun.protect
@@ -139,9 +139,9 @@ let test_refusals_leave_nothing () =
         | _ -> Alcotest.fail "no code or error"
       in
       let code, _ = refusal [ "claude"; sid; "default"; "travel" ] in
-      Alcotest.(check string) "not found" "conversation_not_found" code;
-      Alcotest.(check bool)
-        "the alias folder is not left behind" false (Sys.file_exists travel);
+       Alcotest.(check string) "unconfirmed cleanup" "carry_rollback_incomplete" code;
+       Alcotest.(check bool)
+         "unproven alias folder retained" true (Sys.file_exists travel);
       let code, error =
         refusal [ "claude"; sid; "default"; "x\027[31mRED\nline2" ]
       in
