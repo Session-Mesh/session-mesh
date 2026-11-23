@@ -101,7 +101,7 @@ def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, s
             raise web.HTTPConflict(text="changed")
         return target_context
 
-    async def start(*_args, context=None, expected_identity=None):
+    async def start(*_args, context=None, expected_identity=None, validate_default_target=False):
         events.append(("start", context["id"], context["env"]["CODEX_HOME"]))
         if scenario == "target_changed_during_launch" and context["id"] == "work":
             raise server.AccountContextChanged()
@@ -156,6 +156,25 @@ def test_partial_stop_is_reported_as_uncertain(monkeypatch):
     with pytest.raises(web.HTTPServiceUnavailable) as error:
         asyncio.run(server._stop_agent({"name": "session", "created": 1}, "codex"))
     assert "uncertain" in error.value.text
+
+
+def test_launch_rechecks_profile_revision_after_preparation(monkeypatch):
+    calls = []
+    async def changed(*_args):
+        calls.append("revision")
+        raise web.HTTPConflict(text="changed")
+    async def host(*_args, **_kwargs):
+        calls.append("host")
+        return {"ok": True}
+    monkeypatch.setattr(server, "_switch_profile_context", changed)
+    monkeypatch.setattr(server, "host", host)
+    context = {"id": "work", "context_revision": "a" * 64, "env": {"CODEX_HOME": "/tmp/work"},
+               "roots": {"config": "/tmp/work"}, "unset": []}
+    with pytest.raises(server.AccountContextChanged):
+        asyncio.run(server._start_in_place({"name": "session", "meta": {}}, 2, "/tmp", "codex",
+                    "codex", "codex", None, None, "work", context["env"], context=context,
+                    expected_identity=(1, 2), validate_default_target=True))
+    assert calls == ["revision"]
 
 
 def test_named_source_home_must_match_process(monkeypatch):

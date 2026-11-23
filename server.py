@@ -1587,7 +1587,8 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
             await undo_native_switch(AccountsUnavailable("Target account changed after carry", "profile-context-changed"))
     try:
         if native_switch:
-            await _start_in_place(*launch, target, account_env, context=context, expected_identity=target_identity)
+            await _start_in_place(*launch, target, account_env, context=context, expected_identity=target_identity,
+                                  validate_default_target=True)
         else:
             await _start_in_place(*launch, target, account_env, context=context)
     except AccountContextChanged:
@@ -1643,7 +1644,7 @@ class AccountContextChanged(Exception):
 
 
 async def _start_in_place(source, created, cwd, command, agent, known_agent, notice, vibe, account, account_env,
-                          context=None, expected_identity=None):
+                          context=None, expected_identity=None, validate_default_target=False):
     """Start the agent in the incarnation stop_agent_if left (``created``), under ``account``, with the session's
     meta for that launch (as new_session writes it; the nonce, hence the session token, is kept). A Claude's wake
     socket path follows from the nonce: the socket the stopped Claude left there is removed first, so that the new
@@ -1655,9 +1656,15 @@ async def _start_in_place(source, created, cwd, command, agent, known_agent, not
                                           cwd, ptyhost.clean_env(account_env))
     if expected_identity is not None:
         try:
+            if context["id"] == DEFAULT_ACCOUNT["id"] and not validate_default_target:
+                revision = accountswitch.default_context(known_agent, context["env"])["context_revision"]
+                if revision != context["context_revision"]:
+                    raise AccountContextChanged()
+            else:
+                await _switch_profile_context(context["id"], known_agent, context["context_revision"])
             if _switch_root_identity(context) != expected_identity:
                 raise AccountContextChanged()
-        except web.HTTPException as error:
+        except (web.HTTPException, accountswitch.UnboundDefault) as error:
             raise AccountContextChanged() from error
     meta = {"agent": agent, "known_agent": known_agent, **({"nonce": nonce} if nonce else {}),
             **({"notice": notice} if notice else {}), **({"account": account} if account_env else {}),
