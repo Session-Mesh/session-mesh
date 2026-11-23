@@ -168,6 +168,50 @@
     "key": "server.accountRefused"
   },
   {
+    "pattern": "^Default account context is unavailable; nothing was stopped$",
+    "key": "server.switchDefaultUnknown"
+  },
+  {
+    "pattern": "^Account profile context changed; nothing was stopped$",
+    "key": "server.switchProfileChanged"
+  },
+  {
+    "pattern": "^Foreground agent changed; nothing was stopped$",
+    "key": "server.switchAgentChanged"
+  },
+  {
+    "pattern": "^Conversation changed since the request; nothing was stopped$",
+    "key": "server.switchConversationChanged"
+  },
+  {
+    "pattern": "^Account folder unavailable$",
+    "key": "server.switchFolderUnavailable"
+  },
+  {
+    "pattern": "^Native account switch requires a shell in this session$",
+    "key": "server.switchNeedsShell"
+  },
+  {
+    "pattern": "^Native account switch requires in-place relaunch support$",
+    "key": "server.switchNeedsRelaunch"
+  },
+  {
+    "pattern": "^This PTY host cannot bind the agent identity; nothing was stopped$",
+    "key": "server.switchHostUnbound"
+  },
+  {
+    "pattern": "^Account profile context unknown; nothing was stopped$",
+    "key": "server.switchProfileUnknown"
+  },
+  {
+    "pattern": "^Native account switch request has no valid binding$",
+    "key": "server.switchBindingInvalid"
+  },
+  {
+    "pattern": "^Foreground agent changed since the request; nothing was stopped$",
+    "key": "server.switchAgentChangedSinceRequest"
+  },
+  {
     "pattern": "^Account profile context changed; resume refused$",
     "key": "server.accountProfileResumeChanged"
   },
