@@ -786,6 +786,29 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     await closePage(page);
   });
 
+  for (const width of [1440, 390] as const) test(`unchanged entry overview keeps its DOM at ${width}px`, { timeout: 120_000 }, async () => {
+    const page = await signIn(width, []);
+    let observed!: () => void, reads = 0;
+    const nextPoll = new Promise<void>(resolve => { observed = resolve; });
+    try {
+      await toProjects(page, width < 600);
+      await page.locator('.work-overview-product').first().waitFor();
+      await page.evaluate(() => { (window as unknown as { entryNode: Element | null }).entryNode = document.querySelector('.work-entry'); });
+      await page.route('**/api/work/v1', async route => {
+        const op = JSON.parse(route.request().postData() ?? '{}').op;
+        if (op === 'products' && ++reads === 2) observed();
+        if (op !== 'projects') return route.continue();
+        const response = await route.fetch();
+        const body = await response.json();
+        if (body.projects.length) body.projects[0].title += ' (updated)';
+        await route.fulfill({ response, json: body });
+      });
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await nextPoll;
+      assert.equal(await page.evaluate(() => (window as unknown as { entryNode: Element | null }).entryNode === document.querySelector('.work-entry')), true);
+    } finally { await closePage(page); }
+  });
+
   for (const width of [1440, 390] as const) test(`entry overview refreshes only after focus leaves at ${width}px`, { timeout: 120_000 }, async () => {
     const page = await signIn(width, []);
     try {

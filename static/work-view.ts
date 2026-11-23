@@ -350,7 +350,8 @@ class WorkView implements WorkViewController {
       const snapshot = JSON.stringify([products.value, projects.value]);
       if (atEntry && overview && !overview.contains(document.activeElement) && snapshot !== this.entryOverviewSnapshot) {
         const scroller = scrollerOf(this.options.root), scroll = scroller.scrollTop;
-        overview.replaceWith(renderOverview(this.entryHandlers(), entryTree(products.value, projects.value)));
+        const next = renderOverview(this.entryHandlers(), entryTree(products.value, projects.value));
+        if (overview.outerHTML !== next.outerHTML) overview.replaceWith(next);
         const omitted = this.content.querySelector<HTMLElement>(':scope > .work-omitted');
         if (products.value.truncated || projects.value.truncated) {
           if (!omitted) this.content.append(el('p', 'work-notice work-omitted', this.t('work.entryTruncated')));
