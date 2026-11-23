@@ -42,6 +42,7 @@ import agentmcp
 import agentmail
 import agentwake
 import agentcap
+import accountswitch
 import claudewake
 import launchplan
 import launchsettings
@@ -778,6 +779,36 @@ async def _profile_launch_context(account, agent, expected_revision=None):
             raise web.HTTPConflict(text="Account profile context changed; resume refused") from exc
         print(f"account launch context refused: {exc}", flush=True)
         raise web.HTTPBadRequest(text=ACCOUNT_REFUSED) from exc
+
+
+async def _switch_profile_context(account, agent, expected_revision=None, observed_agent=None):
+    """Resolve the exact native or observed default account for a pending switch.
+
+    The default source must be the independently described foreground agent. The
+    default target is explicitly bound to this server's environment. Neither
+    path is permitted to silently fall back when its binding has changed.
+    """
+    if account != DEFAULT_ACCOUNT["id"]:
+        return await _profile_launch_context(account, agent, expected_revision)
+    try:
+        if observed_agent is None:
+            selected = accountswitch.default_context(agent, os.environ)
+        else:
+            if observed_agent.get("type") != agent or observed_agent.get("foreground") is not True:
+                raise accountswitch.UnboundDefault("Agent is not the foreground process")
+            selected = await asyncio.to_thread(accountswitch.process_default_context, agent, observed_agent.get("pid"))
+    except accountswitch.UnboundDefault as exc:
+        raise web.HTTPConflict(text="Default account context is unavailable; nothing was stopped") from exc
+    revision = selected["context_revision"]
+    if expected_revision is not None and revision != expected_revision:
+        raise web.HTTPConflict(text="Account profile context changed; nothing was stopped")
+    root = selected["root"]
+    variable = "CODEX_HOME" if agent == "codex" else "CLAUDE_CONFIG_DIR"
+    role, child = ("state", "sessions") if agent == "codex" else ("history", "projects")
+    return {"backend": agent, "id": account, "label": DEFAULT_ACCOUNT["label"],
+            "env": {variable: root}, "roots": {"config": root, role: os.path.join(root, child)},
+            "unset": list(dict.fromkeys((*_PROFILE_PROVIDER_OVERRIDES, *ACCOUNT_OVERRIDES.get(variable, ())))),
+            "context_revision": revision}
 
 
 def _profile_command(command, context, agent):

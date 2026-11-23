@@ -1,9 +1,12 @@
 import hashlib
 import os
+import asyncio
 
 import pytest
+from aiohttp import web
 
 import accountswitch
+import server
 
 
 def test_default_context_binds_actual_home():
@@ -47,3 +50,16 @@ def test_actual_process_home_is_observed():
     except accountswitch.UnboundDefault:
         pytest.skip("current process has an ambiguous account environment")
     assert result["root"].startswith("/")
+
+
+def test_server_binds_default_to_observed_agent(monkeypatch):
+    observed = {"type": "codex", "pid": 42, "foreground": True}
+    selected = accountswitch.default_context("codex", {"HOME": "/tmp/alice"})
+    monkeypatch.setattr(accountswitch, "process_default_context", lambda kind, pid: selected)
+    context = asyncio.run(server._switch_profile_context("default", "codex", observed_agent=observed))
+    assert context["env"] == {"CODEX_HOME": "/tmp/alice/.codex"}
+    assert context["context_revision"] == selected["context_revision"]
+    with pytest.raises(web.HTTPConflict):
+        asyncio.run(server._switch_profile_context("default", "codex", "0" * 64, observed))
+    with pytest.raises(web.HTTPConflict):
+        asyncio.run(server._switch_profile_context("default", "codex", observed_agent={**observed, "foreground": False}))
