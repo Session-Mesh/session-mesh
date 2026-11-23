@@ -5,6 +5,9 @@
 (*                                                                            *)
 (******************************************************************************)
 
+val log : ('a, unit, string, unit) format4 -> 'a
+(** Best-effort diagnostics: output failures do not stop the host. *)
+
 val parse : string -> (Yojson.Basic.t, string) result
 (** Parse bounded control JSON: at most 256 KiB, valid UTF-8 and depth 128. *)
 

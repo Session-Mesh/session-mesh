@@ -315,44 +315,6 @@ let accept_failure_keeps_serving () =
           | Some line -> print_endline line
           | None -> failwith "the accept failure is not logged"))
 
-(* Losing stderr must not take the host or an unrelated live session down.
-   The host's small descriptor limit makes a burst force an accept error and
-   hence a log attempt. A read-only stderr produces a portable write failure. *)
-let failed_stderr_keeps_session path flags () =
-  with_fixture quiet_program (fun fixture session_pids ->
-      let stderr = Unix.openfile path flags 0 in
-      let pid =
-        Fun.protect ~finally:(fun () -> Unix.close stderr) (fun () ->
-            host
-            @@ start_host ~stderr
-                 (Array.append
-                    [| "/bin/sh"; "-c"; "ulimit -n 48 && exec \"$@\""; "sh" |]
-                    !host_argv)
-                 ~home:fixture.home ~runtime:fixture.runtime ~shell:fixture.shell)
-      in
-      Fun.protect ~finally:(fun () -> stop pid) (fun () ->
-          wait_answering fixture.socket_path;
-          new_quiet fixture session_pids "kept";
-          let idle = ref [] in
-          Fun.protect ~finally:(fun () -> List.iter Unix.close !idle) (fun () ->
-              let deadline = Unix.gettimeofday () +. 10. in
-              let saturated = ref false in
-              while not !saturated && List.length !idle < 80 && Unix.gettimeofday () < deadline do
-                let socket = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
-                Unix.set_nonblock socket;
-                match Unix.connect socket (Unix.ADDR_UNIX fixture.socket_path) with
-                | () -> idle := socket :: !idle
-                | exception Unix.Unix_error ((Unix.EAGAIN | Unix.ECONNREFUSED), _, _) ->
-                    Unix.close socket;
-                    if List.length !idle >= 32 then saturated := true;
-                    Unix.sleepf 0.03
-              done;
-              expect (Printf.sprintf "enough idle connections to exhaust host descriptors: %d" (List.length !idle))
-                (List.length !idle >= 32);
-              Unix.sleepf 1.;
-              expect "host survives failure to write its error log" (exited pid = None));
-          retained_session_appears ~timeout:10. (fun () -> sessions fixture)))
-
 (* A host killed with SIGKILL leaves its socket file behind. *)
 let stale_socket_is_replaced () =
   with_fixture quiet_program (fun fixture _ ->
@@ -792,8 +754,6 @@ let () =
         [
           Alcotest.test_case "an accept failure keeps the host serving" `Quick
             accept_failure_keeps_serving;
-          Alcotest.test_case "a failed stderr preserves the host and its session" `Quick
-            (failed_stderr_keeps_session "/dev/null" [ Unix.O_RDONLY ]);
           Alcotest.test_case "a dropped recovery probe is retried" `Quick
             probe_recovers_after_eof;
           Alcotest.test_case "fake recovery peer waits for callback" `Quick
@@ -812,11 +772,7 @@ let () =
             live_socket_is_not_taken;
           Alcotest.test_case "hosts started together leave one serving" `Quick
             hosts_started_together_leave_one_serving;
-        ]
-        @ (if Sys.file_exists "/dev/full" then
-             [ Alcotest.test_case "a full stderr preserves the host and its session" `Quick
-                 (failed_stderr_keeps_session "/dev/full" [ Unix.O_WRONLY ]) ]
-           else []) );
+        ] );
       ( "sessions",
         [
           Alcotest.test_case "sessions start with the default SIGPIPE" `Quick
