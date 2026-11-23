@@ -91,6 +91,8 @@ class WorkView implements WorkViewController {
   private writeUnavailable = false;
   private openQuestionsCount: number | null = null;
   private countSequence = 0;
+  private projectAnswerSequence = 0;
+  private entryOverviewSnapshot = '';
   private readonly announcer = el('p', 'sr-only work-announcer');
   /** The document panel of the references in tracker text (static/work-doc-panel.ts). */
   private readonly docs: DocPanel;
@@ -343,6 +345,19 @@ class WorkView implements WorkViewController {
       this.entry = { products: products.value, projects: projects.value };
       if (JSON.stringify([products.value, projects.value]) !== this.rail.documentsSnapshot())
         this.rail.entry(products.value, projects.value);
+      const overview = this.content.querySelector<HTMLElement>('.work-entry');
+      const atEntry = this.project === null && this.product === null && this.sheets.place() === null;
+      const snapshot = JSON.stringify([products.value, projects.value]);
+      if (atEntry && overview && !overview.contains(document.activeElement) && snapshot !== this.entryOverviewSnapshot) {
+        const scroller = scrollerOf(this.options.root), scroll = scroller.scrollTop;
+        overview.replaceWith(renderOverview(this.entryHandlers(), entryTree(products.value, projects.value)));
+        const omitted = this.content.querySelector<HTMLElement>(':scope > .work-omitted');
+        if (products.value.truncated || projects.value.truncated) {
+          if (!omitted) this.content.append(el('p', 'work-notice work-omitted', this.t('work.entryTruncated')));
+        } else omitted?.remove();
+        this.entryOverviewSnapshot = snapshot;
+        scroller.scrollTop = scroll;
+      }
     }
     if (questions.ok) {
       const atEntry = this.project === null && this.product === null && this.sheets.place() === null;
@@ -402,9 +417,9 @@ class WorkView implements WorkViewController {
       && !project.view.root.querySelector('.work-answer-form[aria-busy="true"]')
       && !project.view.currentPanel().contains(document.activeElement) && Date.now() - this.lastProjectInteraction > 5000;
     if (!project || !quiet()) return;
-    const token = this.generation;
+    const token = this.generation, answerSequence = this.projectAnswerSequence;
     const result = await this.api.project(project.id, this.controller?.signal);
-    if (token !== this.generation || !quiet()) return;
+    if (token !== this.generation || answerSequence !== this.projectAnswerSequence || !quiet()) return;
     let status = project.view.root.querySelector<HTMLElement>('.work-auto-refresh-status');
     if (!result.ok) {
       if (!status) {
@@ -471,6 +486,7 @@ class WorkView implements WorkViewController {
 
   private renderEntryScreen(): void {
     if (!this.entry) return;
+    this.entryOverviewSnapshot = JSON.stringify([this.entry.products, this.entry.projects]);
     const cut = this.entry.products.truncated || this.entry.projects.truncated;
     this.rail.entry(this.entry.products, this.entry.projects);
     this.rail.select(ENTRY_KEY);
@@ -612,6 +628,7 @@ class WorkView implements WorkViewController {
     return { api: this.api, t: this.t, generation: () => this.generation, selected: () => this.selected,
       writeUnavailable: () => { this.writeUnavailable = true; },
       recorded: question => {
+        this.projectAnswerSequence++;
         this.memory.sent(question);   // its draft is not kept, nor put back by the reads that follow
         this.sync.publish({ source: 'view', answered: question });   // the marker drops it now, wherever the view is
         this.questions.forgetAnswered(question);

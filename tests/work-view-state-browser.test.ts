@@ -786,6 +786,29 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     await closePage(page);
   });
 
+  for (const width of [1440, 390] as const) test(`entry overview refreshes only after focus leaves at ${width}px`, { timeout: 120_000 }, async () => {
+    const page = await signIn(width, []);
+    try {
+      await toProjects(page, width < 600);
+      const original = page.locator('.work-overview-product[data-product="relay"]');
+      await original.focus();
+      await page.route('**/api/work/v1', async route => {
+        if (JSON.parse(route.request().postData() ?? '{}').op !== 'products') return route.continue();
+        const response = await route.fetch();
+        const body = await response.json();
+        const category = body.categories.find((item: { products: { id: string }[] }) => item.products.some(product => product.id === 'relay'));
+        const product = category.products.find((item: { id: string }) => item.id === 'relay');
+        category.products.push({ ...product, id: `new-${width}` });
+        await route.fulfill({ response, json: body });
+      });
+      await page.waitForTimeout(7000);
+      assert.equal(await original.evaluate(node => node === document.activeElement), true);
+      assert.equal(await page.locator(`.work-overview-product[data-product="new-${width}"]`).count(), 0);
+      await original.blur();
+      await page.locator(`.work-overview-product[data-product="new-${width}"]`).waitFor({ timeout: 35_000 });
+    } finally { await closePage(page); }
+  });
+
   for (const width of [1440, 390] as const) test(`a pending project answer survives background refresh at ${width}px`, { timeout: 120_000 }, async () => {
     const page = await signIn(width, []);
     let release!: () => void, observed!: () => void;
@@ -826,6 +849,50 @@ describe('the Projects view comes back as it was left', { skip }, () => {
       release();
       await closePage(page);
     }
+  });
+
+  for (const width of [1440, 390] as const) test(`a stale project read cannot undo an answer at ${width}px`, { timeout: 120_000 }, async () => {
+    const taskId = width === 1440 ? 'T-9a01' : 'T-9a02';
+    const questionId = width === 1440 ? 'N-00009a01' : 'N-00009a02';
+    fs.appendFileSync(path.join(scratch, 'tracker', 'events', '2026-11.hostq.jsonl'),
+      [...task(taskId, `Stale answer ${width}`, 59, 'P3'), question('2026-11-08T09:59:00Z', taskId, questionId)]
+        .map(event => JSON.stringify(event)).join('\n') + '\n');
+    const page = await signIn(width, []);
+    let release!: () => void, releaseLater!: () => void, observed!: () => void, held = false, oldReleased = false;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const later = new Promise<void>(resolve => { releaseLater = resolve; });
+    const pending = new Promise<void>(resolve => { observed = resolve; });
+    try {
+      await toProjects(page, width < 600);
+      await page.locator('.work-overview-product[data-product="relay"]').click();
+      await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
+      await page.locator('#work-tab-board').click();
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await page.route('**/api/work/v1', async route => {
+        if (JSON.parse(route.request().postData() ?? '{}').op !== 'project') return route.continue();
+        if (oldReleased) { await later; return route.continue(); }
+        if (held) return route.continue();
+        held = true;
+        const response = await route.fetch();
+        observed();
+        await gate;
+        await route.fulfill({ response });
+      });
+      await pending;
+      await page.locator('#work-tab-questions').click();
+      const field = tabField(page, questionId);
+      await field.fill('Answer survives');
+      await field.locator('xpath=ancestor::form').getByRole('button', { name: 'Send answer' }).click();
+      await page.locator(`.work-question-answered[data-question-id="${questionId}"]`).waitFor();
+      await page.locator('#work-tab-board').click();
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await page.waitForTimeout(6000);
+      oldReleased = true;
+      release();
+      await page.waitForTimeout(1000);
+      await page.locator('#work-tab-questions').click();
+      assert.equal(await page.locator(`.work-question-answered[data-question-id="${questionId}"]`).count(), 1);
+    } finally { release(); releaseLater(); await closePage(page); }
   });
 
   test('a failed background read is visible and clears after recovery', { timeout: 300_000 }, async () => {
