@@ -95,3 +95,15 @@ let stop timing ~signal ~sleep ~now ~stopped =
   else (
     signal Sys.sigkill;
     if wait_until (now () +. timing.kill_wait) then `Stopped else `Still_running)
+
+let stop_guarded timing ~signal ~sleep ~now ~stopped =
+  let rec wait_until deadline =
+    if stopped () then true
+    else if now () >= deadline then false
+    else (sleep timing.poll; wait_until deadline)
+  in
+  if not (signal Sys.sighup) then `Identity_changed
+  else if wait_until (now () +. timing.grace) then `Stopped
+  else if not (signal Sys.sigkill) then `Identity_changed
+  else if wait_until (now () +. timing.kill_wait) then `Stopped
+  else `Still_running

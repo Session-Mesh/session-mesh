@@ -639,8 +639,9 @@ let stop_agent env s agent expected =
       in
       (* Never the shell's own group: [classify] names another one. *)
       let signal signum =
-        Option.iter
-          (fun group ->
+        match group with
+        | None -> Option.is_none expected
+        | Some group ->
             (* The process may still exit or the group change between this
                observation and kill(2); this check is not an atomic group signal. *)
             let bound =
@@ -651,9 +652,9 @@ let stop_agent env s agent expected =
                       p.pid = pid && p.incarnation = incarnation && p.pgrp = group
                       && p.sid = s.pid && p.state <> 'Z' && runs_agent p)) = Some true
             in
-            if s.alive && bound then
-              try Unix.kill (-group) signum with Unix.Unix_error _ -> ())
-          group
+            if not s.alive || not bound then false
+            else try Unix.kill (-group) signum; true
+              with Unix.Unix_error _ -> Option.is_none expected
       in
       let clock = Eio.Stdenv.clock env in
       let stopped () =
@@ -661,11 +662,12 @@ let stop_agent env s agent expected =
         = Some true
       in
       match
-        Mesh_pty_agent_stop.stop Mesh_pty_agent_stop.default_timing ~signal
+        Mesh_pty_agent_stop.stop_guarded Mesh_pty_agent_stop.default_timing ~signal
           ~sleep:(Eio.Time.sleep clock)
           ~now:(fun () -> Eio.Time.now clock)
           ~stopped
       with
+      | `Identity_changed -> agent_refusal "agent_changed"
       | `Still_running -> agent_refusal "agent_still_running"
       | `Stopped when (not s.alive) || s.finishing || s.kill_requested ->
           agent_refusal "stale_incarnation"

@@ -89,3 +89,14 @@ val stop :
     [stopped ()] holds or [grace] elapsed, then send SIGKILL and wait up to
     [kill_wait] more. [`Still_running] when the job outlived both: the caller
     then starts nothing. *)
+
+val stop_guarded :
+  timing ->
+  signal:(int -> bool) ->
+  sleep:(float -> unit) ->
+  now:(unit -> float) ->
+  stopped:(unit -> bool) ->
+  [ `Stopped | `Still_running | `Identity_changed ]
+(** Like {!stop}, but [signal] checks identity before each signal. A false
+    result refuses immediately even when [stopped] says the group is empty.
+    The identity check and the signal are not an atomic kernel operation. *)
