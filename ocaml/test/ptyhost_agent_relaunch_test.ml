@@ -213,40 +213,42 @@ let await_size socket rows owner =
 
 let await_size_reads_matching_frame () =
   let size rows owner = Printf.sprintf {|{"rows":%d,"owner":"%s"}|} rows owner in
+  let frame kind payload =
+    let head = Bytes.create 5 in
+    Bytes.set head 0 kind;
+    Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
+    Bytes.to_string head ^ payload
+  in
+  let matching = frame 'S' (size 26 "you") in
+  let after = frame 'D' "after the requested size" in
   List.iter
-    (fun (label, frames, expected) ->
+    (fun (label, frames) ->
       let reader, writer = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
       Fun.protect
         ~finally:(fun () -> Unix.close reader; Unix.close writer)
         (fun () ->
           List.iter
-            (fun (kind, payload) ->
-              let head = Bytes.create 5 in
-              Bytes.set head 0 kind;
-              Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
-              let wire = Bytes.to_string head ^ payload in
+            (fun wire ->
               expect "probe frame written"
                 (Unix.write_substring writer wire 0 (String.length wire)
                 = String.length wire))
-            frames;
+            (List.map (fun (kind, payload) -> frame kind payload) frames
+            @ [ matching; after ]);
           Unix.shutdown writer Unix.SHUTDOWN_SEND;
-          let matched =
-            try
-              await_size reader 26 "you";
-              true
-            with Failure message when message = "the host closed the connection" -> false
-          in
-          expect label (matched = expected)))
+          await_size reader 26 "you";
+          (* The barrier must consume exactly through the matching S. *)
+          expect label
+            (Bytes.to_string (read_exactly reader (String.length after))
+            = after)))
     [
-      ("C is not a size barrier", [ ('C', "{}") ], false);
-      ("empty D is not a size barrier", [ ('D', "") ], false);
-      ("different rows are not the requested size", [ ('S', size 25 "you") ], false);
-      ("different owner is not the requested size", [ ('S', size 26 "other") ], false);
-      ("matching S completes", [ ('S', size 26 "you") ], true);
+      ("C is not a size barrier", [ ('C', "{}") ]);
+      ("empty D is not a size barrier", [ ('D', "") ]);
+      ("different rows are not the requested size", [ ('S', size 25 "you") ]);
+      ("different owner is not the requested size", [ ('S', size 26 "other") ]);
+      ("matching S completes", []);
       ( "C, empty D and mismatching S are skipped",
-        [ ('C', "{}"); ('D', ""); ('S', size 25 "you");
-          ('S', size 26 "other"); ('S', size 26 "you") ],
-        true );
+        [ ('C', "{}"); ('D', ""); ('S', size 25 "you"); ('S', size 26 "other") ]
+      );
     ]
 
 let conditional_attachment_is_retired () =
