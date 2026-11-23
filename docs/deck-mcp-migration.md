@@ -1,11 +1,16 @@
 # Deck MCP grouped tools
 
 The `mesh-board` MCP server advertises `whiteboard`, `demo`, `mail`, `session`, and
-`agent_guide_read`. Each group supports the `describe` action. Its result contains a
+`agent_guide_read`. Call a group with no arguments or with `action: "describe"` to see its
+catalogue. The result contains a
 `commands` array with the action names, descriptions, and input and output schemas where
 declared. Clients can read the catalogue in the JSON text block or in structured content.
 
 These examples show the `params` object for a `tools/call` request.
+
+```json
+{"name":"mail"}
+```
 
 ```json
 {"name":"mail","arguments":{"action":"describe"}}
@@ -20,7 +25,8 @@ These examples show the `params` object for a `tools/call` request.
 ```
 
 The outer `arguments` belongs to MCP. The inner `arguments` contains the action's original
-fields. For an action with no fields, omit the inner object or pass `{}`.
+fields. For an action with no fields, omit the inner object or pass `{}`. A nonempty inner
+object requires an explicit action.
 
 ## Update existing callers
 
@@ -69,9 +75,19 @@ names. Use the group name with whatever prefix your client adds for `mesh-board`
 applies to the whole group, including `describe`. Review the full action list before carrying
 an allow rule over to its group.
 
-For Vibe sessions started by Mesh, the injected `mesh-board` configuration treats an old
-`disabled_tools` entry as a denial of its whole group. Mesh leaves the configuration files on
-disk as written.
+For Vibe sessions started by Mesh, the injected `mesh-board` configuration keeps old
+`disabled_tools` entries and also denies their corresponding groups. This covers both
+bridge versions during upgrades and rollbacks. Mesh leaves configuration files on disk as
+written.
+
+## Upgrade running sessions
+
+A release upgrade keeps the running PTY host and existing agent sessions. Their wake notices,
+tool catalogues and client permissions can still refer to the old tools. After updating
+permissions, restart the PTY host and restore the affected sessions when you are ready to
+switch to the new names. Follow the [snapshot and restore procedure](operations.md#restoring-sessions-after-a-pty-host-restart).
+For a source install, first run `scripts/bootstrap.sh --install-only` with the switch used by
+Mesh to rebuild the bridge and host.
 
 Session Mesh still checks the caller's session. Reading mail text uses the existing consent
 flow, and session creation, restart and account switch still require the owner's approval.

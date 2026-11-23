@@ -9,7 +9,7 @@ in [features.md](features.md#whiteboard-and-demos).
 
 ## Create, open, revise
 
-The agent uses the `demo` tool of the `mesh-board` MCP server. Call it with
+The agent uses the `demo` tool of the `mesh-board` MCP server. Call it without arguments or with
 `{"action":"describe"}` to get the available actions and their schemas. The `create` action
 takes the scene under `arguments.scene`.
 

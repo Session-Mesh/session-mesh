@@ -187,7 +187,10 @@ describe('real Vibe', {skip: absent}, () => {
     const created = (await listing()).mesh.find(item => item.id === 'vb-a')!.created;
     await say(b, `CALL mail {"action":"send","arguments":{"target":"vb-a","target_created":${created},"kind":"message","text":"ping-xyz-123"}}`);
     await approve(b);
-    await until('the notice typed into vb-a', async () => (await screen(a)).includes('# Mesh: new message') || undefined);
+    await until('the notice typed into vb-a', async () => {
+      const output = await screen(a);
+      return output.includes('# Mesh: new message') && output.includes('mail.inbox') || undefined;
+    });
     await approve(a);
     const inbox = await until('the inbox result', async () => lines().find(line => line.role === 'tool' && line.text.includes('"messages"')
       && line.text.includes('"id"')));

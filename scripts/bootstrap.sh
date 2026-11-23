@@ -60,7 +60,7 @@ set -euo pipefail
 
 dune_version="3.24.2"
 mcp_kit_pin="mcp-kit.0.2.0+pin"
-mcp_kit_source="git+https://gitlab.com/nomadic-labs/ai-harness/ocaml-mcp.git#07e7aebf8f750a4f2246a182d57cb39e0e52f2f3"
+mcp_kit_source="git+https://gitlab.com/nomadic-labs/ai-harness/ocaml-mcp.git#34669428625c341e7df853ba2f653d122c8b59bc"
 worktree="$(cd "$(dirname "$0")/.." && pwd -P)"
 switch="${MESH_OPAM_SWITCH:-$(opam switch show 2>/dev/null || true)}"
 

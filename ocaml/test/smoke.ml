@@ -581,6 +581,16 @@ let test_grouped_catalogs ~modern () =
           Alcotest.(check bool)
             "text and structured catalogs agree" true
             (List.assoc_opt "structuredContent" described = Some catalog);
+          List.iter
+            (fun implicit ->
+              Alcotest.(check bool)
+                (group ^ " implicit describe equals explicit describe") true
+                (result_fields implicit = described))
+            [
+              invoke group (`Assoc []);
+              invoke group (`Assoc [ ("arguments", `Assoc []) ]);
+              request "tools/call" [ ("name", `String group) ];
+            ];
           let commands = member "commands" catalog |> to_list in
           Alcotest.(check (list string))
             (group ^ " catalog order") actions (List.map name commands);
@@ -626,7 +636,7 @@ let test_grouped_catalogs ~modern () =
             (invoke group args |> result_fields |> List.assoc_opt "isError"
             = Some (`Bool true)))
         [
-          ("mail", `Assoc []);
+          ("mail", `Assoc [ ("arguments", `Assoc [ ("message_id", `String "example") ]) ]);
           ("mail", `Assoc [ ("action", `String "accounts") ]);
           ("mail", `Assoc [ ("action", `String "inbox"); ("arguments", `Null) ]);
           ("mail", `Assoc [ ("action", `String "inbox"); ("action", `String "inbox") ]);

@@ -149,13 +149,14 @@ disabled_tools = ["agent_peers", "whiteboard_replace", "session_restart_request"
       const limits = (cwd: string, extra: NodeJS.ProcessEnv, name = 'mesh-board') => python(
         `import json, agentmcp; print(json.dumps(agentmcp.vibe_user_limits(${JSON.stringify(cwd)}, name=${JSON.stringify(name)})))`, extra);
       assert.deepEqual(limits(project, {VIBE_HOME: home}), {disabled: false,
-        disabled_tools: ['agent_future', 'agent_guide_read', 'demo', 'mail', 'session', 'whiteboard']});
+        disabled_tools: ['agent_future', 'agent_guide_read', 'agent_message_send', 'agent_peers',
+          'demo', 'mail', 'session', 'session_restart_request', 'whiteboard', 'whiteboard_replace']});
       assert.deepEqual(limits(project, {VIBE_HOME: home}, 'mesh-work'),
         {disabled: true, disabled_tools: ['agent_message_send']});
       fs.appendFileSync(path.join(home, 'config.toml'), '\n[[mcp_servers]]\nname = "mesh-board"\ndisabled = true\n');
       // `disabled` set by any entry of that name counts; the project here has no configuration of its own.
       assert.deepEqual(limits(scratch, {VIBE_HOME: home}), {disabled: true,
-        disabled_tools: ['agent_future', 'agent_guide_read', 'demo', 'mail']});
+        disabled_tools: ['agent_future', 'agent_guide_read', 'agent_message_send', 'demo', 'mail']});
       assert.deepEqual(limits(scratch, {VIBE_HOME: path.join(scratch, 'absent')}), {disabled: false, disabled_tools: []});
     } finally {
       fs.rmSync(scratch, {recursive: true, force: true});

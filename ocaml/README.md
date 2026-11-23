@@ -172,8 +172,8 @@ The server reaches only the mesh of its own session: `@self` routes under
 never reads `MESH_SESSION`, and never sends a session identity supplied by an agent.
 `MESH_SESSION_TOKEN` is required; `MESH_PORT` defaults to `7690` and must be a TCP port.
 
-It advertises four grouped tools and the standalone agent guide. Call a group with
-`{"action":"describe"}` to list its actions and schemas. See the
+It advertises four grouped tools and the standalone agent guide. Call a group without arguments
+or with `{"action":"describe"}` to list its actions and schemas. See the
 [Deck MCP migration guide](../docs/deck-mcp-migration.md) for call examples.
 
 - **`whiteboard` (9 actions)** reads and replaces the session's Excalidraw document with a
