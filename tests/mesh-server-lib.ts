@@ -105,10 +105,16 @@ export async function runServer(where: Scratch): Promise<{child: ChildProcess; r
   child.stderr?.on('data', chunk => { output += chunk; });
   let exited = false;
   const closed = new Promise<void>(resolve => child.on('close', () => { exited = true; resolve(); }));
-  for (let attempt = 0; attempt < 400 && !exited; attempt += 1) {
-    if (await listenerReady(child, where.port))
-      return {child, result: {code: null, output, listened: true}, output: () => output};
-    await new Promise(resolve => setTimeout(resolve, 50));
+  try {
+    for (let attempt = 0; attempt < 400 && !exited; attempt += 1) {
+      if (await listenerReady(child, where.port))
+        return {child, result: {code: null, output, listened: true}, output: () => output};
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  } catch (error) {
+    if (!exited) child.kill('SIGKILL');
+    await closed;
+    throw error;
   }
   if (!exited) child.kill('SIGKILL');
   await closed;

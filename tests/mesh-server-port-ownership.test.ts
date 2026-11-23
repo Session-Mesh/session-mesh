@@ -38,8 +38,13 @@ test('the spawned server is recognized when it owns the port', {skip: !OWNER_CHE
 test('an unrelated listener is not mistaken for the spawned server', {skip: !OWNER_CHECK}, async () => {
   const where = await scratchHome('port-owner-');
   const listener = net.createServer(socket => socket.end());
-  await new Promise<void>(resolve => listener.listen(where.port, '127.0.0.1', resolve));
   try {
+    await new Promise<void>((resolve, reject) => {
+      listener.once('error', reject);
+      listener.listen(0, '127.0.0.1', resolve);
+    });
+    where.port = (listener.address() as net.AddressInfo).port;
+    where.env.MESH_PORT = String(where.port);
     const result = await runServer(where);
     try {
       assert.equal(result.result.listened, false, result.result.output);
@@ -47,7 +52,7 @@ test('an unrelated listener is not mistaken for the spawned server', {skip: !OWN
     }
     finally { await stopServer(result.child); }
   } finally {
-    await new Promise<void>(resolve => listener.close(() => resolve()));
+    if (listener.listening) await new Promise<void>(resolve => listener.close(() => resolve()));
     removeScratch(where.scratch);
   }
 });
