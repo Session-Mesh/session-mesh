@@ -189,6 +189,7 @@ val carry :
 val carry_accounts :
   ?io:io ->
   ?limits:limits ->
+  ?expected_contexts:(string * string) ->
   uid:int ->
   getenv:(string -> string option) ->
   file:string ->
@@ -198,7 +199,11 @@ val carry_accounts :
   to_account:string ->
   unit ->
   (outcome, error) result
-(** {!carry} between two accounts found by {!account_folder}. The source folder
+(** {!carry} between two accounts found by {!account_folder}. When supplied,
+    [expected_contexts] binds source and target revisions to the same loaded
+    native snapshot before any target is created; default and legacy entries
+    have no native revision and are refused in this mode. A later registry edit
+    does not change the snapshot and must be handled by the caller. The source folder
     must exist before a missing target folder is created. If the carry is refused
     without proof that it can remove a newly made target, the folder and any
     lock file remain in place; [carry_rollback_incomplete] reports the retained

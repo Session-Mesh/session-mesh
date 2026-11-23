@@ -107,6 +107,10 @@ val serves : t -> id:string -> backend -> bool
 val ref_ : entry -> account_ref
 val label : entry -> string
 
+val context_revision : entry -> string option
+(** The revision in this already loaded native entry, without preparing roots.
+    [None] denotes a legacy or synthetic default entry. *)
+
 val launch_env : entry -> (string * string) list
 (** Compatibility single-folder selector: [[]] for [default]. Use
     {!launch_context} for a validated four-backend launch environment. *)

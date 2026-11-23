@@ -341,12 +341,21 @@ let bound_io check_roots (io : io) =
         ensure ());
   }
 
-let carry_accounts ?(io = default_io) ?(limits = default_limits) ~uid ~getenv
+let carry_accounts ?(io = default_io) ?(limits = default_limits) ?expected_contexts ~uid ~getenv
     ~file ~kind ~conversation ~from_account ~to_account () =
   sanitized
     (let* () = check_id kind conversation in
      let* (source_entry, target_entry) =
        pair_entries ~uid ~file ~kind ~from_account ~to_account
+     in
+     let* () =
+       match expected_contexts with
+       | None -> Ok ()
+       | Some (source_revision, target_revision) ->
+           if R.context_revision source_entry = Some source_revision
+              && R.context_revision target_entry = Some target_revision
+           then Ok ()
+           else fail "profile-context-changed" "selected profile context changed"
      in
      let getenv =
        if from_account = R.default_id || to_account = R.default_id then

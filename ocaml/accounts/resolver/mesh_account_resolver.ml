@@ -350,6 +350,9 @@ let ref_ (entry : entry) : account_ref =
 
 let label (entry : entry) = entry.label
 
+let context_revision (entry : entry) =
+  Option.map (fun (_, profile) -> P.context_revision profile) entry.profile
+
 let launch_env (entry : entry) =
   match entry.folder with
   | None -> []

@@ -65,6 +65,42 @@ let resolved = function
   | Ok value -> value
   | Error { C.code; message } -> Alcotest.failf "%s: %s" code message
 
+let test_expected_pair_revisions root =
+  let module R = Mesh_account_resolver in
+  let source = claude_account root "native-source" in
+  with_conversation source;
+  native_pair root;
+  let accounts = Result.get_ok (R.load ~uid ~file:(file root)) in
+  let revision id =
+    let entry = Result.get_ok (R.find accounts { R.backend = R.Claude; id }) in
+    Option.get (R.context_revision entry)
+  in
+  let source_revision, target_revision = (revision "work", revision "other") in
+  let run expected_contexts =
+    C.carry_accounts ~expected_contexts ~uid ~getenv ~file:(file root)
+      ~kind:C.Claude ~conversation:sid ~from_account:"work" ~to_account:"other" ()
+  in
+  refused_with "profile-context-changed" (run (String.make 64 '0', target_revision));
+  refused_with "profile-context-changed" (run (source_revision, String.make 64 '0'));
+  refused_with "profile-context-changed"
+    (C.carry_accounts ~expected_contexts:(source_revision, target_revision)
+       ~uid ~getenv ~file:(file root) ~kind:C.Claude ~conversation:sid
+       ~from_account:"default" ~to_account:"other" ());
+  registry root
+    [ profile "claude" "work" "other" (path root "native-source");
+      profile "claude" "other" "work" (path root "changed-target") ];
+  refused_with "profile-context-changed" (run (source_revision, target_revision));
+  Alcotest.(check bool) "changed target never created" false (exists (path root "changed-target"));
+  native_pair root;
+  Alcotest.(check bool) "mismatch never creates target" false (exists (path root "native-target"));
+  ignore (carried (run (source_revision, target_revision)));
+  Alcotest.(check bool) "matching pair copies conversation" true
+    (exists (path root ("native-target/" ^ transcript)));
+  (* A source read from the legacy file cannot pretend to be a bound native pair. *)
+  Unix.unlink (registry_file root);
+  legacy_pair root;
+  refused_with "profile-context-changed" (run (source_revision, target_revision))
+
 let test_migrated_actual_carry root =
   let source = claude_account root "native-source" in
   with_conversation source;
@@ -802,6 +838,7 @@ let () =
           (fun (name, test) ->
             Alcotest.test_case name `Quick (with_native_root test))
           [
+            ("bound pair revisions", test_expected_pair_revisions);
             ("migrated actual Claude/Codex carry", test_migrated_actual_carry);
             ("malformed and symlink registry never fall back", test_malformed_never_falls_back);
             ("disabled accounts refuse", test_disabled_named_accounts);

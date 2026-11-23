@@ -1,7 +1,7 @@
 (test
  (name test_native_source)
  (modules test_native_source)
- (libraries carry_fixture mesh_accounts_carry alcotest unix yojson))
+ (libraries carry_fixture mesh_accounts_carry mesh_account_resolver alcotest unix yojson))
 
 (test
  (name test_pi)
