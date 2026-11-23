@@ -140,8 +140,8 @@ let tool_declaration () =
 let guide_does_not_promise_an_account_switch () =
   let guide = read_file (guide_path ()) in
   Alcotest.(check bool)
-    "says there is no tool that changes the account by itself" true
-    (contains guide "no tool that changes your account by itself");
+    "qualification does not grant permission to switch" true
+    (contains guide "does not grant permission to switch by itself");
   Alcotest.(check bool)
     "names the request tool" true
     (contains guide "`session_account_switch_request`");
@@ -245,7 +245,7 @@ let () =
             instructions_point_to_the_guide;
           Alcotest.test_case "declared without parameters" `Quick
             tool_declaration;
-          Alcotest.test_case "promises no account switch" `Quick
+          Alcotest.test_case "switch still requires owner permission" `Quick
             guide_does_not_promise_an_account_switch;
           Alcotest.test_case "rejects a path argument" `Quick
             rejects_a_path_argument;
