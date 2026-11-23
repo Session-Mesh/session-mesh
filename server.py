@@ -4868,6 +4868,8 @@ async def _switch_request(source, body):
     raw = next((item for item in listed if item["name"] == source["id"] and item["created"] == source["created"]), None)
     if raw is None:
         raise web.HTTPConflict(text="Requesting session replaced")
+    if native and not _native_switch_available(kind, raw):
+        raise _switch_refusal("switch_not_qualified", "This PTY host cannot bind the agent identity")
     current = session_account(raw) or DEFAULT_ACCOUNT["id"]
     if target["id"] == current:
         raise _switch_refusal("account_same", f"This session already runs under {target['label']}.")
@@ -4981,6 +4983,20 @@ def _with_account_labels(item):
             "from_label": _account_label_of(item["from_account"], backend)}
 
 
+def _native_switch_available(kind, raw):
+    capabilities = raw.get("pty_capabilities") if isinstance(raw, dict) else None
+    return (NATIVE_SWITCH_QUALIFIED and _native_profile_mode() and kind in ACCOUNT_MEMBER
+            and isinstance(capabilities, list) and "agent_relaunch_v1" in capabilities
+            and "agent_relaunch_bound_v1" in capabilities)
+
+
+def _qualify_profiles(profiles, sessions):
+    available = {(item.get("meta") or {}).get("known_agent") for item in sessions
+                 if _native_switch_available((item.get("meta") or {}).get("known_agent"), item)}
+    return [{**profile, "switch_qualified": profile["enabled"] and profile["backend"] in available}
+            for profile in profiles]
+
+
 async def api_session_accounts(request):
     """The account alias the calling session's agent runs under and the declared aliases (ids, labels and the
     agents each serves; never a folder), for the mesh-board `session_accounts` tool. The session is the token's
@@ -4997,7 +5013,7 @@ async def api_session_accounts(request):
     current = session_account(raw)
     return web.json_response({
         "agent": source["agent"],
-        "switch_qualified": NATIVE_SWITCH_QUALIFIED and _native_profile_mode(),
+        "switch_qualified": _native_switch_available(source["agent"], raw),
         "accounts_file": _ACCOUNTS["file"],
         "current": ({"id": current, "label": account_label(current, source["agent"]),
                      "declared": any(a["id"] == current for a in declared)} if current
@@ -5376,6 +5392,13 @@ async def api_accounts(request):
         if ran is not None:
             print(f"accounts: mesh-profile {op} answered outside its envelope (exit {ran[0]})", flush=True)
         return accounts_refusal(503, "backend-helper-unavailable")
+    if op == "profiles.list" and reply["ok"] and NATIVE_SWITCH_QUALIFIED:
+        try:
+            sessions = await host({"op": "list"})
+        except web.HTTPException:
+            sessions = []
+        reply["data"]["profiles"] = _qualify_profiles(reply["data"]["profiles"], sessions)
+        return web.json_response(reply, status=reply["http_status"], headers={"Cache-Control": "no-store"})
     return web.Response(body=ran[1], status=reply["http_status"], content_type="application/json",
                         headers={"Cache-Control": "no-store"})
 

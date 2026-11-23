@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {describe, test} from 'node:test';
 import {rolloutIn} from './fake-codex-lib.ts';
-import {mesh, log, travelHome, workHome, sleep, launches, codexSession, listed,
+import {mesh, log, travelHome, workHome, sleep, launches, owner, codexSession, listed,
   installNativeProfiles, unchangedSource, requested, decide, launchOf} from './session-account-switch-fixture.ts';
 
 describe('native switch integration', {skip: process.platform !== 'linux' ? 'process environment binding needs Linux procfs' : false}, () => {
@@ -17,6 +17,14 @@ describe('native switch integration', {skip: process.platform !== 'linux' ? 'pro
       const parallelBefore = (await listed(parallel.name))!;
       const session = await codexSession('x-native-int');
       const before = await listed(session.name);
+      const self = await fetch(`${mesh.base}/api/session-actions/@self/accounts`,
+        {headers: {Authorization: `MeshSession ${session.token}`}});
+      assert.equal(self.status, 200, await self.clone().text());
+      assert.equal((await self.json() as {switch_qualified:boolean}).switch_qualified, true);
+      const profiles = await fetch(`${mesh.base}/api/accounts/profiles`, {headers: owner()});
+      assert.equal(profiles.status, 200);
+      assert.ok((await profiles.json() as {data:{profiles:{switch_qualified:boolean}[]}})
+        .data.profiles.every(profile => profile.switch_qualified));
       const request = await requested(session, 'work');
       const done = await decide(request, true);
       assert.equal(done.state, 'completed', JSON.stringify(done));

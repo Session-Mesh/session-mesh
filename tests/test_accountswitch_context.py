@@ -165,3 +165,30 @@ def test_last_check_refuses_changed_conversation(monkeypatch):
     with pytest.raises(web.HTTPConflict) as error:
         asyncio.run(server._validate_native_switch(raw, "codex", {"conversation": "original"}, {}))
     assert "Conversation changed" in error.value.text
+
+
+@pytest.mark.parametrize("agent,capabilities,expected", [
+    ("codex", ["agent_relaunch_v1", "agent_relaunch_bound_v1"], True),
+    ("claude", ["agent_relaunch_v1", "agent_relaunch_bound_v1"], True),
+    ("codex", ["agent_relaunch_v1"], False),
+    ("codex", [], False),
+    ("pi", ["agent_relaunch_v1", "agent_relaunch_bound_v1"], False),
+    ("opencode", ["agent_relaunch_v1", "agent_relaunch_bound_v1"], False),
+])
+def test_switch_qualification_requires_supported_agent_and_bound_host(monkeypatch, agent, capabilities, expected):
+    monkeypatch.setattr(server, "NATIVE_SWITCH_QUALIFIED", True)
+    monkeypatch.setattr(server, "_native_profile_mode", lambda: True)
+    assert server._native_switch_available(agent, {"pty_capabilities": capabilities}) is expected
+
+
+def test_profile_qualification_uses_live_host_and_supported_backend(monkeypatch):
+    monkeypatch.setattr(server, "NATIVE_SWITCH_QUALIFIED", True)
+    monkeypatch.setattr(server, "_native_profile_mode", lambda: True)
+    profiles = [{"backend": backend, "enabled": enabled, "switch_qualified": False}
+                for backend, enabled in (("codex", True), ("codex", False), ("pi", True), ("claude", True))]
+    sessions = [{"meta": {"known_agent": "codex"},
+                 "pty_capabilities": ["agent_relaunch_v1", "agent_relaunch_bound_v1"]},
+                {"meta": {"known_agent": "pi"},
+                 "pty_capabilities": ["agent_relaunch_v1", "agent_relaunch_bound_v1"]},
+                {"meta": {"known_agent": "claude"}, "pty_capabilities": ["agent_relaunch_v1"]}]
+    assert [p["switch_qualified"] for p in server._qualify_profiles(profiles, sessions)] == [True, False, False, False]
