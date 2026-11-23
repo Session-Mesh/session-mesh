@@ -63,3 +63,53 @@ def test_server_binds_default_to_observed_agent(monkeypatch):
         asyncio.run(server._switch_profile_context("default", "codex", "0" * 64, observed))
     with pytest.raises(web.HTTPConflict):
         asyncio.run(server._switch_profile_context("default", "codex", observed_agent={**observed, "foreground": False}))
+
+
+@pytest.mark.parametrize("fail_carry", [False, True])
+def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, fail_carry):
+    source_context = {"id": "default", "env": {"CODEX_HOME": "/tmp/source"}, "context_revision": "a" * 64}
+    target_context = {"id": "work", "env": {"CODEX_HOME": "/tmp/target"}, "context_revision": "b" * 64}
+    source = {"name": "session", "created": 1, "meta": {}}
+    events = []
+
+    async def validate(*_args):
+        events.append("validate")
+
+    async def prepared(_agent, command, _cwd, _context):
+        return command, None, None
+
+    async def arrangement(*_args):
+        return None
+
+    async def stop(*_args):
+        events.append("stop")
+        return 2
+
+    async def carry():
+        events.append("carry")
+        if fail_carry:
+            raise server.AccountsUnavailable("failed", "carry_failed")
+
+    async def context(*_args):
+        events.append("target-check")
+        return target_context
+
+    async def start(*_args, context=None):
+        events.append(("start", context["id"], context["env"]["CODEX_HOME"]))
+
+    monkeypatch.setattr(server, "_validate_native_switch", validate)
+    monkeypatch.setattr(server, "_switch_root_identity", lambda context: context["id"])
+    monkeypatch.setattr(server, "_prepared_launch", prepared)
+    monkeypatch.setattr(server, "_arrangement_of", arrangement)
+    monkeypatch.setattr(server, "_carry_arrangement", arrangement)
+    monkeypatch.setattr(server, "_stop_agent", stop)
+    monkeypatch.setattr(server, "_switch_profile_context", context)
+    monkeypatch.setattr(server, "_start_in_place", start)
+    switch = ("work", carry, source_context, target_context)
+    if fail_carry:
+        with pytest.raises(server.AccountSwitchUndone):
+            asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
+        assert events == ["validate", "stop", "carry", ("start", "default", "/tmp/source")]
+    else:
+        assert asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch)) == "session"
+        assert events == ["validate", "stop", "carry", "target-check", ("start", "work", "/tmp/target")]

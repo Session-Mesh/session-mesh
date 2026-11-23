@@ -811,6 +811,27 @@ async def _switch_profile_context(account, agent, expected_revision=None, observ
             "context_revision": revision}
 
 
+async def _validate_native_switch(source, kind, source_context, target_context):
+    described = await asyncio.to_thread(_describe_with_hooks, [source])
+    entry = next((item for item in described["mesh"] if item.get("id") == source.get("name")
+                  and item.get("created") == source.get("created")), None)
+    observed = (entry or {}).get("agent") or {}
+    if observed.get("type") != kind or observed.get("foreground") is not True:
+        raise web.HTTPConflict(text="Foreground agent changed; nothing was stopped")
+    await _switch_profile_context(source_context["id"], kind, source_context["context_revision"], observed)
+    await _switch_profile_context(target_context["id"], kind, target_context["context_revision"])
+
+
+def _switch_root_identity(context):
+    try:
+        info = os.stat(context["roots"]["config"], follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode):
+            raise OSError("not a directory")
+        return info.st_dev, info.st_ino
+    except OSError as exc:
+        raise web.HTTPConflict(text="Account folder unavailable") from exc
+
+
 def _profile_command(command, context, agent):
     if context is None:
         return command
@@ -1252,6 +1273,11 @@ async def _restart_profile_context(source, account, known_agent, switch):
         raise web.HTTPConflict(text="Account profile context changed; restart refused")
     if switch and native:
         raise web.HTTPConflict(text="Native profile switching is not qualified")
+    if native and not account and revision:
+        described = await asyncio.to_thread(_describe_with_hooks, [source])
+        entry = next((item for item in described["mesh"] if item.get("id") == source.get("name")
+                      and item.get("created") == source.get("created")), None)
+        return await _switch_profile_context("default", known_agent, revision, (entry or {}).get("agent") or {})
     if not account or not native:
         return None
     if not _accounts_digest(revision):
@@ -1319,7 +1345,11 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
         try:
             return await relaunch_in_place(source, cwd, command, agent, known_agent, account, switch)
         except WholeSessionOnly as exc:   # nothing was signalled: the whole session is replaced, as before
+            if switch and len(switch) > 2:
+                raise web.HTTPConflict(text="Native account switch requires a shell in this session") from exc
             print(f"agent of {old_name} not stopped alone ({exc}): replacing the session", flush=True)
+    if switch and len(switch) > 2:
+        raise web.HTTPConflict(text="Native account switch requires in-place relaunch support")
     return await _replace_with_new_session(old_name, old_created, base, cwd, command, agent, known_agent, account,
                                            switch, source)
 
@@ -1473,13 +1503,18 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     if known_agent == "gemini" and _is_home_directory(cwd):   # new_session's refusal, before anything stops
         raise web.HTTPBadRequest(text=GEMINI_IN_HOME)
     target = switch[0] if switch else account
-    context = await _restart_profile_context(source, account, known_agent, switch)
+    native_switch = bool(switch and len(switch) > 2)
+    source_context, context = switch[2:4] if native_switch else (None, await _restart_profile_context(source, account, known_agent, switch))
     account_env = context["env"] if context else await account_environment(target, known_agent)
-    source_env = await account_environment(account, known_agent) if switch else account_env
+    source_env = source_context["env"] if source_context else await account_environment(account, known_agent) if switch else account_env
     command, notice, vibe = await _prepared_launch(known_agent, command, cwd, context)
     saved = await _arrangement_of(source["name"], source["created"])
     incarnation = (source["name"], source["created"])
-    if context:
+    if native_switch:
+        await _validate_native_switch(source, known_agent, source_context, context)
+        source_identity = _switch_root_identity(source_context)
+        target_identity = _switch_root_identity(context)
+    elif context:
         await _profile_launch_context(account, known_agent, context["context_revision"])
     try:
         created = await _stop_agent(source, known_agent)
@@ -1491,11 +1526,34 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     launch = (source, created, cwd, command, agent, known_agent, notice, vibe)
     if switch:
         try:
+            if native_switch:
+                try:
+                    roots_changed = (_switch_root_identity(source_context) != source_identity
+                                     or _switch_root_identity(context) != target_identity)
+                except web.HTTPException:
+                    roots_changed = True
+                if roots_changed:
+                    raise AccountsUnavailable("Account folder changed", "profile-context-changed")
             await switch[1]()
         except AccountsUnavailable as exc:   # nothing changed under the source account: the conversation goes on there
             print(f"account switch of {source['name']} undone: {exc}", flush=True)
-            await _start_in_place(*launch, account, source_env)
+            if source_context:
+                try:
+                    if _switch_root_identity(source_context) != source_identity:
+                        raise _not_started_again(source["name"])
+                    if account:
+                        await _profile_launch_context(account, known_agent, source_context["context_revision"])
+                except web.HTTPException as error:
+                    raise _not_started_again(source["name"]) from error
+            await _start_in_place(*launch, account, source_env, context=source_context)
             raise AccountSwitchUndone(source["name"], exc.code or "carry_failed", str(exc)) from exc
+    if native_switch:
+        try:
+            await _switch_profile_context(context["id"], known_agent, context["context_revision"])
+            if _switch_root_identity(context) != target_identity:
+                raise _not_started_again(source["name"])
+        except web.HTTPException as error:
+            raise _not_started_again(source["name"]) from error
     await _start_in_place(*launch, target, account_env, context=context)
     return source["name"]
 
@@ -3066,6 +3124,10 @@ def _conversation_found(kind, sid, account):
         root = configured if os.path.isabs(configured) else os.path.join(discover.HOME, default)
     else:
         root = account_folder(account, kind)
+    return _conversation_found_in_root(root, data, pattern)
+
+
+def _conversation_found_in_root(root, data, pattern):
     folder = os.path.join(root, data) if root else None
     return bool(folder) and os.path.isdir(folder) and any(
         os.path.isfile(match) for match in glob.glob(os.path.join(glob.escape(folder), *pattern)))
@@ -4658,13 +4720,13 @@ async def api_session_action_request(request):
         if item is None:
             raise web.HTTPNotFound()
         return web.json_response({"request": item}, headers={"Cache-Control": "no-store"})
-    body, current = await json_object(request), None
+    body, current, binding = await json_object(request), None, None
     if body.get("action") == "switch_account" and set(body) == {"action", "account"}:
-        body, current = await _switch_request(source, body)
+        body, current, binding = await _switch_request(source, body)
     try:
         item = request.app["session_requests"].create(
             source, body, enabled_agents=set(AGENT_PRESETS),
-            resumable=RESUMABLE_AGENT_PRESETS, current_account=current)
+            resumable=RESUMABLE_AGENT_PRESETS, current_account=current, switch_binding=binding)
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc))
     return web.json_response({"request": item}, status=202,
@@ -4676,6 +4738,8 @@ async def api_session_action_request(request):
 # exact source stopped, `mesh-platform accounts carry` copies the conversation, the agent resumes under the target;
 # a failed carry resumes it under its own account. The agent kind is the session's (its token), never the body's.
 CARRY_TIMEOUT = 300
+# Remains false until the complete in-place path and account isolation are qualified.
+NATIVE_SWITCH_QUALIFIED = False
 # The carry's refusal codes (Mesh_accounts_carry): these two may pass when asked again later; these two leave
 # something in the target folder for the operator to look at (named in the service log). Every other code is a
 # refusal that asking again does not change. Each carry runs as its own mesh-platform process: its fcntl lock does
@@ -4771,7 +4835,8 @@ async def _switch_request(source, body):
     kind = source["agent"]
     if kind not in ACCOUNT_MEMBER:
         raise _switch_refusal("agent_unsupported", "Account switching applies to Claude and Codex only.")
-    if _native_profile_mode():
+    native = _native_profile_mode()
+    if native and not NATIVE_SWITCH_QUALIFIED:
         raise _switch_refusal("switch_not_qualified", "Native profile switching is not qualified")
     await declared_accounts()
     target = await _switch_target(body["account"], kind)
@@ -4782,19 +4847,36 @@ async def _switch_request(source, body):
     current = session_account(raw) or DEFAULT_ACCOUNT["id"]
     if target["id"] == current:
         raise _switch_refusal("account_same", f"This session already runs under {target['label']}.")
-    sid = _switch_conversation(await asyncio.to_thread(_describe_with_hooks, listed), source)
+    described = await asyncio.to_thread(_describe_with_hooks, listed)
+    sid = _switch_conversation(described, source)
     if sid is None:
         raise _switch_refusal("conversation_unknown",
                               "The exact conversation id is unknown; it cannot be resumed elsewhere.")
-    folder = None if current == DEFAULT_ACCOUNT["id"] else current
-    if not await asyncio.to_thread(_conversation_found, kind, sid, folder):
+    binding = None
+    if native:
+        observed = next((e.get("agent") for e in described["mesh"] if e.get("id") == source["id"]
+                         and e.get("created") == source["created"]), None) or {}
+        source_revision = (raw.get("meta") or {}).get("account_context_revision")
+        if current != DEFAULT_ACCOUNT["id"] and not _accounts_digest(source_revision):
+            raise web.HTTPConflict(text="Account profile context unknown; nothing was stopped")
+        source_context = await _switch_profile_context(current, kind, source_revision, observed)
+        target_context = await _switch_profile_context(target["id"], kind)
+        binding = {"backend": kind, "source": {"id": current, "context_revision": source_context["context_revision"]},
+                   "target": {"id": target["id"], "context_revision": target_context["context_revision"]}}
+        _, _, data, pattern = _conversation_layout(kind, sid)
+        found = await asyncio.to_thread(_conversation_found_in_root, source_context["roots"]["config"], data, pattern)
+    else:
+        folder = None if current == DEFAULT_ACCOUNT["id"] else current
+        found = await asyncio.to_thread(_conversation_found, kind, sid, folder)
+    if not found:
         raise _switch_refusal("conversation_not_found", "The conversation is not in the current account's folder.")
-    try:
-        await account_environment(None if target["id"] == DEFAULT_ACCOUNT["id"] else target["id"], kind)
-    except web.HTTPBadRequest as exc:
-        raise _switch_refusal("account_folder_refused", f"The folder of account {target['label']} is refused; see "
-                              "the service log.") from exc
-    return {"action": "switch_account", "account": target["id"]}, current
+    if not native:
+        try:
+            await account_environment(None if target["id"] == DEFAULT_ACCOUNT["id"] else target["id"], kind)
+        except web.HTTPBadRequest as exc:
+            raise _switch_refusal("account_folder_refused", f"The folder of account {target['label']} is refused; see "
+                                  "the service log.") from exc
+    return {"action": "switch_account", "account": target["id"]}, current, binding
 
 
 def _carry_env(kind):
@@ -4805,21 +4887,46 @@ def _carry_env(kind):
     return {**work_child_env(), **({variable: configured} if os.path.isabs(configured) else {})}
 
 
-async def _switch_session(item, raw, conversation, argv):
+async def _switch_session(item, raw, conversation, argv, observed_agent=None):
     """Carry out an approved switch: the source stopped, its conversation carried, then resumed under the target
     (a failed carry: under the source again, AccountSwitchUndone)."""
     kind, account = item["source"]["agent"], session_account(raw)
     if (account or DEFAULT_ACCOUNT["id"]) != item["from_account"]:
         raise web.HTTPConflict(text="The session's account changed since the request")
 
+    native = _native_profile_mode()
+    source_context = target_context = None
+    if native:
+        binding = item.get("switch_binding")
+        try:
+            binding = sessionrequests.Requests._switch_binding(binding, item["source"], item["from_account"],
+                                                                        item["account"])
+        except ValueError as exc:
+            raise web.HTTPConflict(text="Native account switch request has no valid binding") from exc
+        source_context = await _switch_profile_context(item["from_account"], kind,
+                                                       binding["source"]["context_revision"], observed_agent or {})
+        target_context = await _switch_profile_context(item["account"], kind,
+                                                       binding["target"]["context_revision"])
+        _, _, data, pattern = _conversation_layout(kind, conversation)
+        if not await asyncio.to_thread(_conversation_found_in_root, source_context["roots"]["config"], data, pattern):
+            raise web.HTTPConflict(text="The conversation is not in the current account's folder")
+
     async def carry():
+        revisions = ((source_context["context_revision"], target_context["context_revision"]) if native else ())
+        environ = _carry_env(kind)
+        if native:
+            default_context = next((c for c in (source_context, target_context) if c["id"] == "default"), None)
+            if default_context:
+                environ.update(default_context["env"])
         await _accounts_program("carry", str(ACCOUNTS_FILE), kind, conversation, item["from_account"],
-                                item["account"], timeout=CARRY_TIMEOUT, env=_carry_env(kind))
+                                item["account"], *revisions, timeout=CARRY_TIMEOUT, env=environ)
 
     target = None if item["account"] == DEFAULT_ACCOUNT["id"] else item["account"]
     try:
         name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"], shlex.join(argv), kind,
-                                     kind, account=account, switch=(target, carry), source=raw)
+                                     kind, account=account,
+                                     switch=(target, carry, source_context, target_context) if native else (target, carry),
+                                     source=raw)
     except AccountSwitchUndone:   # the source was stopped all the same
         await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
         raise
@@ -4916,10 +5023,10 @@ async def _execute_session_action(item):
     if item["action"] == "switch_account":   # checked again: the conversation may only be guessed by now
         if _switch_conversation(described, source) is None:
             raise web.HTTPConflict(text="The exact conversation id is unknown; it cannot be resumed elsewhere")
-        if not await asyncio.to_thread(_conversation_found, source["agent"], agent["session_id"],
+        if not _native_profile_mode() and not await asyncio.to_thread(_conversation_found, source["agent"], agent["session_id"],
                                        session_account(raw)):   # checked again: nothing to carry, nothing stopped
             raise web.HTTPConflict(text="The conversation is not in the current account's folder")
-        return await _switch_session(item, raw, agent["session_id"], argv)
+        return await _switch_session(item, raw, agent["session_id"], argv, agent)
     name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"],
                                  shlex.join(argv), source["agent"], source["agent"], account=account,
                                  source=raw)
