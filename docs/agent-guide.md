@@ -183,7 +183,8 @@ clicks through. Use a demo to show a flow or a structure; use the whiteboard for
 ## Talk to other agents
 
 The `mesh-board` server groups calls under `whiteboard`, `demo`, `mail` and `session`. For
-each group, call it with `{"action":"describe"}` to see its actions and schemas. In this guide,
+each group, call it with no arguments or with `{"action":"describe"}` to see its actions and
+schemas. In this guide,
 `mail.inbox` means call the tool `mail` with `{"action":"inbox"}`. Put action-specific fields
 under `arguments`, for example `{"action":"read","arguments":{"message_id":"…"}}`.
 

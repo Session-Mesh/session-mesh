@@ -716,12 +716,12 @@ def vibe_user_limits(cwd, environ=os.environ, name=SERVER_NAME):
     for path in (vibe_home(environ) / "config.toml", Path(cwd) / ".vibe" / "config.toml"):
         off, names = _limits_in(path, name)
         disabled, tools = disabled or off, tools | set(names)
+    if name == SERVER_NAME:
+        # Keep denials on older bridge binaries during upgrades and rollbacks.
+        tools |= {_DECK_GROUP_BY_RETIRED_TOOL[tool] for tool in tools if tool in _DECK_GROUP_BY_RETIRED_TOOL}
     if len(tools) > _VIBE_LIMITS_MAX:       # cutting the list would silently re-enable the tools cut
         raise VibeRefused(f"the configuration disables {len(tools)} tools of {name} "
                           f"(at most {_VIBE_LIMITS_MAX} are repeated): no Vibe session was started")
-    if name == SERVER_NAME:
-        # Vibe can deny a whole MCP tool. Preserve a retired action's denial by denying its group.
-        tools = {_DECK_GROUP_BY_RETIRED_TOOL.get(tool, tool) for tool in tools}
     return {"disabled": disabled, "disabled_tools": sorted(tools)}
 
 

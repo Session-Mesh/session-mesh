@@ -102,7 +102,7 @@ command = "/bin/true"
 `);
     assert.deepEqual(servers.map(server => server.name).sort(), ['mesh-board', 'mine']);
     const board = servers.find(server => server.name === 'mesh-board')!;
-    assert.deepEqual(board.disabled_tools, ['mail']);
+    assert.deepEqual(board.disabled_tools, ['agent_message_reply', 'agent_message_send', 'mail']);
     assert.equal(board.command, path.join(scratch, 'bin', 'mesh-board-mcp'), 'the user\'s command cannot replace the bridge');
     assert.equal(servers.find(server => server.name === 'mine')!.command, '/bin/true');
   });

@@ -847,7 +847,7 @@ write are described in [demo-scene-v0.md](demo-scene-v0.md) (a static layout),
 ## Messages and requests from agents
 
 The Deck groups its MCP calls under `whiteboard`, `demo`, `mail` and `session`. Each group
-lists its actions and schemas when called with `{"action":"describe"}`. See the
+lists its actions and schemas when called with no arguments or with `{"action":"describe"}`. See the
 [Deck MCP migration guide](deck-mcp-migration.md) for the calling format and client permission rules.
 
 Agents started by the mesh can message each other through the `mesh-board` MCP server: an agent
@@ -1078,7 +1078,7 @@ board tools still work, but the state is then guessed from OpenCode's own store 
 - **History.** The "History" tab lists OpenCode conversations, read from its SQLite store (read-only;
   see "Conversation history"). Resume and pins work; delete is not offered.
 - **Messages.** OpenCode sessions can message each other like Claude and Codex ones. OpenCode
-  gives the model only the text of a tool result, so the `agent_*` and session-request tools of
+  gives the model only the text of a tool result, so the mailbox and session-request actions of
   `mesh-board` repeat their JSON after the summary.
 - **Not covered.** Remote provisioning of held presets (Claude and Codex only) does not include
   OpenCode.
@@ -1138,7 +1138,7 @@ therefore resumed in a mesh session, not from a plain `gemini` run.
   it). With `ui.useAlternateBuffer` the screen would be the alternate one; the "Restore ... full-screen
   scrolling" recovery is offered for Pi and OpenCode only.
 - **Mailbox and wake.** Like Claude and OpenCode: a notice is typed only after the hooks reported a
-  finished turn. The `agent_*` results carry their JSON in the text, as for OpenCode.
+  finished turn. The mailbox results carry their JSON in the text, as for OpenCode.
 - **History.** The "History" tab lists Gemini chats (`chats/session-*.jsonl`, in your own `~/.gemini` and in
   Mesh's private overlay home); only the overlay's are resumable from Mesh (see "Conversation history").
 - **Remote provisioning.** Not available for Gemini.
