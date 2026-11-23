@@ -42,6 +42,7 @@ const REFRESH: Readonly<Record<1440 | 390, { first: string; qFirst: string; titl
   390: { first: 'T-7f02', qFirst: 'N-0000d032', title: 'Refresh phone' },
 };
 const EDIT_TASK = 'T-7f03', EDIT_QUESTION = 'N-0000d033';
+const PAGINATION_TASK = 'T-7f16';
 const PRODUCT_REFRESH = {
   1440: { first: 'T-7f04', title: 'Refresh product desktop' },
   390: { first: 'T-7f05', title: 'Refresh product phone' },
@@ -87,6 +88,7 @@ const EVENTS = [
     question(`2026-11-08T09:4${index}:00Z`, item.first, item.qFirst),
   ]),
   ...task(EDIT_TASK, 'Refresh while editing', 55, 'P3'),
+  { ts: '2026-11-07T09:55:00Z', task: PAGINATION_TASK, type: 'created', title: 'Pagination fixture', project: 'relay', category: 'platform', priority: 'P3', status: 'todo' },
   question('2026-11-08T09:42:00Z', EDIT_TASK, EDIT_QUESTION),
   ...task(PRODUCT_REFRESH[1440].first, PRODUCT_REFRESH[1440].title, 56, 'P3'),
   ...task(PRODUCT_REFRESH[390].first, PRODUCT_REFRESH[390].title, 57, 'P3'),
@@ -626,7 +628,8 @@ describe('the Projects view comes back as it was left', { skip }, () => {
   });
 
   test('a slow rail read cannot discard a newly shown question page', { timeout: 300_000 }, async () => {
-    const extra = Array.from({ length: 25 }, (_, index) => question('2026-11-08T10:00:00Z', EDIT_TASK,
+    // These questions exercise the entry pagination without saturating the project's bounded question list.
+    const extra = Array.from({ length: 25 }, (_, index) => question('2026-11-08T10:00:00Z', PAGINATION_TASK,
       `N-${(0x1000 + index).toString(16).padStart(8, '0')}`));
     fs.appendFileSync(path.join(scratch, 'tracker', 'events', '2026-11.hostq.jsonl'),
       extra.map(event => JSON.stringify(event)).join('\n') + '\n');
@@ -663,7 +666,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
   });
 
   test('a background refresh does not cancel a slow requested question page', { timeout: 120_000 }, async () => {
-    const extra = Array.from({ length: 25 }, (_, index) => question('2026-11-08T11:00:00Z', EDIT_TASK,
+    const extra = Array.from({ length: 25 }, (_, index) => question('2026-11-08T11:00:00Z', PAGINATION_TASK,
       `N-${(0x2000 + index).toString(16).padStart(8, '0')}`));
     fs.appendFileSync(path.join(scratch, 'tracker', 'events', '2026-11.hostq.jsonl'),
       extra.map(event => JSON.stringify(event)).join('\n') + '\n');
