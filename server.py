@@ -3345,13 +3345,38 @@ async def api_projects(request):
                                                actual_size=len(data) + len(chunk))
         data.extend(chunk)
     try:
-        body = json.loads(data)
+        body = json.loads(data, object_pairs_hook=projectartifacts.pairs)
     except (ValueError, UnicodeDecodeError):
         raise web.HTTPBadRequest(text="Invalid project request")
+    if isinstance(body, dict) and body.get("op") == "work-tools":
+        return await api_work_tools(request, body)
     if not isinstance(body, dict) or not isinstance(body.get("op"), str) \
             or body["op"] not in PROJECT_HOST_OPS:
         raise web.HTTPBadRequest(text="Unsupported project operation")
     return web.json_response(await host(body), headers={"Cache-Control": "no-store"})
+
+
+async def api_work_tools(request, body):
+    """Owner-only transport for native canonical Work attachment policy; never a tracker write."""
+    _require_owner_cookie(request)
+    if request.content_type != "application/json":
+        raise web.HTTPUnsupportedMediaType()
+    identity = body.get("session")
+    if body.get("action") == "attach":
+        if not isinstance(identity, dict):
+            raise web.HTTPBadRequest(text="Session identity required")
+        listed = await host({"op": "list"})
+        if not any(s.get("name") == identity.get("name") and s.get("created") == identity.get("created") for s in listed):
+            raise web.HTTPConflict(text="Session replaced or missing")
+    if WORK_SLOTS.locked():
+        raise web.HTTPServiceUnavailable(text="Work attachment helper busy")
+    async with WORK_SLOTS:
+        result = await artifact_command(body)
+    if body.get("action") == "attach":
+        listed = await host({"op": "list"})
+        if not any(s.get("name") == identity.get("name") and s.get("created") == identity.get("created") for s in listed):
+            raise web.HTTPConflict(text="Session changed; check the saved receipt")
+    return web.json_response(result, headers={"Cache-Control": "no-store"})
 
 
 # The Projects view's relay: `work-read --request`, or `work-write --request` for a write op, which only the
@@ -3411,10 +3436,13 @@ async def api_work(request):
         return work_error(503, "busy", "too many work requests")
     async with WORK_SLOTS:
         try:
+            env = work_child_env()
+            if program == "work-read" and "MESH_WORK_INSTANCE_REGISTRATION" in os.environ:
+                env["MESH_WORK_INSTANCE_REGISTRATION"] = os.environ["MESH_WORK_INSTANCE_REGISTRATION"]
             proc = await asyncio.create_subprocess_exec(
                 command, "--request", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL, limit=2 * 1024 * 1024, start_new_session=True,
-                env=work_child_env())
+                env=env)
             proc.stdin.write(body)
             proc.stdin.close()
             limit = WORK_TIMEOUT if program == "work-read" else max(WORK_TIMEOUT, 30.0)  # a write may wait for the lock and git
@@ -4563,6 +4591,10 @@ async def artifact_command(body):
     command = [executable] if configured else [executable, "--artifacts-worker"]
     env = {**os.environ, "MESH_CONF_DIR": str(CONF_DIR)}
     env.pop("MESH_SESSION_TOKEN", None)
+    if body.get("op") == "work-tools":
+        env = {**work_child_env(), "MESH_CONF_DIR": str(CONF_DIR)}
+        if "MESH_WORK_INSTANCE_REGISTRATION" in os.environ:
+            env["MESH_WORK_INSTANCE_REGISTRATION"] = os.environ["MESH_WORK_INSTANCE_REGISTRATION"]
     proc = None
     try:
         if not os.path.isabs(executable):

@@ -4,9 +4,79 @@ The **Artifacts** button inside a live session's **Tools** menu opens a catalogu
 of confirmed connector references. It does not copy note contents, scan conversations,
 fetch share links or widen the separate Projects/Roster artifact permissions.
 
-## Attach session tools to a local project
+## Attach session tools to a Work project
 
-Choose **Tools → Project attachment**, select a **local Mesh project**, then explicitly
+**Tools → Project attachment** lists the same canonical project and product IDs as
+the current **Projects** view. Select the explicit product/project pair, then attach
+the exact live session. Duplicate titles are labels only. A registered project's
+current Projects page also exposes **Attached session tools**. This is Mesh-owned
+metadata: it never writes tracker events or grants Notes access.
+
+### Explicit work-instance registration
+
+The server environment must set `MESH_WORK_INSTANCE_REGISTRATION` to an absolute
+path outside the tracker, naming a private user-owned regular JSON file (0600,
+one hard link, no symlink, at most 4096 bytes). Its exact schema is:
+
+```json
+{"version":1,"instance_id":"64_LOWERCASE_HEX_DIGITS","root_dev":"DECIMAL_DEVICE","root_ino":"DECIMAL_INODE","git_dev":"DECIMAL_DEVICE","git_ino":"DECIMAL_INODE"}
+```
+
+This is a schema illustration, not a usable registration. A trusted operator
+assigns a fresh random 256-bit instance ID and records the current device/inode
+values of the resolved tracker root and its `.git` directory. Neither a path,
+Git commit, title nor filesystem fingerprint creates an instance ID. There is
+no automatic enrollment or registration writer. Missing taxonomy, non-exact
+project IDs, wrong products and missing/unsafe/mismatched registration refuse.
+Paths and filesystem guards are not returned to the browser.
+
+The operator contract is essential: a clone or replacement is a **new instance**,
+even if it has identical content. Do not copy its registration or reuse its ID.
+Root/`.git` object replacement invalidates the guards; re-register a new identity
+deliberately rather than updating guards to revive an old identity. The guards
+do not detect an in-place content replacement retaining both objects, inode
+reuse, or an operator copying and editing a registration. Such replacement
+requires retiring the old registration and assigning a new ID. This is an
+explicit local trust contract, not cryptographic provenance of tracker data.
+Ordinary tracker edits retain instance identity; project creation time is an
+additional project-replacement fence, not a tracker revision or snapshot lock.
+Concurrent external tracker edits are revalidated, not transactionally locked
+with Mesh's separate metadata file.
+
+Mesh stores these associations in private `work-session-tools.json`, separate
+from the tracker, legacy registry and Notes catalogue. It contains a random
+local machine identity, exact session name/creation pair, registered work
+instance, project/product IDs, project creation time, monotonic revision and
+the latest 128 request receipts. Limits are 2000 bindings and 2 MiB total.
+Writes are locked, synced and atomically renamed. A first successful read
+initializes this Mesh-only store; malformed existing data stays unavailable.
+Back up the file privately; copying it to another host is not enrollment of
+that host and must not be used to impersonate its machine identity.
+
+Only the signed-in owner's cookie admits this relay, including reads and receipt
+checks; master bearer/session credentials do not. Attach verifies the live
+session before and after awaited native work. Saved metadata does not prove
+liveness, and a post-save liveness failure leaves an uncertain receipt to check.
+CAS rejects stale revisions; a lost response is not replayed automatically.
+**Check uncertain save** confirms the exact intent and rereads current bindings.
+An absent/evicted receipt remains unknown, not evidence that nothing happened.
+Pending browser intent is in-memory only: closing/reloading loses the automatic
+receipt check, so inspect the current exact association before another change.
+Restart preserves the store; restore never automatically rebinds associations.
+
+Confirmed saves and recovered receipts emit a per-document invalidation hint,
+shared by the pane Tools and Projects bundles. The hint carries no identity or
+authority: mounted controls re-resolve their own canonical scope and reread with
+the owner's credentials. Hints received during a read or save coalesce into one
+queued reread after it completes. An uncertain intent blocks that reread until
+its receipt is checked; it is never cleared or replayed by a hint. Detached or
+stale controls remove their subscription. A late response can refresh another
+mounted control, but cannot change the project selected in the originating dialog.
+
+## Legacy local project attachments (separate registry)
+
+Choose **Tools → Project attachment → Legacy local projects (separate registry)**,
+select a **local Mesh project**, then explicitly
 attach or detach the session. This uses the native project registry, not tracker/worklog
 projects; names or IDs from those separate registries are never matched implicitly.
 The native workspace (**Projects → Old view**) shows the attached session Tools menus without requiring a Roster

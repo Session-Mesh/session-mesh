@@ -14,7 +14,6 @@ let max_projects = 200
 let max_tasks = 200
 let max_edges = 300
 let max_project_events = 40
-
 let column_names = [ "todo"; "in_progress"; "blocked"; "done"; "other" ]
 
 (* Every task is in exactly one column. Blocked comes first, with the meaning
@@ -24,7 +23,11 @@ let column_names = [ "todo"; "in_progress"; "blocked"; "done"; "other" ]
 let column_of (t : W.Model.task) =
   if not (Wr_stats.is_open t) then "done"
   else if Wr_stats.is_blocked t then "blocked"
-  else match t.status with "in_progress" -> "in_progress" | "inbox" | "todo" -> "todo" | _ -> "other"
+  else
+    match t.status with
+    | "in_progress" -> "in_progress"
+    | "inbox" | "todo" -> "todo"
+    | _ -> "other"
 
 let light_json world (row : W.Query.project_row) =
   let p = row.project in
@@ -57,7 +60,8 @@ let no_project_entries (loaded : Wr_load.t) product =
     (fun id ->
       let tasks =
         W.Model.Smap.fold
-          (fun _ (t : W.Model.task) acc -> if t.product = id && t.project_id = None then t :: acc else acc)
+          (fun _ (t : W.Model.task) acc ->
+            if t.product = id && t.project_id = None then t :: acc else acc)
           world.tasks []
       in
       let stats = Wr_stats.of_tasks world tasks in
@@ -68,16 +72,23 @@ let no_project_entries (loaded : Wr_load.t) product =
 let list (loaded : Wr_load.t) ~product ~all =
   let* () = Wr_scope.check_product loaded product in
   let world = Wr_load.world loaded in
-  let rows = W.Query.list_projects world ?taxonomy:loaded.snapshot.taxonomy ?product ~include_closed:all () in
+  let rows =
+    W.Query.list_projects world ?taxonomy:loaded.snapshot.taxonomy ?product
+      ~include_closed:all ()
+  in
   Ok
     (Wr_out.document "projects"
        (Wr_out.list "projects" max_projects (List.map (light_json world) rows)
        @ [ ("total", `Int (List.length rows)) ]
-       @ Wr_out.list "no_project" max_projects (no_project_entries loaded product)
+       @ Wr_out.list "no_project" max_projects
+           (no_project_entries loaded product)
        @ Wr_load.warnings_json loaded))
 
 let column_ids name tasks =
-  List.filter_map (fun (t : W.Model.task) -> if column_of t = name then Some (R.tstr ~max:40 t.id) else None) tasks
+  List.filter_map
+    (fun (t : W.Model.task) ->
+      if column_of t = name then Some (R.tstr ~max:40 t.id) else None)
+    tasks
 
 (* The columns of the shown tasks; [columns_omitted] counts, per column, the
    tasks of the project left out of [tasks] (only when some are). *)
@@ -85,16 +96,24 @@ let columns_fields ~shown ~all =
   let omitted =
     List.filter_map
       (fun name ->
-        let cut = List.length (column_ids name all) - List.length (column_ids name shown) in
+        let cut =
+          List.length (column_ids name all)
+          - List.length (column_ids name shown)
+        in
         if cut > 0 then Some (name, `Int cut) else None)
       column_names
   in
-  ("columns", `Assoc (List.map (fun name -> (name, `List (column_ids name shown))) column_names))
+  ( "columns",
+    `Assoc
+      (List.map
+         (fun name -> (name, `List (column_ids name shown)))
+         column_names) )
   :: (if omitted = [] then [] else [ ("columns_omitted", `Assoc omitted) ])
 
 (* One edge per [blocked_by] entry of the shown tasks; [to_in_project] looks at
    every task of the project. *)
-let edges_json (world : W.Model.world) ~(all : W.Model.task list) (tasks : W.Model.task list) =
+let edges_json (world : W.Model.world) ~(all : W.Model.task list)
+    (tasks : W.Model.task list) =
   let in_project id = List.exists (fun (t : W.Model.task) -> t.id = id) all in
   List.concat_map
     (fun (t : W.Model.task) ->
@@ -102,9 +121,17 @@ let edges_json (world : W.Model.world) ~(all : W.Model.task list) (tasks : W.Mod
         (fun target ->
           let found = W.Model.Smap.find_opt target world.tasks in
           `Assoc
-            ([ ("from", R.tstr ~max:40 t.id); ("to", R.tstr ~max:40 target); ("state", `String (Wr_stats.state world target)) ]
-            @ R.opt "to_title" (fun (d : W.Model.task) -> R.tstr ~max:200 d.title) found
-            @ R.opt "to_status" (fun (d : W.Model.task) -> R.tstr ~max:40 d.status) found
+            ([
+               ("from", R.tstr ~max:40 t.id);
+               ("to", R.tstr ~max:40 target);
+               ("state", `String (Wr_stats.state world target));
+             ]
+            @ R.opt "to_title"
+                (fun (d : W.Model.task) -> R.tstr ~max:200 d.title)
+                found
+            @ R.opt "to_status"
+                (fun (d : W.Model.task) -> R.tstr ~max:40 d.status)
+                found
             @ [ ("to_in_project", `Bool (in_project target)) ]))
         t.blocked_by)
     tasks
@@ -132,9 +159,16 @@ let detail (loaded : Wr_load.t) reference =
   Ok
     (Wr_out.document "project"
        ([ ("project", `Assoc (project_fields row stats)) ]
-       @ Wr_out.list "tasks" max_tasks (List.map (Wr_view.task_row ~attempts:loaded.attempts world) all_tasks)
+       @ (match Wr_attachment.run loaded pid row.project.product_p with
+         | Ok _ -> [ ("session_tools", `Bool true) ]
+         | Error _ -> [])
+       @ Wr_out.list "tasks" max_tasks
+           (List.map
+              (Wr_view.task_row ~attempts:loaded.attempts world)
+              all_tasks)
        @ columns_fields ~shown:tasks ~all:all_tasks
-       @ Wr_out.list "dependencies" max_edges (edges_json world ~all:all_tasks tasks)
+       @ Wr_out.list "dependencies" max_edges
+           (edges_json world ~all:all_tasks tasks)
        @ [ ("reprise", `Assoc (Wr_resume.sections loaded ~keep ())) ]
        @ Wr_questions.fields ~brief:true ~about:task_ids loaded.questions
        @ Wr_out.list "timeline" max_project_events

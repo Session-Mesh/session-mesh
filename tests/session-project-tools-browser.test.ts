@@ -46,6 +46,7 @@ test('actual session Tools attachment: native receipts, uncertain save, project 
       await page.reload(); await page.waitForFunction(lang => document.documentElement.lang === lang, language);
       await page.locator('.p-tools summary').first().click();
       await page.locator('.p-tools-body button').filter({hasText: messages['artifacts.projectTitle']}).click();
+      await page.getByRole('button', {name: messages['artifacts.legacyProjects'], exact:true}).click();
       const modal = page.locator('dialog.session-project-tools');
       await modal.getByText(messages['artifacts.projectNotAttached'], {exact: true}).waitFor();
       assert.ok((await modal.boundingBox())!.width <= width);
@@ -60,6 +61,7 @@ test('actual session Tools attachment: native receipts, uncertain save, project 
     await page.reload(); await page.waitForFunction(() => document.documentElement.lang === 'en');
     await page.locator('.p-tools summary').first().click();
     await page.locator('.p-tools-body button').filter({hasText: 'Project attachment'}).click();
+    await page.getByRole('button', {name:'Legacy local projects (separate registry)', exact:true}).click();
     const dialog = page.locator('dialog.session-project-tools'), select = dialog.locator('select');
     await dialog.getByRole('button', {name: 'Attach session tools', exact: true}).waitFor();
     await select.selectOption(first);
@@ -75,6 +77,7 @@ test('actual session Tools attachment: native receipts, uncertain save, project 
     await page.evaluate(() => (window as unknown as {restoreId: () => void}).restoreId());
     await dialog.getByRole('button', {name: 'Close', exact: true}).click();
     await page.locator('.p-tools-body button').filter({hasText: 'Project attachment'}).click();
+    await page.getByRole('button', {name:'Legacy local projects (separate registry)', exact:true}).click();
     await select.selectOption(first);
     await dialog.getByRole('button', {name: 'Attach session tools', exact: true}).click();
     await dialog.getByText('Save outcome unknown.', {exact: false}).waitFor();
@@ -157,6 +160,7 @@ test('legacy project first attachment and receipt-bound project-view detach refr
     const paneAttach = async () => {
       if (await page.locator('.p-tools').first().getAttribute('open') === null) await page.locator('.p-tools summary').first().click();
       await page.locator('.p-tools-body button').filter({hasText: 'Project attachment'}).click();
+      await page.getByRole('button', {name:'Legacy local projects (separate registry)', exact:true}).click();
       await dialog.getByText('This exact session is not attached to this project.', {exact: true}).waitFor();
       await dialog.getByRole('button', {name: 'Attach session tools', exact: true}).click();
       await dialog.getByText('This exact session is attached to this project.', {exact: true}).waitFor();

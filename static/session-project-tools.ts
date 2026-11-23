@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 import type {ProjectHTTP, ProjectRequest, HostReply} from './project-host.ts';
+import {openWorkProjectAttachment} from './work-session-tools.ts';
 
 export interface SessionToolReference {name: string; created: number; machine_id: string}
 export interface SessionToolReceipt {project_id: string; machine_id: string; boot: string; revision: string; request_id: string}
@@ -12,9 +13,12 @@ export function sameSessionTool(a: SessionToolReference, b: SessionToolReference
 export function openSessionProjectAttachment(ports: {
   document: Document; request: ProjectHTTP; name: string; created: number; machine_id?: string;
   translate: (key: string) => string; current: () => boolean;
-  scopeCurrent?: () => boolean; project?: string;
+  scopeCurrent?: () => boolean; project?: string; legacyLocal?: boolean;
   confirmed?: (receipt: SessionToolReceipt) => void;
 }): void {
+  if (!ports.project && !ports.legacyLocal) {
+    openWorkProjectAttachment({...ports,openLegacy:()=>openSessionProjectAttachment({...ports,legacyLocal:true})}); return;
+  }
   let transport: typeof import('./project-host.ts') | null = null;
   const loading = import('./project-host.ts').then(value => {transport = value; return value;});
   const doc = ports.document, t = ports.translate, focus = doc.activeElement as HTMLElement | null;

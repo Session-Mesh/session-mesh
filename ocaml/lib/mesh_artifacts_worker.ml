@@ -57,7 +57,8 @@ let record root v =
 let run v =
   let op = A.string "op" 32 v in
   let root = Sys.getenv "MESH_CONF_DIR" in
-  if op = "notes-call" then (
+  if op = "work-tools" then Mesh_work_tools.run root v
+  else if op = "notes-call" then (
     A.exact [ "op"; "tool"; "arguments"; "session"; "nonce" ] v;
     let tool = A.string "tool" 32 v in
     if

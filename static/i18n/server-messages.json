@@ -1,5 +1,17 @@
 [
   {
+    "pattern": "^Session identity required$",
+    "key": "server.sessionIdentityRequired"
+  },
+  {
+    "pattern": "^Work attachment helper busy$",
+    "key": "server.workAttachmentBusy"
+  },
+  {
+    "pattern": "^Session changed; check the saved receipt$",
+    "key": "server.sessionChangedCheckReceipt"
+  },
+  {
     "pattern": "^This OpenCode version is not supported by session-mesh \\(only 1\\.x and 2\\.x are\\): a conversation cannot be resumed$",
     "key": "server.opencodeUnsupportedResumeRefused"
   },
