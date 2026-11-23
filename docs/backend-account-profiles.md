@@ -1,7 +1,9 @@
 # Native account-profile contract
 
 `mesh-profile` validates profile metadata and manages confirmation preferences. It does not launch an
-agent or switch a running session; all public profiles currently report `switch_qualified: false`.
+agent or switch a running session. On Linux, the web server can switch a Claude or Codex session between
+native profiles when its PTY host supports bound in-place relaunch. The owner must approve each request.
+macOS, Pi and OpenCode native-profile switches remain unavailable.
 
 ## Identity and configuration
 
@@ -117,7 +119,7 @@ bounds; the transport mode grants none of that authority.
 ## HTTP routes
 
 The web server binds six routes to the transport mode, one operation each. Nothing else is
-exposed: `profiles.resolve` (its reply holds folders) and every switch stay on the host, and the
+exposed through these routes: `profiles.resolve` (its reply holds folders) and every switch stay on the host, and the
 path chooses the operation, never the body.
 
 `GET /api/config` advertises `capabilities.account_settings: true` for this binding. Clients must
@@ -160,7 +162,8 @@ live-switch qualification flag.
   not exactly its operation's shape: for `profiles.list`, a boolean `configured`, a
   `registry_revision` that is `null` or a digest (64 lower-case hex digits), and profiles with
   their six public fields: an `id`, a string `label`, a known `backend`, a boolean `enabled`, a
-  digest `context_revision` and `switch_qualified` false; for every `consent.*` operation, the
+  digest `context_revision` and `switch_qualified` false in the helper response; the server projects
+  the flag from the availability of a compatible live session and PTY host. For every `consent.*` operation, the
   policy (`version`, an integer `revision`, `global` and `pairs`, each pair with its
   `confirmation` and its two accounts' known `backend`, `id` and digest `context_revision`, both
   accounts of one backend with two different ids). An `id` is what the helper accepts: 1 to 32
@@ -246,8 +249,8 @@ Claude/Codex profiles retain their existing alias IDs, with backend-specific lab
 invalid registry never falls back to legacy credentials. Disabled profiles are not offered for launch,
 but their credential roots remain protected from document viewing. A carry resolves both accounts from
 one snapshot; later registry edits apply to the next operation. This is not live checkpoint or arbitrary
-    same-user filesystem-race qualification. Enabled OpenCode/Pi profiles also admit
-    backend-qualified launches; none of the four backends qualifies live switching.
+same-user filesystem-race qualification. Enabled OpenCode/Pi profiles also admit backend-qualified
+launches; their live switches are not qualified.
 
 The browser terminal opts into `acknowledged_input_v1` when the live inventory
 advertises it for this session. The attachment is bound to its current `created`
@@ -264,4 +267,9 @@ focus, mouse and query replies are still queued and ACKed without creating or
 clearing a human draft lease; mixed human bytes are not exempt. This does
 **not** inspect a native
 composer, queue, dialog or tool; it is not a checkpoint or live-switch receipt.
-All backend live-switch qualification flags remain false.
+For an approved Linux Claude/Codex switch, the request binds the conversation, both profile contexts,
+and the foreground process identity. The host verifies the process before each signal. A successful
+switch preserves the terminal and resumes the copied conversation in the target account. A failed
+carry resumes the source only while its context remains verifiable; an uncertain stop is reported for
+inspection and is not replayed automatically. The process check and signal, and the final directory
+check and launch admission, are separate operations rather than atomic guarantees.
