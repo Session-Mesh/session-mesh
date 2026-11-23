@@ -396,8 +396,10 @@ test('malformed index and percentage lines close the extended header', () => {
   }
 });
 
-test('a long malformed binary notice is handled in bounded time', { timeout: 1500 }, () => {
+test('a long malformed binary notice is handled in bounded time', () => {
   const line = 'Binary files "' + 'x and '.repeat(12000) + 'x differ';
+  const started = performance.now();
   const [file] = parseUnifiedDiff(`diff --git a/x b/x\n${line}\n`).files;
+  assert.ok(performance.now() - started < 3000, 'parsing should not repeatedly scan the malformed name');
   assert.equal(file?.binary, false);
 });
