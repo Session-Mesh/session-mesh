@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {test} from 'node:test';
-import {logicalLines, type PaneView, REPO, rows, skip, TerminalMesh, typeLine, waitForRow, WITNESS} from './terminal-browser-lib.ts';
+import {logicalLines, type PaneView, recordControlMessagesManual, REPO, rows, skip, TerminalMesh, typeLine, waitForRow, WITNESS} from './terminal-browser-lib.ts';
 
 declare const active: PaneView & {conn: {created: number}; fit: {proposeDimensions(): {cols: number}}};
 const words = (text: string) => text.trim().split(/\s+/).join(' ');
@@ -21,7 +21,7 @@ test('conditional bound preserves owned replay, explicit size takeover and later
   const wideSize = {width: 2400, height: 1000}, narrowSize = {width: 2000, height: 1000};
   try {
     await mesh.start(); await mesh.newShell('binding-width');
-    const wide = await mesh.openPage('binding-width', wideSize);
+    const wide = await mesh.openPage('binding-width', wideSize, recordControlMessagesManual);
     await typeLine(wide, `node ${quote(WITNESS)} binding`); await waitForRow(wide, 'FIN-binding');
     const wideRows = region(await rows(wide));
     const produced = Number(/sees (\d+) columns/.exec(wideRows[0])?.[1]);
@@ -32,7 +32,7 @@ test('conditional bound preserves owned replay, explicit size takeover and later
     const source = words(paragraphs.map(({first, rest}: {first: string; rest: string}) => `${first} ${rest}`).join(' '));
     assert.equal(words(region(await logicalLines(wide)).slice(1, -1).join(' ')), source);
     const frames: (string | Buffer)[] = [];
-    const narrow = await mesh.openPage('binding-width', narrowSize, undefined, page => page.on('websocket', socket =>
+    const narrow = await mesh.openPage('binding-width', narrowSize, recordControlMessagesManual, page => page.on('websocket', socket =>
       socket.on('framereceived', ({payload}) => {if (frames.length < 3) frames.push(payload);})));
     assert.equal(await narrow.evaluate(() => active.term.cols), produced, 'the second pane follows the first size owner');
     assert.equal(words(region(await logicalLines(narrow)).slice(1, -1).join(' ')), source);
