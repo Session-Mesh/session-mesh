@@ -255,7 +255,7 @@ install.
   the turn ends, and nobody has observed what `agentStop` means in autopilot, where Copilot keeps going
   by itself, and which a Shift+Tab inside Copilot can enter without any change to its arguments. So no
   notice is ever typed into a Copilot, whatever its arguments: its messages wait in the inbox until it
-  checks `agent_inbox`. Its state, its conversation and its mailbox work as for the other agents.
+  checks `mail.inbox`. Its state, its conversation and its mailbox work as for the other agents.
 
   Codex has an optional wake that types nothing: `codex queue`. It is off by default and turns on
   only when the web server starts with `MESH_CODEX_QUEUE_WAKE=1`. For a Codex session whose
@@ -328,7 +328,7 @@ install.
     socket and keeps the typed notice. A policy delivered by MDM or by your organisation's server
     is not a file the mesh can read: the delivery confirmation below covers it;
   - **delivery confirmation, and no typing after a line.** A line written on the socket counts as
-    a wake only if the agent then looks at its inbox, through the route of the `agent_inbox`
+    a wake only if the agent then looks at its inbox, through the route of the `mail.inbox`
     tool. Claude may hold the line for your approval, in a dialog of its own terminal that
     nothing signals to the mesh (it happens with a `hold`, and with a line from a sender that
     states no permission mode in a session that bypasses permissions). A typed notice and `Enter`
@@ -353,7 +353,7 @@ install.
     PTY host's `agent_wake_v1` and `human_input_lease_v1` capabilities), remains for sessions
     that have no socket, and for a line that could not be written at all. A session also gets no
     socket when the mesh's board bridge is not installed, or when the command does not carry the
-    bridge's `--mcp-config` entry (the `agent_inbox` tool that confirms a wake comes from it),
+    bridge's `--mcp-config` entry (the `mail.inbox` tool that confirms a wake comes from it),
     nor when the command carries `--project-config-root`, which moves where Claude reads the
     project's settings. A restart of the server while the directory is already missing or open to
     others cannot tell that lines were written: no session has a socket then, and the typed

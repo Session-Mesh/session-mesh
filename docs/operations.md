@@ -1725,7 +1725,7 @@ meanwhile, the restore of that session is refused. A restart that an agent reque
 approve keeps the alias of the session too.
 
 A Claude or Codex agent can also ask to continue its conversation under another account (its
-`session_account_switch_request` tool, used when you ask for it in the conversation). The page
+`session.account_switch_request` tool, used when you ask for it in the conversation). The page
 asks for your approval: the whole conversation is then copied into the other account's folder and
 sent to that account's provider. Once approved, Mesh stops the agent, copies the conversation
 with `mesh-platform accounts carry` (the transcript only, never a login or settings file) and
@@ -1734,7 +1734,7 @@ example the other account already holds a different copy of that conversation), 
 resumes under its own account, in the same terminal too, and the request records why. Codex
 resumes a conversation from its copied rollout alone, and Claude from its copied
 transcript alone (tried with codex-cli 0.170.0 and Claude Code 2.1.330 on throwaway accounts);
-`session_accounts` still reports `switch_qualified: false`.
+`session.accounts` still reports `switch_qualified: false`.
 
 **Same terminal.** A switch, and a restart an agent requests, stop only the agent: the session
 keeps its name, its shell, its terminal output and every open tab or pane. The PTY host sends

@@ -219,7 +219,7 @@ describe('OpenCode 2 preset', () => {
     assert.deepEqual(lines('input.log'), [], 'nothing is typed while a turn runs or waits');
     report('oc2-main', [started(), question, cancelled, succeeded()]);
     const typed = await until('the notice', () => lines('input.log').find(line => line.startsWith('# Mesh: new message')));
-    assert.match(typed, /agent_inbox/);
+    assert.match(typed, /mail\.inbox/);
   });
 
   test('after a PTY host restart the conversation is restored with --standalone --session and the board again', async () => {

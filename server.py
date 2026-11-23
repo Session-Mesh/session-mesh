@@ -4315,7 +4315,7 @@ async def api_session_action_request(request):
                              headers={"Cache-Control": "no-store"})
 
 
-# ---- Account switch requests (session_account_switch_request): the session's agent asks to continue its
+# ---- Account switch requests (session.account_switch_request): the session's agent asks to continue its
 # conversation under another account. Checked here before it is queued, then, once the owner approved it: the
 # exact source stopped, `mesh-platform accounts carry` copies the conversation, the agent resumes under the target;
 # a failed carry resumes it under its own account. The agent kind is the session's (its token), never the body's.
@@ -4484,7 +4484,7 @@ def _with_account_labels(item):
 
 async def api_session_accounts(request):
     """The account alias the calling session's agent runs under and the declared aliases (ids, labels and the
-    agents each serves; never a folder), for the mesh-board `session_accounts` tool. The session is the token's
+    agents each serves; never a folder), for the mesh-board `session.accounts` tool. The session is the token's
     and the agent kind the one recorded at launch: the route takes no parameter."""
     if request.query:
         raise web.HTTPBadRequest(text="This route takes no parameter")

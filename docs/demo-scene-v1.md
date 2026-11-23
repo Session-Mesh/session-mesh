@@ -46,7 +46,7 @@ This scene starts in `question` and offers two choices, each leading to its own 
 }
 ```
 
-Pass it to `demo_create` or `demo_create_named` with `version: 0`; an update repeats the current
+Pass it to `demo.create` or `demo.create_named` with `version: 0`; an update repeats the current
 revision number in `version`, as for v0.
 
 ## Rules

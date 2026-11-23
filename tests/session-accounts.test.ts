@@ -337,7 +337,7 @@ async function tokenOf(name: string): Promise<string> {
 const selfAccounts = (token: string, query = '') => fetch(`${mesh.base}/api/session-actions/@self/accounts${query}`,
   {headers: {Authorization: `MeshSession ${token}`}});
 
-// The mesh-board `session_accounts` tool reads this route: what an agent may learn of the accounts.
+// The mesh-board `session.accounts` tool reads this route: what an agent may learn of the accounts.
 describe("a session's own accounts, read with its session token", {skip: SKIP}, () => {
   const DEFAULT = {id: 'default', label: 'Default account', claude: true, codex: true};
 

@@ -18,7 +18,7 @@ import {hostArgv} from './claude-wake-lib.ts';
 import {REPO, type Scratch, runServer, scratchHome, stopServer, removeScratch} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
-export const NOTICE_TEXT = 'Mesh: new message(s) in your inbox; check agent_inbox and ask yes/no/always before reading.';
+export const NOTICE_TEXT = 'Mesh: new message(s) in your inbox; check mail.inbox and ask yes/no/always before reading.';
 export const CANARIES = {OPENAI_API_KEY: 'sk-canary-secret', MESH_CANARY: 'mesh-canary-secret',
   ANTHROPIC_API_KEY: 'ak-canary-secret', SSH_AUTH_SOCK: '/tmp/canary-ssh-agent', EDITOR: 'canary-editor'};
 export const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -90,7 +90,7 @@ export class Rig {
   forTarget = (agent: Agent) => this.calls().filter(call => call.argv.includes(agent.uuid));
   typed = (agent: Agent) => {
     const log = path.join(agent.dir, 'input.log');
-    return fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(line => line.includes('agent_inbox')).length : 0;
+    return fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(line => line.includes('mail.inbox')).length : 0;
   };
 
   /** Start the server and the host. `wake` sets MESH_CODEX_QUEUE_WAKE=1; `prepare` runs before the server reads anything. */

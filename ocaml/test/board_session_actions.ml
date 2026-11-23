@@ -71,7 +71,7 @@ let with_server ?(content_type = "application/json") status body f =
       Sys.remove recorded;
       (result, request)
 
-let call port name arguments =
+let call port action arguments =
   let config =
     Result.get_ok (Mesh_board_mcp.Config.make_for_test ~token:"token" ~port ())
   in
@@ -90,7 +90,12 @@ let call port name arguments =
            ("id", `Int 2);
            ("method", `String "tools/call");
            ( "params",
-             `Assoc [ ("name", `String name); ("arguments", arguments) ] );
+             `Assoc
+               [
+                 ("name", `String "session");
+                 ( "arguments",
+                   `Assoc [ ("action", `String action); ("arguments", arguments) ] );
+               ] );
          ])
   in
   match Mcp_kit_stdio.serve_session_line session line with
@@ -142,7 +147,7 @@ let accounts_answer =
 let test_session_accounts_reads_the_self_route () =
   let (is_error, text), request =
     with_server "200 OK" accounts_answer (fun port ->
-        call port "session_accounts" (`Assoc []))
+        call port "accounts" (`Assoc []))
   in
   Alcotest.(check bool) "not an error" false is_error;
   Alcotest.(check string)
@@ -160,7 +165,7 @@ let test_session_accounts_reads_the_self_route () =
 let test_session_accounts_takes_no_argument () =
   List.iter
     (fun arguments ->
-      let is_error, text = call 9 "session_accounts" arguments in
+      let is_error, text = call 9 "accounts" arguments in
       Alcotest.(check bool)
         ("refused before the network: " ^ Yojson.Safe.to_string arguments)
         true is_error;
@@ -179,7 +184,7 @@ let test_a_coded_refusal_reaches_the_agent () =
   in
   let (is_error, text), request =
     with_server "400 Bad Request" body (fun port ->
-        call port "session_restart_request" (`Assoc []))
+        call port "restart_request" (`Assoc []))
   in
   Alcotest.(check string)
     "the restart request is posted"
@@ -203,7 +208,7 @@ let test_a_plain_text_refusal_reaches_the_agent () =
   let (is_error, text), _ =
     with_server ~content_type:"text/plain; charset=utf-8" "409 Conflict"
       "Agent to resume unavailable" (fun port ->
-        call port "session_create_request"
+        call port "create_request"
           (`Assoc [ ("preset", `String "claude") ]))
   in
   Alcotest.(check bool) "an error" true is_error;
@@ -232,7 +237,7 @@ let test_the_cause_is_cleaned_and_bounded () =
   in
   let (is_error, text), _ =
     with_server "400 Bad Request" body (fun port ->
-        call port "session_restart_request" (`Assoc []))
+        call port "restart_request" (`Assoc []))
   in
   Alcotest.(check bool) "an error" true is_error;
   Alcotest.(check bool)
@@ -258,7 +263,7 @@ let test_an_unknown_request_is_explained () =
   let (is_error, text), request =
     with_server ~content_type:"text/plain; charset=utf-8" "404 Not Found"
       "404: Not Found" (fun port ->
-        call port "session_action_status"
+        call port "action_status"
           (`Assoc [ ("request_id", `String "abc") ]))
   in
   Alcotest.(check string)
@@ -268,57 +273,36 @@ let test_an_unknown_request_is_explained () =
   Alcotest.(check bool) "an error" true is_error;
   Alcotest.(check bool)
     "expired, or made by another incarnation" true
-    (contains text "expired" && contains text "session_accounts")
+    (contains text "expired" && contains text "session.accounts")
 
-(* The description of a listed tool. *)
+(* The descriptions of session subcommands are in the generated catalog. *)
 let tool_description name =
-  let config =
-    Result.get_ok
-      (Mesh_board_mcp.Config.make_for_test ~token:"token" ~port:9 ())
-  in
-  let session = Mcp_kit.Server.create_session (Mesh_board_mcp.server config) in
-  List.iter
-    (fun line -> ignore (Mcp_kit_stdio.serve_session_line session line))
-    [
-      {|{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.0"}}}|};
-      {|{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}|};
-    ];
-  let answer =
-    Mcp_kit_stdio.serve_session_line session
-      {|{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}|}
-  in
-  let description =
-    match Option.map Yojson.Safe.from_string answer with
-    | Some (`Assoc fields) -> (
-        match List.assoc_opt "result" fields with
-        | Some (`Assoc result) -> (
-            match List.assoc_opt "tools" result with
-            | Some (`List tools) ->
-                List.find_map
-                  (function
-                    | `Assoc tool
-                      when List.assoc_opt "name" tool
-                           = Some (`String name) -> (
-                        match List.assoc_opt "description" tool with
-                        | Some (`String text) -> Some text
-                        | _ -> None)
-                    | _ -> None)
-                  tools
+  let is_error, text = call 9 "describe" (`Assoc []) in
+  Alcotest.(check bool) "describe succeeds" false is_error;
+  match Yojson.Safe.from_string text with
+  | `Assoc [ ("commands", `List commands) ] -> (
+      match
+        List.find_map
+          (function
+            | `Assoc fields
+              when List.assoc_opt "name" fields = Some (`String name) -> (
+                match List.assoc_opt "description" fields with
+                | Some (`String description) -> Some description
+                | _ -> None)
             | _ -> None)
-        | _ -> None)
-    | _ -> None
-  in
-  match description with
-  | None -> Alcotest.failf "%s is not listed" name
-  | Some text -> text
+          commands
+      with
+      | Some description -> description
+      | None -> Alcotest.failf "no description for session.%s" name)
+  | _ -> Alcotest.fail "expected the session command catalog"
 
-(* session_accounts reads only: a change of account goes through the request
+(* session.accounts reads only: a change of account goes through the request
    tool and the owner's approval, which its description says. *)
 let test_accounts_tool_points_to_the_approved_request () =
-  let text = tool_description "session_accounts" in
+  let text = tool_description "accounts" in
   Alcotest.(check bool)
     "names the request tool" true
-    (contains text "session_account_switch_request");
+    (contains text "session.account_switch_request");
   Alcotest.(check bool)
     "through the owner's approval" true
     (contains text "the owner approves");
@@ -327,7 +311,7 @@ let test_accounts_tool_points_to_the_approved_request () =
     (contains (String.lowercase_ascii text) "no tool to change")
 
 let test_switch_tool_says_who_may_ask () =
-  let text = tool_description "session_account_switch_request" in
+  let text = tool_description "account_switch_request" in
   Alcotest.(check bool)
     "only when the owner asks" true
     (contains text "only when the owner asks");
@@ -348,7 +332,7 @@ let switch_answer =
 let test_switch_request_posts_the_name () =
   let (is_error, text), request =
     with_server "202 Accepted" switch_answer (fun port ->
-        call port "session_account_switch_request"
+        call port "account_switch_request"
           (`Assoc [ ("account", `String "Travel") ]))
   in
   Alcotest.(check bool) "not an error" false is_error;
@@ -374,7 +358,7 @@ let test_switch_refusal_reaches_the_agent () =
   in
   let (is_error, text), _ =
     with_server "400 Bad Request" body (fun port ->
-        call port "session_account_switch_request"
+        call port "account_switch_request"
           (`Assoc [ ("account", `String "work") ]))
   in
   Alcotest.(check bool) "an error" true is_error;
@@ -391,7 +375,7 @@ let test_switch_takes_one_name () =
   List.iter
     (fun arguments ->
       let is_error, text =
-        call 9 "session_account_switch_request" arguments
+        call 9 "account_switch_request" arguments
       in
       Alcotest.(check bool)
         ("refused before the network: " ^ Yojson.Safe.to_string arguments)
@@ -414,7 +398,7 @@ let test_switch_takes_one_name () =
 let () =
   Alcotest.run "mesh-board-session-actions"
     [
-      ( "session_account_switch_request",
+      ( "session.account_switch_request",
         [
           Alcotest.test_case "says who may ask for it" `Quick
             test_switch_tool_says_who_may_ask;
@@ -424,7 +408,7 @@ let () =
             test_switch_refusal_reaches_the_agent;
           Alcotest.test_case "takes one name" `Quick test_switch_takes_one_name;
         ] );
-      ( "session_accounts",
+      ( "session.accounts",
         [
           Alcotest.test_case "points to the approved request" `Quick
             test_accounts_tool_points_to_the_approved_request;

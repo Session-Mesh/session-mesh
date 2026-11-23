@@ -846,6 +846,10 @@ write are described in [demo-scene-v0.md](demo-scene-v0.md) (a static layout),
 
 ## Messages and requests from agents
 
+The Deck groups its MCP calls under `whiteboard`, `demo`, `mail` and `session`. Each group
+lists its actions and schemas when called with `{"action":"describe"}`. See the
+[Deck MCP migration guide](deck-mcp-migration.md) for the calling format and client permission rules.
+
 Agents started by the mesh can message each other through the `mesh-board` MCP server: an agent
 lists its peers, deposits a message or a task in a peer's inbox, and replies to messages it has
 received.
@@ -859,7 +863,7 @@ is typed per idle period. OpenCode, Gemini CLI and Mistral Vibe are treated the 
 OpenCode and the hooks of Gemini and Vibe report the end of each turn, so the notice is typed only while
 they are idle at their prompt. Antigravity and Copilot CLI get no typed notice, because the mesh has no reliable signal that
 they are idle (an `Enter` typed during an approval prompt would answer it): their messages wait in the
-inbox until they check `agent_inbox`. Codex is never typed into either, but it can be woken without
+inbox until they check `mail.inbox`. Codex is never typed into either, but it can be woken without
 a keystroke, once the owner has turned that on (`MESH_CODEX_QUEUE_WAKE=1`, off by default until it has been
 tried on a real session; see `docs/operations.md`): when the mesh knows the exact conversation a Codex session is in (the rollout file the
 process holds open, never a guess and never a name), it runs `codex queue --thread <conversation id>
@@ -879,7 +883,7 @@ restart) can be woken without typing anything. The mesh starts Claude with its o
 socket (`--messaging-socket-path`, in a private directory next to the PTY host's socket, or in a
 short one under `/tmp` where a socket path would not fit, as on macOS) and wakes it by writing one
 line on that socket:
-`Mesh: N new message(s) in your inbox; check agent_inbox and ask yes/no/always before reading.`
+`Mesh: N new message(s) in your inbox; check mail.inbox and ask yes/no/always before reading.`
 Claude shows it as a message from another Claude session and starts a turn, or reads it after the
 running turn. The line carries only the number of waiting messages. One line is sent per batch of
 messages, once the running turn has ended.
@@ -905,7 +909,7 @@ your approval when its sender's permission class differs from the session's, and
 that states no class (the mesh) only in a bypass session.
 
 A line on the socket counts as a wake only once the agent looks at its inbox afterwards (the
-`agent_inbox` tool). Claude may hold the line in an approval dialog of its terminal, which the
+`mail.inbox` tool). Claude may hold the line in an approval dialog of its terminal, which the
 mesh cannot see, and a typed notice with its `Enter` could answer that dialog. So after a line has
 been written the mesh **never types anything** in that terminal for that wake. If the inbox has not
 been read 20 seconds after the line, the wake is shown as unconfirmed: a mark (an envelope with a
@@ -921,7 +925,7 @@ such a session is not woken by any means until you restart it. Outside the doubt
 remains for sessions that have no socket (and for a line that could not be written), with the
 guards above: the session must be idle and its PTY host must announce the wake capabilities. A
 session gets no socket when the board bridge is not installed, when its command lacks the
-bridge's `--mcp-config` entry (the `agent_inbox` tool that confirms a wake), or when its command
+bridge's `--mcp-config` entry (the `mail.inbox` tool that confirms a wake), or when its command
 carries `--project-config-root`, which moves where Claude reads the project's settings. One line
 is sent per batch; messages that arrive meanwhile form the next batch and get their own line, once
 the earlier wake is confirmed. The sockets of sessions that no longer exist are removed.
@@ -978,7 +982,7 @@ Resuming a Pi conversation is refused when the mesh cannot identify it unambiguo
 receives the MCP server and the wake-up extension below only when the mesh starts or resumes it.
 
 New Pi sessions load a small extension that brings message notices to the agent, even while it is
-working. The notice carries no message content: it asks the agent to check `agent_inbox` and to ask
+working. The notice carries no message content: it asks the agent to check `mail.inbox` and to ask
 for your consent before reading. Delivery guarantees:
 
 - **At least once, not exactly once.** As long as the same mesh session stays alive, an unconfirmed
@@ -1008,7 +1012,7 @@ service, which is not bound to `HOME`), with an inline configuration in the 2.x 
 and a state plugin (`opencode-mesh-plugin-v2/`). Differences from 1.x:
 
 - **The board is called through `execute`.** The model reaches MCP tools by writing code for OpenCode 2's single
-  `execute` tool (`tools["mesh-board"]["agent_inbox"]()`); the inbox, consent, read and reply work the same.
+  `execute` tool (`tools["mesh-board"]["mail"]({action: "inbox"})`); the inbox, consent, read and reply work the same.
 - **Your choices stay.** If you disabled `mesh-board` (`disabled: true`, or 1.x's `enabled: false`, in your global
   or the project's configuration), the server is not injected; your `permissions` rules apply.
 - **State.** The plugin reports working, waiting for a permission, waiting for a question and the end of a turn.
@@ -1250,7 +1254,7 @@ reported and no notice is typed).
 - **Messages.** Copilot sessions can message each other like Claude and Codex ones. The bridge
   repeats the JSON of its results after the summary, as for OpenCode.
 - **Autopilot and wake.** No message notice is ever typed into a Copilot, whatever its arguments (its messages
-  wait in the inbox until it calls `agent_inbox`): Copilot enters autopilot from its status bar without any
+  wait in the inbox until it calls `mail.inbox`): Copilot enters autopilot from its status bar without any
   change to its arguments, and what its end-of-turn hook means there has not been observed.
 - **Version.** `copilot` runs the newest version it downloaded; the integration was tested on
   1.0.86 only (the bundled one, in an isolated Copilot home, without auto-update). The newer version

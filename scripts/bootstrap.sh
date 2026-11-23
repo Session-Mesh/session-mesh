@@ -46,7 +46,7 @@
 # repository, read over HTTPS without authentication, until a release has the
 # API it needs:
 # - mcp-kit: mesh-board-mcp needs an API newer than the 0.2.0 release (response
-#   policy, compatibility resource). The pin is versioned 0.2.0+pin so that
+#   policy, compatibility resource, tool subcommands). The pin is versioned 0.2.0+pin so that
 #   ocaml/dune-project can require more than the released 0.2.0.
 # quint-connect (test only, the ITF replay of the ptyhost lifecycle) comes from
 # the pinned opam repository, as release 0.3.0 or later. It installs the
@@ -60,7 +60,7 @@ set -euo pipefail
 
 dune_version="3.24.2"
 mcp_kit_pin="mcp-kit.0.2.0+pin"
-mcp_kit_source="git+https://gitlab.com/nomadic-labs/ai-harness/ocaml-mcp.git#44a8398745cc55c4e0b66e6748ad597b957dcd10"
+mcp_kit_source="git+https://gitlab.com/nomadic-labs/ai-harness/ocaml-mcp.git#07e7aebf8f750a4f2246a182d57cb39e0e52f2f3"
 worktree="$(cd "$(dirname "$0")/.." && pwd -P)"
 switch="${MESH_OPAM_SWITCH:-$(opam switch show 2>/dev/null || true)}"
 

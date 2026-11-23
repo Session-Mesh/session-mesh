@@ -9,43 +9,47 @@ in [features.md](features.md#whiteboard-and-demos).
 
 ## Create, open, revise
 
-The agent uses the tools of the `mesh-board` MCP server, which the mesh adds to Claude Code, Codex
-and Pi when it starts them. `demo_create` takes the scene as its `scene` argument:
+The agent uses the `demo` tool of the `mesh-board` MCP server. Call it with
+`{"action":"describe"}` to get the available actions and their schemas. The `create` action
+takes the scene under `arguments.scene`.
 
 ```json
 {
-  "scene": {
-    "format": "mesh-scene-v0",
-    "version": 0,
-    "title": "Path of a request",
-    "theme": "dark",
-    "nodes": [
-      {"type": "heading", "text": "session-mesh"},
-      {"type": "row", "children": [
-        {"type": "card", "children": [{"type": "text", "text": "Local agent"}]},
-        {"type": "card", "children": [{"type": "text", "text": "Web server"}]}
-      ]},
-      {"type": "badge", "text": "Static diagram"}
-    ]
+  "action": "create",
+  "arguments": {
+    "scene": {
+      "format": "mesh-scene-v0",
+      "version": 0,
+      "title": "Path of a request",
+      "theme": "dark",
+      "nodes": [
+        {"type": "heading", "text": "session-mesh"},
+        {"type": "row", "children": [
+          {"type": "card", "children": [{"type": "text", "text": "Local agent"}]},
+          {"type": "card", "children": [{"type": "text", "text": "Web server"}]}
+        ]},
+        {"type": "badge", "text": "Static diagram"}
+      ]
+    }
   }
 }
 ```
 
-A successful creation returns revision `1`. `demo_open` with `{}` then opens the demo beside the
-session, in the pages that already show that session.
+A successful creation returns revision `1`. Calling `demo` with `{"action":"open"}` opens
+the demo beside the session, in the pages that already show that session.
 
-To change the scene, the agent calls `demo_revisions` with `{}` to learn the current revision, then
-`demo_update` with a complete scene whose `version` equals that revision (for example `1`). Each
-update creates a new revision; old revisions never change. An update based on an old revision is
+To change the scene, call `demo` with `{"action":"revisions"}` to learn the current revision,
+then with `action: "update"` and a complete scene in `arguments.scene`. Use the current
+revision as the scene's `version`. Each update creates a new revision. An update based on an old revision is
 refused with a conflict and overwrites nothing. A demo already open stays on its revision until
 the new one is accepted.
 
 A session can also hold several named demos (up to 8), each with its own history.
-`demo_create_named` creates one and returns an opaque `demo_id`; the title is only display text,
-and several demos may share it. `demo_list` lists them, and `demo_read_named`,
-`demo_update_named`, `demo_revisions_named` and `demo_open_named` take the identifier.
-`demo_restore_named` takes `{demo_id, version, expected_version}`: if `expected_version` is still
-the latest revision, the content of `version` is copied into a **new** revision
+`demo.create_named` creates one and returns an opaque `demo_id`; the title is only display text,
+and several demos may share it. `demo.list` lists them, and `demo.read_named`,
+`demo.update_named`, `demo.revisions_named` and `demo.open_named` take the identifier.
+`demo.restore_named` takes `{demo_id, version, expected_version}` inside `arguments`. If
+`expected_version` is still the latest revision, the content of `version` is copied into a **new** revision
 `expected_version + 1`. A stale `expected_version` is refused with 409, a missing demo or revision
 with 404 and a full history with 507; none of these refusals writes anything.
 

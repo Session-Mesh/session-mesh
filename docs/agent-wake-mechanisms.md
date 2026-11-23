@@ -185,7 +185,7 @@ typed because an interrupted turn sends no `Stop`.
 
 1. **`Stop` continue.** The hook already runs at each `Stop`. When Mesh holds a notification for the
    conversation named in the payload (`conversationId`), it answers `continue` with a neutral reason. The agent
-   starts a turn that tells it to check `agent_inbox`. No typed byte, exact conversation, no secret (the
+   starts a turn that tells it to check `mail.inbox`. No typed byte, exact conversation, no secret (the
    plugin inherits the session environment). It covers a message that arrives during a turn, not one that
    arrives after an interruption or long after the last `Stop`.
 2. **`PreInvocation` `systemMessage`.** Same information at the next prompt.

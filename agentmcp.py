@@ -687,6 +687,28 @@ def _limits_in(path, name):
     return disabled, tools
 
 
+_DECK_GROUP_BY_RETIRED_TOOL = {
+    **dict.fromkeys((
+        "whiteboard_get", "whiteboard_replace", "whiteboard_open", "whiteboard_refresh",
+        "whiteboard_revisions", "whiteboard_revision", "whiteboard_revision_diff",
+        "whiteboard_latest_change", "whiteboard_restore",
+    ), "whiteboard"),
+    **dict.fromkeys((
+        "demo_create", "demo_update", "demo_revisions", "demo_open", "demo_list",
+        "demo_create_named", "demo_read_named", "demo_update_named", "demo_revisions_named",
+        "demo_restore_named", "demo_open_named",
+    ), "demo"),
+    **dict.fromkeys((
+        "agent_peers", "agent_inbox", "agent_message_read", "agent_message_send",
+        "agent_message_reply", "agent_message_ack",
+    ), "mail"),
+    **dict.fromkeys((
+        "session_create_request", "session_restart_request", "session_action_status",
+        "session_accounts", "session_account_switch_request",
+    ), "session"),
+}
+
+
 def vibe_user_limits(cwd, environ=os.environ, name=SERVER_NAME):
     """What the user's Vibe configuration (user and project) restricts on the Mesh server ``name``: the
     injected entry replaces theirs by name, so these are repeated in it and a stricter choice stays in force."""
@@ -697,6 +719,9 @@ def vibe_user_limits(cwd, environ=os.environ, name=SERVER_NAME):
     if len(tools) > _VIBE_LIMITS_MAX:       # cutting the list would silently re-enable the tools cut
         raise VibeRefused(f"the configuration disables {len(tools)} tools of {name} "
                           f"(at most {_VIBE_LIMITS_MAX} are repeated): no Vibe session was started")
+    if name == SERVER_NAME:
+        # Vibe can deny a whole MCP tool. Preserve a retired action's denial by denying its group.
+        tools = {_DECK_GROUP_BY_RETIRED_TOOL.get(tool, tool) for tool in tools}
     return {"disabled": disabled, "disabled_tools": sorted(tools)}
 
 

@@ -7,7 +7,7 @@ in every release (bundles and native release assets): the six of this table, and
 | Program | What it is | Used by |
 |---|---|---|
 | `mesh-ptyhost` | The PTY host, the only one: the Unix-socket protocol that `ptyhost.py` (the Python client module of the web server) speaks, implemented with Eio, plus a `processes` operation that serves process facts (process table, argv, working directory, terminal) to its local clients where they cannot read `/proc` themselves (macOS). | `./install.sh` finds it on `PATH` or in the opam switch, or takes `--ptyhost PATH` ([Native PTY host](../docs/install.md#native-pty-host)). |
-| `mesh-board-mcp` | The stdio MCP server, with 30 tools, that Claude, Codex and Pi sessions started by the mesh receive. | The web server, which finds it in the opam switch named by `MESH_OPAM_SWITCH` (`agentmcp.py`). |
+| `mesh-board-mcp` | The stdio MCP server for the whiteboard, demos, agent mail, session requests and the agent guide. | The web server, which finds it in the opam switch named by `MESH_OPAM_SWITCH` (`agentmcp.py`). |
 | `mesh-platform` | A diagnostic CLI that prints, as JSON, what the `mesh_platform` library sees on this system: capabilities, runtime directory, process table, one process or its command line, and whether a Linux-only feature is available. | Tests and manual checks. |
 | `mesh-read` | A stdio MCP server with 2 tools, `list_sessions` and `read_transcript`, that reads local Claude and Codex transcripts under `$HOME/.claude/projects` and `$HOME/.codex/sessions`. | Not wired by the web server; an agent configuration can add it. |
 | `mesh-history` | The History index: a SQLite database (FTS5 full-text search) driven over stdin/stdout in JSON lines. | The web server (`history.py`), which feeds it the parsed conversations and reads listings and searches from it; without the program it keeps the JSON cache and ripgrep. |
@@ -172,19 +172,20 @@ The server reaches only the mesh of its own session: `@self` routes under
 never reads `MESH_SESSION`, and never sends a session identity supplied by an agent.
 `MESH_SESSION_TOKEN` is required; `MESH_PORT` defaults to `7690` and must be a TCP port.
 
-Its 30 tools, by group (the list is in `server`, at the end of `lib/mesh_board_mcp.ml`):
+It advertises four grouped tools and the standalone agent guide. Call a group with
+`{"action":"describe"}` to list its actions and schemas. See the
+[Deck MCP migration guide](../docs/deck-mcp-migration.md) for call examples.
 
-- **Whiteboard (9):** read and replace the session's Excalidraw document with a compare-and-swap
-  `version`, open or refresh it in the page, list, read, diff and restore its revisions, and read
-  the latest change.
-- **Demos (11):** create, update and open the session's own declarative demo scene and list its
-  revisions; list the named demos, and create, read, update, open and restore one of them and list
-  its revisions.
-- **Agent messages (6):** list peers, list the inbox, read, send, reply to and acknowledge a
+- **`whiteboard` (9 actions)** reads and replaces the session's Excalidraw document with a
+  compare-and-swap `version`, opens or refreshes it in the page, and exposes the revision
+  history, diff, restore and latest change.
+- **`demo` (11 actions)** covers creating, updating and opening the session's declarative
+  demo, and listing its revisions. For named demos it also covers listing, reading and restoring.
+- **`mail` (6 actions)** lists peers and the inbox, reads, sends, replies to and acknowledges a
   message. Message text is untrusted data.
-- **Session requests (3):** ask the owner to create or restart a session, and read the status of
-  such a request. The owner approves each request in the page.
-- **Agent guide (1):** `agent_guide_read` returns the agent guide built into the program; it takes
+- **`session` (5 actions)** lists account aliases, asks the owner to create or restart a session
+  or switch accounts, and reads request status. The owner approves each request in the page.
+- **`agent_guide_read`** returns the agent guide built into the program. It takes
   no argument and sends no request to the mesh. `lib/agent-guide.md`, the embedded text, is a
   byte-for-byte copy of `../docs/agent-guide.md`, kept in this directory so the package builds on
   its own; `tests/agent-guide-copy.test.ts` fails when the two differ.

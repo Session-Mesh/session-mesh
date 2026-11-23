@@ -92,7 +92,7 @@ def test_wake_line_is_one_ndjson_user_message_with_only_a_count():
     line = claudewake.wake_line(3)
     assert line.endswith(b"\n") and line.count(b"\n") == 1
     assert json.loads(line) == {"type": "user", "message": {"role": "user", "content": (
-        "Mesh: 3 new message(s) in your inbox; check agent_inbox "
+        "Mesh: 3 new message(s) in your inbox; check mail.inbox "
         "and ask yes/no/always before reading.")}}
 
 
@@ -335,7 +335,7 @@ def test_launch_refuses_a_shared_socket_directory(capable, wake_dir):
 
 
 def test_without_the_board_bridge_the_session_gets_no_socket(monkeypatch, capable, wake_dir):
-    """No agent_inbox tool: no wake could be confirmed, so the typed notice is kept."""
+    """No mail.inbox tool: no wake could be confirmed, so the typed notice is kept."""
     fresh = server.PRESETS["claude"]
     assert "--messaging-socket-path" in launch(capable, wake_dir, fresh)
     monkeypatch.setattr(claudewake.agentmcp, "board_available", lambda: False)
@@ -343,7 +343,7 @@ def test_without_the_board_bridge_the_session_gets_no_socket(monkeypatch, capabl
 
 
 def test_the_socket_needs_the_bridge_entry_in_the_command_not_only_the_installed_bridge(capable, wake_dir):
-    """agent_inbox comes from the --mcp-config entry of the command: both forms count, other servers do not."""
+    """mail.inbox comes from the --mcp-config entry of the command: both forms count, other servers do not."""
     fresh = shlex.split(server.PRESETS["claude"])
     assert agentmcp.strip_board("claude", fresh) != fresh                 # the preset carries the entry
     bare = agentmcp.strip_board("claude", fresh)

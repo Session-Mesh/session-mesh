@@ -6,7 +6,7 @@
 // - a fake Claude (a script named `claude`, running Node) that answers --version and listens on the
 //   --messaging-socket-path it was given, logging every line it receives;
 // - delivery: one fixed line, nothing typed;
-// - confirmation: the agent's look at its inbox (the route of the agent_inbox tool) ends the wake;
+// - confirmation: the agent's look at its inbox (the route of the mail.inbox tool) ends the wake;
 // - unconfirmed: without that look, after the confirmation window (shortened to 2 s by
 //   MESH_CLAUDE_WAKE_CONFIRM_SECONDS), the owner sees the wake as unconfirmed and NOTHING is typed:
 //   a typed Enter could answer a dialog Claude opened to hold the line;
@@ -117,7 +117,7 @@ describe('server: a Claude with a messaging socket', {skip: MANAGED.length > 0 &
     await waitFor('the line on the socket', 10000, () => lines(target).length === 1);
     const line = JSON.parse(lines(target)[0]) as {type: string; message: {role: string; content: string}};
     assert.equal(line.type, 'user');
-    assert.equal(line.message.content, 'Mesh: 1 new message(s) in your inbox; check agent_inbox and ask yes/no/always before reading.');
+    assert.equal(line.message.content, 'Mesh: 1 new message(s) in your inbox; check mail.inbox and ask yes/no/always before reading.');
     assert.doesNotMatch(lines(target)[0], /SECRET/);
     await pause(700);
     assert.equal(notices(target), 0, 'nothing is typed in the terminal');

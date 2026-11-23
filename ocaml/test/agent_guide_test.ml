@@ -144,7 +144,7 @@ let guide_does_not_promise_an_account_switch () =
     (contains guide "no tool that changes your account by itself");
   Alcotest.(check bool)
     "names the request tool" true
-    (contains guide "`session_account_switch_request`");
+    (contains guide "`session.account_switch_request`");
   Alcotest.(check bool)
     "only when the owner asks in this conversation" true
     (contains guide "only when the owner asks in this conversation");
