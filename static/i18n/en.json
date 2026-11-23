@@ -2090,5 +2090,9 @@
     "other": "Partial view: {n} tasks of {total} were read, the reader's limit. Without a filter, the column counters count every task; the filters and the timeline see only the tasks read."
   },
   "work.product.noMatch": "No task matches these filters.",
-  "work.product.noDates": "None of these tasks has a date: there is no bar to draw."
+  "work.product.noDates": "None of these tasks has a date: there is no bar to draw.",
+  "work.dep.preview": "Preview {id}",
+  "work.dep.previewLoading": "Loading preview…",
+  "work.dep.previewNoProject": "No project",
+  "work.dep.previewUnavailable": "Preview unavailable. Close and reopen to retry."
 }
