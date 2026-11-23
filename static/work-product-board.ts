@@ -36,37 +36,37 @@ function projectTag(ctx: ViewContext, doc: ProductDoc, row: TaskRow): HTMLElemen
   return tag;
 }
 
-export function renderProductBoard(ctx: ViewContext, doc: ProductDoc, filters: Filters): HTMLElement {
+export function renderProductBoard(ctx: ViewContext, doc: ProductDoc, filters: Filters, shown: ReadonlyMap<string, number> = new Map()): HTMLElement {
   const grid = el('div', 'work-columns');
   for (const column of boardColumns(doc, filters)) {
     // "other" is a guard for hand-edited data: shown only when it holds something
     if (column.key === 'other' && column.count === 0) continue;
     grid.append(boardColumn(ctx, column.key, column.rows, column.missing,
-      { count: column.count, limit: PAGE, extra: row => projectTag(ctx, doc, row) }));
+      { count: column.count, limit: PAGE, initial: Math.max(PAGE, shown.get(column.key) ?? PAGE), extra: row => projectTag(ctx, doc, row) }));
   }
   return el('div', 'work-board work-product-board', grid);
 }
 
 /** The rows of a group, the first ones, then a "Show more" button for the next ones (each row drawn when shown). */
-function groupRows(ctx: ViewContext, list: HTMLElement, tasks: readonly TaskRow[], draw: (task: TaskRow) => HTMLElement): void {
-  const more = (from: number): void => {
-    const drawn = tasks.slice(from, from + PAGE).map(draw);
+function groupRows(ctx: ViewContext, list: HTMLElement, tasks: readonly TaskRow[], draw: (task: TaskRow) => HTMLElement, initial: number): void {
+  const more = (from: number, amount = PAGE): void => {
+    const drawn = tasks.slice(from, from + amount).map(draw);
     list.append(...drawn);
-    if (from + PAGE >= tasks.length) return;
+    if (from + amount >= tasks.length) return;
     const item = el('li', 'work-frise-more');
-    const showMore = button('btn work-more', ctx.t('work.product.showMore', { n: Math.min(PAGE, tasks.length - from - PAGE) }), () => {
+    const showMore = button('btn work-more', ctx.t('work.product.showMore', { n: Math.min(PAGE, tasks.length - from - amount) }), () => {
       item.remove();
-      more(from + PAGE);
-      focusFirst(list.querySelectorAll<HTMLElement>('.work-frise-label')[from + PAGE] ?? null);
+      more(from + amount);
+      focusFirst(list.querySelectorAll<HTMLElement>('.work-frise-label')[from + amount] ?? null);
     });
     item.append(showMore);
     list.append(item);
   };
-  more(0);
+  more(0, initial);
 }
 
 /** A project's group: a heading button that folds it (its state kept in `folded`), its rows. */
-function friseGroup(ctx: ViewContext, group: ProjectGroup, draw: (task: TaskRow) => HTMLElement, folded: Set<string>): HTMLElement {
+function friseGroup(ctx: ViewContext, group: ProjectGroup, draw: (task: TaskRow) => HTMLElement, folded: Set<string>, shown: number): HTMLElement {
   const section = el('section', 'work-pfrise-group');
   section.setAttribute('data-project', group.project);
   const list = el('ul', 'work-frise-list');
@@ -79,14 +79,14 @@ function friseGroup(ctx: ViewContext, group: ProjectGroup, draw: (task: TaskRow)
   }, el('span', 'work-pfrise-chev'), el('span', 'work-pfrise-name', name), el('span', 'work-count', String(group.tasks.length)));
   list.hidden = folded.has(group.project);
   setAttributes(toggle, { 'aria-expanded': String(!list.hidden) });
-  groupRows(ctx, list, group.tasks, draw);
+  groupRows(ctx, list, group.tasks, draw, shown);
   section.append(el('h3', 'work-pfrise-head', toggle), list);
   return section;
 }
 
 /** The timeline of the tasks shown, one axis for all, grouped by project. `folded`: the groups folded (kept by the
  *  caller while the view lives). */
-export function renderProductFrise(ctx: ViewContext, doc: ProductDoc, filters: Filters, folded: Set<string>): HTMLElement {
+export function renderProductFrise(ctx: ViewContext, doc: ProductDoc, filters: Filters, folded: Set<string>, shown: ReadonlyMap<string, number> = new Map()): HTMLElement {
   const tasks = filterTasks(doc, filters);
   if (tasks.length === 0) return notice('work-empty', ctx.t(filtersActive(filters) ? 'work.product.noMatch' : 'work.frise.empty'));
   const frise = buildFrise(tasks, ctx.nowMs());
@@ -96,7 +96,7 @@ export function renderProductFrise(ctx: ViewContext, doc: ProductDoc, filters: F
     root.append(notice('work-empty', ctx.t('work.product.noDates')));
   }
   for (const group of groupByProject(doc, frise.rows.map(row => row.task))) {
-    root.append(friseGroup(ctx, group, task => friseRow(ctx, frise, rows.get(task.id)!), folded));
+    root.append(friseGroup(ctx, group, task => friseRow(ctx, frise, rows.get(task.id)!), folded, Math.max(PAGE, shown.get(group.project) ?? PAGE)));
   }
   const today = `${axisPercent(frise, frise.today).toFixed(2)}%`;   // the line of today on every track
   for (const list of root.querySelectorAll<HTMLElement>('.work-frise-list')) list.style.setProperty('--today', today);

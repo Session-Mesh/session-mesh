@@ -16,7 +16,7 @@ import type { WorkApi, WorkError, WorkResult } from './work-api.ts';
 import { entryTree } from './work-derive.ts';
 import { mountDocPanel } from './work-doc-panel.ts';
 import type { DocPanel } from './work-doc-panel.ts';
-import { button, el, focusFirst } from './work-dom.ts';
+import { button, el, focusFirst, progressBlock } from './work-dom.ts';
 import type { Translate, ViewContext } from './work-dom.ts';
 import { EntryQuestions } from './work-entry-questions.ts';
 import { EntrySheets } from './work-entry-sheets.ts';
@@ -27,6 +27,8 @@ import { errorBlock, loadingBlock } from './work-error-view.ts';
 import { browserHistory, createWorkNav, scrollerOf, upOnEscape, wentBack } from './work-nav.ts';
 import type { LevelHost, WorkNav } from './work-nav.ts';
 import { ProductPlace } from './work-product-place.ts';
+import { productSnapshot } from './work-product-page.ts';
+import { projectPoll } from './work-project-poll.ts';
 import type { ProjectAnswersHost } from './work-project-answers.ts';
 import { TAB_KEYS, renderProject } from './work-project-view.ts';
 import type { ProjectView, TabKey } from './work-project-view.ts';
@@ -52,7 +54,7 @@ import type { OpenQuestionsDoc, ProductsDoc, ProjectsDoc, Question } from './wor
 export type { WorkViewController, WorkViewOptions } from './work-view-options.ts';
 
 type EntryData = Readonly<{ products: ProductsDoc; projects: ProjectsDoc }>;
-type OpenProject = Readonly<{ id: string; view: ProjectView }>;
+type OpenProject = { id: string; view: ProjectView; snapshot: string };
 
 class WorkView implements WorkViewController {
   private readonly api: WorkApi;
@@ -87,6 +89,8 @@ class WorkView implements WorkViewController {
   /** The read of the rail's documents under way (readRail). */
   private railRead: AbortController | null = null;
   private writeUnavailable = false;
+  private openQuestionsCount: number | null = null;
+  private countSequence = 0;
   private readonly announcer = el('p', 'sr-only work-announcer');
   /** The document panel of the references in tracker text (static/work-doc-panel.ts). */
   private readonly docs: DocPanel;
@@ -95,6 +99,10 @@ class WorkView implements WorkViewController {
   private readonly nav: WorkNav;
   private readonly sync: QuestionsSync;
   private readonly unsubscribe: () => void;
+  private readonly stopProjectPoll: () => void;
+  private lastProjectInteraction = 0;
+  private readonly railRefreshStatus = el('p', 'work-mute work-rail-refresh-status');
+  private readonly onProjectInteraction = (): void => { this.lastProjectInteraction = Date.now(); };
   /** The owner's place and unsent drafts while away (static/work-view-memory.ts); `openings` numbers each `open`. */
   private readonly memory: ViewMemory;
   private openings = 0;
@@ -125,6 +133,10 @@ class WorkView implements WorkViewController {
     const { rail, questionsOpen, filters } = this.memory.place();
     this.rail = new WorkRail({ root: options.rail ?? el('div', ''), t: this.t, open: rail, folded: () => this.memory.note(),
       choose: choice => this.chosen(choice) });
+    this.railRefreshStatus.hidden = true;
+    this.railRefreshStatus.setAttribute('role', 'status');
+    this.railRefreshStatus.textContent = this.t('work.autoRefreshUnavailable');
+    options.rail?.append(this.railRefreshStatus);
     this.questionsOpen = questionsOpen;
     this.sheet = new TaskSheet({ api: this.api, t: this.t, ctx: this.ctx, nav: this.nav, memory: this.memory,
       generation: () => this.generation, view: () => this.project?.view ?? this.products.view });
@@ -140,6 +152,11 @@ class WorkView implements WorkViewController {
     this.levels = { nav: this.nav, root: options.root, rail: options.rail, active: () => this.active, inProject: () => this.project !== null || this.product !== null,
       closeSheet: () => this.sheet.closeShown(), toEntry: () => void this.backToEntry() };
     this.unsubscribe = this.sync.subscribe('view', change => this.questions.heard(change));
+    for (const event of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+      options.root.addEventListener(event, this.onProjectInteraction, { passive: true });
+      options.rail?.addEventListener(event, this.onProjectInteraction, { passive: true });
+    }
+    this.stopProjectPoll = projectPoll(() => this.refreshVisibleWork());
     window.addEventListener('popstate', this.onPopState);
   }
 
@@ -206,8 +223,15 @@ class WorkView implements WorkViewController {
       await this.openTask(sheet.id, 'questions', null, true);
       await this.refreshCount();
     } else if (await this.loadEntry()) {
-      const question = sheet ? this.questions.question(sheet.id) : null;
+      let question = sheet ? this.questions.question(sheet.id) : null;
+      if (sheet?.kind === 'question' && !question) {
+        const token = this.generation;
+        const result = await this.api.openQuestions(this.controller?.signal, { limit: 100 });
+        if (token !== this.generation) return;
+        question = result.ok ? result.value.questions.find(item => item.id === sheet.id) ?? null : null;
+      }
       if (question) this.openQuestionSheet(question);
+      else if (sheet?.kind === 'question') this.showEntrySheet(() => this.sheets.openUnavailable(sheet.id));
       else if (place.product && !sheet) await this.openProduct(place.product, place.tab, place.task, place.tabScroll);
     }
     // Not when the owner moved meanwhile, nor when the sheet or product left is not the one shown.
@@ -219,7 +243,7 @@ class WorkView implements WorkViewController {
   private scrollTo(place: Place): void {
     if (!this.active) return;
     scrollerOf(this.options.root).scrollTop = place.scroll;
-    const sheet = this.project?.view.detailSlot;
+    const sheet = this.project?.view.detailSlot ?? this.products.view?.detailSlot;
     if (sheet && !sheet.hidden) sheet.scrollTop = place.sheetScroll;
   }
 
@@ -247,6 +271,12 @@ class WorkView implements WorkViewController {
 
   destroy = (): void => {
     this.close();
+    this.stopProjectPoll();
+    for (const event of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+      this.options.root.removeEventListener(event, this.onProjectInteraction);
+      this.options.rail?.removeEventListener(event, this.onProjectInteraction);
+    }
+    this.railRefreshStatus.remove();
     this.memory.dispose();
     this.docs.destroy();
     window.removeEventListener('popstate', this.onPopState);
@@ -280,15 +310,125 @@ class WorkView implements WorkViewController {
   }
 
   private async reload(): Promise<void> {
-    const product = this.product, tab = this.products.view?.current() ?? null;
-    if (!this.project) { if (await this.loadEntry() && product) await this.openProduct(product, tab); return; }
-    await this.openProject(this.project.id, this.project.view.current());
-    await this.refreshCount();
+    // Refresh the current place with the same restoration path used when returning
+    // to Projects, so the selected task and unsent answers remain available.
+    this.memory.note();
+    await this.resume();
+    await this.refreshRailInBackground(true);
+  }
+
+  private async refreshVisibleWork(): Promise<void> {
+    await this.refreshRailInBackground();
+    if (this.sheets.place()) await this.sheets.refreshInBackground(this.controller?.signal,
+      () => this.active && document.visibilityState === 'visible' && Date.now() - this.lastProjectInteraction > 5000);
+    else if (this.selected !== null) await this.sheet.refreshInBackground(this.controller?.signal,
+      () => this.active && document.visibilityState === 'visible' && Date.now() - this.lastProjectInteraction > 5000);
+    else if (this.project) await this.refreshProjectInBackground();
+    else await this.refreshProductInBackground();
+  }
+
+  private async refreshRailInBackground(force = false): Promise<void> {
+    const quiet = (): boolean => this.active && document.visibilityState === 'visible' && this.rail.hasEntry()
+      && !this.options.rail?.contains(document.activeElement) && (force || Date.now() - this.lastProjectInteraction > 5000);
+    if (!quiet()) return;
+    const token = this.generation, signal = this.controller?.signal, questionCount = this.questions.shownCount(), countSequence = this.countSequence;
+    const [products, projects, questions] = await Promise.all([
+      this.api.products(signal), this.api.projects(signal),
+      readOpenQuestions(page => this.api.openQuestions(signal, page), questionCount),
+    ]);
+    if (token !== this.generation || countSequence !== this.countSequence || !quiet() || questionCount !== this.questions.shownCount()) return;
+    this.railRefreshStatus.hidden = products.ok && projects.ok && questions.ok;
+    const railScroll = this.options.rail?.scrollTop ?? 0;
+    if (products.ok && projects.ok) {
+      this.entry = { products: products.value, projects: projects.value };
+      if (JSON.stringify([products.value, projects.value]) !== this.rail.documentsSnapshot())
+        this.rail.entry(products.value, projects.value);
+    }
+    if (questions.ok) {
+      const atEntry = this.project === null && this.product === null && this.sheets.place() === null;
+      if (atEntry && this.content.querySelector('.work-entry-questions')?.contains(document.activeElement)) {
+        if (this.options.rail) this.options.rail.scrollTop = railScroll;
+        return;
+      }
+      if (atEntry && !await this.questions.reread(false, Promise.resolve(questions), true, false,
+        () => this.countSequence === countSequence)) return;
+      if (token !== this.generation || this.countSequence !== countSequence) return;
+      if (questions.value.openQuestions !== this.openQuestionsCount) this.report(questions);
+      if (JSON.stringify(questions.value.questions) !== this.rail.questionsSnapshot()) this.rail.questions(questions.value.questions);
+    }
+    if (this.options.rail) this.options.rail.scrollTop = railScroll;
+  }
+
+  private async refreshProductInBackground(): Promise<void> {
+    const view = this.products.view;
+    const quiet = (): boolean => this.active && document.visibilityState === 'visible' && this.products.view === view
+      && view !== null && ['board', 'frise'].includes(view.current()) && this.selected === null
+      && !view.currentPanel().contains(document.activeElement)
+      && !view.root.querySelector('.work-filter[open]')
+      && !view.root.querySelector('.work-filter-slot')?.contains(document.activeElement)
+      && Date.now() - this.lastProjectInteraction > 5000;
+    if (!view || !quiet() || view.snapshot() === null) return;
+    const token = this.generation;
+    const [result, products] = await Promise.all([
+      this.api.product(view.id, this.controller?.signal), this.api.products(this.controller?.signal),
+    ]);
+    if (token !== this.generation || !quiet()) return;
+    let status = view.root.querySelector<HTMLElement>('.work-auto-refresh-status');
+    const node = products.ok && this.entry ? findProduct(entryTree(products.value, this.entry.projects), view.id) : null;
+    if (!result.ok || !products.ok || !node) {
+      if (!status) {
+        status = el('p', 'work-mute work-auto-refresh-status', this.t('work.autoRefreshUnavailable'));
+        status.setAttribute('role', 'status');
+        view.root.querySelector('.work-product-head')?.after(status);
+      }
+      return;
+    }
+    status?.remove();
+    if (this.entry) this.entry = { products: products.value, projects: this.entry.projects };
+    const currentProgress = view.root.querySelector('.work-product-head .work-progress');
+    const freshProgress = progressBlock(this.t, node.product.tree);
+    if (currentProgress && currentProgress.outerHTML !== freshProgress.outerHTML) currentProgress.replaceWith(freshProgress);
+    if (productSnapshot(result.value) === view.snapshot()) return;
+    const scroller = scrollerOf(this.options.root), scroll = scroller.scrollTop;
+    view.replaceDoc(result.value);
+    scroller.scrollTop = scroll;
+  }
+
+  /** Refresh a quiet project board or timeline without replacing an open task or editor. */
+  private async refreshProjectInBackground(): Promise<void> {
+    const project = this.project;
+    const quiet = (): boolean => this.active && document.visibilityState === 'visible' && this.project === project
+      && project !== null && ['board', 'frise'].includes(project.view.current()) && this.selected === null
+      && !project.view.root.querySelector('.work-answer-form[aria-busy="true"]')
+      && !project.view.currentPanel().contains(document.activeElement) && Date.now() - this.lastProjectInteraction > 5000;
+    if (!project || !quiet()) return;
+    const token = this.generation;
+    const result = await this.api.project(project.id, this.controller?.signal);
+    if (token !== this.generation || !quiet()) return;
+    let status = project.view.root.querySelector<HTMLElement>('.work-auto-refresh-status');
+    if (!result.ok) {
+      if (!status) {
+        status = el('p', 'work-mute work-auto-refresh-status', this.t('work.autoRefreshUnavailable'));
+        status.setAttribute('role', 'status');
+        project.view.root.querySelector('.work-project-head')?.after(status);
+      }
+      return;
+    }
+    status?.remove();
+    const snapshot = JSON.stringify(result.value);
+    if (snapshot === project.snapshot) return;
+    const scroller = scrollerOf(this.options.root), scroll = scroller.scrollTop;
+    project.view.replaceDoc(result.value);
+    this.memory.fill(project.view.panel('questions'));
+    scroller.scrollTop = scroll;
+    project.snapshot = snapshot;
   }
 
   /** Report the open questions count, or null after a failed read: the badge never shows a number it did not read. */
   private report(result: WorkResult<OpenQuestionsDoc>): void {
+    this.countSequence++;
     const count = result.ok ? result.value.openQuestions : null;
+    this.openQuestionsCount = count;
     this.options.onOpenQuestions?.(count);
     this.sync.publish({ source: 'view', openQuestions: count });   // the marker reads again when the count moved
   }
@@ -408,7 +548,7 @@ class WorkView implements WorkViewController {
     if (!result.ok && resuming && result.error.kind === 'missing') { await this.loadEntry(); return false; }
     if (!result.ok) { this.failure(result.error, () => void this.openProject(id, tab), () => void this.backToEntry()); return false; }
     const view = renderProject({ ...this.panelCtx, scopeSignal: signal }, result.value, tab, () => void this.backToEntry(), key => this.tabShown(key));
-    this.project = { id, view };
+    this.project = { id, view, snapshot: JSON.stringify(result.value) };
     this.memory.fill(view.root);
     this.show(view.root);
     this.focusMain(view.root.querySelector<HTMLElement>('.work-back'));

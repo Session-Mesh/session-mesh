@@ -128,9 +128,22 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
   if (doc.truncated) root.append(notice('work-omitted', ctx.t('work.projectTruncated')));
   root.append(split);
   activate(initial, false);
-  const title = doc.project.title;
   const replaceDoc = (next: ProjectDoc): void => {
     doc = next;
+    // Update the summary without replacing the Back button, which may own focus.
+    const currentHead = root.querySelector<HTMLElement>('.work-project-head');
+    const freshHead = header(ctx, next.project, back);
+    for (const selector of ['.work-crumb', '.work-progress']) {
+      const current = currentHead?.querySelector(selector), fresh = freshHead.querySelector(selector);
+      if (current && fresh) current.replaceWith(fresh);
+    }
+    const waiting = currentHead?.querySelector(':scope > .work-mute');
+    const nextWaiting = freshHead.querySelector(':scope > .work-mute');
+    waiting?.remove();
+    if (nextWaiting) currentHead?.append(nextWaiting);
+    const omitted = root.querySelector<HTMLElement>(':scope > .work-omitted');
+    if (next.truncated && !omitted) root.insertBefore(notice('work-omitted', ctx.t('work.projectTruncated')), split);
+    else if (!next.truncated) omitted?.remove();
     // The Questions panel holds the owner's unsent answers: once built it is rebuilt now, even when hidden, so that
     // the caller can put them back.
     const keepQuestions = built.has('questions') && currentKey !== 'questions';
@@ -139,7 +152,7 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
     if (keepQuestions) build('questions');
     activate(currentKey, false);
   };
-  return { root, title, detailSlot, current: () => currentKey, currentPanel: () => panels.get(currentKey)!, activate, replaceDoc,
+  return { root, get title() { return doc.project.title; }, detailSlot, current: () => currentKey, currentPanel: () => panels.get(currentKey)!, activate, replaceDoc,
     panel: key => panels.get(key)!,
     showDetail: open => { detailSlot.hidden = !open; split.classList.toggle('detail-open', open); } };
 }

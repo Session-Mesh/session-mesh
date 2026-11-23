@@ -9,7 +9,7 @@
 
 import type { WorkApi } from './work-api.ts';
 import { renderDetail } from './work-detail-view.ts';
-import { button, focusFirst, markSelected } from './work-dom.ts';
+import { button, el, focusFirst, markSelected } from './work-dom.ts';
 import type { Translate, ViewContext } from './work-dom.ts';
 import { errorBlock, loadingBlock, recordedButUnread } from './work-error-view.ts';
 import { scrollerOf, tabsHidden } from './work-nav.ts';
@@ -43,6 +43,7 @@ export class TaskSheet {
   private sheetBack: HTMLElement | null = null;
   private controller: AbortController | null = null;
   private sequence = 0;
+  private snapshot: string | null = null;
 
   constructor(private readonly host: TaskSheetHost) {}
 
@@ -77,6 +78,7 @@ export class TaskSheet {
       view.detailSlot.replaceChildren(this.closeButton(view), errorBlock(this.host.t, result.error, { retry: () => void this.select(id) }));
     }
     if (!result.ok) return false;
+    this.snapshot = JSON.stringify(result.value);
     const body = renderDetail(this.host.ctx, result.value);
     // The reload after an answer keeps what the owner was typing under the other questions; the drafts kept while
     // away (this sheet's, or one typed in another place) come back too.
@@ -87,6 +89,54 @@ export class TaskSheet {
     const question = after ? body.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(after.question)}"]`) : null;
     focusFirst(question ?? body.querySelector<HTMLElement>('.work-detail-heading'));
     return true;
+  }
+
+  /** Read the open task without disturbing an answer or the control currently in use. */
+  async refreshInBackground(signal: AbortSignal | undefined, idle: () => boolean): Promise<void> {
+    const view = this.host.view(), id = this.selected, snapshot = this.snapshot;
+    if (!view || !id || snapshot === null || view.detailSlot.hidden || !view.detailSlot.querySelector('.work-detail')) return;
+    const token = this.host.generation(), sequence = this.sequence;
+    const result = await this.host.api.task(id, signal);
+    if (token !== this.host.generation() || sequence !== this.sequence || this.selected !== id || this.host.view() !== view || view.detailSlot.hidden) return;
+    const slot = view.detailSlot;
+    const status = (text: string | null): void => {
+      let node = slot.querySelector<HTMLElement>('.work-sheet-refresh-status');
+      if (!text) { node?.remove(); return; }
+      if (!node) {
+        node = el('p', 'work-mute work-sheet-refresh-status');
+        node.setAttribute('role', 'status');
+        slot.querySelector('.work-detail-close')?.after(node);
+      }
+      node.textContent = text;
+    };
+    if (!result.ok) { status(this.host.t('work.autoRefreshUnavailable')); return; }
+    const next = JSON.stringify(result.value);
+    if (next === this.snapshot) { status(null); return; }
+    const drafts = unsentDrafts(slot, '');
+    const focused = document.activeElement;
+    const headingFocused = focused === slot.querySelector('.work-detail-heading');
+    const backFocused = focused === slot.querySelector('.work-detail-close');
+    if (!idle() || (slot.contains(focused) && !headingFocused && !backFocused) || drafts.size > 0 || slot.querySelector('.work-answer-input[readonly]')) {
+      status(this.host.t('work.sheetUpdatesPending'));
+      return;
+    }
+    const opened = [...slot.querySelectorAll<HTMLDetailsElement>('.work-answer-history[open]')]
+      .map(node => node.closest<HTMLElement>('[data-question-id]')?.dataset.questionId).filter((value): value is string => !!value);
+    const scroll = slot.scrollTop, main = scrollerOf(view.root), mainScroll = main.scrollTop;
+    const body = renderDetail(this.host.ctx, result.value);
+    fillDrafts(body, drafts);
+    this.host.memory.fill(body);
+    for (const id of opened) {
+      const question = body.querySelector<HTMLElement>(`[data-question-id="${CSS.escape(id)}"]`);
+      const details = question?.querySelector<HTMLDetailsElement>('.work-answer-history');
+      if (details) details.open = true;
+    }
+    status(null);
+    slot.querySelector('.work-detail')?.replaceWith(body);
+    if (headingFocused) focusFirst(body.querySelector<HTMLElement>('.work-detail-heading'), true);
+    slot.scrollTop = scroll;
+    main.scrollTop = mainScroll;
+    this.snapshot = next;
   }
 
   /** The sheet's way back: it names the tab it returns to (and, for a screen reader, the project). */

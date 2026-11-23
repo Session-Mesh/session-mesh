@@ -82,6 +82,10 @@ export class WorkRail {
   /** Whether the products and projects were read. */
   hasEntry(): boolean { return this.docs !== null; }
 
+  /** Snapshots used to avoid replacing focused tree items for unchanged reads. */
+  documentsSnapshot(): string | null { return this.docs ? JSON.stringify([this.docs.products, this.docs.projects]) : null; }
+  questionsSnapshot(): string | null { return this.asked ? JSON.stringify(this.asked) : null; }
+
   private rebuild(): void {
     const docs = this.docs;
     if (!docs) return;

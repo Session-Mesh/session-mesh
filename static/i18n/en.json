@@ -1967,6 +1967,8 @@
   "terminal.reference.project": "Project {id}: {title}",
   "terminal.reference.question": "Question {id}: {title}",
   "work.refresh": "Refresh",
+  "work.autoRefreshUnavailable": "Updates unavailable. Try Refresh.",
+  "work.sheetUpdatesPending": "Updates available. Finish editing and leave the task controls to refresh.",
   "work.reprise.blocked": "Blocked or waiting",
   "work.reprise.due": "Due soon",
   "work.reprise.empty": "Nothing to pick up: no task in progress, blocked, due soon or idle.",
