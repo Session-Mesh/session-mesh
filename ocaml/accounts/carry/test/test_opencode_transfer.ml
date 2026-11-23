@@ -11,6 +11,11 @@ let data value = obj [ ("data", value) ]
 let id = "ses_fixtureTransfer20261122"
 let path = "/api/experimental/session/" ^ id ^ "/export"
 let info location =
+  (* Existing profile-root labels share one native workspace in this fixture. *)
+  let location =
+    if location = "/source" || location = "/target" then "/workspace"
+    else location
+  in
   obj
     [
       ("id", s id);
@@ -56,19 +61,21 @@ let response location = export location
 let empty = data (`List [])
 let active = data (obj [])
 
-let mock ?(before = fun _ -> None) () =
-  let context location =
+let mock ?(before = fun _ -> None) ?(source_location = "/workspace")
+    ?(target_location = "/workspace") () =
+  let context root location =
     {
-      T.home = location;
-      config = location;
-      data = location;
-      state = location;
-      cache = location;
-      runtime = location;
+      T.home = root;
+      config = root;
+      data = root;
+      state = root;
+      cache = root;
+      runtime = root;
       location;
     }
   in
-  let source = context "/source" and target = context "/target" in
+  let source = context "/source" source_location
+  and target = context "/target" target_location in
   let requests = ref [] in
   let imported = ref false in
   let request context verb route body =
@@ -77,7 +84,7 @@ let mock ?(before = fun _ -> None) () =
     match before (side, verb, route, body) with
     | Some value -> value
     | None ->
-        let location = if side = `Source then "/source" else "/target" in
+        let location = context.T.location in
         if verb = `Get && route = "/api/info" then
           Ok (200, obj [ ("version", s "2.3.2") ])
         else if verb = `Get && route = "/api/session/active" then
@@ -102,7 +109,7 @@ let mock ?(before = fun _ -> None) () =
           && route = "/api/experimental/session/import"
         then (
           imported := true;
-          Ok (200, data (info "/target")))
+          Ok (200, data (info target_location)))
         else Alcotest.fail ("unexpected request " ^ route)
   in
   (source, target, request, requests, imported)
@@ -129,6 +136,100 @@ let success () =
       Alcotest.(check bool) "native messages intact" true
         (Yojson.Safe.Util.member "messages" value = messages)
   | _ -> Alcotest.fail "complete import body expected"
+
+let workspace_location_preflight () =
+  let source, target, request, requests, _ =
+    mock ~target_location:"/other-workspace" ()
+  in
+  code "transfer_invalid_input"
+    (T.transfer ~request ~source ~target ~session_id:id);
+  Alcotest.(check int) "stateless refusal before any request" 0
+    (List.length !requests);
+  let receipt_directory =
+    Test_scratch.private_directory "mesh-opencode-location-" in
+  Fun.protect
+    ~finally:(fun () -> Unix.rmdir receipt_directory)
+    (fun () ->
+      code "transfer_invalid_input"
+        (T.fork_transfer ~request ~source ~target ~parent_native_id:id
+           ~logical_id:"logical" ~epoch:1 ~source_profile:"alpha"
+           ~target_profile:"beta" ~receipt_directory
+           ~operation_id:"workspace-refusal");
+      Alcotest.(check int) "fork refusal before any request" 0
+        (List.length !requests);
+      Alcotest.(check int) "fork refusal before any receipt" 0
+        (Array.length (Sys.readdir receipt_directory)))
+
+let wrong_imported_workspace () =
+  let imported = ref false in
+  let source, target, request, requests, _ =
+    mock
+      ~before:(function
+        | `Target, `Get, route, _ when route = path && !imported ->
+            Some (Ok (200, export "/other-workspace"))
+        | `Target, `Post, "/api/experimental/session/import", _ ->
+            imported := true;
+            Some (Ok (200, data (info "/workspace")))
+        | _ -> None)
+      ()
+  in
+  code "transfer_uncertain"
+    (T.transfer ~request ~source ~target ~session_id:id);
+  Alcotest.(check int) "one committed import, no retry" 1
+    (List.length
+       (List.filter
+          (function
+            | `Target, `Post, "/api/experimental/session/import", _ -> true
+            | _ -> false)
+          !requests))
+
+let nested_workspace_subpath () =
+  let workspace = "/workspace/nested/project" in
+  let subpath = "nested/project" in
+  let nested_info subpath =
+    match info workspace with
+    | `Assoc fields -> obj (("subpath", s subpath) :: fields)
+    | _ -> Alcotest.fail "nested session info must be an object"
+  in
+  let run target_subpath expected =
+    let imported = ref false in
+    let source, target, request, requests, _ =
+      mock ~source_location:workspace ~target_location:workspace
+        ~before:(function
+          | side, `Get, route, _ when route = path ->
+              if side = `Target && not !imported then Some (Ok (404, obj []))
+              else
+                let observed = if side = `Source then subpath else target_subpath in
+                Some
+                  (Ok (200, data
+                    (obj [ ("info", nested_info observed); ("messages", messages) ])))
+          | `Target, `Post, "/api/experimental/session/import", _ ->
+              imported := true;
+              Some (Ok (200, data (nested_info target_subpath)))
+          | _ -> None)
+        ()
+    in
+    Alcotest.(check bool) "exact subpath comparison" true
+      (T.transfer ~request ~source ~target ~session_id:id = expected);
+    let bodies =
+      List.filter_map
+        (function
+          | `Target, `Post, "/api/experimental/session/import", Some body ->
+              Some (Yojson.Safe.from_string body)
+          | _ -> None)
+        !requests
+    in
+    match bodies with
+    | [ body ] ->
+        let member = Yojson.Safe.Util.member in
+        Alcotest.(check bool) "native location stays nested" true
+          (member "location" body = obj [ ("directory", s workspace) ]);
+        Alcotest.(check bool) "source subpath is not erased" true
+          (member "subpath" (member "info" body) = s subpath)
+    | _ -> Alcotest.fail "expected exactly one nested import"
+  in
+  run subpath (Ok { T.messages = 3 });
+  run "other/project" (Error "transfer_uncertain")
 
 let settled_busy_timestamp () =
   let imported = ref false in
@@ -1184,9 +1285,10 @@ let real_roundtrip () =
   match
     ( Sys.getenv_opt "MESH_OC_TRANSFER_BINARY",
       Sys.getenv_opt "MESH_OC_TRANSFER_SOURCE",
+      Sys.getenv_opt "MESH_OC_TRANSFER_WORKSPACE",
       Sys.getenv_opt "MESH_OC_TRANSFER_ID" )
   with
-  | Some binary, Some root, Some session_id ->
+  | Some binary, Some root, Some workspace, Some session_id ->
       let expected =
         match Sys.getenv_opt "MESH_OC_TRANSFER_EXPECTED" with
         | Some "4" -> 4
@@ -1201,7 +1303,7 @@ let real_roundtrip () =
           state = Filename.concat root "state";
           cache = Filename.concat root "cache";
           runtime = Filename.concat root "runtime";
-          location = Filename.concat root "workspace";
+          location = workspace;
         }
       in
       (* Both profile XDG trees live below one runner HOME. This is a fixture
@@ -1223,7 +1325,6 @@ let real_roundtrip () =
               target.state;
               target.cache;
               target.runtime;
-              target.location;
             ];
           let source = { (existing root) with T.home = runner_home } in
           let refused target =
@@ -1244,8 +1345,8 @@ let real_roundtrip () =
           | Error code -> Alcotest.fail code);
       Alcotest.(check bool) "target scratch removed" false
         (Sys.file_exists target_root)
-  | None, None, None -> Alcotest.skip ()
-  | _ -> Alcotest.fail "real native fixture requires all three opt-in variables"
+  | None, None, None, None -> Alcotest.skip ()
+  | _ -> Alcotest.fail "real native fixture requires all four opt-in variables"
 
 let () =
   Alcotest.run "opencode native transfer"
@@ -1273,5 +1374,11 @@ let () =
             real_roundtrip;
           Alcotest.test_case "fork lineage and uncertain receipts" `Quick
             fork_lineage;
+          Alcotest.test_case "identical workspace required before effects" `Quick
+            workspace_location_preflight;
+          Alcotest.test_case "post-import workspace drift is uncertain" `Quick
+            wrong_imported_workspace;
+           Alcotest.test_case "nested workspace checks exact subpath" `Quick
+             nested_workspace_subpath;
         ] );
     ]

@@ -263,8 +263,9 @@ test('native OCaml roundtrip removes only its target on success and refusal', {
   let provider: Awaited<ReturnType<typeof startFakeProvider>> | undefined;
   try {
     const root = path.join(scratch, 'source');
-    const work = path.join(root, 'workspace');
+    const work = path.join(scratch, 'workspace');
     fs.mkdirSync(work, {recursive: true, mode: 0o700});
+    fs.writeFileSync(path.join(work, 'sentinel'), 'workspace is not target scratch');
     provider = await startFakeProvider();
     host = await server(binary!, root, work, provider.port);
     const created = await host.api('POST', '/api/session', {location: {directory: work}});
@@ -285,13 +286,15 @@ test('native OCaml roundtrip removes only its target on success and refusal', {
     const run = (id: string) => execFileSync(ocamlTest!, ['test', 'adapter', '10'], {
       cwd: work, encoding: 'utf8', timeout: 30_000,
       env: {...process.env, MESH_OC_TRANSFER_BINARY: binary!, MESH_OC_TRANSFER_SOURCE: root,
-        MESH_OC_TRANSFER_ID: id, MESH_OC_TRANSFER_EXPECTED: '4'},
+        MESH_OC_TRANSFER_WORKSPACE: work, MESH_OC_TRANSFER_ID: id, MESH_OC_TRANSFER_EXPECTED: '4'},
     });
     run(sessionID);
-    assert.deepEqual(fs.readdirSync(scratch), ['source'], 'successful transfer removed its target');
+    assert.deepEqual(fs.readdirSync(scratch), ['source', 'workspace'], 'successful transfer removed only its target');
     assert.throws(() => run('ses_missingNativeSource'), 'refusal still cleans target');
-    assert.deepEqual(fs.readdirSync(scratch), ['source'], 'failed transfer removed its target');
+    assert.deepEqual(fs.readdirSync(scratch), ['source', 'workspace'], 'failed transfer removed only its target');
     assert.ok(fs.existsSync(path.join(root, 'data')), 'provided source remains untouched');
+    assert.equal(fs.readFileSync(path.join(work, 'sentinel'), 'utf8'), 'workspace is not target scratch',
+      'target cleanup cannot remove or alter the shared workspace');
   } finally {
     await host?.close();
     await provider?.close();
@@ -443,9 +446,11 @@ test('native completed summary remaps keepID on fork and imports; adapter refuse
         const active = await api(host, 'GET', '/api/session/active') as Record<string, unknown>;
         const result = await api(host, 'GET', `/api/experimental/session/${id}/export`) as Export;
         if (!active[id] && result.messages.at(-1)?.type === 'idle') return result;
-        assert.ok(Date.now() < deadline, 'scripted compaction became idle');
-        await new Promise(resolve => setTimeout(resolve, 50));
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        await new Promise(resolve => setTimeout(resolve, Math.min(50, remainingMs)));
       }
+      throw new Error(`scripted compaction session ${id} did not become idle`);
     };
     const root = await api(source, 'POST', '/api/session', {location: {directory: work}});
     const parentID = root.id as string;

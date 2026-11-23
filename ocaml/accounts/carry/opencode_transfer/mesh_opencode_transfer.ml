@@ -424,6 +424,7 @@ let fork_messages_match parent child =
 
 let transfer_with_fork ?notice ?expected_messages fork ~request ~source ~target ~session_id =
   if not (id_valid session_id) || source = target
+     || source.location <> target.location
   then Error "transfer_invalid_input"
   else
     let* () = version request source in
@@ -631,6 +632,7 @@ let fork_transfer ~request ~source ~target ~parent_native_id ~logical_id
     || source_profile = target_profile || epoch < 1
     || not (private_directory receipt_directory)
     || source = target
+    || source.location <> target.location
   then Error "transfer_invalid_input"
   else if receipt_taken receipt_directory operation_id then
     Error "transfer_uncertain"
@@ -1183,6 +1185,7 @@ let with_native ~binary ~source ~target operation =
       || executable.Unix.st_perm land 0o111 = 0
       || not (context_valid source && context_valid target)
       || not (disjoint source target)
+      || source.location <> target.location
     then Error "transfer_invalid_input"
     else
       with_server binary source (fun source_port source_password ->

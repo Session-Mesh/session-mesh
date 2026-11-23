@@ -7,7 +7,10 @@
     credential copy, whole database copy or live-session checkpoint. The caller
     must fence both accounts and provide validated, disjoint profile XDG roots,
     private operation runtime directories and workspace locations. HOME is the
-    runner's common HOME, not a per-profile root or an OS isolation boundary. *)
+    runner's common HOME, not a per-profile root or an OS isolation boundary.
+    The source and target must name the same exact workspace location: native
+    2.3.2 recomputes [subpath] on import, and this adapter does not verify
+    relocations. Profile XDG and operation runtime roots remain disjoint. *)
 
 type context = {
   home : string;
@@ -56,7 +59,8 @@ val transfer :
     entries refuse, while this stateless API continues to refuse native forks
     and revert history. Export/import omit historical instruction epochs.
     Export and context equality do not prove the next model input. Errors are
-    fixed path-free codes. *)
+    fixed path-free codes. Non-identical workspace locations refuse with
+    [transfer_invalid_input] before any request. *)
 
 val fork_transfer :
   request:request ->
@@ -85,7 +89,8 @@ val fork_transfer :
     Historical instruction epochs remain unsupported. The caller must verify
     its independently fenced epoch before any live use: these phase files are
     not an authoritative journal or context-revision CAS. This is not a
-    live-safe checkpoint or a switching coordinator. *)
+    live-safe checkpoint or a switching coordinator. Non-identical workspace
+    locations refuse before a fork or receipt. *)
 
 val run :
   binary:string ->
