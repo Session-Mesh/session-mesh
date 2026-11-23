@@ -99,6 +99,9 @@ async def test_close_after_routes_waits_for_an_active_route_handler(browser, mes
             self.closed = True
             try:
                 assert handler_finished.is_set()
+                # A fulfilled route can still have an in-flight page evaluation.
+                # Settle it before the fake context closes the real page.
+                await asyncio.wait_for(refresh, timeout=5)
             finally:
                 await context.close()
 
