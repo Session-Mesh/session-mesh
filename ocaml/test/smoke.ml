@@ -217,52 +217,12 @@ let test_tools () =
     | None -> []
   in
   Alcotest.(check (list string))
-    "board and static demo scene tools"
-    [
-      "whiteboard_get";
-      "whiteboard_replace";
-      "whiteboard_open";
-      "whiteboard_refresh";
-      "whiteboard_revisions";
-      "whiteboard_revision";
-      "whiteboard_revision_diff";
-      "whiteboard_latest_change";
-      "whiteboard_restore";
-      "demo_create";
-      "demo_update";
-      "demo_revisions";
-      "demo_open";
-      "demo_list";
-      "demo_create_named";
-      "demo_read_named";
-      "demo_update_named";
-      "demo_revisions_named";
-      "demo_restore_named";
-      "demo_open_named";
-      "agent_peers";
-      "agent_inbox";
-      "agent_message_read";
-      "agent_message_send";
-      "agent_message_reply";
-      "agent_message_ack";
-      "session_create_request";
-      "session_restart_request";
-      "session_action_status";
-      "session_accounts";
-      "session_account_switch_request";
-      "agent_guide_read";
-    ]
+    "Deck group tools and the standalone guide"
+    [ "whiteboard"; "demo"; "mail"; "session"; "agent_guide_read" ]
     names;
-  Alcotest.(check bool)
-    "agent read advertises owner approval retry protocol" true
-    (match list with
-    | Some response ->
-        contains_substring response "owner approval is pending"
-        && contains_substring response "yes, no, or always"
-    | None -> false);
   let invalid_open =
     Mcp_kit_stdio.serve_session_line session
-      {|{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"whiteboard_open","arguments":{"session":"another-session"}}}|}
+      {|{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"whiteboard","arguments":{"action":"open","arguments":{"session":"another-session"}}}}|}
   in
   let invalid_open_fields =
     match invalid_open with
@@ -298,7 +258,7 @@ let test_tools () =
     | None -> false);
   let invalid_demo_open =
     Mcp_kit_stdio.serve_session_line session
-      {|{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"demo_open","arguments":{"session":"another-session"}}}|}
+      {|{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"demo","arguments":{"action":"open","arguments":{"session":"another-session"}}}}|}
   in
   Alcotest.(check bool)
     "demo open rejects target-selection input before the network" true
@@ -306,7 +266,7 @@ let test_tools () =
     = Some (`Bool true));
   let invalid_latest_change =
     Mcp_kit_stdio.serve_session_line session
-      {|{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"whiteboard_latest_change","arguments":{"version":1}}}|}
+      {|{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"whiteboard","arguments":{"action":"latest_change","arguments":{"version":1}}}}|}
   in
   Alcotest.(check bool)
     "latest change rejects all input before the network" true
@@ -324,7 +284,7 @@ let test_tools () =
     | None -> false);
   let invalid_replace =
     Mcp_kit_stdio.serve_session_line session
-      {|{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"whiteboard_replace","arguments":{"document":{"elements":[],"appState":{},"files":{"asset":"x"},"version":0}}}}|}
+      {|{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"whiteboard","arguments":{"action":"replace","arguments":{"document":{"elements":[],"appState":{},"files":{"asset":"x"},"version":0}}}}}|}
   in
   Alcotest.(check bool)
     "invalid document does not reach the network" true
@@ -452,7 +412,7 @@ let test_agent_read_pending_requires_owner_without_disclosing_text () =
       let session = initialized_session port in
       let response =
         Mcp_kit_stdio.serve_session_line session
-          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agent_message_read","arguments":{"message_id":"message"}}}|}
+          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mail","arguments":{"action":"read","arguments":{"message_id":"message"}}}}|}
       in
       let rendered = Option.value ~default:"" response in
       Alcotest.(check bool)
@@ -502,17 +462,197 @@ let text_blocks fields =
         blocks
   | _ -> []
 
+let group_catalogs =
+  [
+    ( "whiteboard",
+      [
+        "get"; "replace"; "open"; "refresh"; "revisions"; "revision";
+        "revision_diff"; "latest_change"; "restore";
+      ] );
+    ( "demo",
+      [
+        "create"; "update"; "revisions"; "open"; "list"; "create_named";
+        "read_named"; "update_named"; "revisions_named"; "restore_named";
+        "open_named";
+      ] );
+    ("mail", [ "peers"; "inbox"; "read"; "send"; "reply"; "ack" ]);
+    ( "session",
+      [
+        "create_request"; "restart_request"; "action_status"; "accounts";
+        "account_switch_request";
+      ] );
+  ]
+
+(* Bind a socket that must never be contacted while inspecting or rejecting a
+   call. A connection would remain queued even if the caller times out. *)
+let with_unused_backend f =
+  let listener = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  Fun.protect
+    ~finally:(fun () -> Unix.close listener)
+    (fun () ->
+      Unix.bind listener (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
+      Unix.listen listener 32;
+      let port =
+        match Unix.getsockname listener with
+        | Unix.ADDR_INET (_, port) -> port
+        | Unix.ADDR_UNIX _ -> Alcotest.fail "expected internet socket"
+      in
+      f port;
+      let ready, _, _ = Unix.select [ listener ] [] [] 0. in
+      Alcotest.(check bool) "no backend connection" true (ready = []))
+
+let test_grouped_catalogs ~modern () =
+  with_unused_backend (fun port ->
+      let open Yojson.Safe.Util in
+      let config =
+        Result.get_ok
+          (Mesh_board_mcp.Config.make_for_test ~timeout:0.25 ~token:"token"
+             ~port ())
+      in
+      let session =
+        Mcp_kit.Server.create_session (Mesh_board_mcp.server config)
+      in
+      let serve = Mcp_kit_stdio.serve_session_line session in
+      if not modern then (
+        ignore
+          (serve
+             {|{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"codex","version":"0.160.0"}}}|});
+        ignore
+          (serve
+             {|{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}|}));
+      let metadata =
+        if modern then
+          [
+            ( "_meta",
+              `Assoc
+                [
+                  ("io.modelcontextprotocol/protocolVersion", `String "2026-07-28");
+                  ("io.modelcontextprotocol/clientCapabilities", `Assoc []);
+                ] );
+          ]
+        else []
+      in
+      let request method_ params =
+        Yojson.Safe.to_string
+          (`Assoc
+             [
+               ("jsonrpc", `String "2.0");
+               ("id", `Int 2);
+               ("method", `String method_);
+               ("params", `Assoc (params @ metadata));
+             ])
+        |> serve
+      in
+      let invoke name arguments =
+        request "tools/call" [ ("name", `String name); ("arguments", arguments) ]
+      in
+      let declarations =
+        request "tools/list" [] |> result_fields |> List.assoc "tools" |> to_list
+      in
+      let name declaration = member "name" declaration |> to_string in
+      Alcotest.(check (list string))
+        "only the groups and guide are public"
+        (List.map fst group_catalogs @ [ "agent_guide_read" ])
+        (List.map name declarations);
+      List.iter
+        (fun (group, actions) ->
+          let declaration = List.find (fun decl -> name decl = group) declarations in
+          let selectors =
+            declaration |> member "inputSchema" |> member "properties"
+            |> member "action" |> member "enum" |> to_list |> List.map to_string
+          in
+          Alcotest.(check (list string))
+            (group ^ " selectors") ("describe" :: actions) selectors;
+          let described =
+            invoke group (`Assoc [ ("action", `String "describe") ])
+            |> result_fields
+          in
+          Alcotest.(check bool)
+            (group ^ " describe succeeds") true
+            (List.assoc_opt "isError" described = Some (`Bool false));
+          Alcotest.(check bool)
+            "the reply uses the selected profile" modern
+            (List.assoc_opt "resultType" described = Some (`String "complete"));
+          let catalog =
+            match text_blocks described with
+            | [ text ] -> Yojson.Safe.from_string text
+            | _ -> Alcotest.fail "expected one catalog text block"
+          in
+          Alcotest.(check bool)
+            "text and structured catalogs agree" true
+            (List.assoc_opt "structuredContent" described = Some catalog);
+          let commands = member "commands" catalog |> to_list in
+          Alcotest.(check (list string))
+            (group ^ " catalog order") actions (List.map name commands);
+          List.iter
+            (fun command ->
+              Alcotest.(check bool)
+                "described operation retains a description and both schemas" true
+                (member "description" command |> to_string <> ""
+                && member "type" (member "inputSchema" command) = `String "object"
+                && member "type" (member "outputSchema" command) = `String "object");
+              if group = "mail" && name command = "read" then
+                Alcotest.(check bool)
+                  "mail read still documents consent" true
+                  (let description = member "description" command |> to_string in
+                   contains_substring description "owner approval is pending"
+                   && contains_substring description "yes, no, or always");
+              if group = "session" && name command = "account_switch_request" then
+                Alcotest.(check bool)
+                  "account switch retains its required account field" true
+                  (member "required" (member "inputSchema" command)
+                  = `List [ `String "account" ]))
+            commands;
+          let retired_name action =
+            match (group, action) with
+            | "mail", ("inbox" | "peers") -> "agent_" ^ action
+            | "mail", _ -> "agent_message_" ^ action
+            | _ -> group ^ "_" ^ action
+          in
+          List.iter
+            (fun action ->
+              let retired = retired_name action in
+              let response = invoke retired (`Assoc []) |> Option.get in
+              let error = member "error" (Yojson.Safe.from_string response) in
+              Alcotest.(check string) "retired tool rejected"
+                ("unknown tool: " ^ retired)
+                (member "message" error |> to_string))
+            actions)
+        group_catalogs;
+      List.iter
+        (fun (group, args) ->
+          Alcotest.(check bool)
+            ("rejects " ^ group ^ " " ^ Yojson.Safe.to_string args) true
+            (invoke group args |> result_fields |> List.assoc_opt "isError"
+            = Some (`Bool true)))
+        [
+          ("mail", `Assoc []);
+          ("mail", `Assoc [ ("action", `String "accounts") ]);
+          ("mail", `Assoc [ ("action", `String "inbox"); ("arguments", `Null) ]);
+          ("mail", `Assoc [ ("action", `String "inbox"); ("action", `String "inbox") ]);
+          ("session", `Assoc [ ("action", `String "account_switch_request") ]);
+          ( "session",
+            `Assoc
+              [ ("action", `String "account_switch_request"); ("account", `String "default") ] );
+          ( "demo",
+            `Assoc
+              [ ("action", `String "describe"); ("arguments", `Assoc [ ("scene", `Null) ]) ] );
+        ])
+
 (* OpenCode hands the model the text block only, so the inbox repeats its JSON
    there; that JSON is the metadata the mailbox lists, never a message text. *)
 let test_agent_inbox_text_carries_metadata_only () =
   let body =
     {|{"messages":[{"id":"message","conversation_id":"conversation","source":{"id":"alpha","created":1.0,"agent":"codex"},"kind":"message","created":3.0,"seq":1}]}|}
   in
-  with_http_response "200 OK" body (fun port ->
+  let verify arguments =
+    with_http_response "200 OK" body (fun port ->
       let session = initialized_session port in
       let response =
         Mcp_kit_stdio.serve_session_line session
-          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agent_inbox","arguments":{}}}|}
+          (Printf.sprintf
+             {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mail","arguments":%s}}|}
+             arguments)
       in
       match text_blocks (result_fields response) with
       | [ text ] ->
@@ -526,6 +666,8 @@ let test_agent_inbox_text_carries_metadata_only () =
             (contains_substring text {|"text"|})
       | blocks ->
           Alcotest.failf "expected one text block, got %d" (List.length blocks))
+  in
+  List.iter verify [ {|{"action":"inbox"}|}; {|{"action":"inbox","arguments":{}}|} ]
 
 let test_agent_read_pending_adds_no_json_to_the_text () =
   let body =
@@ -535,7 +677,7 @@ let test_agent_read_pending_adds_no_json_to_the_text () =
       let session = initialized_session port in
       let response =
         Mcp_kit_stdio.serve_session_line session
-          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agent_message_read","arguments":{"message_id":"message"}}}|}
+          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mail","arguments":{"action":"read","arguments":{"message_id":"message"}}}}|}
       in
       match text_blocks (result_fields response) with
       | [ text ] ->
@@ -554,7 +696,7 @@ let test_agent_read_opened_reports_untrusted_content () =
       let session = initialized_session port in
       let response =
         Mcp_kit_stdio.serve_session_line session
-          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agent_message_read","arguments":{"message_id":"message"}}}|}
+          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mail","arguments":{"action":"read","arguments":{"message_id":"message"}}}}|}
       in
       let fields = result_fields response in
       let summary =
@@ -579,7 +721,7 @@ let test_agent_read_missing_is_not_reported_as_a_whiteboard_failure () =
       let session = initialized_session port in
       let response =
         Mcp_kit_stdio.serve_session_line session
-          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"agent_message_read","arguments":{"message_id":"missing"}}}|}
+          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mail","arguments":{"action":"read","arguments":{"message_id":"missing"}}}}|}
       in
       let rendered = Option.value ~default:"" response in
       Alcotest.(check bool)
@@ -598,7 +740,7 @@ let test_named_demo_revisions_validate_exact_identity () =
       let session = initialized_session port in
       let response =
         Mcp_kit_stdio.serve_session_line session
-          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo_revisions_named","arguments":{"demo_id":"00000000000000000000000000000000"}}}|}
+          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo","arguments":{"action":"revisions_named","arguments":{"demo_id":"00000000000000000000000000000000"}}}}|}
       in
       Alcotest.(check bool)
         "mismatched response identity is refused" true
@@ -614,7 +756,7 @@ let test_named_demo_restore_validates_appended_revision () =
       let session = initialized_session port in
       let response =
         Mcp_kit_stdio.serve_session_line session
-          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo_restore_named","arguments":{"demo_id":"00000000000000000000000000000000","version":1,"expected_version":2}}}|}
+          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo","arguments":{"action":"restore_named","arguments":{"demo_id":"00000000000000000000000000000000","version":1,"expected_version":2}}}}|}
       in
       Alcotest.(check bool)
         "unsafe restored response is refused" true
@@ -638,7 +780,7 @@ let test_demo_v1_strict_union_schema () =
       let session = initialized_session port in
       let call =
         Printf.sprintf
-          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo_create","arguments":{"scene":%s}}}|}
+          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo","arguments":{"action":"create","arguments":{"scene":%s}}}}|}
           (v1_scene 0)
       in
       let response = Mcp_kit_stdio.serve_session_line session call in
@@ -650,7 +792,7 @@ let test_demo_v1_strict_union_schema () =
         | _ -> None));
   let session = initialized_session 7690 in
   let invalid =
-    {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo_create","arguments":{"scene":{"format":"mesh-scene-v1","version":0,"title":"Flow","theme":"dark","initial":"start","states":[{"id":"start","view":{"format":"mesh-view-v1","nodes":[]},"choices":[{"label":"Again","target":"start","onclick":"evil()"}]}]}}}}|}
+    {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo","arguments":{"action":"create","arguments":{"scene":{"format":"mesh-scene-v1","version":0,"title":"Flow","theme":"dark","initial":"start","states":[{"id":"start","view":{"format":"mesh-view-v1","nodes":[]},"choices":[{"label":"Again","target":"start","onclick":"evil()"}]}]}}}}}|}
   in
   let rendered =
     Mcp_kit_stdio.serve_session_line session invalid |> Option.value ~default:""
@@ -662,7 +804,7 @@ let test_demo_v1_strict_union_schema () =
       let session = initialized_session port in
       let call =
         Printf.sprintf
-          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo_create","arguments":{"scene":%s}}}|}
+          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"demo","arguments":{"action":"create","arguments":{"scene":%s}}}}|}
           (v2_scene 0)
       in
       let fields =
@@ -674,7 +816,7 @@ let test_demo_v1_strict_union_schema () =
         | Some (`Bool value) -> Some value
         | _ -> None));
   let invalid_v1_gear =
-    {|{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"demo_create","arguments":{"scene":{"format":"mesh-scene-v1","version":0,"title":"Legacy","theme":"dark","initial":"start","states":[{"id":"start","view":{"format":"mesh-view-v1","nodes":[{"type":"gear","angle":0}]},"choices":[]}]}}}}|}
+    {|{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"demo","arguments":{"action":"create","arguments":{"scene":{"format":"mesh-scene-v1","version":0,"title":"Legacy","theme":"dark","initial":"start","states":[{"id":"start","view":{"format":"mesh-view-v1","nodes":[{"type":"gear","angle":0}]},"choices":[]}]}}}}}|}
   in
   Alcotest.(check bool)
     "v1 gear remains refused" true
@@ -728,7 +870,7 @@ let whiteboard_get_error ~timeout port =
       ~finally:(fun () -> ignore (Unix.alarm 0))
       (fun () ->
         Mcp_kit_stdio.serve_session_line session
-          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whiteboard_get","arguments":{}}}|})
+          {|{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whiteboard","arguments":{"action":"get"}}}|})
   in
   let fields = result_fields response in
   Alcotest.(check bool)
@@ -766,6 +908,10 @@ let () =
       ( "mcp",
         [
           Alcotest.test_case "declares an MCP server" `Quick test_tools;
+          Alcotest.test_case "describes groups in legacy JSON text" `Quick
+            (test_grouped_catalogs ~modern:false);
+          Alcotest.test_case "describes groups in the modern profile" `Quick
+            (test_grouped_catalogs ~modern:true);
           Alcotest.test_case "keeps other legacy profiles modern" `Quick
             test_non_2025_06_legacy_profile;
           Alcotest.test_case "serves the generated compatibility matrix" `Quick

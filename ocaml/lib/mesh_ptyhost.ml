@@ -1149,7 +1149,7 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                 (* No digit: a menu that is open after all must not read one
                    as a choice. *)
                 let signal =
-                  "# Mesh: new message(s) waiting; check agent_inbox and ask \
+                  "# Mesh: new message(s) waiting; check mail.inbox and ask \
                    yes/no/always before reading."
                 in
                 s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);

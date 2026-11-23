@@ -168,7 +168,7 @@ describe('Vibe preset', () => {
     assert.match(token, /^ms1\./);
     assert.deepEqual(servers, [{name: 'mesh-board', transport: 'stdio', command: path.join(fakes, 'meshbin', 'mesh-board-mcp'),
       args: [], env: {MESH_CONF_DIR: mesh.confDir, MESH_PORT: String(mesh.port), MESH_SESSION_TOKEN: token},
-      disabled_tools: ['agent_message_send']}]);
+      disabled_tools: ['mail']}]);
     assert.ok(!lines('argv.log')[0].includes(token), 'the session token is not in the arguments');
     assert.ok(!lines('mcp.log')[0].includes(MARKER), 'no ambient credential is copied into the configuration');
     const mine = (await listing()).mesh.find(item => item.id === 'vb-main');
@@ -222,7 +222,7 @@ describe('Vibe preset', () => {
     assert.deepEqual(lines('input.log'), [], 'nothing is typed while a turn runs');
     await notify('vb-main', 'turn_completed');
     const typed = await until('the notice', () => lines('input.log').find(line => line.startsWith('# Mesh: new message')));
-    assert.match(typed, /agent_inbox/);
+    assert.match(typed, /mail\.inbox/);
     assert.ok(!typed.includes('hello'), 'the message text never reaches the terminal');
   });
 

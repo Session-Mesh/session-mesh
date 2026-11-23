@@ -5,7 +5,7 @@
 // and the REAL OpenCode 2 binary (MESH_OPENCODE_V2_BIN) with a scripted provider. Two sessions are started in a real
 // mesh (a fake opencode answering like 2.x stands in for the process in the terminal, which gives each its token and
 // the configuration the mesh injected); the real OpenCode then runs as each of them, with that token and that
-// configuration. Covered, as the protocol asks: a message sent from one agent, listed by `agent_inbox`, read only
+// configuration. Covered, as the protocol asks: a message sent from one agent, listed by `mail.inbox`, read only
 // after the user's consent, answered; all through OpenCode 2's single `execute` tool. Skipped without both binaries.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -94,7 +94,8 @@ function runAs(name: string, prompt: string) {
   const config = JSON.parse(lines('config.log')[index]);
   return oc.run(prompt, config, {MESH_SESSION: name, MESH_SESSION_TOKEN: lines('token.log')[index], MESH_PORT: String(mesh.port)});
 }
-const tool = (name: string, args: object) => `await tools["mesh-board"]["${name}"](${JSON.stringify(args)})`;
+const tool = (action: string, args?: object) =>
+  `await tools["mesh-board"]["mail"](${JSON.stringify(args ? {action, arguments: args} : {action})})`;
 const execute = (code: string) => `go [[execute: ${code}]]`;
 
 describe('the mailbox of OpenCode 2 through the real bridge', {skip}, () => {
@@ -104,7 +105,7 @@ describe('the mailbox of OpenCode 2 through the real bridge', {skip}, () => {
   test('the peers are listed through `execute`', async () => {
     await launch('mail-a');
     await launch('mail-b');
-    const result = await runAs('mail-b', execute('const r = await tools["mesh-board"]["agent_peers"](); console.log(JSON.stringify(r));'));
+    const result = await runAs('mail-b', execute(`const r = ${tool('peers')}; console.log(JSON.stringify(r));`));
     assert.equal(result.code, 0, result.stderr);
     const seen = result.texts.join('\n');
     assert.match(seen, /mail-a/, `the model saw the peer list: ${seen.slice(0, 400)}`);
@@ -112,11 +113,11 @@ describe('the mailbox of OpenCode 2 through the real bridge', {skip}, () => {
       .sessions.find(item => item.identity.id === 'mail-a')!.identity.created;
   });
 
-  test('a message sent from the other agent is listed by agent_inbox, and its text is not in the listing', async () => {
-    const sent = await runAs('mail-b', execute(`const r = ${tool('agent_message_send', {target: 'mail-a', target_created: created, kind: 'message', text: SECRET})}; console.log(JSON.stringify(r));`));
+  test('a message sent from the other agent is listed by mail.inbox, and its text is not in the listing', async () => {
+    const sent = await runAs('mail-b', execute(`const r = ${tool('send', {target: 'mail-a', target_created: created, kind: 'message', text: SECRET})}; console.log(JSON.stringify(r));`));
     assert.equal(sent.code, 0, sent.stderr);
     assert.match(sent.texts.join('\n'), /deposited|receipt|message_id|id/i, sent.texts.join('\n').slice(0, 300));
-    const listing = await runAs('mail-a', execute('const r = await tools["mesh-board"]["agent_inbox"](); console.log(JSON.stringify(r));'));
+    const listing = await runAs('mail-a', execute(`const r = ${tool('inbox')}; console.log(JSON.stringify(r));`));
     assert.equal(listing.code, 0, listing.stderr);
     const seen = listing.texts.join('\n');
     assert.match(seen, /mail-b/, `the model saw the inbox: ${seen.slice(0, 500)}`);
@@ -126,7 +127,7 @@ describe('the mailbox of OpenCode 2 through the real bridge', {skip}, () => {
   });
 
   test('reading raises the user\'s approval request; after "yes" the text is returned, and a reply works', async () => {
-    const pending = await runAs('mail-a', execute(`const r = ${tool('agent_message_read', {message_id: messageId})}; console.log(JSON.stringify(r));`));
+    const pending = await runAs('mail-a', execute(`const r = ${tool('read', {message_id: messageId})}; console.log(JSON.stringify(r));`));
     assert.equal(pending.code, 0, pending.stderr);
     assert.ok(!pending.texts.join('\n').includes(SECRET), 'no text while approval is pending');
     const consent = await until('the user\'s approval request', async () => {
@@ -138,11 +139,11 @@ describe('the mailbox of OpenCode 2 through the real bridge', {skip}, () => {
       headers: {Origin: mesh.base, Cookie: `mesh_auth=${await ownerCookie()}`, 'Content-Type': 'application/json'},
       body: JSON.stringify({decision: 'yes'})});
     assert.equal(decided.status, 200, await decided.clone().text());
-    const opened = await runAs('mail-a', execute(`const r = ${tool('agent_message_read', {message_id: messageId})}; console.log(JSON.stringify(r));`));
+    const opened = await runAs('mail-a', execute(`const r = ${tool('read', {message_id: messageId})}; console.log(JSON.stringify(r));`));
     assert.ok(opened.texts.join('\n').includes(SECRET), `the text after approval: ${opened.texts.join('\n').slice(0, 400)}`);
-    const reply = await runAs('mail-a', execute(`const r = ${tool('agent_message_reply', {message_id: messageId, kind: 'message', text: 'reply-from-a'})}; console.log(JSON.stringify(r));`));
+    const reply = await runAs('mail-a', execute(`const r = ${tool('reply', {message_id: messageId, kind: 'message', text: 'reply-from-a'})}; console.log(JSON.stringify(r));`));
     assert.equal(reply.code, 0, reply.stderr);
-    const back = await runAs('mail-b', execute('const r = await tools["mesh-board"]["agent_inbox"](); console.log(JSON.stringify(r));'));
+    const back = await runAs('mail-b', execute(`const r = ${tool('inbox')}; console.log(JSON.stringify(r));`));
     assert.match(back.texts.join('\n'), /mail-a/, 'the reply reached the sender\'s inbox');
   });
 

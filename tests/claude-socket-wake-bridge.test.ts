@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-// Without the board bridge (`mesh-board-mcp`) a Claude session has no `agent_inbox` tool, so a wake on its
+// Without the board bridge (`mesh-board-mcp`) a Claude session has no `mail.inbox` tool, so a wake on its
 // socket could never be confirmed and would stay "unconfirmed" for ever: the session is launched without a
 // socket and keeps the typed notice. A real server, a real PTY host and a fake Claude.
 // Nothing in this file writes outside its own scratch directories.

@@ -267,7 +267,7 @@ describe('Gemini preset', () => {
     assert.equal((await agentOf('gm-main'))?.status, 'busy');
     hook('gm-main', {hook_event_name: 'AfterAgent', prompt: 'x', prompt_response: 'y'});
     const typed = await until('the notice', () => lines('input.log').find(line => line.startsWith('# Mesh: new message')));
-    assert.match(typed, /agent_inbox/);
+    assert.match(typed, /mail\.inbox/);
   });
 
   test('after a PTY host restart the conversation is restored with --resume and the overlay again', async () => {

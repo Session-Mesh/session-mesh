@@ -194,4 +194,4 @@ def test_real_pi_connects_to_mesh_mcp_when_available(tmp_path, monkeypatch):
     servers = json.loads(result.stdout)["servers"]
     mesh = next(item for item in servers if item["name"] == "mesh-board")
     assert mesh["state"] == "connected"
-    assert {"agent_peers", "agent_inbox", "agent_message_send"} <= set(mesh["tools"])
+    assert {"whiteboard", "demo", "mail", "session", "agent_guide_read"} == set(mesh["tools"])

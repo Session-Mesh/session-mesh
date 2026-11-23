@@ -56,7 +56,7 @@ const approve = async (page: Page) => {
   await page.waitForTimeout(800);   // the prompt takes its keys only once it is focused
   await page.evaluate(() => active.send('\r'));
 };
-/** Wait for Vibe to be idle, answering the approval prompts that come up meanwhile (a wake notice makes it call agent_inbox). */
+/** Wait for Vibe to be idle, answering the approval prompts that come up meanwhile (a wake notice makes it call mail.inbox). */
 async function untilIdle(page: Page, name: string): Promise<void> {
   let quiet = 0;
   await until(`${name} to be idle`, async () => {
@@ -160,7 +160,7 @@ describe('real Vibe', {skip: absent}, () => {
     a = await launch('vb-a');
     b = await launch('vb-b');
     await settle(a);
-    await say(a, 'CALL agent_peers');
+    await say(a, 'CALL mail {"action":"peers"}');
     await approve(a);
     const result = await until('the peers result', async () => lines().find(line => line.role === 'tool' && line.text.includes('vb-b')))
       .catch(async (error: Error) => { throw new Error(`${error.message}\n${await screen(a)}\n${mesh.output.slice(-1500)}`); });
@@ -185,7 +185,7 @@ describe('real Vibe', {skip: absent}, () => {
 
   test('a message to an idle Vibe types a one-line notice, and its text is read only after the user agrees', async () => {
     const created = (await listing()).mesh.find(item => item.id === 'vb-a')!.created;
-    await say(b, `CALL agent_message_send {"target":"vb-a","target_created":${created},"kind":"message","text":"ping-xyz-123"}`);
+    await say(b, `CALL mail {"action":"send","arguments":{"target":"vb-a","target_created":${created},"kind":"message","text":"ping-xyz-123"}}`);
     await approve(b);
     await until('the notice typed into vb-a', async () => (await screen(a)).includes('# Mesh: new message') || undefined);
     await approve(a);
@@ -195,7 +195,7 @@ describe('real Vibe', {skip: absent}, () => {
     assert.ok(!inbox.text.includes('ping-xyz-123'), 'the inbox lists no message text');
     assert.ok(!(await screen(a)).includes('ping-xyz-123'), 'the message text never reached the terminal');
     await untilIdle(a, 'vb-a');
-    await say(a, `CALL agent_message_read {"message_id":"${inboxId}"}`);
+    await say(a, `CALL mail {"action":"read","arguments":{"message_id":"${inboxId}"}}`);
     await approve(a);
     const pending = await until('a consent request', async () => {
       const consent = await (await owner('/api/agent-mail/consent')).json() as {requests?: {id: string}[]};
@@ -204,7 +204,7 @@ describe('real Vibe', {skip: absent}, () => {
     const decision = await owner(`/api/agent-mail/consent/${pending.id}/decision`, {method: 'POST', body: JSON.stringify({decision: 'yes'})});
     assert.equal(decision.status, 200, await decision.clone().text());
     await untilIdle(a, 'vb-a');
-    await say(a, `CALL agent_message_read {"message_id":"${inboxId}"}`);
+    await say(a, `CALL mail {"action":"read","arguments":{"message_id":"${inboxId}"}}`);
     await approve(a);
     await until('the message text', async () => lines().find(line => line.role === 'tool' && line.text.includes('ping-xyz-123')));
   });
@@ -262,7 +262,7 @@ describe('real Vibe', {skip: absent}, () => {
     });
     assert.equal(after.type, 'vibe');
     await settle(page);
-    await say(page, 'CALL agent_peers');
+    await say(page, 'CALL mail {"action":"peers"}');
     await approve(page);
     await until('the board again after the restore', async () => lines().filter(line => line.role === 'tool' && line.text.includes('vb-b')).length >= 2 || undefined);
   });

@@ -152,7 +152,7 @@ OpenCode being the most recent, appears.
    permission.
 2. Check that the token is in the environment and nowhere else.
 3. Run the real agent on the test instance. The `mesh-board` tools must appear in the agent's tool
-   list and answer: call `agent_peers` and `agent_inbox`.
+   list and answer: call `mail.peers` and `mail.inbox`.
 
 **Known trap.** An agent may hand the model only the text of an MCP result and ignore its
 structured content. OpenCode does, and its inbox and peer lists then looked empty. The bridge
@@ -212,8 +212,8 @@ If the agent keeps no readable conversation at all (an encrypted store, no id), 
 ## Step 6: mailbox and wake
 
 1. Start two sessions on the test instance, one of them the agent. From the other, send a message.
-2. The agent must see it with `agent_inbox`. Reading it must raise the owner's approval request in
-   the page. After "yes", `agent_message_read` returns the text and a reply works.
+2. The agent must see it with `mail.inbox`. Reading it must raise the owner's approval request in
+   the page. After "yes", `mail.read` returns the text and a reply works.
 3. Wake: with the agent idle, send a message. A one-line notice must be typed at its prompt and
    submitted, with no message text in it. While the agent is working, nothing must be typed.
    Check this against the native PTY host (`MESH_PTYHOST_CMD`); `ptyhost.py` is only the client

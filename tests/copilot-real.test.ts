@@ -6,7 +6,7 @@
 // real mesh-board-mcp when MESH_BOARD_BRIDGE names it. Nothing of the caller's Copilot configuration is read or copied.
 // Skipped when there is no `copilot` on PATH or no bridge. A real PTY host (MESH_PTYHOST_CMD for the native one),
 // server.py and the real Mesh plugin hooks.
-// Covered: the board tools the model is offered, agent_peers / agent_inbox / owner-approved read through the real
+// Covered: the board tools the model is offered, mail.peers / mail.inbox / owner-approved read through the real
 // bridge, the state the hooks report from the real TUI (working, permission prompt, idle), the wake notice typed into
 // the real prompt, the restore after a PTY host restart (the earlier conversation is back), and a stricter user
 // setting (disabledMcpServers) that keeps the board out.
@@ -151,12 +151,14 @@ const toolMessage = (request: ChatRequest): string => {
   return typeof last?.content === 'string' ? last.content : JSON.stringify(last?.content ?? '');
 };
 const tool = (name: string, args: unknown): StaticReply => ({tool: name, args});
+const mail = (action: string, args?: object): StaticReply =>
+  tool('mesh-board-mail', args ? {action, arguments: args} : {action});
 
 describe('the real Copilot CLI in the mesh', {skip}, () => {
-  test('the model is offered the board tools; agent_peers and agent_inbox answer through the real bridge', async () => {
+  test('the model is offered the board tools; mail.peers and mail.inbox answer through the real bridge', async () => {
     await launch('rc-main');
     provider.reset();
-    provider.enqueue(tool('mesh-board-agent_peers', {}), {text: 'peers-done'});
+    provider.enqueue(mail('peers'), {text: 'peers-done'});
     await type('rc-main', 'list my peers');
     // MCP tools may ask for the user's permission first.
     const result = await until('the peers result sent back to the model', async () => {
@@ -165,7 +167,7 @@ describe('the real Copilot CLI in the mesh', {skip}, () => {
       return provider.requests.length >= 2 ? provider.requests.at(-1) : undefined;
     }, 60);
     const names = provider.toolNames();
-    for (const wanted of ['mesh-board-agent_peers', 'mesh-board-agent_inbox', 'mesh-board-agent_message_read']) {
+    for (const wanted of ['mesh-board-whiteboard', 'mesh-board-demo', 'mesh-board-mail', 'mesh-board-session', 'mesh-board-agent_guide_read']) {
       assert.ok(names.includes(wanted), `${wanted} is offered (${names.filter(n => n.startsWith('mesh')).join(',')})`);
     }
     // The bridge appends the JSON to the text block: the model sees the peers list, not only the summary.
@@ -196,8 +198,8 @@ describe('the real Copilot CLI in the mesh', {skip}, () => {
     const created = overview.sessions.find(item => item.identity.id === 'rc-main')!.identity.created;
     provider.reset();
     provider.enqueue(
-      tool('mesh-board-agent_inbox', {}),
-      request => tool('mesh-board-agent_message_read', {message_id: (/"id":"([^"]+)"/.exec(toolMessage(request)) ?? [])[1] ?? 'none'}),
+      mail('inbox'),
+      request => mail('read', {message_id: (/"id":"([^"]+)"/.exec(toolMessage(request)) ?? [])[1] ?? 'none'}),
       {text: 'asked-the-owner'});
     const sent = await fetch(`${mesh.base}/api/agent-mail/@self/send`, {method: 'POST', body: JSON.stringify({
       target: 'rc-main', target_created: created, kind: 'message', text: 'hello-from-peer'}),
@@ -222,7 +224,7 @@ describe('the real Copilot CLI in the mesh', {skip}, () => {
       headers: {Origin: mesh.base, Cookie: `mesh_auth=${await ownerCookie()}`, 'Content-Type': 'application/json'},
       body: JSON.stringify({decision: 'yes'})});
     assert.equal(decided.status, 200, await decided.clone().text());
-    provider.enqueue(request => tool('mesh-board-agent_message_read', {message_id: (/\"id\\*":\\*"([0-9a-f]{32})/.exec(JSON.stringify(request.messages)) ?? [])[1] ?? 'none'}), {text: 'read-it'});
+    provider.enqueue(request => mail('read', {message_id: (/\"id\\*":\\*"([0-9a-f]{32})/.exec(JSON.stringify(request.messages)) ?? [])[1] ?? 'none'}), {text: 'read-it'});
     await type('rc-main', 'the user agreed: read it');
     await until('the message text reaching the model', async () => {
       const prompt = plain((await open('rc-main')).output()).slice(-3000);

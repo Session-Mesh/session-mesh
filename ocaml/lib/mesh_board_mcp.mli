@@ -83,7 +83,8 @@ val valid_document : Yojson.Safe.t -> (unit, string) result
 (** Check the deliberately narrow v0 Excalidraw wire shape before a write. *)
 
 val server : Config.t -> Mcp_kit.Server.t
-(** Construct the stdio MCP server with board, explicit agent-mailbox and
-    static-demo-scene tools scoped to the inherited session. A negotiated
+(** Construct the stdio MCP server with whiteboard, demo, mail and session
+    groups scoped to the inherited session, and the standalone agent guide.
+    Each group exposes its subcommand declarations through [describe]. A negotiated
     [2025-06-18] client receives the standard 2025-06 response wire profile;
     other legacy clients retain the mcp-kit modern profile. *)

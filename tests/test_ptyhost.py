@@ -199,8 +199,8 @@ async def test_notify_if_is_exact_idempotent_and_requires_verified_foreground(da
                                  "command": "exec -a codex bash --noprofile --norc -i"}) == {"ok": True}
     await read_until(reader, b"codex-")
     assert await daemon.request(request) == {"ok": True, "accepted": True}
-    output = await read_until(reader, b"check agent_inbox")
-    assert b"check agent_inbox" in output
+    output = await read_until(reader, b"check mail.inbox")
+    assert b"check mail.inbox" in output
     assert await daemon.request(request) == {
         "ok": True, "accepted": False, "reason": "already_notified"}
     writer.write(ptyhost.frame(b"D", b"printf 'NO_''DUPLICATE\\n'\r"))
@@ -279,7 +279,7 @@ async def test_human_lease_racing_wake_never_splits_submitted_bytes(daemon):
     await writer.drain()
     if not first["ok"]:
         assert await daemon.request(request) == {"ok": True, "accepted": True}
-        output += await read_until(reader, b"check agent_inbox")
+        output += await read_until(reader, b"check mail.inbox")
     assert b"LEASE_RACE_INTACT" in output
 
 

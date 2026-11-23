@@ -20,7 +20,7 @@ session a socket only when Claude will deliver the line without asking
 (claudepolicy): otherwise the session keeps the typed notice.
 
 A line written on the socket is a wake only once the agent looks at its
-inbox afterwards, through the route of the ``agent_inbox`` tool
+inbox afterwards, through the route of the ``mail.inbox`` tool
 (Poster.note_inbox_read).  Claude may hold the line for the owner's approval in
 a dialog of its terminal, drop it, or the session may have moved to bypass mode
 since the launch.  Once a line has been written, Mesh types nothing in that
@@ -93,7 +93,7 @@ _version_cache = {}
 
 def wake_line(count):
     """The only text ever written on a socket: a fixed sentence and a number."""
-    text = (f"Mesh: {count} new message(s) in your inbox; check agent_inbox "
+    text = (f"Mesh: {count} new message(s) in your inbox; check mail.inbox "
             "and ask yes/no/always before reading.")
     return (json.dumps({"type": "user", "message": {"role": "user", "content": text}},
                        separators=(",", ":")) + "\n").encode()
@@ -217,7 +217,7 @@ def _has_socket_option(argv):
 def _has_board_entry(argv):
     """Whether the board bridge is installed and this command carries its ``--mcp-config`` entry.
 
-    The entry is what gives the session the ``agent_inbox`` tool: a command
+    The entry is what gives the session the ``mail.inbox`` tool: a command
     that lacks it (another mechanism built it, or the bridge was stripped)
     could never confirm a wake."""
     return agentmcp.board_available() and agentmcp.strip_board("claude", argv) != argv
@@ -228,7 +228,7 @@ def launch_command(command, nonce, directory, cwd, env):
 
     The socket is added only when this Claude accepts it, when Claude will
     deliver Mesh's line automatically (claudepolicy), when the board bridge is
-    installed (the session then has the ``agent_inbox`` tool that confirms the
+    installed (the session then has the ``mail.inbox`` tool that confirms the
     wake; without it every wake would stay unconfirmed), and when the directory
     is private.  Nothing here may fail a session's creation: any doubt, or
     any error, returns command.  Blocking (it may run ``claude --version`` and
@@ -240,7 +240,7 @@ def launch_command(command, nonce, directory, cwd, env):
         if not argv or argv[0] != "claude" or _has_socket_option(argv) or not supported(env):
             return command
         if not _has_board_entry(argv):
-            return command      # no agent_inbox tool: no wake could ever be confirmed
+            return command      # no mail.inbox tool: no wake could ever be confirmed
         if not claudepolicy.delivers_automatically(argv, cwd, env):
             return command
         path = socket_path(directory, nonce)
@@ -313,7 +313,7 @@ class Poster(LineStore):
         return self.has_line(request) or self._doubted((request["name"], request["created"]))
 
     def note_inbox_read(self, name, created):
-        """The agent of this incarnation looked at its inbox (the agent_inbox route)."""
+        """The agent of this incarnation looked at its inbox (the mail.inbox route)."""
         key = (name, created)
         now = self._clock()
         self._reads.pop(key, None)

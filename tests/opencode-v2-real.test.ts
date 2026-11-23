@@ -20,7 +20,7 @@ const oc = new RealOpencode();
 let listener: Awaited<ReturnType<typeof startListener>>;
 let stubDir: string;
 let stubLog: string;
-const PEERS = '[[execute: const peers = await tools["mesh-board"]["agent_peers"](); console.log(JSON.stringify(peers));]]';
+const PEERS = '[[execute: const peers = await tools["mesh-board"]["mail"]({action: "peers"}); console.log(JSON.stringify(peers));]]';
 
 before(async () => {
   if (skipReal) return;
@@ -126,7 +126,7 @@ describe('the injected configuration on the real OpenCode 2', {skip: skipReal}, 
 
   test('the user\'s permission rule on the bridge\'s tools survives: a denied tool is not called', async () => {
     reset();
-    oc.writeUserConfig({permissions: [{action: 'mesh-board_agent_peers', resource: '*', effect: 'deny'}]});
+    oc.writeUserConfig({permissions: [{action: 'mesh-board_mail', resource: '*', effect: 'deny'}]});
     const result = await oc.run(`list peers ${PEERS}`, injected(), mesh('tok-e'));
     assert.equal(result.code, 0, result.stderr);
     assert.ok(!result.texts.some(text => text.includes('zebra-peer-42')), 'the peer list was not returned');
@@ -187,7 +187,7 @@ describe('the state the plugin reports from the real events', {skip: skipReal}, 
 
   test('a permission request on the bridge\'s tool: waiting_permission, then working again once it is refused', async () => {
     reset();
-    oc.writeUserConfig({permissions: [{action: 'mesh-board_agent_peers', resource: '*', effect: 'ask'}]});
+    oc.writeUserConfig({permissions: [{action: 'mesh-board_mail', resource: '*', effect: 'ask'}]});
     const result = await oc.run(`list peers ${PEERS}`, injected(), mesh('tok-s3'));
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(stateTypes('tok-s3'), ['working', 'waiting_permission', 'working', 'done']);

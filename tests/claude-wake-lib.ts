@@ -14,7 +14,7 @@ import {nativePtyhost} from './helpers/native-ptyhost.ts';
 export const hostArgv = nativePtyhost;
 // An administrator's policy would change what Claude does with the line: not these tests' subject.
 export const MANAGED = ['/etc/claude-code', '/Library/Application Support/ClaudeCode'].filter(dir => fs.existsSync(dir));
-export const NOTICE = 'check agent_inbox';
+export const NOTICE = 'check mail.inbox';
 
 // `--version` has no side effect. Otherwise: record the arguments and the session token in the
 // working directory, listen on the socket the command line names, and log typed lines.
@@ -34,7 +34,7 @@ export function fakeClaude(): string {
 
 /** A directory holding an executable `claude` the PTY host recognises, and the PATH that finds it.
  *  MESH_BIN_DIR names a directory with a stub `mesh-board-mcp`: the server gives a session a socket
- *  only when the board bridge (the `agent_inbox` tool) is installed, and these tests must not depend on
+ *  only when the board bridge (the `mail.inbox` tool) is installed, and these tests must not depend on
  *  an OCaml build. The stub is never run: the fake Claude ignores `--mcp-config`. */
 export function installFakeClaude(): {bin: string; PATH: string; MESH_BIN_DIR: string} {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'skw-bin-'));

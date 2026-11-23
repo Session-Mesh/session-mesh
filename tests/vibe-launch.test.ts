@@ -75,7 +75,7 @@ describe('the board limits of the session folder', () => {
     const {cwd, conf} = fixture('limits', board(['agent_message_send'], 'disabled = true\n'));
     const launch = py(conf, LAUNCH(cwd));
     assert.equal(launch.servers.length, 1);
-    assert.deepEqual(launch.servers[0].disabled_tools, ['agent_message_send']);
+    assert.deepEqual(launch.servers[0].disabled_tools, ['mail']);
     assert.equal(launch.servers[0].disabled, true);
     assert.deepEqual(launch.words.slice(0, 1), ['--add-dir']);
     assert.match(launch.words[1], new RegExp(`^${conf}/mesh-vibe-hooks/vibe-[0-9a-f]{24}$`));
@@ -113,7 +113,7 @@ print(json.dumps({"off": parse({"disabled": True, "disabled_tools": []}), "plain
     const linked = fixture('linked');
     fs.writeFileSync(path.join(scratch, 'linked', 'dotfile.toml'), board(['agent_message_reply']));
     fs.symlinkSync(path.join(scratch, 'linked', 'dotfile.toml'), path.join(linked.cwd, '.vibe', 'config.toml'));
-    assert.deepEqual(py(linked.conf, LAUNCH(linked.cwd)).servers[0].disabled_tools, ['agent_message_reply']);
+    assert.deepEqual(py(linked.conf, LAUNCH(linked.cwd)).servers[0].disabled_tools, ['mail']);
   });
 
   test('an oversized file, undecodable bytes and too many disabled tools are refused with a message', () => {
@@ -169,7 +169,7 @@ print(json.dumps(result))`;
     const created = result.log.find((request: {op: string}) => request.op === 'new');
     assert.match(created.command, /--add-dir \S+\/mesh-vibe-hooks\/vibe-[0-9a-f]{24} --resume e98ebb44/);
     assert.match(created.command, /^\/bin\/sh -c 'export VIBE_MCP_SERVERS=/);
-    assert.match(created.command, /agent_message_send/, 'the folder\'s limits are in the restarted command');
+    assert.match(created.command, /"disabled_tools":\["mail"\]/, 'the folder\'s limits are in the restarted command');
     assert.equal(created.meta.vibe_hooks, created.command.match(/(vibe-[0-9a-f]{24})/)[1]);
     assert.equal(fs.existsSync(path.join(conf, 'mesh-vibe-hooks', created.meta.vibe_hooks, '.vibe', 'hooks.toml')), true);
   });

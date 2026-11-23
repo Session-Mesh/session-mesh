@@ -366,8 +366,8 @@ async def test_real_mcp_sends_authenticated_pi_message(client, mesh_listing, mai
         assert "result" in await receive()
         await send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
         await send({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-            "name": "agent_message_send", "arguments": {
-                "target": "beta", "target_created": 2.0, "kind": "task", "text": "hello from real mcp"}}})
+            "name": "mail", "arguments": {"action": "send", "arguments": {
+                "target": "beta", "target_created": 2.0, "kind": "task", "text": "hello from real mcp"}}}})
         response = await receive()
         assert not response.get("result", {}).get("isError", True), response
         inbox = await client.get("/api/agent-mail/@self/inbox", headers=claude)

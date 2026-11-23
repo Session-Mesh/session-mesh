@@ -1,5 +1,5 @@
 // A stand-in for the board bridge (mesh-board-mcp), for the real-OpenCode tests: a stdio MCP server with one
-// tool, agent_peers, whose answer has the peer in structuredContent only. Every request, and the Mesh variables
+// tool, mail, whose peers action answers with the peer in structuredContent only. Every request, and the Mesh variables
 // of its environment, are appended to the file named by STUB_LOG, so a test sees which process started the
 // bridge, with which token, and which tools were called.
 import fs from 'node:fs';
@@ -18,9 +18,15 @@ readline.createInterface({input: process.stdin}).on('line', (line) => {
     send({jsonrpc: '2.0', id: message.id, result: {protocolVersion: message.params?.protocolVersion ?? '2025-06-18',
       capabilities: {tools: {}}, serverInfo: {name: 'fake-board', version: '0'}}});
   } else if (message.method === 'tools/list') {
-    send({jsonrpc: '2.0', id: message.id, result: {tools: [{name: 'agent_peers',
-      description: 'List the peer agents of this session.', inputSchema: {type: 'object', properties: {}}}]}});
+    send({jsonrpc: '2.0', id: message.id, result: {tools: [{name: 'mail',
+      description: 'List the peer agents of this session.',
+      inputSchema: {type: 'object', required: ['action'], properties: {action: {type: 'string', enum: ['peers']}}}}]}});
   } else if (message.method === 'tools/call') {
+    if (message.params?.name !== 'mail' || message.params.arguments?.action !== 'peers') {
+      send({jsonrpc: '2.0', id: message.id, result: {isError: true,
+        content: [{type: 'text', text: 'Expected the peers action of mail.'}]}});
+      return;
+    }
     send({jsonrpc: '2.0', id: message.id, result: {content: [{type: 'text', text: 'Peers listed: see structured result.'}],
       structuredContent: {peers: [{name: 'zebra-peer-42'}]}}});
   } else if (message.id !== undefined) {

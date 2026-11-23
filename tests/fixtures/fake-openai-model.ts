@@ -1,7 +1,8 @@
 // A scripted OpenAI-compatible chat endpoint standing in for a model, for tests that run a real agent CLI.
 // Usage: node --experimental-strip-types fake-openai-model.ts <port> <request log>
-// The last user text decides the reply: "CALL <tool> [json arguments]" calls that tool (an agent_* function of the
-// mesh-board MCP server goes through Vibe's run_typescript sandbox, the only way Vibe 3.1 offers MCP tools), a Mesh wake notice calls agent_inbox, anything else is acknowledged.
+// The last user text decides the reply: "CALL <tool> [json arguments]" calls that tool.
+// Mail actions go through Vibe's run_typescript sandbox when the model sees only that
+// tool. A Mesh wake notice calls mail.inbox. Anything else is acknowledged.
 // After a tool result it answers "RESULT: <start of the result>". Every request is appended to the log.
 import fs from 'node:fs';
 import http from 'node:http';
@@ -34,15 +35,17 @@ http.createServer((request, response) => {
     if (last.role === 'tool') reply = `RESULT: ${textOf(last.content).slice(0, 600)}`;
     else {
       const user = textOf(last.content);
-      const wanted = /CALL (\S+)(?: (\{.*\}))?/s.exec(user)?.[1] ?? (user.includes('# Mesh: new message') ? 'agent_inbox' : null);
+      const requested = /CALL (\S+)(?: (\{.*\}))?/s.exec(user);
+      const wake = !requested && user.includes('# Mesh: new message');
+      const wanted = requested?.[1] ?? (wake ? 'mail' : null);
       if (wanted === null) reply = `ACK ${user.slice(0, 120)}`;
       else {
         const name = names.find(candidate => candidate === wanted);
-        const args = /CALL \S+ (\{.*\})/s.exec(user)?.[1] ?? '{}';
+        const args = requested?.[2] ?? (wake ? '{"action":"inbox"}' : '{}');
         if (name) call = {name, args};
-        else if (wanted.startsWith('agent_') && names.includes('run_typescript')) {
+        else if (wanted === 'mail' && names.includes('run_typescript')) {
           // Vibe reaches MCP servers through its sandbox: tools.<mcp_server>.<function>(arguments).
-          const code = `async function main() { return await tools.mcp_mesh_board.${wanted}(${args}); }`;
+          const code = `async function main() { return await tools.mcp_mesh_board.mail(${args}); }`;
           call = {name: 'run_typescript', args: JSON.stringify({code})};
         } else reply = `NOTOOL ${wanted} among ${names.join(',')}`;
       }

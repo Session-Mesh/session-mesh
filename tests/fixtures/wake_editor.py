@@ -28,7 +28,7 @@ def main():
             enter = pending.index(13)
             body = bytes(pending[:enter])
             if (last_text is not None and now - last_text >= 0.1
-                    and body.startswith(b"# Mesh:") and b"agent_inbox" in body):
+                    and body.startswith(b"# Mesh:") and b"mail.inbox" in body):
                 os.write(1, b"WAKE_SUBMITTED\r\n")
             del pending[:enter + 1]
 

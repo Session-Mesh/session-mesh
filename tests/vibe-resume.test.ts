@@ -118,7 +118,7 @@ print(json.dumps({"row": {f.value: s.value for f, s in agentcap.MATRIX["vibe"].i
     }
   });
 
-  test('what the user restricts on the board (user and project configuration) is repeated in the entry', () => {
+  test('user and project denials of retired Deck tools restrict their groups', () => {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'vibe-limits-'));
     try {
       const home = path.join(scratch, 'vibe-home');
@@ -130,27 +130,32 @@ print(json.dumps({"row": {f.value: s.value for f, s in agentcap.MATRIX["vibe"].i
 name = "mesh-board"
 transport = "stdio"
 command = "/bin/true"
-disabled_tools = ["agent_message_send"]
+disabled_tools = ["agent_message_send", "demo", "agent_guide_read", "agent_future"]
 
 [[mcp_servers]]
-name = "other"
+name = "mesh-work"
 transport = "stdio"
 command = "/bin/true"
 disabled = true
+disabled_tools = ["agent_message_send"]
 `);
       fs.writeFileSync(path.join(project, '.vibe', 'config.toml'), `
 [[mcp_servers]]
 name = "mesh-board"
 transport = "stdio"
 command = "/bin/true"
-disabled_tools = ["agent_peers", 7]
+disabled_tools = ["agent_peers", "whiteboard_replace", "session_restart_request", 7]
 `);
-      const limits = (cwd: string, extra: NodeJS.ProcessEnv) => python(
-        `import json, agentmcp; print(json.dumps(agentmcp.vibe_user_limits(${JSON.stringify(cwd)})))`, extra);
-      assert.deepEqual(limits(project, {VIBE_HOME: home}), {disabled: false, disabled_tools: ['agent_message_send', 'agent_peers']});
+      const limits = (cwd: string, extra: NodeJS.ProcessEnv, name = 'mesh-board') => python(
+        `import json, agentmcp; print(json.dumps(agentmcp.vibe_user_limits(${JSON.stringify(cwd)}, name=${JSON.stringify(name)})))`, extra);
+      assert.deepEqual(limits(project, {VIBE_HOME: home}), {disabled: false,
+        disabled_tools: ['agent_future', 'agent_guide_read', 'demo', 'mail', 'session', 'whiteboard']});
+      assert.deepEqual(limits(project, {VIBE_HOME: home}, 'mesh-work'),
+        {disabled: true, disabled_tools: ['agent_message_send']});
       fs.appendFileSync(path.join(home, 'config.toml'), '\n[[mcp_servers]]\nname = "mesh-board"\ndisabled = true\n');
       // `disabled` set by any entry of that name counts; the project here has no configuration of its own.
-      assert.deepEqual(limits(scratch, {VIBE_HOME: home}), {disabled: true, disabled_tools: ['agent_message_send']});
+      assert.deepEqual(limits(scratch, {VIBE_HOME: home}), {disabled: true,
+        disabled_tools: ['agent_future', 'agent_guide_read', 'demo', 'mail']});
       assert.deepEqual(limits(scratch, {VIBE_HOME: path.join(scratch, 'absent')}), {disabled: false, disabled_tools: []});
     } finally {
       fs.rmSync(scratch, {recursive: true, force: true});

@@ -22,7 +22,7 @@ import {ptyhostArgv} from './ptyhost-command.ts';
 import {attach, encode, request, waitFor} from './ptyhost-wire-lib.ts';
 
 const HOST_ARGV = ptyhostArgv();
-const NOTICE = 'check agent_inbox';
+const NOTICE = 'check mail.inbox';
 
 const hosts: ChildProcess[] = [];
 const scratches: string[] = [];
@@ -151,7 +151,7 @@ describe('PTY host: the Enter of a notice is withdrawn during its delay', () => 
     await pause(200);
     assert.deepEqual(await wake(), {ok: true, accepted: true});
     await waitFor('the notice submitted', 5000, () => lines().length === 2);
-    assert.match(lines()[1], /^# Mesh: new message\(s\) waiting; check agent_inbox/);
+    assert.match(lines()[1], /^# Mesh: new message\(s\) waiting; check mail\.inbox/);
     terminal.close();
   });
 
@@ -191,7 +191,7 @@ describe('PTY host: the Enter of a notice is withdrawn during its delay', () => 
     terminal.send('D', Buffer.from(reports.join(''), 'latin1'));
     await pause(700);
     const notice = received().slice(0, received().indexOf(END) + END.length);
-    assert.match(notice, /^# Mesh: new message\(s\) waiting; check agent_inbox .*before reading\.$/);
+    assert.match(notice, /^# Mesh: new message\(s\) waiting; check mail\.inbox .*before reading\.$/);
     const tail = received().slice(notice.length);
     assert.equal(tail.indexOf('\r'), tail.length - reports.join('').length * 2 - 1, JSON.stringify(tail));
     assert.equal(tail.endsWith('\r' + reports.join('') + reports.join('')), true, 'the Enter, then the reports unchanged');

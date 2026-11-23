@@ -243,7 +243,14 @@ try {
   mcp.stdin.write(JSON.stringify({jsonrpc: '2.0', method: 'notifications/initialized'}) + '\n');
   mcp.stdin.write(JSON.stringify({jsonrpc: '2.0', id: 2, method: 'tools/list', params: {}}) + '\n');
   const listed = await until('MCP tools', async () => replies.find(reply => reply.id === 2));
-  assert.ok(listed.result?.tools?.some(tool => tool.name === 'agent_inbox'), JSON.stringify(listed));
+  assert.deepEqual(listed.result?.tools?.map(tool => tool.name).sort(),
+    ['agent_guide_read', 'demo', 'mail', 'session', 'whiteboard'], JSON.stringify(listed));
+  mcp.stdin.write(JSON.stringify({jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+    name: 'mail', arguments: {action: 'describe'},
+  }}) + '\n');
+  const described = await until('MCP mail catalogue', async () => replies.find(reply => reply.id === 3));
+  const catalogue = JSON.parse(described.result.content[0].text);
+  assert.ok(catalogue.commands.some(command => command.name === 'inbox'), JSON.stringify(described));
   console.log(JSON.stringify({ok: true, platform: process.platform, arch: process.arch,
     http: true, nativePty: true, projectObservation: true, rosterObservation: rosterSources.length > 0,
     workRead: true, sessionCredential: true, mcpInitialize: true, mcpTools: listed.result.tools.length}));
