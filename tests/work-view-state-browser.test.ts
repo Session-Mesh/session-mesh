@@ -858,10 +858,11 @@ describe('the Projects view comes back as it was left', { skip }, () => {
       [...task(taskId, `Stale answer ${width}`, 59, 'P3'), question('2026-11-08T09:59:00Z', taskId, questionId)]
         .map(event => JSON.stringify(event)).join('\n') + '\n');
     const page = await signIn(width, []);
-    let release!: () => void, releaseLater!: () => void, observed!: () => void, held = false, oldReleased = false;
+    let release!: () => void, releaseLater!: () => void, observed!: () => void, observedNext!: () => void, held = false, oldReleased = false;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const later = new Promise<void>(resolve => { releaseLater = resolve; });
     const pending = new Promise<void>(resolve => { observed = resolve; });
+    const nextPoll = new Promise<void>(resolve => { observedNext = resolve; });
     try {
       await toProjects(page, width < 600);
       await page.locator('.work-overview-product[data-product="relay"]').click();
@@ -870,7 +871,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
       await page.route('**/api/work/v1', async route => {
         if (JSON.parse(route.request().postData() ?? '{}').op !== 'project') return route.continue();
-        if (oldReleased) { await later; return route.continue(); }
+        if (oldReleased) { observedNext(); await later; return route.continue(); }
         if (held) return route.continue();
         held = true;
         const response = await route.fetch();
@@ -878,6 +879,8 @@ describe('the Projects view comes back as it was left', { skip }, () => {
         await gate;
         await route.fulfill({ response });
       });
+      fs.appendFileSync(path.join(scratch, 'tracker', 'events', '2026-11.hostq.jsonl'),
+        JSON.stringify({ ts: '2026-11-09T10:00:00Z', task: taskId, type: 'set', field: 'title', to: `Changed before answer ${width}` }) + '\n');
       await pending;
       await page.locator('#work-tab-questions').click();
       const field = tabField(page, questionId);
@@ -889,7 +892,8 @@ describe('the Projects view comes back as it was left', { skip }, () => {
       await page.waitForTimeout(6000);
       oldReleased = true;
       release();
-      await page.waitForTimeout(1000);
+      // The poll is serialized: the next project request proves the old response was processed.
+      await nextPoll;
       await page.locator('#work-tab-questions').click();
       assert.equal(await page.locator(`.work-question-answered[data-question-id="${questionId}"]`).count(), 1);
     } finally { release(); releaseLater(); await closePage(page); }
