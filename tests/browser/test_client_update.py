@@ -115,7 +115,8 @@ async def test_close_after_routes_waits_for_an_active_route_handler(browser, mes
         await asyncio.sleep(0)
         assert not closing_context.closed
         release_handler.set()
-        await asyncio.wait_for(close_task, timeout=5)
+        # Closing includes both the route drain and the separately bounded refresh.
+        await asyncio.wait_for(close_task, timeout=15)
         await asyncio.wait_for(refresh, timeout=5)
         assert handler_finished.is_set()
     finally:
