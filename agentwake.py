@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -241,6 +242,49 @@ def _valid_wake_binding(candidate):
 def _same_wake_binding(approved, observed):
     """Compare complete validated witnesses; this alone does not authenticate either."""
     return _valid_wake_binding(approved) and _valid_wake_binding(observed) and approved == observed
+
+
+def _codex_startup_context(pid, expected_start, *, proc_root=Path("/proc")):
+    """Observe an owned Linux process's initial home/runtime, not current in-process state.
+
+    This is not a wake authorization: the caller still needs authenticated foreground,
+    session and conversation identity, plus a host-side fence through the queue effect.
+    No current dispatcher consumes this experimental observation.
+    """
+    if (sys.platform != "linux" or type(pid) is not int or pid <= 0
+            or not isinstance(expected_start, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", expected_start)):
+        return None
+    folder = proc_root / str(pid)
+    selected = {b"HOME", b"CODEX_HOME", b"XDG_RUNTIME_DIR", b"OPENAI_API_KEY", b"CODEX_API_KEY",
+                b"CODEX_ACCESS_TOKEN", b"OPENAI_BASE_URL"}
+    try:
+        if folder.stat().st_uid != os.geteuid():
+            return None
+        def start_time():
+            return (folder / "stat").read_bytes().rsplit(b")", 1)[1].split()[19].decode("ascii")
+        if start_time() != expected_start:
+            return None
+        with (folder / "environ").open("rb") as handle:
+            raw = handle.read(2_000_001)
+        if len(raw) > 2_000_000 or start_time() != expected_start or folder.stat().st_uid != os.geteuid():
+            return None
+        values = {}
+        for part in raw.split(b"\0"):
+            key, separator, value = part.partition(b"=")
+            if separator and key in selected:
+                if key in values:
+                    return None
+                values[key] = value.decode("utf-8")
+        if any(values.get(key) for key in (b"OPENAI_API_KEY", b"CODEX_API_KEY", b"CODEX_ACCESS_TOKEN", b"OPENAI_BASE_URL")):
+            return None
+        home = values.get(b"CODEX_HOME") or os.path.join(values.get(b"HOME", ""), ".codex")
+        runtime = values.get(b"XDG_RUNTIME_DIR", "")
+        for value in (home, runtime):
+            if not os.path.isabs(value) or os.path.normpath(value) != value or len(value.encode("utf-8")) > 4096:
+                return None
+        return {"home": home, "runtime": runtime, "pid": pid, "start": expected_start}
+    except (OSError, UnicodeError, IndexError, ValueError):
+        return None
 
 
 def _queue_seconds():

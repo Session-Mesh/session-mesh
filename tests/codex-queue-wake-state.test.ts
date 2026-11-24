@@ -46,6 +46,51 @@ ${code}`], {encoding: 'utf8', env: {PATH: process.env.PATH, HOME: dir, TMPDIR: d
 const UNCONFIRMED = {ok: false, reason: 'unconfirmed'};
 const ACCEPTED = {ok: true, accepted: true};
 
+test('Linux startup context reads distinct synthetic process homes and refuses uncertain identity', {skip: process.platform !== 'linux'}, () => {
+  const result = scenario(`
+PROC = ROOT / "fake-proc"; PROC.mkdir()
+def add(pid, home, start):
+    folder = PROC / str(pid); folder.mkdir()
+    (folder / "stat").write_bytes(b"1 (codex) " + b" ".join([b"S"] * 19 + [start.encode()]))
+    (folder / "environ").write_bytes(("HOME=" + str(ROOT) + "\\0CODEX_HOME=" + str(home)
+        + "\\0XDG_RUNTIME_DIR=" + str(ROOT / "runtime") + "\\0OTHER=synthetic-secret\\0").encode())
+    return folder
+a = add(101, ROOT / "alpha", "100")
+b = add(102, ROOT / "beta", "200")
+first = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+second = agentwake._codex_startup_context(102, "200", proc_root=PROC)
+wrong_start = agentwake._codex_startup_context(101, "101", proc_root=PROC)
+env = (a / "environ").read_bytes()
+(a / "environ").write_bytes(env + b"CODEX_HOME=/substituted\\0")
+duplicate = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+(a / "environ").write_bytes(env + b"OPENAI_API_KEY=synthetic-secret\\0")
+override = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+(a / "environ").write_bytes(b"HOME=" + str(ROOT).encode() + b"\\0XDG_RUNTIME_DIR=" + str(ROOT / "runtime").encode() + b"\\0")
+default = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+(a / "environ").write_bytes(b"HOME=relative\\0XDG_RUNTIME_DIR=/tmp\\0")
+relative = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+(a / "environ").write_bytes(env)
+original_open = pathlib.Path.open
+def changing_stat(path, *args, **kwargs):
+    if path == a / "environ":
+        (a / "stat").write_bytes(b"1 (codex) " + b" ".join([b"S"] * 19 + [b"101"]))
+    return original_open(path, *args, **kwargs)
+pathlib.Path.open = changing_stat
+try:
+    changed = agentwake._codex_startup_context(101, "100", proc_root=PROC)
+finally:
+    pathlib.Path.open = original_open
+print(json.dumps({"first": first, "second": second, "default": default, "wrong": wrong_start,
+                  "duplicate": duplicate, "override": override, "relative": relative, "changed": changed}))
+`);
+  assert.notEqual(result.first.home, result.second.home);
+  assert.match(result.first.home, /\/alpha$/);
+  assert.match(result.second.home, /\/beta$/);
+  assert.match(result.default.home, /\/\.codex$/);
+  assert.deepEqual([result.wrong, result.duplicate, result.override, result.relative, result.changed], [null, null, null, null, null]);
+  assert.equal(JSON.stringify(result).includes('synthetic-secret'), false);
+});
+
 test('candidate wake bindings reject stale or malformed identity fields without activating dispatch', () => {
   const result = scenario(`
 binding = {"host": "42:123", "session": "one", "created": 12.0, "nonce": "a" * 32,
