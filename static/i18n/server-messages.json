@@ -930,5 +930,9 @@
   {
     "pattern": "^Launch options revision required$",
     "key": "server.optionsRevisionRequired"
+  },
+  {
+    "pattern": "^OpenCode 2 cannot use a model option on a new session$",
+    "key": "server.opencode2FreshModel"
   }
 ]

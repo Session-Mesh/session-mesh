@@ -640,7 +640,7 @@ def _opencode_resumed_id(words):
     return None
 
 
-async def _opencode_command(command, cwd="/", environ=None):
+async def _opencode_command(command, cwd="/", environ=None, *, fresh=False):
     """The command line of an OpenCode session and the notice it carries (None when supported).
 
     The per-session configuration (board server, Mesh event plugin) travels in the environment, and
@@ -668,6 +668,8 @@ async def _opencode_command(command, cwd="/", environ=None):
         config = agentmcp.opencode_config(reach=_mesh_reach_env())
         return f"env {agentmcp.OPENCODE_CONFIG_ENV}={shlex.quote(config)} {shlex.join(words)}", None
     if major == 2:
+        if fresh:
+            return await _opencode_v2_command(words, cwd, environ, fresh=True), None
         return await _opencode_v2_command(words, cwd, environ), None
     unreadable = major is None
     if any(word.split("=", 1)[0] in _OPENCODE_RESUME_ARGS for word in words):
@@ -677,10 +679,10 @@ async def _opencode_command(command, cwd="/", environ=None):
     return f"env -u MESH_SESSION_TOKEN {shlex.join(words)}", notice
 
 
-async def _opencode_v2_command(words, cwd, environ=None):
+async def _opencode_v2_command(words, cwd, environ=None, *, fresh=False):
     environ = dict(os.environ if environ is None else environ)
     try:
-        words = resumeargs.opencode2_command(words)
+        words = resumeargs.opencode2_command(words, fresh=fresh)
     except resumeargs.OpenCode2Refused as exc:
         raise web.HTTPConflict(text=str(exc)) from exc
     resumed = _opencode_resumed_id(words)
@@ -856,7 +858,7 @@ async def _send_new(request):
 
 async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, pi_runtime=None,
                       notice=None, vibe=None, opencode=None, exact=False, nonce=None, conversation=None,
-                      account=None, account_env=None):
+                      account=None, account_env=None, fresh=False):
     """Start a session. Every way to start one ends here ("New session", a
     conversation resumed from the history, a restored session, an agent moved
     in from another terminal, a restart), so workspace_roots is applied here.
@@ -886,7 +888,12 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
     if known_agent == "pi" and command:
         command = _pi_command(command, pi_runtime or await _pi_runtime())
     if known_agent == "opencode" and command:
-        command, notice = opencode or await _opencode_command(command, cwd)
+        if opencode:
+            command, notice = opencode
+        elif fresh:
+            command, notice = await _opencode_command(command, cwd, fresh=True)
+        else:
+            command, notice = await _opencode_command(command, cwd)
     if known_agent == "gemini" and command:
         command = await _gemini_command(command)
     if known_agent == "copilot" and command:
@@ -2776,7 +2783,8 @@ async def api_new(request):
         command = shlex.join(argv)
     name = await new_session(name or f"{Path(cwd).name}-{kind if kind != 'custom' else 'cmd'}",
                              cwd, command, agent if agent in RESUMABLE_AGENT_PRESETS else None,
-                             agent, conversation=conversation, account=account)
+                             agent, conversation=conversation, account=account,
+                             **({"fresh": True} if agent == "opencode" else {}))
     await _record_recent_folder(request, cwd)
     return web.json_response({"id": name})
 
@@ -4809,7 +4817,7 @@ async def _execute_session_action(item):
         name = await new_session(item["name"] or f"{Path(raw['cwd']).name}-{item['preset']}",
                                  raw["cwd"], shlex.join(argv),
                                  agent if agent in RESUMABLE_AGENT_PRESETS else None, agent,
-                                 conversation=conversation)
+                                 conversation=conversation, **({"fresh": True} if agent == "opencode" else {}))
         return {"id": name}
 
     described = await asyncio.to_thread(_describe_with_hooks, listed)

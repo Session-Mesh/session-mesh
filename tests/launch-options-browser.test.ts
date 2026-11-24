@@ -20,6 +20,8 @@ import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {ptyhostArgv} from './ptyhost-command.ts';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
+declare const newSubmitGeneration: number | null;
+
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const skip = !CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM is required' : false;
 
@@ -73,6 +75,8 @@ async function signedIn(width = 1440): Promise<{page: Page; problems: string[]}>
 }
 
 async function openNew(page: Page, preset: string): Promise<Page> {
+  const loaded = page.waitForResponse(response => response.url().endsWith('/api/config')
+    && response.request().method() === 'GET');
   await page.locator('#btn-new').click();
   await page.locator('#dlg-new[open]').waitFor();
   // The folder field is required: name one, as a person would (`data.home` is the default when the
@@ -81,6 +85,8 @@ async function openNew(page: Page, preset: string): Promise<Page> {
   await page.locator('#form-new input[name="cwd"]').fill(folder);
   // The radio itself is display:none (the label carries the style): click the label.
   await page.locator(`#form-new label:has(input[name="preset"][value="${preset}"])`).click();
+  const configuration = await (await loaded).json();
+  await page.waitForFunction('revision => launchOptionsRevision === revision', configuration.launch.agent_options_revision);
   return page;
 }
 
@@ -100,6 +106,47 @@ async function storeDefault(page: Page, agentOptions: Record<string, string>): P
       body: JSON.stringify({revision: launch.agent_options_revision, agent_options: wanted})});
     return saved.ok ? 'ok' : `save ${saved.status}`;
   }, {token: mesh.token(), agentOptions});
+}
+
+/** Hold one genuine response after the server handled it; always release on failure. */
+async function holdResponse(page: Page, pattern: string) {
+  let signalEntered!: () => void, release!: () => void, signalDone!: () => void;
+  const entered = new Promise<void>(resolve => { signalEntered = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  const done = new Promise<void>(resolve => { signalDone = resolve; });
+  let first = true, expired = false, failure: unknown, status: number | undefined;
+  const handler = async (route: import('playwright-core').Route) => {
+    if (!first) { await route.continue(); return; }
+    first = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const response = await route.fetch();
+      status = response.status();
+      signalEntered();
+      await Promise.race([released, new Promise<void>(resolve => {
+        timer = setTimeout(() => { expired = true; resolve(); }, 5000);
+      })]);
+      await route.fulfill({response});
+    } catch (error) {
+      failure = error;
+      signalEntered();
+      await route.abort().catch(() => undefined);
+    } finally {
+      clearTimeout(timer);
+      signalDone();
+    }
+  };
+  await page.route(pattern, handler);
+  return {async entered() {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([entered, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`response not reached: ${pattern}`)), 10_000);
+        })]);
+      } finally { clearTimeout(timer); }
+    }, release, status: () => status,
+    async settled() { await done; assert.equal(failure, undefined); assert.equal(expired, false, 'explicit release won'); },
+    async close() { release(); await page.unroute(pattern, handler); }};
 }
 
 describe('the Options field of New session', {skip}, () => {
@@ -132,6 +179,38 @@ describe('the Options field of New session', {skip}, () => {
     await page.locator('.pane').first().waitFor();
     assert.deepEqual(stored()?.options?.pi, ['-e', '/tmp/ext.mjs']);
     assert.deepEqual(problems, []);
+  });
+
+  test('a stale default can be saved after the token is entered again', async () => {
+    const {page, problems} = await signedIn();
+    const other = await signedIn();
+    assert.equal(await storeDefault(other.page, {pi: '-e /tmp/before-retry.mjs'}), 'ok');
+    await openNew(page, 'pi');
+    await page.locator('#new-options-stored').filter({hasText: '/tmp/before-retry.mjs'}).waitFor();
+    await page.locator('#form-new input[name="options"]').fill('-e /tmp/retry.mjs');
+    await page.locator('#form-new input[name="optionsDefault"]').check();
+    await page.locator('#dlg-new button[value="ok"]').click();
+    await page.locator('#new-elevation-row').waitFor({state: 'visible'});
+    assert.equal(await storeDefault(other.page, {pi: '-e /tmp/other.mjs'}), 'ok');
+    const previousError = await page.locator('#new-err').innerText();
+    await page.locator('#form-new input[name="masterToken"]').fill(mesh.token());
+    const stale = page.waitForResponse(response => response.url().endsWith('/api/config/launch-options')
+      && response.request().method() === 'POST');
+    await page.locator('#dlg-new button[value="ok"]').click();
+    const staleResponse = await stale;
+    assert.equal(staleResponse.status(), 409);
+    assert.equal((await staleResponse.json()).error, 'stale-revision');
+    await page.waitForFunction(previous => document.querySelector('#new-err')?.textContent !== previous, previousError);
+    assert.equal(await page.locator('#dlg-new[open]').count(), 1);
+    await page.locator('#form-new input[name="masterToken"]').fill(mesh.token());
+    const saved = page.waitForResponse(response => response.url().endsWith('/api/config/launch-options')
+      && response.request().method() === 'POST');
+    await page.locator('#dlg-new button[value="ok"]').click();
+    assert.equal((await saved).status(), 200);
+    await page.locator('#dlg-new[open]').waitFor({state: 'detached'});
+    assert.deepEqual(stored()?.options?.pi, ['-e', '/tmp/retry.mjs']);
+    assert.deepEqual(problems, []);
+    assert.deepEqual(other.problems, []);
   });
 
   test('shows the stored default beside the field and leaves the field and the box empty', async () => {
@@ -199,5 +278,98 @@ describe('the Options field of New session', {skip}, () => {
       release();
       await page.unroute('**/api/config').catch(() => undefined);
     }
+  });
+
+  for (const checked of [false, true]) {
+    test(`the default-save choice is captured at submit (initially ${checked})`, async () => {
+      const {page, problems} = await signedIn();
+      assert.equal(await storeDefault(page, {pi: ''}), 'ok'); // this context may save without another token
+      await openNew(page, 'pi');
+      await page.locator('#new-options-stored').filter({hasText: 'No stored default'}).waitFor();
+      await page.locator('#form-new input[name="options"]').fill('-e /tmp/submitted.mjs');
+      await page.locator('#form-new input[name="optionsDefault"]').setChecked(checked);
+      const held = await holdResponse(page, '**/api/new');
+      try {
+        await page.locator('#dlg-new button[value="ok"]').click();
+        await held.entered();
+        await page.locator('#form-new input[name="options"]').fill('-e /tmp/later.mjs');
+        await page.locator('#form-new input[name="optionsDefault"]').setChecked(!checked);
+        held.release();
+        await held.settled();
+        await page.locator('#dlg-new[open]').waitFor({state: 'detached'});
+        assert.deepEqual(stored()?.options?.pi, checked ? ['-e', '/tmp/submitted.mjs'] : undefined);
+        assert.deepEqual(problems, []);
+      } finally { await held.close(); }
+    });
+  }
+
+  for (const phase of ['create', 'saved', 'refused', 'elevating'] as const) {
+    test(`a late ${phase} response leaves a reopened dialog intact`, async () => {
+      const {page, problems} = await signedIn();
+      const other = await signedIn();
+      assert.equal(await storeDefault(phase === 'saved' ? page : other.page, {pi: ''}), 'ok');
+      await openNew(page, 'pi');
+      await page.locator('#new-options-stored').filter({hasText: 'No stored default'}).waitFor();
+      await page.locator('#form-new input[name="options"]').fill('-e /tmp/old-opening.mjs');
+      await page.locator('#form-new input[name="optionsDefault"]').check();
+      const posts: string[] = [];
+      page.on('request', request => { if (request.method() === 'POST') posts.push(new URL(request.url()).pathname); });
+      if (phase === 'elevating') {
+        await page.locator('#dlg-new button[value="ok"]').click();
+        await page.locator('#new-elevation-row').waitFor({state: 'visible'});
+        await page.locator('#form-new input[name="masterToken"]').fill(mesh.token());
+      }
+      const held = await holdResponse(page, phase === 'create' ? '**/api/new'
+        : phase === 'elevating' ? '**/api/config/elevate' : '**/api/config/launch-options');
+      try {
+        await page.locator('#dlg-new button[value="ok"]').click();
+        await held.entered();
+        await page.locator('#dlg-new button[value="cancel"], #dlg-new [data-close-dialog]').first().click();
+        await openNew(page, 'pi');
+        await page.locator('#new-options-stored').filter({hasText: phase === 'saved'
+          ? '/tmp/old-opening.mjs' : 'No stored default'}).waitFor();
+        await page.locator('#form-new input[name="options"]').fill('-e /tmp/new-draft.mjs');
+        held.release();
+        await held.settled();
+        assert.equal(held.status(), phase === 'refused' ? 403 : 200);
+        await page.waitForFunction(() => newSubmitGeneration === null);
+        assert.equal(await page.locator('#dlg-new[open]').count(), 1);
+        assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/new-draft.mjs');
+        assert.equal(await page.locator('#form-new input[name="optionsDefault"]').isChecked(), false);
+        assert.equal(await page.locator('#new-elevation-row').isVisible(), false);
+        assert.equal(await page.locator('#new-err').innerText(), '');
+        assert.equal(await page.locator('#dlg-new').getAttribute('data-pending-default'), null);
+        assert.equal(await page.locator('#form-new input[name="masterToken"]').inputValue(), '');
+        assert.equal(posts.filter(url => url === '/api/new').length, 1);
+        assert.equal(posts.filter(url => url === '/api/config/launch-options').length, phase === 'create' ? 0 : 1);
+        assert.deepEqual(problems, []);
+        assert.deepEqual(other.problems, []);
+      } finally { await held.close(); }
+    });
+  }
+
+  test('configuration from an earlier opening cannot replace the current hint or draft', async () => {
+    const {page, problems} = await signedIn();
+    const other = await signedIn();
+    assert.equal(await storeDefault(other.page, {pi: '-e /tmp/old-config.mjs'}), 'ok');
+    const held = await holdResponse(page, '**/api/config');
+    // Observe the actual exported opening promise, including its final configuration application.
+    const firstOpening = page.evaluate('openNew()');
+    try {
+      await held.entered();
+      await page.locator('#dlg-new button[value="cancel"], #dlg-new [data-close-dialog]').first().click();
+      assert.equal(await storeDefault(other.page, {pi: '-e /tmp/current-config.mjs'}), 'ok');
+      await openNew(page, 'pi');
+      await page.locator('#new-options-stored').filter({hasText: '/tmp/current-config.mjs'}).waitFor();
+      await page.locator('#form-new input[name="options"]').fill('-e /tmp/current-draft.mjs');
+      held.release();
+      await held.settled();
+      await firstOpening;
+      assert.match(await page.locator('#new-options-stored').innerText(), /current-config/);
+      assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '-e /tmp/current-draft.mjs');
+      assert.equal(await page.locator('#dlg-new[open]').count(), 1);
+      assert.deepEqual(problems, []);
+      assert.deepEqual(other.problems, []);
+    } finally { await held.close(); await firstOpening; }
   });
 });

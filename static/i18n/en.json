@@ -2197,6 +2197,7 @@
   "server.optionsEmptyArgument": "An option is empty: quote its value if it is meant to be empty.",
   "server.approvedOptionsUnavailable": "The approved launch options are unavailable. Request approval again.",
   "server.optionsRevisionRequired": "The launch options revision is required. Refresh the request and try again.",
+  "server.opencode2FreshModel": "OpenCode 2 cannot use a model option on a new session.",
   "new.optionsStored": "Stored default, applied first: {options}",
   "new.optionsStoredNone": "No stored default for {agent}.",
   "work.dep.preview": "Preview {id}",
