@@ -94,6 +94,52 @@ describe('native switch integration', {skip: process.platform !== 'linux' ? 'pro
     } finally { fs.rmSync(registry); }
   });
 
+  test('refused switch leaves three concurrent accounts and their homes unchanged', async () => {
+    const registry = installNativeProfiles();
+    try {
+      const sessions = [await codexSession('x-refuse-default'), await codexSession('x-refuse-work', 'work'),
+        await codexSession('x-refuse-travel', 'travel')];
+      const homes = [path.join(mesh.home, '.codex'), workHome, travelHome];
+      const snapshot = (root: string): [string, string][] => {
+        const visit = (dir: string): [string, string][] => fs.readdirSync(dir, {withFileTypes: true})
+          .sort((a, b) => a.name.localeCompare(b.name)).flatMap(entry => {
+            const file = path.join(dir, entry.name), relative = path.relative(root, file);
+            if (entry.isDirectory()) return [[relative, 'directory'] as [string, string], ...visit(file)];
+            assert.ok(entry.isFile(), `unexpected fixture entry ${relative}`);
+            return [[relative, fs.readFileSync(file).toString('base64')] as [string, string]];
+          });
+        return visit(root);
+      };
+      const observations = await Promise.all(sessions.map(async (session, index) => {
+        const row = (await listed(session.name))!;
+        const agentPid = (row.agent as {pid:number}).pid;
+        assert.ok(agentPid > 0);
+        const environment = fs.readFileSync(`/proc/${agentPid}/environ`, 'utf8').split('\0');
+        const effective = environment.find(item => item.startsWith('CODEX_HOME='))?.slice('CODEX_HOME='.length)
+          ?? path.join(mesh.home, '.codex');
+        assert.equal(effective, homes[index]);
+        return {row, agentPid, environment, transcript: fs.readFileSync(rolloutIn(homes[index]!, session.sid))};
+      }));
+      const homeContents = homes.map(snapshot);
+      const launchLog = fs.readFileSync(log, 'utf8');
+      const request = await requested(sessions[0]!, 'work');
+      const result = await decide(request, false);
+      assert.equal(result.state, 'rejected', JSON.stringify(result));
+      assert.equal(fs.readFileSync(log, 'utf8'), launchLog, 'no account was relaunched');
+      for (let index = 0; index < sessions.length; index++) {
+        const session = sessions[index]!, before = observations[index]!;
+        const row = (await listed(session.name))!;
+        assert.equal(row.pid, before.row.pid, 'same PTY shell');
+        assert.equal(row.created, before.row.created, 'same session incarnation');
+        assert.equal((row.agent as {pid:number}).pid, before.agentPid, 'same agent process');
+        assert.deepEqual(fs.readFileSync(`/proc/${before.agentPid}/environ`, 'utf8').split('\0'), before.environment);
+        assert.deepEqual(fs.readFileSync(rolloutIn(homes[index]!, session.sid)), before.transcript);
+        assert.deepEqual(snapshot(homes[index]!), homeContents[index], 'the account home contents did not change');
+      }
+      assert.equal(fs.existsSync(rolloutIn(workHome, sessions[0]!.sid)), false, 'no source transcript copied to target');
+    } finally { fs.rmSync(registry); }
+  });
+
   test('failed carry resumes default in place without affecting another account', async () => {
     const registry = installNativeProfiles();
     try {
