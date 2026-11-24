@@ -503,3 +503,27 @@ def test_large_legacy_wake_over_batch_limit_preserves_original_file(mailbox):
         agentmail.claim_wake(beta, [alpha, beta])
     assert mailbox.read_bytes() == original
     assert not list(mailbox.parent.glob(mailbox.name + ".corrupt*"))
+
+
+@pytest.mark.parametrize("wake_state", ["injected", "claimed"])
+def test_oversized_legacy_empty_completion_survives_two_loads(mailbox, wake_state):
+    alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
+    count = agentmail.MAX_INBOX + 8
+    messages = [{"id": f"{seq:032x}", "conversation_id": "a" * 32, "source": alpha,
+                 "target": beta, "kind": "message", "text": f"message {seq}",
+                 "created": float(seq + 4), "seq": seq} for seq in range(1, count + 1)]
+    wake = {"notification_id": "f" * 32, "target": beta, "from_seq": 1,
+            "through_seq": count, "count": count, "state": wake_state}
+    raw = {"version": 3, "next_seq": count + 1, "messages": messages, "wakes": [wake],
+           "consent_requests": [], "always_policies": []}
+    mailbox.parent.mkdir(parents=True)
+    mailbox.write_text(json.dumps(raw), encoding="utf-8")
+
+    first = agentmail._load()
+    assert first["messages"] == messages
+    completion, = first["wakes"]
+    assert completion["notification_id"] == wake["notification_id"]
+    assert completion["state"] == "injected" and completion["seqs"] == []
+    assert completion["count"] == agentmail.MAX_INBOX
+    assert agentmail._load() == first
+    assert not list(mailbox.parent.glob(mailbox.name + ".corrupt*"))
