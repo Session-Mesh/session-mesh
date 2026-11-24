@@ -418,9 +418,11 @@ for (const width of WIDTHS) {
         assert.equal(await draft.evaluate(node => node === document.activeElement),true);
         assert.equal(wasAborted,false,'the open preview remains alive while the draft blocks replacement');
         await draft.fill('');
-        await scope.locator('.work-detail-heading').focus();
+        const back = scope.locator(lone ? '.work-back' : '.work-detail-close');
+        await back.focus();
+        assert.equal(await back.evaluate(node => node === document.activeElement),true);
         await scope.locator('.work-detail-heading', {hasText:'Updated preview source'}).waitFor({timeout:90_000});
-        assert.equal(await scope.locator('.work-detail-heading').evaluate(node => node === document.activeElement),true);
+        assert.equal(await back.evaluate(node => node === document.activeElement),true);
         await aborted;
         assert.equal(previews,1,'replacement does not automatically reopen the old preview');
         await scope.locator('.work-dep-preview', {hasText:'Preview T-3c4d'}).locator('summary').click();
