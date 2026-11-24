@@ -275,6 +275,72 @@ format 4. Back up that file privately before upgrading if you may return to an o
 An older server sets the newer file aside instead of using it; do not restore a backup over
 the current file without first preserving any mail received since the upgrade.
 
+### Recovering a blocked legacy agent-mail migration
+
+A legacy mailbox migration can stop if a claimed wake covers more than 32 messages,
+or if splitting pending wakes would exceed the wake limit. The original mailbox is
+left in place. Do not edit the file or delete wakes: a claimed wake might already
+have been delivered.
+
+First inspect the affected notifications and **handle their messages manually**.
+Recovery marks the selected wake ranges as completed; it does not send them again.
+Overlapping parts of other pending ranges are also excluded from future wakes, while
+their remaining messages can still wake. Messages and existing permissions are
+preserved, but recovery cannot determine whether a previous wake was delivered.
+
+Use the same user, configuration directory and Python environment as the web server.
+For a release install, run `cd ~/.local/share/session-mesh/current/app` and use
+`../bin/mesh-python` for `python` below. For a source install, run from the checkout
+and use its configured Python. Set `MESH_CONF_DIR` to the server's value if it uses
+a non-default directory. Coordinate with other mailbox writers while inspecting and
+recovering. This makes a private, exclusive backup and prints its SHA-256 and wake
+IDs, states and ranges without printing message text:
+
+```sh
+python - <<'PY'
+import hashlib, json, os
+import agentmail
+
+with agentmail._locked():
+    data = agentmail.FILE.read_bytes()
+    mailbox = json.loads(data)
+    backup = agentmail.FILE.with_name("agent-mail.pre-recovery.json")
+    fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as output:
+        output.write(data)
+        output.flush()
+        os.fsync(output.fileno())
+    print("Private backup:", backup)
+    print("SHA-256:", hashlib.sha256(data).hexdigest())
+    for wake in mailbox.get("wakes", []):
+        print(wake.get("notification_id"), wake.get("state"), wake.get("target"),
+              wake.get("from_seq"), wake.get("through_seq"))
+PY
+```
+
+The mailbox and backup contain private message text; keep the backup private and do
+not publish it. If the backup already exists, choose a new name rather than
+overwriting it. Inspect it securely to identify the messages and target session for
+each selected range. After handling those ranges, copy the printed digest and selected
+notification IDs into these variables and run:
+
+```sh
+export MESH_RECOVERY_DIGEST='<printed SHA-256>'
+export MESH_RECOVERY_IDS='<notification-id>[,<notification-id>...]'
+python - <<'PY'
+import os, agentmail
+print(agentmail.recover_legacy_wakes(
+    notification_ids=os.environ["MESH_RECOVERY_IDS"].split(","),
+    expected_digest=os.environ["MESH_RECOVERY_DIGEST"],
+    acknowledge_manual_handling=True))
+PY
+```
+
+The digest is checked while holding the mailbox lock. If the mailbox changed, the
+selection is invalid, or another migration blocker remains, recovery fails without
+writing: inspect and back up the current file again before deciding what to do. Keep
+the backup until migration and message handling have been verified.
+
 ### Upgrading a source install
 
 ```sh
