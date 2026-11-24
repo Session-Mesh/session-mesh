@@ -3500,17 +3500,20 @@ function pinnedHtml(query) {
     }).join("")) + `</section>`;
 }
 
-// The operator's account alias a session runs with (accounts.json on the runner): its label, as text, never a colour alone.
-const accountLabel = (s) => (typeof s?.account === "string" && s.account ? String(s.account_label || s.account).slice(0, 24) : "");
+// An absent alias says only what Mesh recorded, not which OAuth account the agent actually uses.
+const accountLabel = (s) => (typeof s?.account === "string" && s.account ? String(s.account_label || s.account).slice(0, 24)
+  : (s?.account == null || s.account === "") && s?.kind === "mesh"
+    && ["claude", "codex"].includes(s.agent?.type || s.known_agent) ? t("list.accountDefault") : "");
+const accountTitle = (s, shown) => s?.account ? t("list.accountTitle", { label: shown }) : t("list.accountDefaultTitle");
 function accountBadgeHtml(s) {
   const shown = accountLabel(s);
-  return shown ? `<span class="account-badge" title="${esc(t("list.accountTitle", { label: shown }))}">${esc(shown)}</span>` : "";
+  return shown ? `<span class="account-badge" title="${esc(accountTitle(s, shown))}">${esc(shown)}</span>` : "";
 }
 function showAccountBadge(element, s) {
   const shown = accountLabel(s);
   element.hidden = !shown;
   element.textContent = shown;
-  element.title = shown ? t("list.accountTitle", { label: shown }) : "";
+  element.title = shown ? accountTitle(s, shown) : "";
 }
 
 function itemHtml(s, opts = {}) {

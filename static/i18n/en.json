@@ -429,6 +429,8 @@
   "link.openExternal": "Open in the external browser",
   "link.openedExternal": "opened in the external browser",
   "list.accountTitle": "Account: {label}",
+  "list.accountDefault": "Mesh default",
+  "list.accountDefaultTitle": "No Mesh account alias recorded; the active login is not verified.",
   "list.activeOrderUpdated": "The order of active sessions was updated.",
   "list.boardModified": "Whiteboard modified",
   "list.wakeUnconfirmed": "Wake not confirmed: the agent has not looked at its inbox",

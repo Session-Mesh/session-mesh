@@ -429,6 +429,8 @@
   "link.openExternal": "Ouvrir dans le navigateur externe",
   "link.openedExternal": "ouvert dans le navigateur externe",
   "list.accountTitle": "Compte : {label}",
+  "list.accountDefault": "Défaut Mesh",
+  "list.accountDefaultTitle": "Aucun alias de compte Mesh enregistré ; la connexion effective n’est pas vérifiée.",
   "list.activeOrderUpdated": "Le classement des sessions actives a été mis à jour.",
   "list.boardModified": "Whiteboard modifié",
   "list.wakeUnconfirmed": "Réveil non confirmé : l’agent n’a pas consulté sa boîte",
