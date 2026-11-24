@@ -1493,7 +1493,7 @@
   "mailbox.alreadyDecided": "This request was already decided elsewhere; the list was refreshed.",
   "mailbox.alreadyRevoked": "This permission was already revoked elsewhere; the list was refreshed.",
   "mailbox.requests": "Approval requests waiting",
-  "mailbox.requestLine": "“{target}” asks to read a message from “{source}” ({agent}), received {time}.",
+  "mailbox.requestLine": "Message from “{source}” ({agent}) to “{target}”, awaiting approval since {time}.",
   "mailbox.received": "Received",
   "mailbox.sent": "Sent",
   "mailbox.noneReceived": "No received message kept.",

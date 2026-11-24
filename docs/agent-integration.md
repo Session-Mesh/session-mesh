@@ -211,14 +211,21 @@ If the agent keeps no readable conversation at all (an encrypted store, no id), 
 
 ## Step 6: mailbox and wake
 
-1. Start two sessions on the test instance, one of them the agent. From the other, send a message.
-2. The agent must see it with `mail.inbox`. Reading it must raise the owner's approval request in
-   the page. After "yes", `mail.read` returns the text and a reply works.
-3. Wake: with the agent idle, send a message. A one-line notice must be typed at its prompt and
-   submitted, with no message text in it. While the agent is working, nothing must be typed.
-   Check this against the native PTY host (`MESH_PTYHOST_CMD`); `ptyhost.py` is only the client
-   module the web server uses to reach it.
-4. Check that the message text never reached the terminal.
+1. Start two sessions on the test instance, one of them the agent. Without standing permission
+   between them, send a message from the other session. The owner's approval request must appear
+   in Mesh before the recipient checks its inbox, and the recipient must not be woken yet.
+2. The recipient's `mail.inbox` must list metadata only, with `authorization_pending: true` on the
+   held entry. An explicit `mail.read` must return the existing pending request, not the text or
+   another request. Choose "Read this time" in Mesh. The agent can then read the text directly,
+   without a separate question in chat. Sending a reply must raise a new approval request unless
+   the reverse direction already has standing permission in Mesh.
+3. Wake: with the recipient idle, approve a message and check its wake mechanism, if supported.
+   For a typed wake, a one-line notice must be typed at the prompt and submitted, with no message
+   text in it. While the agent is working, nothing must be typed. Check this against the native
+   PTY host (`MESH_PTYHOST_CMD`); `ptyhost.py` is only the client module the web server uses to
+   reach it.
+4. Check that the message text was never injected into the terminal and that the agent does not
+   treat permission to read as permission to act on the message.
 
 ## Step 7: terminal
 

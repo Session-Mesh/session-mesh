@@ -436,9 +436,9 @@ let test_agent_read_pending_requires_owner_without_disclosing_text () =
         | _ -> ""
       in
       Alcotest.(check bool)
-        "agent is told to await owner approval" true
+        "agent is told that approval is pending in Mesh" true
         (String.length summary > 0
-        && String.starts_with ~prefix:"owner approval is pending"
+        && String.starts_with ~prefix:"owner approval is pending in mesh"
              (String.lowercase_ascii summary));
       let structured = List.assoc_opt "structuredContent" fields in
       Alcotest.(check bool)
@@ -606,8 +606,9 @@ let test_grouped_catalogs ~modern () =
                 Alcotest.(check bool)
                   "mail read still documents consent" true
                   (let description = member "description" command |> to_string in
-                   contains_substring description "owner approval is pending"
-                   && contains_substring description "yes, no, or always");
+                   contains_substring description
+                     "owner approval is pending in Mesh"
+                   && contains_substring description "do not ask separately in chat");
               if group = "session" && name command = "account_switch_request" then
                 Alcotest.(check bool)
                   "account switch retains its required account field" true

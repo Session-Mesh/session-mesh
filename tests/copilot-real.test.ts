@@ -11,6 +11,7 @@
 // the real prompt, the restore after a PTY host restart (the earlier conversation is back), and a stricter user
 // setting (disabledMcpServers) that keeps the board out.
 import assert from 'node:assert/strict';
+import {approveMail} from './helpers/agent-mail-mesh.ts';
 import {type ChildProcess, execFileSync, spawn} from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -200,32 +201,18 @@ describe('the real Copilot CLI in the mesh', {skip}, () => {
     provider.enqueue(
       mail('inbox'),
       request => mail('read', {message_id: (/"id":"([^"]+)"/.exec(toolMessage(request)) ?? [])[1] ?? 'none'}),
-      {text: 'asked-the-owner'});
+      {text: 'read-it'});
     const sent = await fetch(`${mesh.base}/api/agent-mail/@self/send`, {method: 'POST', body: JSON.stringify({
       target: 'rc-main', target_created: created, kind: 'message', text: 'hello-from-peer'}),
     headers: {Authorization: `MeshSession ${peerToken}`, 'Content-Type': 'application/json'}});
     assert.equal(sent.status, 200, await sent.clone().text());
+    await approveMail(mesh.base, `mesh_auth=${await ownerCookie()}`, sent);
     // No notice is ever typed into Copilot (it can enter autopilot without any change to its arguments, and what its
     // end-of-turn hook means there is unobserved): the message waits in the inbox until the user tells Copilot to look.
     await new Promise(resolve => setTimeout(resolve, 3000));
     assert.ok(!provider.requests.some(request => JSON.stringify(request.messages).includes('# Mesh: new message')),
       'no wake notice reached the model');
     await type('rc-main', 'check your inbox');
-    // The read asks for the user's consent; approve it, then the model gets the text on the next read.
-    const consent = await until('a consent request', async () => {
-      if (/Do you want/.test(plain((await open('rc-main')).output()).slice(-3000))) await approve('rc-main');
-      const data = await (await fetch(`${mesh.base}/api/agent-mail/consent`, {headers: {Origin: mesh.base, Cookie: `mesh_auth=${await ownerCookie()}`}})).json() as
-        {requests?: {id: string}[]};
-      return data.requests?.[0];
-    }, 25).catch(error => {
-      throw new Error(`${error.message}; tool results seen by the model: ${provider.requests.map(toolMessage).join(' | ').slice(-1500)}`);
-    });
-    const decided = await fetch(`${mesh.base}/api/agent-mail/consent/${consent.id}/decision`, {method: 'POST',
-      headers: {Origin: mesh.base, Cookie: `mesh_auth=${await ownerCookie()}`, 'Content-Type': 'application/json'},
-      body: JSON.stringify({decision: 'yes'})});
-    assert.equal(decided.status, 200, await decided.clone().text());
-    provider.enqueue(request => mail('read', {message_id: (/\"id\\*":\\*"([0-9a-f]{32})/.exec(JSON.stringify(request.messages)) ?? [])[1] ?? 'none'}), {text: 'read-it'});
-    await type('rc-main', 'the user agreed: read it');
     await until('the message text reaching the model', async () => {
       const prompt = plain((await open('rc-main')).output()).slice(-3000);
       if (/Do you want/.test(prompt)) { await approve('rc-main'); }

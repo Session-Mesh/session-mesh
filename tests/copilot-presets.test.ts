@@ -15,6 +15,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {approveMail} from './helpers/agent-mail-mesh.ts';
 import {fakeAgentPrologue} from './helpers/fake-agent.ts';
 
 const CONVERSATION = '0cb916db-26aa-40f2-86b5-1ba81b225fd2';
@@ -188,6 +189,7 @@ describe('Copilot CLI preset', () => {
       target: 'cp-main', target_created: created, kind: 'message', text: 'hello'}),
     headers: {Authorization: `MeshSession ${peerToken}`, 'Content-Type': 'application/json'}});
     assert.equal(sent.status, 200, await sent.clone().text());
+    await approveMail(mesh.base, `mesh_auth=${await ownerCookie()}`, sent);
     await new Promise(resolve => setTimeout(resolve, 1500));
     assert.deepEqual(lines('input.log'), [], 'nothing is typed while a turn runs');
     hook('cp-main', 'notification', {notification_type: 'permission_prompt', message: 'Run command: x'});

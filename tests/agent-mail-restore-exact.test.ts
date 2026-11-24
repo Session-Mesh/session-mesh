@@ -18,8 +18,9 @@ alice, bob, carol = ident('alice', 1.0), ident('bob', 3.0), ident('carol', 7.0)
 mid = message(1, bob, alice)['id']
 mail = [message(1, bob, alice), message(2, bob, carol)]
 policy = [{'id': 'e' * 32, 'source': alice, 'target': bob, 'created': 6.0}]
-wake = [{'notification_id': 'c' * 32, 'target': alice, 'from_seq': 1, 'through_seq': 1, 'count': 1, 'state': 'pending'}]
-request = [{'id': 'd' * 32, 'message_id': mid, 'source': bob, 'target': alice, 'created': 5.0, 'state': 'pending'}]
+wake = [{'notification_id': 'c' * 32, 'target': alice, 'from_seq': 1, 'through_seq': 1, 'count': 1,
+         'seqs': [1], 'state': 'pending'}]
+request = [{'id': 'd' * 32, 'message_id': mid, 'source': bob, 'target': alice, 'created': 5.0, 'state': 'granted'}]
 
 async def exact(name='alice', created=1.0, sid=SID):
     app = {'restore_lock': asyncio.Lock(), 'organisation_lock': asyncio.Lock(), 'recent_conversations': {}}

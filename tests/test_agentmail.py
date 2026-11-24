@@ -28,33 +28,53 @@ def owner_approved_read(target, message_id, live):
     return agentmail.read(target, message_id, live)
 
 
-def test_owner_approval_rearms_a_delivered_message_for_non_polling_retry(mailbox):
+def approve(receipt):
+    request = next(item for item in agentmail.consent_projection()["requests"]
+                   if item["message_id"] == receipt["id"])
+    agentmail.decide_consent(request["id"], "yes")
+    return receipt
+
+
+def test_send_requests_consent_before_any_recipient_read_or_wake(mailbox):
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
     live = [alpha, beta]
     receipt = agentmail.send(alpha, beta, "message", "read after approval", live, now=3.0)
-    first = agentmail.claim_wake(beta, live)
-    agentmail.mark_wake_injected(beta, first["notification_id"], live)
+    request, = agentmail.consent_projection()["requests"]
+    assert request["message_id"] == receipt["id"]
+    assert "text" not in request
+    assert agentmail.inbox(beta, live)[0]["authorization_pending"] is True
+    assert agentmail.claim_wake(beta, live) is None
     with pytest.raises(agentmail.MailConsentPending) as pending:
         agentmail.read(beta, receipt["id"], live, now=4.0)
-    agentmail.decide_consent(pending.value.request["id"], "yes", now=5.0)
-    second = agentmail.claim_wake(beta, live)
-    assert second["notification_id"] != first["notification_id"]
-    assert second["count"] == 1
+    assert pending.value.request == request
+    agentmail.decide_consent(request["id"], "yes", now=5.0)
+    wake = agentmail.claim_wake(beta, live)
+    assert wake["count"] == 1
+    assert "authorization_pending" not in agentmail.inbox(beta, live)[0]
+    assert agentmail.read(beta, receipt["id"], live)["text"] == "read after approval"
 
 
-@pytest.mark.parametrize("operation", ["reject", "ack"])
-def test_removing_the_last_message_cancels_a_claimed_wake(mailbox, operation):
-    alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
-    live = [alpha, beta]
-    receipt = agentmail.send(alpha, beta, "message", "discard", live, now=3.0)
-    assert agentmail.claim_wake(beta, live)["state"] == "claimed"
-    if operation == "reject":
-        with pytest.raises(agentmail.MailConsentPending) as pending:
-            agentmail.read(beta, receipt["id"], live, now=4.0)
-        agentmail.decide_consent(pending.value.request["id"], "no", now=5.0)
-    else:
-        agentmail.acknowledge(beta, [receipt["id"]], live)
-    assert agentmail.claim_wake(beta, live) is None
+def test_out_of_order_approvals_and_revoke_only_wake_authorized_members(mailbox):
+    alpha, beta, gamma = identity("alpha", 1.0), identity("beta", 2.0), identity("gamma", 3.0)
+    live = [alpha, beta, gamma]
+    first = agentmail.send(alpha, beta, "message", "first from alpha", live)
+    middle = agentmail.send(gamma, beta, "message", "waiting for gamma", live)
+    last = agentmail.send(alpha, beta, "message", "later from alpha", live)
+    requests = {r["message_id"]: r for r in agentmail.consent_projection()["requests"]}
+    policy = agentmail.decide_consent(requests[last["id"]]["id"], "always")["policy"]
+    wake = agentmail.claim_wake(beta, live)
+    assert (wake["from_seq"], wake["through_seq"], wake["count"]) == (first["seq"], last["seq"], 2)
+    assert [r["message_id"] for r in agentmail.consent_projection()["requests"]] == [middle["id"]]
+
+    agentmail.decide_consent(requests[middle["id"]]["id"], "yes")
+    assert agentmail.claim_wake(beta, live) == wake
+    agentmail.revoke_consent(policy["id"])
+    following = agentmail.claim_wake(beta, live)
+    assert following["notification_id"] != wake["notification_id"]
+    assert (following["from_seq"], following["through_seq"], following["count"]) == (
+        middle["seq"], middle["seq"], 1)
+    assert {r["message_id"] for r in agentmail.consent_projection()["requests"]} == {
+        first["id"], last["id"]}
 
 
 def test_metadata_precedes_deliberate_read_and_reply_keeps_conversation(mailbox):
@@ -65,13 +85,17 @@ def test_metadata_precedes_deliberate_read_and_reply_keeps_conversation(mailbox)
     assert set(receipt) == {"id", "conversation_id", "target", "kind", "created", "seq"}
     metadata = agentmail.inbox(beta, live)
     assert metadata == [{"id": receipt["id"], "conversation_id": receipt["conversation_id"],
-                         "source": alpha, "kind": "task", "created": 3.0, "seq": 1}]
+                         "source": alpha, "kind": "task", "created": 3.0, "seq": 1,
+                         "authorization_pending": True}]
     assert "untrusted" not in str(metadata)
 
     opened = owner_approved_read(beta, receipt["id"], live)
     assert opened["text"] == "untrusted instructions"
     reply = agentmail.reply(beta, receipt["id"], "message", "accepted", live, now=4.0)
     assert reply["conversation_id"] == receipt["conversation_id"]
+    assert agentmail.claim_wake(alpha, live) is None
+    request, = agentmail.consent_projection()["requests"]
+    assert (request["message_id"], request["source"], request["target"]) == (reply["id"], beta, alpha)
     assert owner_approved_read(alpha, reply["id"], live)["source"] == beta
 
 
@@ -122,8 +146,8 @@ def test_two_sends_get_monotonic_sequences_and_one_pending_wake(mailbox):
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
     live = [alpha, beta]
 
-    first = agentmail.send(alpha, beta, "message", "one", live, now=3.0)
-    second = agentmail.send(alpha, beta, "message", "two", live, now=4.0)
+    first = approve(agentmail.send(alpha, beta, "message", "one", live, now=3.0))
+    second = approve(agentmail.send(alpha, beta, "message", "two", live, now=4.0))
 
     assert (first["seq"], second["seq"]) == (1, 2)
     wake = agentmail.claim_wake(beta, live)
@@ -138,11 +162,11 @@ def test_two_sends_get_monotonic_sequences_and_one_pending_wake(mailbox):
 def test_message_after_injected_watermark_creates_new_generation(mailbox):
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
     live = [alpha, beta]
-    agentmail.send(alpha, beta, "message", "one", live, now=3.0)
+    approve(agentmail.send(alpha, beta, "message", "one", live, now=3.0))
     first = agentmail.claim_wake(beta, live)
     agentmail.mark_wake_injected(beta, first["notification_id"], live)
 
-    second_message = agentmail.send(alpha, beta, "message", "two", live, now=4.0)
+    second_message = approve(agentmail.send(alpha, beta, "message", "two", live, now=4.0))
     second = agentmail.claim_wake(beta, live)
 
     assert second["notification_id"] != first["notification_id"]
@@ -155,9 +179,9 @@ def test_wake_count_is_exact_with_interleaved_recipients_and_ack(mailbox):
     beta = identity("beta", 2.0)
     gamma = identity("gamma", 3.0)
     live = [alpha, beta, gamma]
-    first = agentmail.send(alpha, beta, "message", "one", live, now=4.0)
-    agentmail.send(alpha, gamma, "message", "other inbox", live, now=5.0)
-    third = agentmail.send(alpha, beta, "message", "three", live, now=6.0)
+    first = approve(agentmail.send(alpha, beta, "message", "one", live, now=4.0))
+    approve(agentmail.send(alpha, gamma, "message", "other inbox", live, now=5.0))
+    third = approve(agentmail.send(alpha, beta, "message", "three", live, now=6.0))
 
     state = json.loads(mailbox.read_text(encoding="utf-8"))
     beta_wake = next(wake for wake in state["wakes"] if wake["target"] == beta)
@@ -172,7 +196,7 @@ def test_wake_count_is_exact_with_interleaved_recipients_and_ack(mailbox):
 def test_claim_and_injected_completion_are_idempotent_across_retries(mailbox):
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
     live = [alpha, beta]
-    agentmail.send(alpha, beta, "task", "review", live, now=3.0)
+    approve(agentmail.send(alpha, beta, "task", "review", live, now=3.0))
 
     claimed = agentmail.claim_wake(beta, live)
     assert agentmail.claim_wake(beta, live) == claimed
@@ -185,10 +209,10 @@ def test_claim_and_injected_completion_are_idempotent_across_retries(mailbox):
 def test_send_after_claim_creates_next_generation_at_dispatch_race_boundary(mailbox):
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
     live = [alpha, beta]
-    agentmail.send(alpha, beta, "message", "one", live, now=3.0)
+    approve(agentmail.send(alpha, beta, "message", "one", live, now=3.0))
     claimed = agentmail.claim_wake(beta, live)
 
-    second = agentmail.send(alpha, beta, "message", "two", live, now=4.0)
+    second = approve(agentmail.send(alpha, beta, "message", "two", live, now=4.0))
     retried = agentmail.claim_wake(beta, live)
 
     assert retried["notification_id"] == claimed["notification_id"]
@@ -203,7 +227,7 @@ def test_send_after_claim_creates_next_generation_at_dispatch_race_boundary(mail
 def test_acknowledging_all_messages_removes_empty_uninjected_wake(mailbox):
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
     live = [alpha, beta]
-    receipt = agentmail.send(alpha, beta, "message", "one", live, now=3.0)
+    receipt = approve(agentmail.send(alpha, beta, "message", "one", live, now=3.0))
 
     assert agentmail.acknowledge(beta, [receipt["id"]], live) == [receipt["id"]]
     assert agentmail.claim_wake(beta, live) is None
@@ -212,11 +236,11 @@ def test_acknowledging_all_messages_removes_empty_uninjected_wake(mailbox):
 def test_ack_after_claim_cancels_empty_generation_and_next_send_is_separate(mailbox):
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
     live = [alpha, beta]
-    first = agentmail.send(alpha, beta, "message", "one", live, now=3.0)
+    first = approve(agentmail.send(alpha, beta, "message", "one", live, now=3.0))
     claimed = agentmail.claim_wake(beta, live)
 
     agentmail.acknowledge(beta, [first["id"]], live)
-    second = agentmail.send(alpha, beta, "message", "two", live, now=4.0)
+    second = approve(agentmail.send(alpha, beta, "message", "two", live, now=4.0))
 
     following = agentmail.claim_wake(beta, live)
     assert following["notification_id"] != claimed["notification_id"]
@@ -238,7 +262,7 @@ def test_v1_file_migrates_without_message_loss(mailbox):
     assert opened["text"] == "kept"
     assert opened["seq"] == 1
     migrated = json.loads(mailbox.read_text(encoding="utf-8"))
-    assert migrated["version"] == 3
+    assert migrated["version"] == 4
     assert migrated["next_seq"] == 2
     assert migrated["messages"][0]["text"] == "kept"
     assert migrated["wakes"][0]["through_seq"] == 1
@@ -336,7 +360,7 @@ def test_always_for_one_claude_session_never_authorises_another(mailbox):
     assert pending_b.value.request["id"] != pending_a.value.request["id"]
 
 
-def test_valid_v2_file_migrates_to_consent_gated_v3(mailbox):
+def test_valid_v2_file_migrates_without_waking_unapproved_mail(mailbox):
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
     mailbox.parent.mkdir(parents=True)
     mailbox.write_text(json.dumps({
@@ -348,12 +372,40 @@ def test_valid_v2_file_migrates_to_consent_gated_v3(mailbox):
                    "from_seq": 1, "through_seq": 1, "state": "pending"}],
     }), encoding="utf-8")
 
-    with pytest.raises(agentmail.MailConsentPending):
-        agentmail.read(beta, "1" * 32, [alpha, beta], now=4.0)
+    assert agentmail.claim_wake(beta, [alpha, beta]) is None
+    assert agentmail.consent_projection()["requests"][0]["message_id"] == "1" * 32
     migrated = json.loads(mailbox.read_text(encoding="utf-8"))
-    assert migrated["version"] == 3
+    assert migrated["version"] == 4
     assert migrated["messages"][0]["text"] == "kept"
-    assert migrated["wakes"][0]["count"] == 1
+    assert migrated["wakes"] == []
+
+
+def test_v3_keeps_existing_grants_without_replaying_unapproved_wakes(mailbox):
+    alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
+    live = [alpha, beta]
+    mailbox.parent.mkdir(parents=True)
+    messages = [{"id": str(seq) * 32, "conversation_id": "a" * 32, "source": alpha,
+                 "target": beta, "kind": "message", "text": f"message {seq}",
+                 "created": float(seq + 4), "seq": seq} for seq in (1, 2, 3)]
+    pending = {"id": "d" * 32, "message_id": messages[1]["id"], "source": alpha,
+               "target": beta, "created": 9.0, "state": "pending"}
+    granted = {**pending, "id": "e" * 32, "message_id": messages[2]["id"], "state": "granted"}
+    mailbox.write_text(json.dumps({
+        "version": 3, "next_seq": 4, "messages": messages, "always_policies": [],
+        "consent_requests": [pending, granted],
+        "wakes": [{"notification_id": "f" * 32, "target": beta, "from_seq": 1,
+                   "through_seq": 3, "count": 3, "state": "pending"}],
+    }), encoding="utf-8")
+
+    wake = agentmail.claim_wake(beta, live)
+    assert (wake["notification_id"], wake["from_seq"], wake["through_seq"], wake["count"]) == (
+        "f" * 32, 3, 3, 1)
+    requests = {r["message_id"]: r for r in agentmail.consent_projection()["requests"]}
+    assert set(requests) == {messages[0]["id"], messages[1]["id"]}
+    assert requests[messages[1]["id"]] == pending
+    assert agentmail.read(beta, messages[2]["id"], live)["text"] == "message 3"
+    agentmail.mark_wake_injected(beta, wake["notification_id"], live)
+    assert agentmail.claim_wake(beta, live) is None
 
 
 def test_v2_migration_preserves_claim_completion_after_messages_were_acked(mailbox):
@@ -367,4 +419,4 @@ def test_v2_migration_preserves_claim_completion_after_messages_were_acked(mailb
 
     completed = agentmail.mark_wake_injected(beta, "3" * 32, [beta])
     assert completed["state"] == "injected"
-    assert json.loads(mailbox.read_text(encoding="utf-8"))["version"] == 3
+    assert json.loads(mailbox.read_text(encoding="utf-8"))["version"] == 4

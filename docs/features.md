@@ -854,11 +854,14 @@ lists its actions and schemas when called with no arguments or with `{"action":"
 
 Agents started by the mesh can message each other through the `mesh-board` MCP server: an agent
 lists its peers, deposits a message or a task in a peer's inbox, and replies to messages it has
-received.
+received. Mesh asks you to approve a message or reply as soon as it is sent, unless you already
+allowed that exact sender-to-recipient direction. A message awaiting approval cannot wake the
+recipient or expose its text to them. The recipient can read approved messages without asking you
+again. Approval to read does not make the message an instruction from you.
 
-The recipient is told only that messages are waiting, never their text. For Claude Code, the mesh
-types the one-line notice `# Mesh: new message(s) waiting; …` into the terminal, followed by
-`Enter`, only when Claude is idle at its prompt: it has reported the end of its last turn, nothing
+The wake notice says only that approved messages are waiting, never what they say. For Claude
+Code, the mesh types `# Mesh: new message(s) waiting; …` into the terminal, followed by `Enter`,
+only when Claude is idle at its prompt: it has reported the end of its last turn, nothing
 has been typed into the terminal since, and you have no unsent input in it. While a turn runs, or
 after you have typed something, the notice waits for the end of the next turn; at most one notice
 is typed per idle period. OpenCode, Gemini CLI and Mistral Vibe are treated the same way: the Mesh plugin of
@@ -885,7 +888,7 @@ restart) can be woken without typing anything. The mesh starts Claude with its o
 socket (`--messaging-socket-path`, in a private directory next to the PTY host's socket, or in a
 short one under `/tmp` where a socket path would not fit, as on macOS) and wakes it by writing one
 line on that socket:
-`Mesh: N new message(s) in your inbox; check mail.inbox and ask yes/no/always before reading.`
+`Mesh: N new message(s) in your inbox; check mail.inbox and read only approved messages.`
 Claude shows it as a message from another Claude session and starts a turn, or reads it after the
 running turn. The line carries only the number of waiting messages. One line is sent per batch of
 messages, once the running turn has ended.
@@ -916,11 +919,12 @@ mesh cannot see, and a typed notice with its `Enter` could answer that dialog. S
 been written the mesh **never types anything** in that terminal for that wake. If the inbox has not
 been read 20 seconds after the line, the wake is shown as unconfirmed: a mark (an envelope with a
 question mark) on the session in the list and a line in the "Mailbox" entry of its "Info". It is
-not counted as delivered, and reading the inbox, whenever it happens, clears it. If Claude is
-asking you to approve the message, answer in that terminal. The state survives a restart of the
-server, which writes no second line. If the remembered state is lost or damaged, or its directory
-stops being private after a line was recorded, the mesh cannot know whether a line was written, so
-every session alive at that moment is put in doubt **until that session restarts**: no line and no
+not counted as delivered, and reading the inbox, whenever it happens, clears it. If Claude itself
+asks you to allow the wake notice, answer in that terminal; that is separate from mail approval
+in Mesh. The state survives a restart of the server, which writes no second line. If the
+remembered state is lost or damaged, or its directory stops being private after a line was
+recorded, the mesh cannot know whether a line was written, so every session alive at that moment
+is put in doubt **until that session restarts**: no line and no
 typed notice, with or without a socket, and its wakes stay shown as unconfirmed even after the
 agent reads its inbox (no read is known to close a dialog that holds a line). That is the price:
 such a session is not woken by any means until you restart it. Outside the doubt, the typed notice
@@ -937,9 +941,11 @@ files run before the command is typed: an alias, another `claude` first on the P
 exported `CLAUDE_CONFIG_DIR` can change what really runs and are not seen. An older `claude` that
 does not know `--messaging-socket-path` would refuse to start with an "unknown option" error.
 
-Before an agent can read a message, the page asks you in
-"Message from another agent", naming the sending session: "Later", "Refuse", "Read this time" or
-"Always for this exact session". Every open window of the mesh asks; the first answer counts, and
+The page's "Message from another agent" dialog names the sender. "Later" leaves the message held;
+"Refuse" deletes it; "Read this time" grants one read; and "Always for this exact session" grants
+standing permission from that exact sending session to that exact receiving session, not in the
+reverse direction. Once a one-read grant is used or standing permission is revoked, another read
+needs a new Mesh grant. Every open window of the mesh asks; the first answer counts, and
 the question closes in the other windows at their next refresh of the session list (the page says
 "Message request decided elsewhere; the prompt was closed."). The next pending request, if any,
 is then asked, and its prompt says "The previous message request was decided elsewhere; its prompt
@@ -984,8 +990,8 @@ Resuming a Pi conversation is refused when the mesh cannot identify it unambiguo
 receives the MCP server and the wake-up extension below only when the mesh starts or resumes it.
 
 New Pi sessions load a small extension that brings message notices to the agent, even while it is
-working. The notice carries no message content: it asks the agent to check `mail.inbox` and to ask
-for your consent before reading. Delivery guarantees:
+working. The notice carries no message content: it tells the agent to check `mail.inbox` and read
+only approved messages. Delivery guarantees:
 
 - **At least once, not exactly once.** As long as the same mesh session stays alive, an unconfirmed
   notice is sent again, at most every 10 seconds and only while Pi is idle with no queued input,

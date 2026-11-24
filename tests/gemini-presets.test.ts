@@ -14,6 +14,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {approveMail} from './helpers/agent-mail-mesh.ts';
 
 const CONVERSATION = '3f1d2c4b-5a6e-4f70-8a9b-0c1d2e3f4a5b';
 const USER_SETTINGS = JSON.stringify({
@@ -262,6 +263,7 @@ describe('Gemini preset', () => {
       Authorization: `MeshSession ${peerToken}`, 'Content-Type': 'application/json'},
     body: JSON.stringify({target: 'gm-main', target_created: created, kind: 'message', text: 'hello'})});
     assert.equal(sent.status, 200, await sent.clone().text());
+    await approveMail(mesh.base, cookie, sent);
     await new Promise(resolve => setTimeout(resolve, 1500));
     assert.deepEqual(lines('input.log'), [], 'nothing is typed while a turn runs');
     assert.equal((await agentOf('gm-main'))?.status, 'busy');

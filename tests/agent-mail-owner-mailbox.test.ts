@@ -81,7 +81,9 @@ describe('GET /api/agent-mail/messages', () => {
       ['gamma', 'message', 'from gamma']]);
     assert.ok(forBeta.received.every(message => message.target.id === 'beta' && message.target.created === beta!.created));
     assert.deepEqual(forBeta.sent.map(({target, text}) => [target.id, text]), [['alpha', 'answer from beta']]);
-    assert.deepEqual([forBeta.requests, forBeta.always, forBeta.truncated], [[], [], false]);
+    assert.deepEqual(forBeta.requests.map(request => request.message_id).sort(),
+      [...forBeta.received, ...forBeta.sent].map(message => message.id).sort());
+    assert.deepEqual([forBeta.always, forBeta.truncated], [[], false]);
 
     const forAlpha = await mailbox(alpha!);
     assert.deepEqual(forAlpha.received.map(({source, text}) => [source.id, text]), [['beta', 'answer from beta']]);
@@ -97,18 +99,19 @@ describe('GET /api/agent-mail/messages', () => {
     assert.equal(before.length, 3);
     const first = (await mailbox(beta!)).received[0]!.id;
 
-    // The agent's read is a pending owner decision; the owner's page reading must not create or settle one.
+    // The deposit created the request. Reading it in the mailbox does not change the request.
+    const requests = (await mailbox(beta!)).requests;
+    const pending = requests.find(request => request.message_id === first)!;
+    assert.ok(pending);
     for (let index = 0; index < 3; index += 1) await mailbox(beta!);
     assert.equal((await readAs(beta!, first)).status, 202, 'owner reading is not a grant');
-    const pending = (await mailbox(beta!)).requests;
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0]!.message_id, first);
-    assert.deepEqual((await mailbox(alpha!)).requests.map(request => request.id), [pending[0]!.id], 'the sender is concerned too');
+    assert.deepEqual((await mailbox(beta!)).requests, requests);
+    assert.ok((await mailbox(alpha!)).requests.some(request => request.id === pending.id), 'the sender is concerned too');
     assert.deepEqual((await mailbox(agents.delta!)).requests, [], 'an unrelated session is not');
 
     // Yes once, then the owner reads repeatedly: the single-use grant is still there.
-    assert.equal((await decide(pending[0]!.id, 'yes')).status, 200);
-    assert.deepEqual((await mailbox(beta!)).requests, []);
+    assert.equal((await decide(pending.id, 'yes')).status, 200);
+    assert.deepEqual((await mailbox(beta!)).requests, requests.filter(request => request.id !== pending.id));
     for (let index = 0; index < 3; index += 1) await mailbox(beta!);
     const revealed = await readAs(beta!, first);
     assert.equal(revealed.status, 200, 'the once-grant survived the owner reading');

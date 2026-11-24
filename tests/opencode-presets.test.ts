@@ -15,6 +15,7 @@ import {after, before, describe, test} from 'node:test';
 import {addConversation, createStore} from './helpers/opencode-store.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {approveMail} from './helpers/agent-mail-mesh.ts';
 
 const CONVERSATION = 'ses_e1ec1ceb2ffeve47ULriArjJ5g';
 const OTHER_CONVERSATION = 'ses_openedlaterconversation1';
@@ -171,6 +172,7 @@ describe('OpenCode preset', () => {
       target: 'oc-main', target_created: created, kind: 'message', text: 'hello'}),
     headers: {Authorization: `MeshSession ${peerToken}`, 'Content-Type': 'application/json'}});
     assert.equal(sent.status, 200, await sent.clone().text());
+    await approveMail(mesh.base, `mesh_auth=${await ownerCookie()}`, sent);
     await new Promise(resolve => setTimeout(resolve, 1500));
     assert.deepEqual(lines('input.log'), [], 'nothing is typed while a turn runs');
     report('oc-main', [status('', 'idle')]);

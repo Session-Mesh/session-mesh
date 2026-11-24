@@ -74,8 +74,10 @@ describe('retained wakes and the pruning hold', () => {
   test('(m8) a prune during the retention keeps the wake: the restored agent claims it', () => {
     const result = runPython<Record<string, unknown>>(`
 ${SCENARIO}
-wake = {'notification_id': 'c' * 32, 'target': alice, 'from_seq': 1, 'through_seq': 1, 'count': 1, 'state': 'pending'}
-seed([message(1, bob, alice)], [wake])
+receipt = agentmail.send(bob, alice, 'message', 'hello', [bob, alice])
+request, = agentmail.consent_projection()['requests']
+assert request['message_id'] == receipt['id']
+agentmail.decide_consent(request['id'], 'yes')
 snapshot(lost=[entry('alice', 1.0, cwd, lost_at=time.time())])
 install(FakeHost([live_session('bob', 3.0)]))
 agentmail.inbox(bob, [bob])                  # someone else prunes while alice is gone

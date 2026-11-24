@@ -15,13 +15,23 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {hostArgv} from './claude-wake-lib.ts';
+import {approveMail} from './helpers/agent-mail-mesh.ts';
 import {REPO, type Scratch, runServer, scratchHome, stopServer, removeScratch} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
-export const NOTICE_TEXT = 'Mesh: new message(s) in your inbox; check mail.inbox and ask yes/no/always before reading.';
+export const NOTICE_TEXT = 'Mesh: new message(s) in your inbox; check mail.inbox and read only approved messages.';
 export const CANARIES = {OPENAI_API_KEY: 'sk-canary-secret', MESH_CANARY: 'mesh-canary-secret',
   ANTHROPIC_API_KEY: 'ak-canary-secret', SSH_AUTH_SOCK: '/tmp/canary-ssh-agent', EDITOR: 'canary-editor'};
 export const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Approve only the deposited message under test, without granting future sends. */
+export async function approveWakeMail(base: string, ownerToken: string, sent: Response): Promise<void> {
+  const login = await fetch(`${base}/login`, {method: 'POST', redirect: 'manual',
+    body: new URLSearchParams({token: ownerToken})});
+  const cookie = login.headers.getSetCookie().find(item => item.startsWith('mesh_auth='))?.split(';')[0];
+  assert.ok(cookie, 'the fixture owner cookie');
+  await approveMail(base, cookie, sent);
+}
 
 export function fakeCodex(control: string): string {
   return [
@@ -177,6 +187,7 @@ export class Rig {
     const response = await fetch(`${this.base}/api/agent-mail/@self/send`, {method: 'POST', headers: this.agentHeaders(from),
       body: JSON.stringify({target: to.name, target_created: to.created, kind: 'message', text})});
     assert.equal(response.status, 200, await response.clone().text());
+    await approveWakeMail(this.base, this.token(), response);
   }
 
   async lookAtInbox(agent: Agent): Promise<number> {

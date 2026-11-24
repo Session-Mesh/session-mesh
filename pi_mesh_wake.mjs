@@ -129,7 +129,7 @@ export default function (pi) {
       }
       state.lastAttempt = Date.now();
       pi.sendUserMessage(`${marker} ${notice.count} Mesh message(s) waiting; check ` +
-        "mail.inbox and ask yes/no/always before reading. A repeated notification " +
+        "mail.inbox and read only approved messages. A repeated notification " +
         "with the same identifier refers to the same messages.", { deliverAs: "steer" });
     } finally { state.checking = false; }
   }

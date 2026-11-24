@@ -16,12 +16,82 @@ def identity(name, created, agent="codex", wake_capable=None):
     return result
 
 
+def pending_request_id(receipt):
+    matches = [request["id"] for request in agentmail.consent_projection()["requests"]
+               if request["message_id"] == receipt["id"]]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def send_approved(source, target, kind, text, live, now=None):
+    receipt = agentmail.send(source, target, kind, text, live, now=now)
+    agentmail.decide_consent(pending_request_id(receipt), "yes", now=now)
+    return receipt
+
+
+async def test_dispatcher_wakes_only_after_owner_consent(tmp_path, monkeypatch):
+    monkeypatch.setattr(agentmail, "FILE", tmp_path / "agent-mail.json")
+    alpha, beta = identity("alpha", 1.0), identity("beta", 2.0, "claude")
+    live = [alpha, beta]
+    wake_live = [{**item, "wake_capable": True} for item in live]
+    notifications = []
+
+    async def listed():
+        return wake_live
+
+    async def notify(request):
+        notifications.append(request)
+        return {"ok": True, "accepted": True}
+
+    refused = agentmail.send(alpha, beta, "message", "refused", live, now=3.0)
+    dispatcher = agentwake.Dispatcher(listed, notify)
+    assert await dispatcher.dispatch_once() is False
+    assert notifications == []
+
+    dispatcher = agentwake.Dispatcher(listed, notify)
+    assert await dispatcher.dispatch_once() is False
+    assert notifications == []
+    agentmail.decide_consent(pending_request_id(refused), "no", now=4.0)
+    assert await dispatcher.dispatch_once() is False
+    assert notifications == []
+
+    once = agentmail.send(alpha, beta, "message", "once", live, now=5.0)
+    assert await dispatcher.dispatch_once() is False
+    assert notifications == []
+    agentmail.decide_consent(pending_request_id(once), "yes", now=6.0)
+    assert await dispatcher.dispatch_once() is False
+    assert await dispatcher.dispatch_once() is False
+    assert [notice["through_seq"] for notice in notifications] == [once["seq"]]
+
+    always = agentmail.send(alpha, beta, "task", "always", live, now=7.0)
+    assert await dispatcher.dispatch_once() is False
+    assert len(notifications) == 1
+    policy = agentmail.decide_consent(pending_request_id(always), "always", now=8.0)["policy"]
+    assert await dispatcher.dispatch_once() is False
+    assert [notice["through_seq"] for notice in notifications] == [once["seq"], always["seq"]]
+
+    trusted = agentmail.send(alpha, beta, "message", "trusted", live, now=9.0)
+    assert agentmail.consent_projection()["requests"] == []
+    assert await dispatcher.dispatch_once() is False
+    assert await dispatcher.dispatch_once() is False
+    assert [(notice["name"], notice["count"], notice["through_seq"]) for notice in notifications] == [
+        ("beta", 1, once["seq"]), ("beta", 1, always["seq"]), ("beta", 1, trusted["seq"]),
+    ]
+    assert len({notice["notification_id"] for notice in notifications}) == 3
+
+    agentmail.revoke_consent(policy["id"])
+    pending = agentmail.send(alpha, beta, "message", "pending again", live, now=10.0)
+    pending_request_id(pending)
+    assert await dispatcher.dispatch_once() is False
+    assert len(notifications) == 3
+
+
 async def test_dispatcher_retries_durable_generation_and_marks_only_acceptance(tmp_path, monkeypatch):
     monkeypatch.setattr(agentmail, "FILE", tmp_path / "agent-mail.json")
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0, "claude")
     live = [alpha, beta]
-    agentmail.send(alpha, beta, "message", "one", live, now=3.0)
-    agentmail.send(alpha, beta, "message", "two", live, now=4.0)
+    send_approved(alpha, beta, "message", "one", live, now=3.0)
+    send_approved(alpha, beta, "message", "two", live, now=4.0)
     wake_live = [{**item, "wake_capable": True} for item in live]
     requests = []
 
@@ -46,7 +116,7 @@ async def test_dispatcher_treats_host_idempotence_as_delivery(tmp_path, monkeypa
     monkeypatch.setattr(agentmail, "FILE", tmp_path / "agent-mail.json")
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
     live = [alpha, beta]
-    agentmail.send(alpha, beta, "task", "work", live, now=3.0)
+    send_approved(alpha, beta, "task", "work", live, now=3.0)
     wake_live = [{**item, "wake_capable": True} for item in live]
 
     async def listed():
@@ -64,7 +134,7 @@ async def test_message_removal_cannot_race_a_claimed_host_transaction(tmp_path, 
     monkeypatch.setattr(agentmail, "FILE", tmp_path / "agent-mail.json")
     alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
     live = [alpha, beta]
-    receipt = agentmail.send(alpha, beta, "message", "ordered", live, now=3.0)
+    receipt = send_approved(alpha, beta, "message", "ordered", live, now=3.0)
     wake_live = [{**item, "wake_capable": True} for item in live]
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -94,9 +164,8 @@ async def test_old_host_keeps_wake_durable_without_trying_unknown_operation(tmp_
     alpha = identity("alpha", 1.0)
     beta = identity("beta", 2.0, "claude", wake_capable=False)
     live = [alpha, beta]
-    agentmail.send(agentwake.Dispatcher._mail_identity(alpha),
-                   agentwake.Dispatcher._mail_identity(beta), "message", "one",
-                   [agentwake.Dispatcher._mail_identity(item) for item in live], now=3.0)
+    mail_live = [agentwake.Dispatcher._mail_identity(item) for item in live]
+    send_approved(mail_live[0], mail_live[1], "message", "one", mail_live, now=3.0)
     requests = []
 
     async def listed():
@@ -111,9 +180,7 @@ async def test_old_host_keeps_wake_durable_without_trying_unknown_operation(tmp_
         dispatcher.trigger()
     assert await dispatcher.dispatch_once() is True
     assert requests == []
-    claimed = agentmail.claim_wake(
-        agentwake.Dispatcher._mail_identity(beta),
-        [agentwake.Dispatcher._mail_identity(item) for item in live])
+    claimed = agentmail.claim_wake(mail_live[1], mail_live)
     assert claimed is not None and claimed["state"] == "claimed"
 
 
@@ -123,7 +190,7 @@ async def test_capability_appearing_delivers_same_durable_generation(tmp_path, m
     beta = identity("beta", 2.0, "claude", wake_capable=False)
     live = [alpha, beta]
     mail_live = [agentwake.Dispatcher._mail_identity(item) for item in live]
-    agentmail.send(mail_live[0], mail_live[1], "task", "work", mail_live, now=3.0)
+    send_approved(mail_live[0], mail_live[1], "task", "work", mail_live, now=3.0)
     requests = []
 
     async def listed():
@@ -150,8 +217,8 @@ async def test_mixed_capabilities_only_notify_capable_incarnation(tmp_path, monk
     new = identity("new", 3.0, "claude", wake_capable=True)
     live = [alpha, old, new]
     mail_live = [agentwake.Dispatcher._mail_identity(item) for item in live]
-    agentmail.send(mail_live[0], mail_live[1], "message", "old", mail_live, now=4.0)
-    agentmail.send(mail_live[0], mail_live[2], "message", "new", mail_live, now=5.0)
+    send_approved(mail_live[0], mail_live[1], "message", "old", mail_live, now=4.0)
+    send_approved(mail_live[0], mail_live[2], "message", "new", mail_live, now=5.0)
     requests = []
 
     async def listed():
@@ -174,7 +241,7 @@ async def test_trigger_storm_cannot_bypass_monotonic_capability_backoff(tmp_path
     beta = identity("beta", 2.0, "claude", wake_capable=False)
     live = [alpha, beta]
     mail_live = [agentwake.Dispatcher._mail_identity(item) for item in live]
-    agentmail.send(mail_live[0], mail_live[1], "message", "wake", mail_live, now=3.0)
+    send_approved(mail_live[0], mail_live[1], "message", "wake", mail_live, now=3.0)
     listed_count = 0
     first_listed = asyncio.Event()
     delivered = asyncio.Event()
@@ -213,7 +280,7 @@ async def test_trigger_storm_cannot_bypass_transport_backoff(tmp_path, monkeypat
     beta = identity("beta", 2.0, "claude", wake_capable=True)
     live = [alpha, beta]
     mail_live = [agentwake.Dispatcher._mail_identity(item) for item in live]
-    agentmail.send(mail_live[0], mail_live[1], "message", "wake", mail_live, now=3.0)
+    send_approved(mail_live[0], mail_live[1], "message", "wake", mail_live, now=3.0)
     attempts = 0
     first_failed = asyncio.Event()
     delivered = asyncio.Event()
@@ -255,7 +322,7 @@ async def test_repeated_readiness_refusals_never_inherit_hard_backoff(
     beta = identity("beta", 2.0, "claude", wake_capable=True)
     live = [alpha, beta]
     mail_live = [agentwake.Dispatcher._mail_identity(item) for item in live]
-    agentmail.send(mail_live[0], mail_live[1], "message", "wake", mail_live, now=3.0)
+    send_approved(mail_live[0], mail_live[1], "message", "wake", mail_live, now=3.0)
     attempts = 0
     refused_seven = asyncio.Event()
     delivered = asyncio.Event()
@@ -299,8 +366,8 @@ async def test_pi_unconfirmed_does_not_delay_other_agent(tmp_path, monkeypatch):
     claude = identity("claude", 3.0, "claude", wake_capable=True)
     live = [source, pi, claude]
     mail_live = [agentwake.Dispatcher._mail_identity(item) for item in live]
-    agentmail.send(mail_live[0], mail_live[1], "message", "pi", mail_live)
-    agentmail.send(mail_live[0], mail_live[2], "message", "claude", mail_live)
+    send_approved(mail_live[0], mail_live[1], "message", "pi", mail_live)
+    send_approved(mail_live[0], mail_live[2], "message", "claude", mail_live)
     calls = []
 
     async def listed():
@@ -316,4 +383,3 @@ async def test_pi_unconfirmed_does_not_delay_other_agent(tmp_path, monkeypatch):
     assert calls == ["pi", "claude"]
     assert agentmail.claim_wake(mail_live[1], mail_live) is not None
     assert agentmail.claim_wake(mail_live[2], mail_live) is None
-

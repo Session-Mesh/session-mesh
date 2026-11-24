@@ -17,6 +17,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {approveMail} from './helpers/agent-mail-mesh.ts';
 import {fakeAgentPrologue} from './helpers/fake-agent.ts';
 
 const CONVERSATION = '0b9a1c2e-1111-4222-8333-444455556666';
@@ -193,6 +194,7 @@ describe('Antigravity preset', () => {
       target: 'agy-main', target_created: created, kind: 'message', text: 'hello'}),
     headers: {Authorization: `MeshSession ${peerToken}`, 'Content-Type': 'application/json'}});
     assert.equal(sent.status, 200, await sent.clone().text());
+    await approveMail(mesh.base, `mesh_auth=${await ownerCookie()}`, sent);
     hook('agy-main', 'Stop', stop(true));
     await until('idle', async () => (await agentOf('agy-main'))?.status === 'idle');
     await new Promise(resolve => setTimeout(resolve, 3000));
