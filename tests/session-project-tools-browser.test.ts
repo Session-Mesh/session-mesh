@@ -177,24 +177,26 @@ test('legacy project first attachment and receipt-bound project-view detach refr
       await tools.getByRole('button', {name: 'Project attachment', exact: true}).click();
       await dialog.getByText('This exact session is attached to this project.', {exact: true}).waitFor();
       let writes = 0;
-      if (uncertain) await page.route('**/api/projects/v1', async route => {
-        if (route.request().postDataJSON().op === 'project_settings') {writes++; await route.fetch(); await route.abort();}
-        else await route.continue();
-      });
       let freshReply: {revision: string} | undefined;
-      const fresh = page.waitForResponse(async response => {
-        if (!response.url().endsWith('/api/projects/v1') || response.request().postDataJSON()?.op !== 'project_read') return false;
-        let reply;
-        try {reply = await response.json();}
-        catch (error) {
-          // A superseded read can lose its CDP body before this observer reads it.
-          if (error instanceof Error && error.message.includes('Network.getResponseBody') &&
-              error.message.includes('No data found for resource with given identifier')) return false;
-          throw error;
-        }
-        if (reply.project?.id !== 'legacy' || reply.revision === before.revision || reply.project.sessions_total !== 0) return false;
-        freshReply = reply; return true;
-      }).then(() => null, error => error);
+      let resolveFresh=()=>{}, rejectFresh=(error:unknown)=>{};
+      let timer:ReturnType<typeof setTimeout>;
+      const fresh=new Promise<void>((resolve,reject)=>{
+        resolveFresh=resolve;rejectFresh=reject;
+        timer=setTimeout(()=>reject(Error('No fresh empty project projection within 30000 ms')),30000);
+      }).then(()=>null,error=>error).finally(()=>clearTimeout(timer));
+      await page.route('**/api/projects/v1', async route => {
+        const op=route.request().postDataJSON()?.op;
+        if (uncertain && op === 'project_settings') {writes++; await route.fetch(); await route.abort();return;}
+        if (op !== 'project_read') {await route.continue();return;}
+        try {
+          // APIResponse is retained independently of Chromium's evictable CDP body.
+          const response=await route.fetch(), reply=await response.json();
+          await route.fulfill({response});
+          if(reply.project?.id === 'legacy' && reply.revision !== before.revision && reply.project.sessions_total === 0) {
+            freshReply=reply;resolveFresh();
+          }
+        } catch(error) {rejectFresh(error);}
+      });
       await dialog.getByRole('button', {name: 'Detach session tools', exact: true}).click();
       if (uncertain) {
         await dialog.getByText('Save outcome unknown.', {exact: false}).waitFor();
@@ -206,7 +208,8 @@ test('legacy project first attachment and receipt-bound project-view detach refr
       assert.ok(freshReply); assert.notEqual(freshReply.revision, before.revision);
       await tools.getByText('No session tools are attached to this local Mesh project.', {exact: true}).waitFor();
       assert.equal(await tools.locator('details, [data-tool="artifacts"]').count(), 0, 'confirmed detach removes the working row without navigation');
-      if (uncertain) {assert.equal(writes, 1); await page.unroute('**/api/projects/v1');}
+      if (uncertain) assert.equal(writes, 1);
+      await page.unroute('**/api/projects/v1');
       await dialog.getByRole('button', {name: 'Close', exact: true}).click();
     };
     await detachAndCheck(false);

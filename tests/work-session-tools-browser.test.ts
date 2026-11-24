@@ -158,7 +158,10 @@ test('real pane Tools canonical selector fences delayed reads/saves and refreshe
     });
     // The hidden mounted Project control is deliberately exercised without
     // changing selection or replacing its DOM.
-    await project.getByRole('button',{name:'Refresh',exact:true}).evaluate((b:HTMLButtonElement)=>b.click());
+    await page.waitForFunction((b:HTMLButtonElement)=>{
+      if(!b.isConnected || b.disabled)return false;
+      b.click();return true;
+    },await project.getByRole('button',{name:'Refresh',exact:true}).elementHandle());
     await gateReady(holding,'older Projects read');
     await pane.getByRole('button',{name:'Attach session tools',exact:true}).click();
     await pane.getByRole('button',{name:'Detach session tools',exact:true}).waitFor();
