@@ -6,6 +6,7 @@
 import asyncio
 import contextlib
 import json
+import math
 import os
 import re
 import shutil
@@ -203,6 +204,43 @@ QUEUE_ENV_KEYS = ("HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "LC_CTYPE
 QUEUE_OUTPUT_MAX = 64 * 1024
 QUEUE_MAX_TRACKED = 1024
 _QUEUE_STATES = frozenset(("started", "queued", "unconfirmed", "cleared"))
+
+
+def _valid_wake_binding(candidate):
+    """Validate the shape of a future host-bound wake witness, not its provenance.
+
+    No current host produces this witness. Validation is deliberately not connected
+    to dispatch: only an authenticated host can attest its fields at launch and
+    revalidate them against the live foreground process before a queue operation.
+    """
+    keys = {"host", "session", "created", "nonce", "pid", "start", "thread", "home", "runtime"}
+    if not isinstance(candidate, dict) or set(candidate) != keys:
+        return False
+    created = candidate["created"]
+    if (not isinstance(candidate["host"], str) or not re.fullmatch(r"[0-9]{1,10}:[0-9]{1,20}", candidate["host"])
+            or not isinstance(candidate["session"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", candidate["session"])
+            or isinstance(created, bool) or not isinstance(created, (int, float)) or not 0 <= created <= 10**12
+            or not math.isfinite(created)
+            or not isinstance(candidate["nonce"], str) or not re.fullmatch(r"[0-9a-f]{32}", candidate["nonce"])
+            or type(candidate["pid"]) is not int or not 0 < candidate["pid"] <= 2**31 - 1
+            or not isinstance(candidate["start"], str) or not re.fullmatch(r"[1-9][0-9]{0,19}", candidate["start"])
+            or not isinstance(candidate["thread"], str) or THREAD_RE.fullmatch(candidate["thread"]) is None):
+        return False
+    for key in ("home", "runtime"):
+        value = candidate[key]
+        if not isinstance(value, str) or not os.path.isabs(value) or "\0" in value or os.path.normpath(value) != value:
+            return False
+        try:
+            if len(value.encode("utf-8")) > 4096:
+                return False
+        except UnicodeEncodeError:
+            return False
+    return True
+
+
+def _same_wake_binding(approved, observed):
+    """Compare complete validated witnesses; this alone does not authenticate either."""
+    return _valid_wake_binding(approved) and _valid_wake_binding(observed) and approved == observed
 
 
 def _queue_seconds():

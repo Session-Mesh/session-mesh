@@ -46,6 +46,26 @@ ${code}`], {encoding: 'utf8', env: {PATH: process.env.PATH, HOME: dir, TMPDIR: d
 const UNCONFIRMED = {ok: false, reason: 'unconfirmed'};
 const ACCEPTED = {ok: true, accepted: true};
 
+test('candidate wake bindings reject stale or malformed identity fields without activating dispatch', () => {
+  const result = scenario(`
+binding = {"host": "42:123", "session": "one", "created": 12.0, "nonce": "a" * 32,
+           "pid": 24, "start": "100", "thread": THREAD, "home": str(ROOT / "alpha"),
+           "runtime": str(ROOT / "run")}
+changes = {"host": "42:124", "session": "two", "created": 13.0, "nonce": "b" * 32,
+           "pid": 25, "start": "101", "thread": "0cb916db-26aa-40f2-86b5-1ba81b225fd3",
+           "home": str(ROOT / "beta"), "runtime": str(ROOT / "run2")}
+stale = [agentwake._same_wake_binding(binding, {**binding, key: value}) for key, value in changes.items()]
+bad = [{**binding, "created": True}, {**binding, "created": 10**500}, {**binding, "pid": True},
+       {**binding, "home": "relative"}, {**binding, "home": "/a/../b"},
+       {**binding, "runtime": "/bad\\x00path"}, {**binding, "extra": "x"}]
+print(json.dumps({"same": agentwake._same_wake_binding(binding, dict(binding)), "stale": stale,
+                  "malformed": [agentwake._valid_wake_binding(item) for item in bad]}))
+`);
+  assert.equal(result.same, true);
+  assert.deepEqual(result.stale, Array(9).fill(false));
+  assert.deepEqual(result.malformed, Array(7).fill(false));
+});
+
 test('characterize unbound aliases: the verifier does not supply an account home', () => {
   const result = scenario(`
 (BIN / "codex").write_text("#!/bin/sh\\nprintf '%s\\n' \\\"\u0024{CODEX_HOME-unset}\\\" >> " + str(LOG) + "\\n")
