@@ -158,6 +158,7 @@ const ACCEPTED_STATUS = `
   GET /api/board/{name}/revision/diff 400
   POST /api/board/{name}/revision/restore 400
   POST /api/session-actions/{request_id}/claim 400
+  POST /api/session-actions/{request_id}/recover-fence 400
   POST /api/session-actions/{request_id}/decision 400
   POST /api/organize 400
   POST /api/restore 400
