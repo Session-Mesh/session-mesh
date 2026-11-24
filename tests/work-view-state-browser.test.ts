@@ -643,7 +643,8 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     await page.locator('.work-refresh').evaluate(button => {
       button.addEventListener('click', () => { (window as any).__testRefreshClick = Date.now(); }, {capture: true, once: true});
     });
-    const railRead = page.waitForRequest(async request => {
+    const railRead = page.waitForResponse(async response => {
+      const request = response.request();
       if (!request.url().endsWith('/api/work/v1')) return false;
       try {
         if (JSON.parse(request.postData() ?? '{}').op !== 'projects') return false;
