@@ -368,6 +368,68 @@ for (const width of WIDTHS) {
       await noOverflow(page);
     });
 
+    for (const lone of [false, true]) test(`background replacement cancels old preview (${lone ? 'unassigned' : 'project'})`, { timeout: 900_000 }, async () => {
+      const { page } = await signedIn(orphanTracked, 'en-US', width);
+      await enterProjects(page, width);
+      if (lone) {
+        const toggle = page.locator('.work-qsection-toggle'); await toggle.waitFor();
+        if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+        await page.locator('.work-entry-questions .work-qrow-open[data-task="T-7e7e"]').click();
+      } else {
+        await openRelayProject(page);
+        await page.locator('.work-tab').nth(1).click();
+        await page.locator('#work-panel-board .work-card', { hasText: '<script>window.__pwn=2</script>' }).click();
+      }
+      const scope = page.locator(lone ? '.work-qsheet' : '.work-detail-pane');
+      await scope.locator('.work-detail-heading').waitFor();
+      const source = lone ? 'T-7e7e' : 'T-8e8e';
+      const draft = scope.getByLabel('Your answer').first();
+      await draft.fill('draft remains while focused');
+      let release!: () => void, started!: () => void, changed = false, previews = 0;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const pending = new Promise<void>(resolve => { started = resolve; });
+      const aborted = page.waitForEvent('requestfailed', {timeout:90_000, predicate: request => {
+        const body = request.postDataJSON();
+        return body?.op === 'task' && body?.args?.id === 'T-3c4d';
+      }});
+      void aborted.catch(() => undefined);
+      await page.route('**/api/work/v1', async route => {
+        const body = route.request().postDataJSON();
+        if (body?.op === 'task' && body?.args?.id === 'T-3c4d') {
+          const response = await route.fetch();
+          if (++previews === 1) { started(); await gate; }
+          await route.fulfill({response}).catch(() => undefined);
+        } else if (changed && body?.op === 'task' && body?.args?.id === source) {
+          const response = await route.fetch();
+          const data = await response.json();
+          data.task.title = 'Updated preview source';
+          await route.fulfill({response,json:data});
+        } else await route.continue();
+      });
+      try {
+        await scope.locator('.work-dep-preview', {hasText:'Preview T-3c4d'}).locator('summary').click();
+        await pending;
+        await draft.focus();
+        changed = true;
+        await scope.locator('.work-sheet-refresh-status').waitFor({state:'visible',timeout:90_000});
+        assert.equal(await draft.inputValue(),'draft remains while focused');
+        assert.equal(await draft.evaluate(node => node === document.activeElement),true);
+        await draft.fill('');
+        await scope.locator('.work-detail-heading').focus();
+        await scope.locator('.work-detail-heading', {hasText:'Updated preview source'}).waitFor({timeout:90_000});
+        assert.equal(await scope.locator('.work-detail-heading').evaluate(node => node === document.activeElement),true);
+        await aborted;
+        assert.equal(previews,1,'replacement does not automatically reopen the old preview');
+        await scope.locator('.work-dep-preview', {hasText:'Preview T-3c4d'}).locator('summary').click();
+        await scope.locator('.work-dep-preview', {hasText:'Preview T-3c4d'}).locator('strong').waitFor({timeout:5000});
+        assert.equal(previews,2,'the replacement preview uses a fresh scope');
+      } finally {
+        release();
+        await page.unrouteAll({behavior:'wait'});
+        await aborted.catch(() => undefined);
+      }
+    });
+
     test('closing a task aborts held previews and frees the shared read slots', { timeout: 900_000 }, async () => {
       const { page } = await signedIn(orphanTracked, 'en-US', width);
       await enterProjects(page, width);
