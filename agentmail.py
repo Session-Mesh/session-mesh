@@ -213,7 +213,7 @@ def _migrate_v1(raw):
             "consent_requests": [], "always_policies": []}
 
 
-def _upgrade_delivery(state):
+def _upgrade_delivery(state, *, suppressed_ids=frozenset()):
     """Keep old mail and existing grants, but never retry an old wake for unapproved mail."""
     messages = state["messages"]
     requests = {item["message_id"]: item for item in state["consent_requests"]}
@@ -224,6 +224,15 @@ def _upgrade_delivery(state):
             allowed.add(message["seq"])
         elif request is None:
             _request_consent(state, message, message["created"])
+    # An operator-confirmed range must not be redispatched by another
+    # overlapping legacy range, including one listed earlier in the file.
+    manually_handled = [wake for wake in state["wakes"]
+                        if wake["notification_id"] in suppressed_ids]
+    allowed.difference_update(
+        message["seq"] for message in messages
+        if any(message["target"] == wake["target"]
+               and wake["from_seq"] <= message["seq"] <= wake["through_seq"]
+               for wake in manually_handled))
     retained = []
     notification_ids = {wake["notification_id"] for wake in state["wakes"]}
     for wake in state["wakes"]:
@@ -366,7 +375,7 @@ def _load(*, recovery_ids=None, expected_digest=None):
         # selected wake ranges; it does not remove or authorize messages.
         for wake in chosen:
             wake["state"] = "injected"
-    return _upgrade_delivery(state) if legacy else state
+    return _upgrade_delivery(state, suppressed_ids=recovery_ids or frozenset()) if legacy else state
 
 
 def recover_legacy_wakes(*, notification_ids, expected_digest, acknowledge_manual_handling):
@@ -376,6 +385,15 @@ def recover_legacy_wakes(*, notification_ids, expected_digest, acknowledge_manua
     permissions remain unchanged. Selected pending/claimed wake ranges become
     completed and will not be dispatched. If other blockers remain, nothing is
     written. This is an operator primitive, not an agent-facing route.
+
+    From the installed server's Python environment, after separately inspecting
+    the private mailbox and recording its SHA-256 and notification IDs, set
+    MESH_RECOVERY_DIGEST and comma-separated MESH_RECOVERY_IDS, then run:
+
+        python -c 'import os,agentmail; print(agentmail.recover_legacy_wakes(notification_ids=os.environ["MESH_RECOVERY_IDS"].split(","), expected_digest=os.environ["MESH_RECOVERY_DIGEST"], acknowledge_manual_handling=True))'
+
+    This marks the selected ranges manually handled. Overlapping parts of any
+    other pending ranges are suppressed; their remaining members can still wake.
     """
     if (acknowledge_manual_handling is not True or not isinstance(expected_digest, str)
             or not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
