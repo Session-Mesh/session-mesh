@@ -120,13 +120,13 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
       account.select.value = draft[side];
       account.select.addEventListener('change', () => {
         if (!writable() || !draft) return;
+        const previous = selected();
         draft[side] = account.select.value;
         const pair = selected();
         const existing = pair && controller.state.snapshot!.policy.pairs.find(r => pairKey(r.a, r.b) === pairKey(pair.a, pair.b));
-        if (existing) {
-          draft.confirmation = existing.confirmation;
-          ruleRadios.querySelectorAll<HTMLInputElement>('input').forEach(input => { input.checked = input.value === draft!.confirmation; });
-        }
+        if (existing) draft.confirmation = existing.confirmation;
+        else if (!pair || !previous || pairKey(previous.a, previous.b) !== pairKey(pair.a, pair.b)) draft.confirmation = 'ask';
+        ruleRadios.querySelectorAll<HTMLInputElement>('input').forEach(input => { input.checked = input.value === draft!.confirmation; });
         updatePreview();
       });
       fields.append(account.label, account.select);

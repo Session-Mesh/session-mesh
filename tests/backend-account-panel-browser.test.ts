@@ -158,6 +158,11 @@ for (const lang of ['en', 'fr']) for (const width of [1440, 390]) {
         {backend, op: 'consent.set_pair', source: 'a', target: 'b'});
       }
       assert.equal(await page.locator('[data-rule]').count(), 4);
+      await addPair(page, 'pi');
+      assert.equal(await control(page, 'pair-rule-skip').isChecked(), true, 'existing pair loads its rule');
+      await control(page, 'pair-b').selectOption('c');
+      assert.equal(await control(page, 'pair-rule-ask').isChecked(), true, 'a different unconfigured pair starts with confirmation');
+      await control(page, 'cancel-edit').click();
       const beforeCancel = await page.evaluate(() => lab.calls.length);
       await addPair(page, 'pi'); await control(page, 'cancel-edit').click();
       assert.equal(await page.evaluate(() => lab.calls.length), beforeCancel, 'cancel edit never writes');
