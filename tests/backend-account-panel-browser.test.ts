@@ -303,3 +303,22 @@ test('component: keyboard removal restores a surviving control without stealing 
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
+
+test('component: pair save restores focus only if the user did not move it', {skip}, async () => {
+  const {page, errors, context} = await fixture();
+  try {
+    await addPair(page, 'pi');
+    await page.evaluate(() => { lab.holdWrite = true; });
+    await control(page, 'save-pair').focus(); await page.keyboard.press('Enter'); await statusIs(page, 'en', 'saving');
+    await control(page, 'close').focus();
+    await page.evaluate(() => { lab.finishWrite(); }); await statusIs(page, 'en', 'saved');
+    assert.equal(await control(page, 'close').evaluate(el => el === document.activeElement), true);
+    assert.equal(await control(page, 'save-pair').count(), 0);
+    await page.evaluate(() => { lab.holdWrite = false; });
+    await addPair(page, 'pi');
+    await control(page, 'pair-b').selectOption('c');
+    await control(page, 'save-pair').focus(); await page.keyboard.press('Enter'); await statusIs(page, 'en', 'saved');
+    assert.equal(await control(page, 'add-pair').evaluate(el => el === document.activeElement), true);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
