@@ -565,3 +565,35 @@ def test_legacy_recovery_never_quarantines_invalid_or_missing_data(mailbox):
     with pytest.raises(agentmail.MailStorageError, match="mailbox missing"):
         agentmail.recover_legacy_wakes(notification_ids=["a" * 32],
             expected_digest="0" * 64, acknowledge_manual_handling=True)
+
+
+@pytest.mark.parametrize("handled_through", [33, 40])
+def test_manual_recovery_suppresses_overlapping_pending_legacy_wake(mailbox, handled_through):
+    alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
+    count = agentmail.MAX_INBOX + 8
+    messages = [{"id": f"{seq:032x}", "conversation_id": "a" * 32, "source": alpha,
+                 "target": beta, "kind": "message", "text": f"message {seq}",
+                 "created": float(seq + 4), "seq": seq} for seq in range(1, count + 1)]
+    wake = {"target": beta, "from_seq": 1, "through_seq": count, "count": count}
+    raw = {"version": 3, "next_seq": count + 1, "messages": messages,
+           "wakes": [{**wake, "notification_id": "d" * 32, "state": "pending"},
+                     {**wake, "notification_id": "f" * 32, "state": "claimed", "through_seq": handled_through,
+                      "count": handled_through}],
+           "consent_requests": [], "always_policies": [
+               {"id": "e" * 32, "source": alpha, "target": beta, "created": 3.0}]}
+    mailbox.parent.mkdir(parents=True)
+    mailbox.write_text(json.dumps(raw), encoding="utf-8")
+    original = mailbox.read_bytes()
+    agentmail.recover_legacy_wakes(notification_ids=["f" * 32],
+        expected_digest=hashlib.sha256(original).hexdigest(), acknowledge_manual_handling=True)
+    migrated = agentmail._load()
+    assert migrated["messages"] == messages
+    completion = next(item for item in migrated["wakes"] if item["notification_id"] == "f" * 32)
+    assert completion["state"] == "injected"
+    remaining = agentmail.claim_wake(beta, [alpha, beta])
+    if handled_through == count:
+        assert remaining is None
+    else:
+        assert remaining["notification_id"] == "d" * 32
+        assert remaining["seqs"] == list(range(handled_through + 1, count + 1))
+    assert agentmail.mark_wake_injected(beta, "f" * 32, [alpha, beta])["state"] == "injected"
