@@ -2212,6 +2212,7 @@
   "server.optionsEmptyArgument": "Une option est vide : mettez sa valeur entre guillemets si elle doit être vide.",
   "server.approvedOptionsUnavailable": "Les options de lancement approuvées sont indisponibles. Demandez une nouvelle approbation.",
   "server.optionsRevisionRequired": "La révision des options de lancement est requise. Actualisez la demande et réessayez.",
+  "server.opencode2FreshModel": "OpenCode 2 ne peut pas utiliser une option de modèle pour une nouvelle session.",
   "new.optionsStored": "Défaut enregistré, appliqué d’abord : {options}",
   "new.optionsStoredNone": "Aucun défaut enregistré pour {agent}.",
   "work.dep.preview": "Aperçu de {id}",

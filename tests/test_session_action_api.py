@@ -9,6 +9,7 @@ import shlex
 from pathlib import Path
 from types import SimpleNamespace
 
+import resumeargs
 import session_helpers
 import sessionrequests
 import server
@@ -471,3 +472,97 @@ async def test_restart_never_starts_replacement_before_source_exit(monkeypatch):
                                      "codex resume sid", "codex", "codex")
     assert "still active" in failure.value.text
     assert "start_if" not in calls
+
+
+@pytest.mark.parametrize("option", ["--model provider/model", "-m provider/model", "--model=provider/model",
+                                    "-m=provider/model"])
+async def test_opencode2_fresh_model_is_refused_before_preflight(monkeypatch, option):
+    monkeypatch.setattr(server.agentmcp, "opencode_resolved", lambda _env: ("/usr/bin/opencode", 2))
+
+    with pytest.raises(server.web.HTTPConflict) as refused:
+        await server._opencode_command(f"opencode {option}", fresh=True)
+    assert "model option" in refused.value.text
+
+
+async def test_opencode2_resume_keeps_existing_conversion(monkeypatch):
+    monkeypatch.setattr(server.agentmcp, "opencode_resolved", lambda _env: ("/usr/bin/opencode", 2))
+    observed = []
+
+    async def adapt(words, _cwd, _env):
+        observed.extend(words)
+        return "adapted"
+
+    monkeypatch.setattr(server, "_opencode_v2_command", adapt)
+    assert await server._opencode_command("opencode --model provider/model") == ("adapted", None)
+    assert observed[-2:] == ["--model", "provider/model"]
+    assert resumeargs.opencode2_command(["opencode", "--model", "provider/model"]) == ["opencode", "--standalone"]
+
+
+def test_opencode2_fresh_prompt_can_contain_model_option_text():
+    assert resumeargs.opencode2_command(["opencode", "--prompt", "--model"], fresh=True) == [
+        "opencode", "--standalone", "--prompt", "--model"]
+
+
+async def test_opencode1_fresh_keeps_model(monkeypatch):
+    monkeypatch.setattr(server.agentmcp, "opencode_resolved", lambda _env: ("/usr/bin/opencode", 1))
+    monkeypatch.setattr(server.agentmcp, "opencode_config", lambda **_kwargs: "config")
+    command, _notice = await server._opencode_command("opencode --model provider/model", fresh=True)
+    assert "--model provider/model" in command
+
+
+async def test_direct_create_marks_opencode_as_fresh(client, auth_cookie, monkeypatch):
+    monkeypatch.setitem(server.AGENT_PRESETS, "opencode", ["opencode"])
+    monkeypatch.setitem(server.PRESETS, "opencode", "opencode")
+    monkeypatch.setattr(server, "AGENT_OPTIONS_ERROR", None)
+    calls = []
+
+    async def create(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "created"
+
+    async def record(*_args):
+        return None
+
+    monkeypatch.setattr(server, "new_session", create)
+    monkeypatch.setattr(server, "_record_recent_folder", record)
+    response = await client.post("/api/new", headers=auth_cookie,
+                                 json={"preset": "opencode", "cwd": str(Path.home())})
+    assert response.status == 200
+    assert calls[0][1]["fresh"] is True
+
+
+async def test_approved_create_marks_opencode_as_fresh(monkeypatch):
+    monkeypatch.setitem(server.AGENT_PRESETS, "opencode", ["opencode"])
+    calls = []
+
+    async def host(_request):
+        return [{"name": "alpha", "created": 1.0, "cwd": str(Path.home())}]
+
+    async def create(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "created"
+
+    monkeypatch.setattr(server, "host", host)
+    monkeypatch.setattr(server, "new_session", create)
+    item = {"source": {"id": "alpha", "created": 1.0}, "action": "create",
+            "preset": "opencode", "_approved_options": [], "model": None, "name": None}
+    assert await server._execute_session_action(item) == {"id": "created"}
+    assert calls[0][1]["fresh"] is True
+
+
+async def test_new_session_passes_fresh_context_to_opencode_preflight(monkeypatch):
+    seen = []
+
+    async def unique(*_args):
+        return "created"
+
+    async def preflight(_command, _cwd, *, fresh=False):
+        seen.append(fresh)
+        raise server.web.HTTPConflict(text="preflight stopped")
+
+    monkeypatch.setattr(server, "unique_name", unique)
+    monkeypatch.setattr(server, "_opencode_command", preflight)
+    with pytest.raises(server.web.HTTPConflict):
+        await server.new_session("created", str(Path.home()), "opencode --model a/b", "opencode", "opencode",
+                                 account_env={}, fresh=True)
+    assert seen == [True]

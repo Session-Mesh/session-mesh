@@ -7412,8 +7412,11 @@ wform.addEventListener("submit", async (e) => {
 // ---------------------------------------------------------------- new session
 
 const dlg = $("#dlg-new"), form = $("#form-new");
+let newDialogGeneration = 0;
+const currentNewDialog = (generation) => generation === newDialogGeneration && dlg.open;
 async function openNew() {
   if (localActionUnavailable()) return;
+  const generation = ++newDialogGeneration;
   form.reset();
   $("#new-err").textContent = "";
   // the last kind started (claude by default): what is wanted most of the time
@@ -7442,6 +7445,7 @@ async function openNew() {
   renderFolderList();
   const [listed, config] = await Promise.allSettled([readJson("/api/dirs"),   // the moved folders are in the config's answer
     moveRecentFoldersToRunner().then(() => readJson("/api/config", { cache: "no-store" }))]);
+  if (!currentNewDialog(generation)) return;
   if (config.status === "fulfilled") { rememberLaunchOptions(config.value?.launch); syncOptionsRow(); }
   fillAccounts(config.status === "fulfilled" && Array.isArray(config.value?.accounts) ? config.value.accounts : []);
   folderField.roots = config.status === "fulfilled" ? MeshFolderState.workspaceRoots(config.value) : [];
@@ -7494,18 +7498,19 @@ function rememberLaunchOptions(launch) {
 
 // Store (or clear) one agent's options. The elevation is asked for here, once, and only when the
 // server says it is missing: the token is typed in the dialog and never kept by the page.
-async function saveAgentOptions(preset, options, token) {
+async function saveAgentOptions(preset, options, token, generation, revision) {
   const send = () => requestLocal("/api/config/launch-options", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ revision: launchOptionsRevision, agent_options: { [preset]: options } }),
+    body: JSON.stringify({ revision, agent_options: { [preset]: options } }),
   });
   if (token) {
     const elevated = await requestLocal("/api/config/elevate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
     if (!elevated.ok) return { ok: false, error: "wrong-token" };
   }
+  if (!currentNewDialog(generation)) return { ok: false, error: "obsolete" };
   const response = await send();
   const body = await response.json().catch(() => ({}));
-  if (response.ok) { rememberLaunchOptions(body.launch); return { ok: true }; }
+  if (response.ok) return { ok: true, launch: body.launch };
   return { ok: false, error: String(body.error || response.status), message: typeof body.message === "string" ? body.message : null,
     revision: typeof body.revision === "string" ? body.revision : null };
 }
@@ -7656,20 +7661,21 @@ folderList.addEventListener("click", (e) => {
 dlg.addEventListener("close", () => folderSuggester.reset());   // no pending timer or answer after the dialog closes
 $("#btn-new").addEventListener("click", () => { if (projecting) projectsController?.create(); else openNew(); });
 form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; syncOptionsRow(); syncAccountChoice(); });
-let newSubmitInFlight = false;   // set before the first await: a double click never starts two sessions
+let newSubmitGeneration = null;   // one submission per opening; an old completion cannot unlock a newer one
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (newSubmitInFlight) return;   // the session is starting, or its default is still being saved
-  newSubmitInFlight = true;
+  const generation = newDialogGeneration;
+  if (!currentNewDialog(generation) || newSubmitGeneration === generation) return;
+  newSubmitGeneration = generation;
   try {
-    await submitNew();
+    await submitNew(generation);
   } finally {
-    newSubmitInFlight = false;
+    if (newSubmitGeneration === generation) newSubmitGeneration = null;
   }
 });
 
-async function submitNew() {
+async function submitNew(generation) {
   // A session was already started and only its default is left to store: this click finishes that,
   // and never starts a second session.
   const pending = dlg.dataset.pendingDefault ? JSON.parse(dlg.dataset.pendingDefault) : null;
@@ -7678,21 +7684,26 @@ async function submitNew() {
     const token = form.masterToken.value;
     form.masterToken.value = "";
     if (!token) { $("#new-err").textContent = t("new.optionsCancelled"); return; }
-    const saved = await saveAgentOptions(pending.preset, pending.options, token)
+    const saved = await saveAgentOptions(pending.preset, pending.options, token, generation, launchOptionsRevision)
       .catch(() => ({ ok: false, error: t("config.launch.err.network") }));
+    if (!currentNewDialog(generation)) { await refresh(); return; }
     if (!saved.ok) {
       if (saved.error === "stale-revision") launchOptionsRevision = saved.revision ?? launchOptionsRevision;
       $("#new-err").textContent = saved.error === "wrong-token"
         ? t("config.launch.err.wrongToken") : t("new.optionsNotSaved", { message: saved.message || saved.error });
       return;
     }
+    rememberLaunchOptions(saved.launch);
     delete dlg.dataset.pendingDefault;
     dlg.close();
     await refresh();
-    active.show(pending.id, false, { focusTerminal: true });
+    if (generation === newDialogGeneration) active.show(pending.id, false, { focusTerminal: true });
     return;
   }
   const body = Object.fromEntries(new FormData(form));
+  const saveDefault = form.optionsDefault.checked && knownAgentPreset(body.preset);
+  const optionsRevision = launchOptionsRevision;
+  const accountSelected = !form.account.disabled;
   delete body.account;   // "" for the default account: the server takes an alias id or nothing
   delete body.masterToken;
   delete body.optionsDefault;
@@ -7701,17 +7712,23 @@ async function submitNew() {
   if (account.refused) { $("#new-err").textContent = account.refused; return; }
   if (account.id) body.account = account.id;
   const r = await requestLocal("/api/new", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) { $("#new-err").textContent = serverText(await r.text()); return; }
+  if (!r.ok) {
+    const error = serverText(await r.text());
+    if (currentNewDialog(generation)) $("#new-err").textContent = error;
+    return;
+  }
   const { id } = await r.json();
+  if (!currentNewDialog(generation)) { await refresh(); return; }
   store.set("preset", body.preset);
-  if (!form.account.disabled) store.set("account", body.account || "");
+  if (accountSelected) store.set("account", body.account || "");
   if (body.preset === "custom") store.set("command", body.command || "");   // the folder: recorded by the server
   // The session is started whatever happens next: a default that cannot be stored never blocks it.
-  const wanted = form.optionsDefault.checked && knownAgentPreset(body.preset)
+  const wanted = saveDefault
     ? { preset: body.preset, options: body.options || "", id } : null;
   if (wanted) {
-    const saved = await saveAgentOptions(wanted.preset, wanted.options)
+    const saved = await saveAgentOptions(wanted.preset, wanted.options, undefined, generation, optionsRevision)
       .catch(() => ({ ok: false, error: t("config.launch.err.network") }));
+    if (!currentNewDialog(generation)) { await refresh(); return; }
     if (!saved.ok) {
       if (saved.error === "elevation-required") {
         $("#new-elevation-row").hidden = false;
@@ -7727,10 +7744,11 @@ async function submitNew() {
       dlg.dataset.pendingDefault = JSON.stringify({ close: true });   // the next click only closes
       return;
     }
+    rememberLaunchOptions(saved.launch);
   }
   dlg.close();
   await refresh();
-  active.show(id, false, { focusTerminal: true });
+  if (generation === newDialogGeneration) active.show(id, false, { focusTerminal: true });
 }
 
 document.addEventListener("keydown", (e) => {

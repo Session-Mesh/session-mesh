@@ -391,7 +391,7 @@ _OPENCODE2_DROPPED_FLAGS = {"--mini", "--no-replay"}
 _OPENCODE2_DROPPED_VALUES = {"--model", "-m", "--replay-limit"}
 
 
-def opencode2_command(words):
+def opencode2_command(words, *, fresh=False):
     """The argv words of an OpenCode launch rewritten for OpenCode 2: ``--standalone`` (a private server,
     not the shared background service) after the program name, and only the options 2.x takes.
 
@@ -415,6 +415,8 @@ def opencode2_command(words):
                 i += 1
                 out.append(words[i])
         elif name in _OPENCODE2_DROPPED_FLAGS or name in _OPENCODE2_DROPPED_VALUES:
+            if fresh and name in ("--model", "-m"):
+                raise OpenCode2Refused("OpenCode 2 cannot use a model option on a new session")
             if name in _OPENCODE2_DROPPED_VALUES and not has_value:
                 i += 1
         else:

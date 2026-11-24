@@ -231,7 +231,10 @@ describe('a pending agent request for an agent disabled since', () => {
     assert.equal(claim.status, 200, await claim.clone().text());
     const {claim_nonce} = await claim.json() as {claim_nonce: string};
     assert.equal((await other.save(['claude'], [work])).status, 200, 'codex is disabled now');
-    const decision = await other.post(`/api/session-actions/${id}/decision`, {approve: true, claim_nonce}, other.owner(false));
+    const config = await fetch(`${other.base}/api/config`, {headers: other.owner(false)});
+    const {launch} = await config.json() as {launch: {agent_options_revision: string}};
+    const decision = await other.post(`/api/session-actions/${id}/decision`,
+      {approve: true, claim_nonce, options_revision: launch.agent_options_revision}, other.owner(false));
     const outcome = await decision.json() as {request: {state: string; result: {error?: string}}};
     assert.equal(outcome.request.state, 'failed');
     assert.equal(outcome.request.result.error, 'Agent codex is disabled in the configuration', JSON.stringify(outcome));
