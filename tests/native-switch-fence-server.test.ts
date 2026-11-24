@@ -8,9 +8,10 @@ import path from 'node:path';
 const repo = path.resolve(import.meta.dirname, '..');
 test('native switch fence binds one session and never replays an uncertain operation', () => {
   const script = `
-import asyncio, sys
+import asyncio, sys, tempfile, pathlib, json
 sys.path.insert(0, ${JSON.stringify(repo)})
 import server
+server.CONF_DIR = pathlib.Path(tempfile.mkdtemp())
 from aiohttp import web
 raw = {'name':'one','created':1.0}
 receipt = 'a'*64+':0000000000000001'
@@ -49,13 +50,61 @@ async def main():
     try: await server.relaunch_in_place(raw, '/', 'codex', 'codex', 'codex', switch=switch); assert False
     except server.NativeFenceRecoveryRequired as e: assert e.fence['creation_receipt'] == receipt
     assert [c['op'] for c in calls] == ['list_bound','switch_input_acquire']
+    server._forget_native_fence(switch[4])
     calls.clear()
     server.host = host
-    async def stop_uncertain(*args, fence, **kwargs): raise web.HTTPServiceUnavailable()
+    async def stop_uncertain(*args, fence, fence_state, **kwargs):
+        fence_state['stop_started'] = True
+        raise web.HTTPServiceUnavailable()
     server._relaunch_in_place = stop_uncertain
     try: await server.relaunch_in_place(raw, '/', 'codex', 'codex', 'codex', switch=switch); assert False
     except server.NativeFenceRecoveryRequired: pass
     assert [c['op'] for c in calls] == ['list_bound','switch_input_acquire']
+    saved = json.loads(server._native_fence_path(switch[4]).read_text())
+    assert saved['creation_receipt'] == receipt
+    assert server._native_fence_path(switch[4]).stat().st_mode & 0o777 == 0o600
+    class Store:
+        def status(self, rid): return {'action':'switch_account','source':{'id':'one','created':1.0}}
+    class Request:
+        match_info = {'request_id':switch[4]}
+        app = {'session_action_tasks':{}, 'session_requests':Store()}
+    async def body(_): return {'action':'release_fence'}
+    server.json_object = body
+    async def recoverhost(message, **kwargs):
+        calls.append(message.copy())
+        if message['op'] == 'list_bound': return [{'name':'one','created':2.0,'creation_receipt':receipt}]
+        if message['op'] == 'switch_input_release':
+            assert message['created'] == 2.0 and message['fence_id'] == saved['fence_id']
+            return {'ok':True}
+        raise AssertionError(message)
+    async def wrong_receipt(message, **kwargs):
+        if message['op'] == 'list_bound': return [{'name':'one','created':2.0,'creation_receipt':'different'}]
+        raise AssertionError('replacement terminal must not be released')
+    server.host = wrong_receipt
+    try: await server.api_session_action_recover_fence(Request()); assert False
+    except web.HTTPConflict: pass
+    assert server._native_fence_path(switch[4]).exists()
+    server.host = recoverhost
+    response = await server.api_session_action_recover_fence(Request())
+    assert json.loads(response.text) == {'ok':True}
+    assert not server._native_fence_path(switch[4]).exists()
+    calls.clear()
+    server.host = host
+    async def refused_before_stop(*args, **kwargs): raise web.HTTPConflict(text='unchanged')
+    server._relaunch_in_place = refused_before_stop
+    try: await server.relaunch_in_place(raw, '/', 'codex', 'codex', 'codex', switch=switch); assert False
+    except web.HTTPConflict: pass
+    assert [c['op'] for c in calls] == ['list_bound','switch_input_acquire','switch_input_release']
+    assert not server._native_fence_path(switch[4]).exists()
+    calls.clear()
+    async def cancelled(*args, fence_state, **kwargs):
+        fence_state['stop_started'] = True
+        raise asyncio.CancelledError()
+    server._relaunch_in_place = cancelled
+    try: await server.relaunch_in_place(raw, '/', 'codex', 'codex', 'codex', switch=switch); assert False
+    except asyncio.CancelledError: pass
+    assert [c['op'] for c in calls] == ['list_bound','switch_input_acquire']
+    assert server._native_fence_path(switch[4]).exists()
 asyncio.run(main())
 `;
   assert.doesNotThrow(() => execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', script], {cwd: repo, timeout: 10_000, stdio: 'pipe'}));
