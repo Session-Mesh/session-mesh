@@ -9,6 +9,7 @@ path in ``server.api_new``; a known agent always starts from this catalogue.
 """
 
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import agentcap
 import agentmcp
@@ -59,6 +60,113 @@ def agent_type(kind: str) -> str:
     if not isinstance(kind, str) or kind not in _EXECUTABLES:
         raise InvalidLaunchPlan(f"unknown Mesh agent: {kind!r}")
     return _EXECUTABLES[kind]
+
+
+# Owner-supplied options Mesh must not accept. Two classes only, on purpose: the flags that make an
+# agent run without approvals and without a sandbox (the class the "codex-yolo" preset reserves to
+# the owner), and the options that pick the conversation, which Mesh records before the agent starts
+# and which would therefore be duplicated or contradicted. Everything else is the owner's choice.
+_YOLO_FLAGS = MappingProxyType({
+    "codex": frozenset({"--yolo", "--dangerously-bypass-approvals-and-sandbox",
+                        "--dangerously-bypass-hook-trust"}),
+    "claude": frozenset({"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}),
+})
+_YOLO_PAIRS = MappingProxyType({
+    "codex": frozenset({("-a", "never"), ("--ask-for-approval", "never"),
+                        ("-s", "danger-full-access"), ("--sandbox", "danger-full-access")}),
+    "claude": frozenset({("--permission-mode", "bypassPermissions")}),
+})
+# ``codex -c key=value`` reaches the same class through its configuration overrides.
+_YOLO_OVERRIDES = frozenset({("approval_policy", "never"), ("ask_for_approval", "never"),
+                             ("sandbox_mode", "danger-full-access"),
+                             ("sandbox", "danger-full-access")})
+_CONVERSATION_OPTIONS = MappingProxyType({
+    "claude": frozenset({"--session-id", "--continue", "-c", "--resume", "-r", "--fork-session"}),
+    "codex": frozenset(),      # ``codex resume`` is a subcommand: refused by _SUBCOMMANDS below
+    "pi": frozenset({"--session-id", "--session", "--session-dir", "--continue", "-c",
+                      "--resume", "-r", "--fork"}),
+    # Read from each CLI's --help: the option that reopens a conversation instead of starting one.
+    "opencode": frozenset({"--continue", "-c", "--session", "-s", "--fork"}),
+    "gemini": frozenset({"--resume", "-r", "--session-file", "--session-id"}),
+    "agy": frozenset({"--continue", "-c", "--conversation"}),
+    "copilot": frozenset({"--resume", "--connect"}),
+})
+# The agents whose first argument is a subcommand rather than a prompt. A word from this set anywhere in
+# the owner's options is refused: an option's value (``--search resume``) is not a token Mesh can tell
+# from a subcommand without modelling every flag's arity, and refusing one word too many is safe here.
+_SUBCOMMANDS = MappingProxyType({
+    "codex": frozenset({"exec", "review", "resume", "apply", "mcp", "mcp-server", "completion",
+                        "login", "logout", "app-server", "proto", "cloud", "sandbox", "debug"}),
+    "opencode": frozenset({"session", "export", "import"}),
+})
+
+
+def _option_pairs(tokens: tuple[str, ...], short_options: frozenset[str]) -> tuple[list[tuple[str, str | None]], tuple[str, ...]]:
+    """The option/value pairs of ``tokens`` and the first positional, if any.
+
+    Handles ``--opt=value``, ``-o value`` and ``-o=value``. Reading stops at the first token that is
+    not an option: what follows is a prompt, where a word like ``--yolo`` is text, not a flag.
+    """
+    pairs: list[tuple[str, str | None]] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not isinstance(token, str) or not token.startswith("-") or token == "-":
+            break
+        if len(token) > 2 and token[:2] in short_options and not token.startswith("--"):
+            pairs.append((token[:2], token[2:].removeprefix("=")))
+            index += 1
+            continue
+        name, separator, inline = token.partition("=")
+        if separator:
+            pairs.append((name, inline))
+            index += 1
+            continue
+        following = tokens[index + 1] if index + 1 < len(tokens) else None
+        if following is not None and not following.startswith("-"):
+            pairs.append((name, following))
+            index += 2
+        else:
+            pairs.append((name, None))
+            index += 1
+    return pairs, tokens[index:]
+
+
+def refusal(kind: str, tokens) -> str | None:
+    """The first owner option Mesh must not accept for ``kind``, or None.
+
+    ``tokens`` are the options the owner supplied (stored or typed for one launch). The code-owned
+    preset vector is deliberately not checked here, so the ``codex-yolo`` preset keeps its own
+    ``--yolo`` while the same flag typed into an options field is refused.
+    """
+    agent = agent_type(kind)
+    options = tuple(tokens)
+    if not options:
+        return None
+    short_options = frozenset(name for name in _CONVERSATION_OPTIONS.get(agent, ())
+                              if len(name) == 2 and name.startswith("-"))
+    if agent == "codex":
+        short_options |= frozenset({"-a", "-s", "-c"})
+    pairs, positional = _option_pairs(options, short_options)
+    yolo_flags = _YOLO_FLAGS.get(agent, frozenset())
+    yolo_pairs = _YOLO_PAIRS.get(agent, frozenset())
+    conversation = _CONVERSATION_OPTIONS.get(agent, frozenset())
+    for name, value in pairs:
+        if name in yolo_flags:
+            return name
+        if (name, value) in yolo_pairs:
+            return f"{name} {value}"
+        if agent == "codex" and name in ("-c", "--config") and value:
+            key, _, setting = value.partition("=")
+            override = (key.strip().strip('"'), setting.strip().strip('"').strip("'"))
+            if override in _YOLO_OVERRIDES:
+                return f"{name} {value}"
+        if name in conversation:
+            return name
+    for token in options:
+        if token in _SUBCOMMANDS.get(agent, frozenset()):
+            return token
+    return None
 
 
 def build(kind: str) -> LaunchPlan:

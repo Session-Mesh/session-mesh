@@ -4,12 +4,20 @@
 """Known agent launch vectors are code-owned and never shell fragments."""
 
 import pytest
-
 import agentcap
 import agentmcp
 import launchplan
 import resumeargs
 
+
+@pytest.mark.parametrize("token", ["-anever", "-a=never", "-sdanger-full-access",
+                                    "-s=danger-full-access", "-capproval_policy=" + "never"])
+def test_attached_forbidden_codex_options_are_refused(token):
+    assert launchplan.refusal("codex", [token])
+
+
+def test_safe_codex_approval_option_is_accepted():
+    assert launchplan.refusal("codex", ["--ask-for-approval", "on-request"]) is None
 
 def test_catalogue_vectors_preserve_existing_fresh_agent_behavior():
     assert launchplan.build("claude").command() == agentmcp.inject(

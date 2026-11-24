@@ -38,7 +38,7 @@ SETTINGS_EFFORTS = frozenset(("low", "medium", "high"))
 # Presets an agent may never request: a session without approvals or sandbox
 # would let one agent obtain an unconfined sibling. The owner still can.
 OWNER_ONLY_PRESETS = frozenset(("codex-yolo",))
-ACTIVE_STATES = ("pending", "claimed", "approved", "executing", "settings_approved", "settings_executing")
+ACTIVE_STATES = ("pending", "claimed", "approved", "approved_options_v1", "executing", "settings_approved", "settings_executing")
 TERMINAL_STATES = ("rejected", "completed", "failed", "execution_unknown")
 _UMASK_LOCK = threading.Lock()
 
@@ -171,9 +171,19 @@ class Requests:
                 """)
                 # Older request stores have no account or effort columns.
                 columns = {row[1] for row in self._db.execute("PRAGMA table_info(session_requests)")}
-                for column in ("account", "from_account", "effort", "conversation"):
+                for column in ("account", "from_account", "effort", "conversation", "approved_options_json", "approved_options_revision"):
                     if column not in columns:
                         self._db.execute(f"ALTER TABLE session_requests ADD COLUMN {column} TEXT")
+                # Older servers write `approved` without a snapshot. Refuse that transition even
+                # after a downgrade, including for requests that were still pending at downgrade.
+                self._db.execute("""
+                    CREATE TRIGGER IF NOT EXISTS session_requests_require_create_snapshot
+                    BEFORE UPDATE OF state ON session_requests
+                    WHEN NEW.action = 'create' AND NEW.state = 'approved'
+                    BEGIN
+                        SELECT RAISE(ABORT, 'create approval requires bound launch options');
+                    END
+                """)
             finally:
                 os.umask(old_mask)
         if self._path != ":memory:":
@@ -244,7 +254,7 @@ class Requests:
         # visibly rather than allowing an arbitrarily late launch.
         self._db.execute(
             "UPDATE session_requests SET state = 'failed', result_json = ?, terminal_at = ? "
-            "WHERE state IN ('approved', 'settings_approved') AND created_at + ? <= ?",
+            "WHERE state IN ('approved', 'approved_options_v1', 'settings_approved') AND created_at + ? <= ?",
             (self._encode({"error": "Authorization expired before execution"}), now, TTL, now))
         self._db.execute(
             "DELETE FROM session_requests WHERE "
@@ -278,7 +288,7 @@ class Requests:
             "name": row["requested_name"], "model": row["model"],
             **({"effort": row["effort"], "conversation": row["conversation"]} if row["action"] == "settings" else {}),
             "account": row["account"], "from_account": row["from_account"],
-            "state": {"settings_approved": "approved", "settings_executing": "executing"}.get(row["state"], row["state"]), "created_at": row["created_at"],
+            "state": {"settings_approved": "approved", "settings_executing": "executing", "approved_options_v1": "approved"}.get(row["state"], row["state"]), "created_at": row["created_at"],
             "result": cls._decode(row["result_json"]),
             # Scheduling hint only. It grants no authority and is safe for the
             # owner inventory/status projection.
@@ -444,7 +454,16 @@ class Requests:
         return {"request": self._row(row), "tab_nonce": tab_nonce,
                 "claim_nonce": claim_nonce, "lease_expires_at": expires_at}
 
-    def decide(self, request_id, approve, claim_nonce):
+    def existing_decision(self, request_id, approve, claim_nonce):
+        """Return only a matching durable decision, without changing it."""
+        with self._transaction():
+            self._prune_locked(self._clock())
+            row = self._db.execute("SELECT * FROM session_requests WHERE id = ?", (request_id,)).fetchone()
+            if row is None or row["decided_claim_nonce"] != claim_nonce or row["decision"] != int(approve):
+                return None
+            return self._row(row)
+
+    def decide(self, request_id, approve, claim_nonce, approved_options=None, options_revision=None):
         if type(approve) is not bool or not isinstance(claim_nonce, str):
             return None
         now = self._clock()
@@ -460,12 +479,19 @@ class Requests:
             if (row["state"] != "claimed" or row["claim_nonce"] != claim_nonce
                     or row["claim_expires_at"] <= now):
                 return None
-            state = ("settings_approved" if row["action"] == "settings" else "approved") if approve else "rejected"
+            if approve and row["action"] == "create" and (
+                    not isinstance(approved_options, list) or not isinstance(options_revision, str)
+                    or any(not isinstance(token, str) for token in approved_options)):
+                return None
+            state = ({"create": "approved_options_v1", "settings": "settings_approved"}.get(row["action"], "approved")
+                     if approve else "rejected")
             terminal_at = None if approve else now
             self._db.execute(
                 "UPDATE session_requests SET state = ?, decision = ?, "
-                "decided_claim_nonce = ?, terminal_at = ? WHERE id = ?",
-                (state, int(approve), claim_nonce, terminal_at, request_id))
+                "decided_claim_nonce = ?, terminal_at = ?, approved_options_json = ?, approved_options_revision = ? WHERE id = ?",
+                (state, int(approve), claim_nonce, terminal_at,
+                 self._encode(approved_options) if approve and row["action"] == "create" else None,
+                 options_revision if approve and row["action"] == "create" else None, request_id))
             if not approve:
                 self._prune_locked(now)
             row = self._db.execute("SELECT * FROM session_requests WHERE id = ?",
@@ -477,7 +503,7 @@ class Requests:
         with self._transaction():
             self._prune_locked(now)
             rows = self._db.execute(
-                "SELECT * FROM session_requests WHERE state IN ('approved', 'settings_approved') "
+                "SELECT * FROM session_requests WHERE state IN ('approved', 'approved_options_v1', 'settings_approved') "
                 "ORDER BY created_at, id").fetchall()
         return [self._row(row) for row in rows]
 
@@ -487,12 +513,15 @@ class Requests:
             self._prune_locked(now)
             changed = self._db.execute(
                 "UPDATE session_requests SET state = CASE WHEN action = 'settings' THEN 'settings_executing' ELSE 'executing' END "
-                "WHERE id = ? AND state IN ('approved', 'settings_approved')", (request_id,)).rowcount
+                "WHERE id = ? AND state IN ('approved', 'approved_options_v1', 'settings_approved')", (request_id,)).rowcount
             if changed != 1:
                 return None
             row = self._db.execute("SELECT * FROM session_requests WHERE id = ?",
                                    (request_id,)).fetchone()
-        return self._row(row)
+        item = self._row(row)
+        if item is not None and item["action"] == "create":
+            item["_approved_options"] = self._decode(row["approved_options_json"])
+        return item
 
     def finish(self, request_id, *, result=None, error=None, detail=None):
         """``detail``: fields recorded beside a failure's error (an undone account switch: rolled_back, id)."""

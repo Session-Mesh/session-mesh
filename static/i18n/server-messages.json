@@ -874,5 +874,53 @@
   {
     "pattern": "^Settings approval invalidated during upgrade$",
     "key": "server.settingsApprovalInvalidated"
+  },
+  {
+    "pattern": "^The stored launch options cannot be read \\(.+\\): fix or remove .+$",
+    "key": "server.optionsStoredUnreadable"
+  },
+  {
+    "pattern": "^the options file cannot be written: (?<reason>.+)$",
+    "key": "server.optionsUnwritable"
+  },
+  {
+    "pattern": "^Options are longer than (?<max>\\S+) characters$",
+    "key": "server.optionsTooLong"
+  },
+  {
+    "pattern": "^Options must be on one line$",
+    "key": "server.optionsOneLine"
+  },
+  {
+    "pattern": "^Options cannot be read: (?<reason>.*)$",
+    "key": "server.optionsUnreadable"
+  },
+  {
+    "pattern": "^Options are more than (?<max>\\S+) tokens$",
+    "key": "server.optionsTooManyTokens"
+  },
+  {
+    "pattern": "^One option is longer than (?<max>\\S+) bytes$",
+    "key": "server.optionsTokenTooLong"
+  },
+  {
+    "pattern": "^Launch refused: (?<option>.+) is not allowed in the launch options \\(it removes the agent's approvals or its sandbox, or it picks its conversation\\)$",
+    "key": "server.optionsRefused"
+  },
+  {
+    "pattern": "^Options must be a string$",
+    "key": "server.optionsNotString"
+  },
+  {
+    "pattern": "^Options are for a known agent only$",
+    "key": "server.optionsAgentOnly"
+  },
+  {
+    "pattern": "^Unknown agent preset: (?<preset>.+)$",
+    "key": "server.optionsUnknownPreset"
+  },
+  {
+    "pattern": "^Options hold an empty argument$",
+    "key": "server.optionsEmptyArgument"
   }
 ]

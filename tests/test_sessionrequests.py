@@ -3,6 +3,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -63,7 +64,7 @@ def test_only_one_tab_claims_and_a_loser_cannot_change_the_decision(tmp_path):
     loser_tab = tab_b if winner["tab_nonce"] == tab_a else tab_a
     assert requests.claim(made["id"], loser_tab) is None
     assert requests.decide(made["id"], False, "not-the-claim") is None
-    assert requests.decide(made["id"], True, winner["claim_nonce"])["state"] == "approved"
+    assert requests.decide(made["id"], True, winner["claim_nonce"], approved_options=[], options_revision="rev")["state"] == "approved"
     assert requests.decide(made["id"], False, winner["claim_nonce"]) is None
     assert requests.begin_execution(made["id"])["state"] == "executing"
     done = requests.finish(made["id"], result={"id": "new-codex"})
@@ -79,8 +80,8 @@ def test_tab_nonce_does_not_recover_a_claim_secret(tmp_path):
     for wrong in ("", "é", "\ud800"):       # refused, never a TypeError from the comparison
         assert requests.claim(made["id"], "a" * 32, wrong) is None
     assert requests.claim(made["id"], "a" * 32, first["claim_nonce"]) == first
-    approved = requests.decide(made["id"], True, first["claim_nonce"])
-    assert requests.decide(made["id"], True, first["claim_nonce"]) == approved
+    approved = requests.decide(made["id"], True, first["claim_nonce"], approved_options=[], options_revision="rev")
+    assert requests.decide(made["id"], True, first["claim_nonce"], approved_options=[], options_revision="rev") == approved
 
 
 def test_restart_preserves_intent_claim_and_terminal_status(tmp_path):
@@ -94,7 +95,7 @@ def test_restart_preserves_intent_claim_and_terminal_status(tmp_path):
     second = sessionrequests.Requests(path, clock=lambda: 11.0)
     assert second.claim(made["id"], "a" * 32) is None
     assert second.claim(made["id"], "a" * 32, claim["claim_nonce"]) == claim
-    second.decide(made["id"], True, claim["claim_nonce"])
+    second.decide(made["id"], True, claim["claim_nonce"], approved_options=[], options_revision="rev")
     second.begin_execution(made["id"])
     second.finish(made["id"], result={"id": "created"})
     second.close()
@@ -121,7 +122,7 @@ def test_restart_never_reexecutes_an_uncertain_execution(tmp_path):
     made = first.create(source(), {"action": "create", "preset": "codex"},
                         enabled_agents={"codex"}, resumable={"codex"})
     claim = first.claim(made["id"], "a" * 32)
-    first.decide(made["id"], True, claim["claim_nonce"])
+    first.decide(made["id"], True, claim["claim_nonce"], approved_options=[], options_revision="rev")
     first.begin_execution(made["id"])
     first.close()
 
@@ -137,13 +138,42 @@ def test_approved_survives_restart_and_is_the_only_recoverable_work(tmp_path):
     made = first.create(source(), {"action": "create", "preset": "codex"},
                         enabled_agents={"codex"}, resumable={"codex"})
     claim = first.claim(made["id"], "a" * 32)
-    first.decide(made["id"], True, claim["claim_nonce"])
+    first.decide(made["id"], True, claim["claim_nonce"], approved_options=[], options_revision="rev")
     first.close()
 
     recovered = sessionrequests.Requests(path, clock=lambda: 11.0)
     assert [item["id"] for item in recovered.approved()] == [made["id"]]
     assert recovered.begin_execution(made["id"])["state"] == "executing"
     assert recovered.begin_execution(made["id"]) is None
+
+
+def test_approval_snapshot_survives_reopen_and_cannot_be_replaced_by_retry(tmp_path):
+    first = store(tmp_path)
+    made = first.create(source(), {"action": "create", "preset": "codex"},
+                        enabled_agents={"codex"}, resumable={"codex"})
+    claim = first.claim(made["id"], "a" * 32)
+    nonce = claim["claim_nonce"]
+    assert first.decide(made["id"], True, nonce) is None
+    approved = first.decide(made["id"], True, nonce, approved_options=["--before"], options_revision="rev-before")
+    assert "_approved_options" not in approved
+    assert first._db.execute("SELECT count(*) FROM session_requests WHERE state = 'approved'").fetchone()[0] == 0
+    assert first._db.execute("UPDATE session_requests SET state = 'executing' WHERE id = ? AND state = 'approved'",
+                             (made["id"],)).rowcount == 0
+    assert first.decide(made["id"], True, nonce, approved_options=["--after"], options_revision="rev-after") == approved
+    first.close()
+    recovered = store(tmp_path)
+    assert "_approved_options" not in recovered.status(made["id"])
+    assert recovered.begin_execution(made["id"])["_approved_options"] == ["--before"]
+
+
+def test_old_writer_cannot_approve_a_pending_create_without_snapshot(tmp_path):
+    requests = store(tmp_path)
+    made = requests.create(source(), {"action": "create", "preset": "codex"},
+                           enabled_agents={"codex"}, resumable={"codex"})
+    requests.claim(made["id"], "a" * 32)
+    with pytest.raises(sqlite3.IntegrityError, match="requires bound launch options"):
+        requests._db.execute("UPDATE session_requests SET state = 'approved' WHERE id = ?", (made["id"],))
+    assert requests.status(made["id"])["state"] == "claimed"
 
 
 def test_expired_claim_can_be_replaced_but_old_claim_cannot_decide(tmp_path):

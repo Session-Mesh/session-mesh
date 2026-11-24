@@ -298,6 +298,16 @@
     <label><span data-i18n="new.name">Name</span> <span class="mute" data-i18n="new.optional">(optional)</span>
       <input name="name" pattern="[A-Za-z0-9_-]{1,48}" autocomplete="off">
     </label>
+    <label id="new-options-row" hidden><span data-i18n="new.options">Options</span> <span class="mute" data-i18n="new.optionsHint">(this launch only)</span>
+      <input name="options" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="--flag value" data-i18n-placeholder="new.optionsPlaceholder">
+    </label>
+    <p id="new-options-stored" class="mute small" hidden></p>
+    <label id="new-options-default-row" class="config-check" hidden>
+      <input type="checkbox" name="optionsDefault"> <span id="new-options-default"></span>
+    </label>
+    <label id="new-elevation-row" hidden><span data-i18n="new.optionsToken">Master token</span>
+      <input name="masterToken" type="password" autocomplete="off" spellcheck="false">
+    </label>
     <div class="err" id="new-err"></div>
     <div class="row">
       <button type="button" class="btn ghost" data-close-dialog data-i18n="common.cancel">Cancel</button>

@@ -4,6 +4,7 @@
 """Owner-approved session lifecycle requests never grant mutation to MCP."""
 
 import pytest
+import asyncio
 import shlex
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,13 +22,92 @@ def agent(sessions):
     return headers
 
 
+async def test_create_approval_binds_options_across_save_and_repeated_decision(
+        client, mesh_listing, auth_cookie, monkeypatch):
+    headers = agent(mesh_listing)
+    monkeypatch.setattr(server, "AGENT_OPTIONS", {"codex": ("--before",)})
+    monkeypatch.setattr(server, "AGENT_OPTIONS_REVISION", "before")
+    monkeypatch.setattr(server, "AGENT_OPTIONS_ERROR", None)
+    entered, release = asyncio.Event(), asyncio.Event()
+    observed = []
+
+    async def execute(item):
+        entered.set()
+        await release.wait()
+        observed.append(item["_approved_options"])
+        return {"id": "created"}
+
+    monkeypatch.setattr(server, "_execute_session_action", execute)
+    made = await client.post("/api/session-actions/@self/request", headers=headers,
+                             json={"action": "create", "preset": "codex"})
+    request_id = (await made.json())["request"]["id"]
+    claimed = await client.post(f"/api/session-actions/{request_id}/claim", headers=auth_cookie,
+                                json={"tab_nonce": "a" * 32})
+    nonce = (await claimed.json())["claim_nonce"]
+    url = f"/api/session-actions/{request_id}/decision"
+    assert (await client.post(url, headers=auth_cookie,
+                              json={"approve": True, "claim_nonce": nonce})).status == 400
+    pending = asyncio.create_task(client.post(url, headers=auth_cookie,
+                                  json={"approve": True, "claim_nonce": nonce,
+                                        "options_revision": "before"}))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    monkeypatch.setattr(server, "AGENT_OPTIONS", {"codex": ("--after",)})
+    monkeypatch.setattr(server, "AGENT_OPTIONS_REVISION", "after")
+    monkeypatch.setattr(server, "AGENT_OPTIONS_ERROR", "unreadable")
+    retry = await client.post(url, headers=auth_cookie,
+                              json={"approve": True, "claim_nonce": nonce, "options_revision": "before"})
+    assert retry.status == 202
+    release.set()
+    assert (await pending).status == 200
+    assert observed == [["--before"]]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_recovered_create_executes_approved_options_not_current_options(tmp_path, monkeypatch, legacy):
+    path = tmp_path / "actions.sqlite3"
+    first = sessionrequests.Requests(path, clock=lambda: 10.0)
+    source = {"id": "alpha", "created": 1.0, "agent": "codex", "cwd": str(Path.home())}
+    made = first.create(source, {"action": "create", "preset": "codex"},
+                        enabled_agents={"codex"}, resumable={"codex"})
+    claim = first.claim(made["id"], "a" * 32)
+    first.decide(made["id"], True, claim["claim_nonce"], approved_options=["--search"],
+                 options_revision="approved-revision")
+    if legacy:
+        first._db.execute("UPDATE session_requests SET approved_options_json = NULL WHERE id = ?", (made["id"],))
+    first.close()
+    recovered = sessionrequests.Requests(path, clock=lambda: 11.0)
+    monkeypatch.setattr(server, "AGENT_OPTIONS", {"codex": ("--different",)})
+    monkeypatch.setattr(server, "AGENT_OPTIONS_ERROR", None)
+    monkeypatch.setattr(server, "LAUNCH_SETTINGS", SimpleNamespace(allows_cwd=lambda _cwd: True))
+    calls = []
+
+    async def host(_request):
+        return [{"name": "alpha", "created": 1.0, "cwd": str(Path.home())}]
+
+    async def create(_base, _cwd, command=None, *_args, **_kwargs):
+        calls.append(shlex.split(command))
+        return "created"
+
+    monkeypatch.setattr(server, "host", host)
+    monkeypatch.setattr(server, "new_session", create)
+    app = {"session_requests": recovered, "session_action_tasks": {}}
+    result = await server._run_session_action(app, made["id"])
+    if legacy:
+        assert result["state"] == "failed" and calls == []
+        assert "Approved launch options unavailable" in result["result"]["error"]
+    else:
+        assert result["state"] == "completed"
+        assert "--search" in calls[0] and "--different" not in calls[0]
+    recovered.close()
+
+
 async def test_startup_worker_recovers_approved_but_not_uncertain_work(tmp_path, monkeypatch):
     requests = sessionrequests.Requests(tmp_path / "actions.sqlite3", clock=lambda: 10.0)
     made = requests.create({"id": "alpha", "created": 1.0, "agent": "codex", "cwd": "/work"},
                            {"action": "create", "preset": "codex"},
                            enabled_agents={"codex"}, resumable={"codex"})
     claim = requests.claim(made["id"], "a" * 32)
-    requests.decide(made["id"], True, claim["claim_nonce"])
+    requests.decide(made["id"], True, claim["claim_nonce"], approved_options=[], options_revision="rev")
     calls = []
 
     async def execute(item):
@@ -99,7 +179,8 @@ async def test_two_owner_pages_get_one_claim_and_one_stable_decision(
     assert rejected.status == 200
     assert (await client.post(f"/api/session-actions/{request_id}/decision",
                               headers=auth_cookie,
-                              json={"approve": True, "claim_nonce": "z" * 24})).status == 409
+                              json={"approve": True, "claim_nonce": "z" * 24,
+                                    "options_revision": server.AGENT_OPTIONS_REVISION or ""})).status == 409
     assert (await rejected.json())["request"]["state"] == "rejected"
 
 
@@ -141,7 +222,7 @@ async def test_lost_decision_response_is_status_replay_not_second_execution(
     claim = await client.post(f"/api/session-actions/{request_id}/claim", headers=auth_cookie,
                               json={"tab_nonce": "a" * 32})
     secret = (await claim.json())["claim_nonce"]
-    payload = {"approve": True, "claim_nonce": secret}
+    payload = {"approve": True, "claim_nonce": secret, "options_revision": server.AGENT_OPTIONS_REVISION or ""}
     first = await client.post(f"/api/session-actions/{request_id}/decision",
                               headers=auth_cookie, json=payload)
     replay = await client.post(f"/api/session-actions/{request_id}/decision",
@@ -192,7 +273,7 @@ async def test_owner_approval_uses_current_directory_closed_preset_and_model(
     claim_nonce = (await claimed.json())["claim_nonce"]
     approved = await client.post(f"/api/session-actions/{request_id}/decision",
                                  headers=auth_cookie,
-                                 json={"approve": True, "claim_nonce": claim_nonce})
+                                 json={"approve": True, "claim_nonce": claim_nonce, "options_revision": server.AGENT_OPTIONS_REVISION or ""})
     assert approved.status == 200
     assert (await approved.json())["request"]["result"] == {"id": "review-codex"}
     base, cwd, argv, agent_kind, known_agent, _keep = calls[0]
@@ -221,7 +302,7 @@ async def test_claude_opus_baker_unlock_uses_the_exact_catalogue_argv(
     claim_nonce = (await claimed.json())["claim_nonce"]
     approved = await client.post(f"/api/session-actions/{request_id}/decision",
                                  headers=auth_cookie,
-                                 json={"approve": True, "claim_nonce": claim_nonce})
+                                 json={"approve": True, "claim_nonce": claim_nonce, "options_revision": server.AGENT_OPTIONS_REVISION or ""})
     assert approved.status == 200
     [(_, sid, _)] = chosen      # a new Claude: the conversation id the mesh chose, appended to the catalogue argv
     assert calls == [("baker-unlock", str(Path.home()),
@@ -248,7 +329,7 @@ async def test_replaced_source_incarnation_cannot_execute_an_approved_request(
     mesh_listing[0]["created"] = 2.0
     decided = await client.post(f"/api/session-actions/{request_id}/decision",
                                 headers=auth_cookie,
-                                json={"approve": True, "claim_nonce": claim_nonce})
+                                json={"approve": True, "claim_nonce": claim_nonce, "options_revision": server.AGENT_OPTIONS_REVISION or ""})
     request = (await decided.json())["request"]
     assert decided.status == 200 and request["state"] == "failed" and not spawned
     assert "replaced" in request["result"]["error"]
@@ -282,7 +363,7 @@ async def test_restart_approval_revalidates_self_then_resumes_with_replaced_mode
     claim_nonce = (await claimed.json())["claim_nonce"]
     approved = await client.post(f"/api/session-actions/{request_id}/decision",
                                  headers=auth_cookie,
-                                 json={"approve": True, "claim_nonce": claim_nonce})
+                                 json={"approve": True, "claim_nonce": claim_nonce, "options_revision": server.AGENT_OPTIONS_REVISION or ""})
     assert approved.status == 200
     assert (await approved.json())["request"]["result"] == {"id": "alpha-2"}
     assert calls[0][:4] == ("alpha", 1.0, "alpha", str(Path.home()))
@@ -310,7 +391,7 @@ async def test_approval_rechecks_workspace_policy_before_any_spawn(
     claim_nonce = (await claimed.json())["claim_nonce"]
     decided = await client.post(f"/api/session-actions/{request_id}/decision",
                                 headers=auth_cookie,
-                                json={"approve": True, "claim_nonce": claim_nonce})
+                                json={"approve": True, "claim_nonce": claim_nonce, "options_revision": server.AGENT_OPTIONS_REVISION or ""})
     assert decided.status == 200 and not spawned
     request = (await decided.json())["request"]
     assert request["state"] == "failed" and "workspace roots" in request["result"]["error"]

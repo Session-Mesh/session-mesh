@@ -27,6 +27,7 @@ const PLAIN = '403: the session cell uses a plain (non-agent) session\'s token, 
 const HANDLER_ANSWERS: Record<string, string> = {
   'GET /view/{tail}': '403: an unsigned capability URL (a public GET; an unserved route answers 404)',
   'POST /api/config/launch': '403: no configuration elevation, named in the body',
+  'POST /api/config/launch-options': '403: no configuration elevation, named in the body',
   'GET /api/agent-mail/@self/pi-wakes': PLAIN,
   'POST /api/agent-mail/@self/pi-wake-ack': PLAIN,
   'GET /api/portfolio/diff/{selector}': '404: no diff selector is known (see BLIND_CELLS)',
