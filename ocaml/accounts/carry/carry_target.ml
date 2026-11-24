@@ -33,6 +33,11 @@ let check_folders ~uid ~target relative =
 
 (* ------------------------------------------------------------- the lock *)
 
+(* Never block when a directory pathname is replaced by a FIFO just before
+   open. The caller checks the opened descriptor is still the bound directory. *)
+let open_directory ?(openfile = Unix.openfile) path =
+  openfile path [ Unix.O_RDONLY; Unix.O_CLOEXEC; Unix.O_NONBLOCK ] 0
+
 let lock_name = ".mesh-carry.lock"
 let open_flags = [ Unix.O_RDWR; Unix.O_CLOEXEC; Unix.O_NONBLOCK ]
 
@@ -41,6 +46,39 @@ let lock_failure error =
 
 let same_file (a : Unix.stats) (b : Unix.stats) =
   a.st_dev = b.st_dev && a.st_ino = b.st_ino
+
+let same_directory ~target identity =
+  match Unix.lstat target with
+  | named -> named.Unix.st_kind = Unix.S_DIR && same_file named identity
+  | exception Unix.Unix_error _ -> false
+
+(* This helper requires independently proven creation custody; an lstat after
+   mkdir does not establish it. Only a still-identical empty directory goes. *)
+let remove_empty_created ~target ~identity =
+  if same_directory ~target identity then
+    quietly (fun () -> Unix.rmdir target)
+
+(* Binding can refuse before its callback starts (for example, open can return
+   EMFILE). Only a proven-owned, still-identical empty directory can be removed then;
+   once entered, the callback keeps cleanup inside its bound-directory scope.
+   These path-based identity checks are not an atomic same-user race sandbox. *)
+let with_target_binding ~target ~created ~identity bind callback =
+  let entered = ref false in
+  let cleanup_unbound () =
+    if created && not !entered then remove_empty_created ~target ~identity
+  in
+  match
+    bind (fun bound ->
+        entered := true;
+        callback bound)
+  with
+  | Error _ as refused ->
+      cleanup_unbound ();
+      refused
+  | Ok _ as result -> result
+  | exception error ->
+      cleanup_unbound ();
+      raise error
 
 (* An existing lock file: a regular file of the operator's, 0600 at most,
    with no other name, opened as the one lstat saw. *)
@@ -105,19 +143,28 @@ let with_lock ~uid ~target conversation f =
           in_progress ()
       | exception Unix.Unix_error (error, _, _) -> lock_failure error)
 
-(* Remove the target folder a refused carry created, with its lock file, when
+(* Remove a target folder with independently proven cleanup custody, with its
+   lock file, when
    no other carry holds any byte of the lock: the whole file is locked first,
    and a carry that opened the file before it went away sees it with
-   {!still_named}. [rmdir] removes the folder only when it is empty. *)
-let remove_created ~target descriptor =
-  match
-    ignore (Unix.lseek descriptor 0 Unix.SEEK_SET);
-    Unix.lockf descriptor Unix.F_TLOCK 0
-  with
-  | () ->
-      quietly (fun () -> Unix.unlink (join target lock_name));
-      quietly (fun () -> Unix.rmdir target)
-  | exception Unix.Unix_error _ -> ()
+    {!still_named}. The directory must still be the one this run created and
+    the lock must still be its opened lock. [rmdir] removes it only when empty. *)
+let remove_created ~target ~identity descriptor =
+  let still_ours () =
+    same_directory ~target identity
+    && still_named ~path:(join target lock_name) descriptor
+  in
+  if still_ours () then
+    match
+      ignore (Unix.lseek descriptor 0 Unix.SEEK_SET);
+      Unix.lockf descriptor Unix.F_TLOCK 0
+    with
+    | () when still_ours () ->
+        quietly (fun () -> Unix.unlink (join target lock_name));
+        if same_directory ~target identity then
+          quietly (fun () -> Unix.rmdir target)
+    | () -> ()
+    | exception Unix.Unix_error _ -> ()
 
 (* -------------------------------------------------- a killed carry's files *)
 
@@ -141,37 +188,15 @@ let leftovers ~uid folder bases =
          | _ -> None)
        names)
 
-(* A new temporary is removed. An old one is a copy put aside by a
-   replacement: the newest goes back in place when the file itself is
-   missing. The old copies still there are returned: they are removed only
-   once the carry succeeds, so a refused carry loses no older copy. *)
-let settle folder found base =
-  let mine = List.filter (fun leftover -> leftover.base = base) found in
-  let olds =
-    List.sort
-      (fun a b -> compare b.mtime a.mtime)
-      (List.filter (fun leftover -> leftover.tag = "old") mine)
-  in
-  List.iter
-    (fun leftover -> if leftover.tag = "new" then Unix.unlink leftover.path)
-    mine;
-  let final = join folder base in
-  let missing =
-    match Unix.lstat final with
-    | _ -> false
-    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true
-  in
-  match olds with
-  | newest :: rest when missing ->
-      Unix.rename newest.path final;
-      List.map (fun leftover -> leftover.path) rest
-  | _ -> List.map (fun leftover -> leftover.path) olds
+(* Legacy old copies are never moved or deleted automatically: a process may
+   still hold their inode. Refuse until the owner has reviewed them. *)
+let settle _folder found base =
+  List.iter (fun leftover ->
+    if leftover.base = base && leftover.tag = "new" then Unix.unlink leftover.path) found;
+  []
 
-(* Before a carry, under its lock: the temporary files a killed carry left
-   next to the files about to be written ([.<name>.carry-new-<16 hex>] and
-   [.<name>.carry-old-<16 hex>] exactly, nothing else). New ones are removed;
-   the old copies to remove once the carry succeeds are returned. The folders
-   were checked by {!check_folders}. *)
+(* Only old artifacts matching this conversation are considered. A refusal
+   leaves each old artifact and the final file untouched. *)
 let clean_leftovers ~uid ~target relatives =
   let folders = List.sort_uniq compare (List.map Filename.dirname relatives) in
   let bases_in folder =
@@ -191,6 +216,13 @@ let clean_leftovers ~uid ~target relatives =
       else
         let bases = bases_in folder in
         let* found = leftovers ~uid full bases in
+        let old = List.filter (fun item -> item.tag = "old") found in
+        let* () =
+          if old = [] then Ok ()
+          else fail "carry_restore_failed"
+            ("legacy recovery copies require review before carry: "
+            ^ String.concat ", " (List.map (fun item -> Filename.basename item.path) old))
+        in
         match List.concat_map (settle full found) bases with
         | settled -> Ok (settled @ olds)
         | exception Unix.Unix_error (error, _, _) ->

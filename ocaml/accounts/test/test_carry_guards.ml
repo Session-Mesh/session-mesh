@@ -131,9 +131,7 @@ let test_lock_file_is_checked () =
         "nothing written" false
         (exists (Filename.concat target "projects")))
 
-(* What a killed carry left: its temporary files next to the files to write
-   are removed, an old copy whose file is missing goes back in place, and
-   nothing else is touched. *)
+(* An old-format recovery copy blocks the carry and preserves all leftovers. *)
 let test_leftovers_of_a_killed_carry () =
   with_root (fun root ->
       let source = claude_account root "a" in
@@ -163,23 +161,41 @@ let test_leftovers_of_a_killed_carry () =
         (fun relative -> write (in_target relative) "stale")
         (removed @ kept);
       write (in_target transcript) "{\"line\":1}\n";
-      let outcome = carried (carry ~source ~target C.Claude) in
-      Alcotest.(check int)
-        "the source's temporary is not carried" 3 outcome.C.files;
+      let before = listing target in
+      let refusal = carry ~source ~target C.Claude in
+      refused_with "carry_restore_failed" refusal;
+      Alcotest.(check bool) "refusal identifies legacy backup" true
+        (contains (message_of refusal) ".carry-old-");
+      Alcotest.(check (list string)) "all target files retained" before (listing target);
       List.iter
         (fun relative ->
           Alcotest.(check bool)
-            (relative ^ " removed") false
-            (exists (in_target relative)))
+            (relative ^ " retained") true
+            (exists (in_target relative));
+          Alcotest.(check string) (relative ^ " content retained") "stale"
+            (read (in_target relative)))
         removed;
       List.iter
         (fun relative ->
           Alcotest.(check bool)
             (relative ^ " kept") true
             (exists (in_target relative)))
-        kept)
+        kept;
+      let old = List.nth removed 1 in
+      let reviewed = Filename.concat root "reviewed-backup" in
+      Unix.rename (in_target old) reviewed;
+      let outcome = carried (carry ~source ~target C.Claude) in
+      Alcotest.(check int) "source temporary not carried" 3 outcome.C.files;
+      Alcotest.(check string) "reviewed backup preserved" "stale" (read reviewed);
+      List.iter (fun relative ->
+        if relative <> old then
+          Alcotest.(check bool) (relative ^ " stale staging removed") false
+            (exists (in_target relative))) removed;
+      List.iter (fun relative ->
+        Alcotest.(check bool) (relative ^ " unrelated entry kept") true
+          (exists (in_target relative))) kept)
 
-(* The old copy of a file that is missing is put back, then replaced. *)
+(* An old copy of a missing file remains available for explicit recovery. *)
 let test_old_copy_put_back () =
   with_root (fun root ->
       let source = claude_account root "a" in
@@ -189,11 +205,14 @@ let test_old_copy_put_back () =
         (Filename.concat target
            (project ^ "/." ^ sid ^ ".jsonl.carry-old-0123456789abcdef"))
         "{\"line\":1}\n";
-      let outcome = carried (carry ~source ~target C.Claude) in
-      Alcotest.(check int) "replaced, not copied" 1 outcome.C.replaced;
-      Alcotest.(check bool)
-        "no leftover" false
-        (List.exists (fun path -> contains path ".carry-") (listing target)))
+      let old = Filename.concat target
+          (project ^ "/." ^ sid ^ ".jsonl.carry-old-0123456789abcdef") in
+      let refusal = carry ~source ~target C.Claude in
+      refused_with "carry_restore_failed" refusal;
+      Alcotest.(check bool) "backup named" true (contains (message_of refusal) ".carry-old-");
+      Alcotest.(check string) "old copy retained" "{\"line\":1}\n" (read old);
+      Alcotest.(check bool) "missing transcript not overwritten" false
+        (exists (Filename.concat target transcript)))
 
 (* Codex ids are whole UUIDs, matched exactly in the rollout's name. *)
 let test_codex_ids_match_exactly () =
@@ -284,7 +303,7 @@ let test_messages_are_clean () =
       Alcotest.(check bool)
         "the alias is not repeated" false (contains message "RED"))
 
-(* A target folder created by a carry that is then refused is removed. *)
+(* An absent source is refused before the target is created. *)
 let test_target_created_only_for_a_carry () =
   with_root (fun root ->
       let travel = Filename.concat root "travel/.claude" in
@@ -301,16 +320,15 @@ let test_target_created_only_for_a_carry () =
           ~file ~kind:C.Claude ~conversation:sid ~from_account:"default"
           ~to_account:"travel" ()
       in
-      refused_with "conversation_not_found" (run ());
-      Alcotest.(check bool) "no target folder" false (exists travel);
+       refused_with "conversation_not_found" (run ());
+       Alcotest.(check bool) "target not created without source" false (exists travel);
       with_conversation source;
       ignore (carried (run ()));
       Alcotest.(check bool)
         "carried" true
         (exists (Filename.concat travel transcript)))
 
-(* A replaced copy that cannot be put back is kept under its temporary name,
-   reported, and put back by the next carry. *)
+(* A replaced copy that cannot be put back stays in durable recovery storage. *)
 let test_a_replaced_copy_that_cannot_be_put_back () =
   with_root (fun root ->
       let source = claude_account root "a" in
@@ -329,13 +347,13 @@ let test_a_replaced_copy_that_cannot_be_put_back () =
           Alcotest.(check bool)
             (label ^ ": names the kept copy")
             true
-            (contains message ("." ^ sid ^ ".jsonl.carry-old-"));
+            (contains message ("." ^ sid ^ ".jsonl.carry-saved-"));
           Alcotest.(check bool)
             (label ^ ": no absolute path")
             false (contains message root);
           let olds =
             List.filter
-              (fun path -> contains path ".carry-old-")
+              (fun path -> contains path ".carry-saved-")
               (listing target)
           in
           Alcotest.(check int) (label ^ ": one old copy") 1 (List.length olds);
@@ -343,16 +361,22 @@ let test_a_replaced_copy_that_cannot_be_put_back () =
             (label ^ ": the older content")
             "{\"line\":1}\n"
             (read (Filename.concat target (List.hd olds)));
-          let outcome = carried (carry ~source ~target C.Claude) in
-          Alcotest.(check int) (label ^ ": files") 3 outcome.C.files;
-          Alcotest.(check string)
-            (label ^ ": the source's copy")
-            (read (Filename.concat source transcript))
-            (read (Filename.concat target transcript));
+          let before_retry = listing target in
+          if label = "in-commit" then (
+            refused_with "unsafe_entry" (carry ~source ~target C.Claude);
+            Alcotest.(check (list string)) (label ^ ": retry leaves entries intact")
+              before_retry (listing target))
+          else (
+            let outcome = carried (carry ~source ~target C.Claude) in
+            Alcotest.(check int) (label ^ ": retry files") 3 outcome.C.files;
+            Alcotest.(check string) (label ^ ": current transcript")
+              (read (Filename.concat source transcript))
+              (read (Filename.concat target transcript)));
           Alcotest.(check bool)
-            (label ^ ": no old copy left")
-            false
-            (List.exists (fun path -> contains path ".carry-") (listing target)))
+            (label ^ ": recovery copy remains") true
+            (exists (Filename.concat target (List.hd olds)));
+          Alcotest.(check string) (label ^ ": recovery bytes remain")
+            "{\"line\":1}\n" (read (Filename.concat target (List.hd olds))))
         [ ("in-commit", 0); ("in-roll-back", 1) ])
 
 let () =
@@ -369,7 +393,7 @@ let () =
           Alcotest.test_case "lock file" `Quick test_lock_file_is_checked;
           Alcotest.test_case "leftovers of a killed carry" `Quick
             test_leftovers_of_a_killed_carry;
-          Alcotest.test_case "an old copy put back" `Quick
+          Alcotest.test_case "an old copy retained for review" `Quick
             test_old_copy_put_back;
           Alcotest.test_case "exact Codex ids" `Quick
             test_codex_ids_match_exactly;

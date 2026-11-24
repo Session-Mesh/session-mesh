@@ -118,6 +118,14 @@ def valid_entry(raw):
     account = raw.get("account")    # the operator's alias the agent ran with (server.account_environment)
     if isinstance(account, str) and ACCOUNT_RE.fullmatch(account):
         entry["account"] = account
+        revision = raw.get("account_context_revision")
+        if isinstance(revision, str) and re.fullmatch(r"[0-9a-f]{64}", revision):
+            entry["account_context_revision"] = revision
+    default_revision = raw.get("default_context_revision")
+    if default_revision is not None:
+        if account is not None or not isinstance(default_revision, str) or not re.fullmatch(r"[0-9a-f]{64}", default_revision):
+            return None
+        entry["default_context_revision"] = default_revision
     marker = _valid_marker(raw.get("restoring"))   # set by begin_restoring only; absent otherwise
     if marker:
         entry["restoring"] = marker
@@ -188,7 +196,9 @@ def entry_of(session):
     return valid_entry({"name": session.get("name"), "cwd": session.get("cwd"), "created": session.get("created"),
                         "agent": kept, "cmd": None if agent else _running(session.get("cmd")), "lost_at": None,
                         "org": {key: session.get(key) for key in ("label", "folder", "rank")},
-                        "account": session.get("account")})
+                         "account": session.get("account"),
+                         "account_context_revision": session.get("account_context_revision"),
+                         "default_context_revision": session.get("default_context_revision")})
 
 
 def public(entries, registry=None):

@@ -1,7 +1,13 @@
 # Native account-profile contract
 
 `mesh-profile` validates profile metadata and manages confirmation preferences. It does not launch an
-agent or switch a running session; all public profiles currently report `switch_qualified: false`.
+agent or switch a running session. On Linux, the web server can switch a Claude or Codex session between
+native profiles when its PTY host supports bound in-place relaunch. The owner must approve each request.
+macOS, Pi and OpenCode native-profile switches remain unavailable.
+Pi sessions without a selected profile retain their existing behavior. Selected Pi profiles are not
+offered for launch: launch and restart requests are refused before changing the session, and a
+refused restore leaves its recovery offer available. Profiled Pi support remains incomplete until
+its running conversation identity and safe restart can be established reliably.
 
 ## Identity and configuration
 
@@ -25,11 +31,20 @@ Root paths use the existing restricted alias path grammar: absolute, normalized 
 1024 bytes, with only `A-Za-z0-9._+@/-`. Resolving a profile also checks current directory custody and
 physical aliases. Public list responses omit roots. Profiles are not an OS sandbox or proof of login.
 
-## Root roles are declarations, not automatic relocation
+## Root roles and launch selectors
 
-These fields describe the intended native layout. This helper does **not** set any environment
-variables. A launch adapter must separately qualify the exact CLI version, its credential precedence
-and its persisted conversation layout before using a profile.
+These fields describe the intended native layout. `mesh-profile` itself does **not** set any
+environment variables. The runner resolves one enabled `(backend, id)` through
+`mesh-platform accounts launch-context FILE BACKEND ID [EXPECTED_CONTEXT_REVISION]`: this prepares and validates only
+that profile's declared roots, then returns its root selectors, inherited-variable removals
+and context/registry revisions
+from one native snapshot. With an expected revision, it refuses a changed profile before creating
+any roots. The legacy grouped `accounts prepare` output remains unchanged. Host-private
+`accounts list` additionally returns closed, metadata-only `launch_profiles` entries
+(`backend`, `id`, `label`) for enabled native profiles. `/api/config.accounts` exposes their
+availability as `claude`, `codex`, `opencode`, and `pi` booleans; the OpenCode label remains keyed
+`opencode-v2` in `backend_labels`. The Pi availability boolean is currently always false, even when
+an enabled Pi profile exists. No profile root is exposed.
 
 | Backend | Required roles | Native selector to check in the adapter |
 | --- | --- | --- |
@@ -57,10 +72,23 @@ store cannot admit a resume under another profile. Pi's overlay builder likewise
 environment and reads only that context's agent directory. Its version probe receives only its
 search path, home and selected Pi directory, not Mesh or provider credentials.
 
-These are internal adapter inputs, not browser-supplied environment maps. Existing callers still use
-their ambient context. The coordinator must resolve and validate a profile, construct its launch
-environment, and pass it to both preflight and launch before this seam implements a profile choice.
-It neither transfers conversations nor establishes an interactive checkpoint.
+These are internal adapter inputs, not browser-supplied environment maps. A selected launch
+passes the same resolved environment to the preflight and the command sent to the terminal,
+through an `env` wrapper because the PTY host forwards only `MESH_*` variables. The wrapper
+removes known inherited provider overrides; OpenCode also removes inherited database and configuration
+overrides. The Pi adapter can pass a selected `history` as `--session-dir` and look up a transcript
+inside that root for `--session`; these adapter capabilities do not enable profiled Pi launches or
+restarts. HOME stays the
+runner's HOME: profiles have no HOME role. Existing unselected callers retain their ambient
+behavior. A restored selected session needs its stored context revision; older offers without
+one and changed revisions refuse before a resume. This does not transfer conversations or
+establish an interactive checkpoint.
+
+Running OpenCode sessions under a selected profile do not take their conversation identity
+from ambient transcript/database discovery: until a profile-root-specific discovery reader is
+available, discovery-only identity is unknown. OpenCode hook reports may still identify a running
+conversation; a restart checks its ID against the selected store. This limits automatic
+resume/restart for selected sessions that have no trustworthy hook or persisted identity.
 
 ## One-shot protocol
 
@@ -97,8 +125,12 @@ bounds; the transport mode grants none of that authority.
 ## HTTP routes
 
 The web server binds six routes to the transport mode, one operation each. Nothing else is
-exposed: `profiles.resolve` (its reply holds folders) and every switch stay on the host, and the
+exposed through these routes: `profiles.resolve` (its reply holds folders) and every switch stay on the host, and the
 path chooses the operation, never the body.
+
+`GET /api/config` advertises `capabilities.account_settings: true` for this binding. Clients must
+hide the settings entry when that explicit capability is absent or false; it is not a PTY-host or
+live-switch qualification flag.
 
 | Route | Operation |
 | --- | --- |
@@ -136,7 +168,8 @@ path chooses the operation, never the body.
   not exactly its operation's shape: for `profiles.list`, a boolean `configured`, a
   `registry_revision` that is `null` or a digest (64 lower-case hex digits), and profiles with
   their six public fields: an `id`, a string `label`, a known `backend`, a boolean `enabled`, a
-  digest `context_revision` and `switch_qualified` false; for every `consent.*` operation, the
+  digest `context_revision` and `switch_qualified` false in the helper response; the server projects
+  the flag from the availability of a compatible live session and PTY host. For every `consent.*` operation, the
   policy (`version`, an integer `revision`, `global` and `pairs`, each pair with its
   `confirmation` and its two accounts' known `backend`, `id` and digest `context_revision`, both
   accounts of one backend with two different ids). An `id` is what the helper accepts: 1 to 32
@@ -170,8 +203,80 @@ never evicted to admit a new one. Finishing, purge, replacement rows and policy 
 together when their enclosing transaction fails. Retention timing belongs to the future coordinator;
 there is no public journal-management operation.
 
-This is a draft v1 contract, not a migration for deployed aliases. Earlier experimental consent
+The consent/store format remains a draft v1 contract. Earlier experimental consent
 references without a backend and journal tables without terminal metadata are not reinterpreted.
 An experimental registry with labels outside the alias rules must be corrected explicitly before use;
 an invalid entry refuses the whole registry, rather than silently dropping a profile.
-Migration from `accounts.json` and the server/launch/UI bindings are separate integration work.
+
+## Explicit migration and account-source selection
+
+Run `mesh-profile migrate` on the runner with the same `MESH_CONF_DIR` as the web server. This host-only
+command converts legacy aliases without moving credentials or conversations. It is not an HTTP
+operation and opening the settings never runs it.
+
+Migration validates the complete `accounts.json` and converted registry before publishing a private
+`backend-profiles.json` without replacing an existing target. Up to 64 aliases can produce 128
+backend-qualified profiles. The original file bytes and agent directories remain unchanged; missing
+agent directories are not created. Success reports only alias/profile counts. A repeat migration or
+an existing target refuses rather than silently merging or overwriting it, except when retrying
+an interrupted no-clobber publication whose private, fsynced publication-intent record binds the
+exact stage, source and target identities and converted registry digest. A matching stage name
+and bytes alone never establish that migration created the target. A recorded target left with
+one link (after stage removal but before the marker) can also be completed on retry. If the
+intent is missing, invalid or left before the target link, migration refuses; reconcile that
+incomplete publication explicitly rather than removing an ambiguous file automatically.
+Other existing targets and staging files are never removed automatically.
+Migration and recovery hold a nonblocking advisory lock on the stable, private 0600
+`.backend-profiles.lock` throughout validation and final cleanup. A simultaneous caller returns
+`migration-busy` without changing the source or target; a later caller sees the completed target
+as `migration-target-exists`. Do not remove the lock file: its stable inode prevents two callers
+from locking different files. An unsafe lock file refuses with `migration-unsafe-configuration-root`.
+The lock is process-scoped; the host-only CLI runs one migration per process and does not qualify
+parallel calls to the migration library within the same process.
+Migration rejects a trimmed label that newly collides with another ID in the same backend (or
+`default`). It also refuses a derived `config/projects` or `config/sessions` path exceeding the native
+1024-byte limit: shorten the legacy base path in `accounts.json` before migrating, and move the agent
+directory separately if necessary. Neither a truncated path nor a changed native path limit is used.
+
+After the registry is synced and published, a private `backend-profiles.migrated` marker retires automatic
+legacy fallback. If the registry later disappears, resolution refuses instead of reviving stale
+aliases. Legacy-only installations retain their existing behavior only while both registry and marker
+are absent. A deliberate rollback therefore requires addressing the retirement marker as well as the
+registry.
+
+An error after publication can return `migration-publication-uncertain` while leaving a complete
+registry in place. Inspect that target before taking another action. Registry and marker publication
+are separate filesystem operations, not a crash-atomic cross-file transaction. The file and directory
+`fsync` calls do not by themselves guarantee survival of a sudden power loss on every platform or
+filesystem (notably macOS); a success response is not a power-loss durability guarantee.
+
+Launch, restore and conversation-carry lookups use the native resolver's selected source. Enabled
+Claude/Codex profiles retain their existing alias IDs, with backend-specific labels. A configured
+invalid registry never falls back to legacy credentials. Disabled profiles are not offered for launch,
+but their credential roots remain protected from document viewing. A carry resolves both accounts from
+one snapshot; later registry edits apply to the next operation. This is not live checkpoint or arbitrary
+same-user filesystem-race qualification. Enabled OpenCode profiles also admit backend-qualified
+launches; their live switches are not qualified. Pi profile metadata can be managed, but selected
+Pi launches and restarts remain unavailable, and refused recovery offers are retained.
+
+The browser terminal opts into `acknowledged_input_v1` when the live inventory
+advertises it for this session. The attachment is bound to its current `created`
+incarnation and an opaque attachment ID. Cached rows cannot select a legacy
+attachment, and a failed ACK handshake does not switch it to raw input. This is a
+transport receipt: the native host queues each bounded, sequenced input frame
+before acknowledging it. The browser keeps bytes until that ACK, requires human
+review after a rejection or uncertain disconnect, and cannot send raw `D` on
+an opt-in attachment. A legacy attachment still works while unfenced, but
+prevents switch-input acquisition. The host waits for queued/in-flight PTY writes
+and dirty human leases before acquisition; an existing negotiated attachment
+cannot submit bytes through a held fence. Strictly recognized terminal-only
+focus, mouse and query replies are still queued and ACKed without creating or
+clearing a human draft lease; mixed human bytes are not exempt. This does
+**not** inspect a native
+composer, queue, dialog or tool; it is not a checkpoint or live-switch receipt.
+For an approved Linux Claude/Codex switch, the request binds the conversation, both profile contexts,
+and the foreground process identity. The host verifies the process before each signal. A successful
+switch preserves the terminal and resumes the copied conversation in the target account. A failed
+carry resumes the source only while its context remains verifiable; an uncertain stop is reported for
+inspection and is not replayed automatically. The process check and signal, and the final directory
+check and launch admission, are separate operations rather than atomic guarantees.

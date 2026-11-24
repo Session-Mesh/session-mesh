@@ -176,7 +176,7 @@ def blocked(*a):
     release.wait(30)
     return []
 class Stub:   # the hook state of the running app, reduced to what a listing calls
-    def expose(self, mesh, raw): pass
+    def expose(self, mesh, raw, *, prune=True): pass
     def report(self): return {}
 async def main():
     async def host_identity(): return "h"
@@ -275,7 +275,7 @@ def spy(mesh):
     seen["on_loop"] = threading.current_thread() is seen["loop_thread"]
 server._apply_history_identity = spy
 class Stub:
-    def expose(self, mesh, raw): pass
+    def expose(self, mesh, raw, *, prune=True): pass
     def report(self): return {}
 async def main():
     seen["loop_thread"] = threading.current_thread()

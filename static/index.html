@@ -75,6 +75,7 @@
         <button id="btn-explore" class="btn ghost" title="History explorer (Esc to go back)" data-i18n-title="bar.exploreTitle" data-i18n="bar.explore">▤ Explorer</button>
         <button id="btn-config" class="btn ghost" title="Paths, versions and settings in use, and the ones that can be changed" data-i18n-title="bar.configTitle" data-i18n="bar.config">Configuration</button>
         <button id="btn-accounts" type="button" class="btn ghost" hidden data-i18n="backendAccounts.title" data-i18n-title="backendAccounts.title"></button>
+        <button id="btn-accounts-retry" type="button" class="btn ghost" hidden data-i18n="backendAccounts.retryDiscovery"></button>
         <button id="btn-management" class="btn ghost" title="Read-only local inventory of the sessions (Esc to go back)" data-i18n-title="bar.managementTitle" data-i18n="bar.management">Management</button>
       </div>
       <button id="btn-mobile-panels" class="btn ghost" aria-label="Open panes" aria-controls="mobile-panels-sheet" aria-expanded="false" title="Choose a pane; the session goes on" data-i18n-aria-label="mobile.panelsAria" data-i18n-title="mobile.panelsTitle" data-i18n="mobile.panels">Panes</button>
@@ -94,6 +95,7 @@
         <button class="btn" type="button" data-mobile-action="btn-flow" data-i18n="flow.title">Agent flow</button>
         <button class="btn" type="button" data-mobile-action="btn-config" data-i18n="config.title">Configuration</button>
         <button class="btn" type="button" hidden data-mobile-action="btn-accounts" data-i18n="backendAccounts.title"></button>
+        <button class="btn" type="button" hidden data-mobile-action="btn-accounts-retry" data-i18n="backendAccounts.retryDiscovery"></button>
         <button class="btn" type="button" data-mobile-action="btn-management" data-i18n="management.title">Mesh management</button>
       </div>
     </dialog>
@@ -210,6 +212,11 @@
         <button type="button" class="btn ghost sm" data-act="close" title="Close this pane (the session goes on)" data-i18n-title="pane.closeTitle" data-i18n="pane.close">Close pane</button>
         <div class="p-menu" role="menu" aria-label="Pane actions" data-i18n-aria-label="pane.menu" hidden></div>
       </div>
+    </div>
+    <div class="p-input-review" hidden>
+      <span class="p-input-state" role="status"></span>
+      <button type="button" class="btn ghost sm p-input-retry" data-i18n="conn.inputRetry">Retry input</button>
+      <button type="button" class="btn ghost sm p-input-discard" data-i18n="conn.inputDiscard">Discard input</button>
     </div>
     <div class="pane-body">
       <div class="demo-tools" hidden>

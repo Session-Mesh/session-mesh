@@ -192,11 +192,15 @@ let paths () =
 
 let bounds () =
   reject (String.make ((1024 * 1024) + 1) ' ');
-  reject
-    (config
-       (List.init 65 (fun i ->
-            let id = "a" ^ string_of_int i in
-            entry "pi" id ("/profiles/" ^ id))))
+  let entries count =
+    List.init count (fun i ->
+        let id = "a" ^ string_of_int i in
+        entry "pi" id ("/profiles/" ^ id))
+  in
+  Alcotest.(check int)
+    "64 dual-backend aliases fit" 128
+    (List.length (P.profiles (value (P.of_string (config (entries 128))))));
+  reject (config (entries 129))
 
 let filesystem_roots () =
   let root = Test_scratch.private_directory "backend-profile-" in
@@ -222,7 +226,15 @@ let filesystem_roots () =
       Alcotest.(check bool)
         "writable config root refused" true
         (Result.is_error (P.validate_roots p));
-      Unix.chmod config_dir 0o700)
+      Unix.rmdir history;
+      Alcotest.(check bool)
+        "missing sibling does not hide unsafe existing config" true
+        (Result.is_error (P.validate_roots ~allow_missing:true p));
+      Unix.chmod config_dir 0o700;
+      ignore (value (P.validate_roots ~allow_missing:true p));
+      Alcotest.(check bool) "strict validation still requires all roots" true
+        (Result.is_error (P.validate_roots p));
+      Unix.mkdir history 0o700)
 
 let registry_file () =
   let root = Test_scratch.private_directory "backend-registry-" in

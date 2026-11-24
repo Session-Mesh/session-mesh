@@ -134,6 +134,16 @@ let carry_temporary name =
     else if marker = ".carry-old-" then Some (base, "old")
     else None
 
+(* Recovery copies are not source conversation artifacts. *)
+let carry_saved name =
+  let length = String.length name and marker = ".carry-saved-" in
+  let marker_length = String.length marker in
+  let start = length - 16 - marker_length in
+  length > marker_length + 17 && name.[0] = '.' && start > 1
+  && String.sub name start marker_length = marker
+  && String.for_all (function '0'..'9' | 'a'..'f' -> true | _ -> false)
+       (String.sub name (length - 16) 16)
+
 (* ------------------------------------------------------------- checks *)
 
 let lstat_opt path =

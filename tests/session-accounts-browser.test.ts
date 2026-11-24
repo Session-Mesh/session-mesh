@@ -18,6 +18,7 @@ import type {Page} from 'playwright-core';
 import {REPO, TerminalMesh, skip} from './terminal-browser-lib.ts';
 
 declare function openNew(): Promise<void>;
+declare function fillAccounts(accounts: unknown[]): void;
 declare const meshContext: {storagePrefix: string};
 
 const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD
@@ -80,6 +81,7 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
     await page.waitForFunction(want => (document.querySelector('#form-new select[name="account"]') as HTMLSelectElement).options.length === want,
       count, {timeout: 10000});
     await page.locator('#form-new input[name="cwd"]').fill(mesh.home);
+    await page.locator('#form-new input[name="cwd"]').press('Tab');
     return {page, sent};
   }
 
@@ -98,6 +100,55 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.deepEqual(sent, [], 'no session requested, under no account');
     assert.equal(await page.locator('#dlg-new[open]').count(), 1, 'the dialog stays open');
+  });
+
+  test('backend-qualified labels follow the preset without changing the selected account id', async () => {
+    declare(three());
+    const {page, sent} = await dialog(4, {remembered: 'work'});
+    await page.evaluate(() => fillAccounts([{id: 'work', label: 'Fallback', claude: true, codex: true,
+      opencode: true, pi: true, backend_labels: {claude: 'Claude Work', codex: '<img> Codex Work',
+        'opencode-v2': '<b> OpenCode Work', pi: 'Pi Work'}}]));
+    for (const [kind, label] of [['claude', 'Claude Work'], ['codex', '<img> Codex Work'],
+      ['opencode', '<b> OpenCode Work'], ['pi', 'Pi Work']]) {
+      await preset(page, kind!);
+      assert.equal(await account(page).inputValue(), 'work');
+      assert.equal(await account(page).isEnabled(), true, `${kind} offers its selected profile`);
+      assert.equal(await account(page).locator('option:checked').textContent(), label);
+    }
+    assert.equal(await account(page).locator('img').count(), 0);
+    assert.equal(await account(page).locator('b').count(), 0);
+    assert.deepEqual(sent, [], 'changing the displayed backend label must not launch a session');
+  });
+
+  test('OpenCode and Pi submit only the chosen id; a profile unavailable for that backend never becomes default', async () => {
+    declare(three());
+    const {page, sent} = await dialog(4, {remembered: 'work'});
+    await page.evaluate(() => fillAccounts([{id: 'work', label: 'Work', opencode: true, pi: true,
+      backend_labels: {'opencode-v2': 'OpenCode Work', pi: 'Pi Work'}}]));
+    for (const kind of ['opencode', 'pi']) {
+      await preset(page, kind);
+      assert.equal(await page.locator('#form-new input[name="preset"]:checked').inputValue(), kind);
+      assert.equal(await account(page).isEnabled(), true);
+      assert.equal(await account(page).evaluate((select: HTMLSelectElement) => select.selectedOptions[0]!.disabled), false);
+      assert.equal(await page.locator('#form-new').evaluate((form: HTMLFormElement) => form.checkValidity()), true);
+      const replied = page.waitForResponse(response => response.url().endsWith('/api/new')
+        && response.request().method() === 'POST');
+      await submit(page);
+      await replied;
+    }
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent.map(body => [body.preset, body.account]), [['opencode', 'work'], ['pi', 'work']]);
+    for (const body of sent) {
+      assert.equal('roots' in body, false);
+      assert.equal('env' in body, false);
+    }
+    assert.equal(await page.locator('#form-new input[name="preset"]:checked').inputValue(), 'pi');
+    await page.evaluate(() => fillAccounts([{id: 'work', label: 'OpenCode Work', opencode: true, pi: false}]));
+    assert.equal(await account(page).inputValue(), 'work');
+    assert.equal(await account(page).evaluate((select: HTMLSelectElement) => select.selectedOptions[0]!.disabled), true);
+    await submit(page);
+    assert.match(await page.locator('#new-err').textContent() ?? '', /OpenCode Work.*Pi/);
+    assert.equal(sent.length, 2, 'the refused choice must not submit under the default account');
   });
 
   test('the default account sends no account; an alias sends its id only', async () => {

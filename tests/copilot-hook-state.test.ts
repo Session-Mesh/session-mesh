@@ -208,3 +208,31 @@ print(json.dumps([good["detail"].get("session"), bad["detail"].get("session")]))
 `), [IDS.fresh, null]);
   });
 });
+
+test('single-session switch inspection preserves hooks of other sessions', () => {
+  const result = python(`
+state = server.EventState()
+server._LIVE_EVENT_STATE = state
+hook(state, NEW_SID)
+event = {"type": "done", "at": time.time(), "received": time.time(), "received_steady": time.monotonic(),
+         "id": None, "detail": {"source": "copilot", "session": RESUMED_SID}}
+assert state.apply("b", "n2", event)
+async def exercise():
+    try:
+        await server._validate_native_switch(RAW[0], "codex", {}, {})
+    except server.web.HTTPConflict:
+        pass
+    after_switch = sorted(k[0] for k in state._states)
+    server._native_profile_mode = lambda: True
+    async def context(*args): return {}
+    server._switch_profile_context = context
+    source = {**RAW[0], "meta": {**RAW[0]["meta"], "account_context_revision": "revision"}}
+    await server._restart_profile_context(source, None, "codex", False)
+    after_restart = sorted(k[0] for k in state._states)
+    server._describe_with_hooks(RAW)
+    complete = sorted(k[0] for k in state._states)
+    print(json.dumps([after_switch, after_restart, complete]))
+asyncio.run(exercise())
+`);
+  assert.deepEqual(result, [['a', 'b'], ['a', 'b'], ['a']]);
+});

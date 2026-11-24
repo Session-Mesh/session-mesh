@@ -1,5 +1,6 @@
 ; Carrying one conversation from an account alias's folder to another's
-; (`mesh-platform accounts carry`), with the folder checks of mesh_accounts.
+; (`mesh-platform accounts carry`), resolving named accounts through the same
+; native-or-legacy source as `mesh-platform accounts list/prepare/resolve`.
 ; carry_statvfs_stubs.c reads the free space of the target's file system.
 
 (library
@@ -8,4 +9,4 @@
   (language c)
   (names carry_statvfs_stubs)
   (flags :standard -Wall -Wextra))
- (libraries mesh_accounts mesh_safe_file unix yojson))
+ (libraries mesh_accounts mesh_account_resolver mesh_safe_file unix yojson digestif))

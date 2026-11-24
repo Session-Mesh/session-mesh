@@ -39,8 +39,10 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
     test(`${key} right after a composition ended delivers the word first, then the key, and keeps the mode`, async () => {
       const page = await phone(`ended-${key}`, 'claude');
       await page.keyboard.type('/');
+      await waitForShellLine(page, '/');
       await forget(page);
       await composeThenKey(page, 'help', key, true);
+      await page.waitForFunction(() => window.__input.length >= 2);
       assert.deepEqual(await frames(page), ['help', KEY_BYTES[key]], 'the word, in order, before the key');
       assert.equal(await field(page), '');
       assert.equal(await direct(page), true);
@@ -51,6 +53,7 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
     test(`${key} while a composition is in progress is refused, and the word is sent once when it ends`, async () => {
       const page = await phone(`composing-${key}`, 'claude');
       await page.keyboard.type('/');
+      await waitForShellLine(page, '/');
       await forget(page);
       await composeThenKey(page, 'help', key, false);
       await waitForFlash(page, 'still being composed');
@@ -68,10 +71,11 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
       const page = await phone(`tap-${key}`, 'claude');
       const cdp = await page.context().newCDPSession(page);
       await page.keyboard.type('/');
+      await waitForShellLine(page, '/');
       await forget(page);
       await cdp.send('Input.imeSetComposition', {text: 'rev', selectionStart: 3, selectionEnd: 3});
       await page.locator(`#keys [data-k="${key}"]`).tap();
-      await page.waitForFunction(() => window.__input.length > 0);
+      await page.waitForFunction(() => window.__input.length >= 2);
       await page.waitForTimeout(300);
       assert.deepEqual(await frames(page), ['rev', KEY_BYTES[key]], 'the word first, then the key');
       assert.equal(await field(page), '');
@@ -82,6 +86,7 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
     for (const via of ['enter', 'tab', 'nl'] as const) {
       const page = await phone(`refused-${via}`, 'claude');
       await page.keyboard.type('/rev');
+      await waitForShellLine(page, '/rev');
       await forget(page);
       await composeThenKey(page, 'iew\u0001', via, true);
       await waitForFlash(page, 'not delivered as typed');
@@ -97,6 +102,7 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
     const page = await phone('refused-multiline', 'claude');
     await withoutBracketedPaste(page);   // a program is running in the shell: it did not ask for bracketed paste
     await page.keyboard.type('/rev');
+    await waitForShellLine(page, '/rev');
     await forget(page);
     await composeThenKey(page, 'iew\tx', 'enter', true);
     await waitForFlash(page, 'not delivered as typed');
@@ -108,9 +114,10 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
   test('held text that cannot be delivered stops the keys too', async () => {
     const page = await phone('held-fails', 'claude');
     await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
     await forget(page);
-    await page.evaluate(() => {   // the socket accepts nothing from now on
-      (active.conn as unknown as {terminal: {queueInput: () => never}}).terminal.queueInput = () => { throw new Error('closed'); };
+    await page.evaluate(() => {   // acknowledged input cannot retain the held text, so the key must not follow
+      (active as unknown as {inputAck: {write: () => boolean}}).inputAck.write = () => false;
     });
     await composeThenKey(page, 'help', 'tab', true);
     await waitForFlash(page, 'not delivered as typed');
@@ -123,6 +130,7 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
     for (const key of ['tab', 'nl'] as const) {
       const page = await phone(`left-${key}`, 'claude');
       await page.keyboard.type('/a');
+      await waitForShellLine(page, '/a');
       await forget(page);
       // Starting the mode fired a refresh that is still in flight: answered while the agent was
       // there, it would restore the foreground the page is about to lose. A refresh of our own is
@@ -142,8 +150,10 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
   test('arming Ctrl delivers the held word first, so it is not taken for a control letter', async () => {
     const page = await phone('ctrl-held', 'claude');
     await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
     await forget(page);
     await composeThenKey(page, 'r', 'ctrl', true);
+    await page.waitForFunction(() => window.__input.length >= 1);
     assert.deepEqual(await frames(page), ['r'], 'the letter went as typed, not as ^R');
     assert.equal(await page.locator('#keys [data-k="ctrl"].on').count(), 1, 'Ctrl is armed once the word went');
     assert.equal(await direct(page), true);
@@ -152,6 +162,7 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
   test('arming Ctrl while a word is being composed is refused', async () => {
     const page = await phone('ctrl-composing', 'claude');
     await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
     await forget(page);
     await composeThenKey(page, 'r', 'ctrl', false);
     await waitForFlash(page, 'still being composed');
@@ -162,8 +173,10 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
   test('^C of the bar delivers the held word first, then ends the mode', async () => {
     const page = await phone('cc-held', 'claude');
     await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
     await forget(page);
     await composeThenKey(page, 'help', 'cc', true);
+    await page.waitForFunction(() => window.__input.length >= 2);
     assert.deepEqual(await frames(page), ['help', '\x03']);
     assert.equal(await direct(page), false);
   });
@@ -173,6 +186,7 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.evaluate(() => navigator.clipboard.writeText('xyz'));
     await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
     await forget(page);
     await composeThenKey(page, 'help', 'paste', false);
     await waitForFlash(page, 'still being composed');

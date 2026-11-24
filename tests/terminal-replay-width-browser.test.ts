@@ -63,7 +63,11 @@ describe('a replay is interpreted at the width it was produced at', {skip}, () =
 
     const frames: (string | Buffer)[] = [];
     const narrow = await mesh.openPage('rw', NARROW, undefined, page => page.on('websocket', socket =>
-      socket.on('framereceived', ({payload}) => { if (frames.length < 2) frames.push(payload); })));
+      socket.on('framereceived', ({payload}) => {
+        // Input negotiation precedes geometry on current hosts; geometry still precedes replay.
+        if (typeof payload === 'string' && JSON.parse(payload).t === 'input_capability') return;
+        if (frames.length < 2) frames.push(payload);
+      })));
     assert.ok(await cols(narrow) < produced, 'the narrow page is narrower than the program');
     const narrowLines = region(await logicalLines(narrow), 'a');
     assert.equal(readText(narrowLines), source, narrowLines.join('\n'));

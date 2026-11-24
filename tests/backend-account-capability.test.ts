@@ -15,11 +15,12 @@ assert.ok(block.startsWith('let backendAccountPanel = null;') && block.includes(
 const lifecycle = app.slice(app.indexOf('let meshContext = null;'), app.indexOf('// The work view\'s bundle once loaded'));
 
 function fixture(request: (url: string, init: RequestInit) => Promise<unknown>) {
-  const entries = [{hidden: true}, {hidden: true}], handlers: (() => void)[] = [];
+  const entries = [{hidden: true}, {hidden: true}], retries = [{hidden: true}, {hidden: true}];
+  const handlers: Record<string, () => void> = {};
   let panels = 0, opened = 0, disposed = 0, timeout: (() => void) | undefined;
   const context = vm.createContext({AbortController, t: (key: string) => key,
-    fetch: request, document: {body: {}, querySelectorAll: () => entries},
-    $: () => ({addEventListener: (_event: string, handler: () => void) => handlers.push(handler)}),
+    fetch: request, document: {body: {}, querySelectorAll: (selector: string) => selector.includes('retry') ? retries : entries},
+    $: (selector: string) => ({addEventListener: (_event: string, handler: () => void) => { handlers[selector] = handler; }}),
     whenTranslated: () => undefined,
     setTimeout: (callback: () => void) => { timeout = callback; return 1; }, clearTimeout: () => { timeout = undefined; },
     MeshPaneActions: {
@@ -28,8 +29,8 @@ function fixture(request: (url: string, init: RequestInit) => Promise<unknown>) 
     },
   });
   vm.runInContext(lifecycle + block, context);
-  return {entries, panels: () => panels, opened: () => opened, disposed: () => disposed,
-    run: (code: string) => vm.runInContext(code, context), click: () => handlers[0]!(), expire: () => timeout!()};
+  return {entries, retries, panels: () => panels, opened: () => opened, disposed: () => disposed,
+    run: (code: string) => vm.runInContext(code, context), click: () => handlers['#btn-accounts']!(), expire: () => timeout!()};
 }
 const response = (value: unknown, status = 200, contentType = 'application/json') => ({
   ok: status === 200, headers: new Headers({'Content-Type': contentType}), json: async () => value,
@@ -51,6 +52,7 @@ test('capability check uses local lifecycle and explicit true only, never accoun
     assert.equal(init.redirect, 'error'); assert.equal(init.cache, 'no-store');
     assert.equal(lab.panels(), value === enabled ? 1 : 0);
     assert.deepEqual(lab.entries.map(e => e.hidden), value === enabled ? [false, false] : [true, true]);
+    assert.deepEqual(lab.retries.map(e => e.hidden), [true, true]);
     lab.run('meshStopped = true; disposeBackendAccountSettings();'); lab.click();
     await lab.run('startBackendAccountSettings()');
     assert.equal(requests.length, 1); assert.deepEqual(lab.entries.map(e => e.hidden), [true, true]);
@@ -67,6 +69,7 @@ test('refused, malformed, non-JSON and failed config reads leave both entries hi
   ]) {
     const lab = fixture(read); lab.run('meshContext = {};'); await lab.run('startBackendAccountSettings()');
     assert.equal(lab.panels(), 0); assert.deepEqual(lab.entries.map(e => e.hidden), [true, true]);
+    assert.deepEqual(lab.retries.map(e => e.hidden), [false, false]);
   }
 });
 
@@ -82,6 +85,22 @@ test('disposal or timeout fences a late capability body even when the transport 
     finish({...enabled, private_marker: 'not-public'}); await pending;
     assert.equal(lab.panels(), 0); assert.deepEqual(lab.entries.map(e => e.hidden), [true, true]);
   }
+});
+
+test('a newer observed negative config fences an older in-flight positive startup body', async () => {
+  let finish!: (value: unknown) => void;
+  const body = new Promise(resolve => { finish = resolve; });
+  const lab = fixture(async () => ({...response(enabled), json: () => body}));
+  lab.run('meshContext = {};');
+  const pending = lab.run('startBackendAccountSettings()');
+  await Promise.resolve();
+  lab.run('observeBackendAccountConfig({capabilities: {account_settings: false}})');
+  finish(enabled); await pending;
+  assert.equal(lab.panels(), 0);
+  assert.deepEqual(lab.entries.map(e => e.hidden), [true, true]);
+  lab.run('observeBackendAccountConfig({capabilities: {account_settings: true}})');
+  assert.equal(lab.panels(), 1);
+  assert.deepEqual(lab.entries.map(e => e.hidden), [false, false]);
 });
 
 test('static desktop and mobile account entries are hidden even before JavaScript starts', () => {

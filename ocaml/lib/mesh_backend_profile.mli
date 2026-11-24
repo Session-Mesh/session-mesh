@@ -67,10 +67,12 @@ val resolve :
 (** Reject unknown, disabled, mismatched or stale selections. No default
     fallback. *)
 
-val validate_roots : ?registry:registry -> t -> (unit, error) result
+val validate_roots : ?registry:registry -> ?allow_missing:bool -> t -> (unit, error) result
 (** Check current canonical directory identity, user ownership and no foreign
     write permission. With a registry, also reject physical credential-root
-    aliases across profiles. This is not upstream login attestation. *)
+    aliases across profiles. [allow_missing] validates every existing root and
+    permits absent roots, but does not validate their creation or missing
+    ancestors. This is not upstream login attestation. *)
 
 val validate_private_root : string -> (unit, error) result
 (** Validate an existing private Mesh configuration directory and its ancestors.

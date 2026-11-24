@@ -348,6 +348,7 @@ jobs:
       # mesh-platform, in the same artifact: the account alias tests (tests/session-accounts*.test.ts) and the
       # update notes' images (tests/update-notes-*.test.ts) run against it through MESH_MESH_PLATFORM_CMD;
       # MESH_REQUIRE_MESH_PLATFORM=1 and MESH_REQUIRE_UPDATE_IMAGE=1 make a missing program a failure.
+      # The actual account settings browser tests also use mesh-profile from the same artifact.
       - name: Fetch work-read, work-write, mesh-platform and mesh-profile
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

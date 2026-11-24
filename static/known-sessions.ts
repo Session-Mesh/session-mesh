@@ -4,7 +4,9 @@
 // The sessions this device knew at its last listing, kept in the browser and shown, as loading,
 // until the server answers. What is kept is limited to what identifies and places a session: its
 // name, the owner's own label (never a title an agent or a transcript produced), folder, working
-// directory, agent type and conversation id, and activity to the minute.
+// directory, agent type and conversation id, activity to the minute, and a
+// positive ACK capability bound to the exact created incarnation. No negative
+// (legacy) capability is cached: only a fresh listing may select raw input.
 //
 // A stored value is read back as untrusted input (another script of the origin could have written
 // it, and it reaches the sidebar's markup): every field is type-checked and bounded, the agent type
@@ -16,6 +18,7 @@ export type KnownAgent = { type: string; session_id: string | null };
 export type KnownRow = {
   id: string; name: string; created: number | null; cwd: string; label: string; folder: string | null;
   agent: KnownAgent | null; known_agent: string | null; activity: number;
+  pty_capabilities?: ["acknowledged_input_v1" | "acknowledged_input_v2"];
 };
 export type Known = { home: string; folders: string[]; rows: KnownRow[] };
 
@@ -45,10 +48,20 @@ export function knownRow(row: Row): KnownRow | null {
   const id = name(row.name, 256);
   if (!id || (row.id !== undefined && row.id !== id)) return null;
   const activity = finite(row.activity);
+  const created = finite(row.created);
+  // This is only an optimistic, incarnation-bound ACK hint. Never remember
+  // negative capability (or infer legacy input from a missing/malformed hint).
+  const capabilities = row.pty_capabilities;
+  const ack = created !== null && created > 0 && Array.isArray(capabilities)
+    && capabilities.length <= 16 && capabilities.every((value) => typeof value === "string")
+    && new Set(capabilities).size === capabilities.length;
+  const version = ack && (capabilities.includes("acknowledged_input_v2") ? "acknowledged_input_v2"
+    : capabilities.includes("acknowledged_input_v1") ? "acknowledged_input_v1" : null);
   return {
-    id, name: id, created: finite(row.created), cwd: text(row.cwd) ?? "", label: text(row.label, 256) ?? "",
+    id, name: id, created, cwd: text(row.cwd) ?? "", label: text(row.label, 256) ?? "",
     folder: name(row.folder, 256), agent: agentOf(row.agent), known_agent: name(row.known_agent, 64),
     activity: activity === null ? 0 : Math.floor(activity / 60) * 60,
+    ...(version ? { pty_capabilities: [version] as ["acknowledged_input_v1" | "acknowledged_input_v2"] } : {}),
   };
 }
 

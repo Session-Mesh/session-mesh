@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {appendFixturePath} from './fixture-login-path.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {type Intercept, type Proxy, startProxy} from './ptyhost-proxy-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
@@ -125,6 +126,7 @@ export class Lab {
       fs.writeFileSync(path.join(where.confDir, 'sessions-snapshot.json'),
         JSON.stringify({version: 1, host: null, live: [], lost}));
       options.prepare?.(where.home, where.confDir);
+      appendFixturePath(where.home, PATH);
     });
     const runtime = path.join(mesh.home, 'run');
     const [hostCommand, ...hostArgs] = nativePtyhost();   // MESH_PTYHOST_CMD: the host under test
@@ -230,4 +232,3 @@ export async function withLab(body: (lab: Lab) => Promise<void>, options: LabOpt
   const lab = await Lab.start(options);
   try { await body(lab); } finally { await lab.stop(); }
 }
-

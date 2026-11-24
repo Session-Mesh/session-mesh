@@ -199,7 +199,16 @@ def configure(token, conf_dir):
     global VIEW_KEY, VIEW_DENY, VIEW_DENY_NOT_WALKED
     VIEW_KEY = hmac.new(token.encode(), b"session-mesh/view/v2", hashlib.sha256).digest()
     home = Path.home()
-    VIEW_DENY = (Path(conf_dir), *(home / name for name in DENY_UNDER_HOME))
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or home / ".local/share")
+    database = data_home / "opencode/opencode.db"
+    databases = [database]
+    if configured := os.environ.get("OPENCODE_DB"):
+        if configured != ":memory:":
+            selected = Path(configured)
+            databases.append(selected if selected.is_absolute() else data_home / "opencode" / selected)
+    database_files = tuple(Path(f"{db}{suffix}") for db in databases for suffix in ("", "-wal", "-shm"))
+    VIEW_DENY = (Path(conf_dir), *(home / name for name in DENY_UNDER_HOME),
+                 data_home / "opencode/auth.json", *database_files)
     VIEW_DENY_NOT_WALKED = frozenset(home / name for name in DENY_NOT_WALKED)
     _ACCOUNT_DENY.clear()
     _load_file_scope(Path(conf_dir) / FILE_SCOPE_STORE_NAME)
@@ -209,7 +218,8 @@ def configure(token, conf_dir):
 # The login files of the operator's account aliases (server._protected_folders: every folder an alias
 # declared, now or before): refused as the default account's ~/.claude/.credentials.json, ~/.claude.json
 # and ~/.codex/auth.json are. Claude's and Codex's names are refused in every folder, whichever agent it serves.
-ACCOUNT_LOGIN_FILES = (".credentials.json", ".claude.json", "auth.json")
+ACCOUNT_LOGIN_FILES = (".credentials.json", ".claude.json", "auth.json", "opencode/auth.json",
+                       "opencode/opencode.db", "opencode/opencode.db-wal", "opencode/opencode.db-shm")
 _ACCOUNT_DENY = []
 
 
@@ -799,6 +809,12 @@ def stat_target(target):
         return None
 
 
+async def refresh_protection(request):
+    """Refresh the application's account protection before document access."""
+    if refresh := request.app.get("refresh_view_protection"):
+        await refresh()
+
+
 async def api_view(request):
     try:
         body = await request.json()
@@ -806,6 +822,7 @@ async def api_view(request):
         body = None
     if not isinstance(body, dict):
         raise web.HTTPBadRequest(text="JSON object expected")
+    await refresh_protection(request)
     # the lookup touches the filesystem (and may search a repository): off the event loop
     return web.json_response(await asyncio.to_thread(
         describe_target, body.get("target"), body.get("base"), body.get("bases") or []))
@@ -823,6 +840,7 @@ async def view(request):
     lexical = Path(os.path.normpath("/" + rest))
     if _lexically_denied(lexical) or not _mac_ok(lexical, mode, exp, mac):
         raise web.HTTPForbidden()
+    await refresh_protection(request)
     try:
         path = await asyncio.to_thread(resolve_doc, str(lexical))
     except web.HTTPException:

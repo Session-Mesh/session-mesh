@@ -44,19 +44,22 @@
     after the copy ([target_no_space]), checked before anything is written. The
     free space is checked, not reserved: carries of different conversations
     running at the same time, or any other writer, can still use it up. A full
-    disk then fails the carry, which is undone.
+    disk then fails the carry; incomplete rollback is reported.
 
-    A file already in the target is left when identical, replaced when it is a
-    prefix of the source (the conversation went on since an earlier carry), and
-    refuses the whole carry otherwise: a different copy is never overwritten,
-    nor one that group or others can write. A read that fails while comparing is
-    a [carry_failed] refusal. Every file is written to a temporary file (mode
-    0600, folders created 0700), then all are put in place; a failure at any
-    step (a full disk, a failed close or rename) removes what was written and
-    puts a replaced copy back, so the target is as it was. When a replaced copy
-    cannot be put back, it is kept as [.<name>.carry-old-<16 hex>] next to its
-    place and the refusal [carry_restore_failed] names it; when a new copy
-    cannot be removed, the refusal [carry_rollback_incomplete] names it.
+    A target file is left when identical and replaced only when it is a prefix
+    of the source; divergent copies are refused. Installations use exclusive
+    creation. Replaced files are moved without overwriting an existing name to
+    [.<name>.carry-saved-<16 hex>] and retained, including after success, so a
+    process holding the old inode can still write to it. [recovery_copies]
+    reports retained copies. Later writes to a recovery copy are not merged
+    into the active conversation; the owner must review them. If an exclusive
+    move is unsupported, the carry refuses rather than falling back to an
+    overwriting move.
+
+    A failed carry removes staged files when safe. Installed files and recovery
+    copies may remain when their custody cannot be proven: the refusal
+    [carry_rollback_incomplete] or [carry_restore_failed] reports the uncertainty.
+    New directories without proven cleanup custody are also retained.
 
     Two carries of the same conversation into the same folder never overlap:
     each holds, without waiting, an exclusive lock (fcntl, between processes) on
@@ -73,16 +76,15 @@
     is guaranteed on NFS, FUSE or SMB: locking may fail there (a [carry_failed]
     refusal) or exclude nothing between machines.
 
-    A carry killed half way can leave [.<name>.carry-new-<16 hex>] and
-    [.<name>.carry-old-<16 hex>] next to the files it was writing. The next
-    carry of that conversation into that folder removes the new ones, under the
-    lock, before planning; an old copy goes back in place first when the file
-    itself is missing, and the other old copies are removed only once that carry
-    succeeds. No other file is removed.
+    An interrupted carry can leave [.<name>.carry-new-<16 hex>] and
+    [.<name>.carry-saved-<16 hex>]. A later carry removes eligible staged files,
+    retains recovery copies and reports their count. Historical
+    [.<name>.carry-old-<16 hex>] artifacts are never moved or removed
+    automatically: their presence refuses the carry for owner review.
 
-    The caller stops the agent before the carry: a transcript still being
-    written could be caught half way, and an agent writing in the target between
-    the plan and the copy would lose its writes.
+    The caller stops the source agent before the carry. Other target writers
+    are not excluded by the carry lock; saved copies preserve the old inode but
+    do not automatically reconcile writes made after the copy.
 
     A transcript or rollout whose last line was cut (an agent killed while
     writing it) is copied as it is, byte for byte: the carry neither completes
@@ -101,7 +103,7 @@ type error = { code : string; message : string }
     [carry_restore_failed], [carry_rollback_incomplete], [carry_failed].
     A caller can retry [carry_in_progress] (another carry holds the lock) and
     [target_no_space] (once space is freed) as is; [carry_restore_failed] and
-    [carry_rollback_incomplete] name a file left in place and need someone to
+    [carry_rollback_incomplete] report a file or folder left in place and need someone to
     step in; the others refuse the request as given. The CLI adds
     [agent_unsupported] (an agent other than claude or codex) and exits 2 on a
     usage error (wrong number of arguments), 1 on any refusal, 0 on success.
@@ -122,6 +124,7 @@ type outcome = {
   replaced : int;  (** Older copies replaced. *)
   unchanged : int;  (** Already identical. *)
   bytes : int;  (** Bytes written. *)
+  recovery_copies : int;  (** Retained recovery copies relevant to these files. *)
 }
 
 type io = {
@@ -130,12 +133,18 @@ type io = {
       (** Of the source, and of a target copy compared with it. *)
   unlink : string -> unit;  (** Of a new copy, when a carry is undone. *)
   rename : string -> string -> unit;
+  rename_noreplace : string -> string -> unit;
+  link : string -> string -> unit;
   close : Unix.file_descr -> unit;  (** Of a file being written. *)
   free_bytes : string -> int option;
       (** Bytes available on the file system of a path (statvfs). *)
 }
 (** The operations a carry can fail in once it has started; tests replace them
     to make a step fail. *)
+
+val rename_noreplace : string -> string -> unit
+(** Atomically move without replacing the destination; raises [Unix.Unix_error]
+    when unsupported or when the destination exists. *)
 
 val default_io : io
 val kind_of_string : string -> kind option
@@ -186,6 +195,7 @@ val carry :
 val carry_accounts :
   ?io:io ->
   ?limits:limits ->
+  ?expected_contexts:(string * string) ->
   uid:int ->
   getenv:(string -> string option) ->
   file:string ->
@@ -195,9 +205,17 @@ val carry_accounts :
   to_account:string ->
   unit ->
   (outcome, error) result
-(** {!carry} between two accounts found by {!account_folder}. The source folder
-    must exist before a missing target folder is created; a target folder this
-    run created is removed again (with its lock file) when the carry is refused
-    and no other carry holds its lock. *)
+(** {!carry} between two accounts found by {!account_folder}. When supplied,
+    [expected_contexts] binds source and target revisions to the same loaded
+    native snapshot before any target is created; legacy entries are refused.
+    A default entry uses SHA-256 of [mesh-default-v1], NUL, the backend,
+    NUL, and its resolved absolute folder. Callers must independently establish
+    the running agent's effective folder before supplying that revision.
+    A later registry edit
+    does not change the snapshot and must be handled by the caller. The source folder
+    must exist before a missing target folder is created. If the carry is refused
+    without proof that it can remove a newly made target, the folder and any
+    lock file remain in place; [carry_rollback_incomplete] reports the retained
+    target. *)
 
 val outcome_to_json : outcome -> Yojson.Safe.t

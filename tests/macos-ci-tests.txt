@@ -90,6 +90,7 @@ tests/opencode-config-merge.test.ts
 tests/opencode-events.test.ts
 tests/opencode-executable.test.ts
 tests/opencode-launch-once.test.ts
+tests/opencode-lineage-real.test.ts
 tests/opencode-quiet-turn.test.ts
 tests/opencode-resume.test.ts
 tests/opencode-v2-events.test.ts

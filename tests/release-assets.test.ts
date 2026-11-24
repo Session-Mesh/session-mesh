@@ -4,7 +4,7 @@
 // scripts/release-assets.sh, the files of a release, in a scratch git repository: `name` gives the
 // built programs their release names, `collect` and `collect-bundle` take from a build job's
 // artifact only the files of its own target, and `bundle` adds the code archive, the stamped
-// install.sh and SHA256SUMS to the 27 programs and the bundles: the 3 bundles, or the 2 Linux ones when
+// install.sh and SHA256SUMS to the 30 programs and the bundles: the 3 bundles, or the 2 Linux ones when
 // the macOS bundle was not qualified, and no other set.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -19,7 +19,7 @@ const ASSETS = path.join(REPO, 'scripts', 'release-assets.sh');
 const BLOCK = "# @release-stamp-begin\nMESH_RELEASE_TAG=''\nMESH_RELEASE_SUMS=''\n# @release-stamp-end\n";
 const INSTALLER = `#!/usr/bin/env bash\nset -euo pipefail\n\n${BLOCK}\nprintf '%s|%s\\n' "$MESH_RELEASE_TAG" "$MESH_RELEASE_SUMS"\n`;
 const sha = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
-const NATIVE_PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'work-read', 'work-mcp', 'work-write'];
+const NATIVE_PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'mesh-profile', 'work-read', 'work-mcp', 'work-write'];
 const PROGRAMS = NATIVE_PROGRAMS
   .flatMap((program) => ['linux-x86_64', 'linux-aarch64', 'macos-arm64'].map((target) => `${program}-${target}`));
 const BUNDLES = ['mesh-linux-x86_64.tar.gz', 'mesh-linux-arm64.tar.gz', 'mesh-macos-arm64.tar.gz'];
@@ -98,7 +98,7 @@ describe('release-assets.sh bundle', () => {
       for (const file of files) fs.unlinkSync(path.join(missing.dist, file));
       const refused = bundle(missing.source, missing.dist);
       assert.equal(refused.status, 1, name);
-      assert.match(refused.stderr, /must hold exactly the 27 programs and the 3 bundles .*, or the same without mesh-macos-arm64\.tar\.gz/);
+      assert.match(refused.stderr, /must hold exactly the 30 programs and the 3 bundles .*, or the same without mesh-macos-arm64\.tar\.gz/);
       assert.ok(!fs.existsSync(path.join(missing.dist, 'install.sh')));
     }
     const badTag = repository('bad-tag');
@@ -167,7 +167,7 @@ for (const [command, name, own, fileMode, other] of KINDS) {
   });
 }
 
-test('release-assets.sh name copies the nine programs under their release names, and refuses an unknown target', () => {
+test('release-assets.sh name copies the ten programs under their release names, and refuses an unknown target', () => {
   const out = path.join(scratch, 'name');
   const built = path.join(out, 'built');
   fs.mkdirSync(built, {recursive: true});
@@ -175,4 +175,19 @@ test('release-assets.sh name copies the nine programs under their release names,
   assert.equal(spawnSync('bash', [ASSETS, 'name', built, 'linux-aarch64', path.join(out, 'assets')]).status, 0);
   assert.deepEqual(fs.readdirSync(path.join(out, 'assets')).sort(), PROGRAMS.filter((file) => file.endsWith('linux-aarch64')).sort());
   assert.equal(spawnSync('bash', [ASSETS, 'name', built, 'windows-x86_64', path.join(out, 'other')]).status, 2);
+});
+
+test('mesh-profile is mandatory in each target artifact and in the stamped release', () => {
+  for (const target of ['linux-x86_64', 'linux-aarch64', 'macos-arm64']) {
+    const file = `mesh-profile-${target}`;
+    const own = PROGRAMS.filter((program) => program.endsWith(target));
+    const collected = collectRun('collect', target, `missing-profile-${target}`, own,
+      (artifact) => fs.unlinkSync(path.join(artifact, file)));
+    assert.equal(collected.status, 1, `${target}: ${collected.stderr}`);
+    assert.deepEqual(collected.copied, []);
+    const {source, dist} = repository(`missing-profile-${target}`);
+    fs.unlinkSync(path.join(dist, file));
+    assert.equal(bundle(source, dist).status, 1, target);
+    assert.ok(!fs.existsSync(path.join(dist, 'install.sh')), 'no incomplete installer is stamped');
+  }
 });

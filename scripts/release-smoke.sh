@@ -4,7 +4,7 @@
 
 # Smoke check of a built release binary set before it is uploaded.
 #   release-smoke.sh <directory holding mesh-ptyhost, mesh-platform, mesh-read, mesh-board-mcp, mesh-history,
-#                     mesh-logout-all, work-read, work-mcp, work-write>
+#                     mesh-logout-all, mesh-profile, work-read, work-mcp, work-write>
 # - mesh-ptyhost is started on a private runtime directory and answers a `list`
 #   request on its socket (one frame: kind C, 4-byte big-endian length, JSON);
 # - mesh-platform prints its platform facts;
@@ -41,6 +41,8 @@ cleanup() {
   rm -r -f -- "$runtime"
 }
 trap cleanup EXIT
+
+bash "$(dirname "$0")/smoke-profile.sh" "$bin/mesh-profile" "$runtime"
 
 unset MESH_RUNTIME_DIR
 XDG_RUNTIME_DIR="$runtime" "$bin/mesh-ptyhost" 2>"$runtime/stderr" &

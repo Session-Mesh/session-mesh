@@ -10,6 +10,7 @@ import { after, before, describe, test } from 'node:test';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { readProjectCatalog } from '../static/projects.ts';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
+import {projectContinuityInput, projectSocketInput} from './helpers/projects-ui.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const NOW = '2026-11-14T12:00:00Z';
@@ -85,6 +86,7 @@ describe('native Projects isolation with mounted Sessions', {skip}, () => {
       if (url.pathname === '/api/sessions') {
         response.setHeader('Content-Type','application/json');
         response.end(JSON.stringify({mesh:[{id:'session-one',name:'session-one',kind:'mesh',created:1234,
+          pty_capabilities:['acknowledged_input_v1'],
           cwd:'/tmp/project',pid:123,label:'Session one'}],external:[],home:'/tmp',now:Date.now()/1000,management:{state:'observed',sessions:[]}})); return;
       }
       if (url.pathname.startsWith('/api/')) {
@@ -110,14 +112,14 @@ describe('native Projects isolation with mounted Sessions', {skip}, () => {
     let output = (_value:string) => { throw new Error('socket not ready'); };
     page.on('request',request=>{const pathname=new URL(request.url()).pathname;if(pathname==='/api/sessions') inventories++;if(pathname==='/static/projects.js'||pathname==='/api/view')projectRequests.push(pathname);});
     await page.routeWebSocket('**/ws/**',socket=>{
-      sockets++; socket.onMessage(message=>input.push(message));
+      sockets++; projectSocketInput(socket, input);
       output = value => socket.send(Buffer.from(value));
       socket.send(Buffer.from('Ready\r\n'+Array.from({length:80},(_,i)=>`line ${i}\r\n`).join('')));
     });
     if(catalogOverride) await page.route('**/static/i18n/en.json*',route=>route.fulfill({json:catalogOverride}));
     if(twoSessions) await page.route('**/api/sessions',route=>route.fulfill({json:{mesh:[
-      {id:'session-one',name:'session-one',kind:'mesh',created:1234,cwd:'/tmp/project',pid:123,label:'Session one'},
-      {id:'session-two',name:'session-two',kind:'mesh',created:5678,cwd:'/tmp/second',pid:124,label:'Session two'},
+      {id:'session-one',name:'session-one',kind:'mesh',created:1234,cwd:'/tmp/project',pid:123,label:'Session one',pty_capabilities:['acknowledged_input_v1']},
+      {id:'session-two',name:'session-two',kind:'mesh',created:5678,cwd:'/tmp/second',pid:124,label:'Session two',pty_capabilities:['acknowledged_input_v1']},
     ],external:[],home:'/tmp',now:Date.now()/1000,management:{state:'observed',sessions:[]}}}));
     if(projectBundle)await page.route('**/static/projects.js*',route=>route.fulfill({body:projectBundle,contentType:'text/javascript'}));
     await page.goto(origin);
@@ -171,9 +173,7 @@ describe('native Projects isolation with mounted Sessions', {skip}, () => {
     if(sameViewport) assert.equal(await page.evaluate('active.term.buffer.active.viewportY === window.sessionViewport'),true);
     assert.equal(await page.evaluate('paneTargets.valid(sessionEvidence.target) && active.id===sessionEvidence.id && data.mesh.find(row=>row.id===active.id||row.name===active.id).created===sessionEvidence.created'),true);
     assert.equal(sockets(),1);
-    await page.evaluate('active.conn.terminal.queueInput(new TextEncoder().encode("continuity"))');
-    await page.waitForTimeout(30);
-    assert.ok(input.some(value=>Buffer.isBuffer(value)&&value.toString()==='continuity'));
+    await projectContinuityInput(page, input, 'continuity');
   }
   for(const width of [1280,390]) test(`membership capability gates actual workspace read bytes at ${width}px`,async()=>{
     const {build}=await import('esbuild');
@@ -682,8 +682,7 @@ describe('native Projects isolation with mounted Sessions', {skip}, () => {
         assert.equal(await page.locator('#projects').isVisible(),releaseWhileOpen);
         assert.equal(await page.locator('#line-text').inputValue(),'second pane draft');assert.equal(sockets(),2);
         if(releaseWhileOpen) await page.locator('#projects-return').click();
-        await page.evaluate('active.conn.terminal.queueInput(new TextEncoder().encode("SECOND_TARGET_CONTINUITY"))');await page.waitForTimeout(30);
-        assert.ok(input.some(value=>Buffer.isBuffer(value)&&value.toString()==='SECOND_TARGET_CONTINUITY'));
+        await projectContinuityInput(page, input, 'SECOND_TARGET_CONTINUITY');
       }finally{release();await page.close();}
     }
   });

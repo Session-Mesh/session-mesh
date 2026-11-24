@@ -279,6 +279,18 @@ let environment fields =
         :: List.remove_assoc "PATH" base
        @ extra))
 
+type input_actor_v2 = {
+  slot : int;
+  generation : int;
+  created : float;
+  actor_nonce : string;
+  lease_id : string;
+  mutable last : int;
+  mutable previous : string;
+}
+
+type input_ack = Ack_v1 of string * float | Ack_v2 of input_actor_v2
+
 type session = {
   name : string;
   creation_receipt : string;
@@ -304,10 +316,17 @@ type session = {
   mutable kill_requested : bool;
   mutable hangup_resending : bool;
   mutable command_started : bool;
+  mutable launch_pending : bool;
   mutable last_input : float;
       (** Wall-clock time of the last bytes queued for the program (keystrokes,
           a typed command, a wake). A wake's idle evidence must postdate it. *)
   human_leases : (string, bool) Hashtbl.t;
+  input_ack_history : (string, float * int * string) Hashtbl.t;
+  input_ack_active : (string, Mesh_pty_output.t) Hashtbl.t;
+  input_ack_v1_pending : (string, unit) Hashtbl.t;
+  input_ack_slots : input_actor_v2 option array;
+  mutable input_ack_generation : int;
+  mutable input_ack_clients : (Mesh_pty_output.t * float) list;
   lease_connections : (string, int) Hashtbl.t;
       (** Client id -> its attached connections that named it. *)
   lease_expires : (string, Mtime.t) Hashtbl.t;
@@ -316,6 +335,7 @@ type session = {
   notified : (string, unit) Hashtbl.t;
   notified_order : string Queue.t;
   input : Mesh_pty_input.t;
+  mutable switch_input_fence : string option;
   replay : Mesh_pty_replay.t;
   mutable clients : Mesh_pty_output.t list;
   mutable size_owner : Mesh_pty_output.t option;
@@ -338,6 +358,23 @@ let valid_opaque_id value =
        (function
          | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' | '-' -> true | _ -> false)
        value
+
+let valid_actor_nonce value =
+  String.length value = 32
+  && String.for_all
+       (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false)
+       value
+
+let mint_actor_nonce env =
+  let random = Cstruct.create 16 in
+  Eio.Flow.read_exact (Eio.Stdenv.secure_random env) random;
+  String.concat ""
+    (List.init 16 (fun i -> Printf.sprintf "%02x" (Cstruct.get_uint8 random i)))
+
+let max_actor_generation =
+  let js_safe = 9007199254740991L in
+  if Int64.compare (Int64.of_int max_int) js_safe < 0 then max_int
+  else Int64.to_int js_safe
 
 let is_agent_name name =
   name = "codex" || name = "claude" || name = "opencode" || name = "gemini"
@@ -410,11 +447,10 @@ let session_json ?(relaunch = true) s =
       ("attached", `Int (List.length s.clients));
       ( "pty_capabilities",
         `List
-          ([ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
-          @
-          if relaunch then
-            [ `String "agent_relaunch_v1"; `String "agent_relaunch_bound_v1" ]
-          else []) );
+           ([ `String "agent_wake_v1"; `String "human_input_lease_v1";
+              `String "acknowledged_input_v1";
+              `String "acknowledged_input_v2" ]
+          @ if relaunch then [ `String "agent_relaunch_v1"; `String "agent_relaunch_bound_v1" ] else []) );
     ]
 
 (* A dirty human-input lease defers agent wakes. Its client may never come
@@ -533,11 +569,12 @@ let type_when_ready ?(clear_line = false) env s command =
       || (not (Mesh_pty_replay.is_empty s.replay))
          && Eio.Time.now clock -. s.activity > 0.8
     then (
-      s.last_input <- Eio.Time.now clock;
       let line = command ^ "\r" in
-      ignore
-        (Mesh_pty_input.enqueue s.input
-           (if clear_line then Mesh_pty_agent_stop.clear_line ^ line else line)))
+      if Option.is_none s.switch_input_fence then (
+        s.launch_pending <- false;
+        if Mesh_pty_input.enqueue s.input
+             (if clear_line then Mesh_pty_agent_stop.clear_line ^ line else line)
+        then s.last_input <- Eio.Time.now clock))
     else wait ()
   in
   wait ()
@@ -583,6 +620,8 @@ let read_table check =
    ([start_if], which may then replace [meta]). Nothing is started here. *)
 let stop_agent env s agent expected =
   let runs_agent found = runs_agent found agent in
+  if Mesh_pty_input.control_pending s.input then agent_refusal "input_pending"
+  else
   match
     read_table (fun table ->
         let classified =
@@ -601,8 +640,8 @@ let stop_agent env s agent expected =
   (* An idle shell that was just sent a line may be about to start the agent:
      the table read now would miss it. *)
   | Some Mesh_pty_agent_stop.Idle
-    when Eio.Time.now (Eio.Stdenv.clock env) -. s.last_input
-         < agent_start_window ->
+    when (Option.is_some s.switch_input_fence && s.command_started)
+         || Eio.Time.now (Eio.Stdenv.clock env) -. s.last_input < agent_start_window ->
       agent_refusal "agent_starting"
   | Some foreground -> (
       let group =
@@ -650,8 +689,19 @@ let stop_agent env s agent expected =
           agent_refusal "stale_incarnation"
       | `Stopped ->
           let now = Eio.Time.now clock in
+          (* The same shell may retain a draft even after a successful stop,
+             including the Idle case. Revocation does not clear dirty leases:
+             an attached old actor must disconnect before its existing grace
+             can expire. A permanently attached dirty actor remains a
+             conservative blocker, rather than silently losing unknown text. *)
           s.created <- (if now > s.created then now else Float.succ s.created);
+          (* Retain actor identities to reject replay in later incarnations,
+             but never retain their terminal payloads after retirement. Only
+             the current incarnation needs the data for ACK-lost retries. *)
+          Mesh_pty_receipts.retire_v1 s.input_ack_history;
+          Hashtbl.clear s.input_ack_v1_pending;
           s.command_started <- false;
+          s.launch_pending <- false;
           s.agent_stopped <- true;
           `Assoc [ ("ok", `Bool true); ("created", `Float s.created) ])
 
@@ -1003,33 +1053,88 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
                 `Assoc [ ("ok", `Bool true) ]
             | _ -> `Assoc [ ("ok", `Bool false) ])
         | _ -> invalid_arg "name")
+    | Some (`String (("switch_input_acquire" | "switch_input_release") as op)) ->
+        if List.sort String.compare (List.map fst fields)
+           <> [ "created"; "creation_receipt"; "fence_id"; "name"; "op" ]
+           || Option.is_some isolated_agent || !stopping then invalid_arg "keys";
+        let created =
+          match get "created" with
+          | Some (`Float value) when Float.is_finite value && value > 0. -> value
+          | Some (`Int value) when value > 0 -> float_of_int value
+          | _ -> invalid_arg "created"
+        in
+        let receipt =
+          match get "creation_receipt" with
+          | Some (`String value) when valid_creation_receipt value -> value
+          | _ -> invalid_arg "creation_receipt"
+        in
+        let fence_id =
+          match get "fence_id" with
+          | Some (`String value) when valid_opaque_id value -> value
+          | _ -> invalid_arg "fence_id"
+        in
+        (match get "name" with
+        | Some (`String name) when valid_session_name name -> (
+            match List.find_opt (fun s -> s.name = name) !sessions with
+            | Some s when s.created = created
+                          && s.creation_receipt = receipt && s.alive
+                          && not s.finishing && not s.kill_requested
+                          && not s.agent_stopping ->
+                if op = "switch_input_acquire" then
+                  (match s.switch_input_fence with
+                  | Some id when id = fence_id -> `Assoc [ ("ok", `Bool true) ]
+                  | Some _ -> agent_refusal "fence_owned"
+                  | None when List.exists
+                      (fun client ->
+                        not (List.exists (fun (trusted, created) ->
+                          trusted == client && created = s.created)
+                          s.input_ack_clients))
+                      s.clients ->
+                      agent_refusal "legacy_attachment"
+                  | None ->
+                      if (not s.launch_pending)
+                         && not (human_dirty s
+                           ~now:(Eio.Time.Mono.now
+                             (Eio.Stdenv.mono_clock env)))
+                         && Mesh_pty_input.acquire_fence s.input then (
+                        s.switch_input_fence <- Some fence_id;
+                        `Assoc [ ("ok", `Bool true) ])
+                      else agent_refusal "input_pending")
+                else if s.switch_input_fence = Some fence_id then (
+                  if Mesh_pty_input.release_fence s.input then (
+                    s.switch_input_fence <- None;
+                    `Assoc [ ("ok", `Bool true) ])
+                  else agent_refusal "control_pending")
+                else agent_refusal "fence_mismatch"
+            | _ -> agent_refusal "stale_incarnation")
+        | _ -> invalid_arg "name")
     | Some (`String "stop_agent_if") -> (
         let keys = List.sort String.compare (List.map fst fields) in
-        if
-          keys <> [ "agent"; "created"; "name"; "op" ]
-          && keys
-             <> [
-                  "agent";
-                  "agent_incarnation";
-                  "agent_input_at";
-                  "agent_pid";
-                  "created";
-                  "name";
-                  "op";
-                ]
+        if keys <> [ "agent"; "created"; "name"; "op" ]
+           && keys <> [ "agent"; "created"; "fence_id"; "name"; "op" ]
+           && keys <> [ "agent"; "agent_incarnation"; "agent_pid"; "created"; "name"; "op" ]
+           && keys <> [ "agent"; "agent_incarnation"; "agent_pid"; "created"; "fence_id"; "name"; "op" ]
+           && keys <> [ "agent"; "agent_incarnation"; "agent_input_at"; "agent_pid"; "created"; "name"; "op" ]
+           && keys <> [ "agent"; "agent_incarnation"; "agent_input_at"; "agent_pid"; "created"; "fence_id"; "name"; "op" ]
         then invalid_arg "keys";
         let expected =
-          match (get "agent_pid", get "agent_incarnation") with
+          match get "agent_pid", get "agent_incarnation" with
           | None, None -> None
-          | Some (`Int pid), Some (`String incarnation) when pid > 0 -> (
-              match Int64.of_string_opt incarnation with
-              | Some value when value > 0L -> Some (pid, value)
-              | _ -> invalid_arg "agent_incarnation")
+          | Some (`Int pid), Some (`String incarnation) when pid > 0 ->
+              (match Int64.of_string_opt incarnation with
+               | Some value when value > 0L -> Some (pid, value)
+               | _ -> invalid_arg "agent_incarnation")
           | _ -> invalid_arg "agent_pid"
+        in
+        let fence_id =
+          match get "fence_id" with
+          | None -> None
+          | Some (`String id) when valid_opaque_id id -> Some id
+          | _ -> invalid_arg "fence_id"
         in
         let input_at =
           match expected, get "agent_input_at" with
-          | None, None -> None
+          | _, None -> None
           | Some _, Some (`Float value) when Float.is_finite value -> Some value
           | Some _, Some (`Int value) -> Some (float_of_int value)
           | _ -> invalid_arg "agent_input_at"
@@ -1053,6 +1158,7 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
             | Some s
               when s.created = created && s.alive && (not s.finishing)
                    && (not s.kill_requested) && not s.agent_stopping
+                   && s.switch_input_fence = fence_id
                    && (match input_at with None -> true | Some at -> at = s.last_input && not (Mesh_pty_input.pending s.input)) ->
                 s.stop_input_epoch <- s.input_signal_epoch;
                 s.agent_stopping <- true;
@@ -1069,7 +1175,15 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
         if
           keys <> [ "command"; "created"; "name"; "op" ]
           && keys <> [ "command"; "created"; "meta"; "name"; "op" ]
+          && keys <> [ "command"; "created"; "fence_id"; "name"; "op" ]
+          && keys <> [ "command"; "created"; "fence_id"; "meta"; "name"; "op" ]
         then invalid_arg "keys";
+        let fence_id =
+          match get "fence_id" with
+          | None -> None
+          | Some (`String id) when valid_opaque_id id -> Some id
+          | _ -> invalid_arg "fence_id"
+        in
         let meta =
           match get "meta" with
           | None -> None
@@ -1096,18 +1210,31 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
               when s.created = created && s.alive && (not s.finishing)
                    && (not s.kill_requested) && (not s.agent_stopping)
                    && (not s.command_started)
-                   && (Option.is_none meta || s.agent_stopped) ->
+                   && (Option.is_none meta || s.agent_stopped)
+                   && s.switch_input_fence = fence_id ->
                 Option.iter
                   (fun value ->
-                    if nonce_of value <> nonce_of s.meta then invalid_arg "meta";
-                    s.meta <- value)
+                    if nonce_of value <> nonce_of s.meta then
+                      invalid_arg "meta")
                   meta;
                 let clear_line = s.agent_stopped in
-                s.agent_stopped <- false;
-                s.command_started <- true;
-                Eio.Fiber.fork ~sw (fun () ->
-                    type_when_ready ~clear_line env s command);
-                `Assoc [ ("ok", `Bool true) ]
+                let line =
+                  (if clear_line then Mesh_pty_agent_stop.clear_line else "")
+                  ^ command ^ "\r"
+                in
+                if Option.is_some fence_id
+                   && not (Mesh_pty_input.enqueue_fenced s.input line)
+                then agent_refusal "input_pending"
+                else (
+                  Option.iter (fun value -> s.meta <- value) meta;
+                  s.agent_stopped <- false;
+                  s.command_started <- true;
+                  if Option.is_none fence_id then (
+                    s.launch_pending <- true;
+                    Eio.Fiber.fork ~sw (fun () ->
+                        type_when_ready ~clear_line env s command))
+                  else s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);
+                  `Assoc [ ("ok", `Bool true) ])
             | _ -> `Assoc [ ("ok", `Bool false) ])
         | _ -> invalid_arg "name")
     | Some (`String "cancel_submit") -> (
@@ -1200,6 +1327,8 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
                   [
                     ("ok", `Bool false); ("reason", `String "stale_incarnation");
                   ]
+            | Some s when Option.is_some s.switch_input_fence ->
+                agent_refusal "switch_input_fenced"
             | Some s when Hashtbl.mem s.notified notification_id ->
                 `Assoc
                   [
@@ -1519,17 +1648,25 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
                           kill_requested = false;
                           hangup_resending = false;
                           command_started = Option.is_some command;
+                          launch_pending = Option.is_some command;
                           agent_stopping = false;
                           input_signal_epoch = 0;
                           stop_input_epoch = 0;
                           agent_stopped = false;
                           last_input = 0.;
                           human_leases = Hashtbl.create 4;
+                          input_ack_history = Hashtbl.create 4;
+                          input_ack_active = Hashtbl.create 4;
+                          input_ack_v1_pending = Hashtbl.create 4;
+                          input_ack_slots = Array.make 64 None;
+                          input_ack_generation = 0;
+                          input_ack_clients = [];
                           lease_connections = Hashtbl.create 4;
                           lease_expires = Hashtbl.create 4;
                           notified = Hashtbl.create 16;
                           notified_order = Queue.create ();
                           input;
+                          switch_input_fence = None;
                           replay = Mesh_pty_replay.create ();
                           clients = [];
                           size_owner = None;
@@ -1739,6 +1876,75 @@ let prepare_attach env observer sessions fields =
   | None -> None
   | Some s -> (
       try
+        if List.mem_assoc "input_ack_v2" fields
+           && List.length (List.sort_uniq String.compare (List.map fst fields))
+              <> List.length fields
+        then invalid_arg "input_ack_v2_duplicate_key";
+        let input_ack_v1 =
+          match (List.assoc_opt "input_ack_created" fields,
+                 List.assoc_opt "input_ack_id" fields) with
+          | None, None -> None
+          | Some (`Float created), Some (`String id)
+            when created = s.created && valid_opaque_id id
+                 && (Hashtbl.mem s.input_ack_history id
+                     || (Hashtbl.length s.input_ack_history + Hashtbl.length s.input_ack_v1_pending < 4096
+                         && Hashtbl.fold (fun _ (birth, _, _) n -> if birth = s.created then n + 1 else n) s.input_ack_history (Hashtbl.length s.input_ack_v1_pending) < 64))
+                 && (Option.is_none s.switch_input_fence
+                     || Hashtbl.mem s.input_ack_history id)
+                 && (match Hashtbl.find_opt s.input_ack_history id with
+                     | None -> true
+                     | Some (birth, _, _) -> birth = created)
+                 && not (Hashtbl.mem s.input_ack_active id) ->
+              Some (Ack_v1 (id, created))
+          | Some (`Int created), Some (`String id)
+            when float_of_int created = s.created && valid_opaque_id id
+                 && (Hashtbl.mem s.input_ack_history id
+                     || (Hashtbl.length s.input_ack_history + Hashtbl.length s.input_ack_v1_pending < 4096
+                         && Hashtbl.fold (fun _ (birth, _, _) n -> if birth = s.created then n + 1 else n) s.input_ack_history (Hashtbl.length s.input_ack_v1_pending) < 64))
+                 && (Option.is_none s.switch_input_fence
+                     || Hashtbl.mem s.input_ack_history id)
+                 && (match Hashtbl.find_opt s.input_ack_history id with
+                     | None -> true
+                     | Some (birth, _, _) -> birth = float_of_int created)
+                 && not (Hashtbl.mem s.input_ack_active id) ->
+              Some (Ack_v1 (id, float_of_int created))
+          | _ -> invalid_arg "input_ack"
+        in
+        let v2_request =
+          match List.assoc_opt "input_ack_v2" fields with
+          | None -> None
+          | Some (`Assoc requested) when Option.is_none input_ack_v1 ->
+              let keys = List.sort String.compare (List.map fst requested) in
+              let created =
+                match List.assoc_opt "created" requested with
+                | Some (`Float value) when Float.is_finite value -> value
+                | Some (`Int value) -> float_of_int value
+                | _ -> invalid_arg "input_ack_v2_created"
+              in
+              if created <> s.created then invalid_arg "input_ack_v2_created";
+              (match List.assoc_opt "mode" requested with
+              | Some (`String "new") when keys = [ "created"; "mode" ] ->
+                  if Option.is_some s.switch_input_fence then
+                    invalid_arg "input_ack_v2_fenced";
+                  Some (`New created)
+              | Some (`String "resume")
+                when keys =
+                  [ "actor_nonce"; "created"; "generation"; "mode"; "slot" ] ->
+                  let slot = List.assoc_opt "slot" requested
+                  and generation = List.assoc_opt "generation" requested
+                  and nonce = List.assoc_opt "actor_nonce" requested in
+                  (match (slot, generation, nonce) with
+                  | Some (`Int slot), Some (`Int generation),
+                    Some (`String nonce)
+                    when slot >= 0 && slot < Array.length s.input_ack_slots
+                         && generation > 0
+                         && generation <= max_actor_generation
+                         && valid_actor_nonce nonce ->
+                      Some (`Resume (created, slot, generation, nonce))
+                  | _ -> invalid_arg "input_ack_v2_resume")
+              | _ -> invalid_arg "input_ack_v2_mode")
+          | _ -> invalid_arg "input_ack_v2"
+        in
         let geometry =
           match List.assoc_opt "rows" fields with
           | None
@@ -1752,9 +1958,31 @@ let prepare_attach env observer sessions fields =
               None
           | _ -> Some (size fields)
         in
+        if Option.is_some s.switch_input_fence
+           && Option.is_none input_ack_v1 && Option.is_none v2_request
+        then invalid_arg "input_ack_fenced";
+        (* An already admitted actor may recover a lost ACK, but its
+           reconnect cannot take or change the PTY geometry under a fence. *)
+        let geometry =
+          if Option.is_some s.switch_input_fence then None else geometry
+        in
+        (* secure_random can suspend. No replay bytes, size ownership or
+           actor slot may be selected until the same incarnation is current
+           again after that read. *)
+        let new_nonce =
+          match v2_request with
+          | Some (`New created) ->
+              let nonce = mint_actor_nonce env in
+              if s.created <> created || Option.is_some s.switch_input_fence
+                 || not s.alive || s.finishing || s.agent_stopping
+                 || not (List.exists (fun current -> current == s) !sessions)
+              then invalid_arg "input_ack_v2_stale";
+              Some nonce
+          | _ -> None
+        in
         (* The replay and the geometry it was last produced at, both taken
-           before this client's geometry is applied, as ptyhost.py does; the
-           reply names the geometry when it can be read. *)
+           after nonce minting but before this client's geometry is applied,
+           as ptyhost.py does; the reply names the geometry when readable. *)
         let snapshot = Mesh_pty_replay.replay s.replay in
         let replay_geometry =
           try Some (s.geometry ())
@@ -1771,16 +1999,75 @@ let prepare_attach env observer sessions fields =
                 (if watch then Mesh_pty_size.Claim else Mesh_pty_size.Take))
                .apply
         in
+        let input_ack =
+          match v2_request with
+          | None -> input_ack_v1
+          | Some (`Resume (created, slot, generation, nonce)) ->
+              (match s.input_ack_slots.(slot) with
+              | Some actor
+                when actor.created = created && actor.generation = generation
+                     && String.equal actor.actor_nonce nonce
+                     && not (Hashtbl.mem s.input_ack_active actor.lease_id) ->
+                  Some (Ack_v2 actor)
+              | _ -> invalid_arg "input_ack_v2_stale")
+          | Some (`New created) ->
+              let actor_nonce =
+                match new_nonce with
+                | Some nonce -> nonce
+                | None -> invalid_arg "input_ack_v2_nonce"
+              in
+              ignore (human_dirty s
+                ~now:(Eio.Time.Mono.now (Eio.Stdenv.mono_clock env)));
+              (* Human I makes its actor dirty. Only a clean inactive actor
+                 (including report-only input) or an expired disconnected
+                 lease can retire; an active or unexpired dirty actor cannot.
+                 A refused attach never sends a caller's retained bytes under
+                 a replacement binding. Existing v1 history is untouched. *)
+              let available actor =
+                not (Hashtbl.mem s.input_ack_active actor.lease_id)
+                && not (Option.value ~default:false
+                  (Hashtbl.find_opt s.human_leases actor.lease_id))
+              in
+              let slot =
+                match Array.find_index Option.is_none s.input_ack_slots with
+                | Some slot -> slot
+                | None ->
+                    let rec find slot =
+                      if slot = Array.length s.input_ack_slots then
+                        invalid_arg "input_ack_v2_exhausted"
+                      else match s.input_ack_slots.(slot) with
+                        | Some actor when available actor -> slot
+                        | _ -> find (slot + 1)
+                    in
+                    find 0
+              in
+              if s.input_ack_generation >= max_actor_generation then
+                invalid_arg "input_ack_v2_generation_exhausted";
+              Option.iter (fun actor ->
+                Hashtbl.remove s.human_leases actor.lease_id;
+                Hashtbl.remove s.lease_expires actor.lease_id)
+                s.input_ack_slots.(slot);
+              s.input_ack_generation <- s.input_ack_generation + 1;
+              let generation = s.input_ack_generation in
+              let actor = {
+                slot; generation; created; actor_nonce;
+                lease_id = Printf.sprintf "!v2:%d:%d" slot generation;
+                last = 0; previous = "";
+              } in
+              s.input_ack_slots.(slot) <- Some actor;
+              Some (Ack_v2 actor)
+        in
         Option.iter
           (fun (rows, cols) ->
             if claimed then (
               s.resize rows cols;
               observe observer env Observe.Resize))
           geometry;
-        Some (s, snapshot, replay_geometry, { client; claimed; watch })
+        Some (s, snapshot, replay_geometry, { client; claimed; watch }, input_ack)
       with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None)
 
-let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
+let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
+    ?input_ack env
     observer s flow =
   let { client; claimed; watch } =
     match size_attach with
@@ -1827,9 +2114,30 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
          ([
             ("ok", `Bool true);
             ( "pty_capabilities",
-              `List [ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
+              `List
+                ([ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
+                @ (match input_ack with
+                   | Some (Ack_v1 _) -> [ `String "acknowledged_input_v1" ]
+                   | Some (Ack_v2 _) -> [ `String "acknowledged_input_v2" ]
+                   | None -> []))
             );
           ]
+         @ optional "input_ack"
+             (Option.map
+               (function
+                 | Ack_v1 (id, created) ->
+                     `Assoc [ ("id", `String id); ("created", `Float created) ]
+                 | Ack_v2 _ -> `Null)
+               (match input_ack with
+                | Some (Ack_v1 _ as ack) -> Some ack | _ -> None))
+         @ optional "input_ack_v2"
+             (match input_ack with
+              | Some (Ack_v2 actor) ->
+                  Some (`Assoc [ ("slot", `Int actor.slot);
+                    ("generation", `Int actor.generation);
+                    ("created", `Float actor.created);
+                    ("actor_nonce", `String actor.actor_nonce) ])
+              | _ -> None)
          @ optional "replay_geometry"
              (Option.map
                 (fun (rows, cols) ->
@@ -1846,6 +2154,18 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
   (* No yield between the captured C/D pair and subscriber registration. *)
   if ready then s.birth_clients := client :: !(s.birth_clients);
   s.clients <- client :: s.clients;
+  Option.iter (fun ack ->
+    let id, created = match ack with
+      | Ack_v1 (id, created) -> (id, created)
+      | Ack_v2 actor -> (actor.lease_id, actor.created) in
+    s.input_ack_clients <- (client, s.created) :: s.input_ack_clients;
+    Hashtbl.replace s.input_ack_active id client;
+    (match ack with
+    | Ack_v1 _ when not (Hashtbl.mem s.input_ack_history id) ->
+        Hashtbl.replace s.input_ack_v1_pending id ()
+    | _ -> ());
+    lease_connection_opened s id;
+    input_client_id := Some id) input_ack;
   (* Still no yield: a watcher's first S frame follows its replay. *)
   if claimed then s.size_owner <- Some client;
   if watch then s.size_watchers <- client :: s.size_watchers;
@@ -1854,6 +2174,17 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
   Fun.protect
     ~finally:(fun () ->
       s.clients <- List.filter (fun other -> other != client) s.clients;
+      s.input_ack_clients <-
+        List.filter (fun (other, _) -> other != client) s.input_ack_clients;
+      Option.iter (fun ack ->
+        let id = match ack with
+          | Ack_v1 (id, _) -> id
+          | Ack_v2 actor -> actor.lease_id in
+        match Hashtbl.find_opt s.input_ack_active id with
+        | Some active when active == client ->
+            Hashtbl.remove s.input_ack_active id;
+            (match ack with Ack_v1 _ -> Hashtbl.remove s.input_ack_v1_pending id | _ -> ())
+        | _ -> ()) input_ack;
       s.birth_clients :=
         List.filter (fun other -> other != client) !(s.birth_clients);
       s.size_watchers <-
@@ -1882,28 +2213,117 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
       let rec input () =
         let frame = read_frame flow in
         if frame.kind = 'R' then (
-          (match parse frame.payload with
-          | Ok (`Assoc fields) -> (
-              try
-                let rows, cols = size fields in
-                match Mesh_pty_size.mode_of_fields fields with
-                | None -> ()
-                | Some mode ->
-                    if not s.finishing then (
-                      let decision =
-                        Mesh_pty_size.resize ~same:( == ) ~owner:s.size_owner
-                          ~client mode
-                      in
-                      if decision.apply then (
-                        s.resize rows cols;
-                        observe observer env Observe.Resize);
-                      s.size_owner <- decision.owner;
-                      announce_size s)
-              with Invalid_argument _ | Not_found | Failure _ -> ())
-          | _ -> ());
+          let stale_ack =
+            match input_ack with
+            | Some (Ack_v1 (_, created)) -> created <> s.created
+            | Some (Ack_v2 actor) -> actor.created <> s.created
+            | None -> false
+          in
+          if Option.is_some s.switch_input_fence || stale_ack then input ()
+          else (
+            (match parse frame.payload with
+            | Ok (`Assoc fields) -> (
+                try
+                  let rows, cols = size fields in
+                  match Mesh_pty_size.mode_of_fields fields with
+                  | None -> ()
+                  | Some mode ->
+                      if not s.finishing then (
+                        let decision =
+                          Mesh_pty_size.resize ~same:( == ) ~owner:s.size_owner
+                            ~client mode
+                        in
+                        if decision.apply then (
+                          s.resize rows cols;
+                          observe observer env Observe.Resize);
+                        s.size_owner <- decision.owner;
+                        announce_size s)
+                with Invalid_argument _ | Not_found | Failure _ -> ())
+            | _ -> ());
+            input ()))
+        else if frame.kind = 'I' then (
+          match input_ack with
+          | None -> input ()
+          | Some ack ->
+          let id, created, prior = match ack with
+            | Ack_v1 (id, created) ->
+                (id, created, Hashtbl.find_opt s.input_ack_history id)
+            | Ack_v2 actor ->
+                (actor.lease_id, actor.created,
+                  if actor.last = 0 then None
+                  else Some (actor.created, actor.last, actor.previous)) in
+          let length = String.length frame.payload in
+          let seq =
+            if length < 5 then 0
+            else
+              let n = ref 0 in
+              for i = 0 to 3 do
+                n := (!n lsl 8) lor Char.code frame.payload.[i]
+              done;
+              !n
+          in
+          let data =
+            if length >= 5 && length <= 65540 then
+              String.sub frame.payload 4 (length - 4)
+            else ""
+          in
+          let reason =
+            if seq <= 0 || data = "" then Some "invalid_frame"
+            else if s.created <> created || not s.alive || s.finishing
+                    || s.agent_stopping then Some "stale_incarnation"
+            else match prior with
+              | Some (birth, last, previous)
+                when birth = created && last = seq && previous = data ->
+                  None (* An ACK-lost retry never enqueues again, even under a fence. *)
+              | _ when Option.is_some s.switch_input_fence ->
+                  Some "switch_input_fenced"
+              | Some (birth, _, _) when birth <> created ->
+                  Some "stale_incarnation"
+              | Some (_, last, _) when seq <= last -> Some "sequence_conflict"
+              | Some (_, last, _) when seq <> last + 1 -> Some "sequence_gap"
+              | None when seq <> 1 -> Some "sequence_gap"
+              | _ ->
+                  if Mesh_pty_input.enqueue s.input data then (
+                    (match ack with
+                    | Ack_v1 _ ->
+                        Hashtbl.replace s.input_ack_history id (created, seq, data);
+                        Hashtbl.remove s.input_ack_v1_pending id
+                    | Ack_v2 actor ->
+                        actor.last <- seq;
+                        actor.previous <- data);
+                    if not (Mesh_pty_input.terminal_reports_only data) then
+                      Hashtbl.replace s.human_leases id true;
+                    s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);
+                    observe observer env (Observe.Input (String.length data));
+                    None)
+                  else Some "input_pending"
+          in
+          let response =
+            `Assoc
+              ([ ("input_ack", `Bool (Option.is_none reason));
+                 ("seq", `Int seq) ]
+               @ (match ack with
+                  | Ack_v1 _ ->
+                      [ ("id", `String id); ("created", `Float created) ]
+                  | Ack_v2 actor ->
+                      [ ("slot", `Int actor.slot);
+                        ("generation", `Int actor.generation);
+                        ("created", `Float created) ])
+              @ Option.fold ~none:[] ~some:(fun value ->
+                  [ ("reason", `String value) ]) reason)
+          in
+          ignore (Mesh_pty_output.enqueue client
+            (Mesh_wire.encode { kind = 'C';
+              payload = Yojson.Basic.to_string response }));
           input ())
         else if frame.kind = 'D' then (
-          if s.agent_stopping || !holding then (
+          if Option.is_some input_ack || Option.is_some s.switch_input_fence then
+            ignore
+              (Mesh_pty_output.enqueue client
+                 (Mesh_wire.encode
+                    { kind = 'C';
+                      payload = {|{"ok":false,"reason":"switch_input_fenced"}|} }))
+          else if s.agent_stopping || !holding then (
             if String.length frame.payload <= (8 * 1024 * 1024) - !held_bytes then (
               let epoch = if s.agent_stopping then s.stop_input_epoch else s.input_signal_epoch in
               Queue.add (s.created, epoch, frame.payload) held_input;
@@ -1935,6 +2355,21 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
           (match parse frame.payload with
           | Ok (`Assoc fields)
             when List.sort String.compare (List.map fst fields)
+                 = [ "dirty"; "generation"; "slot" ] -> (
+              match (input_ack, List.assoc_opt "slot" fields,
+                     List.assoc_opt "generation" fields,
+                     List.assoc_opt "dirty" fields) with
+              | Some (Ack_v2 actor), Some (`Int slot),
+                Some (`Int generation), Some (`Bool dirty)
+                when s.created = actor.created && actor.slot = slot
+                     && actor.generation = generation
+                     && (match Hashtbl.find_opt s.input_ack_active actor.lease_id with
+                         | Some active -> active == client
+                         | None -> false) ->
+                  Hashtbl.replace s.human_leases actor.lease_id dirty
+              | _ -> ())
+          | Ok (`Assoc fields)
+            when List.sort String.compare (List.map fst fields)
                  = [ "client_id"; "dirty" ] -> (
               match
                 ( List.assoc_opt "client_id" fields,
@@ -1942,6 +2377,10 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
               with
               | Some (`String client_id), Some (`Bool dirty)
                 when valid_opaque_id client_id
+                     && (match input_ack with
+                         | Some (Ack_v1 (_, created)) -> created = s.created
+                         | Some (Ack_v2 _) -> false
+                         | None -> true)
                      && Option.fold ~none:true ~some:(String.equal client_id)
                           !input_client_id ->
                   if Option.is_none !input_client_id then
@@ -2032,6 +2471,8 @@ let conditional_attach env observer sessions fields flow =
     with Invalid_argument _ -> None
   with
   | None -> refusal "denied"
+  | Some (s, _) when Option.is_some s.switch_input_fence ->
+      refusal "switch_input_fenced"
   | Some (s, geometry) -> (
       let streaming = ref false in
       try
@@ -2040,7 +2481,8 @@ let conditional_attach env observer sessions fields flow =
             s.resize rows cols;
             observe observer env Observe.Resize)
           geometry;
-        if (not s.alive) || s.finishing || s.kill_requested then
+        if (not s.alive) || s.finishing || s.kill_requested
+           || Option.is_some s.switch_input_fence then
           refusal "indeterminate"
         else (
           streaming := true;
@@ -2102,6 +2544,14 @@ let request_fields fields =
     if List.length (List.filter (fun (key, _) -> key = "op") fields) > 1 then
       [ op ]
     else []
+  else if List.mem_assoc "input_ack_v2" fields
+          && (match last_wins (`Assoc fields) with
+              | `Assoc resolved -> List.assoc_opt "op" resolved = Some (`String "attach")
+              | _ -> false) then
+    (* Dispatch on the same effective operation used above. Preserve every
+       duplicate [op] so strict v2 validation rejects an ambiguous request. *)
+    let ops, rest = List.partition (fun (key, _) -> key = "op") fields in
+    ("op", `String "attach") :: (List.tl ops @ rest)
   else
     match last_wins (`Assoc fields) with
     | `Assoc resolved
@@ -2152,8 +2602,9 @@ let handle env observer dispatch sessions flow =
         else if List.assoc_opt "op" fields = Some (`String "attach") then
           match prepare_attach env observer sessions fields with
           | None -> write_reply flow error
-          | Some (s, snapshot, replay_geometry, size_attach) ->
-              attach ~snapshot ?replay_geometry ~size_attach env observer s flow
+          | Some (s, snapshot, replay_geometry, size_attach, input_ack) ->
+              attach ~snapshot ?replay_geometry ~size_attach ?input_ack env observer s
+                flow
         else
           let reply =
             try dispatch fields with

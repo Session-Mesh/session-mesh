@@ -23,10 +23,15 @@
   unreachable". A request that gets no answer within 180 s is aborted and shown as a slow server, not
   as a restart. An error in the page's own handling of an answer is shown as a page error; it does
   not change what the line says about the server.
-- **Terminals do not wait for the list.** The page restores its saved panes at once and attaches each
-  terminal by its name (`/ws/{name}`). Until the first answer, the sidebar shows the sessions this
-  device knew at its last listing, marked as loading. An answer that lists nothing yet (an empty
-  `mesh`, `complete: false` and `management.state: "pending"`, as a server answers before its first
+- **ACK-capable terminals need not wait for the list.** The page restores saved panes at once. A
+  positive cached ACK hint paired with a valid `created` identity opens only an ACK-bound
+  `/ws/{name}` socket; it cannot choose raw input or replay uncertain bytes. Missing, malformed or
+  stale hints never fall back to raw: an old incarnation is detached when a different one is listed.
+  A cached ACK attachment with the same identity is not downgraded if a later listing omits ACK.
+  A legacy attachment is possible only from a separately observed live row with no ACK attempt for
+  that actor; a legacy cached row waits for the listing. Until the first answer, the sidebar shows
+  the sessions this device knew at its last listing, marked as loading. An answer that lists nothing
+  yet (an empty `mesh`, `complete: false` and `management.state: "pending"`, as a server answers before its first
   listing) does not replace them, and the status line keeps saying "loading". A saved board adds
   the session it belongs to. The first observed listing settles the restored panes: a session it does
   not list is shown as unavailable, and its place in the layout is kept; a pane the owner has moved
@@ -56,8 +61,9 @@
   an ARIA list, so they carry no `aria-setsize` or `aria-posinset`.
 
 The sessions known on this device are kept in `localStorage` (`mesh.knownSessions`): names, the
-owner's own labels, folders, working directories, agent type and conversation id, and activity
-rounded to the minute. They never include what an agent said or a title derived from a conversation
+owner's own labels, folders, working directories, agent type and conversation id, activity
+rounded to the minute, and only a positive ACK hint bound to a positive `created` identity. They
+never include negative/legacy capability, what an agent said or a title derived from a conversation
 (a session without an owner label is shown by its name until the list arrives). They are removed when
 the owner signs out from this page and on a refused listing (HTTP 401). Both also record the time
 (`mesh.signedOutAt`): a page started before it, in any tab of the browser, never stores them again,

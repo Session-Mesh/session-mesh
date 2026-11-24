@@ -10,13 +10,16 @@ survive that. A URL is treated as an opaque prefix followed by the document's
 absolute path, which is how relative links resolve next to a document.
 """
 
+import asyncio
 from pathlib import Path
 import subprocess
 import sys
 
 import pytest
+from aiohttp.test_utils import TestClient, TestServer
 from yarl import URL
 
+import server
 import view
 from helpers import expect_fixed
 
@@ -120,6 +123,64 @@ async def test_api_view_describes_the_document(client, auth_cookie, home_dir):
     data = await resp.json()
     assert {k: data[k] for k in ("kind", "target", "ext")} == {
         "kind": "file", "target": str(doc), "ext": ".html"}
+
+
+def test_concurrent_document_and_config_refresh_across_app_loops(monkeypatch, home_dir):
+    doc = make_doc(home_dir, "page.html", "<p>hello</p>")
+    signature = [None]
+    gate = [None]
+    calls = []
+
+    monkeypatch.setattr(server, "_accounts_signature", lambda: signature[0])
+
+    async def accounts_program(*args):
+        calls.append(args)
+        if gate[0] is not None:
+            entered, release = gate[0]
+            entered.set()
+            await release.wait()
+        return {"accounts": [], "protected_roots": []}
+
+    monkeypatch.setattr(server, "_accounts_program", accounts_program)
+
+    async def run_app(number):
+        client = TestClient(TestServer(server.make_app(
+            session_request_path=home_dir / f"session-requests-{number}.sqlite3")))
+        original = server.declared_accounts
+        entered, release, second_entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        await client.start_server()
+        try:
+            gate[0] = entered, release
+            signature[0] = ("ordinary-refresh", number)
+            before = len(calls)
+            describe = asyncio.create_task(client.post(
+                "/api/view", json={"target": str(doc)},
+                headers={"Authorization": f"Bearer {server.TOKEN}"}))
+            await asyncio.wait_for(entered.wait(), 5)
+
+            async def next_refresh():
+                second_entered.set()
+                await original()
+
+            monkeypatch.setattr(server, "declared_accounts", next_refresh)
+            config = asyncio.create_task(client.get(
+                "/api/config", headers={"Cookie": f"{server.COOKIE}={server.cookie_value()}"}))
+            await asyncio.wait_for(second_entered.wait(), 5)
+            await asyncio.sleep(0)
+            release.set()
+            described, configured = await asyncio.wait_for(asyncio.gather(describe, config), 5)
+            assert described.status == configured.status == 200
+            assert (await described.json())["target"] == str(doc)
+            await configured.read()
+            assert len(calls) == before + 1
+        finally:
+            release.set()
+            monkeypatch.setattr(server, "declared_accounts", original)
+            gate[0] = None
+            await client.close()
+
+    asyncio.run(run_app(1))
+    asyncio.run(run_app(2))
 
 
 async def test_api_view_refuses_documents_outside_the_roots(client, auth_bearer):

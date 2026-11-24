@@ -19,6 +19,7 @@ export type ConfigLoad = () => Promise<{ state: "ok"; value: unknown } | { state
 export type ConfigElements = Readonly<{ dialog: HTMLDialogElement; body: HTMLElement }>;
 export type ConfigPorts = Readonly<{
   t: ConfigTranslate; load: ConfigLoad; copy: (text: string) => Promise<boolean>;
+  onLoad?: (value: unknown) => void;
   elevate: LaunchPorts["elevate"]; revoke: LaunchPorts["revoke"]; save: LaunchPorts["save"];
   saveOptions: LaunchPorts["saveOptions"];
   saveSettings: OperatorNamePorts["saveSettings"];
@@ -261,6 +262,7 @@ export class ConfigPanel {
     this.shell = new SettingsShell(dialog.ownerDocument, { nav: t("config.nav"), back: t("config.back") },
       this.layout(cards, this.editor.element, this.operator.element), this.selected);
     body.replaceChildren(this.shell.element);
+    this.ports.onLoad?.(result.value);
   }
 
   open(): boolean {
