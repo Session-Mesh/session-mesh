@@ -349,8 +349,28 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
     await page.waitForFunction(() => active.inputAck?.pendingBytes === 0 && active.inputLease?.dirty);
     await page.evaluate(() => (active as InputPane & {show(name: string): void}).show('ack-new-draft'));
     await page.waitForFunction(() => active.inputAck?.state === 'ready' && active.inputAck?.binding &&
-      !active.conn?.v2AwaitingCapability && active.conn?.ws?.readyState === WebSocket.OPEN &&
-      (active as InputPane & {id: string}).id === 'ack-new-draft');
+      !active.conn?.v2AwaitingCapability && (active as InputPane & {id: string}).id === 'ack-new-draft');
+    assert.equal(await page.locator('.pane.active .p-input-forget-draft').isVisible(), false,
+      'another session’s draft is never offered as a current-session action');
+    await page.evaluate(() => (active as InputPane & {show(name: string): void}).show('ack-old-draft'));
+    await page.waitForFunction(() => active.inputAck?.state === 'ready' && active.inputAck?.binding &&
+      !active.conn?.v2AwaitingCapability && active.inputLease?.dirty &&
+      (active as InputPane & {id: string}).id === 'ack-old-draft');
+    const old = (await request(mesh.socketPath, {op: 'list_bound'}) as {name: string; created: number}[])
+      .find(row => row.name === 'ack-old-draft');
+    assert.ok(old);
+    // Advance the same terminal's real incarnation. A different session's
+    // draft must not be offered as an action in the current session.
+    await waitFor('agent start window to elapse', 5000, async () => {
+      const result = await request(mesh.socketPath, {op: 'stop_agent_if', name: old.name,
+        created: old.created, agent: 'codex'}) as {ok: boolean; reason?: string};
+      if (!result.ok) assert.equal(result.reason, 'agent_starting');
+      return result.ok;
+    });
+    await page.evaluate(() => refresh());
+    await page.waitForFunction(previous => active.conn?.created !== previous &&
+      active.inputAck?.state === 'ready' && active.inputAck?.binding &&
+      !active.conn?.v2AwaitingCapability && active.conn?.ws?.readyState === WebSocket.OPEN, old.created);
     const stale = page.locator('.pane.active .p-input-forget-draft');
     await stale.waitFor({state: 'visible'});
     assert.equal(await page.evaluate(() => reloadHolds().some(h => h.kind === 'input-draft')), true);
