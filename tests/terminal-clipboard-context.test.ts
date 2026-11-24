@@ -106,6 +106,32 @@ for (const phase of ['replaying', 'draining', 'replayPending']) {
     assert.equal(f.pane.conn.activeHumanInput, null);
     assert.equal(f.pane.conn.queuedHumanInput.length, 0);
   });
+
+  for (const bracketed of [false, true]) test(`clipboard uses normalized text and final bracketed-paste mode after ${phase} (${bracketed ? 'enabled' : 'disabled'})`, async () => {
+    const f = fixture(), text = 'A\nB\r\nC\rD';
+    const mode = (enabled: boolean) => new Promise<void>(done =>
+      f.pane.term.write(`\x1b[?2004${enabled ? 'h' : 'l'}`, done));
+    await mode(!bracketed);
+    const pending = f.begin();
+    f.pane.conn[phase] = true;
+    f.pane.sendRaw(new TextEncoder().encode('later'));
+    f.finish(0, text); await Promise.resolve();
+    assert.deepEqual(f.state.writes, [], 'clipboard text must wait for output replay');
+    // The mode at drain time controls framing, not the mode at the paste click.
+    await mode(bracketed);
+    assert.deepEqual(f.state.writes, []);
+    f.pane.conn[phase] = false; f.pane.flushReplayInput(f.pane.conn);
+    await pending;
+    const normalized = 'A\rB\rC\rD';
+    assert.deepEqual(f.state.pasted, [text], 'xterm receives the original clipboard text');
+    assert.deepEqual(f.state.writes, [bracketed ? `\x1b[200~${normalized}\x1b[201~` : normalized, 'later'],
+      'xterm normalizes and frames once, without adding Enter or overtaking the later key');
+    f.pane.flushReplayInput(f.pane.conn);
+    assert.equal(f.state.writes.length, 2, 'another drain cannot replay the paste');
+    assert.equal(f.state.released, 1);
+    assert.equal(f.pane.conn.activeHumanInput, null);
+    assert.equal(f.pane.conn.queuedHumanInput.length, 0);
+  });
 }
 
 for (const [name, change] of Object.entries(changes)) test(`queued clipboard refuses ${name} changes after the read resolves`, async () => {
