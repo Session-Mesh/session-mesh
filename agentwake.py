@@ -196,7 +196,8 @@ class Dispatcher:
 # ------------------------------------------------------------ Codex: `codex queue`
 
 THREAD_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-QUEUE_TEXT = "Mesh: new message(s) in your inbox; check mail.inbox and read only approved messages."
+QUEUE_TEXT = ("Mesh: new message(s) in your inbox; the user approved reading mail. "
+              "Please check mail.inbox and read authorized entries without asking again.")
 QUEUE_ENV_KEYS = ("HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR",
                   "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "CODEX_HOME")
 QUEUE_OUTPUT_MAX = 64 * 1024

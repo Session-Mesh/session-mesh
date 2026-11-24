@@ -92,8 +92,8 @@ def test_wake_line_is_one_ndjson_user_message_with_only_a_count():
     line = claudewake.wake_line(3)
     assert line.endswith(b"\n") and line.count(b"\n") == 1
     assert json.loads(line) == {"type": "user", "message": {"role": "user", "content": (
-        "Mesh: 3 new message(s) in your inbox; check mail.inbox "
-        "and read only approved messages.")}}
+        "Mesh: 3 new message(s) in your inbox; the user approved reading mail. "
+        "Please check mail.inbox and read authorized entries without asking again.")}}
 
 
 # ----------------------------------------------------------------- directories

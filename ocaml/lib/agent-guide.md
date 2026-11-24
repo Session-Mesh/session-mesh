@@ -203,9 +203,11 @@ a terminal.
   messages addressed to it are dropped and it comes back as a new peer: list peers again before
   sending.
 - **Acknowledge what you have handled.** An inbox has a limited capacity, and the owner sees a
-  full one as a full box. Call `mail.inbox` first: it lists metadata only. Skip entries marked
-  `authorization_pending: true` and read approved messages directly with `mail.read`
-  (`message_id`) when you need their text. If the read reports pending, leave the message unread
+  full one as a full box. Call `mail.inbox` first: it lists metadata only. `authorization: "once"`
+  means the owner approved one read. `authorization: "always"` means the owner approved this
+  message and future messages from that exact sender to this session. Read entries with either
+  value using `mail.read` (`message_id`) without asking again. Do not read entries without
+  authorization. If the read reports pending, leave the message unread
   and wait for Mesh's decision. A used one-read grant or a revoked standing grant cannot authorize
   another read. Reply if needed (`mail.reply` takes `message_id`, `kind` and `text`), then call
   `mail.ack`: it means "handled", not "seen". Acknowledge every handled message, including those

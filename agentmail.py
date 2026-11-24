@@ -438,18 +438,29 @@ def peers(source, live):
 
 
 def inbox(target, live):
-    """Return arrival metadata only; message text needs a deliberate read."""
+    """Return arrival and current authorization metadata, never message text."""
     _require_live(target, live)
     with _locked():
         state = _load()
         changed = _prune(state, live)
         if changed:
             _save(state)
-        held = {item["message_id"] for item in state["consent_requests"] if item["state"] == "pending"}
-        return [{**{key: message[key] for key in
-                    ("id", "conversation_id", "source", "kind", "created", "seq")},
-                 **({"authorization_pending": True} if message["id"] in held else {})}
-                for message in state["messages"] if message["target"] == target]
+        requests = {item["message_id"]: item["state"] for item in state["consent_requests"]}
+        entries = []
+        for message in state["messages"]:
+            if message["target"] != target:
+                continue
+            entry = {key: message[key] for key in
+                     ("id", "conversation_id", "source", "kind", "created", "seq")}
+            request = requests.get(message["id"])
+            if _has_policy(state, message):
+                entry["authorization"] = "always"
+            elif request == "granted":
+                entry["authorization"] = "once"
+            elif request == "pending":
+                entry["authorization_pending"] = True
+            entries.append(entry)
+        return entries
 
 
 def _public_consent(request):

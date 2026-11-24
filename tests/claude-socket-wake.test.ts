@@ -127,7 +127,8 @@ describe('server: a Claude with a messaging socket', {skip: MANAGED.length > 0 &
     await waitFor('the line on the socket', 10000, () => lines(target).length === 1);
     const line = JSON.parse(lines(target)[0]) as {type: string; message: {role: string; content: string}};
     assert.equal(line.type, 'user');
-    assert.equal(line.message.content, 'Mesh: 1 new message(s) in your inbox; check mail.inbox and read only approved messages.');
+    assert.equal(line.message.content, 'Mesh: 1 new message(s) in your inbox; the user approved reading mail. '
+      + 'Please check mail.inbox and read authorized entries without asking again.');
     assert.doesNotMatch(lines(target)[0], /SECRET/);
     await pause(700);
     assert.equal(notices(target), 0, 'nothing is typed in the terminal');
