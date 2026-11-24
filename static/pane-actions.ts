@@ -734,6 +734,10 @@ type SessionActionRequest = Readonly<{
   preset: string | null;
   model: string | null;
   effort?: string | null;
+  // The option tokens the server will add to this launch, already joined for display ('' when none),
+  // and the revision of the file they were read from: the approval names the version it saw.
+  options?: string | null;
+  options_revision?: string | null;
   lease_expires_at?: number | null;
   source: Readonly<{ id: string }>;
   // switch_account: the account ids, and their labels as the server knows them
@@ -759,6 +763,11 @@ function accountName(id: string, label: string | null | undefined): string {
 
 function describeSessionRequest(request: SessionActionRequest): string {
   const params = { agent: request.source.id, model: request.model, preset: presetLabel(request.preset) };
+  // The owner's stored options run too, so the confirmation names them: consent covers what will run.
+  const withOptions = (text: string): string => {
+    const options = typeof request.options === "string" ? request.options.trim() : "";
+    return options ? translate("paneActions.sessionRequest.withOptions", { text, options }) : text;
+  };
   if (request.action === "switch_account") {
     // The owner approves sending the whole conversation to the other account's provider: the text says so.
     return translate("paneActions.sessionRequest.switchAccount", { agent: request.source.id,
@@ -776,8 +785,8 @@ function describeSessionRequest(request: SessionActionRequest): string {
     return request.model ? translate("paneActions.sessionRequest.restartWithModel", params)
       : translate("paneActions.sessionRequest.restart", params);
   }
-  return request.model ? translate("paneActions.sessionRequest.createWithModel", params)
-    : translate("paneActions.sessionRequest.create", params);
+  return withOptions(request.model ? translate("paneActions.sessionRequest.createWithModel", params)
+    : translate("paneActions.sessionRequest.create", params));
 }
 
 type SessionRequestClaim = Readonly<{kind: "claimed"; claimNonce: string}>;
@@ -787,7 +796,7 @@ type SessionRequestBusy = Readonly<{kind: "busy"; leaseExpiresAt: number | null}
 export function createSessionRequestGate(ports: Readonly<{
   claim: (id: string, claimNonce?: string) => Promise<SessionRequestClaim | SessionRequestBusy | "stale" | "retry">;
   confirm: (message: string) => boolean;
-  decide: (id: string, approve: boolean, claimNonce: string) => Promise<"settled" | "stale" | "retry">;
+  decide: (id: string, approve: boolean, claimNonce: string, optionsRevision?: string) => Promise<"settled" | "stale" | "retry">;
   notify: (message: string) => void;
   now?: () => number;
   jitterMs?: (id: string) => number;
@@ -795,7 +804,8 @@ export function createSessionRequestGate(ports: Readonly<{
   const handled = new Set<string>();
   const inFlight = new Set<string>();
   const claims = new Map<string, string>();
-  const decisions = new Map<string, boolean>();
+  // The owner's answer, kept with the text it answered: a request whose options changed under it is asked again.
+  const decisions = new Map<string, { approve: boolean; description: string }>();
   const retryAfter = new Map<string, number>();
   const notifiedLease = new Map<string, number>();
   const now = ports.now ?? Date.now;
@@ -864,10 +874,13 @@ export function createSessionRequestGate(ports: Readonly<{
         if (claim === "retry") { inFlight.delete(value.id); continue; }
         retryAfter.delete(value.id); notifiedLease.delete(value.id);
         claims.set(value.id, claim.claimNonce);
-        const approve = decisions.has(value.id) ? decisions.get(value.id) as boolean
-          : ports.confirm(translate("paneActions.sessionRequest.confirm", { description: describeSessionRequest(value) }));
-        decisions.set(value.id, approve);
-        const outcome = await ports.decide(value.id, approve, claim.claimNonce);
+        const description = describeSessionRequest(value);
+        const answered = decisions.get(value.id);
+        const approve = answered !== undefined && answered.description === description ? answered.approve
+          : ports.confirm(translate("paneActions.sessionRequest.confirm", { description }));
+        decisions.set(value.id, { approve, description });
+        const outcome = await ports.decide(value.id, approve, claim.claimNonce,
+          typeof value.options_revision === "string" ? value.options_revision : undefined);
         if (outcome === "settled") handled.add(value.id);
         if (outcome === "stale") {
           handled.add(value.id);

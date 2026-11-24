@@ -1673,6 +1673,65 @@ not start when the variable names a missing, malformed or symbolic-link file (th
 `journalctl --user -u session-mesh`). `python3 launchsettings.py`, run from the checkout with the
 same variable set, prints the settings as the server reads them.
 
+## Extra options per agent
+
+"New session" has an **Options** field for every agent preset (not for `shell`, not for `other`).
+What you type there is appended, as separate arguments, after the arguments Mesh gives the agent:
+for Pi it loads an extension without losing the two Mesh adds.
+
+```sh
+# in the Options field of a Pi session
+-e /home/USER/dev/my-extension.mjs
+```
+
+The field applies to that session only, and holds only these arguments: the stored default is shown
+beside it and is added by the server, so it is never sent twice. Tick **Make this the default for
+`<agent>`** to store what the field holds as that agent's default (an empty field clears it): the
+same arguments are then added to every new session of that agent, including a session an agent asks
+Mesh to create. Storing needs the master token, typed in the dialog once (ten minutes of
+grace, as in Configuration); if it is refused the session still starts and the dialog says the
+default was not saved.
+
+"Configuration", section **Agents**, edits the same values for every preset at once, and clearing a
+field removes that agent's entry. The values live in `agent-launch-options.json` in Mesh's
+configuration folder (`~/.config/session-mesh`), one JSON array of arguments per preset:
+
+```json
+{
+  "v": 1,
+  "options": {"pi": ["-e", "/home/USER/dev/my-extension.mjs"]}
+}
+```
+
+- **Where they apply.** Only to a new launch: "New session" and a session an agent asks for. A
+  resumed conversation, a session restored after a PTY host restart and an agent moved in from
+  another terminal keep the arguments that conversation already runs with.
+- **What is refused.** Nothing else is checked, except the arguments that would turn the agent into
+  the "no approvals, no sandbox" preset (for Codex `--yolo`,
+  `--dangerously-bypass-approvals-and-sandbox`, `--dangerously-bypass-hook-trust`, `-a never`,
+  `-s danger-full-access`, `-c approval_policy="never"`, `-c sandbox_mode="danger-full-access"`;
+  for Claude `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`,
+  `--permission-mode bypassPermissions`) and the ones that pick the conversation
+  (`--session-id`, `--continue`, `--resume`, `--fork-session`, Pi's `--session`, `--session-dir`,
+  `--fork`, and a Codex subcommand). The check reads the parsed arguments, so `--sandbox=…`,
+  `-a=never` and `-c 'approval_policy="never"'` are recognised like their spaced forms. A refused
+  argument is refused both when you save it and again just before a launch, so a hand-edited file
+  cannot slip it through.
+- **When the file cannot be read.** The server keeps running, but every agent launch is refused with
+  the reason: Mesh cannot know which presets an unreadable file grants options to, and starting
+  without a restrictive argument would widen what the agent may do. The shell and `other` still
+  start. Fix the file, or remove it, then restart the web server to read it again.
+- **A session an agent asks for** is shown with the stored arguments of its preset; the approval is
+  bound to the revision of that file, so a save made after the confirmation is shown asks again
+  instead of launching the new arguments unseen.
+- **Checking a change.** The behaviour is covered by `tools/check-launch-options.ts`, one named case
+  per check (`node --experimental-strip-types tools/check-launch-options.ts <case>`; exit 0 passes,
+  1 fails the assertion, 2 means the harness itself could not run). A representative subset runs
+  with the Node suite; the full list is in the header of `tests/launch-options-checks.test.ts`.
+- **Edits made by hand** are read at startup. A save from Configuration or a session dialog is
+  refused while the file holds bytes this server did not write (the page says the revision is
+  stale), so restart the web server after editing the file.
+
 ## Account aliases: separate Claude and Codex accounts
 
 An account alias lets a session run Claude or Codex under another login than your usual one, for

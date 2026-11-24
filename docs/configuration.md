@@ -42,6 +42,10 @@ see [macOS](operations.md#macos).
 | `MESH_PROJECT_HOOKS` | on | `0` (or `off`, `false`, `no`) stops adding the read-only project context hook to the sessions started or restored afterwards: at session start, Claude and Vibe receive the ids of the session's tracked tasks and the counts of its questions, Codex the ids of its folder's tasks once you have trusted the hook in Codex ([The project context hook](agent-hooks.md#the-project-context-hook)). |
 | `MESH_CODEX_QUEUE_WAKE` | off | `1` lets the mesh wake a Codex session with `codex queue` when agent mail arrives ([Waking Codex with codex queue](operations.md#waking-codex-with-codex-queue)). |
 
+Extra arguments for an agent are not an environment variable: they live in
+`~/.config/session-mesh/agent-launch-options.json`, written from "New session" or from
+"Configuration" ([Extra options per agent](operations.md#extra-options-per-agent)).
+
 `WL_HOME` is not a server setting, but the Projects view reads the project tracker with the web
 server's `WL_HOME` (unset: `~/worklog-data`, else `~/worklog`). Sessions do not receive the web
 server's value: when you set it, give the same absolute path to the web server here and to the
