@@ -25,7 +25,8 @@ const skip = fs.existsSync(HELPER) || process.env.MESH_REQUIRE_MESH_PROFILE ? fa
 
 const READS = {'/api/accounts/profiles': 'profiles.list', '/api/accounts/consent': 'consent.get'} as const;
 const WRITES = {'/api/accounts/consent/set-global': 'consent.set_global', '/api/accounts/consent/set-pair': 'consent.set_pair',
-  '/api/accounts/consent/remove-pair': 'consent.remove_pair', '/api/accounts/consent/reset': 'consent.reset'} as const;
+  '/api/accounts/consent/remove-pair': 'consent.remove_pair', '/api/accounts/consent/reset': 'consent.reset',
+  '/api/accounts/profiles/create': 'profiles.create'} as const;
 const ROUTES: [string, string][] = [...Object.keys(READS).map(p => ['GET', p] as [string, string]),
   ...Object.keys(WRITES).map(p => ['POST', p] as [string, string])];
 const PUBLIC_KEYS = ['backend', 'context_revision', 'enabled', 'id', 'label', 'switch_qualified'];
@@ -242,6 +243,30 @@ describe('the request is bounded before the helper runs', {skip}, () => {
 });
 
 describe('the helper envelope is relayed with its own status', {skip}, () => {
+  test('owner creates one alias with closed public reply, stale revision and duplicate refuse', async () => {
+    const isolated = await startMesh('accounts-routes-create-', {MESH_MESH_PROFILE_CMD: HELPER},
+      where => fs.mkdirSync(where.confDir, {recursive: true, mode: 0o700}));
+    try {
+      const roots = Object.fromEntries(['config', 'history'].map(role => {
+        const directory = path.join(isolated.confDir, 'alias',role);
+        fs.mkdirSync(directory,{recursive:true,mode:0o700});
+        return [role, directory];
+      }));
+      const profile = {backend:'claude',id:'added',label:'Added',roots};
+      const route = '/api/accounts/profiles/create', body = {registry_revision:null,profile};
+      assert.equal((await call(isolated,'POST',route,{body,cookie:null})).status,401);
+      assert.equal((await call(isolated,'POST',route,{body,headers:{Origin:'http://elsewhere.example'}})).status,403);
+      const created = await call(isolated,'POST',route,{body}); envelope(created,200);
+      assert.deepEqual(Object.keys(created.json.data).sort(),['profile','registry_revision']);
+      assert.deepEqual(Object.keys(created.json.data.profile).sort(),PUBLIC_KEYS);
+      assert.equal(created.text.includes(isolated.confDir),false);
+      const listed = await call(isolated,'GET','/api/accounts/profiles'); envelope(listed,200);
+      assert.equal(listed.json.data.registry_revision,created.json.data.registry_revision);
+      envelope(await call(isolated,'POST',route,{body}),409,'profile-registry-changed');
+      envelope(await call(isolated,'POST',route,{body:{...body,registry_revision:created.json.data.registry_revision}}),
+        409,'profile-already-exists');
+    } finally {await isolated.stop();}
+  });
   test('profiles.list lists ids and labels only, never a folder, and qualifies no switch', async () => {
     const reply = await call(real, 'GET', '/api/accounts/profiles');
     envelope(reply, 200);

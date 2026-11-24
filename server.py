@@ -6221,9 +6221,10 @@ def _require_owner_cookie(request):
 
 # ---- Account profiles and confirmation preferences (docs/backend-account-profiles.md, "HTTP routes"): the owner's
 # browser reads and edits them through `mesh-profile --http OP`, which holds the registry, the store and every
-# refusal. Only these six operations have a route: profiles.resolve (it returns folders) and any switch stay on the
+# refusal. Only these named operations have a route: profiles.resolve (it returns folders) and any switch stay on the
 # host. The server checks the caller and the request's bounds, then relays the helper's envelope and its status.
-ACCOUNTS_ROUTES = {"/api/accounts/profiles": "profiles.list", "/api/accounts/consent": "consent.get",
+ACCOUNTS_ROUTES = {"/api/accounts/profiles": "profiles.list", "/api/accounts/profiles/create": "profiles.create",
+                   "/api/accounts/consent": "consent.get",
                    "/api/accounts/consent/set-global": "consent.set_global",
                    "/api/accounts/consent/set-pair": "consent.set_pair",
                    "/api/accounts/consent/remove-pair": "consent.remove_pair",
@@ -6245,6 +6246,7 @@ _ACCOUNTS_CONFIRMATIONS = ("ask", "skip")
 _ACCOUNTS_CODE_STATUS = {
     "request-too-large": 413,
     "consent-revision-conflict": 409, "profile-registry-changed": 409, "profile-context-changed": 409,
+    "profile-already-exists": 409, "profile-migration-required": 409,
     "consent-rule-capacity": 409, "consent-revision-exhausted": 409,
     "unknown-profile": 404, "profiles-unconfigured": 404,
     "invalid-request": 400, "unsupported-request-version": 400, "invalid-account-pair": 400,
@@ -6333,7 +6335,8 @@ def _profile_envelope(op, code, out):
         code_text = reply["code"]
         known = isinstance(code_text, str) and _ACCOUNTS_CODE_RE.fullmatch(code_text)
         return reply if known and _ACCOUNTS_CODE_STATUS.get(code_text, 503) == status else None
-    shape = _public_listing if op == "profiles.list" else _consent_policy   # every other route is a consent.* op
+    shape = (_public_listing if op == "profiles.list" else
+             _public_created if op == "profiles.create" else _consent_policy)
     return reply if shape(reply["data"]) else None
 
 
@@ -6361,6 +6364,10 @@ def _public_profile(p):
             and isinstance(p["label"], str) and p["backend"] in _ACCOUNTS_BACKENDS
             and _accounts_digest(p["context_revision"]) and type(p["enabled"]) is bool
             and p["switch_qualified"] is False)
+
+def _public_created(data):
+    return (isinstance(data, dict) and set(data) == {"registry_revision", "profile"}
+            and _accounts_digest(data["registry_revision"]) and _public_profile(data["profile"]))
 
 
 def _consent_policy(data):
@@ -6401,7 +6408,7 @@ async def _accounts_body(request):
 
 
 async def api_accounts(request):
-    """The six account routes: the owner's browser only (no Authorization header at all, the owner cookie, this
+    """The account routes: the owner's browser only (no Authorization header at all, the owner cookie, this
     server's Origin on reads too, as for the update notes), then the helper's envelope with the status it names."""
     _require_owner_cookie(request)
     if not same_origin(request) or request.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
@@ -8198,6 +8205,7 @@ def make_app(*, session_request_path=None):
     app.router.add_post("/api/agent-mail/consent/revoke", api_agent_mail_consent_revoke)
     # account profiles and confirmation preferences: no route for profiles.resolve, nor for any switch
     app.router.add_get("/api/accounts/profiles", api_accounts)
+    app.router.add_post("/api/accounts/profiles/create", api_accounts)
     app.router.add_get("/api/accounts/consent", api_accounts)
     app.router.add_post("/api/accounts/consent/set-global", api_accounts)
     app.router.add_post("/api/accounts/consent/set-pair", api_accounts)

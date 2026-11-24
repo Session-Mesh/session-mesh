@@ -11,6 +11,8 @@ export type PairRule = Readonly<{a: AccountRef; b: AccountRef; confirmation: Con
 export type Policy = Readonly<{version: 1; revision: number; global: Confirmation; pairs: readonly PairRule[]}>;
 export type Registry = Readonly<{configured: boolean; registry_revision: string | null; profiles: readonly Profile[]}>;
 export type Snapshot = Readonly<{registry: Registry; policy: Policy}>;
+export type ProfileInput = Readonly<{backend: Backend; id: string; label: string; roots: Readonly<Record<string, string>>}>;
+export type ProfileMutation = Readonly<{version: 1; op: 'profiles.create'; registry_revision: string | null; profile: ProfileInput}>;
 type BaseMutation = Readonly<{version: 1; expected_revision: number}>;
 export type ConsentMutation = BaseMutation & (
   | Readonly<{op: 'consent.set_global'; confirmation: Confirmation}>
@@ -23,11 +25,13 @@ export type BackendAccountPorts = Readonly<{
   load: (signal: AbortSignal) => Promise<{profiles: unknown; policy: unknown}>;
   /** Adapter authenticates the human request and maps the native request to its agreed transport. */
   mutate: (request: ConsentMutation, signal: AbortSignal) => Promise<unknown>;
+  create?: (request: ProfileMutation, signal: AbortSignal) => Promise<unknown>;
   timeoutMs?: number;
 }>;
 export type AccountState = Readonly<{
-  phase: 'closed' | 'loading' | 'ready' | 'saving' | 'saved' | 'conflict' | 'refused' | 'error';
+  phase: 'closed' | 'loading' | 'ready' | 'saving' | 'saved' | 'conflict' | 'refused' | 'error' | 'verification';
   snapshot: Snapshot | null;
+  refusal?: string;
 }>;
 
 const invalid = (): never => { throw new Error('invalid-response'); };
@@ -51,9 +55,10 @@ function label(value: unknown): string {
 }
 const asciiLower = (text: string): string => text.replace(/[A-Z]/g, c => c.toLowerCase());
 const CONFLICTS = new Set(['consent-revision-conflict', 'profile-registry-changed', 'profile-context-changed',
+  'profile-already-exists', 'profile-migration-required',
   'consent-rule-capacity', 'consent-revision-exhausted']);
-// Native precommit errors and the HTTP route's pre-helper queue refusal. Generic helper failure
-// (including the HTTP adapter losing an ACK) and store/commit failure are NOT refusals.
+// Native precommit errors and the HTTP route's pre-helper queue refusal. Publication
+// uncertainty is recognized below but is never a definite refusal.
 const REFUSALS = new Map<string, number>([
   ...[...CONFLICTS].map(code => [code, 409] as const),
   ...['unknown-profile', 'profiles-unconfigured'].map(code => [code, 404] as const),
@@ -63,12 +68,15 @@ const REFUSALS = new Map<string, number>([
   ...['invalid-request', 'unsupported-request-version', 'invalid-account-pair', 'invalid-account-reference',
     'profile-backend-mismatch', 'unsupported-operation'].map(code => [code, 400] as const),
   ...['disabled-profile', 'invalid-consent-policy', 'invalid-profile-config', 'unsafe-profile-roots',
+    'migration-busy',
     'unsafe-configuration-root', 'unsafe-backend-store', 'invalid-backend-state', 'unsupported-backend-store-version',
     'backend-transaction-aborted', 'backend-store-busy', 'backend-journal-capacity'].map(code => [code, 503] as const),
+  ['profile-publication-uncertain', 503],
 ]);
 class ReplyFailure extends Error {
   readonly conflict: boolean;
-  constructor(code: string) { super('request-refused'); this.conflict = CONFLICTS.has(code); }
+  readonly code: string;
+  constructor(code: string) { super('request-refused'); this.code = code; this.conflict = CONFLICTS.has(code); }
 }
 function data(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid();
@@ -80,6 +88,7 @@ function data(value: unknown): unknown {
   if (!ok) {
     if (typeof row.code !== 'string' || !REFUSALS.has(row.code)
       || (hasStatus && row.http_status !== REFUSALS.get(row.code))) return invalid();
+    if (row.code === 'profile-publication-uncertain') throw new Error('publication-uncertain');
     throw new ReplyFailure(row.code);
   }
   return row.data;
@@ -144,6 +153,23 @@ export function ruleStatus(registry: Registry, rule: PairRule): 'current' | 'sta
   return profiles.some((p, i) => p!.context_revision !== [rule.a, rule.b][i]!.context_revision) ? 'stale' : 'current';
 }
 const account = (p: AccountRef): AccountRef => ({backend: p.backend, id: p.id, context_revision: p.context_revision});
+export const PROFILE_ROLES: Readonly<Record<Backend, readonly string[]>> = {
+  claude: ['config', 'history'], codex: ['config', 'state'],
+  'opencode-v2': ['config', 'data', 'state', 'cache'], pi: ['config', 'history'],
+};
+export function validProfileInput(input: ProfileInput): boolean {
+  try {
+    backend(input.backend); id(input.id); label(input.label);
+    const roles = PROFILE_ROLES[input.backend];
+    return !!input.roots && typeof input.roots === 'object' && !Array.isArray(input.roots)
+      && Object.keys(input.roots).length === roles.length
+      && roles.every(role => typeof input.roots[role] === 'string'
+        && input.roots[role]!.length <= 1024
+        && /^\/[A-Za-z0-9._+@/-]+$/.test(input.roots[role]!)
+        && !input.roots[role]!.endsWith('/')
+        && input.roots[role]!.split('/').slice(1).every(part => part && part !== '.' && part !== '..'));
+  } catch { return false; }
+}
 function samePolicy(a: Policy, b: Policy): boolean {
   const normalized = (p: Policy) => JSON.stringify({...p, pairs: [...p.pairs].sort((a, b) => pairKey(a.a, a.b).localeCompare(pairKey(b.a, b.b)))});
   return normalized(a) === normalized(b);
@@ -192,7 +218,8 @@ export function createBackendAccountController(ports: BackendAccountPorts) {
       if (token !== generation) return false;
       publish({phase: 'saved', snapshot: {...snapshot, policy: next}}); return true;
     } catch (error) {
-      if (token === generation) publish({phase: error instanceof ReplyFailure ? error.conflict ? 'conflict' : 'refused' : 'error', snapshot});
+      if (token === generation) publish({phase: error instanceof ReplyFailure ? error.conflict ? 'conflict' : 'refused' : 'error',
+        snapshot, ...(error instanceof ReplyFailure ? {refusal: error.code} : {})});
       return false;
     } finally { if (active === abort) active = null; }
   }
@@ -204,6 +231,37 @@ export function createBackendAccountController(ports: BackendAccountPorts) {
     async open() { if (state.phase !== 'closed') return; publish({phase: 'error', snapshot: null}); await refresh(); },
     refresh,
     close() { ++generation; active?.abort(); active = null; publish({phase: 'closed', snapshot: null}); },
+    async createProfile(profile: ProfileInput): Promise<boolean> {
+      if (!writable() || !ports.create || !validProfileInput(profile)) return false;
+      const snapshot = state.snapshot!, token = ++generation, abort = new AbortController(); active = abort;
+      const request: ProfileMutation = {version: 1, op: 'profiles.create',
+        registry_revision: snapshot.registry.registry_revision, profile};
+      publish({phase: 'saving', snapshot});
+      let receiptValidated = false;
+      try {
+        const created = exact(data(await bounded(signal => ports.create!(request, signal), abort)),
+          ['registry_revision', 'profile']);
+        const revision = digest(created.registry_revision);
+        const parsed = parseProfilesReply({version: 1, ok: true,
+          data: {configured: true, registry_revision: revision, profiles: [created.profile]}});
+        const answer = parsed.profiles[0]!;
+        if (answer.backend !== profile.backend || answer.id !== profile.id || answer.label !== profile.label
+          || !answer.enabled || answer.switch_qualified) return invalid();
+        receiptValidated = true;
+        const raw = await bounded(ports.load, abort);
+        const refreshed = {registry: parseProfilesReply(raw.profiles), policy: parsePolicyReply(raw.policy)};
+        if (refreshed.registry.registry_revision !== revision
+          || !refreshed.registry.profiles.some(p => JSON.stringify(p) === JSON.stringify(answer))) return invalid();
+        if (token !== generation) return false;
+        publish({phase: 'saved', snapshot: refreshed}); return true;
+      } catch (error) {
+        if (token === generation) publish({
+          phase: receiptValidated ? 'verification' : error instanceof ReplyFailure ? error.conflict ? 'conflict' : 'refused' : 'error',
+          snapshot, ...(!receiptValidated && error instanceof ReplyFailure ? {refusal: error.code} : {}),
+        });
+        return false;
+      } finally { if (active === abort) active = null; }
+    },
     async saveGlobal(value: Confirmation): Promise<boolean> {
       if (!writable() || !['ask', 'skip'].includes(value)) return false;
       return write({...base(), op: 'consent.set_global', confirmation: value}, {...next(), global: value});

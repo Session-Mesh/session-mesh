@@ -3,7 +3,7 @@
 
 // Actual Mesh app/navigation + checked-in generated assets + real mesh-profile/SQLite.
 // GET /api/config is intercepted for negative capability and lifecycle cases; the real
-// server advertises account_settings:true. Most account-route tests intercept the SIX
+// server advertises account_settings:true. Most account-route tests intercept the account
 // /api/accounts/** routes with real native replies; one case uses the actual server routes.
 // Lifecycle cases also serve a benign
 // local-entry.js so the actual app can be tested before its real MeshUI.startLocalMesh() is
@@ -22,6 +22,7 @@ import {REPO, removeScratch, startMesh, type Scratch} from './mesh-server-lib.ts
 import {chromiumLaunchOptions, READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
 
 const HELPER = process.env.MESH_BACKEND_ACCOUNT_HELPER || path.join(REPO, 'ocaml/_build/default/bin/mesh_profile_main.exe');
+const PLATFORM = path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
 const CHROMIUM = process.env.MESH_CHROMIUM || '';
 const required = process.env.MESH_REQUIRE_BACKEND_ACCOUNT_APP === '1';
 const skip = !CHROMIUM
@@ -34,6 +35,7 @@ const catalogs = Object.fromEntries(['en', 'fr'].map(lang => [lang,
 const ROUTES = {
   'GET /api/accounts/profiles': 'profiles.list',
   'GET /api/accounts/consent': 'consent.get',
+  'POST /api/accounts/profiles/create': 'profiles.create',
   'POST /api/accounts/consent/set-global': 'consent.set_global',
   'POST /api/accounts/consent/set-pair': 'consent.set_pair',
   'POST /api/accounts/consent/remove-pair': 'consent.remove_pair',
@@ -110,11 +112,49 @@ function prepare(where: Scratch): void {
   }));
   fs.writeFileSync(path.join(root, 'backend-profiles.json'), JSON.stringify({version: 1, profiles}), {mode: 0o600});
 }
+test('real settings browser registers a native alias and offers it for a new session',{skip},async()=>{
+  await withFixture(async lab=>{
+    const context=await lab.context('en',1440,null,true), page=await lab.page(context);
+    await open(page);
+    await control(page,'add-account').click();
+    await control(page,'create-backend').selectOption('opencode-v2');
+    await control(page,'create-id').fill('new-alias');
+    await control(page,'create-label').fill('New alias');
+    for(const role of ['config','data','state','cache']){
+      const root=path.join(lab.mesh.confDir,'test-profiles','opencode-v2','new-alias',role);
+      fs.mkdirSync(root,{recursive:true,mode:0o700});
+      await control(page,`create-${role}`).fill(root);
+    }
+    await control(page,'save-account').click(); await status(page,'en','saved');
+    const listing=await lab.native('profiles.list');
+    assert.equal(listing.data?.profiles?.length,13);
+    assert.equal(listing.data?.profiles?.some(p=>p.id==='new-alias'&&p.backend==='opencode-v2'),true);
+    assert.equal(await dialog(page).locator('input[type=password]').count(),0);
+    assert.equal(await dialog(page).locator('li').filter({hasText:'new-alias'}).count(),1);
+    await control(page,'close').click();
+    await page.locator('#btn-new').click();
+    assert.equal(await page.locator('#dlg-new').evaluate((node: HTMLDialogElement)=>node.open),true);
+    const offered=await page.evaluate(async()=>{
+      const response=await fetch('/api/config',{cache:'no-store'});
+      return response.ok?(await response.json()).accounts:[];
+    });
+    assert.ok(offered.some((account:{id:string;opencode?:boolean})=>account.id==='new-alias'&&account.opencode),
+      JSON.stringify(offered));
+    const account=page.locator('#dlg-new select[name="account"]');
+    await account.locator('option[value="new-alias"]').waitFor({state:'attached',timeout:10000});
+    await page.locator('#dlg-new label:has(input[name="preset"][value="opencode"])').click();
+    assert.equal(await page.locator('#new-account-row').isVisible(),true);
+    assert.equal(await account.locator('option[value="new-alias"]').isDisabled(),false);
+    assert.equal(await account.locator('option[value="new-alias"]').textContent(),'New alias');
+  }, true);
+});
 
-async function fixture() {
+async function fixture(withPlatform = false) {
+  if (withPlatform) assert.equal(fs.existsSync(PLATFORM),true,'build the native mesh-platform before this check');
   const mesh = await startMesh('backend-accounts-app-', {
     MESH_PROFILE_CMD: undefined, CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined,
     MESH_MESH_PROFILE_CMD: HELPER,
+    MESH_MESH_PLATFORM_CMD: withPlatform ? PLATFORM : undefined,
     XDG_STATE_HOME: undefined, XDG_DATA_HOME: undefined, OPENCODE_CONFIG: undefined, OPENCODE_CONFIG_DIR: undefined,
   }, prepare);
   const children = new Set<ChildProcess>(), contexts = new Set<BrowserContext>(), tasks = new Set<Promise<void>>();
@@ -268,8 +308,8 @@ async function fixture() {
       return {received: pending.received, release: pending.release, finished: pending.finished}; },
   };
 }
-async function withFixture(run: (lab: Awaited<ReturnType<typeof fixture>>) => Promise<void>): Promise<void> {
-  const lab = await fixture(); await preserveFailure(() => run(lab), lab.dispose);
+async function withFixture(run: (lab: Awaited<ReturnType<typeof fixture>>) => Promise<void>, withPlatform = false): Promise<void> {
+  const lab = await fixture(withPlatform); await preserveFailure(() => run(lab), lab.dispose);
 }
 
 const dialog = (page: Page) => page.locator('dialog.backend-account-panel');

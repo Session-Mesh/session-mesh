@@ -13,7 +13,7 @@ const routes: Readonly<Record<ConsentMutation['op'], string>> = {
 
 /** Fixed same-origin transport. The controller bounds the whole headers/body operation;
  * native public decoders remain responsible for the reply shape and policy semantics. */
-export function createBackendAccountApi(request: AccountFetch): Pick<BackendAccountPorts, 'load' | 'mutate'> {
+export function createBackendAccountApi(request: AccountFetch): Pick<BackendAccountPorts, 'load' | 'mutate' | 'create'> {
   async function read(url: string, signal: AbortSignal, body?: string): Promise<unknown> {
     if (signal.aborted) throw new Error('account-request-aborted');
     const response = await request(url, {
@@ -46,6 +46,11 @@ export function createBackendAccountApi(request: AccountFetch): Pick<BackendAcco
       const {version, op, ...body} = mutation;
       if (version !== 1 || !Object.hasOwn(routes, op)) return Promise.reject(new Error('invalid-account-operation'));
       return read(routes[op], signal, JSON.stringify(body));
+    },
+    create(mutation, signal) {
+      const {version, op, ...body} = mutation;
+      if (version !== 1 || op !== 'profiles.create') return Promise.reject(new Error('invalid-account-operation'));
+      return read('/api/accounts/profiles/create', signal, JSON.stringify(body));
     },
   };
 }

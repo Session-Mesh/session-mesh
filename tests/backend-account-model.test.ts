@@ -16,6 +16,89 @@ const listing = (profiles = [profile('a'), profile('b'), profile('c')]) =>
   reply({configured: true, registry_revision: digest, profiles});
 const defer = () => { let resolve!: (v: unknown) => void; const promise = new Promise<unknown>(r => { resolve = r; }); return {promise, resolve}; };
 
+test('alias creation refreshes only after validated native success and retains snapshot on conflict', async () => {
+  const roots = {config:'/fixtures/agent',history:'/fixtures/history'};
+  const input = {backend:'claude' as const,id:'new',label:'New',roots};
+  let current = listing(), calls: unknown[] = [], mode = 'conflict';
+  const controller = createBackendAccountController({
+    load: async () => ({profiles: current, policy: reply(policy())}),
+    mutate: async () => reply(policy()),
+    create: async request => {
+      calls.push(request);
+      if (mode === 'conflict') return {version:1,ok:false,code:'profile-registry-changed'};
+      current = reply({configured:true,registry_revision:'b'.repeat(64),profiles:[...parseProfilesReply(current).profiles,{...profile('new'),label:'New'}]});
+      return reply({registry_revision:'b'.repeat(64),profile:{...profile('new'),label:'New'}});
+    },
+  });
+  await controller.open();
+  assert.equal(await controller.createProfile(input),false);
+  assert.equal(controller.state.phase,'conflict');
+  assert.equal(controller.state.snapshot!.registry.profiles.length,3);
+  assert.deepEqual(calls[0],{version:1,op:'profiles.create',registry_revision:digest,profile:input});
+  await controller.refresh();
+  mode = 'success';
+  assert.equal(await controller.createProfile(input),true);
+  assert.equal(controller.state.snapshot!.registry.profiles.length,4);
+  assert.equal(controller.state.snapshot!.policy.revision,0);
+});
+test('native 503 publication uncertainty never declares an alias not saved or retries', async () => {
+  let creates = 0, reads = 0;
+  const controller = createBackendAccountController({
+    load: async () => { reads++; return {profiles: listing(), policy: reply(policy())}; },
+    mutate: async () => reply(policy()),
+    create: async () => {
+      creates++;
+      return {http_status: 503, version: 1, ok: false, code: 'profile-publication-uncertain'};
+    },
+  });
+  await controller.open();
+  assert.equal(await controller.createProfile({backend: 'claude', id: 'new', label: 'New',
+    roots: {config: '/fixtures/config', history: '/fixtures/history'}}), false);
+  assert.equal(controller.state.phase, 'error');
+  assert.equal(controller.state.snapshot?.registry.registry_revision, digest);
+  assert.equal(creates, 1);
+  assert.equal(reads, 1);
+  await controller.refresh();
+  assert.equal(reads, 2);
+  assert.equal(creates, 1);
+});
+
+test('successful create receipt followed by refused read-back is uncertain, never a second write', async () => {
+  const input = {backend: 'claude' as const, id: 'new', label: 'New',
+    roots: {config: '/fixtures/config', history: '/fixtures/history'}};
+  let creates = 0, reads = 0, refuseRead = true;
+  const created = {...profile('new'), label: 'New'};
+  const controller = createBackendAccountController({
+    load: async () => {
+      reads++;
+      return {profiles: reads === 1 ? listing() : refuseRead
+        ? {version: 1, ok: false, http_status: 503, code: 'busy'}
+        : reply({configured: true, registry_revision: 'b'.repeat(64),
+            profiles: [...parseProfilesReply(listing()).profiles, created]}),
+      policy: reply(policy())};
+    },
+    mutate: async () => reply(policy()),
+    create: async () => {
+      creates++;
+      return reply({registry_revision: 'b'.repeat(64), profile: created});
+    },
+  });
+  await controller.open();
+  assert.equal(await controller.createProfile(input), false);
+  assert.equal(controller.state.phase, 'verification');
+  assert.equal(controller.state.snapshot?.registry.registry_revision, digest);
+  assert.equal(creates, 1);
+  assert.equal(reads, 2);
+  assert.equal(await controller.createProfile(input), false);
+  assert.equal(creates, 1);
+  refuseRead = false;
+  await controller.refresh();
+  assert.equal(controller.state.phase, 'ready');
+  assert.equal(reads, 3);
+  assert.equal(creates, 1);
+  assert.equal(controller.state.snapshot!.registry.profiles.some(p => p.id === 'new'), true);
+});
+
 test('strict public schemas accept all four backend-qualified namespaces, never private fields', () => {
   const profiles = BACKENDS.flatMap(backend => [profile('a', backend), profile('b', backend)]);
   assert.equal(parseProfilesReply(listing(profiles)).profiles.length, 8);

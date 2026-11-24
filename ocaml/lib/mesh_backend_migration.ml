@@ -47,6 +47,7 @@ let source root = Filename.concat root "accounts.json"
 let target root = Filename.concat root "backend-profiles.json"
 let marker root = Filename.concat root "backend-profiles.migrated"
 let intent root = Filename.concat root ".backend-profiles.migration-intent"
+let first_intent root = Filename.concat root ".backend-profiles.create-intent"
 let migration_lock root = Filename.concat root ".backend-profiles.lock"
 (* A legacy switch records its uncertain outcome durably under this same
    lock. Never interpret or remove its evidence on behalf of the operator. *)
@@ -695,9 +696,9 @@ let migrate ~root =
          let* () = recheck_root () in
          with_migration_lock ~root (fun () ->
              let* () = recheck_root () in
-             (* Only ENOENT permits publication. A dangling link, directory,
-                unreadable entry, or other lstat error all fail closed. *)
+             (* Refuse migration while a legacy switch or initial setup is active. *)
              let* () = absent ~error:Migration_busy (legacy_switch_marker root) in
+             let* () = absent (first_intent root) in
              let existing =
                match Unix.lstat (target root) with
                | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
@@ -744,3 +745,510 @@ let migrate ~root =
              in
              Ok report))
   with Unix.Unix_error _ | Sys_error _ -> Error Publication_failed
+
+(* First-create intent is deliberately distinct from the legacy migration
+   intent: neither operation may interpret or retire the other's evidence. *)
+
+let first_source root =
+  match read_source root with
+  | Error Source_missing -> `Null
+  | Ok (bytes, st) ->
+      `Assoc
+        [
+          ("dev", `Int st.Unix.st_dev);
+          ("ino", `Int st.Unix.st_ino);
+          ("size", `Int st.Unix.st_size);
+          ("digest", `String (hash bytes));
+        ]
+  | Error _ -> raise (Unix.Unix_error (Unix.EPERM, "source", ""))
+
+let first_intent_bytes ~root ~stage ~identity ~content =
+  Yojson.Safe.to_string
+    (`Assoc
+       [
+         ("version", `Int 1);
+         ("kind", `String "first-profile-create");
+         ("stage", `String (Filename.basename stage));
+         ("dev", `Int identity.Unix.st_dev);
+         ("ino", `Int identity.Unix.st_ino);
+         ("size", `Int (String.length content));
+         ("digest", `String (hash content));
+         ("source", first_source root);
+       ])
+  ^ "\n"
+
+let write_first_intent ~root ~directory ~stage ~content =
+  let identity = Unix.lstat stage in
+  if not (private_file identity) || not (stage_name (Filename.basename stage))
+  then raise (Unix.Unix_error (Unix.EPERM, "stage", ""));
+  let bytes = first_intent_bytes ~root ~stage ~identity ~content in
+  let fd =
+    Unix.openfile (first_intent root)
+      [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ] 0o600
+  in
+  Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+      write_all fd bytes 0;
+      Unix.fsync fd);
+  Unix.fsync directory
+
+let read_first_intent root =
+  let path = first_intent root in
+  let initial = Unix.lstat path in
+  if not (private_file initial) || initial.Unix.st_size > 1024 then None
+  else
+    let fd = Unix.openfile path [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+    Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+        if not (unchanged initial (Unix.fstat fd)) then None
+        else
+          let bytes = Bytes.create initial.Unix.st_size in
+          let rec read offset =
+            if offset = Bytes.length bytes then true
+            else
+              let count =
+                Unix.read fd bytes offset (Bytes.length bytes - offset)
+              in
+              count > 0 && read (offset + count)
+          in
+          if read 0 && unchanged initial (Unix.fstat fd)
+             && unchanged initial (Unix.lstat path)
+           then Some (initial, Bytes.to_string bytes)
+           else None)
+
+let cleanup_first_stage ~root ~stage ~identity =
+  match Unix.lstat (first_intent root) with
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
+      cleanup_temp stage identity
+  | _ -> ()
+
+type create_recovery = Unpublished_aborted | Published_reconciled
+
+(* Host-only reconciliation: never publish a staged file. A separately
+   recorded first-create inode may still be staged before its first link, or
+   may already be published. Unverifiable state is left for the operator. *)
+let recover_created_profile ~root =
+  let fail () = Error "profile-publication-uncertain" in
+  let* () =
+    project "unsafe-configuration-root" (P.validate_private_root root)
+  in
+  try
+    let* lock = Result.map_error error_code (acquire_migration_lock root) in
+    Fun.protect ~finally:(fun () -> Unix.close lock) (fun () ->
+        let directory =
+          Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
+        in
+        Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+            let root_identity = Unix.fstat directory in
+            let absent path =
+              match Unix.lstat path with
+              | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true
+              | _ -> false
+            in
+            if not (absent (marker root) && absent (intent root)) then fail ()
+            else
+              let record = read_first_intent root in
+              let destination = target root in
+              match record with
+              | None -> fail ()
+              | Some (record_identity, bytes) ->
+                  let stage =
+                    try
+                      match
+                        Yojson.Safe.Util.member "stage"
+                          (Yojson.Safe.from_string bytes)
+                      with
+                      | `String name when stage_name name ->
+                          Some (Filename.concat root name)
+                      | _ -> None
+                    with Yojson.Json_error _ -> None
+                  in
+                   match stage with
+                   | None -> fail ()
+                   | Some stage ->
+                       let published =
+                         match Unix.lstat destination with
+                         | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
+                             None
+                         | st -> Some st
+                       in
+                       let staged =
+                         match Unix.lstat stage with
+                         | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
+                         | st -> Some st
+                       in
+                       let initial =
+                         match (published, staged) with
+                         | Some st, _ | None, Some st -> Some st
+                         | None, None -> None
+                       in
+                       match initial with
+                       | None -> fail ()
+                       | Some initial ->
+                         let stage_links =
+                           match (published, staged) with
+                           | Some _, Some st ->
+                               initial.Unix.st_nlink = 2
+                               && same initial st && st.Unix.st_nlink = 2
+                           | Some _, None -> initial.Unix.st_nlink = 1
+                           | None, Some st ->
+                               private_file st && same initial st
+                           | None, None -> false
+                         in
+                         if
+                           initial.Unix.st_kind <> Unix.S_REG
+                           || initial.Unix.st_uid <> Unix.geteuid ()
+                           || initial.Unix.st_perm land 0o077 <> 0
+                           || initial.Unix.st_size > 1048576
+                           || not stage_links
+                         then fail ()
+                         else
+                         let fd =
+                           Unix.openfile
+                             (if Option.is_some published then destination else stage)
+                             [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
+                         in
+                        let content =
+                          Fun.protect ~finally:(fun () -> Unix.close fd)
+                            (fun () ->
+                              if not (same initial (Unix.fstat fd)) then None
+                              else
+                                let buffer = Bytes.create initial.Unix.st_size in
+                                let rec read offset =
+                                  if offset = Bytes.length buffer then true
+                                  else
+                                    let n =
+                                      Unix.read fd buffer offset
+                                        (Bytes.length buffer - offset)
+                                    in
+                                    n > 0 && read (offset + n)
+                                in
+                                if read 0 && same initial (Unix.fstat fd)
+                                   && (Unix.fstat fd).Unix.st_nlink
+                                      = initial.Unix.st_nlink
+                                then Some (Bytes.to_string buffer)
+                                else None)
+                        in
+                        match content with
+                        | None -> fail ()
+                        | Some content ->
+                            let* _ =
+                              project "invalid-profile-config"
+                                (P.of_string content)
+                            in
+                            let* () =
+                              match read_source root with
+                              | Error Source_missing -> Ok ()
+                              | Ok (source_bytes, _) ->
+                                  let* aliases =
+                                    project "invalid-profile-config"
+                                      (A.parse source_bytes)
+                                  in
+                                  if aliases = [] then Ok () else fail ()
+                              | Error _ -> fail ()
+                            in
+                            let* expected =
+                              try
+                                Ok
+                                  (first_intent_bytes ~root ~stage
+                                     ~identity:initial ~content)
+                              with Unix.Unix_error _ -> fail ()
+                            in
+                            if bytes <> expected then fail ()
+                            else
+                              let* () =
+                                project "unsafe-configuration-root"
+                                  (P.validate_private_root root)
+                              in
+                              if
+                                not
+                                   (same root_identity (Unix.fstat directory)
+                                   && same root_identity (Unix.lstat root)
+                                   && (match published with
+                                      | Some _ ->
+                                          same initial (Unix.lstat destination)
+                                          && (Unix.lstat destination).Unix.st_nlink
+                                             = initial.Unix.st_nlink
+                                      | None -> absent destination)
+                                   && (match staged with
+                                      | Some _ ->
+                                          same initial (Unix.lstat stage)
+                                          && (Unix.lstat stage).Unix.st_nlink
+                                             = initial.Unix.st_nlink
+                                      | None -> absent stage)
+                                  && (match read_first_intent root with
+                                     | Some (current, value) ->
+                                         same record_identity current
+                                         && value = bytes
+                                     | None -> false)
+                                  && absent (marker root) && absent (intent root))
+                               then fail ()
+                               else
+                                 match published with
+                                 | None ->
+                                     (* Retire and sync the intent while the
+                                        exact single-link stage still exists.
+                                        An interrupted optional cleanup then
+                                        leaves an inert orphan, not an intent
+                                        whose evidence we already removed. *)
+                                     Unix.unlink (first_intent root);
+                                     Unix.fsync directory;
+                                     if not (absent destination) then fail ()
+                                     else (
+                                       (match Unix.lstat stage with
+                                       | st
+                                         when private_file st
+                                              && same initial st ->
+                                           cleanup_temp stage initial;
+                                           Unix.fsync directory
+                                       | exception
+                                           Unix.Unix_error (Unix.ENOENT, _, _)
+                                         -> ()
+                                       | _ -> ());
+                                       if absent destination then
+                                         Ok Unpublished_aborted
+                                       else fail ())
+                                 | Some _ ->
+                                     (match staged with
+                                     | Some _ ->
+                                         Unix.unlink stage;
+                                         Unix.fsync directory
+                                     | None -> ());
+                                     if
+                                       not
+                                         (private_file (Unix.lstat destination)
+                                         && same initial (Unix.lstat destination))
+                                     then fail ()
+                                     else (
+                                       Unix.unlink (first_intent root);
+                                       Unix.fsync directory;
+                                       Ok Published_reconciled)))
+  with Unix.Unix_error _ | Sys_error _ -> fail ()
+
+(* All registry writers cooperate on the migration lock. A first registry is
+   linked without replacement; an append replaces only the checked original
+   after the complete candidate has been synced. Out-of-band same-UID changes
+   are not a filesystem transaction and are outside the native custody model. *)
+let create_profile ~root ~expected_revision ~profile =
+  let fail code = Error code in
+  let* () =
+    project "unsafe-configuration-root" (P.validate_private_root root)
+  in
+  (* Hold the lock for the entire operation, not merely the initial check. *)
+  let run () =
+    let* () =
+      match Unix.lstat (first_intent root) with
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
+      | _ -> fail "profile-publication-uncertain"
+    in
+    let* () =
+      match Unix.lstat (intent root) with
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
+      | _ -> fail "profile-migration-required"
+    in
+    let marker_present =
+      match Unix.lstat (marker root) with
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false
+      | st when private_file st -> true
+      | _ -> raise (Unix.Unix_error (Unix.EPERM, "marker", ""))
+    in
+    let* () =
+      match read_source root with
+      | Error Source_missing -> Ok ()
+      | Error _ -> fail "invalid-profile-config"
+      | Ok (bytes, _) ->
+          let* aliases = project "invalid-profile-config" (A.parse bytes) in
+          if aliases <> [] && not marker_present then
+            fail "profile-migration-required"
+          else Ok ()
+    in
+    let destination = target root in
+    let initial =
+      match Unix.lstat destination with
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
+      | st -> Some st
+    in
+    let* () =
+      if marker_present && Option.is_none initial then
+        fail "profile-registry-changed"
+      else Ok ()
+    in
+    let read_current st =
+      if not (private_file st) || st.Unix.st_size > 1048576 then
+        fail "invalid-profile-config"
+      else
+        let fd = Unix.openfile destination [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+        Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+            if not (unchanged st (Unix.fstat fd)) then
+              fail "profile-registry-changed"
+            else
+              let bytes = Bytes.create st.Unix.st_size in
+              let rec read offset =
+                if offset = Bytes.length bytes then Ok ()
+                else
+                  let n = Unix.read fd bytes offset (Bytes.length bytes - offset) in
+                  if n = 0 then fail "profile-registry-changed"
+                  else read (offset + n)
+              in
+              let* () = read 0 in
+              if
+                not
+                  (unchanged st (Unix.fstat fd)
+                  && unchanged st (Unix.lstat destination))
+              then fail "profile-registry-changed"
+              else Ok (Bytes.to_string bytes))
+    in
+    let* previous =
+      match initial with None -> Ok None | Some st -> Result.map Option.some (read_current st)
+    in
+    let* existing =
+      match previous with
+      | None -> Ok []
+      | Some bytes ->
+          let* _ = project "invalid-profile-config" (P.of_string bytes) in
+          (match Yojson.Safe.from_string bytes with
+          | `Assoc [ ("version", `Int 1); ("profiles", `List rows) ]
+          | `Assoc [ ("profiles", `List rows); ("version", `Int 1) ] -> Ok rows
+          | _ -> fail "invalid-profile-config")
+    in
+    let current_revision = Option.map hash previous in
+    let* () =
+      if expected_revision = current_revision then Ok ()
+      else fail "profile-registry-changed"
+    in
+    let* fields =
+      match profile with
+      | `Assoc fields
+        when List.length fields = 4
+             && List.sort_uniq String.compare (List.map fst fields)
+                = [ "backend"; "id"; "label"; "roots" ] ->
+          Ok fields
+      | _ -> fail "invalid-request"
+    in
+    let enabled = `Assoc (fields @ [ ("enabled", `Bool true) ]) in
+    let* single =
+      project "invalid-request"
+        (P.of_string
+           (Yojson.Safe.to_string
+              (`Assoc [ ("version", `Int 1); ("profiles", `List [ enabled ]) ])))
+    in
+    let* selected =
+      match P.profiles single with
+      | [ selected ] -> Ok selected
+      | _ -> fail "invalid-request"
+    in
+    let* () =
+      if
+        List.exists
+          (fun raw ->
+            let id = Yojson.Safe.Util.member "id" raw
+            and backend = Yojson.Safe.Util.member "backend" raw in
+            id = `String (P.id selected)
+            && backend = List.assoc "backend" fields)
+          existing
+      then fail "profile-already-exists"
+      else Ok ()
+    in
+    let content =
+      Yojson.Safe.to_string
+        (`Assoc
+           [ ("version", `Int 1); ("profiles", `List (existing @ [ enabled ])) ])
+      ^ "\n"
+    in
+    let* candidate = project "invalid-profile-config" (P.of_string content) in
+    let* () =
+      project "unsafe-profile-roots"
+        (P.validate_roots ~registry:candidate selected)
+    in
+    let* () = project "unsafe-profile-roots" (check_roots candidate) in
+    let directory =
+      Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
+    in
+    Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+        let root_identity = Unix.fstat directory in
+        let check () =
+          let* () =
+            project "unsafe-configuration-root"
+              (P.validate_private_root root)
+          in
+          let* () =
+            if
+              same root_identity (Unix.lstat root)
+              && same root_identity (Unix.fstat directory)
+            then Ok ()
+            else fail "unsafe-configuration-root"
+          in
+          let* () =
+            match (initial, previous) with
+            | None, None ->
+                (match Unix.lstat destination with
+                | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
+                | _ -> fail "profile-registry-changed")
+            | Some initial, Some bytes ->
+                let* current = read_current initial in
+                if current = bytes then Ok ()
+                else fail "profile-registry-changed"
+            | _ -> fail "profile-registry-changed"
+          in
+          let* () =
+            match Unix.lstat (intent root) with
+            | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
+            | _ -> fail "profile-migration-required"
+          in
+          let* () =
+            match Unix.lstat (marker root) with
+            | exception Unix.Unix_error (Unix.ENOENT, _, _)
+              when not marker_present -> Ok ()
+            | st when marker_present && private_file st -> Ok ()
+            | _ -> fail "profile-registry-changed"
+          in
+          let* () =
+            match read_source root with
+            | Error Source_missing when not marker_present -> Ok ()
+            | Error Source_missing when marker_present -> Ok ()
+            | Ok (bytes, _) when marker_present -> project "invalid-profile-config" (A.parse bytes) |> Result.map (fun _ -> ())
+            | Ok (bytes, _) ->
+                let* aliases = project "invalid-profile-config" (A.parse bytes) in
+                if aliases = [] then Ok () else fail "profile-migration-required"
+            | Error _ -> fail "invalid-profile-config"
+          in
+          let* () =
+            project "unsafe-profile-roots"
+              (P.validate_roots ~registry:candidate selected)
+          in
+          project "unsafe-profile-roots" (check_roots candidate)
+        in
+        let stage, fd = create_temp root in
+         let stage_identity = Unix.fstat fd in
+         Fun.protect
+           ~finally:(fun () ->
+             cleanup_first_stage ~root ~stage ~identity:stage_identity)
+          (fun () ->
+            Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+                write_all fd content 0;
+                Unix.fchmod fd 0o600;
+                Unix.fsync fd);
+            let* () = check () in
+            if not (private_file (Unix.lstat stage)
+                    && same stage_identity (Unix.lstat stage)) then
+              fail "profile-registry-changed"
+            else (
+              let* () = (match initial with
+              | None ->
+                  write_first_intent ~root ~directory ~stage ~content;
+                  let* () =
+                    match check () with
+                    | Ok () -> Ok ()
+                    | Error _ -> fail "profile-publication-uncertain"
+                  in
+                  Unix.link stage destination;
+                  Unix.unlink stage;
+                  Unix.fsync directory;
+                  Unix.unlink (first_intent root);
+                  Ok ()
+              | Some _ -> Unix.rename stage destination; Ok ()) in
+              Unix.fsync directory;
+              Ok (P.registry_revision candidate, P.public_json selected))))
+  in
+  try
+    let* fd = Result.map_error error_code (acquire_migration_lock root) in
+    Fun.protect ~finally:(fun () -> Unix.close fd) run
+  with Unix.Unix_error _ | Sys_error _ -> fail "profile-publication-uncertain"

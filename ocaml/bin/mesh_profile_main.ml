@@ -152,7 +152,26 @@ let handle root raw =
                  `List
                    (match configured with
                    | None -> []
-                   | Some r -> List.map P.public_json (P.profiles r)) );
+                    | Some r -> List.map P.public_json (P.profiles r)) );
+              ])
+    | `String "profiles.create" ->
+        let* fields =
+          exact [ "version"; "op"; "registry_revision"; "profile" ] raw
+        in
+        let* expected_revision =
+          match List.assoc "registry_revision" fields with
+          | `Null -> Ok None
+          | value -> Result.map Option.some (digest value)
+        in
+        let* profile = field "profile" fields in
+        let* revision, created =
+          M.create_profile ~root ~expected_revision ~profile
+        in
+        Ok
+          (`Assoc
+             [
+               ("registry_revision", `String revision);
+               ("profile", created);
              ])
     | `String "profiles.resolve" ->
         let* fields =
@@ -269,6 +288,7 @@ let read_input () =
 let http_operations =
   [
     "profiles.list";
+    "profiles.create";
     "consent.get";
     "consent.set_global";
     "consent.set_pair";
@@ -282,7 +302,8 @@ let http_status = function
   | Error
       ( "consent-revision-conflict" | "profile-registry-changed"
       | "profile-context-changed" | "consent-rule-capacity"
-      | "consent-revision-exhausted" ) ->
+       | "consent-revision-exhausted" | "profile-already-exists"
+       | "profile-migration-required" ) ->
       409
   | Error ("unknown-profile" | "profiles-unconfigured") -> 404
   | Error
@@ -313,10 +334,14 @@ let () =
   if Array.to_list Sys.argv = [ Sys.argv.(0); "--help" ] then (
     print_endline
       "Usage: mesh-profile [--http <operation>]\n\
-      \       mesh-profile migrate\n\n\
+       \       mesh-profile migrate\n\
+       \       mesh-profile recover-create\n\n\
        Default/--http: one JSON request on stdin.\n\
-       migrate: host-only accounts.json conversion; no stdin request, no \
-       overwrite.\n\
+        migrate: host-only accounts.json conversion; no stdin request, no \
+        overwrite.\n\
+         recover-create: host-only reconciliation of an interrupted first alias \
+         creation; either aborts an unpublished stage or verifies an existing \
+         publication, never creates a registry or retries a request.\n\
        Success: \
        {\"version\":1,\"ok\":true,\"data\":{\"aliases\":N,\"profiles\":N}}\n\
        Failure: {\"version\":1,\"ok\":false,\"code\":\"migration-...\"}\n\
@@ -343,6 +368,7 @@ let () =
     match Array.to_list Sys.argv with
     | [ _ ] -> Ok `Request
     | [ _; "migrate" ] -> Ok `Migrate
+    | [ _; "recover-create" ] -> Ok `Recover_create
     | [ _; "--http"; operation ] when List.mem operation http_operations ->
         Ok (`Http operation)
     | _ -> Error "unsupported-arguments"
@@ -355,21 +381,32 @@ let () =
         project
           (fun _ ->
             match selected with
-            | `Migrate -> M.error_code M.Unsafe_configuration_root
-            | _ -> "unsafe-configuration-root")
+             | `Migrate -> M.error_code M.Unsafe_configuration_root
+             | _ -> "unsafe-configuration-root")
           (Mesh_paths.conf_dir Sys.getenv_opt)
       in
       match selected with
       | `Request -> request root None
       | `Http operation -> request root (Some operation)
-      | `Migrate ->
-          let* report = project M.error_code (M.migrate ~root) in
-          Ok
+       | `Migrate ->
+           let* report = project M.error_code (M.migrate ~root) in
+           Ok
             (`Assoc
                [
                  ("aliases", `Int report.aliases);
-                 ("profiles", `Int report.profiles);
-               ])
+                  ("profiles", `Int report.profiles);
+                ])
+        | `Recover_create ->
+            let* outcome = M.recover_created_profile ~root in
+            Ok
+              (`Assoc
+                 [
+                   ( "outcome",
+                     `String
+                       (match outcome with
+                       | M.Unpublished_aborted -> "unpublished-aborted"
+                       | M.Published_reconciled -> "published-reconciled") );
+                 ])
     with
     | (Out_of_memory | Stack_overflow) as exn -> raise exn
     | _ -> Error "backend-helper-unavailable"
