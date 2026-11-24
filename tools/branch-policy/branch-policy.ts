@@ -15,7 +15,12 @@
 //
 // Usage: node --experimental-strip-types tools/branch-policy/branch-policy.ts semver-label|release-guard
 // The pull request is read from the event file (GITHUB_EVENT_PATH), never from an expression of the
-// workflow. The referenced pull requests and the lists of files are read through the GitHub API with
+// workflow. On GitHub's merge queue (GITHUB_EVENT_NAME=merge_group) the event holds no pull request:
+// its number is parsed from `merge_group.head_ref` (gh-readonly-queue/<base>/pr-<number>-<sha>) with a
+// strict pattern, the pull request is read again through the API (current labels, base, description),
+// its base must still be the one the queue built on, and the same rules are applied to those facts.
+// What does not parse or cannot be read is an error, never an acceptance.
+// The referenced pull requests and the lists of files are read through the GitHub API with
 // GITHUB_TOKEN, which the workflow gives read access only (GITHUB_REPOSITORY names the repository).
 // Exit status: 0 accepted, 1 refused, 2 usage error or an API or event file that cannot be read.
 //
@@ -100,6 +105,48 @@ function object(value: unknown): Json | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Json : null;
 }
 
+// `merge_group.head_ref`, with or without the `refs/heads/` GitHub prints: the queue's own branch.
+// The base may hold slashes (release/latest); the number has no leading zero.
+const QUEUE_HEAD_REF = /^(?:refs\/heads\/)?gh-readonly-queue\/(.+)\/pr-([1-9][0-9]{0,8})-[0-9a-f]{40}$/;
+
+// The number of the queued pull request and the base branch the queue built on, or null when the
+// event is not the merge group event of a queue entry.
+export function queueEntryFromEvent(event: unknown): {number: number; baseRef: string} | null {
+  const headRef = object(object(event)?.merge_group)?.head_ref;
+  const match = typeof headRef === 'string' ? QUEUE_HEAD_REF.exec(headRef) : null;
+  return match === null ? null : {baseRef: match[1], number: Number(match[2])};
+}
+
+// The current facts of a pull request, read through the API; null when there is no such pull request.
+export type LookupFacts = (number: number) => Promise<PullRequestFacts | null>;
+
+export function githubFactsLookup(apiUrl: string, repository: string, token: string, fetchImpl: typeof fetch = fetch): LookupFacts {
+  return async (number) => {
+    const response = await fetchImpl(`${apiUrl}/repos/${repository}/pulls/${number}`, {headers: API_HEADERS(token)});
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`GitHub answered ${response.status} for pull request #${number}`);
+    const body = object(await response.json());
+    const labels = Array.isArray(body?.labels) ? body.labels.map((label) => object(label)?.name) : null;
+    const baseRef = object(body?.base)?.ref;
+    if (body === null || typeof baseRef !== 'string' || labels === null || !labels.every((name) => typeof name === 'string') ||
+      (body.body !== null && typeof body.body !== 'string') || body.number !== number) {
+      throw new Error(`unexpected answer of GitHub for pull request #${number}`);
+    }
+    return {baseRef, labels: labels as string[], body: body.body ?? '', number};
+  };
+}
+
+// The facts of the queued pull request: its number from the queue's branch name, its labels, base and
+// description from the API now. A pull request whose base is no longer the queue's is an error.
+export async function factsFromQueue(event: unknown, lookup: LookupFacts): Promise<PullRequestFacts> {
+  const entry = queueEntryFromEvent(event);
+  if (entry === null) throw new Error('merge_group.head_ref is not a merge queue branch of a pull request');
+  const facts = await lookup(entry.number);
+  if (facts === null) throw new Error(`#${entry.number} is not a pull request of this repository`);
+  if (facts.baseRef !== entry.baseRef) throw new Error(`#${entry.number} no longer targets the branch the queue built on`);
+  return facts;
+}
+
 // The facts of the pull request in an event file, or null when it is not a pull request event.
 export function factsFromEvent(event: unknown): PullRequestFacts | null {
   const pull = object(object(event)?.pull_request);
@@ -159,32 +206,40 @@ function report(command: string, problems: string[]): number {
   return problems.length === 0 ? 0 : 1;
 }
 
-export async function run(argv: string[], env: NodeJS.ProcessEnv, lookup?: LookupPull, lookupFiles?: LookupFiles): Promise<number> {
+function readEvent(env: NodeJS.ProcessEnv): unknown {
+  try {
+    return JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH ?? '', 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+export async function run(argv: string[], env: NodeJS.ProcessEnv, lookup?: LookupPull, lookupFiles?: LookupFiles,
+  lookupFacts?: LookupFacts): Promise<number> {
   const [command, ...rest] = argv;
   if ((command !== 'semver-label' && command !== 'release-guard') || rest.length > 0) {
     console.error(USAGE);
     return 2;
   }
-  let facts: PullRequestFacts | null = null;
-  try {
-    facts = factsFromEvent(JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH ?? '', 'utf8')));
-  } catch {
-    // Reported below with the other unreadable-event case.
-  }
-  if (facts === null) {
-    console.error(`${command}: GITHUB_EVENT_PATH is not the event file of a pull request`);
-    return 2;
-  }
-  if (command === 'semver-label') return report(command, semverLabelProblems(facts));
-  if (!facts.baseRef.startsWith(RELEASE_PREFIX)) return report(command, []);
+  const queued = env.GITHUB_EVENT_NAME === 'merge_group';
+  const event = readEvent(env);
   const repository = env.GITHUB_REPOSITORY ?? '';
-  if (lookup === undefined && (!REPOSITORY.test(repository) || !env.GITHUB_TOKEN)) {
+  const apiUrl = env.GITHUB_API_URL ?? DEFAULT_API_URL;
+  const token = env.GITHUB_TOKEN ?? '';
+  const needsApi = queued || (command === 'release-guard' && (factsFromEvent(event)?.baseRef ?? '').startsWith(RELEASE_PREFIX));
+  if (needsApi && lookup === undefined && lookupFacts === undefined && (!REPOSITORY.test(repository) || !token)) {
     console.error(`${command}: GITHUB_REPOSITORY and GITHUB_TOKEN are required`);
     return 2;
   }
-  const apiUrl = env.GITHUB_API_URL ?? DEFAULT_API_URL;
-  const token = env.GITHUB_TOKEN ?? '';
   try {
+    // The same two rules judge a pull request at its own event and again, as it is then, on the queue.
+    const facts = queued ? await factsFromQueue(event, lookupFacts ?? githubFactsLookup(apiUrl, repository, token)) : factsFromEvent(event);
+    if (facts === null) {
+      console.error(`${command}: GITHUB_EVENT_PATH is not the event file of a pull request`);
+      return 2;
+    }
+    if (command === 'semver-label') return report(command, semverLabelProblems(facts));
+    if (!facts.baseRef.startsWith(RELEASE_PREFIX)) return report(command, []);
     return report(command, await releaseGuardProblems(facts, lookup ?? githubLookup(apiUrl, repository, token),
       lookupFiles ?? githubFilesLookup(apiUrl, repository, token)));
   } catch (error) {

@@ -26,6 +26,7 @@ describe('the cla job of the public CI', () => {
     const body = claJob();
     assert.match(body, /^ {4}name: cla$/m);
     assert.match(body, /^ {8}if: github\.event_name == 'pull_request'$/m);
+    assert.match(body, /^ {6}- if: github\.event_name == 'pull_request' \|\| github\.event_name == 'merge_group'$/m);
     assert.match(body, /^ {10}fetch-depth: 0$/m);
   });
 
@@ -35,16 +36,16 @@ describe('the cla job of the public CI', () => {
   test('is never skipped as a whole, and fails outside a pull request unless the ref is main', () => {
     const body = claJob();
     assert.doesNotMatch(body, /^ {4}if:/m, 'a job-level condition would skip the job');
-    assert.match(body, /^ {8}if: github\.event_name != 'pull_request'$/m);
+    assert.match(body, /^ {8}if: github\.event_name != 'pull_request' && github\.event_name != 'merge_group'$/m);
     assert.ok(body.includes('if [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/heads/release/* ]]; then'));
     assert.ok(body.includes('the cla check only runs on pull requests'));
     assert.match(body, /exit 1/);
   });
 
-  test('every step after the guard is conditional on a pull request', () => {
+  test('every step after the guard is conditional on a pull request or the merge queue', () => {
     const steps = claJob().split(/^ {6}- /m).slice(1);
-    assert.equal(steps.length, 4);
-    for (const step of steps.slice(1)) assert.match(step, /^ {8}if: github\.event_name == 'pull_request'$|^if: github\.event_name == 'pull_request'$/m);
+    assert.equal(steps.length, 5);
+    for (const step of steps.slice(1)) assert.match(step, /^ {8}if: github\.event_name == '(pull_request|merge_group)'$|^if: github\.event_name == '(pull_request|merge_group)'$|^if: github\.event_name == 'pull_request' \|\| github\.event_name == 'merge_group'$/m);
   });
 
   test('the guard passes on refs/heads/main and release/**, and fails on any other ref, saying why', () => {

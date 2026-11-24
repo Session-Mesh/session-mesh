@@ -19,6 +19,7 @@ export type Profile = 'public' | 'description' | 'release' | 'site' | 'policy' |
 
 // The one place where untrusted event text may enter an expression: the description workflow hands
 // the pull request body to its script through an environment variable.
+export const QUEUE_ENV_LINE = /^\s+QUEUE_(?:BASE|HEAD)_SHA: \$\{\{ github\.event\.merge_group\.(?:base|head)_sha \}\}\s*$/;
 export const BODY_ENV_LINE = /^\s+BODY: \$\{\{ github\.event\.pull_request\.body \}\}\s*$/;
 export const RUNNER = 'ubuntu-24.04';
 
@@ -114,11 +115,12 @@ function checkSecrets(lines: Line[], allowedToken: Set<Line> = new Set()): strin
 // Untrusted pull-request text (titles, branch names) never enters an expression, whether read
 // with dots or brackets (`github.event.x`, `github.event['x']`, `github['event']`), and the
 // github context is never read whole or by a computed index, which would hide which part.
-function checkInjection(lines: Line[], allowBodyEnv = false): string[] {
+function checkInjection(lines: Line[], allowBodyEnv = false, allowQueueEnv = false): string[] {
   const problems: string[] = [];
   for (const {number, body, unparsable} of expressions(lines)) {
     if (unparsable) problems.push(`line ${number}: expression never closed (a quoted }} is not its end)`);
     if (allowBodyEnv && body.trim() === 'github.event.pull_request.body' && BODY_ENV_LINE.test(lines[number - 1].raw)) continue;
+    if (allowQueueEnv && /^github\.event\.merge_group\.(base|head)_sha$/.test(body.trim()) && QUEUE_ENV_LINE.test(lines[number - 1].raw)) continue;
     const properties = githubProperties(body);
     if (properties.includes(null)) problems.push(`line ${number}: github context read whole or by a computed index`);
     if (properties.some((name) => name === 'event' || name === 'head_ref')) {
@@ -220,10 +222,11 @@ function checkLeakRules(lines: Line[]): string[] {
 // `GITHUB_TOKEN: ${{ github.token }}` in the env of a script step (no action) of the release-guard
 // job, which reads pull requests with a read-only token.
 export const POLICY_TOKEN_JOB = 'release-guard';
+const POLICY_TOKEN_JOBS = [POLICY_TOKEN_JOB, 'semver-label'];
 const POLICY_TOKEN_LINE = /^\s+GITHUB_TOKEN: \$\{\{ github\.token \}\}\s*$/;
 
 function policyTokenLines(lines: Line[]): Set<Line> {
-  const job = jobBlocks(lines).find((item) => item.name === POLICY_TOKEN_JOB)?.block ?? [];
+  const job = jobBlocks(lines).filter((item) => POLICY_TOKEN_JOBS.includes(item.name)).flatMap((item) => item.block);
   const allowed = new Set<Line>();
   for (const env of job.filter((line) => line.key === 'env' && !line.inBlock)) {
     const step = stepOf(lines, lines.indexOf(env));
@@ -249,13 +252,15 @@ function profileChecks(profile: Profile): {runners: Check; secrets: Check; injec
     case 'description':
       return {...shared, injection: (items) => checkInjection(items, true)};
     case 'policy':
-      return {...shared, secrets: (items) => checkSecrets(items, policyTokenLines(items))};
+      return {...shared, injection: (items) => checkInjection(items, false, true), secrets: (items) => checkSecrets(items, policyTokenLines(items))};
     case 'backport':
       return {...shared, secrets: checkBackportSecrets, injection: checkBackportEvent, actions: (items) => checkActions(items, false),
         triggers: checkBackportTriggers, permissions: checkBackportPermissions};
     case 'register':
       return {...shared, secrets: checkRegisterSecrets, injection: checkRegisterEvent, actions: (items) => checkActions(items, false),
         triggers: checkRegisterTriggers, permissions: checkRegisterPermissions};
+    case 'public':
+      return {...shared, injection: (items) => checkInjection(items, false, true)};
     default:
       return shared;
   }
