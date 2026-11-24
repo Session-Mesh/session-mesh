@@ -25,40 +25,73 @@ def agent(sessions):
     return headers
 
 
-def test_options_projection_keeps_options_and_revision_from_same_save(monkeypatch):
-    entered, release, started, done = threading.Event(), threading.Event(), threading.Event(), threading.Event()
+@pytest.mark.parametrize("reader_kind", ["configuration", "approval"])
+@pytest.mark.parametrize("guarded", [True, False], ids=["real-lock", "lock-bypassed-mutant"])
+def test_options_projection_keeps_options_and_revision_from_same_save(monkeypatch, reader_kind, guarded):
+    entered, release, attempted, done = threading.Event(), threading.Event(), threading.Event(), threading.Event()
+
+    class ObservedLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            if threading.current_thread().name == "options-writer":
+                attempted.set()
+            if guarded:
+                self.lock.acquire()
+
+        def __exit__(self, *_args):
+            if guarded:
+                self.lock.release()
+
     class PausedOptions(dict):
         def items(self):
             entered.set()
             assert release.wait(timeout=2)
             return super().items()
+    monkeypatch.setattr(server, "AGENT_OPTIONS_LOCK", ObservedLock())
     monkeypatch.setattr(server, "AGENT_OPTIONS", PausedOptions({"codex": ("--before",)}))
     monkeypatch.setattr(server, "AGENT_OPTIONS_REVISION", "before")
     monkeypatch.setattr(server, "AGENT_OPTIONS_ERROR", None)
+    if reader_kind == "approval":
+        original = server.stored_options
+        def paused(kind):
+            entered.set()
+            assert release.wait(timeout=2)
+            return original(kind)
+        monkeypatch.setattr(server, "stored_options", paused)
     result = []
-    reader = threading.Thread(target=lambda: result.append(server.launch_projection()))
+    def read():
+        if reader_kind == "configuration":
+            projection = server.launch_projection()
+            result.append((projection["agent_options"]["codex"], projection["agent_options_revision"]))
+        else:
+            projection = server._with_launch_options({"action": "create", "preset": "codex"})
+            result.append((projection["options"], projection["options_revision"]))
+    reader = threading.Thread(target=read)
     def write():
-        started.set()
         server.apply_agent_options({"codex": ("--after",)}, "after")
         done.set()
-    writer = threading.Thread(target=write)
+    writer = threading.Thread(target=write, name="options-writer")
     reader.start()
     try:
         assert entered.wait(timeout=2)
         writer.start()
-        assert started.wait(timeout=2)
-        assert not done.wait(timeout=0.05)
+        assert attempted.wait(timeout=2)
+        if guarded:
+            assert not done.wait(timeout=0.05)
+        else:
+            assert done.wait(timeout=2)
     finally:
         release.set()
         reader.join(timeout=2)
         if writer.ident is not None:
             writer.join(timeout=2)
     assert not reader.is_alive() and not writer.is_alive()
-    assert result[0]["agent_options"] == {"codex": "--before"}
-    assert result[0]["agent_options_revision"] == "before"
-    projection = server.launch_projection()
-    assert projection["agent_options"] == {"codex": "--after"}
-    assert projection["agent_options_revision"] == "after"
+    if guarded:
+        assert result == [("--before", "before")]
+    else:
+        assert result == ([("--before", "after")] if reader_kind == "configuration" else [("--after", "before")])
 
 
 def test_options_save_without_launch_settings_file(tmp_path, monkeypatch):

@@ -4737,11 +4737,12 @@ def _with_launch_options(item):
     launch itself then refuses (stored_options)."""
     if item.get("action") != "create" or not item.get("preset"):
         return item
-    revision = AGENT_OPTIONS_REVISION or ""
-    try:
-        tokens = stored_options(item["preset"])
-    except web.HTTPConflict:
-        return {**item, "options": "", "options_revision": revision}
+    with AGENT_OPTIONS_LOCK:
+        revision = AGENT_OPTIONS_REVISION or ""
+        try:
+            tokens = stored_options(item["preset"])
+        except web.HTTPConflict:
+            return {**item, "options": "", "options_revision": revision}
     return {**item, "options": shlex.join(tokens) if tokens else "", "options_revision": revision}
 
 
