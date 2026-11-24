@@ -216,7 +216,8 @@ If the agent keeps no readable conversation at all (an encrypted store, no id), 
    in Mesh before the recipient checks its inbox, and the recipient must not be woken yet.
 2. The recipient's `mail.inbox` must list metadata only, with `authorization_pending: true` on the
    held entry. An explicit `mail.read` must return the existing pending request, not the text or
-   another request. Choose "Read this time" in Mesh. The agent can then read the text directly,
+   another request. Choose "Read this time" in Mesh. The entry now shows `authorization: "once"`;
+   a standing grant shows `"always"` instead, only for the exact pair. The agent can read directly,
    without a separate question in chat. Sending a reply must raise a new approval request unless
    the reverse direction already has standing permission in Mesh.
 3. Wake: with the recipient idle, approve a message and check its wake mechanism, if supported.

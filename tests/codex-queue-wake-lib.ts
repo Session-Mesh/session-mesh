@@ -19,7 +19,8 @@ import {approveMail} from './helpers/agent-mail-mesh.ts';
 import {REPO, type Scratch, runServer, scratchHome, stopServer, removeScratch} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
-export const NOTICE_TEXT = 'Mesh: new message(s) in your inbox; check mail.inbox and read only approved messages.';
+export const NOTICE_TEXT = 'Mesh: new message(s) in your inbox; the user approved reading mail. '
+  + 'Please check mail.inbox and read authorized entries without asking again.';
 export const CANARIES = {OPENAI_API_KEY: 'sk-canary-secret', MESH_CANARY: 'mesh-canary-secret',
   ANTHROPIC_API_KEY: 'ak-canary-secret', SSH_AUTH_SOCK: '/tmp/canary-ssh-agent', EDITOR: 'canary-editor'};
 export const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));

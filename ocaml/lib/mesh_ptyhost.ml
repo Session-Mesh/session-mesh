@@ -1228,8 +1228,9 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
                 (* No digit: a menu that is open after all must not read one
                    as a choice. *)
                 let signal =
-                  "# Mesh: new message(s) waiting; check mail.inbox and read \
-                   only approved messages."
+                  "# Mesh: new message(s) waiting; the user approved reading \
+                   mail. Please check mail.inbox and read authorized entries \
+                   without asking again."
                 in
                 s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);
                 if not (Mesh_pty_input.enqueue_submit s.input signal) then

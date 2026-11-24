@@ -42,7 +42,9 @@ def test_send_requests_consent_before_any_recipient_read_or_wake(mailbox):
     request, = agentmail.consent_projection()["requests"]
     assert request["message_id"] == receipt["id"]
     assert "text" not in request
-    assert agentmail.inbox(beta, live)[0]["authorization_pending"] is True
+    waiting, = agentmail.inbox(beta, live)
+    assert waiting["authorization_pending"] is True
+    assert "authorization" not in waiting
     assert agentmail.claim_wake(beta, live) is None
     with pytest.raises(agentmail.MailConsentPending) as pending:
         agentmail.read(beta, receipt["id"], live, now=4.0)
@@ -50,8 +52,12 @@ def test_send_requests_consent_before_any_recipient_read_or_wake(mailbox):
     agentmail.decide_consent(request["id"], "yes", now=5.0)
     wake = agentmail.claim_wake(beta, live)
     assert wake["count"] == 1
-    assert "authorization_pending" not in agentmail.inbox(beta, live)[0]
+    authorized, = agentmail.inbox(beta, live)
+    assert authorized["authorization"] == "once"
+    assert "authorization_pending" not in authorized
+    assert "text" not in authorized
     assert agentmail.read(beta, receipt["id"], live)["text"] == "read after approval"
+    assert "authorization" not in agentmail.inbox(beta, live)[0]
 
 
 def test_out_of_order_approvals_and_revoke_only_wake_authorized_members(mailbox):
@@ -67,8 +73,12 @@ def test_out_of_order_approvals_and_revoke_only_wake_authorized_members(mailbox)
     assert [r["message_id"] for r in agentmail.consent_projection()["requests"]] == [middle["id"]]
 
     agentmail.decide_consent(requests[middle["id"]]["id"], "yes")
+    assert {m["id"]: m["authorization"] for m in agentmail.inbox(beta, live)} == {
+        first["id"]: "always", middle["id"]: "once", last["id"]: "always"}
     assert agentmail.claim_wake(beta, live) == wake
     agentmail.revoke_consent(policy["id"])
+    assert {m["id"]: m["authorization"] for m in agentmail.inbox(beta, live) if "authorization" in m} == {
+        middle["id"]: "once"}
     following = agentmail.claim_wake(beta, live)
     assert following["notification_id"] != wake["notification_id"]
     assert (following["from_seq"], following["through_seq"], following["count"]) == (
@@ -322,6 +332,7 @@ def test_always_is_exactly_incarnation_bound_persistent_and_revocable(mailbox):
 
     assert agentmail.read(beta, first["id"], live)["text"] == "one"
     second = agentmail.send(alpha, beta, "message", "two", live, now=6.0)
+    assert [m["authorization"] for m in agentmail.inbox(beta, live)] == ["always", "always"]
     assert agentmail.read(beta, second["id"], live)["text"] == "two"
     assert agentmail.consent_projection()["always"] == [policy]
 
@@ -331,6 +342,9 @@ def test_always_is_exactly_incarnation_bound_persistent_and_revocable(mailbox):
 
     fresh_alpha = identity("alpha", 8.0)
     third = agentmail.send(fresh_alpha, beta, "message", "three", [fresh_alpha, beta], now=9.0)
+    third_entry = next(m for m in agentmail.inbox(beta, [fresh_alpha, beta]) if m["id"] == third["id"])
+    assert third_entry["authorization_pending"] is True
+    assert "authorization" not in third_entry
     with pytest.raises(agentmail.MailConsentPending):
         agentmail.read(beta, third["id"], [fresh_alpha, beta], now=10.0)
 

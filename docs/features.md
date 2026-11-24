@@ -859,7 +859,9 @@ allowed that exact sender-to-recipient direction. A message awaiting approval ca
 recipient or expose its text to them. The recipient can read approved messages without asking you
 again. Approval to read does not make the message an instruction from you.
 
-The wake notice says only that approved messages are waiting, never what they say. For Claude
+The wake notice tells the recipient you approved reading mail, never what the messages say.
+The inbox shows which messages are approved and whether each grant is for one read or for
+future messages from that exact sender. For Claude
 Code, the mesh types `# Mesh: new message(s) waiting; …` into the terminal, followed by `Enter`,
 only when Claude is idle at its prompt: it has reported the end of its last turn, nothing
 has been typed into the terminal since, and you have no unsent input in it. While a turn runs, or
@@ -888,7 +890,7 @@ restart) can be woken without typing anything. The mesh starts Claude with its o
 socket (`--messaging-socket-path`, in a private directory next to the PTY host's socket, or in a
 short one under `/tmp` where a socket path would not fit, as on macOS) and wakes it by writing one
 line on that socket:
-`Mesh: N new message(s) in your inbox; check mail.inbox and read only approved messages.`
+`Mesh: N new message(s) in your inbox; the user approved reading mail. Please check mail.inbox and read authorized entries without asking again.`
 Claude shows it as a message from another Claude session and starts a turn, or reads it after the
 running turn. The line carries only the number of waiting messages. One line is sent per batch of
 messages, once the running turn has ended.
@@ -990,8 +992,8 @@ Resuming a Pi conversation is refused when the mesh cannot identify it unambiguo
 receives the MCP server and the wake-up extension below only when the mesh starts or resumes it.
 
 New Pi sessions load a small extension that brings message notices to the agent, even while it is
-working. The notice carries no message content: it tells the agent to check `mail.inbox` and read
-only approved messages. Delivery guarantees:
+working. The notice carries no message content: it tells the agent the user approved reading
+mail and to read authorized entries from `mail.inbox` without asking again. Delivery guarantees:
 
 - **At least once, not exactly once.** As long as the same mesh session stays alive, an unconfirmed
   notice is sent again, at most every 10 seconds and only while Pi is idle with no queued input,

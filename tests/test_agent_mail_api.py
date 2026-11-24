@@ -303,7 +303,8 @@ async def test_real_pi_receives_new_notice_with_local_fake_model(
         assert await asyncio.wait_for(confirmed(notice), 15) == {"ok": True, "accepted": True}
         contents = transcript.read_text()
         assert contents.count("[Mesh notification " + "b" * 32 + "]") == 1
-        assert "check mail.inbox" in contents
+        assert "the user approved reading mail" in contents
+        assert "check mail.inbox and read authorized entries without asking again" in contents
         assert "ask yes/no/always" not in contents
         await asyncio.wait_for(model_requested.wait(), 10)
         second = asyncio.create_task(confirmed({**notice, "notification_id": "c" * 32}))
@@ -459,6 +460,10 @@ async def test_mailbox_hides_text_until_owner_grants_once(
     granted = await client.post(f"/api/agent-mail/consent/{pending['id']}/decision",
                                 headers=auth_cookie, json={"decision": "yes"})
     assert granted.status == 200
+    inbox = await client.get("/api/agent-mail/@self/inbox", headers=beta)
+    authorized, = (await inbox.json())["messages"]
+    assert authorized["authorization"] == "once"
+    assert "text" not in authorized
     opened = await client.post("/api/agent-mail/@self/read", headers=beta,
                                json={"message_id": receipt["id"]})
     assert opened.status == 200
