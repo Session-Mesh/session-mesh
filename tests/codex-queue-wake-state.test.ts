@@ -46,6 +46,25 @@ ${code}`], {encoding: 'utf8', env: {PATH: process.env.PATH, HOME: dir, TMPDIR: d
 const UNCONFIRMED = {ok: false, reason: 'unconfirmed'};
 const ACCEPTED = {ok: true, accepted: true};
 
+test('characterize unbound aliases: the verifier does not supply an account home', () => {
+  const result = scenario(`
+(BIN / "codex").write_text("#!/bin/sh\\nprintf '%s\\n' \\\"\u0024{CODEX_HOME-unset}\\\" >> " + str(LOG) + "\\n")
+import ptyhost
+os.environ["PATH"] = str(BIN)
+os.environ["CODEX_HOME"] = str(ROOT / "server-home")
+async def verify(name, created): return THREAD
+q = agentwake.CodexQueue(STATE, ptyhost.clean_env, verify, enabled=True)
+def send(name, n, account):
+    return asyncio.run(q.post({"name": name, "created": 1.0, "notification_id": "%032x" % n,
+                               "account": account}, {"thread": THREAD}))
+answers = [send("a", 1, "alpha"), send("b", 2, "beta")]
+print(json.dumps({"answers": answers, "homes": LOG.read_text().splitlines()}))
+`);
+  assert.deepEqual(result.answers, [ACCEPTED, ACCEPTED]);
+  // This witnesses the existing limitation, not that either wake reached its target.
+  assert.deepEqual(result.homes, ['unset', 'unset']);
+});
+
 test('a repair is a durable marker: a restart before any retain still runs nothing, and a post is refused meanwhile', () => {
   const result = scenario(`
 TORN = '{"entries": [torn'
