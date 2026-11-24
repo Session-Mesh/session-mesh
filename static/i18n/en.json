@@ -2300,5 +2300,17 @@
   "flow.newer": "Newer events",
   "flow.latestOf": "Latest of {n} events",
   "server.flowJournalUnavailable": "Flow journal unavailable",
-  "flow.depositMeaning": "Deposit accepted. Owner consent, delivery of the message content and reading are not confirmed."
+  "flow.depositMeaning": "Deposit accepted. Owner consent, delivery of the message content and reading are not confirmed.",
+  "server.switchRequestIdentity": "Native switch requires a durable request identity; nothing was stopped",
+  "server.switchSessionIdentity": "Session identity unavailable; nothing was stopped",
+  "server.switchInputBusy": "Session input is not quiescent ({reason}); nothing was stopped",
+  "server.switchEvidenceExists": "Switch recovery evidence already exists; inspect the session",
+  "server.switchBindingConflict": "Conflicting restart bindings; nothing was stopped",
+  "server.switchReleaseRequired": "Explicit fence release required",
+  "server.switchExecuting": "Switch is still executing",
+  "server.switchEvidenceMissing": "No recoverable fence evidence",
+  "server.switchEvidenceMismatch": "Fence evidence does not match the request",
+  "server.switchTerminalMissing": "Original terminal not found; fence was not released",
+  "server.switchReleaseAmbiguous": "Fence may already be released or held by another owner; inspect before another action",
+  "server.switchReleaseUnconfirmed": "Fence release could not be confirmed; inspect before another action"
 }

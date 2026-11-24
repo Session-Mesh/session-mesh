@@ -127,6 +127,7 @@ EXPECTED = {
     ("POST", "/api/session-actions/@self/request"): SESSION_ONLY,
     ("GET", "/api/session-actions/@self/accounts"): SESSION_ONLY,
     ("POST", "/api/session-actions/{request_id}/claim"): COOKIE,
+    ("POST", "/api/session-actions/{request_id}/recover-fence"): COOKIE,
     ("POST", "/api/session-actions/{request_id}/decision"): COOKIE,
     ("POST", "/api/organize"): COOKIE,
     ("POST", "/api/restore"): COOKIE,

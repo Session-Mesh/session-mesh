@@ -310,8 +310,8 @@ describe('an approved restart or switch that cannot restart the agent in its ter
       ['unsupported_foreground', /^Another program holds the terminal of session r-refused: nothing was stopped\. Quit it, or bring the agent back to the foreground, then ask again$/],
       ['agent_not_foreground', /^The agent of session r-refused does not hold its terminal \(it runs in the background, or beside another agent\): nothing was stopped\. Bring it to the foreground, then ask again$/],
       ['agent_starting', /^The agent was not stopped \(agent_starting\): nothing was started$/],
-      ['agent_still_running', /^The agent was not stopped \(agent_still_running\): nothing was started$/],
-      ['stale_incarnation', /^The agent was not stopped \(stale_incarnation\): nothing was started$/],
+      ['agent_still_running', /^Agent stop outcome uncertain; inspect the session before resuming$/],
+      ['stale_incarnation', /^Agent stop outcome uncertain; inspect the session before resuming$/],
     ];
     for (const [reason, message] of expected) {
       mode.refuseStop = reason;
