@@ -245,6 +245,8 @@ export const CASES: Record<string, (h: Harness) => Promise<void>> = {
   async 'refused-forms'(h) {
     for (const [preset, options, mention] of [
       ['codex', '--yolo', '--yolo'],
+      ['codex', 'hello --yolo', '--yolo'],
+      ['codex', 'hello -a never', '-a'],
       ['codex', '--sandbox=danger-full-access', '--sandbox'],
       ['codex', '-a=never', '-a'],
       ['codex', '-c approval_policy="never"', '-c'],
@@ -276,7 +278,7 @@ export const CASES: Record<string, (h: Harness) => Promise<void>> = {
     await elevate(h);
     const file = path.join(h.mesh.confDir, 'agent-launch-options.json');
     const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
-    const answer = await saveOptions(h, {codex: '--yolo'});
+    const answer = await saveOptions(h, {codex: 'hello --yolo'});
     assert.equal(answer.status, 400, `status ${answer.status}: ${JSON.stringify(answer.body)}`);
     assert.match(answer.text, /--yolo/, answer.text);
     const after = fs.existsSync(file) ? fs.readFileSync(file) : null;

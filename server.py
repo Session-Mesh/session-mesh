@@ -2663,6 +2663,7 @@ PRESETS = {"shell": None, **{kind: shlex.join(argv) for kind, argv in AGENT_PRES
 # the server: it makes every agent launch refuse, because Mesh cannot know which presets an unreadable
 # file grants options to, and launching without a restrictive option would widen what the agent may do.
 AGENT_OPTIONS_PATH = CONF_DIR / launchsettings.AGENT_OPTIONS_FILE
+AGENT_OPTIONS_LOCK = threading.Lock()
 try:
     AGENT_OPTIONS, AGENT_OPTIONS_REVISION = launchsettings.load_agent_options(AGENT_OPTIONS_PATH)
     AGENT_OPTIONS_ERROR = None
@@ -2674,7 +2675,8 @@ except launchsettings.InvalidLaunchSettings as exc:
 def apply_agent_options(stored, revision):
     """Make the owner's saved options effective for the next launch, without a restart."""
     global AGENT_OPTIONS, AGENT_OPTIONS_REVISION, AGENT_OPTIONS_ERROR
-    AGENT_OPTIONS, AGENT_OPTIONS_REVISION, AGENT_OPTIONS_ERROR = stored, revision, None
+    with AGENT_OPTIONS_LOCK:
+        AGENT_OPTIONS, AGENT_OPTIONS_REVISION, AGENT_OPTIONS_ERROR = stored, revision, None
 
 
 def stored_options(kind):
@@ -5307,6 +5309,9 @@ async def _config_host():
 
 def launch_projection():
     """The editable launch settings, their revision, limits and factory values."""
+    with AGENT_OPTIONS_LOCK:
+        options = {kind: shlex.join(tokens) for kind, tokens in sorted(AGENT_OPTIONS.items())}
+        options_revision, options_error = AGENT_OPTIONS_REVISION or "", AGENT_OPTIONS_ERROR
     return {"configured": LAUNCH_SETTINGS.configured,
             "workspace_roots": [str(root) for root in LAUNCH_SETTINGS.roots],
             "enabled_agents": sorted(LAUNCH_SETTINGS.enabled_agents),
@@ -5314,9 +5319,8 @@ def launch_projection():
             "editable": LAUNCH_REVISION is not None, "revision": LAUNCH_REVISION,
             "limits": {"max_roots": launchsettings.MAX_ROOTS, "max_path": launchsettings.MAX_PATH},
             "defaults": launchsettings.defaults(),
-            "agent_options": {kind: shlex.join(tokens) for kind, tokens in sorted(AGENT_OPTIONS.items())},
-            "agent_options_revision": AGENT_OPTIONS_REVISION or "",
-            "agent_options_error": AGENT_OPTIONS_ERROR}
+            "agent_options": options, "agent_options_revision": options_revision,
+            "agent_options_error": options_error, "agent_options_editable": options_error is None}
 
 
 def config_report(origin, host_report):

@@ -19,6 +19,16 @@ def test_attached_forbidden_codex_options_are_refused(token):
 def test_safe_codex_approval_option_is_accepted():
     assert launchplan.refusal("codex", ["--ask-for-approval", "on-request"]) is None
 
+
+@pytest.mark.parametrize("options", [["hello", "--yolo"], ["hello", "-a", "never"],
+                                      ["hello", "--config", "sandbox_mode=danger-full-access"]])
+def test_refuses_bypass_options_after_a_positional_word(options):
+    assert launchplan.refusal("codex", options)
+
+
+def test_allows_safe_options_after_a_positional_word():
+    assert launchplan.refusal("codex", ["hello", "--ask-for-approval", "on-request"]) is None
+
 def test_catalogue_vectors_preserve_existing_fresh_agent_behavior():
     assert launchplan.build("claude").command() == agentmcp.inject(
         "claude", ["claude", *resumeargs.claude_args()])
