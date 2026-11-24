@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {test} from 'node:test';
 import {createHumanInputLease, createPasteDelivery, humanInputClientId} from '../static/pane-actions.ts';
+import {sendsSize} from '../static/terminal-size-owner.ts';
 
 test('wire lease ids isolate adjacent IEEE-754 incarnations without losing tab entropy or reconnect stability', () => {
   const tab = 'a'.repeat(32), name = 'n'.repeat(32);
@@ -111,4 +112,35 @@ test('limited output is admitted to the parser without granting automatic protoc
   assert.equal(admit(binding), true, 'rendering must not require automation authority');
   onData('\x1b[1;1R'); assert.deepEqual(sent, []);
   human = true; onData('x'); assert.deepEqual(sent, ['x']);
+  human = false;
+  Object.assign(connection, {closed: true});
+  assert.equal(admit(binding), true, 'received output still renders after this socket closes');
+  onData('\x1b[1;1R'); assert.deepEqual(sent, ['x'], 'closed output cannot send a terminal reply');
+  pane.actionView++;
+  assert.equal(admit(binding), false, 'output for a retired view never renders in its replacement');
+});
+
+for (const outcome of ['release', 'initial', 'reclaimed', 'changed']) test(`size ownership ${outcome} during replay is settled after refitting`, () => {
+  const writes: unknown[] = [];
+  const context = vm.createContext({localMeshEffectsAllowed: () => true, MeshPaneActions: {sendsSize}});
+  const sizing = app.slice(app.indexOf('  sendSize(force'), app.indexOf('  // The size the pane\'s area fits'));
+  const replay = app.slice(app.indexOf('  ownSize()'), app.indexOf('  // A socket\'s first frame'));
+  vm.runInContext(`class Pane {${sizing}\n${replay}};globalThis.pane = new Pane();`, context);
+  const pane = context.pane;
+  pane.termEl = {hidden: false};
+  pane.term = {rows: 37, cols: 101, resize(cols: number, rows: number) {this.cols = cols; this.rows = rows;}};
+  pane.refit = () => {
+    if (outcome === 'changed') {pane.term.rows = 25; pane.term.cols = 90;}
+    pane.sendSize();
+  };
+  const c = pane.conn = {name: 'A', created: 1, replaySize: {rows: 24, cols: 80},
+    lastSize: {rows: 24, cols: 80}, pty: {rows: 37, cols: 101, owner: 'none'},
+    terminal: {isOpen: () => true, isBound: () => true,
+      resize: (...args: unknown[]) => writes.push(args)}};
+  pane.applyPtySize(c, outcome === 'initial');
+  assert.deepEqual(writes, []);
+  if (outcome === 'reclaimed') {c.pty.owner = 'other'; pane.applyPtySize(c);}
+  pane.leaveReplayGeometry(c);
+  assert.equal(writes.length, outcome === 'release' || outcome === 'changed' ? 1 : 0,
+    'a deferred release claims unchanged dimensions, without duplicating an initial claim or taking another owner');
 });

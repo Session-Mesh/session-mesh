@@ -52,6 +52,34 @@ function browserHandle(created: unknown = 1, legacy = false) {
     replay: () => message(new ArrayBuffer(0))};
 }
 
+test('name-only attachments permit explicit resize without granting retained input', () => {
+  const f = browserHandle(null, true);
+  f.replay();
+  f.handle.resize(25, 90);
+  assert.equal(f.socket.sent.length, 0, 'automatic sizing stays disabled');
+  f.handle.resize(25, 90, 'take');
+  assert.deepEqual(f.socket.sent.map(value => JSON.parse(String(value))), [{t: 'r', rows: 25, cols: 90, size: 'take'}]);
+  assert.equal(f.handle.isBound('alpha', null), false);
+  assert.equal(f.handle.retain(), null);
+  f.handle.dispose();
+});
+
+test('unrenderable geometry on a verified attachment keeps an explicit resize recovery path', () => {
+  const f = browserHandle();
+  f.bound();
+  f.message(JSON.stringify({t: 'g', rows: 37, cols: 1001}));
+  f.replay();
+  assert.equal(f.handle.isBound('alpha', 1), false, 'unusable replay must revoke deferred authority');
+  assert.equal(f.handle.limited, true);
+  assert.deepEqual(f.geometry, [], 'never apply geometry beyond the render cap');
+  f.handle.resize(25, 90);
+  assert.equal(f.socket.sent.length, 0);
+  f.handle.resize(25, 90, 'take');
+  assert.equal(f.socket.sent.length, 1);
+  assert.equal(f.handle.retain(), null);
+  f.handle.dispose();
+});
+
 test('bound authority requires one exact acknowledgement before even an empty replay', () => {
   const f = browserHandle();
   assert.equal(new URL(f.socket.url).searchParams.get('created'), '1');
@@ -341,9 +369,10 @@ test('unadvertised conditional hosts keep live I/O without resizing or verified 
     });
   });
   await new Promise<void>(resolve => owner.listen(socketPath, resolve));
-  const server = await runServer(where);
+  let server: Awaited<ReturnType<typeof runServer>> | undefined;
   let live: Awaited<ReturnType<typeof relay>> | undefined;
   try {
+    server = await runServer(where);
     assert.ok(server.result.listened, server.output());
     const token = fs.readFileSync(path.join(where.confDir, 'token'), 'utf8').trim();
     live = await relay(where.port, token, '&created=1&pty_size=1');
@@ -389,8 +418,8 @@ test('unadvertised conditional hosts keep live I/O without resizing or verified 
     }
   } finally {
     live?.socket?.destroy(); for (const peer of peers) peer.destroy();
-    await stopServer(server.child); await new Promise<void>(resolve => owner.close(() => resolve()));
-    removeScratch(where.scratch);
+    try {if (server) await stopServer(server.child);}
+    finally {await new Promise<void>(resolve => owner.close(() => resolve())); removeScratch(where.scratch);}
   }
 });
 
@@ -430,8 +459,9 @@ test('relay waits for a strict native handshake and never falls back on refusal 
     });
   });
   await new Promise<void>(resolve => owner.listen(socketPath, resolve));
-  const server = await runServer(where);
+  let server: Awaited<ReturnType<typeof runServer>> | undefined;
   try {
+    server = await runServer(where);
     assert.equal(server.result.listened, true, server.output());
     const token = fs.readFileSync(path.join(where.confDir, 'token'), 'utf8').trim();
     for (const response of [frame('C', {ok: false, outcome: 'denied'}), frame('C', {ok: false, outcome: 'indeterminate'}),
@@ -469,9 +499,8 @@ test('relay waits for a strict native handshake and never falls back on refusal 
     } finally { legacy.socket?.destroy(); }
   } finally {
     for (const peer of peers) peer.destroy();
-    await stopServer(server.child);
-    await new Promise<void>(resolve => owner.close(() => resolve()));
-    removeScratch(where.scratch);
+    try {if (server) await stopServer(server.child);}
+    finally {await new Promise<void>(resolve => owner.close(() => resolve())); removeScratch(where.scratch);}
   }
 });
 

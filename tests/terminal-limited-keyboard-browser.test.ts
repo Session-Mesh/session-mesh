@@ -14,6 +14,14 @@ test('limited touch input offers immediate terminal keys without submitting the 
     await page.routeWebSocket('**/ws/A**', socket => {
       socket.onMessage(() => {}); socket.send(JSON.stringify({t: 'limited'})); socket.send(Buffer.alloc(0));
     });
+    await page.evaluate(() => {
+      (window as any).liveKeys = [];
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function(data: any) {
+        if (typeof data !== 'string') (window as any).liveKeys.push(new TextDecoder().decode(data));
+        send.call(this, data);
+      };
+    });
     await page.evaluate(() => active.attach('A'));
     await page.waitForFunction(() => active.conn?.terminal?.limited && !active.conn.replayPending
       && !active.conn.replaying && !active.conn.draining);
@@ -21,17 +29,12 @@ test('limited touch input offers immediate terminal keys without submitting the 
     assert.equal(await button.count(), 1);
     assert.equal(await button.isVisible(), true);
     await button.click();
+    assert.deepEqual(await page.evaluate(() => (window as any).liveKeys), [], 'activation never submits the saved draft');
     assert.deepEqual(await page.evaluate(() => ({focused: document.activeElement === active.term.textarea,
       inputMode: active.term.textarea.getAttribute('inputmode'), draft: line.value,
       bound: active.conn.terminal.isBound('A', 1), retained: active.conn.terminal.retain()})),
     {focused: true, inputMode: 'text', draft: 'saved phone draft', bound: false, retained: null});
     await page.evaluate(() => {
-      (window as any).liveKeys = [];
-      const send = active.conn.ws.send.bind(active.conn.ws);
-      active.conn.ws.send = (data: any) => {
-        if (typeof data !== 'string') (window as any).liveKeys.push(new TextDecoder().decode(data));
-        send(data);
-      };
       const target = paneTargets.capture(active);
       (window as any).limitedCapture = target && paneInput.capture(active, target);
       if (target) paneTargets.release(target);

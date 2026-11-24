@@ -7,9 +7,12 @@ import {test, harness} from '../checks/dictation-browser-fixture.ts';
 declare const active: any;
 
 test('the initial owner-none snapshot does not duplicate a claim, but a later release still claims', async () => {
-  await harness(async (page, _api, sockets) => {
+  await harness(async (page, _api, sockets, writes) => {
     await page.waitForFunction(() => !active.conn.autoRedraw && !active.conn.initialFollow
       && !active.conn.replayPending && !active.conn.replaying && !active.conn.draining);
+    assert.ok(writes.get('A')?.some(data => typeof data === 'string'
+      && JSON.parse(data).t === 'r' && (JSON.parse(data).size ?? 'claim') === 'claim'),
+    'an initial claim was sent before the first owner snapshot');
     const size = await page.evaluate(() => {
       (window as any).sizeClaims = [];
       const socket = active.conn.ws, send = socket.send.bind(socket);

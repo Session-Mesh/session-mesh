@@ -12,7 +12,7 @@ const end = source.indexOf('  filesIn(files)', start);
 assert.ok(start >= 0 && end > start);
 
 function fixture(bound = true) {
-  const state = {bound, effects: true, reads: 0, pasted: [] as string[], messages: [] as string[]};
+  const state = {bound, effects: true, visible: true, reads: 0, pasted: [] as string[], messages: [] as string[]};
   let resolve!: (text: string) => void;
   const terminal = {isOpen: () => true, isBound: () => state.bound};
   const context = vm.createContext({navigator: {clipboard: {readText() {
@@ -20,7 +20,8 @@ function fixture(bound = true) {
   }}}, localMeshEffectsAllowed: () => state.effects, t: (key: string) => key,
   flash: (text: string) => state.messages.push(text)});
   const paste = vm.runInContext(`({${source.slice(start, end)}}).pasteClipboard`, context) as (this: any) => Promise<void>;
-  const pane = {id: 'A', actionView: 1, actionDisposed: false, termEl: {hidden: false},
+  const pane = {id: 'A', actionView: 1, actionDisposed: false,
+    termEl: {hidden: false, getClientRects: () => state.visible ? [{}] : []},
     term: {paste: (text: string) => state.pasted.push(text)},
     conn: {name: 'A', created: 1, ws: {}, terminal, closed: false, ended: false}};
   return {pane, state, begin: () => paste.call(pane), finish: () => resolve?.('clipboard sample')};
@@ -44,6 +45,7 @@ const changes: Record<string, (f: ReturnType<typeof fixture>) => void> = {
   ended: f => {f.pane.conn.ended = true;},
   disposed: f => {f.pane.actionDisposed = true;},
   hidden: f => {f.pane.termEl.hidden = true;},
+  'workspace tab visibility': f => {f.state.visible = false;},
   suspended: f => {f.state.effects = false;},
   unbound: f => {f.state.bound = false;},
 };

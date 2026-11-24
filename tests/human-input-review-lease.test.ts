@@ -45,6 +45,47 @@ test('retired deferred input writes on its original transport before releasing t
   assert.equal(scope.adopt({control() {}, data() {throw Error('retired clean lease must be gone');}}), null);
 });
 
+for (const anotherLease of [false, true]) test(`deferred completion preserves newer unfinished input on ${anotherLease ? 'another' : 'the same'} lease`, () => {
+  const scope = createHumanInputScope(), events: (boolean | number[])[] = [];
+  const make = (clientId: string) => createHumanInputLease({clientId, scope,
+    control(_id, dirty) {events.push(dirty);}, data(bytes) {events.push([...bytes]);}});
+  const lease = make('original');
+  const deferred = lease.defer(Uint8Array.of(13), true);
+  const newer = anotherLease ? make('newer') : lease;
+  newer.write(Uint8Array.of(120));
+  assert.equal(deferred.flush(), true, 'retained bytes still use their original transport');
+  assert.equal(newer.dirty, true);
+  assert.equal(scope.dirty, true);
+  assert.equal(events.includes(false), false, 'an older completion cannot release newer unfinished input');
+});
+
+test('flushing an ordered deferred line and Enter releases its own completed input', () => {
+  const events: (boolean | number[])[] = [];
+  const lease = createHumanInputLease({clientId: 'original',
+    control(_id, dirty) {events.push(dirty);}, data(bytes) {events.push([...bytes]);}});
+  const line = lease.defer(Uint8Array.of(120), false), enter = lease.defer(Uint8Array.of(13), true);
+  assert.equal(line.flush(), true);
+  assert.equal(enter.flush(), true);
+  assert.equal(lease.dirty, false, 'flushing earlier reservations is not newer human input');
+  assert.deepEqual(events, [true, [120], [13], false]);
+});
+
+test('reserved chunks keep their original transport across rebinding and cannot write after cancellation', () => {
+  const original: number[][] = [], replacement: number[][] = [];
+  const lease = createHumanInputLease({clientId: 'original', control() {}, data(bytes) {original.push([...bytes]);}});
+  const reserved = lease.defer(Uint8Array.of(120), false);
+  lease.retire();
+  lease.bind({control() {}, data(bytes) {replacement.push([...bytes]);}});
+  assert.equal(reserved.write(Uint8Array.of(120), false), true);
+  assert.equal(reserved.write(Uint8Array.of(13), true), true);
+  reserved.cancel();
+  assert.equal(reserved.write(Uint8Array.of(121), false), false);
+  assert.equal(reserved.flush(), false);
+  assert.deepEqual(original, [[120], [13]]);
+  assert.deepEqual(replacement, []);
+  assert.equal(lease.inputDirty, false);
+});
+
 test('a failed clean H after completed D retries only H(false) after reconnect', () => {
   const controls: boolean[] = [], frames: number[][] = [];
   let fail = true;

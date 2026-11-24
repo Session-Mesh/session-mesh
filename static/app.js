@@ -101,7 +101,8 @@ const paneInput = MeshPaneActions.createPasteDelivery({
   encode: (text) => enc.encode(text),
   send: (pane, socket, bytes, complete) => pane.conn?.ws === socket
     && !pane.conn.replaying && !pane.conn.draining && !pane.conn.replayPending
-    && (pane.inputLease?.write(bytes, complete) ?? false),
+    && (pane.conn.activeHumanInput?.write
+      ? pane.conn.activeHumanInput.write(bytes, complete) : (pane.inputLease?.write(bytes, complete) ?? false)),
   defer: (binding, text, resume, cancel) => binding.pane.deferReplayPaste(binding, text, resume, cancel),
   schedule: (callback) => { setTimeout(callback, 60); },
 });
@@ -436,7 +437,16 @@ function localTerminalBinding(name, created, bytes, geometry, ptySize = () => {}
       } else if (message?.t === "limited" && Object.keys(message).length === 1) {
         binding = "invalid";
         protocol(true);
-      } else if (!size && !MeshPaneActions.isPtySizeFrame(message)) binding = "invalid";
+      } else if (!size && !MeshPaneActions.isPtySizeFrame(message)) {
+        // A verified socket can still be resized explicitly when its replay is
+        // too large to render. It must not retain deferred-input authority.
+        const wireDimension = (value) => Number.isInteger(value) && value >= 2 && value <= 65535;
+        const unrenderable = message?.t === "g" && Object.keys(message).length === 3
+          && wireDimension(message.rows) && wireDimension(message.cols);
+        const verified = binding === "bound";
+        binding = "invalid";
+        if (verified && unrenderable) protocol(true);
+      }
       if (size) geometry(size);
       if (ownedSize) ptySize(ownedSize);
     },
@@ -474,7 +484,7 @@ function openLocalTerminal(name, size, observer) {
     // mode "claim" (the default, no field): applied only while no other device owns the size;
     // "take": the banner's take-over; "keep": a redraw at the PTY's size.
     resize: (rows, cols, mode = "claim") => {
-      if (binding.isBound() || (limited && mode === "take"))
+      if (binding.isBound() || ((limited || created == null) && mode === "take"))
         send(JSON.stringify(mode === "claim" ? { t: "r", rows, cols } : { t: "r", rows, cols, size: mode }));
     },
     retain: () => binding.isBound() ? lifetime.retain() : null,
@@ -649,9 +659,10 @@ class Pane {
 
   wire() {
     const t = this.term;
-    const currentReply = (reply) => reply?.connection === this.conn && reply.terminal === this.conn?.terminal
-      && reply.view === this.actionView && !this.actionDisposed && !this.conn?.closed && reply.terminal?.isOpen();
-    this.inputOrigin = MeshPaneActions.createTerminalInputOrigin(t._core?.coreService, t._core?._inputHandler, currentReply);
+    const currentOutput = (reply) => reply != null && reply.connection === this.conn && reply.terminal === this.conn?.terminal
+      && reply.view === this.actionView && !this.actionDisposed;
+    const currentReply = (reply) => currentOutput(reply) && !this.conn?.closed && reply.terminal?.isOpen();
+    this.inputOrigin = MeshPaneActions.createTerminalInputOrigin(t._core?.coreService, t._core?._inputHandler, currentOutput);
     for (const event of ["focus", "blur"]) t.textarea?.addEventListener(event, () => {
       this.inputOrigin.focus({connection: this.conn, terminal: this.conn?.terminal, view: this.actionView});
     }, true);
@@ -896,6 +907,7 @@ class Pane {
       this.flushReplayInput(c);
     };
     const input = {
+      write: (bytes, complete) => reservation.write(bytes, complete),
       flush: () => {
         if (!held) return false;
         c.activeHumanInput = input;
@@ -970,7 +982,7 @@ class Pane {
     if (!localMeshEffectsAllowed()) return;
     const c = this.conn;
     if (c?.initializing || !c?.terminal?.isOpen()) return;
-    if (!c.terminal.isBound(c.name, c.created) && !(c.terminal.limited && mode === "take")) return;
+    if (!c.terminal.isBound(c.name, c.created) && !((c.terminal.limited || c.created == null) && mode === "take")) return;
     if (!MeshPaneActions.sendsSize(c.pty ?? null, mode)) return;
     const cols = this.ownSize().cols, last = c.lastSize;
     if (!force && last && last.rows === rows && last.cols === cols) return;
@@ -982,7 +994,11 @@ class Pane {
   // it: the pane shows the PTY at that size (followPtySize). Nobody owns it: the pane fits and
   // claims. This pane owns it: nothing to change, unless it followed until now.
   applyPtySize(c, initialClaim = false) {
-    if (c !== this.conn || c.replaySize || this.termEl.hidden) return;
+    if (c !== this.conn || this.termEl.hidden) return;
+    if (c.replaySize) {
+      c.replaySizeRelease = c.pty?.owner === "none" && !initialClaim;
+      return;
+    }
     const owner = c.pty?.owner;
     if (owner === "you" && !this.ptyFollowing) return;
     this.refit();
@@ -1070,11 +1086,16 @@ class Pane {
     const own = c.replaySize;
     if (!own) return;
     c.replaySize = null;
+    const claimReleased = c.replaySizeRelease;
+    c.replaySizeRelease = false;
     // A pane that follows another device's size goes straight to the PTY's (one rewrap).
     const back = c.terminal?.limited && c.limitedGeometry
       ? c.limitedGeometry : c.pty?.owner === "other" ? c.pty : own;
     this.term.resize(back.cols, back.rows);
+    const beforeRefit = c.lastSize;
     this.refit();   // the layout may have changed meanwhile
+    if (c === this.conn && claimReleased && c.pty?.owner === "none" && !this.termEl.hidden && c.lastSize === beforeRefit)
+      this.sendSize(true);
   }
   // A socket's first frame: the replay of the session's recent output, which after a
   // reconnection the terminal already shows. Its reset (replayPrefix) is in the same write, so
@@ -1523,7 +1544,8 @@ class Pane {
     const current = () => c && !c.closed && !c.ended && this.conn === c && c.terminal === terminal
       && c.ws === socket && c.name === name && c.created === created && this.id === name
       && this.term === term && this.actionView === view && !this.actionDisposed
-      && !this.termEl.hidden && localMeshEffectsAllowed() && terminal?.isBound(name, created);
+      && !this.termEl.hidden && this.termEl.getClientRects().length > 0
+      && localMeshEffectsAllowed() && terminal?.isBound(name, created);
     if (!terminal?.isBound(name, created)) { flash(t("terminal.limitedInput")); return; }
     if (!current()) return;
     try {
@@ -2332,6 +2354,7 @@ class Pane {
           c.away = null;   // this socket sends its size and redraws (armAutoRedraw)
           c.pty = null;    // until the host tells this socket (ptySize, after the replay)
           c.initialSizeClaim = false;
+          c.replaySizeRelease = false;
           c.limitedGeometry = null;
           this.limitedBanner.hidden = true;
           this.limitedKeyboard.hidden = true; c.liveKeyboard = false;

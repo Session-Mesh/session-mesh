@@ -45,7 +45,12 @@ export function humanInputClientId(tab: string, slot: number, name: string, crea
   const epoch = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
   return `${tab.slice(0, 32)}_${slot.toString(36)}_${name.slice(0, 32)}_${epoch}`;
 }
-export interface DeferredHumanInput {flush(): boolean; cancel(): void}
+export interface DeferredHumanInput {
+  flush(): boolean;
+  cancel(): void;
+  /** Write a reserved operation's chunks on its original transport. */
+  write(bytes: Uint8Array, complete: boolean): boolean;
+}
 export interface HumanInputLease {
   readonly dirty: boolean;
   readonly releasePending: boolean;
@@ -148,19 +153,31 @@ class NativeInputLease implements HumanInputLease {
     const transport = this.transport, payload = bytes.slice();
     let held = !this.disposed && !!transport && !!payload.byteLength;
     if (!this.disposed && payload.byteLength) this.scope.mutate();
+    const deferredRevision = this.scope.revision;
     if (held) this.queued++;
     const cancel = (): void => {if (held) {held = false; this.queued--; this.cleanup();}};
-    let flushing = false;
-    return {cancel, flush: () => {
+    let flushing = false, writing = false;
+    const write = (bytes: Uint8Array, finished: boolean): boolean => {
+      if (!held || writing) return false;
+      writing = true;
+      try {return this.deliver(bytes, finished && this.scope.revision === deferredRevision, transport, true);}
+      finally {writing = false;}
+    };
+    return {cancel, write, flush: () => {
       if (!held || flushing) return false;
       flushing = true;
-      try {return this.write(payload, complete, transport);}
+      try {return write(payload, complete);}
       finally {cancel();}
     }};
   }
   write(bytes: Uint8Array, complete = false, transport = this.transport): boolean {
+    return this.deliver(bytes, complete, transport, false);
+  }
+  private deliver(bytes: Uint8Array, complete: boolean, transport: HumanInputTransport | null, reserved: boolean): boolean {
     if (this.disposed || !bytes.byteLength) return false;
-    const revision = this.scope.mutate();
+    // A deferred operation invalidated captures when reserved. Flushing it must
+    // not make subsequent reservations look like newer human input.
+    const revision = reserved ? this.scope.revision : this.scope.mutate();
     if (!transport) return false;
     const reacquire = this.pendingRelease;
     this.pendingRelease = false;   // a new D attempt supersedes an older completed operation

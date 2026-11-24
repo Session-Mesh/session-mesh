@@ -184,10 +184,14 @@ for (const observed of [false, true]) test(`quiet legacy attach needs only its r
   await waitFor('the silent program to disable input echo', 5000, () => fs.existsSync(path.join(host.home, 'ready')));
   const attachment = new Attachment(net.createConnection(host.socketPath));
   attachment.send('C', {op: 'attach', name: 'quiet', rows: 31, cols: 71});
-  const control = JSON.parse((await attachment.next('C')).payload.toString());
+  await waitFor('C then D replay frames', 10000, () => attachment.frames.length >= 2);
+  const acknowledgement = attachment.frames.shift()!;
+  assert.equal(acknowledgement.kind, 'C', 'acknowledgement precedes replay');
+  const control = JSON.parse(acknowledgement.payload.toString());
   assert.equal(control.ok, true);
   assert.ok(control.replay_geometry, 'legacy replay geometry is metadata in the C acknowledgement');
-  const replay = await attachment.next('D');
+  const replay = attachment.frames.shift()!;
+  assert.equal(replay.kind, 'D', 'the second frame is the replay');
   assert.equal(replay.payload.length, 0, 'even a quiet legacy attach emits one empty D replay');
   assert.deepEqual(attachment.frames, [], 'no separate geometry or unsolicited output frame is needed');
   t.diagnostic(`legacy attach: C(ok, replay_geometry), D(${replay.payload.length} bytes); next output follows input`);

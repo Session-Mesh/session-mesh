@@ -338,10 +338,12 @@ async def test_unfinished_input_lease_stays_with_its_session_incarnation(browser
         await tab.wait_for_function("data?.mesh?.some((session) => session.id === 'lease-a')")
         await tab.locator('#list .item[data-id="lease-a"]').click()
         await tab.wait_for_function("active?.id === 'lease-a' && active.conn?.ws?.readyState === WebSocket.OPEN")
+        await tab.wait_for_function("active.conn.terminal.isBound(active.conn.name, active.conn.created) && !active.conn.replayPending && !active.conn.replaying && !active.conn.draining")
         await tab.evaluate("active.send('partial')")
         await tab.wait_for_function("active.inputLease.dirty")
         await tab.evaluate("active.show('lease-b')")
         await tab.wait_for_function("active?.id === 'lease-b' && active.conn?.ws?.readyState === WebSocket.OPEN")
+        await tab.wait_for_function("active.conn.terminal.isBound(active.conn.name, active.conn.created) && !active.conn.replayPending && !active.conn.replaying && !active.conn.draining")
         state = await tab.evaluate("""() => ({
           currentDirty: active.inputLease.dirty,
           retained: [...active.inputLeases.values()].map(lease => lease.dirty),
