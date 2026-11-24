@@ -196,8 +196,22 @@ describe('account switch requests', {skip: SKIP}, () => {
       const pidOf = (name: string) => Number(fs.readFileSync(`${log}.${name}`, 'utf8').trim());
       const actualHome = (pid: number) => {
         const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
-        const variable = env.find(item => item.startsWith('CODEX_HOME='));
-        return variable ? variable.slice(11) : `${env.find(item => item.startsWith('HOME='))!.slice(5)}/.codex`;
+        const homes = env.filter(item => item.startsWith('HOME='));
+        const codexHomes = env.filter(item => item.startsWith('CODEX_HOME='));
+        assert.equal(homes.length, 1, 'the running agent exposes one HOME');
+        assert.ok(codexHomes.length <= 1, 'the running agent exposes at most one CODEX_HOME');
+        return codexHomes[0]?.slice(11) || path.join(homes[0]!.slice(5), '.codex');
+      };
+      const awaitExec = async (pid: number) => {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          try {
+            if (fs.readlinkSync(`/proc/${pid}/exe`).endsWith('/real/codex')) return;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+          await sleep(100);
+        }
+        assert.fail(`the fake agent ${pid} did not complete exec`);
       };
       const workPid = pidOf(work.name), travelPid = pidOf(travel.name), plainPid = pidOf(plain.name);
       assert.deepEqual([actualHome(workPid), actualHome(travelPid), actualHome(plainPid)],
@@ -211,6 +225,7 @@ describe('account switch requests', {skip: SKIP}, () => {
       await launchOf(work.name);
       const switchedPid = pidOf(work.name);
       assert.notEqual(switchedPid, workPid, 'the agent was relaunched');
+      await awaitExec(switchedPid);
       assert.equal(actualHome(switchedPid), travelHome);
       assert.equal((await listed(work.name))!.id, before.id);
       assert.equal(launches().findLast(fields => fields[2] === work.name)?.[4], work.token,
@@ -224,7 +239,10 @@ describe('account switch requests', {skip: SKIP}, () => {
       const restarted = await decide(request, true);
       assert.equal(restarted.state, 'completed', JSON.stringify(restarted));
       await launchOf(plain.name);
-      assert.equal(actualHome(pidOf(plain.name)), path.join(mesh.home, '.codex'));
+      const restartedPid = pidOf(plain.name);
+      assert.notEqual(restartedPid, plainPid, 'restart launches a new agent');
+      await awaitExec(restartedPid);
+      assert.equal(actualHome(restartedPid), path.join(mesh.home, '.codex'));
       assert.equal(launches().findLast(fields => fields[2] === plain.name)?.[4], plain.token);
       assert.equal(actualHome(switchedPid), travelHome);
       assert.equal(actualHome(travelPid), travelHome);
