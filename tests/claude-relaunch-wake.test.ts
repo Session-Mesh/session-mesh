@@ -24,6 +24,8 @@ import {request, waitFor} from './ptyhost-wire-lib.ts';
 // `--version` answers; otherwise: the conversation id in ~/.claude/sessions/<pid>.json (a resume keeps it), a
 // transcript line, the socket (`bound <pid>` or `bind-failed <code>` in ./events.log), the token in ./token. A file
 // ./stubborn makes it ignore SIGHUP. It ends on SIGHUP or SIGKILL without closing the socket: its file stays.
+const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD
+  || path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
 const FAKE = [
   "const fs = require('node:fs'), net = require('node:net'), path = require('node:path');",
   "const readline = require('node:readline'), crypto = require('node:crypto');",
@@ -36,6 +38,7 @@ const FAKE = [
   "fs.writeFileSync(path.join(claude, 'sessions', process.pid + '.json'), JSON.stringify({sessionId: sid, status: 'idle'}));",
   "if (fs.existsSync('./stubborn')) process.on('SIGHUP', () => {});",
   "const log = line => fs.appendFileSync('./events.log', line + '\\n');",
+  "fs.writeFileSync('./launch.json', JSON.stringify(args));",
   "const at = args.indexOf('--messaging-socket-path');",
   'if (at >= 0) {',
   "  const server = net.createServer(c => readline.createInterface({input: c}).on('line', l => fs.appendFileSync('./socket.log', l + '\\n')));",
@@ -68,7 +71,7 @@ before(async () => {
   fs.writeFileSync(path.join(bin, 'claude'),
     `#!/bin/bash\nexec -a claude '${process.execPath}' '${path.join(bin, 'fake-claude.js')}' "$@"\n`, {mode: 0o755});
   const PATH = `${bin}:${process.env.PATH}`;
-  mesh = await startMesh('crw-', {PATH, MESH_BIN_DIR: bin, MESH_CLAUDE_WAKE_CONFIRM_SECONDS: '2'});
+  mesh = await startMesh('crw-', {PATH, MESH_BIN_DIR: bin, MESH_CLAUDE_WAKE_CONFIRM_SECONDS: '2', MESH_MESH_PLATFORM_CMD: PLATFORM});
   const hostSocket = path.join(mesh.home, 'run', 'session-mesh', 'ptyhost.sock');
   host = spawn(hostArgv()[0]!, hostArgv().slice(1), {cwd: REPO, stdio: 'ignore',
     env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C',
@@ -109,9 +112,9 @@ async function sessionId(agent: Agent): Promise<string> {
   return sid;
 }
 
-async function restarted(agent: Agent): Promise<{state: string; result: {id?: string; error?: string} | null}> {
+async function restarted(agent: Agent, body: Record<string, unknown> = {action: 'restart'}): Promise<{state: string; result: {id?: string; error?: string} | null}> {
   const made = await fetch(`${mesh!.base}/api/session-actions/@self/request`, {method: 'POST', headers: as(agent),
-    body: JSON.stringify({action: 'restart'})});
+    body: JSON.stringify(body)});
   assert.equal(made.status, 202, await made.clone().text());
   const {request: item} = await made.json() as {request: {id: string}};
   const claimed = await fetch(`${mesh!.base}/api/session-actions/${item.id}/claim`, {method: 'POST', headers: owner(),
@@ -160,6 +163,25 @@ describe('a Claude restarted in its terminal listens on its wake socket again',
       target = await launch('w-hup');
       await restartBinds(target);
     });
+
+    test('approved settings resume Claude with the requested options in the same terminal',
+      {skip: !fs.existsSync(PLATFORM) && !process.env.MESH_REQUIRE_MESH_PLATFORM}, async () => {
+        const agent = await launch('w-settings');
+        const sid = await sessionId(agent);
+        const decided = await restarted(agent, {action: 'settings', model: 'sonnet', effort: 'medium'});
+        assert.equal(decided.state, 'completed', JSON.stringify(decided));
+        assert.equal(decided.result?.id, agent.name);
+        await waitFor('Claude relaunched with its settings', 20000, () => events(agent).length === 2);
+        const args = JSON.parse(fs.readFileSync(path.join(agent.dir, 'launch.json'), 'utf8')) as string[];
+        assert.equal(args[args.indexOf('--resume') + 1], sid);
+        assert.equal(args[args.indexOf('--model') + 1], 'sonnet');
+        assert.equal(args[args.indexOf('--effort') + 1], 'medium');
+        assert.equal(fs.readFileSync(path.join(agent.dir, 'token'), 'utf8').trim(), agent.token);
+        const {control} = await (await fetch(`${mesh!.base}/api/session-actions/@self/request?view=control`,
+          {headers: as(agent)})).json() as {control: Record<string, unknown>};
+        assert.deepEqual([control.launch_model, control.launch_effort], ['sonnet', 'medium']);
+        assert.deepEqual([control.observed_model, control.observed_effort], [null, null]);
+      });
 
     test('the wake line reaches the restarted Claude on its socket', async () => {
       const peers = await (await fetch(`${mesh!.base}/api/agent-mail/@self/peers`, {headers: as(sender)}))

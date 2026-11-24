@@ -49,7 +49,7 @@ let usage =
    [--refresh] [--cache-only] [--line] [--debug] [--release-dir DIR] | \
    update-image | accounts list FILE | accounts prepare FILE ID | accounts \
    carry FILE claude|codex CONVERSATION FROM TO | accounts resolve FILE \
-   claude|codex NAME"
+   claude|codex NAME | session-settings inspect|apply"
 
 let ex_config = 78
 
@@ -297,10 +297,9 @@ let update_check arguments =
       else print_json (R.to_json ~home outcome);
       0
 
-(* The relay's request: at most 1 MiB (the notes are at most 64 KiB). *)
-let image_request () =
-  let limit = 1024 * 1024 in
-  let buffer = Buffer.create 65536 and chunk = Bytes.create 65536 in
+let json_request limit =
+  let size = min limit 65536 in
+  let buffer = Buffer.create size and chunk = Bytes.create size in
   let rec read () =
     match In_channel.input stdin chunk 0 (Bytes.length chunk) with
     | 0 -> ()
@@ -309,11 +308,68 @@ let image_request () =
         if Buffer.length buffer <= limit then read ()
   in
   read ();
-  match Yojson.Safe.from_string (Buffer.contents buffer) with
-  | `Assoc [ ("url", `String url); ("notes", `String notes) ]
-    when Buffer.length buffer <= limit ->
+  if Buffer.length buffer > limit then None
+  else
+    match Yojson.Safe.from_string (Buffer.contents buffer) with
+    | json -> Some json
+    | exception Yojson.Json_error _ -> None
+
+(* The relay's request: at most 1 MiB (the notes are at most 64 KiB). *)
+let image_request () =
+  match json_request (1024 * 1024) with
+  | Some (`Assoc [ ("url", `String url); ("notes", `String notes) ]) ->
       Some (url, notes)
-  | _ | (exception Yojson.Json_error _) -> None
+  | _ -> None
+
+let session_settings mode =
+  let module S = Mesh_agent_settings in
+  let string = function `String s -> Some s | _ -> None in
+  let list parse = function
+    | `List args ->
+        let parsed = List.filter_map parse args in
+        if List.length parsed = List.length args then Some parsed else None
+    | _ -> None
+  in
+  let option f = function None | Some `Null -> Ok None | Some value ->
+    match f value with Some result -> Ok (Some result) | None -> Error "Invalid setting"
+  in
+  let json_string value = match value with Some s -> `String s | None -> `Null in
+  let strings items = `List (List.map (fun value -> `String value) items) in
+  let run = function
+    | Some (`Assoc members) -> (
+        let get key = List.assoc_opt key members in
+        match (Option.bind (get "agent") string, Option.bind (get "options") (list (list string)),
+               Option.bind (get "tail") (list string)) with
+        | Some agent, Some options, Some tail ->
+            let backend = S.backend agent in
+            if mode = "inspect" then
+              let model, effort =
+                match backend with Some kind -> S.inspect kind options | None -> (None, None)
+              in
+              Ok
+                (`Assoc
+                   [
+                     ("launch_model", json_string model);
+                     ("launch_effort", json_string effort);
+                     ("effort_choices", strings (if backend = None then [] else S.efforts));
+                   ])
+            else if tail <> [] then
+              Error "Unread launch arguments prevent a settings change"
+            else
+              let ( let* ) = Result.bind in
+              let* model = option string (get "model") in
+              let* effort = option string (get "effort") in
+              (match backend with
+              | None -> Error "Settings changes are unsupported for this agent"
+              | Some kind ->
+                  Result.map
+                    (fun argv -> `Assoc [ ("argv", strings (argv @ tail)) ])
+                    (S.apply kind ~model ~effort options))
+        | _ -> Error "Invalid settings request")
+    | _ -> Error "Invalid settings request"
+  in
+  report Fun.id (Result.map_error (fun message -> ("malformed", message))
+                   (run (json_request (64 * 1024))))
 
 let update_image () =
   let module I = Mesh_update_image in
@@ -441,6 +497,7 @@ let run = function
       accounts_resolve file (Option.get (R.backend_of_string backend)) name
   | "update-check" :: options -> update_check options
   | [ "update-image" ] -> update_image ()
+  | [ "session-settings"; ("inspect" | "apply" as mode) ] -> session_settings mode
   | [ "require"; name ] -> with_feature name (require_feature name)
   | [ "capabilities" ] -> report capabilities_json (Ok (P.capabilities ()))
   | [ "runtime-dir" ] -> runtime_dir_report runtime_dir_json (P.runtime_dir ())

@@ -13,6 +13,7 @@ import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, runServer, scratchHome, startMesh, stopServer} from './mesh-server-lib.ts';
 import {ptyhostArgv} from './ptyhost-command.ts';
@@ -35,14 +36,15 @@ let cookie = '';
 let host: ChildProcess | undefined;
 let workClaude: string, workCodex: string, codexOnly: string, claudeOnly: string;
 
-// agent|account variable|session|credential variables present (comma-separated names, sorted)|arguments|session token.
+// agent|account variable|session|credential variables present (comma-separated names, sorted)|arguments|session token|working directory.
 // The fake codex also writes a rollout under its Codex home and keeps it open (then runs as a process named
 // codex), as the real one does: the listing then knows its conversation, which a restart request resumes.
 const fake = (agent: string, variable: string) => [
   '#!/bin/sh',
   'case "$*" in *--version*) echo "2.1.0 (Claude Code)"; exit 0;; esac',
+  'if [ "$MESH_SESSION" = x-settings ] && [ "$1" != resume ]; then cd "$HOME/settings folder" || exit 1; fi',
   `found=$(env | cut -d= -f1 | grep -E '^(${PROFILE_CREDENTIALS.join('|')})$' | sort | tr '\\n' ,)`,
-  `printf '%s|%s|%s|%s|%s|%s\\n' "${agent}" "\${${variable}-unset}" "$MESH_SESSION" "$found" "$*" "$MESH_SESSION_TOKEN" >> '${'LOG'}'`,
+  `printf '%s|%s|%s|%s|%s|%s|%s\\n' "${agent}" "\${${variable}-unset}" "$MESH_SESSION" "$found" "$*" "$MESH_SESSION_TOKEN" "$PWD" >> '${'LOG'}'`,
   ...agent === 'codex' ? [
     'if [ "$1" = resume ]; then id=$2; else id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr A-F a-f); fi',
     'folder="${CODEX_HOME:-$HOME/.codex}/sessions/2026/11/20"; mkdir -p "$folder"',
@@ -222,6 +224,93 @@ describe('account aliases', {skip: SKIP}, () => {
       "the alias's Codex home, without the profile's Codex credentials");
     assert.match(resumed[4]!, new RegExp(`^resume ${sid}`));
     assert.equal((await listed(result.id))?.account, 'work');
+  });
+
+  test('session settings bind the current conversation and wait for explicit owner approval', async () => {
+    declare([{id: 'work', label: 'Atacama', claude_config_dir: workClaude, codex_home: workCodex},
+      {id: 'perso', label: 'Perso', codex_home: codexOnly}, {id: 'client', label: 'Client', claude_config_dir: claudeOnly}]);
+    const workingDirectory = path.join(mesh.home, 'settings folder');
+    fs.mkdirSync(workingDirectory);
+    await launchedWith({preset: 'codex', name: 'x-settings', account: 'work'});
+    const token = logText().split('\n').map(line => line.split('|')).find(fields => fields[2] === 'x-settings')?.[5];
+    assert.ok(token, 'the agent inherited a session token');
+    let sid = '';
+    for (let attempt = 0; attempt < 100 && !sid; attempt += 1) {
+      sid = ((await listed('x-settings'))?.agent as {session_id?: string} | null)?.session_id ?? '';
+      if (!sid) await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.ok(sid, 'the Codex rollout identifies the conversation');
+
+    const endpoint = `${mesh.base}/api/session-actions/@self/request`;
+    const auth = {Authorization: `MeshSession ${token}`, 'Content-Type': 'application/json'};
+    const owner = {Cookie: cookie, Origin: mesh.base, 'Content-Type': 'application/json'};
+    const status = await fetch(`${endpoint}?view=control`, {headers: auth});
+    assert.equal(status.status, 200, await status.clone().text());
+    const {control} = await status.json() as {control: Record<string, unknown>};
+    assert.equal(control.agent, 'codex');
+    assert.equal(control.transition, 'restart');
+    assert.deepEqual(control.effort_choices, ['low', 'medium', 'high']);
+    assert.equal(control.observed_model, null);
+    assert.equal(control.observed_effort, null);
+    assert.equal(Object.hasOwn(control, 'argv'), false);
+    assert.equal((await fetch(`${endpoint}?view=control`, {headers: owner})).status, 401);
+    assert.equal((await fetch(`${endpoint}?view=control&session=x-restart`, {headers: auth})).status, 400);
+    const submit = (fields: object) => fetch(endpoint, {method: 'POST', headers: auth,
+      body: JSON.stringify({action: 'settings', ...fields})});
+    for (const fields of [{}, {effort: 'unsupported'}, {model: '--sandbox'}, {model: 'test-model', preset: null}]) {
+      const refused = await submit(fields);
+      assert.equal(refused.status, 400, await refused.text());
+    }
+    const request = async () => {
+      const made = await submit({model: 'test-model', effort: 'high'});
+      assert.equal(made.status, 202, await made.clone().text());
+      const data = (await made.json() as {request: {id: string; model: string; effort: string; state: string}}).request;
+      assert.deepEqual([data.state, data.model, data.effort], ['pending', 'test-model', 'high']);
+      assert.equal(Object.hasOwn(data, 'conversation'), false);
+      return data.id;
+    };
+    const decide = async (id: string, approve: boolean) => {
+      const claimed = await fetch(`${mesh.base}/api/session-actions/${id}/claim`, {method: 'POST', headers: owner,
+        body: JSON.stringify({tab_nonce: 'b'.repeat(32)})});
+      assert.equal(claimed.status, 200, await claimed.clone().text());
+      const {claim_nonce: claimNonce} = await claimed.json() as {claim_nonce: string};
+      const result = await fetch(`${mesh.base}/api/session-actions/${id}/decision`, {method: 'POST', headers: owner,
+        body: JSON.stringify({approve, claim_nonce: claimNonce})});
+      assert.equal(result.status, 200, await result.clone().text());
+      return (await result.json() as {request: {state: string; result?: {id?: string; error?: string}}}).request;
+    };
+    const rejected = await request();
+    const before = logText();
+    assert.equal((await decide(rejected, false)).state, 'rejected');
+    const pending = await request();
+    const legacy = new DatabaseSync(path.join(mesh.confDir, 'session-requests.sqlite3'));
+    try {
+      assert.throws(() => legacy.prepare("UPDATE session_requests SET state = 'approved' WHERE id = ?").run(pending),
+        /settings action requires a compatible server/);
+      assert.deepEqual(legacy.prepare("SELECT id FROM session_requests WHERE state IN ('approved', 'executing')").all(), []);
+    } finally {
+      legacy.close();
+    }
+    const own = await fetch(`${endpoint}?id=${pending}`, {headers: auth});
+    assert.equal(own.status, 200);
+    assert.equal((await own.json() as {request: {state: string}}).request.state, 'pending');
+    assert.equal(logText(), before, 'requesting and rejecting settings do not launch an agent');
+
+    const approved = await decide(pending, true);
+    const replacement = approved.result?.id;
+    assert.ok(replacement, JSON.stringify(approved.result));
+    let launch: string[] | undefined;
+    for (let attempt = 0; attempt < 100 && !launch; attempt += 1) {
+      launch = logText().split('\n').map(line => line.split('|')).find(fields =>
+        fields[2] === replacement && fields[4]!.startsWith('resume'));
+      if (!launch) await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.ok(launch, 'approved settings resumed the agent');
+    assert.equal(launch[1], workCodex, 'keeps the session account');
+    assert.equal(launch[6], workingDirectory, 'keeps the observed working directory');
+    assert.ok(launch[4]!.startsWith(`resume ${sid} `), 'resumes the same conversation');
+    assert.match(launch[4]!, /--model test-model\b/);
+    assert.match(launch[4]!, /-c model_reasoning_effort="high"/);
   });
 
   test('an alias without a folder for the agent, an unknown alias or a shell is refused, never the default account', async () => {

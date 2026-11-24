@@ -28,20 +28,20 @@ type foreground =
           - [no_shell]: the leader is the agent itself, so stopping it would end
             the session;
           - [no_job_control]: the shell holds the terminal and every process
-            that runs the agent is in the shell's own group (a shell without
-            job control): only that group, the shell and whatever else runs
-            there included, could be signalled;
+            that runs the agent is in the shell's own group (a shell without job
+            control): only that group, the shell and whatever else runs there
+            included, could be signalled;
           - [unsupported_foreground]: another program holds the terminal;
           - [agent_not_foreground]: a process of the session runs the agent
             outside the foreground job (in the background, or beside the
             foreground one).
 
-          The server falls back to a new session (its stop of the whole
-          session, as before [stop_agent_if]) after [no_shell] only, where the
-          agent is the leader that stop kills, and refuses the request after
-          the other reasons: a stop of the whole session signals the shell's
-          group, and an agent that ignores SIGHUP elsewhere in the session
-          would outlive its shell. *)
+          The server falls back to a new session (its stop of the whole session,
+          as before [stop_agent_if]) after [no_shell] only, where the agent is
+          the leader that stop kills, and refuses the request after the other
+          reasons: a stop of the whole session signals the shell's group, and an
+          agent that ignores SIGHUP elsewhere in the session would outlive its
+          shell. *)
 
 val classify :
   runs_agent:(Mesh_platform.process -> bool) ->
@@ -74,9 +74,9 @@ type timing = {
 }
 
 val default_timing : timing
-(** 3 s, 1 s and 0.05 s: the whole stop takes about 4 s at most, well within
-    the 15 s the server waits for this reply. [MESH_PTYHOST_AGENT_STOP_GRACE] replaces [grace] when it
-    is a finite number between 0 and 3. *)
+(** 3 s, 1 s and 0.05 s: the whole stop takes about 4 s at most, well within the
+    15 s the server waits for this reply. [MESH_PTYHOST_AGENT_STOP_GRACE]
+    replaces [grace] when it is a finite number between 0 and 3. *)
 
 val stop :
   timing ->
@@ -89,3 +89,23 @@ val stop :
     [stopped ()] holds or [grace] elapsed, then send SIGKILL and wait up to
     [kill_wait] more. [`Still_running] when the job outlived both: the caller
     then starts nothing. *)
+
+val bound_foreground :
+  runs_agent:(Mesh_platform.process -> bool) ->
+  leader:int ->
+  group:int ->
+  pid:int ->
+  incarnation:int64 ->
+  Mesh_platform.process list ->
+  bool
+
+val stop_guarded :
+  timing ->
+  signal:(int -> bool) ->
+  sleep:(float -> unit) ->
+  now:(unit -> float) ->
+  stopped:(unit -> bool) ->
+  [ `Stopped
+  | `Still_running
+  | `Identity_changed
+  | `Identity_changed_after_signal ]

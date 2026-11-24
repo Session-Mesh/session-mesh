@@ -167,7 +167,7 @@ describe('the real Copilot CLI in the mesh', {skip}, () => {
       return provider.requests.length >= 2 ? provider.requests.at(-1) : undefined;
     }, 60);
     const names = provider.toolNames();
-    for (const wanted of ['mesh-board-whiteboard', 'mesh-board-demo', 'mesh-board-mail', 'mesh-board-session', 'mesh-board-agent_guide_read']) {
+    for (const wanted of ['mesh-board-whiteboard', 'mesh-board-demo', 'mesh-board-mail', 'mesh-board-session', 'mesh-board-control', 'mesh-board-agent_guide_read']) {
       assert.ok(names.includes(wanted), `${wanted} is offered (${names.filter(n => n.startsWith('mesh')).join(',')})`);
     }
     // The bridge appends the JSON to the text block: the model sees the peers list, not only the summary.

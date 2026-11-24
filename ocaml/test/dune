@@ -426,3 +426,8 @@
  (libraries ptyhost_blackbox test_scratch alcotest unix yojson)
  (action
   (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
+
+(test
+ (name mesh_agent_settings_test)
+ (modules mesh_agent_settings_test)
+ (libraries mesh_agent_settings alcotest))

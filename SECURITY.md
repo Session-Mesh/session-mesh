@@ -129,7 +129,10 @@ install.
   - exchange messages with other agents: list peers, send, reply, read its inbox and acknowledge
     (reading a message needs your consent in the page), and, for Pi, receive message notices;
   - ask to create a new agent session in its folder or to restart its own conversation, and read
-    the status of that request; nothing happens until you approve it in the page.
+    the status of that request; nothing happens until you approve it in the page;
+  - inspect its own execution state and explicit launch settings, or request a model or reasoning
+    effort for an identified Codex or Claude Code conversation. Mesh rechecks the conversation
+    before the owner-approved restart and uses the same permissions and account as a normal resume.
 
   The token is in the environment of the agent, so every MCP server and every hook it starts
   inherits it, whether the server or the hook comes from the project, from a plugin or from your

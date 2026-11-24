@@ -1,6 +1,6 @@
 # Deck MCP grouped tools
 
-The `mesh-board` MCP server advertises `whiteboard`, `demo`, `mail`, `session`, and
+The `mesh-board` MCP server advertises `whiteboard`, `demo`, `mail`, `session`, `control`, and
 `agent_guide_read`. Call a group with no arguments or with `action: "describe"` to see its
 catalogue. The result contains a
 `commands` array with the action names, descriptions, and input and output schemas where

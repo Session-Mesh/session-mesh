@@ -111,7 +111,9 @@ with. Fresh and resumed Codex sessions use ordinary rich rendering with
 `--no-alt-screen`; saved commands from older Mesh versions no longer force raw output.
 Claude, Codex, Pi, OpenCode, Gemini CLI, Copilot CLI and Mistral Vibe started by a preset receive the
 mesh's MCP server, `mesh-board`, without losing their other MCP servers (Antigravity has it through its plugin, see below); it provides the
-whiteboard, demos and agent messages described below. Its `agent_guide_read` tool, whose
+whiteboard, demos and agent messages described below. Its `control` group can read the session's
+execution state and request a model or reasoning effort for a Codex or Claude Code conversation
+restart that you approve in the page. Its `agent_guide_read` tool, whose
 description tells the agent that it runs in session-mesh, returns the
 [agent guide](agent-guide.md): what the agent can show you and how, in one read. The server's
 instructions ask the agent to call it once, unconditionally: that read costs about 3,500 tokens of

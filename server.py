@@ -1003,7 +1003,7 @@ class AccountSwitchUndone(Exception):
 
 
 async def replace_session(old_name, old_created, base, cwd, command, agent, known_agent, account=None,
-                          switch=None, source=None):
+                          switch=None, source=None, settings_guard=None, settings_binding=None):
     """Prepare a dormant shell, retire the source, then start the replacement.
 
     ``source``: the source's listing item. When its PTY host serves ``agent_relaunch_v1``, the agent restarts in
@@ -1021,17 +1021,24 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
     ``switch``: (target alias or None for the default account, carry) of an account switch: the replacement runs
     under the target once ``await carry()`` copied the conversation, after the source stopped. When the carry
     fails, the conversation resumes under ``account`` and AccountSwitchUndone names that session.
+    ``settings_guard``: recheck the control request just before stopping and launch in the observed directory.
     """
+    if settings_guard and (not settings_binding or not _relaunches_bound_in_place(source)):
+        raise web.HTTPConflict(text="The PTY host cannot safely bind the agent process; nothing was stopped")
     if known_agent in IN_PLACE_AGENTS and _relaunches_in_place(source):
         try:
-            return await relaunch_in_place(source, cwd, command, agent, known_agent, account, switch)
+            return await relaunch_in_place(source, cwd, command, agent, known_agent, account, switch,
+                                           settings_guard=settings_guard, settings_binding=settings_binding)
         except WholeSessionOnly as exc:   # nothing was signalled: the whole session is replaced, as before
+            if settings_guard:
+                raise web.HTTPConflict(text="The agent cannot be safely stopped alone; nothing was stopped") from exc
             print(f"agent of {old_name} not stopped alone ({exc}): replacing the session", flush=True)
     return await _replace_with_new_session(old_name, old_created, base, cwd, command, agent, known_agent, account,
-                                           switch)
+                                           switch, settings_guard=settings_guard)
 
 
-async def _replace_with_new_session(old_name, old_created, base, cwd, command, agent, known_agent, account, switch):
+async def _replace_with_new_session(old_name, old_created, base, cwd, command, agent, known_agent, account, switch,
+                                    *, settings_guard=None):
     """replace_session in a new session: the PTY host stops the whole source (kill_if)."""
     target = switch[0] if switch else account
     account_env = await account_environment(target, known_agent)
@@ -1044,6 +1051,12 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
     if replacement is None:
         raise web.HTTPServiceUnavailable(text="ptyhost did not confirm the prepared session")
     saved = await _arrangement_of(old_name, old_created)
+    if settings_guard:
+        try:
+            await settings_guard()
+        except web.HTTPException:
+            await host({"op": "kill_if", "name": name, "created": replacement["created"]})
+            raise
     killed = await host({"op": "kill_if", "name": old_name, "created": old_created})
     if killed != {"ok": True}:
         await host({"op": "kill_if", "name": name, "created": replacement["created"]})
@@ -1062,17 +1075,25 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
                                         account_env=source_env)
             await _carry_arrangement(standby, resumed, saved)
             raise AccountSwitchUndone(resumed, exc.code or "carry_failed", str(exc)) from exc
-    await _start_replacement(replacement, cwd, command, known_agent, account_env)
+    await _start_replacement(replacement, cwd, command, known_agent, account_env,
+                             pin_cwd=settings_guard is not None)
     return name
 
 
-async def _start_replacement(replacement, cwd, command, known_agent, account_env):
+def _relaunch_command(command, cwd, account_env, pin_cwd):
+    command = with_account(command, account_env)
+    # cd runs in the session shell, before invoking the account-scoped agent.
+    # An absolute path cannot be parsed as an option.
+    return f"cd {shlex.quote(cwd)} && {command}" if pin_cwd else command
+
+
+async def _start_replacement(replacement, cwd, command, known_agent, account_env, *, pin_cwd=False):
     """Start the agent in the prepared ``replacement`` session (its listing item), once its source is gone."""
     if known_agent == "claude":
         command = await asyncio.to_thread(claudewake.launch_command, command,
                                           replacement["meta"].get("nonce"), CLAUDE_WAKE_DIR,
                                           cwd, ptyhost.clean_env(account_env))
-    command = with_account(command, account_env)
+    command = _relaunch_command(command, cwd, account_env, pin_cwd)
     started = await host({"op": "start_if", "name": replacement["name"],
                           "created": replacement["created"], "command": command})
     if started != {"ok": True}:
@@ -1124,6 +1145,7 @@ _NOT_SEEN = ("ptyhost cannot tell what holds the terminal of session {name}: not
 
 # What the operator can do about the other refusals.
 STOP_REFUSALS = {
+    "agent_stop_uncertain": "The agent may have received a stop signal. Check the session before retrying",
     "process_scan_failed": _NOT_SEEN,
     "no_terminal": _NOT_SEEN,
     "no_job_control": "The shell of session {name} runs the agent without job control: it cannot be stopped alone, "
@@ -1145,7 +1167,35 @@ def _relaunches_in_place(source):
     return isinstance(capabilities, list) and "agent_relaunch_v1" in capabilities
 
 
-async def relaunch_in_place(source, cwd, command, agent, known_agent, account=None, switch=None):
+def _relaunches_bound_in_place(source):
+    capabilities = source.get("pty_capabilities") if isinstance(source, dict) else None
+    return (isinstance(capabilities, list) and "agent_relaunch_v1" in capabilities
+            and "agent_relaunch_bound_v1" in capabilities)
+
+
+async def _settings_process_binding(source, agent):
+    """Bind the checked foreground PID to the host's own process incarnation."""
+    pid = agent.get("pid") if isinstance(agent, dict) else None
+    if type(pid) is not int or pid <= 0 or agent.get("foreground") is not True:
+        raise web.HTTPConflict(text="The requesting foreground agent is unavailable; nothing was stopped")
+    reply = await host({"op": "processes", "pids": [pid]})
+    rows = reply.get("processes") if isinstance(reply, dict) else None
+    if (not isinstance(reply, dict) or type(reply.get("version")) is not int or reply["version"] != 1
+            or reply.get("complete") is not True
+            or reply.get("errors") != [] or not isinstance(rows, list) or len(rows) != 1
+            or not isinstance(rows[0], dict) or type(rows[0].get("pid")) is not int or rows[0]["pid"] != pid
+            or type(rows[0].get("sid")) is not int or rows[0]["sid"] != source.get("pid")):
+        raise web.HTTPConflict(text="The agent process identity is unavailable; nothing was stopped")
+    incarnation = rows[0].get("incarnation")
+    if not isinstance(incarnation, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", incarnation) or int(incarnation) > 2**63 - 1:
+        raise web.HTTPConflict(text="The agent process identity is unavailable; nothing was stopped")
+    input_at = source.get("last_input")
+    if not _finite_number(input_at):
+        raise web.HTTPConflict(text="The agent process identity is unavailable; nothing was stopped")
+    return {"agent_pid": pid, "agent_incarnation": incarnation, "agent_input_at": input_at}
+
+
+async def relaunch_in_place(source, cwd, command, agent, known_agent, account=None, switch=None, *, settings_guard=None, settings_binding=None):
     """Stop the agent of session ``source`` and start it again in the same session, shell and terminal: the PTY host
     (stop_agent_if) answers once the old agent is gone, so no two processes ever run the conversation, and the
     session continues as a new incarnation (its ``created``) with its name, attachments and output. Everything that
@@ -1159,8 +1209,10 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     command, notice, vibe = await _prepared_launch(known_agent, command, cwd)
     saved = await _arrangement_of(source["name"], source["created"])
     incarnation = (source["name"], source["created"])
+    if settings_guard:
+        await settings_guard()
     try:
-        created = await _stop_agent(source, known_agent)
+        created = await _stop_agent(source, known_agent, settings_binding)
     except web.HTTPServiceUnavailable:   # a late reply: the agent may be stopped all the same, the session moved on
         await _carry_arrangement(incarnation, source["name"], saved)
         raise
@@ -1174,7 +1226,7 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
             print(f"account switch of {source['name']} undone: {exc}", flush=True)
             await _start_in_place(*launch, account, source_env)
             raise AccountSwitchUndone(source["name"], exc.code or "carry_failed", str(exc)) from exc
-    await _start_in_place(*launch, target, account_env)
+    await _start_in_place(*launch, target, account_env, pin_cwd=settings_guard is not None)
     return source["name"]
 
 
@@ -1183,13 +1235,15 @@ def _not_started_again(name):
         text=f"Conversation stopped; its agent could not be started again in session {name}")
 
 
-async def _stop_agent(source, known_agent):
+async def _stop_agent(source, known_agent, settings_binding=None):
     """stop_agent_if on the incarnation ``source``: the new ``created`` once the agent is gone. WholeSessionOnly or
     HTTPConflict when the host stopped nothing. A reply that comes too late is checked in the listing: when the
     incarnation moved on, the agent was stopped and the session is still there, and the error says so."""
     try:
-        stopped = await host({"op": "stop_agent_if", "name": source["name"], "created": source["created"],
-                              "agent": known_agent}, timeout=STOP_AGENT_TIMEOUT)
+        message = {"op": "stop_agent_if", "name": source["name"], "created": source["created"], "agent": known_agent}
+        if settings_binding is not None:
+            message.update(settings_binding)
+        stopped = await host(message, timeout=STOP_AGENT_TIMEOUT)
     except web.HTTPServiceUnavailable:
         if await _incarnation_moved_on(source):
             raise _not_started_again(source["name"]) from None
@@ -1215,7 +1269,8 @@ async def _incarnation_moved_on(source):
                and item.get("created") != source["created"] for item in listed or ())
 
 
-async def _start_in_place(source, created, cwd, command, agent, known_agent, notice, vibe, account, account_env):
+async def _start_in_place(source, created, cwd, command, agent, known_agent, notice, vibe, account, account_env,
+                          *, pin_cwd=False):
     """Start the agent in the incarnation stop_agent_if left (``created``), under ``account``, with the session's
     meta for that launch (as new_session writes it; the nonce, hence the session token, is kept). A Claude's wake
     socket path follows from the nonce: the socket the stopped Claude left there is removed first, so that the new
@@ -1229,7 +1284,7 @@ async def _start_in_place(source, created, cwd, command, agent, known_agent, not
             **({"notice": notice} if notice else {}), **({"account": account} if account_env else {}),
             **({"vibe_hooks": vibe.hooks} if vibe and vibe.hooks else {})}
     started = await host({"op": "start_if", "name": source["name"], "created": created,
-                          "command": with_account(command, account_env), "meta": meta})
+                          "command": _relaunch_command(command, cwd, account_env, pin_cwd), "meta": meta})
     if started != {"ok": True}:
         raise _not_started_again(source["name"])
 
@@ -4293,25 +4348,135 @@ async def _session_action_source(request):
     return {**source, "cwd": raw["cwd"]}
 
 
+SESSION_SETTINGS_SLOTS = asyncio.Semaphore(4)
+
+
+async def _session_settings_program(mode, agent, argv, **settings):
+    if SESSION_SETTINGS_SLOTS.locked():
+        raise web.HTTPServiceUnavailable(text="Session settings helper busy")
+    async with SESSION_SETTINGS_SLOTS:
+        return await _run_session_settings_program(mode, agent, argv, settings)
+
+
+async def _run_session_settings_program(mode, agent, argv, settings):
+    options, tail = resumeargs.settings_option_groups(agent, argv, saved=mode == "inspect")
+    if mode == "apply" and tail:
+        raise web.HTTPConflict(text="Unread launch arguments prevent a settings change")
+    program = work_command("mesh-platform")
+    if program is None:
+        raise web.HTTPServiceUnavailable(text="Session settings helper unavailable")
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            program, "session-settings", mode, env=work_child_env(),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(
+            proc.communicate(json.dumps({"agent": agent, "options": options, "tail": tail, **settings}).encode()), 3)
+        answer = json.loads(out)
+        if proc.returncode == 0 and isinstance(answer, dict):
+            return answer
+    except (OSError, ValueError, asyncio.TimeoutError):
+        pass
+    finally:
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+    raise web.HTTPServiceUnavailable(text="Session settings helper unavailable")
+
+
+def _session_action_entry(described, source):
+    current = next((entry for entry in described["mesh"] if entry["id"] == source["id"]
+                    and entry["created"] == source["created"]), None)
+    agent = current and current.get("agent")
+    return current if agent and agent.get("type") == source["agent"] else None
+
+
+async def _session_control_observation(source):
+    listed = await host({"op": "list"})
+    entry = _session_action_entry(await asyncio.to_thread(_describe_with_hooks, listed), source)
+    raw = next((item for item in listed if isinstance(item, dict) and item.get("name") == source["id"]
+                and item.get("created") == source["created"]), None)
+    return entry, raw
+
+
+async def _session_control_entry(source):
+    entry, _raw = await _session_control_observation(source)
+    return entry
+
+
+def _session_control_conversation(source, entry):
+    if entry is None or source["agent"] not in sessionrequests.SETTINGS_AGENTS:
+        return None
+    agent = entry["agent"]
+    if discover._guessed_source(agent.get("identity_source")):
+        return None
+    cwd = entry.get("cwd")
+    if (not cwd or not cwd.isprintable() or not os.path.isabs(cwd)
+            or not os.path.isdir(cwd) or not LAUNCH_SETTINGS.allows_cwd(cwd)):
+        return None
+    return agent.get("session_id")
+
+
+async def _session_control_status(source):
+    entry, raw = await _session_control_observation(source)
+    agent = entry and entry["agent"]
+    status = {"agent": source["agent"], "state": agent.get("status") if agent else None,
+              "transition": "unavailable", "launch_model": None, "launch_effort": None,
+              "observed_model": None, "observed_effort": None, "effort_choices": []}
+    if not agent or source["agent"] not in sessionrequests.SETTINGS_AGENTS:
+        return status
+    try:
+        settings = await _session_settings_program("inspect", source["agent"], agent.get("argv") or [])
+    except web.HTTPServiceUnavailable:
+        return status
+    status.update((key, settings[key]) for key in ("launch_model", "launch_effort")
+                  if key in settings)
+    if _session_control_conversation(source, entry) and _relaunches_bound_in_place(raw):
+        try:
+            await _settings_process_binding(raw, agent)
+        except (web.HTTPException, ValueError):
+            return status
+        status["transition"] = "restart"
+        status["effort_choices"] = settings.get("effort_choices", [])
+    return status
+
+
+def _session_action_reply(item):
+    # The exact backend conversation is for revalidation, never a wire field.
+    return {key: value for key, value in item.items() if key != "conversation"} if item is not None else None
+
+
 async def api_session_action_request(request):
     source = await _session_action_source(request)
     if request.method == "GET":
+        if set(request.query) == {"view"} and request.query.getall("view") == ["control"]:
+            status = await _session_control_status(source)
+            return web.json_response({"control": status}, headers={"Cache-Control": "no-store"})
         if set(request.query) != {"id"}:
             raise web.HTTPBadRequest(text="Request ID required")
         item = request.app["session_requests"].own(request.query["id"], source)
         if item is None:
             raise web.HTTPNotFound()
-        return web.json_response({"request": item}, headers={"Cache-Control": "no-store"})
-    body, current = await json_object(request), None
+        return web.json_response({"request": _session_action_reply(item)}, headers={"Cache-Control": "no-store"})
+    body, current, conversation = await json_object(request), None, None
     if body.get("action") == "switch_account" and set(body) == {"action", "account"}:
         body, current = await _switch_request(source, body)
+    if body.get("action") == "settings":
+        entry = await _session_control_entry(source)
+        conversation = _session_control_conversation(source, entry)
+        if conversation is None:
+            raise web.HTTPConflict(text="Settings changes require a supported agent, an exact conversation and an allowed working directory")
+        await _session_settings_program("inspect", source["agent"], entry["agent"].get("argv") or [])
     try:
         item = request.app["session_requests"].create(
             source, body, enabled_agents=set(AGENT_PRESETS),
-            resumable=RESUMABLE_AGENT_PRESETS, current_account=current)
+            resumable=RESUMABLE_AGENT_PRESETS, current_account=current, conversation=conversation)
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc))
-    return web.json_response({"request": item}, status=202,
+    return web.json_response({"request": _session_action_reply(item)}, status=202,
                              headers={"Cache-Control": "no-store"})
 
 
@@ -4530,10 +4695,12 @@ async def _execute_session_action(item):
                 and entry["created"] == source["created"]), None)
     if raw is None:
         raise web.HTTPConflict(text="Requesting session replaced")
-    if not os.path.isdir(raw["cwd"]):
-        raise web.HTTPConflict(text="Session folder not found")
-    if not LAUNCH_SETTINGS.allows_cwd(raw["cwd"]):
-        raise web.HTTPForbidden(text=OUTSIDE_WORKSPACE_ROOTS)
+    settings_requested = item["action"] == "settings"
+    if not settings_requested:
+        if not os.path.isdir(raw["cwd"]):
+            raise web.HTTPConflict(text="Session folder not found")
+        if not LAUNCH_SETTINGS.allows_cwd(raw["cwd"]):
+            raise web.HTTPForbidden(text=OUTSIDE_WORKSPACE_ROOTS)
     if item["action"] == "create":
         if item["preset"] not in AGENT_PRESETS:
             raise web.HTTPConflict(text=f"Agent {item['preset']} is disabled in the configuration")
@@ -4546,12 +4713,35 @@ async def _execute_session_action(item):
         return {"id": name}
 
     described = await asyncio.to_thread(_describe_with_hooks, listed)
-    current = next((entry for entry in described["mesh"] if entry["id"] == source["id"]
-                    and entry["created"] == source["created"]), None)
-    agent = current and current.get("agent")
-    if not agent or agent.get("type") != source["agent"]:
+    entry = _session_action_entry(described, source)
+    if entry is None:
         raise web.HTTPConflict(text="Agent to resume unavailable")
-    argv = _model_argv(_resume_argv(agent), item["model"])
+    agent = entry["agent"]
+    argv = _resume_argv(agent)
+    cwd = raw["cwd"]
+    replacement_options = {}
+    if settings_requested:
+        if not item["conversation"] or _session_control_conversation(source, entry) != item["conversation"]:
+            raise web.HTTPConflict(text="Requesting conversation or working directory is no longer available")
+        cwd = entry["cwd"]
+
+        async def settings_guard():
+            current = await _session_control_entry(source)
+            if (_session_control_conversation(source, current) != item["conversation"] or current["cwd"] != cwd
+                    or any(current["agent"].get(key) != agent.get(key) for key in ("pid", "argv"))):
+                raise web.HTTPConflict(text="Requesting agent, conversation or working directory changed")
+
+        if not _relaunches_bound_in_place(raw):
+            raise web.HTTPConflict(text="The PTY host cannot safely bind the agent process; nothing was stopped")
+        replacement_options["settings_binding"] = await _settings_process_binding(raw, agent)
+        replacement_options["settings_guard"] = settings_guard
+        settings = await _session_settings_program(
+            "apply", source["agent"], argv, model=item["model"], effort=item["effort"])
+        argv = settings.get("argv")
+        if not isinstance(argv, list) or not argv or any(not isinstance(arg, str) for arg in argv):
+            raise web.HTTPServiceUnavailable(text="Invalid session settings helper response")
+    else:
+        argv = _model_argv(argv, item["model"])
     if item["action"] == "switch_account":   # checked again: the conversation may only be guessed by now
         if _switch_conversation(described, source) is None:
             raise web.HTTPConflict(text="The exact conversation id is unknown; it cannot be resumed elsewhere")
@@ -4559,9 +4749,9 @@ async def _execute_session_action(item):
                                        session_account(raw)):   # checked again: nothing to carry, nothing stopped
             raise web.HTTPConflict(text="The conversation is not in the current account's folder")
         return await _switch_session(item, raw, agent["session_id"], argv)
-    name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"],
+    name = await replace_session(raw["name"], raw["created"], raw["name"], cwd,
                                  shlex.join(argv), source["agent"], source["agent"], account=session_account(raw),
-                                 source=raw)
+                                 source=raw, **replacement_options)
     await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
     return {"id": name}
 
@@ -4627,15 +4817,15 @@ async def api_session_action_decision(request):
     if item is None:
         raise web.HTTPConflict(text="Request missing, lease lost or incompatible decision")
     if not body["approve"]:
-        return web.json_response({"request": item})
+        return web.json_response({"request": _session_action_reply(item)})
     if item["state"] != "approved":
         status = 202 if item["state"] == "executing" else 200
-        return web.json_response({"request": item}, status=status,
+        return web.json_response({"request": _session_action_reply(item)}, status=status,
                                  headers={"Cache-Control": "no-store"})
     # The task is app-owned. A disconnected browser loses only its response;
     # cancelling this handler cannot cancel or replay the mutation.
     finished = await asyncio.shield(_schedule_session_action(request.app, request_id))
-    return web.json_response({"request": finished})
+    return web.json_response({"request": _session_action_reply(finished)})
 
 
 async def api_session_action_claim(request):
@@ -4654,8 +4844,10 @@ async def api_session_action_claim(request):
         status = request.app["session_requests"].status(request_id)
         if status is None:
             raise web.HTTPNotFound()
-        return web.json_response({"request": status}, status=409,
+        return web.json_response({"request": _session_action_reply(status)}, status=409,
                                  headers={"Cache-Control": "no-store"})
+    if "request" in claim:
+        claim["request"] = _session_action_reply(claim["request"])
     return web.json_response(claim, headers={"Cache-Control": "no-store"})
 
 

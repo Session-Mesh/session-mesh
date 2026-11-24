@@ -236,6 +236,14 @@ describe('account switch requests', {skip: SKIP}, () => {
     assert.equal(((await listed('x-guess'))?.agent as {identity_source?: string}).identity_source, 'cwd_unique');
     const [code] = await refused(session, 'travel');
     assert.equal(code, 'conversation_unknown', 'a guess (cwd_unique) is not the exact conversation');
+    const auth = {Authorization: `MeshSession ${session.token}`};
+    const status = await fetch(`${mesh.base}/api/session-actions/@self/request?view=control`, {headers: auth});
+    assert.equal(status.status, 200);
+    assert.equal((await status.json() as {control: {transition: string}}).control.transition, 'unavailable');
+    const before = launches().length;
+    const settings = await ask(session, {action: 'settings', effort: 'low'});
+    assert.equal(settings.status, 409);
+    assert.equal(launches().length, before, 'a guessed conversation cannot be restarted with settings');
   });
 
   test("a conversation not found in its account's folder is refused, also when that folder is missing", async () => {
@@ -381,6 +389,19 @@ describe("the owner's switch dialog", () => {
     assert.match(french!, /^L’agent « x-agent » demande à passer du compte Default account \(default\) au compte Travel \(travel\)\./);
     assert.match(french!, /Toute sa conversation sera copiée .* et envoyée au fournisseur de ce compte/);
     assert.doesNotMatch(french!, /propriétaire/);
+  });
+
+  test('describes every selected setting before approval in English and French', async () => {
+    const settings = {action: 'settings', model: 'test-model', effort: 'high'};
+    for (const language of ['en', 'fr']) {
+      const [text] = await dialog(language, settings);
+      assert.match(text!, /test-model/);
+      assert.match(text!, /high/);
+      const [effortOnly] = await dialog(language, {...settings, model: null});
+      assert.match(effortOnly!, /high/);
+      assert.match(effortOnly!, /configuration/);
+      assert.deepEqual(await dialog(language, {...settings, model: null, effort: null}), []);
+    }
   });
 
   test('a switch request without both accounts is never shown', async () => {

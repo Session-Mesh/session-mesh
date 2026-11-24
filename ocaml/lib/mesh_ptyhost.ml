@@ -292,10 +292,12 @@ type session = {
       (** The incarnation. [stop_agent_if] moves it on: the shell and its
           terminal stay, the agent is a new one. *)
   mutable agent_stopping : bool;
+  mutable input_signal_epoch : int;
+  mutable stop_input_epoch : int;
       (** A [stop_agent_if] is under way: nothing is typed or started. *)
   mutable agent_stopped : bool;
-      (** The agent was stopped and none was started since: the next
-          [start_if] may replace [meta]. *)
+      (** The agent was stopped and none was started since: the next [start_if]
+          may replace [meta]. *)
   mutable activity : float;
   mutable alive : bool;
   mutable finishing : bool;
@@ -338,8 +340,8 @@ let valid_opaque_id value =
        value
 
 let is_agent_name name =
-  name = "codex" || name = "claude" || name = "opencode" || name = "gemini" || name = "agy" || name = "vibe"
-  || name = "copilot"
+  name = "codex" || name = "claude" || name = "opencode" || name = "gemini"
+  || name = "agy" || name = "vibe" || name = "copilot"
 
 (* Gemini CLI is a node script: argv[0] is node (or nodejs), and its entry
    point is the first argument that is not a node option (the installed link
@@ -349,7 +351,9 @@ let runs_gemini_script argv0 rest =
   let interpreter = Filename.basename argv0 in
   (interpreter = "node" || interpreter = "nodejs")
   &&
-  match List.find_opt (fun word -> not (String.starts_with ~prefix:"-" word)) rest with
+  match
+    List.find_opt (fun word -> not (String.starts_with ~prefix:"-" word)) rest
+  with
   | Some script ->
       let name = Filename.basename script in
       name = "gemini" || name = "gemini.js"
@@ -402,11 +406,15 @@ let session_json ?(relaunch = true) s =
       ("meta", s.meta);
       ("created", `Float s.created);
       ("activity", `Float s.activity);
+      ("last_input", `Float s.last_input);
       ("attached", `Int (List.length s.clients));
       ( "pty_capabilities",
         `List
           ([ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
-          @ if relaunch then [ `String "agent_relaunch_v1" ] else []) );
+          @
+          if relaunch then
+            [ `String "agent_relaunch_v1"; `String "agent_relaunch_bound_v1" ]
+          else []) );
     ]
 
 (* A dirty human-input lease defers agent wakes. Its client may never come
@@ -573,10 +581,20 @@ let read_table check =
    attachments (Mesh_pty_agent_stop). On success the session is a new
    incarnation: [created] moves on, and one command may be started again
    ([start_if], which may then replace [meta]). Nothing is started here. *)
-let stop_agent env s agent =
+let stop_agent env s agent expected =
   let runs_agent found = runs_agent found agent in
   match
-    read_table (Mesh_pty_agent_stop.classify ~runs_agent ~leader:s.pid)
+    read_table (fun table ->
+        let classified =
+          Mesh_pty_agent_stop.classify ~runs_agent ~leader:s.pid table
+        in
+        match (expected, classified) with
+        | None, _ -> classified
+        | Some (pid, incarnation), Mesh_pty_agent_stop.Running group
+          when Mesh_pty_agent_stop.bound_foreground ~runs_agent ~leader:s.pid
+                 ~group ~pid ~incarnation table ->
+            classified
+        | Some _, _ -> Mesh_pty_agent_stop.Refused "agent_changed")
   with
   | None -> agent_refusal "process_scan_failed"
   | Some (Mesh_pty_agent_stop.Refused reason) -> agent_refusal reason
@@ -594,11 +612,25 @@ let stop_agent env s agent =
       in
       (* Never the shell's own group: [classify] names another one. *)
       let signal signum =
-        Option.iter
-          (fun group ->
-            if s.alive then
-              try Unix.kill (-group) signum with Unix.Unix_error _ -> ())
-          group
+        match group with
+        | None -> Option.is_none expected
+        | Some group -> (
+            let bound =
+              match expected with
+              | None -> true
+              | Some (pid, incarnation) ->
+                  read_table
+                    (Mesh_pty_agent_stop.bound_foreground ~runs_agent
+                       ~leader:s.pid ~group ~pid ~incarnation)
+                  = Some true
+            in
+            if (not s.alive) || not bound then false
+            else
+              try
+                Unix.kill (-group) signum;
+                s.input_signal_epoch <- s.input_signal_epoch + 1;
+                true
+              with Unix.Unix_error _ -> Option.is_none expected)
       in
       let clock = Eio.Stdenv.clock env in
       let stopped () =
@@ -606,11 +638,13 @@ let stop_agent env s agent =
         = Some true
       in
       match
-        Mesh_pty_agent_stop.stop Mesh_pty_agent_stop.default_timing ~signal
-          ~sleep:(Eio.Time.sleep clock)
+        Mesh_pty_agent_stop.stop_guarded Mesh_pty_agent_stop.default_timing
+          ~signal ~sleep:(Eio.Time.sleep clock)
           ~now:(fun () -> Eio.Time.now clock)
           ~stopped
       with
+      | `Identity_changed -> agent_refusal "agent_changed"
+      | `Identity_changed_after_signal -> agent_refusal "agent_stop_uncertain"
       | `Still_running -> agent_refusal "agent_still_running"
       | `Stopped when (not s.alive) || s.finishing || s.kill_requested ->
           agent_refusal "stale_incarnation"
@@ -692,9 +726,10 @@ let bound_selection sessions fields ~operation ~geometry =
   | None -> invalid_arg "incarnation"
   | Some s -> (s, size)
 
-let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(agent_presets = None)
-    ?(isolated_agent = None) ?(update = Mesh_update_host.create ()) env sw sessions owned reservations pending stopping
-    observer =
+let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
+    ?(agent_presets = None) ?(isolated_agent = None)
+    ?(update = Mesh_update_host.create ()) env sw sessions owned reservations
+    pending stopping observer =
   (* One closure per host lifetime, never per client connection. No fallback if
      secure randomness fails; generation allocation is non-yielding and burned. *)
   let random = Cstruct.create 32 in
@@ -730,7 +765,10 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
       ~machine:project_machine ()
   in
   let project_active = ref 0 in
-  let observation = Mesh_project_observation.make ?hook:project_observation_hook ~boot ~store:project_store () in
+  let observation =
+    Mesh_project_observation.make ?hook:project_observation_hook ~boot
+      ~store:project_store ()
+  in
   Eio.Fiber.fork_daemon ~sw (fun () ->
       while not !stopping do
         Mesh_project_observation.tick observation ~stopping:false;
@@ -743,8 +781,11 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
     match get "op" with
     | Some (`String op) when Mesh_project_observation.is_operation op ->
         Eio.Cancel.protect (fun () ->
-            Eio_unix.run_in_systhread ~label:"project-observation-control" (fun () ->
-                Mesh_project_observation.run observation ~isolated:(Option.is_some isolated_agent) ~stopping:!stopping fields))
+            Eio_unix.run_in_systhread ~label:"project-observation-control"
+              (fun () ->
+                Mesh_project_observation.run observation
+                  ~isolated:(Option.is_some isolated_agent)
+                  ~stopping:!stopping fields))
     | Some (`String op) when Mesh_project_codec.is_operation op ->
         if Option.is_some isolated_agent then
           Mesh_project_store.run project_store ~isolated:true fields
@@ -763,9 +804,15 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                 ~finally:(fun () -> decr project_active)
                 (fun () ->
                   Eio_unix.run_in_systhread ~label:"projects" (fun () ->
-                      let reply = Mesh_project_store.run project_store ~isolated:false fields in
-                      if op="project_capabilities" then
-                        `Assoc (("observation", Mesh_project_observation.capability observation) :: Mesh_project_codec.obj reply)
+                      let reply =
+                        Mesh_project_store.run project_store ~isolated:false
+                          fields
+                      in
+                      if op = "project_capabilities" then
+                        `Assoc
+                          (( "observation",
+                             Mesh_project_observation.capability observation )
+                          :: Mesh_project_codec.obj reply)
                       else reply))))
     | Some (`String "boot_identity") ->
         if List.map fst fields <> [ "op" ] then invalid_arg "keys";
@@ -839,7 +886,8 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
         (* The latest answer of the release check, from memory: no request, no
            file. [null] when no newer release is announced. *)
         if List.map fst fields <> [ "op" ] then invalid_arg "keys";
-        `Assoc [ ("ok", `Bool true); ("update", Mesh_update_host.latest update) ]
+        `Assoc
+          [ ("ok", `Bool true); ("update", Mesh_update_host.latest update) ]
     | Some (`String "update_notes") ->
         (* The notes of the release [update_notice] announces, from memory: no
            request, no file. [null] without one. *)
@@ -956,10 +1004,36 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
             | _ -> `Assoc [ ("ok", `Bool false) ])
         | _ -> invalid_arg "name")
     | Some (`String "stop_agent_if") -> (
+        let keys = List.sort String.compare (List.map fst fields) in
         if
-          List.sort String.compare (List.map fst fields)
-          <> [ "agent"; "created"; "name"; "op" ]
+          keys <> [ "agent"; "created"; "name"; "op" ]
+          && keys
+             <> [
+                  "agent";
+                  "agent_incarnation";
+                  "agent_input_at";
+                  "agent_pid";
+                  "created";
+                  "name";
+                  "op";
+                ]
         then invalid_arg "keys";
+        let expected =
+          match (get "agent_pid", get "agent_incarnation") with
+          | None, None -> None
+          | Some (`Int pid), Some (`String incarnation) when pid > 0 -> (
+              match Int64.of_string_opt incarnation with
+              | Some value when value > 0L -> Some (pid, value)
+              | _ -> invalid_arg "agent_incarnation")
+          | _ -> invalid_arg "agent_pid"
+        in
+        let input_at =
+          match expected, get "agent_input_at" with
+          | None, None -> None
+          | Some _, Some (`Float value) when Float.is_finite value -> Some value
+          | Some _, Some (`Int value) -> Some (float_of_int value)
+          | _ -> invalid_arg "agent_input_at"
+        in
         if Option.is_some isolated_agent || !stopping then
           invalid_arg "stop_agent_if";
         let created =
@@ -978,11 +1052,13 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
             match List.find_opt (fun s -> s.name = name) !sessions with
             | Some s
               when s.created = created && s.alive && (not s.finishing)
-                   && (not s.kill_requested) && not s.agent_stopping ->
+                   && (not s.kill_requested) && not s.agent_stopping
+                   && (match input_at with None -> true | Some at -> at = s.last_input && not (Mesh_pty_input.pending s.input)) ->
+                s.stop_input_epoch <- s.input_signal_epoch;
                 s.agent_stopping <- true;
                 Fun.protect
                   ~finally:(fun () -> s.agent_stopping <- false)
-                  (fun () -> stop_agent env s agent)
+                  (fun () -> stop_agent env s agent expected)
             | _ -> agent_refusal "stale_incarnation")
         | _ -> invalid_arg "name")
     | Some (`String "start_if") -> (
@@ -1023,8 +1099,7 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                    && (Option.is_none meta || s.agent_stopped) ->
                 Option.iter
                   (fun value ->
-                    if nonce_of value <> nonce_of s.meta then
-                      invalid_arg "meta";
+                    if nonce_of value <> nonce_of s.meta then invalid_arg "meta";
                     s.meta <- value)
                   meta;
                 let clear_line = s.agent_stopped in
@@ -1103,7 +1178,11 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
         | _ -> invalid_arg "through_seq");
         let agent =
           match get "agent" with
-          | Some (`String (("codex" | "claude" | "opencode" | "gemini" | "vibe") as value)) -> value
+          | Some
+              (`String
+                 (("codex" | "claude" | "opencode" | "gemini" | "vibe") as value))
+            ->
+              value
           | _ -> invalid_arg "agent"
         in
         match get "name" with
@@ -1440,6 +1519,8 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None) ?(ag
                           hangup_resending = false;
                           command_started = Option.is_some command;
                           agent_stopping = false;
+                          input_signal_epoch = 0;
+                          stop_input_epoch = 0;
                           agent_stopped = false;
                           last_input = 0.;
                           human_leases = Hashtbl.create 4;
@@ -1620,11 +1701,7 @@ let size = Mesh_pty_protocol.size
 (* The attachment that is about to attach, and what the attach decided about
    the PTY size (Mesh_pty_size): [claimed], it applied its geometry and owns
    the size; [watch], it asked for S frames (an attach with "size":"claim"). *)
-type size_attach = {
-  client : Mesh_pty_output.t;
-  claimed : bool;
-  watch : bool;
-}
+type size_attach = { client : Mesh_pty_output.t; claimed : bool; watch : bool }
 
 (* Each watching attachment learns the PTY's size and whether it owns it. *)
 let announce_size s =
@@ -1711,6 +1788,9 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
         { client = Mesh_pty_output.create (); claimed = false; watch = false }
   in
   let input_client_id = ref None in
+  let held_input = Queue.create () in
+  let held_bytes = ref 0 in
+  let holding = ref false in
   let snapshot, origin_metadata, ready =
     if not origin then
       ( (match snapshot with
@@ -1789,6 +1869,7 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
       observe observer env Observe.Detach;
       Mesh_pty_output.detached client)
     (fun () ->
+      Eio.Switch.run (fun input_switch ->
       let rec output () =
         match Mesh_pty_output.next client with
         | None -> ()
@@ -1821,7 +1902,30 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
           | _ -> ());
           input ())
         else if frame.kind = 'D' then (
-          if not s.finishing then (
+          if s.agent_stopping || !holding then (
+            if String.length frame.payload <= (8 * 1024 * 1024) - !held_bytes then (
+              let epoch = if s.agent_stopping then s.stop_input_epoch else s.input_signal_epoch in
+              Queue.add (s.created, epoch, frame.payload) held_input;
+              held_bytes := !held_bytes + String.length frame.payload);
+            if not !holding then (
+              holding := true;
+              Eio.Fiber.fork ~sw:input_switch (fun () ->
+                  let rec wait () =
+                    if s.agent_stopping && not s.finishing then (
+                      Eio.Time.sleep (Eio.Stdenv.clock env) 0.01;
+                      wait ())
+                  in
+                  wait ();
+                  while not (Queue.is_empty held_input) do
+                    let incarnation, epoch, payload = Queue.take held_input in
+                    held_bytes := !held_bytes - String.length payload;
+                    if not s.finishing && s.created = incarnation && s.input_signal_epoch = epoch then (
+                      s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);
+                      if Mesh_pty_input.enqueue s.input payload then
+                        observe observer env (Observe.Input (String.length payload)))
+                  done;
+                  holding := false)))
+          else if not s.finishing then (
             s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);
             if Mesh_pty_input.enqueue s.input frame.payload then
               observe observer env (Observe.Input (String.length frame.payload)));
@@ -1849,7 +1953,7 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach env
       in
       Eio.Fiber.first
         (fun () -> Eio.Fiber.first output input)
-        (fun () -> Eio.Promise.await (Mesh_pty_output.aborted client)))
+        (fun () -> Eio.Promise.await (Mesh_pty_output.aborted client))))
 
 let write_reply flow reply =
   let payload = Yojson.Basic.to_string reply in
@@ -2028,7 +2132,9 @@ let handle env observer dispatch sessions flow =
             String.length frame.payload > Mesh_project_codec.request_bytes
             &&
             match List.assoc_opt "op" fields with
-            | Some (`String op) -> Mesh_project_codec.is_operation op || Mesh_project_observation.is_operation op
+            | Some (`String op) ->
+                Mesh_project_codec.is_operation op
+                || Mesh_project_observation.is_operation op
             | _ -> false
           then ("__project_request_oversize", `Bool true) :: fields
           else fields
@@ -2046,8 +2152,7 @@ let handle env observer dispatch sessions flow =
           match prepare_attach env observer sessions fields with
           | None -> write_reply flow error
           | Some (s, snapshot, replay_geometry, size_attach) ->
-              attach ~snapshot ?replay_geometry ~size_attach env observer s
-                flow
+              attach ~snapshot ?replay_geometry ~size_attach env observer s flow
         else
           let reply =
             try dispatch fields with
@@ -2240,8 +2345,8 @@ let connection_failed = function
   | failure ->
       log "connection ended by an error: %s" (Printexc.to_string failure)
 
-let run_impl ?project_store_hook ?project_observation_hook ?private_preset_directory ?agent_preset_config
-    () =
+let run_impl ?project_store_hook ?project_observation_hook
+    ?private_preset_directory ?agent_preset_config () =
   catch_inherited_ignores ();
   let isolated_agent = isolated_agent_from_environment () in
   (match isolated_agent with
@@ -2367,8 +2472,9 @@ let run_impl ?project_store_hook ?project_observation_hook ?private_preset_direc
     let pending = ref [] and stopping = ref false in
     let update = Mesh_update_host.create () in
     let dispatch_owned =
-      dispatch ?project_store_hook ?project_observation_hook ~preset ~agent_presets ~isolated_agent ~update env sw
-        sessions owned reservations pending stopping observer
+      dispatch ?project_store_hook ?project_observation_hook ~preset
+        ~agent_presets ~isolated_agent ~update env sw sessions owned
+        reservations pending stopping observer
     in
     let stop, resolve = Eio.Promise.create () in
     let stopped = ref false in
@@ -2399,8 +2505,8 @@ let run_impl ?project_store_hook ?project_observation_hook ?private_preset_direc
                 (* Ends with [accept_sw], so a stop does not wait for it. *)
                 Mesh_update_host.start update ~sw:accept_sw
                   ~mgr:(Eio.Stdenv.process_mgr env)
-                  ~clock:(Eio.Stdenv.mono_clock env)
-                  ~log:(fun text -> log "%s" text);
+                  ~clock:(Eio.Stdenv.mono_clock env) ~log:(fun text ->
+                    log "%s" text);
                 while true do
                   (* Out of descriptors (EMFILE) or another accept error:
                      the sessions stay; retry once some may be free. *)

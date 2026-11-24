@@ -44,6 +44,17 @@ let classify ~runs_agent ~leader table =
       | _ :: _, [] -> Running job
       | _ :: _, _ :: _ -> Refused "agent_not_foreground")
 
+let bound_foreground ~runs_agent ~leader ~group ~pid ~incarnation table =
+  (match classify ~runs_agent ~leader table with
+    | Running current -> current = group
+    | Idle | Refused _ -> false)
+  && List.exists
+       (fun (p : Mesh_platform.process) ->
+         p.pid = pid
+         && p.incarnation = incarnation
+         && p.pgrp = group && p.sid = leader && live p && runs_agent p)
+       table
+
 let gone ~runs_agent ~leader ~group table =
   match
     List.find_opt
@@ -95,3 +106,17 @@ let stop timing ~signal ~sleep ~now ~stopped =
   else (
     signal Sys.sigkill;
     if wait_until (now () +. timing.kill_wait) then `Stopped else `Still_running)
+
+let stop_guarded timing ~signal ~sleep ~now ~stopped =
+  let rec wait_until deadline =
+    if stopped () then true
+    else if now () >= deadline then false
+    else (
+      sleep timing.poll;
+      wait_until deadline)
+  in
+  if not (signal Sys.sighup) then `Identity_changed
+  else if wait_until (now () +. timing.grace) then `Stopped
+  else if not (signal Sys.sigkill) then `Identity_changed_after_signal
+  else if wait_until (now () +. timing.kill_wait) then `Stopped
+  else `Still_running

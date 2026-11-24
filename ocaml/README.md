@@ -172,7 +172,7 @@ The server reaches only the mesh of its own session: `@self` routes under
 never reads `MESH_SESSION`, and never sends a session identity supplied by an agent.
 `MESH_SESSION_TOKEN` is required; `MESH_PORT` defaults to `7690` and must be a TCP port.
 
-It advertises four grouped tools and the standalone agent guide. Call a group without arguments
+It advertises five grouped tools and the standalone agent guide. Call a group without arguments
 or with `{"action":"describe"}` to list its actions and schemas. See the
 [Deck MCP migration guide](../docs/deck-mcp-migration.md) for call examples.
 
@@ -185,6 +185,9 @@ or with `{"action":"describe"}` to list its actions and schemas. See the
   message. Message text is untrusted data.
 - **`session` (5 actions)** lists account aliases, asks the owner to create or restart a session
   or switch accounts, and reads request status. The owner approves each request in the page.
+- **`control` (2 actions)** inspects the current session's state, launch settings and available
+  settings controls. It can request an owner-approved Codex or Claude Code resume with a selected
+  model or reasoning effort. Observed inference settings are reported separately.
 - **`agent_guide_read`** returns the agent guide built into the program. It takes
   no argument and sends no request to the mesh. `lib/agent-guide.md`, the embedded text, is a
   byte-for-byte copy of `../docs/agent-guide.md`, kept in this directory so the package builds on

@@ -312,7 +312,7 @@ check_installed_bundle() {
 # stamp before anything is unpacked, laid out as releases/<tag>/app (the code) and
 # releases/<tag>/bin (the programs); app/bin/mesh-board-mcp links to the release's own, where the
 # agents' board configuration looks for it, app/bin/work-mcp likewise for the agents' tracker, and
-# app/bin/work-read and app/bin/work-write where the web server looks for them (/api/work/v1). The
+# app/bin/mesh-platform, app/bin/work-read and app/bin/work-write where the web server looks for them. The
 # services then run this machine's Python.
 RELEASE_PROGRAMS=(mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all work-read work-mcp work-write)
 code_asset() { printf 'session-mesh-%s.tar.gz' "$MESH_RELEASE_TAG"; }
@@ -331,6 +331,7 @@ stage_programs() {
     || stage_abort "the code archive does not hold session-mesh-$tag/."
   { mv -- "$STAGE/session-mesh-$tag" "$release/app" && mkdir -p "$release/app/bin" \
     && ln -s ../../bin/mesh-board-mcp "$release/app/bin/mesh-board-mcp" \
+    && ln -s ../../bin/mesh-platform "$release/app/bin/mesh-platform" \
     && ln -s ../../bin/work-read "$release/app/bin/work-read" \
     && ln -s ../../bin/work-mcp "$release/app/bin/work-mcp" \
     && ln -s ../../bin/work-write "$release/app/bin/work-write" \

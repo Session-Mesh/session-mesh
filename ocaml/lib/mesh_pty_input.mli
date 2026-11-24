@@ -12,6 +12,9 @@
 type t
 
 val create : string -> t
+val pending : t -> bool
+(** True while an input frame is queued or being written. *)
+
 val enqueue : t -> string -> bool
 val enqueue_submit : t -> string -> bool
 (** [enqueue_submit t text] queues [text], a short delay, then an Enter key.
