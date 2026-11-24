@@ -7,7 +7,7 @@ import {LaunchEditor, parseLaunch} from '../static/config-launch-editor.ts';
 
 class Element {
   className = ''; textContent = ''; dataset: Record<string, string> = {}; children: Element[] = [];
-  value = ''; type = ''; disabled = false; listeners = new Map<string, () => void>();
+  value = ''; type = ''; disabled = false; checked = false; listeners = new Map<string, () => void>();
   readonly tag: string;
   constructor(tag: string) { this.tag = tag; }
   append(...children: Element[]) { this.children.push(...children); }
@@ -17,7 +17,8 @@ class Element {
   querySelector(_selector: string) { return null; }
   get lastElementChild() { return this.children.at(-1); }
 }
-const document = {createElement: (tag: string) => new Element(tag), createTextNode: () => new Element('#text')};
+const document = {createElement: (tag: string) => new Element(tag), createTextNode: () => new Element('#text'),
+  defaultView: {confirm: (_message: string) => true}};
 function all(element: Element): Element[] { return [element, ...element.children.flatMap(all)]; }
 
 test('options can be edited with no launch settings file', async () => {
@@ -51,4 +52,52 @@ test('unreadable options do not become editable through an existing elevation', 
   try {
     assert.ok(!all(editor.element as unknown as Element).some((node) => node.className.includes('config-options')));
   } finally { editor.dispose(); }
+});
+
+for (const first of ['options', 'launch'] as const) {
+  test(`saving ${first} asks before discarding the other draft`, async () => {
+    const view = parseLaunch({editable: true, revision: 'launch-rev', enabled_agents: ['codex'],
+      workspace_roots: ['/work'], known_agents: ['codex', 'claude'], agent_options_editable: true,
+      agent_options_revision: 'options-rev', defaults: {}, limits: {}});
+    let answer = false, prompts = 0, saves = 0;
+    const doc = {...document, defaultView: {confirm: () => { prompts += 1; return answer; }}};
+    const editor = new LaunchEditor(doc as unknown as Document, view, {active: true, secondsLeft: 60}, {
+      t: (key) => key, elevate: async () => ({ok: true, secondsLeft: 60}), revoke: async () => true,
+      save: async () => { saves += 1; return {ok: true}; },
+      saveOptions: async () => { saves += 1; return {ok: true}; }, reload: () => {},
+    });
+    try {
+      const nodes = all(editor.element as unknown as Element);
+      const agent = nodes.find((node) => node.dataset.agent === 'claude')!;
+      agent.checked = true; agent.listeners.get('change')!();
+      const input = nodes.find((node) => node.dataset.optionAgent === 'codex')!;
+      input.value = '--search'; input.listeners.get('input')!();
+      const button = nodes.find((node) => first === 'options'
+        ? node.className.includes('config-save-options') : node.className === 'btn sm primary config-save')!;
+      button.listeners.get('click')!();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(prompts, 1); assert.equal(saves, 0);
+      answer = true; button.listeners.get('click')!();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(prompts, 2); assert.equal(saves, 1);
+    } finally { editor.dispose(); }
+  });
+}
+
+test('an options save finishing after disposal does not reload the new dialog', async () => {
+  const view = parseLaunch({editable: false, revision: null, known_agents: ['codex'],
+    agent_options_editable: true, agent_options_revision: 'rev', defaults: {}, limits: {}});
+  let finish!: (value: {ok: true}) => void, reloads = 0;
+  const pending = new Promise<{ok: true}>((resolve) => { finish = resolve; });
+  const editor = new LaunchEditor(document as unknown as Document, view, {active: true, secondsLeft: 60}, {
+    t: (key) => key, elevate: async () => ({ok: true, secondsLeft: 60}), revoke: async () => true,
+    save: async () => ({ok: true}), saveOptions: async () => pending, reload: () => { reloads += 1; },
+  });
+  const nodes = all(editor.element as unknown as Element);
+  const input = nodes.find((node) => node.dataset.optionAgent === 'codex')!;
+  input.value = '--search'; input.listeners.get('input')!();
+  nodes.find((node) => node.className.includes('config-save-options'))!.listeners.get('click')!();
+  editor.dispose(); finish({ok: true});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reloads, 0);
 });

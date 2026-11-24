@@ -2182,6 +2182,8 @@
   "config.launch.optionsPlaceholder": "--flag value",
   "config.launch.saveOptions": "Save options",
   "config.launch.optionsUnchanged": "Nothing to save.",
+  "config.launch.discardLaunchDraft": "Saving options reloads this page and discards unsaved agents and folders. Continue?",
+  "config.launch.discardOptionsDraft": "Saving agents and folders reloads this page and discards unsaved options. Continue?",
   "paneActions.sessionRequest.withOptions": "{text} (options: {options})",
   "server.optionsTooLong": "The options are longer than {max} characters.",
   "server.optionsOneLine": "The options must be on one line.",

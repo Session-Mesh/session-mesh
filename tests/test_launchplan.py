@@ -29,6 +29,11 @@ def test_refuses_bypass_options_after_a_positional_word(options):
 def test_allows_safe_options_after_a_positional_word():
     assert launchplan.refusal("codex", ["hello", "--ask-for-approval", "on-request"]) is None
 
+
+@pytest.mark.parametrize("options", [["--resume", "old-id"], ["--resume=old-id"], ["--continue"], ["-c"]])
+def test_refuses_vibe_conversation_selectors(options):
+    assert launchplan.refusal("vibe", options)
+
 def test_catalogue_vectors_preserve_existing_fresh_agent_behavior():
     assert launchplan.build("claude").command() == agentmcp.inject(
         "claude", ["claude", *resumeargs.claude_args()])

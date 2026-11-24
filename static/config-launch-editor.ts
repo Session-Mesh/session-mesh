@@ -71,6 +71,7 @@ export class LaunchEditor {
   private options: Map<string, string>;
   private message: { text: string; ok: boolean } | null = null;
   private busy = false;
+  private disposed = false;
   private clock: HTMLElement | null = null;
 
   private readonly doc: Document;
@@ -90,7 +91,7 @@ export class LaunchEditor {
     this.draw();
   }
 
-  dispose(): void { this.stopClock(); }
+  dispose(): void { this.disposed = true; this.stopClock(); }
 
   private el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", content?: string): HTMLElementTagNameMap[K] {
     const node = this.doc.createElement(tag);
@@ -193,6 +194,7 @@ export class LaunchEditor {
     const { t } = this.ports;
     this.busy = true; this.draw();
     const result = await this.ports.elevate(token).catch(() => null);
+    if (this.disposed) return;
     this.busy = false;
     if (result === null) this.message = { text: t("config.launch.err.network"), ok: false };
     else if (result.ok) {
@@ -282,8 +284,13 @@ export class LaunchEditor {
       if (value !== (this.view.agentOptions[agent] ?? "")) changed[agent] = value;
     }
     if (Object.keys(changed).length === 0) { this.message = { text: t("config.launch.optionsUnchanged"), ok: true }; this.showMessage(); return; }
+    const launchDirty = this.view.editable && (this.agents.size !== this.view.agents.length
+      || this.view.agents.some((agent) => !this.agents.has(agent))
+      || this.roots.length !== this.view.roots.length || this.roots.some((root, index) => root !== this.view.roots[index]));
+    if (launchDirty && !this.doc.defaultView?.confirm(t("config.launch.discardLaunchDraft"))) return;
     this.busy = true; this.draw();
     const result = await this.ports.saveOptions({ revision: this.view.agentOptionsRevision, agent_options: changed }).catch(() => null);
+    if (this.disposed) return;
     this.busy = false;
     if (result === null) { this.message = { text: t("config.launch.err.network"), ok: false }; this.draw(); return; }
     if (result.ok) { this.ports.reload("saved"); return; }
@@ -320,6 +327,7 @@ export class LaunchEditor {
     // Locking the page is not revoking: when the server did not confirm, the elevation may still be
     // live, so the page stays unlocked and says so.
     const revoked = await this.ports.revoke().catch(() => false);
+    if (this.disposed) return;
     if (!revoked) { this.message = { text: this.ports.t("config.launch.err.lockFailed"), ok: false }; this.draw(); return; }
     this.stopClock(); this.mode = "locked"; this.message = null; this.draw();
   }
@@ -330,9 +338,12 @@ export class LaunchEditor {
     if (this.agents.size === 0) return fail(t("config.launch.err.noAgent"));
     if (this.roots.length === 0) return fail(t("config.launch.err.noFolder"));
     if (this.view.revision === null) return fail(t("config.launch.noFile"));
+    const optionsDirty = [...this.options].some(([agent, value]) => value !== (this.view.agentOptions[agent] ?? ""));
+    if (optionsDirty && !this.doc.defaultView?.confirm(t("config.launch.discardOptionsDraft"))) return;
     this.busy = true; this.draw();
     const result = await this.ports.save({ revision: this.view.revision, enabled_agents: this.view.knownAgents.filter((a) => this.agents.has(a)),
       workspace_roots: [...this.roots] }).catch(() => null);
+    if (this.disposed) return;
     this.busy = false;
     if (result === null) { this.message = { text: t("config.launch.err.network"), ok: false }; this.draw(); return; }
     if (result.ok) { this.ports.reload("saved"); return; }

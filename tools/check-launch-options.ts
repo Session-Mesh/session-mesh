@@ -405,7 +405,9 @@ export const CASES: Record<string, (h: Harness) => Promise<void>> = {
     const token = await agentToken(h, 'requester-model');
     const asked = await requestCreate(h, token, {action: 'create', preset: 'codex', model: 'gpt-5', name: 'wanted-codex'});
     assert.equal(asked.status, 202, asked.text);
-    assert.equal((await approve(h, asked.request!.id)).status, 200);
+    const pending = (await pendingRequests(h)).find(item => item.id === asked.request?.id);
+    assert.ok(pending, 'the pending request reaches the page');
+    assert.equal((await approve(h, asked.request!.id, pending.options_revision)).status, 200);
     for (let attempt = 0; attempt < 200 && recorded(`${h.argvLog}.codex`).length < 2; attempt += 1) await sleep(100);
     const launches = recorded(`${h.argvLog}.codex`);
     const argv = launches[launches.length - 1]!;
