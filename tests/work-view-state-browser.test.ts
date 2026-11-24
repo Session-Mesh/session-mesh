@@ -41,6 +41,10 @@ const REFRESH: Readonly<Record<1440 | 390, { first: string; qFirst: string; titl
   1440: { first: 'T-7f01', qFirst: 'N-0000d031', title: 'Refresh desktop' },
   390: { first: 'T-7f02', qFirst: 'N-0000d032', title: 'Refresh phone' },
 };
+const PENDING_REFRESH = {
+  1440: { first: 'T-7f17', qFirst: 'N-0000d048', title: 'Pending desktop' },
+  390: { first: 'T-7f18', qFirst: 'N-0000d049', title: 'Pending phone' },
+} as const;
 const EDIT_TASK = 'T-7f03', EDIT_QUESTION = 'N-0000d033';
 const PAGINATION_TASK = 'T-7f16';
 const PRODUCT_REFRESH = {
@@ -836,6 +840,11 @@ describe('the Projects view comes back as it was left', { skip }, () => {
   });
 
   for (const width of [1440, 390] as const) test(`a pending project answer survives background refresh at ${width}px`, { timeout: 120_000 }, async () => {
+    const item = PENDING_REFRESH[width];
+    const eventsPath = path.join(scratch, 'tracker', 'events', '2026-11.hostq.jsonl');
+    fs.appendFileSync(eventsPath, [...task(item.first, item.title, 59, 'P3'),
+      question('2026-11-09T09:58:00Z', item.first, item.qFirst)]
+      .map(event => JSON.stringify(event)).join('\n') + '\n');
     const page = await signIn(width, []);
     let release!: () => void, observed!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -845,7 +854,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
       await page.locator('.work-overview-product[data-product="relay"]').click();
       await page.locator(`.work-entry-project[data-project="${PROJECT}"]`).click();
       await page.locator('#work-tab-questions').click();
-      const id = REFRESH[width].qFirst;
+      const id = item.qFirst;
       const field = tabField(page, id);
       await field.fill('Keep this answer on failure');
       await page.route('**/api/work/v1', async route => {
@@ -859,8 +868,8 @@ describe('the Projects view comes back as it was left', { skip }, () => {
       await pending;
       await page.locator('#work-tab-board').click();
       await page.locator('#work-tab-board').blur();
-      fs.appendFileSync(path.join(scratch, 'tracker', 'events', '2026-11.hostq.jsonl'),
-        JSON.stringify({ ts: '2026-11-09T09:59:00Z', task: REFRESH[width].first, type: 'set', field: 'title', to: `Pending ${width}` }) + '\n');
+      fs.appendFileSync(eventsPath,
+        JSON.stringify({ ts: '2026-11-09T09:59:00Z', task: item.first, type: 'set', field: 'title', to: `Pending ${width}` }) + '\n');
       await page.waitForTimeout(7000);
       await page.locator('#work-tab-questions').click();
       assert.equal(await form.getAttribute('aria-busy'), 'true');
@@ -870,10 +879,12 @@ describe('the Projects view comes back as it was left', { skip }, () => {
       assert.equal(await field.inputValue(), 'Keep this answer on failure');
       await page.locator('#work-tab-board').click();
       await page.locator('#work-tab-board').blur();
-      await card(page, REFRESH[width].first).getByText(`Pending ${width}`).waitFor({ timeout: 35_000 });
+      await card(page, item.first).getByText(`Pending ${width}`).waitFor({ timeout: 35_000 });
     } finally {
       release();
       await closePage(page);
+      fs.appendFileSync(eventsPath, JSON.stringify({ ts: '2026-11-09T10:00:00Z', task: item.first,
+        type: 'answer', question: item.qFirst, text: 'Done', by: 'owner', via: 'owner-web' }) + '\n');
     }
   });
 
