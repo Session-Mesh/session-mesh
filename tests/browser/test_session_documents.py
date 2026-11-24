@@ -13,7 +13,6 @@ import secrets
 
 import aiohttp
 import pytest
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import docs
 import ptyhost
@@ -686,6 +685,8 @@ async def click_session_link(page, text, expect=HID):
 async def post_on_click(page, messages):
     """One click on #go in the pane's frame (a real user gesture) so that it posts ``messages``,
     a JS expression over the frame's load token ``t``."""
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
     frame = await view_frame(page)
     nonce = secrets.token_hex(16)
     await page.evaluate("""([selector, nonce]) => {
