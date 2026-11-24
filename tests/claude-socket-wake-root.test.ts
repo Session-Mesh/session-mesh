@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
 import {hostArgv, installFakeClaude, MANAGED, NOTICE} from './claude-wake-lib.ts';
+import {approveWakeMail} from './codex-queue-wake-lib.ts';
 import {REPO, runServer, scratchHome, stopServer} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
@@ -41,9 +42,9 @@ class Session {
   constructor(where: Where) { this.where = where; }
 
   get base() { return `http://127.0.0.1:${this.where.port}`; }
+  token() { return fs.readFileSync(path.join(this.where.confDir, 'token'), 'utf8').trim(); }
   owner() {
-    const token = fs.readFileSync(path.join(this.where.confDir, 'token'), 'utf8').trim();
-    return {Authorization: `Bearer ${token}`, Origin: this.base, 'Content-Type': 'application/json'};
+    return {Authorization: `Bearer ${this.token()}`, Origin: this.base, 'Content-Type': 'application/json'};
   }
   headers(agent: Agent) { return {Authorization: `MeshSession ${agent.token}`, 'Content-Type': 'application/json'}; }
 
@@ -63,9 +64,10 @@ class Session {
     other.created = peers.peers.find(item => item.id === other.name)!.created;
   }
 
-  async post(agent: Agent, route: string, body: object): Promise<void> {
+  async post(agent: Agent, route: string, body: object): Promise<Response> {
     const response = await fetch(`${this.base}/api/${route}`, {method: 'POST', headers: this.headers(agent), body: JSON.stringify(body)});
     assert.equal(response.status, 200, await response.clone().text());
+    return response;
   }
 
   async flagged(agent: Agent): Promise<boolean> {
@@ -151,8 +153,9 @@ describe('a restart of the server after a line was written', options, () => {
     assert.equal(hasSocket(target), true);
     await world.learnCreated(sender, target);
     await world.post(target, 'event', {type: 'done'});
-    await world.post(sender, 'agent-mail/@self/send',
+    const sent = await world.post(sender, 'agent-mail/@self/send',
       {target: target.name, target_created: target.created, kind: 'message', text: 'first'});
+    await approveWakeMail(world.base, world.token(), sent);
     await waitFor('the line', 10000, () => lines(target).length === 1);
 
     // Restart 1: the server dies while the line waits for its confirmation.
