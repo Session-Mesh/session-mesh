@@ -146,6 +146,7 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       const draft = phone.locator('.pane.active .p-input-drafts textarea');
       assert.equal(await draft.inputValue(), 'phone-during-switch');
       assert.equal(await draft.getAttribute('readonly'), '');
+      assert.equal(await draft.getAttribute('data-previous'), 'true');
       await phone.evaluate(() => {
         const pane = active as any;
         pane.inputAcks.set('another-session\0fixture', {input: {pendingBytes: 6, pendingHumanBytes: 6, retainedText: 'secret', state: 'review'}});
@@ -163,6 +164,27 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       assert.equal(await draft.inputValue(), 'phone-during-switch', 'desktop and phone drafts remain independent');
       await desktop.evaluate(() => { const pane = active as any; pane.inputAcks.delete(`${pane.conn.name}\0desktop-fixture`); pane.renderRetainedInput(); });
       assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch'], 'reconnection does not resend input');
+      await mesh.newShell('other-draft-session');
+      await phone.waitForFunction(() => document.querySelector('#list .loose .item[data-id="other-draft-session"]') !== null);
+      await phone.locator('#btn-menu').click();
+      await phone.locator('#list .loose .item[data-id="other-draft-session"]').click();
+      await phone.waitForFunction(() => (active as any)?.conn?.name === 'other-draft-session' && active?.conn?.ws?.readyState === WebSocket.OPEN);
+      assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').count(), 0, 'session A is not visible in B');
+      await phone.evaluate(() => {
+        const pane = active as any;
+        const input = {pendingBytes: 7, pendingHumanBytes: 7, retainedText: 'draft B', state: 'review', deliveryUncertain: false,
+          incompleteHumanInput: false, discard() { this.pendingBytes = 0; this.pendingHumanBytes = 0; }};
+        pane.inputAcks.set(`${pane.conn.name}\0fixture`, {input});
+        pane.renderRetainedInput();
+      });
+      assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').inputValue(), 'draft B');
+      assert.match(await phone.locator('.pane.active .p-input-state').innerText(), /7/);
+      await phone.locator('.pane.active .p-input-discard').click();
+      assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').count(), 0);
+      await phone.locator('#btn-menu').click();
+      await phone.locator('#list .loose .item[data-id="fenced-account"]').click();
+      await phone.waitForFunction(() => (active as any)?.conn?.name === 'fenced-account' && active?.conn?.ws?.readyState === WebSocket.OPEN);
+      assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').inputValue(), 'phone-during-switch', 'discarding B preserves A');
     } finally {
       try {
         fs.writeFileSync(release, 'release');
