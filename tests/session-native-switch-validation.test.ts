@@ -115,8 +115,12 @@ describe('native switch integration', {skip: process.platform !== 'linux' ? 'pro
         const agentPid = (row.agent as {pid:number}).pid;
         assert.ok(agentPid > 0);
         const environment = fs.readFileSync(`/proc/${agentPid}/environ`, 'utf8').split('\0');
-        const effective = environment.find(item => item.startsWith('CODEX_HOME='))?.slice('CODEX_HOME='.length)
-          ?? path.join(mesh.home, '.codex');
+        const homeValues = environment.filter(item => item.startsWith('HOME=')).map(item => item.slice('HOME='.length));
+        const codexHomes = environment.filter(item => item.startsWith('CODEX_HOME=')).map(item => item.slice('CODEX_HOME='.length));
+        assert.equal(homeValues.length, 1, 'the process has one HOME');
+        assert.ok(homeValues[0], 'the process HOME is nonempty');
+        assert.ok(codexHomes.length <= 1, 'the process has at most one CODEX_HOME');
+        const effective = codexHomes[0] || path.join(homeValues[0]!, '.codex');
         assert.equal(effective, homes[index]);
         return {row, agentPid, environment, transcript: fs.readFileSync(rolloutIn(homes[index]!, session.sid))};
       }));
