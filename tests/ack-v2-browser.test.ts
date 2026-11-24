@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {after, before, describe, test} from 'node:test';
 import {TerminalMesh, skip, withoutSince} from './terminal-browser-lib.ts';
 
+declare const find: (name: string) => {created: number; provisional: boolean; pty_capabilities: string[]};
+declare const syncPanesWithListing: (observed: boolean) => void;
 declare const active: {
   conn: {ws: WebSocket & {announce: (cap?: object) => void; receipt: (ack: object) => void}} | null;
   inputAck: {state: string; pendingBytes: number; binding: {slot: number; generation: number} | null};
@@ -351,6 +353,20 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     await page.evaluate(() => (active as typeof active & {show(name: string): void}).show('no-ack-terminal'));
     await page.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN && !active.inputAck);
     const forget = page.locator('.pane.active .p-input-forget-draft');
+    assert.equal(await forget.isVisible(), false,
+      'a draft belonging to a different session is not a current-session action');
+    await page.evaluate(() => (active as typeof active & {show(name: string): void}).show('v2-terminal'));
+    await page.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN);
+    // Simulate a replacement of this same session whose host has no ACK.
+    // The bridge is fake here; the real-host test covers actual reincarnation.
+    await page.evaluate(() => {
+      const session = find('v2-terminal');
+      session.created += 1;
+      session.provisional = false;
+      session.pty_capabilities = [];
+      syncPanesWithListing(true);
+    });
+    await page.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN && !active.inputAck);
     await forget.waitFor({state: 'visible'});
     page.once('dialog', dialog => dialog.accept());
     await forget.click();
