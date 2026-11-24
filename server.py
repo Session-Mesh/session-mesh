@@ -1701,8 +1701,11 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     if len(matches) != 1 or not isinstance(matches[0].get("creation_receipt"), str):
         raise web.HTTPConflict(text="Session identity unavailable; nothing was stopped")
     fence = {"name": source["name"], "created": source["created"],
-             "creation_receipt": matches[0]["creation_receipt"],
-             "fence_id": hashlib.sha256(("native-switch:" + switch[4]).encode()).hexdigest()}
+             "creation_receipt": matches[0]["creation_receipt"], "fence_id": secrets.token_hex(32)}
+    # Persist before acquisition, including across cancellation and restart.
+    # This private receipt is never returned to the agent or owner browser.
+    _save_native_fence(switch[4], fence)
+    state = {"stop_started": False, "stop_refused": False}
     try:
         reply = await host({"op": "switch_input_acquire", **fence})
     except Exception as exc:
@@ -1712,17 +1715,47 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
             raise NativeFenceRecoveryRequired(fence, "Acquisition outcome uncertain")
         reason = reply.get("reason", "refused")
         reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,40}", reason) else "refused"
+        _forget_native_fence(switch[4])
         raise web.HTTPConflict(text=f"Session input is not quiescent ({reason}); nothing was stopped")
     try:
         result = await _relaunch_in_place(source, cwd, command, agent, known_agent, account, switch,
-                                          settings_guard=settings_guard, settings_binding=settings_binding, fence=fence)
+                                          settings_guard=settings_guard, settings_binding=settings_binding, fence=fence,
+                                          fence_state=state)
     except AccountSwitchUndone:
         await _release_native_fence(fence)
+        _forget_native_fence(switch[4])
         raise
     except Exception as exc:
+        if not state["stop_started"] or state["stop_refused"]:
+            await _release_native_fence(fence)
+            _forget_native_fence(switch[4])
+            raise
         raise NativeFenceRecoveryRequired(fence, "Switch outcome requires inspection") from exc
     await _release_native_fence(fence)
+    _forget_native_fence(switch[4])
     return result
+
+
+def _native_fence_path(request_id):
+    return CONF_DIR / "switch-fences" / (hashlib.sha256(request_id.encode()).hexdigest() + ".json")
+
+
+def _save_native_fence(request_id, fence):
+    path = _native_fence_path(request_id)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    if not fsutil.atomic_create(path, json.dumps(fence)):
+        raise web.HTTPConflict(text="Switch recovery evidence already exists; inspect the session")
+    # Make the directory entry durable before the host receives the acquire.
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _forget_native_fence(request_id):
+    _native_fence_path(request_id).unlink(missing_ok=True)
 
 
 class NativeFenceRecoveryRequired(Exception):
@@ -1747,7 +1780,7 @@ async def _release_native_fence(fence):
     raise NativeFenceRecoveryRequired(fence, "Control input did not drain")
 
 
-async def _relaunch_in_place(source, cwd, command, agent, known_agent, account=None, switch=None, *, settings_guard=None, settings_binding=None, fence=None):
+async def _relaunch_in_place(source, cwd, command, agent, known_agent, account=None, switch=None, *, settings_guard=None, settings_binding=None, fence=None, fence_state=None):
     """Stop the agent of session ``source`` and start it again in the same session, shell and terminal: the PTY host
     (stop_agent_if) answers once the old agent is gone, so no two processes ever run the conversation, and the
     session continues as a new incarnation (its ``created``) with its name, attachments and output. Everything that
@@ -1781,7 +1814,8 @@ async def _relaunch_in_place(source, cwd, command, agent, known_agent, account=N
         if settings_binding is not None and native_switch:
             raise web.HTTPConflict(text="Conflicting restart bindings; nothing was stopped")
         created = await _stop_agent(source, known_agent, settings_binding=settings_binding,
-                                    profile_binding=source_context if native_switch else None, fence_id=fence["fence_id"] if fence else None)
+                                    profile_binding=source_context if native_switch else None, fence_id=fence["fence_id"] if fence else None,
+                                    fence_state=fence_state)
     except web.HTTPServiceUnavailable:   # a late reply: the agent may be stopped all the same, the session moved on
         await _carry_arrangement(incarnation, source["name"], saved)
         raise
@@ -1859,7 +1893,7 @@ def _not_started_again(name):
         text=f"Conversation stopped; its agent could not be started again in session {name}")
 
 
-async def _stop_agent(source, known_agent, settings_binding=None, profile_binding=None, fence_id=None):
+async def _stop_agent(source, known_agent, settings_binding=None, profile_binding=None, fence_id=None, fence_state=None):
     """stop_agent_if on the incarnation ``source``: the new ``created`` once the agent is gone. WholeSessionOnly or
     HTTPConflict when the host stopped nothing. A reply that comes too late is checked in the listing: when the
     incarnation moved on, the agent was stopped and the session is still there, and the error says so."""
@@ -1871,6 +1905,8 @@ async def _stop_agent(source, known_agent, settings_binding=None, profile_bindin
             message.update(settings_binding)
         if profile_binding is not None:
             message.update(agent_pid=profile_binding["process_pid"], agent_incarnation=profile_binding["process_start"])
+        if fence_state is not None:
+            fence_state["stop_started"] = True
         stopped = await host(message, timeout=STOP_AGENT_TIMEOUT)
     except web.HTTPServiceUnavailable:
         if await _incarnation_moved_on(source):
@@ -1880,6 +1916,8 @@ async def _stop_agent(source, known_agent, settings_binding=None, profile_bindin
         return stopped["created"]
     reason = stopped.get("reason") if isinstance(stopped, dict) else None
     reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,40}", reason) else "refused"
+    if fence_state is not None and isinstance(stopped, dict) and stopped.get("ok") is False and reason != "agent_stop_uncertain":
+        fence_state["stop_refused"] = True
     if reason == "agent_stop_uncertain":
         raise web.HTTPServiceUnavailable(text="Agent stop outcome uncertain; inspect the session before resuming")
     if reason in WHOLE_SESSION_REASONS:
@@ -5676,7 +5714,7 @@ async def _run_session_action_once(app, request_id):
         return app["session_requests"].finish(
             request_id, error=str(exc) + "; inspect the session before explicit fence recovery.",
             detail={"code": "switch_fence_recovery", "retryable": False, "operator_action": True,
-                    "fence": exc.fence, "target_copy_uncertain": True})
+                    "target_copy_uncertain": True})
     except AccountSwitchTargetStartUnconfirmed as exc:
         return app["session_requests"].finish(
             request_id, error=("The conversation was copied, but the target start failed or could not be confirmed. "
@@ -5784,6 +5822,45 @@ async def api_session_action_decision(request):
     # cancelling this handler cannot cancel or replay the mutation.
     finished = await asyncio.shield(_schedule_session_action(request.app, request_id))
     return web.json_response({"request": _session_action_reply(finished)})
+
+
+async def api_session_action_recover_fence(request):
+    """Owner explicitly releases a previously inspected, exact PTY fence.
+
+    The operation cannot resume a session or retry a switch. The original
+    receipt and fence owner come only from private, durable local evidence.
+    """
+    request_id = request.match_info["request_id"]
+    body = await json_object(request)
+    if body != {"action": "release_fence"}:
+        raise web.HTTPBadRequest(text="Explicit fence release required")
+    task = request.app["session_action_tasks"].get(request_id)
+    if task is not None and not task.done():
+        raise web.HTTPConflict(text="Switch is still executing")
+    item = request.app["session_requests"].status(request_id)
+    if item is None or item.get("action") != "switch_account":
+        raise web.HTTPNotFound()
+    try:
+        saved = json.loads(fsutil.read_bounded(_native_fence_path(request_id), 4096))
+    except (OSError, ValueError, TypeError):
+        raise web.HTTPNotFound(text="No recoverable fence evidence") from None
+    source = item.get("source") or {}
+    if (not isinstance(saved, dict) or set(saved) != {"name", "created", "creation_receipt", "fence_id"}
+            or saved.get("name") != source.get("id") or saved.get("created") != source.get("created")
+            or not isinstance(saved.get("creation_receipt"), str) or not isinstance(saved.get("fence_id"), str)):
+        raise web.HTTPConflict(text="Fence evidence does not match the request")
+    rows = await host({"op": "list_bound"})
+    matches = [row for row in rows if isinstance(row, dict) and row.get("name") == saved["name"]
+               and row.get("creation_receipt") == saved["creation_receipt"]] if isinstance(rows, list) else []
+    if len(matches) != 1 or not _finite_number(matches[0].get("created")):
+        raise web.HTTPConflict(text="Original terminal not found; fence was not released")
+    saved["created"] = matches[0]["created"]
+    try:
+        await _release_native_fence(saved)
+    except NativeFenceRecoveryRequired:
+        raise web.HTTPServiceUnavailable(text="Fence release could not be confirmed; inspect before another action") from None
+    _forget_native_fence(request_id)
+    return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
 async def api_session_action_claim(request):
@@ -7723,6 +7800,7 @@ def make_app(*, session_request_path=None):
     app.router.add_get("/api/session-actions/@self/request", api_session_action_request)
     app.router.add_post("/api/session-actions/@self/request", api_session_action_request)
     app.router.add_get("/api/session-actions/@self/accounts", api_session_accounts)
+    app.router.add_post("/api/session-actions/{request_id}/recover-fence", api_session_action_recover_fence)
     app.router.add_post("/api/session-actions/{request_id}/claim", api_session_action_claim)
     app.router.add_post("/api/session-actions/{request_id}/decision", api_session_action_decision)
     app.router.add_get("/api/demo-scene/@self", api_demo_scene_self_get)
