@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Atacama <contact@atacama.tech>
+
+// Experimental end-to-end test. All accounts, transcripts and processes are fixtures.
+import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {after, before, describe, test} from 'node:test';
+import type {Page} from 'playwright-core';
+import {installFakeCodex, launchesIn, rolloutIn} from './fake-codex-lib.ts';
+import {appendFixturePath} from './fixture-login-path.ts';
+import {request, waitFor} from './ptyhost-wire-lib.ts';
+import {REPO, settle, skip, TerminalMesh} from './terminal-browser-lib.ts';
+
+type Row = {id: string; pid: number; created: number; agent: {pid: number; session_id: string} | null};
+type Bound = {name: string; created: number; creation_receipt: string};
+declare const active: {conn?: {ws?: WebSocket}; inputAck?: {state: string}};
+
+async function openPrimary(page: Page, phone: boolean): Promise<void> {
+  if (phone) await page.locator('#btn-menu').click();
+  const entry = page.locator('#list .loose .item[data-id="fenced-account"]');
+  await entry.waitFor({state: 'visible', timeout: 30_000});
+  assert.equal(await entry.count(), 1, 'one primary row in the unfiled sessions list');
+  await entry.click();
+  await page.waitForFunction(() => active?.conn?.ws?.readyState === 1, undefined, {timeout: 30_000});
+  await settle(page);
+}
+
+describe('fenced native switch with desktop and phone', {skip}, () => {
+  let bin: string, fake: ReturnType<typeof installFakeCodex>, mesh: TerminalMesh, marker: string, release: string;
+  before(async () => {
+    bin = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-switch-browser-bin-'));
+    fake = installFakeCodex(bin);
+    marker = path.join(bin, 'carry-entered');
+    release = path.join(bin, 'release-carry');
+    const platform = process.env.MESH_MESH_PLATFORM_CMD!;
+    const wrapper = path.join(bin, 'platform-wrapper');
+    fs.writeFileSync(wrapper, `#!/bin/sh\nif [ "$1" = accounts ] && [ "$2" = carry ]; then\n  : > '${marker}'\n  count=0\n  while [ ! -e '${release}' ]; do\n    [ "$count" -lt 150 ] || exit 124\n    sleep .1\n    count=$((count+1))\n  done\nfi\nexec '${platform}' "$@"\n`, {mode: 0o700});
+    mesh = new TerminalMesh({PATH: fake.PATH, EIO_BACKEND: 'posix',
+      MESH_MESH_PLATFORM_CMD: wrapper,
+      MESH_MESH_PROFILE_CMD: process.env.MESH_PROFILE_CMD || path.join(REPO, 'ocaml/_build/default/bin/mesh_profile_main.exe')});
+    await mesh.start(); appendFixturePath(mesh.home, fake.PATH);
+  });
+  after(async () => {
+    spawnSync('pkill', ['-KILL', '-f', path.join(bin, 'real', 'codex')]);
+    await mesh.stop();
+    fs.rmSync(bin, {recursive: true, force: true});
+  });
+
+  test('input during carry remains retained while switch keeps the PTY and conversation', {timeout: 90_000}, async () => {
+    const conf = path.join(mesh.home, '.config/session-mesh');
+    const target = path.join(mesh.home, 'work-codex'), state = path.join(mesh.home, 'work-state');
+    for (const dir of [conf, target, state]) fs.mkdirSync(dir, {recursive: true, mode: 0o700});
+    fs.chmodSync(path.dirname(conf), 0o700); fs.chmodSync(conf, 0o700);
+    fs.writeFileSync(path.join(conf, 'backend-profiles.json'), JSON.stringify({version: 1, profiles: [
+      {backend: 'codex', id: 'work', label: 'Work', enabled: true, roots: {config: target, state}},
+    ]}), {mode: 0o600});
+    const auth = {Authorization: `Bearer ${mesh.token()}`, Origin: mesh.base, 'Content-Type': 'application/json'};
+    const created = await fetch(`${mesh.base}/api/new`, {method: 'POST', headers: auth,
+      body: JSON.stringify({preset: 'codex', cwd: mesh.home, name: 'fenced-account'})});
+    assert.equal(created.status, 200, await created.clone().text());
+    const listing = async (): Promise<Row | undefined> => {
+      const response = await fetch(`${mesh.base}/api/sessions`, {headers: auth});
+      return ((await response.json()) as {mesh: Row[]}).mesh.find(row => row.id === 'fenced-account');
+    };
+    await waitFor('fixture conversation and token', 30_000, async () =>
+      Boolean((await listing())?.agent?.session_id && launchesIn(fake.log).find(row => row[2] === 'fenced-account')?.[4]));
+    const before = (await listing())!;
+    const launchesBefore = launchesIn(fake.log);
+    const token = launchesBefore.find(row => row[2] === 'fenced-account')![4]!;
+    const sid = before.agent!.session_id;
+    const transcript = rolloutIn(path.join(mesh.home, '.codex'), sid);
+    const original = fs.readFileSync(transcript);
+    const desktop = await mesh.signIn({width: 1200, height: 720});
+    let phone: Page | undefined;
+    let decision: Promise<Response> | undefined;
+    let decisionSettled: Promise<unknown> | undefined;
+    try {
+      await openPrimary(desktop, false);
+      phone = await mesh.signIn({width: 390, height: 780}, () => {
+        const send = WebSocket.prototype.send;
+        (window as any).__inputFrames = [];
+        WebSocket.prototype.send = function(data) {
+          if (data instanceof Uint8Array && data.length >= 4)
+            (window as any).__inputFrames.push(new TextDecoder().decode(data.subarray(4)));
+          return send.call(this, data);
+        };
+      }, undefined, {phone: true});
+      await openPrimary(phone, true);
+      for (const page of [desktop, phone]) await page.waitForFunction(() => active?.inputAck?.state === 'ready');
+      const bound = (await request(mesh.socketPath, {op: 'list_bound'}) as Bound[]).find(row => row.name === 'fenced-account')!;
+      assert.ok(bound);
+      assert.equal(bound.created, before.created);
+      const cookie = (await desktop.context().cookies()).map(item => `${item.name}=${item.value}`).join('; ');
+      const owner = {Cookie: cookie, Origin: mesh.base, 'Content-Type': 'application/json'};
+      const asked = await fetch(`${mesh.base}/api/session-actions/@self/request`, {method: 'POST',
+        headers: {Authorization: `MeshSession ${token}`, 'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'switch_account', account: 'work'})});
+      assert.equal(asked.status, 202, await asked.clone().text());
+      const item = (await asked.json() as {request: {id: string}}).request;
+      const claim = await fetch(`${mesh.base}/api/session-actions/${item.id}/claim`, {method: 'POST', headers: owner,
+        body: JSON.stringify({tab_nonce: 'b'.repeat(32)})});
+      assert.equal(claim.status, 200, await claim.clone().text());
+      const {claim_nonce} = await claim.json() as {claim_nonce: string};
+      decision = fetch(`${mesh.base}/api/session-actions/${item.id}/decision`, {method: 'POST', headers: owner,
+        body: JSON.stringify({approve: true, claim_nonce}), signal: AbortSignal.timeout(25_000)});
+      decisionSettled = decision.then(() => undefined, () => undefined);
+      await waitFor('carry helper entered', 7000, () => fs.existsSync(marker));
+      assert.equal(await phone.evaluate(() => active.inputAck?.state), 'ready');
+      const sent = await phone.evaluate(() => { const pane = active as any; return {before:pane.inputAck.state, accepted:pane.sendRaw(new TextEncoder().encode('phone-during-switch')), pending:pane.inputAck.pendingBytes}; });
+      assert.deepEqual(sent, {before: 'ready', accepted: true, pending: 19});
+      await phone.waitForFunction(() => active.inputAck?.state === 'halted', undefined, {timeout: 4000});
+      assert.equal(await phone.evaluate(() => (active as any).inputAck.pendingBytes), 19, 'accepted input remains available for review');
+      assert.deepEqual(launchesIn(fake.log), launchesBefore, 'target has not launched while carry is held');
+      assert.deepEqual(fs.readFileSync(transcript), original);
+      assert.equal(fs.existsSync(rolloutIn(target, sid)), false);
+      fs.writeFileSync(release, 'release');
+      const response = await decision;
+      assert.equal(response.status, 200, await response.clone().text());
+      const outcome = await response.json() as {request: {state: string; result: {id?: string}}};
+      assert.equal(outcome.request.state, 'completed', JSON.stringify(outcome));
+      assert.equal(outcome.request.result.id, before.id);
+      await waitFor('switched conversation listed', 15_000, async () => {
+        const row = await listing();
+        return Boolean(row && row.created !== before.created && row.agent?.session_id === sid);
+      });
+      const after = (await listing())!;
+      assert.equal(after.pid, before.pid, 'the PTY shell remains the same');
+      assert.notEqual(after.created, before.created, 'the session incarnation advances');
+      assert.equal(after.agent?.session_id, sid, 'the same conversation is resumed');
+      const calls = launchesIn(fake.log).filter(row => row[2] === 'fenced-account');
+      assert.equal(calls.length, 2);
+      assert.equal(calls[1]![1], target, 'the resumed agent uses the target account');
+      assert.match(calls[1]![3]!, new RegExp(`^resume ${sid}(?:\\s|$)`));
+      assert.equal(fs.existsSync(rolloutIn(target, sid)), true);
+      assert.equal(await phone.evaluate(() => (active as any).inputAck.pendingBytes), 19, 'input remains retained after the switch');
+      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch']);
+      await phone.evaluate(() => active.conn!.ws!.close());
+      await phone.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN, undefined, {timeout: 15000});
+      assert.equal(await phone.evaluate(() => [...(active as any).inputAcks.values()].reduce((sum: number, entry: any) => sum + entry.input.pendingBytes, 0)), 19, 'reconnection keeps input from the old incarnation');
+      assert.equal(await phone.locator('.pane.active .p-input-review').isVisible(), true, 'the retained input is presented for review');
+      assert.equal(await phone.locator('.pane.active .p-input-discard').isVisible(), true);
+      assert.equal(await phone.locator('.pane.active .p-input-retry').isVisible(), false, 'old incarnation cannot be retried here');
+      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch'], 'reconnection does not resend input');
+    } finally {
+      try {
+        fs.writeFileSync(release, 'release');
+      } finally {
+        await decisionSettled;
+        await desktop.context().close();
+        await phone?.context().close();
+      }
+    }
+  });
+});
