@@ -6,10 +6,12 @@
 import pytest
 import asyncio
 import shlex
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import resumeargs
+import launchsettings
 import session_helpers
 import sessionrequests
 import server
@@ -21,6 +23,52 @@ def agent(sessions):
     sessions[0].update(pid=1, activity=1.0, attached=0, cwd=str(Path.home()))
     sessions[0]["meta"]["known_agent"] = "codex"
     return headers
+
+
+def test_options_projection_keeps_options_and_revision_from_same_save(monkeypatch):
+    entered, release, done = threading.Event(), threading.Event(), threading.Event()
+    class PausedOptions(dict):
+        def items(self):
+            entered.set()
+            assert release.wait(timeout=2)
+            return super().items()
+    monkeypatch.setattr(server, "AGENT_OPTIONS", PausedOptions({"codex": ("--before",)}))
+    monkeypatch.setattr(server, "AGENT_OPTIONS_REVISION", "before")
+    monkeypatch.setattr(server, "AGENT_OPTIONS_ERROR", None)
+    result = []
+    reader = threading.Thread(target=lambda: result.append(server.launch_projection()))
+    writer = threading.Thread(target=lambda: (server.apply_agent_options({"codex": ("--after",)}, "after"), done.set()))
+    reader.start()
+    try:
+        assert entered.wait(timeout=2)
+        writer.start()
+        assert not done.wait(timeout=0.05)
+    finally:
+        release.set()
+        reader.join(timeout=2)
+        if writer.ident is not None:
+            writer.join(timeout=2)
+    assert not reader.is_alive() and not writer.is_alive()
+    assert result[0]["agent_options"] == {"codex": "--before"}
+    assert result[0]["agent_options_revision"] == "before"
+    projection = server.launch_projection()
+    assert projection["agent_options"] == {"codex": "--after"}
+    assert projection["agent_options_revision"] == "after"
+
+
+def test_options_save_without_launch_settings_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "LAUNCH_REVISION", None)
+    monkeypatch.setattr(server, "AGENT_OPTIONS", {})
+    monkeypatch.setattr(server, "AGENT_OPTIONS_REVISION", None)
+    monkeypatch.setattr(server, "AGENT_OPTIONS_ERROR", None)
+    projection = server.launch_projection()
+    assert projection["editable"] is False and projection["agent_options_editable"] is True
+    path = tmp_path / "options.json"
+    changes = server._agent_option_changes({"codex": "--search"})
+    stored, revision = launchsettings.write_agent_options(path, changes, projection["agent_options_revision"] or None)
+    assert stored == {"codex": ("--search",)} and revision
+    with pytest.raises(launchsettings.ConflictError):
+        launchsettings.write_agent_options(path, changes, None)
 
 
 async def test_create_approval_binds_options_across_save_and_repeated_decision(

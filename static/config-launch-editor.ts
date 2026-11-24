@@ -12,7 +12,7 @@
 import type { ConfigTranslate } from "./config-panel.ts";
 
 export type LaunchView = Readonly<{
-  editable: boolean; revision: string | null; agents: readonly string[]; knownAgents: readonly string[];
+  editable: boolean; optionsEditable: boolean; revision: string | null; agents: readonly string[]; knownAgents: readonly string[];
   roots: readonly string[]; defaults: Readonly<{ agents: readonly string[]; roots: readonly string[] }>;
   maxRoots: number; maxPath: number;
   // The extra arguments the owner stored per agent, as the text the launch field holds, and the
@@ -43,6 +43,7 @@ export function parseLaunch(raw: unknown): LaunchView {
   const launch = record(raw), defaults = record(launch.defaults), limits = record(launch.limits);
   return {
     editable: launch.editable === true && typeof launch.revision === "string",
+    optionsEditable: launch.agent_options_editable === true,
     revision: typeof launch.revision === "string" ? launch.revision : null,
     agents: strings(launch.enabled_agents), knownAgents: strings(launch.known_agents), roots: strings(launch.workspace_roots),
     defaults: { agents: strings(defaults.enabled_agents), roots: strings(defaults.workspace_roots) },
@@ -82,7 +83,7 @@ export class LaunchEditor {
     this.element.className = "config-section config-card config-launch"; this.element.dataset.section = "launch";
     this.agents = new Set(view.agents); this.roots = [...view.roots];
     this.options = new Map(view.knownAgents.map((agent) => [agent, view.agentOptions[agent] ?? '']));
-    this.mode = elevation.active && view.editable ? "editing" : "locked";
+    this.mode = elevation.active && (view.editable || view.optionsEditable) ? "editing" : "locked";
     if (notice === "saved") this.message = { text: ports.t("config.launch.saved"), ok: true };
     if (notice === "stale") this.message = { text: ports.t("config.launch.err.stale"), ok: false };
     if (this.mode === "editing") this.startClock(elevation.secondsLeft);
@@ -133,14 +134,15 @@ export class LaunchEditor {
     const { t } = this.ports;
     const heading = this.el("h4", "", t("config.launch.title"));
     const parts: HTMLElement[] = [heading];
-    if (!this.view.editable) {
-      parts.push(this.el("p", "mute", t("config.launch.noFile")), this.summary());
-    } else if (this.mode === "editing") {
+    if (this.mode === "editing") {
+      if (!this.view.editable) parts.push(this.el("p", "mute", t("config.launch.noFile")), this.summary());
       parts.push(...this.editing());
     } else {
-      parts.push(this.el("p", "mute", t("config.launch.readonly")), this.summary());
-      parts.push(this.mode === "asking" ? this.tokenForm() : this.button(t("config.launch.edit"),
-        () => { this.mode = "asking"; this.message = null; this.draw(); this.element.querySelector("input")?.focus(); }, "btn sm primary config-edit"));
+      parts.push(this.el("p", "mute", t(this.view.editable ? "config.launch.readonly" : "config.launch.noFile")), this.summary());
+      if (this.view.editable || this.view.optionsEditable) {
+        parts.push(this.mode === "asking" ? this.tokenForm() : this.button(t("config.launch.edit"),
+          () => { this.mode = "asking"; this.message = null; this.draw(); this.element.querySelector("input")?.focus(); }, "btn sm primary config-edit"));
+      }
     }
     if (this.message) {
       const line = this.el("p", this.message.ok ? "config-ok" : "config-error", this.message.text);
@@ -246,7 +248,8 @@ export class LaunchEditor {
     }, "btn sm ghost config-default-roots"));
 
     const save = this.button(t("config.launch.save"), () => { void this.save(); }, "btn sm primary config-save");
-    return [bar, agents, roots, this.el("p", "mute config-help", t("config.launch.help")), save, this.optionsFieldset()];
+    return [bar, ...(this.view.editable ? [agents, roots, this.el("p", "mute config-help", t("config.launch.help")), save] : []),
+      ...(this.view.optionsEditable ? [this.optionsFieldset()] : [])];
   }
 
   /** One text field per known agent: what the launch dialog's options field holds, stored or cleared. */

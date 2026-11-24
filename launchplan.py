@@ -105,7 +105,7 @@ def _option_pairs(tokens: tuple[str, ...], short_options: frozenset[str]) -> tup
     """The option/value pairs of ``tokens`` and the first positional, if any.
 
     Handles ``--opt=value``, ``-o value`` and ``-o=value``. Reading stops at the first token that is
-    not an option: what follows is a prompt, where a word like ``--yolo`` is text, not a flag.
+    not an option; callers must continue scanning since CLIs can parse flags after positional words.
     """
     pairs: list[tuple[str, str | None]] = []
     index = 0
@@ -148,6 +148,9 @@ def refusal(kind: str, tokens) -> str | None:
     if agent == "codex":
         short_options |= frozenset({"-a", "-s", "-c"})
     pairs, positional = _option_pairs(options, short_options)
+    while positional:
+        more, positional = _option_pairs(positional[1:], short_options)
+        pairs.extend(more)
     yolo_flags = _YOLO_FLAGS.get(agent, frozenset())
     yolo_pairs = _YOLO_PAIRS.get(agent, frozenset())
     conversation = _CONVERSATION_OPTIONS.get(agent, frozenset())
