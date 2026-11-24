@@ -101,7 +101,12 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
       const pair = selected(); if (!writable() || !pair || !draft) return;
       const request = generation;
       void controller.savePair(pair.a, pair.b, draft.confirmation).then(saved => {
-        if (saved && request === generation && dialog.open) { clearDraft(); content.querySelector<HTMLElement>('[data-focus="add-pair"]')?.focus(); }
+        if (saved && request === generation && dialog.open) {
+          const active = doc.activeElement;
+          const restore = !active || active === doc.body || active === dialog || !!editHost?.contains(active);
+          clearDraft();
+          if (restore) content.querySelector<HTMLElement>('[data-focus="add-pair"]')?.focus();
+        }
       });
     });
     const updatePreview = () => {
