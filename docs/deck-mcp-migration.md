@@ -70,15 +70,17 @@ old parameters under the group's inner `arguments`. The guide still uses
 
 ## Update client permissions
 
-Before upgrading, migrate any client allow, deny or ask rules that target the former tool
-names. Use the group name with whatever prefix your client adds for `mesh-board`. A rule
-applies to the whole group, including `describe`. Review the full action list before carrying
-an allow rule over to its group.
+Before upgrading, add group rules for any client allow, deny or ask rules that target the
+former tool names. Keep the former rules as well for as long as an older bridge or a rollback
+may be used: an older bridge does not understand a group name. Use the group name with
+whatever prefix your client adds for `mesh-board`. A group rule applies to the whole group,
+including `describe`; review the full action list before carrying an allow rule over.
 
-For Vibe sessions started by Mesh, the injected `mesh-board` configuration keeps old
-`disabled_tools` entries and also denies their corresponding groups. This covers both
-bridge versions during upgrades and rollbacks. Mesh leaves configuration files on disk as
-written.
+For Vibe sessions started by Mesh, the injected `mesh-board` configuration retains old
+`disabled_tools` entries and also denies their corresponding groups when an old selector is
+present. A group selector alone does not deny the former flat tools in an older bridge. Keep
+both forms in configuration throughout upgrades and rollbacks. Mesh leaves configuration files
+on disk as written.
 
 ## Upgrade running sessions
 
