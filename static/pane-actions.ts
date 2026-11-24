@@ -706,6 +706,7 @@ export interface PasteConnection {
 export interface PasteBinding {
   readonly pane: object; readonly target: CapturedTarget;
   readonly connection: PasteConnection; readonly socket: PasteSocket;
+  readonly current?: () => boolean;
 }
 export type PasteResultKind = "refused" | "paste" | "submitted" | "uncertain";
 export interface PasteResult {
@@ -725,9 +726,9 @@ export interface PastePorts {
   readonly schedule: (callback: () => void) => void;
 }
 export interface PasteDelivery {
-  readonly capture: (pane: object, target: CapturedTarget) => PasteBinding | null;
+  readonly capture: (pane: object, target: CapturedTarget, current?: () => boolean) => PasteBinding | null;
   readonly onData: (pane: object, frame: string, ordinary: () => void) => void;
-  readonly deliver: (binding: PasteBinding, text: string, enter: boolean,
+  readonly deliver: (binding: PasteBinding, text: string | Promise<string>, enter: boolean,
     settle: (result: PasteResult) => void) => { readonly cancel: () => void };
 }
 export function createPasteDelivery(ports: PastePorts): PasteDelivery {
@@ -735,6 +736,7 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
     stopped: boolean; unknown: boolean; reason: PasteResult["reason"] };
   let current: Attempt | null = null;
   const valid = (binding: PasteBinding): boolean => ports.valid(binding.target)
+    && (!binding.current || binding.current())
     && ports.connection(binding.pane) === binding.connection
     && binding.connection.ws === binding.socket
     && !binding.connection.closed && !binding.connection.ended && !binding.connection.initializing
@@ -757,10 +759,10 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
     attempt.frames++; attempt.wireBytes += bytes.byteLength; attempt.joined += frame;
   };
   return {
-    capture(pane, target) {
+    capture(pane, target, current) {
       const connection = ports.connection(pane), socket = connection?.ws;
       if (!connection || !socket) return null;
-      const binding = Object.freeze({ pane, target, connection, socket });
+      const binding = Object.freeze({ pane, target, connection, socket, ...(current ? {current} : {}) });
       return valid(binding) ? binding : null;
     },
     onData(pane, frame, ordinary) {
@@ -768,8 +770,10 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
       if (attempt?.binding.pane === pane) send(attempt, frame);
       else ordinary();
     },
-    deliver(binding, text, enter, settle) {
-      const requestedBytes = ports.encode(text).byteLength;
+    deliver(binding, payload, enter, settle) {
+      let ready = typeof payload === "string", running = false;
+      let text = ready ? payload as string : "";
+      let requestedBytes = ports.encode(text).byteLength;
       const attempt: Attempt = { binding, frames: 0, wireBytes: 0, joined: "",
         stopped: false, unknown: false, reason: null };
       let settled = false, deferred: {start(): void; settle(): void} | null = null;
@@ -785,7 +789,9 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
         finish(attempt.frames || attempt.unknown ? "uncertain" : "refused");
       } };
       const run = (): void => {
-        if (settled) return;
+        if (settled || running) return;
+        if (!ready) return;
+        running = true;
         if (!valid(binding)) { attempt.reason = "guard"; finish("refused"); return; }
         if (!text) {
           if (!enter) { attempt.reason = "incomplete"; finish("refused"); return; }
@@ -817,6 +823,15 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
           });
         } catch { attempt.reason = "schedule"; finish("uncertain"); }
       };
+      if (!ready) void (payload as Promise<string>).then(value => {
+        if (settled) return;
+        text = value; requestedBytes = ports.encode(text).byteLength; ready = true;
+        if (deferred) deferred.start();
+        else run();
+      }, () => {
+        if (settled) return;
+        attempt.reason = "paste"; finish("refused");
+      });
       if (!valid(binding)) {attempt.reason = "guard"; finish("refused"); return operation;}
       deferred = ports.defer?.(binding, text, run, operation.cancel) ?? null;
       if (deferred) deferred.start();

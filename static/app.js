@@ -885,6 +885,7 @@ class Pane {
     if (c.replaying || c.draining || c.replayPending || c.flushingHumanInput || c.cancellingHumanInput) return;
     c.flushingHumanInput = true;
     try {
+      c.activeHumanInput?.resume?.();
       while (!c.activeHumanInput && !c.replaying && !c.draining && !c.replayPending && c.queuedHumanInput?.length) {
         const entry = c.queuedHumanInput.shift();
         if (localMeshEffectsAllowed() && this.conn === c && !c.closed && c.ws === entry.socket
@@ -908,6 +909,7 @@ class Pane {
     };
     const input = {
       write: (bytes, complete) => reservation.write(bytes, complete),
+      resume,
       flush: () => {
         if (!held) return false;
         c.activeHumanInput = input;
@@ -1548,11 +1550,24 @@ class Pane {
       && localMeshEffectsAllowed() && terminal?.isBound(name, created);
     if (!terminal?.isBound(name, created)) { flash(t("terminal.limitedInput")); return; }
     if (!current()) return;
+    observePaneActions(this);
+    const target = paneTargets.capture(this);
+    if (!target) return;
+    const binding = paneInput.capture(this, target, current);
+    if (!binding) { paneTargets.release(target); return; }
     try {
-      const text = await navigator.clipboard.readText();
-      if (current()) term.paste(text);
+      // Reserve before awaiting the browser: later keys stay behind this paste,
+      // including when replay starts while the clipboard permission is pending.
+      const text = navigator.clipboard.readText();
+      await new Promise((done) => {
+        paneInput.deliver(binding, text, false, (result) => {
+          paneTargets.release(target);
+          if (result.reason === "paste") flash(t("clipboard.pasteDenied"));
+          done();
+        });
+      });
     }
-    catch { flash(t("clipboard.pasteDenied")); }
+    catch { paneTargets.release(target); flash(t("clipboard.pasteDenied")); }
   }
   filesIn(files) {
     if (!files.length) return;
