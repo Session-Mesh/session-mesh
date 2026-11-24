@@ -392,6 +392,8 @@ for (const width of WIDTHS) {
         const body = request.postDataJSON();
         return body?.op === 'task' && body?.args?.id === 'T-3c4d';
       }});
+      let wasAborted = false;
+      void aborted.then(() => { wasAborted = true; }, () => undefined);
       void aborted.catch(() => undefined);
       await page.route('**/api/work/v1', async route => {
         const body = route.request().postDataJSON();
@@ -414,6 +416,7 @@ for (const width of WIDTHS) {
         await scope.locator('.work-sheet-refresh-status').waitFor({state:'visible',timeout:90_000});
         assert.equal(await draft.inputValue(),'draft remains while focused');
         assert.equal(await draft.evaluate(node => node === document.activeElement),true);
+        assert.equal(wasAborted,false,'the open preview remains alive while the draft blocks replacement');
         await draft.fill('');
         await scope.locator('.work-detail-heading').focus();
         await scope.locator('.work-detail-heading', {hasText:'Updated preview source'}).waitFor({timeout:90_000});
