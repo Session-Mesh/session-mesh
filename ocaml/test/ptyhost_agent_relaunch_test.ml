@@ -29,7 +29,7 @@ let agent_script =
    echo \"start $$ ${CLAUDE_CONFIG_DIR-unset}\" >> \"$log\"\n\
    echo \"agent-start $$ ${CLAUDE_CONFIG_DIR-unset}\"\n\
    case \"$1\" in\n\
-   stubborn) trap '' HUP ;;\n\
+   stubborn) trap 'echo \"hup $$\" >> \"$log\"' HUP ;;\n\
    *) trap 'sleep 0.3; echo \"stop $$\" >> \"$log\"; exit 0' HUP ;;\n\
    esac\n\
    while :; do sleep 0.1; done\n"
@@ -267,6 +267,35 @@ let refusals_signal_nothing () =
       expect "no meta on an incarnation whose agent was not stopped"
         (member "ok" (start_again fixture created) = `Bool false))
 
+let bound_agent_refusal_signals_nothing () =
+  with_host (fun fixture ->
+      let session = new_agent fixture in
+      let created = member "created" session in
+      let agent = List.hd (agent_pids fixture) in
+      let reply =
+        send fixture
+          [
+            ("op", `String "stop_agent_if");
+            ("name", `String "relaunch");
+            ("created", created);
+            ("agent", `String "claude");
+            ("agent_pid", `Int agent);
+            ("agent_incarnation", `String "1");
+            ("agent_input_at", member "last_input" session);
+          ]
+      in
+      expect "mismatched process incarnation refused"
+        (member "reason" reply = `String "agent_changed");
+      let stale_input = send fixture
+        [ ("op", `String "stop_agent_if"); ("name", `String "relaunch");
+          ("created", created); ("agent", `String "claude");
+          ("agent_pid", `Int agent); ("agent_incarnation", `String "1");
+          ("agent_input_at", `Float (-1.)) ] in
+      expect "changed input refuses the stop" (member "reason" stale_input = `String "stale_incarnation");
+      expect "the agent still runs" (alive agent);
+      expect "session incarnation unchanged"
+        (member "created" (the_session fixture) = created))
+
 (* A shell without job control runs the agent in its own group: only a stop
    of the whole session could reach it, so nothing is signalled. *)
 let no_job_control_signals_nothing () =
@@ -300,6 +329,27 @@ let half_typed_line_is_erased () =
         (List.exists
            (fun line -> contains line "/accounts/b")
            (log_lines fixture));
+      Unix.close desk)
+
+let input_during_stop_does_not_reach_shell () =
+  with_host (fun fixture ->
+      let session = new_agent ~mode:"stubborn" fixture in
+      let desk = attach fixture in
+      let marker = Filename.concat fixture.home "unexpected-command" in
+      let child = Unix.fork () in
+      if child = 0 then (
+        let result = stop_agent fixture (member "created" session) in
+        exit (if member "ok" result = `Bool true then 0 else 1));
+      ignore (wait_until "stubborn agent received HUP" 5. (fun () ->
+          List.exists (fun line -> String.starts_with ~prefix:"hup " line) (log_lines fixture)));
+      type_in desk ("touch " ^ Filename.quote marker ^ "\r");
+      type_in desk ("touch " ^ Filename.quote marker ^ "\r");
+      let _, status = Unix.waitpid [] child in
+      expect "stop completed" (status = Unix.WEXITED 0);
+      let barrier = Filename.concat fixture.home "shell-barrier" in
+      type_in desk ("touch " ^ Filename.quote barrier ^ "\r");
+      ignore (wait_until "shell processed the barrier" 5. (fun () -> Sys.file_exists barrier));
+      expect "held input did not reach the shell" (not (Sys.file_exists marker));
       Unix.close desk)
 
 let meta_keeps_the_nonce () =
@@ -369,10 +419,14 @@ let () =
             stubborn_agent_is_killed;
           Alcotest.test_case "refusals signal nothing" `Slow
             refusals_signal_nothing;
+          Alcotest.test_case "bound agent mismatch signals nothing" `Slow
+            bound_agent_refusal_signals_nothing;
           Alcotest.test_case "a shell without job control: nothing signalled"
             `Slow no_job_control_signals_nothing;
           Alcotest.test_case "a half-typed line is erased before the launch"
             `Slow half_typed_line_is_erased;
+          Alcotest.test_case "input during stop never reaches the shell" `Slow
+            input_during_stop_does_not_reach_shell;
           Alcotest.test_case "the new meta keeps the nonce" `Slow
             meta_keeps_the_nonce;
           Alcotest.test_case "a pending launch is dropped by a stop" `Slow

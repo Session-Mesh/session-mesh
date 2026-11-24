@@ -669,6 +669,30 @@ def _kept_options(kind, args, *, strict=False):
     return kept
 
 
+def settings_option_groups(kind, argv, *, saved):
+    """Group words according to the agent's existing option grammar.
+
+    For inspection, ignore a launcher that we cannot identify. For rewriting,
+    preserve the executable and resume positionals, plus any unread tail.
+    """
+    args = list((entry_args(kind, argv) or []) if saved else argv)
+    groups, i = [], 0
+    while i < len(args):
+        arg = args[i]
+        end = i + 1
+        if arg == "--":
+            break
+        if arg.startswith("-") and arg != "-":
+            short = _short_option(kind, arg)
+            category = _category(_SPEC[kind], short[0] if short else arg.split("=", 1)[0])
+            if category is None:
+                break
+            _, end = _read_option(category, args, i, bool(short) or "=" in arg, False)
+        groups.append(args[i:end])
+        i = end
+    return groups, args[i:]
+
+
 def _shell_words(text):
     try:
         return shlex.split(text)

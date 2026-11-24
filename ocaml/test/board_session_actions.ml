@@ -71,7 +71,7 @@ let with_server ?(content_type = "application/json") status body f =
       Sys.remove recorded;
       (result, request)
 
-let call port action arguments =
+let call ?(group = "session") port action arguments =
   let config =
     Result.get_ok (Mesh_board_mcp.Config.make_for_test ~token:"token" ~port ())
   in
@@ -92,7 +92,7 @@ let call port action arguments =
            ( "params",
              `Assoc
                [
-                 ("name", `String "session");
+                 ("name", `String group);
                  ( "arguments",
                    `Assoc [ ("action", `String action); ("arguments", arguments) ] );
                ] );
@@ -395,9 +395,57 @@ let test_switch_takes_one_name () =
     ]
 
 
+let test_control_status () =
+  let (is_error, text), request =
+    with_server "200 OK"
+      {|{"control":{"agent":"codex","transition":"restart","launch_model":"test-model","observed_model":null}}|}
+      (fun port -> call ~group:"control" port "status" (`Assoc []))
+  in
+  Alcotest.(check bool) "successful" false is_error;
+  Alcotest.(check string) "self status route"
+    "GET /api/session-actions/@self/request?view=control HTTP/1.1"
+    (request_line request);
+  Alcotest.(check bool) "uses session authentication" true
+    (contains request "MeshSession token");
+  Alcotest.(check bool) "does not invent an observed model" true
+    (contains text {|"observed_model":null|})
+
+let test_control_request () =
+  let (is_error, _), request =
+    with_server "202 Accepted" {|{"request":{"id":"example","state":"pending"}}|}
+      (fun port ->
+        call ~group:"control" port "settings_request"
+          (`Assoc [ ("model", `String "test-model"); ("effort", `String "high") ]))
+  in
+  Alcotest.(check bool) "successful" false is_error;
+  Alcotest.(check string) "self request route"
+    "POST /api/session-actions/@self/request HTTP/1.1" (request_line request);
+  Alcotest.(check string) "selected settings only"
+    {|{"action":"settings","model":"test-model","effort":"high"}|}
+    (request_body request)
+
+let test_control_rejects_invalid_calls () =
+  List.iter
+    (fun (action, fields) ->
+      let is_error, message = call ~group:"control" 9 action (`Assoc fields) in
+      Alcotest.(check bool) "invalid" true is_error;
+      Alcotest.(check bool) "rejected before HTTP" false (contains message "unreachable"))
+    [
+      ("status", [ ("session", `String "another") ]);
+      ("settings_request", []);
+      ("settings_request", [ ("effort", `String "unsupported") ]);
+      ("settings_request", [ ("model", `String "a"); ("account", `String "another") ]);
+    ]
+
 let () =
   Alcotest.run "mesh-board-session-actions"
     [
+      ( "control",
+        [
+          Alcotest.test_case "reads self status" `Quick test_control_status;
+          Alcotest.test_case "posts selected settings" `Quick test_control_request;
+          Alcotest.test_case "rejects invalid arguments" `Quick test_control_rejects_invalid_calls;
+        ] );
       ( "session.account_switch_request",
         [
           Alcotest.test_case "says who may ask for it" `Quick

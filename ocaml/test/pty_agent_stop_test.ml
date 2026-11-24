@@ -160,6 +160,35 @@ let escalation () =
   Alcotest.(check (list string))
     "a SIGHUP is still sent, harmless" [ "HUP" ] (signals sent)
 
+let lost_identity_is_never_success () =
+  let stopped_called = ref false in
+  let result =
+    Stop.stop_guarded Stop.default_timing
+      ~signal:(fun _ -> false)
+      ~sleep:(fun _ -> ())
+      ~now:(fun () -> 0.)
+      ~stopped:(fun () ->
+        stopped_called := true;
+        true)
+  in
+  Alcotest.(check bool)
+    "refuse before first signal" true
+    (result = `Identity_changed);
+  Alcotest.(check bool) "do not claim success" false !stopped_called;
+  let clock = ref 0. and signals = ref 0 in
+  let result =
+    Stop.stop_guarded Stop.default_timing
+      ~signal:(fun _ ->
+        incr signals;
+        !signals = 1)
+      ~sleep:(fun t -> clock := !clock +. t)
+      ~now:(fun () -> !clock)
+      ~stopped:(fun () -> false)
+  in
+  Alcotest.(check bool)
+    "uncertain after first signal" true
+    (result = `Identity_changed_after_signal)
+
 let () =
   Alcotest.run "pty_agent_stop"
     [
@@ -169,5 +198,7 @@ let () =
           Alcotest.test_case "when the agent is gone" `Quick gone;
           Alcotest.test_case "SIGHUP, then SIGKILL, then give up" `Quick
             escalation;
+          Alcotest.test_case "lost identity cannot become stopped" `Quick
+            lost_identity_is_never_success;
         ] );
     ]

@@ -182,7 +182,7 @@ clicks through. Use a demo to show a flow or a structure; use the whiteboard for
 
 ## Talk to other agents
 
-The `mesh-board` server groups calls under `whiteboard`, `demo`, `mail` and `session`. For
+The `mesh-board` server groups calls under `whiteboard`, `demo`, `mail`, `session` and `control`. For
 each group, call it with no arguments or with `{"action":"describe"}` to see its actions and
 schemas. In this guide,
 `mail.inbox` means call the tool `mail` with `{"action":"inbox"}`. Put action-specific fields
@@ -231,6 +231,16 @@ undecided request expires. A restart stops your agent and starts it
 again in the same session and terminal (in a new session when the agent is the session's own
 program; when it cannot be stopped alone otherwise, nothing is stopped and the request fails with
 what the owner can do); the session is then a new incarnation.
+
+Use `control.status` to read your execution state and the model or reasoning effort declared at
+launch, when visible. The separate observed values stay empty until Mesh can see an inference.
+If the returned transition is `restart`, `control.settings_request` can ask the owner to resume
+your Codex or Claude Code conversation with a specified model, reasoning effort or both. Pass only
+the settings you want changed. Mesh preserves omitted launch options. The backend can resolve
+settings from its own configuration when it restarts. Check the listed effort choices before asking.
+The backend determines which models the account can use. The request ID works
+with `session.action_status` from the requesting incarnation, and the owner sees the outcome in the
+approval flow.
 
 `session.accounts` tells you which account alias your session runs under (`default` for the default
 account) and which aliases the owner declared on the runner, with the agents each one serves. It

@@ -33,10 +33,12 @@ TAB_NONCE_RE = re.compile(r"[0-9a-f]{32}")
 ACCOUNT_RE = re.compile(r"[a-z0-9-]{1,32}")
 # The agents whose conversation Mesh can carry to another account (mesh-platform accounts carry).
 SWITCHABLE_AGENTS = frozenset(("claude", "codex"))
+SETTINGS_AGENTS = frozenset(("claude", "codex"))
+SETTINGS_EFFORTS = frozenset(("low", "medium", "high"))
 # Presets an agent may never request: a session without approvals or sandbox
 # would let one agent obtain an unconfined sibling. The owner still can.
 OWNER_ONLY_PRESETS = frozenset(("codex-yolo",))
-ACTIVE_STATES = ("pending", "claimed", "approved", "executing")
+ACTIVE_STATES = ("pending", "claimed", "approved", "executing", "settings_approved", "settings_executing")
 TERMINAL_STATES = ("rejected", "completed", "failed", "execution_unknown")
 _UMASK_LOCK = threading.Lock()
 
@@ -167,9 +169,9 @@ class Requests:
                         terminal_at REAL
                     )
                 """)
-                # A database written before account switching: the two columns are added, empty.
+                # Older request stores have no account or effort columns.
                 columns = {row[1] for row in self._db.execute("PRAGMA table_info(session_requests)")}
-                for column in ("account", "from_account"):
+                for column in ("account", "from_account", "effort", "conversation"):
                     if column not in columns:
                         self._db.execute(f"ALTER TABLE session_requests ADD COLUMN {column} TEXT")
             finally:
@@ -182,9 +184,21 @@ class Requests:
         # Crossing a process lifetime makes an in-flight result unknowable.
         # It must never become an automatic second invocation.
         with self._transaction():
+            # Old servers treat unknown actions as restart. A database-level
+            # barrier remains effective when such a server opens this store.
+            for operation in ("INSERT", "UPDATE OF state, action"):
+                trigger = "settings_legacy_insert" if operation == "INSERT" else "settings_legacy_update"
+                self._db.execute(f"CREATE TRIGGER IF NOT EXISTS {trigger} BEFORE {operation} ON session_requests "
+                                 "WHEN NEW.action = 'settings' AND NEW.state IN ('approved', 'executing') "
+                                 "BEGIN SELECT RAISE(ABORT, 'settings action requires a compatible server'); END")
+            # Prior deployments lacked the barrier: never turn their approval
+            # into authority on upgrade. An in-flight result is still unknown.
+            self._db.execute("UPDATE session_requests SET state = 'failed', result_json = ?, terminal_at = ? "
+                             "WHERE action = 'settings' AND state = 'approved'",
+                             (self._encode({"error": "Settings approval invalidated during upgrade"}), self._clock()))
             self._db.execute(
                 "UPDATE session_requests SET state = 'execution_unknown', "
-                "result_json = ?, terminal_at = ? WHERE state = 'executing'",
+                "result_json = ?, terminal_at = ? WHERE state IN ('executing', 'settings_executing')",
                 (self._encode({"error": "Execution result unknown after restart"}),
                  self._clock()))
             self._prune_locked(self._clock())
@@ -230,7 +244,7 @@ class Requests:
         # visibly rather than allowing an arbitrarily late launch.
         self._db.execute(
             "UPDATE session_requests SET state = 'failed', result_json = ?, terminal_at = ? "
-            "WHERE state = 'approved' AND created_at + ? <= ?",
+            "WHERE state IN ('approved', 'settings_approved') AND created_at + ? <= ?",
             (self._encode({"error": "Authorization expired before execution"}), now, TTL, now))
         self._db.execute(
             "DELETE FROM session_requests WHERE "
@@ -262,8 +276,9 @@ class Requests:
             "id": row["id"], "action": row["action"],
             "source": cls._decode(row["source_json"]), "preset": row["preset"],
             "name": row["requested_name"], "model": row["model"],
+            **({"effort": row["effort"], "conversation": row["conversation"]} if row["action"] == "settings" else {}),
             "account": row["account"], "from_account": row["from_account"],
-            "state": row["state"], "created_at": row["created_at"],
+            "state": {"settings_approved": "approved", "settings_executing": "executing"}.get(row["state"], row["state"]), "created_at": row["created_at"],
             "result": cls._decode(row["result_json"]),
             # Scheduling hint only. It grants no authority and is safe for the
             # owner inventory/status projection.
@@ -272,9 +287,12 @@ class Requests:
 
     @staticmethod
     def public(item):
-        return {key: item[key] for key in
+        public = {key: item[key] for key in
                 ("id", "action", "source", "preset", "name", "model", "account", "from_account", "state",
                  "created_at", "result", "lease_expires_at")}
+        if item["action"] == "settings":
+            public["effort"] = item["effort"]
+        return public
 
     @staticmethod
     def _switch(source, body, current_account, resumable):
@@ -293,11 +311,11 @@ class Requests:
             raise ValueError("This session already runs under this account")
         return account, current_account
 
-    def create(self, source, body, *, enabled_agents, resumable, current_account=None):
-        if not isinstance(body, dict) or set(body) - {"action", "preset", "name", "model", "account"}:
+    def create(self, source, body, *, enabled_agents, resumable, current_account=None, conversation=None):
+        if not isinstance(body, dict) or set(body) - {"action", "preset", "name", "model", "account", "effort"}:
             raise ValueError("Invalid request fields")
         action = body.get("action")
-        if action not in ("create", "restart", "switch_account"):
+        if action not in ("create", "restart", "switch_account", "settings"):
             raise ValueError("Invalid session action")
         account = from_account = None
         if action == "switch_account":
@@ -305,6 +323,18 @@ class Requests:
         elif "account" in body:
             raise ValueError("Only an account switch names an account")
         model = self._optional_model(body.get("model"))
+        effort = body.get("effort")
+        if action == "settings":
+            if source["agent"] not in SETTINGS_AGENTS or not conversation:
+                raise ValueError("Settings changes require an exact conversation for a supported agent")
+            if set(body) - {"action", "model", "effort"}:
+                raise ValueError("Settings requests specify only a model or reasoning effort")
+            if "effort" in body and (not isinstance(effort, str) or effort not in SETTINGS_EFFORTS):
+                raise ValueError("Unsupported reasoning effort")
+            if ("model" in body and model is None) or (model is None and effort is None):
+                raise ValueError("Specify a model or reasoning effort")
+        elif "effort" in body:
+            raise ValueError("Only a settings request selects a reasoning effort")
         if action == "switch_account":
             preset, name = source["agent"], None
         elif action == "create":
@@ -343,9 +373,9 @@ class Requests:
                 raise ValueError("Too many active requests for this session")
             self._db.execute(
                 "INSERT INTO session_requests "
-                "(id, action, source_json, preset, requested_name, model, account, from_account, state, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-                (request_id, action, source_json, preset, name, model, account, from_account, now))
+                "(id, action, source_json, preset, requested_name, model, account, from_account, effort, conversation, state, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (request_id, action, source_json, preset, name, model, account, from_account, effort, conversation, now))
             row = self._db.execute("SELECT * FROM session_requests WHERE id = ?",
                                    (request_id,)).fetchone()
         return self._row(row)
@@ -430,7 +460,7 @@ class Requests:
             if (row["state"] != "claimed" or row["claim_nonce"] != claim_nonce
                     or row["claim_expires_at"] <= now):
                 return None
-            state = "approved" if approve else "rejected"
+            state = ("settings_approved" if row["action"] == "settings" else "approved") if approve else "rejected"
             terminal_at = None if approve else now
             self._db.execute(
                 "UPDATE session_requests SET state = ?, decision = ?, "
@@ -447,7 +477,7 @@ class Requests:
         with self._transaction():
             self._prune_locked(now)
             rows = self._db.execute(
-                "SELECT * FROM session_requests WHERE state = 'approved' "
+                "SELECT * FROM session_requests WHERE state IN ('approved', 'settings_approved') "
                 "ORDER BY created_at, id").fetchall()
         return [self._row(row) for row in rows]
 
@@ -456,8 +486,8 @@ class Requests:
         with self._transaction():
             self._prune_locked(now)
             changed = self._db.execute(
-                "UPDATE session_requests SET state = 'executing' "
-                "WHERE id = ? AND state = 'approved'", (request_id,)).rowcount
+                "UPDATE session_requests SET state = CASE WHEN action = 'settings' THEN 'settings_executing' ELSE 'executing' END "
+                "WHERE id = ? AND state IN ('approved', 'settings_approved')", (request_id,)).rowcount
             if changed != 1:
                 return None
             row = self._db.execute("SELECT * FROM session_requests WHERE id = ?",
@@ -472,7 +502,7 @@ class Requests:
         with self._transaction():
             changed = self._db.execute(
                 "UPDATE session_requests SET state = ?, result_json = ?, terminal_at = ? "
-                "WHERE id = ? AND state = 'executing'",
+                "WHERE id = ? AND state IN ('executing', 'settings_executing')",
                 (state, self._encode(value), now, request_id)).rowcount
             if changed != 1:
                 return None

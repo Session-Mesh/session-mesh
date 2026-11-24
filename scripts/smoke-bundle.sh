@@ -244,7 +244,7 @@ try {
   mcp.stdin.write(JSON.stringify({jsonrpc: '2.0', id: 2, method: 'tools/list', params: {}}) + '\n');
   const listed = await until('MCP tools', async () => replies.find(reply => reply.id === 2));
   assert.deepEqual(listed.result?.tools?.map(tool => tool.name).sort(),
-    ['agent_guide_read', 'demo', 'mail', 'session', 'whiteboard'], JSON.stringify(listed));
+    ['agent_guide_read', 'control', 'demo', 'mail', 'session', 'whiteboard'], JSON.stringify(listed));
   mcp.stdin.write(JSON.stringify({jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
     name: 'mail', arguments: {action: 'describe'},
   }}) + '\n');

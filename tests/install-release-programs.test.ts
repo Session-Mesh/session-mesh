@@ -31,6 +31,7 @@ describe('a release without a bundle for this platform', () => {
       assert.equal(mode(path.join(release, 'bin', program)), 0o755);
     }
     assert.equal(fs.readFileSync(path.join(release, 'app/server.py'), 'utf8'), '# server of v1.0.0\n');
+    assert.equal(fs.readlinkSync(path.join(release, 'app/bin/mesh-platform')), '../../bin/mesh-platform');
     assert.equal(fs.readlinkSync(path.join(release, 'app/bin/mesh-board-mcp')), '../../bin/mesh-board-mcp', 'agents find the release\'s board');
     assert.equal(fs.readlinkSync(path.join(release, 'app/bin/work-read')), '../../bin/work-read', 'the web server finds the release\'s work-read');
     assert.equal(fs.readFileSync(path.join(release, 'app/bin/work-read'), 'utf8'), 'v1.0.0 work-read');

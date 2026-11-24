@@ -727,10 +727,11 @@ export function createChooserGate(): ChooserGate {
 
 type SessionActionRequest = Readonly<{
   id: string;
-  action: "create" | "restart" | "switch_account";
+  action: "create" | "restart" | "switch_account" | "settings";
   state: "pending" | "claimed";
   preset: string | null;
   model: string | null;
+  effort?: string | null;
   lease_expires_at?: number | null;
   source: Readonly<{ id: string }>;
   // switch_account: the account ids, and their labels as the server knows them
@@ -761,6 +762,13 @@ function describeSessionRequest(request: SessionActionRequest): string {
     return translate("paneActions.sessionRequest.switchAccount", { agent: request.source.id,
       from: accountName(request.from_account as string, request.from_label),
       to: accountName(request.account as string, request.account_label) });
+  }
+  if (request.action === "settings") {
+    if (request.effort) {
+      return translate(request.model ? "paneActions.sessionRequest.restartWithSettings"
+        : "paneActions.sessionRequest.restartWithEffort", {...params, effort: request.effort});
+    }
+    return translate("paneActions.sessionRequest.restartWithSelectedModel", params);
   }
   if (request.action === "restart") {
     return request.model ? translate("paneActions.sessionRequest.restartWithModel", params)
@@ -801,9 +809,14 @@ export function createSessionRequestGate(ports: Readonly<{
     const switchNames = request.action !== "switch_account"
       || (typeof request.account === "string" && request.account.length > 0
         && typeof request.from_account === "string" && request.from_account.length > 0);
+    const settings = request.action !== "settings"
+      || ((request.model === null || typeof request.model === "string")
+        && (request.effort === null || typeof request.effort === "string")
+        && Boolean(request.model || request.effort));
     return typeof request.id === "string" && request.id.length > 0
-      && (request.action === "create" || request.action === "restart" || request.action === "switch_account")
-      && switchNames
+      && (request.action === "create" || request.action === "restart"
+        || request.action === "switch_account" || request.action === "settings")
+      && switchNames && settings
       && (request.state === "pending" || request.state === "claimed") && !!request.source
       && typeof request.source.id === "string";
   };

@@ -218,7 +218,7 @@ let test_tools () =
   in
   Alcotest.(check (list string))
     "Deck group tools and the standalone guide"
-    [ "whiteboard"; "demo"; "mail"; "session"; "agent_guide_read" ]
+    [ "whiteboard"; "demo"; "mail"; "session"; "control"; "agent_guide_read" ]
     names;
   let invalid_open =
     Mcp_kit_stdio.serve_session_line session
@@ -481,6 +481,7 @@ let group_catalogs =
         "create_request"; "restart_request"; "action_status"; "accounts";
         "account_switch_request";
       ] );
+    ("control", [ "status"; "settings_request" ]);
   ]
 
 (* Bind a socket that must never be contacted while inspecting or rejecting a

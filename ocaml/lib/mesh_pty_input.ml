@@ -16,6 +16,7 @@ type t = {
   stopped : unit Eio.Promise.t;
   stop : unit Eio.Promise.u;
   mutable bytes : int;
+  mutable writing : bool;
   mutable dropping : bool;
   mutable closed : bool;
 }
@@ -29,9 +30,12 @@ let create name =
     stopped;
     stop;
     bytes = 0;
+    writing = false;
     dropping = false;
     closed = false;
   }
+
+let pending t = t.writing || t.bytes > 0 || not (Queue.is_empty t.frames)
 
 let close t =
   if not t.closed then (
@@ -174,7 +178,9 @@ let run t clock sink =
         ignore (Queue.take t.frames);
         t.bytes <- t.bytes - 1;
         if Queue.is_empty t.frames then t.dropping <- false;
-        Eio.Flow.write sink [ Cstruct.of_string "\r" ];
+        t.writing <- true;
+        Fun.protect ~finally:(fun () -> t.writing <- false) (fun () ->
+            Eio.Flow.write sink [ Cstruct.of_string "\r" ]);
         Eio.Fiber.yield ();
         write ()
     | Some (Data data) ->

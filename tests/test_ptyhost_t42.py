@@ -327,7 +327,7 @@ async def test_synthetic_command_publication_is_atomic(emitting, monkeypatch):
 
     monkeypatch.setattr(Path, "write_bytes", interrupted_write)
     await emit(home, 0, b"FIRST-LAST\n")
-    assert await read_until(reader, b"LAST") == b"FIRST-LAST\r\n"
+    assert await read_until(reader, b"LAST\r\n") == b"FIRST-LAST\r\n"
 
 
 async def test_final_output_precedes_exit_and_name_reuse(emitting):

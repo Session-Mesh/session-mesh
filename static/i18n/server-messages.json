@@ -556,6 +556,38 @@
     "key": "server.agentDisabledInConfig"
   },
   {
+    "pattern": "^Session settings helper busy$",
+    "key": "server.sessionSettingsBusy"
+  },
+  {
+    "pattern": "^Session settings helper unavailable$",
+    "key": "server.sessionSettingsUnavailable"
+  },
+  {
+    "pattern": "^Settings changes require a supported agent, an exact conversation and an allowed working directory$",
+    "key": "server.sessionSettingsNeedsConversation"
+  },
+  {
+    "pattern": "^Requesting conversation or working directory is no longer available$",
+    "key": "server.sessionSettingsContextUnavailable"
+  },
+  {
+    "pattern": "^Requesting agent, conversation or working directory changed$",
+    "key": "server.sessionSettingsContextChanged"
+  },
+  {
+    "pattern": "^Invalid session settings helper response$",
+    "key": "server.sessionSettingsBadReply"
+  },
+  {
+    "pattern": "^The agent may have received a stop signal\\. Check the session before retrying$",
+    "key": "server.agentStopUncertain"
+  },
+  {
+    "pattern": "^Unread launch arguments prevent a settings change$",
+    "key": "server.settingsUnreadArguments"
+  },
+  {
     "pattern": "^Agent to resume unavailable$",
     "key": "server.resumeAgentUnavailable"
   },
@@ -822,5 +854,25 @@
   {
     "pattern": "^WebSocket expected$",
     "key": "server.websocketExpected"
+  },
+  {
+    "pattern": "^The PTY host cannot safely bind the agent process; nothing was stopped$",
+    "key": "server.settingsHostUnbound"
+  },
+  {
+    "pattern": "^The requesting foreground agent is unavailable; nothing was stopped$",
+    "key": "server.settingsAgentUnavailable"
+  },
+  {
+    "pattern": "^The agent process identity is unavailable; nothing was stopped$",
+    "key": "server.settingsIdentityUnavailable"
+  },
+  {
+    "pattern": "^The agent cannot be safely stopped alone; nothing was stopped$",
+    "key": "server.settingsStopUnbound"
+  },
+  {
+    "pattern": "^Settings approval invalidated during upgrade$",
+    "key": "server.settingsApprovalInvalidated"
   }
 ]
