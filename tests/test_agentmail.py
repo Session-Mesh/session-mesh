@@ -434,3 +434,72 @@ def test_v2_migration_preserves_claim_completion_after_messages_were_acked(mailb
     completed = agentmail.mark_wake_injected(beta, "3" * 32, [beta])
     assert completed["state"] == "injected"
     assert json.loads(mailbox.read_text(encoding="utf-8"))["version"] == 4
+
+
+@pytest.mark.parametrize("version,wake_state", [(2, "pending"), (3, "pending"), (3, "claimed")])
+def test_large_legacy_wake_migrates_without_losing_mail_or_claim_identity(mailbox, version, wake_state):
+    alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
+    count = agentmail.MAX_INBOX + 8
+    messages = [{"id": f"{seq:032x}", "conversation_id": "a" * 32, "source": alpha,
+                 "target": beta, "kind": "message", "text": f"message {seq}",
+                 "created": float(seq + 4), "seq": seq} for seq in range(1, count + 1)]
+    wake = {"notification_id": "f" * 32, "target": beta, "from_seq": 1,
+            "through_seq": count, "state": wake_state}
+    raw = {"version": version, "next_seq": count + 1, "messages": messages, "wakes": [wake]}
+    if version == 3:
+        wake["count"] = count
+        raw["consent_requests"] = []
+        raw["always_policies"] = [{"id": "e" * 32, "source": alpha, "target": beta, "created": 3.0}]
+    mailbox.parent.mkdir(parents=True)
+    mailbox.write_text(json.dumps(raw), encoding="utf-8")
+
+    if wake_state == "claimed":
+        original = mailbox.read_bytes()
+        with pytest.raises(agentmail.MailStorageError, match="explicit recovery"):
+            agentmail.claim_wake(beta, [alpha, beta])
+        assert mailbox.read_bytes() == original
+        return
+    first = agentmail.claim_wake(beta, [alpha, beta])
+    saved = json.loads(mailbox.read_text(encoding="utf-8"))
+    assert saved["version"] == 4
+    assert saved["messages"] == messages
+    if version == 2:
+        assert first is None
+        assert saved["wakes"] == []
+        assert len(saved["consent_requests"]) == count
+    else:
+        assert first["notification_id"] == wake["notification_id"]
+        assert first["count"] == agentmail.MAX_INBOX
+        assert agentmail.claim_wake(beta, [alpha, beta]) == first
+        assert [item["count"] for item in saved["wakes"]] == [agentmail.MAX_INBOX, 8]
+        assert [seq for item in saved["wakes"] for seq in item["seqs"]] == list(range(1, count + 1))
+        agentmail.mark_wake_injected(beta, first["notification_id"], [alpha, beta])
+        second = agentmail.claim_wake(beta, [alpha, beta])
+        assert second["count"] == 8
+        assert agentmail.claim_wake(beta, [alpha, beta]) == second
+        agentmail.mark_wake_injected(beta, second["notification_id"], [alpha, beta])
+        assert agentmail.claim_wake(beta, [alpha, beta]) is None
+    assert not list(mailbox.parent.glob(mailbox.name + ".corrupt*"))
+
+
+def test_large_legacy_wake_over_batch_limit_preserves_original_file(mailbox):
+    alpha, beta = identity("alpha", 1.0), identity("beta", 2.0)
+    count = agentmail.MAX_INBOX + 1
+    messages = [{"id": f"{seq:032x}", "conversation_id": "a" * 32, "source": alpha,
+                 "target": beta, "kind": "message", "text": f"message {seq}",
+                 "created": float(seq + 4), "seq": seq} for seq in range(1, count + 1)]
+    wakes = [{"notification_id": f"{seq + 1000:032x}", "target": beta, "from_seq": 1,
+              "through_seq": 1, "count": 1, "state": "injected"}
+             for seq in range(agentmail.MAX_WAKE_BATCHES - 1)]
+    wakes.append({"notification_id": "f" * 32, "target": beta, "from_seq": 1,
+                  "through_seq": count, "count": count, "state": "pending"})
+    raw = {"version": 3, "next_seq": count + 1, "messages": messages, "wakes": wakes,
+           "consent_requests": [], "always_policies": [
+               {"id": "e" * 32, "source": alpha, "target": beta, "created": 3.0}]}
+    mailbox.parent.mkdir(parents=True)
+    mailbox.write_text(json.dumps(raw), encoding="utf-8")
+    original = mailbox.read_bytes()
+    with pytest.raises(agentmail.MailStorageError, match="Too many legacy wake batches"):
+        agentmail.claim_wake(beta, [alpha, beta])
+    assert mailbox.read_bytes() == original
+    assert not list(mailbox.parent.glob(mailbox.name + ".corrupt*"))
