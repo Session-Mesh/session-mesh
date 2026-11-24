@@ -608,6 +608,7 @@ ASKING_PAGE = f"""<!doctype html><button id='go'>go</button><p id='caps'></p><sc
   }});
   document.getElementById('go').addEventListener('click', () => {{
     window.clicks++;
+    if (document.testClickNonce) parent.postMessage({{testClickAck: document.testClickNonce, clicks: window.clicks}}, '*');
     for (const m of window.MSGS || []) parent.postMessage(m, '*');
   }});
 </script>"""
@@ -694,7 +695,9 @@ async def post_on_click(page, messages):
       if (!source) throw new Error('document frame unavailable before click');
       const witness = {nonce, acknowledged: false, source};
       witness.listener = (event) => {
-        if (event.source === source && event.data?.testClickAck === nonce) {
+        // A removed iframe's WindowProxy may no longer be available at delivery.
+        // The per-document random nonce still binds an acknowledgement to that click.
+        if ((event.source === source || event.source === null) && event.data?.testClickAck === nonce) {
           witness.acknowledged = true;
           witness.clicks = event.data.clicks;
         }
@@ -708,9 +711,6 @@ async def post_on_click(page, messages):
           window.MSGS = {messages};
           window.clicks = 0;
           document.testClickNonce = {json.dumps(nonce)};
-          document.querySelector('#go').addEventListener('click', () => {{
-            parent.postMessage({{testClickAck: document.testClickNonce, clicks: window.clicks}}, '*');
-          }}, {{once: true}});
         }}""")
         await focus_frame(page)
         # Synchronize the opaque child's painted surface before physical input.
