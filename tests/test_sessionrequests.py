@@ -19,6 +19,27 @@ def store(tmp_path, *, clock=lambda: 10.0):
     return sessionrequests.Requests(tmp_path / "session-requests.sqlite3", clock=clock)
 
 
+def test_launch_options_and_settings_keep_distinct_approved_states(tmp_path):
+    requests = store(tmp_path)
+    launch = requests.create(source(), {"action": "create", "preset": "codex"},
+                             enabled_agents={"codex"}, resumable={"codex"})
+    settings = requests.create(source(name="beta"), {"action": "settings", "effort": "high"},
+                               enabled_agents={"codex"}, resumable={"codex"}, conversation="conversation-id")
+    for entry in (launch, settings):
+        claim = requests.claim(entry["id"], "a" * 32)
+        assert requests.decide(entry["id"], True, claim["claim_nonce"],
+                               approved_options=["--model", "test"], options_revision="rev")["state"] == "approved"
+    assert {item["id"] for item in requests.approved()} == {launch["id"], settings["id"]}
+    with sqlite3.connect(tmp_path / "session-requests.sqlite3") as db:
+        rows = dict(db.execute("SELECT action, state FROM session_requests"))
+    assert rows == {"create": "approved_options_v1", "settings": "settings_approved"}
+    assert requests.begin_execution(launch["id"])["state"] == "executing"
+    assert requests.begin_execution(settings["id"])["state"] == "executing"
+    with sqlite3.connect(tmp_path / "session-requests.sqlite3") as db:
+        rows = dict(db.execute("SELECT action, state FROM session_requests"))
+    assert rows == {"create": "executing", "settings": "settings_executing"}
+
+
 def test_agent_request_is_pending_and_only_visible_to_its_incarnation(tmp_path):
     requests = store(tmp_path)
     made = requests.create(source(), {"action": "create", "preset": "claude",
