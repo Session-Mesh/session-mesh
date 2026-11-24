@@ -77,12 +77,14 @@ while IFS= read -r line; do printf '%s\\n' "$line" >> '${log('input.log')}'; don
 `, {mode: 0o755});
   pathEnv = `${bin}:${process.env.PATH}`;
   mesh = await startMesh('opencode-v2-presets-', {PATH: pathEnv, MESH_BIN_DIR: meshBin, OPENCODE_API_KEY: MARKER,
-    XDG_DATA_HOME: dataHome});
-  // OpenCode 2's own store, where Mesh checks the conversation to resume and reads the one a process was started with.
-  fs.mkdirSync(path.join(dataHome, 'opencode'));
-  const store = createStoreV2(path.join(dataHome, 'opencode', 'opencode.db'));
-  addConversationV2(store, CONVERSATION, fs.realpathSync(mesh.home), {updated: Date.now() - 3_600_000});
-  store.close();
+    XDG_DATA_HOME: dataHome}, where => {
+    // Complete the store before the server's first background History scan.
+    fs.mkdirSync(path.join(dataHome, 'opencode'));
+    const store = createStoreV2(path.join(dataHome, 'opencode', 'opencode.db'));
+    try {
+      addConversationV2(store, CONVERSATION, fs.realpathSync(where.home), {updated: Date.now() - 3_600_000});
+    } finally { store.close(); }
+  });
   host = startHost();
   await until('the PTY host', () => fs.existsSync(path.join(mesh.home, 'run', 'session-mesh', 'ptyhost.sock')));
 });
