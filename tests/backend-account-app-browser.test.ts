@@ -22,7 +22,7 @@ import {REPO, removeScratch, startMesh, type Scratch} from './mesh-server-lib.ts
 import {chromiumLaunchOptions, READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
 
 const HELPER = process.env.MESH_BACKEND_ACCOUNT_HELPER || path.join(REPO, 'ocaml/_build/default/bin/mesh_profile_main.exe');
-const PLATFORM = path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
+const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD || path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
 const CHROMIUM = process.env.MESH_CHROMIUM || '';
 const required = process.env.MESH_REQUIRE_BACKEND_ACCOUNT_APP === '1';
 const skip = !CHROMIUM

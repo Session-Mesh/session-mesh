@@ -184,6 +184,7 @@ const ACCEPTED_STATUS = `
   POST /api/agent-mail/consent/{request_id}/decision 400
   POST /api/agent-mail/consent/revoke 400
   GET /api/accounts/profiles 400 invalid-request
+  POST /api/accounts/profiles/create 400 invalid-request
   GET /api/accounts/consent 400 invalid-request
   POST /api/accounts/consent/set-global 400 invalid-request
   POST /api/accounts/consent/set-pair 400 invalid-request
