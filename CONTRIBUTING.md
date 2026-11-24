@@ -203,6 +203,8 @@ run on the pull request before enqueueing. A check that cannot establish its inp
 Supporting a merge queue does not enable one or automatically enqueue a backport. Backports remain
 subject to the review and branch rules above. CodeRabbit's status is advisory under the current
 rules; the queue support does not make it a required check.
+Maintainers configuring the maintenance queue must follow its [group size and maintainer-list
+prerequisites](docs/development.md#backports-to-the-maintenance-branch).
 
 ### How a pull request is merged
 

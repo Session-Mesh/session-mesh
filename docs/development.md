@@ -260,9 +260,18 @@ that the changes are the same.
 **Preparing a maintenance merge queue.** Before requiring a queue on `release/latest`, land the
 `merge_group` workflow support and its policy and CLA checkers on that branch through the backport
 process. Confirm that every required check runs on a merge group, including a failure when the native
-host job fails; `tests/merge-queue-workflow.test.ts` exercises the queue steps. Then maintainers can
-configure a queue with rebase merges and verify it on a backport. This preparation does not itself
-change branch rules or enqueue pull requests.
+host job fails; `tests/merge-queue-workflow.test.ts` exercises the queue steps. Configure rebase
+merges, build concurrency of **1**, and a maximum of **1** pull request to merge per group. The
+policy checker identifies and revalidates one pull request per merge group; larger or concurrent
+groups must not be enabled with this implementation. Verify the queue on a backport. This
+preparation does not itself change branch rules or enqueue pull requests.
+
+Before enqueueing, ensure that `tools/cla-check/MAINTAINERS` on the maintenance **base branch**
+already contains the queue committer's numeric-ID GitHub noreply address. The checker derives the
+login-only committer alias from that base list; a change in the queued pull request cannot grant
+itself authority. If the entry is missing, first backport the relevant maintainer register change
+through the register backport workflow and verify it has landed on the base. This alias applies to
+the committer only; commit authors must still satisfy the CLA rules.
 
 CodeRabbit is advisory under the current branch rules. Automatic enqueueing needs a separate,
 fail-closed policy for its review on the exact pull-request head and must not bypass the required
