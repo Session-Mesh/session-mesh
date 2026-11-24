@@ -290,7 +290,7 @@ describe('the public CI as committed', () => {
       const at = lines.findIndex((line) => line.key === 'name' && line.value.startsWith('Node browser tests'));
       assert.ok(at >= 0, 'no Node browser tests step');
       const step = stepOf(lines, at);
-      assert.deepEqual(step.filter((line) => line.key === 'if'), [], 'the step must run on every shard');
+      assert.deepEqual(step.filter((line) => line.key === 'if').map(line => line.value), ["matrix.kind == 'node'"], 'the step runs on every Node shard');
       const body = step.map((line) => line.raw).join('\n');
       for (const needle of ['MESH_REQUIRE_BROWSER=1', 'MESH_PYTHON="$(command -v python)"',
         "grep -lZE 'MESH_CHROMIUM|terminal-browser-lib' -- tests/*.test.ts", 'xargs -0 -r grep -LZ MESH_NATIVE_PTYHOST --',
@@ -302,6 +302,48 @@ describe('the public CI as committed', () => {
       const source = (file: string): string => fs.readFileSync(path.join(ROOT, 'tests', file), 'utf8');
       const needsChromium = tests.filter((file) => /MESH_CHROMIUM|terminal-browser-lib/.test(source(file)));
       assert.ok(needsChromium.length >= 16, `only ${needsChromium.length} Chromium tests found: the discovery grep is broken`);
+    });
+
+    test(`${name} retains the required browser checks and partitions both test sets exactly once`, () => {
+      const jobs = jobBlocks(parseLines(text));
+      const body = (name: string) => jobs.find(job => job.name === name)!.block.map(line => line.raw).join('\n');
+      const parts = body('browser_parts'), gate = body('browser');
+      assert.match(parts, /shard: \[0, 1, 2, 3\]/);
+      assert.match(parts, /kind: \[python, node\]/);
+      assert.match(parts, /if: matrix\.kind == 'python'/);
+      assert.match(parts, /if: matrix\.kind == 'node'/);
+      assert.match(gate, /name: browser tests \(Chromium, shard \$\{\{ matrix\.shard \}\} of 4\)/);
+      assert.match(gate, /needs: \[native, browser_parts\]/);
+      assert.match(gate, /needs\.browser_parts\.result/);
+      assert.match(gate, /\"\$PARTS_RESULT\" != success/);
+      assert.match(gate, /if: \"!cancelled\(\)\"/);
+      const guard = (gate + '\n').match(/run: \|\n((?:          .*\n)+)/)?.[1];
+      assert.ok(guard, 'missing required-check guard');
+      for (const [native, parts, expected] of [['success', 'success', 0], ['failure', 'success', 1],
+        ['success', 'failure', 1], ['success', 'skipped', 1], ['success', 'cancelled', 1]]) {
+        const result = spawnSync('bash', ['-c', guard], {env: {...process.env,
+          NATIVE_RESULT: String(native), PARTS_RESULT: String(parts)}});
+        assert.equal(result.status, expected, `guard accepted ${native}/${parts}`);
+      }
+      const files = fs.readdirSync(path.join(ROOT, 'tests')).filter(file => file.endsWith('.test.ts'));
+      const read = (file: string) => fs.readFileSync(path.join(ROOT, 'tests', file), 'utf8');
+      const candidates = files.filter(file => /MESH_CHROMIUM|terminal-browser-lib/.test(read(file)))
+        .filter(file => !/MESH_NATIVE_PTYHOST/.test(read(file))).sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+      const shards = Array.from({length: 4}, (_, shard) => candidates.filter((_, index) => index % 4 === shard));
+      assert.ok(shards.every(shard => shard.length > 0));
+      assert.deepEqual(shards.flat().sort(), [...candidates].sort());
+      assert.equal(new Set(shards.flat()).size, candidates.length);
+      // Exercise the exact awk assignment used by the Python step with uneven
+      // weights: all collected files must reach one and only one shard.
+      const collected = '25 tests/a.py\n8 tests/b.py\n7 tests/c.py\n5 tests/d.py\n1 tests/e.py\n';
+      const pythonShards = Array.from({length: 4}, (_, shard) => {
+        const script = `awk -v n=4 -v k=${shard} '{best = 0; for (i = 1; i < n; i++) if (load[i] < load[best]) best = i; load[best] += $1; if (best == k) print $2}'`;
+        const result = spawnSync('bash', ['-c', script], {input: collected, encoding: 'utf8'});
+        assert.equal(result.status, 0);
+        return result.stdout.trim().split('\n').filter(Boolean);
+      });
+      assert.deepEqual(pythonShards.flat().sort(), ['tests/a.py', 'tests/b.py', 'tests/c.py', 'tests/d.py', 'tests/e.py']);
+      assert.equal(new Set(pythonShards.flat()).size, 5);
     });
 
     test(`${name} runs the native catalog ratchet in the job that builds the native host`, () => {
@@ -342,7 +384,7 @@ describe('the public CI as committed', () => {
         'key: native-programs-']) {
         assert.ok(native.includes(needle), `${needle} missing from the native job`);
       }
-      for (const jobName of ['frontend', 'browser']) {
+      for (const jobName of ['frontend', 'browser_parts']) {
         const job = body(jobName);
         for (const needle of ['name: mesh-work-programs-linux-x86_64', 'MESH_WORK_READ_CMD=$RUNNER_TEMP/native-work/work-read',
           'MESH_WORK_WRITE_CMD=$RUNNER_TEMP/native-work/work-write', 'MESH_REQUIRE_WORK_READ=1']) {
@@ -365,7 +407,7 @@ describe('the public CI as committed', () => {
         'test -x native-host/mesh-platform', '            native-host/mesh-platform', 'key: native-programs-v3-']) {
         assert.ok(native.includes(needle), `${needle} missing from the native job`);
       }
-      for (const jobName of ['frontend', 'browser']) {
+      for (const jobName of ['frontend', 'browser_parts']) {
         const job = body(jobName);
         for (const needle of ['MESH_MESH_PLATFORM_CMD=$RUNNER_TEMP/native-work/mesh-platform', 'MESH_REQUIRE_MESH_PLATFORM=1',
           'MESH_REQUIRE_UPDATE_IMAGE=1']) {
@@ -395,7 +437,7 @@ describe('the public CI as committed', () => {
       }
     });
     test(`${name} requires the real account helper for the running-app browser tests`, () => {
-      const browser = jobBlocks(parseLines(text)).find(item => item.name === 'browser');
+      const browser = jobBlocks(parseLines(text)).find(item => item.name === 'browser_parts');
       assert.ok(browser);
       const body = browser.block.map(line => line.raw).join('\n');
       for (const needle of ['"$RUNNER_TEMP/native-work/mesh-profile"',

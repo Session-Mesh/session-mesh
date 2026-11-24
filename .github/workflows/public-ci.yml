@@ -258,20 +258,21 @@ jobs:
           mesh_prepare_test_tmpdir
           python -m pytest -q -m 'not browser'
 
-  browser:
-    name: browser tests (Chromium, shard ${{ matrix.shard }} of 4)
+  browser_parts:
+    name: browser ${{ matrix.kind }} tests (Chromium, shard ${{ matrix.shard }} of 4)
     needs: native
     # A skipped required check counts as passing for the ruleset, and `native` is not itself required:
     # the job runs even when `native` failed or was skipped, and its first step turns that into a red check.
     if: "!cancelled()"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    # The whole browser suite runs serially in about 9 minutes on a fast
-    # workstation: four shards keep each job within the 10-minute target on a runner.
+    # Run the Python and Node halves concurrently. Four shards per half keep
+    # the longest observed Node suite from delaying the Python phase as well.
     strategy:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3]
+        kind: [python, node]
     env:
       SHARDS: 4
       SHARD: ${{ matrix.shard }}
@@ -354,6 +355,7 @@ jobs:
       - name: Install Chromium's system packages
         run: bash .github/scripts/apt-install.sh --playwright-deps chromium
       - name: Browser tests
+        if: matrix.kind == 'python'
         run: |
           chrome="$(find "$HOME/.cache/ms-playwright/" -path '*/chromium-*/chrome-linux*/chrome' -type f | sort -V | tail -1)"
           test -x "$chrome"
@@ -375,8 +377,9 @@ jobs:
       # list is discovered, never typed: every tests/*.test.ts that names MESH_CHROMIUM or imports
       # terminal-browser-lib joins, so a new browser test cannot stay silently skipped. A test that
       # also needs the native ptyhost (MESH_NATIVE_PTYHOST) belongs to the ocaml job or stays
-      # local, outside these shards. Files are dealt out in name order; about 160 s of tests in all.
+      # local, outside these shards. Files are dealt out in name order.
       - name: Node browser tests (this shard's part)
+        if: matrix.kind == 'node'
         run: |
           chrome="$(find "$HOME/.cache/ms-playwright/" -path '*/chromium-*/chrome-linux*/chrome' -type f | sort -V | tail -1)"
           test -x "$chrome"
@@ -402,6 +405,30 @@ jobs:
           # A skipped describe still reports `# skipped 0`: `# pass` is the guard.
           grep -qx '# skipped 0' "$RUNNER_TEMP/node-browser.tap"
           grep -Eqx '# pass [1-9][0-9]*' "$RUNNER_TEMP/node-browser.tap"
+
+  # Preserve the four existing required check names. GitHub reports the
+  # combined matrix result as success only when every Python and Node shard
+  # succeeded; skipped, cancelled and failed parts cannot pass the guard.
+  browser:
+    name: browser tests (Chromium, shard ${{ matrix.shard }} of 4)
+    needs: [native, browser_parts]
+    if: "!cancelled()"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Require every browser test shard
+        env:
+          NATIVE_RESULT: ${{ needs.native.result }}
+          PARTS_RESULT: ${{ needs.browser_parts.result }}
+        run: |
+          if [[ "$NATIVE_RESULT" != success || "$PARTS_RESULT" != success ]]; then
+            echo "Native or browser test matrix did not succeed"
+            exit 1
+          fi
 
   ocaml:
     name: OCaml build, tests and native ptyhost gate
