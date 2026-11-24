@@ -2025,7 +2025,8 @@ Limits of this version:
   exits, a `claude` typed in the same pane runs under the default account.
 - The history panel, "Resume" from the history, and moving in an agent running in another terminal
   only know the default account's folders.
-- Waking Codex with `codex queue` (below) reaches the default Codex home, not an alias's.
+- The opt-in Codex queue wake uses the foreground agent's observed initial home on Linux when it
+  can identify it; otherwise it is withheld. Delivery to a real session remains unverified (below).
 - A new session that an agent requests (and you approve) starts under the default account, even
   when the requesting session runs under an alias.
 - The session list's details for a Claude session under an alias (its conversation id and last
@@ -2112,8 +2113,11 @@ neither read nor written.
 `MESH_CODEX_QUEUE_TIMEOUT_SECONDS` (1 to 60) shortens the limit for tests, and `MESH_CODEX_QUEUE_MAX_TRACKED` (1 to 1024) the number of attempts kept.
 
 Known limits of this wake: one `codex queue` is run per notification (the notifications of one Codex
-turn are not grouped); the conversation is checked again just before the attempt is recorded, not between
-that record and the exec; two servers sharing one configuration folder are not supported for this wake; and
+turn are not grouped). The host, session, foreground agent, conversation and observed initial home and
+runtime are rechecked after the attempt is recorded; a changed or unavailable binding leaves the
+attempt unconfirmed without starting the command. This recheck does not prove the agent's current
+in-process environment and is not atomic with the queue process starting. Two servers sharing one
+configuration folder are not supported for this wake, and
 the `codex` found first on the PATH that sessions get is trusted, as is every directory of that PATH;
 and a wake withheld because every one of the 1024 kept attempts is in doubt is retried like a transport
 failure, so the retry backoff (up to 60 seconds) applies to the wakes of every agent until room exists
