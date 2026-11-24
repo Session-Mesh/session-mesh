@@ -152,6 +152,12 @@ function workResponse(page: Page, op: string) {
   }, { timeout: 35_000 });
 }
 
+// Poll cycles are serialized: a second cycle cannot start until the first finished applying.
+async function completedWorkCycle(page: Page, op: string) {
+  await workResponse(page, op);
+  await workResponse(page, op);
+}
+
 async function signIn(width: number, sent: Sent[], realPoll = false): Promise<Page> {
   const phone = width < 600;
   const page = await mesh.signIn({ width, height: phone ? 844 : 900 }, undefined, watched => {
@@ -634,9 +640,17 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     });
     await page.locator('.work-rail-refresh-status').waitFor({ state: 'visible', timeout: 35_000 });
     await page.unrouteAll({ behavior: 'wait' });
-    const railRead = page.waitForRequest(request => {
+    await page.locator('.work-refresh').evaluate(button => {
+      button.addEventListener('click', () => { (window as any).__testRefreshClick = Date.now(); }, {capture: true, once: true});
+    });
+    const railRead = page.waitForRequest(async request => {
       if (!request.url().endsWith('/api/work/v1')) return false;
-      try { return JSON.parse(request.postData() ?? '{}').op === 'projects'; } catch { return false; }
+      try {
+        if (JSON.parse(request.postData() ?? '{}').op !== 'projects') return false;
+        const clickedAt = await page.evaluate(() => (window as any).__testRefreshClick as number | undefined);
+        const started = request.timing().startTime;
+        return clickedAt !== undefined && started >= clickedAt && started - clickedAt < 5000;
+      } catch { return false; }
     }, { timeout: 5000 });
     await page.locator('.work-refresh').click();
     await railRead;
@@ -707,7 +721,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     });
     await page.locator('.work-qmore-button').click();
     await pending;
-    const railRead = workResponse(page, 'projects');
+    const railRead = completedWorkCycle(page, 'projects');
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await railRead;
     release();
@@ -851,7 +865,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
         category.products.push({ ...product, id: `new-${width}` });
         await route.fulfill({ response, json: body });
       });
-      await workResponse(page, 'projects');
+      await completedWorkCycle(page, 'projects');
       assert.equal(await original.evaluate(node => node === document.activeElement), true);
       assert.equal(await page.locator(`.work-overview-product[data-product="new-${width}"]`).count(), 0);
       await original.blur();
@@ -890,7 +904,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
       await page.locator('#work-tab-board').blur();
       fs.appendFileSync(eventsPath,
         JSON.stringify({ ts: '2026-11-09T09:59:00Z', task: item.first, type: 'set', field: 'title', to: `Pending ${width}` }) + '\n');
-      await workResponse(page, 'projects');
+      await completedWorkCycle(page, 'projects');
       await page.locator('#work-tab-questions').click();
       assert.equal(await form.getAttribute('aria-busy'), 'true');
       assert.equal(await field.inputValue(), 'Keep this answer on failure');
