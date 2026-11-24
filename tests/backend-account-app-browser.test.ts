@@ -213,9 +213,9 @@ async function fixture() {
     const page = await context.newPage();
     page.on('pageerror', error => problems.push(String(error)));
     page.on('console', message => { if (/Content Security Policy|violat/i.test(message.text())) problems.push(message.text()); });
-    await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
     const bundle = page.waitForResponse(response => new URL(response.url()).pathname === '/static/pane-actions.js');
-    await page.goto(`${mesh.base}/`);
+    // Login already redirects to the app; navigating again can start it twice.
+    await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
     assert.equal(await page.locator('link[href^="/static/backend-account-panel.css?v="]').count(), 1, 'the panel stylesheet is cache-versioned');
     assert.equal((await (await bundle).body()).toString(), fs.readFileSync(path.join(REPO, 'static/pane-actions.js'), 'utf8'), 'served generated bundle is the current worktree asset');
     if (started) {
