@@ -183,6 +183,12 @@ export function createAcknowledgedInput(ports: {
     get pendingHumanBytes() {
       return pending.reduce((sum, frame) => sum + (frame.reportOnly ? 0 : frame.data.length), 0);
     },
+    get retainedText() {
+      const decoder = new TextDecoder();
+      let text = "";
+      for (const frame of pending) if (!frame.reportOnly) text += decoder.decode(frame.data, {stream: true});
+      return text + decoder.decode();
+    },
     connect(created: number, id: string, supported: boolean) {
       if (ports.version === 2) return;
       if (state === "halted") return;

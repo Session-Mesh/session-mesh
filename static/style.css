@@ -392,6 +392,10 @@ dialog input:focus { outline: none; border-color: var(--accent); }
 .p-input-review[hidden], .p-input-review .p-input-retry[hidden],
 .p-input-review .p-input-discard[hidden] { display: none; }
 .p-input-state { flex: 1 1 150px; min-width: 0; overflow-wrap: anywhere; }
+.p-input-drafts { flex: 1 0 100%; min-width: 0; }
+.p-input-drafts label { display: block; margin-top: 6px; }
+.p-input-drafts textarea { display: block; width: 100%; min-height: 4em; max-height: 12em;
+  resize: vertical; white-space: pre-wrap; }
 .p-unread, .p-board-hint { display: none; }
 .p-actions { flex: none; flex-wrap: nowrap; gap: 4px; }
 .p-actions [data-act="close"] { display: none; }

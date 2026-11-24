@@ -181,6 +181,7 @@
   "conn.sessionEnded": "session terminée",
   "conn.unsentInput": "saisie inachevée conservée : envoie ou annule-la avant les messages agents",
   "conn.inputRetained": "{count} octets de saisie conservés ({state}) ; vérifiez avant de réessayer.",
+  "conn.inputCopyDraft": "Texte conservé (sélectionnez et copiez ; il a peut-être déjà été livré)",
   "conn.inputRetry": "Réessayer la saisie",
   "conn.inputReconnect": "Reconnecter la saisie",
   "conn.inputDiscard": "Abandonner la saisie",

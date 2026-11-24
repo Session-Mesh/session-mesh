@@ -896,6 +896,31 @@ class Pane {
     // Retained input needing review, including from an old attachment, still needs a choice.
     const reviewPending = entries.some(({ input }) => input !== current || input.state !== "sending");
     container.hidden = !reviewPending && current?.state !== "halted" && !obsolete;
+    const drafts = $(".p-input-drafts", container);
+    const texts = [];
+    if (!container.hidden && this.conn?.name) {
+      const prefix = `${this.conn.name}\0`;
+      for (const [key, entry] of this.inputAcks) {
+        if (!key.startsWith(prefix) || !entry.input.pendingHumanBytes) continue;
+        texts.push(entry.input.retainedText);
+      }
+    }
+    const existing = [...drafts.querySelectorAll("textarea")];
+    if (drafts.dataset.session !== (this.conn?.name ?? "") || existing.length !== texts.length ||
+        existing.some((field, i) => field.value !== texts[i])) {
+      drafts.replaceChildren();
+      drafts.dataset.session = this.conn?.name ?? "";
+      for (const text of texts) {
+        const label = document.createElement("label");
+        label.textContent = t("conn.inputCopyDraft");
+        const textarea = document.createElement("textarea");
+        textarea.readOnly = true;
+        textarea.spellcheck = false;
+        textarea.value = text;
+        label.append(textarea);
+        drafts.append(label);
+      }
+    }
     if (container.hidden) return;
     $(".p-input-discard", container).textContent = t(entries.some((entry) =>
       entry.input.state === "uncertain") ? "conn.inputDiscardUnknown" : "conn.inputDiscard");
