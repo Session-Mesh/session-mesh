@@ -1247,7 +1247,301 @@ let missing_or_aliased_mesh_root () =
       let alias = Filename.concat root "alias" in
       Unix.symlink root alias;
       refusal alias "migration-unsafe-configuration-root";
-      no_target root)
+       no_target root)
+
+let first_create_interruption () =
+  let prelink_fixture f =
+    fixture (fun root ->
+        let stage =
+          Filename.concat root ".backend-profiles-123-0123456789abcdef.tmp"
+        and content = "{\"version\":1,\"profiles\":[]}\n" in
+        let original = legacy [] in
+        write (source root) original;
+        write stage content;
+        let directory =
+          Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
+        in
+        Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+            M.write_first_intent ~root ~directory ~stage ~content);
+        f root stage content original)
+  in
+  prelink_fixture (fun root stage _ original ->
+      refusal root "migration-target-exists";
+      Alcotest.(check bool) "create cannot replay pending first intent" true
+        (M.create_profile ~root ~expected_revision:None ~profile:`Null
+        = Error "profile-publication-uncertain");
+      let status, response = run root [ "recover-create" ] in
+      Alcotest.(check bool) "explicit prelink abort" true
+        (status = Unix.WEXITED 0);
+      Alcotest.(check string) "path-free prelink reply"
+        {|{"version":1,"ok":true,"data":{"outcome":"unpublished-aborted"}}|}
+        (Yojson.Safe.to_string response);
+      Alcotest.(check bool) "unpublished target stays absent" false
+        (Sys.file_exists (target root));
+      Alcotest.(check bool) "verified stage retired" false
+        (Sys.file_exists stage);
+      Alcotest.(check bool) "verified intent retired" false
+        (Sys.file_exists (Filename.concat root ".backend-profiles.create-intent"));
+      Alcotest.(check string) "legacy bytes retained" original
+        (read (source root));
+      let config = Filename.concat root "config"
+      and history = Filename.concat root "history" in
+      Unix.mkdir config 0o700;
+      Unix.mkdir history 0o700;
+      let requested =
+        `Assoc
+          [
+            ("id", s "explicit-new-request");
+            ("label", s "Explicit");
+            ("backend", s "claude");
+            ( "roots",
+              `Assoc [ ("config", s config); ("history", s history) ] );
+          ]
+      in
+      Alcotest.(check bool) "only an explicit new request can publish" true
+        (Result.is_ok
+           (M.create_profile ~root ~expected_revision:None ~profile:requested));
+      Alcotest.(check bool) "new request published" true
+        (Sys.file_exists (target root)));
+  prelink_fixture (fun root stage content original ->
+      let intent = Filename.concat root ".backend-profiles.create-intent" in
+      Unix.unlink intent;
+      write intent "not an intent";
+      let status, _ = run root [ "recover-create" ] in
+      Alcotest.(check bool) "malformed intent refuses" true
+        (status = Unix.WEXITED 1);
+      Alcotest.(check string) "malformed intent stays" "not an intent" (read intent);
+      Alcotest.(check string) "stage unchanged" content (read stage);
+      Alcotest.(check string) "source unchanged" original (read (source root)));
+  prelink_fixture (fun root stage content _ ->
+      let replacement = Filename.concat root "replacement" in
+      write replacement content;
+      Unix.rename replacement stage;
+      let status, _ = run root [ "recover-create" ] in
+      Alcotest.(check bool) "same bytes without recorded inode refuse" true
+        (status = Unix.WEXITED 1);
+      Alcotest.(check string) "replacement stage remains" content (read stage);
+      Alcotest.(check bool) "intent remains" true
+        (Sys.file_exists (Filename.concat root ".backend-profiles.create-intent")));
+  prelink_fixture (fun root stage content _ ->
+      let foreign = Filename.concat root "foreign" in
+      write foreign content;
+      Unix.rename foreign (target root);
+      let status, _ = run root [ "recover-create" ] in
+      Alcotest.(check bool) "prelink abort never removes foreign target" true
+        (status = Unix.WEXITED 1);
+      Alcotest.(check string) "foreign target intact" content
+        (read (target root));
+      Alcotest.(check string) "recorded stage intact" content (read stage));
+  prelink_fixture (fun root stage _ _ ->
+      let fd = Unix.openfile stage [ Unix.O_WRONLY; Unix.O_TRUNC ] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+          ignore (Unix.write_substring fd "changed" 0 7));
+      let status, _ = run root [ "recover-create" ] in
+      Alcotest.(check bool) "changed bytes refuse prelink abort" true
+        (status = Unix.WEXITED 1);
+      Alcotest.(check string) "changed stage retained" "changed" (read stage));
+  prelink_fixture (fun root stage _ _ ->
+      Unix.unlink stage;
+      let status, _ = run root [ "recover-create" ] in
+      Alcotest.(check bool) "both names absent refuse" true
+        (status = Unix.WEXITED 1);
+      Alcotest.(check bool) "intent held for manual reconciliation" true
+        (Sys.file_exists (Filename.concat root ".backend-profiles.create-intent")));
+  prelink_fixture (fun root stage content _ ->
+      Unix.unlink (Filename.concat root ".backend-profiles.create-intent");
+      let status, _ = run root [ "recover-create" ] in
+      Alcotest.(check bool) "stage alone lacks provenance" true
+        (status = Unix.WEXITED 1);
+      Alcotest.(check string) "unwitnessed stage remains" content (read stage));
+  prelink_fixture (fun root stage content original ->
+      (* Model interruption immediately after the unpublished recovery retires
+         and syncs its checked intent, before optional stage cleanup. This is
+         not a process-kill test of the exact instruction boundary. *)
+      let identity = Unix.lstat stage in
+      let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+          Unix.unlink (Filename.concat root ".backend-profiles.create-intent");
+          Unix.fsync directory);
+      Alcotest.(check bool) "no pending intent without evidence" false
+        (Sys.file_exists (Filename.concat root ".backend-profiles.create-intent"));
+      Alcotest.(check bool) "no publication from abort" false
+        (Sys.file_exists (target root));
+      Alcotest.(check int) "private orphan still singly linked" 1
+        (Unix.lstat stage).Unix.st_nlink;
+      Alcotest.(check string) "orphan content unchanged" content (read stage);
+      Alcotest.(check string) "source unchanged" original (read (source root));
+      let status, _ = run root [ "recover-create" ] in
+      Alcotest.(check bool) "no inference from orphan alone" true
+        (status = Unix.WEXITED 1);
+      Alcotest.(check bool) "new request is not held by stranded intent" true
+        (M.create_profile ~root ~expected_revision:None ~profile:`Null
+        = Error "invalid-request");
+      M.cleanup_first_stage ~root ~stage ~identity;
+      Alcotest.(check bool) "optional exact cleanup" false
+        (Sys.file_exists stage));
+  prelink_fixture (fun root stage content _ ->
+      let identity = Unix.lstat stage in
+      let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+          Unix.unlink (Filename.concat root ".backend-profiles.create-intent");
+          Unix.fsync directory);
+      let replacement = Filename.concat root "replacement" in
+      write replacement content;
+      Unix.rename replacement stage;
+      M.cleanup_first_stage ~root ~stage ~identity;
+      Alcotest.(check string) "replacement orphan not removed" content
+        (read stage));
+  prelink_fixture (fun root stage content _ ->
+      M.cleanup_first_stage ~root ~stage ~identity:(Unix.lstat stage);
+      Alcotest.(check string) "failed create keeps evidenced stage" content
+        (read stage);
+      Alcotest.(check bool) "pending intent still blocks retry" true
+        (M.create_profile ~root ~expected_revision:None ~profile:`Null
+        = Error "profile-publication-uncertain"));
+  fixture (fun root ->
+      let stage =
+        Filename.concat root ".backend-profiles-123-0123456789abcdef.tmp"
+      in
+      write stage "unpublished";
+      M.cleanup_first_stage ~root ~stage ~identity:(Unix.lstat stage);
+      Alcotest.(check bool) "unwitnessed temporary stage cleaned" false
+        (Sys.file_exists stage));
+  fixture (fun root ->
+      let stage = Filename.concat root ".backend-profiles-123-0123456789abcdef.tmp" in
+      let config = Filename.concat root "config"
+      and history = Filename.concat root "history" in
+      Unix.mkdir config 0o700;
+      Unix.mkdir history 0o700;
+      let content =
+        Yojson.Safe.to_string
+          (`Assoc
+             [
+               ("version", `Int 1);
+               ( "profiles",
+                 `List
+                   [
+                     `Assoc
+                       [
+                         ("id", s "known");
+                         ("label", s "Known");
+                         ("backend", s "claude");
+                         ("enabled", `Bool true);
+                         ( "roots",
+                           `Assoc
+                             [ ("config", s config); ("history", s history) ] );
+                       ];
+                   ] );
+             ])
+        ^ "\n"
+      in
+      let original = legacy [] in
+      write (source root) original;
+      write stage content;
+      let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+          M.write_first_intent ~root ~directory ~stage ~content;
+          Unix.link stage (target root);
+          refusal root "migration-target-exists";
+          Alcotest.(check bool) "create cannot replay pending publication" true
+            (M.create_profile ~root ~expected_revision:None ~profile:`Null
+            = Error "profile-publication-uncertain");
+          Alcotest.(check bool) "ordinary loader refuses two links" true
+            (Result.is_error (P.load ~root));
+          let status, response = run root [ "recover-create" ] in
+           Alcotest.(check bool) "explicit host recovery" true
+             (status = Unix.WEXITED 0);
+           Alcotest.(check string) "path-free recovery reply"
+             {|{"version":1,"ok":true,"data":{"outcome":"published-reconciled"}}|}
+            (Yojson.Safe.to_string response);
+          Alcotest.(check string) "exact first registry preserved" content
+            (read (target root));
+          Alcotest.(check string) "legacy bytes preserved" original
+            (read (source root));
+          Alcotest.(check int) "single link restored" 1
+            (Unix.lstat (target root)).Unix.st_nlink;
+          Alcotest.(check bool) "known profile retained" true
+            (match P.load ~root with
+            | Ok (Some registry) ->
+                List.exists (fun p -> P.id p = "known") (P.profiles registry)
+            | _ -> false);
+          Alcotest.(check bool) "only recorded stage removed" false
+            (Sys.file_exists stage)));
+  fixture (fun root ->
+      let stage = Filename.concat root ".backend-profiles-123-0123456789abcdef.tmp" in
+      let content = "{\"version\":1,\"profiles\":[]}\n" in
+      write stage content;
+      let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+          M.write_first_intent ~root ~directory ~stage ~content;
+          Unix.link stage (target root);
+          Unix.unlink stage;
+          let status, _ = run root [ "recover-create" ] in
+          Alcotest.(check bool) "post-unlink intent retired explicitly" true
+            (status = Unix.WEXITED 0);
+          Alcotest.(check bool) "intent removed after verified target" false
+            (Sys.file_exists (Filename.concat root ".backend-profiles.create-intent"));
+          Alcotest.(check bool) "ordinary loader reads recovered registry" true
+            (Result.is_ok (P.load ~root))));
+  fixture (fun root ->
+      let stage = Filename.concat root ".backend-profiles-123-0123456789abcdef.tmp" in
+      let content = "{\"version\":1,\"profiles\":[]}\n" in
+      write stage content;
+      let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+          M.write_first_intent ~root ~directory ~stage ~content;
+          Unix.link stage (target root);
+          let replacement = Filename.concat root "replacement" in
+          write replacement content;
+          Unix.rename replacement (target root);
+          let status, _ = run root [ "recover-create" ] in
+          Alcotest.(check bool) "unverified replacement refused" true
+            (status = Unix.WEXITED 1);
+          Alcotest.(check bool) "intent retained" true
+            (Sys.file_exists (Filename.concat root ".backend-profiles.create-intent"));
+          Alcotest.(check bool) "stage retained" true
+            (Sys.file_exists stage);
+          Alcotest.(check string) "replacement untouched" content
+            (read (target root))));
+  fixture (fun root ->
+      let stage = Filename.concat root ".backend-profiles-123-0123456789abcdef.tmp" in
+      let content = "{\"version\":1,\"profiles\":[]}\n" in
+      write stage content;
+      Unix.link stage (target root);
+      let status, _ = run root [ "recover-create" ] in
+      Alcotest.(check bool) "matching bytes and name are not provenance" true
+        (status = Unix.WEXITED 1);
+      Alcotest.(check int) "unwitnessed link preserved" 2
+        (Unix.lstat (target root)).Unix.st_nlink);
+  fixture (fun root ->
+      let stage = Filename.concat root ".backend-profiles-123-0123456789abcdef.tmp" in
+      let content = "{\"version\":1,\"profiles\":[]}\n" in
+      write stage content;
+      let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+          M.write_first_intent ~root ~directory ~stage ~content;
+          Unix.link stage (target root);
+          write (source root) (legacy [ account ~claude:"/private/fixture" "existing" ]);
+          let status, _ = run root [ "recover-create" ] in
+          Alcotest.(check bool) "legacy change refuses recovery" true
+            (status = Unix.WEXITED 1);
+          Alcotest.(check int) "no link removed" 2
+            (Unix.lstat (target root)).Unix.st_nlink));
+  fixture (fun root ->
+      let stage = Filename.concat root ".backend-profiles-123-0123456789abcdef.tmp" in
+      let content = "{\"version\":1,\"profiles\":[]}\n" in
+      write stage content;
+      let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+          M.write_first_intent ~root ~directory ~stage ~content;
+          let config = Filename.concat root "credential-root" in
+          Unix.mkdir config 0o700;
+          write (source root) (legacy [ account ~claude:config "existing" ]);
+          refusal root "migration-target-exists";
+          Alcotest.(check bool) "prelink create intent still held" true
+            (Sys.file_exists (Filename.concat root ".backend-profiles.create-intent"));
+          Alcotest.(check bool) "migration made no target" false
+            (Sys.file_exists (target root))))
 
 let () =
   Alcotest.run
@@ -1284,5 +1578,6 @@ let () =
             ("postpublication durability uncertainty", uncertain_publication);
             ("foreign custody predicate", custody_predicate);
             ("missing and aliased Mesh root", missing_or_aliased_mesh_root);
+            ("explicit first-create recovery requires witnessed state", first_create_interruption);
           ] );
     ]

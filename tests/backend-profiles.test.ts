@@ -13,6 +13,7 @@ import {test} from 'node:test';
 const repo=path.resolve(import.meta.dirname,'..');
 const candidate=path.join(repo,'ocaml/_build/default/bin/mesh_profile_main.exe');
 const binary=process.env.MESH_PROFILE_CMD || (fs.existsSync(candidate)?candidate:path.join(repo,'_opam/bin/mesh-profile'));
+const platform=path.join(repo,'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
 // Without mesh-profile the file is skipped, with the reason, unless MESH_REQUIRE_MESH_PROFILE is set (CI):
 // then a missing program fails every test. ocaml/test covers the modules themselves.
 const skip=fs.existsSync(binary)||process.env.MESH_REQUIRE_MESH_PROFILE?false
@@ -49,6 +50,131 @@ test('unconfigured registry is explicit and does not create account state',{skip
   const reply=f.request('profiles.list');assert.equal(reply.ok,true);assert.deepEqual(reply.data.profiles,[]);
   assert.equal(reply.data.configured,false);assert.equal(fs.existsSync(f.db),false);
 }));
+test('create accepts first and appended aliases in every backend without exposing roots',{skip},()=>use(f=>{
+  let expected:string|null=null;
+  for(const backend of ['claude','codex','opencode-v2','pi']){
+    const profile=f.add(backend,backend);
+    f.profiles.pop();
+    const created=f.request('profiles.create',{registry_revision:expected,profile:{backend,id:profile.id,label:profile.label,roots:profile.roots}});
+    assert.equal(created.ok,true,JSON.stringify(created));
+    assert.equal(created.data.profile.backend,backend);
+    assert.equal(created.data.profile.enabled,true);
+    assert.equal(JSON.stringify(created).includes(f.root),false);
+    expected=created.data.registry_revision;
+    if(backend==='claude'){
+      assert.equal(fs.existsSync(path.join(f.conf,'.backend-profiles.create-intent')),false);
+      assert.equal(fs.statSync(f.file).nlink,1);
+    }
+    assert.equal(f.request('profiles.list').data.registry_revision,expected);
+    const resolved=f.request('profiles.resolve',{backend,id:profile.id,expected_context:created.data.profile.context_revision});
+    assert.equal(resolved.ok,true,JSON.stringify(resolved));
+    assert.deepEqual(resolved.data.roots,profile.roots);
+  }
+  assert.equal(f.request('profiles.list').data.profiles.length,4);
+  assert.equal(fs.existsSync(f.db),false,'creation cannot mutate consent');
+}));
+test('created aliases enter the native list and backend-qualified launch selectors',{skip:skip||(!fs.existsSync(platform)&&'mesh-platform not built')},()=>use(f=>{
+  let revision:string|null=null;
+  const select:{[key:string]:string}={claude:'CLAUDE_CONFIG_DIR',codex:'CODEX_HOME',
+    'opencode-v2':'XDG_CONFIG_HOME',pi:'PI_CODING_AGENT_DIR'};
+  for(const backend of ['claude','codex','opencode-v2','pi']){
+    const fprofile=f.add(`new-${backend}`,backend);f.profiles.pop();
+    const {enabled,...profile}=fprofile;
+    const created=f.request('profiles.create',{registry_revision:revision,profile});
+    assert.equal(created.ok,true,JSON.stringify(created));
+    revision=created.data.registry_revision;
+    const run=(args:string[])=>spawnSync(platform,['accounts',...args],{encoding:'utf8',timeout:5000,
+      env:{HOME:f.root,MESH_CONF_DIR:f.conf,PATH:'/usr/bin:/bin'}});
+    const file=path.join(f.conf,'accounts.json');
+    const listed=run(['list',file]);assert.equal(listed.status,0,listed.stdout);
+    assert.ok(JSON.parse(listed.stdout).launch_profiles.some((p:any)=>p.backend===backend&&p.id===profile.id));
+    const launch=run(['launch-context',file,backend,profile.id,created.data.profile.context_revision]);
+    assert.equal(launch.status,0,launch.stdout);
+    const ctx=JSON.parse(launch.stdout).context;
+    assert.equal(ctx.env[select[backend]!],profile.roots.config);
+    assert.equal(ctx.registry_revision,revision);
+    assert.equal(ctx.context_revision,created.data.profile.context_revision);
+  }
+}));
+test('create refuses stale, duplicate, malformed and unsafe roots without altering registry bytes',{skip},()=>use(f=>{
+  const one=f.add('one','claude');f.profiles.pop();
+  const request=(profile:any,registry_revision:string|null)=>{
+    const {enabled,...input}=profile;
+    return f.request('profiles.create',{registry_revision,profile:input});
+  };
+  const first=request(one,null);assert.equal(first.ok,true,JSON.stringify(first));
+  const bytes=fs.readFileSync(f.file);
+  const two=f.add('two','codex');f.profiles.pop();
+  assert.equal(request(two,null).code,'profile-registry-changed');
+  assert.equal(request(one,first.data.registry_revision).code,'profile-already-exists');
+  assert.equal(request({...two,roots:{config:two.roots.config}},first.data.registry_revision).ok,false);
+  assert.equal(request({...two,roots:{...two.roots,state:'/not/a/real/directory'}},first.data.registry_revision).ok,false);
+  const linked=path.join(f.root,'linked-config');
+  fs.symlinkSync(two.roots.config,linked);
+  assert.equal(request({...two,roots:{...two.roots,config:linked}},first.data.registry_revision).code,'unsafe-profile-roots');
+  assert.equal(f.request('profiles.create',{registry_revision:first.data.registry_revision,profile:two}).code,'invalid-request');
+  assert.deepEqual(fs.readFileSync(f.file),bytes);
+  const stale=first.data.registry_revision;
+  assert.equal(request(two,stale).ok,true);
+  assert.equal(request({...one,id:'three'},stale).code,'profile-registry-changed');
+}));
+test('create requires explicit legacy migration and never replaces missing migrated or invalid registry',{skip},()=>use(f=>{
+  const profile=f.add('new','pi');f.profiles.pop();
+  const add=()=>f.request('profiles.create',{registry_revision:null,profile});
+  const legacy=path.join(f.conf,'accounts.json');
+  const original=JSON.stringify({v:1,accounts:[{id:'old',label:'Old',claude_config_dir:profile.roots.config}]});
+  fs.writeFileSync(legacy,original,{mode:0o600});
+  assert.equal(add().code,'profile-migration-required');
+  assert.equal(fs.readFileSync(legacy,'utf8'),original);
+  assert.equal(fs.existsSync(f.file),false);
+  fs.unlinkSync(legacy);
+  fs.writeFileSync(path.join(f.conf,'backend-profiles.migrated'),'marker',{mode:0o600});
+  assert.equal(add().code,'profile-registry-changed');
+  assert.equal(fs.existsSync(f.file),false);
+  fs.unlinkSync(path.join(f.conf,'backend-profiles.migrated'));
+  fs.writeFileSync(f.file,'{broken',{mode:0o600});
+  const before=fs.readFileSync(f.file);
+  assert.equal(add().ok,false);
+  assert.deepEqual(fs.readFileSync(f.file),before);
+}));
+test('create appends after explicit host migration without changing legacy or retirement bytes',{skip},()=>use(f=>{
+  const old=f.add('old','claude');f.profiles.pop();
+  const next=f.add('next','codex');f.profiles.pop();
+  const legacy=path.join(f.conf,'accounts.json'), marker=path.join(f.conf,'backend-profiles.migrated');
+  fs.writeFileSync(legacy,JSON.stringify({v:1,accounts:[{id:'old',label:'Old',claude_config_dir:old.roots.config}]}),{mode:0o600});
+  const migration=spawnSync(binary,['migrate'],{encoding:'utf8',env:{HOME:f.root,MESH_CONF_DIR:f.conf,PATH:'/usr/bin:/bin'}});
+  assert.equal(migration.status,0,migration.stdout);
+  const beforeLegacy=fs.readFileSync(legacy),beforeMarker=fs.readFileSync(marker);
+  const revision=f.request('profiles.list').data.registry_revision;
+  const {enabled,...profile}=next;
+  const created=f.request('profiles.create',{registry_revision:revision,profile});
+  assert.equal(created.ok,true,JSON.stringify(created));
+  assert.deepEqual(fs.readFileSync(legacy),beforeLegacy);
+  assert.deepEqual(fs.readFileSync(marker),beforeMarker);
+  assert.deepEqual(f.request('profiles.list').data.profiles.map((p:any)=>p.id),['old','next']);
+}));
+test('two first creates using the same expected revision cannot both publish',{skip},async()=>{
+  const f=fixture();
+  try{
+    const one=f.add('one','claude'),two=f.add('two','codex');f.profiles.length=0;
+    const send=(candidate:any)=>new Promise<Reply>((resolve,reject)=>{
+      const {enabled,...profile}=candidate;
+      const child=spawn(binary,[],{env:{HOME:f.root,MESH_CONF_DIR:f.conf,PATH:'/usr/bin:/bin'},stdio:['pipe','pipe','pipe']});
+      let stdout='',stderr='';
+      child.stdout.setEncoding('utf8').on('data',chunk=>{stdout+=chunk;});
+      child.stderr.setEncoding('utf8').on('data',chunk=>{stderr+=chunk;});
+      child.once('error',reject);
+      child.once('close',code=>{
+        try{const reply=JSON.parse(stdout) as Reply;assert.equal(code,reply.ok?0:1,stderr);resolve(reply);}catch(error){reject(error);}
+      });
+      child.stdin.end(JSON.stringify({version:1,op:'profiles.create',registry_revision:null,profile}));
+    });
+    const results=await Promise.all([send(one),send(two)]);
+    assert.equal(results.filter(r=>r.ok).length,1,JSON.stringify(results));
+    assert.ok(['profile-registry-changed','migration-busy'].includes(results.find(r=>!r.ok)?.code ?? ''));
+    assert.equal(f.request('profiles.list').data.profiles.length,1);
+  }finally{f.close();}
+});
 test('four backend projections contain no paths and cannot qualify a switch',{skip},()=>use(f=>{
   for(const backend of ['claude','codex','opencode-v2','pi'])f.add(backend,backend);f.save();
   const reply=f.request('profiles.list');assert.equal(reply.ok,true);assert.equal(reply.data.profiles.length,4);
@@ -175,6 +301,7 @@ test('HTTP mode exposes only public operations and retains duplicate-field rejec
     assert.equal(fs.existsSync(f.db),false);
   }
   assert.equal(f.http('profiles.resolve','{}').reply.code,'unsupported-arguments');
+  assert.equal(f.http('recover-create','{}').reply.code,'unsupported-arguments');
   assert.equal(f.http('switch.start','{}').reply.code,'unsupported-arguments');
   assert.equal(fs.existsSync(f.db),false);
 }));
