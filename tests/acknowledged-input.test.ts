@@ -5,6 +5,18 @@ import { test } from "node:test";
 import { createAcknowledgedInput, terminalReportsOnly } from "../static/pane-actions.ts";
 
 const bytes = (s: string) => new TextEncoder().encode(s);
+test("retained text is readable without replay and disappears on discard", () => {
+  const sent: Uint8Array[] = [];
+  const input = createAcknowledgedInput({version: 2, created: 42, send: frame => sent.push(frame), state: () => {}});
+  assert.equal(input.connectV2(42, 1, 1, "a".repeat(32), true), true);
+  assert.equal(input.write(bytes("bonjour 🌍")), true);
+  input.disconnect();
+  assert.equal(input.retainedText, "bonjour 🌍");
+  assert.equal(sent.length, 1);
+  input.discard();
+  assert.equal(input.retainedText, "");
+  assert.equal(sent.length, 1);
+});
 test("only complete terminal reports bypass a new draft lease", () => {
   for (const report of [
     "\x1b[I", "\x1b[O", "\x1b[<0;5;5M", "\x1b[<32;6;7M",

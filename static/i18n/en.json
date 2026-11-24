@@ -181,6 +181,7 @@
   "conn.sessionEnded": "session ended",
   "conn.unsentInput": "unfinished input kept: send or cancel it before agent messages",
   "conn.inputRetained": "{count} input bytes retained ({state}); review before retrying.",
+  "conn.inputCopyDraft": "Retained text (select and copy; it may already have arrived)",
   "conn.inputRetry": "Retry input",
   "conn.inputReconnect": "Reconnect input",
   "conn.inputDiscard": "Discard input",

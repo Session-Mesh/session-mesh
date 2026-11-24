@@ -143,6 +143,25 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       assert.equal(await phone.locator('.pane.active .p-input-review').isVisible(), true, 'the retained input is presented for review');
       assert.equal(await phone.locator('.pane.active .p-input-discard').isVisible(), true);
       assert.equal(await phone.locator('.pane.active .p-input-retry').isVisible(), false, 'old incarnation cannot be retried here');
+      const draft = phone.locator('.pane.active .p-input-drafts textarea');
+      assert.equal(await draft.inputValue(), 'phone-during-switch');
+      assert.equal(await draft.getAttribute('readonly'), '');
+      await phone.evaluate(() => {
+        const pane = active as any;
+        pane.inputAcks.set('another-session\0fixture', {input: {pendingBytes: 6, pendingHumanBytes: 6, retainedText: 'secret', state: 'review'}});
+        pane.renderRetainedInput();
+      });
+      assert.equal(await draft.count(), 1, 'another session’s retained text is never shown here');
+      assert.equal(await draft.inputValue(), 'phone-during-switch');
+      await phone.evaluate(() => { const pane = active as any; pane.inputAcks.delete('another-session\0fixture'); pane.renderRetainedInput(); });
+      await desktop.evaluate(() => {
+        const pane = active as any;
+        pane.inputAcks.set(`${pane.conn.name}\0desktop-fixture`, {input: {pendingBytes: 13, pendingHumanBytes: 13, retainedText: 'desktop-draft', state: 'review'}});
+        pane.renderRetainedInput();
+      });
+      assert.equal(await desktop.locator('.pane.active .p-input-drafts textarea').inputValue(), 'desktop-draft');
+      assert.equal(await draft.inputValue(), 'phone-during-switch', 'desktop and phone drafts remain independent');
+      await desktop.evaluate(() => { const pane = active as any; pane.inputAcks.delete(`${pane.conn.name}\0desktop-fixture`); pane.renderRetainedInput(); });
       assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch'], 'reconnection does not resend input');
     } finally {
       try {
