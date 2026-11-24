@@ -450,6 +450,11 @@ describe('.github/workflows/branch-policy.yml', () => {
 describe('.coderabbit.yaml', () => {
   const text = fs.readFileSync(path.join(ROOT, '.coderabbit.yaml'), 'utf8');
 
+  test('automatic approvals require a current low-risk assessment and do not approve skipped reviews', () => {
+    assert.match(text, /^ {2}fail_commit_status: true$/m);
+    assert.match(text, /^ {2}auto_approvals:\n {4}enabled: true\n {4}approve_on_skipped_review: false\n {4}allow_author_approval: false\n {4}max_merge_risk: low$/m);
+  });
+
   test('reviews the pull requests whose base is a release branch', () => {
     assert.match(text, /^ {2}auto_review:\n {4}enabled: true\n {4}drafts: false\n(?: {4}#.*\n)* {4}base_branches: \["release\/\.\*"\]\n/m);
     assert.ok(/^(?:release\/.*)$/.test('release/latest'));
