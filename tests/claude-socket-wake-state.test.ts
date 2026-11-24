@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
 import {hostArgv, installFakeClaude, MANAGED, NOTICE} from './claude-wake-lib.ts';
+import {approveWakeMail} from './codex-queue-wake-lib.ts';
 import {REPO, runServer, scratchHome, stopServer} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
@@ -59,7 +60,8 @@ describe('a lost or damaged state of the wake lines', {skip: MANAGED.length > 0 
       const where = await scratchHome('skw-state-', {PATH, MESH_BIN_DIR, MESH_CLAUDE_WAKE_CONFIRM_SECONDS: '2'});
       scratches.push(where.scratch);
       const base = `http://127.0.0.1:${where.port}`;
-      const owner = () => ({Authorization: `Bearer ${fs.readFileSync(path.join(where.confDir, 'token'), 'utf8').trim()}`,
+      const token = () => fs.readFileSync(path.join(where.confDir, 'token'), 'utf8').trim();
+      const owner = () => ({Authorization: `Bearer ${token()}`,
         Origin: base, 'Content-Type': 'application/json'});
       const session = (agent: Agent) => ({Authorization: `MeshSession ${agent.token}`, 'Content-Type': 'application/json'});
       let run = await runServer(where);
@@ -82,6 +84,7 @@ describe('a lost or damaged state of the wake lines', {skip: MANAGED.length > 0 
       const post = async (agent: Agent, route: string, body: object) => {
         const response = await fetch(`${base}/api/${route}`, {method: 'POST', headers: session(agent), body: JSON.stringify(body)});
         assert.equal(response.status, 200, await response.clone().text());
+        return response;
       };
       const flagged = async (agent: Agent) => {
         const data = await (await fetch(`${base}/api/sessions`, {headers: owner()})).json() as
@@ -95,8 +98,9 @@ describe('a lost or damaged state of the wake lines', {skip: MANAGED.length > 0 
         {peers: {id: string; created: number}[]};
       target.created = peers.peers.find(item => item.id === target.name)!.created;
       await post(target, 'event', {type: 'done'});
-      await post(sender, 'agent-mail/@self/send',
+      const sent = await post(sender, 'agent-mail/@self/send',
         {target: target.name, target_created: target.created, kind: 'message', text: 'first'});
+      await approveWakeMail(base, token(), sent);
       await waitFor('the line', 10000, () => lines(target).length === 1);
 
       await stopServer(servers.pop()!);
