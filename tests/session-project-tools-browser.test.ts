@@ -181,10 +181,20 @@ test('legacy project first attachment and receipt-bound project-view detach refr
         if (route.request().postDataJSON().op === 'project_settings') {writes++; await route.fetch(); await route.abort();}
         else await route.continue();
       });
+      let freshReply: {revision: string} | undefined;
       const fresh = page.waitForResponse(async response => {
         if (!response.url().endsWith('/api/projects/v1') || response.request().postDataJSON()?.op !== 'project_read') return false;
-        const reply = await response.json(); return reply.project?.id === 'legacy' && reply.revision !== before.revision && reply.project.sessions_total === 0;
-      });
+        let reply;
+        try {reply = await response.json();}
+        catch (error) {
+          // A superseded read can lose its CDP body before this observer reads it.
+          if (error instanceof Error && error.message.includes('Network.getResponseBody') &&
+              error.message.includes('No data found for resource with given identifier')) return false;
+          throw error;
+        }
+        if (reply.project?.id !== 'legacy' || reply.revision === before.revision || reply.project.sessions_total !== 0) return false;
+        freshReply = reply; return true;
+      }).then(() => null, error => error);
       await dialog.getByRole('button', {name: 'Detach session tools', exact: true}).click();
       if (uncertain) {
         await dialog.getByText('Save outcome unknown.', {exact: false}).waitFor();
@@ -192,7 +202,8 @@ test('legacy project first attachment and receipt-bound project-view detach refr
         await dialog.getByRole('button', {name: 'Check uncertain save', exact: true}).click();
       }
       await dialog.getByText('Save confirmed.', {exact: false}).waitFor();
-      const reply = await (await fresh).json(); assert.notEqual(reply.revision, before.revision);
+      const readError = await fresh; if (readError) throw readError;
+      assert.ok(freshReply); assert.notEqual(freshReply.revision, before.revision);
       await tools.getByText('No session tools are attached to this local Mesh project.', {exact: true}).waitFor();
       assert.equal(await tools.locator('details, [data-tool="artifacts"]').count(), 0, 'confirmed detach removes the working row without navigation');
       if (uncertain) {assert.equal(writes, 1); await page.unroute('**/api/projects/v1');}

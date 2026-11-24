@@ -8,8 +8,8 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {removeScratch,REPO} from './mesh-server-lib.ts';
 
-const worker=path.join(REPO,'ocaml/_build/default/bin/mesh_artifacts_main.exe');
-const reader=path.join(REPO,'ocaml/_build/default/work_read/bin/work_read_main.exe');
+const worker=process.env.MESH_ARTIFACTS_CMD || path.join(REPO,'ocaml/_build/default/bin/mesh_artifacts_main.exe');
+const reader=process.env.MESH_WORK_READ_CMD || path.join(REPO,'ocaml/_build/default/work_read/bin/work_read_main.exe');
 function fixture() {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'work-tools-native-'));
   const tracker=path.join(root,'tracker'),home=path.join(root,'home'),conf=path.join(root,'conf');

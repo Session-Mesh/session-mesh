@@ -19,8 +19,8 @@ test('current Work Projects attach canonical IDs, preserve receipts and detach a
   fs.writeFileSync(registration,JSON.stringify({version:1,instance_id:'a'.repeat(64),
     root_dev:String(stat.dev),root_ino:String(stat.ino),git_dev:String(git.dev),git_ino:String(git.ino)}),{mode:0o600});
   const mesh=new TerminalMesh({WL_HOME:tracker,MESH_WORK_INSTANCE_REGISTRATION:registration,
-    MESH_WORK_READ_CMD:path.join(REPO,'ocaml/_build/default/work_read/bin/work_read_main.exe'),
-    MESH_ARTIFACTS_CMD:path.join(REPO,'ocaml/_build/default/bin/mesh_artifacts_main.exe')});
+    MESH_WORK_READ_CMD:process.env.MESH_WORK_READ_CMD || path.join(REPO,'ocaml/_build/default/work_read/bin/work_read_main.exe'),
+    MESH_ARTIFACTS_CMD:process.env.MESH_ARTIFACTS_CMD || path.join(REPO,'ocaml/_build/default/bin/mesh_artifacts_main.exe')});
   try {
     await mesh.start();await mesh.newShell('canonical-tools');
     const page=await mesh.openPage('canonical-tools',{width:1440,height:900},()=>{
@@ -103,8 +103,8 @@ test('real pane Tools canonical selector fences delayed reads/saves and refreshe
   fs.writeFileSync(registration,JSON.stringify({version:1,instance_id:'a'.repeat(64),
     root_dev:String(stat.dev),root_ino:String(stat.ino),git_dev:String(git.dev),git_ino:String(git.ino)}),{mode:0o600});
   const mesh=new TerminalMesh({WL_HOME:tracker,MESH_WORK_INSTANCE_REGISTRATION:registration,
-    MESH_WORK_READ_CMD:path.join(REPO,'ocaml/_build/default/work_read/bin/work_read_main.exe'),
-    MESH_ARTIFACTS_CMD:path.join(REPO,'ocaml/_build/default/bin/mesh_artifacts_main.exe')});
+    MESH_WORK_READ_CMD:process.env.MESH_WORK_READ_CMD || path.join(REPO,'ocaml/_build/default/work_read/bin/work_read_main.exe'),
+    MESH_ARTIFACTS_CMD:process.env.MESH_ARTIFACTS_CMD || path.join(REPO,'ocaml/_build/default/bin/mesh_artifacts_main.exe')});
   let release=()=>{},releaseContext=()=>{},releaseSent=()=>{};
   const gateReady=async(p:Promise<void>,label:string)=>{
     let timer:ReturnType<typeof setTimeout>|undefined;
