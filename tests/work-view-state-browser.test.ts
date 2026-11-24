@@ -144,6 +144,14 @@ after(() => { assert.deepEqual(errors, [], 'no error in the pages'); });
 /** Every request of the page: its URL and body, to look for drafts. */
 type Sent = { url: string; body: string };
 
+function workResponse(page: Page, op: string) {
+  return page.waitForResponse(response => {
+    const request = response.request();
+    if (!request.url().endsWith('/api/work/v1')) return false;
+    try { return JSON.parse(request.postData() ?? '{}').op === op; } catch { return false; }
+  }, { timeout: 35_000 });
+}
+
 async function signIn(width: number, sent: Sent[], realPoll = false): Promise<Page> {
   const phone = width < 600;
   const page = await mesh.signIn({ width, height: phone ? 844 : 900 }, undefined, watched => {
@@ -626,7 +634,12 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     });
     await page.locator('.work-rail-refresh-status').waitFor({ state: 'visible', timeout: 35_000 });
     await page.unrouteAll({ behavior: 'wait' });
+    const railRead = page.waitForRequest(request => {
+      if (!request.url().endsWith('/api/work/v1')) return false;
+      try { return JSON.parse(request.postData() ?? '{}').op === 'projects'; } catch { return false; }
+    }, { timeout: 5000 });
     await page.locator('.work-refresh').click();
+    await railRead;
     await page.locator('.work-rail-refresh-status').waitFor({ state: 'hidden', timeout: 5000 });
     await closePage(page);
   });
@@ -655,15 +668,17 @@ describe('the Projects view comes back as it was left', { skip }, () => {
       }
       return route.continue();
     });
+    const railRead = workResponse(page, 'projects');
     await pending;
     await page.locator('.work-qmore-button').click();
     await page.waitForFunction(() => document.querySelectorAll('.work-qrow').length > 20);
     const badge = page.locator('#work-rail [data-key="product:relay"] .work-tree-questions');
     const afterMore = await badge.textContent();
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await page.waitForTimeout(6000);
+    await railRead;
+    const processed = workResponse(page, 'projects');
     release();
-    await page.waitForTimeout(1000);
+    await processed;
     assert.equal(await badge.textContent(), afterMore);
     await page.unrouteAll({ behavior: 'wait' });
     await closePage(page);
@@ -692,8 +707,9 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     });
     await page.locator('.work-qmore-button').click();
     await pending;
+    const railRead = workResponse(page, 'projects');
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await page.waitForTimeout(7_000);
+    await railRead;
     release();
     await page.waitForFunction(() => document.querySelectorAll('.work-qrow').length > 20, null, { timeout: 10_000 });
     await closePage(page);
@@ -727,10 +743,14 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     await page.locator('#work-tab-board').blur();
     const progress = page.locator('.work-product-head .work-progress-text');
     const before = await progress.textContent();
+    const counts = /^(\d+) done of (\d+)$/.exec(before?.trim() ?? '');
+    assert.ok(counts, `expected progress counts, got ${before}`);
+    const expected = `${Number(counts[1]) + 1} done of ${counts[2]}`;
     fs.appendFileSync(path.join(scratch, 'tracker', 'events', '2026-11.hostq.jsonl'),
       JSON.stringify({ ts: '2026-11-09T09:50:00Z', task: PRODUCT_REFRESH[1440].first, type: 'set', field: 'status', to: 'done' }) + '\n');
-    await page.waitForFunction(previous => document.querySelector('.work-product-head .work-progress-text')?.textContent !== previous,
-      before, { timeout: 35_000 });
+    await page.waitForFunction(value => document.querySelector('.work-product-head .work-progress-text')?.textContent?.trim() === value,
+      expected, { timeout: 35_000 });
+    assert.notEqual(await progress.textContent(), before);
     await closePage(page);
   });
 
@@ -743,7 +763,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
     await sheetField(page, PRODUCT_EDIT_QUESTION).fill('Unsent product answer');
     fs.appendFileSync(path.join(scratch, 'tracker', 'events', '2026-11.hostq.jsonl'),
       JSON.stringify({ ts: '2026-11-09T09:30:00Z', task: PRODUCT_EDIT_TASK, type: 'set', field: 'title', to: 'Product answer changed' }) + '\n');
-    await page.waitForTimeout(7_000);
+    await page.locator('.work-detail-pane .work-sheet-refresh-status').waitFor({ state: 'visible', timeout: 35_000 });
     assert.equal(await sheetField(page, PRODUCT_EDIT_QUESTION).inputValue(), 'Unsent product answer');
     assert.equal(await sheetField(page, PRODUCT_EDIT_QUESTION).evaluate(node => node === document.activeElement), true);
     await closePage(page);
@@ -831,7 +851,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
         category.products.push({ ...product, id: `new-${width}` });
         await route.fulfill({ response, json: body });
       });
-      await page.waitForTimeout(7000);
+      await workResponse(page, 'projects');
       assert.equal(await original.evaluate(node => node === document.activeElement), true);
       assert.equal(await page.locator(`.work-overview-product[data-product="new-${width}"]`).count(), 0);
       await original.blur();
@@ -870,7 +890,7 @@ describe('the Projects view comes back as it was left', { skip }, () => {
       await page.locator('#work-tab-board').blur();
       fs.appendFileSync(eventsPath,
         JSON.stringify({ ts: '2026-11-09T09:59:00Z', task: item.first, type: 'set', field: 'title', to: `Pending ${width}` }) + '\n');
-      await page.waitForTimeout(7000);
+      await workResponse(page, 'projects');
       await page.locator('#work-tab-questions').click();
       assert.equal(await form.getAttribute('aria-busy'), 'true');
       assert.equal(await field.inputValue(), 'Keep this answer on failure');
