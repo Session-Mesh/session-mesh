@@ -1690,6 +1690,64 @@ async def _settings_process_binding(source, agent):
 
 
 async def relaunch_in_place(source, cwd, command, agent, known_agent, account=None, switch=None, *, settings_guard=None, settings_binding=None):
+    if not (switch and len(switch) > 2):
+        return await _relaunch_in_place(source, cwd, command, agent, known_agent, account, switch,
+                                        settings_guard=settings_guard, settings_binding=settings_binding)
+    if len(switch) < 5 or not isinstance(switch[4], str):
+        raise web.HTTPConflict(text="Native switch requires a durable request identity; nothing was stopped")
+    rows = await host({"op": "list_bound"})
+    matches = [row for row in rows if isinstance(row, dict) and row.get("name") == source["name"]
+               and row.get("created") == source["created"]] if isinstance(rows, list) else []
+    if len(matches) != 1 or not isinstance(matches[0].get("creation_receipt"), str):
+        raise web.HTTPConflict(text="Session identity unavailable; nothing was stopped")
+    fence = {"name": source["name"], "created": source["created"],
+             "creation_receipt": matches[0]["creation_receipt"],
+             "fence_id": hashlib.sha256(("native-switch:" + switch[4]).encode()).hexdigest()}
+    try:
+        reply = await host({"op": "switch_input_acquire", **fence})
+    except Exception as exc:
+        raise NativeFenceRecoveryRequired(fence, "Acquisition outcome uncertain") from exc
+    if reply != {"ok": True}:
+        if not isinstance(reply, dict) or reply.get("ok") is not False:
+            raise NativeFenceRecoveryRequired(fence, "Acquisition outcome uncertain")
+        reason = reply.get("reason", "refused")
+        reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,40}", reason) else "refused"
+        raise web.HTTPConflict(text=f"Session input is not quiescent ({reason}); nothing was stopped")
+    try:
+        result = await _relaunch_in_place(source, cwd, command, agent, known_agent, account, switch,
+                                          settings_guard=settings_guard, settings_binding=settings_binding, fence=fence)
+    except AccountSwitchUndone:
+        await _release_native_fence(fence)
+        raise
+    except Exception as exc:
+        raise NativeFenceRecoveryRequired(fence, "Switch outcome requires inspection") from exc
+    await _release_native_fence(fence)
+    return result
+
+
+class NativeFenceRecoveryRequired(Exception):
+    def __init__(self, fence, message):
+        super().__init__(message)
+        self.fence = dict(fence)
+
+
+async def _release_native_fence(fence):
+    # A control_pending refusal is definitive: no release occurred. Do not
+    # retry an unanswered request, whose outcome is unknown.
+    for _ in range(100):
+        try:
+            reply = await host({"op": "switch_input_release", **fence})
+        except Exception as exc:
+            raise NativeFenceRecoveryRequired(fence, "Release outcome uncertain") from exc
+        if reply == {"ok": True}:
+            return
+        if not isinstance(reply, dict) or reply.get("reason") != "control_pending":
+            raise NativeFenceRecoveryRequired(fence, "Fence release refused")
+        await asyncio.sleep(.05)
+    raise NativeFenceRecoveryRequired(fence, "Control input did not drain")
+
+
+async def _relaunch_in_place(source, cwd, command, agent, known_agent, account=None, switch=None, *, settings_guard=None, settings_binding=None, fence=None):
     """Stop the agent of session ``source`` and start it again in the same session, shell and terminal: the PTY host
     (stop_agent_if) answers once the old agent is gone, so no two processes ever run the conversation, and the
     session continues as a new incarnation (its ``created``) with its name, attachments and output. Everything that
@@ -1723,10 +1781,12 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
         if settings_binding is not None and native_switch:
             raise web.HTTPConflict(text="Conflicting restart bindings; nothing was stopped")
         created = await _stop_agent(source, known_agent, settings_binding=settings_binding,
-                                    profile_binding=source_context if native_switch else None)
+                                    profile_binding=source_context if native_switch else None, fence_id=fence["fence_id"] if fence else None)
     except web.HTTPServiceUnavailable:   # a late reply: the agent may be stopped all the same, the session moved on
         await _carry_arrangement(incarnation, source["name"], saved)
         raise
+    if fence is not None:
+        fence["created"] = created
     # the new incarnation keeps the session's label, folder and rank (bound to ``created``, which moved on)
     await _carry_arrangement(incarnation, source["name"], saved, created)
     launch = (source, created, cwd, command, agent, known_agent, notice, vibe)
@@ -1738,7 +1798,7 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
             if account:
                 await _profile_launch_context(account, known_agent, source_context["context_revision"])
             await _start_in_place(*launch, account, source_env, context=source_context,
-                                  expected_identity=source_identity)
+                                  expected_identity=source_identity, fence_id=fence["fence_id"] if fence else None)
         except Exception as error:
             raise AccountSwitchRecoveryFailed(source["name"], exc, target_copy_remains=target_copy_remains) from error
         raise AccountSwitchUndone(source["name"], exc.code, str(exc),
@@ -1757,6 +1817,8 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
             await switch[1]()
         except AccountsUnavailable as exc:   # nothing changed under the source account: the conversation goes on there
             print(f"account switch of {source['name']} undone: {exc}", flush=True)
+            if native_switch and _carry_copy_uncertain(exc.code):
+                raise AccountSwitchRecoveryFailed(source["name"], exc) from exc
             if source_context:
                 await undo_native_switch(exc)
             try:
@@ -1775,7 +1837,7 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     try:
         if native_switch:
             await _start_in_place(*launch, target, account_env, context=context, expected_identity=target_identity,
-                                  validate_default_target=True)
+                                  validate_default_target=True, fence_id=fence["fence_id"] if fence else None)
         else:
             expected = restart_identity if context else None
             await _start_in_place(*launch, target, account_env, context=context, expected_identity=expected,
@@ -1797,12 +1859,14 @@ def _not_started_again(name):
         text=f"Conversation stopped; its agent could not be started again in session {name}")
 
 
-async def _stop_agent(source, known_agent, settings_binding=None, profile_binding=None):
+async def _stop_agent(source, known_agent, settings_binding=None, profile_binding=None, fence_id=None):
     """stop_agent_if on the incarnation ``source``: the new ``created`` once the agent is gone. WholeSessionOnly or
     HTTPConflict when the host stopped nothing. A reply that comes too late is checked in the listing: when the
     incarnation moved on, the agent was stopped and the session is still there, and the error says so."""
     try:
         message = {"op": "stop_agent_if", "name": source["name"], "created": source["created"], "agent": known_agent}
+        if fence_id is not None:
+            message["fence_id"] = fence_id
         if settings_binding is not None:
             message.update(settings_binding)
         if profile_binding is not None:
@@ -1840,7 +1904,7 @@ class AccountContextChanged(Exception):
 
 
 async def _start_in_place(source, created, cwd, command, agent, known_agent, notice, vibe, account, account_env,
-                          context=None, expected_identity=None, validate_default_target=False, *, pin_cwd=False):
+                          context=None, expected_identity=None, validate_default_target=False, *, pin_cwd=False, fence_id=None):
     """Start the agent in the incarnation stop_agent_if left (``created``), under ``account``, with the session's
     meta for that launch (as new_session writes it; the nonce, hence the session token, is kept). A Claude's wake
     socket path follows from the nonce: the socket the stopped Claude left there is removed first, so that the new
@@ -1869,8 +1933,10 @@ async def _start_in_place(source, created, cwd, command, agent, known_agent, not
     command = _profile_command(command, context, known_agent) if context else with_account(command, account_env)
     if pin_cwd:
         command = f"cd {shlex.quote(cwd)} && {command}"
-    started = await host({"op": "start_if", "name": source["name"], "created": created,
-                          "command": command, "meta": meta})
+    start = {"op": "start_if", "name": source["name"], "created": created, "command": command, "meta": meta}
+    if fence_id is not None:
+        start["fence_id"] = fence_id
+    started = await host(start)
     if started != {"ok": True}:
         raise _not_started_again(source["name"])
 
@@ -5408,7 +5474,7 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
     try:
         name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"], shlex.join(argv), kind,
                                      kind, account=account,
-                                     switch=(target, carry, source_context, target_context) if native else (target, carry),
+                                     switch=(target, carry, source_context, target_context, item["id"]) if native else (target, carry),
                                      source=raw)
     except AccountSwitchUndone:   # the source was stopped all the same
         await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
@@ -5606,6 +5672,11 @@ async def _run_session_action_once(app, request_id):
     create_nonce = sessiontoken.new_nonce() if item["action"] == "create" else None
     try:
         result = await _execute_session_action(item, create_nonce)
+    except NativeFenceRecoveryRequired as exc:
+        return app["session_requests"].finish(
+            request_id, error=str(exc) + "; inspect the session before explicit fence recovery.",
+            detail={"code": "switch_fence_recovery", "retryable": False, "operator_action": True,
+                    "fence": exc.fence, "target_copy_uncertain": True})
     except AccountSwitchTargetStartUnconfirmed as exc:
         return app["session_requests"].finish(
             request_id, error=("The conversation was copied, but the target start failed or could not be confirmed. "
