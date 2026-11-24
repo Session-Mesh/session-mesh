@@ -251,6 +251,22 @@ let await_size_reads_matching_frame () =
       );
     ]
 
+let send_to_retired send =
+  try send () with
+  | Unix.Unix_error ((Unix.EPIPE | Unix.ECONNRESET | Unix.ENOTCONN), _, _) -> ()
+
+let retired_write_errors_are_narrow () =
+  List.iter
+    (fun error -> send_to_retired (fun () -> raise (Unix.Unix_error (error, "write", ""))))
+    [ Unix.EPIPE; Unix.ECONNRESET; Unix.ENOTCONN ];
+  let propagated =
+    try
+      send_to_retired (fun () -> raise (Unix.Unix_error (Unix.EBADF, "write", "")));
+      false
+    with Unix.Unix_error (Unix.EBADF, _, _) -> true
+  in
+  expect "unrelated write errors remain visible" propagated
+
 let conditional_attachment_is_retired () =
   with_host (fun fixture ->
       let before = new_agent fixture in
@@ -267,8 +283,7 @@ let conditional_attachment_is_retired () =
         ~finally:(fun () -> List.iter Unix.close [old; legacy; fresh])
         (fun () ->
           let stale = Filename.concat fixture.home "stale-input" in
-          (try type_in old ("printf stale > " ^ stale ^ "\r")
-           with Unix.Unix_error ((Unix.EPIPE | Unix.ECONNRESET), _, _) -> ());
+          send_to_retired (fun () -> type_in old ("printf stale > " ^ stale ^ "\r"));
           let barrier = Filename.concat fixture.home "fresh-input" in
           type_in fresh ("printf fresh > " ^ barrier ^ "\r");
           ignore (wait_until "fresh conditional input" 5. (fun () -> Sys.file_exists barrier));
@@ -287,7 +302,7 @@ let conditional_attachment_is_retired () =
           control fresh 'R' [ ("rows", `Int 41); ("cols", `Int 91); ("size", `String "take") ];
           await_size fresh 41 "you";
           List.iter
-            (fun send -> try send () with Unix.Unix_error ((Unix.EPIPE | Unix.ECONNRESET), _, _) -> ())
+            send_to_retired
             [ (fun () -> control old 'H' (lease false));
               (fun () -> control old 'R' [ ("rows", `Int 65); ("cols", `Int 105); ("size", `String "take") ]) ];
           control fresh 'R' [ ("rows", `Int 42); ("cols", `Int 92); ("size", `String "keep") ];
@@ -540,6 +555,8 @@ let () =
             same_terminal;
           Alcotest.test_case "conditional attachments retire, legacy attachments stay" `Slow
             conditional_attachment_is_retired;
+          Alcotest.test_case "retired write errors are narrowly handled" `Quick
+            retired_write_errors_are_narrow;
           Alcotest.test_case "an agent that ignores SIGHUP is killed" `Slow
             stubborn_agent_is_killed;
           Alcotest.test_case "refusals signal nothing" `Slow
