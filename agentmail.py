@@ -119,7 +119,7 @@ def _wake(value, legacy):
             and isinstance(value["through_seq"], int) and not isinstance(value["through_seq"], bool)
             and 0 < value["from_seq"] <= value["through_seq"]
             and isinstance(value["count"], int) and not isinstance(value["count"], bool)
-            and 0 < value["count"] <= MAX_INBOX
+            and 0 < value["count"] <= (MAX_MESSAGES if legacy else MAX_INBOX)
             and value["state"] in {"pending", "claimed", "injected"}):
         return None
     if not legacy:
@@ -224,6 +224,7 @@ def _upgrade_delivery(state):
         elif request is None:
             _request_consent(state, message, message["created"])
     retained = []
+    notification_ids = {wake["notification_id"] for wake in state["wakes"]}
     for wake in state["wakes"]:
         seqs = [message["seq"] for message in messages
                 if message["target"] == wake["target"] and message["seq"] in allowed
@@ -232,9 +233,31 @@ def _upgrade_delivery(state):
             # Preserve completion idempotence for a claimed generation that must no longer dispatch.
             retained.append({**wake, "state": "injected", "seqs": []})
         elif seqs:
-            _set_wake_members(wake, seqs)
             allowed.difference_update(seqs)  # a legacy range can overlap a later wake
-            retained.append(wake)
+            batches = [seqs[offset:offset + MAX_INBOX] for offset in range(0, len(seqs), MAX_INBOX)]
+            if wake["state"] == "claimed" and len(batches) > 1:
+                # A previous notification may already have been delivered.
+                # Do not turn its remainder into an automatic second wake.
+                raise MailStorageError("Oversized claimed legacy wake needs explicit recovery")
+            for index, members in enumerate(batches):
+                # Preserve the original notification identity, and split only
+                # a pending wake that has never been claimed.
+                batch = wake
+                if index:
+                    for _ in range(16):
+                        notification_id = secrets.token_hex(16)
+                        if notification_id not in notification_ids:
+                            notification_ids.add(notification_id)
+                            break
+                    else:
+                        raise MailStorageError("Could not allocate a unique migration wake")
+                    batch = {**wake, "notification_id": notification_id, "state": "pending"}
+                _set_wake_members(batch, members)
+                retained.append(batch)
+    if len(retained) > MAX_WAKE_BATCHES:
+        # Do not quarantine valid historical mail or discard completion IDs.
+        # The original file remains untouched for explicit recovery.
+        raise MailStorageError("Too many legacy wake batches to migrate")
     state["wakes"] = retained
     _save(state)
     return state
