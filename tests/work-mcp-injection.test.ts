@@ -240,8 +240,22 @@ executable, overlay = pimcp.prepare(os.environ["MESH_CONF_DIR"])
 print(json.dumps([agentmcp.opencode_config(), agentmcp.opencode_config_v2(), agentmcp.gemini_settings({}),
                   agentmcp.copilot_args(), agentmcp.agy_plugin_files(), agentmcp.vibe_mcp_value({}),
                   (overlay / "mcp.json").read_text()]))`);
-    assert.equal(JSON.stringify(r).includes('mesh-work'), false);
-    assert.equal(JSON.stringify(r).includes('work-mcp'), false);
+    const [opencode, opencodeV2, gemini, copilot, agy, vibe, pi] = r;
+    const copilotConfig = JSON.parse(copilot[copilot.indexOf('--additional-mcp-config') + 1]);
+    const serverSets = [JSON.parse(opencode).mcp, JSON.parse(opencodeV2).mcp?.servers, gemini.mcpServers,
+      copilotConfig.mcpServers, JSON.parse(agy['mcp_config.json']).mcpServers, JSON.parse(pi).mcpServers];
+    for (const servers of serverSets) {
+      assert.ok(servers && Object.hasOwn(servers, 'mesh-board'));
+      assert.equal(Object.hasOwn(servers, 'mesh-work'), false);
+      for (const entry of Object.values(servers) as {command?: string | string[]}[]) {
+        const command = Array.isArray(entry.command) ? entry.command[0] : entry.command;
+        assert.notEqual(path.basename(command ?? ''), 'work-mcp');
+      }
+    }
+    if (vibe) for (const server of JSON.parse(vibe.join('token'))) {
+      assert.notEqual(server.name, 'mesh-work');
+      assert.notEqual(path.basename(server.command), 'work-mcp');
+    }
   });
 });
 

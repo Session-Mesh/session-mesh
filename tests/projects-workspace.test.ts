@@ -224,7 +224,9 @@ for (const width of [1280, 390]) test(`actual native Projects create/settings/co
       assert.equal(await page.evaluate('active===p1Saved.pane && active.term===p1Saved.term && active.conn===p1Saved.conn && paneTargets.valid(p1Saved.target) && active.id===p1Saved.id'), true);
       assert.equal(await page.locator('#line-text').inputValue(), 'native pending draft');
       assert.equal(await page.evaluate('active.term.buffer.active.viewportY === p1Saved.viewport'), true);
-      await page.evaluate('active.conn.terminal.queueInput(new TextEncoder().encode("p1-marker\\n"))');
+      await page.evaluate('active.term.focus()');
+      await page.keyboard.type('p1-marker');
+      await page.keyboard.press('Enter');
       await page.waitForFunction(() => Array.from({length:active.term.buffer.active.length},(_,i)=>active.term.buffer.active.getLine(i)?.translateToString()).join('\n').includes('reply:p1-marker'));
       await enter(page, width === 390);
       await page.locator('#project-overview h2').filter({ hasText: 'Shared notebook' }).waitFor();
@@ -615,7 +617,9 @@ for (const width of [1280, 390]) test(`actual I1 native typed repository ${REAL_
       'bounded UI preferences retain the selected project section without observation authority');
     await page.locator('#projects-return').click();
     assert.equal(await page.evaluate('active===i1Saved.pane && active.term===i1Saved.term && active.conn===i1Saved.conn && paneTargets.valid(i1Saved.target)'), true);
-    await page.evaluate('active.conn.terminal.queueInput(new TextEncoder().encode("i1-terminal-alive\\n"))');
+    await page.evaluate('active.term.focus()');
+    await page.keyboard.type('i1-terminal-alive');
+    await page.keyboard.press('Enter');
     await page.waitForFunction(() => Array.from({ length: active.term.buffer.active.length }, (_, i) => active.term.buffer.active.getLine(i)?.translateToString()).join('\n').includes('i1-terminal-alive'));
     await context.close();
   } finally { await browser?.close(); if (server) await stopServer(server); await stop(host); fs.rmSync(where.scratch, { recursive: true, force: true }); }

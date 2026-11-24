@@ -161,6 +161,8 @@ describe('the session marker', { skip }, () => {
     // Back to the sessions; the other session's button, from the keyboard, opens its task sheet with the answer form.
     await page.locator('#btn-sessions').click();
     await openSession(page, 'qa-linked');
+    // Wait for this session's marker, not the previously active session's header.
+    await page.locator('.pane.active [data-act="questions"][aria-label^="1 open question for this session"]').waitFor();
     await headerButton(page).focus();
     await page.keyboard.press('Enter');
     const sheet = page.locator('.work-detail-pane');
