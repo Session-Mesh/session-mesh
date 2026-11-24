@@ -17,6 +17,11 @@ test("retained text is readable without replay and disappears on discard", () =>
   assert.equal(input.retainedText, "");
   assert.equal(sent.length, 1);
 });
+test("retained text exposes terminal controls and replaces invalid UTF-8", () => {
+  const input = createAcknowledgedInput({version: 2, created: 42, send: () => {}, state: () => {}});
+  assert.equal(input.write(new Uint8Array([27, 91, 50, 48, 48, 126, 65, 8, 255])), true);
+  assert.equal(input.retainedText, "\x1b[200~A\b�");
+});
 test("only complete terminal reports bypass a new draft lease", () => {
   for (const report of [
     "\x1b[I", "\x1b[O", "\x1b[<0;5;5M", "\x1b[<32;6;7M",

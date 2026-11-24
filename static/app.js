@@ -531,7 +531,7 @@ class Pane {
       }
     });
     $(".p-input-discard", this.el).addEventListener("click", () => {
-      for (const entry of this.inputAcks.values()) {
+      for (const [, entry] of this.activeSessionInputs()) {
         if (entry.input.pendingBytes) {
           const uncertain = entry.input.deliveryUncertain;
           entry.input.discard();
@@ -885,7 +885,7 @@ class Pane {
 
   renderRetainedInput() {
     const container = $(".p-input-review", this.el);
-    const entries = [...this.inputAcks.values()].filter((entry) => entry.input.pendingBytes);
+    const entries = this.activeSessionInputs().map(([, entry]) => entry).filter((entry) => entry.input.pendingBytes);
     const pending = entries.reduce((total, entry) => total + entry.input.pendingBytes, 0);
     const current = this.inputAck;
     const obsolete = this.obsoleteDirtyInput();
@@ -899,21 +899,21 @@ class Pane {
     const drafts = $(".p-input-drafts", container);
     const texts = [];
     if (!container.hidden && this.conn?.name) {
-      const prefix = `${this.conn.name}\0`;
-      for (const [key, entry] of this.inputAcks) {
-        if (!key.startsWith(prefix) || !entry.input.pendingHumanBytes) continue;
-        texts.push(entry.input.retainedText);
+      for (const [key, entry] of this.activeSessionInputs()) {
+        if (!entry.input.pendingHumanBytes) continue;
+        texts.push({ text: entry.input.retainedText, previous: key !== `${this.conn.name}\0${this.conn.created}` });
       }
     }
     const existing = [...drafts.querySelectorAll("textarea")];
     if (drafts.dataset.session !== (this.conn?.name ?? "") || existing.length !== texts.length ||
-        existing.some((field, i) => field.value !== texts[i])) {
+        existing.some((field, i) => field.value !== texts[i].text || field.dataset.previous !== String(texts[i].previous))) {
       drafts.replaceChildren();
       drafts.dataset.session = this.conn?.name ?? "";
-      for (const text of texts) {
+      for (const {text, previous} of texts) {
         const label = document.createElement("label");
-        label.textContent = t("conn.inputCopyDraft");
+        label.textContent = t(previous ? "conn.inputCopyPreviousDraft" : "conn.inputCopyDraft");
         const textarea = document.createElement("textarea");
+        textarea.dataset.previous = String(previous);
         textarea.readOnly = true;
         textarea.spellcheck = false;
         textarea.value = text;
@@ -944,11 +944,16 @@ class Pane {
       ? t("conn.inputRetained", { count: pending, state }) : state;
   }
 
+  activeSessionInputs() {
+    const name = this.conn?.name;
+    return name ? [...this.inputAcks].filter(([key]) => key.startsWith(`${name}\0`)) : [];
+  }
+
   obsoleteDirtyInput() {
     const c = this.conn;
     if (!c) return null;
     const currentKey = `${c.name}\0${c.created}`;
-    for (const [key, entry] of this.inputAcks) {
+    for (const [key, entry] of this.activeSessionInputs()) {
       if (key !== currentKey && entry.input !== this.inputAck &&
           !entry.input.pendingBytes && entry.lease?.dirty) return { key, entry };
     }
