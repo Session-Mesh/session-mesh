@@ -1774,6 +1774,8 @@ async def _release_native_fence(fence):
             raise NativeFenceRecoveryRequired(fence, "Release outcome uncertain") from exc
         if reply == {"ok": True}:
             return
+        if isinstance(reply, dict) and reply.get("reason") == "fence_mismatch":
+            raise NativeFenceRecoveryRequired(fence, "Fence may already be released or held by another owner")
         if not isinstance(reply, dict) or reply.get("reason") != "control_pending":
             raise NativeFenceRecoveryRequired(fence, "Fence release refused")
         await asyncio.sleep(.05)
@@ -1916,9 +1918,15 @@ async def _stop_agent(source, known_agent, settings_binding=None, profile_bindin
         return stopped["created"]
     reason = stopped.get("reason") if isinstance(stopped, dict) else None
     reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,40}", reason) else "refused"
-    if fence_state is not None and isinstance(stopped, dict) and stopped.get("ok") is False and reason != "agent_stop_uncertain":
+    # Only these responses are guaranteed to precede every signal. In
+    # particular stale_incarnation can also follow a successful stop, and
+    # agent_still_running may follow HUP/KILL; unknown reasons fail closed.
+    before_signal = {"process_scan_failed", "no_terminal", "no_shell", "no_job_control",
+                     "unsupported_foreground", "agent_not_foreground", "agent_changed",
+                     "agent_starting", "input_pending"}
+    if fence_state is not None and isinstance(stopped, dict) and stopped.get("ok") is False and reason in before_signal:
         fence_state["stop_refused"] = True
-    if reason == "agent_stop_uncertain":
+    if reason in {"agent_stop_uncertain", "agent_still_running", "stale_incarnation"} or (fence_state is not None and reason not in before_signal):
         raise web.HTTPServiceUnavailable(text="Agent stop outcome uncertain; inspect the session before resuming")
     if reason in WHOLE_SESSION_REASONS:
         raise WholeSessionOnly(reason)
@@ -5857,7 +5865,9 @@ async def api_session_action_recover_fence(request):
     saved["created"] = matches[0]["created"]
     try:
         await _release_native_fence(saved)
-    except NativeFenceRecoveryRequired:
+    except NativeFenceRecoveryRequired as exc:
+        if str(exc) == "Fence may already be released or held by another owner":
+            raise web.HTTPConflict(text="Fence may already be released or held by another owner; inspect before another action") from None
         raise web.HTTPServiceUnavailable(text="Fence release could not be confirmed; inspect before another action") from None
     _forget_native_fence(request_id)
     return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})
