@@ -5396,9 +5396,10 @@ async def api_agent_mail_consent_revoke(request):
     _require_owner_cookie(request)
     body = _agent_mail_body(await json_object(request), {"policy_id"})
     try:
-        policy = await asyncio.to_thread(agentmail.revoke_consent, body["policy_id"])
+        policy = await request.app["agent_wakes"].mutate(agentmail.revoke_consent, body["policy_id"])
     except agentmail.MailError as exc:
         _agent_mail_failure(exc)
+    request.app["agent_wakes"].trigger()
     return web.json_response({"revoked": policy}, headers={"Cache-Control": "no-store"})
 
 

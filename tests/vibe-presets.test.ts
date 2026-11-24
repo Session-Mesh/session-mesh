@@ -17,6 +17,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, removeScratch, startMesh} from './mesh-server-lib.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {approveMail} from './helpers/agent-mail-mesh.ts';
 
 const CONVERSATION = 'e98ebb44-7316-c2a7-62cf-582ea59f42f6';
 const MARKER = 'VIBE-TEST-CREDENTIAL';
@@ -151,6 +152,7 @@ async function send(from: string, to: string, text: string): Promise<void> {
     target: to, target_created: await createdOf(to), kind: 'message', text}),
   headers: {Authorization: `MeshSession ${token}`, 'Content-Type': 'application/json'}});
   assert.equal(sent.status, 200, await sent.clone().text());
+  await approveMail(mesh.base, `mesh_auth=${await ownerCookie()}`, sent);
 }
 
 const waitingFor = async (name: string) => ((await agentOf(name)) as {waiting_for?: string} | null | undefined)?.waiting_for;

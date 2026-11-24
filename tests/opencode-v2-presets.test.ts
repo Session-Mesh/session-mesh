@@ -18,6 +18,7 @@ import {after, before, describe, test} from 'node:test';
 import {addConversationV2, createStoreV2} from './helpers/opencode-store.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {approveMail} from './helpers/agent-mail-mesh.ts';
 
 const CONVERSATION = 'ses_e1ec1ceb2ffeve47ULriArjJ5g';
 const CHILD = 'ses_e1ec1ceb2ffeCHILD00000000001';
@@ -207,6 +208,7 @@ describe('OpenCode 2 preset', () => {
         target: 'oc2-main', target_created: created, kind: 'message', text}),
       headers: {Authorization: `MeshSession ${peerToken}`, 'Content-Type': 'application/json'}});
       assert.equal(sent.status, 200, await sent.clone().text());
+      await approveMail(mesh.base, `mesh_auth=${await ownerCookie()}`, sent);
     };
     report('oc2-main', [started()]);
     await until('working', async () => (await agentOf('oc2-main'))?.status === 'busy');

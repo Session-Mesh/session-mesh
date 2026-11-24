@@ -4,10 +4,10 @@
 """Bounded private inboxes between live Mesh agent sessions.
 
 Messages are addressed to a session *incarnation* (name plus creation time),
-not merely to a reusable terminal name.  They are durable across Web-server
-restarts, but are never delivered to a terminal: an agent must explicitly ask
-its local MCP bridge to read its own inbox.  Message text is therefore still
-untrusted agent-provided data, not an instruction authorised by Mesh.
+not merely to a reusable terminal name. They are durable across web-server
+restarts. Mesh asks for consent at deposit time and only schedules wakes for
+approved messages. The agent still reads the text through its local MCP bridge;
+the text is untrusted data and is never injected into a terminal.
 """
 
 import contextlib
@@ -106,8 +106,10 @@ def _message(value):
     }
 
 
-def _wake(value):
+def _wake(value, legacy):
     required = {"notification_id", "target", "from_seq", "through_seq", "count", "state"}
+    if not legacy:
+        required.add("seqs")
     if not isinstance(value, dict) or set(value) != required:
         return None
     if not (isinstance(value["notification_id"], str)
@@ -120,9 +122,16 @@ def _wake(value):
             and 0 < value["count"] <= MAX_INBOX
             and value["state"] in {"pending", "claimed", "injected"}):
         return None
-    return {"notification_id": value["notification_id"], "target": dict(value["target"]),
-            "from_seq": value["from_seq"], "through_seq": value["through_seq"],
-            "count": value["count"], "state": value["state"]}
+    if not legacy:
+        seqs = value["seqs"]
+        if (not isinstance(seqs, list)
+                or len(seqs) > MAX_INBOX
+                or any(not isinstance(seq, int) or isinstance(seq, bool) for seq in seqs)
+                or (seqs and (seqs != sorted(set(seqs)) or len(seqs) != value["count"]
+                              or seqs[0] != value["from_seq"] or seqs[-1] != value["through_seq"]))
+                or (not seqs and value["state"] != "injected")):
+            return None
+    return {**value, "target": dict(value["target"])}
 
 
 def _consent_request(value):
@@ -184,7 +193,7 @@ def _corrupt():
 
 
 def _migrate_v1(raw):
-    """Losslessly add sequence/wake metadata to the original mailbox shape."""
+    """Preserve the original messages and assign each a sequence number."""
     if not isinstance(raw, dict) or set(raw) != {"version", "messages"} \
             or raw.get("version") != 1 or not isinstance(raw.get("messages"), list) \
             or len(raw["messages"]) > MAX_MESSAGES:
@@ -199,15 +208,36 @@ def _migrate_v1(raw):
         messages.append(message)
     if len({message["id"] for message in messages}) != len(messages):
         return None
-    wakes = []
-    for target in {json.dumps(message["target"], sort_keys=True) for message in messages}:
-        identity = json.loads(target)
-        seqs = [message["seq"] for message in messages if message["target"] == identity]
-        wakes.append({"notification_id": secrets.token_hex(16), "target": identity,
-                      "from_seq": min(seqs), "through_seq": max(seqs),
-                      "count": len(seqs), "state": "pending"})
-    return {"next_seq": len(messages) + 1, "messages": messages, "wakes": wakes,
+    return {"next_seq": len(messages) + 1, "messages": messages, "wakes": [],
             "consent_requests": [], "always_policies": []}
+
+
+def _upgrade_delivery(state):
+    """Keep old mail and existing grants, but never retry an old wake for unapproved mail."""
+    messages = state["messages"]
+    requests = {item["message_id"]: item for item in state["consent_requests"]}
+    allowed = set()
+    for message in messages:
+        request = requests.get(message["id"])
+        if _has_policy(state, message) or (request and request["state"] == "granted"):
+            allowed.add(message["seq"])
+        elif request is None:
+            _request_consent(state, message, message["created"])
+    retained = []
+    for wake in state["wakes"]:
+        seqs = [message["seq"] for message in messages
+                if message["target"] == wake["target"] and message["seq"] in allowed
+                and wake["from_seq"] <= message["seq"] <= wake["through_seq"]]
+        if wake["state"] == "injected" or (wake["state"] == "claimed" and not seqs):
+            # Preserve completion idempotence for a claimed generation that must no longer dispatch.
+            retained.append({**wake, "state": "injected", "seqs": []})
+        elif seqs:
+            _set_wake_members(wake, seqs)
+            allowed.difference_update(seqs)  # a legacy range can overlap a later wake
+            retained.append(wake)
+    state["wakes"] = retained
+    _save(state)
+    return state
 
 
 def _load():
@@ -221,8 +251,7 @@ def _load():
         migrated = _migrate_v1(raw)
         if migrated is None:
             return _corrupt()
-        _save(migrated)
-        return migrated
+        return _upgrade_delivery(migrated)
     if isinstance(raw, dict) and raw.get("version") == 2:
         messages_by_target = raw.get("messages") if isinstance(raw.get("messages"), list) else []
         migrated_wakes = []
@@ -250,12 +279,9 @@ def _load():
                 migrated_wakes.append({**wake, "count": 0})
         raw = {**raw, "version": 3, "wakes": migrated_wakes,
                "consent_requests": [], "always_policies": []}
-        migrated_v2 = True
-    else:
-        migrated_v2 = False
     if not isinstance(raw, dict) or set(raw) != {"version", "next_seq", "messages", "wakes",
                                                 "consent_requests", "always_policies"} \
-            or raw["version"] != 3 or not isinstance(raw["messages"], list) \
+            or raw["version"] not in (3, 4) or not isinstance(raw["messages"], list) \
             or not isinstance(raw["wakes"], list) or len(raw["messages"]) > MAX_MESSAGES \
             or len(raw["wakes"]) > MAX_WAKE_BATCHES \
             or not isinstance(raw["consent_requests"], list) \
@@ -266,7 +292,8 @@ def _load():
             or raw["next_seq"] < 1:
         return _corrupt()
     messages = [_message(value) for value in raw["messages"]]
-    wakes = [_wake(value) for value in raw["wakes"]]
+    legacy = raw["version"] == 3
+    wakes = [_wake(value, legacy) for value in raw["wakes"]]
     consents = [_consent_request(value) for value in raw["consent_requests"]]
     policies = [_always_policy(value) for value in raw["always_policies"]]
     seqs = [value["seq"] for value in messages if value is not None]
@@ -283,22 +310,21 @@ def _load():
             or any(valid_messages.get(value["message_id"], {}).get("source") != value["source"]
                    or valid_messages.get(value["message_id"], {}).get("target") != value["target"]
                    for value in consents)
-            or any(value["state"] == "pending" and value["count"] != sum(
+            or any((value["state"] == "pending" if legacy else value["state"] != "injected")
+                   and value["count"] != sum(
                 message["target"] == value["target"]
-                and value["from_seq"] <= message["seq"] <= value["through_seq"]
-                for message in messages if message is not None)
-                   for value in wakes)):
+                and (value["from_seq"] <= message["seq"] <= value["through_seq"] if legacy
+                     else message["seq"] in value["seqs"])
+                for message in messages) for value in wakes)):
         return _corrupt()
     state = {"next_seq": raw["next_seq"], "messages": messages, "wakes": wakes,
              "consent_requests": consents, "always_policies": policies}
-    if migrated_v2:
-        _save(state)
-    return state
+    return _upgrade_delivery(state) if legacy else state
 
 
 def _save(state):
     try:
-        fsutil.atomic_write(FILE, json.dumps({"version": 3, **state}, ensure_ascii=False,
+        fsutil.atomic_write(FILE, json.dumps({"version": 4, **state}, ensure_ascii=False,
                                               separators=(",", ":"), allow_nan=False))
     except OSError as exc:
         raise MailStorageError("Could not save agent messages") from exc
@@ -383,6 +409,14 @@ def _pair_key(policy):
     return json.dumps([policy["source"], policy["target"]], sort_keys=True)
 
 
+def _same_pair(a, b):
+    return a["source"] == b["source"] and a["target"] == b["target"]
+
+
+def _has_policy(state, message):
+    return any(_same_pair(policy, message) for policy in state["always_policies"])
+
+
 def _one_policy_per_pair(policies):
     """The permanent permissions with at most one per (source, target): a transfer can bring a pair that
     already had one (the new incarnation was granted before), and the oldest then stays."""
@@ -411,14 +445,26 @@ def inbox(target, live):
         changed = _prune(state, live)
         if changed:
             _save(state)
-        return [{key: message[key] for key in
-                 ("id", "conversation_id", "source", "kind", "created", "seq")}
+        held = {item["message_id"] for item in state["consent_requests"] if item["state"] == "pending"}
+        return [{**{key: message[key] for key in
+                    ("id", "conversation_id", "source", "kind", "created", "seq")},
+                 **({"authorization_pending": True} if message["id"] in held else {})}
                 for message in state["messages"] if message["target"] == target]
 
 
 def _public_consent(request):
     return {key: request[key] for key in
             ("id", "message_id", "source", "target", "created", "state")}
+
+
+def _request_consent(state, message, now):
+    if len(state["consent_requests"]) >= MAX_CONSENT_REQUESTS:
+        raise MailFull()
+    request = {"id": secrets.token_hex(16), "message_id": message["id"],
+               "source": dict(message["source"]), "target": dict(message["target"]),
+               "created": now, "state": "pending"}
+    state["consent_requests"].append(request)
+    return request
 
 
 def read(target, message_id, live, now=None):
@@ -435,31 +481,20 @@ def read(target, message_id, live, now=None):
                         if item["id"] == message_id and item["target"] == target), None)
         if message is None:
             raise MailNotFound()
-        always = any(policy["source"] == message["source"]
-                     and policy["target"] == message["target"]
-                     for policy in state["always_policies"])
+        always = _has_policy(state, message)
         request = next((item for item in state["consent_requests"]
                         if item["message_id"] == message_id), None)
         if not always and (request is None or request["state"] != "granted"):
             if request is None:
-                if len(state["consent_requests"]) >= MAX_CONSENT_REQUESTS:
-                    raise MailFull()
                 created = time.time() if now is None else now
                 if not _finite(created):
                     raise MailInvalidRequest("Invalid authorization request date")
-                request = {"id": secrets.token_hex(16), "message_id": message_id,
-                           "source": dict(message["source"]), "target": dict(message["target"]),
-                           "created": created, "state": "pending"}
-                state["consent_requests"].append(request)
-                _save(state)
-            elif changed:
+                request = _request_consent(state, message, created)
                 _save(state)
             raise MailConsentPending(_public_consent(request))
         if request is not None:
             # A once grant is a capability consumed by this single successful read.
             state["consent_requests"].remove(request)
-            _save(state)
-        elif changed:
             _save(state)
         return {key: message[key] for key in
                 ("id", "conversation_id", "source", "kind", "text", "created", "seq")}
@@ -524,23 +559,71 @@ def owner_mailbox(identity, live):
         }
 
 
-def _drop_message(state, message_id):
-    state["messages"] = [message for message in state["messages"]
-                         if message["id"] != message_id]
-    state["consent_requests"] = [request for request in state["consent_requests"]
-                                  if request["message_id"] != message_id]
+def _set_wake_members(wake, seqs):
+    members = sorted(seqs)
+    wake.update(seqs=members, from_seq=members[0], through_seq=members[-1], count=len(members))
+
+
+def _withdraw_wake_members(state, seqs):
+    if not seqs:
+        return
     retained = []
     for wake in state["wakes"]:
         if wake["state"] == "injected":
             retained.append(wake)
             continue
-        seqs = [message["seq"] for message in state["messages"]
-                if message["target"] == wake["target"]
-                and wake["from_seq"] <= message["seq"] <= wake["through_seq"]]
-        if seqs:
-            wake.update(from_seq=min(seqs), through_seq=max(seqs), count=len(seqs))
+        remaining = set(wake["seqs"]) - seqs
+        if remaining:
+            if len(remaining) < wake["count"]:
+                _set_wake_members(wake, remaining)
             retained.append(wake)
     state["wakes"] = retained
+
+
+def _drop_message(state, message_id):
+    _withdraw_wake_members(state, {item["seq"] for item in state["messages"] if item["id"] == message_id})
+    state["messages"] = [message for message in state["messages"]
+                         if message["id"] != message_id]
+    state["consent_requests"] = [request for request in state["consent_requests"]
+                                  if request["message_id"] != message_id]
+
+
+def _queue_wake(state, message):
+    target, seq = message["target"], message["seq"]
+    active = [wake for wake in state["wakes"] if wake["target"] == target
+              and wake["state"] != "injected"]
+    if any(seq in wake["seqs"] for wake in active):
+        return
+    # Owner decisions can arrive out of send order. Track exact members rather
+    # than assuming every message between two sequence numbers is authorized.
+    pending = next((wake for wake in reversed(active) if wake["state"] == "pending"), None)
+    if pending is not None and pending["count"] < MAX_INBOX:
+        _set_wake_members(pending, [*pending["seqs"], seq])
+        return
+    if len(state["wakes"]) >= MAX_WAKE_BATCHES:
+        old = next((wake for wake in state["wakes"] if wake["state"] == "injected"), None)
+        if old is None:
+            raise MailFull()
+        state["wakes"].remove(old)
+    wake = {"notification_id": secrets.token_hex(16), "target": dict(target), "state": "pending"}
+    _set_wake_members(wake, [seq])
+    state["wakes"].append(wake)
+
+
+def _remove_policy(state, policy, now):
+    state["always_policies"].remove(policy)
+    requested = {item["message_id"]: item for item in state["consent_requests"]}
+    held = set()
+    for message in state["messages"]:
+        if _same_pair(message, policy) and not _has_policy(state, message):
+            request = requested.get(message["id"])
+            if request is None:
+                _request_consent(state, message, now)
+            elif request["state"] == "granted":
+                # An independent once grant is not revoked with the standing policy.
+                continue
+            held.add(message["seq"])
+    _withdraw_wake_members(state, held)
 
 
 def decide_consent(request_id, decision, now=None):
@@ -558,47 +641,32 @@ def decide_consent(request_id, decision, now=None):
                         if item["id"] == request_id and item["state"] == "pending"), None)
         if request is None:
             raise MailNotFound()
+        messages = {item["id"]: item for item in state["messages"]}
         result = _public_consent(request)
         result["decision"] = decision
         if decision == "no":
             _drop_message(state, request["message_id"])
         elif decision == "yes":
             request["state"] = "granted"
+            _queue_wake(state, messages[request["message_id"]])
         else:
             policy = next((item for item in state["always_policies"]
-                           if item["source"] == request["source"]
-                           and item["target"] == request["target"]), None)
+                           if _same_pair(item, request)), None)
             if policy is None:
                 if len(state["always_policies"]) >= MAX_ALWAYS_POLICIES:
                     # Losing an old preference is fail-closed: its peer must ask again.
-                    state["always_policies"].sort(key=lambda item: (item["created"], item["id"]))
-                    state["always_policies"].pop(0)
+                    old = min(state["always_policies"], key=lambda item: (item["created"], item["id"]))
+                    _remove_policy(state, old, now)
                 policy = {"id": secrets.token_hex(16), "source": dict(request["source"]),
                           "target": dict(request["target"]), "created": now}
                 state["always_policies"].append(policy)
+            approved = [item for item in state["consent_requests"]
+                        if item["state"] == "pending" and _same_pair(item, request)]
             state["consent_requests"] = [item for item in state["consent_requests"]
-                                          if not (item["source"] == request["source"]
-                                                  and item["target"] == request["target"])]
+                                          if item not in approved]
+            for item in approved:
+                _queue_wake(state, messages[item["message_id"]])
             result["policy"] = dict(policy)
-        if decision != "no":
-            message = next(item for item in state["messages"]
-                           if item["id"] == request["message_id"])
-            covered = any(wake["target"] == message["target"]
-                          and wake["state"] != "injected"
-                          and wake["from_seq"] <= message["seq"] <= wake["through_seq"]
-                          for wake in state["wakes"])
-            if not covered:
-                while len(state["wakes"]) >= MAX_WAKE_BATCHES:
-                    old = next((wake for wake in state["wakes"]
-                                if wake["state"] == "injected"), None)
-                    if old is None:
-                        raise MailFull()
-                    state["wakes"].remove(old)
-                state["wakes"].append({"notification_id": secrets.token_hex(16),
-                                       "target": dict(message["target"]),
-                                       "from_seq": message["seq"],
-                                       "through_seq": message["seq"],
-                                       "count": 1, "state": "pending"})
         _save(state)
         return result
 
@@ -612,7 +680,7 @@ def revoke_consent(policy_id):
                        if item["id"] == policy_id), None)
         if policy is None:
             raise MailNotFound()
-        state["always_policies"].remove(policy)
+        _remove_policy(state, policy, time.time())
         _save(state)
         return dict(policy)
 
@@ -633,30 +701,16 @@ def _append(state, source, target, kind, text, conversation_id, now):
     if (len(state["messages"]) >= MAX_MESSAGES
             or sum(message["target"] == target for message in state["messages"]) >= MAX_INBOX):
         raise MailFull()
-    # Claim freezes a dispatch watermark.  A message racing with an accepted
-    # notification must form the next generation, never hide behind the
-    # already-dispatched notification.
-    active = next((wake for wake in reversed(state["wakes"])
-                   if wake["target"] == target and wake["state"] == "pending"), None)
-    if active is None:
-        while len(state["wakes"]) >= MAX_WAKE_BATCHES:
-            old = next((wake for wake in state["wakes"] if wake["state"] == "injected"), None)
-            if old is None:
-                raise MailFull()
-            state["wakes"].remove(old)
     seq = state["next_seq"]
     message = {"id": secrets.token_hex(16), "conversation_id": conversation_id,
                "source": dict(source), "target": dict(target), "kind": kind,
                "text": text, "created": now, "seq": seq}
+    if _has_policy(state, message):
+        _queue_wake(state, message)
+    else:
+        _request_consent(state, message, now)
     state["messages"].append(message)
     state["next_seq"] += 1
-    if active is None:
-        state["wakes"].append({"notification_id": secrets.token_hex(16),
-                               "target": dict(target), "from_seq": seq,
-                               "through_seq": seq, "count": 1, "state": "pending"})
-    else:
-        active["through_seq"] = seq
-        active["count"] += 1
     return {key: value for key, value in message.items() if key not in {"source", "text"}}
 
 

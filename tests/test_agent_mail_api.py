@@ -115,7 +115,7 @@ async def test_pi_wake_stream_auth_incarnation_and_confirmation(client, mesh_lis
 
 
 async def test_pi_unconfirmed_wake_does_not_block_mail_operations(
-        client, mesh_listing, mail_file, monkeypatch):
+        client, mesh_listing, mail_file, monkeypatch, auth_cookie):
     sender, pi = agents(mesh_listing)
     mesh_listing[1]["meta"]["known_agent"] = "pi"
     async def host(request):
@@ -127,7 +127,14 @@ async def test_pi_unconfirmed_wake_does_not_block_mail_operations(
         await stream.content.readline()
         url = "/api/agent-mail/@self/send"
         first = {"target": "beta", "target_created": 2.0, "kind": "task", "text": "one"}
-        assert (await client.post(url, headers=sender, json=first)).status == 200
+        sent = await client.post(url, headers=sender, json=first)
+        assert sent.status == 200
+        owner = await client.get("/api/agent-mail/consent", headers=auth_cookie)
+        pending, = (await owner.json())["requests"]
+        assert pending["message_id"] == (await sent.json())["receipt"]["id"]
+        decision = await client.post(f"/api/agent-mail/consent/{pending['id']}/decision",
+                                     headers=auth_cookie, json={"decision": "yes"})
+        assert decision.status == 200
         notice = json.loads(await asyncio.wait_for(stream.content.readline(), 3))
         assert "notification_id" in notice
         # Pi deliberately does not acknowledge. The mailbox lock must already
@@ -296,7 +303,8 @@ async def test_real_pi_receives_new_notice_with_local_fake_model(
         assert await asyncio.wait_for(confirmed(notice), 15) == {"ok": True, "accepted": True}
         contents = transcript.read_text()
         assert contents.count("[Mesh notification " + "b" * 32 + "]") == 1
-        assert "yes/no/always" in contents
+        assert "check mail.inbox" in contents
+        assert "ask yes/no/always" not in contents
         await asyncio.wait_for(model_requested.wait(), 10)
         second = asyncio.create_task(confirmed({**notice, "notification_id": "c" * 32}))
         if mode == "rpc":
@@ -427,21 +435,24 @@ async def test_mailbox_hides_text_until_owner_grants_once(
     receipt = (await sent.json())["receipt"]
     assert set(receipt) == {"id", "conversation_id", "target", "kind", "created", "seq"}
 
+    owner_view = await client.get("/api/agent-mail/consent", headers=auth_cookie)
+    assert owner_view.status == 200
+    pending, = (await owner_view.json())["requests"]
+    assert pending["message_id"] == receipt["id"]
+    assert "untrusted work request" not in str(pending)
+
     inbox = await client.get("/api/agent-mail/@self/inbox", headers=beta)
     assert inbox.status == 200
     metadata = (await inbox.json())["messages"]
     assert metadata[0]["source"] == {"id": "alpha", "created": 1.0, "agent": "codex"}
+    assert metadata[0]["authorization_pending"] is True
     assert "untrusted" not in str(metadata)
 
     opened = await client.post("/api/agent-mail/@self/read", headers=beta,
                                json={"message_id": receipt["id"]})
     assert opened.status == 202
-    pending = (await opened.json())["pending"]
-    assert "untrusted work request" not in str(pending)
+    assert (await opened.json())["pending"] == pending
 
-    owner_view = await client.get("/api/agent-mail/consent", headers=auth_cookie)
-    assert owner_view.status == 200
-    assert (await owner_view.json())["requests"] == [pending]
     assert (await client.get("/api/agent-mail/consent", headers=auth_bearer)).status == 401
     assert (await client.post(f"/api/agent-mail/consent/{pending['id']}/decision",
                               headers=beta, json={"decision": "yes"})).status == 401
@@ -459,7 +470,9 @@ async def test_mailbox_hides_text_until_owner_grants_once(
     response_receipt = (await replied.json())["receipt"]
     assert response_receipt["conversation_id"] == receipt["conversation_id"]
     shown = await client.get("/api/agent-mail/@self/inbox", headers=alpha)
-    assert (await shown.json())["messages"][0]["source"]["id"] == "beta"
+    reply_meta, = (await shown.json())["messages"]
+    assert reply_meta["source"]["id"] == "beta"
+    assert reply_meta["authorization_pending"] is True
 
 
 async def test_owner_always_policy_is_exact_persistent_and_revocable(

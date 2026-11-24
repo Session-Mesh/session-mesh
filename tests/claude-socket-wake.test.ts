@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
 import {hostArgv, installFakeClaude, MANAGED, NOTICE} from './claude-wake-lib.ts';
+import {approveWakeMail} from './codex-queue-wake-lib.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
@@ -78,10 +79,15 @@ describe('server: a Claude with a messaging socket', {skip: MANAGED.length > 0 &
     assert.equal(((await response.json()) as {applied: boolean}).applied, true, 'the server applied the event');
   }
 
-  async function send(from: Agent, to: Agent, text: string): Promise<void> {
+  async function deposit(from: Agent, to: Agent, text: string): Promise<Response> {
     const response = await fetch(`${mesh!.base}/api/agent-mail/@self/send`, {method: 'POST', headers: agentHeaders(from),
       body: JSON.stringify({target: to.name, target_created: to.created, kind: 'message', text})});
     assert.equal(response.status, 200, await response.clone().text());
+    return response;
+  }
+
+  async function sendApproved(from: Agent, to: Agent, text: string): Promise<void> {
+    await approveWakeMail(mesh!.base, mesh!.token(), await deposit(from, to, text));
   }
 
   async function lookAtInbox(agent: Agent): Promise<number> {
@@ -110,14 +116,18 @@ describe('server: a Claude with a messaging socket', {skip: MANAGED.length > 0 &
     await learnCreated(agents.sender, agents.target);
   });
 
-  test('delivery: one fixed line on the socket, nothing typed', async () => {
+  test('delivery: no wake before approval, then one fixed line on the socket and nothing typed', async () => {
     const {sender, target} = agents;
     await event(target, 'done');
-    await send(sender, target, 'SECRET first message');
+    const sent = await deposit(sender, target, 'SECRET first message');
+    await pause(1500);
+    assert.equal(lines(target).length, 0, 'no socket line without approval');
+    assert.equal(notices(target), 0, 'no typed notice without approval');
+    await approveWakeMail(mesh!.base, mesh!.token(), sent);
     await waitFor('the line on the socket', 10000, () => lines(target).length === 1);
     const line = JSON.parse(lines(target)[0]) as {type: string; message: {role: string; content: string}};
     assert.equal(line.type, 'user');
-    assert.equal(line.message.content, 'Mesh: 1 new message(s) in your inbox; check mail.inbox and ask yes/no/always before reading.');
+    assert.equal(line.message.content, 'Mesh: 1 new message(s) in your inbox; check mail.inbox and read only approved messages.');
     assert.doesNotMatch(lines(target)[0], /SECRET/);
     await pause(700);
     assert.equal(notices(target), 0, 'nothing is typed in the terminal');
@@ -139,7 +149,7 @@ describe('server: a Claude with a messaging socket', {skip: MANAGED.length > 0 &
 
   test('a line nobody follows becomes unconfirmed and visible; nothing is ever typed; no second line', async () => {
     const {sender, target} = agents;
-    await send(sender, target, 'second message');
+    await sendApproved(sender, target, 'second message');
     await waitFor('the second line', 10000, () => lines(target).length === 2);
     assert.equal(await flagged(target), false, 'not flagged while the line may still be followed');
     await waitFor('the unconfirmed state in the page listing', 15000, () => flagged(target));
@@ -161,7 +171,7 @@ describe('server: a Claude with a messaging socket', {skip: MANAGED.length > 0 &
     fs.rmSync(path.join(settings, 'settings.json'));
     assert.equal(launched(strict).includes('--messaging-socket-path'), false);
     await event(strict, 'done');
-    await send(agents.sender, strict, 'for the strict one');
+    await sendApproved(agents.sender, strict, 'for the strict one');
     await waitFor('the typed notice', 15000, () => notices(strict) === 1);
     assert.equal(lines(strict).length, 0);
   });

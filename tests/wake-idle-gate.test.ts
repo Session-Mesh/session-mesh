@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
+import {approveWakeMail} from './codex-queue-wake-lib.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import net from 'node:net';
 import {ptyhostArgv} from './ptyhost-command.ts';
@@ -185,13 +186,13 @@ describe('PTY host: the Enter of a notice is withdrawn during its delay', () => 
     // cursor-position reply and a device-status reply, as separate frames and as one.
     const reports = ['\x1b[I', '\x1b[O', '\x1b[<0;10;5M\x1b[<0;10;5m', '\x1b[M !!', '\x1b[<65;3;4M',
       '\x1b[12;40R', '\x1b[0n'];
-    const END = 'before reading.';
+    const END = 'read only approved messages.';
     assert.deepEqual(await wake(), {ok: true, accepted: true});
     for (const report of reports) terminal.send('D', Buffer.from(report, 'latin1'));
     terminal.send('D', Buffer.from(reports.join(''), 'latin1'));
     await pause(700);
     const notice = received().slice(0, received().indexOf(END) + END.length);
-    assert.match(notice, /^# Mesh: new message\(s\) waiting; check mail\.inbox .*before reading\.$/);
+    assert.match(notice, /^# Mesh: new message\(s\) waiting; check mail\.inbox and read only approved messages\.$/);
     const tail = received().slice(notice.length);
     assert.equal(tail.indexOf('\r'), tail.length - reports.join('').length * 2 - 1, JSON.stringify(tail));
     assert.equal(tail.endsWith('\r' + reports.join('') + reports.join('')), true, 'the Enter, then the reports unchanged');
@@ -281,10 +282,11 @@ describe('server: a fake Claude is woken only once it reports a finished turn', 
     assert.equal((await response.json() as {applied: boolean}).applied, true);
   }
 
-  async function send(from: Agent, to: Agent, text: string): Promise<void> {
+  async function sendApproved(from: Agent, to: Agent, text: string): Promise<void> {
     const response = await fetch(`${mesh!.base}/api/agent-mail/@self/send`, {method: 'POST', headers: agentHeaders(from),
       body: JSON.stringify({target: to.name, target_created: to.created, kind: 'message', text})});
     assert.equal(response.status, 200, await response.clone().text());
+    await approveWakeMail(mesh!.base, mesh!.token(), response);
   }
 
   test('no notice before a finished turn, during a turn or after input; one once idle', async () => {
@@ -313,7 +315,7 @@ describe('server: a fake Claude is woken only once it reports a finished turn', 
     agents.target.created = peer!.created;
     const {sender, target} = agents;
 
-    await send(sender, target, 'first');
+    await sendApproved(sender, target, 'first');
     await pause(2500);
     assert.equal(notices(target), 0, 'no hook event yet: the agent is not known to be idle');
 
@@ -337,7 +339,7 @@ describe('server: a fake Claude is woken only once it reports a finished turn', 
     assert.doesNotMatch(typed(target), /\d+ message\(s\)/);
 
     // The notice was input too: a new message waits for the next finished turn.
-    await send(sender, target, 'second');
+    await sendApproved(sender, target, 'second');
     await pause(2500);
     assert.equal(notices(target), 1, 'no second notice in the same idle period');
     await event(target, 'done');
@@ -349,7 +351,7 @@ describe('server: a fake Claude is woken only once it reports a finished turn', 
     const {sender, target} = agents;
     await event(target, 'done', now() + 59);
     await event(target, 'waiting_permission');
-    await send(sender, target, 'third');
+    await sendApproved(sender, target, 'third');
     await pause(2500);
     assert.equal(notices(target), 2, 'an approval prompt is showing: no notice');
     await event(target, 'done');
@@ -358,7 +360,7 @@ describe('server: a fake Claude is woken only once it reports a finished turn', 
 
   test('a turn that begins while a notice waits for its Enter withdraws that Enter', async () => {
     const {sender, target} = agents;
-    await send(sender, target, 'fourth');   // the last notice was input: deferred until a finished turn
+    await sendApproved(sender, target, 'fourth');   // the last notice was input: deferred until a finished turn
     await pause(500);
     const terminal = await attach(path.join(mesh!.home, 'run', 'session-mesh', 'ptyhost.sock'), 'target');
     await pause(200);
@@ -379,7 +381,7 @@ describe('server: a fake Claude is woken only once it reports a finished turn', 
   test('a turn that begins while the dispatcher waits for the mailbox lock withdraws the Enter', async () => {
     const {sender, target} = agents;
     await event(target, 'working');
-    await send(sender, target, 'fifth');
+    await sendApproved(sender, target, 'fifth');
     await pause(500);
     const terminal = await attach(path.join(mesh!.home, 'run', 'session-mesh', 'ptyhost.sock'), 'target');
     await pause(200);

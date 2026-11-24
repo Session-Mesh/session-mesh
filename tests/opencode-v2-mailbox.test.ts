@@ -48,7 +48,7 @@ before(async () => {
   fs.symlinkSync(BRIDGE, path.join(meshBin, 'mesh-board-mcp'));
   // Version and configuration probes go to the real binary; a launch is recorded and idles.
   fs.writeFileSync(path.join(bin, 'opencode'), `#!/bin/sh
-case "$1" in --version|debug) exec '${REAL_BINARY}' "$@";; esac
+case "$1" in --version|api|debug) exec '${REAL_BINARY}' "$@";; esac
 printf '%s\\n' "$OPENCODE_CONFIG_CONTENT" >> '${log('config.log')}'
 printf '%s\\n' "$MESH_SESSION_TOKEN" >> '${log('token.log')}'
 printf '%s\\n' "$MESH_SESSION" >> '${log('session.log')}'
@@ -101,6 +101,7 @@ const execute = (code: string) => `go [[execute: ${code}]]`;
 describe('the mailbox of OpenCode 2 through the real bridge', {skip}, () => {
   let created: number;
   let messageId: string;
+  let requestId: string;
 
   test('the peers are listed through `execute`', async () => {
     await launch('mail-a');
@@ -117,24 +118,28 @@ describe('the mailbox of OpenCode 2 through the real bridge', {skip}, () => {
     const sent = await runAs('mail-b', execute(`const r = ${tool('send', {target: 'mail-a', target_created: created, kind: 'message', text: SECRET})}; console.log(JSON.stringify(r));`));
     assert.equal(sent.code, 0, sent.stderr);
     assert.match(sent.texts.join('\n'), /deposited|receipt|message_id|id/i, sent.texts.join('\n').slice(0, 300));
+    const {requests} = await ownerGet('/api/agent-mail/consent') as {requests: {id: string; message_id: string}[]};
+    assert.equal(requests.length, 1, 'the send asks the owner before the recipient looks at its inbox');
+    const [consent] = requests;
+    requestId = consent.id;
     const listing = await runAs('mail-a', execute(`const r = ${tool('inbox')}; console.log(JSON.stringify(r));`));
     assert.equal(listing.code, 0, listing.stderr);
     const seen = listing.texts.join('\n');
     assert.match(seen, /mail-b/, `the model saw the inbox: ${seen.slice(0, 500)}`);
+    assert.match(seen, /"authorization_pending":\s*true/);
     assert.ok(!seen.includes(SECRET), 'the inbox listing never carries the message text');
     messageId = /"message_id":\s*"([^"]+)"|"id":\s*"([^"]+)"/.exec(seen)?.slice(1).find(Boolean) as string;
     assert.ok(messageId, `a message id in ${seen.slice(0, 500)}`);
+    assert.equal(messageId, consent.message_id);
   });
 
-  test('reading raises the user\'s approval request; after "yes" the text is returned, and a reply works', async () => {
+  test('before approval there is no text or wake; after "yes" the text is returned, and a reply works', async () => {
     const pending = await runAs('mail-a', execute(`const r = ${tool('read', {message_id: messageId})}; console.log(JSON.stringify(r));`));
     assert.equal(pending.code, 0, pending.stderr);
-    assert.ok(!pending.texts.join('\n').includes(SECRET), 'no text while approval is pending');
-    const consent = await until('the user\'s approval request', async () => {
-      const projection = await ownerGet('/api/agent-mail/consent');
-      return (projection.pending ?? projection.requests ?? [])[0] as {id?: string; request_id?: string} | undefined;
-    });
-    const requestId = (consent.id ?? consent.request_id)!;
+    const pendingOutput = pending.texts.join('\n');
+    assert.ok(pendingOutput.includes(requestId), 'reading finds the same approval request');
+    assert.ok(!pendingOutput.includes(SECRET), 'no text while approval is pending');
+    assert.ok(!lines('input.log').some(line => line.includes('# Mesh: new message(s) waiting')), 'no typed wake before approval');
     const decided = await fetch(`${mesh.base}/api/agent-mail/consent/${requestId}/decision`, {method: 'POST',
       headers: {Origin: mesh.base, Cookie: `mesh_auth=${await ownerCookie()}`, 'Content-Type': 'application/json'},
       body: JSON.stringify({decision: 'yes'})});
@@ -145,6 +150,8 @@ describe('the mailbox of OpenCode 2 through the real bridge', {skip}, () => {
     assert.equal(reply.code, 0, reply.stderr);
     const back = await runAs('mail-b', execute(`const r = ${tool('inbox')}; console.log(JSON.stringify(r));`));
     assert.match(back.texts.join('\n'), /mail-a/, 'the reply reached the sender\'s inbox');
+    assert.match(back.texts.join('\n'), /"authorization_pending":\s*true/);
+    assert.ok(!back.texts.join('\n').includes('reply-from-a'), 'the reply also waits for approval');
   });
 
   test('the message text never reached a terminal', () => {

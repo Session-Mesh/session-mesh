@@ -1506,7 +1506,7 @@
   "mailbox.alreadyDecided": "Cette demande a déjà été tranchée ailleurs ; la liste a été actualisée.",
   "mailbox.alreadyRevoked": "Cette autorisation a déjà été révoquée ailleurs ; la liste a été actualisée.",
   "mailbox.requests": "Demandes d’approbation en attente",
-  "mailbox.requestLine": "« {target} » demande à lire un message de « {source} » ({agent}), reçu {time}.",
+  "mailbox.requestLine": "Message de « {source} » ({agent}) à « {target} », en attente d’autorisation depuis {time}.",
   "mailbox.received": "Reçus",
   "mailbox.sent": "Envoyés",
   "mailbox.noneReceived": "Aucun message reçu conservé.",

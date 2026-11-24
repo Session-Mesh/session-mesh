@@ -17,6 +17,20 @@ import {nativePtyhost} from './native-ptyhost.ts';
 export type Agent = {name: string; dir: string; token: string; created: number};
 export type Identity = {id: string; created: number; agent: string};
 
+/** Grant fixture mail as the owner before a test exercises transport or agent readiness. */
+export async function approveMail(base: string, cookie: string, sent: Response): Promise<void> {
+  const {receipt} = await sent.json() as {receipt: {id: string}};
+  const headers = {Cookie: cookie, Origin: base, 'Content-Type': 'application/json'};
+  const response = await fetch(`${base}/api/agent-mail/consent`, {headers});
+  assert.equal(response.status, 200);
+  const {requests} = await response.json() as {requests: {id: string; message_id: string}[]};
+  const request = requests.find(item => item.message_id === receipt.id);
+  assert.ok(request, 'sending created the owner decision');
+  const decision = await fetch(`${base}/api/agent-mail/consent/${request.id}/decision`, {
+    method: 'POST', headers, body: JSON.stringify({decision: 'yes'})});
+  assert.equal(decision.status, 200, await decision.clone().text());
+}
+
 export class AgentMesh {
   readonly agents: Record<string, Agent> = {};
   cookie = '';
@@ -89,10 +103,11 @@ export class AgentMesh {
     }
   }
 
-  async send(from: Agent, to: Agent, text: string, kind = 'message'): Promise<void> {
+  async send(from: Agent, to: Agent, text: string, kind = 'message'): Promise<string> {
     const response = await fetch(`${this.mesh.base}/api/agent-mail/@self/send`, {method: 'POST', headers: this.agentHeaders(from),
       body: JSON.stringify({target: to.name, target_created: to.created, kind, text})});
     assert.equal(response.status, 200, await response.clone().text());
+    return ((await response.json()) as {receipt: {id: string}}).receipt.id;
   }
 
   async inbox(agent: Agent): Promise<string[]> {

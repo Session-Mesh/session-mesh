@@ -106,8 +106,9 @@ mid = message(1, bob, alice)['id']
 def mail():
     return [message(1, bob, alice), message(2, bob, carol)]
 policy = [{'id': 'e' * 32, 'source': alice, 'target': bob, 'created': 6.0}]
-wake = [{'notification_id': 'c' * 32, 'target': alice, 'from_seq': 1, 'through_seq': 1, 'count': 1, 'state': 'pending'}]
-request = [{'id': 'd' * 32, 'message_id': mid, 'source': bob, 'target': alice, 'created': 5.0, 'state': 'pending'}]
+wake = [{'notification_id': 'c' * 32, 'target': alice, 'from_seq': 1, 'through_seq': 1, 'count': 1,
+         'seqs': [1], 'state': 'pending'}]
+request = [{'id': 'd' * 32, 'message_id': mid, 'source': bob, 'target': alice, 'created': 5.0, 'state': 'granted'}]
 `;
 
   test('(b) a restored session reads the mail of its old incarnation and keeps its policies', () => {

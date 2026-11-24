@@ -270,6 +270,11 @@ downloads nothing and needs the previous release still on disk. `~/.local/bin/me
 follows the release restored: a 0.1.x release of native programs has the command as
 `current/app/bin/mesh-logout-all`, a later one as `current/bin/mesh-logout-all`.
 
+The server that approves agent mail before waking recipients upgrades `agent-mail.json` to
+format 4. Back up that file privately before upgrading if you may return to an older server.
+An older server sets the newer file aside instead of using it; do not restore a backup over
+the current file without first preserving any mail received since the upgrade.
+
 ### Upgrading a source install
 
 ```sh

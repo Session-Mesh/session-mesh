@@ -43,6 +43,9 @@ before(async () => {
   await lab.send(lab.agents.alpha!, beta, HOSTILE);
   await lab.send(lab.agents.gamma!, beta, 'task for beta', 'task');
   await lab.send(beta, lab.agents.alpha!, 'beta answers alpha');
+  for (const request of (await lab.consent()).requests) {
+    assert.equal((await lab.decide(request.id, 'yes')).status, 200);
+  }
   browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
 });
 after(async () => {
@@ -108,16 +111,12 @@ async function requestRowsFit(page: Page): Promise<number> {
 
 /** A fresh approval request for beta from alpha, dismissed on the page's own prompt ("Later"). */
 async function pendingRequest(page: Page, text: string): Promise<string> {
-  const before = new Set(await lab.inbox(beta));
-  await lab.send(lab.agents.alpha!, beta, text);
-  const [id] = (await lab.inbox(beta)).filter(known => !before.has(known));
-  assert.ok(id, 'the new message reached the inbox');
-  assert.equal((await lab.readAs(beta, id)).status, 202);
+  const id = await lab.send(lab.agents.alpha!, beta, text);
   await page.evaluate(() => refresh());
   await page.locator('#dlg-agent-mail-consent[open]').waitFor();
   await page.locator('#dlg-agent-mail-consent button[value="later"]').click();
   const request = (await lab.consent()).requests.find(item => item.message_id === id);
-  assert.ok(request, 'the read created an approval request');
+  assert.ok(request, 'sending created an approval request');
   return request.id;
 }
 
@@ -162,8 +161,10 @@ describe('the pane mailbox', {skip}, () => {
   test('an approval request lights the badge, shows in the open panel and is decided there', async () => {
     const {page, errors} = await signedIn('en-US');
     const [hostile, task] = (await lab.inbox(beta));
-    assert.equal((await lab.readAs(beta, hostile!)).status, 202);
-    assert.equal((await lab.readAs(beta, task!)).status, 202);
+    for (const id of [hostile!, task!]) {
+      assert.equal((await lab.readAs(beta, id)).status, 200, 'consume the fixture grant');
+      assert.equal((await lab.readAs(beta, id)).status, 202, 'a deliberate reread needs fresh consent');
+    }
     await page.evaluate(() => refresh());
     // The page also asks on its own, one request after the other; "Later" decides nothing.
     for (let asked = 0; asked < 2; asked += 1) {
@@ -181,7 +182,8 @@ describe('the pane mailbox', {skip}, () => {
     await requests.first().waitFor();
     assert.equal(await requests.count(), 2);
     assert.deepEqual(await requests.first().locator('button').allInnerTexts(), ['Refuse', 'Read this time', 'Always for this exact session']);
-    assert.match(await requests.first().locator('p').innerText(), /^“beta” asks to read a message from “(alpha|gamma)” \(claude\), received /);
+    assert.match(await requests.first().locator('p').innerText(),
+      /^Message from “(alpha|gamma)” \(claude\) to “beta”, awaiting approval since /);
 
     // Read this time: the agent's own read now succeeds once, and the list reloads.
     const taskRequest = requests.filter({hasText: '“gamma”'});
@@ -208,6 +210,9 @@ describe('the pane mailbox', {skip}, () => {
     await dialog(page).getByRole('button', {name: 'Revoke'}).click();
     await page.waitForFunction(() => document.querySelectorAll('#dlg-mailbox .mailbox-policy').length === 0);
     assert.equal((await lab.consent()).always.length, 0);
+    const pending = (await lab.consent()).requests.find(request => request.message_id === task);
+    assert.ok(pending, 'revocation holds the task until new approval');
+    assert.equal((await lab.decide(pending.id, 'yes')).status, 200);
     await page.keyboard.press('Escape');
     await page.evaluate(() => refresh());
     await badge.waitFor({state: 'hidden'});
@@ -329,15 +334,11 @@ describe('the pane mailbox', {skip}, () => {
     await lab.decide(requestId, 'no');
   });
 
-  /** Send beta a fresh message, have beta try to read it, and return its id once it waits for approval. */
+  /** Send beta a fresh message and find its approval, without calling any recipient tool. */
   async function awaitingApproval(text: string): Promise<{messageId: string; requestId: string}> {
-    const before = new Set(await lab.inbox(beta));
-    await lab.send(lab.agents.alpha!, beta, text);
-    const [messageId] = (await lab.inbox(beta)).filter(known => !before.has(known));
-    assert.ok(messageId, 'the new message reached the inbox');
-    assert.equal((await lab.readAs(beta, messageId)).status, 202);
+    const messageId = await lab.send(lab.agents.alpha!, beta, text);
     const request = (await lab.consent()).requests.find(item => item.message_id === messageId);
-    assert.ok(request, 'the read created an approval request');
+    assert.ok(request, 'sending created an approval request');
     return {messageId, requestId: request.id};
   }
   const prompt = (page: Page) => page.locator('#dlg-agent-mail-consent');
@@ -374,13 +375,12 @@ describe('the pane mailbox', {skip}, () => {
     } finally { await cdp.detach(); }
   }
 
-  test('an approval prompt answered in one window closes in the other', async () => {
+  test('sending opens the approval prompt without a recipient read, and one answer closes both', async () => {
     for (const pending of (await lab.consent()).requests) await lab.decide(pending.id, 'no');
     const first = await signedIn('en-US');
     const second = await signedIn('en-US');
     const {messageId, requestId} = await awaitingApproval('seen by two viewers');
     for (const {page} of [first, second]) {
-      await page.evaluate(() => refresh());
       await prompt(page).locator('button[value="yes"]').waitFor();
     }
     assert.equal(await answer(first.page, 'yes', requestId), 200);

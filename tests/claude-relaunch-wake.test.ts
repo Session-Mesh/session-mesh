@@ -18,6 +18,7 @@ import path from 'node:path';
 import net from 'node:net';
 import {after, before, describe, test} from 'node:test';
 import {hostArgv, MANAGED} from './claude-wake-lib.ts';
+import {approveMail} from './helpers/agent-mail-mesh.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
@@ -193,6 +194,7 @@ describe('a Claude restarted in its terminal listens on its wake socket again',
       const sent = await fetch(`${mesh!.base}/api/agent-mail/@self/send`, {method: 'POST', headers: as(sender),
         body: JSON.stringify({target: target.name, target_created: created, kind: 'message', text: 'after the restart'})});
       assert.equal(sent.status, 200, await sent.clone().text());
+      await approveMail(mesh!.base, cookie, sent);
       const lines = () => {
         const file = path.join(target.dir, 'socket.log');
         return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];

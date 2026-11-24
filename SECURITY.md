@@ -231,9 +231,11 @@ install.
   terminal; an agent has to ask to read its inbox. You can read the retained messages of a
   session in that pane's mailbox, with your browser's sign-in only: no agent credential reaches
   that route, the text is shown as plain text (no markup, no link), and reading it grants the
-  agent nothing. What the mesh does type, into Claude Code, OpenCode, Gemini CLI and Mistral Vibe only,
+  agent nothing. Depositing a message or reply asks for your approval in the page, unless you
+  already allowed that exact sender-to-recipient direction. Only approved messages can trigger
+  a wake. What the mesh does type, into Claude Code, OpenCode, Gemini CLI and Mistral Vibe only,
   is a fixed notice that messages are waiting, followed by `Enter`. An `Enter` that reached an
-  approval prompt would answer it, and any agent can cause a notice by sending a message, so the
+  approval prompt would answer it, so the
   notice is typed only when Claude is known to be idle at its prompt: its last hook event is the
   end of a turn (`Stop` with no background task; for OpenCode, its plugin's `session.idle`, for Gemini its
   `AfterAgent` hook, for Vibe the end-of-turn notification of its hooks, and a later working, permission or question event closes the gate), no input has reached the terminal since that

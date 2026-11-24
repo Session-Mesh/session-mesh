@@ -82,10 +82,17 @@ def claude_peer(client, mesh_listing, monkeypatch, tmp_path):
     remove_wake_directory()
 
 
-def send(text):
-    live = [{"id": "alpha", "created": 1.0, "agent": "codex"},
-            {"id": "beta", "created": 2.0, "agent": "claude"}]
-    agentmail.send(live[0], live[1], "message", text, live)
+LIVE = [{"id": "alpha", "created": 1.0, "agent": "codex"}, {"id": "beta", "created": 2.0, "agent": "claude"}]
+
+
+def approve(message_id):
+    request = next(request for request in agentmail.consent_projection()["requests"]
+                   if request["message_id"] == message_id)
+    agentmail.decide_consent(request["id"], "yes")
+
+
+def send_approved(text):
+    approve(agentmail.send(LIVE[0], LIVE[1], "message", text, LIVE)["id"])
 
 
 def dispatcher_of(client):
@@ -102,9 +109,13 @@ async def look_at_inbox(client, peer, who="beta"):
 
 async def test_a_batch_is_woken_on_the_socket_and_confirmed_by_the_look_at_the_inbox(client, claude_peer):
     async with Listener(claude_peer.path) as listener:
-        for text in ("SECRET-ONE do this", "SECRET-TWO", "SECRET-THREE"):
-            send(text)
         dispatcher = dispatcher_of(client)
+        held = agentmail.send(LIVE[0], LIVE[1], "message", "SECRET-ONE do this", LIVE)
+        assert await dispatcher.dispatch_once() is False    # no wake to dispatch before approval
+        assert await listener.settle(0) == [] and claude_peer.typed == []
+        approve(held["id"])
+        for text in ("SECRET-TWO", "SECRET-THREE"):
+            send_approved(text)
         assert await dispatcher.dispatch_once() is True      # line sent, not yet confirmed
         assert await dispatcher.dispatch_once() is True      # still waiting: no second line
         assert len(await look_at_inbox(client, claude_peer)) == 3
@@ -115,13 +126,10 @@ async def test_a_batch_is_woken_on_the_socket_and_confirmed_by_the_look_at_the_i
     assert claude_peer.typed == []                           # nothing typed in the terminal
 
 
-LIVE = [{"id": "alpha", "created": 1.0, "agent": "codex"}, {"id": "beta", "created": 2.0, "agent": "claude"}]
-
-
 async def test_without_that_look_the_wake_is_unconfirmed_and_nothing_is_ever_typed(client, claude_peer, monkeypatch):
     monkeypatch.setattr(client.app["claude_wakes"], "_confirm", 0.05)
     async with Listener(claude_peer.path) as listener:
-        send("one")
+        send_approved("one")
         dispatcher = dispatcher_of(client)
         assert await dispatcher.dispatch_once() is True
         await asyncio.sleep(0.1)
@@ -142,7 +150,7 @@ async def test_the_unconfirmed_state_is_shown_to_the_owner_and_cleared_by_the_lo
         return {row["identity"]["id"]: row["wake_unconfirmed"] for row in (await response.json())["sessions"]}
 
     async with Listener(claude_peer.path):
-        send("one")
+        send_approved("one")
         dispatcher = dispatcher_of(client)
         await dispatcher.dispatch_once()
         assert await shown() == {"alpha": False, "beta": False}
@@ -158,7 +166,7 @@ async def test_the_unconfirmed_state_is_shown_to_the_owner_and_cleared_by_the_lo
 async def test_nothing_is_typed_even_when_the_socket_is_gone_after_the_line(client, claude_peer, monkeypatch):
     monkeypatch.setattr(client.app["claude_wakes"], "_confirm", 0.05)
     async with Listener(claude_peer.path):
-        send("one")
+        send_approved("one")
         dispatcher = dispatcher_of(client)
         assert await dispatcher.dispatch_once() is True
     assert not claude_peer.path.exists()                     # Claude exited: no socket in the listing now
@@ -172,7 +180,7 @@ async def test_a_restart_of_the_server_after_the_line_types_nothing_and_writes_n
         client, claude_peer, monkeypatch):
     monkeypatch.setattr(client.app["claude_wakes"], "_confirm", 0.05)
     async with Listener(claude_peer.path) as listener:
-        send("one")
+        send_approved("one")
         assert await dispatcher_of(client).dispatch_once() is True
         for _ in range(2):                                   # a restart each side of the judgement
             poster = client.app["claude_wakes"]
@@ -189,7 +197,7 @@ async def test_a_restart_of_the_server_after_the_line_types_nothing_and_writes_n
 async def test_a_look_at_the_inbox_after_the_window_still_confirms_the_wake(client, claude_peer, monkeypatch):
     monkeypatch.setattr(client.app["claude_wakes"], "_confirm", 0.05)
     async with Listener(claude_peer.path):
-        send("one")
+        send_approved("one")
         dispatcher = dispatcher_of(client)
         assert await dispatcher.dispatch_once() is True
         await asyncio.sleep(0.1)
@@ -202,7 +210,7 @@ async def test_a_look_at_the_inbox_after_the_window_still_confirms_the_wake(clie
 async def test_another_sessions_look_at_its_inbox_confirms_nothing(client, claude_peer, monkeypatch):
     monkeypatch.setattr(client.app["claude_wakes"], "_confirm", 5.0)
     async with Listener(claude_peer.path):
-        send("one")
+        send_approved("one")
         dispatcher = dispatcher_of(client)
         assert await dispatcher.dispatch_once() is True
         await look_at_inbox(client, claude_peer, "alpha")
@@ -211,10 +219,10 @@ async def test_another_sessions_look_at_its_inbox_confirms_nothing(client, claud
 
 async def test_a_message_arriving_during_the_wait_is_neither_lost_nor_absorbed(client, claude_peer):
     async with Listener(claude_peer.path) as listener:
-        send("one")
+        send_approved("one")
         dispatcher = dispatcher_of(client)
         assert await dispatcher.dispatch_once() is True
-        send("two")                                           # a second batch forms behind the first
+        send_approved("two")                                  # a second batch forms behind the first
         assert await dispatcher.dispatch_once() is True       # still waiting for the first look
         await look_at_inbox(client, claude_peer)
         assert await dispatcher.dispatch_once() is True       # the second batch has its own line now
@@ -230,7 +238,7 @@ async def test_a_socket_does_not_make_a_session_capable_of_the_typed_wake(client
         live = await server._agent_wake_live(None, client.app["event_state"], client.app["claude_wakes"])
         beta = next(item for item in live if item["id"] == "beta")
         assert "wake_socket" in beta and beta["wake_capable"] is False
-        send("one")
+        send_approved("one")
         assert await dispatcher_of(client).dispatch_once() is True    # durable and dormant
         assert await listener.settle(0) == [] and claude_peer.typed == []
     claude_peer.listing[1]["pty_capabilities"] = ["agent_wake_v1"]
@@ -242,7 +250,7 @@ async def test_without_a_socket_the_typed_notice_is_used_directly(client, claude
     stale = socket.socket(socket.AF_UNIX)
     stale.bind(str(claude_peer.path))
     stale.close()                                             # nobody listens: connection refused
-    send("one")
+    send_approved("one")
     assert await dispatcher_of(client).dispatch_once() is False
     assert len(claude_peer.typed) == 1
     claude_peer.path.unlink()
