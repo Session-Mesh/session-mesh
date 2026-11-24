@@ -14,6 +14,7 @@ import path from 'node:path';
 // file .stubborn, it ignores SIGHUP (only SIGKILL ends it), as an agent that does not exit on a hang-up would.
 export const fakeCodex = (logFile: string, real: string) => [
   '#!/bin/sh',
+  'umask 077',   // the fake writes credentials-adjacent rollouts under a private Codex home
   'if [ -e ./.stubborn ]; then trap "" HUP; fi',
   `pids='${logFile}.'"$MESH_SESSION"; overlap=no`,
   'if [ -f "$pids" ] && kill -0 "$(cat "$pids")" 2>/dev/null; then overlap=yes; fi; echo $$ > "$pids"',

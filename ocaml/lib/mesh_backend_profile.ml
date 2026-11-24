@@ -196,7 +196,7 @@ let of_json revision value =
     let* raw = field "profiles" fields in
     let* rows =
       match raw with
-      | `List xs when List.length xs <= 64 -> Ok xs
+      | `List xs when List.length xs <= 128 -> Ok xs
       | _ -> Error Invalid_config
     in
     let rec loop acc = function
@@ -267,8 +267,16 @@ let rec trusted path =
      || (st.Unix.st_uid = 0 && st.Unix.st_perm land 0o1000 <> 0))
   && (Filename.dirname path = path || trusted (Filename.dirname path))
 
-let validate_roots ?registry profile =
+let validate_roots ?registry ?(allow_missing = false) profile =
   try
+    let existing =
+      List.filter
+        (fun (_, path) ->
+          match Unix.lstat path with
+          | _ -> true
+          | exception Unix.Unix_error (Unix.ENOENT, _, _) when allow_missing -> false)
+        profile.roots
+    in
     if
       List.for_all
         (fun (_, path) ->
@@ -278,10 +286,10 @@ let validate_roots ?registry profile =
           && st.Unix.st_perm land 0o022 = 0
           && Unix.realpath path = path
           && trusted (Filename.dirname path))
-        profile.roots
+        existing
     then
       let identities =
-        List.map (fun (role, path) -> (role, Unix.stat path)) profile.roots
+        List.map (fun (role, path) -> (role, Unix.stat path)) existing
       in
       let same a b =
         a.Unix.st_dev = b.Unix.st_dev && a.Unix.st_ino = b.Unix.st_ino
@@ -293,7 +301,7 @@ let validate_roots ?registry profile =
         | Some role, Some config -> (
             match List.assoc_opt role identities with
             | Some history -> same config history
-            | None -> true)
+            | None -> not allow_missing)
         | _ -> false
       in
       let credential p role = List.mem_assoc role (credential_roots p) in

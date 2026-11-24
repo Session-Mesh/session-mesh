@@ -67,6 +67,30 @@ describe('sessions known on this device', () => {
     assert.equal(shown.provisional, true);
   });
 
+  test('only a positive, well-formed ACK hint survives beside the exact created identity', () => {
+    const base = {kind: 'mesh', id: 's', name: 's', created: 10, activity: 0,
+      pty_capabilities: ['acknowledged_input_v1']};
+    const listed = knownFrom({mesh: [base]})!;
+    assert.deepEqual(listed.rows[0]?.pty_capabilities, ['acknowledged_input_v1']);
+    assert.deepEqual(readKnown(JSON.parse(JSON.stringify(listed)))?.rows[0]?.pty_capabilities,
+      ['acknowledged_input_v1']);
+    assert.deepEqual(knownFrom({mesh: [{...base, pty_capabilities:
+      ['acknowledged_input_v1', 'acknowledged_input_v2']}]})?.rows[0]?.pty_capabilities,
+    ['acknowledged_input_v2'], 'the bound cached hint must prefer v2');
+    for (const value of [null, -1, 0, '10', Number.POSITIVE_INFINITY]) {
+      const row = readKnown({home: '', rows: [{...base, created: value}]})!.rows[0]!;
+      assert.equal(row.pty_capabilities, undefined, `no ACK without a positive numeric incarnation: ${value}`);
+    }
+    for (const value of ['acknowledged_input_v1', ['acknowledged_input_v1', {}],
+      ['acknowledged_input_v1', 'acknowledged_input_v1']]) {
+      const row = readKnown({home: '', rows: [{...base, pty_capabilities: value}]})!.rows[0]!;
+      assert.equal(row.pty_capabilities, undefined, 'malformed capability must not authorize early attachment');
+    }
+    assert.equal(readKnown({home: '', rows: [{...base, id: 'different'}]})!.rows.length, 0);
+    assert.equal(knownFrom({mesh: [{...base, pty_capabilities: []}]})!.rows[0]?.pty_capabilities,
+      undefined, 'legacy observations are not cached as an early-attach permission');
+  });
+
   test('a page started before a sign-out (in any tab) never stores again; one started after may', () => {
     assert.equal(mayRemember(null, 1000), true, 'never signed out');
     assert.equal(mayRemember(2000, 1000), false, 'an older tab whose answer arrives after the sign-out');

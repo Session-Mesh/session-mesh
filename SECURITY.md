@@ -547,6 +547,37 @@ is never filtered. An agent can never request a `codex-yolo` session through `me
 when the preset is enabled: the request is refused, so one agent cannot obtain an unconfined
 sibling. Only you start one, from "New session".
 
+### Native switch input fence (not a checkpoint)
+
+The PTY host accepts private `switch_input_acquire` and
+`switch_input_release` control requests with an exact `name`, `created`,
+`creation_receipt` and opaque `fence_id`. Acquisition refuses queued or
+in-flight PTY input **and any attached legacy raw-input client**; it never
+clears the queue. While fenced, new legacy attachments are refused. An
+acquired fence stays in host memory across control-socket disconnects and
+rejects human input and typed agent notices. A same-terminal
+`stop_agent_if` advances the incarnation but retains the fence; while fenced,
+`stop_agent_if` and `start_if` require the same `fence_id`. The owned start
+command is a distinct control frame that can reach the PTY while ordinary
+input remains fenced; release requires that frame to drain and the **new**
+incarnation. A wrong owner or stale incarnation cannot release.
+If an acknowledgment is lost, the coordinator must reconcile the live
+incarnation and retry with its original `fence_id`; a second owner cannot
+claim the fence. An explicit release is also the recovery operation when
+the switch is abandoned, including after a successful stop (the shell then
+has no running agent). There is no orphan timeout or automatic release.
+Host/session termination ends the fence together with the PTY.
+
+This is **only** a native input-admission barrier. It does not inspect an
+agent's editor, flush buffered input in the browser, establish a durable
+checkpoint, or qualify any backend for live switching. Existing raw
+attachments have no acknowledgment/retry protocol for `D` frames. A switch
+coordinator cannot use this fence with an active legacy terminal attachment;
+it needs a negotiated, end-to-end retained-input protocol before an attached
+browser can participate. The dormant raw-`D` refusal is defense in depth,
+**not** a lossless retry mechanism. A control frame's PTY write does not
+prove that the agent started correctly or that its editor was flushed.
+
 ### The OpenCode preset
 
 - **OpenCode 1.x and 2.x are supported; any other major is launched bare.** The mesh

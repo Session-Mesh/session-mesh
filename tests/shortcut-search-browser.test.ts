@@ -20,7 +20,8 @@ const MAC = (): void => {
   window.__input = [];
   const send = WebSocket.prototype.send;
   WebSocket.prototype.send = function (data) {
-    if (data instanceof Uint8Array) window.__input.push(new TextDecoder().decode(data));
+    if (data instanceof Uint8Array) window.__input.push(
+      new TextDecoder().decode(this.url.includes('input_ack=1') ? data.subarray(4) : data));
     return send.call(this, data);
   };
   Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});

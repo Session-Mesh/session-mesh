@@ -41,7 +41,7 @@ let rec walk_entry ~uid ~source ~seen relative depth acc name =
   incr seen;
   if !seen > max_entries then
     fail "conversation_too_large" "the conversation holds too many files"
-  else if Option.is_some (carry_temporary name) then Ok acc
+  else if Option.is_some (carry_temporary name) || carry_saved name then Ok acc
   else
     let* stats = lstat_opt (join source child) in
     match stats with

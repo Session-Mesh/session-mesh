@@ -241,6 +241,46 @@ async def test_renaming_updates_saved_pin_without_changing_its_identity(board):
     assert await tab.evaluate("pinnedSessions()[0].id") == sid
 
 
+async def test_board_teardown_finishes_an_inflight_reply(browser, mesh, monkeypatch):
+    fixture = board.__wrapped__(browser, mesh)
+    open_board = await anext(fixture)
+    tab = await open_board([])
+    gate = FirstReplyGate()
+    tab.sessions.gate = gate
+    cleanup_started = asyncio.Event()
+    unroute = tab.unroute_all
+    close = tab.context.close
+
+    async def observed_unroute(**options):
+        assert options == {"behavior": "wait"}
+        cleanup_started.set()
+        await unroute(**options)
+
+    async def checked_close():
+        cleanup_started.set()
+        try:
+            assert gate.reply_finished.is_set(), "context closed before its route finished"
+        finally:
+            await close()
+
+    monkeypatch.setattr(tab, "unroute_all", observed_unroute)
+    monkeypatch.setattr(tab.context, "close", checked_close)
+    await tab.evaluate("void refresh()")
+    cleanup = None
+    try:
+        await asyncio.wait_for(gate.reply_started.wait(), timeout=5)
+        cleanup = asyncio.create_task(anext(fixture, None))
+        await asyncio.wait_for(cleanup_started.wait(), timeout=5)
+        assert not gate.reply_finished.is_set()
+    finally:
+        gate.reply_release.set()
+        if cleanup is None:
+            await anext(fixture, None)
+        else:
+            await cleanup
+    assert gate.reply_finished.is_set()
+
+
 async def test_pins_are_escaped_and_fit_on_mobile(board):
     tab = await board([], **PHONE)
     sid = "01a162e0-89bf-75d2-93db-abc74e04973f"

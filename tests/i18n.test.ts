@@ -262,6 +262,23 @@ describe('source code link', () => {
 });
 
 describe('server messages', () => {
+  test('account restore and retained-copy refusals stay translated in English and French', async () => {
+    const examples = [
+      'Conflicting account contexts; resume refused',
+      'Default account context changed; resume refused',
+      'Default account context unavailable; resume refused',
+      'The conversation resumed under account personal, but the completed target copy remains. The operator must check the target account before another switch; do not ask again.',
+    ];
+    for (const lang of ['en', 'fr']) {
+      const {rt} = await runtime([lang], memoryStorage());
+      for (const message of examples) {
+        const translated = rt.serverMessage(message);
+        assert.ok(translated && !translated.includes('{account}'));
+        if (lang === 'fr') assert.notEqual(translated, message);
+      }
+    }
+  });
+
   test('a known server message is translated, an unknown one is shown as it came', async () => {
     const rows = JSON.parse(fs.readFileSync(path.join(I18N, 'server-messages.json'), 'utf8')) as Array<{key: string}>;
     assert.ok(rows.length > 0, 'the table maps at least one server message');

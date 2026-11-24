@@ -31,11 +31,13 @@ describe('phone direct writing: what the field receives', {skip}, () => {
   test('backspace on the empty field erases at the terminal and keeps the mode', async () => {
     const page = await phone('erase', 'claude');
     await page.keyboard.type('/ab');
+    await waitForShellLine(page, '/ab');
     await page.keyboard.press('Backspace');
-    assert.deepEqual(await frames(page), ['/', 'a', 'b', '\x7f']);
     await waitForShellLine(page, '/a');
+    assert.deepEqual(await frames(page), ['/', 'a', 'b', '\x7f']);
     await page.keyboard.press('Backspace');
     await page.keyboard.press('Backspace');
+    await page.waitForFunction(() => window.__input.length === 6);
     assert.deepEqual((await frames(page)).slice(4), ['\x7f', '\x7f']);
     assert.equal(await direct(page), true, 'the field cannot know when the agent line is empty: the mode stays');
     assert.equal(await field(page), '');
@@ -60,8 +62,10 @@ describe('phone direct writing: what the field receives', {skip}, () => {
   test('Esc, Tab and the arrows of the key bar go to the agent and keep the mode', async () => {
     const page = await phone('keybar', 'claude');
     await page.keyboard.type('/a');
+    await waitForShellLine(page, '/a');
     await forget(page);
     for (const key of ['tab', 'up', 'down', 'esc']) await page.locator(`#keys [data-k="${key}"]`).click();
+    await page.waitForFunction(() => window.__input.length >= 4);
     assert.deepEqual(await frames(page), ['\t', '\x1b[A', '\x1b[B', '\x1b']);
     assert.equal(await direct(page), true);
     assert.equal(await field(page), '');
@@ -147,8 +151,10 @@ describe('phone direct writing: what the field receives', {skip}, () => {
   test('a multi-line insertion while writing directly is one bracketed paste', async () => {
     const page = await phone('multiline-direct', 'claude');
     await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
     await forget(page);
     await page.keyboard.insertText('a\nb');
+    await page.waitForFunction(() => window.__input.length > 0);
     const sent = await frames(page);
     assert.ok(sent.length > 0 && sent.join('').startsWith(BRACKET_START) && sent.join('').endsWith(BRACKET_END), JSON.stringify(sent));
     assert.equal(outsideBrackets(sent), '', 'no line break reaches the terminal as keys');
@@ -196,6 +202,7 @@ describe('phone direct writing: what the field receives', {skip}, () => {
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.evaluate(() => navigator.clipboard.writeText(''));
     await page.keyboard.type('/a');
+    await waitForShellLine(page, '/a');
     await forget(page);
     await page.locator('#keys [data-k="paste"]').click();
     await waitForFlash(page, 'clipboard is empty');

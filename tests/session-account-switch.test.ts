@@ -1,176 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
-
-// Account switch requests (docs/agent-guide.md "Ask for sessions"): a Claude or Codex session asks, with its
-// session token, to continue its conversation under another account alias. The server resolves the name for the
-// session's own agent kind (never one the body names), refuses with a code and a message what cannot be carried
-// out, and does nothing until the owner approves. Once approved: the exact source stops, `mesh-platform accounts
-// carry` copies the conversation, and the agent resumes under the target; when the carry fails the conversation
-// resumes under its own account (rolled_back). A fake `codex` on PATH records its Codex home and arguments, and
-// writes and holds open a rollout as the real one does, so the listing knows its conversation.
-// `mesh-platform` comes from MESH_MESH_PLATFORM_CMD or the dune build (MESH_REQUIRE_MESH_PLATFORM=1: required); the
-// cases that carry a conversation need its `accounts carry` command and are skipped, with the reason, without it.
 import assert from 'node:assert/strict';
-import {type ChildProcess, spawn, spawnSync} from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import {after, before, describe, test} from 'node:test';
-import {installFakeCodex, launchesIn, rolloutIn} from './fake-codex-lib.ts';
-import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
-import {ptyhostArgv} from './ptyhost-command.ts';
+import {describe, test} from 'node:test';
+import {rolloutIn} from './fake-codex-lib.ts';
+import {REPO} from './mesh-server-lib.ts';
 import {createSessionRequestGate, setTranslator} from '../static/pane-actions.ts';
-
-const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD
-  || path.join(REPO, 'ocaml', '_build', 'default', 'platform', 'cli', 'mesh_platform_main.exe');
-const SKIP = fs.existsSync(PLATFORM) || process.env.MESH_REQUIRE_MESH_PLATFORM ? false
-  : `mesh-platform not built: dune build ./platform/cli/mesh_platform_main.exe, or set MESH_MESH_PLATFORM_CMD (${PLATFORM})`;
-// `accounts carry` is in the usage text of a mesh-platform that has it.
-const CARRY = SKIP ? SKIP : spawnSync(PLATFORM, [], {encoding: 'utf8'}).stderr?.includes('accounts carry') ? false
-  : `this mesh-platform has no accounts carry command (${PLATFORM})`;
-
-let mesh: Mesh;
-let bin: string;
-let log: string;
-let cookie = '';
-let host: ChildProcess | undefined;
-let travelHome: string, workHome: string, clientClaude: string;
-
-before(async () => {
-  if (SKIP) return;
-  bin = fs.mkdtempSync(path.join(os.tmpdir(), 'switch-bin-'));
-  const installed = installFakeCodex(bin);
-  log = installed.log;
-  const PATH = installed.PATH;
-  mesh = await startMesh('switch-', {PATH, MESH_MESH_PLATFORM_CMD: PLATFORM, CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined});
-  const accounts = path.join(mesh.home, '.agent-accounts');
-  fs.mkdirSync(accounts, {mode: 0o700});
-  travelHome = path.join(accounts, 'travel', '.codex');   // missing: created when a request names it
-  workHome = path.join(accounts, 'work', '.codex');
-  clientClaude = path.join(accounts, 'client', '.claude');
-  for (const folder of ['travel', 'work', 'client', 'twin', 'spare', 'mirror']) fs.mkdirSync(path.join(accounts, folder), {mode: 0o700});
-  fs.mkdirSync(workHome, {mode: 0o700});
-  fs.mkdirSync(clientClaude, {mode: 0o700});
-  fs.writeFileSync(path.join(mesh.confDir, 'accounts.json'), JSON.stringify({v: 1, accounts: [
-    {id: 'travel', label: 'Travel', codex_home: travelHome},
-    {id: 'work', label: 'Work', codex_home: workHome},
-    {id: 'client', label: 'Client', claude_config_dir: clientClaude},
-    // labels are unique among the aliases, but one can equal the default account's
-    {id: 'twin', label: 'Default Account', codex_home: path.join(accounts, 'twin', '.codex')},
-    // one account's label is another's id: that name designates neither (Mesh_account_resolver)
-    {id: 'spare', label: 'Reserve', codex_home: path.join(accounts, 'spare', '.codex')},
-    {id: 'mirror', label: 'spare', codex_home: path.join(accounts, 'mirror', '.codex')},
-  ]}), {mode: 0o600});
-  const [command, ...args] = ptyhostArgv();
-  host = spawn(command!, args, {cwd: REPO, stdio: 'ignore',
-    env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C', SHELL: '/bin/sh'}});
-  for (let attempt = 0; attempt < 100 && !fs.existsSync(path.join(mesh.home, 'run', 'session-mesh', 'ptyhost.sock')); attempt += 1) {
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({token: mesh.token()})});
-  cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
-  assert.ok(cookie);
-});
-
-after(async () => {
-  // The fake agents outlive the PTY host; a process named codex left running would be seen by the next suites'
-  // listings (they would read its rollout and write a cache).
-  if (bin) spawnSync('pkill', ['-KILL', '-f', path.join(bin, 'real', 'codex')]);
-  host?.kill('SIGKILL');
-  await mesh?.stop();
-  if (bin) fs.rmSync(bin, {recursive: true, force: true});
-});
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-const launches = () => launchesIn(log);
-const owner = () => ({Cookie: cookie, Origin: mesh.base, 'Content-Type': 'application/json'});
-
-type Session = {name: string; token: string; sid: string};
-
-/** A Codex session started under ``account`` (absent: the default one), once the listing knows its conversation. */
-async function codexSession(name: string, account?: string, cwd?: string): Promise<Session> {
-  const response = await fetch(`${mesh.base}/api/new`, {method: 'POST', body: JSON.stringify({cwd: cwd ?? mesh.home,
-    preset: 'codex', name, ...account ? {account} : {}}),
-  headers: {Authorization: `Bearer ${mesh.token()}`, Origin: mesh.base, 'Content-Type': 'application/json'}});
-  assert.equal(response.status, 200, await response.clone().text());
-  let token = '', sid = '';
-  for (let attempt = 0; attempt < 150 && !(token && sid); attempt += 1) {
-    token = launches().find(fields => fields[2] === name)?.[4] ?? '';
-    sid = ((await listed(name))?.agent as {session_id?: string} | null)?.session_id ?? '';
-    if (!(token && sid)) await sleep(200);
-  }
-  assert.ok(token && sid, `the fake codex of ${name} is listed with its conversation`);
-  return {name, token, sid};
-}
-
-async function listed(name: string): Promise<Record<string, unknown> | undefined> {
-  const data = await (await fetch(`${mesh.base}/api/sessions`, {headers: {Authorization: `Bearer ${mesh.token()}`}}))
-    .json() as {mesh: Record<string, unknown>[]};
-  return data.mesh.find(item => item.id === name);
-}
-
-/** Rename session ``name`` LABEL as the list does, and file it in a folder (which ranks it). */
-async function arrange(name: string): Promise<void> {
-  const headers = {Authorization: `Bearer ${mesh.token()}`, Origin: mesh.base, 'Content-Type': 'application/json'};
-  for (const op of [{op: 'folder-add', name: 'Moved'}, {op: 'move', id: name, folder: 'Moved'}, {op: 'rename', id: name, label: LABEL}]) {
-    const done = await fetch(`${mesh.base}/api/organize`, {method: 'POST', headers, body: JSON.stringify(op)});
-    assert.equal(done.status, 200, await done.text());
-  }
-}
-
-/** The label and folder of session ``name``, read twice: the second listing would prune those of an ended incarnation. */
-async function arrangement(name: string): Promise<unknown[]> {
-  await listed(name);
-  const item = await listed(name);
-  return [item?.label, item?.folder];
-}
-
-const LABEL = 'Renamed before the switch';
-
-const ask = (session: Session, body: Record<string, unknown>) => fetch(`${mesh.base}/api/session-actions/@self/request`,
-  {method: 'POST', body: JSON.stringify(body),
-    headers: {Authorization: `MeshSession ${session.token}`, 'Content-Type': 'application/json'}});
-
-type Request = {id: string; state: string; account: string | null; from_account: string | null;
-  result: {id?: string; account?: string; error?: string; rolled_back?: boolean; code?: string;
-    retryable?: boolean; operator_action?: boolean} | null};
-
-async function requested(session: Session, account: unknown): Promise<Request> {
-  const response = await ask(session, {action: 'switch_account', account});
-  assert.equal(response.status, 202, await response.clone().text());
-  return (await response.json() as {request: Request}).request;
-}
-
-/** The coded refusal of a switch request: [code, message]. */
-async function refused(session: Session, account: unknown): Promise<[string, string]> {
-  const response = await ask(session, {action: 'switch_account', account});
-  const text = await response.text();
-  assert.equal(response.status, 400, text);
-  const {error} = JSON.parse(text) as {error: {code: string; message: string}};
-  return [error.code, error.message];
-}
-
-async function decide(request: Request, approve: boolean): Promise<Request> {
-  const claimed = await fetch(`${mesh.base}/api/session-actions/${request.id}/claim`, {method: 'POST', headers: owner(),
-    body: JSON.stringify({tab_nonce: 'b'.repeat(32)})});
-  assert.equal(claimed.status, 200, await claimed.clone().text());
-  const {claim_nonce: claimNonce} = await claimed.json() as {claim_nonce: string};
-  const decided = await fetch(`${mesh.base}/api/session-actions/${request.id}/decision`, {method: 'POST', headers: owner(),
-    body: JSON.stringify({approve, claim_nonce: claimNonce})});
-  assert.equal(decided.status, 200, await decided.clone().text());
-  return (await decided.json() as {request: Request}).request;
-}
-
-/** The last resume the fake codex recorded in session ``name`` (a name freed by the stop can be reused): [CODEX_HOME, arguments]. */
-async function launchOf(name: string): Promise<[string, string]> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const found = launches().findLast(fields => fields[2] === name && fields[3]!.startsWith('resume'));
-    if (found) return [found[1]!, found[3]!];
-    await sleep(100);
-  }
-  throw new Error(`no codex launched in ${name}`);
-}
+import {SKIP, PROFILE_SKIP, CARRY, mesh, log, travelHome, workHome, sleep, launches, owner,
+  codexSession, listed, arrange, arrangement, LABEL, installNativeProfiles, nativeProfiles,
+  consentPolicy, unchangedSource, ask, requested, refused, decide, launchOf,
+  type Session, type Request} from './session-account-switch-fixture.ts';
 
 describe('account switch requests', {skip: SKIP}, () => {
   let source: Session;
@@ -306,6 +146,146 @@ describe('account switch requests', {skip: SKIP}, () => {
     assert.ok(await listed('x-refused'), 'the source still runs');
   });
 
+  test('native profiles refuse before queueing, across profile and default directions despite skip consent',
+    {skip: process.platform === 'linux' ? 'native switches are qualified on Linux' : PROFILE_SKIP}, async () => {
+    const registry = installNativeProfiles();
+    try {
+      await nativeProfiles();
+      const consent = await fetch(`${mesh.base}/api/accounts/consent/set-global`, {method: 'POST', headers: owner(),
+        body: JSON.stringify({expected_revision: 0, confirmation: 'skip'})});
+      assert.equal(consent.status, 200, await consent.clone().text());
+      const policy = await consentPolicy() as {revision: number; global: string; pairs: unknown[]};
+      assert.deepEqual([policy.revision, policy.global, policy.pairs], [1, 'skip', []]);
+
+      for (const [name, from, to] of [
+        ['x-profile-switch', 'work', 'travel'],
+        ['x-default-to-profile', 'default', 'work'],
+        ['x-profile-to-default', 'work', 'default'],
+      ] as const) {
+        const session = await codexSession(name, from === 'default' ? undefined : from);
+        const before = (await listed(session.name))!;
+        if (from !== 'default') assert.match(String(before?.account_context_revision), /^[a-f0-9]{64}$/);
+        const original = rolloutIn(from === 'default' ? path.join(mesh.home, '.codex') : workHome, session.sid);
+        const target = rolloutIn(to === 'default' ? path.join(mesh.home, '.codex') : to === 'work' ? workHome : travelHome,
+          session.sid);
+        const transcript = fs.readFileSync(original);
+        assert.equal(fs.existsSync(target), false, `${name}: no target transcript before the request`);
+        const launchLog = fs.readFileSync(log, 'utf8');
+
+        assert.deepEqual(await refused(session, to),
+          ['switch_not_qualified', 'Native profile switching is not qualified']);
+        await unchangedSource(session, before, launchLog);
+        assert.deepEqual(fs.readFileSync(original), transcript, `${name}: no source transcript write`);
+        assert.equal(fs.existsSync(target), false, `${name}: no conversation copied to the target`);
+      }
+      assert.deepEqual(await consentPolicy(), policy, 'stored consent was not consumed or changed');
+    } finally {
+      fs.rmSync(registry);
+    }
+  });
+
+  test('parallel native profiles isolate processes and an approved switch leaves the other sessions intact',
+    {skip: PROFILE_SKIP || (process.platform !== 'linux' ? '/proc process environment required' : false)}, async () => {
+    const registry = installNativeProfiles();
+    try {
+      await nativeProfiles();
+      // Synthetic auth-file writes model disk isolation only, not a real OAuth refresh.
+      const [work, travel, plain] = await Promise.all([
+        codexSession('native-work', 'work'), codexSession('native-travel', 'travel'), codexSession('native-default'),
+      ]);
+      const pidOf = (name: string) => Number(fs.readFileSync(`${log}.${name}`, 'utf8').trim());
+      const actualHome = (pid: number) => {
+        const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
+        const variable = env.find(item => item.startsWith('CODEX_HOME='));
+        return variable ? variable.slice(11) : `${env.find(item => item.startsWith('HOME='))!.slice(5)}/.codex`;
+      };
+      const workPid = pidOf(work.name), travelPid = pidOf(travel.name), plainPid = pidOf(plain.name);
+      assert.deepEqual([actualHome(workPid), actualHome(travelPid), actualHome(plainPid)],
+        [workHome, travelHome, path.join(mesh.home, '.codex')]);
+      const defaultAuth = path.join(mesh.home, '.codex', 'auth.json');
+      fs.writeFileSync(defaultAuth, '{"fakeAccount":"default"}');
+      fs.writeFileSync(path.join(workHome, 'auth.json'), '{"fakeAccount":"work-relogin"}');
+      const before = (await listed(work.name))!;
+      const switched = await decide(await requested(work, 'travel'), true);
+      assert.equal(switched.state, 'completed', JSON.stringify(switched));
+      await launchOf(work.name);
+      const switchedPid = pidOf(work.name);
+      assert.notEqual(switchedPid, workPid, 'the agent was relaunched');
+      assert.equal(actualHome(switchedPid), travelHome);
+      assert.equal((await listed(work.name))!.id, before.id);
+      assert.equal(launches().findLast(fields => fields[2] === work.name)?.[4], work.token,
+        'the relaunched agent keeps the session token');
+      assert.deepEqual([pidOf(travel.name), pidOf(plain.name)], [travelPid, plainPid]);
+      assert.deepEqual([actualHome(travelPid), actualHome(plainPid)], [travelHome, path.join(mesh.home, '.codex')]);
+      assert.equal(fs.readFileSync(defaultAuth, 'utf8'), '{"fakeAccount":"default"}');
+      const made = await ask(plain, {action: 'restart'});
+      assert.equal(made.status, 202, await made.clone().text());
+      const {request} = await made.json() as {request: Request};
+      const restarted = await decide(request, true);
+      assert.equal(restarted.state, 'completed', JSON.stringify(restarted));
+      await launchOf(plain.name);
+      assert.equal(actualHome(pidOf(plain.name)), path.join(mesh.home, '.codex'));
+      assert.equal(launches().findLast(fields => fields[2] === plain.name)?.[4], plain.token);
+      assert.equal(actualHome(switchedPid), travelHome);
+      assert.equal(actualHome(travelPid), travelHome);
+    } finally { fs.rmSync(registry); }
+  });
+
+  test('a legacy request queued before native registry activation is refused on approval without a stop or copy',
+    {skip: PROFILE_SKIP}, async () => {
+    const session = await codexSession('x-legacy-activated');
+    const before = (await listed(session.name))!;
+    const original = rolloutIn(path.join(mesh.home, '.codex'), session.sid);
+    const target = rolloutIn(travelHome, session.sid);
+    const transcript = fs.readFileSync(original);
+    assert.equal(fs.existsSync(target), false);
+    const policy = await consentPolicy();
+    const request = await requested(session, 'travel');
+    assert.deepEqual([request.state, request.from_account, request.account], ['pending', 'default', 'travel']);
+    const launchLog = fs.readFileSync(log, 'utf8');
+    const registry = installNativeProfiles();
+    try {
+      await nativeProfiles();
+      const decided = await decide(request, true);
+      assert.equal(decided.state, 'failed', JSON.stringify(decided));
+      assert.equal(decided.result?.error, process.platform === 'linux'
+        ? 'Native account switch request has no valid binding' : 'Native profile switching is not qualified');
+      assert.ok(!decided.result?.rolled_back, 'the source was never stopped');
+      await unchangedSource(session, before, launchLog);
+      assert.deepEqual(fs.readFileSync(original), transcript, 'source conversation unchanged');
+      assert.equal(fs.existsSync(target), false, 'no target transcript written');
+      assert.deepEqual(await consentPolicy(), policy, 'consent remains stored and unchanged');
+    } finally {
+      fs.rmSync(registry);
+    }
+  });
+
+  test('the native migration marker refuses before preparing a missing legacy target folder',
+    {skip: process.platform === 'linux' ? 'native switches are qualified on Linux' : false}, async () => {
+    const session = await codexSession('x-marker-refusal');
+    const before = (await listed(session.name))!;
+    const accountFile = path.join(mesh.confDir, 'accounts.json');
+    const originalAccounts = fs.readFileSync(accountFile, 'utf8');
+    const target = path.join(mesh.home, '.agent-accounts/fresh/.codex');
+    fs.mkdirSync(path.dirname(target), {mode: 0o700});
+    const declared = JSON.parse(originalAccounts) as {v: number; accounts: Record<string, unknown>[]};
+    declared.accounts.push({id: 'fresh', label: 'Fresh', codex_home: target});
+    fs.writeFileSync(accountFile, JSON.stringify(declared), {mode: 0o600});
+    assert.equal(fs.existsSync(target), false);
+    const launchLog = fs.readFileSync(log, 'utf8');
+    const marker = path.join(mesh.confDir, 'backend-profiles.migrated');
+    fs.writeFileSync(marker, '', {mode: 0o600});
+    try {
+      assert.deepEqual(await refused(session, 'fresh'),
+        ['switch_not_qualified', 'Native profile switching is not qualified']);
+      assert.equal(fs.existsSync(target), false, 'no legacy target folder prepared');
+      await unchangedSource(session, before, launchLog);
+    } finally {
+      fs.rmSync(marker);
+      fs.writeFileSync(accountFile, originalAccounts, {mode: 0o600});
+    }
+  });
+
   test('approved: the agent stops, its conversation is carried, and it resumes under the target in the same terminal', {skip: CARRY}, async () => {
     const session = await codexSession('x-move');
     await arrange('x-move');
@@ -331,6 +311,57 @@ describe('account switch requests', {skip: SKIP}, () => {
     assert.equal(typeof before?.created, 'number');
     assert.notEqual(after?.created, before?.created, 'a new incarnation of the session');
     assert.deepEqual(await arrangement('x-move'), [LABEL, 'Moved'], 'the new incarnation keeps the name and folder');
+  });
+
+  test('parallel Codex accounts remain isolated through a switch, relogin and restart',
+    {skip: CARRY || (process.platform !== 'linux' ? '/proc process environment required' : false)}, async () => {
+    // Synthetic auth files only: never use the operator's accounts or credentials.
+    const defaultHome = path.join(mesh.home, '.codex');
+    for (const [folder, value] of [[defaultHome, 'default'], [workHome, 'work'], [travelHome, 'travel']]) {
+      fs.mkdirSync(folder!, {recursive: true, mode: 0o700});
+      fs.writeFileSync(path.join(folder!, 'auth.json'), JSON.stringify({fakeAccount: value}), {mode: 0o600});
+    }
+    const [plain, work, moving] = await Promise.all([
+      codexSession('parallel-default'), codexSession('parallel-work', 'work'), codexSession('parallel-moving', 'travel'),
+    ]);
+    const pidOf = (name: string) => Number(fs.readFileSync(`${log}.${name}`, 'utf8').trim());
+    const environment = (pid: number) => fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
+    const actualHome = (pid: number) => {
+      const env = environment(pid);
+      const variable = env.find(item => item.startsWith('CODEX_HOME='));
+      return variable ? variable.slice('CODEX_HOME='.length) : `${env.find(item => item.startsWith('HOME='))!.slice(5)}/.codex`;
+    };
+    const plainPid = pidOf(plain.name), workPid = pidOf(work.name), movingPid = pidOf(moving.name);
+    assert.deepEqual([actualHome(plainPid), actualHome(workPid), actualHome(movingPid)], [defaultHome, workHome, travelHome]);
+    const workAuth = fs.readFileSync(path.join(workHome, 'auth.json'), 'utf8');
+    const defaultAuth = fs.readFileSync(path.join(defaultHome, 'auth.json'), 'utf8');
+
+    const switched = await decide(await requested(moving, 'work'), true);
+    assert.equal(switched.state, 'completed', JSON.stringify(switched));
+    await launchOf(moving.name);
+    assert.equal(actualHome(pidOf(moving.name)), workHome);
+    assert.equal(launches().findLast(fields => fields[2] === moving.name)?.[4], moving.token, 'switch stays in the same PTY');
+    assert.equal(pidOf(work.name), workPid, 'the other work session was not restarted');
+    assert.equal(actualHome(workPid), workHome);
+    assert.equal(actualHome(plainPid), defaultHome);
+    assert.equal(fs.readFileSync(path.join(workHome, 'auth.json'), 'utf8'), workAuth);
+    assert.equal(fs.readFileSync(path.join(defaultHome, 'auth.json'), 'utf8'), defaultAuth);
+
+    // Simulate an auth-file update, not a real OAuth refresh, and verify the default file is unchanged.
+    fs.writeFileSync(path.join(workHome, 'auth.json'), JSON.stringify({fakeAccount: 'work-relogin'}));
+    assert.equal(fs.readFileSync(path.join(defaultHome, 'auth.json'), 'utf8'), defaultAuth);
+    const made = await ask(plain, {action: 'restart'});
+    assert.equal(made.status, 202, await made.clone().text());
+    const {request} = await made.json() as {request: Request};
+    const restarted = await decide(request, true);
+    assert.equal(restarted.state, 'completed', JSON.stringify(restarted));
+    assert.equal(restarted.result?.id, plain.name);
+    await launchOf(plain.name);
+    assert.equal(actualHome(pidOf(plain.name)), defaultHome, 'default remains default after another account was used');
+    assert.equal(launches().findLast(fields => fields[2] === plain.name)?.[4], plain.token, 'restart stays in the same PTY');
+    assert.equal(pidOf(work.name), workPid);
+    assert.equal(actualHome(workPid), workHome);
+    assert.equal(fs.readFileSync(path.join(defaultHome, 'auth.json'), 'utf8'), defaultAuth);
   });
 
   test('a carry that fails resumes the conversation under its own account and says it was undone', {skip: CARRY}, async () => {

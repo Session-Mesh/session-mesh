@@ -8,6 +8,20 @@ import { test } from 'node:test';
 import { ProjectsUiFixture } from './helpers/projects-ui.ts';
 import { followupCatalog, roadmapObservation, roadmapTask, attemptObservation } from './helpers/project-followup-fixtures.ts';
 
+test('Projects socket fixture acknowledges input without consuming the Sessions draft',
+  {skip:!process.env.MESH_CHROMIUM&&!process.env.MESH_REQUIRE_BROWSER?'MESH_CHROMIUM not configured':false}, async () => {
+    assert.ok(process.env.MESH_CHROMIUM, 'Chrome executable required');
+    const fixture = new ProjectsUiFixture(path.resolve(import.meta.dirname, '..'));
+    try {
+      await fixture.start();
+      const {page, sockets, input} = await fixture.sessionPage();
+      try {
+        await fixture.continuity(page, sockets, input);
+        assert.equal(await page.locator('#line-text').inputValue(), 'pending draft');
+      } finally { await page.close(); }
+    } finally { await fixture.stop(); }
+  });
+
 test('Chrome shows elapsed assignment lifetime distinctly from forecasts and preserves Sessions', {skip:!process.env.MESH_CHROMIUM&&!process.env.MESH_REQUIRE_BROWSER?'MESH_CHROMIUM not configured':false}, async () => {
   assert.ok(process.env.MESH_CHROMIUM, 'Chrome executable required');
   const fixture = new ProjectsUiFixture(path.resolve(import.meta.dirname, '..'));

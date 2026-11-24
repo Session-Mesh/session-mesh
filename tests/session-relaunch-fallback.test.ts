@@ -25,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {installFakeCodex, launchesIn} from './fake-codex-lib.ts';
+import {appendFixturePath} from './fixture-login-path.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {ptyhostArgv} from './ptyhost-command.ts';
 import {type Proxy, startProxy} from './ptyhost-proxy-lib.ts';
@@ -100,6 +101,7 @@ before(async () => {
   log = installed.log;
   mesh = await startMesh('relaunch-', {PATH: installed.PATH, MESH_MESH_PLATFORM_CMD: PLATFORM,
     CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined});
+  appendFixturePath(mesh.home, installed.PATH);
   const travel = path.join(mesh.home, '.agent-accounts', 'travel');
   fs.mkdirSync(travel, {recursive: true, mode: 0o700});
   fs.writeFileSync(path.join(mesh.confDir, 'accounts.json'), JSON.stringify({v: 1, accounts: [

@@ -77,6 +77,74 @@ async def restore(client, headers, *names):
     return resp.status, await resp.json()
 
 
+@pytest.mark.parametrize("sid", [None, SID])
+async def test_profiled_pi_restore_refuses_without_consuming_offer(client, auth_cookie, fake_host, tmp_path, sid):
+    agent = {"type": "pi", "session_id": sid, "pid": 22, "argv": ["pi"]}
+    item = mesh_item("pi-profile", tmp_path, 1.0, agent)
+    item.update(account="work", account_context_revision="a" * 64)
+    lose(tmp_path, item)
+    before = respawn.lost_entry("pi-profile")
+    status, body = await restore(client, auth_cookie, "pi-profile")
+    assert status == 200
+    assert body["results"]["pi-profile"] == {"ok": False, "error": server.PI_PROFILE_UNAVAILABLE}
+    assert fake_host.new_requests == []
+    assert respawn.lost_entry("pi-profile") == before
+
+
+@pytest.mark.parametrize("changed", [False, True])
+async def test_missing_transcript_still_validates_saved_default_context(
+        client, auth_cookie, fake_host, tmp_path, monkeypatch, changed):
+    item = mesh_item("bound-default", tmp_path, 1.0, claude())
+    item["default_context_revision"] = "a" * 64
+    lose(tmp_path, item)
+    before = respawn.lost_entry("bound-default")
+    assert before["default_context_revision"] == "a" * 64
+    monkeypatch.setattr(server, "_conversation_missing", lambda *_args: True)
+    def validate(kind, revision):
+        assert (kind, revision) == ("claude", "a" * 64)
+        if changed:
+            raise server.web.HTTPConflict(text="Account profile context changed; resume refused")
+    monkeypatch.setattr(server, "_validate_default_restore", validate)
+    status, body = await restore(client, auth_cookie, "bound-default")
+    assert status == 200
+    if changed:
+        assert body["results"]["bound-default"]["ok"] is False
+        assert fake_host.new_requests == []
+        assert respawn.lost_entry("bound-default") == before
+    else:
+        assert body["results"]["bound-default"]["ok"] is True
+        assert len(fake_host.new_requests) == 1
+        assert respawn.lost_entry("bound-default") is None
+
+
+async def test_exact_profiled_pi_restore_refuses_before_intent(monkeypatch, tmp_path):
+    entry = {"name": "pi-profile", "created": 1.0, "cwd": str(tmp_path), "account": "work",
+             "account_context_revision": "a" * 64, "agent": {"type": "pi", "session_id": None}}
+    events = []
+
+    async def listed(**_kwargs):
+        return {"mesh": [], "external": []}
+
+    async def identity(value, _expected):
+        return value, None
+
+    async def start(*_args):
+        events.append("intent-or-launch")
+        raise AssertionError("must not start")
+
+    monkeypatch.setattr(server, "sessions", listed)
+    monkeypatch.setattr(respawn, "lost_entry", lambda _name: entry)
+    monkeypatch.setattr(respawn, "offer_mismatch", lambda *_args: [])
+    monkeypatch.setattr(server, "_exact_identity", identity)
+    monkeypatch.setattr(server, "_start_exact", start)
+    app = {"restore_lock": asyncio.Lock(), "organisation_lock": asyncio.Lock()}
+    result = await server.restore_exact(app, {"name": "pi-profile", "resume_id": None})
+    assert result["ok"] is False
+    assert result["error"] == server.PI_PROFILE_UNAVAILABLE
+    assert events == []
+    assert "restoring" not in entry
+
+
 async def test_the_lost_sessions_are_listed_as_restorable(client, auth_cookie, fake_host, tmp_path):
     lose(tmp_path, mesh_item("a", tmp_path, 1.0, claude(argv=["claude", "prompt"])), mesh_item("b", tmp_path, 2.0, None, "vim x"))
     data = await (await client.get("/api/sessions", headers=auth_cookie)).json()

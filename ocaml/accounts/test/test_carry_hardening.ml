@@ -85,7 +85,7 @@ let test_lock_ignores_case () =
       | Some refusal -> refused_with "carry_in_progress" refusal
       | None -> Alcotest.fail "the second carry did not run")
 
-(* An older copy left by a failed carry stays until a carry succeeds. *)
+(* An old-format recovery copy requires explicit review and is never removed. *)
 let test_older_copy_kept_until_success () =
   with_root (fun root ->
       let source = claude_account root "a" in
@@ -96,15 +96,17 @@ let test_older_copy_kept_until_success () =
       write (Filename.concat target old) "{\"line\":1}\n";
       let diverged = Filename.concat target (own ^ "/tool-results/r1.txt") in
       write diverged "other";
-      refused_with "conversation_diverged" (carry ~source ~target C.Claude);
+      refused_with "carry_restore_failed" (carry ~source ~target C.Claude);
       Alcotest.(check bool)
         "kept after a refusal" true
         (exists (Filename.concat target old));
       Unix.unlink diverged;
-      ignore (carried (carry ~source ~target C.Claude));
-      Alcotest.(check bool)
-        "removed after a carry" false
-        (exists (Filename.concat target old)))
+      refused_with "carry_restore_failed" (carry ~source ~target C.Claude);
+      Alcotest.(check string) "backup content retained" "{\"line\":1}\n"
+        (read (Filename.concat target old));
+      Alcotest.(check string) "active transcript unchanged"
+        (read (Filename.concat source transcript))
+        (read (Filename.concat target transcript)))
 
 (* A read that fails while comparing with an older copy is a refusal, not an
    exception. *)
@@ -128,8 +130,15 @@ let test_source_changed_during_copy () =
       let target = claude_account root "b" in
       let before = listing target in
       let io = { (failing_io ()) with C.read = (fun _ _ _ _ -> 0) } in
-      refused_with "carry_failed" (carry ~io ~source ~target C.Claude);
-      Alcotest.(check (list string)) "as before" before (listing target))
+      refused_with "carry_rollback_incomplete" (carry ~io ~source ~target C.Claude);
+      let after = listing target in
+      List.iter
+        (fun relative ->
+          Alcotest.(check bool) "older entry retained" true
+            (List.mem relative after))
+        before;
+      Alcotest.(check bool) "no staged copy" false
+        (List.exists (fun relative -> contains relative ".carry-new-") after))
 
 (* A copy the rollback cannot remove is reported by name. *)
 let test_incomplete_rollback_is_reported () =
@@ -174,7 +183,7 @@ let () =
             test_writable_target_file;
           Alcotest.test_case "Codex layout" `Quick test_codex_layout;
           Alcotest.test_case "lock ignores case" `Quick test_lock_ignores_case;
-          Alcotest.test_case "older copy kept until a carry succeeds" `Quick
+          Alcotest.test_case "older copy requires review" `Quick
             test_older_copy_kept_until_success;
           Alcotest.test_case "failed read" `Quick test_failed_read_is_refused;
           Alcotest.test_case "source changed during the copy" `Quick

@@ -272,6 +272,39 @@ async def test_new_touch_cancels_queued_fullscreen_wheel_events(phone):
     await touch(tab, "touchEnd", x, top)
 
 
+async def test_mouse_reports_waiting_for_ack_do_not_move_the_terminal_under_a_touch(phone):
+    tab = await phone(ALTERNATE, ready="active.term.buffer.active.type === 'alternate'")
+    await tab.wait_for_function("active.term.modes.mouseTrackingMode !== 'none'", timeout=10000)
+    await tab.evaluate("""() => {
+      const socket = active.conn.ws, original = socket.onmessage;
+      window.__heldReports = [];
+      socket.onmessage = event => {
+        if (typeof event.data === 'string' && JSON.parse(event.data).t === 'input_ack') {
+          window.__heldReports.push(event);
+          return;
+        }
+        original.call(socket, event);
+      };
+      window.__releaseReports = () => {
+        socket.onmessage = original;
+        for (const event of window.__heldReports) original.call(socket, event);
+      };
+    }""")
+    x, top, bottom = await terminal_touch_path(tab, 360)
+    await touch(tab, "touchStart", x, bottom)
+    await touch(tab, "touchMove", x, top)
+    await tab.wait_for_function("window.__heldReports.length > 0", timeout=3000)
+    assert await tab.evaluate("""() => active.inputAck.state === 'sending'
+      && active.inputAck.pendingBytes > 0 && active.inputAck.pendingHumanBytes === 0
+      && document.querySelector('.pane.active .p-input-review').hidden""")
+    await touch(tab, "touchEnd", x, top)
+    await touch(tab, "touchStart", x, top)
+    assert await tab.evaluate("document.elementFromPoint(%f, %f).closest('.term') !== null" % (x, top))
+    await touch(tab, "touchEnd", x, top)
+    await tab.evaluate("window.__releaseReports()")
+    await tab.wait_for_function("active.inputAck.state === 'ready'", timeout=3000)
+
+
 async def test_the_normal_buffer_scrolls_per_pixel_even_when_the_program_tracks_the_mouse(phone):
     tab = await phone(TRACK)
     await tab.wait_for_function("active.term.modes.mouseTrackingMode !== 'none'", timeout=10000)

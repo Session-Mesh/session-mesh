@@ -48,7 +48,10 @@ async function launch(preset: string, name: string): Promise<string> {
   const response = await fetch(`${mesh.base}/api/new`, {
     method: 'POST', headers: headers(), body: JSON.stringify({preset, cwd: mesh.home, name})});
   assert.equal(response.status, 200, await response.clone().text());
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // The PTY host may wait up to ten seconds for the shell to become quiet
+  // before sending the launch command. Allow time for the command to start
+  // after that documented wait, especially on a busy machine.
+  for (let attempt = 0; attempt < 300; attempt += 1) {
     const lines = fs.existsSync(argvLog) ? fs.readFileSync(argvLog, 'utf8').split('\n').filter(Boolean) : [];
     const line = lines.find(item => !seen.has(item));
     if (line) { seen.add(line); return line; }

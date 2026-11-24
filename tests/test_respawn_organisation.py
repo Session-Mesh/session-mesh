@@ -354,6 +354,21 @@ async def test_membership_never_publishes_an_older_host_list_over_a_newer_one(sn
     assert json.loads(state.answer(None))["host"] == "ok", "a successful read ends a silent host"
 
 
+async def test_membership_projects_input_ack_before_discovery_finishes(snapshot_file, tmp_path):
+    state = server.SessionsState()
+    modern = dict(hosted("modern", tmp_path, 1.0),
+                  pty_capabilities=["human_input_lease_v1", "acknowledged_input_v1"])
+    old = hosted("old", tmp_path, 2.0)
+    malformed = dict(hosted("malformed", tmp_path, 3.0), pty_capabilities="acknowledged_input_v1")
+    await state.membership(([modern, old, malformed], True, None, 0.0, 1.0))
+    assert {row["id"]: (row["ready"], row["pty_capabilities"])
+            for row in json.loads(state.answer(None))["mesh"]} == {
+                "modern": (False, ["acknowledged_input_v1"]),
+                "old": (False, []),
+                "malformed": (False, []),
+            }
+
+
 async def test_a_read_slower_than_a_publish_never_puts_older_rows_back(snapshot_file, tmp_path, monkeypatch):
     # A read's awaits (organisation, snapshot) let a round, or a newer read, publish in between.
     entered, release, view = threading.Event(), threading.Event(), server.organize.view
@@ -390,6 +405,80 @@ async def test_a_read_slower_than_a_publish_never_puts_older_rows_back(snapshot_
     release.set()
     await newer
     assert (sorted(state.rows), state.read_done) == (["a", "b"], 6.0)
+
+
+async def test_listing_and_recovery_do_not_wait_for_slow_accounts(monkeypatch):
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def slow_accounts():
+        calls.append("refresh")
+        entered.set()
+        await release.wait()
+        return []
+
+    recorded = []
+
+    async def record(data, read, order):
+        recorded.append(order)
+        return [], True
+
+    monkeypatch.setattr(server, "declared_accounts", slow_accounts)
+    monkeypatch.setattr(server, "_record_listing", record)
+    monkeypatch.setattr(server, "_LIVE_EVENT_STATE", None)
+    monkeypatch.setattr(server, "_LISTING_ACCOUNT_REFRESH", (None, None, 0.0), raising=False)
+    try:
+        await asyncio.wait_for(server._listing(None, None, ([], True, None, 123.0, 1.0)), 1)
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(server._listing(None, None, ([], True, None, 124.0, 2.0)), 1)
+        assert calls == ["refresh"]
+        assert recorded == [1.0, 2.0]
+    finally:
+        release.set()
+        task = server._LISTING_ACCOUNT_REFRESH[1]
+        if task is not None:
+            await task
+
+
+async def test_listing_refresh_cooldown_does_not_throttle_strict_callers(monkeypatch):
+    calls = []
+
+    async def refresh():
+        calls.append("refresh")
+        return []
+
+    monkeypatch.setattr(server, "declared_accounts", refresh)
+    monkeypatch.setattr(server, "_LISTING_ACCOUNT_REFRESH", (None, None, 0.0))
+    monkeypatch.setattr(server, "_LISTING_ACCOUNT_RETRY_SECONDS", 60.0)
+    server._schedule_listing_account_refresh()
+    await server._LISTING_ACCOUNT_REFRESH[1]
+    await asyncio.sleep(0)  # let the completion callback set the deadline
+    server._schedule_listing_account_refresh()
+    assert calls == ["refresh"]
+    await server.declared_accounts()
+    assert calls == ["refresh", "refresh"]
+
+
+async def test_startup_does_not_bypass_strict_document_refresh(monkeypatch):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_accounts():
+        entered.set()
+        await release.wait()
+        return []
+
+    monkeypatch.setattr(server, "declared_accounts", slow_accounts)
+    monkeypatch.setattr(server, "_LISTING_ACCOUNT_REFRESH", (None, None, 0.0))
+    await asyncio.wait_for(server._start_listing_account_refresh(None), 1)
+    await asyncio.wait_for(entered.wait(), 1)
+    strict = asyncio.create_task(server.refresh_document_account_protection())
+    try:
+        await asyncio.sleep(0)
+        assert not strict.done()
+    finally:
+        release.set()
+        await strict
+        await server._stop_listing_account_refresh(None)
 
 
 async def test_a_listing_observes_the_conversations_at_the_time_of_its_host_read(monkeypatch):

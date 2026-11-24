@@ -448,9 +448,8 @@ describe('the public CI as committed', () => {
       }
     });
 
-    // The backend profile tests (tests/backend-profiles.test.ts) skip without mesh-profile: it travels with the
-    // work programs, the cache key prefix changed when it joined, and the frontend job (which runs them) requires it.
-    test(`${name} hands mesh-profile to the frontend job, failing rather than skipping`, () => {
+    // The profile and account settings tests need the native helper from the work programs artifact.
+    test(`${name} hands mesh-profile to frontend and browser jobs, failing rather than skipping`, () => {
       const jobs = jobBlocks(parseLines(text));
       const body = (jobName: string): string => {
         const job = jobs.find((item) => item.name === jobName);

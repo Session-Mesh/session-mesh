@@ -49,7 +49,9 @@ let usage =
    [--refresh] [--cache-only] [--line] [--debug] [--release-dir DIR] | \
    update-image | accounts list FILE | accounts prepare FILE ID | accounts \
    carry FILE claude|codex CONVERSATION FROM TO | accounts resolve FILE \
-   claude|codex NAME | session-settings inspect|apply"
+   claude|codex|opencode-v2|pi NAME | accounts launch-context FILE \
+   claude|codex|opencode-v2|pi ID [EXPECTED_CONTEXT_REVISION] | \
+   session-settings inspect|apply"
 
 let ex_config = 78
 
@@ -394,12 +396,13 @@ let update_image () =
    {"accounts": [...]} (Mesh_accounts.to_json) once the operator's file and
    every folder it declares are valid; [accounts prepare FILE ID] also creates
    that account's missing folders (mode 0700) and prints {"account": {...}}.
-   [accounts resolve FILE claude|codex NAME] prints {"account": {"backend",
+    [accounts resolve FILE BACKEND NAME] prints {"account": {"backend",
    "id", "label"}}: the account of that backend whose id is NAME, else the one
    whose label is NAME ignoring ASCII case; never a prefix. A refusal exits 1
    with {"kind": "accounts", "error": "..."}: the web server then offers no
    alias. [resolve] adds the error's "code", and "candidates" when the name is
-   ambiguous. *)
+    ambiguous. [accounts launch-context FILE BACKEND ID] prepares just that
+    selected backend and prints its selectors, removals, roots and revisions. *)
 module R = Mesh_account_resolver
 
 let accounts_failure ?(extra = []) message =
@@ -423,6 +426,21 @@ let accounts_prepare file id =
       print_json (`Assoc [ ("account", account) ]);
       0
   | Error error -> accounts_failure error.message
+
+let accounts_launch_context file backend id expected_context =
+  let uid = Unix.geteuid () in
+  let result =
+    Result.bind (R.load ~uid ~file) (fun registry ->
+        Result.bind (R.find registry { R.backend; id })
+          (R.launch_context ~uid ?expected_context))
+  in
+  match result with
+  | Ok context ->
+      print_json (`Assoc [ ("context", R.launch_context_json context) ]);
+      0
+  | Error error ->
+      accounts_failure ~extra:[ ("code", `String error.code) ]
+        (R.sanitize error.message)
 
 (* [resolve]'s messages name no folder and hold no control character
    (R.sanitize); [list] and [prepare] print theirs unchanged. *)
@@ -453,7 +471,7 @@ let accounts_resolve file backend name =
    file left in place and need someone to step in. One process per carry: the
    lock does not exclude carries inside one process. For Codex only the rollout is
    copied: that is enough to resume it (Mesh_accounts_carry). *)
-let accounts_carry file kind conversation from_account to_account =
+let accounts_carry ?expected_contexts file kind conversation from_account to_account =
   let module Carry = Mesh_accounts_carry in
   let refuse { Carry.code; message } =
     print_error ("mesh-platform: " ^ message);
@@ -478,7 +496,7 @@ let accounts_carry file kind conversation from_account to_account =
       refuse { Carry.code = "conversation_unknown"; message = "not a conversation id" }
   | Some kind -> (
       match
-        Carry.carry_accounts ~uid ~getenv:Sys.getenv_opt ~file ~kind
+        Carry.carry_accounts ?expected_contexts ~uid ~getenv:Sys.getenv_opt ~file ~kind
           ~conversation ~from_account ~to_account ()
       with
       | Ok outcome ->
@@ -489,9 +507,31 @@ let accounts_carry file kind conversation from_account to_account =
 let run = function
   | [ "accounts"; "list"; file ] -> accounts_list file
   | [ "accounts"; "prepare"; file; id ] -> accounts_prepare file id
+  | [ "accounts"; "launch-context"; file; backend; id ] -> (
+      match R.backend_of_string backend with
+      | Some backend -> accounts_launch_context file backend id None
+      | None -> 2)
+  | [ "accounts"; "launch-context"; file; backend; id; expected ]
+    when String.length expected = 64
+         && String.for_all
+              (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false)
+              expected -> (
+      match R.backend_of_string backend with
+      | Some backend -> accounts_launch_context file backend id (Some expected)
+      | None -> 2)
   | [ "accounts"; "carry"; file; kind; conversation; from_account; to_account ]
     ->
       accounts_carry file kind conversation from_account to_account
+  | [ "accounts"; "carry"; file; kind; conversation; from_account; to_account;
+      source_revision; target_revision ]
+    when List.for_all
+           (fun revision -> String.length revision = 64
+              && String.for_all
+                   (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false)
+                   revision)
+           [ source_revision; target_revision ] ->
+      accounts_carry ~expected_contexts:(source_revision, target_revision)
+        file kind conversation from_account to_account
   | [ "accounts"; "resolve"; file; backend; name ]
     when R.backend_of_string backend <> None ->
       accounts_resolve file (Option.get (R.backend_of_string backend)) name

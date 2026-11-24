@@ -192,6 +192,64 @@ async def test_recovered_create_executes_approved_options_not_current_options(
     recovered.close()
 
 
+@pytest.mark.parametrize('copied', [False, True])
+async def test_failed_switch_recovery_retains_original_error_and_never_claims_rollback(monkeypatch, copied):
+    class Requests:
+        def begin_execution(self, _request_id):
+            return {'source': {'agent': 'codex'}, 'from_account': 'default'}
+        def finish(self, _request_id, *, error, detail):
+            return {'error': error, 'result': detail}
+    async def execute(_item):
+        raise server.AccountSwitchRecoveryFailed('session', server.AccountsUnavailable('original failure', 'carry_failed'),
+                                                 target_copy_remains=copied)
+    monkeypatch.setattr(server, '_execute_session_action', execute)
+    result = await server._run_session_action({'session_requests': Requests()}, 'request')
+    assert 'original failure' in result['error']
+    assert 'could not be verified' in result['error']
+    assert result['result']['code'] == 'carry_failed'
+    assert result['result']['rolled_back'] is False
+    assert result['result']['target_copy_remains'] is copied
+    assert result['result']['operator_action'] is True
+    assert result['result']['retryable'] is False
+
+
+@pytest.mark.parametrize('code', ['helper-unavailable', None, 'carry_rollback_incomplete', 'carry_restore_failed', 'unexpected-code'])
+@pytest.mark.parametrize('restart_succeeds', [True, False])
+async def test_uncertain_carry_never_claims_target_cleanup(monkeypatch, code, restart_succeeds):
+    class Requests:
+        def begin_execution(self, _request_id):
+            return {'source': {'agent': 'codex'}, 'from_account': 'default'}
+        def finish(self, _request_id, *, error, detail):
+            return {'error': error, 'result': detail}
+    async def execute(_item):
+        failure = server.AccountsUnavailable('carry outcome unavailable', code)
+        if restart_succeeds:
+            raise server.AccountSwitchUndone('session', failure.code, str(failure))
+        raise server.AccountSwitchRecoveryFailed('session', failure)
+    monkeypatch.setattr(server, '_execute_session_action', execute)
+    result = await server._run_session_action({'session_requests': Requests()}, 'request')
+    assert result['result']['target_copy_remains'] is True
+    assert result['result']['target_copy_uncertain'] is True
+    assert result['result']['rolled_back'] is False
+    assert result['result']['operator_action'] is True
+    assert result['result']['retryable'] is False
+    assert 'may remain' in result['error']
+
+
+async def test_unconfirmed_target_start_retains_copy_and_requires_inspection(monkeypatch):
+    class Requests:
+        def begin_execution(self, _request_id): return {'source': {'agent': 'codex'}, 'from_account': 'default'}
+        def finish(self, _request_id, *, error, detail): return {'error': error, 'result': detail}
+    async def execute(_item): raise server.AccountSwitchTargetStartUnconfirmed('session')
+    monkeypatch.setattr(server, '_execute_session_action', execute)
+    result = await server._run_session_action({'session_requests': Requests()}, 'request')
+    assert result['result']['target_copy_remains'] is True
+    assert result['result']['target_copy_uncertain'] is False
+    assert result['result']['rolled_back'] is False
+    assert result['result']['retryable'] is False and result['result']['operator_action'] is True
+    assert 'may be running' in result['error']
+
+
 async def test_startup_worker_recovers_approved_but_not_uncertain_work(tmp_path, monkeypatch):
     requests = sessionrequests.Requests(tmp_path / "actions.sqlite3", clock=lambda: 10.0)
     made = requests.create({"id": "alpha", "created": 1.0, "agent": "codex", "cwd": "/work"},
@@ -219,6 +277,33 @@ async def test_startup_worker_recovers_approved_but_not_uncertain_work(tmp_path,
 @pytest.fixture
 def mesh_listing(monkeypatch):
     return session_helpers.listing.__wrapped__(monkeypatch)
+
+
+async def test_native_binding_stays_internal_on_all_request_responses(client, mesh_listing, auth_cookie, monkeypatch):
+    headers = agent(mesh_listing)
+    binding = {'backend': 'codex', 'conversation': '12345678-abcd', 'agent_pid': 123, 'agent_start': '456',
+               'source': {'id': 'default', 'context_revision': 'a' * 64},
+               'target': {'id': 'work', 'context_revision': 'b' * 64}}
+    async def switch(_source, body):
+        return body, 'default', binding
+    monkeypatch.setattr(server, '_switch_request', switch)
+    made = await client.post('/api/session-actions/@self/request', headers=headers,
+                             json={'action': 'switch_account', 'account': 'work'})
+    assert made.status == 202
+    item = (await made.json())['request']
+    assert 'switch_binding' not in item
+    stored = client.server.app['session_requests'].status(item['id'])
+    assert stored['switch_binding'] == binding
+    read = await client.get('/api/session-actions/@self/request', params={'id': item['id']}, headers=headers)
+    assert 'switch_binding' not in (await read.json())['request']
+    claim = await client.post(f"/api/session-actions/{item['id']}/claim", headers=auth_cookie,
+                              json={'tab_nonce': 'a' * 32})
+    claimed = await claim.json()
+    assert 'switch_binding' not in claimed['request']
+    rejected = await client.post(f"/api/session-actions/{item['id']}/decision", headers=auth_cookie,
+                                 json={'approve': False, 'claim_nonce': claimed['claim_nonce']})
+    assert 'switch_binding' not in (await rejected.json())['request']
+    assert client.server.app['session_requests'].status(item['id'])['switch_binding'] == binding
 
 
 async def test_session_token_only_records_intent_and_owner_rejects_it(
@@ -512,37 +597,41 @@ async def test_restart_preparation_failure_never_stops_source(monkeypatch):
 
 async def test_restart_starts_deferred_command_only_after_exact_source_is_stopped(monkeypatch):
     calls = []
+    nonce = None
 
     async def prepared(*_args, **_kwargs):
+        nonlocal nonce
+        nonce = _kwargs["nonce"]
         calls.append(("prepare", _args))
         return "old-2"
 
     async def host(request):
         calls.append((request["op"], request))
         if request["op"] == "list":
-            if sum(call[0] == "list" for call in calls) == 1:
-                return [{"name": "old-2", "created": 2.0}]
-            return [{"name": "old-2", "created": 2.0}]
+            return [{"name": "old-2", "created": 2.0, "meta": {"nonce": nonce}}]
         return {"ok": True}
 
     monkeypatch.setattr(server, "new_session", prepared)
     monkeypatch.setattr(server, "host", host)
     assert await server.replace_session("old", 1.0, "old", str(Path.home()),
                                         "codex resume sid", "codex", "codex") == "old-2"
-    assert [call[0] for call in calls] == ["prepare", "list", "kill_if", "list", "start_if"]
+    assert [call[0] for call in calls] == ["prepare", "list", "list", "kill_if", "list", "list", "start_if"]
     assert calls[-1][1]["command"] == "codex resume sid"
 
 
 async def test_restart_never_starts_replacement_before_source_exit(monkeypatch):
     calls = []
+    nonce = None
 
     async def prepared(*_args, **_kwargs):
+        nonlocal nonce
+        nonce = _kwargs["nonce"]
         return "old-2"
 
     async def host(request):
         calls.append(request["op"])
         if request["op"] == "list":
-            return [{"name": "old-2", "created": 2.0},
+            return [{"name": "old-2", "created": 2.0, "meta": {"nonce": nonce}},
                     {"name": "old", "created": 1.0}]
         return {"ok": True}
 

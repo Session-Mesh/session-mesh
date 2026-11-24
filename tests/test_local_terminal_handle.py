@@ -17,6 +17,7 @@ def test_local_terminal_reconnect_lease_and_stale_callbacks():
     script = r"""
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const vm = require('node:vm');
 const sockets = [], timers = new Map(), frames = [], output = [], states = [];
 let serial = 0, refresh = async () => {}, fits = 0;
@@ -31,13 +32,16 @@ class Socket {
   open() { this.readyState = 1; return this.onopen(); }
   bytes(text) { this.onmessage({data: new TextEncoder().encode(text).buffer}); }
 }
-const context = vm.createContext({WebSocket: Socket, Uint8Array, TextEncoder,
+const context = vm.createContext({WebSocket: Socket, Uint8Array, TextEncoder, crypto,
   requireLocalMesh: () => {}, localMeshEffectsAllowed: () => true,
   localActionUnavailable: () => false, t: key => key,
   location: {protocol: 'https:', host: 'mesh.example'}, touch: false,
-  inputLeaseTab: 'a'.repeat(32), enc: new TextEncoder(), active: null,
+  inputLeaseTab: 'a'.repeat(32), enc: new TextEncoder(), active: null, inventoryLoaded: true,
+  lastListing: {management: {state: 'observed'}},
   lineDirect: null,   // app.js module state read by the connection's close handler
-  find: name => ({id: name, created: 42}),
+  // This isolated socket test exercises the legacy raw-input path; acknowledged
+  // input with a known incarnation is covered by the real browser/native seam.
+  find: name => ({id: name, kind: 'mesh', created: 37, pty_capabilities: []}),
   updateKeys: () => {}, flash: () => {}, refresh: () => refresh(),
   data: {mesh: [{id: 'shell/name'}]},
   requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
@@ -46,17 +50,20 @@ const context = vm.createContext({WebSocket: Socket, Uint8Array, TextEncoder,
   clearTimeout: id => timers.delete(id),
 });
 vm.runInContext(fs.readFileSync('static/pane-actions.js', 'utf8'), context);
+vm.runInContext(fs.readFileSync('static/sessions-progress.js', 'utf8') +
+  '\nconst Progress = globalThis.MeshSessionsProgress;', context);
 const app = fs.readFileSync('static/app.js', 'utf8');
 const start = app.indexOf('function localTerminalSocketReady(');
 const end = app.indexOf('function webLabel(s) {', start);
 assert.ok(start > 0 && end > start);
 vm.runInContext(app.slice(start, end) + '\nglobalThis.TestPane = Pane;', context);
 const pane = Object.assign(Object.create(context.TestPane.prototype), {
-  id: 'shell/name', conn: null, inputLeases: new Map(), inputLeaseSlot: 7,
+  id: 'shell/name', conn: null, inputLeases: new Map(), inputAcks: new Map(), inputLeaseSlot: 7,
   termEl: {hidden: false, classList: {remove() {}}, removeAttribute() {}},
   term: {rows: 24, cols: 80, reset() { this.rows = 24; this.cols = 80; }, write(_data, done) { done?.(); }},
   fit: {fit() { fits++; pane.term.rows = 37; pane.term.cols = 143; }},
   setConn: (text, bad) => states.push([text, bad]),
+  renderRetainedInput: () => {},
   output: value => output.push(typeof value === 'string' ? value : new TextDecoder().decode(value)),
   armAutoRedraw: () => {}, bumpAutoRedraw: () => {}, bumpInitialFollow: () => {},
   dropReaderAnchor: () => {},

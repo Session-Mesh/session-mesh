@@ -192,7 +192,7 @@ let test_resolve root =
   Alcotest.(check bool)
     "resolve creates nothing" false
     (Sys.file_exists (Filename.concat root "work/codex"));
-  let code, _, _ = resolve "pi" "work" in
+  let code, _, _ = resolve "vibe" "work" in
   Alcotest.(check int) "unknown backend: usage" 2 code
 
 let test_resolve_ambiguous root =
@@ -255,6 +255,53 @@ let test_resolve_sanitized root =
       "mesh-platform: " ^ raw ^ "\n" )
     (run [ "accounts"; "list"; file ])
 
+(* Native registry commands keep the old FILE argument, but share one source
+   preference and preserve independent backend labels under a grouped id. *)
+let test_native_commands root =
+  let file = Filename.concat root "accounts.json" in
+  let registry = Filename.concat root "backend-profiles.json" in
+  write_file file "invalid legacy source must not be read";
+  let declare codex_enabled =
+    write_file registry
+      (Printf.sprintf
+         {|{"version":1,"profiles":[{"id":"work","label":"Claude Work","backend":"claude","enabled":true,"roots":{"config":"%s/claude","history":"%s/claude/projects"}},{"id":"work","label":"Codex Work","backend":"codex","enabled":%b,"roots":{"config":"%s/codex","state":"%s/codex/sessions"}}]}|}
+         root root codex_enabled root root)
+  in
+  declare true;
+  expect "native list"
+    ( 0,
+      Printf.sprintf
+        {|{"accounts":[{"id":"work","label":"Claude Work","claude_config_dir":"%s/claude","codex_home":"%s/codex","backend_labels":{"claude":"Claude Work","codex":"Codex Work"}}],"protected_roots":["%s/claude","%s/codex"],"launch_profiles":[{"backend":"claude","id":"work","label":"Claude Work"},{"backend":"codex","id":"work","label":"Codex Work"}]}|}
+        root root root root
+      ^ "\n",
+      "" )
+    (run [ "accounts"; "list"; file ]);
+  expect "native Claude label" (resolved "claude" "work" "Claude Work")
+    (run [ "accounts"; "resolve"; file; "claude"; "CLAUDE WORK" ]);
+  expect "native Codex label" (resolved "codex" "work" "Codex Work")
+    (run [ "accounts"; "resolve"; file; "codex"; "CODEX WORK" ]);
+  declare false;
+  expect "native prepare enabled roots only"
+    ( 0,
+      Printf.sprintf
+        {|{"account":{"id":"work","label":"Claude Work","claude_config_dir":"%s/claude","backend_labels":{"claude":"Claude Work"}}}|}
+        root
+      ^ "\n",
+      "" )
+    (run [ "accounts"; "prepare"; file; "work" ]);
+  Alcotest.(check bool) "native history prepared" true
+    (is_private_directory (Filename.concat root "claude/projects"));
+  Alcotest.(check bool) "disabled native root not created" false
+    (Sys.file_exists (Filename.concat root "codex"));
+  expect "disabled backend refuses"
+    (resolve_refused "account_no_agent" "account work has no Codex folder")
+    (run [ "accounts"; "resolve"; file; "codex"; "work" ]);
+  write_file registry "{";
+  expect "configured malformed never resolves even default"
+    (resolve_refused "accounts_refused"
+       "backend-profiles.json: invalid-profile-config")
+    (run [ "accounts"; "resolve"; file; "claude"; "default" ])
+
 let () =
   Alcotest.run "mesh-platform accounts (golden)"
     [
@@ -277,4 +324,6 @@ let () =
           Alcotest.test_case "sanitized" `Quick
             (with_temporary test_resolve_sanitized);
         ] );
+      ( "native registry",
+        [ Alcotest.test_case "shared CLI source" `Quick (with_temporary test_native_commands) ] );
     ]

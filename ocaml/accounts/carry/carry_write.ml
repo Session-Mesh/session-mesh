@@ -15,11 +15,16 @@ type io = {
   read : Unix.file_descr -> bytes -> int -> int -> int;
   unlink : string -> unit;
   rename : string -> string -> unit;
+  rename_noreplace : string -> string -> unit;
+  link : string -> string -> unit;
   close : Unix.file_descr -> unit;
   free_bytes : string -> int option;
 }
 
-type action = Copy | Replace | Same
+external rename_noreplace : string -> string -> unit
+  = "mesh_accounts_carry_rename_noreplace"
+
+type action = Copy | Replace of Unix.stats | Same
 
 (* A regular file read without following a link (Mesh_safe_file). *)
 let with_reading path f =
@@ -86,7 +91,11 @@ let plan io ~uid ~source ~target (relative, size) =
     when st_uid = uid && st_perm land 0o022 <> 0 ->
       fail "unsafe_entry"
         ("target " ^ relative ^ " can be written by other users")
-  | Some { Unix.st_kind = Unix.S_REG; st_uid; st_size; _ } when st_uid = uid ->
+  | Some { Unix.st_kind = Unix.S_REG; st_uid; st_nlink; _ }
+    when st_uid = uid && st_nlink <> 1 ->
+      fail "unsafe_entry"
+        ("target " ^ relative ^ " has another name (a hard link)")
+  | Some ({ Unix.st_kind = Unix.S_REG; st_uid; st_size; _ } as expected) when st_uid = uid ->
       let* prefix =
         if st_size > size then Ok false
         else
@@ -94,7 +103,7 @@ let plan io ~uid ~source ~target (relative, size) =
             ~target:(join target relative) st_size
       in
       if prefix && st_size = size then Ok (relative, size, Same)
-      else if prefix then Ok (relative, size, Replace)
+      else if prefix then Ok (relative, size, Replace expected)
       else
         fail "conversation_diverged"
           ("the target holds a different copy of " ^ relative)
@@ -104,10 +113,13 @@ let plan io ~uid ~source ~target (relative, size) =
 (* ----------------------------------------------------------- the writing *)
 
 type state = {
-  mutable created : string list;  (** folders made, newest first *)
+  mutable created : (string * Unix.stats) list;  (** proven custody, newest first *)
+  mutable unproven_folders : string list;
   mutable temporary : string list;
   mutable committed : (string * string * string option) list;
       (** relative, final, backup *)
+  mutable inflight : (string * string * string * string option) option;
+      (** The rename currently attempted: record its possible effects first. *)
 }
 
 (* A replaced copy could not be put back; it is kept under this name,
@@ -132,7 +144,9 @@ let make_folder ~uid state ~target path =
   let* () =
     match Unix.mkdir full 0o700 with
     | () ->
-        state.created <- full :: state.created;
+        (* mkdir returns no identity. A later lookup may name a different
+           directory; retain it for review rather than granting rmdir rights. *)
+        state.unproven_folders <- full :: state.unproven_folders;
         Ok ()
     | exception Unix.Unix_error (Unix.EEXIST, _, _) -> Ok ()
     | exception Unix.Unix_error (error, _, _) ->
@@ -141,7 +155,9 @@ let make_folder ~uid state ~target path =
   let* stats = lstat_opt full in
   match stats with
   | None -> fail "carry_failed" ("target " ^ path ^ " went away")
-  | Some stats -> private_folder ~uid ("target " ^ path) stats
+  | Some stats ->
+      let* () = private_folder ~uid ("target " ^ path) stats in
+      Ok ()
 
 let make_folders ~uid state ~target relative =
   List.fold_left
@@ -184,49 +200,154 @@ let stage io state ~source ~final size =
 (* Put [backup] back as [final] after a failed rename, or raise
    [Restore_failed]. *)
 let restore io ~relative ~final backup =
-  match io.rename backup final with
-  | () -> ()
-  | exception _ -> raise (Restore_failed (relative_sibling relative backup))
+  (* A third party may have populated [final]. The hard link refuses to
+     replace it; retain [backup] even after linking because unlink-by-inode is
+     not available atomically and report the remaining recovery artifact. *)
+  (try io.link backup final with _ -> ());
+  raise (Restore_failed (relative_sibling relative backup))
 
-let commit io state ~target (relative, temporary, action) =
+let commit ~check_roots io state ~target (relative, temporary, action) =
   let final = join target relative in
-  let backup = if action = Replace then Some (sibling final "old") else None in
-  Option.iter (fun backup -> io.rename final backup) backup;
-  (match io.rename temporary final with
+  let backup = match action with Replace _ -> Some (sibling final "saved") | _ -> None in
+  state.inflight <- Some (relative, temporary, final, backup);
+  Option.iter (fun backup -> io.rename_noreplace final backup) backup;
+  (match action, backup with
+  | Replace expected, Some backup ->
+      let current = Unix.lstat backup in
+      if current.st_dev <> expected.st_dev || current.st_ino <> expected.st_ino
+         || current.st_size <> expected.st_size || current.st_mtime <> expected.st_mtime
+         then
+        restore io ~relative ~final backup
+  | _ -> ());
+  (match io.link temporary final with
   | () -> ()
   | exception error ->
-      Option.iter (restore io ~relative ~final) backup;
+      if Result.is_ok (check_roots ()) then
+        Option.iter (restore io ~relative ~final) backup;
       raise error);
+  state.committed <- (relative, final, backup) :: state.committed;
+  io.unlink temporary;
   state.temporary <- List.filter (( <> ) temporary) state.temporary;
-  state.committed <- (relative, final, backup) :: state.committed
+  state.inflight <- None
 
-(* What a rollback could not undo, relative to the target: replaced copies
-   that could not be put back (kept under their .carry-old name), and new
-   copies that could not be removed. *)
-type undone = { kept : string list; left : string list }
+(* What a rollback could not undo or verify, relative to the target. *)
+type undone = {
+  kept : string list;
+  left : string list;
+  temporary : string list;
+  folders : string list;
+  uncertain : string list;
+}
+
+let empty_undone =
+  { kept = []; left = []; temporary = []; folders = []; uncertain = [] }
+
+let relative_to_target ~target path =
+  let prefix = target ^ "/" in
+  if String.starts_with ~prefix path then
+    String.sub path (String.length prefix)
+      (String.length path - String.length prefix)
+  else Filename.basename path
+
+let possible_rename_paths (relative, _, backup) =
+  relative :: Option.to_list (Option.map (relative_sibling relative) backup)
+
+let possible_effects state =
+  let inflight =
+    Option.to_list
+      (Option.map
+         (fun (relative, _, final, backup) -> (relative, final, backup))
+         state.inflight)
+  in
+  List.concat_map possible_rename_paths (inflight @ state.committed)
+  |> List.sort_uniq String.compare
+
+let pending_cleanup ~target (state : state) =
+  {
+    empty_undone with
+    temporary = List.map (relative_to_target ~target) state.temporary;
+    folders =
+      List.map (relative_to_target ~target)
+        (state.unproven_folders @ List.map fst state.created);
+    uncertain = possible_effects state;
+  }
+
+(* If a rename raised before its effects could be observed, a stable root can
+   still show whether it moved anything. Missing/unreadable names are not
+   assumed clean. Never inspect a replacement root: callers check custody
+   before calling this function. *)
+let unresolved_rename state =
+  let exists path =
+    match Unix.lstat path with
+    | _ -> true
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false
+    | exception Unix.Unix_error _ -> true
+  in
+  match state.inflight with
+  | None -> []
+  | Some (relative, _, final, None) ->
+      if exists final then [ relative ] else []
+  | Some (relative, temporary, _, Some backup) ->
+      if exists backup || not (exists temporary) then
+        [ relative; relative_sibling relative backup ]
+      else []
 
 (* Undo one file put in place: remove a new copy, put a replaced one back. *)
-let undo io undone (relative, final, backup) =
+let undo _io undone (relative, _final, backup) =
+  (* Neither unlink nor rename can compare inode and mutate atomically on all
+     supported platforms. Leave the installed name and any backup for review,
+     rather than deleting or overwriting another writer's file. *)
   match backup with
-  | None -> (
-      match io.unlink final with
-      | () -> undone
-      | exception _ -> { undone with left = relative :: undone.left })
-  | Some backup -> (
-      match io.rename backup final with
-      | () -> undone
-      | exception _ ->
-          { undone with kept = relative_sibling relative backup :: undone.kept }
-      )
+  | None -> { undone with left = relative :: undone.left }
+  | Some backup ->
+      { undone with kept = relative_sibling relative backup :: undone.kept;
+        uncertain = relative :: undone.uncertain }
 
-(* Undo everything, newest first, and report what could not be undone. *)
-let roll_back io state =
+(* Undo everything, newest first, and report skipped as well as failed cleanup. *)
+let roll_back ?(check_roots = fun () -> Ok ()) io ~target state =
   let undone =
-    List.fold_left (undo io) { kept = []; left = [] } state.committed
+    List.fold_left
+      (fun undone entry ->
+        if Result.is_ok (check_roots ()) then undo io undone entry
+        else
+          {
+            undone with
+            uncertain = possible_rename_paths entry @ undone.uncertain;
+          })
+      empty_undone state.committed
   in
-  List.iter (fun path -> quietly (fun () -> Unix.unlink path)) state.temporary;
-  List.iter (fun path -> quietly (fun () -> Unix.rmdir path)) state.created;
-  undone
+  let undone =
+    List.fold_left
+      (fun undone path ->
+        let removed =
+          Result.is_ok (check_roots ())
+          && (match io.unlink path with () -> true | exception _ -> false)
+        in
+        if removed then undone
+        else
+          {
+            undone with
+            temporary = relative_to_target ~target path :: undone.temporary;
+          })
+      undone state.temporary
+  in
+  let undone =
+    List.fold_left
+      (fun undone (path, identity) ->
+        let removed =
+          Result.is_ok (check_roots ())
+          && Carry_target.same_directory ~target:path identity
+          && (match Unix.rmdir path with () -> true | exception _ -> false)
+        in
+        if removed then undone
+        else
+          { undone with folders = relative_to_target ~target path :: undone.folders })
+      undone state.created
+  in
+  { undone with
+    folders =
+      List.map (relative_to_target ~target) state.unproven_folders
+      @ undone.folders }
 
 let stage_all io ~uid state ~source ~target planned =
   List.fold_left
@@ -244,44 +365,103 @@ let stage_all io ~uid state ~source ~target planned =
 
 (* The refusal of a failed carry whose rollback was incomplete: an older copy
    not put back weighs more than a new copy not removed. *)
-let incomplete error { kept; left } =
+let cleanup_details { kept = _; left; temporary; folders; uncertain } =
   let not_removed =
     if left = [] then ""
     else "; new copies could not be removed: " ^ String.concat ", " left
   in
-  match (kept, left) with
-  | [], [] -> Error error
-  | [], _ ->
+  let staged =
+    if temporary = [] then ""
+    else "; staged copy cleanup unconfirmed: " ^ String.concat ", " temporary
+  in
+  let created =
+    if folders = [] then ""
+    else "; folder cleanup unconfirmed: " ^ String.concat ", " folders
+  in
+  let effects =
+    if uncertain = [] then ""
+    else
+      "; installed copies or backups unconfirmed: "
+      ^ String.concat ", " uncertain
+  in
+  not_removed ^ staged ^ created ^ effects
+
+let incomplete error ({ kept; left; temporary; folders; uncertain } as undone) =
+  let details = cleanup_details undone in
+  match (kept, left, temporary, folders, uncertain) with
+  | [], [], [], [], [] -> Error error
+  | [], _, _, _, _ ->
       fail "carry_rollback_incomplete"
-        ("the carry failed" ^ not_removed ^ " (" ^ error.message ^ ")")
+        ("the carry failed" ^ details ^ " (" ^ error.message ^ ")")
   | _ ->
       fail "carry_restore_failed"
         ("the carry failed and an older copy could not be put back; it is kept \
-          as " ^ String.concat ", " kept ^ not_removed)
+          as " ^ String.concat ", " kept ^ details)
 
-let write_plan io ~uid ~source ~target planned =
-  let state = { created = []; temporary = []; committed = [] } in
-  let failed error = incomplete error (roll_back io state) in
+let write_plan ?(check_roots = fun () -> Ok ())
+    ?(validate_staged = fun _ -> Ok ()) io ~uid ~source ~target planned =
+  let state =
+    { created = []; unproven_folders = []; temporary = []; committed = [];
+      inflight = None }
+  in
+  let root_changed undone =
+    let uncertain =
+      List.sort_uniq String.compare (possible_effects state @ undone.uncertain)
+    in
+    fail "carry_rollback_incomplete"
+      ("an account folder changed during the copy; cleanup requires review"
+      ^ cleanup_details { undone with uncertain })
+  in
+  let failed error =
+    match check_roots () with
+    | Ok () ->
+        let uncertain = unresolved_rename state in
+        let undone = roll_back ~check_roots io ~target state in
+        let undone =
+          { undone with
+            uncertain = List.sort_uniq String.compare (uncertain @ undone.uncertain) }
+        in
+        (match check_roots () with
+        | Ok () -> incomplete error undone
+        | Error _ -> root_changed undone)
+    | Error _ -> root_changed (pending_cleanup ~target state)
+  in
   let unix error =
     { code = "carry_failed"; message = Unix.error_message error }
   in
+  let discard_backups _ =
+    (* Recovery copies must remain reachable by any process still holding the
+       old inode, including after this carry and future carries have finished. *)
+    match check_roots () with
+    | Ok () -> Ok ()
+    | Error _ -> root_changed (pending_cleanup ~target state)
+  in
   match
     let* staged = stage_all io ~uid state ~source ~target planned in
-    List.iter (commit io state ~target) (List.rev staged);
+    let* () = validate_staged staged in
+    List.iter (commit ~check_roots io state ~target) (List.rev staged);
     Ok ()
   with
   | Ok () ->
-      List.iter
-        (fun (_, _, backup) ->
-          Option.iter (fun b -> quietly (fun () -> Unix.unlink b)) backup)
-        state.committed;
-      Ok ()
+      (match check_roots () with
+      | Error _ -> root_changed (pending_cleanup ~target state)
+      | Ok () -> discard_backups state.committed)
   | Error error -> failed error
   | exception Restore_failed kept ->
-      let undone = roll_back io state in
-      incomplete
-        { code = "carry_failed"; message = "a rename failed" }
-        { undone with kept = kept :: undone.kept }
+      (match check_roots () with
+      | Error _ -> root_changed (pending_cleanup ~target state)
+      | Ok () ->
+          let undone = roll_back ~check_roots io ~target state in
+          (match check_roots () with
+       | Error _ -> root_changed undone
+       | Ok () ->
+           incomplete
+             { code = "carry_failed"; message = "a rename failed" }
+             {
+               undone with
+               kept = kept :: undone.kept;
+               uncertain = possible_effects state @ undone.uncertain;
+             }))
   | exception Unix.Unix_error (error, _, _) -> failed (unix error)
   | exception Fun.Finally_raised (Unix.Unix_error (error, _, _)) ->
       failed (unix error)

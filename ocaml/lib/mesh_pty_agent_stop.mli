@@ -51,6 +51,11 @@ val classify :
 (** What holds the terminal of the session led by [leader], from one table.
     [runs_agent] tells whether a process runs the requested agent. *)
 
+val bound_foreground :
+  runs_agent:(Mesh_platform.process -> bool) -> leader:int -> group:int ->
+  pid:int -> incarnation:int64 -> Mesh_platform.process list -> bool
+(** The exact process remains in the same foreground agent group. *)
+
 val gone :
   runs_agent:(Mesh_platform.process -> bool) ->
   leader:int ->
@@ -109,3 +114,6 @@ val stop_guarded :
   | `Still_running
   | `Identity_changed
   | `Identity_changed_after_signal ]
+(** Like {!stop}, but [signal] checks identity before each signal. A false
+    result refuses immediately even when [stopped] says the group is empty.
+    The identity check and the signal are not an atomic kernel operation. *)

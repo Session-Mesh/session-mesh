@@ -152,6 +152,16 @@ let failing_io ?(writes = max_int) ?(reads = max_int) ?(unlinks = max_int)
         if contains old_path ".carry-old-" && not restores then
           fail_with Unix.EIO "rename";
         Unix.rename old_path new_path);
+    rename_noreplace = Mesh_accounts_carry__Carry_write.rename_noreplace;
+    link =
+      (fun old_path new_path ->
+        if contains old_path ".carry-new-" then begin
+          incr rename_count;
+          if !rename_count > renames then fail_with Unix.EIO "link"
+        end;
+        if contains old_path ".carry-old-" && not restores then
+          fail_with Unix.EIO "link";
+        Unix.link old_path new_path);
     close =
       (fun descriptor ->
         incr close_count;

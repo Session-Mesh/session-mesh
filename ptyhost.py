@@ -206,12 +206,16 @@ async def host_identity():
     return f"{pid}:{start}" if pid > 0 else None
 
 
-async def attach_info(name, rows, cols, size=None):
+async def attach_info(name, rows, cols, size=None, input_ack=None, input_ack_v2=None):
     """``size="claim"``: the geometry applies only while no other attachment owns the PTY
     size, and the host sends S frames (the size and its owner) on this attachment."""
     request = {"op": "attach", "name": name, "rows": rows, "cols": cols}
     if size is not None:
         request["size"] = size
+    if input_ack is not None:
+        request["input_ack_created"], request["input_ack_id"] = input_ack
+    if input_ack_v2 is not None:
+        request["input_ack_v2"] = input_ack_v2
 
     async def handshake():
         reader, writer = await asyncio.open_unix_connection(str(SOCK), limit=4 * 1024 * 1024)
@@ -223,9 +227,9 @@ async def attach_info(name, rows, cols, size=None):
         return reader, writer, reply
 
     reader, writer, reply = await asyncio.wait_for(handshake(), REQUEST_TIMEOUT)
-    if not reply.get("ok"):
+    if not isinstance(reply, dict) or not reply.get("ok"):
         writer.close()
-        raise LookupError(reply.get("error"))
+        raise LookupError(reply.get("error") if isinstance(reply, dict) else "invalid attach reply")
     return reader, writer, reply
 
 

@@ -9,7 +9,7 @@
 // comes from MESH_MESH_PLATFORM_CMD or the dune build; MESH_REQUIRE_MESH_PLATFORM=1 (CI) makes its absence a
 // failure instead of a skip.
 import assert from 'node:assert/strict';
-import {type ChildProcess, spawn} from 'node:child_process';
+import {type ChildProcess, spawn, spawnSync} from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,6 +17,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {after, before, describe, test} from 'node:test';
 import {REPO, type Mesh, runServer, scratchHome, startMesh, stopServer} from './mesh-server-lib.ts';
 import {ptyhostArgv} from './ptyhost-command.ts';
+import {appendFixturePath} from './fixture-login-path.ts';
 
 const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD
   || path.join(REPO, 'ocaml', '_build', 'default', 'platform', 'cli', 'mesh_platform_main.exe');
@@ -70,6 +71,7 @@ before(async () => {
   // The default account's credentials, exported by the login shell every session starts (`$SHELL -l`).
   fs.writeFileSync(path.join(mesh.home, '.profile'),
     PROFILE_CREDENTIALS.map(name => `export ${name}=profile-default-${name.toLowerCase()}\n`).join(''));
+  appendFixturePath(mesh.home, PATH);
   const accounts = path.join(mesh.home, '.agent-accounts');
   fs.mkdirSync(path.join(accounts, 'work'), {recursive: true, mode: 0o700});
   fs.mkdirSync(path.join(accounts, 'perso'), {recursive: true, mode: 0o700});
@@ -147,6 +149,13 @@ async function configAccounts(): Promise<{text: string; accounts: unknown}> {
 
 const viewStatus = async (target: string) => (await fetch(`${mesh.base}/api/view`, {method: 'POST', headers: headers(),
   body: JSON.stringify({target})})).status;
+
+test('private login profile preserves credentials and resolves only the fake agent on its PATH', {skip: SKIP}, () => {
+  const result = spawnSync('/bin/sh', ['-lc', 'command -v claude; printf "credential=%s\\n" "$ANTHROPIC_API_KEY"'],
+    {env: {HOME: mesh.home, PATH: `${bin}:/usr/bin:/bin`}, encoding: 'utf8'});
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `${path.join(bin, 'claude')}\ncredential=profile-default-anthropic_api_key\n`);
+});
 
 describe('account aliases', {skip: SKIP}, () => {
   test('without accounts.json nothing changes: the default account, no alias offered', async () => {

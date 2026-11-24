@@ -28,8 +28,12 @@
     "key": "server.ptyhostNotResponding"
   },
   {
-    "pattern": "^ptyhost did not confirm the prepared session$",
+    "pattern": "^ptyhost did not confirm the prepared standby$",
     "key": "server.ptyhostSessionUnconfirmed"
+  },
+  {
+    "pattern": "^Prepared standby no longer belongs to this restart$",
+    "key": "server.preparedStandbyOwnershipLost"
   },
   {
     "pattern": "^ptyhost did not confirm the restored session$",
@@ -162,6 +166,118 @@
   {
     "pattern": "^Account alias refused: check accounts\\.json and its folders on the runner \\(details in the server log\\)$",
     "key": "server.accountRefused"
+  },
+  {
+    "pattern": "^Agent stop outcome uncertain; inspect the session before resuming$",
+    "key": "server.switchStopUncertain"
+  },
+  {
+    "pattern": "^Bound default restart requires in-place relaunch support$",
+    "key": "server.switchDefaultRestartNeedsRelaunch"
+  },
+  {
+    "pattern": "^Default account context is unavailable; nothing was stopped$",
+    "key": "server.switchDefaultUnknown"
+  },
+  {
+    "pattern": "^Account profile context changed; nothing was stopped$",
+    "key": "server.switchProfileChanged"
+  },
+  {
+    "pattern": "^Foreground agent changed; nothing was stopped$",
+    "key": "server.switchAgentChanged"
+  },
+  {
+    "pattern": "^Conversation changed since the request; nothing was stopped$",
+    "key": "server.switchConversationChanged"
+  },
+  {
+    "pattern": "^Account folder unavailable$",
+    "key": "server.switchFolderUnavailable"
+  },
+  {
+    "pattern": "^Native account switch requires a shell in this session$",
+    "key": "server.switchNeedsShell"
+  },
+  {
+    "pattern": "^Native account switch requires in-place relaunch support$",
+    "key": "server.switchNeedsRelaunch"
+  },
+  {
+    "pattern": "^This PTY host cannot bind the agent identity; nothing was stopped$",
+    "key": "server.switchHostUnbound"
+  },
+  {
+    "pattern": "^Account profile context unknown; nothing was stopped$",
+    "key": "server.switchProfileUnknown"
+  },
+  {
+    "pattern": "^Native account switch request has no valid binding$",
+    "key": "server.switchBindingInvalid"
+  },
+  {
+    "pattern": "^Foreground agent changed since the request; nothing was stopped$",
+    "key": "server.switchAgentChangedSinceRequest"
+  },
+  {
+    "pattern": "^Conflicting account contexts; resume refused$",
+    "key": "server.accountContextsConflicting"
+  },
+  {
+    "pattern": "^Default account context changed; resume refused$",
+    "key": "server.defaultAccountResumeChanged"
+  },
+  {
+    "pattern": "^Default account context unavailable; resume refused$",
+    "key": "server.defaultAccountResumeUnavailable"
+  },
+  {
+    "pattern": "^The conversation resumed under account (?<account>.+?), but the completed target copy remains\\. The operator must check the target account before another switch; do not ask again\\.$",
+    "key": "server.switchTargetCopyRemains"
+  },
+  {
+    "pattern": "^An older target copy was retained for recovery\\. It may receive late writes; review it before cleanup\\.$",
+    "key": "server.switchRecoveryCopyRetained"
+  },
+  {
+    "pattern": "^Pi profile sessions are not yet supported; the session or recovery offer was not changed$",
+    "key": "server.piProfileUnavailable"
+  },
+  {
+    "pattern": "^Account profile context changed; resume refused$",
+    "key": "server.accountProfileResumeChanged"
+  },
+  {
+    "pattern": "^Account profile context unknown; resume refused$",
+    "key": "server.accountProfileResumeUnknown"
+  },
+  {
+    "pattern": "^Account profile context changed; restart refused$",
+    "key": "server.accountProfileRestartChanged"
+  },
+  {
+    "pattern": "^Account profile context unknown; restart refused$",
+    "key": "server.accountProfileRestartUnknown"
+  },
+  {
+    "pattern": "^Selected Pi profile refuses competing session options$",
+    "key": "server.accountProfilePiOptions"
+  },
+  {
+    "pattern": "^Pi conversation is outside the selected profile$",
+    "key": "server.accountProfilePiConversation"
+  },
+  {
+    "pattern": "^Selected OpenCode profile requires a readable OpenCode 2 executable$",
+    "key": "server.accountProfileOpencodeExecutable"
+  },
+  {
+    "pattern": "^A prepared launch without the selected account context is refused$",
+    "key": "server.accountProfileLaunchUnbound"
+  },
+  {
+    "pattern": "^Native profile switching is not qualified$",
+    "key": "server.accountProfileSwitchUnqualified"
   },
   {
     "pattern": "^Invalid name \\(letters, digits, - and _\\)$",

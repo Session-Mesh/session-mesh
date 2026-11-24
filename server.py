@@ -42,6 +42,7 @@ import agentmcp
 import agentmail
 import agentwake
 import agentcap
+import accountswitch
 import claudewake
 import launchplan
 import launchsettings
@@ -424,13 +425,14 @@ def _mesh_reach_env():
 
 # ---- Account aliases: accounts.json in the config folder, written by the operator on the runner and validated by
 # `mesh-platform accounts` (ocaml/accounts/mesh_accounts.mli). A page only ever names an alias id; the folders
-# stay here. Mesh hands the folder to the agent as CLAUDE_CONFIG_DIR or CODEX_HOME; it never reads the login
-# files in it (it does read settings.json for the Claude policy check and the conversations to restore them).
+# stay here. Legacy aliases use CLAUDE_CONFIG_DIR or CODEX_HOME; native launches resolve one selected
+# backend-qualified context. Mesh never reads the login files (it reads Claude settings for policy and
+# conversation data for restore admission).
 ACCOUNTS_FILE = CONF_DIR / "accounts.json"
 # Every folder an alias has declared while this runner ran: /view keeps refusing their login files even when
 # accounts.json is later refused or the alias removed (the folders and the logins stay on disk).
 ACCOUNTS_PROTECTED_FILE = CONF_DIR / "accounts-protected.json"
-_ACCOUNTS_PROTECTED_MAX = 256
+_ACCOUNTS_PROTECTED_MAX = 1024  # fits every credential root of a 128-profile registry, plus historical roots
 ACCOUNT_ID_RE = re.compile(r"[a-z0-9-]{1,32}")
 _ACCOUNT_PATH_RE = re.compile(r"/[A-Za-z0-9._+@/-]{1,1023}")
 ACCOUNT_MEMBER = {"claude": ("claude_config_dir", "CLAUDE_CONFIG_DIR", "Claude"),
@@ -448,7 +450,10 @@ ACCOUNT_AGENTS_ONLY = "An account alias applies to Claude and Codex sessions onl
 ACCOUNT_UNKNOWN = "Unknown account alias (accounts.json on the runner)"
 ACCOUNT_REFUSED = "Account alias refused: check accounts.json and its folders on the runner (details in the server log)"
 # the first reading always runs; "file": absent, refused or ok (what an agent is told of accounts.json)
-_ACCOUNTS = {"signature": "not read yet", "accounts": [], "protected": None, "file": "absent"}
+_ACCOUNTS = {"signature": "not read yet", "accounts": [], "launch_profiles": None,
+             "protected": None, "file": "absent"}
+_ACCOUNTS_REFRESH = (None, None)  # (event loop, lock); the account cache is process-wide
+_ACCOUNTS_REFRESH_GUARD = threading.Lock()
 DEFAULT_ACCOUNT = {"id": "default", "label": "Default account", "claude": True, "codex": True}
 
 
@@ -463,26 +468,38 @@ class AccountsUnavailable(Exception):
 
 
 def _accounts_signature():
-    try:
-        st = os.lstat(ACCOUNTS_FILE)
-    except FileNotFoundError:
+    signatures = []
+    for file in (CONF_DIR / "backend-profiles.json", CONF_DIR / "backend-profiles.migrated", ACCOUNTS_FILE):
+        try:
+            st = os.lstat(file)
+            signatures.append((st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_mode, st.st_nlink))
+        except FileNotFoundError:
+            signatures.append(None)
+        except OSError as exc:
+            signatures.append(("unreadable", repr(exc)))
+    if not any(value is not None for value in signatures):
         return None
+    try:
+        root = os.lstat(CONF_DIR)
+        custody = (root.st_dev, root.st_ino, root.st_uid, root.st_gid, root.st_mode, root.st_ctime_ns)
     except OSError as exc:
-        return ("unreadable", repr(exc))
-    return (st.st_ino, st.st_size, st.st_mtime_ns)
+        custody = ("unreadable", repr(exc))
+    return (custody, *signatures)
 
 
 async def _accounts_program(*args, timeout=10, env=None):
     """The JSON answer of `mesh-platform accounts ARGS`; AccountsUnavailable on any refusal."""
     program, proc = work_command("mesh-platform"), None
     if not program:
-        raise AccountsUnavailable("mesh-platform not found")
+        raise AccountsUnavailable("mesh-platform not found", code="helper-unavailable")
     try:
         proc = await asyncio.create_subprocess_exec(program, "accounts", *args, env=env or work_child_env(),
                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
         answer = json.loads(out)
-    except (OSError, ValueError, asyncio.TimeoutError) as exc:
+    except (OSError, asyncio.TimeoutError) as exc:
+        raise AccountsUnavailable(repr(exc), code="helper-unavailable") from exc
+    except ValueError as exc:
         raise AccountsUnavailable(repr(exc)) from exc
     finally:
         if proc is not None and proc.returncode is None:
@@ -505,12 +522,38 @@ def _valid_account(value):
                   for field, _, _ in ACCOUNT_MEMBER.values()))
     if not ok:
         raise AccountsUnavailable("unexpected answer")
+    labels = value.get("backend_labels", {})
+    if (not isinstance(labels, dict) or not labels.keys() <= {"claude", "codex", "opencode-v2", "pi"}
+             or not all(isinstance(label, str) and 0 < len(label) <= 24 for label in labels.values())):
+        raise AccountsUnavailable("unexpected backend labels")
     return value
 
 
-def _protected_folders(accounts):
+def _valid_launch_profiles(profiles, accounts):
+    if not isinstance(profiles, list) or len(profiles) > 128:
+        raise AccountsUnavailable("unexpected launch inventory")
+    indexed = {}
+    for profile in profiles:
+        if (not isinstance(profile, dict) or set(profile) != {"backend", "id", "label"}
+                or profile["backend"] not in ("claude", "codex", "opencode-v2", "pi")
+                or not isinstance(profile["id"], str) or not ACCOUNT_ID_RE.fullmatch(profile["id"])
+                or profile["id"] == "default" or not isinstance(profile["label"], str)
+                or not 0 < len(profile["label"]) <= 24):
+            raise AccountsUnavailable("unexpected launch inventory")
+        key = (profile["backend"], profile["id"])
+        if key in indexed:
+            raise AccountsUnavailable("duplicate launch profile")
+        indexed[key] = profile["label"]
+    aliases = {(backend, alias["id"]): label for alias in accounts
+               for backend, label in alias.get("backend_labels", {}).items()}
+    if indexed != aliases:
+        raise AccountsUnavailable("launch inventory disagrees with aliases")
+    return profiles
+
+
+def _protected_folders(accounts, profile_roots=()):
     """The folders whose login files /view refuses: the ones declared now and every one declared before, kept in
-    accounts-protected.json (never shrunk: a refused accounts.json or a removed alias leaves the logins on disk).
+    accounts-protected.json (bounded history, with every current root retained before historical roots).
     A file that cannot be read or written only loses the earlier runs' folders, never this run's."""
     known = _ACCOUNTS["protected"]
     if known is None:
@@ -524,7 +567,12 @@ def _protected_folders(accounts):
         except (OSError, ValueError) as exc:
             print(f"accounts-protected.json unreadable: {exc!r}", flush=True)
     declared = [a[field] for a in accounts for field, _, _ in ACCOUNT_MEMBER.values() if a.get(field)]
-    merged = list(dict.fromkeys([*known, *declared]))[-_ACCOUNTS_PROTECTED_MAX:]
+    declared.extend(p for p in profile_roots if isinstance(p, str) and _ACCOUNT_PATH_RE.fullmatch(p))
+    declared = list(dict.fromkeys(declared))
+    current = set(declared)
+    history = [p for p in dict.fromkeys(known) if p not in current]
+    keep = max(0, _ACCOUNTS_PROTECTED_MAX - len(declared))
+    merged = history[max(0, len(history) - keep):] + declared
     if merged != known:
         try:
             fsutil.atomic_write(ACCOUNTS_PROTECTED_FILE, json.dumps(merged))
@@ -535,32 +583,148 @@ def _protected_folders(accounts):
 
 
 async def declared_accounts():
-    """The operator's aliases, read again whenever accounts.json changed; none when it is absent or refused
-    (the refusal is logged: the default account stays what it always was)."""
+    global _ACCOUNTS_REFRESH
+    loop = asyncio.get_running_loop()
+    with _ACCOUNTS_REFRESH_GUARD:
+        owner, lock = _ACCOUNTS_REFRESH
+        if owner is not loop:
+            # A new app/test loop may replace a finished loop's lock, but two live
+            # loops must not refresh the shared cache without mutual exclusion.
+            if owner is not None and not owner.is_closed():
+                raise RuntimeError("account refresh is already running on another event loop")
+            lock = asyncio.Lock()
+            _ACCOUNTS_REFRESH = (loop, lock)
+    async with lock:
+        return await _refresh_declared_accounts()
+
+
+# Listings need account labels, but must not let a slow helper delay PTY reads
+# or recovery snapshots. Strict launch/document callers still await validation.
+_LISTING_ACCOUNT_REFRESH = (None, None, 0.0)  # event loop, in-flight task, retry deadline
+_LISTING_ACCOUNT_CLOSING = None  # event loop that has stopped its listing refresh
+_LISTING_ACCOUNT_RETRY_SECONDS = 5.0
+
+
+def _schedule_listing_account_refresh():
+    global _LISTING_ACCOUNT_REFRESH
+    loop = asyncio.get_running_loop()
+    if _LISTING_ACCOUNT_CLOSING is loop:
+        return
+    owner, task, deadline = _LISTING_ACCOUNT_REFRESH
+    if owner is loop and ((task is not None and not task.done()) or loop.time() < deadline):
+        return
+    if owner is not None and owner is not loop and task is not None and not task.done():
+        raise RuntimeError("listing account refresh is already running on another event loop")
+    task = loop.create_task(declared_accounts())
+    _LISTING_ACCOUNT_REFRESH = (loop, task, 0.0)
+
+    def finished(done):
+        global _LISTING_ACCOUNT_REFRESH
+        if not done.cancelled():
+            error = done.exception()
+            if error is not None:
+                print(f"listing account refresh failed: {error!r}", flush=True)
+        if _LISTING_ACCOUNT_REFRESH[1] is done:
+            _LISTING_ACCOUNT_REFRESH = (loop, None, loop.time() + _LISTING_ACCOUNT_RETRY_SECONDS)
+
+    task.add_done_callback(finished)
+
+
+async def _start_listing_account_refresh(_app):
+    global _LISTING_ACCOUNT_CLOSING
+    _LISTING_ACCOUNT_CLOSING = None
+    _schedule_listing_account_refresh()
+
+
+async def _stop_listing_account_refresh(_app):
+    global _LISTING_ACCOUNT_CLOSING
+    _LISTING_ACCOUNT_CLOSING = asyncio.get_running_loop()
+    owner, task, _ = _LISTING_ACCOUNT_REFRESH
+    if owner is asyncio.get_running_loop() and task is not None and not task.done():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def refresh_document_account_protection():
+    """Do not serve documents when native profile roots cannot be inventoried."""
+    await declared_accounts()
+    if _native_profile_mode() and _ACCOUNTS["file"] != "ok":
+        raise web.HTTPServiceUnavailable(text="Protected folder unavailable")
+
+
+async def _refresh_declared_accounts():
+    """The native resolver's aliases; a configured profile registry supersedes legacy accounts.json.
+    An invalid registry never silently falls back to legacy credentials."""
     signature = await asyncio.to_thread(_accounts_signature)
     if signature != _ACCOUNTS["signature"]:
-        accounts, state = [], "absent"
+        accounts, state, protected, launch_profiles = [], "absent", [], None
+        transient_failure = False
         if signature is not None:
+            answer, failure = None, None
+            for attempt in range(3):
+                try:
+                    answer = await _accounts_program("list", str(ACCOUNTS_FILE))
+                    break
+                except AccountsUnavailable as exc:
+                    failure = exc
+                    if exc.code != "helper-unavailable" or attempt == 2:
+                        break
+                    await asyncio.sleep(0.05 * (2 ** attempt))
             try:
-                answer = await _accounts_program("list", str(ACCOUNTS_FILE))
+                if answer is None:
+                    raise failure
                 accounts, state = [_valid_account(value) for value in answer.get("accounts") or []], "ok"
+                if _native_profile_mode() and "protected_roots" not in answer:
+                    raise AccountsUnavailable("missing native protected roots")
+                protected = answer.get("protected_roots", [])
+                if not isinstance(protected, list) or not all(isinstance(p, str) and _ACCOUNT_PATH_RE.fullmatch(p) for p in protected):
+                    raise AccountsUnavailable("unexpected protected roots")
+                if "launch_profiles" in answer:
+                    launch_profiles = _valid_launch_profiles(answer["launch_profiles"], accounts)
+                elif _native_profile_mode():
+                    raise AccountsUnavailable("missing native launch inventory")
             except AccountsUnavailable as exc:
                 print(f"accounts.json refused, no alias offered: {exc}", flush=True)
-                accounts, state = [], "refused"
-        _ACCOUNTS.update(signature=signature, accounts=accounts, file=state)
-        view.deny_account_files(await asyncio.to_thread(_protected_folders, accounts))
+                accounts, state, protected, launch_profiles = [], "refused", [], None
+                transient_failure = exc.code == "helper-unavailable"
+        worker = asyncio.create_task(asyncio.to_thread(_protected_folders, accounts, protected))
+        try:
+            roots = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # to_thread keeps writing after its awaiter is cancelled. Hold the refresh
+            # lock until it finishes so no older root history can overtake a newer one.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    pass
+            worker.exception()  # retrieve a worker failure without replacing cancellation
+            raise
+        view.deny_account_files(roots)
+        _ACCOUNTS.update(signature=_ACCOUNTS["signature"] if transient_failure else signature,
+                         accounts=accounts, launch_profiles=launch_profiles, file=state)
     return _ACCOUNTS["accounts"]
 
 
 def accounts_projection():
     """What a page is told of the aliases: id, label and which agents each serves, never a folder."""
+    profiles = _ACCOUNTS["launch_profiles"]
+    if profiles is not None and any(p["backend"] in ("opencode-v2", "pi") for p in profiles):
+        offered = {(p["backend"], p["id"]) for p in profiles}
+        return [{"id": a["id"], "label": a["label"],
+                 "claude": ("claude", a["id"]) in offered, "codex": ("codex", a["id"]) in offered,
+                 "opencode": ("opencode-v2", a["id"]) in offered, "pi": False,
+                 "backend_labels": a["backend_labels"]} for a in _ACCOUNTS["accounts"]]
     return [{"id": a["id"], "label": a["label"], "claude": bool(a.get("claude_config_dir")),
-             "codex": bool(a.get("codex_home"))} for a in _ACCOUNTS["accounts"]]
+             "codex": bool(a.get("codex_home")),
+             **({"backend_labels": a["backend_labels"]} if "backend_labels" in a else {})} for a in _ACCOUNTS["accounts"]]
 
 
-def account_label(account):
+def account_label(account, backend=None):
     """The label of a known alias, or its id (an alias removed from the file since)."""
-    return next((a["label"] for a in _ACCOUNTS["accounts"] if a["id"] == account), account)
+    backend = "opencode-v2" if backend == "opencode" else backend
+    return next((a.get("backend_labels", {}).get(backend, a["label"])
+                 for a in _ACCOUNTS["accounts"] if a["id"] == account), account)
 
 
 def session_account(session):
@@ -609,21 +773,204 @@ def with_account(command, environment):
     return " ".join(["env", *unset, *assigned, command])
 
 
-async def _pi_runtime():
+_PROFILE_LAUNCH_ENV = {
+    "claude": {"CLAUDE_CONFIG_DIR"},
+    "codex": {"CODEX_HOME"},
+    "pi": {"PI_CODING_AGENT_DIR"},
+    "opencode": {"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"},
+}
+_PROFILE_LAUNCH_ROLES = {
+    "claude": {"config", "history"}, "codex": {"config", "state"},
+    "pi": {"config", "history"}, "opencode": {"config", "data", "state", "cache"},
+}
+_PROFILE_ROLE_ENV = {
+    "claude": {"config": "CLAUDE_CONFIG_DIR"}, "codex": {"config": "CODEX_HOME"},
+    "pi": {"config": "PI_CODING_AGENT_DIR"},
+    "opencode": {"config": "XDG_CONFIG_HOME", "data": "XDG_DATA_HOME",
+                 "state": "XDG_STATE_HOME", "cache": "XDG_CACHE_HOME"},
+}
+_PROFILE_PROVIDER_OVERRIDES = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY",
+                               "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+                               "AZURE_OPENAI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
+                               "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL")
+_PROFILE_OVERRIDES = {
+    "pi": (), "opencode": ("OPENCODE_DB", "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"),
+}
+
+
+PI_PROFILE_UNAVAILABLE = "Pi profile sessions are not yet supported; the session or recovery offer was not changed"
+
+
+async def _profile_launch_context(account, agent, expected_revision=None):
+    """One backend-qualified native snapshot. Never interpret an invalid helper response as default credentials."""
+    if account is not None and agent == "pi":
+        raise web.HTTPConflict(text=PI_PROFILE_UNAVAILABLE)
+    if expected_revision == "legacy":
+        if _native_profile_mode():
+            raise web.HTTPConflict(text="Account profile context changed; resume refused")
+        return None
+    if account is None or not (os.path.lexists(CONF_DIR / "backend-profiles.json")
+                               or os.path.lexists(CONF_DIR / "backend-profiles.migrated")):
+        if expected_revision is not None:
+            raise web.HTTPConflict(text="Account profile context changed; resume refused")
+        return None
+    if agent not in _PROFILE_LAUNCH_ENV:
+        raise web.HTTPBadRequest(text=ACCOUNT_AGENTS_ONLY)
+    backend = "opencode-v2" if agent == "opencode" else agent
+    if expected_revision is not None and not _accounts_digest(expected_revision):
+        raise web.HTTPConflict(text="Account profile context unknown; resume refused")
     try:
-        return await asyncio.to_thread(pimcp.prepare, CONF_DIR)
+        args = ("launch-context", str(ACCOUNTS_FILE), backend, account)
+        context = (await _accounts_program(*args, *((expected_revision,) if expected_revision else ()))).get("context")
+        if (not isinstance(context, dict)
+                or set(context) != {"backend", "id", "label", "env", "unset", "roots",
+                                    "registry_revision", "context_revision"}
+                or context["backend"] != backend or context["id"] != account
+                or not isinstance(context["label"], str)
+                or not _accounts_digest(context["registry_revision"])
+                or not _accounts_digest(context["context_revision"])
+                or not isinstance(context["env"], dict)
+                or set(context["env"]) != _PROFILE_LAUNCH_ENV[agent]
+                or not isinstance(context["roots"], dict)
+                or set(context["roots"]) != _PROFILE_LAUNCH_ROLES[agent]
+                or not isinstance(context["unset"], list)
+                or not all(isinstance(name, str) for name in context["unset"])
+                or len(context["unset"]) != len(set(context["unset"]))
+                or set(context["unset"]) != set((*_PROFILE_PROVIDER_OVERRIDES,
+                    *ACCOUNT_OVERRIDES.get(next(iter(context["env"])), ()),
+                    *_PROFILE_OVERRIDES.get(agent, ())))
+                or not all(isinstance(value, str) and _ACCOUNT_PATH_RE.fullmatch(value)
+                           for value in (*context["env"].values(), *context["roots"].values()))
+                or any(context["env"][variable] != context["roots"][role]
+                       for role, variable in _PROFILE_ROLE_ENV[agent].items())):
+            raise AccountsUnavailable("unexpected launch context")
+        if expected_revision is not None and context["context_revision"] != expected_revision:
+            raise web.HTTPConflict(text="Account profile context changed; resume refused")
+        return context
+    except AccountsUnavailable as exc:
+        if exc.code == "profile-context-changed":
+            raise web.HTTPConflict(text="Account profile context changed; resume refused") from exc
+        print(f"account launch context refused: {exc}", flush=True)
+        raise web.HTTPBadRequest(text=ACCOUNT_REFUSED) from exc
+
+
+async def _switch_profile_context(account, agent, expected_revision=None, observed_agent=None):
+    """Resolve the exact native or observed default account for a pending switch.
+
+    The default source must be the independently described foreground agent. The
+    default target is explicitly bound to this server's environment. Neither
+    path is permitted to silently fall back when its binding has changed.
+    """
+    try:
+        selected = None
+        if observed_agent is not None:
+            if observed_agent.get("type") != agent or observed_agent.get("foreground") is not True:
+                raise accountswitch.UnboundDefault("Agent is not the foreground process")
+            selected = await asyncio.to_thread(accountswitch.process_default_context, agent, observed_agent.get("pid"))
+        if account != DEFAULT_ACCOUNT["id"]:
+            context = await _profile_launch_context(account, agent, expected_revision)
+            if selected is not None:
+                if selected["root"] != context["roots"]["config"]:
+                    raise accountswitch.UnboundDefault("Agent account folder differs from the recorded profile")
+                context = {**context, "process_pid": selected["process_pid"], "process_start": selected["process_start"]}
+            return context
+        if selected is None:
+            selected = accountswitch.default_context(agent, os.environ)
+    except accountswitch.UnboundDefault as exc:
+        raise web.HTTPConflict(text="Default account context is unavailable; nothing was stopped") from exc
+    revision = selected["context_revision"]
+    if expected_revision is not None and revision != expected_revision:
+        raise web.HTTPConflict(text="Account profile context changed; nothing was stopped")
+    root = selected["root"]
+    variable = "CODEX_HOME" if agent == "codex" else "CLAUDE_CONFIG_DIR"
+    role, child = ("state", "sessions") if agent == "codex" else ("history", "projects")
+    return {"backend": agent, "id": account, "label": DEFAULT_ACCOUNT["label"],
+            "env": {variable: root}, "roots": {"config": root, role: os.path.join(root, child)},
+            "unset": list(dict.fromkeys((*_PROFILE_PROVIDER_OVERRIDES, *ACCOUNT_OVERRIDES.get(variable, ())))),
+            "context_revision": revision,
+            **({"process_pid": selected["process_pid"], "process_start": selected["process_start"]}
+               if observed_agent is not None else {})}
+
+
+async def _validate_native_switch(source, kind, source_context, target_context):
+    described = await asyncio.to_thread(_describe_with_hooks, [source], False)
+    entry = next((item for item in described["mesh"] if item.get("id") == source.get("name")
+                  and item.get("created") == source.get("created")), None)
+    observed = (entry or {}).get("agent") or {}
+    if observed.get("type") != kind or observed.get("foreground") is not True:
+        raise web.HTTPConflict(text="Foreground agent changed; nothing was stopped")
+    identity = {"id": source["name"], "created": source["created"], "agent": kind}
+    if _switch_conversation(described, identity) != source_context["conversation"]:
+        raise web.HTTPConflict(text="Conversation changed since the request; nothing was stopped")
+    actual = await _switch_profile_context(source_context["id"], kind, source_context["context_revision"], observed)
+    if (actual["process_pid"], actual["process_start"]) != (source_context["process_pid"], source_context["process_start"]):
+        raise web.HTTPConflict(text="Foreground agent changed; nothing was stopped")
+    await _switch_profile_context(target_context["id"], kind, target_context["context_revision"])
+
+
+def _switch_root_identity(context):
+    try:
+        info = os.stat(context["roots"]["config"], follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode):
+            raise OSError("not a directory")
+        return info.st_dev, info.st_ino
+    except OSError as exc:
+        raise web.HTTPConflict(text="Account folder unavailable") from exc
+
+
+def _profile_command(command, context, agent):
+    if context is None:
+        return command
+    return " ".join(["env", *(f"-u {name}" for name in context["unset"]),
+                     *(f"{key}={shlex.quote(value)}" for key, value in context["env"].items()), command])
+
+
+def _profile_environ(context, agent):
+    """Selected preflight cannot consult inherited provider or store overrides."""
+    environ = dict(os.environ)
+    for name in context["unset"]:
+        environ.pop(name, None)
+    environ.update(context["env"])
+    return environ
+
+
+async def _pi_runtime(environ=None):
+    try:
+        return await asyncio.to_thread(pimcp.prepare, CONF_DIR, environ)
     except pimcp.PiUnavailable as exc:
         raise web.HTTPServiceUnavailable(text=str(exc)) from exc
 
 
-def _pi_command(command, runtime):
+def _pi_command(command, runtime, session_dir=None):
     argv = shlex.split(command)
     if not argv or argv[0] != "pi":
         raise web.HTTPBadRequest(text="Non-canonical Pi command")
+    if session_dir:
+        options = argv[1:]
+        if any(flag in ("--session-dir", "--continue", "-c", "--resume", "-r", "--session-id")
+               or flag.startswith(("--session-dir=", "--session-id=", "--session="))
+               for flag in options):
+            raise web.HTTPConflict(text="Selected Pi profile refuses competing session options")
+        sessions = [i for i, flag in enumerate(options) if flag == "--session"]
+        if len(sessions) > 1 or (sessions and (sessions[0] + 1 >= len(options)
+                                              or not _selected_pi_transcript(options[sessions[0] + 1], session_dir))):
+            raise web.HTTPConflict(text="Pi conversation is outside the selected profile")
     executable, overlay = runtime
     extension = Path(__file__).with_name("pi_mesh_wake.mjs")
     return f"PI_CODING_AGENT_DIR={shlex.quote(str(overlay))} " + shlex.join(
-        [executable, "--extension", str(extension), *argv[1:]])
+        [executable, "--extension", str(extension),
+         *(["--session-dir", session_dir] if session_dir else []), *argv[1:]])
+
+
+def _selected_pi_transcript(path, session_dir):
+    """A Pi --session path is admissible only when its v3 transcript is unique in the selected history."""
+    if not os.path.isabs(path):
+        return False
+    directory, candidate = os.path.realpath(session_dir), os.path.realpath(path)
+    if os.path.commonpath((directory, candidate)) != directory:
+        return False
+    header = discover._pi_header(candidate)
+    return bool(header and discover.pi_session_path(header["id"], session_dir) == candidate)
 
 
 OPENCODE_UNSUPPORTED_RESUME_REFUSED = ("This OpenCode version is not supported by session-mesh (only 1.x and 2.x are): "
@@ -645,7 +992,7 @@ def _opencode_resumed_id(words):
     return None
 
 
-async def _opencode_command(command, cwd="/", environ=None, *, fresh=False):
+async def _opencode_command(command, cwd="/", environ=None, *, fresh=False, require_v2=False):
     """The command line of an OpenCode session and the notice it carries (None when supported).
 
     The per-session configuration (board server, Mesh event plugin) travels in the environment, and
@@ -665,6 +1012,8 @@ async def _opencode_command(command, cwd="/", environ=None, *, fresh=False):
     # The caller's selected context must stay the same across the asynchronous preflight steps.
     environ = dict(os.environ if environ is None else environ)
     executable, major = await asyncio.to_thread(agentmcp.opencode_resolved, environ)
+    if require_v2 and (not executable or major != 2):
+        raise web.HTTPConflict(text="Selected OpenCode profile requires a readable OpenCode 2 executable")
     words = shlex.split(command)
     if executable and words and words[0] == "opencode":
         # The binary that was read is the one that runs, not whatever the terminal's shell finds first.
@@ -863,7 +1212,7 @@ async def _send_new(request):
 
 async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, pi_runtime=None,
                       notice=None, vibe=None, opencode=None, exact=False, nonce=None, conversation=None,
-                      account=None, account_env=None, fresh=False):
+                      account=None, account_env=None, account_revision=None, default_context_revision=None, fresh=False):
     """Start a session. Every way to start one ends here ("New session", a
     conversation resumed from the history, a restored session, an agent moved
     in from another terminal, a restart), so workspace_roots is applied here.
@@ -880,9 +1229,20 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
     without its command, which comes later)."""
     if not LAUNCH_SETTINGS.allows_cwd(cwd):
         raise web.HTTPForbidden(text=OUTSIDE_WORKSPACE_ROOTS)
+    if default_context_revision is not None:
+        if account is not None:
+            raise web.HTTPConflict(text="Conflicting account contexts; resume refused")
+        _validate_default_restore(known_agent, default_context_revision)
     if known_agent == "gemini" and _is_home_directory(cwd):
         raise web.HTTPBadRequest(text=GEMINI_IN_HOME)
-    if account_env is None:
+    context = await _profile_launch_context(account, known_agent, account_revision) if account else None
+    if default_context_revision is not None:
+        context = await _switch_profile_context(DEFAULT_ACCOUNT["id"], known_agent, default_context_revision)
+    if context is not None:
+        if pi_runtime is not None or opencode is not None:
+            raise web.HTTPConflict(text="A prepared launch without the selected account context is refused")
+        account_env = context["env"]
+    elif account_env is None:
         account_env = await account_environment(account, known_agent if command else None)
     if exact:
         if any(s.get("name") == base for s in await host({"op": "list"})):
@@ -891,14 +1251,17 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
     else:
         name = await unique_name(base, keep)
     if known_agent == "pi" and command:
-        command = _pi_command(command, pi_runtime or await _pi_runtime())
+        runtime = pi_runtime or (await _pi_runtime(_profile_environ(context, "pi")) if context
+                                 else await _pi_runtime())
+        command = (_pi_command(command, runtime, context["roots"]["history"]) if context
+                   else _pi_command(command, runtime))
     if known_agent == "opencode" and command:
         if opencode:
             command, notice = opencode
-        elif fresh:
-            command, notice = await _opencode_command(command, cwd, fresh=True)
         else:
-            command, notice = await _opencode_command(command, cwd)
+            command, notice = await _opencode_command(
+                command, cwd, _profile_environ(context, "opencode") if context else None,
+                fresh=fresh, require_v2=bool(context))
     if known_agent == "gemini" and command:
         command = await _gemini_command(command)
     if known_agent == "copilot" and command:
@@ -911,10 +1274,20 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
         command = await asyncio.to_thread(claudewake.launch_command, command, nonce, CLAUDE_WAKE_DIR,
                                           cwd, ptyhost.clean_env(account_env))
     if command:
-        command = with_account(command, account_env)
+        command = _profile_command(command, context, known_agent) if context else with_account(command, account_env)
+    if account_revision is not None:
+        # Preparation (notably Claude wake) can yield after the first mode check.
+        # Revalidate the offer immediately before admitting its launch.
+        await _profile_launch_context(account, known_agent, account_revision)
+    if default_context_revision is not None:
+        _validate_default_restore(known_agent, default_context_revision)
     env = {"MESH_SESSION": name, "MESH_SESSION_TOKEN": sessiontoken.issue(name, nonce), **_mesh_reach_env()}
     meta = {"agent": agent, "known_agent": known_agent, "nonce": nonce, **({"notice": notice} if notice else {}),
             **({"account": account} if account_env else {})}
+    if context:
+        meta["account_context_revision"] = context["context_revision"]
+    elif default_context_revision is not None:
+        meta["account_context_revision"] = default_context_revision
     if vibe and vibe.hooks:
         meta["vibe_hooks"] = vibe.hooks
     await _send_launch({"op": "new", "name": name, "cwd": cwd, "command": command, "env": env, "meta": meta},
@@ -968,14 +1341,17 @@ async def _forget_launch(session):
         print(f"new: conversation record of {session['name']} not dropped: {exc!r}", flush=True)
 
 
-async def _prepared_launch(known_agent, command, cwd):
+async def _prepared_launch(known_agent, command, cwd, context=None):
     """(command, notice, vibe) of an agent launch prepared while the source still runs: everything that can
     fail is done here, before anything is stopped."""
     notice = vibe = None
     if known_agent == "pi":
-        command = _pi_command(command, await _pi_runtime())
+        command = _pi_command(command, await _pi_runtime(_profile_environ(context, "pi") if context else None),
+                              context["roots"]["history"] if context else None)
     elif known_agent == "opencode":
-        command, notice = await _opencode_command(command, cwd)
+        command, notice = await _opencode_command(command, cwd,
+                                                   _profile_environ(context, "opencode") if context else None,
+                                                   require_v2=bool(context))
     elif known_agent == "gemini":
         command = await _gemini_command(command)
     elif known_agent == "copilot":
@@ -984,6 +1360,32 @@ async def _prepared_launch(known_agent, command, cwd):
         vibe = await _prepare_vibe(command, cwd)
         command = vibe.command
     return command, notice, vibe
+
+
+def _native_profile_mode():
+    return (os.path.lexists(CONF_DIR / "backend-profiles.json")
+            or os.path.lexists(CONF_DIR / "backend-profiles.migrated"))
+
+
+async def _restart_profile_context(source, account, known_agent, switch):
+    if account is not None and known_agent == "pi":
+        raise web.HTTPConflict(text=PI_PROFILE_UNAVAILABLE)
+    revision = ((source or {}).get("meta") or {}).get("account_context_revision")
+    native = _native_profile_mode()
+    if revision and not native:
+        raise web.HTTPConflict(text="Account profile context changed; restart refused")
+    if switch and native:
+        raise web.HTTPConflict(text="Native profile switching is not qualified")
+    if native and not account and revision:
+        described = await asyncio.to_thread(_describe_with_hooks, [source], False)
+        entry = next((item for item in described["mesh"] if item.get("id") == source.get("name")
+                      and item.get("created") == source.get("created")), None)
+        return await _switch_profile_context("default", known_agent, revision, (entry or {}).get("agent") or {})
+    if not account or not native:
+        return None
+    if not _accounts_digest(revision):
+        raise web.HTTPConflict(text="Account profile context unknown; restart refused")
+    return await _profile_launch_context(account, known_agent, revision)
 
 
 # How long _wait_source_gone waits: past the PTY host's SIGKILL of a session that ignores SIGHUP (kill_if: SIGHUP
@@ -1006,12 +1408,54 @@ async def _wait_source_gone(old_name, old_created, standby):
         await asyncio.sleep(0.05)
 
 
+async def _confirm_standby(replacement, nonce):
+    """A reused name or birth time is not evidence that this restart made the listed shell."""
+    listed = await host({"op": "list"})
+    if not any(item.get("name") == replacement["name"] and item.get("created") == replacement["created"]
+               and (item.get("meta") or {}).get("nonce") == nonce for item in listed):
+        raise web.HTTPServiceUnavailable(text="Prepared standby no longer belongs to this restart")
+
+
+# Only closed, documented carry refusals establish that cleanup completed.
+_CARRY_CLEAN_REFUSALS = frozenset((
+    "conversation_unknown", "conversation_not_found", "conversation_ambiguous", "conversation_diverged",
+    "conversation_too_large", "unsafe_entry", "account_same", "account_folder_refused", "account_unknown",
+    "account_no_agent", "accounts_refused", "target_no_space", "carry_in_progress", "carry_failed",
+    "agent_unsupported", "profile-context-changed",
+))
+
+
+def _carry_copy_uncertain(code):
+    return code not in _CARRY_CLEAN_REFUSALS
+
+
 class AccountSwitchUndone(Exception):
     """The conversation could not be carried to the other account: it resumed under its own, in session ``name``."""
 
-    def __init__(self, name, code, reason):
+    def __init__(self, name, code, reason, *, target_copy_remains=False):
         super().__init__(reason)
-        self.name, self.code = name, code
+        self.name, self.code = name, code or "carry_failed"
+        self.target_copy_uncertain = not target_copy_remains and _carry_copy_uncertain(code)
+        self.target_copy_remains = target_copy_remains or self.target_copy_uncertain
+
+
+class AccountSwitchRecoveryFailed(Exception):
+    """A switch failed and restarting its source did not succeed or could not be verified."""
+
+    def __init__(self, name, failure, *, target_copy_remains=False):
+        super().__init__(str(failure))
+        self.name = name
+        self.code = failure.code or "carry_failed"
+        self.target_copy_uncertain = not target_copy_remains and _carry_copy_uncertain(failure.code)
+        self.target_copy_remains = target_copy_remains or self.target_copy_uncertain
+
+
+class AccountSwitchTargetStartUnconfirmed(Exception):
+    """The copy succeeded but starting the target failed or its outcome is unknown."""
+
+    def __init__(self, name):
+        super().__init__("The target start failed or could not be confirmed")
+        self.name = name
 
 
 async def replace_session(old_name, old_created, base, cwd, command, agent, known_agent, account=None,
@@ -1044,33 +1488,58 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
         except WholeSessionOnly as exc:   # nothing was signalled: the whole session is replaced, as before
             if settings_guard:
                 raise web.HTTPConflict(text="The agent cannot be safely stopped alone; nothing was stopped") from exc
+            if switch and len(switch) > 2:
+                raise web.HTTPConflict(text="Native account switch requires a shell in this session") from exc
             print(f"agent of {old_name} not stopped alone ({exc}): replacing the session", flush=True)
+    if switch and len(switch) > 2:
+        raise web.HTTPConflict(text="Native account switch requires in-place relaunch support")
     return await _replace_with_new_session(old_name, old_created, base, cwd, command, agent, known_agent, account,
-                                           switch, settings_guard=settings_guard)
+                                           switch, source, settings_guard=settings_guard)
 
 
 async def _replace_with_new_session(old_name, old_created, base, cwd, command, agent, known_agent, account, switch,
-                                    *, settings_guard=None):
+                                    source=None, *, settings_guard=None):
     """replace_session in a new session: the PTY host stops the whole source (kill_if)."""
     target = switch[0] if switch else account
-    account_env = await account_environment(target, known_agent)
+    context = await _restart_profile_context(source, account, known_agent, switch)
+    if context and account is None:
+        raise web.HTTPConflict(text="Bound default restart requires in-place relaunch support")
+    account_env = context["env"] if context else await account_environment(target, known_agent)
     source_env = await account_environment(account, known_agent) if switch else account_env
-    command, notice, vibe = await _prepared_launch(known_agent, command, cwd)
+    command, notice, vibe = await _prepared_launch(known_agent, command, cwd, context)
+    standby_nonce = sessiontoken.new_nonce()
     name = await new_session(base, cwd, None, agent, known_agent, keep=48, notice=notice, vibe=vibe,
-                             account=target, account_env=account_env)
+                             nonce=standby_nonce, account=target, account_env=account_env,
+                             account_revision=context["context_revision"] if context else None)
     listed = await host({"op": "list"})
     replacement = next((item for item in listed if item.get("name") == name), None)
-    if replacement is None:
-        raise web.HTTPServiceUnavailable(text="ptyhost did not confirm the prepared session")
+    if replacement is None or (replacement.get("meta") or {}).get("nonce") != standby_nonce:
+        raise web.HTTPServiceUnavailable(text="ptyhost did not confirm the prepared standby")
     saved = await _arrangement_of(old_name, old_created)
-    if settings_guard:
+    if context or settings_guard:
         try:
-            await settings_guard()
-        except web.HTTPException:
-            await host({"op": "kill_if", "name": name, "created": replacement["created"]})
+            if settings_guard:
+                await settings_guard()
+            if context:
+                await _profile_launch_context(account, known_agent, context["context_revision"])
+        except web.HTTPException as refusal:
+            await _confirm_standby(replacement, standby_nonce)
+            standby = {"op": "kill_if", "name": name, "created": replacement["created"]}
+            uncertain = (f"Account profile restart refused; standby cleanup uncertain: {name} "
+                         f"(created {replacement['created']}); source was not stopped by this restart")
+            try:
+                retired = await host(standby)
+            except Exception as exc:   # the kill may have taken effect despite a missing acknowledgement
+                print(f"restart: standby {name} ({replacement['created']}) cleanup unconfirmed: {exc!r}",
+                      flush=True)
+                raise web.HTTPServiceUnavailable(text=uncertain + " (kill_if reply unavailable)") from exc
+            if retired != {"ok": True}:
+                raise web.HTTPServiceUnavailable(text=uncertain + " (kill_if refused or unconfirmed)") from refusal
             raise
+    await _confirm_standby(replacement, standby_nonce)
     killed = await host({"op": "kill_if", "name": old_name, "created": old_created})
     if killed != {"ok": True}:
+        await _confirm_standby(replacement, standby_nonce)
         await host({"op": "kill_if", "name": name, "created": replacement["created"]})
         raise web.HTTPConflict(text="Session replaced or stop already requested")
     await _carry_arrangement((old_name, old_created), name, saved, replacement["created"])
@@ -1080,15 +1549,24 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
             await switch[1]()
         except AccountsUnavailable as exc:   # nothing changed under the source account: the conversation goes on there
             print(f"account switch of {old_name} undone: {exc}", flush=True)
-            standby = (name, replacement["created"])   # what the owner arranged meanwhile is on the standby
-            saved = await _arrangement_of(*standby) or saved
-            await host({"op": "kill_if", "name": name, "created": replacement["created"]})
-            resumed = await new_session(base, cwd, command, agent, known_agent, keep=48, account=account,
-                                        account_env=source_env)
-            await _carry_arrangement(standby, resumed, saved)
+            try:
+                await _confirm_standby(replacement, standby_nonce)
+                standby = (name, replacement["created"])   # what the owner arranged meanwhile is on the standby
+                saved = await _arrangement_of(*standby) or saved
+                await host({"op": "kill_if", "name": name, "created": replacement["created"]})
+                resumed = await new_session(base, cwd, command, agent, known_agent, keep=48, account=account,
+                                            account_env=source_env)
+                await _carry_arrangement(standby, resumed, saved)
+            except Exception as recovery_error:
+                raise AccountSwitchRecoveryFailed(old_name, exc) from recovery_error
             raise AccountSwitchUndone(resumed, exc.code or "carry_failed", str(exc)) from exc
-    await _start_replacement(replacement, cwd, command, known_agent, account_env,
-                             pin_cwd=settings_guard is not None)
+    try:
+        await _start_replacement(replacement, cwd, command, known_agent, account_env, context, standby_nonce,
+                                 pin_cwd=settings_guard is not None)
+    except Exception as error:
+        if switch:
+            raise AccountSwitchTargetStartUnconfirmed(name) from error
+        raise
     return name
 
 
@@ -1099,13 +1577,17 @@ def _relaunch_command(command, cwd, account_env, pin_cwd):
     return f"cd {shlex.quote(cwd)} && {command}" if pin_cwd else command
 
 
-async def _start_replacement(replacement, cwd, command, known_agent, account_env, *, pin_cwd=False):
+async def _start_replacement(replacement, cwd, command, known_agent, account_env, context=None, standby_nonce=None, *, pin_cwd=False):
     """Start the agent in the prepared ``replacement`` session (its listing item), once its source is gone."""
     if known_agent == "claude":
         command = await asyncio.to_thread(claudewake.launch_command, command,
                                           replacement["meta"].get("nonce"), CLAUDE_WAKE_DIR,
                                           cwd, ptyhost.clean_env(account_env))
-    command = _relaunch_command(command, cwd, account_env, pin_cwd)
+    command = _profile_command(command, context, known_agent) if context else with_account(command, account_env)
+    if pin_cwd:
+        command = f"cd {shlex.quote(cwd)} && {command}"
+    if standby_nonce is not None:
+        await _confirm_standby(replacement, standby_nonce)
     started = await host({"op": "start_if", "name": replacement["name"],
                           "created": replacement["created"], "command": command})
     if started != {"ok": True}:
@@ -1216,29 +1698,97 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     if known_agent == "gemini" and _is_home_directory(cwd):   # new_session's refusal, before anything stops
         raise web.HTTPBadRequest(text=GEMINI_IN_HOME)
     target = switch[0] if switch else account
-    account_env = await account_environment(target, known_agent)
-    source_env = await account_environment(account, known_agent) if switch else account_env
-    command, notice, vibe = await _prepared_launch(known_agent, command, cwd)
+    native_switch = bool(switch and len(switch) > 2)
+    source_context, context = switch[2:4] if native_switch else (None, await _restart_profile_context(source, account, known_agent, switch))
+    account_env = context["env"] if context else await account_environment(target, known_agent)
+    source_env = source_context["env"] if source_context else await account_environment(account, known_agent) if switch else account_env
+    command, notice, vibe = await _prepared_launch(known_agent, command, cwd, context)
     saved = await _arrangement_of(source["name"], source["created"])
     incarnation = (source["name"], source["created"])
     if settings_guard:
         await settings_guard()
+    if native_switch:
+        if "agent_relaunch_bound_v1" not in (source.get("pty_capabilities") or []):
+            raise web.HTTPConflict(text="This PTY host cannot bind the agent identity; nothing was stopped")
+        await _validate_native_switch(source, known_agent, source_context, context)
+        source_identity = _switch_root_identity(source_context)
+        target_identity = _switch_root_identity(context)
+    elif context:
+        if account is None:
+            await _restart_profile_context(source, account, known_agent, None)
+        else:
+            await _profile_launch_context(account, known_agent, context["context_revision"])
+        restart_identity = _switch_root_identity(context)
     try:
-        created = await _stop_agent(source, known_agent, settings_binding)
+        if settings_binding is not None and native_switch:
+            raise web.HTTPConflict(text="Conflicting restart bindings; nothing was stopped")
+        created = await _stop_agent(source, known_agent, settings_binding=settings_binding,
+                                    profile_binding=source_context if native_switch else None)
     except web.HTTPServiceUnavailable:   # a late reply: the agent may be stopped all the same, the session moved on
         await _carry_arrangement(incarnation, source["name"], saved)
         raise
     # the new incarnation keeps the session's label, folder and rank (bound to ``created``, which moved on)
     await _carry_arrangement(incarnation, source["name"], saved, created)
     launch = (source, created, cwd, command, agent, known_agent, notice, vibe)
+
+    async def undo_native_switch(exc, *, target_copy_remains=False):
+        try:
+            if _switch_root_identity(source_context) != source_identity:
+                raise _not_started_again(source["name"])
+            if account:
+                await _profile_launch_context(account, known_agent, source_context["context_revision"])
+            await _start_in_place(*launch, account, source_env, context=source_context,
+                                  expected_identity=source_identity)
+        except Exception as error:
+            raise AccountSwitchRecoveryFailed(source["name"], exc, target_copy_remains=target_copy_remains) from error
+        raise AccountSwitchUndone(source["name"], exc.code, str(exc),
+                                  target_copy_remains=target_copy_remains) from exc
+
     if switch:
         try:
+            if native_switch:
+                try:
+                    roots_changed = (_switch_root_identity(source_context) != source_identity
+                                     or _switch_root_identity(context) != target_identity)
+                except web.HTTPException:
+                    roots_changed = True
+                if roots_changed:
+                    raise AccountsUnavailable("Account folder changed", "profile-context-changed")
             await switch[1]()
         except AccountsUnavailable as exc:   # nothing changed under the source account: the conversation goes on there
             print(f"account switch of {source['name']} undone: {exc}", flush=True)
-            await _start_in_place(*launch, account, source_env)
+            if source_context:
+                await undo_native_switch(exc)
+            try:
+                await _start_in_place(*launch, account, source_env, context=source_context)
+            except Exception as error:
+                raise AccountSwitchRecoveryFailed(source["name"], exc) from error
             raise AccountSwitchUndone(source["name"], exc.code or "carry_failed", str(exc)) from exc
-    await _start_in_place(*launch, target, account_env, pin_cwd=settings_guard is not None)
+    if native_switch:
+        try:
+            await _switch_profile_context(context["id"], known_agent, context["context_revision"])
+            if _switch_root_identity(context) != target_identity:
+                raise _not_started_again(source["name"])
+        except web.HTTPException:
+            await undo_native_switch(AccountsUnavailable("Target account changed after carry", "profile-context-changed"),
+                                     target_copy_remains=True)
+    try:
+        if native_switch:
+            await _start_in_place(*launch, target, account_env, context=context, expected_identity=target_identity,
+                                  validate_default_target=True)
+        else:
+            expected = restart_identity if context else None
+            await _start_in_place(*launch, target, account_env, context=context, expected_identity=expected,
+                                  pin_cwd=settings_guard is not None)
+    except AccountContextChanged:
+        if native_switch:
+            await undo_native_switch(AccountsUnavailable("Target account changed before launch", "profile-context-changed"),
+                                     target_copy_remains=True)
+        raise _not_started_again(source["name"])
+    except Exception as error:
+        if switch:
+            raise AccountSwitchTargetStartUnconfirmed(source["name"]) from error
+        raise
     return source["name"]
 
 
@@ -1247,7 +1797,7 @@ def _not_started_again(name):
         text=f"Conversation stopped; its agent could not be started again in session {name}")
 
 
-async def _stop_agent(source, known_agent, settings_binding=None):
+async def _stop_agent(source, known_agent, settings_binding=None, profile_binding=None):
     """stop_agent_if on the incarnation ``source``: the new ``created`` once the agent is gone. WholeSessionOnly or
     HTTPConflict when the host stopped nothing. A reply that comes too late is checked in the listing: when the
     incarnation moved on, the agent was stopped and the session is still there, and the error says so."""
@@ -1255,6 +1805,8 @@ async def _stop_agent(source, known_agent, settings_binding=None):
         message = {"op": "stop_agent_if", "name": source["name"], "created": source["created"], "agent": known_agent}
         if settings_binding is not None:
             message.update(settings_binding)
+        if profile_binding is not None:
+            message.update(agent_pid=profile_binding["process_pid"], agent_incarnation=profile_binding["process_start"])
         stopped = await host(message, timeout=STOP_AGENT_TIMEOUT)
     except web.HTTPServiceUnavailable:
         if await _incarnation_moved_on(source):
@@ -1264,6 +1816,8 @@ async def _stop_agent(source, known_agent, settings_binding=None):
         return stopped["created"]
     reason = stopped.get("reason") if isinstance(stopped, dict) else None
     reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,40}", reason) else "refused"
+    if reason == "agent_stop_uncertain":
+        raise web.HTTPServiceUnavailable(text="Agent stop outcome uncertain; inspect the session before resuming")
     if reason in WHOLE_SESSION_REASONS:
         raise WholeSessionOnly(reason)
     if reason in STOP_REFUSALS:
@@ -1281,8 +1835,12 @@ async def _incarnation_moved_on(source):
                and item.get("created") != source["created"] for item in listed or ())
 
 
+class AccountContextChanged(Exception):
+    """The verified account directory changed during launch preparation."""
+
+
 async def _start_in_place(source, created, cwd, command, agent, known_agent, notice, vibe, account, account_env,
-                          *, pin_cwd=False):
+                          context=None, expected_identity=None, validate_default_target=False, *, pin_cwd=False):
     """Start the agent in the incarnation stop_agent_if left (``created``), under ``account``, with the session's
     meta for that launch (as new_session writes it; the nonce, hence the session token, is kept). A Claude's wake
     socket path follows from the nonce: the socket the stopped Claude left there is removed first, so that the new
@@ -1292,11 +1850,27 @@ async def _start_in_place(source, created, cwd, command, agent, known_agent, not
         await asyncio.to_thread(claudewake.clear_socket, CLAUDE_WAKE_DIR, nonce)
         command = await asyncio.to_thread(claudewake.launch_command, command, nonce, CLAUDE_WAKE_DIR,
                                           cwd, ptyhost.clean_env(account_env))
+    if expected_identity is not None:
+        try:
+            if context["id"] == DEFAULT_ACCOUNT["id"] and not validate_default_target:
+                revision = accountswitch.default_context(known_agent, context["env"])["context_revision"]
+                if revision != context["context_revision"]:
+                    raise AccountContextChanged()
+            else:
+                await _switch_profile_context(context["id"], known_agent, context["context_revision"])
+            if _switch_root_identity(context) != expected_identity:
+                raise AccountContextChanged()
+        except (web.HTTPException, accountswitch.UnboundDefault) as error:
+            raise AccountContextChanged() from error
     meta = {"agent": agent, "known_agent": known_agent, **({"nonce": nonce} if nonce else {}),
             **({"notice": notice} if notice else {}), **({"account": account} if account_env else {}),
+            **({"account_context_revision": context["context_revision"]} if context else {}),
             **({"vibe_hooks": vibe.hooks} if vibe and vibe.hooks else {})}
+    command = _profile_command(command, context, known_agent) if context else with_account(command, account_env)
+    if pin_cwd:
+        command = f"cd {shlex.quote(cwd)} && {command}"
     started = await host({"op": "start_if", "name": source["name"], "created": created,
-                          "command": _relaunch_command(command, cwd, account_env, pin_cwd), "meta": meta})
+                          "command": command, "meta": meta})
     if started != {"ok": True}:
         raise _not_started_again(source["name"])
 
@@ -1337,6 +1911,12 @@ def _session_notice(raw):
     return notice if notice in (agentmcp.OPENCODE_UNSUPPORTED_NOTICE, agentmcp.OPENCODE_UNREADABLE_NOTICE) else None
 
 
+def _terminal_input_capabilities(raw):
+    return (["acknowledged_input_v2"] if _finite_number(raw.get("created")) and raw["created"] > 0
+            and attach_supports(raw, "acknowledged_input_v2") else []) + (
+                ["acknowledged_input_v1"] if attach_supports(raw, "acknowledged_input_v1") else [])
+
+
 def _mesh_order(d):
     """Sessions created since the last move first (newest on top), then the owner's order."""
     return d["rank"] is not None, d["rank"] if d["rank"] is not None else -d["created"]
@@ -1345,12 +1925,34 @@ def _mesh_order(d):
 def _account_fields(session):
     """A listed session's alias and its label (shown on the row and the pane header), or nothing."""
     account = session_account(session)
-    return {"account": account, "account_label": account_label(account)} if account else {}
+    meta = session.get("meta") or {}
+    if not account and _accounts_digest(meta.get("account_context_revision")):
+        return {"default_context_revision": meta["account_context_revision"]}
+    return ({"account": account, "account_label": account_label(account, meta.get("known_agent") or meta.get("agent")),
+            **({"account_context_revision": meta["account_context_revision"]}
+               if _accounts_digest(meta.get("account_context_revision")) else {})} if account else {})
 
 
 def list_sessions(mesh_raw, listed=True, read_at=None):
     with discover.listing_scope():      # one codex process scan for the whole listing
         return _list_sessions(mesh_raw, listed, read_at)
+
+
+def _bind_profile_discovery(described, raw):
+    """Ambient Pi/OpenCode history cannot name a native profile's running conversation.
+
+    Preserve process facts and subsequent hook reports; a selected store is checked
+    against the pinned revision at action/restore time. Discovery-only identity is
+    deliberately unknown until a selected-root reader is available.
+    """
+    meta = raw.get("meta") or {}
+    agent = described.get("agent")
+    if (meta.get("account") and (_accounts_digest(meta.get("account_context_revision"))
+                                 or os.path.lexists(CONF_DIR / "backend-profiles.json")
+                                 or os.path.lexists(CONF_DIR / "backend-profiles.migrated"))
+            and isinstance(agent, dict) and agent.get("type") in ("pi", "opencode")):
+        described["agent"] = {key: agent[key] for key in
+                              ("type", "pid", "argv", "started", "foreground") if key in agent}
 
 
 def _list_sessions(mesh_raw, listed, read_at=None):
@@ -1362,9 +1964,11 @@ def _list_sessions(mesh_raw, listed, read_at=None):
     org = organize.view(mesh_raw, prune=listed, read_at=read_at)
     for s in mesh_raw:
         d = discover.describe(procs, s["pid"])
+        _bind_profile_discovery(d, s)
         known_agent = (s.get("meta") or {}).get("known_agent")
         d.update(id=s["name"], name=s["name"], kind="mesh", created=s["created"],
                  attached=s["attached"], activity=s["activity"],
+                 pty_capabilities=_terminal_input_capabilities(s),
                  known_agent=known_agent if known_agent in AGENT_TYPES else None,
                  notice=_session_notice(s), **_account_fields(s),
                  **org["sessions"][s["name"]])
@@ -1455,6 +2059,7 @@ async def _listing(event_state=None, organisation_lock=None, read=None):
     """One full listing, and whether the host listed. ``read``: the host's listing, already read."""
     if event_state is None:
         event_state = _LIVE_EVENT_STATE
+    _schedule_listing_account_refresh()
     read_at = None if read else time.time()   # what a restart's carry bound after it is not judged by this list
     read = read or await _read_host()
     raw, listed, _, observed_at, order = read
@@ -1746,6 +2351,7 @@ class SessionsState:
             agent = entry["agent"] and not notice and dict(entry["agent"], provisional=True)
             rows.append({"id": s["name"], "name": s["name"], "kind": "mesh", "created": s["created"], "pid": s["pid"],
                          "cwd": s["cwd"], "cmd": entry["cmd"] or "", "attached": s["attached"], "activity": s["activity"],
+                         "pty_capabilities": _terminal_input_capabilities(s),
                          "known_agent": kind if kind in AGENT_TYPES else None, "notice": notice, "agent": agent or None,
                          **_account_fields(s),
                          "ready": False, **org["sessions"][s["name"]]})
@@ -2067,17 +2673,18 @@ class EventState:
                 "unobservable": self._metrics["unobservable"],
                 "disagreements": dict(sorted(self._metrics["disagreements"].items()))}
 
-    def expose(self, mesh, raw):
+    def expose(self, mesh, raw, prune=True):
         """Add each current incarnation's hint and forget non-live entries."""
         live = {(s.get("name"), (s.get("meta") or {}).get("nonce"))
                 for s in raw if isinstance(s, dict) and isinstance(s.get("name"), str)
                 and isinstance(s.get("meta"), dict) and isinstance(s["meta"].get("nonce"), str)}
-        self._states = {key: value for key, value in self._states.items() if key in live}
-        self._seen = {key: value for key, value in self._seen.items() if key in live}
-        self._buckets = {key: value for key, value in self._buckets.items() if key in live}
-        self._compared = {key: value for key, value in self._compared.items() if key in live}
-        self._generations = {key: value for key, value in self._generations.items() if key in live}
-        self._pinned = {key: value for key, value in self._pinned.items() if key in live}
+        if prune:
+            self._states = {key: value for key, value in self._states.items() if key in live}
+            self._seen = {key: value for key, value in self._seen.items() if key in live}
+            self._buckets = {key: value for key, value in self._buckets.items() if key in live}
+            self._compared = {key: value for key, value in self._compared.items() if key in live}
+            self._generations = {key: value for key, value in self._generations.items() if key in live}
+            self._pinned = {key: value for key, value in self._pinned.items() if key in live}
         nonce_by_name = {name: nonce for name, nonce in live}
         for entry in mesh:
             key = entry["name"], nonce_by_name.get(entry["name"])
@@ -2194,11 +2801,11 @@ def _apply_copilot_hooks(mesh):
             agent["session_id"], agent["identity_source"] = session, "copilot_hooks"
 
 
-def _apply_hook_state(event_state, mesh, raw, history_identity=True):
+def _apply_hook_state(event_state, mesh, raw, history_identity=True, prune=True):
     """What the hooks reported, applied to a described mesh (``raw``: the PTY host's list of it).
     ``history_identity=False``: the caller runs _apply_history_identity itself (it reads files and
     scans the history index, so a caller on the event loop does it in a worker)."""
-    event_state.expose(mesh, raw)
+    event_state.expose(mesh, raw, prune=prune)
     _apply_reported_state(mesh)
     _apply_copilot_hooks(mesh)
     if history_identity:
@@ -2241,12 +2848,12 @@ def _apply_history_identity(mesh):
             agent["session_id"], agent["identity_source"] = sid, "history_cwd"
 
 
-def _describe_with_hooks(listed):
+def _describe_with_hooks(listed, prune=True):
     """``list_sessions`` with the running app's hook state applied (a Copilot started bare has its
     conversation from its hooks only)."""
     described = list_sessions(listed, False)
     if _LIVE_EVENT_STATE is not None:
-        _apply_hook_state(_LIVE_EVENT_STATE, described["mesh"], listed)
+        _apply_hook_state(_LIVE_EVENT_STATE, described["mesh"], listed, prune=prune)
     return described
 
 
@@ -2805,7 +3412,7 @@ def _chosen_launch(agent, argv):
     return [*argv, "--session-id", sid], ("claude", sid, "launch:session_id")
 
 
-def _resume_argv(info):
+def _resume_argv(info, context=None):
     """The launch line that reopens the agent's conversation. An id guessed from the folder's history is
     display-only (it may be another session's): no reported id, so refused as before the guess existed."""
     sid = info.get("session_id")
@@ -2817,7 +3424,8 @@ def _resume_argv(info):
     except agentcap.UnsupportedCapability as exc:
         raise web.HTTPBadRequest(text=str(exc)) from exc
     if kind == "pi":
-        path = discover.pi_session_path(sid)
+        path = (discover.pi_session_path(sid, context["roots"]["history"]) if context
+                else discover.pi_session_path(sid))
         if not path:
             raise web.HTTPConflict(text="Pi conversation missing or ambiguous; resume refused")
         return agentmcp.inject("pi", ["pi", "--session", path])
@@ -2861,6 +3469,10 @@ def _conversation_found(kind, sid, account):
         root = configured if os.path.isabs(configured) else os.path.join(discover.HOME, default)
     else:
         root = account_folder(account, kind)
+    return _conversation_found_in_root(root, data, pattern)
+
+
+def _conversation_found_in_root(root, data, pattern):
     folder = os.path.join(root, data) if root else None
     return bool(folder) and os.path.isdir(folder) and any(
         os.path.isfile(match) for match in glob.glob(os.path.join(glob.escape(folder), *pattern)))
@@ -4541,8 +5153,8 @@ async def _session_control_status(source):
 
 
 def _session_action_reply(item):
-    # The exact backend conversation is for revalidation, never a wire field.
-    return {key: value for key, value in item.items() if key != "conversation"} if item is not None else None
+    # Conversation and account binding are for revalidation, never wire fields.
+    return sessionrequests.Requests.public(item) if item is not None else None
 
 
 async def api_session_action_request(request):
@@ -4557,9 +5169,9 @@ async def api_session_action_request(request):
         if item is None:
             raise web.HTTPNotFound()
         return web.json_response({"request": _session_action_reply(item)}, headers={"Cache-Control": "no-store"})
-    body, current, conversation = await json_object(request), None, None
+    body, current, conversation, binding = await json_object(request), None, None, None
     if body.get("action") == "switch_account" and set(body) == {"action", "account"}:
-        body, current = await _switch_request(source, body)
+        body, current, binding = await _switch_request(source, body)
     if body.get("action") == "settings":
         entry = await _session_control_entry(source)
         conversation = _session_control_conversation(source, entry)
@@ -4569,7 +5181,7 @@ async def api_session_action_request(request):
     try:
         item = request.app["session_requests"].create(
             source, body, enabled_agents=set(AGENT_PRESETS),
-            resumable=RESUMABLE_AGENT_PRESETS, current_account=current, conversation=conversation)
+            resumable=RESUMABLE_AGENT_PRESETS, current_account=current, conversation=conversation, switch_binding=binding)
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc))
     return web.json_response({"request": _session_action_reply(item)}, status=202,
@@ -4581,6 +5193,8 @@ async def api_session_action_request(request):
 # exact source stopped, `mesh-platform accounts carry` copies the conversation, the agent resumes under the target;
 # a failed carry resumes it under its own account. The agent kind is the session's (its token), never the body's.
 CARRY_TIMEOUT = 300
+# Native process environment observation and the bound switch are qualified on Linux.
+NATIVE_SWITCH_QUALIFIED = sys.platform == "linux"
 # The carry's refusal codes (Mesh_accounts_carry): these two may pass when asked again later; these two leave
 # something in the target folder for the operator to look at (named in the service log). Every other code is a
 # refusal that asking again does not change. Each carry runs as its own mesh-platform process: its fcntl lock does
@@ -4591,6 +5205,13 @@ CARRY_NEEDS_OPERATOR = frozenset(("carry_restore_failed", "carry_rollback_incomp
 
 def _switch_undone_text(from_account, exc):
     """What the agent relays of an undone switch: where the conversation went on, the carry's cause, what next."""
+    if exc.target_copy_uncertain:
+        return (f"The conversation resumed under account {from_account}, but target copy cleanup is uncertain. "
+                "A copy may remain; the operator must inspect the target before another switch. "
+                f"Cause: {exc.code}: {str(exc).rstrip('.')}. Do not ask again.")
+    if exc.target_copy_remains:
+        return (f"The conversation resumed under account {from_account}, but the completed target copy remains. "
+                "The operator must check the target account before another switch; do not ask again.")
     advice = (" Asking again later may work." if exc.code in CARRY_RETRYABLE
               else " The operator must check the target account's folder (see the service log) before another "
                    "switch; do not ask again." if exc.code in CARRY_NEEDS_OPERATOR
@@ -4639,7 +5260,7 @@ async def _switch_target(name, kind):
     ignoring ASCII case; never a prefix, never another agent's account, and a name that is one account's id and
     another's label designates neither. Without a usable accounts.json only ``default`` can be named."""
     shown = name if isinstance(name, str) and 0 < len(name) <= 64 and name.isprintable() else None
-    offered = [DEFAULT_ACCOUNT, *(a for a in accounts_projection() if a[kind])]
+    offered = [DEFAULT_ACCOUNT, *({**a, "label": account_label(a["id"], kind)} for a in accounts_projection() if a[kind])]
     unknown = _switch_refusal("account_unknown", f"No {ACCOUNT_MEMBER[kind][2]} account “{shown or '?'}” is "
                               f"declared. Available: {_shown_accounts(offered)}.")
     if shown is None:
@@ -4676,28 +5297,52 @@ async def _switch_request(source, body):
     kind = source["agent"]
     if kind not in ACCOUNT_MEMBER:
         raise _switch_refusal("agent_unsupported", "Account switching applies to Claude and Codex only.")
+    native = _native_profile_mode()
+    if native and not NATIVE_SWITCH_QUALIFIED:
+        raise _switch_refusal("switch_not_qualified", "Native profile switching is not qualified")
     await declared_accounts()
     target = await _switch_target(body["account"], kind)
     listed = await host({"op": "list"})
     raw = next((item for item in listed if item["name"] == source["id"] and item["created"] == source["created"]), None)
     if raw is None:
         raise web.HTTPConflict(text="Requesting session replaced")
+    if native and not _native_switch_available(kind, raw):
+        raise _switch_refusal("switch_not_qualified", "This PTY host cannot bind the agent identity")
     current = session_account(raw) or DEFAULT_ACCOUNT["id"]
     if target["id"] == current:
         raise _switch_refusal("account_same", f"This session already runs under {target['label']}.")
-    sid = _switch_conversation(await asyncio.to_thread(_describe_with_hooks, listed), source)
+    described = await asyncio.to_thread(_describe_with_hooks, listed)
+    sid = _switch_conversation(described, source)
     if sid is None:
         raise _switch_refusal("conversation_unknown",
                               "The exact conversation id is unknown; it cannot be resumed elsewhere.")
-    folder = None if current == DEFAULT_ACCOUNT["id"] else current
-    if not await asyncio.to_thread(_conversation_found, kind, sid, folder):
+    binding = None
+    if native:
+        observed = next((e.get("agent") for e in described["mesh"] if e.get("id") == source["id"]
+                         and e.get("created") == source["created"]), None) or {}
+        source_revision = (raw.get("meta") or {}).get("account_context_revision")
+        if current != DEFAULT_ACCOUNT["id"] and not _accounts_digest(source_revision):
+            raise web.HTTPConflict(text="Account profile context unknown; nothing was stopped")
+        source_context = await _switch_profile_context(current, kind, source_revision, observed)
+        target_context = await _switch_profile_context(target["id"], kind)
+        binding = {"backend": kind, "conversation": sid, "agent_pid": source_context["process_pid"],
+                   "agent_start": source_context["process_start"],
+                   "source": {"id": current, "context_revision": source_context["context_revision"]},
+                   "target": {"id": target["id"], "context_revision": target_context["context_revision"]}}
+        _, _, data, pattern = _conversation_layout(kind, sid)
+        found = await asyncio.to_thread(_conversation_found_in_root, source_context["roots"]["config"], data, pattern)
+    else:
+        folder = None if current == DEFAULT_ACCOUNT["id"] else current
+        found = await asyncio.to_thread(_conversation_found, kind, sid, folder)
+    if not found:
         raise _switch_refusal("conversation_not_found", "The conversation is not in the current account's folder.")
-    try:
-        await account_environment(None if target["id"] == DEFAULT_ACCOUNT["id"] else target["id"], kind)
-    except web.HTTPBadRequest as exc:
-        raise _switch_refusal("account_folder_refused", f"The folder of account {target['label']} is refused; see "
-                              "the service log.") from exc
-    return {"action": "switch_account", "account": target["id"]}, current
+    if not native:
+        try:
+            await account_environment(None if target["id"] == DEFAULT_ACCOUNT["id"] else target["id"], kind)
+        except web.HTTPBadRequest as exc:
+            raise _switch_refusal("account_folder_refused", f"The folder of account {target['label']} is refused; see "
+                                  "the service log.") from exc
+    return {"action": "switch_account", "account": target["id"]}, current, binding
 
 
 def _carry_env(kind):
@@ -4708,31 +5353,77 @@ def _carry_env(kind):
     return {**work_child_env(), **({variable: configured} if os.path.isabs(configured) else {})}
 
 
-async def _switch_session(item, raw, conversation, argv):
+async def _switch_session(item, raw, conversation, argv, observed_agent=None):
     """Carry out an approved switch: the source stopped, its conversation carried, then resumed under the target
     (a failed carry: under the source again, AccountSwitchUndone)."""
     kind, account = item["source"]["agent"], session_account(raw)
     if (account or DEFAULT_ACCOUNT["id"]) != item["from_account"]:
         raise web.HTTPConflict(text="The session's account changed since the request")
 
+    native = _native_profile_mode()
+    # An approved native binding is authoritative even if the registry and its
+    # marker vanish afterwards; it must never fall back to legacy switching.
+    if "switch_binding" in item and not native:
+        raise web.HTTPConflict(text="Account profile context changed; nothing was stopped")
+    if native and not NATIVE_SWITCH_QUALIFIED:
+        raise web.HTTPConflict(text="Native profile switching is not qualified")
+    source_context = target_context = None
+    if native:
+        binding = item.get("switch_binding")
+        try:
+            binding = sessionrequests.Requests._switch_binding(binding, item["source"], item["from_account"],
+                                                                        item["account"])
+        except ValueError as exc:
+            raise web.HTTPConflict(text="Native account switch request has no valid binding") from exc
+        if conversation != binding["conversation"]:
+            raise web.HTTPConflict(text="Conversation changed since the request; nothing was stopped")
+        source_context = await _switch_profile_context(item["from_account"], kind,
+                                                       binding["source"]["context_revision"], observed_agent or {})
+        if (source_context["process_pid"], source_context["process_start"]) != (binding["agent_pid"], binding["agent_start"]):
+            raise web.HTTPConflict(text="Foreground agent changed since the request; nothing was stopped")
+        source_context["conversation"] = binding["conversation"]
+        target_context = await _switch_profile_context(item["account"], kind,
+                                                       binding["target"]["context_revision"])
+        _, _, data, pattern = _conversation_layout(kind, conversation)
+        if not await asyncio.to_thread(_conversation_found_in_root, source_context["roots"]["config"], data, pattern):
+            raise web.HTTPConflict(text="The conversation is not in the current account's folder")
+
+    carried = {}
+
     async def carry():
-        await _accounts_program("carry", str(ACCOUNTS_FILE), kind, conversation, item["from_account"],
-                                item["account"], timeout=CARRY_TIMEOUT, env=_carry_env(kind))
+        revisions = ((source_context["context_revision"], target_context["context_revision"]) if native else ())
+        environ = _carry_env(kind)
+        if native:
+            default_context = next((c for c in (source_context, target_context) if c["id"] == "default"), None)
+            if default_context:
+                environ.update(default_context["env"])
+        result = await _accounts_program("carry", str(ACCOUNTS_FILE), kind, conversation, item["from_account"],
+                                         item["account"], *revisions, timeout=CARRY_TIMEOUT, env=environ)
+        summary = result.get("carried")
+        if not isinstance(summary, dict) or type(summary.get("replaced")) is not int or summary["replaced"] < 0:
+            raise AccountsUnavailable("Invalid carry result", "carry_rollback_incomplete")
+        carried.update(summary)
 
     target = None if item["account"] == DEFAULT_ACCOUNT["id"] else item["account"]
     try:
         name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"], shlex.join(argv), kind,
-                                     kind, account=account, switch=(target, carry), source=raw)
+                                     kind, account=account,
+                                     switch=(target, carry, source_context, target_context) if native else (target, carry),
+                                     source=raw)
     except AccountSwitchUndone:   # the source was stopped all the same
         await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
         raise
     await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
-    return {"id": name, "account": item["account"]}
+    result = {"id": name, "account": item["account"]}
+    if carried.get("recovery_copies", 0):
+        result["notice"] = ("An older target copy was retained for recovery. It may receive late writes; "
+                            "review it before cleanup.")
+    return result
 
 
-def _account_label_of(account):
+def _account_label_of(account, backend=None):
     """The label of an account id of a request, "default" included."""
-    return DEFAULT_ACCOUNT["label"] if account == DEFAULT_ACCOUNT["id"] else account_label(account)
+    return DEFAULT_ACCOUNT["label"] if account == DEFAULT_ACCOUNT["id"] else account_label(account, backend)
 
 
 def _with_launch_options(item):
@@ -4753,10 +5444,36 @@ def _with_launch_options(item):
 
 def _with_account_labels(item):
     """A pending request as the page shows it: a switch carries the labels of both accounts."""
+    item = sessionrequests.Requests.public(item)
     if item.get("action") != "switch_account":
         return item
-    return {**item, "account_label": _account_label_of(item["account"]),
-            "from_label": _account_label_of(item["from_account"])}
+    backend = item["source"]["agent"]
+    return {**item, "account_label": _account_label_of(item["account"], backend),
+            "from_label": _account_label_of(item["from_account"], backend)}
+
+
+def _native_switch_available(kind, raw):
+    if not isinstance(raw, dict) or not isinstance(raw.get("meta"), dict):
+        return False
+    meta, capabilities = raw["meta"], raw.get("pty_capabilities")
+    account = meta.get("account")
+    # A legacy named alias is not bound to a native profile revision. Default
+    # sessions are independently bound to their observed process at request time.
+    bound = (account is None or account == DEFAULT_ACCOUNT["id"]
+             or (isinstance(account, str) and ACCOUNT_ID_RE.fullmatch(account)
+                 and _accounts_digest(meta.get("account_context_revision"))))
+    return bool(NATIVE_SWITCH_QUALIFIED and _native_profile_mode() and isinstance(kind, str)
+                and kind in ACCOUNT_MEMBER and bound and isinstance(capabilities, list) and "agent_relaunch_v1" in capabilities
+                and "agent_relaunch_bound_v1" in capabilities)
+
+
+def _qualify_profiles(profiles, sessions):
+    if not _valid_ptyhost_list(sessions):
+        sessions = []
+    available = {(item.get("meta") or {}).get("known_agent") for item in sessions
+                 if _native_switch_available((item.get("meta") or {}).get("known_agent"), item)}
+    return [{**profile, "switch_qualified": profile["enabled"] and profile["backend"] in available}
+            for profile in profiles]
 
 
 async def api_session_accounts(request):
@@ -4775,9 +5492,9 @@ async def api_session_accounts(request):
     current = session_account(raw)
     return web.json_response({
         "agent": source["agent"],
-        "switch_qualified": False,
+        "switch_qualified": _native_switch_available(source["agent"], raw),
         "accounts_file": _ACCOUNTS["file"],
-        "current": ({"id": current, "label": account_label(current),
+        "current": ({"id": current, "label": account_label(current, source["agent"]),
                      "declared": any(a["id"] == current for a in declared)} if current
                     else {"id": DEFAULT_ACCOUNT["id"], "label": DEFAULT_ACCOUNT["label"], "declared": True}),
         "accounts": [DEFAULT_ACCOUNT, *accounts_projection()],
@@ -4836,7 +5553,9 @@ async def _execute_session_action(item, create_nonce=None):
     if entry is None:
         raise web.HTTPConflict(text="Agent to resume unavailable")
     agent = entry["agent"]
-    argv = _resume_argv(agent)
+    account = session_account(raw)
+    context = await _restart_profile_context(raw, account, source["agent"], None)
+    argv = _resume_argv(agent, context)
     cwd = raw["cwd"]
     replacement_options = {}
     if settings_requested:
@@ -4864,12 +5583,12 @@ async def _execute_session_action(item, create_nonce=None):
     if item["action"] == "switch_account":   # checked again: the conversation may only be guessed by now
         if _switch_conversation(described, source) is None:
             raise web.HTTPConflict(text="The exact conversation id is unknown; it cannot be resumed elsewhere")
-        if not await asyncio.to_thread(_conversation_found, source["agent"], agent["session_id"],
+        if not _native_profile_mode() and not await asyncio.to_thread(_conversation_found, source["agent"], agent["session_id"],
                                        session_account(raw)):   # checked again: nothing to carry, nothing stopped
             raise web.HTTPConflict(text="The conversation is not in the current account's folder")
-        return await _switch_session(item, raw, agent["session_id"], argv)
+        return await _switch_session(item, raw, agent["session_id"], argv, agent)
     name = await replace_session(raw["name"], raw["created"], raw["name"], cwd,
-                                 shlex.join(argv), source["agent"], source["agent"], account=session_account(raw),
+                                 shlex.join(argv), source["agent"], source["agent"], account=account,
                                  source=raw, **replacement_options)
     await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
     return {"id": name}
@@ -4887,11 +5606,28 @@ async def _run_session_action_once(app, request_id):
     create_nonce = sessiontoken.new_nonce() if item["action"] == "create" else None
     try:
         result = await _execute_session_action(item, create_nonce)
+    except AccountSwitchTargetStartUnconfirmed as exc:
+        return app["session_requests"].finish(
+            request_id, error=("The conversation was copied, but the target start failed or could not be confirmed. "
+                               "The target agent may be running; inspect the session and target before further action."),
+            detail={"rolled_back": False, "target_copy_remains": True, "target_copy_uncertain": False,
+                    "id": exc.name, "code": "target_start_unconfirmed", "retryable": False, "operator_action": True})
+    except AccountSwitchRecoveryFailed as exc:
+        return app["session_requests"].finish(
+            request_id, error=(f"Account switch failed: {exc.code}: {str(exc)}. Source restart failed or could not "
+                               "be verified; inspect the session and request status before any further action."
+                               + (" A target copy may remain; inspect the target." if exc.target_copy_uncertain else "")),
+            detail={"rolled_back": False, "target_copy_remains": exc.target_copy_remains,
+                    "target_copy_uncertain": exc.target_copy_uncertain,
+                    "id": exc.name, "code": exc.code, "retryable": False, "operator_action": True})
     except AccountSwitchUndone as exc:
         return app["session_requests"].finish(
             request_id, error=_switch_undone_text(item["from_account"], exc),
-            detail={"rolled_back": True, "id": exc.name, "code": exc.code, "retryable": exc.code in CARRY_RETRYABLE,
-                    "operator_action": exc.code in CARRY_NEEDS_OPERATOR})
+            detail={"rolled_back": not exc.target_copy_remains, "target_copy_remains": exc.target_copy_remains,
+                    "target_copy_uncertain": exc.target_copy_uncertain,
+                    "id": exc.name, "code": exc.code,
+                    "retryable": not exc.target_copy_remains and exc.code in CARRY_RETRYABLE,
+                    "operator_action": exc.target_copy_remains or exc.code in CARRY_NEEDS_OPERATOR})
     except web.HTTPException as exc:
         return app["session_requests"].finish(
             request_id, error=exc.text or "Action failed")
@@ -5231,6 +5967,13 @@ async def api_accounts(request):
         if ran is not None:
             print(f"accounts: mesh-profile {op} answered outside its envelope (exit {ran[0]})", flush=True)
         return accounts_refusal(503, "backend-helper-unavailable")
+    if op == "profiles.list" and reply["ok"] and NATIVE_SWITCH_QUALIFIED:
+        try:
+            sessions = await host({"op": "list"})
+        except (web.HTTPException, ValueError):
+            sessions = []
+        reply["data"]["profiles"] = _qualify_profiles(reply["data"]["profiles"], sessions)
+        return web.json_response(reply, status=reply["http_status"], headers={"Cache-Control": "no-store"})
     return web.Response(body=ran[1], status=reply["http_status"], content_type="application/json",
                         headers={"Cache-Control": "no-store"})
 
@@ -5398,6 +6141,7 @@ def config_report(origin, host_report):
             "board_mcp": str(board_bin), "board_mcp_present": agentmcp.board_available(),
         },
         "version": {"client": client_version(), "install_name": ROOT.name or None},
+        "capabilities": {"account_settings": True},
         "host": host_report,
         "agents": agents,
         "launch": launch_projection(),
@@ -5830,6 +6574,33 @@ async def _settle_restored(name, new, entry, recreated, warnings, offer_done):
         warnings.append("organisation not restored")
 
 
+def _validate_default_restore(agent, revision):
+    try:
+        if not _accounts_digest(revision) or accountswitch.default_context(agent, os.environ)["context_revision"] != revision:
+            raise web.HTTPConflict(text="Default account context changed; resume refused")
+    except accountswitch.UnboundDefault as exc:
+        raise web.HTTPConflict(text="Default account context unavailable; resume refused") from exc
+
+
+async def _restore_launch_context(entry):
+    account = entry.get("account")
+    agent = entry["agent"]
+    if not account and agent and entry.get("default_context_revision") is not None:
+        _validate_default_restore(agent["type"], entry["default_context_revision"])
+    if not account or not agent:
+        return None
+    native = (os.path.lexists(CONF_DIR / "backend-profiles.json")
+              or os.path.lexists(CONF_DIR / "backend-profiles.migrated"))
+    if not native:
+        if entry.get("account_context_revision"):
+            raise web.HTTPConflict(text="Account profile context changed; resume refused")
+        return None
+    revision = entry.get("account_context_revision")
+    if not _accounts_digest(revision):
+        raise web.HTTPConflict(text="Account profile context unknown; resume refused")
+    return await _profile_launch_context(account, agent["type"], revision)
+
+
 async def _create_restored(name, entry, running, reason=None):
     """The page path's creation: (the new session's name, None), or (None, the refusal result). A creation sent to
     the host whose outcome is unknown holds the conversation (``running``) and the offer, then re-raises.
@@ -5837,11 +6608,19 @@ async def _create_restored(name, entry, running, reason=None):
     agent = entry["agent"]
     resumable = bool(agent and agent["session_id"])
     try:
-        command = shlex.join(_resume_argv(agent)) if resumable else _not_relaunched_line(agent, reason)
+        # A missing transcript may turn a bound offer into a shell. Its saved
+        # default identity still governs whether that offer may be consumed.
+        if not resumable and agent and not entry.get("account") and entry.get("default_context_revision") is not None:
+            _validate_default_restore(agent["type"], entry["default_context_revision"])
+        context = await _restore_launch_context(entry) if resumable else None
+        command = shlex.join(_resume_argv(agent, context)) if resumable else _not_relaunched_line(agent, reason)
         new = await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
                                 agent["type"] if resumable else None, keep=48,
                                 conversation=_restored_conversation(agent) if resumable else None,
-                                account=entry.get("account") if resumable else None)
+                                account=entry.get("account") if resumable else None,
+                                default_context_revision=entry.get("default_context_revision") if resumable else None,
+                                account_revision=(entry.get("account_context_revision") if context else
+                                                  "legacy" if resumable and entry.get("account") else None))
     except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, GeminiSettingsRefused) as e:
         return None, {"ok": False, "error": e.text}
     except (CreationUncertain, asyncio.CancelledError):   # sent, outcome unknown: the agent may still start
@@ -5852,6 +6631,11 @@ async def _create_restored(name, entry, running, reason=None):
     if resumable:
         running.add(agent["session_id"])
     return new, None
+
+
+def _unavailable_pi_profile_offer(entry):
+    agent = entry.get("agent")
+    return bool(entry.get("account") and isinstance(agent, dict) and agent.get("type") == "pi")
 
 
 async def restore_one(name, running, organisation_lock):
@@ -5866,6 +6650,8 @@ async def restore_one(name, running, organisation_lock):
         entry = await asyncio.to_thread(respawn.lost_entry, name)
         if entry is None:
             return {"ok": False, "error": "Not found, already restored or folder gone"}
+        if _unavailable_pi_profile_offer(entry):
+            return {"ok": False, "error": PI_PROFILE_UNAVAILABLE}
         if "restoring" in entry:    # an exact restore already recorded its session: never a second one
             return {"ok": False, "error": RESTORING_REFUSAL}
         if offer_held(name, entry["created"]):
@@ -5994,11 +6780,15 @@ async def _create_exact(name, entry, nonce):
     agent = entry["agent"]
     resumable = bool(agent and agent["session_id"])
     try:
-        command = shlex.join(_resume_argv(agent)) if resumable else None
+        context = await _restore_launch_context(entry) if resumable else None
+        command = shlex.join(_resume_argv(agent, context)) if resumable else None
         await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
                           agent["type"] if resumable else None, keep=48, exact=True, nonce=nonce,
                           conversation=_restored_conversation(agent) if resumable else None,
-                          account=entry.get("account") if resumable else None)
+                          account=entry.get("account") if resumable else None,
+                          default_context_revision=entry.get("default_context_revision") if resumable else None,
+                          account_revision=(entry.get("account_context_revision") if context else
+                                            "legacy" if resumable and entry.get("account") else None))
     except CreationUncertain:
         raise
     except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, web.HTTPServiceUnavailable) as e:
@@ -6088,6 +6878,8 @@ async def restore_exact(app, expected):
             if refusal is not None:
                 return refusal
             marker = entry.get("restoring")
+            if marker is None and _unavailable_pi_profile_offer(entry):
+                return _result("launch-refused", "not-started", PI_PROFILE_UNAVAILABLE, status=409)
             if marker is None:
                 refusal, marker = await _start_exact(app, name, entry, running)
                 if refusal is not None:
@@ -6260,6 +7052,49 @@ def attach_supports(reply, capability):
             and capability in capabilities)
 
 
+def _ack_v2_binding(value, created, nonce=False):
+    return (isinstance(value, dict)
+            and set(value) == ({"created", "slot", "generation", "actor_nonce"} if nonce
+                               else {"created", "slot", "generation"})
+            and _finite_number(value["created"]) and value["created"] == created
+            and type(value["slot"]) is int and 0 <= value["slot"] < 64
+            and type(value["generation"]) is int and 0 < value["generation"] <= 2**53 - 1
+            and (not nonce or (isinstance(value["actor_nonce"], str)
+                               and re.fullmatch(r"[0-9a-f]{32}", value["actor_nonce"]) is not None)))
+
+
+def _ack_v2_receipt(payload, binding):
+    try:
+        receipt = json.loads(payload)
+    except (ValueError, TypeError):
+        return None
+    if (not isinstance(receipt, dict)
+            or not (set(receipt) == {"input_ack", "seq", "created", "slot", "generation"}
+                    or set(receipt) == {"input_ack", "seq", "created", "slot", "generation", "reason"})
+            or type(receipt["input_ack"]) is not bool or type(receipt["seq"]) is not int
+            or not 1 <= receipt["seq"] <= 0x7fffffff
+            or not _ack_v2_binding({key: receipt[key] for key in ("created", "slot", "generation")},
+                                   binding["created"])
+            or any(receipt[key] != binding[key] for key in ("slot", "generation"))
+            or ("reason" in receipt and (not isinstance(receipt["reason"], str) or not receipt["reason"]))
+            or (not receipt["input_ack"] and "reason" not in receipt)):
+        return None
+    return {"t": "input_ack", "version": 2, **receipt}
+
+
+def _ack_v2_h(text, binding):
+    try:
+        message = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if (isinstance(message, dict) and set(message) == {"t", "slot", "generation", "dirty"}
+            and message["t"] == "h" and type(message["dirty"]) is bool
+            and type(message["slot"]) is int and message["slot"] == binding["slot"]
+            and type(message["generation"]) is int and message["generation"] == binding["generation"]):
+        return ptyhost.frame(b"H", {key: message[key] for key in ("slot", "generation", "dirty")})
+    return None
+
+
 async def ws_term(request):
     name = request.match_info["name"]
     if not NAME_RE.fullmatch(name) or not same_origin(request):
@@ -6272,13 +7107,77 @@ async def ws_term(request):
     # pty_size=1: a browser that follows the PTY size another one owns. Its attach claims the
     # size (applied only while no other attachment owns it) and it receives {t:"s"} messages.
     pty_size = request.query.get("pty_size") == "1"
+    ack_query_keys = {"input_ack", "input_ack_mode", "input_ack_created", "input_ack_slot",
+                      "input_ack_generation", "input_ack_nonce", "input_ack_id"}
+    ack_keys = set(request.query) & ack_query_keys
+    if (any(key.startswith("input_ack") and key not in ack_query_keys for key in request.query)
+            or any(len(request.query.getall(key)) != 1 for key in ack_keys)
+            or (ack_keys and request.query.get("input_ack") not in ("1", "2"))):
+        raise web.HTTPBadRequest(text="Invalid acknowledged input negotiation")
+    requested_v2 = request.query.get("input_ack") == "2"
+    requested_ack = request.query.get("input_ack") == "1"
+    ack_id = request.query.get("input_ack_id")
+    ack_created = request.query.get("input_ack_created")
+    v2_request = None
+    if requested_v2:
+        mode = request.query.get("input_ack_mode")
+        allowed = ({"input_ack", "input_ack_mode", "input_ack_created"} if mode == "new"
+                   else {"input_ack", "input_ack_mode", "input_ack_created", "input_ack_slot",
+                         "input_ack_generation", "input_ack_nonce"})
+        if (mode not in ("new", "resume") or ack_keys != allowed
+                or not isinstance(ack_created, str)
+                or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", ack_created)):
+            raise web.HTTPBadRequest(text="Invalid acknowledged input v2 binding")
+        created = float(ack_created)
+        if not math.isfinite(created) or created <= 0:
+            raise web.HTTPBadRequest(text="Invalid acknowledged input incarnation")
+        v2_request = {"mode": mode, "created": created}
+        if mode == "resume":
+            slot = request.query["input_ack_slot"]
+            generation = request.query["input_ack_generation"]
+            nonce = request.query["input_ack_nonce"]
+            if (len(slot) > 2 or len(generation) > 16
+                    or not re.fullmatch(r"(?:0|[1-9][0-9]*)", slot)
+                    or not re.fullmatch(r"[1-9][0-9]*", generation)
+                    or re.fullmatch(r"[0-9a-f]{32}", nonce) is None
+                    or not 0 <= int(slot) < 64 or not 0 < int(generation) <= 2**53 - 1):
+                raise web.HTTPBadRequest(text="Invalid acknowledged input v2 actor")
+            v2_request.update(slot=int(slot), generation=int(generation), actor_nonce=nonce)
+    elif requested_ack and ack_keys != {"input_ack", "input_ack_id", "input_ack_created"}:
+        raise web.HTTPBadRequest(text="Invalid acknowledged input binding")
+    elif ack_keys and not requested_ack:
+        raise web.HTTPBadRequest(text="Invalid acknowledged input negotiation")
+    if requested_ack:
+        if (not isinstance(ack_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,96}", ack_id)
+                or not isinstance(ack_created, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", ack_created)):
+            raise web.HTTPBadRequest(text="Invalid acknowledged input binding")
+        ack_created = float(ack_created)
+        if not math.isfinite(ack_created) or ack_created <= 0:
+            raise web.HTTPBadRequest(text="Invalid acknowledged input incarnation")
     try:
         reader, writer, attach_reply = await ptyhost.attach_info(name, rows, cols,
-                                                                 size="claim" if pty_size else None)
+            size="claim" if pty_size else None,
+            **({"input_ack": (ack_created, ack_id)} if requested_ack else
+               {"input_ack_v2": v2_request} if requested_v2 else {}))
     except (OSError, LookupError, asyncio.IncompleteReadError, asyncio.TimeoutError):
         # IncompleteReadError: an older ptyhost closes some failed requests without replying
         raise web.HTTPNotFound()
     human_input_lease = attach_supports(attach_reply, "human_input_lease_v1")
+    native_ack = attach_reply.get("input_ack") if isinstance(attach_reply, dict) else None
+    acknowledged = (requested_ack
+                    and attach_supports(attach_reply, "acknowledged_input_v1")
+                    and isinstance(native_ack, dict)
+                    and set(native_ack) == {"id", "created"}
+                    and native_ack["id"] == ack_id and native_ack["created"] == ack_created)
+    v2_binding = attach_reply.get("input_ack_v2") if isinstance(attach_reply, dict) else None
+    if requested_v2:
+        if (not attach_supports(attach_reply, "acknowledged_input_v2")
+                or not _ack_v2_binding(v2_binding, v2_request["created"], nonce=True)
+                or (v2_request["mode"] == "resume"
+                    and any(v2_binding[key] != v2_request[key] for key in
+                            ("slot", "generation", "actor_nonce")))):
+            writer.close()
+            raise web.HTTPNotFound()
     # The geometry the host's replay was produced at, for a browser that asks for it; the
     # browser validates it. A host that does not give it sends nothing more.
     geometry = attach_reply.get("replay_geometry") if request.query.get("replay_geometry") == "1" else None
@@ -6291,6 +7190,12 @@ async def ws_term(request):
 
     async def downstream():
         try:
+            if requested_v2:
+                await ws.send_str(json.dumps({"t": "input_capability", "supported": True,
+                    "version": 2, **v2_binding}))
+            elif requested_ack:
+                await ws.send_str(json.dumps({"t": "input_capability",
+                    "supported": acknowledged, "created": ack_created, "id": ack_id}))
             if isinstance(geometry, dict):   # before the replay, the host's first D frame
                 await ws.send_str(json.dumps({"t": "g", "rows": geometry.get("rows"), "cols": geometry.get("cols")}))
             while True:
@@ -6301,6 +7206,22 @@ async def ws_term(request):
                     size = pty_size_message(payload)
                     if size:
                         await ws.send_str(size)
+                elif kind == b"C" and acknowledged:
+                    try:
+                        receipt = json.loads(payload)
+                    except (ValueError, TypeError):
+                        continue
+                    if (isinstance(receipt, dict) and type(receipt.get("input_ack")) is bool
+                            and type(receipt.get("seq")) is int
+                            and 1 <= receipt["seq"] <= 0x7fffffff
+                            and receipt.get("created") == ack_created and receipt.get("id") == ack_id
+                            and (receipt["input_ack"] or
+                                 isinstance(receipt.get("reason"), str))):
+                        await ws.send_str(json.dumps({"t": "input_ack", **receipt}))
+                elif kind == b"C" and requested_v2:
+                    receipt = _ack_v2_receipt(payload, v2_binding)
+                    if receipt:
+                        await ws.send_str(json.dumps(receipt))
                 elif kind == b"X":
                     break
         except (asyncio.IncompleteReadError, ConnectionError):
@@ -6311,15 +7232,30 @@ async def ws_term(request):
     try:
         async for msg in ws:
             if msg.type == web.WSMsgType.BINARY:
-                writer.write(ptyhost.frame(b"D", msg.data))
+                if requested_ack or requested_v2:
+                    if ((requested_v2 or acknowledged) and 5 <= len(msg.data) <= 65540
+                            and 0 < int.from_bytes(msg.data[:4], "big") <= 0x7fffffff):
+                        writer.write(ptyhost.frame(b"I", msg.data))
+                    # Never downgrade an opt-in connection to unacknowledged D.
+                    else:
+                        await ws.send_str(json.dumps({"t": "input_rejected", "reason": "invalid_frame"}))
+                else:
+                    writer.write(ptyhost.frame(b"D", msg.data))
             elif msg.type == web.WSMsgType.TEXT:
-                control = browser_control_frame(msg.data, pty_size)
+                v2_h = _ack_v2_h(msg.data, v2_binding) if requested_v2 else None
+                control = v2_h or browser_control_frame(msg.data, pty_size)
                 # H is an optional extension.  Forwarding it to the former
                 # OCaml owner closes the whole attachment, including ordinary
                 # keyboard D frames.  R remains part of the baseline protocol.
-                if control and (control[:1] != b"H" or human_input_lease):
+                # An opted-in socket must prove its exact incarnation before it
+                # can change a human-input lease as well as before it can type.
+                if control and (control[:1] != b"H" or
+                                (requested_v2 and v2_h is not None) or
+                                (not requested_v2 and human_input_lease and (not requested_ack or acknowledged))):
                     writer.write(control)
-                    if human_input_lease and releases_human_input(msg.data):
+                    if ((requested_v2 and v2_h is not None and
+                         json.loads(msg.data)["dirty"] is False)
+                            or (human_input_lease and releases_human_input(msg.data))):
                         request.app["agent_wakes"].trigger()
             await writer.drain()
     except (ConnectionError, ValueError):
@@ -6571,6 +7507,7 @@ async def manifest(request):
 def make_app(*, session_request_path=None):
     # 1 MB for every body (login form, JSON); uploads stream their own (_read_upload)
     app = web.Application(middlewares=[auth_mw], client_max_size=BODY_MAX)
+    app["refresh_view_protection"] = refresh_document_account_protection
     app[projectartifacts.READER] = projectartifacts.Reader(lambda body: host(body))
     app[projectissues.KEY] = projectissues.Reader(lambda body: host(body))
     app["sockets"] = set()
@@ -6636,7 +7573,7 @@ def make_app(*, session_request_path=None):
         lambda: _agent_wake_live(app["pi_wakes"], app["event_state"], app["claude_wakes"], app["codex_wakes"]),
         wake_notify)
     app.on_startup.append(start_agent_wakes)
-    app.on_startup.append(lambda _app: declared_accounts())   # the labels of the listing's alias sessions
+    app.on_startup.append(_start_listing_account_refresh)
     app.on_cleanup.append(stop_agent_wakes)
     app.on_startup.append(start_watcher)
     app.on_shutdown.append(close_sockets)
@@ -6645,6 +7582,7 @@ def make_app(*, session_request_path=None):
     app.on_cleanup.append(stop_history)
     app.on_startup.append(start_snapshot)
     app.on_cleanup.append(stop_snapshot)
+    app.on_cleanup.append(_stop_listing_account_refresh)
     app.on_cleanup.append(close_session_requests)   # after the snapshot loop, whose extras read it
     app.on_startup.append(start_vibe_hooks_sweeper)
     app.on_cleanup.append(stop_vibe_hooks_sweeper)

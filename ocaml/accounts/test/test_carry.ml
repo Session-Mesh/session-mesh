@@ -251,9 +251,8 @@ let test_round_trip_and_divergence () =
       refused_with "conversation_diverged" (carry ~source ~target C.Claude);
       Alcotest.(check string) "kept" before (read target_path))
 
-(* A failure while writing (a full disk), closing or putting files in place
-   leaves the target as it was: no new file, no temporary file, a replaced
-   copy back. *)
+(* A failed copy preserves files and older copies. Newly made folders without
+   proven cleanup custody may remain and must be reported. *)
 let test_a_failed_copy_changes_nothing () =
   with_root (fun root ->
       let source = claude_account root "a" in
@@ -262,9 +261,16 @@ let test_a_failed_copy_changes_nothing () =
         (fun (label, io) ->
           let target = claude_account root ("t-" ^ label) in
           let before = listing target in
-          refused_with "carry_failed" (carry ~io ~source ~target C.Claude);
-          Alcotest.(check (list string))
-            (label ^ ": as before") before (listing target))
+           refused_with "carry_rollback_incomplete"
+             (carry ~io ~source ~target C.Claude);
+           let after = listing target in
+           List.iter
+             (fun relative ->
+               Alcotest.(check bool) (label ^ ": older entry retained") true
+                 (List.mem relative after))
+             before;
+           Alcotest.(check bool) (label ^ ": no staged copy") false
+             (List.exists (fun relative -> contains relative ".carry-new-") after))
         [
           ("first-write", failing_io ~writes:0 ());
           ("second-write", failing_io ~writes:1 ());
@@ -276,12 +282,19 @@ let test_a_failed_copy_changes_nothing () =
       let target = claude_account root "older" in
       write (Filename.concat target transcript) "{\"line\":1}\n";
       let before = listing target in
-      refused_with "carry_failed"
-        (carry ~io:(failing_io ~renames:2 ()) ~source ~target C.Claude);
-      Alcotest.(check (list string)) "as before" before (listing target);
-      Alcotest.(check string)
-        "the older copy" "{\"line\":1}\n"
-        (read (Filename.concat target transcript)))
+       refused_with "carry_restore_failed"
+         (carry ~io:(failing_io ~renames:2 ()) ~source ~target C.Claude);
+       let after = listing target in
+       List.iter
+         (fun relative ->
+           if relative <> transcript then
+             Alcotest.(check bool) "older target entry retained" true
+               (List.mem relative after))
+         before;
+      let backups = List.filter (fun p -> contains p ".carry-saved-") after in
+      Alcotest.(check int) "one retained recovery copy" 1 (List.length backups);
+      Alcotest.(check string) "the older copy" "{\"line\":1}\n"
+        (read (Filename.concat target (List.hd backups))))
 
 let test_same_folder_is_refused () =
   with_root (fun root ->

@@ -140,8 +140,8 @@ let tool_declaration () =
 let guide_does_not_promise_an_account_switch () =
   let guide = read_file (guide_path ()) in
   Alcotest.(check bool)
-    "says there is no tool that changes the account by itself" true
-    (contains guide "no tool that changes your account by itself");
+    "qualification does not grant permission to switch" true
+    (contains guide "does not grant permission to switch by itself");
   Alcotest.(check bool)
     "names the request tool" true
     (contains guide "`session.account_switch_request`");
@@ -156,6 +156,12 @@ let guide_does_not_promise_an_account_switch () =
   Alcotest.(check bool)
     "the whole conversation goes to the other account" true
     (contains guide "copies your whole conversation");
+  Alcotest.(check bool)
+    "failed-copy recovery depends on a successful restart" true
+    (contains guide "recovery described below applies only if restarting the source succeeds");
+  Alcotest.(check bool)
+    "restart failure requires inspecting the request status" true
+    (contains guide "Before asking for the switch, tell the owner to inspect the request status");
   Alcotest.(check bool)
     "does not say the agent can change account" false
     (contains guide "can change account" || contains guide "switch_supported");
@@ -245,7 +251,7 @@ let () =
             instructions_point_to_the_guide;
           Alcotest.test_case "declared without parameters" `Quick
             tool_declaration;
-          Alcotest.test_case "promises no account switch" `Quick
+          Alcotest.test_case "switch still requires owner permission" `Quick
             guide_does_not_promise_an_account_switch;
           Alcotest.test_case "rejects a path argument" `Quick
             rejects_a_path_argument;

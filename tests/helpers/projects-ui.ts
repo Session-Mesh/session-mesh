@@ -6,8 +6,37 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
-import { chromium, type Browser, type Page } from 'playwright-core';
+import { chromium, type Browser, type Page, type WebSocketRoute } from 'playwright-core';
 import {chromiumLaunchOptions} from './browser-launch.ts';
+
+declare const active: {send(text: string): void; inputAck?: {state: string; pendingBytes: number};
+  conn?: {terminal?: {isOpen(): boolean}}};
+
+export function projectSocketInput(socket: WebSocketRoute, input: (string | Buffer)[]) {
+  const url = new URL(socket.url());
+  const id = url.searchParams.get('input_ack_id');
+  const created = Number(url.searchParams.get('input_ack_created'));
+  assert.equal(url.searchParams.get('input_ack'), '1', 'Projects fixture exercises acknowledged attachments');
+  assert.ok(id && Number.isFinite(created) && created > 0, 'attachment has a listed identity');
+  socket.onMessage(message => {
+    input.push(message);
+    if (!Buffer.isBuffer(message)) return;
+    assert.ok(message.length > 4, 'acknowledged input carries a sequence and nonempty data');
+    socket.send(JSON.stringify({t: 'input_ack', created, id, seq: message.readUInt32BE(0), input_ack: true}));
+  });
+  socket.send(JSON.stringify({t: 'input_capability', created, id, supported: true}));
+}
+
+export async function projectContinuityInput(page: Page, input: (string | Buffer)[], marker: string) {
+  await page.waitForFunction(() => active?.inputAck?.state === 'ready' && active.conn?.terminal?.isOpen());
+  const before = input.length;
+  await page.evaluate(text => active.send(text), marker);
+  await page.waitForFunction(() => active.inputAck?.state === 'ready' && active.inputAck.pendingBytes === 0);
+  const frames = input.slice(before).filter(Buffer.isBuffer);
+  assert.deepEqual(frames.map(frame => frame.subarray(4).toString()), [marker],
+    'exactly one acknowledged input frame reaches the selected Sessions socket');
+  assert.ok(frames[0]!.readUInt32BE(0) > 0, 'the input frame carries a sequence');
+}
 
 export class ProjectsUiFixture {
   private browser!: Browser;
@@ -21,6 +50,7 @@ export class ProjectsUiFixture {
       if (url.pathname === '/api/sessions') {
         response.setHeader('Content-Type','application/json');
         response.end(JSON.stringify({mesh:[{id:'session-one',name:'session-one',kind:'mesh',created:1234,
+          pty_capabilities:['acknowledged_input_v1'],
           cwd:'/tmp/project',pid:123,label:'Session one'}],external:[],home:'/tmp',now:Date.now()/1000,management:{state:'observed',sessions:[]}})); return;
       }
       if (url.pathname.startsWith('/api/')) {
@@ -60,14 +90,14 @@ export class ProjectsUiFixture {
     let output = (_value:string) => { throw new Error('socket not ready'); };
     page.on('request',request=>{const pathname=new URL(request.url()).pathname;if(pathname==='/api/sessions') inventories++;if(pathname==='/static/projects.js'||pathname==='/api/view')projectRequests.push(pathname);});
     await page.routeWebSocket('**/ws/**',socket=>{
-      sockets++; socket.onMessage(message=>input.push(message));
+      sockets++; projectSocketInput(socket, input);
       output = value => socket.send(Buffer.from(value));
       socket.send(Buffer.from('Ready\r\n'+Array.from({length:80},(_,i)=>`line ${i}\r\n`).join('')));
     });
     if(catalogOverride) await page.route('**/static/i18n/en.json*',route=>route.fulfill({json:catalogOverride}));
     if(twoSessions) await page.route('**/api/sessions',route=>route.fulfill({json:{mesh:[
-      {id:'session-one',name:'session-one',kind:'mesh',created:1234,cwd:'/tmp/project',pid:123,label:'Session one'},
-      {id:'session-two',name:'session-two',kind:'mesh',created:5678,cwd:'/tmp/second',pid:124,label:'Session two'},
+      {id:'session-one',name:'session-one',kind:'mesh',created:1234,cwd:'/tmp/project',pid:123,label:'Session one',pty_capabilities:['acknowledged_input_v1']},
+      {id:'session-two',name:'session-two',kind:'mesh',created:5678,cwd:'/tmp/second',pid:124,label:'Session two',pty_capabilities:['acknowledged_input_v1']},
     ],external:[],home:'/tmp',now:Date.now()/1000,management:{state:'observed',sessions:[]}}}));
     await page.goto(this.origin);
     await page.waitForFunction(expected=>typeof meshContext !== 'undefined' && panes.length > 0 && data.mesh.length===expected,twoSessions?2:1);
@@ -124,8 +154,6 @@ export class ProjectsUiFixture {
     if(sameViewport) assert.equal(await page.evaluate('active.term.buffer.active.viewportY === window.sessionViewport'),true);
     assert.equal(await page.evaluate('paneTargets.valid(sessionEvidence.target) && active.id===sessionEvidence.id && data.mesh.find(row=>row.id===active.id||row.name===active.id).created===sessionEvidence.created'),true);
     assert.equal(sockets(),1);
-    await page.evaluate('active.conn.terminal.queueInput(new TextEncoder().encode("continuity"))');
-    await page.waitForTimeout(30);
-    assert.ok(input.some(value=>Buffer.isBuffer(value)&&value.toString()==='continuity'));
+    await projectContinuityInput(page, input, 'continuity');
   }
 }

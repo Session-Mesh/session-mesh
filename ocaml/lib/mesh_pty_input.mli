@@ -15,7 +15,22 @@ val create : string -> t
 val pending : t -> bool
 (** True while an input frame is queued or being written. *)
 
+val terminal_reports_only : string -> bool
+(** Strict complete focus, mouse, cursor-position and status reply grammar.
+    Mixed human bytes (including Enter or paste framing) are not reports. *)
 val enqueue : t -> string -> bool
+val acquire_fence : t -> bool
+(** Only succeeds with no queued or in-flight PTY write. No implicit timeout
+    or release on a caller disconnect. *)
+val release_fence : t -> bool
+(** Refuses release if the writer is closed or an owned control frame is queued
+    or in flight. A closed writer may have discarded an undelivered frame. *)
+val control_pending : t -> bool
+(** An owned control is queued or being written under the fence. *)
+val enqueue_fenced : t -> string -> bool
+(** The host's owned relaunch command drains while fenced. Ordinary input and
+    wakes remain refused. Success acknowledges queue admission, not a completed
+    PTY write or editor readiness. *)
 val enqueue_submit : t -> string -> bool
 (** [enqueue_submit t text] queues [text], a short delay, then an Enter key.
     Any later {!enqueue} while that Enter is still queued withdraws it and

@@ -2,9 +2,10 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 // Actual Mesh app/navigation + checked-in generated assets + real mesh-profile/SQLite.
-// GET /api/config is intercepted to advertise the TEST capability account_settings:true;
-// the real server at this base does NOT advertise it. The SIX /api/accounts/** routes are
-// intercepted using the agreed fixed HTTP contract below. Lifecycle cases also serve a benign
+// GET /api/config is intercepted for negative capability and lifecycle cases; the real
+// server advertises account_settings:true. Most account-route tests intercept the SIX
+// /api/accounts/** routes with real native replies; one case uses the actual server routes.
+// Lifecycle cases also serve a benign
 // local-entry.js so the actual app can be tested before its real MeshUI.startLocalMesh() is
 // called; every other case serves all real generated assets.
 // This does NOT qualify the real server accounts routes/authentication, or provider launch/switching.
@@ -113,6 +114,7 @@ function prepare(where: Scratch): void {
 async function fixture() {
   const mesh = await startMesh('backend-accounts-app-', {
     MESH_PROFILE_CMD: undefined, CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined,
+    MESH_MESH_PROFILE_CMD: HELPER,
     XDG_STATE_HOME: undefined, XDG_DATA_HOME: undefined, OPENCODE_CONFIG: undefined, OPENCODE_CONFIG_DIR: undefined,
   }, prepare);
   const children = new Set<ChildProcess>(), contexts = new Set<BrowserContext>(), tasks = new Set<Promise<void>>();
@@ -188,22 +190,22 @@ async function fixture() {
     }
     await route.fulfill({status: reply.http_status, contentType: 'application/json', headers: {'cache-control': 'no-store'}, body: JSON.stringify(reply)});
   }
-  async function context(lang = 'en', width = 1440, config: {flag?: unknown; status?: number;
-    hold?: ReturnType<typeof deferred<void>>} = {flag: true}): Promise<BrowserContext> {
+  async function context(lang = 'en', width = 1440, config: {flag?: unknown; status?: number; contentType?: string;
+    hold?: ReturnType<typeof deferred<void>>} | null = {flag: true}, realRoutes = false): Promise<BrowserContext> {
     const context = await browser.newContext({locale: lang, viewport: {width, height: 900}, serviceWorkers: 'block'});
     contexts.add(context); context.setDefaultTimeout(8000); context.setDefaultNavigationTimeout(READY_TIMEOUT_MS);
-    await context.route(`${mesh.base}/api/config`, route => {
+    if (config !== null) await context.route(`${mesh.base}/api/config`, route => {
       const task = (async () => {
         assert.equal(route.request().method(), 'GET'); configRequests.push(route.request().url());
         if (config.hold) { configHolds.add(config.hold); await config.hold.promise; configHolds.delete(config.hold); }
         // A private configuration value must never be rendered by this availability check.
-        await route.fulfill({status: config.status ?? 200, contentType: 'application/json', body: JSON.stringify({
+        await route.fulfill({status: config.status ?? 200, contentType: config.contentType ?? 'application/json', body: JSON.stringify({
           private_marker: mesh.confDir, capabilities: config.flag === undefined ? {} : {account_settings: config.flag},
         })}).catch(() => undefined); // Disposal can abort a held config fetch.
       })();
       tasks.add(task); void task.finally(() => tasks.delete(task)); return task;
     });
-    await context.route(`${mesh.base}/api/accounts/**`, route => {
+    if (!realRoutes) await context.route(`${mesh.base}/api/accounts/**`, route => {
       const task = handle(route).catch(async error => { problems.push(String(error)); await route.abort('failed').catch(() => undefined); });
       tasks.add(task); void task.finally(() => tasks.delete(task)); return task;
     });
@@ -337,6 +339,72 @@ test('running app: EN/FR desktop/mobile navigation, explicit four-backend Ask ex
       assert.equal(await page.locator(width === 390 ? '#btn-mobile-actions' : '#btn-accounts').evaluate(el => el === document.activeElement), true);
       await context.close();
     }
+  });
+});
+
+test('running app: advertised capability uses the real owner-cookie routes with synthetic profiles', {skip, timeout: 60_000}, async () => {
+  await withFixture(async lab => {
+    const context = await lab.context('en', 1440, null, true);
+    const traffic: string[] = [];
+    context.on('request', request => {
+      const url = new URL(request.url());
+      if (url.pathname.startsWith('/api/accounts/')) traffic.push(`${request.method()} ${url.pathname}`);
+    });
+    const page = await lab.page(context);
+    await open(page);
+    assert.deepEqual(traffic, ['GET /api/accounts/profiles', 'GET /api/accounts/consent']);
+    assert.ok((await dialog(page).textContent())!.includes(LABEL));
+    await control(page, 'global-skip').check();
+    assert.equal(traffic.length, 2, 'radio selection does not save');
+    await control(page, 'save-global').click(); await status(page, 'en', 'saved');
+    assert.equal(traffic[2], 'POST /api/accounts/consent/set-global');
+    await pair(page, 'opencode-v2');
+    await control(page, 'save-pair').click(); await status(page, 'en', 'saved');
+    assert.equal(traffic[3], 'POST /api/accounts/consent/set-pair');
+    const policy = (await lab.native('consent.get')).data!;
+    assert.equal(policy.global, 'skip');
+    assert.deepEqual(policy.pairs!.map(rule => [rule.a.backend, rule.a.id, rule.b.id, rule.confirmation]),
+      [['opencode-v2', 'a', 'b', 'ask']]);
+    assert.equal(traffic.length, 4, 'no extra request, retry, agent start or switch');
+    await context.close();
+  });
+});
+
+test('running app: launch options and session badges preserve codepoints across four backend presets', {skip, timeout: 60_000}, async () => {
+  await withFixture(async lab => {
+    const context = await lab.context(), page = await lab.page(context);
+    const label = 'A'.repeat(23) + '🪶' + 'B';
+    const {selections, badges} = await page.evaluate((value: string) => {
+      const form = document.querySelector<HTMLFormElement>('#form-new')!;
+      (globalThis as unknown as {fillAccounts: (accounts: unknown[]) => void}).fillAccounts([{
+        id: 'work', label: value, claude: true, codex: true, opencode: true, pi: true,
+        backend_labels: {claude: value, codex: value, 'opencode-v2': value, pi: value},
+      }]);
+      const results: [string, string, string][] = [];
+      for (const kind of ['claude', 'codex', 'opencode', 'pi']) {
+        form.querySelector<HTMLInputElement>(`input[name="preset"][value="${kind}"]`)!.checked = true;
+        form.querySelector<HTMLInputElement>(`input[name="preset"][value="${kind}"]`)!.dispatchEvent(new Event('change', {bubbles: true}));
+        const select = form.querySelector<HTMLSelectElement>('select[name="account"]')!;
+        select.value = 'work';
+        results.push([kind, select.value, select.selectedOptions[0]!.textContent!]);
+      }
+      const session = {account: 'work', account_label: value};
+      const list = document.createElement('div');
+      list.innerHTML = (globalThis as unknown as {accountBadgeHtml: (session: unknown) => string}).accountBadgeHtml(session);
+      document.body.append(list);
+      const header = document.createElement('span');
+      document.body.append(header);
+      (globalThis as unknown as {showAccountBadge: (element: HTMLElement, session: unknown) => void}).showAccountBadge(header, session);
+      const badge = list.querySelector<HTMLElement>('.account-badge')!;
+      const badges = [[badge.textContent, badge.title], [header.textContent, header.title, header.hidden]];
+      list.remove(); header.remove();
+      return {selections: results, badges};
+    }, label);
+    assert.deepEqual(selections, ['claude', 'codex', 'opencode', 'pi'].map(kind => [kind, 'work', 'A'.repeat(23) + '🪶']));
+    const shown = 'A'.repeat(23) + '🪶';
+    assert.deepEqual(badges, [[shown, `Account: ${shown}`], [shown, `Account: ${shown}`, false]]);
+    assert.deepEqual(lab.calls, [], 'labels do not probe or mutate accounts');
+    await context.close();
   });
 });
 
@@ -474,6 +542,94 @@ test('running app: absent/false/nonboolean or refused config capability hides bo
       await context.close();
     }
     assert.equal(lab.configRequests.length, 6);
+  });
+});
+
+test('running app: a failed startup config can recover through a fresh successful configuration dialog', {skip, timeout: 60_000}, async () => {
+  await withFixture(async lab => {
+    const config: {flag: unknown; status: number; contentType?: string} = {flag: true, status: 503};
+    const context = await lab.context('en', 1440, config);
+    const page = await lab.page(context, 'en', true, false);
+    assert.equal(await dialog(page).count(), 0);
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+    assert.equal(await page.locator('[data-mobile-action="btn-accounts"]').getAttribute('hidden'), '');
+    assert.equal(lab.configRequests.length, 1);
+    assert.deepEqual(lab.calls, []);
+
+    config.status = 200; config.flag = false;
+    await page.locator('#btn-config').click();
+    await page.locator('#dlg-config .config-shell').waitFor({state: 'attached'});
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+    assert.equal(await dialog(page).count(), 0);
+    await page.locator('#dlg-config').evaluate((node: HTMLDialogElement) => node.close());
+
+    config.flag = true; config.contentType = 'text/html';
+    await page.locator('#btn-config').click();
+    await page.locator('#dlg-config [role="status"]').waitFor({state: 'attached'});
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+    assert.equal(await dialog(page).count(), 0);
+    await page.locator('#dlg-config').evaluate((node: HTMLDialogElement) => node.close());
+
+    config.contentType = 'application/json';
+    config.flag = true;
+    await page.locator('#btn-config').click();
+    await dialog(page).waitFor({state: 'attached'});
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), null);
+    assert.equal(await page.locator('[data-mobile-action="btn-accounts"]').getAttribute('hidden'), null);
+    assert.equal(lab.configRequests.length, 4, 'only operator-opened config dialogs retry the read');
+    assert.deepEqual(lab.calls, [], 'recovery does not probe account routes or submit writes');
+    await page.locator('#dlg-config').evaluate((node: HTMLDialogElement) => node.close());
+    await open(page);
+    assert.deepEqual(lab.calls.map(call => call.op), ['profiles.list', 'consent.get']);
+    assert.deepEqual(lab.posts(), []);
+    await context.close();
+  });
+});
+
+test('running app: failed account capability discovery offers an explicit retry', {skip, timeout: 60_000}, async () => {
+  await withFixture(async lab => {
+    const config: {flag: unknown; status: number} = {flag: true, status: 503};
+    const context = await lab.context('en', 1440, config);
+    const page = await lab.page(context, 'en', true, false);
+    const retry = page.locator('#btn-accounts-retry');
+    await retry.waitFor({state: 'visible'});
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+    assert.deepEqual(lab.calls, []);
+    config.status = 200;
+    await retry.click();
+    await dialog(page).waitFor({state: 'attached'});
+    assert.equal(await retry.isVisible(), false);
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), null);
+    assert.deepEqual(lab.calls, [], 'discovery sends no account write or profile request');
+    await open(page);
+    assert.deepEqual(lab.calls.map(call => call.op), ['profiles.list', 'consent.get']);
+    assert.deepEqual(lab.posts(), []);
+    await context.close();
+  });
+});
+
+test('running app: a config response received after its dialog closes cannot enable account controls', {skip, timeout: 60_000}, async () => {
+  await withFixture(async lab => {
+    const config: {flag: boolean; status: number; hold?: ReturnType<typeof deferred<void>>} = {flag: true, status: 503};
+    const context = await lab.context('en', 1440, config);
+    const page = await lab.page(context, 'en', true, false);
+    const hold = config.hold = deferred<void>(); config.status = 200;
+    const request = page.waitForRequest(r => new URL(r.url()).pathname === '/api/config');
+    await page.locator('#btn-config').click(); await request;
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+    await page.locator('#dlg-config').evaluate((node: HTMLDialogElement) => node.close());
+    const finished = page.waitForResponse(r => new URL(r.url()).pathname === '/api/config');
+    hold.resolve(); await finished;
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+    assert.equal(await dialog(page).count(), 0);
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), '');
+    assert.deepEqual(lab.calls, []);
+    config.hold = undefined;
+    await page.locator('#btn-config').click();
+    await dialog(page).waitFor({state: 'attached'});
+    assert.equal(await page.locator('#btn-accounts').getAttribute('hidden'), null);
+    assert.equal(lab.configRequests.length, 3);
+    await context.close();
   });
 });
 
