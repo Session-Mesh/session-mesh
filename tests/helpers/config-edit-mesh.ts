@@ -54,14 +54,26 @@ export class ConfigMesh {
       where.env.MESH_LAUNCH_SETTINGS = settingsPath;
     }
     const {child, result, output} = await runServer(where);
-    assert.equal(result.listened, true, result.output);
-    const nativeHost = nativePtyhost();
-    const host = spawn(nativeHost[0], nativeHost.slice(1), {cwd: REPO, stdio: 'ignore',
-      env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C'}});
-    await waitFor('ptyhost socket', 10000, () => fs.existsSync(path.join(where.home, 'run', 'session-mesh', 'ptyhost.sock')));
-    const mesh = new ConfigMesh(where.scratch, where.port, where.confDir, where.home, child, host, output);
-    await mesh.signIn();
-    return mesh;
+    let host: ChildProcess | undefined;
+    try {
+      assert.equal(result.listened, true, result.output);
+      const nativeHost = nativePtyhost();
+      host = spawn(nativeHost[0], nativeHost.slice(1), {cwd: REPO, stdio: 'ignore',
+        env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C'}});
+      await new Promise<void>((resolve, reject) => {
+        host!.once('spawn', resolve);
+        host!.once('error', reject);
+      });
+      await waitFor('ptyhost socket', 10000, () => fs.existsSync(path.join(where.home, 'run', 'session-mesh', 'ptyhost.sock')));
+      const mesh = new ConfigMesh(where.scratch, where.port, where.confDir, where.home, child, host, output);
+      await mesh.signIn();
+      return mesh;
+    } catch (error) {
+      host?.kill('SIGKILL');
+      await stopServer(child);
+      fs.rmSync(where.scratch, {recursive: true, force: true});
+      throw error;
+    }
   }
 
   token(): string { return fs.readFileSync(path.join(this.confDir, 'token'), 'utf8').trim(); }
