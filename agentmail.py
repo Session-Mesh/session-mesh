@@ -231,7 +231,10 @@ def _upgrade_delivery(state):
                 and wake["from_seq"] <= message["seq"] <= wake["through_seq"]]
         if wake["state"] == "injected" or (wake["state"] == "claimed" and not seqs):
             # Preserve completion idempotence for a claimed generation that must no longer dispatch.
-            retained.append({**wake, "state": "injected", "seqs": []})
+            # An empty completion has no surviving member list. Keep its
+            # original identity and range while fitting the v4 count bound.
+            retained.append({**wake, "state": "injected", "seqs": [],
+                             "count": min(wake["count"], MAX_INBOX)})
         elif seqs:
             allowed.difference_update(seqs)  # a legacy range can overlap a later wake
             batches = [seqs[offset:offset + MAX_INBOX] for offset in range(0, len(seqs), MAX_INBOX)]
