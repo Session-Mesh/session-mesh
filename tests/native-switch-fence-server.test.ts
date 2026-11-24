@@ -28,6 +28,7 @@ async def main():
         assert fence['creation_receipt'] == receipt and fence['created'] == 1.0
         fence['created'] = 2.0
         return 'one'
+    real_stop = server._stop_agent
     server.host, server._relaunch_in_place = host, relaunch
     assert await server.relaunch_in_place(raw, '/', 'codex', 'codex', 'codex', switch=switch) == 'one'
     assert [c['op'] for c in calls] == ['list_bound','switch_input_acquire','switch_input_release']
@@ -104,6 +105,29 @@ async def main():
     try: await server.relaunch_in_place(raw, '/', 'codex', 'codex', 'codex', switch=switch); assert False
     except asyncio.CancelledError: pass
     assert [c['op'] for c in calls] == ['list_bound','switch_input_acquire']
+    assert server._native_fence_path(switch[4]).exists()
+    server._forget_native_fence(switch[4])
+    calls.clear()
+    async def signalled_host(message, **kwargs):
+        calls.append(message.copy())
+        if message['op'] == 'list_bound': return [{'name':'one','created':1.0,'creation_receipt':receipt}]
+        if message['op'] == 'switch_input_acquire': return {'ok':True}
+        if message['op'] == 'stop_agent_if': return {'ok':False,'reason':'agent_still_running'}
+        raise AssertionError(message)
+    async def real_stopping(*args, fence, fence_state, **kwargs):
+        await real_stop(raw, 'codex', fence_id=fence['fence_id'], fence_state=fence_state)
+    server.host, server._relaunch_in_place = signalled_host, real_stopping
+    try: await server.relaunch_in_place(raw, '/', 'codex', 'codex', 'codex', switch=switch); assert False
+    except server.NativeFenceRecoveryRequired: pass
+    assert [c['op'] for c in calls] == ['list_bound','switch_input_acquire','stop_agent_if']
+    assert server._native_fence_path(switch[4]).exists()
+    async def mismatchhost(message, **kwargs):
+        if message['op'] == 'list_bound': return [{'name':'one','created':1.0,'creation_receipt':receipt}]
+        if message['op'] == 'switch_input_release': return {'ok':False,'reason':'fence_mismatch'}
+        raise AssertionError(message)
+    server.host = mismatchhost
+    try: await server.api_session_action_recover_fence(Request()); assert False
+    except web.HTTPConflict as exc: assert 'may already be released' in exc.text
     assert server._native_fence_path(switch[4]).exists()
 asyncio.run(main())
 `;
