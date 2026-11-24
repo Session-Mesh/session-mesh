@@ -12,6 +12,7 @@ the text is untrusted data and is never injected into a terminal.
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import math
 import re
@@ -266,17 +267,29 @@ def _upgrade_delivery(state):
     return state
 
 
-def _load():
+def _load(*, recovery_ids=None, expected_digest=None):
+    def invalid():
+        if recovery_ids is not None:
+            raise MailStorageError("Legacy recovery refused: invalid mailbox")
+        return _corrupt()
+
     try:
-        raw = json.loads(FILE.read_text(encoding="utf-8"))
+        contents = FILE.read_bytes()
+        if expected_digest is not None and hashlib.sha256(contents).hexdigest() != expected_digest:
+            raise MailStorageError("Legacy recovery refused: mailbox changed")
+        raw = json.loads(contents)
     except FileNotFoundError:
+        if recovery_ids is not None:
+            raise MailStorageError("Legacy recovery refused: mailbox missing") from None
         return _empty_state()
     except (OSError, ValueError):
-        return _corrupt()
+        return invalid()
+    if recovery_ids is not None and (not isinstance(raw, dict) or raw.get("version") not in (2, 3)):
+        raise MailStorageError("Legacy recovery refused: mailbox is not legacy")
     if isinstance(raw, dict) and raw.get("version") == 1:
         migrated = _migrate_v1(raw)
         if migrated is None:
-            return _corrupt()
+            return invalid()
         return _upgrade_delivery(migrated)
     if isinstance(raw, dict) and raw.get("version") == 2:
         messages_by_target = raw.get("messages") if isinstance(raw.get("messages"), list) else []
@@ -316,7 +329,7 @@ def _load():
             or len(raw["always_policies"]) > MAX_ALWAYS_POLICIES \
             or not isinstance(raw["next_seq"], int) or isinstance(raw["next_seq"], bool) \
             or raw["next_seq"] < 1:
-        return _corrupt()
+        return invalid()
     messages = [_message(value) for value in raw["messages"]]
     legacy = raw["version"] == 3
     wakes = [_wake(value, legacy) for value in raw["wakes"]]
@@ -342,10 +355,38 @@ def _load():
                 and (value["from_seq"] <= message["seq"] <= value["through_seq"] if legacy
                      else message["seq"] in value["seqs"])
                 for message in messages) for value in wakes)):
-        return _corrupt()
+        return invalid()
     state = {"next_seq": raw["next_seq"], "messages": messages, "wakes": wakes,
              "consent_requests": consents, "always_policies": policies}
+    if recovery_ids is not None:
+        chosen = [wake for wake in wakes if wake["notification_id"] in recovery_ids]
+        if len(chosen) != len(recovery_ids) or any(wake["state"] not in {"pending", "claimed"} for wake in chosen):
+            raise MailStorageError("Legacy recovery refused: notification selection changed")
+        # This explicit operator decision confirms manual handling of the
+        # selected wake ranges; it does not remove or authorize messages.
+        for wake in chosen:
+            wake["state"] = "injected"
     return _upgrade_delivery(state) if legacy else state
+
+
+def recover_legacy_wakes(*, notification_ids, expected_digest, acknowledge_manual_handling):
+    """Explicit local recovery after the owner manually handles selected wakes.
+
+    The digest is SHA-256 of the exact file inspected by the owner. Messages and
+    permissions remain unchanged. Selected pending/claimed wake ranges become
+    completed and will not be dispatched. If other blockers remain, nothing is
+    written. This is an operator primitive, not an agent-facing route.
+    """
+    if (acknowledge_manual_handling is not True or not isinstance(expected_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
+            or not isinstance(notification_ids, list) or not notification_ids
+            or len(notification_ids) > MAX_WAKE_BATCHES
+            or any(not isinstance(value, str) or not ID_RE.fullmatch(value) for value in notification_ids)
+            or len(set(notification_ids)) != len(notification_ids)):
+        raise MailInvalidRequest("Explicit manual handling and exact recovery evidence required")
+    with _locked():
+        state = _load(recovery_ids=set(notification_ids), expected_digest=expected_digest)
+        return {"completed": len(notification_ids), "messages": len(state["messages"])}
 
 
 def _save(state):
