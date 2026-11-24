@@ -1,13 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 Atacama <contact@atacama.tech>
 #
-# CodeRabbit review settings. Reviews are advisory: the public CI and a maintainer's review
-# decide a merge. Reference: https://docs.coderabbit.ai/reference/configuration
+# CodeRabbit review settings. Automatic approvals are a pilot for all reviewed branches;
+# they do not enqueue a pull request or replace required CI checks.
+# Reference: https://docs.coderabbit.ai/reference/configuration
 language: en-US
 tone_instructions: "Be brief and specific. Comment on correctness, security and the project rules in CONTRIBUTING.md; skip style nits a linter would catch."
 early_access: false
 reviews:
   profile: chill
+  fail_commit_status: true
+  auto_approvals:
+    enabled: true
+    approve_on_skipped_review: false
+    allow_author_approval: false
+    max_merge_risk: low
   high_level_summary: true
   poem: false
   review_status: true
