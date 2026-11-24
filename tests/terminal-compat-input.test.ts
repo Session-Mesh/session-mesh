@@ -27,6 +27,53 @@ test('wire lease ids isolate adjacent IEEE-754 incarnations without losing tab e
 });
 
 const app = fs.readFileSync('static/app.js', 'utf8');
+test('two reserved pastes keep their FIFO and original lease after pane.inputLease is replaced', () => {
+  const callbacks: (() => void)[] = [], original: string[] = [], replacement: string[] = [];
+  const controls: boolean[] = [], outcomes: string[] = [];
+  const context = vm.createContext({MeshPaneActions: {createPasteDelivery},
+    paneTargets: {valid: () => true}, localTerminalSocketReady: () => true,
+    localMeshEffectsAllowed: () => true, enc: new TextEncoder(), composeOwner: null,
+    setTimeout: (fn: () => void) => {callbacks.push(fn);}, cdlg: {open: false}});
+  const methods = app.slice(app.indexOf('  flushReplayInput(c)'), app.indexOf('  send(str,'));
+  vm.runInContext(`class Pane {${methods}};globalThis.pane = new Pane();`, context);
+  vm.runInContext(app.slice(app.indexOf('const paneInput = '), app.indexOf('const paneMenuHolds = '))
+    + ';globalThis.paneInput = paneInput;', context);
+  const pane = context.pane;
+  const c = pane.conn = {ws: {}, name: 'alpha', created: 1, replaying: true,
+    terminal: {isBound: () => true}};
+  const lease = createHumanInputLease({clientId: 'original',
+    control(_id, dirty) {controls.push(dirty);},
+    data(bytes) {original.push(new TextDecoder().decode(bytes));}});
+  pane.inputLease = lease;
+  pane.term = {paste: (text: string) => context.paneInput.onData(pane, text,
+    () => {throw Error('reserved paste must use its captured operation');})};
+  const binding = context.paneInput.capture(pane, {kind: 'mesh', pane, name: 'alpha', created: 1});
+  assert.ok(binding);
+  for (const text of ['first', 'second']) context.paneInput.deliver(binding, text, true,
+    (result: {kind: string}) => outcomes.push(result.kind));
+  assert.equal(c.queuedHumanInput.length, 2);
+  lease.retire();
+  pane.inputLease = createHumanInputLease({clientId: 'replacement', control() {},
+    data(bytes) {replacement.push(new TextDecoder().decode(bytes));}});
+  c.replaying = false; pane.flushReplayInput(c);
+  assert.deepEqual(original, ['first']);
+  assert.equal(c.queuedHumanInput.length, 1, 'second paste waits for the first delayed Enter');
+  assert.equal(callbacks.length, 1);
+  callbacks.shift()!();
+  assert.deepEqual(original, ['first', '\r', 'second']);
+  assert.equal(callbacks.length, 1);
+  assert.equal(lease.inputDirty, true, 'the second reservation still owns the original barrier');
+  callbacks.shift()!();
+  assert.deepEqual(original, ['first', '\r', 'second', '\r']);
+  assert.deepEqual(replacement, [], 'neither payload nor delayed Enter uses the new lease');
+  assert.deepEqual(outcomes, ['submitted', 'submitted']);
+  assert.deepEqual(controls, [true, false]);
+  assert.equal(lease.inputDirty, false);
+  assert.equal(c.activeHumanInput, null);
+  assert.equal(c.queuedHumanInput.length, 0);
+  assert.equal(callbacks.length, 0);
+});
+
 test('all captured paste destinations reject an unverified transport, including delayed Enter after revocation', () => {
   const callbacks: (() => void)[] = [], wire: Uint8Array[] = [];
   let bound = false;
