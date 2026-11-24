@@ -67,7 +67,10 @@ describe('Mesh account metadata badges in list and terminal header', {skip}, () 
     mesh = await startMesh('account-badge-ui-');
     browser = await chromium.launch(chromiumLaunchOptions(CHROMIUM, ['--no-sandbox', '--mute-audio']));
   });
-  after(async () => { await browser?.close(); await mesh?.stop(); });
+  after(async () => {
+    try { await browser?.close(); }
+    finally { await mesh?.stop(); }
+  });
 
   for (const width of [1440, 390]) for (const language of ['en', 'fr'] as const) {
     test(`${language}, ${width}px: default, named aliases and non-agent transitions`, async () => {
@@ -75,13 +78,15 @@ describe('Mesh account metadata badges in list and terminal header', {skip}, () 
       const phone = width === 390;
       const context = await browser.newContext({locale: wording.locale, viewport: {width, height: 900},
         isMobile: phone, hasTouch: phone, serviceWorkers: 'block'});
-      const page = await context.newPage();
-      page.setDefaultTimeout(READY_TIMEOUT_MS);
-      const problems: string[] = [];
-      const mutations: string[] = [];
-      const sockets: string[] = [];
-      page.on('pageerror', error => problems.push(String(error)));
+      let pageForCleanup: Page | undefined;
       try {
+        const page = await context.newPage();
+        pageForCleanup = page;
+        page.setDefaultTimeout(READY_TIMEOUT_MS);
+        const problems: string[] = [];
+        const mutations: string[] = [];
+        const sockets: string[] = [];
+        page.on('pageerror', error => problems.push(String(error)));
         // All polls, including deltas, get a complete deterministic snapshot.
         // Fulfill directly: no live APIResponse/route.fetch survives teardown.
         await page.route('**/api/sessions*', route => route.fulfill({json: {
@@ -90,8 +95,10 @@ describe('Mesh account metadata badges in list and terminal header', {skip}, () 
             folder: null, rank: index, notice: null})),
           external: [], folders: [], moved: {}, opens: {}, home: mesh.home, now: 2000, gen: 1, full: true,
         }}));
-        await page.route('**/api/{new,stop,restart,adopt}', route => {
-          mutations.push(new URL(route.request().url()).pathname);
+        // Actual control routes: kill also carries restart decisions. Include
+        // action claim/decision, restore/discard and history-based creation.
+        await page.route(url => /^\/api\/(?:new|adopt|kill\/[^/]+|restore(?:\/discard)?|history\/resume|session-actions\/[^/]+\/(?:claim|decision))$/.test(url.pathname), route => {
+          mutations.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
           return route.fulfill({status: 409, body: 'The badge fixture never starts or changes sessions'});
         });
         await page.routeWebSocket('**/ws/**', socket => {
@@ -150,11 +157,11 @@ describe('Mesh account metadata badges in list and terminal header', {skip}, () 
           await shot(page, `${width}-${language}-${session.id}`);
         }
         assert.ok(sockets.length > 0, 'terminal connections are intercepted by the fixture');
-        assert.deepEqual(mutations, [], 'viewing metadata never starts, stops, adopts or switches an agent');
+        assert.deepEqual(mutations, [], 'no creation, kill/restart, adopt, action decision or restore API was requested');
         assert.deepEqual(problems, [], 'no uncaught page error');
       } finally {
-        await page.unrouteAll({behavior: 'wait'});
-        await context.close();
+        try { await pageForCleanup?.unrouteAll({behavior: 'wait'}); }
+        finally { await context.close(); }
       }
     });
   }
