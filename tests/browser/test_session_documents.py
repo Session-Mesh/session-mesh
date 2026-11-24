@@ -9,9 +9,11 @@ request mesh-open would make, with the token the session's shell really holds.""
 import asyncio
 import json
 import os
+import secrets
 
 import aiohttp
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import docs
 import ptyhost
@@ -685,23 +687,54 @@ async def post_on_click(page, messages):
     """One click on #go in the pane's frame (a real user gesture) so that it posts ``messages``,
     a JS expression over the frame's load token ``t``."""
     frame = await view_frame(page)
-    await frame.evaluate(f"""() => {{
-      const t = new URLSearchParams(location.search).get('dt');
-      window.MSGS = {messages};
-      window.clicks = 0;
-    }}""")
-    await focus_frame(page)
-    # Synchronize the opaque child's painted surface before physical input;
-    # DOM/frame readiness can precede its compositor surface. No gesture or
-    # click is dispatched by this target screenshot.
-    await frame.locator("#go").screenshot()
-    await frame.locator("#go").click()
-    if not frame.is_detached():   # a new tab lays the columns out again: the frame reloads
+    nonce = secrets.token_hex(16)
+    await page.evaluate("""([selector, nonce]) => {
+      const source = document.querySelector(selector)?.contentWindow;
+      if (!source) throw new Error('document frame unavailable before click');
+      const witness = {nonce, acknowledged: false, source};
+      witness.listener = (event) => {
+        if (event.source === source && event.data?.testClickAck === nonce) {
+          witness.acknowledged = true;
+          witness.clicks = event.data.clicks;
+        }
+      };
+      window.testClickWitness = witness;
+      addEventListener('message', witness.listener);
+    }""", [PANE_FRAME, nonce])
+    try:
+        await frame.evaluate(f"""() => {{
+          const t = new URLSearchParams(location.search).get('dt');
+          window.MSGS = {messages};
+          window.clicks = 0;
+          document.testClickNonce = {json.dumps(nonce)};
+          document.querySelector('#go').addEventListener('click', () => {{
+            parent.postMessage({{testClickAck: document.testClickNonce, clicks: window.clicks}}, '*');
+          }}, {{once: true}});
+        }}""")
+        await focus_frame(page)
+        # Synchronize the opaque child's painted surface before physical input.
+        await frame.locator("#go").screenshot()
+        await frame.locator("#go").click()
         try:
-            assert await frame.evaluate("window.clicks") == 1
-        except Exception as e:    # detached while asked
-            if not frame.is_detached():
-                raise e
+            await page.wait_for_function("(nonce) => window.testClickWitness?.nonce === nonce && "
+                                         "window.testClickWitness.acknowledged", arg=nonce, timeout=5000)
+            assert await page.evaluate("window.testClickWitness.clicks") == 1
+        except PlaywrightTimeoutError as exc:
+            try:
+                same = not frame.is_detached() and await frame.evaluate(
+                    "(nonce) => document.testClickNonce === nonce", nonce)
+            except Exception:  # execution context was destroyed during replacement
+                same = False
+            reason = "same document" if same else "document replaced or detached"
+            raise AssertionError(f"click not acknowledged by the prepared document ({reason})") from exc
+    finally:
+        await page.evaluate("""(nonce) => {
+          const witness = window.testClickWitness;
+          if (witness?.nonce === nonce) {
+            removeEventListener('message', witness.listener);
+            delete window.testClickWitness;
+          }
+        }""", nonce)
 
 
 async def assert_nothing_shown(page, before, fetched):
