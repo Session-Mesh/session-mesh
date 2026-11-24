@@ -28,6 +28,31 @@ type report = { aliases : int; profiles : int }
 val error_code : error -> string
 (** Fixed, path-free error codes. *)
 
+val create_profile :
+  root:string ->
+  expected_revision:string option ->
+  profile:Yojson.Safe.t ->
+  (string * Yojson.Safe.t, string) result
+(** Register exactly one enabled profile under the migration lock. The caller
+    supplies a backend-qualified profile without [enabled]; returns the new
+    registry revision and its public projection, never private roots. Refuses
+    legacy aliases pending explicit migration and any ambiguous registry. *)
+
+type create_recovery = Unpublished_aborted | Published_reconciled
+
+val recover_created_profile : root:string -> (create_recovery, string) result
+(** Host-only reconciliation of an interrupted first create. For an absent
+    target, verify the durable create intent, exact private single-link stage,
+    bytes, unchanged empty legacy declaration and no migration/retirement state;
+    then discard only that staged candidate. For a published target, reconcile
+    only its verified stage/intent. An absent target and absent stage remain
+    blocked for manual inspection. Never publishes or replays the request.
+    In the unpublished case retire and sync the intent before optional exact
+    staging-inode cleanup; a crash may leave an inert orphan, not a pending
+    intent without evidence. Published reconciliation keeps the destination
+    as evidence while removing the stage before the intent.
+    Returns whether publication had already happened, not a new create receipt. *)
+
 val migrate : root:string -> (report, error) result
 (** Validate the whole legacy file with the alias parser and the whole converted
     registry with the native profile validator before writing anything. Preserve

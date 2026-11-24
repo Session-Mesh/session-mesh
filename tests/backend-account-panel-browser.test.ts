@@ -11,7 +11,7 @@ import {fileURLToPath} from 'node:url';
 import {createServer, type Server} from 'node:http';
 import {build} from 'esbuild';
 import {chromium, type Browser, type Page} from 'playwright-core';
-import {BACKENDS, type Backend, type ConsentMutation, type Policy, type Profile} from '../static/backend-account-model.ts';
+import {BACKENDS, type Backend, type ConsentMutation, type Policy, type Profile, type ProfileMutation} from '../static/backend-account-model.ts';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -25,8 +25,8 @@ let browser: Browser, server: Server, base: string;
 const hostile = '<img src=x onerror=1>';
 
 declare const lab: {
-  calls: ConsentMutation[]; loads: number; profiles: Profile[]; policy: Policy; holdWrite: boolean; holdLoad: boolean;
-  fail: string | null; finishWrite: () => void; finishLoad: () => void;
+  calls: (ConsentMutation | ProfileMutation)[]; loads: number; profiles: Profile[]; policy: Policy; holdWrite: boolean; holdLoad: boolean;
+  fail: string | null; createFail: string | null; readFail: string | null; finishWrite: () => void; finishLoad: () => void;
   panel: {open: () => Promise<void>; close: () => void};
 };
 
@@ -41,7 +41,7 @@ before(async () => {
     };
     const digest = 'a'.repeat(64), reply = data => ({version: 1, ok: true, data});
     const backends = ['claude', 'codex', 'opencode-v2', 'pi'];
-    window.lab = {calls: [], loads: 0, fail: null, holdWrite: false, holdLoad: false,
+    window.lab = {calls: [], loads: 0, fail: null, createFail: null, readFail: null, holdWrite: false, holdLoad: false, registryRevision:digest,
       policy: {version: 1, revision: 0, global: 'ask', pairs: []},
       profiles: backends.flatMap(backend => ['a', 'b', 'c'].map(id => ({backend, id, label: id === 'a' ? ${JSON.stringify(hostile)} : id === 'c' ? '界'.repeat(24) : 'Account ' + id,
         context_revision: digest, enabled: true, switch_qualified: false})))};
@@ -49,7 +49,8 @@ before(async () => {
     const panel = createBackendAccountPanel(document.querySelector('main'), {t, timeoutMs: 10000,
       load: async () => {
         lab.loads++;
-        const result = structuredClone({profiles: reply({configured: true, registry_revision: digest, profiles: lab.profiles}), policy: reply(lab.policy)});
+         const result = structuredClone({profiles: reply({configured: true, registry_revision: lab.registryRevision, profiles: lab.profiles}),
+           policy: lab.readFail ? {version:1,ok:false,http_status:503,code:lab.readFail} : reply(lab.policy)});
         if (lab.holdLoad) return new Promise(resolve => { lab.finishLoad = () => resolve(result); });
         return result;
       },
@@ -75,7 +76,17 @@ before(async () => {
         };
         if (lab.holdWrite) return new Promise(resolve => { lab.finishWrite = () => resolve(commit()); });
         return commit();
-      }
+      },
+      create: async request => {
+        lab.calls.push(structuredClone(request));
+        if (lab.createFail) return {http_status:lab.createFail==='profile-publication-uncertain'?503:409,
+          version:1,ok:false,code:lab.createFail};
+        const {roots,...metadata} = request.profile;
+        const p = {...metadata,enabled:true,context_revision:digest,switch_qualified:false};
+        lab.profiles.push(p);
+        lab.registryRevision='b'.repeat(64);
+        return reply({registry_revision:lab.registryRevision,profile:p});
+      },
     });
     lab.panel = panel;
     document.querySelector('#open').textContent = t('backendAccounts.title');
@@ -109,6 +120,70 @@ async function statusIs(page: Page, lang: string, phase: string) {
   await page.getByRole('status').filter({hasText: catalogs[lang]![`backendAccounts.status.${phase}`]!}).waitFor();
 }
 const control = (page: Page, key: string) => page.locator(`[data-focus="${key}"]`);
+for (const lang of ['en','fr']) test(`component ${lang}: confirmed create with refused reread stays review-only`,{skip},async()=>{
+  const {page,context,errors}=await fixture(lang);
+  try {
+    await control(page,'add-account').click();
+    await control(page,'create-backend').selectOption('claude');
+    await control(page,'create-id').fill('readback-alias');
+    await control(page,'create-label').fill('Readback');
+    await control(page,'create-config').fill('/fixture/config');
+    await control(page,'create-history').fill('/fixture/history');
+    await page.evaluate(()=>{lab.readFail='busy';});
+    await control(page,'save-account').click();
+    await statusIs(page,lang,'verification');
+    assert.equal((await page.getByRole('status').textContent())!.includes(catalogs[lang]!['backendAccounts.status.refused']!),false);
+    assert.equal(await control(page,'create-id').inputValue(),'readback-alias');
+    assert.equal(await control(page,'save-account').isDisabled(),true);
+    assert.equal(await page.evaluate(()=>lab.calls.filter(call=>call.op==='profiles.create').length),1);
+    await page.evaluate(()=>{lab.readFail=null;});
+    await control(page,'refresh').click();
+    await statusIs(page,lang,'ready');
+    assert.equal(await page.evaluate(()=>lab.calls.filter(call=>call.op==='profiles.create').length),1);
+    assert.equal(await page.locator('dialog li').filter({hasText:'readback-alias'}).count(),1);
+    assert.deepEqual(errors,[]);
+  } finally { await context.close(); }
+});
+for (const lang of ['en','fr']) test(`component ${lang}: add-account form has backend roles, no credentials, and survives refusal`,{skip},async()=>{
+  const {page,context,errors}=await fixture(lang);
+  try {
+    await control(page,'add-account').click();
+    await control(page,'create-backend').selectOption('opencode-v2');
+    await control(page,'create-id').fill('new-account');
+    await control(page,'create-label').fill(' \tNew account \t');
+    for(const role of ['config','data','state','cache']) await control(page,`create-${role}`).fill(`/fixture/${role}`);
+    assert.equal(await page.locator('dialog input[type="password"],dialog input[name*="token"],dialog input[name*="secret"]').count(),0);
+    assert.equal(await control(page,'create-history').count(),0);
+    await page.evaluate(()=>{lab.createFail='profile-registry-changed';});
+    await control(page,'save-account').click();
+    await statusIs(page,lang,'conflict');
+    assert.ok((await page.getByRole('status').textContent())!.includes(catalogs[lang]!['backendAccounts.refusal.profile-registry-changed']!));
+    assert.equal(await control(page,'create-id').inputValue(),'new-account');
+    assert.equal(await control(page,'create-state').inputValue(),'/fixture/state');
+    assert.equal(await page.evaluate(()=>lab.profiles.some(p=>p.id==='new-account')),false);
+    await page.evaluate(()=>{lab.createFail='profile-publication-uncertain';});
+    await control(page,'refresh').click();
+    await statusIs(page,lang,'ready');
+    assert.equal(await control(page,'create-id').inputValue(),'new-account');
+    await control(page,'save-account').click();
+    await statusIs(page,lang,'error');
+    assert.equal((await page.getByRole('status').textContent())!.includes(catalogs[lang]!['backendAccounts.status.refused']!),false);
+    assert.equal(await control(page,'create-id').inputValue(),'new-account');
+    assert.equal(await page.evaluate(()=>lab.profiles.some(p=>p.id==='new-account')),false);
+    assert.equal(await control(page,'save-account').isDisabled(),true);
+    await page.evaluate(()=>{lab.createFail=null;});
+    await control(page,'refresh').click();
+    await statusIs(page,lang,'ready');
+    await control(page,'save-account').click(); await statusIs(page,lang,'saved');
+    assert.equal(await page.evaluate(()=>{const last=lab.calls.at(-1);return last?.op==='profiles.create'?last.profile.label:null;}),'New account');
+    assert.equal(await control(page,'create-id').count(),0);
+    assert.equal(await page.locator('dialog li').filter({hasText:'new-account'}).count(),1);
+    await control(page,'add-pair').click();
+    await control(page,'pair-backend').selectOption('opencode-v2');
+    assert.ok((await control(page,'pair-a').locator('option').allTextContents()).some(text=>text.includes('new-account')));
+    assert.deepEqual(errors,[]);
+  } finally {await context.close();}
+});
 async function addPair(page: Page, backend: Backend, reversed = false) {
   await control(page, 'add-pair').click(); await control(page, 'pair-backend').selectOption(backend);
   await control(page, 'pair-a').selectOption(reversed ? 'b' : 'a');

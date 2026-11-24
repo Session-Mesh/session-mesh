@@ -38,6 +38,17 @@ test('fixed mutation routes strip version/op and retain exact native CAS/backend
     assert.deepEqual(init.headers, {Accept: 'application/json', 'Content-Type': 'application/json'});
   });
 });
+test('alias request uses only the fixed authenticated POST and sends metadata without transport credentials', async()=>{
+  const calls:[string,RequestInit][]=[];
+  const api=createBackendAccountApi(async(url,init)=>{calls.push([url,init]);return reply();});
+  const profile={backend:'pi' as const,id:'new',label:'New',roots:{config:'/fixture/config',history:'/fixture/history'}};
+  await api.create!({version:1,op:'profiles.create',registry_revision:null,profile},signal());
+  assert.equal(calls.length,1);
+  assert.equal(calls[0]![0],'/api/accounts/profiles/create');
+  assert.equal(calls[0]![1].credentials,'same-origin');
+  assert.deepEqual(JSON.parse(String(calls[0]![1].body)),{registry_revision:null,profile});
+  assert.deepEqual(calls[0]![1].headers,{Accept:'application/json','Content-Type':'application/json'});
+});
 test('a native conflict remains a native reply, not a transport retry', async () => {
   let calls = 0;
   const api = createBackendAccountApi(async () => {calls++; return reply(409);});

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-import {BACKENDS, createBackendAccountController, effectiveConfirmation, pairKey, ruleStatus,
+import {BACKENDS, PROFILE_ROLES, createBackendAccountController, effectiveConfirmation, pairKey, ruleStatus, validProfileInput,
   type AccountState, type Backend, type BackendAccountPorts, type Confirmation, type PairRule, type Profile,
-  type Snapshot} from './backend-account-model.ts';
+  type ProfileInput, type Snapshot} from './backend-account-model.ts';
 
 export type AccountTranslate = (key: string, params?: Record<string, string | number>) => string;
 export type BackendAccountPanelPorts = BackendAccountPorts & Readonly<{t: AccountTranslate}>;
@@ -31,7 +31,9 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
   const closeButton = button('close', 'close', () => close());
   footer.append(refresh, closeButton); dialog.append(title, description, status, content, footer); host.append(dialog);
   let opener: HTMLElement | null = null, disposed = false, shown: Snapshot | null = null, generation = 0;
-  let editHost: HTMLElement | null = null;
+  let editHost: HTMLElement | null = null, createHost: HTMLElement | null = null;
+  let creation: {backend: Backend; id: string; label: string; roots: Record<string, string>} | null = null;
+  const trimLabel = (value: string) => value.replace(/^[\x09-\x0d\x20]+|[\x09-\x0d\x20]+$/g, '');
   let draft: {backend: Backend; a: string; b: string; confirmation: Confirmation} | null = null;
   let restoreFocus: string | null = null;
   const writable = () => controller.state.phase === 'ready' || controller.state.phase === 'saved';
@@ -45,7 +47,7 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
   function clearDraft() { draft = null; editHost?.replaceChildren(); }
   function close() {
     ++generation;
-    controller.close(); clearDraft(); shown = null;
+    controller.close(); clearDraft(); creation = null; shown = null;
     if (dialog.open) dialog.close();
     if (opener?.isConnected) opener.focus(); opener = null;
   }
@@ -65,6 +67,62 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
     const label = node('label', t(`backendAccounts.${key}`)), select = node('select');
     select.id = `${prefix}-${focus}`; select.dataset.focus = focus; label.htmlFor = select.id;
     return {label, select};
+  }
+  function startCreate() {
+    if (!writable() || !ports.create) return;
+    creation = {backend: 'claude', id: '', label: '', roots: {}};
+    renderCreate(); createHost?.querySelector<HTMLElement>('[data-focus="create-backend"]')?.focus();
+  }
+  function renderCreate() {
+    if (!creation || !createHost) return;
+    createHost.replaceChildren();
+    const fields = node('fieldset'); fields.dataset.controls = '';
+    fields.append(node('legend', t('backendAccounts.createTitle')),
+      node('p', t('backendAccounts.createHelp')));
+    const backend = labelledSelect('backendLabel', 'create-backend');
+    for (const tag of BACKENDS) {
+      const option = node('option', t(`backendAccounts.backend.${tag}`)); option.value = tag; backend.select.append(option);
+    }
+    backend.select.value = creation.backend;
+    backend.select.addEventListener('change', () => {
+      if (!creation || !writable()) return;
+      creation.backend = backend.select.value as Backend; creation.roots = {};
+      renderCreate(); createHost?.querySelector<HTMLElement>('[data-focus="create-backend"]')?.focus();
+    });
+    fields.append(backend.label, backend.select);
+    const save = button('saveAccount', 'save-account', () => {
+      if (!creation || !writable()) return;
+      const input: ProfileInput = {backend: creation.backend, id: creation.id,
+        label: trimLabel(creation.label), roots: {...creation.roots}};
+      if (!validProfileInput(input)) return;
+      const request = generation;
+      void controller.createProfile(input).then(saved => {
+        if (saved && request === generation && dialog.open) {
+          creation = null; createHost?.replaceChildren();
+          content.querySelector<HTMLElement>('[data-focus="add-account"]')?.focus();
+        }
+      });
+    });
+    const input = (key: string, focus: string, value: string, update: (value: string) => void) => {
+      const label = node('label', t(`backendAccounts.${key}`)), control = node('input');
+      control.type = 'text'; control.value = value; control.id = `${prefix}-${focus}`;
+      control.dataset.focus = focus; control.autocomplete = 'off'; label.htmlFor = control.id;
+      control.addEventListener('input', () => { update(control.value); save.disabled = !valid(); });
+      fields.append(label, control);
+    };
+    const valid = () => !!creation && validProfileInput({...creation, label: trimLabel(creation.label)});
+    input('createId', 'create-id', creation.id, value => { if (creation) creation.id = value; });
+    input('createLabel', 'create-label', creation.label, value => { if (creation) creation.label = value; });
+    for (const role of PROFILE_ROLES[creation.backend]) {
+      input(`root.${role}`, `create-${role}`, creation.roots[role] ?? '',
+        value => { if (creation) creation.roots[role] = value; });
+    }
+    const actions = node('div'); actions.className = 'backend-account-actions';
+    actions.append(button('cancelEdit', 'cancel-create', () => {
+      creation = null; createHost?.replaceChildren();
+      content.querySelector<HTMLElement>('[data-focus="add-account"]')?.focus();
+    }), save);
+    fields.append(actions); createHost.append(fields); save.disabled = !valid();
   }
   function radios(key: string, group: string, value: Confirmation, change: (value: Confirmation) => void): HTMLFieldSetElement {
     const fieldset = node('fieldset'); fieldset.append(node('legend', t(`backendAccounts.${key}`)));
@@ -150,6 +208,11 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
       row.append(node('p', t(profile.switch_qualified ? 'backendAccounts.qualificationNotAuthority' : 'backendAccounts.notQualified'))); profiles.append(row);
     }
     profileSection.append(profiles); if (!snapshot.registry.profiles.length) profileSection.append(node('p', t('backendAccounts.noProfiles')));
+    if (ports.create) {
+      profileSection.append(button('addAccount', 'add-account', startCreate));
+      createHost = node('div'); profileSection.append(createHost);
+      if (creation) renderCreate();
+    }
     content.append(profileSection);
     const controls = node('fieldset'); controls.dataset.controls = '';
     controls.append(node('legend', t('backendAccounts.confirmations')));
@@ -185,7 +248,11 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
     const focused = doc.activeElement instanceof HTMLElement ? doc.activeElement.dataset.focus : undefined;
     if (state.phase === 'saving') restoreFocus = focused ?? null;
     const statusKey = state.phase === 'error' && state.snapshot === null ? 'loadError' : state.phase;
-    status.textContent = t(`backendAccounts.status.${statusKey}`);
+    const fieldErrors = ['invalid-request', 'invalid-profile-config', 'unsafe-profile-roots',
+      'profile-registry-changed', 'profile-already-exists', 'profile-migration-required'];
+    status.textContent = t(`backendAccounts.status.${statusKey}`)
+      + (state.refusal && creation && fieldErrors.includes(state.refusal)
+        ? ` ${t(`backendAccounts.refusal.${state.refusal}`)}` : '');
     dialog.setAttribute('aria-busy', String(state.phase === 'loading' || state.phase === 'saving'));
     refresh.disabled = state.phase === 'saving' || state.phase === 'loading';
     if (state.snapshot !== shown) {

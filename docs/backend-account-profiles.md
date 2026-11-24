@@ -1,6 +1,6 @@
 # Native account-profile contract
 
-`mesh-profile` validates profile metadata and manages confirmation preferences. It does not launch an
+`mesh-profile` validates profile metadata, registers aliases and manages confirmation preferences. It does not launch an
 agent or switch a running session. On Linux, the web server can switch a Claude or Codex session between
 native profiles when its PTY host supports bound in-place relaunch. The owner must approve each request.
 macOS, Pi and OpenCode native-profile switches remain unavailable.
@@ -95,7 +95,7 @@ resume/restart for selected sessions that have no trustworthy hook or persisted 
 The default invocation reads one bounded JSON request from stdin and writes one versioned JSON line.
 All objects use closed schemas: unknown or duplicate fields refuse. Operations are `profiles.list`,
 `profiles.resolve`, `consent.get`, `consent.set_global`, `consent.set_pair`, `consent.remove_pair` and
-`consent.reset`. No operation executes a switch.
+`consent.reset` and `profiles.create`. No operation executes a switch.
 
 A pair-management request must explicitly select its backend:
 
@@ -122,9 +122,41 @@ It accepts the same fields without `version` and `op`, adds those fields interna
 process action. The HTTP binding below authenticates the human browser and enforces origin and body
 bounds; the transport mode grants none of that authority.
 
+First alias creation writes a separate, durable typed create intent before linking
+the complete staged registry without replacing another writer's target. On
+success, it removes the staging link and intent. Once an intent exists, a failed
+create does not discard its recorded stage. Run `mesh-profile recover-create`
+**explicitly on the host** after an interruption; it never creates a registry,
+retries the request, or runs through HTTP. Under the migration lock it checks the
+intent, recorded stage/inode and exact bytes, unchanged empty legacy source and
+absence of migration/retirement state. If the target is absent and the exact
+private single-link stage is still present, it retires the intent and syncs the
+directory **before** optionally cleaning only that stage's inode and syncing
+again. It reports `unpublished-aborted`: a new alias requires a **new explicit
+request**. Interruption after intent retirement can leave an
+inert private orphan stage, never a pending intent with both stage and target
+absent. Such an orphan alone is not recovery evidence and is not automatically
+used to publish. If the target is present, it verifies the
+one- or two-link publication, removes only its recorded staging link if needed,
+then retires the intent and reports `published-reconciled`. Ordinary reads reject
+the two-link target
+until this reconciliation. Missing stage **and** target, mismatched evidence or
+changed source remain blocked for manual inspection; the command never infers
+publication from a name or matching bytes alone. The legacy migration intent is
+separate and cannot be reconciled by this command.
+
+A successful `profiles.create` reply reports a completed native creation or
+append, not a successful subsequent settings read. If that read-back fails,
+Settings preserves the draft, labels the state as **verification pending** and
+requires an explicit refresh to inspect the authoritative listing; it does not
+call the write "not saved" or send it again. A
+`profile-publication-uncertain` response does not confirm publication at all:
+the alias **may already have been registered**, so inspect the listing rather
+than retrying automatically. Neither case is the host-only recovery command.
+
 ## HTTP routes
 
-The web server binds six routes to the transport mode, one operation each. Nothing else is
+The web server binds seven routes to the transport mode, one operation each. Nothing else is
 exposed through these routes: `profiles.resolve` (its reply holds folders) and every switch stay on the host, and the
 path chooses the operation, never the body.
 
@@ -135,6 +167,7 @@ live-switch qualification flag.
 | Route | Operation |
 | --- | --- |
 | `GET /api/accounts/profiles` | `profiles.list` |
+| `POST /api/accounts/profiles/create` | `profiles.create` |
 | `GET /api/accounts/consent` | `consent.get` |
 | `POST /api/accounts/consent/set-global` | `consent.set_global` |
 | `POST /api/accounts/consent/set-pair` | `consent.set_pair` |
@@ -176,7 +209,8 @@ live-switch qualification flag.
   characters among `a`-`z`, `0`-`9` and `-`, and not `default`. The label is relayed as the
   helper gives it; the helper checks it when it reads the registry.
 - **A failed write.** A `503` on a write does not say whether the helper committed the change.
-  Read `GET /api/accounts/consent` again and send the next edit with the revision it gives.
+  Re-read the corresponding authoritative state (`GET /api/accounts/profiles` for creation,
+  `GET /api/accounts/consent` for preferences) before any new explicit edit.
 
 The server runs `mesh-profile --http <operation>` as an argument vector, never through a shell, in
 its own process group, with an environment of `MESH_CONF_DIR` (the server's configuration folder,
@@ -185,9 +219,38 @@ At most four run at once. The program is `MESH_MESH_PROFILE_CMD` when set (an ab
 existing file, else none), otherwise `mesh-profile` in `MESH_BIN_DIR`, or in the opam switch's
 `bin` when `MESH_BIN_DIR` is unset.
 
-These routes change preferences only. They never switch an account, and in this version a
+The consent routes change preferences only; profile creation registers an alias. None switches an account, and in this version a
 session's request to change its account is always put to the owner, whatever the global or pair
 preference says: the session-action path does not read the consent store.
+
+### Register an alias
+
+`POST /api/accounts/profiles/create` uses the same owner-cookie/origin checks, JSON body bound,
+helper process isolation and fail-closed reply decoder as the routes above. Its closed body is:
+
+```json
+{"registry_revision":null,"profile":{"backend":"claude","id":"work","label":"Work",
+ "roots":{"config":"/existing/claude","history":"/existing/history"}}}
+```
+
+`registry_revision` is `null` only for a first registry, otherwise the exact digest returned by
+`profiles.list`. `profile` contains exactly backend, id, label and roots; the native helper sets
+`enabled: true`. The root roles are exactly those in the table above. A successful reply has
+`registry_revision` (new digest) and `profile` (the same six public fields as a listing), **never
+roots**. The UI refreshes the list after validating this reply and leaves the form intact on a
+conflict, refusal or uncertain result; it never retries a write. The route does not collect
+credentials, log into a provider, create agent directories, modify preferences or switch sessions.
+Sign in separately through the native CLI. A label is not evidence of sign-in.
+
+The native writer checks the whole candidate registry and existing directory custody, serializes
+with explicit host migration under the permanent registry lock, requires the exact authored-byte
+revision, stages and syncs a complete private file and publishes a first registry without
+clobbering a target. An append replaces only the checked existing registry; source `accounts.json`
+and any retirement marker are left unchanged. Existing real legacy aliases without a retirement
+marker require the host-only `mesh-profile migrate` first; a missing migrated registry, corrupt
+registry or unresolved migration intent is not a fresh installation. A stale digest, duplicate ID
+or migration-required state yields a path-free 409 refusal. No same-user out-of-band filesystem
+race or sudden power-loss durability guarantee is implied by this mechanism.
 
 ## Policy and journal transactions
 

@@ -1819,6 +1819,10 @@ them, and refuses them in `/view`. It does read, as it does for the default acco
 
 ### Declaring aliases
 
+For the native registry, open **Accounts and confirmations → Add account** and supply an alias
+and existing runner directories for the selected backend. This does not sign in to the provider.
+See [Backend account profiles](backend-account-profiles.md#register-an-alias) for creation and recovery.
+
 This legacy format applies before explicit migration to `backend-profiles.json`. A configured profile
 registry takes precedence; editing `accounts.json` after migration does not update that registry.
 
