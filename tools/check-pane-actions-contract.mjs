@@ -272,6 +272,17 @@ try {
   assert.equal(attempts, 2, "transport failure permits exactly a later retry");
   assert.equal(retryPrompts, 1, "a lost decision response never opens a second prompt");
   assert.deepEqual(seenClaimSecrets, [undefined, "retry-claim"], "retry proves possession of the claim secret");
+  let revisionPrompts = 0;
+  const revisions = [];
+  const revisionGate = createSessionRequestGate({ confirm: () => { revisionPrompts += 1; return true; }, notify: () => {},
+    claim: async () => ({ kind: "claimed", claimNonce: "claim" }),
+    decide: async (_id, _approved, _claim, revision) => { revisions.push(revision); return revisions.length < 3 ? "retry" : "settled"; } });
+  const createRequest = { ...request, action: "create", options: "--search", options_revision: "one" };
+  await revisionGate.consider([createRequest]);
+  await revisionGate.consider([createRequest]);
+  await revisionGate.consider([{ ...createRequest, options_revision: "two" }]);
+  assert.deepEqual(revisions, ["one", "one", "two"]);
+  assert.equal(revisionPrompts, 2, "same revision retries silently; a changed revision is confirmed again");
   let claimOwner = null;
   let prompts = 0;
   const competingGate = () => createSessionRequestGate({

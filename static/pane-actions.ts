@@ -805,7 +805,7 @@ export function createSessionRequestGate(ports: Readonly<{
   const inFlight = new Set<string>();
   const claims = new Map<string, string>();
   // The owner's answer, kept with the text it answered: a request whose options changed under it is asked again.
-  const decisions = new Map<string, { approve: boolean; description: string }>();
+  const decisions = new Map<string, { approve: boolean; description: string; revision: string | undefined }>();
   const retryAfter = new Map<string, number>();
   const notifiedLease = new Map<string, number>();
   const now = ports.now ?? Date.now;
@@ -875,12 +875,12 @@ export function createSessionRequestGate(ports: Readonly<{
         retryAfter.delete(value.id); notifiedLease.delete(value.id);
         claims.set(value.id, claim.claimNonce);
         const description = describeSessionRequest(value);
+        const revision = typeof value.options_revision === "string" ? value.options_revision : undefined;
         const answered = decisions.get(value.id);
-        const approve = answered !== undefined && answered.description === description ? answered.approve
+        const approve = answered !== undefined && answered.description === description && answered.revision === revision ? answered.approve
           : ports.confirm(translate("paneActions.sessionRequest.confirm", { description }));
-        decisions.set(value.id, { approve, description });
-        const outcome = await ports.decide(value.id, approve, claim.claimNonce,
-          typeof value.options_revision === "string" ? value.options_revision : undefined);
+        decisions.set(value.id, { approve, description, revision });
+        const outcome = await ports.decide(value.id, approve, claim.claimNonce, revision);
         if (outcome === "settled") handled.add(value.id);
         if (outcome === "stale") {
           handled.add(value.id);

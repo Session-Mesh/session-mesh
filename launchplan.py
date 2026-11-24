@@ -90,6 +90,7 @@ _CONVERSATION_OPTIONS = MappingProxyType({
     "gemini": frozenset({"--resume", "-r", "--session-file", "--session-id"}),
     "agy": frozenset({"--continue", "-c", "--conversation"}),
     "copilot": frozenset({"--resume", "--connect"}),
+    "vibe": frozenset({"--resume", "--continue", "-c"}),
 })
 # The agents whose first argument is a subcommand rather than a prompt. A word from this set anywhere in
 # the owner's options is refused: an option's value (``--search resume``) is not a token Mesh can tell
