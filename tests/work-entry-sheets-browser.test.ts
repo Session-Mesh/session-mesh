@@ -267,9 +267,12 @@ describe('the sheets opened from the entry screen', { skip }, () => {
     } else await toEntry(page);
     const toggle = page.locator('.work-qsection-toggle');
     if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
-    while (await page.locator(`.work-qrow[data-question-id="${id}"]`).count() === 0) {
+    for (let pages = 0; await page.locator(`.work-qrow[data-question-id="${id}"]`).count() === 0; pages++) {
+      assert.ok(pages < 10, `question ${id} not found within 10 pages`);
       const previous = await page.locator('.work-qrow').count();
-      await page.locator('.work-qmore-button').click();
+      const more = page.locator('.work-qmore-button');
+      assert.ok(await more.isVisible() && await more.isEnabled(), `no next page while searching for question ${id}`);
+      await more.click();
       await page.waitForFunction(count => document.querySelectorAll('.work-qrow').length > count, previous, { timeout: 10_000 });
     }
     await openRow(page, id);
