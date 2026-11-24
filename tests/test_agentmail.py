@@ -4,6 +4,7 @@
 """Private, incarnation-bound transport for Mesh agent mailbox envelopes."""
 
 import json
+import hashlib
 
 import pytest
 
@@ -458,6 +459,21 @@ def test_large_legacy_wake_migrates_without_losing_mail_or_claim_identity(mailbo
         with pytest.raises(agentmail.MailStorageError, match="explicit recovery"):
             agentmail.claim_wake(beta, [alpha, beta])
         assert mailbox.read_bytes() == original
+        digest = hashlib.sha256(original).hexdigest()
+        with pytest.raises(agentmail.MailStorageError, match="mailbox changed"):
+            agentmail.recover_legacy_wakes(notification_ids=[wake["notification_id"]],
+                expected_digest="0" * 64, acknowledge_manual_handling=True)
+        with pytest.raises(agentmail.MailInvalidRequest):
+            agentmail.recover_legacy_wakes(notification_ids=[wake["notification_id"]],
+                expected_digest=digest, acknowledge_manual_handling=False)
+        assert mailbox.read_bytes() == original
+        result = agentmail.recover_legacy_wakes(notification_ids=[wake["notification_id"]],
+            expected_digest=digest, acknowledge_manual_handling=True)
+        assert result == {"completed": 1, "messages": count}
+        assert agentmail._load()["messages"] == messages
+        assert agentmail.claim_wake(beta, [alpha, beta]) is None
+        completion = agentmail.mark_wake_injected(beta, wake["notification_id"], [alpha, beta])
+        assert completion["state"] == "injected"
         return
     first = agentmail.claim_wake(beta, [alpha, beta])
     saved = json.loads(mailbox.read_text(encoding="utf-8"))
@@ -503,6 +519,13 @@ def test_large_legacy_wake_over_batch_limit_preserves_original_file(mailbox):
         agentmail.claim_wake(beta, [alpha, beta])
     assert mailbox.read_bytes() == original
     assert not list(mailbox.parent.glob(mailbox.name + ".corrupt*"))
+    result = agentmail.recover_legacy_wakes(notification_ids=["f" * 32],
+        expected_digest=hashlib.sha256(original).hexdigest(), acknowledge_manual_handling=True)
+    assert result == {"completed": 1, "messages": count}
+    migrated = agentmail._load()
+    assert migrated["messages"] == messages
+    assert len(migrated["wakes"]) == agentmail.MAX_WAKE_BATCHES
+    assert agentmail.claim_wake(beta, [alpha, beta]) is None
 
 
 @pytest.mark.parametrize("wake_state", ["injected", "claimed"])
@@ -527,3 +550,18 @@ def test_oversized_legacy_empty_completion_survives_two_loads(mailbox, wake_stat
     assert completion["count"] == agentmail.MAX_INBOX
     assert agentmail._load() == first
     assert not list(mailbox.parent.glob(mailbox.name + ".corrupt*"))
+
+
+def test_legacy_recovery_never_quarantines_invalid_or_missing_data(mailbox):
+    mailbox.parent.mkdir(parents=True)
+    mailbox.write_text('{"version":3,"messages":[]}', encoding="utf-8")
+    original = mailbox.read_bytes()
+    with pytest.raises(agentmail.MailStorageError, match="invalid mailbox"):
+        agentmail.recover_legacy_wakes(notification_ids=["a" * 32],
+            expected_digest=hashlib.sha256(original).hexdigest(), acknowledge_manual_handling=True)
+    assert mailbox.read_bytes() == original
+    assert not list(mailbox.parent.glob(mailbox.name + ".corrupt*"))
+    mailbox.unlink()
+    with pytest.raises(agentmail.MailStorageError, match="mailbox missing"):
+        agentmail.recover_legacy_wakes(notification_ids=["a" * 32],
+            expected_digest="0" * 64, acknowledge_manual_handling=True)
