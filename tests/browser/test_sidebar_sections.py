@@ -62,6 +62,21 @@ class Sessions:
             self.gate.reply_finished.set()
 
 
+async def close_boards(contexts):
+    """Release fixture gates and finish intercepted requests before closing their contexts."""
+    for _, gate in contexts:
+        if gate is not None:
+            gate.ready_release.set()
+            gate.reply_release.set()
+    for context, _ in contexts:
+        try:
+            for tab in context.pages:
+                await tab.unroute_all(behavior="wait")
+            await context.unroute_all(behavior="wait")
+        finally:
+            await context.close()
+
+
 @pytest.fixture
 async def board(browser, mesh):
     """open(specs, **context) -> tab on a mesh that shows these fake sessions.
@@ -70,7 +85,7 @@ async def board(browser, mesh):
 
     async def open_board(specs, gate=None, **options):
         context = await browser.new_context(**({"viewport": {"width": 1000, "height": 700}} | options))
-        contexts.append(context)
+        contexts.append((context, gate))
         await context.add_cookies([{"name": server.COOKIE, "value": server.cookie_value(), "url": mesh.origin}])
         tab = await context.new_page()
         sessions = Sessions(gate)
@@ -91,8 +106,7 @@ async def board(browser, mesh):
         return tab
 
     yield open_board
-    for context in contexts:
-        await context.close()
+    await close_boards(contexts)
 
 
 # the fixture sessions: two waiting (oldest wait first), two unread (newest first), two working
