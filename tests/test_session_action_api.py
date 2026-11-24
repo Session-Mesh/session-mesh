@@ -26,7 +26,7 @@ def agent(sessions):
 
 
 def test_options_projection_keeps_options_and_revision_from_same_save(monkeypatch):
-    entered, release, done = threading.Event(), threading.Event(), threading.Event()
+    entered, release, started, done = threading.Event(), threading.Event(), threading.Event(), threading.Event()
     class PausedOptions(dict):
         def items(self):
             entered.set()
@@ -37,11 +37,16 @@ def test_options_projection_keeps_options_and_revision_from_same_save(monkeypatc
     monkeypatch.setattr(server, "AGENT_OPTIONS_ERROR", None)
     result = []
     reader = threading.Thread(target=lambda: result.append(server.launch_projection()))
-    writer = threading.Thread(target=lambda: (server.apply_agent_options({"codex": ("--after",)}, "after"), done.set()))
+    def write():
+        started.set()
+        server.apply_agent_options({"codex": ("--after",)}, "after")
+        done.set()
+    writer = threading.Thread(target=write)
     reader.start()
     try:
         assert entered.wait(timeout=2)
         writer.start()
+        assert started.wait(timeout=2)
         assert not done.wait(timeout=0.05)
     finally:
         release.set()
