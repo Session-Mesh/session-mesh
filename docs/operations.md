@@ -2096,7 +2096,12 @@ these fails.
 With the setting on, the mesh wakes a Codex session by running `codex queue --thread <conversation id> --message <fixed
 line>` (no `--resume`) for the exact conversation the session holds open. It uses the `codex` first on
 the PATH that sessions get (`~/.local/bin` included) as an absolute path, with a short environment
-(no `MESH_*` name, no secret) and at most 15 seconds and 64 KiB of output. Each attempt is recorded
+(no `MESH_*` name, no secret) and at most 15 seconds and 64 KiB of output. On Linux, it reads the
+foreground agent's initial `CODEX_HOME` and `XDG_RUNTIME_DIR`, and rechecks the host, session,
+process and conversation before launch. If these cannot be identified, it does not launch the wake.
+This is an observation of the process's initial environment: it cannot detect every subsequent
+in-process change, and the final recheck is not atomic with starting `codex queue`. On other platforms
+the account context cannot yet be established and this wake is withheld. Each attempt is recorded
 in `codex-queue-wakes.json` in the configuration folder (0600) before the process starts and is never
 repeated: a session whose attempt failed shows the unconfirmed mark until its inbox is read. A session
 that was alive when the state file was found damaged (the file is kept next to it as

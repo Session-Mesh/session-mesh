@@ -5150,11 +5150,36 @@ def _codex_threads(listed, wanted):
 
 
 async def _codex_thread(name, created):
-    """The exact conversation of one live Codex incarnation right now, or None."""
+    """A fresh Linux startup-context observation bound to the foreground agent, or None.
+
+    This is not atomic with launching the queue process; the opt-in wake remains
+    experimental and unsupported where the agent's startup context cannot be read.
+    """
+    before = await ptyhost.host_identity()
+    if before is None:
+        return None
     listed = await host({"op": "list"})
     if not _valid_ptyhost_list(listed):
         return None
-    return (await asyncio.to_thread(_codex_threads, listed, {(name, created)})).get((name, created))
+    matches = [item for item in listed if item["name"] == name and item["created"] == created]
+    if len(matches) != 1:
+        return None
+    def observe():
+        item = matches[0]
+        agent = discover.describe(discover.snapshot(), item["pid"])["agent"]
+        if (not agent or agent.get("type") != "codex" or agent.get("foreground") is not True
+                or agent.get("identity_source") != "open_rollout"):
+            return None
+        context = agentwake._codex_startup_context(agent.get("pid"))
+        if context is None:
+            return None
+        binding = {"host": before, "session": name, "created": created,
+                   "nonce": item["meta"].get("nonce"), "thread": agent.get("session_id"), **context}
+        return binding if agentwake._valid_wake_binding(binding) else None
+    binding = await asyncio.to_thread(observe)
+    if binding is None or await ptyhost.host_identity() != before:
+        return None
+    return binding
 
 
 async def _codex_exact_for(listed, live, codex_wakes):

@@ -7,6 +7,43 @@ import pytest
 
 import agentmail
 import agentwake
+import ptyhost
+import server
+
+
+def test_codex_queue_binding_uses_foreground_agent_pid_and_exact_host(monkeypatch):
+    thread = "0cb916db-26aa-40f2-86b5-1ba81b225fd2"
+    row = {"name": "target", "created": 1.0, "pid": 100, "cwd": "/tmp", "activity": 0.0,
+           "attached": 0, "meta": {"nonce": "a" * 32}}
+    agent = {"type": "codex", "pid": 200, "foreground": True, "identity_source": "open_rollout",
+             "session_id": thread}
+    seen = []
+    async def host(_request):
+        return [row]
+    async def host_identity():
+        return "42:123"
+    def context(pid):
+        seen.append(pid)
+        return {"home": "/synthetic/account", "runtime": "/synthetic/runtime", "pid": pid, "start": "100"}
+    monkeypatch.setattr(server, "host", host)
+    monkeypatch.setattr(ptyhost, "host_identity", host_identity)
+    monkeypatch.setattr(server.discover, "snapshot", lambda: {})
+    monkeypatch.setattr(server.discover, "describe", lambda _procs, _sid: {"agent": agent})
+    monkeypatch.setattr(agentwake, "_codex_startup_context", context)
+    binding = asyncio.run(server._codex_thread("target", 1.0))
+    assert seen == [200] and binding["pid"] == 200 and binding["thread"] == thread
+    agent["foreground"] = False
+    assert asyncio.run(server._codex_thread("target", 1.0)) is None
+    agent["foreground"] = True
+    agent["identity_source"] = "cwd_unique"
+    assert asyncio.run(server._codex_thread("target", 1.0)) is None
+    assert asyncio.run(server._codex_thread("target", 2.0)) is None
+    agent["identity_source"] = "open_rollout"
+    identities = iter(["42:123", "42:124"])
+    async def changed_host():
+        return next(identities)
+    monkeypatch.setattr(ptyhost, "host_identity", changed_host)
+    assert asyncio.run(server._codex_thread("target", 1.0)) is None
 
 
 def identity(name, created, agent="codex", wake_capable=None):

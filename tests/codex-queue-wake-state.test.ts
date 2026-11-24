@@ -29,7 +29,10 @@ LOG = ROOT / "runs.log"
 STATE = ROOT / "state.json"
 THREAD = "0cb916db-26aa-40f2-86b5-1ba81b225fd2"
 def queue(enabled=True, clock=None):
-    async def verify(name, created): return THREAD
+    async def verify(name, created):
+        return {"host": "42:123", "session": name, "created": created, "nonce": "a" * 32,
+                "pid": 24, "start": "100", "thread": THREAD,
+                "home": str(ROOT / name), "runtime": str(ROOT / "runtime")}
     return agentwake.CodexQueue(STATE, lambda: {"PATH": str(BIN)}, verify, timeout=5, enabled=enabled,
                                 **({"clock": clock} if clock else {}))
 def post(q, name, created, n):
@@ -111,7 +114,7 @@ print(json.dumps({"same": agentwake._same_wake_binding(binding, dict(binding)), 
   assert.deepEqual(result.malformed, Array(7).fill(false));
 });
 
-test('characterize unbound aliases: the verifier does not supply an account home', () => {
+test('unbound aliases do not launch a wake when the verifier cannot establish a home', () => {
   const result = scenario(`
 (BIN / "codex").write_text("#!/bin/sh\\nprintf '%s\\n' \\\"\u0024{CODEX_HOME-unset}\\\" >> " + str(LOG) + "\\n")
 import ptyhost
@@ -123,11 +126,48 @@ def send(name, n, account):
     return asyncio.run(q.post({"name": name, "created": 1.0, "notification_id": "%032x" % n,
                                "account": account}, {"thread": THREAD}))
 answers = [send("a", 1, "alpha"), send("b", 2, "beta")]
-print(json.dumps({"answers": answers, "homes": LOG.read_text().splitlines()}))
+print(json.dumps({"answers": answers, "ran": LOG.exists(), "recorded": STATE.exists()}))
+`);
+  assert.deepEqual(result.answers, [{ok: false, reason: 'account_unverified'}, {ok: false, reason: 'account_unverified'}]);
+  assert.equal(result.ran, false);
+  assert.equal(result.recorded, false);
+});
+
+test('queue receives each verified synthetic home and runtime without persisting them', () => {
+  const result = scenario(`
+(BIN / "codex").write_text("#!/bin/sh\\nprintf '%s|%s\\n' \\\"\u0024CODEX_HOME\\\" \\\"\u0024XDG_RUNTIME_DIR\\\" >> " + str(LOG) + "\\n")
+async def verify(name, created):
+    return {"host": "42:123", "session": name, "created": created, "nonce": "a" * 32,
+            "pid": 24 if name == "alpha" else 25, "start": "100", "thread": THREAD,
+            "home": str(ROOT / name), "runtime": str(ROOT / "runtime")}
+q = agentwake.CodexQueue(STATE, lambda: {"PATH": str(BIN), "MESH_SECRET": "synthetic-secret"}, verify, enabled=True)
+answers = [post(q, "alpha", 1.0, 1), post(q, "beta", 2.0, 2)]
+print(json.dumps({"answers": answers, "homes": LOG.read_text().splitlines(),
+                  "state": STATE.read_text(), "root": str(ROOT)}))
 `);
   assert.deepEqual(result.answers, [ACCEPTED, ACCEPTED]);
-  // This witnesses the existing limitation, not that either wake reached its target.
-  assert.deepEqual(result.homes, ['unset', 'unset']);
+  assert.deepEqual(result.homes, [`${result.root}/alpha|${result.root}/runtime`, `${result.root}/beta|${result.root}/runtime`]);
+  assert.equal(result.state.includes(result.root), false);
+  assert.equal(result.state.includes('synthetic-secret'), false);
+});
+
+test('a changed binding after recording is not launched or automatically replayed', () => {
+  const result = scenario(`
+calls = [0]
+async def verify(name, created):
+    calls[0] += 1
+    return {"host": "42:123", "session": name, "created": created, "nonce": "a" * 32,
+            "pid": 24, "start": "100", "thread": THREAD,
+            "home": str(ROOT / ("alpha" if calls[0] == 1 else "beta")), "runtime": str(ROOT / "runtime")}
+q = agentwake.CodexQueue(STATE, lambda: {"PATH": str(BIN)}, verify, enabled=True)
+first = post(q, "a", 1.0, 1)
+again = post(q, "a", 1.0, 1)
+print(json.dumps({"first": first, "again": again, "runs": runs(), "calls": calls[0]}))
+`);
+  assert.deepEqual(result.first, UNCONFIRMED);
+  assert.deepEqual(result.again, UNCONFIRMED);
+  assert.equal(result.runs, 0);
+  assert.equal(result.calls, 2);
 });
 
 test('a repair is a durable marker: a restart before any retain still runs nothing, and a post is refused meanwhile', () => {
