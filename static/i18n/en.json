@@ -2195,6 +2195,8 @@
   "server.optionsAgentOnly": "Options are for a known agent only",
   "server.optionsUnknownPreset": "Unknown agent preset: {preset}",
   "server.optionsEmptyArgument": "An option is empty: quote its value if it is meant to be empty.",
+  "server.approvedOptionsUnavailable": "The approved launch options are unavailable. Request approval again.",
+  "server.optionsRevisionRequired": "The launch options revision is required. Refresh the request and try again.",
   "new.optionsStored": "Stored default, applied first: {options}",
   "new.optionsStoredNone": "No stored default for {agent}.",
   "work.dep.preview": "Preview {id}",

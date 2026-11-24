@@ -2210,6 +2210,8 @@
   "server.optionsAgentOnly": "Les options ne s'appliquent qu'à un agent connu",
   "server.optionsUnknownPreset": "Preset d'agent inconnu : {preset}",
   "server.optionsEmptyArgument": "Une option est vide : mettez sa valeur entre guillemets si elle doit être vide.",
+  "server.approvedOptionsUnavailable": "Les options de lancement approuvées sont indisponibles. Demandez une nouvelle approbation.",
+  "server.optionsRevisionRequired": "La révision des options de lancement est requise. Actualisez la demande et réessayez.",
   "new.optionsStored": "Défaut enregistré, appliqué d’abord : {options}",
   "new.optionsStoredNone": "Aucun défaut enregistré pour {agent}.",
   "work.dep.preview": "Aperçu de {id}",
