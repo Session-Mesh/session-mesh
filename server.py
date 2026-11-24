@@ -4808,6 +4808,8 @@ async def _execute_session_action(item):
     if item["action"] == "create":
         if item["preset"] not in AGENT_PRESETS:
             raise web.HTTPConflict(text=f"Agent {item['preset']} is disabled in the configuration")
+        # Unreadable defaults refuse every fresh launch; execution still uses only the approved snapshot.
+        stored_options(item["preset"])
         agent = launchplan.agent_type(item["preset"])
         options = item.get("_approved_options")
         if not isinstance(options, list) or any(not isinstance(token, str) for token in options):

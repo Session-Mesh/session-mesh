@@ -63,8 +63,9 @@ async def test_create_approval_binds_options_across_save_and_repeated_decision(
     assert observed == [["--before"]]
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-async def test_recovered_create_executes_approved_options_not_current_options(tmp_path, monkeypatch, legacy):
+@pytest.mark.parametrize("legacy, options_error", [(False, None), (True, None), (False, "unreadable")])
+async def test_recovered_create_executes_approved_options_not_current_options(
+        tmp_path, monkeypatch, legacy, options_error):
     path = tmp_path / "actions.sqlite3"
     first = sessionrequests.Requests(path, clock=lambda: 10.0)
     source = {"id": "alpha", "created": 1.0, "agent": "codex", "cwd": str(Path.home())}
@@ -78,7 +79,7 @@ async def test_recovered_create_executes_approved_options_not_current_options(tm
     first.close()
     recovered = sessionrequests.Requests(path, clock=lambda: 11.0)
     monkeypatch.setattr(server, "AGENT_OPTIONS", {"codex": ("--different",)})
-    monkeypatch.setattr(server, "AGENT_OPTIONS_ERROR", None)
+    monkeypatch.setattr(server, "AGENT_OPTIONS_ERROR", options_error)
     monkeypatch.setattr(server, "LAUNCH_SETTINGS", SimpleNamespace(allows_cwd=lambda _cwd: True))
     calls = []
 
@@ -93,7 +94,10 @@ async def test_recovered_create_executes_approved_options_not_current_options(tm
     monkeypatch.setattr(server, "new_session", create)
     app = {"session_requests": recovered, "session_action_tasks": {}}
     result = await server._run_session_action(app, made["id"])
-    if legacy:
+    if options_error:
+        assert result["state"] == "failed" and calls == []
+        assert "The stored launch options cannot be read" in result["result"]["error"]
+    elif legacy:
         assert result["state"] == "failed" and calls == []
         assert "Approved launch options unavailable" in result["result"]["error"]
     else:
