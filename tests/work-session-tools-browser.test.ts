@@ -24,7 +24,15 @@ test('current Work Projects attach canonical IDs, preserve receipts and detach a
   try {
     await mesh.start();await mesh.newShell('canonical-tools');
     const page=await mesh.openPage('canonical-tools',{width:1440,height:900},()=>{
-      sessionStorage.setItem('mesh.workView',JSON.stringify({schema:2,place:{project:'P-5e6f',tab:'reprise'},drafts:{}}));
+      sessionStorage.setItem('mesh.workView',JSON.stringify({schema:2,place:{project:'P-5e6f',tab:'board'},drafts:{}}));
+      const start=window.setTimeout.bind(window);
+      window.setTimeout=((action:TimerHandler,delay=0,...args:unknown[])=>{
+        const id=start(action,delay,...args);
+        if(delay===15000)(window as any).runCanonicalProjectPoll=()=>{
+          clearTimeout(id);if(typeof action==='function')action(...args);
+        };
+        return id;
+      }) as typeof window.setTimeout;
     });
     await page.locator('#btn-projects').click();
     const tools=page.locator('.work-project > .work-session-tools');
@@ -59,6 +67,19 @@ test('current Work Projects attach canonical IDs, preserve receipts and detach a
       await route.continue();
     });
     await tools.getByRole('button',{name:'Detach session tools',exact:true}).click();
+    await tools.getByRole('button',{name:'Check uncertain save',exact:true}).click({trial:true});
+    await page.evaluate(()=>(window as any).pendingAttachmentControl=document.querySelector('.work-project > .work-session-tools'));
+    fs.appendFileSync(path.join(tracker,'events','2026-11.hosta.jsonl'),'\n'+JSON.stringify({
+      ts:'2026-11-12T00:00:00Z',task:'P-5e6f',type:'set',field:'title',to:'Refreshed canonical project'})+'\n');
+    await page.evaluate(()=>{
+      const now=Date.now.bind(Date);Date.now=()=>now()+6000;
+      (window as any).runCanonicalProjectPoll();
+    });
+    await page.locator('.work-crumb-title').filter({hasText:'Refreshed canonical project'}).waitFor();
+    assert.equal(await page.evaluate(()=>(window as any).pendingAttachmentControl===
+      document.querySelector('.work-project > .work-session-tools')),true,'background polling preserves the pending-intent control');
+    assert.equal(await tools.getByRole('button',{name:'Attach session tools',exact:true}).isDisabled(),true);
+    assert.equal(await tools.getByRole('button',{name:'Check uncertain save',exact:true}).isDisabled(),false);
     await tools.getByRole('button',{name:'Check uncertain save',exact:true}).click();
     await tools.getByRole('button',{name:'Detach session tools',exact:true}).waitFor({state:'detached'});
     assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).bindings.length,0,'receipt-bound detach rereads without replay');
