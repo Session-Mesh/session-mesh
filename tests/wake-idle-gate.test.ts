@@ -152,7 +152,7 @@ describe('PTY host: the Enter of a notice is withdrawn during its delay', () => 
     await pause(200);
     assert.deepEqual(await wake(), {ok: true, accepted: true});
     await waitFor('the notice submitted', 5000, () => lines().length === 2);
-    assert.match(lines()[1], /^# Mesh: new message\(s\) waiting; check mail\.inbox/);
+    assert.match(lines()[1], /^# Mesh: new message\(s\) waiting; the user approved reading mail\. Please check mail\.inbox/);
     terminal.close();
   });
 
