@@ -1054,5 +1054,53 @@
   {
     "pattern": "^Flow journal unavailable$",
     "key": "server.flowJournalUnavailable"
+  },
+  {
+    "pattern": "^Native\\ switch\\ requires\\ a\\ durable\\ request\\ identity;\\ nothing\\ was\\ stopped$",
+    "key": "server.switchRequestIdentity"
+  },
+  {
+    "pattern": "^Session\\ identity\\ unavailable;\\ nothing\\ was\\ stopped$",
+    "key": "server.switchSessionIdentity"
+  },
+  {
+    "pattern": "^Session input is not quiescent \\((?<reason>.+)\\); nothing was stopped$",
+    "key": "server.switchInputBusy"
+  },
+  {
+    "pattern": "^Switch\\ recovery\\ evidence\\ already\\ exists;\\ inspect\\ the\\ session$",
+    "key": "server.switchEvidenceExists"
+  },
+  {
+    "pattern": "^Conflicting\\ restart\\ bindings;\\ nothing\\ was\\ stopped$",
+    "key": "server.switchBindingConflict"
+  },
+  {
+    "pattern": "^Explicit\\ fence\\ release\\ required$",
+    "key": "server.switchReleaseRequired"
+  },
+  {
+    "pattern": "^Switch\\ is\\ still\\ executing$",
+    "key": "server.switchExecuting"
+  },
+  {
+    "pattern": "^No\\ recoverable\\ fence\\ evidence$",
+    "key": "server.switchEvidenceMissing"
+  },
+  {
+    "pattern": "^Fence\\ evidence\\ does\\ not\\ match\\ the\\ request$",
+    "key": "server.switchEvidenceMismatch"
+  },
+  {
+    "pattern": "^Original\\ terminal\\ not\\ found;\\ fence\\ was\\ not\\ released$",
+    "key": "server.switchTerminalMissing"
+  },
+  {
+    "pattern": "^Fence\\ may\\ already\\ be\\ released\\ or\\ held\\ by\\ another\\ owner;\\ inspect\\ before\\ another\\ action$",
+    "key": "server.switchReleaseAmbiguous"
+  },
+  {
+    "pattern": "^Fence\\ release\\ could\\ not\\ be\\ confirmed;\\ inspect\\ before\\ another\\ action$",
+    "key": "server.switchReleaseUnconfirmed"
   }
 ]

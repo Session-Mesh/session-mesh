@@ -2315,5 +2315,17 @@
   "flow.newer": "Événements suivants",
   "flow.latestOf": "Dernier de {n} événements",
   "server.flowJournalUnavailable": "Journal de flux indisponible",
-  "flow.depositMeaning": "Dépôt accepté. Le consentement de l’opérateur, la remise du contenu et la lecture ne sont pas confirmés."
+  "flow.depositMeaning": "Dépôt accepté. Le consentement de l’opérateur, la remise du contenu et la lecture ne sont pas confirmés.",
+  "server.switchRequestIdentity": "La bascule nécessite une identité de demande durable ; rien n’a été arrêté.",
+  "server.switchSessionIdentity": "Identité de session indisponible ; rien n’a été arrêté.",
+  "server.switchInputBusy": "La saisie de la session n’est pas au repos ({reason}) ; rien n’a été arrêté.",
+  "server.switchEvidenceExists": "Une preuve de récupération existe déjà ; inspectez la session.",
+  "server.switchBindingConflict": "Les identités de redémarrage sont incompatibles ; rien n’a été arrêté.",
+  "server.switchReleaseRequired": "La levée explicite du verrou est requise.",
+  "server.switchExecuting": "La bascule est toujours en cours.",
+  "server.switchEvidenceMissing": "Aucune preuve de verrou récupérable.",
+  "server.switchEvidenceMismatch": "La preuve de verrou ne correspond pas à la demande.",
+  "server.switchTerminalMissing": "Terminal d’origine introuvable ; le verrou n’a pas été levé.",
+  "server.switchReleaseAmbiguous": "Le verrou est peut-être déjà levé ou détenu par un autre acteur ; inspectez avant toute autre action.",
+  "server.switchReleaseUnconfirmed": "La levée du verrou n’a pas pu être confirmée ; inspectez avant toute autre action."
 }

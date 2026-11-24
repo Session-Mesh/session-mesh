@@ -206,7 +206,7 @@ def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, s
     async def arrangement(*_args):
         return None
 
-    async def stop(*_args):
+    async def stop(*_args, **_kwargs):
         events.append("stop")
         return 2
 
@@ -223,7 +223,7 @@ def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, s
             raise web.HTTPConflict(text="changed")
         return target_context
 
-    async def start(*_args, context=None, expected_identity=None, validate_default_target=False):
+    async def start(*_args, context=None, expected_identity=None, validate_default_target=False, **_kwargs):
         events.append(("start", context["id"], context["env"]["CODEX_HOME"]))
         if scenario in ("restart_fails_after_carry_failure", "restart_fails_after_copy", "uncertain_carry_restart_fails") and context["id"] == "default":
             raise web.HTTPServiceUnavailable(text="restart unavailable")
@@ -252,28 +252,28 @@ def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, s
     switch = ("work", carry, source_context, target_context)
     if scenario in ('target_start_refused', 'target_start_timeout'):
         with pytest.raises(server.AccountSwitchTargetStartUnconfirmed):
-            asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
+            asyncio.run(server._relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
         assert events == ['validate', 'stop', 'carry', 'target-check', ('start', 'work', '/tmp/target')]
     elif scenario == "source_changed":
         with pytest.raises(server.AccountSwitchRecoveryFailed) as error:
-            asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
+            asyncio.run(server._relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
         assert error.value.code == 'profile-context-changed'
         assert events == ["validate", "stop"]
-    elif scenario in ("restart_fails_after_carry_failure", "restart_fails_after_copy", "uncertain_carry_restart_fails"):
+    elif scenario in ('uncertain_carry', 'uncertain_carry_restart_fails'):
         with pytest.raises(server.AccountSwitchRecoveryFailed) as error:
-            asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
+            asyncio.run(server._relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
+        assert error.value.target_copy_uncertain is True and error.value.target_copy_remains is True
+        assert events == ['validate', 'stop', 'carry'], 'an uncertain carry must not trigger a source or target launch'
+    elif scenario in ("restart_fails_after_carry_failure", "restart_fails_after_copy"):
+        with pytest.raises(server.AccountSwitchRecoveryFailed) as error:
+            asyncio.run(server._relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
         assert error.value.code == ('profile-context-changed' if scenario == 'restart_fails_after_copy' else 'carry_failed')
         assert error.value.target_copy_remains is (scenario != 'restart_fails_after_carry_failure')
-        assert error.value.target_copy_uncertain is (scenario == 'uncertain_carry_restart_fails')
+        assert error.value.target_copy_uncertain is False
         assert ('start', 'default', '/tmp/source') in events
-    elif scenario == 'uncertain_carry':
-        with pytest.raises(server.AccountSwitchUndone) as error:
-            asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
-        assert error.value.target_copy_uncertain is True and error.value.target_copy_remains is True
-        assert 'may remain' in server._switch_undone_text('default', error.value)
     elif scenario != "success":
         with pytest.raises(server.AccountSwitchUndone) as error:
-            asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
+            asyncio.run(server._relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch))
         assert error.value.target_copy_remains is (scenario in ("target_changed", "target_changed_during_launch"))
         if error.value.target_copy_remains:
             assert "target copy remains" in server._switch_undone_text("default", error.value)
@@ -281,7 +281,7 @@ def test_in_place_switch_starts_only_bound_target_or_bound_source(monkeypatch, s
                           *([("start", "work", "/tmp/target")] if scenario == "target_changed_during_launch" else []),
                           ("start", "default", "/tmp/source")]
     else:
-        assert asyncio.run(server.relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch)) == "session"
+        assert asyncio.run(server._relaunch_in_place(source, "/tmp", "codex", "codex", "codex", None, switch)) == "session"
         assert events == ["validate", "stop", "carry", "target-check", ("start", "work", "/tmp/target")]
 
 
@@ -355,7 +355,7 @@ def test_profile_restart_revalidates_the_identity_captured_before_stop(monkeypat
     async def arrangement(*_args):
         return None
 
-    async def stop(*_args):
+    async def stop(*_args, **_kwargs):
         events.append("stop")
         return 2
 
@@ -390,9 +390,10 @@ def test_approval_refuses_another_conversation(monkeypatch):
     assert "Conversation changed" in error.value.text
 
 
-def test_partial_stop_is_reported_as_uncertain(monkeypatch):
+@pytest.mark.parametrize('reason', ['agent_stop_uncertain', 'agent_still_running', 'stale_incarnation'])
+def test_partial_stop_is_reported_as_uncertain(monkeypatch, reason):
     async def host(*_args, **_kwargs):
-        return {"ok": False, "reason": "agent_stop_uncertain"}
+        return {"ok": False, "reason": reason}
     monkeypatch.setattr(server, "host", host)
     with pytest.raises(web.HTTPServiceUnavailable) as error:
         asyncio.run(server._stop_agent({"name": "session", "created": 1}, "codex"))
