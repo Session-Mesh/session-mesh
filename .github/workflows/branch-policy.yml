@@ -17,13 +17,18 @@ on:
   pull_request:
     # The label changes, and `edited`, which is also a change of base branch or of description.
     types: [opened, reopened, synchronize, edited, labeled, unlabeled]
+  # The merge queue: the temporary merge-group commit carries no pull request, so on it each job
+  # reads the queued pull request again (its number is in the queue's branch name) and applies the
+  # same rule to its labels and base as they are then, with the base's copy of the tool.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
 
 concurrency:
   group: branch-policy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 defaults:
   run:
@@ -37,15 +42,40 @@ jobs:
     name: semver label
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name != 'merge_group'
         with:
           persist-credentials: false
+      # The merge queue: the checkout is the queue's temporary commit, whose history holds the
+      # event's `base_sha`; the base's copy of the tool is the one that runs (see below).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'merge_group'
+        with:
+          persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: A pull request to main carries exactly one semver label
+        if: github.event_name != 'merge_group'
         run: node --experimental-strip-types tools/branch-policy/branch-policy.ts semver-label
+      # The queue's commit carries no pull request, so the tool reads the number from the queue's
+      # branch name and the pull request's labels and base through the API as they are now, and
+      # applies the same rule. The tool is the base's copy, never the queued commits'; the commit
+      # id reaches the script through the environment, never the script text.
+      - name: Merge queue, the labels and base of the queued pull request as they are now
+        if: github.event_name == 'merge_group'
+        env:
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tool="$RUNNER_TEMP/branch-policy.ts"
+          git cat-file blob "$QUEUE_BASE_SHA:tools/branch-policy/branch-policy.ts" > "$tool"
+          node --experimental-strip-types "$tool" semver-label
 
   release-guard:
     name: release branch guard
@@ -56,12 +86,28 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name != 'merge_group'
         with:
           persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'merge_group'
+        with:
+          persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: A pull request to a release branch is a backport of a merged patch
+        if: github.event_name != 'merge_group'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node --experimental-strip-types tools/branch-policy/branch-policy.ts release-guard
+      - name: Merge queue, the base and description of the queued pull request as they are now
+        if: github.event_name == 'merge_group'
+        env:
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tool="$RUNNER_TEMP/branch-policy.ts"
+          git cat-file blob "$QUEUE_BASE_SHA:tools/branch-policy/branch-policy.ts" > "$tool"
+          node --experimental-strip-types "$tool" release-guard

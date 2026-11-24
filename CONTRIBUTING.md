@@ -192,6 +192,18 @@ The public CI runs on every push to `release/**` as it does on `main`, and CodeR
 pull requests to `release/**`. The maintainers' setup of the backport workflow is in
 [docs/development.md](docs/development.md#backports-to-the-maintenance-branch).
 
+### Merge queues and backports
+
+The required checks support GitHub's `merge_group` event. If maintainers enable a merge queue for a
+base branch, the queue checks the proposed commits on its current base. The branch policy checks
+read the queued pull request's current base, labels and backport description again; the CLA check
+uses the base's checker and maintainer list. The description check remains warning-only and was
+run on the pull request before enqueueing. A check that cannot establish its inputs fails.
+
+Supporting a merge queue does not enable one or automatically enqueue a backport. Backports remain
+subject to the review and branch rules above. CodeRabbit's status is advisory under the current
+rules; the queue support does not make it a required check.
+
 ### How a pull request is merged
 
 Pull requests are merged with **"Rebase and merge" only**: GitHub replays the commits of the pull

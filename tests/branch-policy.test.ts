@@ -13,7 +13,7 @@ import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {blockOf, jobBlocks, parseLines} from './public-ci-workflow-lib.ts';
 import {checkWorkflow} from './public-ci-workflow-checks.ts';
-import {factsFromEvent, githubFilesLookup, githubLookup, MAX_REFERENCES, REGISTER_FILES, releaseGuardProblems, semverLabelProblems, type PullRequestFacts,
+import {factsFromEvent, factsFromQueue, githubFactsLookup, githubFilesLookup, githubLookup, MAX_REFERENCES, queueEntryFromEvent, REGISTER_FILES, releaseGuardProblems, semverLabelProblems, type PullRequestFacts,
   type SourcePull}
   from '../tools/branch-policy/branch-policy.ts';
 
@@ -47,6 +47,48 @@ describe('semver label of a pull request to main', () => {
 
   test('does not judge a pull request to another branch', () => {
     for (const base of ['release/latest', 'topic', 'Main', 'main/x']) assert.deepEqual(semverLabelProblems(pull(base, [])), [], base);
+  });
+});
+
+describe('merge queue entry', () => {
+  const SHA = 'a'.repeat(40);
+  const event = (headRef: unknown) => ({merge_group: {head_ref: headRef}});
+
+  test('the pull request number and base come from the queue branch name, with or without refs/heads/', () => {
+    assert.deepEqual(queueEntryFromEvent(event(`refs/heads/gh-readonly-queue/main/pr-12-${SHA}`)), {baseRef: 'main', number: 12});
+    assert.deepEqual(queueEntryFromEvent(event(`gh-readonly-queue/release/latest/pr-7-${SHA}`)), {baseRef: 'release/latest', number: 7});
+  });
+
+  test('anything else is not an entry (fail closed)', () => {
+    const bad = [`refs/heads/main`, `gh-readonly-queue/main/pr-0-${SHA}`, `gh-readonly-queue/main/pr-07-${SHA}`, `gh-readonly-queue/main/pr--1-${SHA}`,
+      `gh-readonly-queue/main/pr-1-${'A'.repeat(40)}`, `gh-readonly-queue/main/pr-1-${'a'.repeat(39)}`, `gh-readonly-queue/main/pr-1-${SHA}\n`,
+      `x/gh-readonly-queue/main/pr-1-${SHA}`, `gh-readonly-queue//pr-1-${SHA}`, `gh-readonly-queue/main/pr-9999999999-${SHA}`, '', 5, null];
+    for (const headRef of bad) assert.equal(queueEntryFromEvent(event(headRef)), null, String(headRef));
+    assert.equal(queueEntryFromEvent({}), null);
+    assert.equal(queueEntryFromEvent({merge_group: 'x'}), null);
+    assert.equal(queueEntryFromEvent(null), null);
+  });
+
+  test('the facts are the pull request as it is now, and the same rules judge them as at its own event', async () => {
+    const entry = {merge_group: {head_ref: `refs/heads/gh-readonly-queue/main/pr-12-${SHA}`}};
+    const lookup = (labels: string[], base = 'main') => async () => ({baseRef: base, labels, body: ''});
+    assert.deepEqual(semverLabelProblems(await factsFromQueue(entry, lookup(['semver: patch']))), semverLabelProblems(pull('main', ['semver: patch'])));
+    assert.deepEqual(semverLabelProblems(await factsFromQueue(entry, lookup([]))), semverLabelProblems(pull('main', [])));
+    assert.equal(semverLabelProblems(await factsFromQueue(entry, lookup([]))).length, 1);
+    await assert.rejects(factsFromQueue(entry, lookup([], 'release/latest')), /no longer targets/);
+    await assert.rejects(factsFromQueue(entry, async () => null), /not a pull request of this repository/);
+    await assert.rejects(factsFromQueue({merge_group: {head_ref: 'x'}}, lookup([])), /not a merge queue branch/);
+  });
+
+  test('githubFactsLookup reads labels, base and description, and refuses an answer that does not fit', async () => {
+    const answer = (status: number, json: unknown) => (async () => new Response(JSON.stringify(json), {status})) as unknown as typeof fetch;
+    const good = {number: 12, base: {ref: 'main'}, labels: [{name: 'semver: patch'}], body: null};
+    assert.deepEqual(await githubFactsLookup('http://x', 'o/r', 't', answer(200, good))(12), {baseRef: 'main', labels: ['semver: patch'], body: '', number: 12});
+    assert.equal(await githubFactsLookup('http://x', 'o/r', 't', answer(404, {}))(12), null);
+    await assert.rejects(githubFactsLookup('http://x', 'o/r', 't', answer(500, {}))(12), /GitHub answered 500/);
+    await assert.rejects(githubFactsLookup('http://x', 'o/r', 't', answer(200, {...good, number: 13}))(12), /unexpected answer/);
+    await assert.rejects(githubFactsLookup('http://x', 'o/r', 't', answer(200, {...good, labels: [{name: 3}]}))(12), /unexpected answer/);
+    await assert.rejects(githubFactsLookup('http://x', 'o/r', 't', answer(200, {...good, labels: undefined}))(12), /unexpected answer/);
   });
 });
 
@@ -358,10 +400,10 @@ describe('.github/workflows/branch-policy.yml', () => {
     assert.deepEqual(checkWorkflow(text, 'policy'), []);
   });
 
-  test('runs on pull_request, again when a label changes or the base branch is edited, and never on a push', () => {
+  test('runs on pull_request and the merge queue, again when a label changes or the base branch is edited, and never on a push', () => {
     assert.match(text, /^ {2}pull_request:\n(?: {4}#.*\n)* {4}types: \[opened, reopened, synchronize, edited, labeled, unlabeled\]\n/m);
     const onIndex = lines.findIndex((line) => line.indent === 0 && line.key === 'on');
-    assert.deepEqual(blockOf(lines, onIndex).filter((line) => line.indent === 2).map((line) => line.key), ['pull_request']);
+    assert.deepEqual(blockOf(lines, onIndex).filter((line) => line.indent === 2).map((line) => line.key), ['pull_request', 'merge_group']);
   });
 
   test('has the two checks, each running on every pull request (a skipped job would pass a required check)', () => {
@@ -371,21 +413,24 @@ describe('.github/workflows/branch-policy.yml', () => {
     for (const name of ['semver-label', 'release-guard']) assert.doesNotMatch(job(name), /^ {4}if:/m, `${name} must never be skipped as a whole`);
   });
 
-  test('runs the policy tool of the checkout, with the read-only token for the guard only', () => {
+  test('runs the policy tool of the checkout on a pull request and the base\'s copy on the queue; the token only where the API is read', () => {
     assert.match(job('semver-label'), /node --experimental-strip-types tools\/branch-policy\/branch-policy\.ts semver-label$/m);
     assert.match(job('release-guard'), /node --experimental-strip-types tools\/branch-policy\/branch-policy\.ts release-guard$/m);
-    assert.doesNotMatch(job('semver-label'), /github\.token|GITHUB_TOKEN/);
-    assert.match(job('release-guard'), /^ {10}GITHUB_TOKEN: \$\{\{ github\.token \}\}$/m);
-    assert.match(job('release-guard'), /^ {4}permissions:\n {6}contents: read\n {6}pull-requests: read$/m);
+    const pullRequestStep = job('semver-label').split(/^ {6}- /m).find((step) => /branch-policy\.ts semver-label$/m.test(step) && !step.includes('"$tool"')) ?? '';
+    assert.ok(pullRequestStep.length > 0);
+    assert.doesNotMatch(pullRequestStep, /github\.token|GITHUB_TOKEN/, 'the label check of a pull request needs no token');
+    for (const name of ['semver-label', 'release-guard']) {
+      assert.match(job(name), /^ {10}GITHUB_TOKEN: \$\{\{ github\.token \}\}$/m);
+      assert.match(job(name), /^ {4}permissions:\n {6}contents: read\n {6}pull-requests: read$/m);
+    }
     assert.match(text, /^permissions:\n {2}contents: read\n/m);
   });
 
-  test('is refused when the run\'s token reaches another job, an action or a write scope', () => {
+  test('is refused when the run\'s token reaches an action, the whole workflow or a write scope', () => {
+    const setupNode = '      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0\n        with:\n          node-version: ${{ env.NODE_VERSION }}\n';
     const faults: [string, string, RegExp][] = [
-      ['the token in the label job', text.replace('        run: node --experimental-strip-types tools/branch-policy/branch-policy.ts semver-label',
-        '        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: node --experimental-strip-types tools/branch-policy/branch-policy.ts semver-label'), /explicit token/],
-      ['the token under an action', text.replace('      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0\n        with:\n          node-version: ${{ env.NODE_VERSION }}\n      - name: A pull request to a release',
-        '      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        with:\n          node-version: ${{ env.NODE_VERSION }}\n      - name: A pull request to a release'), /explicit token/],
+      ['the token under an action', text.replace(setupNode, '      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        with:\n          node-version: ${{ env.NODE_VERSION }}\n'), /explicit token/],
+      ['the token for the whole workflow', text.replace('env:\n  NODE_VERSION: "24"', 'env:\n  NODE_VERSION: "24"\n  GITHUB_TOKEN: ${{ github.token }}'), /explicit token/],
       ['a write scope', text.replace('      pull-requests: read', '      pull-requests: write'), /pull-requests: write is not read-only/],
       ['a secret', text.replace('GITHUB_TOKEN: ${{ github.token }}', 'GITHUB_TOKEN: ${{ secrets.PAT }}'), /secret reference/],
       ['the description in an expression', text.replace('        run: node --experimental-strip-types tools/branch-policy/branch-policy.ts semver-label',

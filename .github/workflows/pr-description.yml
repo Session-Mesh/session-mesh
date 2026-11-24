@@ -15,13 +15,17 @@ name: pr-description
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
+  # The merge queue: the description was checked on the pull request; the temporary merge-group
+  # commit has none, so the job reports its required name with a success and checks nothing more.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
 
 concurrency:
   group: pr-description-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 defaults:
   run:
@@ -38,17 +42,25 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      # On the merge queue this is the only step that runs: the required name is reported.
+      - name: Merge queue, already judged on the pull request
+        if: github.event_name == 'merge_group'
+        run: echo "merge group, judged on the pull request before it was queued"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name != 'merge_group'
         with:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: github.event_name != 'merge_group'
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install gitleaks (pinned, SHA-256 checked)
+        if: github.event_name != 'merge_group'
         run: |
           bash .github/scripts/install-gitleaks.sh "$RUNNER_TEMP/gitleaks"
           echo "MESH_LEAK_GITLEAKS=$RUNNER_TEMP/gitleaks/gitleaks" >> "$GITHUB_ENV"
       - name: leak-guard on the description (warning mode)
+        if: github.event_name != 'merge_group'
         env:
           BODY: ${{ github.event.pull_request.body }}
         run: |

@@ -257,6 +257,18 @@ which the `cla` job accepts. The `release branch guard` only checks that the des
 to a merged `semver: patch` pull request: the review of the backport pull request is what checks
 that the changes are the same.
 
+**Preparing a maintenance merge queue.** Before requiring a queue on `release/latest`, land the
+`merge_group` workflow support and its policy and CLA checkers on that branch through the backport
+process. Confirm that every required check runs on a merge group, including a failure when the native
+host job fails; `tests/merge-queue-workflow.test.ts` exercises the queue steps. Then maintainers can
+configure a queue with rebase merges and verify it on a backport. This preparation does not itself
+change branch rules or enqueue pull requests.
+
+CodeRabbit is advisory under the current branch rules. Automatic enqueueing needs a separate,
+fail-closed policy for its review on the exact pull-request head and must not bypass the required
+checks. Check whether the integration reports a required status on merge-group commits before
+requiring that status there; an absent check would stall the queue.
+
 **Cutting a patch release (0.x.y).** The changelog entry of the release is prepared as a pull
 request to `main`, labelled `semver: patch`, that adds the heading of the release and its entries
 to `CHANGELOG.md` and nothing else: merged to `main`, it is backported to `release/latest` like any
