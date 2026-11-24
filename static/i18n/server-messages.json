@@ -922,5 +922,13 @@
   {
     "pattern": "^Options hold an empty argument$",
     "key": "server.optionsEmptyArgument"
+  },
+  {
+    "pattern": "^Approved launch options unavailable; request approval again$",
+    "key": "server.approvedOptionsUnavailable"
+  },
+  {
+    "pattern": "^Launch options revision required$",
+    "key": "server.optionsRevisionRequired"
   }
 ]
