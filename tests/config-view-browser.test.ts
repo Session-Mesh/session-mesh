@@ -40,6 +40,14 @@ async function signedIn(locale: string, width: number, height = 900): Promise<{p
   const context = await browser.newContext({locale, viewport: {width, height}, permissions: ['clipboard-read', 'clipboard-write']});
   contexts.push(context);
   const page = await context.newPage();
+  // Exercise an older server that does not advertise account settings even
+  // when the current server used by this fixture supports them.
+  await page.route('**/api/config', async route => {
+    const response = await route.fetch();
+    const config = await response.json();
+    await route.fulfill({response, json: {...config,
+      capabilities: {...config.capabilities, account_settings: false}}});
+  });
   const problems: string[] = [];
   const calls: string[] = [];
   const accountCalls: string[] = [];
