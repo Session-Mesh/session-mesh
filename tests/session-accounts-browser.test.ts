@@ -21,6 +21,7 @@ declare function openNew(): Promise<void>;
 declare function fillAccounts(accounts: unknown[]): void;
 declare const meshContext: {storagePrefix: string};
 declare const data: {home?: string};
+declare const newAccountsReady: boolean;
 declare const store: {set(key: string, value: unknown): void};
 
 const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD
@@ -150,10 +151,14 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
     pages.push(page);
     await page.waitForFunction(() => typeof data.home === 'string' && data.home.length > 0);
     let calls = 0; const sent: Record<string, unknown>[] = [];
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const held = new Promise<void>(resolve => { entered = resolve; });
     await page.route('**/api/new', route => { sent.push(route.request().postDataJSON()); return route.fulfill({status:400,body:'fixture'}); });
     await page.route('**/api/config', async route => {
       if (++calls === 1) return route.fulfill({status:503,body:'unavailable'});
       const response = await route.fetch(); const config = await response.json();
+      entered(); await gate;
       return route.fulfill({response,json:{...config,accounts:[]}});
     });
     try {
@@ -162,11 +167,14 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
       await page.locator('#form-new input[name="cwd"]').fill(mesh.home);
       await submit(page); assert.deepEqual(sent, []);
       assert.match((await page.locator('#new-err').textContent())!, /could not be loaded/i);
-      await page.getByRole('button',{name:'Retry loading accounts'}).click();
-      await page.getByRole('button',{name:'Retry loading accounts'}).waitFor({state:'hidden'});
+      await Promise.all([bounded(held, 'retry account request'), page.getByRole('button',{name:'Retry loading accounts'}).click()]);
+      assert.equal(await page.evaluate(() => newAccountsReady), false);
+      await submit(page); assert.deepEqual(sent, [], 'pending retry must not start a session');
+      release();
+      await page.waitForFunction(() => newAccountsReady);
       await submit(page); await page.waitForFunction(() => document.querySelector('#new-err')?.textContent === 'fixture');
       assert.equal(sent.length, 1); assert.equal(sent[0]!.account, undefined);
-    } finally { await page.unrouteAll({behavior:'wait'}); }
+    } finally { release(); await page.unrouteAll({behavior:'wait'}); }
   });
 
   test('stalled folder suggestions do not block loaded accounts or keep old choices', async () => {
