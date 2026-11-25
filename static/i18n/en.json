@@ -568,6 +568,8 @@
   "mobilePanels.closeTitle": "Close the pane — the session keeps running",
   "mobilePanels.unknownIdentity": "Unknown origin · Rights: not exposed",
   "new.account": "Account",
+  "new.accountLoadFailed": "Accounts could not be loaded. Retry before starting an agent.",
+  "new.accountRetry": "Retry loading accounts",
   "new.accountDefault": "Default account",
   "new.accountGone": "The account {id} chosen last time on this device is no longer declared on the runner: choose an account",
   "new.accountGoneOption": "{id} (no longer declared)",
