@@ -45,8 +45,13 @@ val label : t -> string
 val backend : t -> backend
 (** Exact backend variant, independent of native approval/sandbox presets. *)
 
+val tag : backend -> string
+
 val enabled : t -> bool
 (** Whether resolution is permitted by this registry. *)
+
+val managed : t -> bool
+(** Entry created for capability-gated explicit first launch, not a legacy association. *)
 
 val context_revision : t -> string
 (** Backend/root fingerprint; label and enabled state do not change identity. *)
@@ -66,6 +71,10 @@ val resolve :
   (t, error) result
 (** Reject unknown, disabled, mismatched or stale selections. No default
     fallback. *)
+
+val resolve_managed :
+  registry -> id:string -> backend:backend -> expected_context:string -> (t, error) result
+(** Only managed, enabled entries at the exact supplied context. The caller still checks capability and paths. *)
 
 val validate_roots : ?registry:registry -> ?allow_missing:bool -> t -> (unit, error) result
 (** Check current canonical directory identity, user ownership and no foreign

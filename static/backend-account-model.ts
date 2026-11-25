@@ -6,13 +6,16 @@ export const BACKENDS = ['claude', 'codex', 'opencode-v2', 'pi'] as const;
 export type Backend = typeof BACKENDS[number];
 export type Confirmation = 'ask' | 'skip';
 export type AccountRef = Readonly<{backend: Backend; id: string; context_revision: string}>;
-export type Profile = AccountRef & Readonly<{label: string; enabled: boolean; switch_qualified: boolean}>;
+export type Profile = AccountRef & Readonly<{label: string; enabled: boolean; switch_qualified: boolean; managed?: true}>;
 export type PairRule = Readonly<{a: AccountRef; b: AccountRef; confirmation: Confirmation}>;
 export type Policy = Readonly<{version: 1; revision: number; global: Confirmation; pairs: readonly PairRule[]}>;
 export type Registry = Readonly<{configured: boolean; registry_revision: string | null; profiles: readonly Profile[]}>;
 export type Snapshot = Readonly<{registry: Registry; policy: Policy}>;
 export type ProfileInput = Readonly<{backend: Backend; id: string; label: string; roots: Readonly<Record<string, string>>}>;
 export type ProfileMutation = Readonly<{version: 1; op: 'profiles.create'; registry_revision: string | null; profile: ProfileInput}>;
+export type ProvisionBackend = Exclude<Backend, 'pi'>;
+export type ProvisionInput = Readonly<{backend: ProvisionBackend; label: string}>;
+export type ProvisionMutation = Readonly<{version: 1; op: 'profiles.provision'; registry_revision: string | null; profile: ProvisionInput}>;
 type BaseMutation = Readonly<{version: 1; expected_revision: number}>;
 export type ConsentMutation = BaseMutation & (
   | Readonly<{op: 'consent.set_global'; confirmation: Confirmation}>
@@ -26,12 +29,19 @@ export type BackendAccountPorts = Readonly<{
   /** Adapter authenticates the human request and maps the native request to its agreed transport. */
   mutate: (request: ConsentMutation, signal: AbortSignal) => Promise<unknown>;
   create?: (request: ProfileMutation, signal: AbortSignal) => Promise<unknown>;
+  /** Read-only registry inspection is independent of the native write capability. */
+  inspect?: (signal: AbortSignal) => Promise<unknown>;
+  provision?: Readonly<{backends: readonly ProvisionBackend[];
+    managed?: true;
+    write: (request: ProvisionMutation, signal: AbortSignal) => Promise<unknown>}> | undefined;
   timeoutMs?: number;
 }>;
 export type AccountState = Readonly<{
   phase: 'closed' | 'loading' | 'ready' | 'saving' | 'saved' | 'conflict' | 'refused' | 'error' | 'verification';
   snapshot: Snapshot | null;
+  inspected?: Registry;
   refusal?: string;
+  provisionPending?: 'provisionUncertain' | 'provisionVerification';
 }>;
 
 const invalid = (): never => { throw new Error('invalid-response'); };
@@ -55,7 +65,7 @@ function label(value: unknown): string {
 }
 const asciiLower = (text: string): string => text.replace(/[A-Z]/g, c => c.toLowerCase());
 const CONFLICTS = new Set(['consent-revision-conflict', 'profile-registry-changed', 'profile-context-changed',
-  'profile-already-exists', 'profile-migration-required',
+  'profile-already-exists', 'profile-migration-required', 'profile-provision-unavailable',
   'consent-rule-capacity', 'consent-revision-exhausted']);
 // Native precommit errors and the HTTP route's pre-helper queue refusal. Publication
 // uncertainty is recognized below but is never a definite refusal.
@@ -109,9 +119,13 @@ export function parseProfilesReply(value: unknown): Registry {
   if (!Array.isArray(row.profiles) || row.profiles.length > 128 || (!configured && row.profiles.length !== 0)) return invalid();
   const profiles: Profile[] = [];
   for (const raw of row.profiles) {
-    const p = exact(raw, ['backend', 'id', 'context_revision', 'label', 'enabled', 'switch_qualified']);
+    const managed = !!raw && typeof raw === 'object' && Object.hasOwn(raw, 'managed');
+    const p = exact(raw, ['backend', 'id', 'context_revision', 'label', 'enabled', 'switch_qualified',
+      ...(managed ? ['managed'] : [])]);
+    if (managed && p.managed !== true) return invalid();
     const item: Profile = {backend: backend(p.backend), id: id(p.id), context_revision: digest(p.context_revision),
-      label: label(p.label), enabled: flag(p.enabled), switch_qualified: flag(p.switch_qualified)};
+      label: label(p.label), enabled: flag(p.enabled), switch_qualified: flag(p.switch_qualified),
+      ...(managed ? {managed: true} : {})};
     if (profiles.some(other => other.backend === item.backend && (other.id === item.id || asciiLower(other.label) === asciiLower(item.label)))) return invalid();
     profiles.push(item);
   }
@@ -170,18 +184,58 @@ export function validProfileInput(input: ProfileInput): boolean {
         && input.roots[role]!.split('/').slice(1).every(part => part && part !== '.' && part !== '..'));
   } catch { return false; }
 }
+export function validProvisionInput(input: ProvisionInput): boolean {
+  try {
+    const fields = exact(input, ['backend', 'label']);
+    return backend(fields.backend) !== 'pi' && label(fields.label).length > 0;
+  } catch { return false; }
+}
 function samePolicy(a: Policy, b: Policy): boolean {
   const normalized = (p: Policy) => JSON.stringify({...p, pairs: [...p.pairs].sort((a, b) => pairKey(a.a, a.b).localeCompare(pairKey(b.a, b.b)))});
   return normalized(a) === normalized(b);
 }
 
-export function createBackendAccountController(ports: BackendAccountPorts) {
+export function createBackendAccountController(ports: BackendAccountPorts, provisionJournal?: {
+  load(): string | null; save(value: string | null): void;
+}) {
   let state: AccountState = {phase: 'closed', snapshot: null};
   let generation = 0;
   let active: AbortController | null = null;
+  type Receipt = {revision: string; profile: Profile};
+  type PendingProvision = {snapshot: Snapshot | null; receipt?: Receipt};
+  let pending: PendingProvision | undefined;
+  function restoreProvision(snapshot: Snapshot | null): PendingProvision | undefined {
+    if (!provisionJournal) return;
+    try {
+      const saved = provisionJournal.load();
+      if (saved === null) return;
+      return saved === 'uncertain' ? {snapshot} : {snapshot, receipt: profileReceipt(JSON.parse(saved))};
+    } catch { return {snapshot}; }
+  }
+  pending = restoreProvision(null);
+  function remember(receipt?: Receipt) {
+    provisionJournal?.save(receipt ? JSON.stringify({version: 1, ok: true, data: {
+      registry_revision: receipt.revision, profile: receipt.profile,
+    }}) : 'uncertain');
+  }
+  function clearPending() {
+    provisionJournal?.save(null);
+    pending = undefined;
+  }
   const listeners = new Set<(state: AccountState) => void>();
-  const publish = (next: AccountState) => { state = next; for (const listener of listeners) listener(state); };
+  const publish = (next: AccountState) => {
+    if (pending && next.snapshot) pending.snapshot = next.snapshot;
+    state = pending && next.phase !== 'closed' ? {...next,
+      provisionPending: pending.receipt ? 'provisionVerification' : 'provisionUncertain'} : next;
+    for (const listener of listeners) listener(state);
+  };
   const writable = () => (state.phase === 'ready' || state.phase === 'saved') && !!state.snapshot;
+  const currentRegistry = () => state.snapshot?.registry ?? state.inspected;
+  const canAssociate = () => (state.phase === 'ready' || state.phase === 'saved') && !!currentRegistry();
+  async function inspect(signal: AbortSignal): Promise<Registry> {
+    if (!ports.inspect) throw new Error('registry-inspection-unavailable');
+    return parseProfilesReply(await ports.inspect(signal));
+  }
   const timeoutMs = Math.max(1, Math.min(60_000, ports.timeoutMs ?? 15_000));
   async function bounded<T>(run: (signal: AbortSignal) => Promise<T>, abort: AbortController): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -202,10 +256,26 @@ export function createBackendAccountController(ports: BackendAccountPorts) {
     const request = ++generation, abort = new AbortController(); active = abort;
     publish({phase: 'loading', snapshot: null});
     try {
+      if (pending) {
+        const operation = pending;
+        const registry = await bounded(inspect, abort);
+        if (request !== generation) return;
+        const snapshot = operation.snapshot ? {registry, policy: operation.snapshot.policy} : null;
+        const receipt = operation.receipt;
+        if (receipt && verifies(registry, receipt)) {
+          clearPending();
+          publish({phase: 'saved', snapshot, ...(!snapshot ? {inspected: registry} : {})});
+        } else {
+          // An unchanged registry, or a plausible matching row without a
+          // validated receipt, cannot identify this particular write.
+          publish({phase: 'ready', snapshot, ...(!snapshot ? {inspected: registry} : {})});
+        }
+        return;
+      }
       const raw = await bounded(ports.load, abort);
       const snapshot = {registry: parseProfilesReply(raw.profiles), policy: parsePolicyReply(raw.policy)};
       if (request === generation) publish({phase: 'ready', snapshot});
-    } catch { if (request === generation) publish({phase: 'error', snapshot: null}); }
+    } catch { if (request === generation) publish({phase: 'error', snapshot: pending?.snapshot ?? null}); }
     finally { if (active === abort) active = null; }
   }
   async function write(request: ConsentMutation, expected: Policy): Promise<boolean> {
@@ -225,6 +295,51 @@ export function createBackendAccountController(ports: BackendAccountPorts) {
   }
   const base = (): BaseMutation => ({version: 1, expected_revision: state.snapshot!.policy.revision});
   const next = (): Policy => ({...state.snapshot!.policy, revision: state.snapshot!.policy.revision + 1});
+  function profileReceipt(value: unknown): Receipt {
+    const created = exact(data(value), ['registry_revision', 'profile']);
+    const revision = digest(created.registry_revision);
+    const parsed = parseProfilesReply({version: 1, ok: true,
+      data: {configured: true, registry_revision: revision, profiles: [created.profile]}});
+    return {revision, profile: parsed.profiles[0]!};
+  }
+  function verifies(registry: Registry, receipt: Receipt): boolean {
+    return registry.registry_revision === receipt.revision
+      && registry.profiles.some(p => JSON.stringify(p) === JSON.stringify(receipt.profile));
+  }
+  async function saveProfile(profile: ProfileInput): Promise<boolean> {
+      const snapshot = state.snapshot, registry = currentRegistry()!, token = ++generation;
+      const abort = new AbortController(); active = abort;
+      const current = {snapshot, ...(!snapshot ? {inspected: registry} : {})};
+      publish({phase: 'saving', ...current});
+      let receiptValidated = false;
+      try {
+        const receipt = profileReceipt(await bounded(signal => ports.create!({version: 1, op: 'profiles.create',
+          registry_revision: registry.registry_revision, profile}, signal), abort));
+        const answer = receipt.profile;
+        if (answer.backend !== profile.backend || answer.label !== profile.label
+          || !answer.enabled || answer.switch_qualified || answer.id !== profile.id) return invalid();
+        receiptValidated = true;
+        if (pending) {
+          // Association is a distinct write; its receipt must never settle a creation journal.
+          const registry = await bounded(inspect, abort);
+          if (!verifies(registry, receipt) || token !== generation) return invalid();
+          publish({phase: 'saved', snapshot: snapshot ? {...snapshot, registry} : null,
+            ...(!snapshot ? {inspected: registry} : {})});
+          return true;
+        }
+        const raw = await bounded(ports.load, abort);
+        const refreshed = {registry: parseProfilesReply(raw.profiles), policy: parsePolicyReply(raw.policy)};
+        if (!verifies(refreshed.registry, receipt)) return invalid();
+        if (token !== generation) return false;
+        publish({phase: 'saved', snapshot: refreshed}); return true;
+      } catch (error) {
+        if (token === generation) publish({
+          phase: receiptValidated ? 'verification' : error instanceof ReplyFailure ? error.conflict ? 'conflict' : 'refused' : 'error',
+          ...current, ...(!receiptValidated && error instanceof ReplyFailure ? {refusal: error.code} : {}),
+        });
+        return false;
+      } finally { if (active === abort) active = null; }
+  }
   return {
     get state() { return state; },
     subscribe(listener: (state: AccountState) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -232,33 +347,45 @@ export function createBackendAccountController(ports: BackendAccountPorts) {
     refresh,
     close() { ++generation; active?.abort(); active = null; publish({phase: 'closed', snapshot: null}); },
     async createProfile(profile: ProfileInput): Promise<boolean> {
-      if (!writable() || !ports.create || !validProfileInput(profile)) return false;
-      const snapshot = state.snapshot!, token = ++generation, abort = new AbortController(); active = abort;
-      const request: ProfileMutation = {version: 1, op: 'profiles.create',
-        registry_revision: snapshot.registry.registry_revision, profile};
+      if (!canAssociate() || !ports.create || !validProfileInput(profile)) return false;
+      return saveProfile(profile);
+    },
+    async provisionProfile(profile: ProvisionInput): Promise<boolean> {
+      const provision = ports.provision;
+      if (!writable() || pending || !ports.inspect || !provision || !validProvisionInput(profile) || !provision.backends.includes(profile.backend)) return false;
+      const snapshot = state.snapshot!;
+      pending = restoreProvision(snapshot);
+      if (pending) { publish({phase: 'ready', snapshot}); return false; }
+      const token = ++generation, abort = new AbortController(); active = abort;
+      const operation: PendingProvision = {snapshot};
+      pending = operation; // Closing while the request is in flight does not cancel publication.
       publish({phase: 'saving', snapshot});
-      let receiptValidated = false;
       try {
-        const created = exact(data(await bounded(signal => ports.create!(request, signal), abort)),
-          ['registry_revision', 'profile']);
-        const revision = digest(created.registry_revision);
-        const parsed = parseProfilesReply({version: 1, ok: true,
-          data: {configured: true, registry_revision: revision, profiles: [created.profile]}});
-        const answer = parsed.profiles[0]!;
-        if (answer.backend !== profile.backend || answer.id !== profile.id || answer.label !== profile.label
-          || !answer.enabled || answer.switch_qualified) return invalid();
-        receiptValidated = true;
-        const raw = await bounded(ports.load, abort);
-        const refreshed = {registry: parseProfilesReply(raw.profiles), policy: parsePolicyReply(raw.policy)};
-        if (refreshed.registry.registry_revision !== revision
-          || !refreshed.registry.profiles.some(p => JSON.stringify(p) === JSON.stringify(answer))) return invalid();
+        remember(); // A storage failure must not dispatch a write that cannot be tracked.
+        const receipt = profileReceipt(await bounded(signal => provision.write({version: 1, op: 'profiles.provision',
+          registry_revision: snapshot.registry.registry_revision, profile}, signal), abort));
+        const answer = receipt.profile;
+        if (answer.backend !== profile.backend || answer.label !== profile.label
+          || answer.enabled !== !!provision.managed || answer.managed !== provision.managed
+          || answer.switch_qualified || !/^p-[a-f0-9]{16}$/.test(answer.id)
+          || receipt.revision === snapshot.registry.registry_revision) return invalid();
         if (token !== generation) return false;
-        publish({phase: 'saved', snapshot: refreshed}); return true;
+        operation.receipt = receipt;
+        remember(receipt);
+        const registry = await bounded(inspect, abort);
+        if (!verifies(registry, receipt)) return invalid();
+        if (token !== generation) return false;
+        clearPending();
+        publish({phase: 'saved', snapshot: {...snapshot, registry}});
+        return true;
       } catch (error) {
-        if (token === generation) publish({
-          phase: receiptValidated ? 'verification' : error instanceof ReplyFailure ? error.conflict ? 'conflict' : 'refused' : 'error',
-          snapshot, ...(!receiptValidated && error instanceof ReplyFailure ? {refusal: error.code} : {}),
-        });
+        if (token === generation) {
+          if (!operation.receipt && error instanceof ReplyFailure) {
+            try { clearPending(); }
+            catch { publish({phase: 'error', snapshot}); return false; }
+            publish({phase: error.conflict ? 'conflict' : 'refused', snapshot, refusal: error.code});
+          } else publish({phase: 'error', snapshot});
+        }
         return false;
       } finally { if (active === abort) active = null; }
     },

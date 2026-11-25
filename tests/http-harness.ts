@@ -187,6 +187,7 @@ const ACCEPTED_STATUS = `
   POST /api/accounts/profiles/create 400 invalid-request
   GET /api/accounts/consent 400 invalid-request
   POST /api/accounts/consent/set-global 400 invalid-request
+  POST /api/accounts/profiles/provision 400 invalid-request
   POST /api/accounts/consent/set-pair 400 invalid-request
   POST /api/accounts/consent/remove-pair 400 invalid-request
   POST /api/accounts/consent/reset 400 invalid-request

@@ -316,8 +316,7 @@ let check_roots registry =
     Result.map (fun _ -> ()) (check_profiles [] (P.profiles registry))
   with Unix.Unix_error _ | Sys_error _ -> Error Unsafe_agent_roots
 
-let create_temp root =
-  let random_hex () =
+let random_hex () =
     let fd = Unix.openfile "/dev/urandom" [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
     Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
         let bytes = Bytes.create 8 in
@@ -331,7 +330,8 @@ let create_temp root =
         String.concat ""
           (List.init 8 (fun i ->
                Printf.sprintf "%02x" (Char.code (Bytes.get bytes i)))))
-  in
+
+let create_temp root =
   let rec attempt remaining =
     let path =
       Filename.concat root
@@ -980,7 +980,8 @@ let recover_created_profile ~root =
                                          same record_identity current
                                          && value = bytes
                                      | None -> false)
-                                  && absent (marker root) && absent (intent root))
+                                  && absent (marker root) && absent (intent root)
+                                  && absent (legacy_switch_marker root))
                                then fail ()
                                else
                                  match published with
@@ -1028,18 +1029,43 @@ let recover_created_profile ~root =
    linked without replacement; an append replaces only the checked original
    after the complete candidate has been synced. Out-of-band same-UID changes
    are not a filesystem transaction and are outside the native custody model. *)
-let create_profile ~root ~expected_revision ~profile =
+type profile_publication_point = Before_publish | After_publish
+
+let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random_hex ())
+    ?managed_admit ~root ~expected_revision ~provision ~profile () =
   let fail code = Error code in
+  let* () =
+    if not provision then Ok ()
+    else
+      match profile with
+      | `Assoc fields
+        when List.length fields = 2
+             && List.sort_uniq String.compare (List.map fst fields)
+                = [ "backend"; "label" ] -> (
+          match (List.assoc "backend" fields, List.assoc "label" fields) with
+          | `String ("claude" | "codex" | "opencode-v2"), `String label
+            when A.valid_label (String.trim label) -> Ok ()
+          | _ -> fail "invalid-request")
+      | _ -> fail "invalid-request"
+  in
   let* () =
     project "unsafe-configuration-root" (P.validate_private_root root)
   in
+  let check_legacy_switch () =
+    match Unix.lstat (legacy_switch_marker root) with
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
+    | _ -> fail "profile-migration-required"
+  in
+  let check_provision_boundary () =
+    if Option.fold ~none:false ~some:(fun admit -> not (admit ())) managed_admit then
+      fail "profile-provision-unavailable"
+    else if provision then check_legacy_switch ()
+    else Ok ()
+  in
   (* Hold the lock for the entire operation, not merely the initial check. *)
   let run () =
-    let* () =
-      match Unix.lstat (legacy_switch_marker root) with
-      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
-      | _ -> fail "profile-migration-required"
-    in
+    let* () = check_provision_boundary () in
+    let* () = if provision then Ok () else check_legacy_switch () in
     let* () =
       match Unix.lstat (first_intent root) with
       | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
@@ -1105,14 +1131,15 @@ let create_profile ~root ~expected_revision ~profile =
     let* previous =
       match initial with None -> Ok None | Some st -> Result.map Option.some (read_current st)
     in
-    let* existing =
+    let* existing, existing_registry =
       match previous with
-      | None -> Ok []
+      | None -> Ok ([], None)
       | Some bytes ->
-          let* _ = project "invalid-profile-config" (P.of_string bytes) in
+          let* registry = project "invalid-profile-config" (P.of_string bytes) in
           (match Yojson.Safe.from_string bytes with
           | `Assoc [ ("version", `Int 1); ("profiles", `List rows) ]
-          | `Assoc [ ("profiles", `List rows); ("version", `Int 1) ] -> Ok rows
+          | `Assoc [ ("profiles", `List rows); ("version", `Int 1) ] ->
+              Ok (rows, Some registry)
           | _ -> fail "invalid-profile-config")
     in
     let current_revision = Option.map hash previous in
@@ -1120,16 +1147,41 @@ let create_profile ~root ~expected_revision ~profile =
       if expected_revision = current_revision then Ok ()
       else fail "profile-registry-changed"
     in
-    let* fields =
-      match profile with
-      | `Assoc fields
+    let* fields, new_dirs =
+      match (provision, profile) with
+      | false, `Assoc fields
         when List.length fields = 4
              && List.sort_uniq String.compare (List.map fst fields)
                 = [ "backend"; "id"; "label"; "roots" ] ->
-          Ok fields
+          Ok (fields, [])
+      | true, `Assoc fields ->
+          let id = new_id () in
+          let base = Filename.concat root ("profile-" ^ id) in
+          let child name = Filename.concat base name in
+          let backend = List.assoc "backend" fields in
+          let config = child "config" in
+          let roots, dirs =
+            match backend with
+            | `String "claude" ->
+                let history = Filename.concat config "projects" in
+                ([ ("config", config); ("history", history) ], [ config; history ])
+            | `String "codex" ->
+                let state = Filename.concat config "sessions" in
+                ([ ("config", config); ("state", state) ], [ config; state ])
+            | _ ->
+                let roles = [ "config"; "data"; "state"; "cache" ] in
+                (List.map (fun role -> (role, child role)) roles, List.map child roles)
+          in
+          Ok
+            ( ("id", `String id)
+              :: ("roots", `Assoc (List.map (fun (role, path) -> (role, `String path)) roots))
+              :: fields,
+              base :: dirs )
       | _ -> fail "invalid-request"
     in
-    let enabled = `Assoc (fields @ [ ("enabled", `Bool true) ]) in
+    let managed = Option.is_some managed_admit in
+    let enabled = `Assoc (fields @ [ ("enabled", `Bool (managed || not provision)) ]
+      @ if managed then [("managed", `Bool true)] else []) in
     let* single =
       project "invalid-request"
         (P.of_string
@@ -1147,8 +1199,14 @@ let create_profile ~root ~expected_revision ~profile =
           (fun raw ->
             let id = Yojson.Safe.Util.member "id" raw
             and backend = Yojson.Safe.Util.member "backend" raw in
-            id = `String (P.id selected)
-            && backend = List.assoc "backend" fields)
+            backend = List.assoc "backend" fields
+            && (id = `String (P.id selected)
+                || (provision
+                    && match Yojson.Safe.Util.member "label" raw with
+                       | `String label ->
+                           String.lowercase_ascii (String.trim label)
+                           = String.lowercase_ascii (P.label selected)
+                       | _ -> false)))
           existing
       then fail "profile-already-exists"
       else Ok ()
@@ -1161,16 +1219,45 @@ let create_profile ~root ~expected_revision ~profile =
     in
     let* candidate = project "invalid-profile-config" (P.of_string content) in
     let* () =
-      project "unsafe-profile-roots"
-        (P.validate_roots ~registry:candidate selected)
+      match new_dirs with
+      | [] -> Ok ()
+      | base :: children ->
+          (* Never adopt a colliding entry, even if it is an empty directory.
+             If interrupted after mkdir, retain the unpublished subtree. Neither
+             normal reads nor registry recovery adopt or delete its directories. *)
+          let* () =
+            match existing_registry with
+            | None -> Ok ()
+            | Some registry -> project "unsafe-profile-roots" (check_roots registry)
+          in
+          let* () = project "unsafe-configuration-root" (P.validate_private_root root) in
+          (match Unix.mkdir base 0o700 with
+           | exception Unix.Unix_error (Unix.EEXIST, _, _) -> fail "profile-already-exists"
+           | () ->
+               List.iter (fun dir -> Unix.mkdir dir 0o700) children;
+               List.iter
+                 (fun dir ->
+                   let fd = Unix.openfile dir [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+                   Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> Unix.fsync fd))
+                 (List.rev new_dirs);
+               Ok ())
     in
-    let* () = project "unsafe-profile-roots" (check_roots candidate) in
+    let after_allocation result =
+      if provision then project "profile-publication-uncertain" result else result
+    in
+    let* () = after_allocation
+      (
+      project "unsafe-profile-roots"
+        (P.validate_roots ~registry:candidate selected))
+    in
+    let* () = after_allocation (project "unsafe-profile-roots" (check_roots candidate)) in
     let directory =
       Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
     in
     Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
         let root_identity = Unix.fstat directory in
         let check () =
+          let* () = check_provision_boundary () in
           let* () =
             project "unsafe-configuration-root"
               (P.validate_private_root root)
@@ -1232,10 +1319,10 @@ let create_profile ~root ~expected_revision ~profile =
                 write_all fd content 0;
                 Unix.fchmod fd 0o600;
                 Unix.fsync fd);
-            let* () = check () in
+            let* () = after_allocation (check ()) in
             if not (private_file (Unix.lstat stage)
                     && same stage_identity (Unix.lstat stage)) then
-              fail "profile-registry-changed"
+              after_allocation (fail "profile-registry-changed")
             else (
               let* () = (match initial with
               | None ->
@@ -1245,12 +1332,18 @@ let create_profile ~root ~expected_revision ~profile =
                     | Ok () -> Ok ()
                     | Error _ -> fail "profile-publication-uncertain"
                   in
+                  checkpoint Before_publish;
                   Unix.link stage destination;
+                  checkpoint After_publish;
                   Unix.unlink stage;
                   Unix.fsync directory;
                   Unix.unlink (first_intent root);
                   Ok ()
-              | Some _ -> Unix.rename stage destination; Ok ()) in
+              | Some _ ->
+                  checkpoint Before_publish;
+                  Unix.rename stage destination;
+                  checkpoint After_publish;
+                  Ok ()) in
               Unix.fsync directory;
               Ok (P.registry_revision candidate, P.public_json selected))))
   in
@@ -1258,3 +1351,12 @@ let create_profile ~root ~expected_revision ~profile =
     let* fd = Result.map_error error_code (acquire_migration_lock root) in
     Fun.protect ~finally:(fun () -> Unix.close fd) run
   with Unix.Unix_error _ | Sys_error _ -> fail "profile-publication-uncertain"
+
+let create_profile ~root ~expected_revision ~profile =
+  write_profile ~provision:false ~root ~expected_revision ~profile ()
+
+let provision_profile ~root ~expected_revision ~profile =
+  write_profile ~provision:true ~root ~expected_revision ~profile ()
+
+let provision_managed ~admit ~root ~expected_revision ~profile =
+  write_profile ~managed_admit:admit ~provision:true ~root ~expected_revision ~profile ()

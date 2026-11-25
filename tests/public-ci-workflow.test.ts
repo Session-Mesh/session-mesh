@@ -426,7 +426,7 @@ describe('the public CI as committed', () => {
     });
 
     // The account alias and update image tests skip without mesh-platform: it travels with the work programs,
-    // the cache key prefix changed when it joined (an older entry lacks it), and the test jobs require it.
+    // and the test jobs require it. Cache compatibility is checked separately for the whole artifact set.
     test(`${name} hands mesh-platform to the frontend and browser jobs, failing rather than skipping`, () => {
       const jobs = jobBlocks(parseLines(text));
       const body = (jobName: string): string => {
@@ -436,7 +436,7 @@ describe('the public CI as committed', () => {
       };
       const native = body('native');
       for (const needle of ['cp -L ocaml/_build/install/default/bin/mesh-platform native-host/mesh-platform',
-        'test -x native-host/mesh-platform', '            native-host/mesh-platform', 'key: native-programs-v3-']) {
+        'test -x native-host/mesh-platform', '            native-host/mesh-platform']) {
         assert.ok(native.includes(needle), `${needle} missing from the native job`);
       }
       for (const jobName of ['frontend_parts', 'browser_parts']) {
@@ -458,7 +458,7 @@ describe('the public CI as committed', () => {
       };
       const native = body('native');
       for (const needle of ['cp -L ocaml/_build/install/default/bin/mesh-profile native-host/mesh-profile',
-        'test -x native-host/mesh-profile', '            native-host/mesh-profile', 'key: native-programs-v3-']) {
+        'test -x native-host/mesh-profile', '            native-host/mesh-profile']) {
         assert.ok(native.includes(needle), `${needle} missing from the native job`);
       }
       const frontend = body('frontend_parts');
@@ -476,6 +476,26 @@ describe('the public CI as committed', () => {
         'MESH_BACKEND_ACCOUNT_HELPER=$RUNNER_TEMP/native-work/mesh-profile', 'MESH_REQUIRE_BACKEND_ACCOUNT_APP=1']) {
         assert.ok(body.includes(needle), `${needle} missing from browser helper staging`);
       }
+    });
+
+    test(`${name} partitions the native cache and synthetic browser artifact by their contents`, () => {
+      const jobs = jobBlocks(parseLines(text));
+      const native = jobs.find(job => job.name === 'native')!.block;
+      const cache = native.findIndex(line => line.key === 'name' && line.value === 'Restore the built host');
+      assert.ok(cache >= 0);
+      const restore = blockOf(native, cache);
+      assert.equal(restore.find(line => line.key === 'path')?.value, 'native-host');
+      assert.ok(!restore.some(line => line.key === 'restore-keys'), 'no fallback to a bundle without the fixture');
+      const key = restore.find(line => line.key === 'key')?.value ?? '';
+      assert.match(key, /^native-programs-v4-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}/);
+      assert.match(key, /hashFiles\('ocaml\/\*\*', '!ocaml\/test\/\*\*', 'ocaml\/test\/provision_runner\/\*\*', '!ocaml\/_build\/\*\*'/);
+      const raw = (job: string) => jobs.find(item => item.name === job)!.block.map(line => line.raw).join('\n');
+      const artifact = 'mesh-managed-profile-test-linux-x86_64';
+      assert.match(raw('native'), new RegExp(`name: ${artifact}\\s+path: native-host/mesh-profile-fixture\\s+if-no-files-found: error`));
+      assert.match(raw('browser_parts'), new RegExp(`name: ${artifact}\\s+path: \\$\\{\\{ runner.temp \\}\\}/native-test`));
+      assert.ok(raw('browser_parts').includes('MESH_REQUIRE_MANAGED_PROFILE=1'));
+      assert.ok(!raw('frontend_parts').includes(artifact));
+      assert.doesNotMatch(raw('native'), /^\s{12}native-host\/mesh-profile-fixture$/m, 'not in the ordinary multi-file artifact');
     });
   }
 });

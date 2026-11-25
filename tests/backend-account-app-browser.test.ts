@@ -116,6 +116,7 @@ test('real settings browser registers a native alias and offers it for a new ses
   await withFixture(async lab=>{
     const context=await lab.context('en',1440,null,true), page=await lab.page(context);
     await open(page);
+    assert.equal(await control(page,'provision-account').count(),0);
     await control(page,'add-account').click();
     await control(page,'create-backend').selectOption('opencode-v2');
     await control(page,'create-id').fill('new-alias');
@@ -545,7 +546,9 @@ test('running app: pre-start and post-dispose account clicks issue no requests; 
     await bounded(page.evaluate(async () => { window.backendAccountsTestRuntime = await MeshUI.startLocalMesh(); }), READY_TIMEOUT_MS, 'actual Mesh runtime startup');
     await page.locator('dialog.backend-account-panel').waitFor({state: 'attached'});
     const pending = lab.holdProfiles();
+    const discovery = page.waitForRequest(r => new URL(r.url()).pathname === '/api/config');
     await page.locator('#btn-accounts').click(); await status(page, 'en', 'loading');
+    await discovery;
     assert.equal((await pending.received()).ok, true);
     assert.deepEqual(requests, ['GET /api/accounts/profiles']);
     const aborted = page.waitForEvent('requestfailed', {predicate: request => new URL(request.url()).pathname === '/api/accounts/profiles', timeout: 8000});
@@ -562,7 +565,7 @@ test('running app: pre-start and post-dispose account clicks issue no requests; 
     await page.locator('#btn-accounts').dispatchEvent('click');
     await bounded(page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))), 2000, 'post-dispose click effects');
     assert.equal(requests.length, count); assert.equal(lab.calls.length, 1); assert.equal(lab.posts().length, 0);
-    assert.equal(lab.configRequests.length, 1, 'no config request after dispose');
+    assert.equal(lab.configRequests.length, 2, 'startup and panel opening only; no config request after dispose');
     assert.equal(await dialog(page).count(), 0, 'neither the late answer nor the click recreated the disposed panel');
   });
 });

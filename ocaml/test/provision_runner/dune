@@ -1,0 +1,15 @@
+(rule
+ (target mesh_profile_main.ml)
+ (deps ../../bin/mesh_profile_main.ml)
+ (action (copy %{dep:../../bin/mesh_profile_main.ml} %{target})))
+
+; Not a public package target. This executable substitutes only the capability
+; module; the request decoder, registry writer and resolver are shared.
+(executable
+ (name mesh_profile_main)
+ (modules mesh_profile_main provision_capability)
+ (libraries mesh_backend_profile mesh_backend_consent mesh_backend_store mesh_cli yojson unix))
+
+(alias
+ (name runtest)
+ (deps mesh_profile_main.exe))

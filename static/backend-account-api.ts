@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-import type {BackendAccountPorts, ConsentMutation} from './backend-account-model.ts';
+import {validProvisionInput, type BackendAccountPorts, type ConsentMutation, type ProvisionBackend} from './backend-account-model.ts';
 
 type AccountFetch = (input: string, init: RequestInit) => Promise<Response>;
 const routes: Readonly<Record<ConsentMutation['op'], string>> = {
@@ -13,7 +13,9 @@ const routes: Readonly<Record<ConsentMutation['op'], string>> = {
 
 /** Fixed same-origin transport. The controller bounds the whole headers/body operation;
  * native public decoders remain responsible for the reply shape and policy semantics. */
-export function createBackendAccountApi(request: AccountFetch): Pick<BackendAccountPorts, 'load' | 'mutate' | 'create'> {
+export function createBackendAccountApi(request: AccountFetch, nativeProvision?: unknown): BackendAccountPorts & {
+  setProvisionCapability(value: unknown): void;
+} {
   async function read(url: string, signal: AbortSignal, body?: string): Promise<unknown> {
     if (signal.aborted) throw new Error('account-request-aborted');
     const response = await request(url, {
@@ -34,7 +36,14 @@ export function createBackendAccountApi(request: AccountFetch): Pick<BackendAcco
     }
     return reply;
   }
+  const known = (value: unknown): value is ProvisionBackend =>
+    value === 'claude' || value === 'codex' || value === 'opencode-v2';
+  const backends = (value: unknown): ProvisionBackend[] => Array.isArray(value) && value.length <= 3
+    && value.every(known) && new Set(value).size === value.length ? [...value] : [];
+  let provision = backends(nativeProvision);
   return {
+    setProvisionCapability(value) { provision = backends(value); },
+    inspect: signal => read('/api/accounts/profiles', signal),
     async load(signal) {
       // Sequential reads avoid an orphan second request if the first one refuses.
       const profiles = await read('/api/accounts/profiles', signal);
@@ -52,5 +61,15 @@ export function createBackendAccountApi(request: AccountFetch): Pick<BackendAcco
       if (version !== 1 || op !== 'profiles.create') return Promise.reject(new Error('invalid-account-operation'));
       return read('/api/accounts/profiles/create', signal, JSON.stringify(body));
     },
+    get provision(): BackendAccountPorts['provision'] { return provision.length ? {
+      backends: provision,
+      managed: true as const,
+      write(mutation, signal) {
+        const {version, op, registry_revision, profile} = mutation;
+        if (version !== 1 || op !== 'profiles.provision' || !validProvisionInput(profile)
+          || !provision.includes(profile.backend)) return Promise.reject(new Error('invalid-account-operation'));
+        return read('/api/accounts/profiles/provision', signal, JSON.stringify({registry_revision, profile}));
+      },
+    } : undefined; },
   };
 }

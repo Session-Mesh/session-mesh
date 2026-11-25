@@ -18,6 +18,7 @@ type t = {
   label : string;
   backend : backend;
   enabled : bool;
+  managed : bool;
   roots : (string * string) list;
   context_revision : string;
 }
@@ -124,7 +125,15 @@ let separate_conversation_root backend roots =
   | _, None -> false
 
 let decode value =
-  let* fields = keys [ "id"; "label"; "backend"; "enabled"; "roots" ] value in
+  let base = [ "id"; "label"; "backend"; "enabled"; "roots" ] in
+  let managed =
+    match value with `Assoc fields -> List.mem_assoc "managed" fields | _ -> false
+  in
+  let* fields = keys (if managed then "managed" :: base else base) value in
+  let* () =
+    if not managed || List.assoc "managed" fields = `Bool true then Ok ()
+    else Error Invalid_config
+  in
   let* raw_id = field "id" fields in
   let* id = text 80 raw_id in
   let* raw_label = field "label" fields in
@@ -148,15 +157,15 @@ let decode value =
       hash
         (Yojson.Safe.to_string
            (`Assoc
-              [
+              ([
                 ("backend", `String (tag backend));
                 ( "roots",
                   `Assoc
                     (List.map (fun (key, value) -> (key, `String value)) roots)
                 );
-              ]))
+              ] @ if managed then [("managed", `Bool true)] else [])))
     in
-    Ok { id; label; backend; enabled; roots; context_revision }
+    Ok { id; label; backend; enabled; managed; roots; context_revision }
 
 let overlaps a b =
   a = b
@@ -229,21 +238,22 @@ let id p = p.id
 let label p = p.label
 let backend p = p.backend
 let enabled p = p.enabled
+let managed p = p.managed
 let context_revision p = p.context_revision
 let roots p = p.roots
 
 let public_json p =
   `Assoc
-    [
+    ([
       ("id", `String p.id);
       ("label", `String p.label);
       ("backend", `String (tag p.backend));
       ("enabled", `Bool p.enabled);
       ("context_revision", `String p.context_revision);
       ("switch_qualified", `Bool false);
-    ]
+    ] @ if p.managed then [("managed", `Bool true)] else [])
 
-let resolve registry ~id ~backend ~expected_context =
+let resolve_kind ~managed registry ~id ~backend ~expected_context =
   match
     List.find_opt (fun p -> p.id = id && p.backend = backend) registry.profiles
   with
@@ -251,13 +261,17 @@ let resolve registry ~id ~backend ~expected_context =
       if List.exists (fun p -> p.id = id) registry.profiles then
         Error Backend_mismatch
       else Error Unknown_profile
-  | Some p when not p.enabled -> Error Disabled_profile
+  | Some p when not p.enabled || p.managed <> managed -> Error Disabled_profile
   | Some p
     when Option.fold ~none:false
            ~some:(fun expected -> expected <> p.context_revision)
            expected_context ->
       Error Context_changed
   | Some p -> Ok p
+
+let resolve = resolve_kind ~managed:false
+let resolve_managed registry ~id ~backend ~expected_context =
+  resolve_kind ~managed:true registry ~id ~backend ~expected_context:(Some expected_context)
 
 let rec trusted path =
   let st = Unix.lstat path in

@@ -3,7 +3,7 @@
 
 // Real HTTP, resolver and PTY host; recording CLIs, not provider or resumability qualification.
 import assert from 'node:assert/strict';
-import {spawn, type ChildProcess} from 'node:child_process';
+import {spawn, spawnSync, type ChildProcess} from 'node:child_process';
 import {once} from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,6 +17,111 @@ const platform = process.env.MESH_MESH_PLATFORM_CMD ||
 const skip = fs.existsSync(platform) || process.env.MESH_REQUIRE_MESH_PLATFORM === '1'
   ? false : 'build mesh-platform or set MESH_MESH_PLATFORM_CMD';
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+function inventory(root: string): unknown[] {
+  const st = fs.lstatSync(root);
+  const metadata = [st.dev, st.ino, st.mode];
+  if (!st.isDirectory()) return [...metadata, fs.readFileSync(root)];
+  return [...metadata, fs.readdirSync(root).sort().map(name => [name, inventory(path.join(root, name))])];
+}
+
+test('normal helper refuses managed creation and does not offer a host-provisioned profile', {skip, timeout:60000}, async () => {
+  const helper = process.env.MESH_PROFILE_CMD || path.join(REPO, 'ocaml/_build/default/bin/mesh_profile_main.exe');
+  const mesh = await startMesh('accounts-provision-http-', {
+    MESH_MESH_PLATFORM_CMD: platform, MESH_MESH_PROFILE_CMD: helper,
+    MESH_SESSION: undefined, MESH_SESSION_TOKEN: undefined,
+  }, where => {
+    fs.mkdirSync(where.confDir, {recursive: true, mode: 0o700});
+    assert.deepEqual(fs.readdirSync(where.confDir), []);
+  });
+  let host: ChildProcess | undefined;
+  const registry = path.join(mesh.confDir, 'backend-profiles.json');
+  const socket = path.join(mesh.home, 'run/session-mesh/ptyhost.sock');
+  try {
+    const provision = (label: string, registry_revision: string | null) => {
+      const result = spawnSync(helper, [], {
+        input: JSON.stringify({version: 1, op: 'profiles.provision', registry_revision, profile: {backend: 'codex', label}}),
+        encoding: 'utf8', timeout: 5000, env: {HOME: mesh.home, MESH_CONF_DIR: mesh.confDir, PATH: '/usr/bin:/bin'},
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stdout);
+      return JSON.parse(result.stdout);
+    };
+    const argv = nativePtyhost();
+    host = spawn(argv[0], argv.slice(1), {cwd: REPO, stdio: 'ignore',
+      env: {HOME: mesh.home, PATH: '/usr/bin:/bin', SHELL: '/bin/sh', LANG: 'C.UTF-8',
+        XDG_RUNTIME_DIR: path.join(mesh.home, 'run')}});
+    await waitFor('private native host', 10000, () => request(socket, {op: 'list'}).then(() => true, () => false));
+    const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({token: mesh.token()})});
+    const cookie = login.headers.get('set-cookie')?.split(';')[0]; assert.ok(cookie);
+    const headers = {Cookie: cookie, Origin: mesh.base, 'Content-Type': 'application/json'};
+    assert.equal(fs.existsSync(registry), false);
+    const inspect = async () => {
+      const before = inventory(mesh.confDir);
+      const response = await fetch(`${mesh.base}/api/accounts/profiles`, {headers});
+      assert.equal(response.status, 200);
+      const listing = await response.json();
+      assert.deepEqual(inventory(mesh.confDir), before, 'registry inspection never initializes account state');
+      return listing.data;
+    };
+    assert.equal((await inspect()).configured, false);
+    const capabilities = await (await fetch(`${mesh.base}/api/config`, {headers})).json();
+    assert.equal(capabilities.capabilities.profile_provision, undefined);
+    assert.equal(capabilities.managed_profile_offers, undefined);
+    const refused = await fetch(`${mesh.base}/api/accounts/profiles/provision`, {method:'POST', headers,
+      body:JSON.stringify({registry_revision:null, profile:{backend:'codex',label:'Not qualified'}})});
+    assert.equal(refused.status, 409);
+    assert.equal((await refused.json()).code, 'profile-provision-unavailable');
+    assert.equal(fs.existsSync(registry), false);
+    const a = provision('First fixture', null).data;
+    const b = provision('Second fixture', a.registry_revision).data;
+    const raw = JSON.parse(fs.readFileSync(registry, 'utf8'));
+    assert.deepEqual(raw.profiles.map((p: {enabled: boolean}) => p.enabled), [false, false]);
+    for (const row of raw.profiles) {
+      assert.ok(fs.statSync(row.roots.state).isDirectory());
+      assert.equal(fs.existsSync(path.join(row.roots.config, 'fixture-launch')), false);
+    }
+    assert.equal((await inspect()).configured, true);
+    {
+      assert.equal(fs.existsSync(path.join(mesh.confDir, 'backend-accounts.sqlite')), false);
+      const inside = path.join(raw.profiles[0].roots.config, 'synthetic-note.txt');
+      const control = path.join(mesh.home, 'public-note.txt');
+      fs.writeFileSync(control, 'public document', {mode: 0o600});
+      fs.writeFileSync(inside, 'synthetic private marker', {mode: 0o600});
+      const sign = (target: string) => fetch(`${mesh.base}/api/view`, {method:'POST', headers,
+        body:JSON.stringify({target})});
+      const refused = await sign(inside);
+      assert.equal(refused.status, 403);
+      assert.doesNotMatch(await refused.text(), /synthetic private marker|\/view\//);
+      const allowed = await sign(control);
+      assert.equal(allowed.status, 200);
+      const signed = new URL((await allowed.json()).url, mesh.base);
+      assert.match(signed.pathname, /^\/view\//);
+      const visible = await fetch(signed, {headers, redirect:'manual'});
+      assert.equal(visible.status, 200);
+      assert.match(await visible.text(), /public document/);
+      fs.unlinkSync(control);
+      fs.linkSync(inside, control);
+      const denied = await fetch(signed, {headers, redirect:'manual'});
+      assert.equal(denied.status, 403);
+      assert.doesNotMatch(await denied.text(), /synthetic private marker/);
+    }
+    const config = async () => (await fetch(`${mesh.base}/api/config`, {headers})).json() as Promise<{accounts: {id: string; codex: boolean}[]}>;
+    const launch = (name: string, account: string) => fetch(`${mesh.base}/api/new`, {method: 'POST', headers,
+      body: JSON.stringify({preset: 'codex', name, cwd: mesh.home, account})});
+    assert.ok(!(await config()).accounts.some(row => row.id === a.profile.id || row.id === b.profile.id));
+    const hidden = await launch('hidden-profile', a.profile.id);
+    assert.equal(hidden.status, 400, await hidden.text());
+    assert.deepEqual(await request(socket, {op: 'list'}), []);
+
+  } finally {
+    if (host && host.exitCode === null && host.signalCode === null) {
+      const closed = once(host, 'close'); host.kill('SIGKILL'); await closed;
+    }
+    await mesh.stop();
+  }
+});
 
 test('HTTP launches use selected roots and refuse unqualified Pi profiles', {skip, timeout: 60000}, async () => {
   let bin = '', record = '', profiles: Array<{backend: string; roots: Record<string, string>}> = [];

@@ -66,6 +66,12 @@ let with_store root f =
 let policy_json policy = Yojson.Safe.from_string (C.to_string policy)
 let registry root = project P.error_code (P.load ~root)
 
+(* Only this launch family has the managed admission path below; being on
+   this list alone never grants capability. *)
+let provision_backends = ["codex"]
+let provision_executable ~root name =
+  if List.mem name provision_backends then Provision_capability.executable ~root name else None
+
 let pair_accounts configured fields =
   let* raw_backend = field "backend" fields in
   let* backend = parse_backend raw_backend in
@@ -128,7 +134,7 @@ let manage root expected change =
       | Some error -> Error (C.error_code error)
       | None -> project S.error_code result)
 
-let handle root raw =
+let handle ?(http = false) root raw =
   let* fields =
     match raw with `Assoc fields -> Ok fields | _ -> Error "invalid-request"
   in
@@ -154,7 +160,23 @@ let handle root raw =
                    | None -> []
                     | Some r -> List.map P.public_json (P.profiles r)) );
               ])
-    | `String "profiles.create" ->
+    | `String "profiles.provision-capabilities" ->
+        let* _ = exact [ "version"; "op" ] raw in
+        let offers = List.filter (fun name -> Option.is_some (provision_executable ~root name)) provision_backends in
+        let* profiles =
+          if offers = [] then Ok []
+          else
+            let* current = registry root in
+            Ok (match current with None -> [] | Some registry ->
+              P.profiles registry |> List.filter_map (fun p ->
+                let name = P.tag (P.backend p) in
+                if P.enabled p && P.managed p && List.mem name offers
+                    && Result.is_ok (P.validate_roots ~registry p) then Some (P.public_json p)
+                else None))
+        in
+        Ok (`Assoc [ ("backends", `List (List.map (fun name -> `String name) offers));
+          ("profiles", `List profiles) ])
+    | `String (("profiles.create" | "profiles.provision") as operation) ->
         let* fields =
           exact [ "version"; "op"; "registry_revision"; "profile" ] raw
         in
@@ -164,8 +186,24 @@ let handle root raw =
           | value -> Result.map Option.some (digest value)
         in
         let* profile = field "profile" fields in
+        let* write =
+          if operation <> "profiles.provision" then Ok M.create_profile
+          else if not http then Ok M.provision_profile
+          else
+            let* input = exact [ "backend"; "label" ] profile in
+            let* raw_backend = field "backend" input in
+            let* _ = parse_backend raw_backend in
+            let* () =
+              match List.assoc "label" input with
+              | `String label when Mesh_accounts.valid_label (String.trim label) -> Ok ()
+              | _ -> Error "invalid-request"
+            in
+            let name = match raw_backend with `String name -> name | _ -> assert false in
+            if Option.is_none (provision_executable ~root name) then Error "profile-provision-unavailable"
+            else Ok (M.provision_managed ~admit:(fun () -> Option.is_some (provision_executable ~root name)))
+        in
         let* revision, created =
-          M.create_profile ~root ~expected_revision ~profile
+          write ~root ~expected_revision ~profile
         in
         Ok
           (`Assoc
@@ -173,6 +211,24 @@ let handle root raw =
                ("registry_revision", `String revision);
                ("profile", created);
              ])
+    | `String "profiles.managed-launch" when not http ->
+        let* fields = exact [ "version"; "op"; "id"; "backend"; "expected_context" ] raw in
+        let* profile_id = id "id" fields in
+        let* raw_backend = field "backend" fields in
+        let* backend = parse_backend raw_backend in
+        let* raw_expected = field "expected_context" fields in
+        let* expected_context = digest raw_expected in
+        let* executable =
+          match provision_executable ~root (P.tag backend) with
+          | Some path -> Ok path | None -> Error "profile-provision-unavailable"
+        in
+        let* configured = registry root in
+        let* configured = match configured with Some r -> Ok r | None -> Error "profiles-unconfigured" in
+        let* selected = project P.error_code
+          (P.resolve_managed configured ~id:profile_id ~backend ~expected_context) in
+        let* () = project P.error_code (P.validate_roots ~registry:configured selected) in
+        Ok (`Assoc [ ("profile", P.public_json selected); ("executable", `String executable);
+          ("roots", `Assoc (List.map (fun (k,v) -> (k, `String v)) (P.roots selected))) ])
     | `String "profiles.resolve" ->
         let* fields =
           exact [ "version"; "op"; "id"; "backend"; "expected_context" ] raw
@@ -289,6 +345,8 @@ let http_operations =
   [
     "profiles.list";
     "profiles.create";
+    "profiles.provision";
+    "profiles.provision-capabilities";
     "consent.get";
     "consent.set_global";
     "consent.set_pair";
@@ -303,7 +361,7 @@ let http_status = function
       ( "consent-revision-conflict" | "profile-registry-changed"
       | "profile-context-changed" | "consent-rule-capacity"
        | "consent-revision-exhausted" | "profile-already-exists"
-       | "profile-migration-required" ) ->
+      | "profile-migration-required" | "profile-provision-unavailable" ) ->
       409
   | Error ("unknown-profile" | "profiles-unconfigured") -> 404
   | Error
@@ -328,7 +386,7 @@ let request root selected =
         Ok (`Assoc (("version", `Int 1) :: ("op", `String operation) :: fields))
     | _ -> Error "invalid-request"
   in
-  handle root request
+  handle ~http:(Option.is_some selected) root request
 
 let () =
   if Array.to_list Sys.argv = [ Sys.argv.(0); "--help" ] then (

@@ -200,7 +200,7 @@ let of_registry ~uid registry =
           | P.Opencode_v2 -> Some Opencode_v2
           | P.Pi -> Some Pi
         in
-        if not (P.enabled profile) then None
+        if not (P.enabled profile) || P.managed profile then None
         else
           Option.map
             (fun backend ->
