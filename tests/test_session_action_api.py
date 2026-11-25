@@ -922,5 +922,64 @@ async def test_native_fence_recovery_preserves_failed_carry_evidence(monkeypatch
     with pytest.raises(server.NativeFenceRecoveryRequired) as exc:
         await server.relaunch_in_place({'name':'alpha','created':1}, '/tmp', 'codex', 'codex', 'codex',
                                        switch=('a','b','c','d','request'))
-    assert exc.value.switch_outcome == {'switch_phase':'source_restart_unconfirmed',
+    assert exc.value.switch_outcome == {'switch_phase':'source_recovery_unconfirmed',
                                         'target_copy_remains':remains, 'target_copy_uncertain':uncertain}
+
+@pytest.mark.parametrize('source_reply,standby_reply,clear', [
+    ({'ok':False}, {'ok':True}, True),
+    ({'ok':0}, {'ok':True}, False),
+    ({'ok':False, 'reason':'changed'}, {'ok':True}, False),
+    ({'ok':False}, {'ok':1}, False),
+    ({'ok':False}, {'ok':True, 'extra':1}, False),
+])
+async def test_legacy_barrier_clears_only_on_exact_refusal_and_cleanup(monkeypatch, source_reply, standby_reply, clear):
+    async def context(*_args): return None
+    async def env(*_args): return {}
+    async def prepared(_kind, command, _cwd, _context): return command, None, None
+    async def noop(*_args): return None
+    async def create(*_args, **_kwargs): return 'standby'
+    async def host(req):
+        if req['op'] == 'list':
+            return [{'name':'standby','created':2,'meta':{'nonce':'nonce'}}]
+        return source_reply if req['name'] == 'source' else standby_reply
+    for name, value in [('_restart_profile_context', context), ('account_environment', env), ('_prepared_launch', prepared),
+                        ('_confirm_standby', noop), ('_arrangement_of', noop), ('new_session', create), ('host', host)]:
+        monkeypatch.setattr(server, name, value)
+    monkeypatch.setattr(server.sessiontoken, 'new_nonce', lambda: 'nonce')
+    monkeypatch.setattr(server, '_legacy_check_active', lambda: None)
+    phase = {'effect_started': True}
+    token = server._LEGACY_SWITCH_PHASE.set(phase)
+    try:
+        with pytest.raises(server.web.HTTPException):
+            await server._replace_with_new_session('source', 1, 'source', '/tmp', 'codex', 'codex', 'codex', None, ('work', noop))
+        assert phase['effect_started'] is not clear
+    finally:
+        server._LEGACY_SWITCH_PHASE.reset(token)
+
+async def test_native_uncertain_carry_never_attempts_source_or_target_start(monkeypatch):
+    starts = []
+    async def host(req):
+        if req['op'] == 'list_bound':
+            return [{'name':'alpha','created':1,'creation_receipt':'receipt'}]
+        return {'ok': True}
+    async def noop(*_args, **_kwargs): return None
+    async def prepared(_agent, command, _cwd, _context): return command, None, None
+    async def stop(*_args, fence_state=None, **_kwargs):
+        fence_state['stop_started'] = True
+        return 2
+    async def carry(): raise server.AccountsUnavailable('unknown carry', 'carry_rollback_incomplete')
+    async def start(*_args, **_kwargs): starts.append('started')
+    for name, value in [('host', host), ('_prepared_launch', prepared), ('_arrangement_of', noop),
+                        ('_validate_native_switch', noop), ('_stop_agent', stop), ('_carry_arrangement', noop),
+                        ('_start_in_place', start)]:
+        monkeypatch.setattr(server, name, value)
+    monkeypatch.setattr(server, '_save_native_fence', lambda *_args: None)
+    monkeypatch.setattr(server, '_switch_root_identity', lambda context: context['id'])
+    source = {'name':'alpha', 'created':1, 'pty_capabilities':['agent_relaunch_bound_v1']}
+    origin, target = {'id':'default','env':{}}, {'id':'work','env':{}}
+    with pytest.raises(server.NativeFenceRecoveryRequired) as exc:
+        await server.relaunch_in_place(source, '/tmp', 'codex', 'codex', 'codex',
+                                       switch=('work', carry, origin, target, 'request'))
+    assert starts == []
+    assert exc.value.switch_outcome == {'switch_phase':'source_recovery_unconfirmed',
+                                        'target_copy_remains':True, 'target_copy_uncertain':True}

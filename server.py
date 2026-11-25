@@ -1511,6 +1511,10 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
                                            switch, source, settings_guard=settings_guard)
 
 
+def _exact_host_ack(reply, value):
+    return type(reply) is dict and set(reply) == {"ok"} and reply["ok"] is value
+
+
 async def _replace_with_new_session(old_name, old_created, base, cwd, command, agent, known_agent, account, switch,
                                     source=None, *, settings_guard=None):
     """replace_session in a new session: the PTY host stops the whole source (kill_if)."""
@@ -1550,17 +1554,21 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
                 print(f"restart: standby {name} ({replacement['created']}) cleanup unconfirmed: {exc!r}",
                       flush=True)
                 raise web.HTTPServiceUnavailable(text=uncertain + " (kill_if reply unavailable)") from exc
-            if retired != {"ok": True}:
+            if not _exact_host_ack(retired, True):
                 raise web.HTTPServiceUnavailable(text=uncertain + " (kill_if refused or unconfirmed)") from refusal
             raise
     await _confirm_standby(replacement, standby_nonce)
     killed = await host({"op": "kill_if", "name": old_name, "created": old_created})
-    if killed != {"ok": True}:
+    if not _exact_host_ack(killed, True):
         await _confirm_standby(replacement, standby_nonce)
         retired = await host({"op": "kill_if", "name": name, "created": replacement["created"]})
-        if retired != {"ok": True}:
+        if not _exact_host_ack(retired, True):
             raise web.HTTPServiceUnavailable(text="Standby cleanup unconfirmed; inspect before another action")
-        raise web.HTTPConflict(text="Session replaced or stop already requested")
+        if _exact_host_ack(killed, False):
+            if phase is not None:
+                phase["effect_started"] = False
+            raise web.HTTPConflict(text="Session replaced or stop already requested")
+        raise web.HTTPServiceUnavailable(text="Source stop unconfirmed; inspect before another action")
     await _carry_arrangement((old_name, old_created), name, saved, replacement["created"])
     await _wait_source_gone(old_name, old_created, name)
     if switch:
@@ -1575,7 +1583,7 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
                 standby = (name, replacement["created"])   # what the owner arranged meanwhile is on the standby
                 saved = await _arrangement_of(*standby) or saved
                 retired = await host({"op": "kill_if", "name": name, "created": replacement["created"]})
-                if retired != {"ok": True}:
+                if not _exact_host_ack(retired, True):
                     raise web.HTTPServiceUnavailable(text="Standby cleanup unconfirmed; inspect before another action")
                 resumed = await new_session(base, cwd, command, agent, known_agent, keep=48, account=account,
                                             account_env=source_env)
@@ -1777,7 +1785,7 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
             raise
         recovery = NativeFenceRecoveryRequired(fence, "Switch outcome requires inspection")
         if isinstance(exc, AccountSwitchRecoveryFailed):
-            recovery.switch_outcome = {"switch_phase": "source_restart_unconfirmed",
+            recovery.switch_outcome = {"switch_phase": "source_recovery_unconfirmed",
                                        "target_copy_remains": exc.target_copy_remains,
                                        "target_copy_uncertain": exc.target_copy_uncertain}
         elif isinstance(exc, AccountSwitchTargetStartUnconfirmed):
