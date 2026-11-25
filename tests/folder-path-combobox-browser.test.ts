@@ -18,6 +18,7 @@ import type {Page} from 'playwright-core';
 import {TerminalMesh, skip} from './terminal-browser-lib.ts';
 
 declare function openNew(): Promise<void>;
+declare const folderField: {roots: string[]; known: string[]};
 
 const HOSTILE = '<img src=x onerror=window.__folderXss=1>';
 const settingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-fold-'));
@@ -60,9 +61,11 @@ describe('folder field of the New session dialog', {skip}, () => {
     return page;
   }
 
-  /** The allowed folder (from GET /api/config) is in the list, shown or not: the dialog's requests have answered. */
-  const knownLoaded = (page: Page) => page.waitForFunction(root => [...document.querySelectorAll('#new-folder-list [role="option"]')]
-    .some(option => option.textContent === root), work, {polling: 100, timeout: 10000});
+  /** Wait for the configured root and the folders supplied by GET /api/dirs. */
+  const knownLoaded = (page: Page) => page.waitForFunction(({root, folders}) =>
+    folderField.roots.includes(root) && folders.every(folder => folderField.known.includes(folder)),
+    {root: work, folders: ['alpha', 'alpine', HOSTILE, 'gamma'].map(name => path.join(work, name))},
+    {polling: 100, timeout: 10000});
 
   /** Replace the field's text by typing it, then wait until the list holds `expected`. */
   async function typeAndWait(page: Page, text: string, expected: string[]): Promise<void> {
