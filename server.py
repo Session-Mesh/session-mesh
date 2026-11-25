@@ -1757,7 +1757,11 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
                 raise
             _forget_native_fence(switch[4])
             raise
-        raise NativeFenceRecoveryRequired(fence, "Switch outcome requires inspection") from exc
+        recovery = NativeFenceRecoveryRequired(fence, "Switch outcome requires inspection")
+        if isinstance(exc, AccountSwitchTargetStartUnconfirmed):
+            recovery.switch_outcome = {"switch_phase": "target_start_unconfirmed", "id": exc.name,
+                                       "target_copy_remains": True, "target_copy_uncertain": False}
+        raise recovery from exc
     try:
         await _release_native_fence(fence)
     except NativeFenceRecoveryRequired as exc:
@@ -5909,6 +5913,12 @@ async def _execute_session_action(item, create_nonce=None):
     agent = entry["agent"]
     account = session_account(raw)
     context = await _restart_profile_context(raw, account, source["agent"], None)
+    if item["action"] != "switch_account" and account and context is not None:
+        sid = agent.get("session_id")
+        layout = _conversation_layout(source["agent"], sid) if sid else None
+        if source["agent"] in ("claude", "codex"):
+            if layout is None or not await asyncio.to_thread(_conversation_found_in_root, context["roots"]["config"], layout[2], layout[3]):
+                raise web.HTTPConflict(text="Bound account conversation unavailable; restore refused")
     argv = _resume_argv(agent, context)
     cwd = raw["cwd"]
     replacement_options = {}
@@ -7404,6 +7414,9 @@ async def api_restore_rebind(request):
             if (entry is None or respawn.offer_mismatch(entry, expected) or not entry.get("account")
                     or entry.get("account_context_revision") or entry.get("restoring")):
                 raise web.HTTPConflict(text="The offer is not the expected one")
+            resolved, reason = await asyncio.to_thread(respawn.restore_identity, entry)
+            if reason == "contested" or resolved["agent"]["session_id"] != expected["resume_id"]:
+                raise web.HTTPConflict(text="The offer is not the expected one")
             digest = hashlib.sha256(json.dumps(entry, sort_keys=True, separators=(",", ":"),
                                                ensure_ascii=True).encode()).hexdigest()
             if action == "confirm" and digest != body["offer_digest"]:
@@ -7417,6 +7430,9 @@ async def api_restore_rebind(request):
                 raise web.HTTPConflict(text="Bound account conversation unavailable; restore refused")
             if action == "confirm":
                 await _profile_launch_context(body["account"], expected["agent_kind"], revision)
+                resolved, reason = await asyncio.to_thread(respawn.restore_identity, entry)
+                if reason == "contested" or resolved["agent"]["session_id"] != expected["resume_id"]:
+                    raise web.HTTPConflict(text="The offer is not the expected one")
                 try:
                     await asyncio.to_thread(respawn.rebind_offer, expected, entry, body["account"], revision)
                 except LookupError as exc:

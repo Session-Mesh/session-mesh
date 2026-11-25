@@ -777,3 +777,40 @@ async def test_new_session_passes_fresh_context_to_opencode_preflight(monkeypatc
         await server.new_session("created", str(Path.home()), "opencode --model a/b", "opencode", "opencode",
                                  account_env={}, fresh=True)
     assert seen == [True]
+
+
+async def test_fenced_target_start_failure_preserves_copy_outcome(monkeypatch):
+    async def host(req):
+        if req['op'] == 'list_bound':
+            return [{'name': 'alpha', 'created': 1, 'creation_receipt': 'receipt'}]
+        assert req['op'] == 'switch_input_acquire'
+        return {'ok': True}
+    async def relaunch(*_args, fence_state=None, **_kwargs):
+        fence_state['stop_started'] = True
+        raise server.AccountSwitchTargetStartUnconfirmed('alpha')
+    monkeypatch.setattr(server, 'host', host)
+    monkeypatch.setattr(server, '_save_native_fence', lambda *_args: None)
+    monkeypatch.setattr(server, '_relaunch_in_place', relaunch)
+    with pytest.raises(server.NativeFenceRecoveryRequired) as exc:
+        await server.relaunch_in_place({'name':'alpha','created':1}, '/tmp', 'codex', 'codex', 'codex',
+                                       switch=('a', 'b', 'c', 'd', 'request'))
+    assert exc.value.switch_outcome == {'switch_phase':'target_start_unconfirmed', 'id':'alpha',
+                                        'target_copy_remains':True, 'target_copy_uncertain':False}
+
+
+async def test_restart_refuses_missing_named_transcript_before_replacement(monkeypatch, tmp_path):
+    raw = {'name':'alpha', 'created':1, 'cwd':str(tmp_path), 'meta':{'account':'work'}}
+    described = {'agent': {'type':'codex', 'session_id':'12345678-abcd', 'argv':['codex']}, 'cwd':str(tmp_path)}
+    async def host(_req): return [raw]
+    async def context(*_args): return {'roots':{'config':str(tmp_path / 'selected')}}
+    async def replace(*_args, **_kwargs): pytest.fail('must not stop the source')
+    monkeypatch.setattr(server, 'host', host)
+    monkeypatch.setattr(server, 'LAUNCH_SETTINGS', SimpleNamespace(allows_cwd=lambda _cwd: True))
+    monkeypatch.setattr(server, '_describe_with_hooks', lambda *_args: {})
+    monkeypatch.setattr(server, '_session_action_entry', lambda *_args: described)
+    monkeypatch.setattr(server, 'session_account', lambda *_args: 'work')
+    monkeypatch.setattr(server, '_restart_profile_context', context)
+    monkeypatch.setattr(server, 'replace_session', replace)
+    item = {'source':{'id':'alpha', 'created':1, 'agent':'codex'}, 'action':'restart', 'model':None}
+    with pytest.raises(server.web.HTTPConflict):
+        await server._execute_session_action(item)

@@ -1137,5 +1137,9 @@ def resolved_identity(entry, registry):
     state, sid = resolve_identity(registry, entry["name"], entry["created"], agent["type"])
     if state == "none":
         sid = agent["session_id"]
+    # A bound offer approves the snapshot's exact conversation. A newer
+    # registry claim must never silently change that approval.
+    if entry.get("account_context_revision") and sid != agent["session_id"]:
+        return {**entry, "agent": {**agent, "session_id": None}}, "contested"
     reason = "contested" if state == "contested" else None if sid else "unknown"
     return {**entry, "agent": {**agent, "session_id": sid}}, reason

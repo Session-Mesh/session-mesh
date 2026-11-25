@@ -146,7 +146,7 @@ class Requests:
             try:
                 self._db = sqlite3.connect(self._path, timeout=5, isolation_level=None,
                                            check_same_thread=False)
-                self._db.create_function("mesh_retain_terminal", 1, self._retain_terminal)
+                self._db.create_function("mesh_retain_terminal", 1, self._retain_terminal_safely)
                 self._db.row_factory = sqlite3.Row
                 self._db.execute("PRAGMA foreign_keys = ON")
                 if self._path != ":memory:":
@@ -258,6 +258,14 @@ class Requests:
     def close(self):
         with self._lock:
             self._db.close()
+
+    def _retain_terminal_safely(self, request_id):
+        # Inaccessible evidence must retain the result, not roll back completion.
+        try:
+            return bool(self._retain_terminal(request_id))
+        except Exception as exc:
+            print(f"session requests: retaining terminal result after evidence check failed: {type(exc).__name__}", flush=True)
+            return True
 
     def _prune_locked(self, now):
         # A stale browser lease is not a decision. Return the intent to the
