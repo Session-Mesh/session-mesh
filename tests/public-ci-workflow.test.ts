@@ -357,7 +357,7 @@ describe('the public CI as committed', () => {
       assert.match(parts, /\$\{#selected\[@\]\} > 0/);
       assert.match(gate, /name: frontend and Node tests/);
       assert.match(gate, /needs: frontend_parts/);
-      assert.match(gate, /if: always\(\)/);
+      assert.match(gate, /if: "!cancelled\(\)"/);
       const guard = (gate + '\n').match(/run: \|\n((?:          .*\n)+)/)?.[1];
       assert.ok(guard);
       for (const [result, status] of [['success', 0], ['failure', 1], ['skipped', 1], ['cancelled', 1]]) {

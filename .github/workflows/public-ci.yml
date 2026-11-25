@@ -207,7 +207,7 @@ jobs:
   frontend:
     name: frontend and Node tests
     needs: frontend_parts
-    if: always()
+    if: "!cancelled()"
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
