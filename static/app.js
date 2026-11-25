@@ -893,7 +893,7 @@ class Pane {
     const current = this.inputAck;
     const obsolete = this.obsoleteDirtyInput();
     const other = [...this.inputAcks].filter(([key, entry]) =>
-      !key.startsWith(`${this.conn?.name ?? ""}\0`) && entry.input.pendingBytes);
+      !key.startsWith(`${this.conn?.name ?? ""}\0`) && (entry.input.pendingBytes || entry.lease?.dirty));
     const forgetDraft = $(".p-input-forget-draft", container);
     forgetDraft.textContent = t("conn.inputForgetOldDraft");
     forgetDraft.hidden = !obsolete;
@@ -903,7 +903,7 @@ class Pane {
     container.hidden = !reviewPending && current?.state !== "halted" && !obsolete && !other.length;
     const otherContainer = $(".p-input-other-drafts", container);
     const otherState = JSON.stringify(other.map(([key, entry]) =>
-      [key, entry.input.pendingBytes, entry.input.pendingHumanBytes, entry.input.deliveryUncertain, entry.input.retainedText]));
+      [key, entry.input.pendingBytes, entry.input.pendingHumanBytes, entry.input.deliveryUncertain, entry.input.retainedText, !!entry.lease?.dirty]));
     if (this.otherDraftsState !== otherState || !this.otherDraftsEntries ||
         other.some(([key, entry], i) => this.otherDraftsEntries[i]?.[0] !== key || this.otherDraftsEntries[i]?.[1] !== entry)) {
       this.otherDraftsState = otherState;
@@ -915,8 +915,10 @@ class Pane {
         const heading = document.createElement("strong");
         heading.textContent = key.split("\0", 1)[0];
         const summary = document.createElement("span");
-        summary.textContent = t("conn.inputRetained", { count: entry.input.pendingBytes,
-          state: t(entry.input.deliveryUncertain ? "conn.inputUncertain" : "conn.inputReview") });
+        summary.textContent = entry.input.pendingBytes
+          ? t("conn.inputRetained", { count: entry.input.pendingBytes,
+            state: t(entry.input.deliveryUncertain ? "conn.inputUncertain" : "conn.inputReview") })
+          : t("conn.inputObsoleteDraft");
         card.append(heading, summary);
         if (entry.input.pendingHumanBytes) {
           const label = document.createElement("label");
@@ -933,18 +935,35 @@ class Pane {
           });
           card.append(copy);
         }
-        const discard = document.createElement("button");
-        discard.type = "button"; discard.className = "btn ghost sm";
-        discard.textContent = t(entry.input.deliveryUncertain ? "conn.inputDiscardUnknown" : "conn.inputDiscard");
-        discard.addEventListener("click", () => {
-          if (this.inputAcks.get(key) !== entry || !entry.input.pendingBytes) return;
-          const uncertain = entry.input.deliveryUncertain;
-          entry.input.discard();
-          if (!uncertain && !entry.input.incompleteHumanInput) entry.lease?.release();
-          this.renderRetainedInput();
-          renderReloadStatus();
-        });
-        card.append(discard); otherContainer.append(card);
+        if (entry.input.pendingBytes) {
+          const discard = document.createElement("button");
+          discard.type = "button"; discard.className = "btn ghost sm";
+          discard.textContent = t(entry.input.deliveryUncertain ? "conn.inputDiscardUnknown" : "conn.inputDiscard");
+          discard.addEventListener("click", () => {
+            if (this.inputAcks.get(key) !== entry || !entry.input.pendingBytes) return;
+            const uncertain = entry.input.deliveryUncertain;
+            entry.input.discard();
+            if (!uncertain && !entry.input.incompleteHumanInput) entry.lease?.release();
+            this.renderRetainedInput();
+            renderReloadStatus();
+          });
+          card.append(discard);
+        }
+        if (entry.lease?.dirty && !entry.input.pendingBytes) {
+          const forget = document.createElement("button");
+          forget.type = "button"; forget.className = "btn ghost sm";
+          forget.textContent = t("conn.inputForgetOldDraft");
+          forget.addEventListener("click", () => {
+            if (this.inputAcks.get(key) !== entry || entry.input.pendingBytes || !entry.lease?.dirty ||
+                !confirm(t("conn.inputForgetOldDraftConfirm"))) return;
+            this.inputAcks.delete(key);
+            this.inputLeases.delete(key);
+            this.renderRetainedInput();
+            renderReloadStatus();
+          });
+          card.append(forget);
+        }
+        otherContainer.append(card);
       }
     }
     const drafts = $(".p-input-drafts", container);
