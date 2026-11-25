@@ -210,6 +210,8 @@ for (const lateConfig of [false, true]) test(lateConfig
     assert.deepEqual(launches.map(r => (r as {managed_profile:unknown}).managed_profile),[ref(a),ref(a)]);
     assert.ok(launches.every(r => Object.hasOwn(r as object,'managed_profile')), 'no request fell back to default');
     await waitFor('exact fake executable receives A',10000,()=>observe(0,'launch') === 'managed-a');
+    await page.waitForFunction(() => active.id === 'managed-a' && active.conn?.terminal?.isOpen()
+      && active.conn?.replaying === false, null, {timeout:10000});
     const terminalA = page.locator('.pane.active .xterm-helper-textarea');
     await terminalA.evaluate(field => (field as HTMLTextAreaElement).focus());
     const beforeKeys = frames;
