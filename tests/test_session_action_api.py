@@ -988,3 +988,78 @@ async def test_native_uncertain_carry_never_attempts_source_or_target_start(monk
     assert starts == []
     assert exc.value.switch_outcome == {'switch_phase':'source_recovery_unconfirmed',
                                         'target_copy_remains':True, 'target_copy_uncertain':True}
+
+
+@pytest.mark.parametrize('previous', [False, True])
+async def test_unsent_stop_restores_prior_effect_evidence(monkeypatch, previous):
+    async def unreachable(*_args, **_kwargs): raise server.HostNotReached(text='no connection')
+    monkeypatch.setattr(server, 'host', unreachable)
+    monkeypatch.setattr(server, '_legacy_check_active', lambda: None)
+    phase = {'effect_started': previous}
+    fence_state = {'stop_started': previous}
+    token = server._LEGACY_SWITCH_PHASE.set(phase)
+    try:
+        with pytest.raises(server.HostNotReached):
+            await server._stop_agent({'name':'alpha','created':1}, 'codex', fence_state=fence_state)
+        assert phase['effect_started'] is previous
+        assert fence_state['stop_started'] is previous
+    finally:
+        server._LEGACY_SWITCH_PHASE.reset(token)
+
+
+async def test_legacy_recovery_does_not_launch_into_new_native_registry(monkeypatch):
+    async def context(*_args): return None
+    async def env(*_args): return {}
+    async def prepared(_kind, command, _cwd, _context): return command, None, None
+    async def noop(*_args): return None
+    calls = []
+    async def create(*_args, **_kwargs):
+        calls.append('new')
+        return 'standby'
+    async def carry(): raise server.AccountsUnavailable('carry failed', 'carry_failed')
+    async def host(req):
+        if req['op'] == 'list':
+            return [{'name':'standby','created':2,'meta':{'nonce':'nonce'}}]
+        return {'ok':True}
+    for name, value in [('_restart_profile_context', context), ('account_environment', env), ('_prepared_launch', prepared),
+                        ('_confirm_standby', noop), ('_arrangement_of', noop), ('_carry_arrangement', noop),
+                        ('_wait_source_gone', noop), ('new_session', create), ('host', host)]:
+        monkeypatch.setattr(server, name, value)
+    monkeypatch.setattr(server.sessiontoken, 'new_nonce', lambda: 'nonce')
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: True)
+    with pytest.raises(server.AccountSwitchRecoveryFailed):
+        await server._replace_with_new_session('source', 1, 'source', '/tmp', 'codex', 'codex', 'codex', None,
+                                                ('work', carry))
+    assert calls == ['new'], 'the stopped source must not be launched with a newly introduced native profile'
+
+
+async def test_legacy_recovery_rechecks_mode_inside_session_launch(monkeypatch):
+    async def context(*_args): return None
+    async def env(*_args): return {}
+    async def prepared(_kind, command, _cwd, _context): return command, None, None
+    async def noop(*_args): return None
+    checks, sends = [], []
+    async def create(*_args, **kwargs):
+        if not sends:
+            sends.append('standby')
+            return 'standby'
+        assert kwargs['account_revision'] == 'legacy'
+        checks.append('revalidate')
+        await server._profile_launch_context('work', 'codex', kwargs['account_revision'])
+        sends.append('recovery')
+    async def carry(): raise server.AccountsUnavailable('carry failed', 'carry_failed')
+    async def host(req):
+        if req['op'] == 'list':
+            return [{'name':'standby','created':2,'meta':{'nonce':'nonce'}}]
+        return {'ok':True}
+    for name, value in [('_restart_profile_context', context), ('account_environment', env), ('_prepared_launch', prepared),
+                        ('_confirm_standby', noop), ('_arrangement_of', noop), ('_carry_arrangement', noop),
+                        ('_wait_source_gone', noop), ('new_session', create), ('host', host)]:
+        monkeypatch.setattr(server, name, value)
+    monkeypatch.setattr(server.sessiontoken, 'new_nonce', lambda: 'nonce')
+    reads = iter([False, True])
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: next(reads))
+    with pytest.raises(server.AccountSwitchRecoveryFailed):
+        await server._replace_with_new_session('source', 1, 'source', '/tmp', 'codex', 'codex', 'codex', 'work',
+                                                ('target', carry))
+    assert checks == ['revalidate'] and sends == ['standby']

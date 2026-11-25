@@ -18,6 +18,8 @@ import server
 import sessiontoken
 from respawn_helpers import SID, SID2, claude, codex, mesh_item, snapshot_file  # noqa: F401
 
+ORIGINAL_CONVERSATION_MISSING = server._conversation_missing
+
 
 class FakeHost:
     """A ptyhost that lists, creates and kills sessions in memory and remembers every request."""
@@ -677,3 +679,19 @@ def test_bound_restore_does_not_adopt_new_registry_conversation(monkeypatch):
     resolved, reason = respawn.resolved_identity(entry, {})
     assert resolved['agent']['session_id'] is None
     assert reason == 'contested'
+
+
+async def test_unbound_named_native_missing_transcript_keeps_offer(client, auth_cookie, fake_host, tmp_path, monkeypatch):
+    item = mesh_item('legacy-unbound', tmp_path, 1.0, claude())
+    item['account'] = 'work'
+    lose(tmp_path, item)
+    before = respawn.lost_entry('legacy-unbound')
+    selected = tmp_path / 'profile'
+    (selected / 'projects').mkdir(parents=True)
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: True)
+    monkeypatch.setattr(server, '_conversation_missing', ORIGINAL_CONVERSATION_MISSING)
+    monkeypatch.setattr(server, 'account_folder', lambda *_args: str(selected))
+    status, body = await restore(client, auth_cookie, 'legacy-unbound')
+    assert status == 200 and body['results']['legacy-unbound']['ok'] is False
+    assert 'context unknown' in body['results']['legacy-unbound']['error']
+    assert fake_host.new_requests == [] and respawn.lost_entry('legacy-unbound') == before
