@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {test} from 'node:test';
 import {selectHistoricalReleases, type Release} from '../tools/historical-release-selection.ts';
+import {verifyAsset} from '../tools/fetch-historical-releases.ts';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 function release(tag_name: string, prerelease = false): Release {
@@ -34,4 +39,17 @@ test('does not silently fall back when the latest release has incomplete or unsa
 test('requires published stable and nightly releases', () => {
   assert.throws(() => selectHistoricalReleases([release('v0.1.1')]), /both a stable release and a nightly/);
   assert.throws(() => selectHistoricalReleases([release('v0.2.0-nightly.20261125', true)]), /both a stable release and a nightly/);
+});
+
+test('download verification rejects changed or truncated artifacts', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mesh-historical-digest-'));
+  try {
+    const file = path.join(dir, 'artifact'); writeFileSync(file, 'release');
+    const item = {name: 'artifact', size: 7, digest: `sha256:${createHash('sha256').update('release').digest('hex')}`};
+    assert.doesNotThrow(() => verifyAsset(file, item));
+    writeFileSync(file, 'changed');
+    assert.throws(() => verifyAsset(file, item), /wrong digest/);
+    writeFileSync(file, 'short');
+    assert.throws(() => verifyAsset(file, item), /wrong size/);
+  } finally { rmSync(dir, {recursive: true, force: true}); }
 });
