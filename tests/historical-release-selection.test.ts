@@ -8,6 +8,7 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {selectHistoricalReleases, type Release} from '../tools/historical-release-selection.ts';
 import {verifyAsset} from '../tools/fetch-historical-releases.ts';
+import {historicalArtifacts} from './helpers/historical-artifacts.ts';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 function release(tag_name: string, prerelease = false): Release {
@@ -52,4 +53,26 @@ test('download verification rejects changed or truncated artifacts', () => {
     writeFileSync(file, 'short');
     assert.throws(() => verifyAsset(file, item), /wrong size/);
   } finally { rmSync(dir, {recursive: true, force: true}); }
+});
+
+test('dynamic manifest confines paths and rejects invalid digests', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mesh-historical-manifest-'));
+  const previous = process.env.MESH_HISTORICAL_DYNAMIC;
+  const entry = (role:string, tag:string) => ({tag, archive:`${role}/session-mesh-${tag}.tar.gz`,
+    host:`${role}/mesh-ptyhost-linux-x86_64`, platform:`${role}/mesh-platform-linux-x86_64`,
+    archiveSha:'a'.repeat(64), hostSha:'b'.repeat(64), platformSha:'c'.repeat(64)});
+  const manifest = {version:1, stable:entry('stable', 'v0.1.1'), nightly:entry('nightly', 'v0.2.0-nightly.20261125')};
+  const write = () => writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+  try {
+    process.env.MESH_HISTORICAL_DYNAMIC = '1'; write();
+    assert.equal(historicalArtifacts(dir).stable.tag, 'v0.1.1');
+    manifest.stable.host = '../outside'; write();
+    assert.throws(() => historicalArtifacts(dir));
+    manifest.stable.host = 'stable/mesh-ptyhost-linux-x86_64'; manifest.nightly.hostSha = 'bad'; write();
+    assert.throws(() => historicalArtifacts(dir));
+  } finally {
+    if (previous === undefined) delete process.env.MESH_HISTORICAL_DYNAMIC;
+    else process.env.MESH_HISTORICAL_DYNAMIC = previous;
+    rmSync(dir, {recursive:true, force:true});
+  }
 });

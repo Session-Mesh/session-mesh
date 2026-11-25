@@ -11,6 +11,7 @@ import {test} from 'node:test';
 import {REPO, scratchHome, runServer, stopServer, removeScratch} from './mesh-server-lib.ts';
 import {startTestPtyhost} from './helpers/managed-test-ptyhost.ts';
 import {waitFor} from './ptyhost-wire-lib.ts';
+import {historicalArtifacts} from './helpers/historical-artifacts.ts';
 
 const artifacts = process.env.MESH_HISTORICAL_ARTIFACTS;
 const candidate = process.env.MESH_PTYHOST_CMD;
@@ -18,12 +19,8 @@ const required = process.env.MESH_REQUIRE_HISTORICAL_MIGRATION === '1';
 const supported = process.platform === 'linux' && process.arch === 'x64';
 const skip = !required && (!supported || !artifacts || !candidate)
   ? 'Linux x86_64; set MESH_HISTORICAL_ARTIFACTS and MESH_PTYHOST_CMD' : false;
-const versions = [
-  {tag:'v0.1.1', archive:'session-mesh-v0.1.1.tar.gz', archiveSha:'f839e0b39dd031831da18bca7fe8654b2e1574222300dc3a2630260e2f2b6f6f',
-    host:'mesh-ptyhost-linux-x86_64', hostSha:'276b2fe69e8ab1ff5def33a455bc444bc773a19913042f246dbd46999a5ad008'},
-  {tag:'v0.2.0-nightly.20261124', archive:'session-mesh-v0.2.0-nightly.20261124.tar.gz', archiveSha:'58ea5761fc840ca2269e1a31c81566cb0c1fb6af6e94354c85be6989c2a63342',
-    host:'nightly-20261124/mesh-ptyhost-linux-x86_64', hostSha:'23e83e42ee335315eebb950469f6a690682d5ec417a451997e4b32cfb446269a'},
-];
+const selected = historicalArtifacts(artifacts);
+const versions = [selected.stable, selected.nightly];
 const sha = (file:string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
 for (const version of versions) test(`${version.tag} real snapshot survives upgrade to candidate`, {skip, timeout:90000}, async (t) => {
