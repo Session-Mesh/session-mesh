@@ -13,6 +13,8 @@ function fixture() {
   const context = vm.createContext({paneTargets: targets, localMeshEffectsAllowed: () => !context.meshPageSuspended,
     meshPageFinal: false, meshStopped: false, meshPageSuspended: false, meshPageCache: null,
     meshCacheFocusRevision: 0, meshPageEpoch: 0, meshContext: {}, panes: [] as any[], document: {activeElement: null},
+    disposeBackendAccountSettings() {}, startBackendAccountSettings: async () => {},
+    flowGeneration: 0, flowController: null, flowing: false,
     projectsGeneration: 0, workGeneration: 0, projectsController: null, workController: null,
     inventoryPoller: null, listBatch: {cancel() {}, request() {}}, pageSignals: null,
     localTerminalHandles: [], retirePageInput() {}, renderComposeStatus() {}, projecting: false,
