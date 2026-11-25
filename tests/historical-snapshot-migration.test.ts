@@ -26,7 +26,8 @@ const versions = [
 ];
 const sha = (file:string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
-for (const version of versions) test(`${version.tag} real snapshot survives upgrade to candidate`, {skip, timeout:90000}, async () => {
+for (const version of versions) test(`${version.tag} real snapshot survives upgrade to candidate`, {skip, timeout:90000}, async (t) => {
+  const requestSignal = () => AbortSignal.any([t.signal, AbortSignal.timeout(10000)]);
   assert.ok(supported, 'historical binaries require Linux x86_64');
   assert.ok(artifacts, 'MESH_HISTORICAL_ARTIFACTS required');
   assert.ok(candidate && path.isAbsolute(candidate) && !candidate.includes(' '), 'MESH_PTYHOST_CMD must name one absolute binary');
@@ -63,12 +64,12 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
       const cwd = path.join(where.home,`work-${name}`); fs.mkdirSync(cwd, {mode:0o700}); return [name,cwd];
     }));
     for (const name of ['alpha','bravo']) {
-      const response = await fetch(`${url}/api/new`, {method:'POST', headers, body:JSON.stringify({preset:'shell', cwd:directories[name], name})});
+      const response = await fetch(`${url}/api/new`, {method:'POST', headers, signal:requestSignal(), body:JSON.stringify({preset:'shell', cwd:directories[name], name})});
       assert.equal(response.status,200,await response.text());
     }
     const snapshot = path.join(where.confDir,'sessions-snapshot.json');
     await waitFor('historical snapshot',15000,async () => {
-      await fetch(`${url}/api/sessions`,{headers});
+      await fetch(`${url}/api/sessions`,{headers, signal:requestSignal()});
       if (!fs.existsSync(snapshot)) return false;
       return JSON.parse(fs.readFileSync(snapshot,'utf8')).live?.length === 2;
     });
@@ -78,12 +79,12 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
       [['alpha',directories.alpha,null],['bravo',directories.bravo,null]]);
     await stopServer(server); server = undefined; await host.stop(); host = undefined;
     const next = await runServer(where, REPO); assert.ok(next.result.listened, next.output()); server = next.child;
-    await fetch(`${url}/api/sessions`,{headers});
+    await fetch(`${url}/api/sessions`,{headers, signal:requestSignal()});
     assert.deepEqual(fs.readFileSync(snapshot), before, 'unavailable host must not overwrite historical snapshot');
     host = startTestPtyhost([candidate], {cwd:REPO, env:hostEnv, stdio:'ignore'}, socket); await host.ready;
     let offers: any[] = [];
     await waitFor('restorable historical sessions',15000,async () => {
-      const response = await fetch(`${url}/api/sessions`,{headers});
+      const response = await fetch(`${url}/api/sessions`,{headers, signal:requestSignal()});
       offers = (await response.json()).restorable ?? [];
       return offers.length === 2;
     });
@@ -92,13 +93,13 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
       assert.equal(offer.cwd, directories[offer.name]);
       assert.equal(offer.agent, null);
     }
-    const restored = await fetch(`${url}/api/restore`,{method:'POST',headers,body:JSON.stringify({names:['alpha','bravo']})});
+    const restored = await fetch(`${url}/api/restore`,{method:'POST',headers,signal:requestSignal(),body:JSON.stringify({names:['alpha','bravo']})});
     assert.equal(restored.status,200,await restored.clone().text());
     const body = await restored.json();
     assert.equal(body.results.alpha.ok,true); assert.equal(body.results.bravo.ok,true);
     let restoredRows: {name:string; cwd:string; agent:unknown}[] = [];
     await waitFor('restored sessions recorded',15000,async () => {
-      const response = await fetch(`${url}/api/sessions`,{headers});
+      const response = await fetch(`${url}/api/sessions`,{headers, signal:requestSignal()});
       const data = await response.json();
       restoredRows = data.mesh ?? [];
       const names = restoredRows.map(row => row.name).sort();
