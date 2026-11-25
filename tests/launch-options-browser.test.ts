@@ -21,6 +21,8 @@ import {ptyhostArgv} from './ptyhost-command.ts';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 declare const newSubmitGeneration: number | null;
+declare const newAccountsReady: boolean;
+declare const launchOptionsRevision: string;
 declare const active: {id?: string} | null;
 
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
@@ -95,6 +97,22 @@ const stored = () => {
   const file = path.join(mesh.confDir, 'agent-launch-options.json');
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) as {options?: Record<string, string[]>} : null;
 };
+
+async function waitStoredHint(page: Page, expected: string): Promise<void> {
+  try {
+    await page.locator('#new-options-stored').filter({hasText: expected}).waitFor();
+  } catch (cause) {
+    const details = await page.evaluate(() => ({
+      text: document.querySelector('#new-options-stored')?.textContent,
+      hidden: (document.querySelector('#new-options-stored') as HTMLElement | null)?.hidden,
+      error: document.querySelector('#new-err')?.textContent,
+      preset: (document.querySelector('#form-new input[name="preset"]:checked') as HTMLInputElement | null)?.value,
+      accountReady: newAccountsReady,
+      optionsRevision: launchOptionsRevision,
+    })).catch(() => null);
+    throw new Error(`stored options hint did not reach ${expected}: ${JSON.stringify(details)}`, {cause});
+  }
+}
 
 /** Store a default through the configuration route, as the Configuration dialog does. */
 async function storeDefault(page: Page, agentOptions: Record<string, string>): Promise<string> {
@@ -218,7 +236,7 @@ describe('the Options field of New session', {skip}, () => {
     const other = await signedIn();
     assert.equal(await storeDefault(other.page, {pi: '-e /tmp/before-retry.mjs'}), 'ok');
     await openNew(page, 'pi');
-    await page.locator('#new-options-stored').filter({hasText: '/tmp/before-retry.mjs'}).waitFor();
+    await waitStoredHint(page, '/tmp/before-retry.mjs');
     await page.locator('#form-new input[name="options"]').fill('-e /tmp/retry.mjs');
     await page.locator('#form-new input[name="optionsDefault"]').check();
     await page.locator('#dlg-new button[value="ok"]').click();
@@ -358,8 +376,7 @@ describe('the Options field of New session', {skip}, () => {
         await held.entered();
         await page.locator('#dlg-new button[value="cancel"], #dlg-new [data-close-dialog]').first().click();
         await openNew(page, 'pi');
-        await page.locator('#new-options-stored').filter({hasText: phase === 'saved'
-          ? '/tmp/old-opening.mjs' : 'No stored default'}).waitFor();
+        await waitStoredHint(page, phase === 'saved' ? '/tmp/old-opening.mjs' : 'No stored default');
         await page.locator('#form-new input[name="options"]').fill('-e /tmp/new-draft.mjs');
         held.release();
         await held.settled();
