@@ -212,7 +212,10 @@ describe('links and documents in the Projects view', { skip }, () => {
     assert.equal(await md.getAttribute('sandbox'), 'allow-scripts');
     await page.frameLocator('.work-doc-panel iframe').locator('table td', { hasText: 'draft' }).waitFor();
     // The blocker names a file outside the view roots: the reference is a button, the panel says it is not available.
+    const denied = page.waitForResponse(response => response.url().endsWith('/api/view') &&
+      response.request().method() === 'POST' && response.request().postDataJSON()?.target === `${DIR}/outside.md`);
     await sheet.locator('.work-detail-item').getByRole('button', { name: /outside\.md/ }).click();
+    assert.equal((await denied).status(), 403, 'outside-root symlink is refused by the server');
     await panel(page).locator('.work-doc-unavailable').waitFor();
     assert.equal(await panel(page).locator('iframe').count(), 0);
     assert.equal(await panel(page).locator('.work-doc-newtab').isHidden(), true);
@@ -249,7 +252,10 @@ describe('links and documents in the Projects view', { skip }, () => {
     await panel(page).waitFor({ state: 'hidden' });
     assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.className), 'work-doc-link');
     await openTaskSheet(page);
+    const denied = page.waitForResponse(response => response.url().endsWith('/api/view') &&
+      response.request().method() === 'POST' && response.request().postDataJSON()?.target === `${DIR}/outside.md`);
     await page.locator('.work-detail-pane .work-detail-item').getByRole('button', { name: /outside\.md/ }).click();
+    assert.equal((await denied).status(), 403, 'outside-root symlink is refused by the server');
     await panel(page).locator('.work-doc-unavailable').waitFor();
     assert.equal(await panel(page).locator('iframe').count(), 0);
     assert.equal(await panel(page).locator('.work-doc-newtab').isHidden(), true);
