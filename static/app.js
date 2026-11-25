@@ -5207,7 +5207,16 @@ const mailboxPanel = MeshPaneActions.createMailboxPanel({
 });
 
 const configPanel = MeshPaneActions.createConfigPanel({ dialog: $("#dlg-config"), body: $("#config-body") }, {
-  t,
+  t: (key, params) => {
+    if (MeshI18n.loaded) {
+      const translated = t(key, params);
+      if (translated !== key) return translated;
+    }
+    const fallback = window.MeshConfigFallback?.[key];
+    if (typeof fallback !== "string") return key;
+    return fallback.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name) =>
+      params && Object.hasOwn(params, name) ? String(params[name]) : match);
+  },
   load: async () => {
     try {
       const response = await requestLocal("/api/config", { cache: "no-store" });
@@ -5254,7 +5263,22 @@ const configPanel = MeshPaneActions.createConfigPanel({ dialog: $("#dlg-config")
   },
 });
 function sizeTakeoverMode() { return MeshPaneActions.sizeTakeoverMode(store.get(MeshPaneActions.SIZE_TAKEOVER_KEY, "auto")); }
-$("#btn-config").addEventListener("click", () => configPanel.open());
+let configOpenAttempt = 0;
+$("#dlg-config [data-close-dialog]").addEventListener("click", () => {
+  if (!MeshI18n.loaded) $("#dlg-config").close();
+});
+$("#btn-config").addEventListener("click", async () => {
+  const attempt = ++configOpenAttempt;
+  let timer;
+  const ready = await Promise.race([
+    MeshI18n.ready.then(() => true, () => false),
+    new Promise((resolve) => { timer = setTimeout(() => resolve(false), 4000); }),
+  ]);
+  clearTimeout(timer);
+  if (attempt !== configOpenAttempt) return;
+  if (!ready) flash($("#config-translation-unavailable").textContent, 8000);
+  configPanel.open();
+});
 
 let backendAccountPanel = null;
 let backendAccountPorts = null;

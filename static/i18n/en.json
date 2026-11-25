@@ -1645,6 +1645,7 @@
   "config.soon.updates": "Update notification settings will appear here.",
   "config.notice": "Some values can be changed here, others are read-only. No token, key or file content is ever shown here.",
   "config.loadFailed": "The configuration could not be loaded. Close and reopen this panel to try again.",
+  "config.translationUnavailable": "Opening configuration in English while translations load.",
   "config.unknown": "unknown",
   "config.notSet": "not set",
   "config.notDetected": "not detected",
