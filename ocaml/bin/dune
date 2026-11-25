@@ -32,7 +32,7 @@
 (executable
  (name mesh_profile_main)
  (public_name mesh-profile)
- (modules mesh_profile_main)
+ (modules mesh_profile_main provision_capability)
  (libraries
   mesh_backend_profile
   mesh_backend_consent

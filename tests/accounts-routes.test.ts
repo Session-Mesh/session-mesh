@@ -9,6 +9,7 @@
 // records what it was given and answers what a mode file says). `mesh-profile` comes from MESH_PROFILE_CMD or the
 // dune build; MESH_REQUIRE_MESH_PROFILE=1 turns its absence into failures, as for tests/backend-profiles.test.ts.
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {createHmac} from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -239,6 +240,13 @@ describe('the request is bounded before the helper runs', {skip}, () => {
     const form = await call(real, 'POST', '/api/accounts/consent/reset',
       {body: 'expected_revision=0', headers: {'Content-Type': 'application/x-www-form-urlencoded'}});
     envelope(form, 415, 'unsupported-media-type');
+  });
+
+  test('the alias creation table probe is refused by the authenticated handler without a helper', async () => {
+    const route = '/api/accounts/profiles/create';
+    assert.equal((await call(missing, 'POST', route, {body:'[]', cookie:null})).status, 401);
+    assert.equal((await call(missing, 'POST', route, {body:'[]', headers:{Origin:'http://elsewhere.example'}})).status, 403);
+    envelope(await call(missing, 'POST', route, {body:'[]'}), 400, 'invalid-request');
   });
 });
 
@@ -523,6 +531,74 @@ function serverCodes(source: string): Record<string, number> {
   return Object.fromEntries(entries.map(m => [m[1], Number(m[2])]));
 }
 
+function assertProfileAuthority(source: string) {
+  assert.equal(source.match(/["']mesh-profile["']/g)?.length, 1, 'one executable lookup');
+  assert.match(source, /return await _run_private_helper\(work_command\("mesh-profile"\), argv, body,/);
+  assert.doesNotMatch(source, /["']profiles\.resolve["']/, 'generic private resolution stays out of the server');
+  const edges: string[] = [];
+  let owner = '';
+  for (const line of source.split('\n')) {
+    const def = /^(?:async )?def (\w+)\(/.exec(line);
+    if (def) { owner = def[1]!; continue; }
+    if (/\b(?:_profile_run|_provision_capabilities|_managed_launch_context)\b/.test(line)) {
+      edges.push(`${owner}: ${line.trim()}`);
+    }
+  }
+  assert.deepEqual(edges, [
+    'new_session: context = await _managed_launch_context(managed_profile)',
+    'new_session: if managed_profile is not None and await _managed_launch_context(managed_profile) != context:',
+    '_provision_capabilities: ran = await _profile_run("config", "profiles.provision-capabilities", b"{}")',
+    '_managed_launch_context: ran = await _profile_run("managed-launch", managed_ref=ref)',
+    'api_accounts: ran = await _profile_run("accounts", op, body)',
+    'api_config: provisioning = await _provision_capabilities()',
+  ]);
+}
+
+test('managed launch rejects divergent or malformed input before looking up the helper', () => {
+  const check = spawnSync(process.env.MESH_PYTHON || 'python3', ['-B', '-c', `
+import asyncio
+import contextlib
+import server
+
+lookups = []
+def lookup(name):
+    lookups.append(name)
+    return None
+server.work_command = lookup
+ref = {"backend": "codex", "id": "p-0123456789abcdef", "context_revision": "a" * 64}
+cases = [
+    (("managed-launch", "profiles.managed-launch", b'{"op":"profiles.list"}'), {}),
+    (("managed-launch",), {"managed_ref": {**ref, "op": "profiles.list"}}),
+    (("managed-launch",), {"managed_ref": {**ref, "backend": "pi"}}),
+    (("managed-launch",), {"managed_ref": {**ref, "id": []}}),
+    (("managed-launch",), {"managed_ref": {**ref, "context_revision": "wrong"}}),
+    (("managed-launch",), {"managed_ref": b'{}'}),
+    (("config", "profiles.provision-capabilities", b"{}"), {"managed_ref": ref}),
+]
+for args, kwargs in cases:
+    with contextlib.suppress(TypeError, ValueError):
+        asyncio.run(server._profile_run(*args, **kwargs))
+        raise AssertionError(f"unexpected acceptance: {args!r}, lookup={lookups!r}")
+    assert not lookups, lookups
+`], {cwd: REPO, encoding: 'utf8'});
+  assert.equal(check.status, 0, check.stderr || String(check.error));
+});
+
+test('mesh-profile call sites and their authorities have an exhaustive allowlist', () => {
+  const source = fs.readFileSync(path.join(REPO, 'server.py'), 'utf8');
+  assertProfileAuthority(source);
+  for (const unexpected of [
+    'return await _profile_run("accounts", "profiles.list", b"{}")',
+    'resolver = _managed_launch_context',
+    'return await _provision_capabilities()',
+  ]) {
+    assert.throws(() => assertProfileAuthority(`${source}\nasync def unexpected_switch():\n    ${unexpected}\n`),
+      {name: 'AssertionError'});
+  }
+  assert.throws(() => assertProfileAuthority(source.replace('_profile_run("config", "profiles.provision-capabilities"',
+    '_profile_run("config", "profiles.provision"')), {name: 'AssertionError'});
+});
+
 describe('scope', {skip}, () => {
   test('the code table is read whatever its spacing or quoting', () => {
     assert.deepEqual(serverCodes(`_ACCOUNTS_CODE_STATUS = {\n "a-b": 409,"x":409, 'y' :404,\n\t"z"\n:\t400}`), {'a-b': 409, x: 409, y: 404, z: 400});
@@ -535,19 +611,6 @@ describe('scope', {skip}, () => {
         assert.ok(!seen.some(text => text.includes(folder)), `a response named ${folder}`);
       }
     }
-  });
-
-  test('server.py runs mesh-profile from the accounts routes only, never from a session action or a switch', () => {
-    const source = fs.readFileSync(path.join(REPO, 'server.py'), 'utf8');
-    assert.equal(source.match(/work_command\("mesh-profile"\)/g)?.length, 1);
-    const lines = source.split('\n');
-    const callers = lines.flatMap((line, index) => {
-      if (!line.includes('_profile_run(') || /^(async )?def _profile_run\(/.test(line)) return [];
-      const owner = lines.slice(0, index).reverse().find(above => /^(async )?def /.test(above));
-      return [/def (\w+)/.exec(owner ?? '')?.[1]];
-    });
-    assert.deepEqual(callers, ['api_accounts']);
-    assert.doesNotMatch(source, /"profiles\.resolve"/, 'profiles.resolve is never named by the server');
   });
 
   test('the server knows each refusal code under the status the helper gives it, no more and no less', () => {

@@ -242,6 +242,59 @@ conflict, refusal or uncertain result; it never retries a write. The route does 
 credentials, log into a provider, create agent directories, modify preferences or switch sessions.
 Sign in separately through the native CLI. A label is not evidence of sign-in.
 
+The settings action **Associate an existing configuration** uses this operation.
+The native helper separately accepts `profiles.provision` in its host-only one-shot protocol:
+`{"version":1,"op":"profiles.provision","registry_revision":null,"profile":{"backend":"codex","label":"Work"}}`.
+Use the current registry revision instead of `null` for an existing registry. This operation allocates
+the runner's private directories and records a **disabled** profile; it does not start an agent,
+check a sign-in or expose the profile in New session. This host-only maintenance operation is
+distinct from the capability-gated HTTP path below.
+It rejects Pi, paths and caller-chosen IDs. A failure after allocation can leave unpublished
+directories; neither profile reads nor `recover-create` adopt or delete them. For a witnessed
+first write, `mesh-profile recover-create` either retires the unpublished stage or reconciles the
+already published inode; it never publishes a stage. For an interrupted append, explicitly re-read
+`profiles.list`: the surviving registry is authoritative. First-write recovery does not interpret
+an append stage. Recovery refuses contradictory legacy switch evidence under the registry lock
+without retiring the intent or stage. Do not replay the original request or discard an orphan based
+on its name; review the current revision, rows and retained evidence before any new explicit request.
+
+In the provision panel, read-back uses only the registry and never reads consent.
+A validated receipt can be confirmed against its exact revision and profile; without a receipt,
+neither an unchanged registry nor a plausible new row identifies the request. The panel blocks
+further provisioning, including after capability loss and a reload in the same browser and origin.
+Each opening of Accounts discards the previous creation offer and reads the current capability.
+Refreshing the capability does not clear the journal. **Associate** is a separate explicit registry
+write using the inspected revision, and its receipt cannot settle a creation journal. This browser hold does not
+replace host recovery, is not a cross-client custody record, and cannot interpret a host recovery
+without evidence linking that recovery to this request.
+
+### Managed first launch
+
+The owner-only, same-origin `POST /api/accounts/profiles/provision` accepts precisely a
+`registry_revision` and `profile: {backend, label}`. The browser learns the admitted backends
+from `/api/config`, but cannot grant eligibility: the native helper checks its own capability
+before allocation and again before publication. The distributed helper admits **none**. A
+successful, admitted creation records a managed profile in the same registry write that
+publishes its private directories. It neither opens a PTY nor checks sign-in.
+
+Beyond the owner-cookie and same-origin account routes, the server permits exactly two native uses:
+
+- Owner-cookie `GET /api/config` invokes `--http profiles.provision-capabilities` with `{}`.
+  This read-only discovery projects only admitted backend tags and public profile metadata.
+- The managed branch of `POST /api/new` invokes private `profiles.managed-launch` with a closed
+  `(backend, id, context revision)` reference. The dispatcher validates that reference and builds
+  the private request itself. The server uses the result only for the explicit
+  launch; the private executable and roots do not enter the HTTP response. Ordinary starts,
+  resume and switch cannot use this resolver.
+
+The managed option in New session sends `managed_profile: {backend, id, context_revision}`.
+The server gets the private executable and roots from a fresh native check, revalidates
+the same context before PTY admission, and refuses a missing or changed binding. No command,
+paths or fallback account can be supplied on this path. Ordinary aliases, resume and account
+switch cannot resolve a managed entry through the legacy resolver. An explicit connection
+command is not offered. The browser acceptance test uses a separately built, non-installed
+helper with only the capability module substituted and a known synthetic executable.
+
 The native writer checks the whole candidate registry and existing directory custody, serializes
 with explicit host migration under the permanent registry lock, requires the exact authored-byte
 revision, stages and syncs a complete private file and publishes a first registry without

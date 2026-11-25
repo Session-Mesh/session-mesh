@@ -1578,6 +1578,140 @@ let first_create_interruption () =
           Alcotest.(check bool) "migration made no target" false
             (Sys.file_exists (target root))))
 
+let provision_interruption ~append ~point () =
+  fixture (fun root ->
+      let profile label = `Assoc [ ("backend", s "codex"); ("label", s label) ] in
+      let before =
+        if not append then None
+        else
+          match M.provision_profile ~root ~expected_revision:None ~profile:(profile "Existing") with
+          | Error code -> Alcotest.fail code
+          | Ok (revision, _) -> Some (revision, read (target root), Unix.lstat (target root))
+      in
+      let revision = Option.map (fun (revision, _, _) -> revision) before in
+      let requested = profile "Interrupted" in
+      let roots () =
+        Sys.readdir root |> Array.to_list
+        |> List.filter (String.starts_with ~prefix:"profile-p-")
+        |> List.sort String.compare
+        |> List.map (Filename.concat root)
+      in
+      let old_roots = roots () in
+      let snapshot path =
+        let st = Unix.lstat path in
+        (st.Unix.st_dev, st.Unix.st_ino, read path)
+      in
+      let sentinel base =
+        Filename.concat (Filename.concat base "config") "sessions/witness"
+      in
+      List.iter (fun base -> write (sentinel base) "existing") old_roots;
+      (match Unix.fork () with
+      | 0 ->
+          let checkpoint actual =
+            if actual = point then (
+              Unix.kill (Unix.getpid ()) Sys.sigkill;
+              Unix._exit 126)
+          in
+          ignore (M.write_profile ~checkpoint ~provision:true ~root
+                    ~expected_revision:revision ~profile:requested ());
+          Unix._exit 125
+      | pid ->
+          Alcotest.(check bool) "writer killed at the requested boundary" true
+            (snd (Unix.waitpid [] pid) = Unix.WSIGNALED Sys.sigkill));
+      let allocated = roots () in
+      let new_root =
+        match List.filter (fun path -> not (List.mem path old_roots)) allocated with
+        | [path] -> path
+        | _ -> Alcotest.fail "exactly one new native root"
+      in
+      write (sentinel new_root) "retained";
+      let witnesses = List.map (fun root -> snapshot (sentinel root)) allocated in
+      let published = point = M.After_publish in
+      let destination = target root in
+      let recorded = if Sys.file_exists destination then Some (snapshot destination) else None in
+      (match before with
+      | None ->
+          Alcotest.(check bool) "target only exists after link" published (Option.is_some recorded);
+          Alcotest.(check bool) "intent blocks a second write" true
+            (M.provision_profile ~root ~expected_revision:None ~profile:requested
+             = Error "profile-publication-uncertain")
+      | Some (_, bytes, st) when not published ->
+          Alcotest.(check bool) "append before rename preserves old inode and bytes" true
+            (recorded = Some (st.Unix.st_dev, st.Unix.st_ino, bytes))
+      | Some _ ->
+          Alcotest.(check bool) "stale append cannot replay" true
+            (M.provision_profile ~root ~expected_revision:revision ~profile:requested
+             = Error "profile-registry-changed"));
+      if not append then (
+        let evidence = Filename.concat root ".backend-profiles.create-intent" in
+        let stage = Filename.concat root
+          Yojson.Safe.Util.(Yojson.Safe.from_string (read evidence) |> member "stage" |> to_string) in
+        let legacy_switch = Filename.concat root ".backend-profiles.legacy-switch" in
+        write legacy_switch "contradictory synthetic evidence";
+        let held = List.map snapshot [evidence; stage; legacy_switch] in
+        let status, _ = run root ["recover-create"] in
+        Alcotest.(check bool) "legacy evidence prevents explicit recovery" true
+          (status = Unix.WEXITED 1);
+        Alcotest.(check bool) "intent, stage, and marker retain their inodes and bytes" true
+          (List.map snapshot [evidence; stage; legacy_switch] = held);
+        Alcotest.(check bool) "contradiction does not replace the target" true
+          (recorded = (if Sys.file_exists destination then Some (snapshot destination) else None));
+        Unix.unlink legacy_switch);
+      let status, response = run root ["recover-create"] in
+      if append then
+        Alcotest.(check bool) "first-create recovery does not interpret an append" true
+          (status = Unix.WEXITED 1)
+      else (
+        Alcotest.(check bool) "explicit first-create recovery" true (status = Unix.WEXITED 0);
+        let outcome = Yojson.Safe.Util.(response |> member "data" |> member "outcome" |> to_string) in
+        Alcotest.(check string) "recovery never publishes a stage"
+          (if published then "published-reconciled" else "unpublished-aborted") outcome);
+      Alcotest.(check bool) "recovery never replaces the registry" true
+        (recorded = (if Sys.file_exists destination then Some (snapshot destination) else None));
+      let count = Bool.to_int append + Bool.to_int published in
+      let loaded = match P.load ~root with
+        | Ok registry -> Option.fold ~none:[] ~some:P.profiles registry
+        | Error _ -> Alcotest.fail "explicit read cannot determine surviving registry"
+      in
+      Alcotest.(check int) "only published rows visible" count (List.length loaded);
+      Alcotest.(check bool) "every surviving row stays disabled" true
+        (List.for_all (fun p -> not (P.enabled p)) loaded);
+      Alcotest.(check bool) "directory witnesses retain inodes and bytes" true
+        (roots () = allocated && List.map (fun root -> snapshot (sentinel root)) allocated = witnesses))
+
+let provision_mkdir_collision () =
+  fixture (fun root ->
+      let profile label = `Assoc [ ("backend", s "codex"); ("label", s label) ] in
+      let revision =
+        match M.provision_profile ~root ~expected_revision:None ~profile:(profile "Neighbour") with
+        | Error code -> Alcotest.fail code
+        | Ok (revision, _) -> revision
+      in
+      let id = "p-0123456789abcdef" in
+      let occupied = Filename.concat root ("profile-" ^ id) in
+      Unix.mkdir occupied 0o700;
+      write (Filename.concat occupied "witness") "preexisting unregistered directory";
+      let rec inventory path =
+        let st = Unix.lstat path in
+        let content =
+          if st.Unix.st_kind = Unix.S_DIR then
+            `Directory (Sys.readdir path |> Array.to_list |> List.sort String.compare)
+          else `File (read path)
+        in
+        (path, st.Unix.st_dev, st.Unix.st_ino, content)
+        :: (match content with
+            | `Directory names -> List.concat_map (fun name -> inventory (Filename.concat path name)) names
+            | `File _ -> [])
+      in
+      let before = inventory root in
+      let used = ref false in
+      let result = M.write_profile ~new_id:(fun () -> used := true; id) ~root
+        ~expected_revision:(Some revision) ~provision:true ~profile:(profile "Different") () in
+      Alcotest.(check bool) "unregistered destination reaches the mkdir guard" true
+        (!used && result = Error "profile-already-exists");
+      Alcotest.(check bool) "registry and neighbouring trees retain names, inodes and bytes" true
+        (inventory root = before))
+
 let () =
   Alcotest.run
     ~argv:[| Sys.argv.(0) |]
@@ -1614,5 +1748,10 @@ let () =
             ("foreign custody predicate", custody_predicate);
             ("missing and aliased Mesh root", missing_or_aliased_mesh_root);
             ("explicit first-create recovery requires witnessed state", first_create_interruption);
+            ("provision killed before first link", provision_interruption ~append:false ~point:Before_publish);
+            ("provision killed after first link", provision_interruption ~append:false ~point:After_publish);
+            ("provision killed before append rename", provision_interruption ~append:true ~point:Before_publish);
+            ("provision killed after append rename", provision_interruption ~append:true ~point:After_publish);
+            ("provision refuses a real mkdir collision", provision_mkdir_collision);
           ] );
     ]

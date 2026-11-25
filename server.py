@@ -1215,7 +1215,7 @@ async def _send_new(request):
 async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, pi_runtime=None,
                       notice=None, vibe=None, opencode=None, exact=False, nonce=None, conversation=None,
                       account=None, account_env=None, account_revision=None, default_context_revision=None, fresh=False,
-                      standby_phase=None):
+                      standby_phase=None, managed_profile=None):
     """Start a session. Every way to start one ends here ("New session", a
     conversation resumed from the history, a restored session, an agent moved
     in from another terminal, a restart), so workspace_roots is applied here.
@@ -1238,7 +1238,15 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
         _validate_default_restore(known_agent, default_context_revision)
     if known_agent == "gemini" and _is_home_directory(cwd):
         raise web.HTTPBadRequest(text=GEMINI_IN_HOME)
-    context = await _profile_launch_context(account, known_agent, account_revision) if account else None
+    if managed_profile is not None:
+        if (known_agent != "codex" or account is not None or account_revision is not None
+                or default_context_revision is not None or conversation is not None or standby_phase is not None):
+            raise web.HTTPConflict(text=MANAGED_PROFILE_REFUSED)
+        context = await _managed_launch_context(managed_profile)
+        account = context["id"]
+        command = shlex.quote(context["executable"])
+    else:
+        context = await _profile_launch_context(account, known_agent, account_revision) if account else None
     if default_context_revision is not None:
         context = await _switch_profile_context(DEFAULT_ACCOUNT["id"], known_agent, default_context_revision)
     if context is not None:
@@ -1282,6 +1290,8 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
         # Preparation (notably Claude wake) can yield after the first mode check.
         # Revalidate the offer immediately before admitting its launch.
         await _profile_launch_context(account, known_agent, account_revision)
+    if managed_profile is not None and await _managed_launch_context(managed_profile) != context:
+        raise web.HTTPConflict(text=MANAGED_PROFILE_REFUSED)
     if default_context_revision is not None:
         _validate_default_restore(known_agent, default_context_revision)
     env = {"MESH_SESSION": name, "MESH_SESSION_TOKEN": sessiontoken.issue(name, nonce), **_mesh_reach_env()}
@@ -3587,7 +3597,7 @@ async def api_new(request):
     kind = body.get("preset", "shell")
     if kind not in {"shell", "custom", *AGENT_PRESETS}:
         raise web.HTTPBadRequest(text="Unknown or disabled preset")
-    options = parse_launch_options(kind, body.get("options"))
+    options = () if "managed_profile" in body else parse_launch_options(kind, body.get("options"))
     command = str(body.get("command") or "").strip() if kind == "custom" else PRESETS.get(kind)
     name = str(body.get("name") or "").strip()
     if name and not NAME_RE.fullmatch(name):
@@ -3596,13 +3606,18 @@ async def api_new(request):
     account = body.get("account")   # absent or null: the default account; anything else must be an alias id
     if account is not None and not (isinstance(account, str) and ACCOUNT_ID_RE.fullmatch(account)):
         raise web.HTTPBadRequest(text=ACCOUNT_UNKNOWN)
+    managed = body.get("managed_profile")
+    if "managed_profile" in body:
+        if (not _managed_profile_ref(managed) or not set(body) <= {"preset", "cwd", "name", "managed_profile"}
+                or kind != "codex" or account is not None):
+            raise web.HTTPConflict(text=MANAGED_PROFILE_REFUSED)
     conversation = None
-    if agent:
+    if agent and managed is None:
         argv, conversation = _chosen_launch(agent, effective_launch(kind, stored_options(kind), options))
         command = shlex.join(argv)
     name = await new_session(name or f"{Path(cwd).name}-{kind if kind != 'custom' else 'cmd'}",
                              cwd, command, agent if agent in RESUMABLE_AGENT_PRESETS else None,
-                             agent, conversation=conversation, account=account,
+                             agent, conversation=conversation, account=account, managed_profile=managed,
                              **({"fresh": True} if agent == "opencode" else {}))
     await _record_recent_folder(request, cwd)
     return web.json_response({"id": name})
@@ -5870,7 +5885,8 @@ def _qualify_profiles(profiles, sessions):
         sessions = []
     available = {(item.get("meta") or {}).get("known_agent") for item in sessions
                  if _native_switch_available((item.get("meta") or {}).get("known_agent"), item)}
-    return [{**profile, "switch_qualified": profile["enabled"] and profile["backend"] in available}
+    return [{**profile, "switch_qualified": profile["enabled"] and not profile.get("managed")
+             and profile["backend"] in available}
             for profile in profiles]
 
 
@@ -6224,6 +6240,7 @@ def _require_owner_cookie(request):
 # refusal. Only these named operations have a route: profiles.resolve (it returns folders) and any switch stay on the
 # host. The server checks the caller and the request's bounds, then relays the helper's envelope and its status.
 ACCOUNTS_ROUTES = {"/api/accounts/profiles": "profiles.list", "/api/accounts/profiles/create": "profiles.create",
+                   "/api/accounts/profiles/provision": "profiles.provision",
                    "/api/accounts/consent": "consent.get",
                    "/api/accounts/consent/set-global": "consent.set_global",
                    "/api/accounts/consent/set-pair": "consent.set_pair",
@@ -6238,6 +6255,7 @@ FLOW_SLOTS = asyncio.Semaphore(4)
 ACCOUNTS_MAX_PENDING, ACCOUNTS_QUEUE = 4 + 8, {"pending": 0}
 _ACCOUNTS_STATUSES = frozenset((200, 400, 404, 409, 413, 503))
 _ACCOUNTS_PUBLIC_PROFILE = {"id", "label", "backend", "enabled", "context_revision", "switch_qualified"}
+MANAGED_PROFILE_REFUSED = "Managed profile unavailable or changed; no session started"
 _ACCOUNTS_POLICY, _ACCOUNTS_PAIR = {"version", "revision", "global", "pairs"}, {"a", "b", "confirmation"}
 _ACCOUNTS_ACCOUNT, _ACCOUNTS_BACKENDS = {"backend", "id", "context_revision"}, ("claude", "codex", "opencode-v2", "pi")
 _ACCOUNTS_CONFIRMATIONS = ("ask", "skip")
@@ -6246,7 +6264,7 @@ _ACCOUNTS_CONFIRMATIONS = ("ask", "skip")
 _ACCOUNTS_CODE_STATUS = {
     "request-too-large": 413,
     "consent-revision-conflict": 409, "profile-registry-changed": 409, "profile-context-changed": 409,
-    "profile-already-exists": 409, "profile-migration-required": 409,
+    "profile-already-exists": 409, "profile-migration-required": 409, "profile-provision-unavailable": 409,
     "consent-rule-capacity": 409, "consent-revision-exhausted": 409,
     "unknown-profile": 404, "profiles-unconfigured": 404,
     "invalid-request": 400, "unsupported-request-version": 400, "invalid-account-pair": 400,
@@ -6269,6 +6287,35 @@ def accounts_refusal(status, code):
     """A refusal the server gives itself, in the helper's envelope (the page reads both the same way)."""
     return web.json_response({"http_status": status, "version": 1, "ok": False, "code": code}, status=status,
                              headers={"Cache-Control": "no-store"})
+
+
+def _managed_profile_ref(ref):
+    return (isinstance(ref, dict) and set(ref) == {"backend", "id", "context_revision"}
+            and ref["backend"] == "codex" and _accounts_id(ref["id"])
+            and _accounts_digest(ref["context_revision"]))
+
+
+async def _profile_run(authority, op=None, body=None, *, managed_ref=None):
+    """Run the profile helper with bounded output and a stripped environment.
+
+    The owner account routes use only declared HTTP operations. Config can
+    discover public offers; only managed launch may use the private resolver.
+    """
+    if (authority == "managed-launch" and op is None and body is None
+            and _managed_profile_ref(managed_ref)):
+        op, argv = "profiles.managed-launch", ()
+        body = json.dumps({"version": 1, "op": op, "id": managed_ref["id"],
+                           "backend": managed_ref["backend"],
+                           "expected_context": managed_ref["context_revision"]}).encode()
+    elif managed_ref is None and authority == "accounts" and op in ACCOUNTS_ROUTES.values():
+        argv = ("--http", op)
+    elif managed_ref is None and authority == "config" and op == "profiles.provision-capabilities" and body == b"{}":
+        argv = ("--http", op)
+    else:
+        raise ValueError("unexpected mesh-profile operation for authority")
+    return await _run_private_helper(work_command("mesh-profile"), argv, body,
+                                     ACCOUNTS_SLOTS, ACCOUNTS_TIMEOUT, ACCOUNTS_MAX_REPLY,
+                                     f"accounts: mesh-profile {op}")
 
 
 async def _run_private_helper(command, args, body, slots, timeout, limit, diagnostic):
@@ -6296,13 +6343,6 @@ async def _run_private_helper(command, args, body, slots, timeout, limit, diagno
                 with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(proc.wait(), 5)
     return code, out
-
-
-async def _profile_run(op, body):
-    """Only the accounts route may run mesh-profile; the helper receives no credentials."""
-    return await _run_private_helper(work_command("mesh-profile"), ["--http", op], body,
-                                     ACCOUNTS_SLOTS, ACCOUNTS_TIMEOUT, ACCOUNTS_MAX_REPLY,
-                                     f"accounts: mesh-profile {op}")
 
 
 async def _flow_run(op, body):
@@ -6336,7 +6376,8 @@ def _profile_envelope(op, code, out):
         known = isinstance(code_text, str) and _ACCOUNTS_CODE_RE.fullmatch(code_text)
         return reply if known and _ACCOUNTS_CODE_STATUS.get(code_text, 503) == status else None
     shape = (_public_listing if op == "profiles.list" else
-             _public_created if op == "profiles.create" else _consent_policy)
+             _public_created if op in ("profiles.create", "profiles.provision") else
+             _public_provision_capabilities if op == "profiles.provision-capabilities" else _consent_policy)
     return reply if shape(reply["data"]) else None
 
 
@@ -6360,7 +6401,10 @@ def _public_listing(data):
 
 def _public_profile(p):
     """A listed profile: a helper id, a label, a known backend, a boolean, its context digest; never a switch."""
-    return (isinstance(p, dict) and set(p) == _ACCOUNTS_PUBLIC_PROFILE and _accounts_id(p["id"])
+    return (isinstance(p, dict)
+            and (set(p) == _ACCOUNTS_PUBLIC_PROFILE
+                 or (set(p) == _ACCOUNTS_PUBLIC_PROFILE | {"managed"} and p["managed"] is True))
+            and _accounts_id(p["id"])
             and isinstance(p["label"], str) and p["backend"] in _ACCOUNTS_BACKENDS
             and _accounts_digest(p["context_revision"]) and type(p["enabled"]) is bool
             and p["switch_qualified"] is False)
@@ -6368,6 +6412,64 @@ def _public_profile(p):
 def _public_created(data):
     return (isinstance(data, dict) and set(data) == {"registry_revision", "profile"}
             and _accounts_digest(data["registry_revision"]) and _public_profile(data["profile"]))
+
+
+def _public_provision_capabilities(data):
+    if (not isinstance(data, dict) or set(data) != {"backends", "profiles"}
+            or not isinstance(data["backends"], list) or not isinstance(data["profiles"], list)):
+        return False
+    values = data["backends"]
+    return (len(values) <= 1 and all(value == "codex" for value in values)
+            and len(set(values)) == len(values) and len(data["profiles"]) <= 128
+            and all(_public_profile(p) and p.get("managed") is True and p["enabled"] and p["backend"] in values
+                    for p in data["profiles"])
+            and len({(p["backend"], p["id"]) for p in data["profiles"]}) == len(data["profiles"]))
+
+
+async def _provision_capabilities():
+    unavailable = {"backends": [], "profiles": []}
+    if ACCOUNTS_QUEUE["pending"] >= ACCOUNTS_MAX_PENDING:
+        return unavailable
+    ACCOUNTS_QUEUE["pending"] += 1
+    try:
+        ran = await _profile_run("config", "profiles.provision-capabilities", b"{}")
+    finally:
+        ACCOUNTS_QUEUE["pending"] -= 1
+    reply = _profile_envelope("profiles.provision-capabilities", *ran) if ran is not None else None
+    return reply["data"] if reply and reply["ok"] else unavailable
+
+
+async def _managed_launch_context(ref):
+    if ACCOUNTS_QUEUE["pending"] >= ACCOUNTS_MAX_PENDING:
+        raise web.HTTPConflict(text=MANAGED_PROFILE_REFUSED)
+    ACCOUNTS_QUEUE["pending"] += 1
+    try:
+        ran = await _profile_run("managed-launch", managed_ref=ref)
+    except ValueError as exc:
+        raise web.HTTPConflict(text=MANAGED_PROFILE_REFUSED) from exc
+    finally:
+        ACCOUNTS_QUEUE["pending"] -= 1
+    try:
+        if ran is None or ran[0] != 0 or not ran[1].endswith(b"\n"):
+            raise ValueError()
+        reply = json.loads(ran[1], object_pairs_hook=_accounts_unique_keys)
+        if (not isinstance(reply, dict) or set(reply) != {"version", "ok", "data"}
+                or type(reply["version"]) is not int or reply["version"] != 1 or reply["ok"] is not True):
+            raise ValueError()
+        data = reply["data"]
+        if not isinstance(data, dict) or set(data) != {"profile", "roots", "executable"}:
+            raise ValueError()
+        p, roots, executable = data["profile"], data["roots"], data["executable"]
+        if (not _public_profile(p) or p.get("managed") is not True or not p["enabled"]
+                or any(p[k] != v for k, v in ref.items())
+                or not isinstance(roots, dict) or set(roots) != _PROFILE_LAUNCH_ROLES["codex"]
+                or not all(isinstance(value, str) and _ACCOUNT_PATH_RE.fullmatch(value)
+                           for value in (*roots.values(), executable))):
+            raise ValueError()
+    except (ValueError, RecursionError) as exc:
+        raise web.HTTPConflict(text=MANAGED_PROFILE_REFUSED) from exc
+    return {**ref, "roots": roots, "executable": executable, "env": {"CODEX_HOME": roots["config"]},
+            "unset": list(dict.fromkeys((*_PROFILE_PROVIDER_OVERRIDES, *ACCOUNT_OVERRIDES.get("CODEX_HOME", ()))))}
 
 
 def _consent_policy(data):
@@ -6425,7 +6527,7 @@ async def api_accounts(request):
         return accounts_refusal(503, "busy")
     ACCOUNTS_QUEUE["pending"] += 1
     try:
-        ran = await _profile_run(op, body)
+        ran = await _profile_run("accounts", op, body)
     finally:
         ACCOUNTS_QUEUE["pending"] -= 1
     reply = _profile_envelope(op, *ran) if ran is not None else None
@@ -6630,6 +6732,10 @@ async def api_config(request):
     report["accounts"] = accounts_projection()
     report["accounts_available"] = (_ACCOUNTS["file"] != "refused"
                                     and (not _native_profile_mode() or _ACCOUNTS["file"] == "ok"))
+    provisioning = await _provision_capabilities()
+    if provisioning["backends"]:
+        report["capabilities"]["profile_provision"] = provisioning["backends"]
+        report["managed_profile_offers"] = provisioning["profiles"]
     report["elevation"] = {"active": (left := elevation_seconds_left(request)) > 0, "seconds_left": left,
                            "duration": ELEVATION_SECONDS}
     return web.json_response(report, headers={"Cache-Control": "no-store"})
@@ -8206,6 +8312,7 @@ def make_app(*, session_request_path=None):
     # account profiles and confirmation preferences: no route for profiles.resolve, nor for any switch
     app.router.add_get("/api/accounts/profiles", api_accounts)
     app.router.add_post("/api/accounts/profiles/create", api_accounts)
+    app.router.add_post("/api/accounts/profiles/provision", api_accounts)
     app.router.add_get("/api/accounts/consent", api_accounts)
     app.router.add_post("/api/accounts/consent/set-global", api_accounts)
     app.router.add_post("/api/accounts/consent/set-pair", api_accounts)

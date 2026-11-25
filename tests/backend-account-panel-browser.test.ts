@@ -11,7 +11,7 @@ import {fileURLToPath} from 'node:url';
 import {createServer, type Server} from 'node:http';
 import {build} from 'esbuild';
 import {chromium, type Browser, type Page} from 'playwright-core';
-import {BACKENDS, type Backend, type ConsentMutation, type Policy, type Profile, type ProfileMutation} from '../static/backend-account-model.ts';
+import {BACKENDS, type Backend, type ConsentMutation, type Policy, type Profile, type ProfileMutation, type ProvisionMutation} from '../static/backend-account-model.ts';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -25,7 +25,7 @@ let browser: Browser, server: Server, base: string;
 const hostile = '<img src=x onerror=1>';
 
 declare const lab: {
-  calls: (ConsentMutation | ProfileMutation)[]; loads: number; profiles: Profile[]; policy: Policy; holdWrite: boolean; holdLoad: boolean;
+  calls: (ConsentMutation | ProfileMutation | ProvisionMutation)[]; loads: number; profiles: Profile[]; policy: Policy; holdWrite: boolean; holdLoad: boolean;
   fail: string | null; createFail: string | null; readFail: string | null; finishWrite: () => void; finishLoad: () => void;
   panel: {open: () => Promise<void>; close: () => void};
 };
@@ -87,6 +87,18 @@ before(async () => {
         lab.registryRevision='b'.repeat(64);
         return reply({registry_revision:lab.registryRevision,profile:p});
       },
+      inspect: async () => {
+        if (lab.readFail) return {version:1,ok:false,http_status:503,code:lab.readFail};
+        return reply({configured:true,registry_revision:lab.registryRevision,profiles:lab.profiles});
+      },
+      provision: {backends:['codex'], write:async request => {
+        lab.calls.push(structuredClone(request));
+        if (lab.createFail) return {http_status:lab.createFail==='profile-publication-uncertain'?503:409,
+          version:1,ok:false,code:lab.createFail};
+        const p={...request.profile,id:'p-0123456789abcdef',enabled:false,context_revision:digest,switch_qualified:false};
+        lab.profiles.push(p);lab.registryRevision='c'.repeat(64);
+        return reply({registry_revision:lab.registryRevision,profile:p});
+      }},
     });
     lab.panel = panel;
     document.querySelector('#open').textContent = t('backendAccounts.title');
@@ -120,6 +132,86 @@ async function statusIs(page: Page, lang: string, phase: string) {
   await page.getByRole('status').filter({hasText: catalogs[lang]![`backendAccounts.status.${phase}`]!}).waitFor();
 }
 const control = (page: Page, key: string) => page.locator(`[data-focus="${key}"]`);
+for (const lang of ['en','fr']) test(`component ${lang}: provision collects only backend and label and never retries an uncertain write`,{skip},async()=>{
+  const {page,context,errors}=await fixture(lang);
+  try {
+    await control(page,'provision-account').click();
+    assert.deepEqual(await control(page,'create-backend').locator('option').evaluateAll(options=>options.map(o=>(o as HTMLOptionElement).value)),['codex']);
+    assert.equal(await control(page,'create-id').count(),0);
+    assert.equal(await control(page,'create-config').count(),0);
+    await control(page,'create-label').fill('  Travel  ');
+    await page.evaluate(()=>{lab.createFail='profile-publication-uncertain';});
+    await control(page,'save-account').click();
+    await statusIs(page,lang,'provisionUncertain');
+    assert.equal(await control(page,'create-label').inputValue(),'  Travel  ');
+    assert.equal(await control(page,'save-account').isDisabled(),true);
+    await page.evaluate(()=>{lab.createFail=null;});
+    await control(page,'refresh').click();await statusIs(page,lang,'provisionUncertain');
+    const request={version:1,op:'profiles.provision',registry_revision:'a'.repeat(64),profile:{backend:'codex',label:'Travel'}};
+    assert.deepEqual(await page.evaluate(()=>lab.calls),[request]);
+    assert.equal(await control(page,'save-account').isDisabled(),true);
+    await control(page,'close').click();
+    await page.locator('#open').click();
+    await statusIs(page,lang,'provisionUncertain');
+    assert.equal(await control(page,'provision-account').isDisabled(),true);
+    assert.deepEqual(await page.evaluate(()=>({calls:lab.calls,loads:lab.loads})),{calls:[request],loads:1});
+    await control(page,'add-account').click(); // Association remains a separate form.
+    assert.equal(await control(page,'create-config').count(),1);
+    await page.reload();
+    await page.locator('#open').click();
+    await statusIs(page,lang,'provisionUncertain');
+    assert.equal(await control(page,'provision-account').isDisabled(),true);
+    assert.equal(await control(page,'add-account').isEnabled(),true);
+    assert.ok(await page.locator('dialog li').count() > 0, 'runner registry is still inspectable');
+    assert.deepEqual(await page.evaluate(()=>({calls:lab.calls,loads:lab.loads})),{calls:[],loads:0});
+    const reopened = await context.newPage();
+    await reopened.goto(`${base}/?lang=${lang}`);
+    await reopened.locator('#open').click();
+    await statusIs(reopened,lang,'provisionUncertain');
+    assert.equal(await control(reopened,'provision-account').isDisabled(),true);
+    assert.deepEqual(errors,[]);
+  } finally {await context.close();}
+});
+test('component restores no provision draft after verifying an acknowledged receipt',{skip},async()=>{
+  const {page,context}=await fixture();
+  try {
+    await control(page,'provision-account').click();
+    await control(page,'create-label').fill('Travel');
+    await page.evaluate(()=>{lab.readFail='busy';});
+    await control(page,'save-account').click();
+    await statusIs(page,'en','provisionVerification');
+    assert.equal(await control(page,'save-account').isDisabled(),true);
+    await page.evaluate(()=>{lab.readFail=null;});
+    await control(page,'refresh').click();
+    await statusIs(page,'en','saved');
+    assert.equal(await control(page,'save-account').count(),0);
+    assert.equal(await page.evaluate(()=>lab.calls.length),1);
+    const row=page.locator('dialog li').filter({hasText:'p-0123456789abcdef'});
+    assert.ok((await row.textContent())!.includes(catalogs.en!['backendAccounts.profileDisabled']!));
+  } finally {await context.close();}
+});
+test('component restores a confirmed receipt after reloading the tab without reading consent',{skip},async()=>{
+  const {page,context}=await fixture();
+  try {
+    await control(page,'provision-account').click();
+    await control(page,'create-label').fill('Travel');
+    await page.evaluate(()=>{lab.readFail='busy';});
+    await control(page,'save-account').click();
+    await statusIs(page,'en','provisionVerification');
+    const committed = await page.evaluate(()=>lab.profiles);
+    await page.reload();
+    await page.locator('#open').click();
+    await statusIs(page,'en','provisionVerification');
+    await page.evaluate(profiles=>{
+      Object.assign(lab, {profiles, registryRevision:'c'.repeat(64)});
+    }, committed);
+    await control(page,'refresh').click();
+    await statusIs(page,'en','saved');
+    assert.equal(await control(page,'save-account').count(),0);
+    assert.equal(await page.locator('dialog li').filter({hasText:'p-0123456789abcdef'}).count(),1);
+    assert.deepEqual(await page.evaluate(()=>({calls:lab.calls,loads:lab.loads})),{calls:[],loads:0});
+  } finally {await context.close();}
+});
 for (const lang of ['en','fr']) test(`component ${lang}: confirmed create with refused reread stays review-only`,{skip},async()=>{
   const {page,context,errors}=await fixture(lang);
   try {

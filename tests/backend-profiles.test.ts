@@ -50,6 +50,78 @@ test('unconfigured registry is explicit and does not create account state',{skip
   const reply=f.request('profiles.list');assert.equal(reply.ok,true);assert.deepEqual(reply.data.profiles,[]);
   assert.equal(reply.data.configured,false);assert.equal(fs.existsSync(f.db),false);
 }));
+test('host-only provision creates private native roots without offering an unqualified profile',{skip},()=>use(f=>{
+  assert.deepEqual(fs.readdirSync(f.conf),[]);
+  const created=f.request('profiles.provision',{registry_revision:null,profile:{backend:'codex',label:'Travel'}});
+  assert.equal(created.ok,true,JSON.stringify(created));
+  const receipt=created.data.profile;
+  assert.equal(receipt.backend,'codex');assert.equal(receipt.label,'Travel');
+  assert.match(receipt.id,/^p-[a-f0-9]{16}$/);
+  assert.equal(receipt.enabled,false);assert.equal(receipt.switch_qualified,false);
+  assert.equal('roots' in receipt,false);assert.equal(JSON.stringify(created).includes(f.root),false);
+  const {profiles:[stored]}=JSON.parse(fs.readFileSync(f.file,'utf8'));
+  assert.equal(stored.id,receipt.id);
+  assert.equal(path.dirname(stored.roots.state),stored.roots.config);
+  assert.equal(path.basename(stored.roots.state),'sessions');
+  for(const dir of [path.dirname(stored.roots.config),stored.roots.config,stored.roots.state]){
+    const stat=fs.lstatSync(dir);assert(stat.isDirectory());assert.equal(stat.mode & 0o777,0o700);
+    assert.equal(fs.realpathSync(dir),dir);
+  }
+  assert.deepEqual(fs.readdirSync(stored.roots.state),[]);
+  assert.equal(fs.existsSync(f.db),false);
+  assert.deepEqual(f.request('profiles.list').data.profiles,[receipt]);
+  assert.equal(f.request('profiles.resolve',{backend:'codex',id:receipt.id,expected_context:receipt.context_revision}).ok,false);
+  if(fs.existsSync(platform)){
+    const args=['accounts','list',path.join(f.conf,'accounts.json')];
+    const listed=spawnSync(platform,args,{encoding:'utf8',env:{HOME:f.root,MESH_CONF_DIR:f.conf,PATH:'/usr/bin:/bin'}});
+    assert.equal(listed.status,0,listed.stdout);
+    const inventory=JSON.parse(listed.stdout);
+    assert.deepEqual(inventory.launch_profiles,[]);
+    assert.ok(inventory.protected_roots.includes(stored.roots.config));
+  }
+}));
+test('provision rejects wrong inputs, stale state and collisions without creating another root',{skip},()=>use(f=>{
+  const provision=(profile:object,registry_revision:string|null)=>f.request('profiles.provision',{registry_revision,profile});
+  for(const profile of [{backend:'pi',label:'Pi'},{backend:'codex',label:'Bad',roots:{}},{backend:'codex',label:'Bad',id:'mine'}])
+    assert.equal(provision(profile,null).code,'invalid-request');
+  assert.deepEqual(fs.readdirSync(f.conf),[]);
+  assert.equal(f.http('profiles.provision','{}').reply.code,'invalid-request');
+  assert.deepEqual(f.http('profiles.provision-capabilities','{}').reply.data,{backends:[],profiles:[]});
+  for (const backend of ['claude','codex','opencode-v2','pi']) {
+    const refused=f.http('profiles.provision',JSON.stringify({registry_revision:null,profile:{backend,label:'Travel'}}));
+    assert.equal(refused.reply.code,'profile-provision-unavailable');
+    assert.equal(refused.reply.http_status,409);
+  }
+  assert.deepEqual(fs.readdirSync(f.conf),[]);
+  fs.writeFileSync(path.join(f.conf,'.backend-profiles.legacy-switch'),'held',{mode:0o600});
+  assert.equal(provision({backend:'codex',label:'Travel'},null).code,'profile-migration-required');
+  fs.unlinkSync(path.join(f.conf,'.backend-profiles.legacy-switch'));
+  const first=provision({backend:'codex',label:'Travel'},null);
+  assert.equal(first.ok,true,JSON.stringify(first));
+  const revision=first.data.registry_revision, bytes=fs.readFileSync(f.file), before=fs.readdirSync(f.conf);
+  assert.equal(provision({backend:'codex',label:'Next'},null).code,'profile-registry-changed');
+  assert.equal(provision({backend:'codex',label:' travel '},revision).code,'profile-already-exists');
+  assert.deepEqual(fs.readdirSync(f.conf),before);
+  assert.deepEqual(fs.readFileSync(f.file),bytes);
+  const second=provision({backend:'claude',label:'Travel'},revision);
+  assert.equal(second.ok,true,JSON.stringify(second));
+  assert.equal(second.data.profile.enabled,false);
+  const pending=path.join(f.conf,'.backend-profiles.create-intent');
+  fs.writeFileSync(pending,'retained synthetic evidence',{mode:0o600});
+  const held=fs.readdirSync(f.conf);
+  assert.equal(provision({backend:'opencode-v2',label:'Next'},second.data.registry_revision).code,'profile-publication-uncertain');
+  assert.deepEqual(fs.readdirSync(f.conf),held);
+  assert.equal(fs.readFileSync(pending,'utf8'),'retained synthetic evidence');
+  fs.unlinkSync(pending);
+  const third=provision({backend:'opencode-v2',label:'Next'},second.data.registry_revision);
+  assert.equal(third.ok,true,JSON.stringify(third));
+  const rows=JSON.parse(fs.readFileSync(f.file,'utf8')).profiles;
+  assert.equal(rows.length,3);
+  assert.equal(path.basename(rows[1].roots.history),'projects');
+  assert.deepEqual(Object.keys(rows[2].roots).sort(),['cache','config','data','state']);
+  assert.equal(new Set(Object.values(rows[2].roots)).size,4);
+  for(const dir of Object.values(rows[2].roots) as string[]) assert.equal(fs.statSync(dir).mode & 0o777,0o700);
+}));
 test('create accepts first and appended aliases in every backend without exposing roots',{skip},()=>use(f=>{
   let expected:string|null=null;
   for(const backend of ['claude','codex','opencode-v2','pi']){

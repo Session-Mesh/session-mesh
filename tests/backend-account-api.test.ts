@@ -4,6 +4,31 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createBackendAccountApi} from '../static/backend-account-api.ts';
+
+test('native capability selects the normal closed provision transport, never using association', async () => {
+  const calls: [string, RequestInit][] = [];
+  const request = async (url: string, init: RequestInit) => { calls.push([url,init]); return reply(); };
+  for (const capabilities of [undefined, [], ['pi'], ['codex', 'codex'], ['codex', {}]]) {
+    assert.equal(createBackendAccountApi(request, capabilities).provision, undefined);
+  }
+  const api = createBackendAccountApi(request, ['codex']);
+  const signal = new AbortController().signal;
+  assert.deepEqual(api.provision?.backends, ['codex']);
+  const write = api.provision!;
+  const mutation = {version:1, op:'profiles.provision', registry_revision:null,
+    profile:{backend:'codex', label:'Work'}} as const;
+  await write.write(mutation, signal);
+  api.setProvisionCapability(undefined);
+  assert.equal(api.provision, undefined);
+  await assert.rejects(write.write(mutation, signal), /invalid-account-operation/);
+  await api.inspect!(signal);
+  api.setProvisionCapability(['codex']);
+  assert.deepEqual(api.provision?.backends, ['codex']);
+  assert.deepEqual(calls.map(([url, init]) => [url, init.method, init.body]), [
+    ['/api/accounts/profiles/provision','POST',JSON.stringify({registry_revision:null,profile:{backend:'codex',label:'Work'}})],
+    ['/api/accounts/profiles','GET',undefined],
+  ]);
+});
 import {createBackendAccountController, type ConsentMutation} from '../static/backend-account-model.ts';
 
 const signal = () => new AbortController().signal;

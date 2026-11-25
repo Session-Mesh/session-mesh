@@ -119,6 +119,7 @@ EXPECTED = {
     ("POST", "/api/agent-mail/consent/revoke"): COOKIE_ONLY,
     ("GET", "/api/accounts/profiles"): COOKIE_ONLY,      # tests/accounts-routes.test.ts
     ("POST", "/api/accounts/profiles/create"): COOKIE_ONLY,
+    ("POST", "/api/accounts/profiles/provision"): COOKIE_ONLY,
     ("GET", "/api/accounts/consent"): COOKIE_ONLY,
     ("POST", "/api/accounts/consent/set-global"): COOKIE_ONLY,
     ("POST", "/api/accounts/consent/set-pair"): COOKIE_ONLY,

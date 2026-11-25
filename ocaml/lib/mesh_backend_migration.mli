@@ -38,6 +38,24 @@ val create_profile :
     registry revision and its public projection, never private roots. Refuses
     legacy aliases pending explicit migration and any ambiguous registry. *)
 
+val provision_profile :
+  root:string ->
+  expected_revision:string option ->
+  profile:Yojson.Safe.t ->
+  (string * Yojson.Safe.t, string) result
+
+val provision_managed :
+  admit:(unit -> bool) ->
+  root:string ->
+  expected_revision:string option ->
+  profile:Yojson.Safe.t ->
+  (string * Yojson.Safe.t, string) result
+(** Closed provisioning path whose native capability is consulted under the registry lock. *)
+(** Allocate new private native directories and publish a disabled profile
+    from exactly [backend] and [label]. No HTTP operation, launch or provider
+    access is granted by this preparation step. Existing paths are never
+    adopted. Unpublished directories can remain after interruption. *)
+
 type create_recovery = Unpublished_aborted | Published_reconciled
 
 val recover_created_profile : root:string -> (create_recovery, string) result

@@ -5257,6 +5257,7 @@ function sizeTakeoverMode() { return MeshPaneActions.sizeTakeoverMode(store.get(
 $("#btn-config").addEventListener("click", () => configPanel.open());
 
 let backendAccountPanel = null;
+let backendAccountPorts = null;
 let backendAccountCapabilityRead = null;
 let backendAccountGeneration = 0;
 function showBackendAccountEntries(available) {
@@ -5273,14 +5274,17 @@ function enableBackendAccountSettings() {
       ? document.querySelector('[data-mobile-action="btn-accounts"]') : null;
   ++backendAccountGeneration;
   backendAccountCapabilityRead?.abort(); backendAccountCapabilityRead = null;
-  const ports = MeshPaneActions.createBackendAccountApi((url, init) => requestLocal(url, init));
-  backendAccountPanel = MeshPaneActions.createBackendAccountPanel(document.body, { t, ...ports });
+  backendAccountPorts = MeshPaneActions.createBackendAccountApi((url, init) => requestLocal(url, init));
+  backendAccountPanel = MeshPaneActions.createBackendAccountPanel(document.body, Object.assign(backendAccountPorts, {
+    t, refreshCapability: () => { void startBackendAccountSettings(true); },
+    clearCapability: clearBackendAccountCapability,
+  }));
   showBackendAccountEntries(true);
   showBackendAccountRetry(false);
   returnFocus?.focus();
 }
 function observeBackendAccountConfig(config) {
-  if (!localMeshEffectsAllowed()) return;
+  if (!localMeshEffectsAllowed() || backendAccountPanel) return;
   if (config?.capabilities?.account_settings === true) {
     enableBackendAccountSettings();
   } else if (!backendAccountPanel) {
@@ -5289,11 +5293,25 @@ function observeBackendAccountConfig(config) {
     backendAccountCapabilityRead?.abort(); backendAccountCapabilityRead = null;
   }
 }
-async function startBackendAccountSettings() {
-  if (!localMeshEffectsAllowed() || backendAccountPanel || backendAccountCapabilityRead) return;
+function clearBackendAccountCapability() {
+  ++backendAccountGeneration;
+  backendAccountCapabilityRead?.abort(); backendAccountCapabilityRead = null;
+  backendAccountPorts.setProvisionCapability(undefined);
+  backendAccountPanel.refreshProvisionView();
+}
+async function startBackendAccountSettings(refreshProvision = false) {
+  if (!localMeshEffectsAllowed()) return;
+  if (refreshProvision) {
+    if (!backendAccountPanel) return;
+    clearBackendAccountCapability();
+  } else if (backendAccountPanel || backendAccountCapabilityRead) return;
   const generation = ++backendAccountGeneration, abort = new AbortController();
   let failed = true;
   backendAccountCapabilityRead = abort;
+  const updateProvision = (value) => {
+    backendAccountPorts.setProvisionCapability(value);
+    backendAccountPanel.refreshProvisionView();
+  };
   const timer = setTimeout(() => abort.abort(), 15_000);
   try {
     const response = await requestLocal("/api/config", { method: "GET", signal: abort.signal, credentials: "same-origin",
@@ -5302,7 +5320,9 @@ async function startBackendAccountSettings() {
     const config = await response.json();
     if (abort.signal.aborted || generation !== backendAccountGeneration || !localMeshEffectsAllowed()) return;
     failed = false;
-    if (config?.capabilities?.account_settings === true) enableBackendAccountSettings();
+    if (backendAccountPanel) updateProvision(config?.capabilities?.account_settings === true
+      ? config.capabilities.profile_provision : undefined);
+    else if (config?.capabilities?.account_settings === true) enableBackendAccountSettings();
     else showBackendAccountRetry(false);
   } catch { /* An absent, refused or unreadable capability leaves account settings unavailable. */ }
   finally {
@@ -5318,6 +5338,7 @@ function disposeBackendAccountSettings() {
   showBackendAccountEntries(false);
   showBackendAccountRetry(false);
   backendAccountPanel?.dispose(); backendAccountPanel = null;
+  backendAccountPorts = null;
 }
 whenTranslated(() => { void startBackendAccountSettings(); });
 $("#btn-accounts-retry").addEventListener("click", () => { void startBackendAccountSettings(); });
@@ -8165,8 +8186,9 @@ wform.addEventListener("submit", async (e) => {
 
 const dlg = $("#dlg-new"), form = $("#form-new");
 let newDialogGeneration = 0;
-const currentNewDialog = (generation) => generation === newDialogGeneration && dlg.open;
+const currentNewDialog = (generation) => generation === newDialogGeneration && dlg.open && localMeshEffectsAllowed();
 let newAccountsReady = false, newAccountsFailed = false;
+let newManagedAccountSelection;
 
 const accountRetry = document.createElement("button");
 accountRetry.type = "button"; accountRetry.className = "btn ghost sm"; accountRetry.hidden = true;
@@ -8175,12 +8197,10 @@ $("#new-err").after(accountRetry);
 let retryAccounts = () => {};
 accountRetry.addEventListener("click", () => retryAccounts());
 async function openNew() {
-  if (localActionUnavailable()) return;
+  if (localActionUnavailable() || dlg.open) return;
   const generation = ++newDialogGeneration;
-  newAccountsReady = false; newAccountsFailed = false;
+  newAccountsFailed = false;
   accountRetry.textContent = t("new.accountRetry");
-  newAccounts = [];
-  form.account.replaceChildren(new Option(t("new.accountDefault"), ""));
   accountRetry.hidden = true;
   form.reset();
   $("#new-err").textContent = "";
@@ -8198,8 +8218,21 @@ async function openNew() {
   optionsPreset = null;
   const openButton = form.querySelector('button[value="ok"]');
   if (openButton) openButton.textContent = t("common.open");
-  syncOptionsRow();
+  // Ordinary aliases are unknown until discovery, not missing. Only a
+  // managed choice needs a provisional selection that cannot become default.
+  const storedAccount = store.get("account", "");
+  const rememberedAccount = newManagedAccountSelection ?? (typeof storedAccount === "string" ? storedAccount : "");
+  const pendingManaged = rememberedAccount.startsWith("managed:");
+  newAccounts = [];
+  managedOffers = new Map();
+  form.account.replaceChildren(new Option(t("new.accountDefault"), ""));
+  if (pendingManaged) {
+    form.account.add(new Option(t("common.loading"), rememberedAccount));
+    form.account.value = rememberedAccount;
+  }
+  newAccountsReady = false;
   syncAccountChoice();
+  syncOptionsRow();
   const cur = active?.id && find(active.id);
   form.cwd.value = short(cur?.cwd || data.home).replace(/^~/, data.home);
   dlg.showModal();
@@ -8231,13 +8264,16 @@ async function openNew() {
   let requestGeneration = 0;
   retryAccounts = async () => {
     const request = ++requestGeneration;
+    const keepCurrentSelection = pendingManaged || newAccountsReady;
     newAccountsReady = false; newAccountsFailed = false; accountRetry.hidden = true;
     try {
       const config = await readJson("/api/config", { cache: "no-store", signal: AbortSignal.timeout(10000) });
       if (!current() || request !== requestGeneration) return;
       if (!Array.isArray(config?.accounts) || ("accounts_available" in config && config.accounts_available !== true)) throw new Error();
-      rememberLaunchOptions(config.launch); syncOptionsRow();
-      fillAccounts(config.accounts);
+      rememberLaunchOptions(config.launch);
+      fillAccounts(config.accounts, config.managed_profile_offers,
+        keepCurrentSelection ? form.account.value : rememberedAccount);
+      syncOptionsRow();
       roots = MeshFolderState.workspaceRoots(config);
       recent = MeshFolderState.runnerRecentFolders(config) || [];
       updateFolders();
@@ -8269,7 +8305,7 @@ function optionsText(preset) {
 }
 
 function syncOptionsRow() {
-  const value = form.preset.value, known = knownAgentPreset(value);
+  const value = form.preset.value, known = knownAgentPreset(value) && !form.account.value.startsWith("managed:");
   $("#new-options-row").hidden = !known;
   $("#new-options-default-row").hidden = !known;
   $("#new-options-stored").hidden = !known;
@@ -8318,16 +8354,28 @@ async function saveAgentOptions(preset, options, token, generation, revision) {
 // instead of starting under the default account. The page sends an alias id, never a folder.
 const ACCOUNT_PRESETS = { claude: "claude", codex: "codex", "codex-yolo": "codex", opencode: "opencode", pi: "pi" };
 let newAccounts = [];
-function fillAccounts(accounts) {
+let managedOffers = new Map();
+function fillAccounts(accounts, managed = [], last = form.account.value) {
   newAccounts = accounts.filter((a) => typeof a?.id === "string" && typeof a?.label === "string")
     .map((a, rank) => ({ ...a, rank }))
     .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) || a.rank - b.rank);
-  const select = form.account, last = store.get("account", "");
-  const gone = last && !newAccounts.some((a) => a.id === last) ? new Option(t("new.accountGoneOption", { id: last }), last) : null;
+  const select = form.account;
+  managedOffers = new Map();
+  for (const p of Array.isArray(managed) ? managed : []) {
+    if (p?.backend !== "codex" || p.managed !== true || p.enabled !== true ||
+        typeof p.id !== "string" || !/^p-[a-f0-9]{16}$/.test(p.id) ||
+        typeof p.context_revision !== "string" || !/^[a-f0-9]{64}$/.test(p.context_revision) ||
+        typeof p.label !== "string") continue;
+    managedOffers.set(`managed:${p.backend}:${p.id}`, p);
+  }
+  const available = managedOffers.has(last) || newAccounts.some((a) => a.id === last);
+  const gone = last && !available ? new Option(t("new.accountGoneOption", { id: last }), last) : null;
   if (gone) gone.dataset.gone = "1";
   select.replaceChildren(new Option(t("new.accountDefault"), ""),
-    ...newAccounts.map((a) => new Option(shortAccountLabel(a.label), a.id)), ...(gone ? [gone] : []));
-  select.value = gone || newAccounts.some((a) => a.id === last) ? last : "";
+    ...newAccounts.map((a) => new Option(shortAccountLabel(a.label), a.id)),
+    ...Array.from(managedOffers, ([value, profile]) => new Option(shortAccountLabel(profile.label), value)),
+    ...(gone ? [gone] : []));
+  select.value = gone || available ? last : "";
   syncAccountChoice();
   newAccountsReady = true;
   if ([t("common.loading"), t("new.accountLoadFailed")].includes($("#new-err").textContent)) $("#new-err").textContent = "";
@@ -8337,6 +8385,10 @@ function syncAccountChoice() {
   $("#new-account-row").hidden = !offered;
   form.account.disabled = !offered || !agent;
   for (const option of form.account.options) {
+    if (option.value.startsWith("managed:")) {
+      option.disabled = !managedOffers.has(option.value) || form.preset.value !== "codex";
+      continue;
+    }
     const account = newAccounts.find((a) => a.id === option.value);
     option.disabled = !!option.value && !!agent && (!!option.dataset.gone || !account?.[agent]);
     if (account) {
@@ -8351,6 +8403,11 @@ function syncAccountChoice() {
 const ACCOUNT_AGENT_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", pi: "Pi" };
 function accountChoice() {
   const agent = ACCOUNT_PRESETS[form.preset.value], option = form.account.selectedOptions[0];
+  if (option?.value.startsWith("managed:")) {
+    const p = managedOffers.get(option.value);
+    if (!p || option.disabled || form.preset.value !== "codex") return {refused: t("new.managedProfileRefused")};
+    return {managed: {backend: p.backend, id: p.id, context_revision: p.context_revision}, selection: option.value};
+  }
   if (form.account.disabled || !agent || !option?.value) return {};
   if (option.dataset.gone) return { refused: t("new.accountGone", { id: option.value }) };
   if (option.disabled) return { refused: t("server.accountNoFolder", { label: option.text, agent: ACCOUNT_AGENT_NAMES[agent] }) };
@@ -8464,6 +8521,9 @@ folderList.addEventListener("click", (e) => {
 });
 dlg.addEventListener("close", () => { if (!dlg.open) { newAccountsReady = false; folderSuggester.reset(); } });
 $("#btn-new").addEventListener("click", () => { if (projecting) projectsController?.create(); else openNew(); });
+form.account.addEventListener("change", () => {
+  newManagedAccountSelection = form.account.value.startsWith("managed:") ? form.account.value : undefined;
+});
 form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; syncOptionsRow(); syncAccountChoice(); });
 let newSubmitGeneration = null;   // one submission per opening; an old completion cannot unlock a newer one
 
@@ -8510,7 +8570,7 @@ async function submitNew(generation) {
     return;
   }
   if (ACCOUNT_PRESETS[form.preset.value] && !newAccountsReady
-      && (form.preset.value !== "pi" || store.get("account", ""))) {
+      && (form.preset.value !== "pi" || form.account.value || store.get("account", ""))) {
     $("#new-err").textContent = t(newAccountsFailed ? "new.accountLoadFailed" : "common.loading");
     return;
   }
@@ -8525,6 +8585,11 @@ async function submitNew(generation) {
   const account = accountChoice();
   if (account.refused) { $("#new-err").textContent = account.refused; return; }
   if (account.id) body.account = account.id;
+  if (account.managed) {
+    delete body.command;
+    delete body.options;
+    body.managed_profile = account.managed;
+  }
   const r = await requestLocal("/api/new", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) {
     const error = serverText(await r.text());
@@ -8534,10 +8599,13 @@ async function submitNew(generation) {
   const { id } = await r.json();
   if (!currentNewDialog(generation)) { await refresh(); return; }
   store.set("preset", body.preset);
-  if (accountSelected) store.set("account", body.account || "");
+  if (accountSelected) {
+    store.set("account", account.selection || body.account || "");
+    newManagedAccountSelection = undefined;
+  }
   if (body.preset === "custom") store.set("command", body.command || "");   // the folder: recorded by the server
   // The session is started whatever happens next: a default that cannot be stored never blocks it.
-  const wanted = saveDefault
+  const wanted = saveDefault && !account.managed
     ? { preset: body.preset, options: body.options || "", id } : null;
   if (wanted) {
     const saved = await saveAgentOptions(wanted.preset, wanted.options, undefined, generation, optionsRevision)

@@ -16,6 +16,107 @@ const listing = (profiles = [profile('a'), profile('b'), profile('c')]) =>
   reply({configured: true, registry_revision: digest, profiles});
 const defer = () => { let resolve!: (v: unknown) => void; const promise = new Promise<unknown>(r => { resolve = r; }); return {promise, resolve}; };
 
+test('provision neither uses the association transport nor accepts an enabled receipt', async () => {
+  let writes = 0, reads = 0;
+  const initial = {
+    load: async () => { reads++; return {profiles: listing(), policy: reply(policy())}; },
+    mutate: async () => reply(policy()),
+    create: async () => { assert.fail('provision must not use the association transport'); },
+  };
+  const withoutPort = createBackendAccountController(initial);
+  await withoutPort.open();
+  assert.equal(await withoutPort.provisionProfile({backend: 'codex', label: 'New'}), false);
+  const controller = createBackendAccountController({...initial,
+    inspect: async () => assert.fail('invalid receipt cannot trigger inspection'),
+    provision: {backends: ['codex'], write: async request => {
+    writes++;
+    return reply({registry_revision: 'b'.repeat(64),
+      profile: {...profile('p-0123456789abcdef', 'codex'), label: request.profile.label}});
+  }}});
+  await controller.open();
+  assert.equal(await controller.provisionProfile({backend: 'claude', label: 'New'}), false);
+  assert.equal(await controller.provisionProfile({backend: 'codex', label: 'New'}), false);
+  assert.equal(controller.state.phase, 'error');
+  assert.equal(controller.state.provisionPending, 'provisionUncertain');
+  assert.equal(writes, 1);
+  assert.equal(reads, 2, 'malformed write receipt must not trigger a read-back');
+  assert.equal(await controller.provisionProfile({backend: 'codex', label: 'New'}), false);
+  assert.equal(writes, 1);
+});
+
+const requestedProvision = {backend: 'codex', label: 'Travel'} as const;
+const newRevision = 'b'.repeat(64);
+const provisioned = {...profile('p-0123456789abcdef', 'codex'), label: 'Travel', enabled: false};
+const unconfigured = reply({configured:false, registry_revision:null, profiles:[]});
+
+for (const append of [false, true]) for (const published of [false, true]) {
+  test(`lost provision receipt stays blocked across inspection and reopen (${append ? 'append' : 'first'}, ${published ? 'published' : 'unpublished'})`, async () => {
+    let loads = 0, inspections = 0, writes = 0;
+    const old = append ? [profile('a')] : [];
+    let current = append ? listing(old) : unconfigured;
+    const controller = createBackendAccountController({
+      load: async () => { loads++; return {profiles: current, policy: reply(policy())}; },
+      mutate: async () => assert.fail('no mutation during read-back'),
+      inspect:async () => { inspections++; return current; },
+      provision: {backends:['codex'],
+        write:async request => {
+          writes++;
+          assert.equal(request.registry_revision, append ? digest : null);
+          if (published) current = reply({configured:true, registry_revision:newRevision, profiles:[...old, provisioned]});
+          throw new Error('transport lost the reply');
+        }},
+    });
+    await controller.open();
+    assert.equal(await controller.provisionProfile(requestedProvision), false);
+    assert.equal(inspections, 0);
+    await controller.refresh();
+    assert.equal(controller.state.provisionPending, 'provisionUncertain');
+    assert.equal(controller.state.snapshot?.registry.profiles.length, old.length + Number(published));
+    controller.close();
+    await controller.open();
+    assert.equal(controller.state.provisionPending, 'provisionUncertain');
+    assert.equal(await controller.provisionProfile(requestedProvision), false);
+    assert.deepEqual({loads, inspections, writes}, {loads:1, inspections:2, writes:1});
+  });
+}
+
+test('confirmed provision receipt survives close and clears only on its exact registry read-back', async () => {
+  let current = listing(), loads = 0, inspections = 0, writes = 0;
+  const entered = defer();
+  const controller = createBackendAccountController({
+    load: async () => { loads++; return {profiles: current, policy: reply(policy())}; },
+    mutate: async () => assert.fail('no mutation during read-back'),
+    inspect:async () => {
+      if (++inspections === 1) {
+        entered.resolve(null);
+        return new Promise(() => {});
+      }
+      return current;
+    },
+    provision: {backends:['codex'], write:async () => {
+      writes++; return reply({registry_revision:newRevision, profile:provisioned});
+    }},
+  });
+  await controller.open();
+  const write = controller.provisionProfile(requestedProvision);
+  await entered.promise;
+  controller.close();
+  assert.equal(await write, false);
+  await controller.open();
+  assert.equal(controller.state.provisionPending, 'provisionVerification');
+  current = reply({configured:true, registry_revision:'c'.repeat(64), profiles:[provisioned]});
+  await controller.refresh();
+  assert.equal(controller.state.provisionPending, 'provisionVerification');
+  current = reply({configured:true, registry_revision:newRevision, profiles:[{...provisioned, context_revision:'d'.repeat(64)}]});
+  await controller.refresh();
+  assert.equal(controller.state.provisionPending, 'provisionVerification');
+  current = reply({configured:true, registry_revision:newRevision, profiles:[provisioned]});
+  await controller.refresh();
+  assert.equal(controller.state.phase, 'saved');
+  assert.equal(controller.state.provisionPending, undefined);
+  assert.deepEqual({loads, inspections, writes}, {loads:1, inspections:5, writes:1});
+});
+
 test('alias creation refreshes only after validated native success and retains snapshot on conflict', async () => {
   const roots = {config:'/fixtures/agent',history:'/fixtures/history'};
   const input = {backend:'claude' as const,id:'new',label:'New',roots};

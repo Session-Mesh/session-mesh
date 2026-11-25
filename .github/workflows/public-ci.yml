@@ -370,6 +370,18 @@ jobs:
             echo "MESH_BACKEND_ACCOUNT_HELPER=$RUNNER_TEMP/native-work/mesh-profile"
             echo "MESH_REQUIRE_BACKEND_ACCOUNT_APP=1"
           } >> "$GITHUB_ENV"
+      - name: Fetch the synthetic managed-profile test helper
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mesh-managed-profile-test-linux-x86_64
+          path: ${{ runner.temp }}/native-test
+      - name: Require the synthetic helper in the Node browser shard
+        run: |
+          helper="$RUNNER_TEMP/native-test/mesh-profile-fixture"
+          chmod +x "$helper"
+          test -x "$helper"
+          echo "MESH_MANAGED_PROFILE_TEST_HELPER=$helper" >> "$GITHUB_ENV"
+          echo "MESH_REQUIRE_MANAGED_PROFILE=1" >> "$GITHUB_ENV"
       - name: Use a fast apt mirror with retries
         run: bash .github/scripts/fast-apt-mirror.sh
       # The Chromium download (kept by the cache step above, keyed on requirements-browser.txt, which
@@ -612,10 +624,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: native-host
-          # native-programs-v3-: the entry holds work-read, work-write, mesh-platform and mesh-profile too; the
-          # former native-host-, native-programs- and native-programs-v2- entries, which lack some of them, are
-          # never restored.
-          key: native-programs-v3-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/**', '!ocaml/test/**', '!ocaml/_build/**', 'scripts/bootstrap.sh', 'scripts/release-pins.sh') }}
+          # The synthetic browser helper is cached with the native programs but has its own CI artifact.
+          key: native-programs-v4-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/**', '!ocaml/test/**', 'ocaml/test/provision_runner/**', '!ocaml/_build/**', 'scripts/bootstrap.sh', 'scripts/release-pins.sh') }}
       # The same opam state, key and setup as the ocaml job (it is the one that saves it).
       - name: Restore the opam state
         if: steps.host-cache.outputs.cache-hit != 'true'
@@ -645,6 +655,12 @@ jobs:
         run: |
           bash scripts/bootstrap.sh --deps-only
           (cd ocaml && opam exec -- dune build -p session_mesh @install)
+          (cd ocaml && opam exec -- dune build test/provision_runner/mesh_profile_main.exe)
+          test -f ocaml/_build/default/session_mesh.install
+          if grep -Eq 'test/provision_runner|mesh-profile-fixture' ocaml/_build/default/session_mesh.install; then
+            echo "The synthetic browser helper must not be installed" >&2
+            exit 1
+          fi
           mkdir -p native-host
           cp -L ocaml/_build/install/default/bin/mesh-ptyhost native-host/mesh-ptyhost
           cp -L ocaml/_build/install/default/bin/mesh-logout-all native-host/mesh-logout-all
@@ -652,6 +668,7 @@ jobs:
           cp -L ocaml/_build/install/default/bin/work-write native-host/work-write
           cp -L ocaml/_build/install/default/bin/mesh-platform native-host/mesh-platform
           cp -L ocaml/_build/install/default/bin/mesh-profile native-host/mesh-profile
+          cp ocaml/_build/default/test/provision_runner/mesh_profile_main.exe native-host/mesh-profile-fixture
       - name: Save the built host
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.host-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -667,6 +684,8 @@ jobs:
           test -x native-host/work-write
           test -x native-host/mesh-platform
           test -x native-host/mesh-profile
+          test -x native-host/mesh-profile-fixture
+          ! cmp -s native-host/mesh-profile native-host/mesh-profile-fixture
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mesh-ptyhost-linux-x86_64
@@ -687,6 +706,12 @@ jobs:
             native-host/work-write
             native-host/mesh-platform
             native-host/mesh-profile
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mesh-managed-profile-test-linux-x86_64
+          path: native-host/mesh-profile-fixture
           if-no-files-found: error
           retention-days: 3
 

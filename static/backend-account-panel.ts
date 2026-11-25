@@ -1,19 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-import {BACKENDS, PROFILE_ROLES, createBackendAccountController, effectiveConfirmation, pairKey, ruleStatus, validProfileInput,
+import {BACKENDS, PROFILE_ROLES, createBackendAccountController, effectiveConfirmation, pairKey, ruleStatus, validProfileInput, validProvisionInput,
   type AccountState, type Backend, type BackendAccountPorts, type Confirmation, type PairRule, type Profile,
-  type ProfileInput, type Snapshot} from './backend-account-model.ts';
+  type ProvisionBackend, type Registry, type Snapshot} from './backend-account-model.ts';
 
 export type AccountTranslate = (key: string, params?: Record<string, string | number>) => string;
-export type BackendAccountPanelPorts = BackendAccountPorts & Readonly<{t: AccountTranslate}>;
+export type BackendAccountPanelPorts = BackendAccountPorts & Readonly<{
+  t: AccountTranslate; refreshCapability?: () => void; clearCapability?: () => void;
+}>;
 let serial = 0;
 
 /** Standalone UI-04 foundation. The caller supplies a host, catalogs, transport and the CSS asset.
  * No app globals, credential editor, network fallback, provider access or switch operation. */
 export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccountPanelPorts) {
   const doc = host.ownerDocument, prefix = `backend-accounts-${++serial}`;
-  const controller = createBackendAccountController(ports);
+  const provisionKey = 'mesh.backendAccounts.provision.v1';
+  const controller = createBackendAccountController(ports, ports.inspect ? {
+    load: () => doc.defaultView!.localStorage.getItem(provisionKey),
+    save: value => {
+      const journal = doc.defaultView!.localStorage;
+      if (value === null) journal.removeItem(provisionKey);
+      else journal.setItem(provisionKey, value);
+    },
+  } : undefined);
   const t = ports.t;
   const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] => {
     const element = doc.createElement(tag); if (text !== undefined) element.textContent = text; return element;
@@ -27,16 +37,23 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
   const button = (key: string, focus: string, action: () => void): HTMLButtonElement => {
     const b = node('button', t(`backendAccounts.${key}`)); b.type = 'button'; b.dataset.focus = focus; b.addEventListener('click', action); return b;
   };
-  const refresh = button('refresh', 'refresh', () => { clearDraft(); void controller.refresh(); });
+  const refresh = button('refresh', 'refresh', () => { clearDraft(); ports.refreshCapability?.(); void controller.refresh(); });
   const closeButton = button('close', 'close', () => close());
   footer.append(refresh, closeButton); dialog.append(title, description, status, content, footer); host.append(dialog);
   let opener: HTMLElement | null = null, disposed = false, shown: Snapshot | null = null, generation = 0;
+  let inspected: Registry | undefined;
+  let shownCapability = '';
   let editHost: HTMLElement | null = null, createHost: HTMLElement | null = null;
-  let creation: {backend: Backend; id: string; label: string; roots: Record<string, string>} | null = null;
+  let creation: {mode: 'associate' | 'provision'; backend: Backend; id: string; label: string; roots: Record<string, string>} | null = null;
   const trimLabel = (value: string) => value.replace(/^[\x09-\x0d\x20]+|[\x09-\x0d\x20]+$/g, '');
   let draft: {backend: Backend; a: string; b: string; confirmation: Confirmation} | null = null;
   let restoreFocus: string | null = null;
-  const writable = () => controller.state.phase === 'ready' || controller.state.phase === 'saved';
+  const writable = () => !!controller.state.snapshot && (controller.state.phase === 'ready' || controller.state.phase === 'saved');
+  const canAssociate = () => writable() || (!!controller.state.inspected &&
+    (controller.state.phase === 'ready' || controller.state.phase === 'saved'));
+  const provisionWritable = () => writable() && !controller.state.provisionPending &&
+    !!ports.provision?.backends.length && (!creation || creation.mode !== 'provision' ||
+      ports.provision.backends.includes(creation.backend as ProvisionBackend));
   const context = (profile: Profile): string => t('backendAccounts.context', {label: profile.label, backend: t(`backendAccounts.backend.${profile.backend}`), id: profile.id});
   const profilesFor = (backend: Backend) => controller.state.snapshot?.registry.profiles.filter(p => p.backend === backend && p.enabled) ?? [];
   const selected = () => {
@@ -48,11 +65,16 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
   function close() {
     ++generation;
     controller.close(); clearDraft(); creation = null; shown = null;
+    content.replaceChildren();
+    inspected = undefined;
     if (dialog.open) dialog.close();
+    ports.clearCapability?.();
     if (opener?.isConnected) opener.focus(); opener = null;
   }
   // A delayed native close event from an earlier open must not close the new generation.
-  dialog.addEventListener('close', () => { if (!dialog.open) close(); });
+  dialog.addEventListener('close', () => {
+    if (!disposed && !dialog.open && controller.state.phase !== 'closed') close();
+  });
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
   dialog.addEventListener('submit', event => event.preventDefault());
   dialog.addEventListener('keydown', event => {
@@ -68,38 +90,43 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
     select.id = `${prefix}-${focus}`; select.dataset.focus = focus; label.htmlFor = select.id;
     return {label, select};
   }
-  function startCreate() {
-    if (!writable() || !ports.create) return;
-    creation = {backend: 'claude', id: '', label: '', roots: {}};
+  function startCreate(mode: 'associate' | 'provision') {
+    const backend = mode === 'associate' ? ports.create && 'claude' : ports.provision?.backends[0];
+    if (!(mode === 'provision' ? provisionWritable() : canAssociate()) || !backend) return;
+    creation = {mode, backend, id: '', label: '', roots: {}};
     renderCreate(); createHost?.querySelector<HTMLElement>('[data-focus="create-backend"]')?.focus();
   }
   function renderCreate() {
     if (!creation || !createHost) return;
+    const provision = creation.mode === 'provision';
+    const trigger = provision ? 'provision-account' : 'add-account';
     createHost.replaceChildren();
     const fields = node('fieldset'); fields.dataset.controls = '';
-    fields.append(node('legend', t('backendAccounts.createTitle')),
-      node('p', t('backendAccounts.createHelp')));
+    fields.append(node('legend', t(provision ? 'backendAccounts.provisionTitle' : 'backendAccounts.createTitle')),
+      node('p', t(provision ? 'backendAccounts.provisionHelp' : 'backendAccounts.createHelp')));
     const backend = labelledSelect('backendLabel', 'create-backend');
-    for (const tag of BACKENDS) {
+    for (const tag of provision ? ports.provision?.backends ?? [] : BACKENDS) {
       const option = node('option', t(`backendAccounts.backend.${tag}`)); option.value = tag; backend.select.append(option);
     }
     backend.select.value = creation.backend;
     backend.select.addEventListener('change', () => {
-      if (!creation || !writable()) return;
+      if (!creation || !(provision ? provisionWritable() : canAssociate())) return;
       creation.backend = backend.select.value as Backend; creation.roots = {};
       renderCreate(); createHost?.querySelector<HTMLElement>('[data-focus="create-backend"]')?.focus();
     });
     fields.append(backend.label, backend.select);
-    const save = button('saveAccount', 'save-account', () => {
-      if (!creation || !writable()) return;
-      const input: ProfileInput = {backend: creation.backend, id: creation.id,
-        label: trimLabel(creation.label), roots: {...creation.roots}};
-      if (!validProfileInput(input)) return;
+    const associateInput = () => ({backend: creation!.backend, id: creation!.id, label: trimLabel(creation!.label), roots: {...creation!.roots}});
+    const provisionInput = () => ({backend: creation!.backend as ProvisionBackend, label: trimLabel(creation!.label)});
+    const valid = () => !!creation && (provision ? validProvisionInput(provisionInput()) : validProfileInput(associateInput()));
+    const save = button(provision ? 'saveProvision' : 'saveAccount', 'save-account', () => {
+      if (!creation || !(provision ? provisionWritable() : canAssociate())) return;
+      if (!valid()) return;
       const request = generation;
-      void controller.createProfile(input).then(saved => {
+      const pending = provision ? controller.provisionProfile(provisionInput()) : controller.createProfile(associateInput());
+      void pending.then(saved => {
         if (saved && request === generation && dialog.open) {
           creation = null; createHost?.replaceChildren();
-          content.querySelector<HTMLElement>('[data-focus="add-account"]')?.focus();
+          content.querySelector<HTMLElement>(`[data-focus="${trigger}"]`)?.focus();
         }
       });
     });
@@ -110,17 +137,16 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
       control.addEventListener('input', () => { update(control.value); save.disabled = !valid(); });
       fields.append(label, control);
     };
-    const valid = () => !!creation && validProfileInput({...creation, label: trimLabel(creation.label)});
-    input('createId', 'create-id', creation.id, value => { if (creation) creation.id = value; });
+    if (!provision) input('createId', 'create-id', creation.id, value => { if (creation) creation.id = value; });
     input('createLabel', 'create-label', creation.label, value => { if (creation) creation.label = value; });
-    for (const role of PROFILE_ROLES[creation.backend]) {
+    for (const role of provision ? [] : PROFILE_ROLES[creation.backend]) {
       input(`root.${role}`, `create-${role}`, creation.roots[role] ?? '',
         value => { if (creation) creation.roots[role] = value; });
     }
     const actions = node('div'); actions.className = 'backend-account-actions';
     actions.append(button('cancelEdit', 'cancel-create', () => {
       creation = null; createHost?.replaceChildren();
-      content.querySelector<HTMLElement>('[data-focus="add-account"]')?.focus();
+      content.querySelector<HTMLElement>(`[data-focus="${trigger}"]`)?.focus();
     }), save);
     fields.append(actions); createHost.append(fields); save.disabled = !valid();
   }
@@ -198,22 +224,29 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
     actions.append(button('cancelEdit', 'cancel-edit', () => { clearDraft(); content.querySelector<HTMLElement>('[data-focus="add-pair"]')?.focus(); }), save);
     fields.append(summary, ruleRadios, preview, actions); editHost.append(fields); updatePreview();
   }
-  function renderContent(snapshot: Snapshot) {
-    content.replaceChildren();
+  function profileList(registry: Registry) {
     const profileSection = node('section'); profileSection.append(node('h3', t('backendAccounts.profiles')));
     const profiles = node('ul');
-    for (const profile of snapshot.registry.profiles) {
+    for (const profile of registry.profiles) {
       const row = node('li', context(profile));
       row.append(node('p', t(profile.enabled ? 'backendAccounts.profileEnabled' : 'backendAccounts.profileDisabled')));
       row.append(node('p', t(profile.switch_qualified ? 'backendAccounts.qualificationNotAuthority' : 'backendAccounts.notQualified'))); profiles.append(row);
     }
-    profileSection.append(profiles); if (!snapshot.registry.profiles.length) profileSection.append(node('p', t('backendAccounts.noProfiles')));
-    if (ports.create) {
-      profileSection.append(button('addAccount', 'add-account', startCreate));
+    profileSection.append(profiles); if (!registry.profiles.length) profileSection.append(node('p', t('backendAccounts.noProfiles')));
+    return profileSection;
+  }
+  function profileControls(registry: Registry) {
+    const profileSection = profileList(registry);
+    if (ports.create || ports.provision?.backends.length) {
+      if (ports.provision?.backends.length) profileSection.append(button('provisionTitle', 'provision-account', () => startCreate('provision')));
+      if (ports.create) profileSection.append(button('addAccount', 'add-account', () => startCreate('associate')));
       createHost = node('div'); profileSection.append(createHost);
       if (creation) renderCreate();
     }
-    content.append(profileSection);
+    return profileSection;
+  }
+  function renderContent(snapshot: Snapshot) {
+    content.replaceChildren(profileControls(snapshot.registry));
     const controls = node('fieldset'); controls.dataset.controls = '';
     controls.append(node('legend', t('backendAccounts.confirmations')));
     let globalDraft = snapshot.policy.global;
@@ -247,19 +280,36 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
     if (disposed || state.phase === 'closed') return;
     const focused = doc.activeElement instanceof HTMLElement ? doc.activeElement.dataset.focus : undefined;
     if (state.phase === 'saving') restoreFocus = focused ?? null;
-    const statusKey = state.phase === 'error' && state.snapshot === null ? 'loadError' : state.phase;
+    const statusKey = state.phase !== 'loading' && state.phase !== 'saving' && state.provisionPending
+      ? state.provisionPending : state.phase === 'error' && state.snapshot === null ? 'loadError' : state.phase;
     const fieldErrors = ['invalid-request', 'invalid-profile-config', 'unsafe-profile-roots',
-      'profile-registry-changed', 'profile-already-exists', 'profile-migration-required'];
+      'profile-registry-changed', 'profile-already-exists', 'profile-migration-required', 'profile-provision-unavailable'];
     status.textContent = t(`backendAccounts.status.${statusKey}`)
       + (state.refusal && creation && fieldErrors.includes(state.refusal)
         ? ` ${t(`backendAccounts.refusal.${state.refusal}`)}` : '');
     dialog.setAttribute('aria-busy', String(state.phase === 'loading' || state.phase === 'saving'));
     refresh.disabled = state.phase === 'saving' || state.phase === 'loading';
-    if (state.snapshot !== shown) {
-      shown = state.snapshot;
-      if (shown) { clearDraft(); renderContent(shown); } else { clearDraft(); content.replaceChildren(); }
+    if (state.phase === 'saved' && !state.provisionPending && creation?.mode === 'provision') {
+      creation = null; createHost?.replaceChildren();
+    }
+    const capability = ports.provision?.backends.join(',') ?? '';
+    if (state.snapshot !== shown || state.inspected !== inspected || capability !== shownCapability) {
+      if (state.snapshot !== shown || state.inspected !== inspected) clearDraft();
+      shown = state.snapshot; inspected = state.inspected;
+      shownCapability = capability;
+      if (shown) renderContent(shown);
+      else if (inspected) content.replaceChildren(profileControls(inspected));
+      else content.replaceChildren();
     }
     content.querySelectorAll<HTMLFieldSetElement>('fieldset[data-controls]').forEach(fields => { fields.disabled = !writable(); });
+    const provision = content.querySelector<HTMLButtonElement>('[data-focus="provision-account"]');
+    if (provision) provision.disabled = !provisionWritable();
+    const associate = content.querySelector<HTMLButtonElement>('[data-focus="add-account"]');
+    if (associate) associate.disabled = !canAssociate();
+    if (creation) {
+      const fields = createHost?.querySelector('fieldset');
+      if (fields) fields.disabled = creation.mode === 'provision' ? !provisionWritable() : !canAssociate();
+    }
     if (writable() && restoreFocus) {
       if (!focused || focused === restoreFocus) {
         const previous = Array.from(content.querySelectorAll<HTMLElement>('[data-focus]')).find(el => el.dataset.focus === restoreFocus);
@@ -271,10 +321,12 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
   const unsubscribe = controller.subscribe(render);
   return {
     dialog,
+    refreshProvisionView() { render(controller.state); },
     async open(trigger?: HTMLElement) {
       if (disposed || dialog.open) return;
       ++generation;
       opener = trigger ?? (doc.activeElement instanceof HTMLElement ? doc.activeElement : null);
+      ports.refreshCapability?.();
       dialog.showModal(); closeButton.focus(); await controller.open();
     },
     close,
