@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
-import {REPO, removeScratch, runServer, type Scratch, scratchHome, stopServer} from './mesh-server-lib.ts';
+import {REPO, freePort, removeScratch, runServer, type Scratch, scratchHome, stopServer} from './mesh-server-lib.ts';
 import {type Intercept, type Proxy, startProxy} from './ptyhost-proxy-lib.ts';
 import {waitFor} from './ptyhost-wire-lib.ts';
 
@@ -66,6 +66,18 @@ function fakeAgents(bin: string): void {
   ]);
 }
 
+// The ephemeral port can be claimed between discovery and the child binding it.
+// Retry only a confirmed bind collision, never treat a foreign listener as ours.
+export async function runHistoryServer(where: Scratch): ReturnType<typeof runServer> {
+  for (let attempt = 0; ; attempt += 1) {
+    const run = await runServer(where);
+    if (run.result.listened || attempt === 4 ||
+        !/OSError: \[Errno (?:98|48)\] error while attempting to bind[^\n]*address already in use/i.test(run.result.output)) return run;
+    where.port = await freePort();
+    where.env.MESH_PORT = String(where.port);
+  }
+}
+
 export class HistoryLab {
   readonly where: Scratch;
   readonly bin: string;
@@ -98,7 +110,7 @@ export class HistoryLab {
     fs.mkdirSync(hostRuntime, {recursive: true, mode: 0o700});
     const hostSocket = await lab.startHost(hostRuntime);
     if (intercept) lab.proxy = await startProxy(path.join(runtime, 'session-mesh', 'ptyhost.sock'), hostSocket, intercept);
-    await lab.startServer();
+    try { await lab.startServer(); } catch (error) { await lab.stop(); throw error; }
     return lab;
   }
 
@@ -152,7 +164,7 @@ export class HistoryLab {
   }
 
   async startServer(): Promise<void> {
-    const {child, result, output} = await runServer(this.where);
+    const {child, result, output} = await runHistoryServer(this.where);
     this.output = output;
     assert.ok(result.listened, result.output);
     this.server = child;
@@ -168,7 +180,7 @@ export class HistoryLab {
   serverOutput(): string { return this.output(); }
 
   async stop(): Promise<void> {
-    await stopServer(this.server);
+    if (this.server) await stopServer(this.server);
     this.proxy?.close();
     const exited = this.host.exitCode !== null || this.host.signalCode !== null;
     const gone = new Promise(resolve => this.host.once('close', resolve));

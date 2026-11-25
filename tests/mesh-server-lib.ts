@@ -46,7 +46,7 @@ export type Mesh = {
 
 export type Scratch = {scratch: string; home: string; confDir: string; env: NodeJS.ProcessEnv; port: number};
 
-function freePort(): Promise<number> {
+export function freePort(): Promise<number> {
   return new Promise(resolve => {
     const probe = net.createServer().listen(0, '127.0.0.1', () => {
       const {port} = probe.address() as net.AddressInfo;
