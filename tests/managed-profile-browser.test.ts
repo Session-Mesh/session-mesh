@@ -176,6 +176,23 @@ for (const lateConfig of [false, true]) test(lateConfig
       await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
       assert.equal(await form.locator('select[name=account]').inputValue(), `managed:codex:${a.id}`);
     }
+    // Shell and custom have no account selector. A previously selected managed
+    // profile must not block them or be sent as a default/managed account.
+    for (const preset of ['shell', 'custom']) {
+      await form.locator(`label:has(input[name=preset][value=${preset}])`).click();
+      if (preset === 'custom') await form.locator('input[name=command]').fill('true');
+      let sent: Record<string, unknown> | undefined;
+      await page.route(launchURL, async route => {
+        sent = route.request().postDataJSON();
+        await route.fulfill({status:409, body:'test refusal'});
+      }, {times:1});
+      await Promise.all([page.waitForResponse(r => r.url() === launchURL), form.locator('button[value=ok]').click()]);
+      assert.equal(sent?.preset, preset);
+      assert.equal(Object.hasOwn(sent!, 'managed_profile'), false);
+      assert.equal(Object.hasOwn(sent!, 'account'), false);
+    }
+    launches.length = 0;
+    await form.locator('label:has(input[name=preset][value=codex])').click();
     const submit = () => Promise.all([
       page.waitForResponse(r => r.url() === launchURL && r.request().method() === 'POST'),
       form.locator('button[value=ok]').click(),

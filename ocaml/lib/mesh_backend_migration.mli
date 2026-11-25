@@ -43,6 +43,9 @@ val provision_profile :
   expected_revision:string option ->
   profile:Yojson.Safe.t ->
   (string * Yojson.Safe.t, string) result
+(** Allocate private directories and publish a disabled profile from exactly
+    [backend] and [label]. Existing paths are never adopted. Unpublished
+    directories can remain after interruption. *)
 
 val provision_managed :
   admit:(unit -> bool) ->
@@ -50,11 +53,8 @@ val provision_managed :
   expected_revision:string option ->
   profile:Yojson.Safe.t ->
   (string * Yojson.Safe.t, string) result
-(** Closed provisioning path whose native capability is consulted under the registry lock. *)
-(** Allocate new private native directories and publish a disabled profile
-    from exactly [backend] and [label]. No HTTP operation, launch or provider
-    access is granted by this preparation step. Existing paths are never
-    adopted. Unpublished directories can remain after interruption. *)
+(** Publish an enabled managed profile only if the native capability admits it
+    under the registry lock. No provider sign-in is performed. *)
 
 type create_recovery = Unpublished_aborted | Published_reconciled
 

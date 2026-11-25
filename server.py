@@ -3612,8 +3612,9 @@ async def api_new(request):
                 or kind != "codex" or account is not None):
             raise web.HTTPConflict(text=MANAGED_PROFILE_REFUSED)
     conversation = None
+    stored = stored_options(kind) if agent else ()
     if agent and managed is None:
-        argv, conversation = _chosen_launch(agent, effective_launch(kind, stored_options(kind), options))
+        argv, conversation = _chosen_launch(agent, effective_launch(kind, stored, options))
         command = shlex.join(argv)
     name = await new_session(name or f"{Path(cwd).name}-{kind if kind != 'custom' else 'cmd'}",
                              cwd, command, agent if agent in RESUMABLE_AGENT_PRESETS else None,

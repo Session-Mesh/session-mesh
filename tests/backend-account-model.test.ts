@@ -35,6 +35,7 @@ test('provision neither uses the association transport nor accepts an enabled re
   }}});
   await controller.open();
   assert.equal(await controller.provisionProfile({backend: 'claude', label: 'New'}), false);
+  assert.equal(writes, 0, 'unsupported backend never reaches the write transport');
   assert.equal(await controller.provisionProfile({backend: 'codex', label: 'New'}), false);
   assert.equal(controller.state.phase, 'error');
   assert.equal(controller.state.provisionPending, 'provisionUncertain');
@@ -52,6 +53,7 @@ const unconfigured = reply({configured:false, registry_revision:null, profiles:[
 for (const append of [false, true]) for (const published of [false, true]) {
   test(`lost provision receipt stays blocked across inspection and reopen (${append ? 'append' : 'first'}, ${published ? 'published' : 'unpublished'})`, async () => {
     let loads = 0, inspections = 0, writes = 0;
+    let writtenRevision: string | null | undefined;
     const old = append ? [profile('a')] : [];
     let current = append ? listing(old) : unconfigured;
     const controller = createBackendAccountController({
@@ -61,13 +63,14 @@ for (const append of [false, true]) for (const published of [false, true]) {
       provision: {backends:['codex'],
         write:async request => {
           writes++;
-          assert.equal(request.registry_revision, append ? digest : null);
+          writtenRevision = request.registry_revision;
           if (published) current = reply({configured:true, registry_revision:newRevision, profiles:[...old, provisioned]});
           throw new Error('transport lost the reply');
         }},
     });
     await controller.open();
     assert.equal(await controller.provisionProfile(requestedProvision), false);
+    assert.equal(writtenRevision, append ? digest : null);
     assert.equal(inspections, 0);
     await controller.refresh();
     assert.equal(controller.state.provisionPending, 'provisionUncertain');
