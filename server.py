@@ -5506,11 +5506,19 @@ def _carry_helper_snapshot(path):
         raise AccountsUnavailable('mesh-platform not found', 'helper-unavailable')
     path = os.path.realpath(path)
     try:
-        with open(path, 'rb') as executable:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as executable:
             before = os.fstat(executable.fileno())
             if not stat.S_ISREG(before.st_mode) or before.st_size > 128 * 1024 * 1024:
                 raise OSError('invalid helper')
-            digest = hashlib.file_digest(executable, 'sha256').digest()
+            hasher = hashlib.sha256()
+            total = 0
+            while chunk := executable.read(1024 * 1024):
+                total += len(chunk)
+                if total > 128 * 1024 * 1024:
+                    raise OSError('helper too large')
+                hasher.update(chunk)
+            digest = hasher.digest()
             after = os.fstat(executable.fileno())
         def identity(value):
             return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
