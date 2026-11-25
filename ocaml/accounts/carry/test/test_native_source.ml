@@ -491,10 +491,16 @@ let test_default_target_environment_is_pinned root =
     | "HOME" -> Some root
     | _ -> None
   in
-  refused_with "carry_rollback_incomplete"
-    (C.carry_accounts ~io:(failing_io ~free:(Some 0) ()) ~uid ~getenv
-       ~file:(file root) ~kind:C.Claude ~conversation:sid ~from_account:"work"
-       ~to_account:"default" ());
+  let result =
+    C.carry_accounts ~io:(failing_io ~free:(Some 0) ()) ~uid ~getenv
+      ~file:(file root) ~kind:C.Claude ~conversation:sid ~from_account:"work"
+      ~to_account:"default" ()
+  in
+  refused_with "target_no_space" result;
+  Alcotest.(check bool) "folder cleanup uncertainty remains explicit" true
+    (contains (message_of result) "folder cleanup unconfirmed");
+  Alcotest.(check bool) "source transcript retained" true (exists (path source transcript));
+  Alcotest.(check bool) "target transcript not installed" false (exists (path chosen transcript));
   Alcotest.(check int) "default selector read only once" 1 !selections;
   Alcotest.(check bool) "unproven target retained for review" true (exists chosen);
   check_identity "pre-existing empty alternative never removed" identity preexisting;
