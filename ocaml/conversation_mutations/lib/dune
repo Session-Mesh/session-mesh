@@ -1,0 +1,3 @@
+(library
+ (name conversation_mutations)
+ (libraries conversation_registry_model))

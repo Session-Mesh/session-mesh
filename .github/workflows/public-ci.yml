@@ -83,17 +83,18 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             demo-compiler/package-lock.json
-      # The native PTY host, built once by the native job: every test job runs against it.
-      - name: Fetch the native PTY host
+      # The native PTY host and History helper, built once by the native job.
+      - name: Fetch the native PTY host and History helper
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: mesh-ptyhost-linux-x86_64
           path: ${{ runner.temp }}/native-host
-      - name: Point the tests at the native PTY host
+      - name: Point the tests at the native PTY host and History helper
         run: |
-          chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost"
+          chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost" "$RUNNER_TEMP/native-host/mesh-history"
           # The plain absolute path (CONTRIBUTING.md, "Which PTY host the tests run"): no quoting.
           echo "MESH_PTYHOST_CMD=$RUNNER_TEMP/native-host/mesh-ptyhost" >> "$GITHUB_ENV"
+          echo "MESH_MESH_HISTORY_CMD=$RUNNER_TEMP/native-host/mesh-history" >> "$GITHUB_ENV"
       # mesh-logout-all, built by the same job: its oracles (tests/cli-no-proxy.test.ts,
       # tests/test_logout_all.py) run against it through MESH_LOGOUT_ALL_CMD.
       - name: Fetch mesh-logout-all
@@ -251,16 +252,17 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: requirements-dev.txt
-      - name: Fetch the native PTY host
+      - name: Fetch the native PTY host and History helper
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: mesh-ptyhost-linux-x86_64
           path: ${{ runner.temp }}/native-host
-      - name: Point the tests at the native PTY host
+      - name: Point the tests at the native PTY host and History helper
         run: |
-          chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost"
+          chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost" "$RUNNER_TEMP/native-host/mesh-history"
           # The plain absolute path (CONTRIBUTING.md, "Which PTY host the tests run"): no quoting.
           echo "MESH_PTYHOST_CMD=$RUNNER_TEMP/native-host/mesh-ptyhost" >> "$GITHUB_ENV"
+          echo "MESH_MESH_HISTORY_CMD=$RUNNER_TEMP/native-host/mesh-history" >> "$GITHUB_ENV"
       # mesh-logout-all, built by the same job: its oracles (tests/cli-no-proxy.test.ts,
       # tests/test_logout_all.py) run against it through MESH_LOGOUT_ALL_CMD.
       - name: Fetch mesh-logout-all
@@ -332,16 +334,17 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('requirements-browser.txt') }}
-      - name: Fetch the native PTY host
+      - name: Fetch the native PTY host and History helper
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: mesh-ptyhost-linux-x86_64
           path: ${{ runner.temp }}/native-host
-      - name: Point the tests at the native PTY host
+      - name: Point the tests at the native PTY host and History helper
         run: |
-          chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost"
+          chmod +x "$RUNNER_TEMP/native-host/mesh-ptyhost" "$RUNNER_TEMP/native-host/mesh-history"
           # The plain absolute path (CONTRIBUTING.md, "Which PTY host the tests run"): no quoting.
           echo "MESH_PTYHOST_CMD=$RUNNER_TEMP/native-host/mesh-ptyhost" >> "$GITHUB_ENV"
+          echo "MESH_MESH_HISTORY_CMD=$RUNNER_TEMP/native-host/mesh-history" >> "$GITHUB_ENV"
       # work-read and work-write, built by the same job: the Projects tests (tests/work-*.test.ts,
       # tests/session-questions-browser.test.ts) run against them through MESH_WORK_READ_CMD and
       # MESH_WORK_WRITE_CMD, and MESH_REQUIRE_WORK_READ=1 makes a missing program a failure, never a skip.
@@ -594,12 +597,13 @@ jobs:
           grep -qx '# skipped 0' "$RUNNER_TEMP/history-db.tap"
           grep -Eqx '# pass [1-9][0-9]*' "$RUNNER_TEMP/history-db.tap"
 
-  # The native PTY host, built once and handed to every test job as the artifact
-  # mesh-ptyhost-linux-x86_64 (tests find it through MESH_PTYHOST_CMD), and mesh-logout-all, handed
+  # The native PTY host and History helper are handed to every test job as the artifact
+  # mesh-ptyhost-linux-x86_64 (MESH_PTYHOST_CMD and MESH_MESH_HISTORY_CMD). mesh-logout-all is handed
   # to the frontend and python jobs as mesh-logout-all-linux-x86_64 (MESH_LOGOUT_ALL_CMD), and
   # work-read and work-write, handed to the frontend and browser jobs as mesh-work-programs-linux-x86_64
   # (MESH_WORK_READ_CMD, MESH_WORK_WRITE_CMD) with mesh-platform (MESH_MESH_PLATFORM_CMD) and mesh-profile
-  # (MESH_PROFILE_CMD, frontend job only). The one `dune build @install` below builds all six, so the work programs add no build. The binaries are cached on the hash of everything that can change them: the OCaml sources outside
+  # (MESH_PROFILE_CMD, frontend job only). The one `dune build @install` below builds all seven. The binaries are
+  # cached on the hash of everything that can change them: the OCaml sources outside
   # ocaml/test, the bootstrap script that pins the dependencies, the commit of the opam repository
   # (scripts/release-pins.sh), and the compiler. A hit costs seconds (no opam,
   # no compiler); a miss builds it from the opam state of the ocaml job, only the programs
@@ -624,8 +628,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: native-host
-          # The synthetic browser helper is cached with the native programs but has its own CI artifact.
-          key: native-programs-v4-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/**', '!ocaml/test/**', 'ocaml/test/provision_runner/**', '!ocaml/_build/**', 'scripts/bootstrap.sh', 'scripts/release-pins.sh') }}
+          # v5 includes mesh-history; the synthetic browser helper has its own CI artifact.
+          key: native-programs-v5-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/**', '!ocaml/test/**', 'ocaml/test/provision_runner/**', '!ocaml/_build/**', 'scripts/bootstrap.sh', 'scripts/release-pins.sh') }}
       # The same opam state, key and setup as the ocaml job (it is the one that saves it).
       - name: Restore the opam state
         if: steps.host-cache.outputs.cache-hit != 'true'
@@ -663,6 +667,7 @@ jobs:
           fi
           mkdir -p native-host
           cp -L ocaml/_build/install/default/bin/mesh-ptyhost native-host/mesh-ptyhost
+          cp -L ocaml/_build/install/default/bin/mesh-history native-host/mesh-history
           cp -L ocaml/_build/install/default/bin/mesh-logout-all native-host/mesh-logout-all
           cp -L ocaml/_build/install/default/bin/work-read native-host/work-read
           cp -L ocaml/_build/install/default/bin/work-write native-host/work-write
@@ -679,6 +684,7 @@ jobs:
         run: |
           test -x native-host/mesh-ptyhost
           ldd native-host/mesh-ptyhost
+          test -x native-host/mesh-history
           test -x native-host/mesh-logout-all
           test -x native-host/work-read
           test -x native-host/work-write
@@ -689,7 +695,9 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mesh-ptyhost-linux-x86_64
-          path: native-host/mesh-ptyhost
+          path: |
+            native-host/mesh-ptyhost
+            native-host/mesh-history
           if-no-files-found: error
           retention-days: 3
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

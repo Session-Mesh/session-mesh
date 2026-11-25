@@ -1,0 +1,10 @@
+(library
+ (name mesh_conversation_store)
+ (modules mesh_conversation_store)
+ (libraries unix mesh_worklog))
+
+(test
+ (name test_conversation_store)
+ (modules test_conversation_store)
+ (libraries mesh_conversation_store unix alcotest)
+ (action (run %{test} %{exe:../bin/mesh_history_main.exe})))

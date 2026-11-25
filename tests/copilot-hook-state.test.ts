@@ -59,7 +59,8 @@ def recorded():
   try {
     const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c', `${prelude}\n${code}`], {
       cwd: REPO, encoding: 'utf8',
-      env: {PATH: process.env.PATH, HOME: conf, MESH_CONF_DIR: conf, XDG_RUNTIME_DIR: conf, TMPDIR: conf}});
+      env: {PATH: process.env.PATH, HOME: conf, MESH_CONF_DIR: conf, XDG_RUNTIME_DIR: conf, TMPDIR: conf,
+        MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD}});
     return JSON.parse(output);
   } finally {
     fs.rmSync(conf, {recursive: true, force: true});

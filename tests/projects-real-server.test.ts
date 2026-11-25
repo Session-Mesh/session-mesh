@@ -35,15 +35,16 @@ test('hostile catalog stays inert through real authenticated signed view and ind
     MESH_CONF_DIR:conf, MESH_CACHE_DIR:path.join(temp,'cache'), MESH_RUNTIME_DIR:runtime,
     MESH_HOST:'127.0.0.1', MESH_PORT:String(port), MESH_AUTH_MODE:'legacy', PYTHONDONTWRITEBYTECODE:'1' };
   let diagnostics = '';
-  const launch = (argv:string[]) => {
-    const child = spawn(argv[0],argv.slice(1),{cwd:ROOT,env,stdio:['ignore','pipe','pipe']});
+  const launch = (argv:string[], childEnv: NodeJS.ProcessEnv = env) => {
+    const child = spawn(argv[0],argv.slice(1),{cwd:ROOT,env:childEnv,stdio:['ignore','pipe','pipe']});
     child.on('error',error=>{diagnostics += String(error);});
     for (const stream of [child.stdout,child.stderr]) stream?.on('data',data=>{diagnostics = (diagnostics+data).slice(-16000);});
     children.push(child); return child;
   };
   let browser;
   try {
-    launch(ptyhostArgv()); const server = launch([PYTHON,'server.py']);
+    launch(ptyhostArgv());
+    const server = launch([PYTHON,'server.py'], {...env, MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD});
     let ready = false;
     for (let i=0;i<150;i++) {
       assert.equal(server.exitCode,null,`server exited: ${diagnostics}`);

@@ -3,8 +3,8 @@
 
 // A throwaway PTY host and server.py, and Chromium pages on them, for the terminal browser
 // tests. Each run has its own HOME, configuration and runtime directory; nothing here reads
-// the caller's MESH_* variables or reaches a running mesh.
-// Host: the native one, named by MESH_PTYHOST_CMD (words separated by spaces).
+// the caller's session data or reaches a running mesh.
+// Host and registry helper: the test executables named by MESH_PTYHOST_CMD and MESH_MESH_HISTORY_CMD.
 // Chromium: MESH_CHROMIUM; without it the tests are skipped (MESH_REQUIRE_BROWSER=1 makes the
 // absence a failure).
 import assert from 'node:assert/strict';
@@ -67,7 +67,8 @@ export class TerminalMesh {
     const env: NodeJS.ProcessEnv = {PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: this.home, SHELL: '/bin/bash',
       XDG_RUNTIME_DIR: this.runtime, XDG_CONFIG_HOME: path.join(this.home, '.config'),
       XDG_CACHE_HOME: path.join(this.home, '.cache'), MESH_CONF_DIR: this.confDir,
-      MESH_CACHE_DIR: path.join(this.home, '.cache', 'session-mesh'), MESH_PORT: String(port), ...this.extraEnv};
+      MESH_CACHE_DIR: path.join(this.home, '.cache', 'session-mesh'), MESH_PORT: String(port),
+      MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD, ...this.extraEnv};
     this.hostEnv = env;
     this.spawn(nativePtyhost(), env);
     await this.waitUntil('the PTY host', () => accepts({path: this.socketPath}));

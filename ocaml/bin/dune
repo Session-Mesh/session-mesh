@@ -15,7 +15,7 @@
  (name mesh_history_main)
  (public_name mesh-history)
  (modules mesh_history_main)
- (libraries mesh_history mesh_flow yojson unix))
+ (libraries mesh_history mesh_flow conversation_protocol yojson unix))
 
 (executable
  (name mesh_ptyhost_main)

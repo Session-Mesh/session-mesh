@@ -28,7 +28,6 @@ import time
 
 import meshpaths
 import fsutil
-import conversation_names
 
 FILE = meshpaths.CONF_DIR / "mesh.json"
 MAX_LEN = 60
@@ -299,5 +298,5 @@ def apply(op, sessions):
             raise ValueError(f"Unknown operation: {kind}")
         _save(data)
         if kind == "rename":
-            conversation_names.rename(name, e["created"], previous_label, label)
+            fsutil.conversation_request("rename", name=name, created=e["created"], old=previous_label, new=label)
     return view(sessions)

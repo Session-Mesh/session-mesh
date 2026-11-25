@@ -1,0 +1,10 @@
+(library
+ (name conversation_protocol)
+ (modules conversation_protocol)
+ (libraries conversation_registry_model conversation_codec conversation_mutations
+   mesh_conversation_names mesh_conversation_store yojson unix))
+
+(test
+ (name test_conversation_protocol)
+ (modules test_conversation_protocol)
+ (libraries conversation_protocol alcotest yojson unix))

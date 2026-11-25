@@ -11,6 +11,8 @@ import time
 
 import pytest
 
+import fsutil
+import meshpaths
 import organize
 import ptyhost
 import respawn
@@ -491,11 +493,16 @@ async def test_startup_does_not_bypass_strict_document_refresh(monkeypatch):
         await server._stop_listing_account_refresh(None)
 
 
-async def test_a_listing_observes_the_conversations_at_the_time_of_its_host_read(monkeypatch):
-    observed = []
-    monkeypatch.setattr(server.conversation_names, "observe", lambda mesh, listed, now: observed.append(now))
-    await server._listing(None, None, ([], False, None, 123.0, 0.0))
-    assert observed == [123.0]
+async def test_a_listing_observes_the_conversations_at_the_time_of_its_host_read(fake_host, tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "_RECORDED", [0.0])
+    monkeypatch.setattr(meshpaths, "CONF_DIR", tmp_path)
+    monkeypatch.setattr(server, "_LIVE_EVENT_STATE", None)
+    raw = [hosted("observed", tmp_path, 100.0)]
+    observed_at = float(int(time.time()) - 10)
+    await server._listing(None, None, (raw, True, None, observed_at, 0.0))
+    [entry] = fsutil.conversation_request("snapshot")
+    assert entry["name"] == "observed"
+    assert entry["seen"] == observed_at
 
 
 @pytest.mark.parametrize("reply, kept", [(asyncio.CancelledError(), True), (ConnectionResetError(), True),

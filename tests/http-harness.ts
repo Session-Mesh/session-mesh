@@ -328,12 +328,13 @@ function isolatedEnvironment(home: string, port: number): NodeJS.ProcessEnv {
   for (const name of ['XDG_DATA_HOME', 'OPENCODE_DB', 'COPILOT_HOME', 'VIBE_HOME', 'GEMINI_CLI_HOME',
     'PI_CODING_AGENT_DIR']) delete env[name];
   // Every MESH_* variable configures the server (MESH_TRUST_PROXY, MESH_PUSH, MESH_HISTORY_CMD, and
-  // MESH_SESSION / MESH_SESSION_TOKEN when the suite itself runs inside a session): none may leak in.
+  // MESH_SESSION / MESH_SESSION_TOKEN when the suite itself runs inside a session). Pass only the
+  // selected native history helper back in.
   for (const name of Object.keys(env)) if (name.startsWith('MESH_')) delete env[name];
   return {...env, HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run'),
     XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'),
     MESH_CONF_DIR: path.join(home, '.config', 'session-mesh'), MESH_CACHE_DIR: path.join(home, '.cache', 'session-mesh'),
-    MESH_PORT: String(port),
+    MESH_PORT: String(port), MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD,
     // The owner's switch for answering from a notification. With it, POST /api/push/act reaches its body check;
     // no push subscription exists here, so no notification carries an answer.
     MESH_ANSWER_BUTTONS: '1'};

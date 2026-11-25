@@ -25,7 +25,7 @@ function python(before: unknown, code: string, keep = false): [unknown, Record<s
     const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c',
       `import asyncio, json, sys\nsys.path.insert(0, ${JSON.stringify(REPO)})\nimport server\n${code}`],
     {cwd: REPO, encoding: 'utf8', env: {PATH: process.env.PATH, HOME: conf, MESH_CONF_DIR: conf, XDG_RUNTIME_DIR: conf,
-      TMPDIR: conf}});
+      TMPDIR: conf, MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD}});
     const file = path.join(conf, 'mesh.json');
     return [JSON.parse(output.trim().split('\n').pop()!), fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}, conf];
   } finally {

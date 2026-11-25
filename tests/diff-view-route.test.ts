@@ -127,7 +127,8 @@ describe('the diff viewer through the server routes', {skip: OWNER_CHECK ? false
     fs.writeFileSync(path.join(home, 'ready.diff'), DIFF);
     const env: NodeJS.ProcessEnv = {PATH: process.env.PATH, HOME: home, XDG_RUNTIME_DIR: runtime,
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'),
-      MESH_CONF_DIR: confDir, MESH_CACHE_DIR: path.join(home, '.cache', 'session-mesh'), LANG: 'C.UTF-8'};
+      MESH_CONF_DIR: confDir, MESH_CACHE_DIR: path.join(home, '.cache', 'session-mesh'), LANG: 'C.UTF-8',
+      MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD};
     try {
       for (let attempt = 0; attempt < 3; attempt += 1) if (await startServer(env)) return;
       throw new Error(`server.py exited three times before serving:\n${output}`);

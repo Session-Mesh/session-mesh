@@ -1,0 +1,14 @@
+(library
+ (name conversation_registry_model)
+ (modules conversation_registry_model)
+ (libraries yojson))
+
+(library
+ (name mesh_conversation_names)
+ (modules mesh_conversation_names)
+ (libraries conversation_registry_model yojson))
+
+(test
+ (name test_conversation_names)
+ (modules test_conversation_names)
+ (libraries mesh_conversation_names alcotest yojson))

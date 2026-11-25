@@ -26,43 +26,55 @@ function tempHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'listing-caches-'));
 }
 
-describe('conversation names are serialised only to be written', () => {
-  test('an unchanged listing serialises and writes nothing; a change is written once, as before', () => {
+describe('conversation names are persisted only when changed', () => {
+  test('an unchanged listing keeps the file; a changed listing replaces it', () => {
     const home = tempHome();
     try {
-      const result = python(`
-import json, os, time, conversation_names as names
-T = float(int(time.time()) - 100)   # in the past: _load keeps only entries seen before now
-real, dumps = json.dumps, []
-def counted(*args, **kwargs):
-    dumps.append(1)
-    return real(*args, **kwargs)
-names.json.dumps = counted
-sessions = [{"name": f"s{i}", "created": 100 + i, "label": f"L{i}",
-             "agent": {"type": "claude", "session_id": f"abcdefgh-{i:04d}", "identity_source": "pid_metadata"}}
-            for i in range(30)]
-names.observe(sessions, now=T)
-first = len(dumps)
-mtime = os.stat(names.FILE).st_mtime_ns
-del dumps[:]
-names.observe(sessions, now=T + 1)
-unchanged = {"dumps": len(dumps), "written": os.stat(names.FILE).st_mtime_ns != mtime}
-seen = sorted({e["seen"] - T for e in names.snapshot()})
-del dumps[:]
-sessions[3] = dict(sessions[3], label="Renamed")
-names.observe(sessions, now=T + 2)
-changed = [e for e in names.snapshot() if e["name"] == "s3"][0]
-later = [e for e in names.snapshot() if e["name"] == "s4"][0]
-print(json.dumps({"first": first, "unchanged": unchanged, "seen": seen, "changed_dumps": len(dumps),
-                  "s3": [changed["label"], changed["aliases"], changed["seen"] - T], "s4_seen": later["seen"] - T}))
-`, home);
-      assert.equal(result.first, 1, 'the first listing writes the file: one serialisation');
-      assert.deepEqual(result.unchanged, {dumps: 0, written: false});
-      assert.deepEqual(result.seen, [0], 'an unchanged entry keeps its time');
-      assert.equal(result.changed_dumps, 1);
-      assert.deepEqual(result.s3, ['Renamed', ['s3', 'L3', 'Renamed'], 2]);
+      const conf = path.join(home, 'conf');
+      const file = path.join(conf, 'conversation-names.json');
+      const helper = process.env.MESH_MESH_HISTORY_CMD
+        || path.join(REPO, 'ocaml', '_build', 'default', 'bin', 'mesh_history_main.exe');
+      const stamp = () => {
+        const {ino, mtimeNs} = fs.statSync(file, {bigint: true});
+        return {ino, mtimeNs};
+      };
+      type Entry = {name: string; seen: number; label: string; aliases: string[]};
+      const entries = (): Entry[] => JSON.parse(fs.readFileSync(file, 'utf8'));
+      const sessions = Array.from({length: 30}, (_, i) => ({
+        name: 's' + i,
+        created: 100 + i,
+        label: 'L' + i,
+        agent: {type: 'claude', session_id: 'abcdefgh-' + String(i).padStart(4, '0'), identity_source: 'pid_metadata'},
+      }));
+      const observe = (now: number) => {
+        const request = {version: 1, op: 'observe', sessions, now, project: false};
+        const output = execFileSync(helper, ['--conversation-names'], {
+          env: {MESH_CONF_DIR: conf},
+          input: JSON.stringify(request) + '\n',
+          encoding: 'utf8',
+          timeout: 120_000,
+        });
+        assert.deepEqual(JSON.parse(output), {version: 1, result: null});
+      };
+      const firstSeen = Math.floor(Date.now() / 1000) - 100;
+      observe(firstSeen);
+      const first = stamp();
+      observe(firstSeen + 1);
+      assert.deepEqual(stamp(), first);
+      const unchanged = entries();
+      assert.equal(unchanged.length, sessions.length);
+      assert.deepEqual([...new Set(unchanged.map(entry => entry.seen))], [firstSeen],
+        'an unchanged entry keeps its time');
+
+      sessions[3].label = 'Renamed';
+      observe(firstSeen + 2);
+      assert.notEqual(stamp().ino, first.ino);
+      const saved = entries();
+      const changed = saved.find(entry => entry.name === 's3');
+      assert.ok(changed);
+      assert.deepEqual([changed.label, changed.aliases, changed.seen], ['Renamed', ['s3', 'L3', 'Renamed'], firstSeen + 2]);
       // As before: once an entry changed in this listing, the entries handled after it are stamped too.
-      assert.equal(result.s4_seen, 2);
+      assert.equal(saved.find(entry => entry.name === 's4')?.seen, firstSeen + 2);
     } finally {
       fs.rmSync(home, {recursive: true, force: true});
     }

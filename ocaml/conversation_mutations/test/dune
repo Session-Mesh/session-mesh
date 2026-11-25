@@ -1,0 +1,3 @@
+(test
+ (name conversation_mutations_test)
+ (libraries conversation_mutations mesh_conversation_names alcotest))

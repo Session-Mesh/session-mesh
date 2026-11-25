@@ -82,6 +82,8 @@ class World:
                     # test is meant to prevent.
                     "MESH_PYTHON": sys.executable,
                     "MESH_PTYHOST_CMD": ptyhost_command()[0]}
+        if "MESH_MESH_HISTORY_CMD" in os.environ:
+            self.env["MESH_MESH_HISTORY_CMD"] = os.environ["MESH_MESH_HISTORY_CMD"]
 
     def run(self, *args, **env_over):
         return subprocess.run([str(LAUNCHER), *args], env={**self.env, **env_over}, capture_output=True, text=True,
