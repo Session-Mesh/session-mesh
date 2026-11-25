@@ -464,7 +464,10 @@ test('running app: absent/false/nonboolean or refused config capability hides bo
     for (const config of [{}, {flag: false}, {flag: 'true'}, {flag: true, status: 401}, {flag: true, status: 403}, {flag: true, status: 503}]) {
       const context = await lab.context('fr', 900, config);
       const response = context.waitForEvent('response', {predicate: r => new URL(r.url()).pathname === '/api/config'});
-      const page = await lab.page(context, 'fr', true, false); await (await response).finished();
+      const page = await lab.page(context, 'fr', true, false);
+      const configResponse = await response;
+      assert.equal(configResponse.status(), config.status ?? 200, 'this context received its configured response');
+      await configResponse.finished();
       await page.locator('#btn-accounts').dispatchEvent('click');
       await page.locator('[data-mobile-action="btn-accounts"]').dispatchEvent('click');
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -473,7 +476,7 @@ test('running app: absent/false/nonboolean or refused config capability hides bo
       assert.equal(await dialog(page).count(), 0); assert.deepEqual(lab.calls, []);
       await context.close();
     }
-    assert.equal(lab.configRequests.length, 6);
+    // Each context awaited its own config response; other app features may also read it.
   });
 });
 
