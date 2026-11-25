@@ -33,7 +33,7 @@ const PROJECT = 'P-5e6f';
 const DIR = '~/notes/2026-11-20-fictional';
 const QUESTION = `Which layout? The details and the diagram are in ${DIR}/plan.html, see also https://example.test/spec.`;
 const HOSTILE = 'javascript:window.__pwn=1 data:text/html,<b>x</b> <img src=x onerror=window.__pwn=2> file:///etc/passwd';
-const OUTSIDE = path.join(REPO, 'README.md');
+const OUTSIDE = `${DIR}/outside.md`;
 const EVENTS = [
   { ts: '2026-11-07T09:00:00Z', task: TASK, type: 'created', title: 'Layout task', project: 'gateway', category: 'platform', priority: 'P1', status: 'todo' },
   { ts: '2026-11-07T09:01:00Z', task: TASK, type: 'set', field: 'project', to: PROJECT },
@@ -73,6 +73,7 @@ function temporaryTracker(): string {
 function writeDocuments(home: string): void {
   const notes = path.join(home, 'notes', '2026-11-20-fictional');
   fs.mkdirSync(notes, { recursive: true });
+  fs.symlinkSync('/etc/hosts', path.join(notes, 'outside.md'));
   fs.writeFileSync(path.join(notes, 'plan.html'), PAGE);
   fs.writeFileSync(path.join(notes, 'diagram.svg'),
     '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="120" height="60" fill="#9c9"/><script>alert(1)</script></svg>');
@@ -211,7 +212,7 @@ describe('links and documents in the Projects view', { skip }, () => {
     assert.equal(await md.getAttribute('sandbox'), 'allow-scripts');
     await page.frameLocator('.work-doc-panel iframe').locator('table td', { hasText: 'draft' }).waitFor();
     // The blocker names a file outside the view roots: the reference is a button, the panel says it is not available.
-    await sheet.locator('.work-detail-item').getByRole('button', { name: /README\.md/ }).click();
+    await sheet.locator('.work-detail-item').getByRole('button', { name: /outside\.md/ }).click();
     await panel(page).locator('.work-doc-unavailable').waitFor();
     assert.equal(await panel(page).locator('iframe').count(), 0);
     assert.equal(await panel(page).locator('.work-doc-newtab').isHidden(), true);
