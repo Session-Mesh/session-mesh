@@ -195,32 +195,33 @@ function samePolicy(a: Policy, b: Policy): boolean {
   return normalized(a) === normalized(b);
 }
 
-export function createBackendAccountController(ports: BackendAccountPorts, provisionJournal?: {
-  load(): string | null; save(value: string | null): void;
-}) {
+import type {ProvisionJournal} from './backend-account-provision-journal.ts';
+
+export function createBackendAccountController(ports: BackendAccountPorts, provisionJournal?: ProvisionJournal) {
   let state: AccountState = {phase: 'closed', snapshot: null};
   let generation = 0;
   let active: AbortController | null = null;
   type Receipt = {revision: string; profile: Profile};
-  type PendingProvision = {snapshot: Snapshot | null; receipt?: Receipt};
+  type PendingProvision = {snapshot: Snapshot | null; id?: string; receipt?: Receipt};
   let pending: PendingProvision | undefined;
-  function restoreProvision(snapshot: Snapshot | null): PendingProvision | undefined {
+  async function restoreProvision(snapshot: Snapshot | null): Promise<PendingProvision | undefined> {
     if (!provisionJournal) return;
     try {
-      const saved = provisionJournal.load();
+      const saved = await provisionJournal.load();
       if (saved === null) return;
-      return saved === 'uncertain' ? {snapshot} : {snapshot, receipt: profileReceipt(JSON.parse(saved))};
+      return saved.value === 'uncertain' ? {snapshot, id: saved.id}
+        : {snapshot, id: saved.id, receipt: profileReceipt(JSON.parse(saved.value))};
     } catch { return {snapshot}; }
   }
-  pending = restoreProvision(null);
-  function remember(receipt?: Receipt) {
-    provisionJournal?.save(receipt ? JSON.stringify({version: 1, ok: true, data: {
+  async function remember(receipt?: Receipt) {
+    if (!pending?.id) return;
+    await provisionJournal?.save(pending.id, receipt ? JSON.stringify({version: 1, ok: true, data: {
       registry_revision: receipt.revision, profile: receipt.profile,
     }}) : 'uncertain');
   }
-  function clearPending() {
-    provisionJournal?.save(null);
-    pending = undefined;
+  async function clearPending() {
+    if (pending?.id) await provisionJournal?.save(pending.id, null);
+    pending = await restoreProvision(pending?.snapshot ?? null);
   }
   const listeners = new Set<(state: AccountState) => void>();
   const publish = (next: AccountState) => {
@@ -256,6 +257,12 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
     const request = ++generation, abort = new AbortController(); active = abort;
     publish({phase: 'loading', snapshot: null});
     try {
+      if (!pending && provisionJournal) {
+        const restored = await restoreProvision(null);
+        if (request !== generation) return;
+        pending = restored;
+      }
+      if (request !== generation) return;
       if (pending) {
         const operation = pending;
         const registry = await bounded(inspect, abort);
@@ -263,7 +270,8 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
         const snapshot = operation.snapshot ? {registry, policy: operation.snapshot.policy} : null;
         const receipt = operation.receipt;
         if (receipt && verifies(registry, receipt)) {
-          clearPending();
+          await clearPending();
+          if (request !== generation) return;
           publish({phase: 'saved', snapshot, ...(!snapshot ? {inspected: registry} : {})});
         } else {
           // An unchanged registry, or a plausible matching row without a
@@ -354,14 +362,33 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
       const provision = ports.provision;
       if (!writable() || pending || !ports.inspect || !provision || !validProvisionInput(profile) || !provision.backends.includes(profile.backend)) return false;
       const snapshot = state.snapshot!;
-      pending = restoreProvision(snapshot);
-      if (pending) { publish({phase: 'ready', snapshot}); return false; }
       const token = ++generation, abort = new AbortController(); active = abort;
-      const operation: PendingProvision = {snapshot};
+      publish({phase: 'saving', snapshot});
+      let id: string | undefined;
+      try {
+        const saved = await restoreProvision(snapshot);
+        if (token !== generation) return false;
+        if (saved) { pending = saved; publish({phase: 'ready', snapshot}); return false; }
+        if (provisionJournal) {
+          const result = await provisionJournal.acquire();
+          id = result.entry.id;
+          if (!result.acquired) {
+            const next = await restoreProvision(snapshot);
+            if (token === generation) { pending = next; publish({phase: 'ready', snapshot}); }
+            return false;
+          }
+          if (token !== generation) {
+            await provisionJournal.save(id, null); // No network write was attempted.
+            return false;
+          }
+        }
+      } catch { if (token === generation) publish({phase: 'error', snapshot}); return false; }
+      const operation: PendingProvision = {snapshot, ...(id ? {id} : {})};
       pending = operation; // Closing while the request is in flight does not cancel publication.
       publish({phase: 'saving', snapshot});
       try {
-        remember(); // A storage failure must not dispatch a write that cannot be tracked.
+        // acquire() durably stores intent before dispatch. Without a journal,
+        // retain the existing in-memory behavior.
         const receipt = profileReceipt(await bounded(signal => provision.write({version: 1, op: 'profiles.provision',
           registry_revision: snapshot.registry.registry_revision, profile}, signal), abort));
         const answer = receipt.profile;
@@ -371,18 +398,21 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
           || receipt.revision === snapshot.registry.registry_revision) return invalid();
         if (token !== generation) return false;
         operation.receipt = receipt;
-        remember(receipt);
+        await remember(receipt);
+        if (token !== generation) return false;
         const registry = await bounded(inspect, abort);
         if (!verifies(registry, receipt)) return invalid();
         if (token !== generation) return false;
-        clearPending();
+        await clearPending();
+        if (token !== generation) return false;
         publish({phase: 'saved', snapshot: {...snapshot, registry}});
         return true;
       } catch (error) {
         if (token === generation) {
           if (!operation.receipt && error instanceof ReplyFailure) {
-            try { clearPending(); }
-            catch { publish({phase: 'error', snapshot}); return false; }
+            try { await clearPending(); }
+            catch { if (token === generation) publish({phase: 'error', snapshot}); return false; }
+            if (token !== generation) return false;
             publish({phase: error.conflict ? 'conflict' : 'refused', snapshot, refusal: error.code});
           } else publish({phase: 'error', snapshot});
         }
