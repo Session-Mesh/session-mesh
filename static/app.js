@@ -5611,7 +5611,7 @@ async function openRestoreRebind() {
     if (busy || !proposal) return; busy = true; confirm.disabled = true; offerSelect.disabled = accountSelect.disabled = true;
     try {
       const r = await requestLocal("/api/restore/rebind", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"confirm", ...proposal})});
-      if (!r.ok) { status.textContent = t("restore.rebind.stale"); confirm.hidden = true; proposal = null; return; }
+      if (!r.ok) { status.textContent = t(r.status >= 400 && r.status < 500 ? "restore.rebind.stale" : "restore.rebind.uncertain"); confirm.hidden = true; proposal = null; return; }
       const result = await r.json();
       if (result.ok !== true) throw new Error();
       status.textContent = t("restore.rebind.done"); confirm.hidden = true; proposal = null;
