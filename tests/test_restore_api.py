@@ -552,3 +552,83 @@ async def test_a_silent_host_gives_no_update_when_the_request_times_out(monkeypa
         await asyncio.wait_for(asyncio.sleep(3600), 0.05)
     monkeypatch.setattr(ptyhost, "request", request)
     assert await server._update_notice() is None
+
+
+async def test_rebind_legacy_offer_requires_confirmation_and_exact_context(
+        client, auth_cookie, fake_host, tmp_path, monkeypatch):
+    item = mesh_item('legacy-bound', tmp_path, 1.0, claude())
+    item['account'] = 'old'
+    lose(tmp_path, item)
+    original = respawn.lost_entry('legacy-bound')
+    expected = {'name': 'legacy-bound', 'created': original['created'], 'agent_kind': 'claude',
+                'resume_id': original['agent']['session_id'], 'cwd': original['cwd']}
+    root = tmp_path / 'profile'
+    transcript = root / 'projects' / 'project' / (expected['resume_id'] + '.jsonl')
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('transcript')
+    revision = 'a' * 64
+
+    async def context(account, kind, selected=None):
+        assert (account, kind) == ('work', 'claude')
+        if selected is not None and selected != revision:
+            raise server.web.HTTPConflict()
+        return {'context_revision': revision, 'label': 'Work', 'roots': {'config': str(root)}}
+
+    monkeypatch.setattr(server, '_profile_launch_context', context)
+    request = {'action': 'preview', 'expected': expected, 'account': 'work'}
+    response = await client.post('/api/restore/rebind', json=request, headers=auth_cookie)
+    assert response.status == 200
+    preview = await response.json()
+    assert preview['previous_account'] == 'old'
+    assert respawn.lost_entry('legacy-bound') == original
+    assert fake_host.new_requests == []
+    confirm = {**request, 'action': 'confirm', 'context_revision': revision,
+               'offer_digest': preview['offer_digest']}
+    stale = await client.post('/api/restore/rebind', json={**confirm, 'offer_digest': 'b' * 64}, headers=auth_cookie)
+    assert stale.status == 409
+    transcript.unlink()
+    missing = await client.post('/api/restore/rebind', json=confirm, headers=auth_cookie)
+    assert missing.status == 409
+    assert respawn.lost_entry('legacy-bound') == original
+    transcript.write_text('transcript')
+    response = await client.post('/api/restore/rebind', json=confirm, headers=auth_cookie)
+    assert response.status == 200
+    bound = respawn.lost_entry('legacy-bound')
+    assert bound == {**original, 'account': 'work', 'account_context_revision': revision}
+    assert fake_host.new_requests == []
+    retry = await client.post('/api/restore/rebind', json=confirm, headers=auth_cookie)
+    assert retry.status == 409
+
+
+async def test_rebind_rejects_changed_offer_and_changed_profile_before_writing(
+        client, auth_cookie, fake_host, tmp_path, monkeypatch):
+    item = mesh_item('legacy-race', tmp_path, 1.0, codex())
+    item['account'] = 'old'
+    lose(tmp_path, item)
+    original = respawn.lost_entry('legacy-race')
+    expected = {'name': 'legacy-race', 'created': original['created'], 'agent_kind': 'codex',
+                'resume_id': original['agent']['session_id'], 'cwd': original['cwd']}
+    root = tmp_path / 'profile'
+    transcript = root / 'sessions' / '2026' / '01' / '01' / ('rollout-x-' + expected['resume_id'] + '.jsonl')
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('transcript')
+    state = {'revision': 'a' * 64}
+
+    async def context(_account, _kind, selected=None):
+        if selected is not None and selected != state['revision']:
+            raise server.web.HTTPConflict()
+        return {'context_revision': state['revision'], 'label': 'Work', 'roots': {'config': str(root)}}
+
+    monkeypatch.setattr(server, '_profile_launch_context', context)
+    request = {'action': 'preview', 'expected': expected, 'account': 'work'}
+    preview = await (await client.post('/api/restore/rebind', json=request, headers=auth_cookie)).json()
+    confirm = {**request, 'action': 'confirm', 'context_revision': preview['context_revision'],
+               'offer_digest': preview['offer_digest']}
+    state['revision'] = 'b' * 64
+    assert (await client.post('/api/restore/rebind', json=confirm, headers=auth_cookie)).status == 409
+    assert respawn.lost_entry('legacy-race') == original
+    state['revision'] = 'a' * 64
+    respawn.begin_restoring('legacy-race', original['created'], 'a' * 32)
+    assert (await client.post('/api/restore/rebind', json=confirm, headers=auth_cookie)).status == 409
+    assert respawn.lost_entry('legacy-race')['restoring']
+    assert fake_host.new_requests == []

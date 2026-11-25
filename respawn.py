@@ -514,6 +514,19 @@ def offer_mismatch(entry, expected):
     return [key for key in EXPECTED_KEYS if actual[key] != expected[key]]
 
 
+def rebind_offer(expected, original, account, revision):
+    """Bind exactly the unchanged legacy offer; never create or resume a session."""
+    with _lock:
+        old = _load()
+        entry = next((e for e in old["lost"] if e["name"] == expected["name"] and usable(e)), None)
+        if (entry != original or entry is None or offer_mismatch(entry, expected)
+                or not entry.get("account") or entry.get("account_context_revision")
+                or entry.get("restoring")):
+            raise LookupError("offer changed")
+        replacement = {**entry, "account": account, "account_context_revision": revision}
+        _store(old, {**old, "lost": [replacement if e is entry else e for e in old["lost"]]}, required=True)
+
+
 def _set_marker(name, created, marker):
     """Set (or, with None, remove) the restoring marker of the offer (name, created). Raises
     LookupError when no such offer exists and OSError when the snapshot cannot be written."""
