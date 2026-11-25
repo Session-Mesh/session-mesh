@@ -455,6 +455,8 @@ let carry_accounts ?(io = default_io) ?(limits = default_limits) ?expected_conte
                       ~source ~target))
           in
           match result with
+          | Error error when unproven_creation && error.code = "target_no_space" ->
+              Error { error with message = error.message ^ "; account folder cleanup unconfirmed" }
           | Error error when unproven_creation
                              && (error.code = "carry_rollback_incomplete"
                                 || error.code = "carry_restore_failed") ->

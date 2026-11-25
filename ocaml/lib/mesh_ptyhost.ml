@@ -2155,9 +2155,9 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
   if ready then s.birth_clients := client :: !(s.birth_clients);
   s.clients <- client :: s.clients;
   Option.iter (fun ack ->
-    let id, created = match ack with
-      | Ack_v1 (id, created) -> (id, created)
-      | Ack_v2 actor -> (actor.lease_id, actor.created) in
+    let id = match ack with
+      | Ack_v1 (id, _) -> id
+      | Ack_v2 actor -> actor.lease_id in
     s.input_ack_clients <- (client, s.created) :: s.input_ack_clients;
     Hashtbl.replace s.input_ack_active id client;
     (match ack with
