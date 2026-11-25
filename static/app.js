@@ -5573,15 +5573,15 @@ async function openRestoreRebind() {
   dialog.append(heading, explanation, offerLabel, accountLabel, details, status, actions);
   document.body.append(dialog); dialog.addEventListener("close", () => dialog.remove(), {once: true});
   close.addEventListener("click", () => dialog.close()); dialog.showModal();
-  let offers = [], profiles = [], proposal = null, busy = false;
-  const reset = () => { proposal = null; details.hidden = true; confirm.hidden = true; preview.hidden = false; status.textContent = ""; };
+  let offers = [], profiles = [], proposal = null, busy = false, offersFresh = false;
+  const reset = () => { proposal = null; details.hidden = true; confirm.hidden = true; preview.hidden = !offersFresh; if (offersFresh) status.textContent = ""; };
   const updateProfiles = () => {
     reset(); accountSelect.replaceChildren();
     const offer = offers[Number(offerSelect.value)];
     profiles.filter(p => p.enabled === true && p.backend === offer?.expected?.agent_kind).forEach(p => {
       const option = document.createElement("option"); option.value = p.id; option.textContent = p.label; accountSelect.append(option);
     });
-    preview.disabled = !accountSelect.options.length;
+    preview.disabled = !offersFresh || !accountSelect.options.length;
   };
   offerSelect.addEventListener("change", updateProfiles); accountSelect.addEventListener("change", reset);
   try {
@@ -5589,12 +5589,12 @@ async function openRestoreRebind() {
     if (!a.ok || !b.ok) throw new Error();
     const listed = await a.json(), registry = await b.json();
     if (!Array.isArray(listed.offers) || !Array.isArray(registry?.data?.profiles)) throw new Error();
-    offers = listed.offers.filter(o => o?.expected && typeof o.expected.name === "string"); profiles = registry.data.profiles;
+    offers = listed.offers.filter(o => o?.expected && typeof o.expected.name === "string"); profiles = registry.data.profiles; offersFresh = true;
     offers.forEach((o, i) => { const option = document.createElement("option"); option.value = String(i); option.textContent = `${o.expected.name} · ${o.previous_account}`; offerSelect.append(option); });
     if (!offers.length) status.textContent = t("restore.rebind.none"); else updateProfiles();
   } catch { status.textContent = t("restore.rebind.unavailable"); }
   preview.addEventListener("click", async () => {
-    if (busy) return; busy = true; preview.disabled = true; offerSelect.disabled = accountSelect.disabled = true;
+    if (busy || !offersFresh) return; busy = true; preview.disabled = true; offerSelect.disabled = accountSelect.disabled = true;
     try {
       const selected = offers[Number(offerSelect.value)];
       const r = await requestLocal("/api/restore/rebind", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"preview", expected:selected.expected, account:accountSelect.value})});
@@ -5608,14 +5608,14 @@ async function openRestoreRebind() {
     finally { busy = false; preview.disabled = false; offerSelect.disabled = accountSelect.disabled = false; }
   });
   const refreshOffersAfterUncertain = async () => {
-    preview.hidden = true; preview.disabled = true;
+    offersFresh = false; preview.hidden = true; preview.disabled = true;
     try {
       const response = await requestLocal("/api/restore/rebind", {cache:"no-store"});
       if (!response.ok) throw new Error();
       const listed = await response.json();
       if (!Array.isArray(listed.offers)) throw new Error();
       offers = listed.offers.filter(o => o?.expected && typeof o.expected.name === "string");
-      offerSelect.replaceChildren();
+      offersFresh = true; offerSelect.replaceChildren();
       offers.forEach((o, i) => { const option = document.createElement("option"); option.value = String(i); option.textContent = `${o.expected.name} · ${o.previous_account}`; offerSelect.append(option); });
       if (offers.length) { updateProfiles(); preview.hidden = false; }
     } catch { /* Keep preview unavailable until the dialog is reopened. */ }

@@ -67,9 +67,9 @@ describe('explicit restore profile binding', {skip}, () => {
     try {
       const page = await context.newPage(); const actions: string[] = []; let reads = 0;
       const expected = {name:'alpha',created:1,agent_kind:'codex',resume_id:'fake',cwd:'/project'};
-      await page.route('**/api/accounts/profiles', route => route.fulfill({json:{data:{profiles:[{backend:'codex',id:'personal',label:'Personal',enabled:true}]}}}));
+      await page.route('**/api/accounts/profiles', route => route.fulfill({json:{data:{profiles:[{backend:'codex',id:'personal',label:'Personal',enabled:true},{backend:'codex',id:'work',label:'Work',enabled:true}]}}}));
       await page.route('**/api/restore/rebind', async route => {
-        if (route.request().method() === 'GET') return ++reads === 1 ? route.fulfill({json:{offers:[{expected,previous_account:'old'}]}}) : route.fulfill({status:503});
+        if (route.request().method() === 'GET') return ++reads === 1 ? route.fulfill({json:{offers:[{expected,previous_account:'old'},{expected:{...expected,name:'bravo'},previous_account:'other'}]}}) : route.fulfill({status:503});
         const body = route.request().postDataJSON(); actions.push(body.action);
         if (body.action === 'confirm') return route.abort();
         return route.fulfill({json:{ok:true,account:'personal',label:'Personal',config_root:'/profiles/personal',context_revision:'revision-proof',offer_digest:'offer-proof'}});
@@ -82,6 +82,13 @@ describe('explicit restore profile binding', {skip}, () => {
       assert.equal(reads, 2); assert.deepEqual(actions,['preview','confirm']);
       assert.equal(await page.getByRole('button',{name:'Review binding'}).count(), 0);
       assert.equal(await page.getByRole('button',{name:'Confirm binding'}).count(), 0);
+      const selects = page.locator('dialog.restore-rebind select');
+      await selects.nth(0).selectOption('1');
+      await selects.nth(1).selectOption('work');
+      assert.equal(await page.getByRole('button',{name:'Review binding'}).count(), 0);
+      await page.locator('dialog.restore-rebind button').filter({hasText:'Review binding'}).dispatchEvent('click');
+      assert.deepEqual(actions,['preview','confirm'], 'selection and synthetic click cannot replay or preview stale offers');
+      assert.equal(reads, 2);
     } finally { await context.close(); }
   });
 
