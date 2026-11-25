@@ -189,7 +189,7 @@ async def test_foreign_origin_on_post_is_403(client, auth_cookie, doc_target):
 
 
 async def test_missing_origin_is_allowed(client, auth_cookie, doc_target):
-    # bin/mesh-open sends no Origin; SameSite=Strict covers browsers
+    # mesh-open sends no Origin; SameSite=Strict covers browsers
     resp = await client.post("/api/view", json=doc_target, headers=auth_cookie)
     assert resp.status == 200
 

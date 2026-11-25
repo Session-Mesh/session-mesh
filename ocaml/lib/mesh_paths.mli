@@ -19,6 +19,9 @@ type getenv = string -> string option
 (** How a variable of the environment is read ([Sys.getenv_opt], or a fixed
     environment in tests). *)
 
+val home : getenv -> (string, string) result
+(** The user's home, from [HOME] or the user database. *)
+
 val conf_dir : getenv -> (string, string) result
 (** The configuration directory, normalised like Python's [pathlib]: no
     repeated, trailing or [.] component. *)

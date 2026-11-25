@@ -7,7 +7,7 @@
 #     Copy the built programs under their release names: <program>-<os>-<arch>, where <os>-<arch>
 #     is one of TARGETS (linux-x86_64, linux-aarch64, macos-arm64).
 #   release-assets.sh collect <os>-<arch> <artifact-directory> <directory>
-#     Copy the ten programs of one target from the directory its build job's artifact was
+#     Copy the eleven programs of one target from the directory its build job's artifact was
 #     downloaded into, refusing that directory unless it holds exactly those ten regular files:
 #     an artifact can then provide the programs of its own target only.
 #   release-assets.sh collect-bundle <platform> <artifact-directory> <directory>
@@ -23,7 +23,7 @@
 #     included.
 set -euo pipefail
 
-PROGRAMS="mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all mesh-profile work-read work-mcp work-write"
+PROGRAMS="mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all mesh-open mesh-profile work-read work-mcp work-write"
 TARGETS="linux-x86_64 linux-aarch64 macos-arm64"
 BUNDLE_PLATFORMS="linux-x86_64 linux-arm64 macos-arm64"
 # The bundle a release may be published without.
@@ -58,7 +58,7 @@ name_programs() {
   ls -l "$3"
 }
 
-# The ten asset names of one target, sorted.
+# The eleven asset names of one target, sorted.
 target_programs() {
   local program
   for program in $PROGRAMS; do echo "$program-$1"; done | LC_ALL=C sort

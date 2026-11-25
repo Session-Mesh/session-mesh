@@ -19,18 +19,21 @@
    only for what the peer did (refused, closed, reset, silent). From the first
    byte on, whatever goes wrong is [Unreadable]; a local error is [Failed]. *)
 
-type authorization = string
+type authorization = { header : string; session : bool }
 
 let is_control c = Char.code c < 0x20 || Char.code c = 0x7f
 
-let bearer token =
+let authorization ~session scheme token =
   if String.exists is_control token then
     Error "the token holds a control character"
-  else Ok ("Bearer " ^ token)
+  else Ok { header = scheme ^ " " ^ token; session }
+
+let bearer = authorization ~session:false "Bearer"
+let session = authorization ~session:true "MeshSession"
 
 type outcome =
   | Success of string
-  | Refused of { status : int; reason : string }
+  | Refused of { status : int; reason : string; body : string }
   | Unreadable of string
   | No_answer of string
   | Failed of string
@@ -235,22 +238,29 @@ let rec exactly connection body count =
    mesh-logout-all refused them. *)
 let is_redirection = function 301 | 302 | 303 | 307 | 308 -> true | _ -> false
 
-let refused status =
+let refused ~reason ~body status =
   let reason =
     if is_redirection status then "redirect refused"
+    else if reason <> "" then reason
     else Cohttp.Code.reason_phrase_of_code status
   in
-  Refused { status; reason }
+  Refused { status; reason; body }
 
-let request_text ~port ~route authorization =
+let request_text ~port ~route ~json_body authorization =
+  let content_type, body =
+    match json_body with
+    | None -> ("", "")
+    | Some body -> ("content-type: application/json\r\n", body)
+  in
   Printf.sprintf
     "POST %s HTTP/1.1\r\n\
      host: 127.0.0.1:%d\r\n\
      authorization: %s\r\n\
-     content-length: 0\r\n\
-     connection: close\r\n\
-     \r\n"
-    route port authorization
+     content-length: %d\r\n\
+     %sconnection: close\r\n\
+     \r\n\
+     %s"
+    route port authorization.header (String.length body) content_type body
 
 let is_digit c = c >= '0' && c <= '9'
 let all_digits text = text <> "" && String.for_all is_digit text
@@ -260,12 +270,12 @@ let all_digits text = text <> "" && String.for_all is_digit text
 let status_of_line text =
   let malformed () = raise (Malformed "malformed status line") in
   match String.split_on_char ' ' text with
-  | version :: code :: _ ->
+  | version :: code :: reason ->
       if version <> "HTTP/1.1" && version <> "HTTP/1.0" then malformed ();
       if String.length code <> 3 || not (all_digits code) then malformed ();
       let status = int_of_string code in
       if status < 100 then malformed ();
-      status
+      (status, String.trim (String.concat " " reason))
   | _ -> malformed ()
 
 let field text =
@@ -363,22 +373,31 @@ let rec final_answer connection interim =
   match read_line connection with
   | None -> None
   | Some text -> (
-      let status = status_of_line text in
+      let status, reason = status_of_line text in
       let fields = headers connection in
       match status with
       | 100 when interim < max_interim -> final_answer connection (interim + 1)
       | 100 -> raise (Malformed "too many interim answers")
-      | _ -> Some (status, fields))
+      | _ -> Some (status, reason, fields))
 
-let exchange connection ~port ~route authorization =
+let exchange connection ~port ~route ~json_body authorization =
   connect connection port;
-  send connection (request_text ~port ~route authorization) 0;
+  send connection (request_text ~port ~route ~json_body authorization) 0;
   match final_answer connection 0 with
   | None when connection.received -> raise ended_early
   | None -> No_answer "the connection closed before an answer"
-  | Some (status, fields) ->
+  | Some (status, reason, fields) -> (
       if status >= 200 && status < 300 then Success (body connection fields)
-      else refused status
+      else
+        match json_body with
+        | None -> refused ~reason:"" ~body:"" status
+        | Some _ ->
+            let body =
+              if is_redirection status || (authorization.session && status = 401)
+              then ""
+              else body connection fields
+            in
+            refused ~reason ~body status)
 
 (* What the peer, or the way to it, can do to a connection. Any other error
    is local (no descriptor, no memory) and says nothing about the mesh, with
@@ -419,7 +438,7 @@ let failure connection = function
       socket_failure ~received:connection.received ~call error
   | error -> raise error
 
-let post ?(timeout = 10.) ?(clock = Unix.gettimeofday) ~port ~route
+let post ?(timeout = 10.) ?(clock = Unix.gettimeofday) ?json_body ~port ~route
     authorization () =
   let port = Mesh_paths.port_number port in
   let checked = clock () in
@@ -442,5 +461,5 @@ let post ?(timeout = 10.) ?(clock = Unix.gettimeofday) ~port ~route
       Fun.protect
         ~finally:(fun () -> Unix.close socket)
         (fun () ->
-          try exchange connection ~port ~route authorization
+          try exchange connection ~port ~route ~json_body authorization
           with error -> failure connection error)

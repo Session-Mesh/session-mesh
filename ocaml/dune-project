@@ -46,6 +46,8 @@
    (>= 1.4))
   (eio_main
    (>= 1.4))
+  (eio_posix
+   (>= 1.4))
   mtime
   (alcotest :with-test)
   (sqlite3 :with-test)

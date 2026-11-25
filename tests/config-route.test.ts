@@ -65,7 +65,13 @@ describe('GET /api/config', () => {
     assert.equal(paths.runtime_dir, path.join(mesh.home, 'run'));
     assert.ok(path.isAbsolute(paths.install_dir));
     assert.ok(fs.existsSync(path.join(paths.install_dir, 'server.py')));
-    assert.equal(paths.mesh_open_present, true);
+    assert.equal(path.basename(paths.mesh_open), 'mesh-open');
+    let openExecutable = false;
+    try {
+      fs.accessSync(paths.mesh_open, fs.constants.X_OK);
+      openExecutable = fs.statSync(paths.mesh_open).isFile();
+    } catch { /* A source checkout can run the web server without mesh-open installed. */ }
+    assert.equal(paths.mesh_open_present, openExecutable);
     assert.equal(typeof paths.board_mcp_present, 'boolean');
   });
 

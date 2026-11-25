@@ -1,7 +1,6 @@
 extend-include = [
   "bin/mesh-attach",
   "bin/mesh-event",
-  "bin/mesh-open",
   "bin/mesh-rename",
 ]
 

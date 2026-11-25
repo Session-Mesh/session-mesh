@@ -4,7 +4,7 @@
 
 # Smoke check of a built release binary set before it is uploaded.
 #   release-smoke.sh <directory holding mesh-ptyhost, mesh-platform, mesh-read, mesh-board-mcp, mesh-history,
-#                     mesh-logout-all, mesh-profile, work-read, work-mcp, work-write>
+#                     mesh-logout-all, mesh-open, mesh-profile, work-read, work-mcp, work-write>
 # - mesh-ptyhost is started on a private runtime directory and answers a `list`
 #   request on its socket (one frame: kind C, 4-byte big-endian length, JSON);
 # - mesh-platform prints its platform facts;
@@ -85,6 +85,9 @@ done
 
 # mesh-history, on a private database (FTS5, accent folding, a search for "cafe" finds "Café").
 bash "$(dirname "$0")/smoke-history.sh" "$bin/mesh-history" "$runtime"
+
+open_help="$(env -u MESH_CACHE_DIR MESH_CONF_DIR="$runtime" "$bin/mesh-open" --help)"
+printf '%s\n' "$open_help" | grep -q '^usage: mesh-open.*--reload.*--watch'
 
 # mesh-logout-all: an argument gives the usage and exit 1; then, on a private configuration
 # directory and port 1 (no mesh there), it raises the generation on disk: the HTTP client and the

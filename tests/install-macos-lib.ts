@@ -104,7 +104,7 @@ export function fixture(opts: {checkoutName?: string; fakes?: Record<string, str
   const product = /^DAEMON_DIR=\/Library\/LaunchDaemons$/m;
   assert.match(script, product, 'scripts/install-macos.sh no longer sets DAEMON_DIR=/Library/LaunchDaemons on one line');
   fs.writeFileSync(path.join(checkout, 'scripts', 'install-macos.sh'), script.replace(product, () => `DAEMON_DIR=${shellQuote(daemons)}`));
-  for (const cmd of ['mesh-open', 'mesh-attach', 'mesh-rename']) fs.writeFileSync(path.join(checkout, 'bin', cmd), '');
+  for (const cmd of ['mesh-attach', 'mesh-rename']) fs.writeFileSync(path.join(checkout, 'bin', cmd), '');
   const home = path.join(root, opts.homeName ?? 'h');
   const bin = path.join(root, 'fakes');
   const state = path.join(root, 'launchd');

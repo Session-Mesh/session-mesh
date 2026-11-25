@@ -30,6 +30,21 @@
  (libraries mesh_logout_all unix))
 
 (executable
+ (name mesh_open_main)
+ (public_name mesh-open)
+ (modules mesh_open_main)
+ (libraries
+  mesh_cli
+  mesh_platform
+  mesh_pty_support
+  mesh_wire
+  mesh_python_text
+  eio
+  eio_posix
+  yojson
+  unix))
+
+(executable
  (name mesh_profile_main)
  (public_name mesh-profile)
  (modules mesh_profile_main provision_capability)

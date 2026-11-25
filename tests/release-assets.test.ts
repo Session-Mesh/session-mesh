@@ -19,7 +19,7 @@ const ASSETS = path.join(REPO, 'scripts', 'release-assets.sh');
 const BLOCK = "# @release-stamp-begin\nMESH_RELEASE_TAG=''\nMESH_RELEASE_SUMS=''\n# @release-stamp-end\n";
 const INSTALLER = `#!/usr/bin/env bash\nset -euo pipefail\n\n${BLOCK}\nprintf '%s|%s\\n' "$MESH_RELEASE_TAG" "$MESH_RELEASE_SUMS"\n`;
 const sha = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
-const NATIVE_PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'mesh-profile', 'work-read', 'work-mcp', 'work-write'];
+const NATIVE_PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'mesh-open', 'mesh-profile', 'work-read', 'work-mcp', 'work-write'];
 const PROGRAMS = NATIVE_PROGRAMS
   .flatMap((program) => ['linux-x86_64', 'linux-aarch64', 'macos-arm64'].map((target) => `${program}-${target}`));
 const BUNDLES = ['mesh-linux-x86_64.tar.gz', 'mesh-linux-arm64.tar.gz', 'mesh-macos-arm64.tar.gz'];
@@ -167,7 +167,7 @@ for (const [command, name, own, fileMode, other] of KINDS) {
   });
 }
 
-test('release-assets.sh name copies the ten programs under their release names, and refuses an unknown target', () => {
+test('release-assets.sh name copies the eleven programs under their release names, and refuses an unknown target', () => {
   const out = path.join(scratch, 'name');
   const built = path.join(out, 'built');
   fs.mkdirSync(built, {recursive: true});

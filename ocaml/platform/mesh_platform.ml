@@ -65,6 +65,19 @@ let runtime_dir ?(getenv = Sys.getenv_opt) ?(home = passwd_home)
   Runtime_dir.resolve ~getenv ~home ~run_user_root ~platform
     ~euid:(Unix.geteuid ())
 
+let client_socket_path ?(getenv = Sys.getenv_opt) ?(home = passwd_home) () =
+  let explicit name = Runtime_dir.env_nonempty getenv name in
+  let path =
+    match (explicit "MESH_RUNTIME_DIR", explicit "XDG_RUNTIME_DIR") with
+    | Some path, _ | None, Some path -> Some path
+    | None, None -> (
+        match platform with
+        | Macos -> Option.map Runtime_dir.macos_default_path (home ())
+        | Linux | Other _ ->
+            Some (Printf.sprintf "/run/user/%d" (Unix.getuid ())))
+  in
+  Option.map (fun path -> Filename.concat path Runtime_dir.socket_relative) path
+
 type process = Types.process = {
   pid : int;
   ppid : int;

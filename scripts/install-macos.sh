@@ -392,17 +392,18 @@ grant_operator() {
   refuse "tailscale serve was refused (its output is above); the installer runs no sudo for Tailscale on macOS. Check that Tailscale is running and logged in for this user, then rerun with --tailscale (the service already runs on 127.0.0.1:$PORT)"
 }
 
-# mesh-logout-all is a native program (link_logout_all, install-common.sh). The other clients need only
+# mesh-open and mesh-logout-all are native programs (link_native_command, install-common.sh). The other clients need only
 # the standard library (no aiohttp) and run on Python 3.9 or newer, so
 # python3 on PATH, the system one included, runs them.
 mac_link_commands() {
   local cmd
   step "Commands mesh-open, mesh-attach, mesh-rename and mesh-logout-all"
   mkdir -p "$PW_HOME/.local/bin"
-  for cmd in mesh-open mesh-attach mesh-rename; do
+  for cmd in mesh-attach mesh-rename; do
     ln -sfn "${RUN_ROOT:-$APP_ROOT}/bin/$cmd" "$PW_HOME/.local/bin/$cmd"
   done
-  link_logout_all "$PW_HOME/.local/bin" "${OPAM_SWITCH:-}"
+  link_native_command mesh-open "$PW_HOME/.local/bin" "${OPAM_SWITCH:-}"
+  link_native_command mesh-logout-all "$PW_HOME/.local/bin" "${OPAM_SWITCH:-}"
   echo "mesh-open FILE : open a local document in the page side panel"
   echo "mesh-attach [NAME] : open (or join) a mesh session in this terminal"
   echo "mesh-rename NAME   : rename the current mesh session (--folder: file it)"

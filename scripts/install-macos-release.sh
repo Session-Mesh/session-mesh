@@ -70,8 +70,11 @@ mac_rollback() {
     refuse "$target was not kept: its web server did not answer on 127.0.0.1:$PORT, and $OLD_TAG runs again (logs: $LOG_DIR/web.log)"
   fi
   echo "running $target on 127.0.0.1:$PORT"
-  relink_logout_all "$PW_HOME/.local/bin" \
-    || warn "could not relink $PW_HOME/.local/bin/mesh-logout-all to the release restored; check that link"
+  local command
+  for command in mesh-open mesh-logout-all; do
+    relink_native_command "$command" "$PW_HOME/.local/bin" \
+      || warn "could not relink $PW_HOME/.local/bin/$command to the release restored; check that link"
+  done
   pty_host_report "$OLD_TAG" "$target" "$(mac_pty_restart_command)"
   exit 0
 }
