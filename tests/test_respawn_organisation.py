@@ -300,10 +300,12 @@ async def test_ignoring_a_lost_session_drops_its_organisation(client, auth_cooki
     assert respawn.lost_entry("a") is None
     snapshot = json.loads(respawn.FILE.read_text())
     assert {entry["name"] for entry in snapshot["lost"]} == {"b", "c"}
+    assert all(entry["org"]["label"] != "Alpha" for entry in snapshot["live"] + snapshot["lost"])
     _, body = await restore(client, auth_cookie, "a")
     assert not body["results"]["a"]["ok"]
     data = await api_get(client, auth_cookie)
     assert all(session["name"] != "a" for session in data["mesh"])
+    assert all(session["label"] != "Alpha" for session in data["mesh"])
     assert all(entry["name"] != "a" for entry in data["restorable"])
 
 
