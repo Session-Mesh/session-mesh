@@ -5510,6 +5510,16 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
         raise web.HTTPConflict(text="Account profile context changed; nothing was stopped")
     if native and not NATIVE_SWITCH_QUALIFIED:
         raise web.HTTPConflict(text="Native profile switching is not qualified")
+    if not native:
+        # Older helpers do not understand --legacy-only. Refuse before the
+        # source agent is stopped, rather than discovering that after a carry.
+        try:
+            capabilities = await _accounts_program("carry-capabilities")
+        except AccountsUnavailable as exc:
+            raise web.HTTPConflict(text="Account carry safety capability unavailable; nothing was stopped") from exc
+        if (set(capabilities) != {"version", "legacy_only"} or type(capabilities["version"]) is not int
+                or capabilities["version"] != 1 or capabilities["legacy_only"] is not True):
+            raise web.HTTPConflict(text="Account carry safety capability unavailable; nothing was stopped")
     source_context = target_context = None
     if native:
         binding = item.get("switch_binding")

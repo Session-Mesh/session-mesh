@@ -505,6 +505,9 @@ let accounts_carry ?expected_contexts ?(legacy_only = false) file kind conversat
       | Error error -> refuse error)
 
 let run = function
+  | [ "accounts"; "carry-capabilities" ] ->
+      print_json (`Assoc [ ("version", `Int 1); ("legacy_only", `Bool true) ]);
+      0
   | [ "accounts"; "list"; file ] -> accounts_list file
   | [ "accounts"; "prepare"; file; id ] -> accounts_prepare file id
   | [ "accounts"; "launch-context"; file; backend; id ] -> (

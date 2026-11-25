@@ -1102,5 +1102,9 @@
   {
     "pattern": "^Fence\\ release\\ could\\ not\\ be\\ confirmed;\\ inspect\\ before\\ another\\ action$",
     "key": "server.switchReleaseUnconfirmed"
+  },
+  {
+    "pattern": "^Account carry safety capability unavailable; nothing was stopped$",
+    "key": "server.switchCarryCapability"
   }
 ]
