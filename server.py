@@ -3682,9 +3682,15 @@ def _restore_identity(entry):
         except accountswitch.UnboundDefault:
             # Leave the offer unchanged; the launch validator refuses it.
             return entry, reason
-    if agent and agent["session_id"] and _conversation_missing(
-            agent["type"], agent["session_id"], entry.get("account"), bound_default_root=bound_root,
-            bound_named=bool(entry.get("account") and entry.get("account_context_revision"))):
+    bound_named = bool(entry.get("account") and entry.get("account_context_revision"))
+    missing = False
+    if agent and agent["session_id"]:
+        if bound_root is not None or bound_named:
+            missing = _conversation_missing(agent["type"], agent["session_id"], entry.get("account"),
+                                            bound_default_root=bound_root, bound_named=bound_named)
+        else:
+            missing = _conversation_missing(agent["type"], agent["session_id"], entry.get("account"))
+    if missing:
         return {**entry, "agent": {**agent, "session_id": None}}, "not found"
     return entry, reason
 
