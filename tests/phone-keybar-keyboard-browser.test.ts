@@ -122,6 +122,8 @@ describe('phone key bar: a tap never changes the soft keyboard state', {skip}, (
     await closeKeyboard(page);
     await tap(page, 'up');
     assert.equal(await editableFocused(page), false, 'closed: the keyboard stays closed');
+    // Input can wait for the previous frame's acknowledgement before it is sent.
+    await page.waitForFunction(() => window.__input.length >= 2);
     assert.deepEqual(await frames(page), ['\x1b[B', '\x1b[A']);
     assert.equal(await direct(page), true);
   });
