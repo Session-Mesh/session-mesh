@@ -28,9 +28,10 @@ migration, real agent credentials, the release installer or rollback.
 If account-fixture cleanup cannot be confirmed, the test reports and retains its scratch directory
 for inspection instead of removing it or signalling unrelated processes.
 
-The scheduled and manually dispatchable `historical-migrations.yml` downloads the latest published
+The scheduled, manually dispatchable and migration-test pull request `historical-migrations.yml` downloads the latest published
 stable release and nightly, validates each asset's advertised SHA-256 and size, builds the candidate
-native programs on `main`, and runs the same snapshot and account scenarios. This separate workflow
+native programs on the checked commit, and runs the same snapshot and account scenarios. Scheduled
+and manual runs are limited to `main`. This separate workflow
 reports failures without making mutable release downloads a merge queue dependency. It has no write
 token, and checkout credentials are not retained for the historical
 processes. The disposable home and restricted environment are not a filesystem or network sandbox;

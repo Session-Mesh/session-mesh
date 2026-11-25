@@ -8,6 +8,7 @@ test('scheduled migration checks run isolated on main and do not skip historical
   const workflow = readFileSync('.github/workflows/historical-migrations.yml', 'utf8');
   assert.match(workflow, /^  schedule:$/m);
   assert.match(workflow, /^  workflow_dispatch:$/m);
+  assert.match(workflow, /^  pull_request:$/m);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /persist-credentials: false/);
   assert.doesNotMatch(workflow, /github\.token|secrets\.|workflow_run|pull_request_target/);

@@ -5,13 +5,20 @@ on:
   schedule:
     - cron: '15 1 * * *'
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/historical-migrations.yml'
+      - 'tools/historical-release-selection.ts'
+      - 'tools/fetch-historical-releases.ts'
+      - 'tests/historical-*.ts'
+      - 'tests/helpers/historical-*.ts'
 
 permissions:
   contents: read
 
 jobs:
   historical-migrations:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
