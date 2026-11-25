@@ -24,7 +24,7 @@ def _install(tmp_path, arguments=(), *, loaded=False, active=False, query_ok=Tru
         shutil.copy2(root / "scripts" / name, checkout / "scripts" / name)
     if missing_template:
         (checkout / "systemd/session-mesh-pty.service.in").unlink()
-    for command in ("mesh-open", "mesh-attach", "mesh-rename"):
+    for command in ("mesh-attach", "mesh-rename"):
         (checkout / "bin").mkdir(exist_ok=True)
         (checkout / "bin" / command).touch()
     home = tmp_path / "home"

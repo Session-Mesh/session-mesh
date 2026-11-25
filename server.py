@@ -201,7 +201,7 @@ def has_owner_cookie(request):
 def authed(request):
     if has_owner_cookie(request):
         return True
-    # local CLI (bin/mesh-open) authenticates with the token itself
+    # local CLI (mesh-open) authenticates with the token itself
     bearer = request.headers.get("Authorization", "")
     return bearer.startswith("Bearer ") and secret_matches(bearer[7:], TOKEN)
 
@@ -6720,6 +6720,7 @@ def config_report(origin, host_report):
     """The closed, secret-free configuration projection."""
     bin_dir = agentmcp.runtime_bin()
     board_bin = Path(agentmcp.BOARD_MCP)
+    open_bin = agentmcp.mesh_executable("mesh-open")
     agents = []
     for agent in sorted({launchplan.agent_type(kind) for kind in launchplan.catalogue()}):
         enabled = any(launchplan.agent_type(kind) == agent for kind in LAUNCH_SETTINGS.enabled_agents)
@@ -6732,7 +6733,7 @@ def config_report(origin, host_report):
             "cache_dir": str(meshpaths.CACHE_DIR), "uploads_dir": str(UPLOAD_DIR),
             "install_dir": str(ROOT), "bin_dir": str(bin_dir),
             "launch_settings": str(LAUNCH_SETTINGS.source) if LAUNCH_SETTINGS.source else None,
-            "mesh_open": str(bin_dir / "mesh-open"), "mesh_open_present": (bin_dir / "mesh-open").exists(),
+            "mesh_open": str(open_bin), "mesh_open_present": open_bin.is_file() and os.access(open_bin, os.X_OK),
             "mesh_open_on_path": shutil.which("mesh-open"),
             "board_mcp": str(board_bin), "board_mcp_present": agentmcp.board_available(),
         },

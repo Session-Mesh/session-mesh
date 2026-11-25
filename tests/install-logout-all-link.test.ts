@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-// ~/.local/bin/mesh-logout-all across releases (scripts/install-common.sh: place_logout_all,
-// relink_logout_all). Two rules: after --rollback the link names the command of the release
+// ~/.local/bin/mesh-logout-all across releases (scripts/install-common.sh: place_native_command,
+// relink_native_command). Two rules: after --rollback the link names the command of the release
 // restored, which for a 0.1.x release of native programs is the Python command app/bin/mesh-logout-all
 // (such a release has no bin/mesh-logout-all), so the link never dangles; and the installer replaces
 // or removes at that path only a link an install of session-mesh made, never the user's own file or
@@ -25,10 +25,14 @@ const LEFT = /mesh-logout-all was not made by this installer: it is left as it i
 // Python command in app/bin, and the link naming that command.
 function asPythonProgramsRelease(fx: Fixture, tag: string): void {
   const release = path.join(fx.share, 'releases', tag);
-  fs.rmSync(path.join(release, 'bin/mesh-logout-all'));
-  writeExecutable(path.join(release, 'app/bin/mesh-logout-all'), `echo "python mesh-logout-all of ${tag}"`);
-  fs.unlinkSync(linkOf(fx));
-  fs.symlinkSync(PYTHON_LINK(fx), linkOf(fx));
+  for (const name of ['mesh-open', 'mesh-logout-all']) {
+    fs.rmSync(path.join(release, 'bin', name));
+    fs.rmSync(path.join(release, 'app/bin', name), {force: true});
+    writeExecutable(path.join(release, 'app/bin', name), `echo "python ${name} of ${tag}"`);
+    const link = path.join(fx.home, '.local/bin', name);
+    fs.unlinkSync(link);
+    fs.symlinkSync(path.join(fx.share, 'current/app/bin', name), link);
+  }
 }
 
 // A link that resolves, and what it names.
@@ -37,7 +41,7 @@ function resolved(fx: Fixture): string {
   return fs.readlinkSync(linkOf(fx));
 }
 
-describe('install.sh --rollback and the mesh-logout-all link (Linux)', () => {
+describe('install.sh --rollback and the native command links (Linux)', () => {
   test('back to a 0.1.x release of native programs, the link names its Python command; the next upgrade names the native program again', () => {
     const fx = fixture();
     publish(fx, 'v1.0.0', {platforms: [], programs: PROGRAM_PLATFORMS});
@@ -49,14 +53,19 @@ describe('install.sh --rollback and the mesh-logout-all link (Linux)', () => {
     const up = run(fx, downloaded(fx, 'v1.1.0'));
     assert.equal(up.status, 0, up.output);
     assert.equal(resolved(fx), NATIVE_LINK(fx));
+    const openLink = path.join(fx.home, '.local/bin/mesh-open');
+    assert.equal(fs.readlinkSync(openLink), path.join(fx.share, 'current/bin/mesh-open'));
     const back = run(fx, installed(fx), ['--rollback']);
     assert.equal(back.status, 0, back.output);
     assert.equal(current(fx), 'releases/v1.0.0');
     assert.equal(resolved(fx), PYTHON_LINK(fx));
+    assert.equal(fs.readlinkSync(openLink), path.join(fx.share, 'current/app/bin/mesh-open'));
+    assert.match(fs.readFileSync(openLink, 'utf8'), /python mesh-open of v1.0.0/);
     assert.equal(fs.realpathSync(linkOf(fx)), fs.realpathSync(path.join(fx.share, 'releases/v1.0.0/app/bin/mesh-logout-all')));
     const again = run(fx, downloaded(fx, 'v1.1.0'));
     assert.equal(again.status, 0, again.output);
     assert.equal(resolved(fx), NATIVE_LINK(fx));
+    assert.equal(fs.readlinkSync(openLink), path.join(fx.share, 'current/bin/mesh-open'));
     assert.doesNotMatch(again.output, LEFT);
   });
 

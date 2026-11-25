@@ -25,7 +25,7 @@ describe('the publish job of release.yml', () => {
   test('the publish job accepts exactly the two sets of files, with or without the macOS bundle', () => {
     const index = lines.findIndex((line) => job(RELEASE_WRITE_JOB).includes(line) && line.raw.includes('expected=(install.sh'));
     const script = scriptOf(lines, index);
-    const PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'mesh-profile', 'work-read', 'work-mcp', 'work-write']
+    const PROGRAMS = ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'mesh-open', 'mesh-profile', 'work-read', 'work-mcp', 'work-write']
       .flatMap((program) => ['linux-x86_64', 'linux-aarch64', 'macos-arm64'].map((target) => `${program}-${target}`));
     const full = ['install.sh', 'SHA256SUMS', 'session-mesh-v1.0.0.tar.gz', 'mesh-linux-x86_64.tar.gz', 'mesh-linux-arm64.tar.gz',
       'mesh-macos-arm64.tar.gz', ...PROGRAMS];

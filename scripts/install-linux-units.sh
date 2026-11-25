@@ -277,8 +277,11 @@ linux_rollback() {
   release_activate "$target"
   restart_web || roll_back_web "$target"
   echo "running $target on 127.0.0.1:$PORT"
-  relink_logout_all "$HOME/.local/bin" \
-    || warn "could not relink $HOME/.local/bin/mesh-logout-all to the release restored; check that link"
+  local command
+  for command in mesh-open mesh-logout-all; do
+    relink_native_command "$command" "$HOME/.local/bin" \
+      || warn "could not relink $HOME/.local/bin/$command to the release restored; check that link"
+  done
   pty_host_report "$OLD_TAG" "$target" "$PTY_RESTART_COMMAND"
   exit 0
 }

@@ -5,46 +5,17 @@
 // mesh directly even when the environment names a proxy, never hand the token to that proxy, and never
 // follow a redirection elsewhere (it would resend the Authorization header to another host).
 import assert from 'node:assert/strict';
-import {execFileSync, spawn, spawnSync} from 'node:child_process';
+import {execFileSync, spawn} from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import {after, before, beforeEach, describe, test} from 'node:test';
+import {nativeMeshCommand} from './helpers/native-cli.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const PYTHON = process.env.MESH_PYTHON || 'python3';
-// The mesh-logout-all under test: MESH_LOGOUT_ALL_CMD, a path to an executable or a JSON argv array
-// (never a shell string); else the native program of this checkout's dune build, else the one
-// scripts/bootstrap.sh installs in the opam switch (MESH_OPAM_SWITCH, else the current one).
-function isExecutable(file: string): boolean {
-  try {
-    fs.accessSync(file, fs.constants.X_OK);
-    return fs.statSync(file).isFile();
-  } catch {
-    return false;
-  }
-}
-function defaultLogoutAll(): string {
-  const built = path.join(REPO, 'ocaml', '_build', 'default', 'bin', 'mesh_logout_all_main.exe');
-  if (isExecutable(built)) return built;
-  const switchArgs = process.env.MESH_OPAM_SWITCH ? [`--switch=${process.env.MESH_OPAM_SWITCH}`] : [];
-  const opam = spawnSync('opam', ['var', ...switchArgs, 'bin'], {encoding: 'utf8'});
-  const installed = opam.status === 0 ? path.join(opam.stdout.trim(), 'mesh-logout-all') : '';
-  if (installed && isExecutable(installed)) return installed;
-  throw new Error('no mesh-logout-all to test: set MESH_LOGOUT_ALL_CMD to the absolute path of the native program, '
-    + 'or build it (scripts/bootstrap.sh, or dune build in ocaml/)');
-}
-function logoutAllCommand(): string[] {
-  const raw = process.env.MESH_LOGOUT_ALL_CMD ?? '';
-  if (!raw) return [defaultLogoutAll()];
-  if (!raw.trimStart().startsWith('[')) return [raw];
-  const argv: unknown = JSON.parse(raw);
-  assert.ok(Array.isArray(argv) && argv.length > 0 && argv.every(item => typeof item === 'string'),
-    'MESH_LOGOUT_ALL_CMD must be a path or a JSON array of strings');
-  return argv as string[];
-}
 const MASTER = 'master-token-for-the-test';
 const SESSION = 'session-token-for-the-test';
 const PROXY_VARIABLES = ['http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY', 'https_proxy', 'HTTPS_PROXY'];
@@ -191,7 +162,7 @@ function environment(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 function runCli(name: string, args: string[], extra: NodeJS.ProcessEnv = {}): Promise<{code: number | null; output: string}> {
   return new Promise(resolve => {
-    const argv = name === 'mesh-logout-all' ? logoutAllCommand() : [PYTHON, path.join(REPO, 'bin', name)];
+    const argv = ['mesh-open', 'mesh-logout-all'].includes(name) ? nativeMeshCommand(name) : [PYTHON, path.join(REPO, 'bin', name)];
     const child = spawn(argv[0], [...argv.slice(1), ...args],
       {cwd: scratch, env: environment(extra), stdio: ['ignore', 'pipe', 'pipe']});
     let output = '';
@@ -263,7 +234,7 @@ describe('mesh CLIs ignore proxy variables for the local mesh', () => {
 });
 
 describe('mesh CLIs never follow a redirection', () => {
-  for (const status of [301, 302, 303, 307]) {
+  for (const status of [301, 302, 303, 307, 308]) {
     test(`mesh-open fails on a ${status} and sends nothing elsewhere`, async () => {
       redirectStatus = status;
       const result = await runCli('mesh-open', ['page.md']);
@@ -340,7 +311,7 @@ describe('mesh-logout-all keeps the master token and the generation file to itse
     test(`mesh-logout-all exits 1 when its stdout is ${sink}`, {skip}, async () => {
       const full = sink === 'a full device' ? fs.openSync('/dev/full', 'w') : undefined;
       const result = await new Promise<{code: number | null; stderr: string}>(resolve => {
-        const argv = logoutAllCommand();
+        const argv = nativeMeshCommand('mesh-logout-all');
         const child = spawn(argv[0], argv.slice(1), {cwd: scratch, env: environment({}), stdio: ['ignore', full ?? 'pipe', 'pipe']});
         child.stdout?.destroy();
         let stderr = '';
@@ -381,9 +352,13 @@ describe('mesh CLIs without a token', () => {
   // An agent tool may run commands with a stripped environment: neither MESH_SESSION nor
   // MESH_SESSION_TOKEN. The process ancestry still shows the session; this test process is the
   // CLI's parent, standing in for the session's shell.
-  test('mesh-open below a session shell without any mesh variable refuses and sends nothing', async () => {
+  test('mesh-open below a session shell without session variables refuses and sends nothing', async () => {
     sessionShellPid = process.pid;
-    const result = await runCli('mesh-open', ['page.md']);
+    const alias = path.join(scratch, 'runtime-alias');
+    fs.symlinkSync(runtimeDir, alias);
+    const result = await runCli('mesh-open', ['page.md'], {
+      EIO_BACKEND: 'unused-by-mesh-open', MESH_RUNTIME_DIR: alias, XDG_RUNTIME_DIR: path.join(scratch, 'missing'),
+    });
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /^mesh-open: .*mesh session s1.*MESH_SESSION_TOKEN/m);
     assert.doesNotMatch(result.output, /Traceback/);

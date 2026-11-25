@@ -172,7 +172,7 @@ function checkout(fx: Fixture): string {
   fs.copyFileSync(path.join(SOURCE, 'install.sh'), path.join(dir, 'install.sh'));
   copyInstallerScripts(SOURCE, dir);
   fs.cpSync(path.join(SOURCE, 'systemd'), path.join(dir, 'systemd'), {recursive: true});
-  for (const cmd of ['mesh-open', 'mesh-attach', 'mesh-rename']) fs.writeFileSync(path.join(dir, 'bin', cmd), '');
+  for (const cmd of ['mesh-attach', 'mesh-rename']) fs.writeFileSync(path.join(dir, 'bin', cmd), '');
   writeExecutable(path.join(fx.fakes, 'mesh-ptyhost'), 'exit 97');
   return path.join(dir, 'install.sh');
 }
@@ -197,7 +197,7 @@ describe('source installs', () => {
     assert.match(unit(fx, PTY), new RegExp(`^ExecStart=:"${escape(fx.fakes)}/mesh-ptyhost"$`, 'm'));
     assert.ok(!changes(result.calls).some((line) => line.includes(PTY)), 'the running PTY host is not restarted');
     assert.match(result.output, /session-mesh-pty\.service now runs .*restarting it ends every mesh session/);
-    assert.equal(fs.readlinkSync(path.join(fx.home, '.local/bin/mesh-open')), `${path.dirname(source)}/bin/mesh-open`);
+    assert.equal(fs.readlinkSync(path.join(fx.home, '.local/bin/mesh-attach')), `${path.dirname(source)}/bin/mesh-attach`);
   });
 
   test('--from-source whose web server does not answer gives the release its link and units back', () => {

@@ -105,6 +105,15 @@ jobs:
         run: |
           chmod +x "$RUNNER_TEMP/native-logout-all/mesh-logout-all"
           echo "MESH_LOGOUT_ALL_CMD=$RUNNER_TEMP/native-logout-all/mesh-logout-all" >> "$GITHUB_ENV"
+      - name: Fetch mesh-open
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mesh-open-linux-x86_64
+          path: ${{ runner.temp }}/native-open
+      - name: Point the tests at mesh-open
+        run: |
+          chmod +x "$RUNNER_TEMP/native-open/mesh-open"
+          echo "MESH_OPEN_CMD=$RUNNER_TEMP/native-open/mesh-open" >> "$GITHUB_ENV"
       # work-read and work-write, built by the same job: the Projects tests (tests/work-*.test.ts,
       # tests/session-questions-browser.test.ts) run against them through MESH_WORK_READ_CMD and
       # MESH_WORK_WRITE_CMD, and MESH_REQUIRE_WORK_READ=1 makes a missing program a failure, never a skip.
@@ -624,8 +633,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: native-host
-          # The synthetic browser helper is cached with the native programs but has its own CI artifact.
-          key: native-programs-v4-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/**', '!ocaml/test/**', 'ocaml/test/provision_runner/**', '!ocaml/_build/**', 'scripts/bootstrap.sh', 'scripts/release-pins.sh') }}
+          # This entry includes mesh-open and the separately uploaded synthetic browser helper.
+          key: native-programs-v5-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ env.OCAML_COMPILER }}-${{ hashFiles('ocaml/**', '!ocaml/test/**', 'ocaml/test/provision_runner/**', '!ocaml/_build/**', 'scripts/bootstrap.sh', 'scripts/release-pins.sh') }}
       # The same opam state, key and setup as the ocaml job (it is the one that saves it).
       - name: Restore the opam state
         if: steps.host-cache.outputs.cache-hit != 'true'
@@ -664,6 +673,7 @@ jobs:
           mkdir -p native-host
           cp -L ocaml/_build/install/default/bin/mesh-ptyhost native-host/mesh-ptyhost
           cp -L ocaml/_build/install/default/bin/mesh-logout-all native-host/mesh-logout-all
+          cp -L ocaml/_build/install/default/bin/mesh-open native-host/mesh-open
           cp -L ocaml/_build/install/default/bin/work-read native-host/work-read
           cp -L ocaml/_build/install/default/bin/work-write native-host/work-write
           cp -L ocaml/_build/install/default/bin/mesh-platform native-host/mesh-platform
@@ -680,6 +690,7 @@ jobs:
           test -x native-host/mesh-ptyhost
           ldd native-host/mesh-ptyhost
           test -x native-host/mesh-logout-all
+          test -x native-host/mesh-open
           test -x native-host/work-read
           test -x native-host/work-write
           test -x native-host/mesh-platform
@@ -696,6 +707,12 @@ jobs:
         with:
           name: mesh-logout-all-linux-x86_64
           path: native-host/mesh-logout-all
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mesh-open-linux-x86_64
+          path: native-host/mesh-open
           if-no-files-found: error
           retention-days: 3
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

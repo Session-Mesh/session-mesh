@@ -340,10 +340,11 @@ report_pty_host
 
 step "Commands mesh-open, mesh-attach, mesh-rename and mesh-logout-all"
 mkdir -p "$HOME/.local/bin"
-for cmd in mesh-open mesh-attach mesh-rename; do
+for cmd in mesh-attach mesh-rename; do
   ln -sfn "${RUN_ROOT:-$APP_ROOT}/bin/$cmd" "$HOME/.local/bin/$cmd"
 done
-link_logout_all "$HOME/.local/bin" "$OPAM_SWITCH"
+link_native_command mesh-open "$HOME/.local/bin" "$OPAM_SWITCH"
+link_native_command mesh-logout-all "$HOME/.local/bin" "$OPAM_SWITCH"
 echo "mesh-open FILE : open a local document in the page side panel"
 echo "mesh-attach [NAME] : open (or join) a mesh session in this terminal"
 echo "mesh-rename NAME   : rename the current mesh session (--folder: file it)"

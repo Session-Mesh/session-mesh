@@ -203,7 +203,6 @@ tests/test_launchsettings.py
 tests/test_local_terminal_handle.py
 tests/test_mesh_conf_dir.py
 tests/test_mesh_event.py
-tests/test_mesh_open.py
 tests/test_observability.py
 tests/test_pimcp.py
 tests/test_projectartifacts.py

@@ -110,7 +110,7 @@ let through_mesh ?timeout output (conf, port, authorization) =
                generation);
           0
       | Error message -> fail output message)
-  | Refused { status; reason } ->
+  | Refused { status; reason; _ } ->
       fail output
         (Printf.sprintf "mesh-logout-all: the mesh refused (%d %s)" status
            reason)

@@ -132,6 +132,15 @@ val runtime_dir :
 val socket_path : runtime_dir -> string
 (** [path/session-mesh/ptyhost.sock]. *)
 
+val client_socket_path :
+  ?getenv:(string -> string option) ->
+  ?home:(unit -> string option) ->
+  unit ->
+  string option
+(** Locate an existing host using the same variable order and defaults as
+    [ptyhost.py]. A client neither creates directories nor applies the checks
+    required for binding a new socket. *)
+
 val max_socket_path : int
 (** Usable [sun_path] length on this platform, terminating NUL excluded. *)
 

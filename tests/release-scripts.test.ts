@@ -149,7 +149,7 @@ describe('build-bundle.sh: the Node archive', () => {
     const log = path.join(dir, 'curl.log');
     fs.writeFileSync(path.join(fakes, 'curl'), `#!/bin/bash\necho "$*" >> '${log}'\nwhile (($#)); do [[ $1 == -o ]] && printf other > "$2"; shift; done\n`, {mode: 0o755});
     for (const name of ['uv', 'patchelf', 'zstd']) fs.writeFileSync(path.join(fakes, name), '#!/bin/sh\nexit 97\n', {mode: 0o755});
-    for (const name of ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'mesh-profile', 'work-read', 'work-mcp', 'work-write']) {
+    for (const name of ['mesh-ptyhost', 'mesh-board-mcp', 'mesh-read', 'mesh-platform', 'mesh-history', 'mesh-logout-all', 'mesh-open', 'mesh-profile', 'work-read', 'work-mcp', 'work-write']) {
       if (name === 'mesh-profile' && profile === 'missing') continue;
       fs.writeFileSync(path.join(native, name), `fixture ${name}`, {mode: name === 'mesh-profile' && profile === 'not-executable' ? 0o644 : 0o755});
     }
@@ -192,7 +192,7 @@ exit 97
     assert.ok(script, 'the production bundle manifest writer');
     const root = fs.mkdtempSync(path.join(scratch, 'manifest-'));
     const native = ['libexec/mesh-ptyhost', 'bin/mesh-board-mcp', 'bin/mesh-read', 'bin/mesh-platform', 'bin/mesh-history',
-      'bin/mesh-logout-all', 'bin/mesh-profile', 'bin/work-read', 'bin/work-mcp', 'bin/work-write'];
+      'bin/mesh-logout-all', 'bin/mesh-open', 'bin/mesh-profile', 'bin/work-read', 'bin/work-mcp', 'bin/work-write'];
     for (const file of [...native, 'runtime/python/bin/python3']) {
       fs.mkdirSync(path.dirname(path.join(root, file)), {recursive: true});
       fs.writeFileSync(path.join(root, file), file.endsWith('python3') ? '#!/bin/sh\necho Python-fixture\n' : file, {mode: 0o755});

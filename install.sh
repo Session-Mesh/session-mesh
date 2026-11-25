@@ -253,10 +253,10 @@ check_stamp_in_sums() {
 # The bundle archive of a platform, as scripts/build-bundle.sh names it: one top directory
 # mesh-<os>-<arch>/ with the launcher, the code (app/), the wrappers and native programs (bin/,
 # libexec/), the Python and Node runtimes (runtime/) and bundle.json, which records the SHA-256 of
-# the ten native programs.
+# the eleven native programs.
 bundle_asset() { printf 'mesh-%s.tar.gz' "$1"; }
 BUNDLE_FILES=(mesh env.sh bundle.json app/install.sh app/server.py bin/mesh-python bin/mesh-ptyhost
-  libexec/mesh-ptyhost bin/mesh-board-mcp bin/mesh-read bin/mesh-platform bin/mesh-history bin/mesh-logout-all bin/mesh-profile
+  libexec/mesh-ptyhost bin/mesh-board-mcp bin/mesh-read bin/mesh-platform bin/mesh-history bin/mesh-logout-all bin/mesh-open bin/mesh-profile
   bin/work-read bin/work-mcp bin/work-write)
 BUNDLE_NATIVE='^ *"((bin|libexec)/(mesh|work)-[a-z-]+)": "([0-9a-f]{64})",?$'
 
@@ -271,7 +271,7 @@ bundle_intact() {
     [[ $actual == "${BASH_REMATCH[4]}" ]] || return 1
     count=$((count + 1))
   done < "$dir/bundle.json"
-  ((count == 10))
+  ((count == 11))
 }
 
 # Bundle: builds the release in a staging directory: the archive is checked before it is unpacked,
@@ -308,13 +308,13 @@ check_installed_bundle() {
 }
 
 # Native programs (a release without a bundle for this platform): the code archive
-# session-mesh-<tag>.tar.gz and the ten programs <program>-<os>-<arch>, each checked against the
+# session-mesh-<tag>.tar.gz and the eleven programs <program>-<os>-<arch>, each checked against the
 # stamp before anything is unpacked, laid out as releases/<tag>/app (the code) and
 # releases/<tag>/bin (the programs); app/bin/mesh-board-mcp links to the release's own, where the
 # agents' board configuration looks for it, app/bin/work-mcp likewise for the agents' tracker, and
 # app/bin/mesh-platform, app/bin/work-read and app/bin/work-write where the web server looks for them. The
 # services then run this machine's Python.
-RELEASE_PROGRAMS=(mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all mesh-profile work-read work-mcp work-write)
+RELEASE_PROGRAMS=(mesh-ptyhost mesh-board-mcp mesh-read mesh-platform mesh-history mesh-logout-all mesh-open mesh-profile work-read work-mcp work-write)
 code_asset() { printf 'session-mesh-%s.tar.gz' "$MESH_RELEASE_TAG"; }
 stage_programs() {
   local tag=$MESH_RELEASE_TAG program release
@@ -333,6 +333,7 @@ stage_programs() {
     && ln -s ../../bin/mesh-board-mcp "$release/app/bin/mesh-board-mcp" \
     && ln -s ../../bin/mesh-platform "$release/app/bin/mesh-platform" \
     && ln -s ../../bin/mesh-profile "$release/app/bin/mesh-profile" \
+    && ln -s ../../bin/mesh-open "$release/app/bin/mesh-open" \
     && ln -s ../../bin/work-read "$release/app/bin/work-read" \
     && ln -s ../../bin/work-mcp "$release/app/bin/work-mcp" \
     && ln -s ../../bin/work-write "$release/app/bin/work-write" \
@@ -382,7 +383,7 @@ release_platforms() {
   esac
 }
 
-# 0 when this installer records the code archive and the ten programs of platform $1.
+# 0 when this installer records the code archive and the eleven programs of platform $1.
 release_has_programs() {
   local program
   [[ -n $1 && -n $(sums_hash "$MESH_RELEASE_SUMS" "$(code_asset)") ]] || return 1

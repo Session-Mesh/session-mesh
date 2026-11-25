@@ -45,7 +45,7 @@ function fixture(checkoutName = 'checkout', fakes: Record<string, string> = FAKE
   fs.copyFileSync(path.join(SOURCE, 'install.sh'), path.join(checkout, 'install.sh'));
   fs.cpSync(path.join(SOURCE, 'systemd'), path.join(checkout, 'systemd'), {recursive: true});
   copyInstallerScripts(SOURCE, checkout);
-  for (const cmd of ['mesh-open', 'mesh-attach', 'mesh-rename']) fs.writeFileSync(path.join(checkout, 'bin', cmd), '');
+  for (const cmd of ['mesh-attach', 'mesh-rename']) fs.writeFileSync(path.join(checkout, 'bin', cmd), '');
   const home = path.join(root, 'home');
   const bin = path.join(root, 'fakes');
   fs.mkdirSync(home, {mode: 0o700});
@@ -145,23 +145,26 @@ describe('install.sh: local install without Tailscale', () => {
     assert.match(unit(fx, 'session-mesh-pty.service'), new RegExp(`^ExecStart=:"${re(path.join(bin, 'mesh-ptyhost'))}"$`, 'm'));
   });
 
-  // mesh-logout-all is native: a source install links the program scripts/bootstrap.sh installs in the
-  // opam switch, replacing the link of an earlier (0.1.x) install to the checkout's Python command.
+  // A source install points installed command links to the opam switch, replacing the older Python links.
   const switchOpam = '[[ $* == "switch show" ]] && echo sw; [[ $* == "var --switch=sw bin" ]] && echo "$SWITCH_BIN"; exit 0';
 
-  test('a source install links mesh-logout-all to the native program of the opam switch, replacing a 0.1.x link', () => {
+  test('a source install links both native commands from the switch, replacing older Python links', () => {
     const fx = fixture('checkout', {...FAKES, opam: switchOpam});
     const bin = path.join(fx.root, 'switch-bin');
     fs.mkdirSync(bin);
-    fs.writeFileSync(path.join(bin, 'mesh-logout-all'), '\x7fELF native mesh-logout-all', {mode: 0o755});
-    const link = path.join(fx.home, '.local/bin/mesh-logout-all');
-    fs.mkdirSync(path.dirname(link), {recursive: true});
-    fs.symlinkSync(path.join(fx.checkout, 'bin', 'mesh-logout-all'), link);
+    for (const name of ['mesh-open', 'mesh-logout-all']) {
+      fs.writeFileSync(path.join(bin, name), '\x7fELF native ' + name, {mode: 0o755});
+      const link = path.join(fx.home, '.local/bin', name);
+      fs.mkdirSync(path.dirname(link), {recursive: true});
+      fs.symlinkSync(path.join(fx.checkout, 'bin', name), link);
+    }
     const run = install(fx, [], {SWITCH_BIN: bin});
     assert.equal(run.status, 0, run.stderr);
-    assert.equal(fs.readlinkSync(link), path.join(bin, 'mesh-logout-all'));
-    assert.equal(fs.readFileSync(link).subarray(0, 4).toString('hex'), '7f454c46', 'an ELF executable, not a Python file');
-    assert.equal(fs.readlinkSync(path.join(fx.home, '.local/bin/mesh-open')), path.join(fx.checkout, 'bin', 'mesh-open'));
+    for (const name of ['mesh-open', 'mesh-logout-all']) {
+      const link = path.join(fx.home, '.local/bin', name);
+      assert.equal(fs.readlinkSync(link), path.join(bin, name));
+      assert.equal(fs.readFileSync(link).subarray(0, 4).toString('hex'), '7f454c46');
+    }
   });
 
   test('a source install whose opam switch lacks mesh-logout-all names it, says how to build it, and leaves no link to the Python command', () => {

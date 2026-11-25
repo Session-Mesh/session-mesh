@@ -488,7 +488,7 @@ describe('the public CI as committed', () => {
       assert.equal(restore.find(line => line.key === 'path')?.value, 'native-host');
       assert.ok(!restore.some(line => line.key === 'restore-keys'), 'no fallback to a bundle without the fixture');
       const key = restore.find(line => line.key === 'key')?.value ?? '';
-      assert.match(key, /^native-programs-v4-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}/);
+      assert.match(key, /^native-programs-v5-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}/);
       assert.match(key, /hashFiles\('ocaml\/\*\*', '!ocaml\/test\/\*\*', 'ocaml\/test\/provision_runner\/\*\*', '!ocaml\/_build\/\*\*'/);
       const raw = (job: string) => jobs.find(item => item.name === job)!.block.map(line => line.raw).join('\n');
       const artifact = 'mesh-managed-profile-test-linux-x86_64';
@@ -500,6 +500,18 @@ describe('the public CI as committed', () => {
       assert.ok(ordinary, 'ordinary work-program artifact must have explicit multiline paths');
       assert.deepEqual(ordinary[1]!.trim().split('\n').map(line => line.trim()),
         ['native-host/work-read', 'native-host/work-write', 'native-host/mesh-platform', 'native-host/mesh-profile']);
+    });
+
+    test(`${name} supplies mesh-open to the Node tests`, () => {
+      const jobs = jobBlocks(parseLines(text));
+      const body = (job: string) => jobs.find(item => item.name === job)!.block.map(line => line.raw).join('\n');
+      for (const needle of ['cp -L ocaml/_build/install/default/bin/mesh-open native-host/mesh-open',
+        'test -x native-host/mesh-open', 'name: mesh-open-linux-x86_64', 'path: native-host/mesh-open']) {
+        assert.ok(body('native').includes(needle), `${needle} missing from the native job`);
+      }
+      for (const needle of ['name: mesh-open-linux-x86_64', 'MESH_OPEN_CMD=$RUNNER_TEMP/native-open/mesh-open']) {
+        assert.ok(body('frontend_parts').includes(needle), `${needle} missing from the frontend job`);
+      }
     });
   }
 });

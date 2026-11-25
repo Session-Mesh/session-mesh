@@ -22,12 +22,17 @@ val bearer : string -> (authorization, string) result
 (** [Bearer <token>]. A token holding an ASCII control character is refused with
     a message that does not quote it. *)
 
+val session : string -> (authorization, string) result
+(** [MeshSession <token>], with the same validation as {!bearer}. *)
+
 type outcome =
   | Success of string  (** A 2xx answer and its body. *)
-  | Refused of { status : int; reason : string }
+  | Refused of { status : int; reason : string; body : string }
       (** Any other final HTTP status. [reason] is ["redirect refused"] for 301,
           302, 303, 307 and 308 (the redirection is not followed), the standard
-          reason phrase otherwise. *)
+          reason phrase when no response reason is available. [body] is read
+          only on JSON requests, except on redirections or a rejected session
+          token. *)
   | Unreadable of string
       (** At least one byte of an answer was read, and what followed is not a
           complete, readable HTTP/1.x response within the limits: a malformed
@@ -53,14 +58,16 @@ type outcome =
 val post :
   ?timeout:float ->
   ?clock:(unit -> float) ->
+  ?json_body:string ->
   port:Mesh_paths.port ->
   route:string ->
   authorization ->
   unit ->
   outcome
 (** [post ~port ~route authorization ()] sends an empty [POST] with
-    [Content-Length: 0] and reads the answer. [clock] is the wall clock,
-    [Unix.gettimeofday] by default (a test sets it back).
+    [Content-Length: 0] and reads the answer. [json_body] sends JSON in the
+    request and reads the response body on a refusal as well. [clock] is the
+    wall clock, [Unix.gettimeofday] by default (a test sets it back).
 
     One deadline ([timeout], 10 seconds by default) covers the connection, the
     request, the answer and its body: a budget of seconds that each wait, and

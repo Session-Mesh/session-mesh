@@ -1,8 +1,7 @@
 # Session Mesh OCaml tools
 
-This directory is the opam package `session_mesh`. It builds nine programs, all of them shipped
-in every release (bundles and native release assets): the six of this table, and `work-mcp`,
-`work-read` and `work-write`, which have their own sections below.
+This directory is the opam package `session_mesh`. It builds the following local programs for the release bundles and native release assets.
+The project-tracking commands `work-mcp`, `work-read` and `work-write` have their own sections.
 
 | Program | What it is | Used by |
 |---|---|---|
@@ -12,6 +11,8 @@ in every release (bundles and native release assets): the six of this table, and
 | `mesh-read` | A stdio MCP server with 2 tools, `list_sessions` and `read_transcript`, that reads local Claude and Codex transcripts under `$HOME/.claude/projects` and `$HOME/.codex/sessions`. | Not wired by the web server; an agent configuration can add it. |
 | `mesh-history` | The History index: a SQLite database (FTS5 full-text search) driven over stdin/stdout in JSON lines. | The web server (`history.py`), which feeds it the parsed conversations and reads listings and searches from it; without the program it keeps the JSON cache and ripgrep. |
 | `mesh-logout-all` | The command that signs every browser out: it asks the local mesh, with the master token, to raise the cookie generation, and raises it in `cookie-generation` itself when no mesh answers. | The user, through `~/.local/bin/mesh-logout-all`, which `./install.sh` links to the release's program (bundle or native programs) or, for a source install, to the opam switch's. It replaces the Python script `bin/mesh-logout-all`. |
+| `mesh-open` | Opens a local file in a panel. It uses the session token when supplied and checks for a session shell in its ancestry before it will read the master token. | Users and agents, through the release executable or the opam switch. |
+| `mesh-profile` | Manages backend account profiles and migrates existing aliases. | The web server and users running `mesh-profile migrate`. |
 
 ## Library: worklog
 
@@ -252,7 +253,7 @@ MESH_OPAM_SWITCH=session-mesh bash scripts/bootstrap.sh
 Without `MESH_OPAM_SWITCH` the current opam switch is used, under the same rule. The bootstrap
 installs the pins above and the package's dependencies and test dependencies, builds and tests the package, then installs
 `mesh-ptyhost`, `mesh-board-mcp`, `mesh-read`, `mesh-platform`, `mesh-history`,
-`mesh-logout-all`, `work-read`, `work-mcp` and `work-write` into that switch.
+`mesh-logout-all`, `mesh-open`, `mesh-profile`, `work-read`, `work-mcp` and `work-write` into that switch.
 `bash scripts/bootstrap.sh --install-only` installs the same dependencies but runs no test.
 
 Some OCaml tests drive `mesh-ptyhost` through the Python test harness `tests/ptyhost_proc.py`: the
