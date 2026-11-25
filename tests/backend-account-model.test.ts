@@ -116,7 +116,7 @@ for (const append of [false, true]) for (const published of [false, true]) {
     await controller.open();
     assert.equal(controller.state.provisionPending, 'provisionUncertain');
     assert.equal(await controller.provisionProfile(requestedProvision), false);
-    assert.deepEqual({loads, inspections, writes}, {loads:1, inspections:2, writes:1});
+    assert.deepEqual({loads, inspections, writes}, {loads:3, inspections:0, writes:1});
   });
 }
 
@@ -154,7 +154,74 @@ test('confirmed provision receipt survives close and clears only on its exact re
   await controller.refresh();
   assert.equal(controller.state.phase, 'saved');
   assert.equal(controller.state.provisionPending, undefined);
-  assert.deepEqual({loads, inspections, writes}, {loads:1, inspections:5, writes:1});
+  assert.deepEqual({loads, inspections, writes}, {loads:5, inspections:1, writes:1});
+});
+
+test('a restored journal entry clears after its owner completes and other entries remain blocking', async () => {
+  const rows = new Map<string, string>([['one', 'uncertain']]);
+  const journal: ProvisionJournal = {
+    load: async () => { const row = rows.entries().next().value; return row ? {id: row[0], value: row[1]} : null; },
+    acquire: async () => assert.fail('no provisioning expected'),
+    save: async (id, value) => { if (value === null) rows.delete(id); else rows.set(id, value); },
+  };
+  const controller = createBackendAccountController({load: async () => ({profiles: listing(), policy: reply(policy())}),
+    inspect: async () => listing(), mutate: async () => assert.fail('no mutation expected')}, journal);
+  await controller.open();
+  assert.equal(controller.state.provisionPending, 'provisionUncertain');
+  rows.delete('one'); rows.set('two', 'uncertain');
+  await controller.refresh();
+  assert.equal(controller.state.provisionPending, 'provisionUncertain');
+  rows.delete('two');
+  await controller.refresh();
+  assert.equal(controller.state.provisionPending, undefined);
+  assert.equal(controller.state.phase, 'ready');
+  assert.ok(controller.state.snapshot);
+});
+
+test('a second controller unblocks after the owner verifies its own provision', async () => {
+  let entry: {id: string; value: string} | null = null;
+  const journal: ProvisionJournal = {
+    load: async () => entry,
+    acquire: async () => { if (entry) return {entry, acquired: false};
+      entry = {id: 'operation', value: 'uncertain'}; return {entry, acquired: true}; },
+    save: async (id, value) => { if (entry?.id === id) entry = value === null ? null : {id, value}; },
+  };
+  const entered = defer(), result = defer();
+  let registry = listing();
+  const ports = {load: async () => ({profiles: registry, policy: reply(policy())}),
+    mutate: async () => assert.fail('no consent mutation'), inspect: async () => registry,
+    provision: {backends: ['codex'] as 'codex'[], write: async () => { entered.resolve(null); return result.promise; }}};
+  const owner = createBackendAccountController(ports, journal);
+  const observer = createBackendAccountController(ports, journal);
+  await owner.open();
+  const write = owner.provisionProfile(requestedProvision);
+  await entered.promise;
+  await observer.open();
+  assert.equal(observer.state.provisionPending, 'provisionUncertain');
+  registry = reply({configured: true, registry_revision: newRevision, profiles: [provisioned]});
+  result.resolve(reply({registry_revision: newRevision, profile: provisioned}));
+  assert.equal(await write, true);
+  await observer.refresh();
+  assert.equal(observer.state.provisionPending, undefined);
+  assert.equal(observer.state.snapshot?.registry.registry_revision, newRevision);
+});
+
+test('refresh during uncertain provisioning reloads consent before the next write', async () => {
+  let current = policy(), request: any;
+  const controller = createBackendAccountController({
+    load: async () => ({profiles: listing(), policy: reply(current)}), inspect: async () => listing(),
+    mutate: async value => { request = value; current = {...current, global: 'skip', revision: current.revision + 1}; return reply(current); },
+    provision: {backends: ['codex'], write: async () => { throw new Error('reply lost'); }},
+  });
+  await controller.open();
+  await controller.provisionProfile(requestedProvision);
+  current = {...policy(), revision: 7};
+  await controller.refresh();
+  assert.equal(controller.state.provisionPending, 'provisionUncertain');
+  assert.equal(controller.state.snapshot?.policy.revision, 7);
+  assert.equal(await controller.saveGlobal('skip'), true);
+  assert.equal(request.expected_revision, 7);
+  assert.equal(controller.state.provisionPending, 'provisionUncertain');
 });
 
 test('alias creation refreshes only after validated native success and retains snapshot on conflict', async () => {

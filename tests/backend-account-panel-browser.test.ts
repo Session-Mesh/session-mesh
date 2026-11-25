@@ -201,7 +201,7 @@ for (const lang of ['en','fr']) test(`component ${lang}: provision collects only
     await page.locator('#open').click();
     await statusIs(page,lang,'provisionUncertain');
     assert.equal(await control(page,'provision-account').isDisabled(),true);
-    assert.deepEqual(await page.evaluate(()=>({calls:lab.calls,loads:lab.loads})),{calls:[request],loads:1});
+    assert.deepEqual(await page.evaluate(()=>({calls:lab.calls,loads:lab.loads})),{calls:[request],loads:3});
     await control(page,'add-account').click(); // Association remains a separate form.
     assert.equal(await control(page,'create-config').count(),1);
     await page.reload();

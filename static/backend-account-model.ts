@@ -202,7 +202,7 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
   let generation = 0;
   let active: AbortController | null = null;
   type Receipt = {revision: string; profile: Profile};
-  type PendingProvision = {snapshot: Snapshot | null; id?: string; receipt?: Receipt};
+  type PendingProvision = {snapshot: Snapshot | null; id?: string; receipt?: Receipt; owned?: boolean};
   let pending: PendingProvision | undefined;
   async function restoreProvision(snapshot: Snapshot | null): Promise<PendingProvision | undefined> {
     if (!provisionJournal) return;
@@ -257,17 +257,18 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
     const request = ++generation, abort = new AbortController(); active = abort;
     publish({phase: 'loading', snapshot: null});
     try {
-      if (!pending && provisionJournal) {
-        const restored = await restoreProvision(null);
+      if ((!pending || !pending.owned) && provisionJournal) {
+        const restored = await restoreProvision(pending?.snapshot ?? null);
         if (request !== generation) return;
         pending = restored;
       }
       if (request !== generation) return;
       if (pending) {
         const operation = pending;
-        const registry = await bounded(inspect, abort);
+        const raw = operation.snapshot ? await bounded(ports.load, abort) : null;
+        const registry = raw ? parseProfilesReply(raw.profiles) : await bounded(inspect, abort);
         if (request !== generation) return;
-        const snapshot = operation.snapshot ? {registry, policy: operation.snapshot.policy} : null;
+        const snapshot = raw ? {registry, policy: parsePolicyReply(raw.policy)} : null;
         const receipt = operation.receipt;
         if (receipt && verifies(registry, receipt)) {
           await clearPending();
@@ -383,7 +384,7 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
           }
         }
       } catch { if (token === generation) publish({phase: 'error', snapshot}); return false; }
-      const operation: PendingProvision = {snapshot, ...(id ? {id} : {})};
+      const operation: PendingProvision = {snapshot, owned: true, ...(id ? {id} : {})};
       pending = operation; // Closing while the request is in flight does not cancel publication.
       publish({phase: 'saving', snapshot});
       try {
