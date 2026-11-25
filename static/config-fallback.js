@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
-// Offline English configuration strings; synchronized with i18n/en.json by the test.
+// Generated from static/i18n/en.json by tools/generate-config-fallback.ts.
 window.MeshConfigFallback = {
   "common.back": "Back",
   "common.cancel": "Cancel",
@@ -155,3 +155,4 @@ window.MeshConfigFallback = {
   "config.launch.discardLaunchDraft": "Saving options reloads this page and discards unsaved agents and folders. Continue?",
   "config.launch.discardOptionsDraft": "Saving agents and folders reloads this page and discards unsaved options. Continue?"
 };
+document.getElementById('config-translation-unavailable').textContent = window.MeshConfigFallback['config.translationUnavailable'];
