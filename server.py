@@ -972,7 +972,8 @@ def _selected_pi_transcript(path, session_dir):
     if os.path.commonpath((directory, candidate)) != directory:
         return False
     header = discover._pi_header(candidate)
-    return bool(header and discover.pi_session_path(header["id"], session_dir) == candidate)
+    selected = discover.pi_session_path(header["id"], session_dir) if header else None
+    return bool(selected and os.path.realpath(selected) == candidate)
 
 
 OPENCODE_UNSUPPORTED_RESUME_REFUSED = ("This OpenCode version is not supported by session-mesh (only 1.x and 2.x are): "

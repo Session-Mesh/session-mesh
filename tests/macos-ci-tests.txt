@@ -98,6 +98,7 @@ tests/opencode-resume.test.ts
 tests/opencode-v2-events.test.ts
 tests/opencode-v2-mailbox.test.ts
 tests/opencode-v2-real.test.ts
+tests/pi-selected-discovery.test.ts
 tests/pi-wake-no-proxy.test.ts
 tests/portfolio-optional-observer.test.ts
 tests/project-activity.test.ts
