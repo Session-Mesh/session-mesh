@@ -91,6 +91,13 @@ class ConversationRegistryUnreadable(RuntimeError):
     """The registry could not be decoded, and was left untouched."""
 
 
+def _ocaml_int(value):
+    """Match OCaml's tagged signed integer representation on this machine."""
+    bits = sys.maxsize.bit_length()
+    value &= (1 << bits) - 1
+    return value - (1 << bits) if value >= 1 << (bits - 1) else value
+
+
 def conversation_request(op, **fields):
     """Exchange one newline-terminated frame. A failed reply may follow a committed write."""
     import meshpaths
@@ -109,10 +116,7 @@ def conversation_request(op, **fields):
         # OCaml's Unix.fstat represents inode numbers as tagged machine ints.
         # Darwin can return an unsigned inode wider than that representation.
         # Encode the same signed value that the native helper will observe.
-        bits = sys.maxsize.bit_length()
-        inode = info.st_ino & ((1 << bits) - 1)
-        if inode >= 1 << (bits - 1):
-            inode -= 1 << bits
+        inode = _ocaml_int(info.st_ino)
         run = subprocess.run([command, "--conversation-names"], input=body + b"\n", stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, cwd="/", pass_fds=(life_read,),
                              env={"MESH_CONF_DIR": str(meshpaths.CONF_DIR), "PATH": "/usr/bin:/bin",

@@ -39,6 +39,21 @@ test('pipe identifiers wider than an OCaml integer retain their identity', () =>
   }
 });
 
+test('pipe identifier conversion matches OCaml signed integer boundaries', () => {
+  const code = [
+    'import fsutil',
+    'for n in ((1 << 62) - 1, 1 << 62, (1 << 63) - 1, 1 << 63):',
+    '    print(fsutil._ocaml_int(n))',
+  ].join('\n');
+  const result = spawnSync(process.env.MESH_PYTHON || 'python3', ['-c', code], {
+    cwd: REPO, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.trim().split('\n'), [
+    '4611686018427387903', '-4611686018427387904', '-1', '0',
+  ]);
+});
+
 async function useWrapper(lab: any, body: string): Promise<void> {
   const wrapper = path.join(lab.where.scratch, 'history-wrapper');
   fs.writeFileSync(wrapper, '#!/bin/sh\n' + body + '\n', {mode: 0o700});
