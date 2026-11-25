@@ -7373,6 +7373,13 @@ async def _complete_exact(name, entry, marker):
             "previous": {"name": name, "created": entry["created"]}}
 
 
+async def api_restore_rebind_offers(request):
+    _require_owner_cookie(request)
+    async with request.app["organisation_lock"]:
+        offers = await asyncio.to_thread(respawn.legacy_rebind_offers)
+    return web.json_response({"offers": offers}, headers={"Cache-Control": "no-store"})
+
+
 async def api_restore_rebind(request):
     """Owner-confirmed binding of an old named offer to one exact native profile."""
     _require_owner_cookie(request)
@@ -8168,6 +8175,7 @@ def make_app(*, session_request_path=None):
     app.router.add_put("/api/board/{name}", api_board_put)
     app.router.add_post("/api/organize", api_organize)
     app.router.add_post("/api/restore", api_restore)
+    app.router.add_get("/api/restore/rebind", api_restore_rebind_offers)
     app.router.add_post("/api/restore/rebind", api_restore_rebind)
     app.router.add_post("/api/restore/discard", api_restore_discard)
     app.router.add_post("/api/upload", api_upload)

@@ -133,6 +133,7 @@ EXPECTED = {
     ("POST", "/api/restore"): COOKIE,
     ("POST", "/api/restore/discard"): COOKIE,
     ("POST", "/api/restore/rebind"): COOKIE_ONLY,
+    ("GET", "/api/restore/rebind"): COOKIE_ONLY,
     ("POST", "/api/upload"): COOKIE,
     ("POST", "/api/view"): COOKIE,
     ("POST", "/api/ls"): COOKIE,

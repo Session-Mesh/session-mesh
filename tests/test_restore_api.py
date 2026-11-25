@@ -632,3 +632,23 @@ async def test_rebind_rejects_changed_offer_and_changed_profile_before_writing(
     assert (await client.post('/api/restore/rebind', json=confirm, headers=auth_cookie)).status == 409
     assert respawn.lost_entry('legacy-race')['restoring']
     assert fake_host.new_requests == []
+
+
+async def test_rebind_offers_owner_projection_excludes_ineligible_and_sensitive_fields(
+        client, auth_cookie, fake_host, tmp_path):
+    eligible = mesh_item('legacy', tmp_path, 1.0, claude())
+    eligible['account'] = 'work'
+    bound = mesh_item('bound', tmp_path, 2.0, codex())
+    bound.update(account='work', account_context_revision='a' * 64)
+    ordinary = mesh_item('ordinary', tmp_path, 3.0, claude())
+    lose(tmp_path, eligible, bound, ordinary)
+    response = await client.get('/api/restore/rebind', headers=auth_cookie)
+    assert response.status == 200
+    assert response.headers['Cache-Control'] == 'no-store'
+    entry = respawn.lost_entry('legacy')
+    assert await response.json() == {'offers': [{'expected': {'name': 'legacy', 'created': entry['created'],
+        'agent_kind': 'claude', 'resume_id': entry['agent']['session_id'], 'cwd': entry['cwd']},
+        'previous_account': 'work'}]}
+    respawn.begin_restoring('legacy', entry['created'], 'a' * 32)
+    response = await client.get('/api/restore/rebind', headers=auth_cookie)
+    assert (await response.json())['offers'] == []
