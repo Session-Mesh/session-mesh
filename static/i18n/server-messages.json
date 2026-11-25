@@ -1106,5 +1106,9 @@
   {
     "pattern": "^Account carry safety capability unavailable; nothing was stopped$",
     "key": "server.switchCarryCapability"
+  },
+  {
+    "pattern": "^Account migration or switch is busy; nothing was stopped$",
+    "key": "server.switchMigrationBusy"
   }
 ]

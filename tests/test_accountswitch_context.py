@@ -4,6 +4,8 @@
 import hashlib
 import os
 import asyncio
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -158,6 +160,68 @@ def test_helper_snapshot_rejects_oversized_file(tmp_path):
         server._carry_helper_snapshot(str(path))
 
 
+def test_legacy_switch_marker_survives_process_death_and_blocks_reentry(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, 'CONF_DIR', tmp_path)
+    code = ("import pathlib,sys,server; server.CONF_DIR=pathlib.Path(sys.argv[1]); "
+            "server._legacy_switch_begin({'id':'crashed'}, {'name':'session','created':1}); "
+            "print('ready',flush=True); input()")
+    child = subprocess.Popen([sys.executable, '-c', code, str(tmp_path)], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline().strip() == 'ready'
+        with pytest.raises(web.HTTPConflict):
+            server._legacy_switch_begin({'id': 'next'}, {'name': 'session', 'created': 1})
+        child.kill()
+        child.wait(timeout=5)
+        marker = tmp_path / '.backend-profiles.legacy-switch'
+        assert marker.exists()
+        with pytest.raises(web.HTTPConflict):
+            server._legacy_switch_begin({'id': 'next'}, {'name': 'session', 'created': 1})
+        marker.unlink()  # Explicit operator reconciliation in this fixture.
+        lease = server._legacy_switch_begin({'id': 'next'}, {'name': 'session', 'created': 1})
+        server._legacy_switch_end(lease, completed=True)
+        assert not marker.exists()
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+
+
+def test_legacy_switch_keeps_marker_on_uncertain_outcome(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, 'CONF_DIR', tmp_path)
+    lease = server._legacy_switch_begin({'id': 'uncertain'}, {'name': 'session', 'created': 1})
+    server._legacy_switch_end(lease, completed=False)
+    assert (tmp_path / '.backend-profiles.legacy-switch').exists()
+    with pytest.raises(web.HTTPConflict):
+        server._legacy_switch_begin({'id': 'next'}, {'name': 'session', 'created': 1})
+
+
+def test_cancelled_legacy_switch_preserves_marker_without_replay(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, 'CONF_DIR', tmp_path)
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    executable = tmp_path / 'helper'
+    executable.write_bytes(b'fixture')
+    monkeypatch.setattr(server, 'work_command', lambda _name: str(executable))
+    calls = []
+    async def helper(*args, **kwargs):
+        assert args == ('carry-capabilities',)
+        return {'version': 1, 'legacy_only': True}
+    async def replace(*args, **kwargs):
+        calls.append('stop-outcome-unknown')
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(server, '_accounts_program', helper)
+    monkeypatch.setattr(server, 'replace_session', replace)
+    item = {'id': 'request', 'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    raw = {'name': 'session', 'created': 1, 'cwd': '/tmp', 'meta': {}}
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
+    assert calls == ['stop-outcome-unknown']
+    assert (tmp_path / '.backend-profiles.legacy-switch').exists()
+    with pytest.raises(web.HTTPConflict):
+        asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
+    assert calls == ['stop-outcome-unknown']
+
+
 def test_helper_snapshot_refuses_fifo_without_waiting(tmp_path):
     path = tmp_path / 'helper'
     os.mkfifo(path)
@@ -168,6 +232,7 @@ def test_helper_snapshot_refuses_fifo_without_waiting(tmp_path):
 def test_legacy_switch_requires_legacy_resolver_at_carry(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    monkeypatch.setattr(server, 'CONF_DIR', tmp_path)
     executable = tmp_path / 'mesh-platform'
     executable.write_bytes(b'fixture')
     monkeypatch.setattr(server, 'work_command', lambda _name: str(executable))
@@ -182,7 +247,7 @@ def test_legacy_switch_requires_legacy_resolver_at_carry(monkeypatch, tmp_path):
         return 'synthetic'
     monkeypatch.setattr(server, '_accounts_program', helper)
     monkeypatch.setattr(server, 'replace_session', replace)
-    item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    item = {'id': 'test-request', 'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
     raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
     assert asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))['account'] == 'work'
     assert calls[0] == ('carry-capabilities',)
@@ -194,6 +259,7 @@ def test_legacy_switch_requires_legacy_resolver_at_carry(monkeypatch, tmp_path):
 def test_legacy_switch_refuses_old_or_invalid_helper_before_stop(monkeypatch, reply, tmp_path):
     calls = []
     monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    monkeypatch.setattr(server, 'CONF_DIR', tmp_path)
     executable = tmp_path / 'mesh-platform'
     executable.write_bytes(b'fixture')
     monkeypatch.setattr(server, 'work_command', lambda _name: str(executable))
@@ -205,7 +271,7 @@ def test_legacy_switch_refuses_old_or_invalid_helper_before_stop(monkeypatch, re
         calls.append('stopped')
     monkeypatch.setattr(server, '_accounts_program', helper)
     monkeypatch.setattr(server, 'replace_session', replace)
-    item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    item = {'id': 'test-request', 'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
     raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
     with pytest.raises(web.HTTPConflict) as error:
         asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
@@ -219,6 +285,7 @@ def test_legacy_switch_refuses_changed_helper_before_carry(monkeypatch, tmp_path
     executable.write_bytes(b'new-helper')
     monkeypatch.setattr(server, 'work_command', lambda _name: str(executable))
     monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    monkeypatch.setattr(server, 'CONF_DIR', tmp_path)
     calls = []
     async def helper(*args, **kwargs):
         calls.append(args)
@@ -234,7 +301,7 @@ def test_legacy_switch_refuses_changed_helper_before_carry(monkeypatch, tmp_path
         await switch[1]()
     monkeypatch.setattr(server, '_accounts_program', helper)
     monkeypatch.setattr(server, 'replace_session', replace)
-    item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    item = {'id': 'test-request', 'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
     raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
     with pytest.raises(server.AccountsUnavailable) as error:
         asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
@@ -249,6 +316,7 @@ def test_legacy_switch_keeps_versioned_helper_after_current_link_moves(monkeypat
     current.symlink_to(first)
     monkeypatch.setattr(server, 'work_command', lambda _name: str(current))
     monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    monkeypatch.setattr(server, 'CONF_DIR', tmp_path)
     monkeypatch.setattr(respawn, 'forget_live', lambda *args: None)
     calls = []
     async def helper(*args, **kwargs):
@@ -263,7 +331,7 @@ def test_legacy_switch_keeps_versioned_helper_after_current_link_moves(monkeypat
         return 'synthetic'
     monkeypatch.setattr(server, '_accounts_program', helper)
     monkeypatch.setattr(server, 'replace_session', replace)
-    item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    item = {'id': 'test-request', 'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
     raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
     asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
     assert len(calls) == 2 and all(program == str(first) for _, program in calls)
@@ -275,6 +343,7 @@ def test_legacy_switch_never_runs_replaced_real_helper(monkeypatch, tmp_path):
     executable.chmod(0o700)
     monkeypatch.setattr(server, 'work_command', lambda _name: str(executable))
     monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    monkeypatch.setattr(server, 'CONF_DIR', tmp_path)
     async def replace(*args, switch, **kwargs):
         old = tmp_path / 'old-helper'
         old.write_text(f'#!/bin/sh\nprintf ran > {marker}\n')
@@ -282,7 +351,7 @@ def test_legacy_switch_never_runs_replaced_real_helper(monkeypatch, tmp_path):
         old.replace(executable)
         await switch[1]()
     monkeypatch.setattr(server, 'replace_session', replace)
-    item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    item = {'id': 'test-request', 'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
     raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
     with pytest.raises(server.AccountsUnavailable) as error:
         asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
