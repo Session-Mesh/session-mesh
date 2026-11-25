@@ -190,10 +190,12 @@ let test_errors () =
         {|{"version":1,"op":"observe","sessions":[{"name":"w","created":1},{"name":"broken"}]}|};
       Alcotest.(check (list string)) "invalid requests left no files" []
         (Array.to_list (Sys.readdir (Filename.dirname path)));
-      Unix.mkdir path 0o700;
-      error "atomic write failure" "registry_io"
+      let lock = Filename.remove_extension path ^ ".lock" in
+      Unix.mkdir lock 0o700;
+      error "lock failure" "registry_io"
         {|{"version":1,"op":"close","name":"w","created":1,"now":101}|};
-      Alcotest.(check bool) "destination preserved" true (Sys.is_directory path))
+      Alcotest.(check bool) "lock failure preserved" true (Sys.is_directory lock);
+      Unix.rmdir lock)
 
 let () =
   Alcotest.run "conversation protocol"

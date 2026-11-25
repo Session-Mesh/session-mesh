@@ -1179,6 +1179,8 @@ configuration directory. This native helper is required for session listings, re
 name operations, even when the optional History database is disabled. Install it with the other
 native programs using `scripts/bootstrap.sh`, or use the bundled release. If the helper is missing
 or incompatible, those operations report an error rather than changing the registry themselves.
+An executable wrapper set by `MESH_HISTORY_CMD` must preserve inherited file descriptors when it
+starts `mesh-history`; a wrapper that closes them is refused, so an orphaned helper cannot write later.
 
 - **Helper stopped.** The log line `history: database helper stopped: <reason>` means the helper
   failed (timeout, locked or corrupt file). The in-memory index and ripgrep answer meanwhile, and

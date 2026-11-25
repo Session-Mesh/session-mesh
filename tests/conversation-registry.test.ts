@@ -155,8 +155,10 @@ const frame = JSON.parse(input);
 const args = process.argv.slice(2);
 const entry = {frame, args, cwd: process.cwd(), env: process.env, parent: process.ppid};
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(entry) + '\\n');
-const reply = execFileSync(${JSON.stringify(helper)}, args, {input,
-  env: {...process.env, MESH_CONVERSATION_PARENT_PID: String(process.pid)}});
+const fd = Number(process.env.MESH_CONVERSATION_LIFELINE.split(':')[0]);
+const stdio = ['pipe', 'pipe', 'pipe'];
+stdio[fd] = fd;
+const reply = execFileSync(${JSON.stringify(helper)}, args, {input, stdio, env: process.env});
 process.stdout.write(frame.op === 'close' ? '{"version":2,"result":null}\\n' : reply);
 `, {mode: 0o700});
     lab.where.env.MESH_MESH_HISTORY_CMD = witness;
@@ -179,8 +181,8 @@ process.stdout.write(frame.op === 'close' ? '{"version":2,"result":null}\\n' : r
     for (const entry of calls) {
       assert.deepEqual(entry.args, ['--conversation-names']);
       assert.equal(entry.cwd, '/');
-      assert.deepEqual(Object.keys(entry.env).sort(), ['MESH_CONF_DIR', 'MESH_CONVERSATION_PARENT_PID', 'PATH']);
-      assert.equal(entry.env.MESH_CONVERSATION_PARENT_PID, String(entry.parent));
+      assert.deepEqual(Object.keys(entry.env).sort(), ['MESH_CONF_DIR', 'MESH_CONVERSATION_LIFELINE', 'PATH']);
+      assert.match(entry.env.MESH_CONVERSATION_LIFELINE, /^[0-9]+:[0-9]+:[0-9]+$/);
     }
     const registry = path.join(lab.where.confDir, file);
     const closed = (JSON.parse(fs.readFileSync(registry, 'utf8')) as Binding[]).find(row => row.sid === SIDS.claude);

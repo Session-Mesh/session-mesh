@@ -11,14 +11,14 @@ type source =
   | Unreadable of Unix.error
 
 exception Parent_exited
-(** The server supplied [MESH_CONVERSATION_PARENT_PID] and the helper is no
-    longer a child of that process. *)
+(** The server supplied a lifeline and the caller disappeared, or a wrapper
+    closed or replaced the inherited pipe. *)
 
 val transact : path:string -> (source -> 'a * string option) -> 'a
 (** Hold the exclusive BSD flock on the sibling [.lock] file while reading
     [path], running the callback once, and atomically replacing [path] if the
     callback returns [Some contents]. Lock, write and callback exceptions
-    propagate. When the expected parent PID is set, check it before waiting,
+    propagate. When the caller's lifeline is supplied, check it before waiting,
     after acquiring the lock and before committing. The callback decides how
     to handle missing or unreadable input.
     It must not recursively acquire the same lock. *)

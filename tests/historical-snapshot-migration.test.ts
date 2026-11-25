@@ -39,7 +39,8 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
     XDG_RUNTIME_DIR:path.join(where.home,'run'), XDG_CONFIG_HOME:path.join(where.home,'.config'),
     XDG_CACHE_HOME:path.join(where.home,'.cache'), MESH_CONF_DIR:where.confDir,
     MESH_CACHE_DIR:path.join(where.home,'.cache/session-mesh'), MESH_PORT:String(where.port),
-    MESH_SESSIONS_WAIT:'60', MESH_TEST_SESSIONS_COMPLETE:'1'};
+    MESH_SESSIONS_WAIT:'60', MESH_TEST_SESSIONS_COMPLETE:'1',
+    MESH_MESH_HISTORY_CMD:path.join(REPO,'ocaml/_build/install/default/bin/mesh-history')};
   const source = path.join(where.scratch,'old');
   const oldCopy = path.join(where.scratch,'old-ptyhost');
   const socket = path.join(where.home,'run/session-mesh/ptyhost.sock');

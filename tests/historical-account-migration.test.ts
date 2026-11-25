@@ -77,7 +77,8 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
     where.env = {...hostEnv, LANGUAGE:'en', XDG_CONFIG_HOME:path.join(where.home,'.config'),
       XDG_CACHE_HOME:path.join(where.home,'.cache'), MESH_CONF_DIR:where.confDir,
       MESH_CACHE_DIR:path.join(where.home,'.cache/session-mesh'), MESH_PORT:String(where.port),
-      MESH_SESSIONS_WAIT:'60', MESH_TEST_SESSIONS_COMPLETE:'1', MESH_MESH_PLATFORM_CMD:oldPlatformCopy};
+      MESH_SESSIONS_WAIT:'60', MESH_TEST_SESSIONS_COMPLETE:'1', MESH_MESH_PLATFORM_CMD:oldPlatformCopy,
+      MESH_MESH_HISTORY_CMD:path.join(REPO,'ocaml/_build/install/default/bin/mesh-history')};
     host = startTestPtyhost([oldHostCopy],{cwd:source,env:hostEnv,stdio:'ignore'},socket); await host.ready;
     const prior = await runServer(where,source); assert.ok(prior.result.listened,prior.output()); server = prior.child;
     stopCurrentServer = onceAsync(() => stopServer(prior.child));
