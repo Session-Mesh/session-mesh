@@ -205,7 +205,8 @@ let invalid_requests_are_refused () =
 (* The built host. *)
 
 let host_argv = ref [||]
-let program = "#!/bin/sh\n/bin/sleep 613\n:\n"
+let program =
+  "#!/bin/sh\n/bin/sh -c 'printf \"%s\\n\" \"$$\" > \"$HOME/child.pid\"; exec /bin/sleep 613'\n:\n"
 
 let with_host f =
   let scratch =
@@ -255,14 +256,23 @@ let new_session socket_path home session =
 let host_serves_its_table () =
   with_host (fun ~host ~home ~socket_path session ->
       let shell = new_session socket_path home session in
-      let child () =
-        List.find_opt
-          (fun r -> U.member "ppid" r = `Int shell)
-          (U.to_list
-             (U.member "processes"
-                (processes socket_path {|{"op":"processes"}|})))
+      let receipt = Filename.concat home "child.pid" in
+      let child_pid = ref None in
+      let observed_child () =
+        try
+          let channel = open_in receipt in
+          let line =
+            Fun.protect ~finally:(fun () -> close_in channel) (fun () -> input_line channel)
+          in
+          match int_of_string_opt line with
+          | Some pid when pid > 0 -> (
+              match P.command_line pid with
+              | Ok [ "/bin/sleep"; "613" ] -> child_pid := Some pid; true
+              | _ -> false)
+          | _ -> false
+        with Sys_error _ | End_of_file -> false
       in
-      ignore (wait_until "foreground child" 10. (fun () -> child () <> None));
+      ignore (wait_until "foreground child" 10. observed_child);
       let reply = processes socket_path {|{"op":"processes"}|} in
       Alcotest.(check int) "version" 1 (U.to_int (U.member "version" reply));
       Alcotest.(check int)
@@ -272,10 +282,12 @@ let host_serves_its_table () =
         (String.for_all
            (function '0' .. '9' -> true | _ -> false)
            (U.to_string (U.member "incarnation" (U.member "host" reply))));
+      expect "complete is a boolean"
+        (match U.member "complete" reply with `Bool _ -> true | _ -> false);
       (* The global scan is explicitly bounded and may be incomplete on a busy
          machine. Its completeness rules are exercised with deterministic fake
          scans above; validate our own live processes using the targeted API. *)
-      let child_pid = U.to_int (U.member "pid" (Option.get (child ()))) in
+      let child_pid = Option.get !child_pid in
       let selected =
         processes socket_path
           (Printf.sprintf {|{"op":"processes","pids":[%d,%d]}|} shell child_pid)
@@ -290,6 +302,7 @@ let host_serves_its_table () =
         "leader ppid" host
         (U.to_int (U.member "ppid" leader));
       let child = row selected child_pid in
+      Alcotest.(check int) "child ppid" shell (U.to_int (U.member "ppid" child));
       Alcotest.(check int) "child sid" shell (U.to_int (U.member "sid" child));
       if U.member "complete" reply = `Bool true then (
         let leader = row reply shell and child = row reply child_pid in
