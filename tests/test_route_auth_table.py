@@ -107,6 +107,7 @@ EXPECTED = {
     ("GET", "/api/agent-mail/consent"): COOKIE_ONLY,
     ("GET", "/api/agent-mail/overview"): COOKIE_ONLY,
     ("GET", "/api/agent-mail/messages"): COOKIE_ONLY,
+    ("GET", "/api/flow/events"): COOKIE_ONLY,
     ("GET", "/api/update/notes"): COOKIE_ONLY,
     ("GET", "/api/update/image"): COOKIE_ONLY,
     ("GET", "/api/config"): COOKIE_ONLY,

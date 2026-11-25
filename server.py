@@ -414,7 +414,12 @@ def _mesh_reach_env():
     """The port actually served and the config dir in use, always: clean_env drops MESH_* from the
     environment, and the session tools (mesh-open, mesh-event, mesh-board-mcp) must reach this mesh,
     not the default one on 7690, whether or not MESH_CONF_DIR is set."""
-    return {"MESH_CONF_DIR": str(CONF_DIR), "MESH_PORT": str(PORT)}
+    reach = {"MESH_CONF_DIR": str(CONF_DIR), "MESH_PORT": str(PORT)}
+    for name in ("MESH_MCP_TRACE_JOURNAL", "MESH_MCP_TRACE_PLUGIN"):
+        value = os.environ.get(name)
+        if value and os.path.isabs(value):
+            reach[name] = value
+    return reach
 
 
 # ---- Account aliases: accounts.json in the config folder, written by the operator on the runner and validated by
@@ -4795,7 +4800,7 @@ def _model_argv(argv, model):
     return [*kept, "--model", model]
 
 
-async def _execute_session_action(item):
+async def _execute_session_action(item, create_nonce=None):
     source = item["source"]
     listed = await host({"op": "list"})
     raw = next((entry for entry in listed if entry["name"] == source["id"]
@@ -4822,7 +4827,8 @@ async def _execute_session_action(item):
         name = await new_session(item["name"] or f"{Path(raw['cwd']).name}-{item['preset']}",
                                  raw["cwd"], shlex.join(argv),
                                  agent if agent in RESUMABLE_AGENT_PRESETS else None, agent,
-                                 conversation=conversation, **({"fresh": True} if agent == "opencode" else {}))
+                                 conversation=conversation, nonce=create_nonce,
+                                 **({"fresh": True} if agent == "opencode" else {}))
         return {"id": name}
 
     described = await asyncio.to_thread(_describe_with_hooks, listed)
@@ -4878,8 +4884,9 @@ async def _run_session_action_once(app, request_id):
     item = app["session_requests"].begin_execution(request_id)
     if item is None:
         return app["session_requests"].status(request_id)
+    create_nonce = sessiontoken.new_nonce() if item["action"] == "create" else None
     try:
-        result = await _execute_session_action(item)
+        result = await _execute_session_action(item, create_nonce)
     except AccountSwitchUndone as exc:
         return app["session_requests"].finish(
             request_id, error=_switch_undone_text(item["from_account"], exc),
@@ -4894,7 +4901,20 @@ async def _run_session_action_once(app, request_id):
         raise
     except Exception:
         return app["session_requests"].finish(request_id, error="Action failed")
-    return app["session_requests"].finish(request_id, result=result)
+    finished = app["session_requests"].finish(request_id, result=result)
+    if item["action"] == "create" and isinstance(result.get("id"), str):
+        try:
+            listed = await host({"op": "list"})
+            raw = next((entry for entry in listed if entry["name"] == result["id"]
+                        and entry["meta"].get("nonce") == create_nonce), None) if _valid_ptyhost_list(listed) else None
+            if raw:
+                target = {"id": raw["name"], "created": raw["created"], "agent": launchplan.agent_type(item["preset"])}
+                await _flow_record({"id": request_id, "kind": "create", "time": raw["created"],
+                                    "source": {k: item["source"][k] for k in ("id", "created", "agent")},
+                                    "target": target})
+        except Exception:
+            print("flow: unable to record creation", flush=True)
+    return finished
 
 
 def _schedule_session_action(app, request_id):
@@ -5017,6 +5037,7 @@ ACCOUNTS_ROUTES = {"/api/accounts/profiles": "profiles.list", "/api/accounts/con
 # contended store gives the helper's coded answer rather than ours.
 ACCOUNTS_MAX_BODY, ACCOUNTS_TIMEOUT, ACCOUNTS_MAX_REPLY = 16384, 8.0, 1024 * 1024
 ACCOUNTS_SLOTS = asyncio.Semaphore(4)
+FLOW_SLOTS = asyncio.Semaphore(4)
 # Four helpers run and eight requests wait at most: one more is 503 busy at once, so a burst cannot pile up.
 ACCOUNTS_MAX_PENDING, ACCOUNTS_QUEUE = 4 + 8, {"pending": 0}
 _ACCOUNTS_STATUSES = frozenset((200, 400, 404, 409, 413, 503))
@@ -5053,24 +5074,22 @@ def accounts_refusal(status, code):
                              headers={"Cache-Control": "no-store"})
 
 
-async def _profile_run(op, body):
-    """(exit code, first line) of `mesh-profile --http OP` given BODY, or None: no helper, no start, no complete
-    line within the time limit. Closed argv, its own process group, an environment that names the config folder
-    only (no token, credential or provider variable of the server's)."""
-    command, proc = work_command("mesh-profile"), None
+async def _run_private_helper(command, args, body, slots, timeout, limit, diagnostic):
+    """Run a closed helper invocation with bounded output and no credentials in its environment."""
+    proc = None
     if command is None:
         return None
-    async with ACCOUNTS_SLOTS:
+    async with slots:
         try:
             proc = await asyncio.create_subprocess_exec(
-                command, "--http", op, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL, limit=ACCOUNTS_MAX_REPLY, start_new_session=True,
+                command, *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL, limit=limit, start_new_session=True,
                 env={"MESH_CONF_DIR": str(CONF_DIR), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"})
             proc.stdin.write(body)
             proc.stdin.close()
-            out, code = await asyncio.wait_for(asyncio.gather(proc.stdout.readline(), proc.wait()), ACCOUNTS_TIMEOUT)
+            out, code = await asyncio.wait_for(asyncio.gather(proc.stdout.readline(), proc.wait()), timeout)
         except (OSError, ValueError, asyncio.TimeoutError) as exc:   # ValueError: a line over the cap
-            print(f"accounts: mesh-profile {op} gave no answer: {type(exc).__name__}", flush=True)
+            print(f"{diagnostic} gave no answer: {type(exc).__name__}", flush=True)
             return None
         finally:
             if proc is not None:
@@ -5080,6 +5099,20 @@ async def _profile_run(op, body):
                 with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(proc.wait(), 5)
     return code, out
+
+
+async def _profile_run(op, body):
+    """Only the accounts route may run mesh-profile; the helper receives no credentials."""
+    return await _run_private_helper(work_command("mesh-profile"), ["--http", op], body,
+                                     ACCOUNTS_SLOTS, ACCOUNTS_TIMEOUT, ACCOUNTS_MAX_REPLY,
+                                     f"accounts: mesh-profile {op}")
+
+
+async def _flow_run(op, body):
+    if FLOW_SLOTS.locked():
+        return None
+    return await _run_private_helper(work_command("mesh-history"), ["--flow-" + op], body,
+                                     FLOW_SLOTS, 2.0, 2_000_000, f"flow: mesh-history {op}")
 
 
 def _profile_envelope(op, code, out):
@@ -5208,6 +5241,26 @@ async def api_agent_mail_consent(request):
         raise web.HTTPBadRequest()
     projection = await asyncio.to_thread(agentmail.consent_projection)
     return web.json_response(projection, headers={"Cache-Control": "no-store"})
+
+
+async def _flow_record(event):
+    try:
+        result = await _flow_run("write", json.dumps(event).encode())
+        if result is not None and result[0] == 0:
+            return
+    except Exception:
+        pass
+    print("flow: unable to record event", flush=True)
+
+
+async def api_flow_events(request):
+    _require_owner_cookie(request)
+    if request.query:
+        raise web.HTTPBadRequest()
+    result = await _flow_run("read", b"")
+    if result is None or result[0] != 0:
+        raise web.HTTPServiceUnavailable(text="Flow journal unavailable")
+    return web.Response(body=result[1], content_type="application/json", headers={"Cache-Control": "no-store"})
 
 
 async def api_agent_mail_overview(request):
@@ -5606,6 +5659,8 @@ async def api_agent_mail_send(request):
     except agentmail.MailError as exc:
         _agent_mail_failure(exc)
     request.app["agent_wakes"].trigger()
+    await _flow_record({"id": receipt["id"], "kind": "message", "time": receipt["created"],
+                        "source": source, "target": receipt["target"]})
     return web.json_response({"receipt": receipt}, headers={"Cache-Control": "no-store"})
 
 
@@ -5617,6 +5672,8 @@ async def api_agent_mail_reply(request):
     except agentmail.MailError as exc:
         _agent_mail_failure(exc)
     request.app["agent_wakes"].trigger()
+    await _flow_record({"id": receipt["id"], "kind": "message", "time": receipt["created"],
+                        "source": source, "target": receipt["target"]})
     return web.json_response({"receipt": receipt}, headers={"Cache-Control": "no-store"})
 
 
@@ -6628,6 +6685,7 @@ def make_app(*, session_request_path=None):
     # The mailbox is reachable only through the sending agent's own
     # MeshSession capability.  It never writes to a peer terminal.
     app.router.add_get("/api/agent-mail/@self/peers", api_agent_mail_peers)
+    app.router.add_get("/api/flow/events", api_flow_events)
     app.router.add_get("/api/agent-mail/@self/inbox", api_agent_mail_inbox)
     app.router.add_post("/api/agent-mail/@self/read", api_agent_mail_read)
     app.router.add_post("/api/agent-mail/@self/send", api_agent_mail_send)

@@ -1,0 +1,3 @@
+(test
+ (name mesh_flow_test)
+ (libraries mesh_flow test_scratch alcotest yojson unix))
