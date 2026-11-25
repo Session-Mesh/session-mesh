@@ -191,6 +191,8 @@ process.stdout.write(frame.op === 'close' ? '{"version":2,"result":null}\\n' : r
     assert.equal(history.status, 200, history.text);
     assert.deepEqual(history.json.mesh_names, []);
     assert.equal(fs.readFileSync(registry, 'utf8'), malformed);
+    // The new explicit override remains authoritative when both are present.
+    lab.where.env.MESH_HISTORY_CMD = helper;
     lab.where.env.MESH_MESH_HISTORY_CMD = path.join(lab.where.scratch, 'missing');
     await lab.restartServer();
     assert.equal((await lab.call('GET', '/api/history')).status, 500);
