@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory() as tmp:
     root = pathlib.Path(tmp)
     ambient = root / 'ambient' / 'sessions' / 'project'
     selected_root = root / 'selected[work]'
-    selected = selected_root / 'project'
+    selected = selected_root
     ambient.mkdir(parents=True); selected.mkdir(parents=True)
     here = str(root / 'work')
     def transcript(folder, ident):
@@ -25,6 +25,7 @@ with tempfile.TemporaryDirectory() as tmp:
     discover._another_pi_may_run_in = lambda pid, cwd: False
     assert discover.pi_info(1)['session_id'].startswith('1111')
     assert discover.pi_info(1, str(selected_root))['session_id'].startswith('2222')
+    assert discover.pi_session_path('22222222-2222-2222-2222-222222222222', str(selected_root)) == str(selected / '22222222-2222-2222-2222-222222222222.jsonl')
     assert 'session_id' not in discover.pi_info(1, '')
     assert 'session_id' not in discover.pi_info(1, 'relative')
     transcript(selected, '33333333-3333-3333-3333-333333333333')
