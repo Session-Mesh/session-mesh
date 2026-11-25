@@ -36,6 +36,7 @@ const PREVIEW_CLEANUP_WORKFLOW = 'site-preview-cleanup.yml';
 const BACKPORT_WORKFLOW = 'backport.yml';
 const REGISTER_WORKFLOW = 'backport-register.yml';
 const POLICY_WORKFLOW = 'branch-policy.yml';
+const HISTORICAL_WORKFLOW = 'historical-migrations.yml';
 // The nightly pre-release: the `nightly` profile, its own rules in tests/nightly-workflow.test.ts.
 const NIGHTLY_WORKFLOW = 'nightly.yml';
 // The issue triage: the `triage` profile, its own rules in tests/issue-triage-workflow-checks.ts.
@@ -200,7 +201,7 @@ describe('public CI workflow checker', () => {
 
 describe('the public CI as committed', () => {
   test('only the public workflows exist (no private workflow left)', () => {
-    assert.deepEqual(workflowFiles(), [REGISTER_WORKFLOW, BACKPORT_WORKFLOW, POLICY_WORKFLOW, TRIAGE_WORKFLOW, NIGHTLY_WORKFLOW, DESCRIPTION_WORKFLOW, MACOS_WORKFLOW, PUBLIC_WORKFLOW, RELEASE_WORKFLOW, PREVIEW_CLEANUP_WORKFLOW, PREVIEW_WORKFLOW, SITE_WORKFLOW]);
+    assert.deepEqual(workflowFiles(), [REGISTER_WORKFLOW, BACKPORT_WORKFLOW, POLICY_WORKFLOW, HISTORICAL_WORKFLOW, TRIAGE_WORKFLOW, NIGHTLY_WORKFLOW, DESCRIPTION_WORKFLOW, MACOS_WORKFLOW, PUBLIC_WORKFLOW, RELEASE_WORKFLOW, PREVIEW_CLEANUP_WORKFLOW, PREVIEW_WORKFLOW, SITE_WORKFLOW]);
   });
 
   for (const name of workflowFiles().filter((file) => file !== RELEASE_WORKFLOW)) {
