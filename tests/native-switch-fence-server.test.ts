@@ -13,7 +13,7 @@ test('operator inventory distinguishes orphan receipts without exposing fence se
   try {
     const folder = path.join(dir, 'switch-fences');
     fs.mkdirSync(folder);
-    for (const [id, name, created] of [['a'.repeat(64), 'first', 1], ['b'.repeat(64), 'second', 2]] as const)
+    for (const [id, name, created] of [['a'.repeat(64), 'same-name', 1], ['b'.repeat(64), 'same-name', 2]] as const)
       fs.writeFileSync(path.join(folder, `${id}.json`), JSON.stringify({name, created, fence_id: 'secret-owner', creation_receipt: 'secret-receipt'}));
     const docs = fs.readFileSync(path.join(repo, 'docs/operations.md'), 'utf8');
     const section = docs.split('### Recovering an orphaned account-switch input fence')[1]!;
@@ -21,8 +21,8 @@ test('operator inventory distinguishes orphan receipts without exposing fence se
     assert.ok(code);
     const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-c', code],
       {cwd: repo, env: {...process.env, MESH_CONF_DIR: dir}, encoding: 'utf8'});
-    assert.match(output, new RegExp(`sha256-${'a'.repeat(64)} 'first' 1`));
-    assert.match(output, new RegExp(`sha256-${'b'.repeat(64)} 'second' 2`));
+    assert.match(output, new RegExp(`sha256-${'a'.repeat(64)} 'same-name' 1`));
+    assert.match(output, new RegExp(`sha256-${'b'.repeat(64)} 'same-name' 2`));
     assert.doesNotMatch(output, /secret-owner|secret-receipt/);
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
