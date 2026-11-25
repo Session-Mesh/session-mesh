@@ -70,6 +70,34 @@ let test_free_space () =
       | Some free -> Alcotest.(check bool) "statvfs" true (free > 0)
       | None -> Alcotest.fail "statvfs failed")
 
+let test_default_target_no_space () =
+  with_root (fun root ->
+      let source = claude_account root "work" in
+      with_conversation source;
+      let target = Filename.concat root ".claude" in
+      let file = Filename.concat root "accounts.json" in
+      write file
+        (Printf.sprintf
+           {|{"v": 1, "accounts": [{"id": "work", "label": "Work", "claude_config_dir": "%s"}]}|}
+           source);
+      let run () =
+        C.carry_accounts ~io:(failing_io ~free:(Some 0) ()) ~uid
+          ~getenv:(function "HOME" -> Some root | _ -> None)
+          ~file ~kind:C.Claude ~conversation:sid ~from_account:"work"
+          ~to_account:"default" ()
+      in
+      Alcotest.(check bool) "default target initially absent" false (exists target);
+      let first = run () in
+      refused_with "target_no_space" first;
+      Alcotest.(check bool) "folder uncertainty reported" true
+        (contains (message_of first) "folder cleanup unconfirmed");
+      Alcotest.(check bool) "no transcript installed" false
+        (exists (Filename.concat target transcript));
+      let second = run () in
+      refused_with "target_no_space" second;
+      Alcotest.(check bool) "existing folder needs no cleanup warning" false
+        (contains (message_of second) "folder cleanup unconfirmed"))
+
 (* A full disk in the middle of a file: the target is as it was, without a
    temporary file. *)
 let test_disk_full_mid_file () =
@@ -387,6 +415,7 @@ let () =
           Alcotest.test_case "default limits" `Quick test_default_limits;
           Alcotest.test_case "too large" `Quick test_too_large;
           Alcotest.test_case "free space" `Quick test_free_space;
+          Alcotest.test_case "default target no space" `Quick test_default_target_no_space;
           Alcotest.test_case "disk full mid-file" `Quick test_disk_full_mid_file;
           Alcotest.test_case "two concurrent carries" `Quick
             test_concurrent_carries;
