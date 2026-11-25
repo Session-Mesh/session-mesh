@@ -1597,6 +1597,7 @@ async def _start_replacement(replacement, cwd, command, known_agent, account_env
         command = f"cd {shlex.quote(cwd)} && {command}"
     if standby_nonce is not None:
         await _confirm_standby(replacement, standby_nonce)
+    _legacy_check_active()
     started = await host({"op": "start_if", "name": replacement["name"],
                           "created": replacement["created"], "command": command})
     if started != {"ok": True}:
@@ -2029,6 +2030,7 @@ async def _start_in_place(source, created, cwd, command, agent, known_agent, not
     start = {"op": "start_if", "name": source["name"], "created": created, "command": command, "meta": meta}
     if fence_id is not None:
         start["fence_id"] = fence_id
+    _legacy_check_active()
     started = await host(start)
     if started != {"ok": True}:
         raise _not_started_again(source["name"])
@@ -5707,6 +5709,7 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
             default_context = next((c for c in (source_context, target_context) if c["id"] == "default"), None)
             if default_context:
                 environ.update(default_context["env"])
+        _legacy_check_active()
         result = await _accounts_program("carry", str(ACCOUNTS_FILE), kind, conversation, item["from_account"],
                                          item["account"], *revisions, timeout=CARRY_TIMEOUT, env=environ,
                                          program=legacy_helper[0] if legacy_helper else None)
@@ -5731,7 +5734,7 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
             await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
             raise
         except web.HTTPException:
-            if not phase['effect_started']:
+            if phase is not None and not phase['effect_started']:
                 completed = True
             raise
         completed = True
