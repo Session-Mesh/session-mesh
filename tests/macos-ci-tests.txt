@@ -50,6 +50,8 @@ tests/flow-build.test.ts
 tests/flow-events.test.ts
 tests/flow-model.test.ts
 tests/gemini-resume.test.ts
+tests/historical-migration-workflow.test.ts
+tests/historical-release-selection.test.ts
 tests/history-agents-db.test.ts
 tests/history-agents.test.ts
 tests/history-db-protocol.test.ts
