@@ -3639,7 +3639,7 @@ def _conversation_found_in_root(root, data, pattern):
         os.path.isfile(match) for match in glob.glob(os.path.join(glob.escape(folder), *pattern)))
 
 
-def _conversation_missing(kind, sid, account=None):
+def _conversation_missing(kind, sid, account=None, *, bound_default_root=None, bound_named=False):
     """Whether the conversation is known to be gone: no Claude transcript, no Codex rollout of that id.
     Pi and OpenCode are checked when their launch line is built; the others are not checked. Claude's and
     Codex's data folders are looked for in ``$CLAUDE_CONFIG_DIR`` and ``$CODEX_HOME`` (absolute) and in
@@ -3652,8 +3652,14 @@ def _conversation_missing(kind, sid, account=None):
     configured = os.environ.get(variable) or ""
     roots = [configured] if os.path.isabs(configured) else []
     folders = [os.path.join(root, data) for root in [*roots, os.path.join(discover.HOME, default)]]
+    if bound_default_root is not None and account is None:
+        # A bound default is resumed only in this exact root; an unrelated
+        # transcript under the ambient home must never qualify the offer.
+        return not _conversation_found_in_root(bound_default_root, data, pattern)
     if account is not None:
         folder = account_folder(account, kind)
+        if bound_named:
+            return not _conversation_found_in_root(folder, data, pattern)
         folders = [os.path.join(folder, data)] if folder else []
     present = [folder for folder in folders if os.path.isdir(folder)]
     return bool(present) and not any(os.path.isfile(match) for folder in present   # a dangling link is no transcript
@@ -3669,7 +3675,16 @@ def _restore_identity(entry):
     """respawn.restore_identity, then the conversation looked for on disk (blocking: run it in a worker)."""
     entry, reason = respawn.restore_identity(entry)
     agent = entry["agent"]
-    if agent and agent["session_id"] and _conversation_missing(agent["type"], agent["session_id"], entry.get("account")):
+    bound_root = None
+    if agent and not entry.get("account") and entry.get("default_context_revision") is not None:
+        try:
+            bound_root = accountswitch.default_context(agent['type'], os.environ)['root']
+        except accountswitch.UnboundDefault:
+            # Leave the offer unchanged; the launch validator refuses it.
+            return entry, reason
+    if agent and agent["session_id"] and _conversation_missing(
+            agent["type"], agent["session_id"], entry.get("account"), bound_default_root=bound_root,
+            bound_named=bool(entry.get("account") and entry.get("account_context_revision"))):
         return {**entry, "agent": {**agent, "session_id": None}}, "not found"
     return entry, reason
 
@@ -6998,6 +7013,8 @@ async def _create_restored(name, entry, running, reason=None):
         # default identity still governs whether that offer may be consumed.
         if not resumable and agent and not entry.get("account") and entry.get("default_context_revision") is not None:
             _validate_default_restore(agent["type"], entry["default_context_revision"])
+        if agent and not resumable and (entry.get("account_context_revision") or entry.get("default_context_revision")):
+            raise web.HTTPConflict(text="Bound account conversation unavailable; restore refused")
         context = await _restore_launch_context(entry) if resumable else None
         command = shlex.join(_resume_argv(agent, context)) if resumable else _not_relaunched_line(agent, reason)
         new = await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,

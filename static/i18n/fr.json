@@ -2330,5 +2330,6 @@
   "server.switchReleaseUnconfirmed": "La levée du verrou n’a pas pu être confirmée ; inspectez avant toute autre action.",
   "server.switchCarryCapability": "La capacité de transfert sécurisé des comptes est indisponible ; rien n’a été arrêté.",
   "server.switchMigrationBusy": "Une migration ou une bascule de compte est en cours ; rien n’a été arrêté.",
-  "server.switchMigrationChanged": "Le contexte de migration ou de bascule a changé ; inspectez la session."
+  "server.switchMigrationChanged": "Le contexte de migration ou de bascule a changé ; inspectez la session.",
+  "server.boundRestoreUnavailable": "La conversation du compte lié est indisponible ; restauration refusée."
 }

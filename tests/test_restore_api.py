@@ -4,6 +4,7 @@
 """POST /api/restore and the `restorable` list of GET /api/sessions (RS-2, RS-3)."""
 
 import asyncio
+import os
 from pathlib import Path
 import shlex
 
@@ -62,7 +63,7 @@ class FakeHost:
 def fake_host(monkeypatch, snapshot_file):
     host = FakeHost()
     monkeypatch.setattr(ptyhost, "request", host.request)
-    monkeypatch.setattr(server, "_conversation_missing", lambda kind, sid, account=None: False)   # no transcript files here
+    monkeypatch.setattr(server, "_conversation_missing", lambda kind, sid, account=None, **_kw: False)   # no transcript files here
     return host
 
 
@@ -99,7 +100,7 @@ async def test_missing_transcript_still_validates_saved_default_context(
     lose(tmp_path, item)
     before = respawn.lost_entry("bound-default")
     assert before["default_context_revision"] == "a" * 64
-    monkeypatch.setattr(server, "_conversation_missing", lambda *_args: True)
+    monkeypatch.setattr(server, "_conversation_missing", lambda *_args, **_kwargs: True)
     def validate(kind, revision):
         assert (kind, revision) == ("claude", "a" * 64)
         if changed:
@@ -107,14 +108,70 @@ async def test_missing_transcript_still_validates_saved_default_context(
     monkeypatch.setattr(server, "_validate_default_restore", validate)
     status, body = await restore(client, auth_cookie, "bound-default")
     assert status == 200
-    if changed:
-        assert body["results"]["bound-default"]["ok"] is False
-        assert fake_host.new_requests == []
-        assert respawn.lost_entry("bound-default") == before
-    else:
-        assert body["results"]["bound-default"]["ok"] is True
-        assert len(fake_host.new_requests) == 1
-        assert respawn.lost_entry("bound-default") is None
+    assert body["results"]["bound-default"]["ok"] is False
+    assert fake_host.new_requests == []
+    assert respawn.lost_entry("bound-default") == before
+
+
+@pytest.mark.parametrize('kind', ['claude', 'codex'])
+def test_bound_default_transcript_is_not_satisfied_by_ambient_home(tmp_path, monkeypatch, kind):
+    sid = SID if kind == 'claude' else SID2
+    selected = tmp_path / 'selected'
+    ambient = tmp_path / 'home'
+    variable, folder, data, pattern = server._conversation_layout(kind, sid)
+    fallback = ambient / folder / data
+    for component in pattern[:-1]:
+        fallback /= 'project' if component == '*' else component
+    fallback.mkdir(parents=True)
+    filename = pattern[-1].replace('*', 'fixture')
+    (fallback / filename).write_text('fixture')
+    monkeypatch.setenv(variable, str(selected))
+    monkeypatch.setenv('HOME', str(ambient))
+    monkeypatch.setattr(server.discover, 'HOME', str(ambient))
+    assert server._conversation_missing(kind, sid) is False
+    assert server._conversation_missing(kind, sid, bound_default_root=str(selected)) is True
+    agent = claude(sid) if kind == 'claude' else codex(sid)
+    revision = server.accountswitch.default_context(kind, os.environ)['context_revision']
+    entry = {'agent': agent, 'default_context_revision': revision}
+    monkeypatch.setattr(respawn, 'restore_identity', lambda value: (value, None))
+    resolved, reason = server._restore_identity(entry)
+    assert resolved['agent']['session_id'] is None and reason == 'not found'
+    actual = selected / data
+    for component in pattern[:-1]:
+        actual /= 'project' if component == '*' else component
+    actual.mkdir(parents=True)
+    (actual / filename).write_text('fixture')
+    assert server._conversation_missing(kind, sid, bound_default_root=str(selected)) is False
+
+
+async def test_missing_bound_named_conversation_preserves_offer(client, auth_cookie, fake_host, tmp_path, monkeypatch):
+    item = mesh_item('bound-named', tmp_path, 1.0, claude())
+    item.update(account='work', account_context_revision='a' * 64)
+    lose(tmp_path, item)
+    before = respawn.lost_entry('bound-named')
+    monkeypatch.setattr(server, '_conversation_missing', lambda *_args, **_kwargs: True)
+    status, body = await restore(client, auth_cookie, 'bound-named')
+    assert status == 200
+    assert body['results']['bound-named']['ok'] is False
+    assert 'conversation unavailable' in body['results']['bound-named']['error']
+    assert fake_host.new_requests == []
+    assert respawn.lost_entry('bound-named') == before
+
+
+async def test_exact_missing_bound_named_conversation_refuses_before_creation(monkeypatch, tmp_path):
+    entry = {'name': 'bound-named', 'created': 1.0, 'cwd': str(tmp_path), 'account': 'work',
+             'account_context_revision': 'a' * 64, 'agent': claude()}
+    expected = {'resume_id': SID}
+    monkeypatch.setattr(respawn, 'restore_identity', lambda value: (value, None))
+    monkeypatch.setattr(server, '_conversation_missing', lambda *_args, **_kwargs: True)
+    _, refusal = await server._exact_identity(entry, expected)
+    assert refusal['code'] == 'not-resumable' and refusal['phase'] == 'not-started'
+
+
+def test_bound_named_missing_root_is_not_assumed_restorable(monkeypatch):
+    monkeypatch.setattr(server, 'account_folder', lambda *_args: None)
+    assert server._conversation_missing('claude', SID, 'work') is False
+    assert server._conversation_missing('claude', SID, 'work', bound_named=True) is True
 
 
 async def test_exact_profiled_pi_restore_refuses_before_intent(monkeypatch, tmp_path):
