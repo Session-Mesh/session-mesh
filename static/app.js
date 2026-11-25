@@ -7179,7 +7179,7 @@ function sendDirectControl(letter, held = false) {
   return true;
 }
 // Sends what the field received, then empties it. True when the text was delivered as typed
-// (or as one paste); otherwise a message says why, and the text is gone from the field.
+// (or as one paste); a definitely refused acknowledged write stays in the field for review.
 function flushDirectField(inputType, held = false) {
   const text = line.value;
   if (!text) return true;
@@ -7188,7 +7188,12 @@ function flushDirectField(inputType, held = false) {
   const kind = MeshPaneActions.directInput(text, inputType);
   if (kind !== "typed") return pasteDirect(text, kind, held);
   if (ctrlArmed && Array.from(text).length === 1) return sendDirectControl(text, held);
-  return writeDirect(text, false, held);
+  // ACK writes returning false did not enqueue these bytes. Keep them for explicit review;
+  // a legacy write can have an uncertain outcome and must never be offered for replay here.
+  const acknowledged = !!lineDirect.pane.inputAck;
+  const delivered = writeDirect(text, false, held);
+  if (!delivered && acknowledged) { line.value = text; fitLine(); }
+  return delivered;
 }
 // The field changed and no composition is in progress. True when direct writing took the text.
 // `composedOn` is the pane a composition started on: its word does not start the mode on another.
