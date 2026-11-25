@@ -1,0 +1,50 @@
+# Scheduled independently of the merge queue: a disappearing release must not
+# prevent unrelated fixes from merging, but an upgrade regression is visible.
+name: historical-migrations
+on:
+  schedule:
+    - cron: '15 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  historical-migrations:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install native build prerequisites
+        run: |
+          bash .github/scripts/fast-apt-mirror.sh
+          bash .github/scripts/apt-install.sh bubblewrap musl-tools rsync --if-available darcs g++-multilib gcc-multilib mercurial
+      - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3.9.1
+        with:
+          ocaml-compiler: ocaml-base-compiler.5.3.0
+          opam-pin: false
+          cache: false
+      - name: Build candidate native programs
+        run: |
+          bash scripts/bootstrap.sh --deps-only
+          (cd ocaml && opam exec -- dune build -p session_mesh @install)
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Download and verify the latest releases
+        run: node --experimental-strip-types tools/fetch-historical-releases.ts "$RUNNER_TEMP/migration-releases"
+      - name: Test snapshot and account migrations
+        run: |
+          export MESH_HISTORICAL_ARTIFACTS="$RUNNER_TEMP/migration-releases" MESH_HISTORICAL_DYNAMIC=1 MESH_REQUIRE_HISTORICAL_MIGRATION=1
+          export MESH_PYTHON="$(command -v python)" MESH_PTYHOST_CMD="$GITHUB_WORKSPACE/ocaml/_build/install/default/bin/mesh-ptyhost" MESH_CANDIDATE_PLATFORM_CMD="$GITHUB_WORKSPACE/ocaml/_build/install/default/bin/mesh-platform"
+          export MESH_CANDIDATE_PTYHOST_SHA256="$(sha256sum "$MESH_PTYHOST_CMD" | cut -d ' ' -f 1)" MESH_CANDIDATE_PLATFORM_SHA256="$(sha256sum "$MESH_CANDIDATE_PLATFORM_CMD" | cut -d ' ' -f 1)"
+          node --experimental-strip-types --test --test-reporter=tap tests/historical-snapshot-migration.test.ts tests/historical-account-migration.test.ts | tee "$RUNNER_TEMP/historical.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/historical.tap"
+          grep -qx '# pass 4' "$RUNNER_TEMP/historical.tap"

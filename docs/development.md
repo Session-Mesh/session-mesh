@@ -28,6 +28,18 @@ migration, real agent credentials, the release installer or rollback.
 If account-fixture cleanup cannot be confirmed, the test reports and retains its scratch directory
 for inspection instead of removing it or signalling unrelated processes.
 
+The scheduled and manually dispatchable `historical-migrations.yml` downloads the latest published
+stable release and nightly, validates each asset's advertised SHA-256 and size, builds the candidate
+native programs on `main`, and runs the same snapshot and account scenarios. This separate workflow
+reports failures without making mutable release downloads a merge queue dependency. It has no write
+token, and checkout credentials are not retained for the historical
+processes. The checks do not cover installer upgrades, rollback or real provider credentials.
+To reproduce with the current published releases, choose a new absolute directory and run
+`node --experimental-strip-types tools/fetch-historical-releases.ts /absolute/new-directory`, then
+use that path as `MESH_HISTORICAL_ARTIFACTS` and set `MESH_HISTORICAL_DYNAMIC=1` in addition to
+the required candidate binary and digest variables above. The downloader fails on missing, oversized,
+duplicate or digest-mismatched assets; it never silently selects an older release.
+
 `scripts/test-local.sh` runs the complete local suite: the OCaml build and its tests (which
 installs the native PTY host that the other tests start), frontend checks, Node tests, `ruff`, the
 Python suite including browser tests, then the gate of the native PTY host. The tests that start
