@@ -16,7 +16,8 @@ open Ptyhost_blackbox
 let host_argv = ref [||]
 let member = Yojson.Basic.Util.member
 
-type fixture = { home : string; socket_path : string; agent : string }
+type fixture = { home : string; socket_path : string; agent : string;
+                 mutable restart_host : unit -> unit }
 
 (* [graceful]: ends 0.3 s after SIGHUP; [stubborn]: ignores it. A start
    while the previous agent still runs is logged as an overlap. *)
@@ -58,6 +59,7 @@ let with_host ?(grace = "0.5") ?lease_grace f =
         Filename.concat scratch "bin/claude"
         ^ " "
         ^ Filename.concat scratch "bin/agent.sh";
+      restart_host = (fun () -> failwith "host not started");
     }
   in
   List.iter
@@ -71,16 +73,19 @@ let with_host ?(grace = "0.5") ?lease_grace f =
     (file_contents (Unix.realpath "/bin/bash"));
   let shell = Filename.concat scratch "shell.sh" in
   write_shell shell "#!/bin/sh\nexec /bin/sh -i\n";
-  let pid =
-    host
-       (start_host
+  let launch () =
+    host (start_host
           ~environment:([ "MESH_PTYHOST_AGENT_STOP_GRACE=" ^ grace ]
             @ Option.fold ~none:[] ~some:(fun seconds ->
                 [ "MESH_PTYHOST_HUMAN_LEASE_GRACE=" ^ seconds ]) lease_grace)
          !host_argv ~home:fixture.home
          ~runtime:(Filename.concat scratch "run")
-         ~shell)
-  in
+         ~shell) in
+  let pid = ref (launch ()) in
+  fixture.restart_host <- (fun () ->
+      stop !pid;
+      pid := launch ();
+      wait_answering fixture.socket_path);
   Fun.protect
     ~finally:(fun () ->
       let agents = agent_pids fixture in
@@ -88,7 +93,7 @@ let with_host ?(grace = "0.5") ?lease_grace f =
         (fun pid ->
           try Unix.kill (-pid) Sys.sigkill with Unix.Unix_error _ -> ())
         agents;
-      stop pid;
+      stop !pid;
       remove_tree scratch)
     (fun () ->
       wait_answering fixture.socket_path;
@@ -1266,6 +1271,9 @@ let fenced_relaunch () =
       expect "explicit release"
         (member "ok" (switch_fence fixture "switch_input_release" fresh fence_id)
          = `Bool true);
+      expect "retirement survives the changed agent incarnation"
+        (member "reason" (switch_fence fixture "switch_input_acquire" fresh fence_id)
+         = `String "fence_retired");
       let after = attach fixture in
       let replay = ref "" in
       let new_pid = List.nth (agent_pids fixture) 1 in
@@ -1274,6 +1282,64 @@ let fenced_relaunch () =
         contains !replay (Printf.sprintf "agent-start %d /accounts/b" new_pid)));
       Unix.close after;
       expect "no early release left" (List.length (agent_pids fixture) = 2))
+
+let retired_fence_races () =
+  with_host (fun fixture ->
+      let created = member "created" (new_agent fixture) in
+      let receipt = match send fixture [("op", `String "list_bound")] with
+        | `List [session] -> member "creation_receipt" session
+        | _ -> failwith "bound listing" in
+      let fields op id = [ ("op", `String op); ("name", `String "relaunch");
+        ("created", created); ("creation_receipt", receipt); ("fence_id", `String id) ] in
+      let payload = Yojson.Basic.to_string (`Assoc (fields "switch_input_acquire" fence_id)) in
+      let delayed = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      Fun.protect ~finally:(fun () -> Unix.close delayed) (fun () ->
+          Unix.setsockopt_float delayed Unix.SO_RCVTIMEO 5.;
+          Unix.connect delayed (Unix.ADDR_UNIX fixture.socket_path);
+          let header = Bytes.create 5 in
+          Bytes.set header 0 'C'; Bytes.set_int32_be header 1 (Int32.of_int (String.length payload));
+          expect "delayed connection header" (Unix.write delayed header 0 5 = 5);
+          expect "release before delayed acquire" (member "ok" (send fixture (fields "switch_input_release" fence_id)) = `Bool true);
+          expect "duplicate release" (member "ok" (send fixture (fields "switch_input_release" fence_id)) = `Bool true);
+          expect "finish delayed acquire" (Unix.write_substring delayed payload 0 (String.length payload) = String.length payload);
+          let size = Bytes.get_int32_be (read_exactly delayed 5) 1 |> Int32.to_int in
+          let late = Yojson.Basic.from_string (Bytes.to_string (read_exactly delayed size)) in
+          expect "delayed acquire rejected" (member "reason" late = `String "fence_retired"));
+      let owner = "other-owner-0123456789abcdef" in
+      expect "different owner acquires" (member "ok" (send fixture (fields "switch_input_acquire" owner)) = `Bool true);
+      expect "retired owner cannot release new owner" (member "reason" (send fixture (fields "switch_input_release" fence_id)) = `String "fence_mismatch");
+      expect "owner releases" (member "ok" (send fixture (fields "switch_input_release" owner)) = `Bool true);
+      expect "owner release retry" (member "ok" (send fixture (fields "switch_input_release" owner)) = `Bool true);
+      expect "released owner cannot acquire again" (member "reason" (send fixture (fields "switch_input_acquire" owner)) = `String "fence_retired");
+      expect "stale incarnation refused" (member "reason" (send fixture (List.map (fun (k,v) -> if k = "created" then (k, `Float 1.) else (k,v)) (fields "switch_input_release" fence_id))) = `String "stale_incarnation");
+      expect "stale receipt refused" (member "reason" (send fixture (List.map (fun (k,v) -> if k = "creation_receipt" then (k, `String (String.make 64 '0' ^ ":0000000000000001")) else (k,v)) (fields "switch_input_release" fence_id))) = `String "stale_incarnation"))
+
+let retired_fence_capacity () =
+  with_host (fun fixture ->
+      let created = member "created" (new_agent fixture) in
+      for n = 0 to 254 do
+        expect "bounded retirement" (member "ok" (switch_fence fixture "switch_input_release" created (Printf.sprintf "retired-fence-%016d" n)) = `Bool true)
+      done;
+      let last = "last-owner-0123456789abcdef" in
+      expect "last capacity reserved by acquire" (member "ok" (switch_fence fixture "switch_input_acquire" created last) = `Bool true);
+      expect "other release cannot consume reserved slot" (member "reason" (switch_fence fixture "switch_input_release" created "retired-fence-9999999999999999") = `String "fence_mismatch");
+      expect "reserved owner can retire" (member "ok" (switch_fence fixture "switch_input_release" created last) = `Bool true);
+      expect "known retirement remains idempotent" (member "ok" (switch_fence fixture "switch_input_release" created "retired-fence-0000000000000000") = `Bool true);
+      expect "new retirement fails closed at cap" (member "reason" (switch_fence fixture "switch_input_release" created "retired-fence-9999999999999999") = `String "fence_history_full");
+      expect "new acquire fails closed at cap" (member "reason" (switch_fence fixture "switch_input_acquire" created "retired-fence-9999999999999999") = `String "fence_history_full");
+      expect "old retirement still blocks acquire" (member "reason" (switch_fence fixture "switch_input_acquire" created "retired-fence-0000000000000000") = `String "fence_retired"))
+
+let retired_fence_host_restart () =
+  with_host (fun fixture ->
+      let old_created = member "created" (new_agent fixture) in
+      let old_receipt = match send fixture [("op", `String "list_bound")] with
+        | `List [session] -> member "creation_receipt" session | _ -> failwith "old bound listing" in
+      expect "old host release" (member "ok" (switch_fence fixture "switch_input_release" old_created fence_id) = `Bool true);
+      fixture.restart_host ();
+      let fresh = member "created" (new_agent fixture) in
+      let stale = send fixture [ ("op", `String "switch_input_release"); ("name", `String "relaunch");
+            ("created", fresh); ("creation_receipt", old_receipt); ("fence_id", `String fence_id) ] in
+      expect "old host receipt cannot release on restarted host" (member "reason" stale = `String "stale_incarnation"))
 
 let () =
   host_argv := [| Sys.argv.(1) |];
@@ -1308,6 +1374,9 @@ let () =
             pending_launch_is_dropped;
           Alcotest.test_case "switch input fence survives stop/start" `Slow
             fenced_relaunch;
+          Alcotest.test_case "retired fences reject delayed acquire" `Slow retired_fence_races;
+          Alcotest.test_case "retired fence capacity fails closed" `Slow retired_fence_capacity;
+          Alcotest.test_case "old host receipt is stale" `Slow retired_fence_host_restart;
            Alcotest.test_case "acknowledged human input" `Slow
              acknowledged_input;
            Alcotest.test_case "v1 capacity and incarnation" `Slow
