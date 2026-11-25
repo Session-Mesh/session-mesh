@@ -8421,7 +8421,8 @@ async function submitNew(generation) {
     if (generation === newDialogGeneration) showCreatedSession(pending.id);
     return;
   }
-  if (ACCOUNT_PRESETS[form.preset.value] && !newAccountsReady) {
+  if (ACCOUNT_PRESETS[form.preset.value] && !newAccountsReady
+      && (form.preset.value !== "pi" || store.get("account", ""))) {
     $("#new-err").textContent = t(newAccountsFailed ? "new.accountLoadFailed" : "common.loading");
     return;
   }
