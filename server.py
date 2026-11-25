@@ -7373,6 +7373,54 @@ async def _complete_exact(name, entry, marker):
             "previous": {"name": name, "created": entry["created"]}}
 
 
+async def api_restore_rebind(request):
+    """Owner-confirmed binding of an old named offer to one exact native profile."""
+    _require_owner_cookie(request)
+    body = await json_object(request)
+    action = body.get("action")
+    keys = {"action", "expected", "account"}
+    if action == "confirm":
+        keys |= {"offer_digest", "context_revision"}
+    if action not in ("preview", "confirm") or set(body) != keys or not _accounts_id(body.get("account")):
+        raise web.HTTPBadRequest(text="Invalid request")
+    try:
+        expected = respawn.parse_expected(body["expected"])
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    if (expected["agent_kind"] not in ("claude", "codex") or not expected["resume_id"]
+            or (action == "confirm" and (not _accounts_digest(body["offer_digest"])
+                                         or not _accounts_digest(body["context_revision"])) )):
+        raise web.HTTPBadRequest(text="Invalid request")
+    async with request.app["restore_lock"]:
+        async with request.app["organisation_lock"]:
+            entry = await asyncio.to_thread(respawn.lost_entry, expected["name"])
+            if (entry is None or respawn.offer_mismatch(entry, expected) or not entry.get("account")
+                    or entry.get("account_context_revision") or entry.get("restoring")):
+                raise web.HTTPConflict(text="The offer is not the expected one")
+            digest = hashlib.sha256(json.dumps(entry, sort_keys=True, separators=(",", ":"),
+                                               ensure_ascii=True).encode()).hexdigest()
+            if action == "confirm" and digest != body["offer_digest"]:
+                raise web.HTTPConflict(text="The offer is not the expected one")
+            revision = body.get("context_revision")
+            context = await _profile_launch_context(body["account"], expected["agent_kind"], revision)
+            if context is None:
+                raise web.HTTPConflict(text="Account profile context unknown; resume refused")
+            _, _, data, pattern = _conversation_layout(expected["agent_kind"], expected["resume_id"])
+            if not await asyncio.to_thread(_conversation_found_in_root, context["roots"]["config"], data, pattern):
+                raise web.HTTPConflict(text="Bound account conversation unavailable; restore refused")
+            if action == "confirm":
+                await _profile_launch_context(body["account"], expected["agent_kind"], revision)
+                try:
+                    await asyncio.to_thread(respawn.rebind_offer, expected, entry, body["account"], revision)
+                except LookupError as exc:
+                    raise web.HTTPConflict(text="The offer is not the expected one") from exc
+            return web.json_response({"ok": True, "action": action, "expected": expected,
+                                      "previous_account": entry["account"], "account": body["account"],
+                                      "label": context["label"], "config_root": context["roots"]["config"],
+                                      "context_revision": context["context_revision"], "offer_digest": digest},
+                                     headers={"Cache-Control": "no-store"})
+
+
 async def api_restore_discard(request):
     names = await names_body(request)
     async with request.app["organisation_lock"]:
@@ -8120,6 +8168,7 @@ def make_app(*, session_request_path=None):
     app.router.add_put("/api/board/{name}", api_board_put)
     app.router.add_post("/api/organize", api_organize)
     app.router.add_post("/api/restore", api_restore)
+    app.router.add_post("/api/restore/rebind", api_restore_rebind)
     app.router.add_post("/api/restore/discard", api_restore_discard)
     app.router.add_post("/api/upload", api_upload)
     app.router.add_post("/api/view", view.api_view)
