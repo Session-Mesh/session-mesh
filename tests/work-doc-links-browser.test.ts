@@ -248,6 +248,12 @@ describe('links and documents in the Projects view', { skip }, () => {
     await close.click();
     await panel(page).waitFor({ state: 'hidden' });
     assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.className), 'work-doc-link');
+    await openTaskSheet(page);
+    await page.locator('.work-detail-pane .work-detail-item').getByRole('button', { name: /outside\.md/ }).click();
+    await panel(page).locator('.work-doc-unavailable').waitFor();
+    assert.equal(await panel(page).locator('iframe').count(), 0);
+    assert.equal(await panel(page).locator('.work-doc-newtab').isHidden(), true);
+    await noOverflow(page);
     assert.deepEqual(await messages(), []);
     assert.deepEqual(problems, []);
   });
