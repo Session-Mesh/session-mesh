@@ -8780,6 +8780,8 @@ function suspendLocalPage() {
     name: pane.conn.name, created: pane.conn.created});
   meshPageCache = {bindings: [...bindings.values()], focus: document.activeElement};
   meshPageSuspended = true; meshPageEpoch++;
+  disposeBackendAccountSettings();
+  flowGeneration++; flowController?.close();
   projectsGeneration++; workGeneration++;
   projectsController?.close(); workController?.close();
   inventoryPoller?.stop(); listBatch.cancel(); pageSignals?.dispose();
@@ -8794,13 +8796,15 @@ function suspendLocalPage() {
 }
 async function resumeLocalPage() {
   if (!meshPageSuspended || meshStopped || meshPageFinal || !meshPageCache) return;
-  const epoch = meshPageEpoch, context = meshContext;
+  const epoch = meshPageEpoch, context = meshContext, flowTurn = flowGeneration;
   meshPageCache.focusRevision = meshCacheFocusRevision;
   meshPageSuspended = false;
+  void startBackendAccountSettings();
   renderComposeStatus(); listBatch.request();
   await startInventory(context, true);
   if (!localMeshEffectsAllowed() || meshPageFinal || meshContext !== context || epoch !== meshPageEpoch) return;
   if (projecting) openProjectsPresentation();
+  if (flowing && flowTurn === flowGeneration) void setFlow(true);
 }
 function restorePendingCachedTerminals() {
   if (!meshPageCache || !localMeshEffectsAllowed() || meshPageFinal) return;

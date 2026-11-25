@@ -416,11 +416,15 @@ let session_json ?(relaunch = true) s =
       ("attached", `Int (List.length s.clients));
       ( "pty_capabilities",
         `List
-          ([ `String "agent_wake_v1"; `String "human_input_lease_v1";
-             conditional_input_capability ]
-          @ if relaunch then
-              [ `String "agent_relaunch_v1"; `String "agent_relaunch_bound_v1" ]
-            else []) );
+           ([
+              `String "agent_wake_v1";
+              `String "human_input_lease_v1";
+              conditional_input_capability;
+            ]
+           @
+           if relaunch then
+             [ `String "agent_relaunch_v1"; `String "agent_relaunch_bound_v1" ]
+           else []) );
     ]
 
 (* A dirty human-input lease defers agent wakes. Its client may never come
@@ -1945,7 +1949,9 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach ?incarnatio
           | _ -> ());
           input ())
         else if frame.kind = 'D' then (
-          if s.agent_stopping || !holding then (
+          (* Legacy sockets retain main's stop-window queue. Conditional
+             sockets must never defer bytes beyond their admission fence. *)
+          if Option.is_none incarnation && (s.agent_stopping || !holding) then (
             if String.length frame.payload <= (8 * 1024 * 1024) - !held_bytes then (
               let epoch = if s.agent_stopping then s.stop_input_epoch else s.input_signal_epoch in
               Queue.add (s.created, epoch, frame.payload) held_input;
@@ -1960,9 +1966,9 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach ?incarnatio
                   in
                   wait ();
                   while not (Queue.is_empty held_input) do
-                    let incarnation, epoch, payload = Queue.take held_input in
+                    let created, epoch, payload = Queue.take held_input in
                     held_bytes := !held_bytes - String.length payload;
-                    if not s.finishing && s.created = incarnation && s.input_signal_epoch = epoch then (
+                    if not s.finishing && s.created = created && s.input_signal_epoch = epoch then (
                       s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);
                       if Mesh_pty_input.enqueue s.input payload then
                         observe observer env (Observe.Input (String.length payload)))
