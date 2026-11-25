@@ -29,7 +29,8 @@ PROCESS_AGENTS = {"vibe-rs": "vibe"}
 
 def _pi_sessions(session_dir=None):
     base = os.environ.get("PI_CODING_AGENT_DIR") or f"{HOME}/.pi/agent"
-    return glob.glob(f"{session_dir or os.path.expanduser(base) + '/sessions'}/*/*.jsonl")
+    directory = session_dir if session_dir is not None else os.path.expanduser(base) + "/sessions"
+    return glob.glob(f"{glob.escape(directory)}/*/*.jsonl")
 
 
 # ---------------------------------------------------------------- /proc
@@ -1067,7 +1068,7 @@ def _another_pi_may_run_in(pid, here):
                for other, stat in procs.items())
 
 
-def pi_info(pid):
+def pi_info(pid, session_dir=None):
     info = {"type": "pi"}
     here, started = cwd(pid), proc_start(pid)
     if not here:
@@ -1075,7 +1076,10 @@ def pi_info(pid):
     if _another_pi_may_run_in(pid, here):
         return info
     candidates = []
-    for path in _pi_sessions():
+    if session_dir is not None and (not isinstance(session_dir, str) or not os.path.isabs(session_dir)):
+        return info
+    paths = _pi_sessions() if session_dir is None else _pi_sessions(session_dir)
+    for path in paths:
         header = _pi_header(path)
         if not header or header["cwd"] != here:
             continue
