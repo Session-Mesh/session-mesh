@@ -3,13 +3,13 @@
 
 // Real HTTP, resolver and PTY host; recording CLIs, not provider or resumability qualification.
 import assert from 'node:assert/strict';
-import {spawn, spawnSync, type ChildProcess} from 'node:child_process';
-import {once} from 'node:events';
+import {spawnSync} from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {test} from 'node:test';
 import {REPO, startMesh} from './mesh-server-lib.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {startTestPtyhost} from './helpers/managed-test-ptyhost.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
 const platform = process.env.MESH_MESH_PLATFORM_CMD ||
@@ -34,7 +34,7 @@ test('normal helper refuses managed creation and does not offer a host-provision
     fs.mkdirSync(where.confDir, {recursive: true, mode: 0o700});
     assert.deepEqual(fs.readdirSync(where.confDir), []);
   });
-  let host: ChildProcess | undefined;
+  let host: ReturnType<typeof startTestPtyhost> | undefined;
   const registry = path.join(mesh.confDir, 'backend-profiles.json');
   const socket = path.join(mesh.home, 'run/session-mesh/ptyhost.sock');
   try {
@@ -48,10 +48,10 @@ test('normal helper refuses managed creation and does not offer a host-provision
       return JSON.parse(result.stdout);
     };
     const argv = nativePtyhost();
-    host = spawn(argv[0], argv.slice(1), {cwd: REPO, stdio: 'ignore',
+    host = startTestPtyhost(argv, {cwd: REPO, stdio: 'ignore',
       env: {HOME: mesh.home, PATH: '/usr/bin:/bin', SHELL: '/bin/sh', LANG: 'C.UTF-8',
-        XDG_RUNTIME_DIR: path.join(mesh.home, 'run')}});
-    await waitFor('private native host', 10000, () => request(socket, {op: 'list'}).then(() => true, () => false));
+        XDG_RUNTIME_DIR: path.join(mesh.home, 'run')}}, socket);
+    await host.ready;
     const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({token: mesh.token()})});
     const cookie = login.headers.get('set-cookie')?.split(';')[0]; assert.ok(cookie);
@@ -116,10 +116,7 @@ test('normal helper refuses managed creation and does not offer a host-provision
     assert.deepEqual(await request(socket, {op: 'list'}), []);
 
   } finally {
-    if (host && host.exitCode === null && host.signalCode === null) {
-      const closed = once(host, 'close'); host.kill('SIGKILL'); await closed;
-    }
-    await mesh.stop();
+    try { await host?.stop(); } finally { await mesh.stop(); }
   }
 });
 
@@ -181,14 +178,14 @@ setTimeout(() => {}, 30000);
     where.env.MESH_BIN_DIR = bin;
     where.env.SHELL = '/bin/sh';
   });
-  let host: ChildProcess | undefined;
+  let host: ReturnType<typeof startTestPtyhost> | undefined;
   const socket = path.join(mesh.home, 'run/session-mesh/ptyhost.sock');
   try {
     const argv = nativePtyhost();
-    host = spawn(argv[0], argv.slice(1), {cwd: REPO, stdio: 'ignore',
+    host = startTestPtyhost(argv, {cwd: REPO, stdio: 'ignore',
       env: {HOME: mesh.home, PATH: `${bin}:/usr/bin:/bin`, SHELL: '/bin/sh', LANG: 'C.UTF-8',
-        XDG_RUNTIME_DIR: path.join(mesh.home, 'run')}});
-    await waitFor('private native host', 10000, () => request(socket, {op: 'list'}).then(() => true, () => false));
+        XDG_RUNTIME_DIR: path.join(mesh.home, 'run')}}, socket);
+    await host.ready;
     const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
       body: new URLSearchParams({token: mesh.token()})});
@@ -235,11 +232,6 @@ setTimeout(() => {}, 30000);
       assert.match(session.meta.account_context_revision!, /^[a-f0-9]{64}$/);
     }
   } finally {
-    if (host && host.exitCode === null && host.signalCode === null) {
-      const closed = once(host, 'close');
-      host.kill('SIGKILL');
-      await closed;
-    }
-    await mesh.stop();
+    try { await host?.stop(); } finally { await mesh.stop(); }
   }
 });
