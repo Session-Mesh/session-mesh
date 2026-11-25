@@ -231,7 +231,7 @@ describe('the public CI as committed', () => {
     });
 
     test(`${name} gives the Node tests a bash 3.2 (MESH_BASH32), so the installer parse test runs`, () => {
-      const frontend = jobBlocks(parseLines(text)).find((job) => job.name === 'frontend');
+      const frontend = jobBlocks(parseLines(text)).find((job) => job.name === 'frontend_parts');
       assert.ok(frontend, 'no frontend job');
       const raw = frontend.block.map((line) => line.raw);
       const exported = raw.findIndex((line) => line.includes('echo "MESH_BASH32=$wrapper" >> "$GITHUB_ENV"'));
@@ -259,7 +259,7 @@ describe('the public CI as committed', () => {
     // The Node tests that start server.py (MESH_PYTHON) and the demo compiler test (bubblewrap)
     // find what they need in the job that runs them, set up before they run.
     test(`${name} gives the Node tests their Python and a working bubblewrap`, () => {
-      const runner = 'node --experimental-strip-types --test --test-concurrency=4 "${files[@]}"';
+      const runner = 'node --experimental-strip-types --test --test-concurrency=4 "${selected[@]}"';
       const job = jobBlocks(parseLines(text)).find((item) => item.block.some((line) => line.raw.includes(runner)));
       assert.ok(job, 'no job runs the Node test files');
       const body = job.block.map((line) => line.raw).join('\n');
@@ -347,6 +347,32 @@ describe('the public CI as committed', () => {
       assert.equal(new Set(pythonShards.flat()).size, 5);
     });
 
+    test(`${name} partitions all Node files and gates the required check`, () => {
+      const jobs = jobBlocks(parseLines(text));
+      const body = (id: string) => jobs.find(job => job.name === id)!.block.map(line => line.raw).join('\n');
+      const parts = body('frontend_parts'), gate = body('frontend');
+      assert.match(parts, /shard: \[0, 1\]/);
+      assert.match(parts, /fail-fast: false/);
+      assert.match(parts, /i % 2 == shard/);
+      assert.match(parts, /\$\{#selected\[@\]\} > 0/);
+      assert.match(gate, /name: frontend and Node tests/);
+      assert.match(gate, /needs: frontend_parts/);
+      assert.match(gate, /if: always\(\)/);
+      const guard = (gate + '\n').match(/run: \|\n((?:          .*\n)+)/)?.[1];
+      assert.ok(guard);
+      for (const [result, status] of [['success', 0], ['failure', 1], ['skipped', 1], ['cancelled', 1]]) {
+        assert.equal(spawnSync('bash', ['-c', guard], {env: {...process.env, PARTS_RESULT: String(result)}}).status, status);
+      }
+      const script = `mapfile -d '' files < <(find tests -type f \\( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \\) -not -path '*/node_modules/*' -print0 | sort -z)
+        selected=(); for i in "\${!files[@]}"; do if (( i % 2 == shard )); then selected+=("\${files[i]}"); fi; done
+        printf '%s\\0' "\${selected[@]}"`;
+      const all = spawnSync('bash', ['-c', "find tests -type f \\( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \\) -not -path '*/node_modules/*' -print0 | sort -z"], {cwd: ROOT}).stdout.toString().split('\0').filter(Boolean);
+      const shards = [0, 1].map(shard => spawnSync('bash', ['-c', script], {cwd: ROOT, env: {...process.env, shard: String(shard)}}).stdout.toString().split('\0').filter(Boolean));
+      assert.ok(shards.every(shard => shard.length > 0));
+      assert.deepEqual(shards.flat().sort(), all.sort());
+      assert.equal(new Set(shards.flat()).size, all.length);
+    });
+
     test(`${name} runs the native catalog ratchet in the job that builds the native host`, () => {
       const job = jobBlocks(parseLines(text)).find((item) => item.block.some((line) => line.raw.includes('scripts/test-ptyhost-t41.sh')));
       assert.ok(job, 'no job builds the native host');
@@ -385,7 +411,7 @@ describe('the public CI as committed', () => {
         'key: native-programs-']) {
         assert.ok(native.includes(needle), `${needle} missing from the native job`);
       }
-      for (const jobName of ['frontend', 'browser_parts']) {
+      for (const jobName of ['frontend_parts', 'browser_parts']) {
         const job = body(jobName);
         for (const needle of ['name: mesh-work-programs-linux-x86_64', 'MESH_WORK_READ_CMD=$RUNNER_TEMP/native-work/work-read',
           'MESH_WORK_WRITE_CMD=$RUNNER_TEMP/native-work/work-write', 'MESH_REQUIRE_WORK_READ=1']) {
@@ -408,7 +434,7 @@ describe('the public CI as committed', () => {
         'test -x native-host/mesh-platform', '            native-host/mesh-platform', 'key: native-programs-v3-']) {
         assert.ok(native.includes(needle), `${needle} missing from the native job`);
       }
-      for (const jobName of ['frontend', 'browser_parts']) {
+      for (const jobName of ['frontend_parts', 'browser_parts']) {
         const job = body(jobName);
         for (const needle of ['MESH_MESH_PLATFORM_CMD=$RUNNER_TEMP/native-work/mesh-platform', 'MESH_REQUIRE_MESH_PLATFORM=1',
           'MESH_REQUIRE_UPDATE_IMAGE=1']) {
@@ -431,7 +457,7 @@ describe('the public CI as committed', () => {
         'test -x native-host/mesh-profile', '            native-host/mesh-profile', 'key: native-programs-v3-']) {
         assert.ok(native.includes(needle), `${needle} missing from the native job`);
       }
-      const frontend = body('frontend');
+      const frontend = body('frontend_parts');
       for (const needle of ['"$RUNNER_TEMP/native-work/mesh-profile"', 'MESH_PROFILE_CMD=$RUNNER_TEMP/native-work/mesh-profile',
         'MESH_REQUIRE_MESH_PROFILE=1']) {
         assert.ok(frontend.includes(needle), `${needle} missing from the frontend job`);
