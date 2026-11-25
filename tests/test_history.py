@@ -11,13 +11,23 @@ from pathlib import Path
 import pytest
 
 import agentmcp
-import conversation_names
+import fsutil
 import history
+import meshpaths
 import resumeargs
 import server
 
 SID = "0a1b2c3d-1111-2222-3333-444455556666"
 CODEX_SID = "019a0000-aaaa-bbbb-cccc-ddddeeeeffff"
+
+
+async def test_live_where_distinguishes_agents_with_same_conversation_id(monkeypatch):
+    current = {"kind": "mesh", "agent": {"type": "codex", "session_id": SID}}
+    async def sessions():
+        return {"mesh": [current], "external": []}
+    monkeypatch.setattr(server, "sessions", sessions)
+    assert await server.live_where(SID, "codex") == current
+    assert await server.live_where(SID, "claude") is None
 
 
 def _claude_lines(sid, cwd, text="hello there"):
@@ -414,19 +424,19 @@ async def test_delete_removes_transcript_and_claude_extras(hist, client, auth_co
     keep.mkdir()
     _age(p)
     history.refresh()
-    monkeypatch.setattr(conversation_names, "FILE", hist.root / "conversation-names.json")
-    conversation_names.observe([
+    monkeypatch.setattr(meshpaths, "CONF_DIR", hist.root)
+    fsutil.conversation_request("observe", sessions=[
         {"name": "delete-fixture", "created": 1, "label": "Named before delete",
          "agent": {"type": "claude", "session_id": SID, "identity_source": "pid_metadata"}},
         {"name": "keep-other-agent", "created": 2,
          "agent": {"type": "codex", "session_id": SID, "identity_source": "open_rollout"}},
     ])
-    conversation_names.close("delete-fixture", 1)
+    fsutil.conversation_request("close", name="delete-fixture", created=1)
     resp = await client.delete(f"/api/history/claude/{SID}", headers=auth_cookie)
     assert resp.status == 200, await resp.text()
     assert not p.exists() and not (p.parent / SID).exists() and not fh.exists() and keep.exists()
     assert history.listing()[0] == []
-    bindings = conversation_names.snapshot()
+    bindings = fsutil.conversation_request("snapshot")
     assert len(bindings) == 1 and bindings[0]["agent"] == "codex"
     resp = await client.delete(f"/api/history/claude/{SID}", headers=auth_cookie)
     assert resp.status == 404

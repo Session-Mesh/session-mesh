@@ -49,7 +49,7 @@ async function start(extra: Record<string, string>): Promise<Running> {
     XDG_CACHE_HOME: path.join(temp, 'cache'), XDG_DATA_HOME: path.join(temp, 'data'), XDG_RUNTIME_DIR: runtime,
     MESH_CONF_DIR: conf, MESH_CACHE_DIR: path.join(temp, 'cache'), MESH_RUNTIME_DIR: runtime,
     MESH_HOST: '127.0.0.1', MESH_PORT: String(port), MESH_AUTH_MODE: 'legacy', PYTHONDONTWRITEBYTECODE: '1',
-    WL_HOME: wl, MESH_WORK_READ_CMD: READER,
+    WL_HOME: wl, MESH_WORK_READ_CMD: READER, MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD,
     // Generous by default: a loaded machine must not turn a real read into a 504.
     MESH_WORK_READ_TIMEOUT: process.env.MESH_WORK_READ_TIMEOUT ?? '10', ...extra,
   };

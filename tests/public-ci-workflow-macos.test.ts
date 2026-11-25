@@ -110,6 +110,10 @@ describe('the informational macOS job', () => {
     assert.doesNotMatch(body, /chromium|playwright|requirements-browser|MESH_CHROMIUM/i);
   });
 
+  test('selects the installed native conversation registry for server tests', () => {
+    assert.ok(macosBody().includes('MESH_MESH_HISTORY_CMD=$bin/mesh-history'));
+  });
+
   test('saves its opam state from main only, as the Linux job does, and keys it on the pins', () => {
     const body = macosBody();
     const guard = "if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && " +

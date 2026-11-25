@@ -3,7 +3,9 @@
 
 """Small file helpers shared by the mesh's state files."""
 
+import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -67,3 +69,41 @@ def read_bounded(path, max_bytes):
     with Path(path).expanduser().open("rb") as handle:
         data = handle.read(max_bytes + 1)
     return None if len(data) > max_bytes else data.decode("utf-8")
+
+
+def helper_command(program):
+    """Resolve an installation-owned executable or its explicit absolute override."""
+    import agentmcp
+
+    if (explicit := os.environ.get(f"MESH_{program.upper().replace('-', '_')}_CMD")) is not None:
+        return explicit if os.path.isabs(explicit) and os.path.isfile(explicit) else None
+    dirs = [agentmcp.runtime_bin()] + ([] if os.environ.get("MESH_BIN_DIR") else [agentmcp.switch_bin()])
+    return next((str(d / program) for d in dirs if (d / program).is_file()), None)
+
+
+def conversation_request(op, **fields):
+    """Exchange one newline-terminated frame. A failed reply may follow a committed write."""
+    import meshpaths
+
+    command = helper_command("mesh-history")
+    if command is None:
+        raise RuntimeError("mesh-history with conversation-name support is required")
+    request = {"version": 1, "op": op, **fields}
+    body = json.dumps(request, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
+    run = subprocess.run([command, "--conversation-names"], input=body + b"\n", stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, cwd="/",
+                         env={"MESH_CONF_DIR": str(meshpaths.CONF_DIR), "PATH": "/usr/bin:/bin",
+                              "MESH_CONVERSATION_PARENT_PID": str(os.getpid())})
+    frame = run.stdout
+    if run.returncode or not frame.endswith(b"\n") or frame.count(b"\n") != 1:
+        raise RuntimeError("invalid mesh-history conversation-name response")
+    try:
+        response = json.loads(frame.decode())
+    except ValueError:
+        raise RuntimeError("invalid mesh-history conversation-name response") from None
+    if (not isinstance(response, dict) or type(response.get("version")) is not int
+            or response["version"] != 1):
+        raise RuntimeError("incompatible mesh-history conversation-name response")
+    if set(response) != {"version", "result"}:
+        raise RuntimeError("mesh-history conversation-name operation failed or helper is incompatible")
+    return response["result"]

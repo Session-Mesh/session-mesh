@@ -21,8 +21,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 import board
-import conversation_names
 import management
+import meshpaths
 import opens
 import organize
 import respawn
@@ -184,7 +184,8 @@ def _reset_mesh_state():
     next page's layout before its own setup starts. Clear those fixtures at
     setup time, after the prior page and test server are already gone.
     """
-    for path in (board.FILE, conversation_names.FILE, management.FILE, organize.FILE, respawn.FILE):
+    names_file = meshpaths.CONF_DIR / "conversation-names.json"
+    for path in (board.FILE, names_file, management.FILE, organize.FILE, respawn.FILE):
         path.unlink(missing_ok=True)
     management.reset_for_tests()
     opens.OPENS.clear()

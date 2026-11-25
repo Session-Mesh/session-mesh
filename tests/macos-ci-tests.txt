@@ -205,7 +205,6 @@ tests/test_claudewake_server.py
 tests/test_client_version.py
 tests/test_codeview.py
 tests/test_codeview_subresources.py
-tests/test_conversation_names.py
 tests/test_demo_scene.py
 tests/test_discover_foreground.py
 tests/test_discover_said.py

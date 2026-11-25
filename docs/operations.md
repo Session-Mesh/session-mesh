@@ -1174,6 +1174,12 @@ process). Removing it loses nothing: it is rebuilt at the next listing. A transc
 but cannot be opened (permission, descriptor limit) no longer aborts the listing: that one session
 shows `updated` 0 and, for Codex, idle, until it can be read.
 
+The web server also uses `mesh-history` for the separate conversation-name registry in the
+configuration directory. This native helper is required for session listings, renames and History
+name operations, even when the optional History database is disabled. Install it with the other
+native programs using `scripts/bootstrap.sh`, or use the bundled release. If the helper is missing
+or incompatible, those operations report an error rather than changing the registry themselves.
+
 - **Helper stopped.** The log line `history: database helper stopped: <reason>` means the helper
   failed (timeout, locked or corrupt file). The in-memory index and ripgrep answer meanwhile, and
   the helper is started again after 30 s.
