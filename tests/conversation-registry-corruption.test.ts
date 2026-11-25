@@ -32,15 +32,15 @@ test('corrupt names do not block rename, recovery snapshots or conditional stop'
   });
 });
 
-test('a filesystem error remains visible and does not authorize a conditional stop', async () => {
+test('a lock error remains visible and does not authorize a conditional stop', async () => {
   await withHistoryLab(async lab => {
     const session = await lab.create('claude');
-    const registry = path.join(lab.where.confDir, file);
-    fs.unlinkSync(registry);
-    fs.mkdirSync(registry);
+    const lock = path.join(lab.where.confDir, 'conversation-names.lock');
+    fs.unlinkSync(lock);
+    fs.mkdirSync(lock);
     const stopped = await lab.call('POST', '/api/kill/' + session.name, {created: session.created});
     assert.equal(stopped.status, 500, stopped.text);
-    assert.ok(fs.statSync(registry).isDirectory());
+    assert.ok(fs.statSync(lock).isDirectory());
     assert.match(lab.serverOutput(), /conversation-name operation failed/);
   });
 });

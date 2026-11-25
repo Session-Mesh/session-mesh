@@ -111,7 +111,7 @@ let load clock = function
   | Store.Contents contents ->
       Conversation_codec.decode_with_clock ~clock:(fun () -> time_as_float (clock ())) contents
   | Store.Missing -> Some []
-  | Store.Unreadable error -> raise (Unix.Unix_error (error, "read registry", ""))
+  | Store.Unreadable _ -> None
 
 let changes result =
   if result.Mutations.dirty then Some (Conversation_codec.encode result.entries)

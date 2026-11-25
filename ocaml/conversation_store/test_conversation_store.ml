@@ -68,6 +68,7 @@ let failure () =
       expect_contents "after failure" path)
 
 external flock_try : Unix.file_descr -> bool = "mesh_worklog_flock_try"
+external int_of_descriptor : Unix.file_descr -> int = "%identity"
 
 let receive_signal fd =
   let ready, _, _ = Unix.select [fd] [] [] 5. in
@@ -177,10 +178,20 @@ let interoperability () =
 
 let helper = Sys.argv.(1)
 
-let parent_guard ~kill_parent () =
+let parent_guard ~kill_parent ~wrapped () =
   with_registry (fun path lock ->
       transact ~path (fun _ -> (), Some "[]\n");
       let dir = Filename.dirname path in
+      let executable =
+        if not wrapped then helper
+        else (
+          let wrapper = Filename.concat dir "wrapper" in
+          Out_channel.with_open_text wrapper (fun out ->
+              Printf.fprintf out "#!/bin/sh\n%s \"$@\"\nstatus=$?\nexit \"$status\"\n"
+                (Filename.quote helper));
+          Unix.chmod wrapper 0o700;
+          wrapper)
+      in
       let frame_path = Filename.concat dir "frame" in
       Out_channel.with_open_bin frame_path (fun out ->
           output_string out
@@ -198,20 +209,26 @@ let parent_guard ~kill_parent () =
               let code =
                 try
                   let frame = Unix.openfile frame_path [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
+                  let life_read, life_write = Unix.pipe ~cloexec:true () in
+                  let info = Unix.fstat life_read in
+                  Unix.clear_close_on_exec life_read;
+                  let life = Printf.sprintf "%d:%d:%d" (int_of_descriptor life_read)
+                      info.Unix.st_dev info.Unix.st_ino in
                   let helper_pid =
                     Fun.protect ~finally:(fun () -> Unix.close frame) (fun () ->
-                        Unix.create_process_env helper [|helper; "--conversation-names"|]
+                        Unix.create_process_env executable [|executable; "--conversation-names"|]
                           [|"MESH_CONF_DIR=" ^ dir;
-                            "MESH_CONVERSATION_PARENT_PID=" ^ string_of_int (Unix.getpid ())|]
+                            "MESH_CONVERSATION_LIFELINE=" ^ life|]
                           frame response_write Unix.stderr)
                   in
+                  Unix.close life_read;
                   Unix.close response_write;
                   let pids = Unix.out_channel_of_descr pid_write in
                   Printf.fprintf pids "%d\n" helper_pid;
                   close_out pids;
-                  match snd (Unix.waitpid [] helper_pid) with
-                  | Unix.WEXITED code -> code
-                  | _ -> 1
+                  let status = snd (Unix.waitpid [] helper_pid) in
+                  Unix.close life_write;
+                  match status with Unix.WEXITED code -> code | _ -> 1
                 with _ -> 1
               in
               Unix._exit code
@@ -278,8 +295,12 @@ let () =
       Alcotest.test_case "post-commit result" `Quick post_commit;
       Alcotest.test_case "BSD flock interoperability" `Quick interoperability;
       Alcotest.test_case "helper exits when its parent dies while waiting" `Quick
-        (parent_guard ~kill_parent:true);
+        (parent_guard ~kill_parent:true ~wrapped:false);
       Alcotest.test_case "helper waits and commits while its parent lives" `Quick
-        (parent_guard ~kill_parent:false);
+        (parent_guard ~kill_parent:false ~wrapped:false);
+      Alcotest.test_case "wrapped helper exits when its parent dies while waiting" `Quick
+        (parent_guard ~kill_parent:true ~wrapped:true);
+      Alcotest.test_case "wrapped helper commits while its parent lives" `Quick
+        (parent_guard ~kill_parent:false ~wrapped:true);
     ];
   ]

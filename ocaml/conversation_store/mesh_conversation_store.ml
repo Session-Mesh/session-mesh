@@ -12,18 +12,52 @@ type source =
 
 exception Parent_exited
 
-(* Only the server's one-shot subprocess supplies this environment variable.
-   Checking getppid also detects reparenting while the original PID is a zombie. *)
+(* Unix represents descriptors as integers on both supported platforms. The
+   inherited descriptor is checked against its pipe identity before use. *)
+external descriptor_of_int : int -> Unix.file_descr = "%identity"
+
+(* Only the server's one-shot subprocess supplies the pipe. The server owns
+   its write end, so EOF means the original caller is gone, even through a
+   non-exec wrapper. An absent/replaced descriptor must fail closed. *)
 let parent_guard () =
-  match Sys.getenv_opt "MESH_CONVERSATION_PARENT_PID" with
+  match Sys.getenv_opt "MESH_CONVERSATION_LIFELINE" with
   | None -> ignore
   | Some value ->
-      let pid =
-        match int_of_string_opt value with
-        | Some pid when pid > 0 -> pid
-        | _ -> invalid_arg "invalid conversation-name parent PID"
+      let number, device, inode =
+        match String.split_on_char ':' value with
+        | [number; device; inode] -> (
+            match int_of_string_opt number, int_of_string_opt device, int_of_string_opt inode with
+            | Some number, Some device, Some inode when number > 2 -> number, device, inode
+            | _ -> raise Parent_exited)
+        | _ -> raise Parent_exited
       in
-      fun () -> if Unix.getppid () <> pid then raise Parent_exited
+      let matches number =
+        try
+          let stat = Unix.fstat (descriptor_of_int number) in
+          stat.st_kind = Unix.S_FIFO && stat.st_dev = device && stat.st_ino = inode
+        with Unix.Unix_error _ -> false
+      in
+      (* Some wrappers move inherited descriptors. Check the original number
+         first; only scan when a wrapper changed it, matching the pipe itself
+         rather than trusting any unrelated descriptor with the same number. *)
+      let rec find number =
+        if number > 4095 then raise Parent_exited
+        else if matches number then number else find (number + 1)
+      in
+      let fd = descriptor_of_int (if matches number then number else find 3) in
+      (try
+         Unix.set_nonblock fd;
+         Unix.set_close_on_exec fd
+       with Unix.Unix_error _ -> raise Parent_exited);
+      let byte = Bytes.create 1 in
+      let rec check () =
+        match Unix.read fd byte 0 1 with
+        | _ -> raise Parent_exited
+        | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) -> ()
+        | exception Unix.Unix_error (Unix.EINTR, _, _) -> check ()
+        | exception Unix.Unix_error _ -> raise Parent_exited
+      in
+      check
 
 (* Reuse the BSD flock binding linked by mesh_worklog. Unix.lockf takes a
    different lock on Linux, so it cannot coordinate with the existing writer. *)

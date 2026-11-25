@@ -99,11 +99,24 @@ def conversation_request(op, **fields):
         raise RuntimeError("mesh-history with conversation-name support is required")
     request = {"version": 1, "op": op, **fields}
     body = json.dumps(request, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
-    run = subprocess.run([command, "--conversation-names"], input=body + b"\n", stdout=subprocess.PIPE,
-                         stderr=subprocess.DEVNULL, cwd="/",
-                         env={"MESH_CONF_DIR": str(meshpaths.CONF_DIR), "PATH": "/usr/bin:/bin",
-                              "MESH_CONVERSATION_PARENT_PID": str(os.getpid())})
+    # The helper can be launched through a wrapper, so its immediate parent is
+    # not necessarily this server. Only this process keeps the write end: EOF
+    # tells the helper to abandon a pending mutation when the server dies.
+    life_read, life_write = os.pipe()
+    try:
+        info = os.fstat(life_read)
+        run = subprocess.run([command, "--conversation-names"], input=body + b"\n", stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, cwd="/", pass_fds=(life_read,),
+                             env={"MESH_CONF_DIR": str(meshpaths.CONF_DIR), "PATH": "/usr/bin:/bin",
+                                  "MESH_CONVERSATION_LIFELINE": f"{life_read}:{info.st_dev}:{info.st_ino}"})
+    finally:
+        try:
+            os.close(life_read)
+        finally:
+            os.close(life_write)
     frame = run.stdout
+    if run.returncode == 75:
+        raise RuntimeError("mesh-history conversation-name lifetime signal unavailable")
     if run.returncode or not frame.endswith(b"\n") or frame.count(b"\n") != 1:
         raise RuntimeError("invalid mesh-history conversation-name response")
     try:
