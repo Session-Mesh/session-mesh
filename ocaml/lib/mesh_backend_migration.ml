@@ -843,7 +843,8 @@ let recover_created_profile ~root =
               | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true
               | _ -> false
             in
-            if not (absent (marker root) && absent (intent root)) then fail ()
+            if not (absent (marker root) && absent (intent root)
+                    && absent (legacy_switch_marker root)) then fail ()
             else
               let record = read_first_intent root in
               let destination = target root in
@@ -1034,6 +1035,11 @@ let create_profile ~root ~expected_revision ~profile =
   in
   (* Hold the lock for the entire operation, not merely the initial check. *)
   let run () =
+    let* () =
+      match Unix.lstat (legacy_switch_marker root) with
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
+      | _ -> fail "profile-migration-required"
+    in
     let* () =
       match Unix.lstat (first_intent root) with
       | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
