@@ -7,11 +7,12 @@ import {runHistoryServer} from './history-resume-name-lib.ts';
 import {listenerReady, removeScratch, scratchHome, stopServer} from './mesh-server-lib.ts';
 
 test('concurrent history servers survive a port claimed after allocation without accepting foreign listeners', async () => {
-  const places = await Promise.all(Array.from({length:3}, () => scratchHome('history-port-race-')));
+  const places: Awaited<ReturnType<typeof scratchHome>>[] = [];
   const blockers: net.Server[] = [];
   const running: Awaited<ReturnType<typeof runHistoryServer>>[] = [];
   try {
-    for (const place of places) {
+    for (let i = 0; i < 3; i++) {
+      const place = await scratchHome('history-port-race-'); places.push(place);
       const blocker = net.createServer(socket => socket.destroy());
       await new Promise<void>((resolve, reject) => blocker.once('error', reject).listen(place.port, '127.0.0.1', resolve));
       blockers.push(blocker);
