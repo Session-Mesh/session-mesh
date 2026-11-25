@@ -18,7 +18,7 @@ export function provisionJournal(storage: Storage, indexedDB: IDBFactory, random
     request.onupgradeneeded = () => request.result.createObjectStore('entries', {keyPath: 'id'});
     request.onsuccess = () => { if (abandoned) request.result.close(); else resolve(request.result); };
     request.onerror = () => reject(request.error);
-    request.onblocked = () => { abandoned = true; reject(new Error('provision journal unavailable')); };
+    request.onblocked = () => { abandoned = true; reject(new Error('provision-journal-unavailable')); };
   });
   function transact<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore, done: (value: T) => void) => void): Promise<T> {
     return open().then(db => new Promise<T>((resolve, reject) => {
@@ -27,7 +27,7 @@ export function provisionJournal(storage: Storage, indexedDB: IDBFactory, random
       try { run(store, value => { result = value; }); }
       catch (error) { db.close(); reject(error); return; }
       tx.oncomplete = () => { db.close(); resolve(result); };
-      tx.onabort = tx.onerror = () => { db.close(); reject(tx.error ?? new Error('provision journal transaction failed')); };
+      tx.onabort = tx.onerror = () => { db.close(); reject(tx.error ?? new Error('provision-journal-transaction-failed')); };
     }));
   }
   return {
@@ -62,7 +62,7 @@ export function provisionJournal(storage: Storage, indexedDB: IDBFactory, random
         else storage.setItem(legacy, value);
         return;
       }
-      if (!/^[a-f0-9]{32}$/.test(id)) throw new Error('invalid provision journal id');
+      if (!/^[a-f0-9]{32}$/.test(id)) throw new Error('invalid-provision-journal-id');
       return transact('readwrite', (store, done) => {
         if (value === null) store.delete(id);
         else store.put({id, value});
