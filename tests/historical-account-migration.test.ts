@@ -9,6 +9,7 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {REPO, scratchHome, runServer, stopServer, removeScratch} from './mesh-server-lib.ts';
 import {startTestPtyhost} from './helpers/managed-test-ptyhost.ts';
+import {cleanupHistoricalFixture} from './helpers/historical-cleanup.ts';
 import {installFakeCodex, launchesIn} from './fake-codex-lib.ts';
 import {appendFixturePath} from './fixture-login-path.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
@@ -56,6 +57,8 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
   const accounts = path.join(where.confDir,'accounts.json');
   const hostEnv = {HOME:where.home, PATH:`${bin}:/usr/bin:/bin`, SHELL:'/bin/bash', LANG:'C.UTF-8', XDG_RUNTIME_DIR:path.join(where.home,'run')};
   let host: ReturnType<typeof startTestPtyhost> | undefined, server: ChildProcess | undefined;
+  let retirementUncertain: unknown;
+  let hostStopUncertain: unknown;
   try {
     fs.mkdirSync(source); fs.mkdirSync(bin); fs.mkdirSync(aliasHome,{recursive:true,mode:0o700});
     fs.mkdirSync(where.confDir,{recursive:true,mode:0o700});
@@ -89,7 +92,9 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
     assert.equal(recorded.account,'work'); assert.equal(recorded.agent.type,'codex'); assert.equal(recorded.cwd,where.home);
     assert.equal(launchesIn(fake.log)[0]?.[1],aliasHome);
     await stopServer(server); server = undefined;
-    await retireFixtureSession(socket); await host.stop(); host = undefined;
+    try { await retireFixtureSession(socket); } catch (error) { retirementUncertain = error; throw error; }
+    try { await host.stop(); } catch (error) { hostStopUncertain = error; throw error; }
+    host = undefined;
     if (removeAlias) fs.writeFileSync(accounts,JSON.stringify({v:1,accounts:[]}),{mode:0o600});
     where.env.MESH_MESH_PLATFORM_CMD = candidatePlatform;
     const next = await runServer(where,REPO); assert.ok(next.result.listened,next.output()); server = next.child;
@@ -125,9 +130,11 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
       assert.equal(fs.existsSync(path.join(where.home,'.codex')),false);
     }
   } finally {
-    try { if (server) await stopServer(server); } finally {
-      try { if (host) { try { await retireFixtureSession(socket); } finally { await host.stop(); } } }
-      finally { removeScratch(where.scratch); }
-    }
+    await cleanupHistoricalFixture(where.scratch, {
+      stopServer: async () => { if (server) await stopServer(server); },
+      retireHost: async () => { if (retirementUncertain) throw retirementUncertain; if (host) await retireFixtureSession(socket); },
+      stopHost: async () => { if (hostStopUncertain) throw hostStopUncertain; if (host) await host.stop(); },
+      removeScratch: () => removeScratch(where.scratch),
+    });
   }
 });

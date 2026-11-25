@@ -25,6 +25,8 @@ required run, `MESH_CANDIDATE_PLATFORM_SHA256`. It uses a synthetic Codex agent 
 a removed alias refuses the restore without falling back to the default home. Historical releases
 in this matrix predate native backend profiles, so these tests do not qualify native profile
 migration, real agent credentials, the release installer or rollback.
+If account-fixture cleanup cannot be confirmed, the test reports and retains its scratch directory
+for inspection instead of removing it or signalling unrelated processes.
 
 `scripts/test-local.sh` runs the complete local suite: the OCaml build and its tests (which
 installs the native PTY host that the other tests start), frontend checks, Node tests, `ruff`, the
