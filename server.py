@@ -13,6 +13,7 @@ ptrace-attached to Terminator, so it is not offered.)"""
 import asyncio
 import concurrent.futures
 import contextlib
+import contextvars
 from collections import deque
 import fcntl
 import glob
@@ -1509,6 +1510,10 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
     source_env = await account_environment(account, known_agent) if switch else account_env
     command, notice, vibe = await _prepared_launch(known_agent, command, cwd, context)
     standby_nonce = sessiontoken.new_nonce()
+    _legacy_check_active()
+    phase = _LEGACY_SWITCH_PHASE.get()
+    if phase is not None:
+        phase['effect_started'] = True  # standby creation can be uncertain
     name = await new_session(base, cwd, None, agent, known_agent, keep=48, notice=notice, vibe=vibe,
                              nonce=standby_nonce, account=target, account_env=account_env,
                              account_revision=context["context_revision"] if context else None)
@@ -1550,6 +1555,8 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
             await switch[1]()
         except AccountsUnavailable as exc:   # nothing changed under the source account: the conversation goes on there
             print(f"account switch of {old_name} undone: {exc}", flush=True)
+            if _carry_copy_uncertain(exc.code):
+                raise AccountSwitchRecoveryFailed(old_name, exc) from exc
             try:
                 await _confirm_standby(replacement, standby_nonce)
                 standby = (name, replacement["created"])   # what the owner arranged meanwhile is on the standby
@@ -1560,7 +1567,7 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
                 await _carry_arrangement(standby, resumed, saved)
             except Exception as recovery_error:
                 raise AccountSwitchRecoveryFailed(old_name, exc) from recovery_error
-            raise AccountSwitchUndone(resumed, exc.code or "carry_failed", str(exc)) from exc
+            raise AccountSwitchUndone(resumed, exc.code, str(exc)) from exc
     try:
         await _start_replacement(replacement, cwd, command, known_agent, account_env, context, standby_nonce,
                                  pin_cwd=settings_guard is not None)
@@ -1580,6 +1587,7 @@ def _relaunch_command(command, cwd, account_env, pin_cwd):
 
 async def _start_replacement(replacement, cwd, command, known_agent, account_env, context=None, standby_nonce=None, *, pin_cwd=False):
     """Start the agent in the prepared ``replacement`` session (its listing item), once its source is gone."""
+    _legacy_check_active()
     if known_agent == "claude":
         command = await asyncio.to_thread(claudewake.launch_command, command,
                                           replacement["meta"].get("nonce"), CLAUDE_WAKE_DIR,
@@ -1885,7 +1893,7 @@ async def _relaunch_in_place(source, cwd, command, agent, known_agent, account=N
             await switch[1]()
         except AccountsUnavailable as exc:   # nothing changed under the source account: the conversation goes on there
             print(f"account switch of {source['name']} undone: {exc}", flush=True)
-            if native_switch and _carry_copy_uncertain(exc.code):
+            if _carry_copy_uncertain(exc.code):
                 raise AccountSwitchRecoveryFailed(source["name"], exc) from exc
             if source_context:
                 await undo_native_switch(exc)
@@ -1893,7 +1901,7 @@ async def _relaunch_in_place(source, cwd, command, agent, known_agent, account=N
                 await _start_in_place(*launch, account, source_env, context=source_context)
             except Exception as error:
                 raise AccountSwitchRecoveryFailed(source["name"], exc) from error
-            raise AccountSwitchUndone(source["name"], exc.code or "carry_failed", str(exc)) from exc
+            raise AccountSwitchUndone(source["name"], exc.code, str(exc)) from exc
     if native_switch:
         try:
             await _switch_profile_context(context["id"], known_agent, context["context_revision"])
@@ -1941,6 +1949,10 @@ async def _stop_agent(source, known_agent, settings_binding=None, profile_bindin
             message.update(agent_pid=profile_binding["process_pid"], agent_incarnation=profile_binding["process_start"])
         if fence_state is not None:
             fence_state["stop_started"] = True
+        _legacy_check_active()
+        phase = _LEGACY_SWITCH_PHASE.get()
+        if phase is not None:
+            phase['effect_started'] = True
         stopped = await host(message, timeout=STOP_AGENT_TIMEOUT)
     except web.HTTPServiceUnavailable:
         if await _incarnation_moved_on(source):
@@ -1956,6 +1968,8 @@ async def _stop_agent(source, known_agent, settings_binding=None, profile_bindin
     before_signal = {"process_scan_failed", "no_terminal", "no_shell", "no_job_control",
                      "unsupported_foreground", "agent_not_foreground", "agent_changed",
                      "agent_starting", "input_pending"}
+    if phase is not None and isinstance(stopped, dict) and stopped.get('ok') is False and reason in before_signal:
+        phase['effect_started'] = False
     if fence_state is not None and isinstance(stopped, dict) and stopped.get("ok") is False and reason in before_signal:
         fence_state["stop_refused"] = True
     if reason in {"agent_stop_uncertain", "agent_still_running", "stale_incarnation"} or (fence_state is not None and reason not in before_signal):
@@ -1987,6 +2001,7 @@ async def _start_in_place(source, created, cwd, command, agent, known_agent, not
     meta for that launch (as new_session writes it; the nonce, hence the session token, is kept). A Claude's wake
     socket path follows from the nonce: the socket the stopped Claude left there is removed first, so that the new
     one can listen on it."""
+    _legacy_check_active()
     nonce = (source.get("meta") or {}).get("nonce")
     if known_agent == "claude":
         await asyncio.to_thread(claudewake.clear_socket, CLAUDE_WAKE_DIR, nonce)
@@ -5531,18 +5546,22 @@ def _carry_helper_snapshot(path):
 
 
 _LEGACY_SWITCH_MUTEX = threading.Lock()
+_LEGACY_SWITCH_PHASE = contextvars.ContextVar('legacy_switch_phase', default=None)
 
 
 def _legacy_switch_begin(item, raw):
     """Exclude cooperating migration until a durable switch marker is resolved."""
     if not _LEGACY_SWITCH_MUTEX.acquire(blocking=False):
         raise web.HTTPConflict(text="Account migration or switch is busy; nothing was stopped")
-    fd = None
+    fd = directory = None
     try:
-        lock_path = CONF_DIR / '.backend-profiles.lock'
-        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        directory = os.open(CONF_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        root_identity = os.fstat(directory)
+        _legacy_verify_directory(directory, root_identity)
+        lock_path = '.backend-profiles.lock'
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
         def valid_lock():
-            opened, named = os.fstat(fd), os.lstat(lock_path)
+            opened, named = os.fstat(fd), os.stat(lock_path, dir_fd=directory, follow_symlinks=False)
             return (stat.S_ISREG(opened.st_mode) and stat.S_ISREG(named.st_mode)
                     and opened.st_uid == os.geteuid() and named.st_uid == os.geteuid()
                     and stat.S_IMODE(opened.st_mode) == stat.S_IMODE(named.st_mode) == 0o600
@@ -5551,16 +5570,18 @@ def _legacy_switch_begin(item, raw):
         if not valid_lock():
             raise OSError('unsafe migration lock')
         fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _legacy_verify_directory(directory, root_identity)
         if not valid_lock():
             raise OSError('migration changed')
         for name in ('backend-profiles.json', 'backend-profiles.migrated', '.backend-profiles.migration-intent'):
             try:
-                os.lstat(CONF_DIR / name)
+                os.stat(name, dir_fd=directory, follow_symlinks=False)
             except FileNotFoundError:
                 continue
             raise OSError('migration changed')
-        marker = CONF_DIR / '.backend-profiles.legacy-switch'
-        marker_fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        marker = '.backend-profiles.legacy-switch'
+        marker_fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600,
+                            dir_fd=directory)
         contents = json.dumps({'version': 1, 'request_id': item['id'], 'name': raw['name'],
                                'created': raw['created']}, separators=(',', ':')).encode()
         try:
@@ -5569,46 +5590,60 @@ def _legacy_switch_begin(item, raw):
                 stream.write(contents)
                 stream.flush()
                 os.fsync(stream.fileno())
-            directory = os.open(CONF_DIR, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            os.fsync(directory)
+            _legacy_verify_directory(directory, root_identity)
         except BaseException:
             # An incomplete or uncertain marker is deliberately left in place.
             raise
-        return fd, marker, identity, contents
+        return fd, directory, root_identity, marker, identity, contents
     except BaseException as exc:
         if fd is not None:
             os.close(fd)
+        if directory is not None:
+            os.close(directory)
         _LEGACY_SWITCH_MUTEX.release()
         if isinstance(exc, (OSError, KeyError)):
             raise web.HTTPConflict(text="Account migration or switch is busy; nothing was stopped") from exc
         raise
 
 
+def _legacy_verify_directory(directory, identity):
+    current, named = os.fstat(directory), os.stat(CONF_DIR, follow_symlinks=False)
+    if (not stat.S_ISDIR(current.st_mode) or not stat.S_ISDIR(named.st_mode)
+            or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino)
+            or (named.st_dev, named.st_ino) != (identity.st_dev, identity.st_ino)):
+        raise OSError('configuration directory changed')
+
+
+def _legacy_check_active():
+    phase = _LEGACY_SWITCH_PHASE.get()
+    if phase is not None:
+        try:
+            _legacy_verify_directory(phase['directory'], phase['identity'])
+        except OSError as exc:
+            raise web.HTTPConflict(text="Account migration or switch context changed; inspect the session") from exc
+
+
 def _legacy_switch_end(lease, *, completed):
-    fd, marker, identity, contents = lease
+    fd, directory, root_identity, marker, identity, contents = lease
     try:
         if completed:
-            opened = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            _legacy_verify_directory(directory, root_identity)
+            opened = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
             with os.fdopen(opened, 'rb') as stream:
                 current = os.fstat(stream.fileno())
-                named = os.lstat(marker)
+                named = os.stat(marker, dir_fd=directory, follow_symlinks=False)
                 if (not stat.S_ISREG(current.st_mode) or current.st_uid != os.geteuid()
                         or stat.S_IMODE(current.st_mode) != 0o600 or current.st_nlink != 1
                         or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino)
                         or (named.st_dev, named.st_ino) != (identity.st_dev, identity.st_ino)
                         or stream.read(len(contents) + 1) != contents):
                     raise OSError('switch marker changed')
-            marker.unlink()
-            directory = os.open(CONF_DIR, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            os.unlink(marker, dir_fd=directory)
+            os.fsync(directory)
     finally:
         os.close(fd)
+        os.close(directory)
         _LEGACY_SWITCH_MUTEX.release()
 
 
@@ -5662,6 +5697,7 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
     carried = {}
 
     async def carry():
+        _legacy_check_active()
         if not native and await asyncio.to_thread(_carry_helper_snapshot, legacy_helper[0]) != legacy_helper:
             raise AccountsUnavailable('account carry helper changed', 'profile-context-changed')
         revisions = ((source_context["context_revision"], target_context["context_revision"])
@@ -5681,6 +5717,8 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
 
     target = None if item["account"] == DEFAULT_ACCOUNT["id"] else item["account"]
     lease = _legacy_switch_begin(item, raw) if not native else None
+    phase = {'effect_started': False, 'directory': lease[1], 'identity': lease[2]} if lease else None
+    token = _LEGACY_SWITCH_PHASE.set(phase) if lease is not None else None
     completed = False
     try:
         try:
@@ -5692,10 +5730,17 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
             completed = not exc.target_copy_remains and not exc.target_copy_uncertain
             await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
             raise
+        except web.HTTPException:
+            if not phase['effect_started']:
+                completed = True
+            raise
         completed = True
     finally:
         if lease is not None:
-            _legacy_switch_end(lease, completed=completed)
+            try:
+                _legacy_switch_end(lease, completed=completed)
+            finally:
+                _LEGACY_SWITCH_PHASE.reset(token)
     await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
     result = {"id": name, "account": item["account"]}
     if carried.get("recovery_copies", 0):
