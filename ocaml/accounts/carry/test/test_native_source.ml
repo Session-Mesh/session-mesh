@@ -478,6 +478,7 @@ let expose_refusal (result : (unit, Mesh_accounts_carry__Carry_base.error) resul
 let test_default_target_environment_is_pinned root =
   let source = claude_account root "native-source" in
   with_conversation source;
+  let source_before = read (path source transcript) in
   native_pair root;
   let chosen = path root "chosen-default-target" in
   let preexisting = path root "preexisting-default-target" in
@@ -500,6 +501,7 @@ let test_default_target_environment_is_pinned root =
   Alcotest.(check bool) "folder cleanup uncertainty remains explicit" true
     (contains (message_of result) "folder cleanup unconfirmed");
   Alcotest.(check bool) "source transcript retained" true (exists (path source transcript));
+  Alcotest.(check string) "source transcript unchanged" source_before (read (path source transcript));
   Alcotest.(check bool) "target transcript not installed" false (exists (path chosen transcript));
   Alcotest.(check int) "default selector read only once" 1 !selections;
   Alcotest.(check bool) "unproven target retained for review" true (exists chosen);
