@@ -1114,5 +1114,9 @@
   {
     "pattern": "^Account migration or switch context changed; inspect the session$",
     "key": "server.switchMigrationChanged"
+  },
+  {
+    "pattern": "^Bound account conversation unavailable; restore refused$",
+    "key": "server.boundRestoreUnavailable"
   }
 ]

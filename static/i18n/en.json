@@ -2315,5 +2315,6 @@
   "server.switchReleaseUnconfirmed": "Fence release could not be confirmed; inspect before another action",
   "server.switchCarryCapability": "Account carry safety capability unavailable; nothing was stopped",
   "server.switchMigrationBusy": "Account migration or switch is busy; nothing was stopped",
-  "server.switchMigrationChanged": "Account migration or switch context changed; inspect the session"
+  "server.switchMigrationChanged": "Account migration or switch context changed; inspect the session",
+  "server.boundRestoreUnavailable": "Bound account conversation unavailable; restore refused"
 }
