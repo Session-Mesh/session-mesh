@@ -2349,5 +2349,7 @@
   "server.switchCarryCapability": "La capacité de transfert sécurisé des comptes est indisponible ; rien n’a été arrêté.",
   "server.switchMigrationBusy": "Une migration ou une bascule de compte est en cours ; rien n’a été arrêté.",
   "server.switchMigrationChanged": "Le contexte de migration ou de bascule a changé ; inspectez la session.",
-  "server.boundRestoreUnavailable": "La conversation du compte lié est indisponible ; restauration refusée."
+  "server.boundRestoreUnavailable": "La conversation du compte lié est indisponible ; restauration refusée.",
+  "server.switchStandbyCleanupUnconfirmed": "Nettoyage de la session de secours non confirmé ; inspectez avant toute autre action.",
+  "server.switchSourceStopUnconfirmed": "Arrêt de la session source non confirmé ; inspectez avant toute autre action."
 }

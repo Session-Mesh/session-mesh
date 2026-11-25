@@ -206,9 +206,10 @@ def test_fence_retention_check_fails_closed_on_inaccessible_storage(monkeypatch)
 ])
 async def test_fence_release_failure_reports_known_switch_outcome_without_retry(monkeypatch, outcome):
     class Requests:
-        def begin_execution(self, _request_id): return {'source': {'agent': 'codex'}}
+        def begin_execution(self, _request_id): return {'action': 'switch_account', 'source': {'agent': 'codex'}}
         def finish(self, _request_id, *, error, detail): return {'error': error, 'result': detail}
-    async def execute(_item):
+    async def execute(_item, nonce):
+        assert nonce is None
         error = server.NativeFenceRecoveryRequired({'fence_id': 'private'}, 'Release outcome uncertain')
         error.switch_outcome = outcome
         raise error
@@ -225,10 +226,11 @@ async def test_fence_release_failure_reports_known_switch_outcome_without_retry(
 async def test_failed_switch_recovery_retains_original_error_and_never_claims_rollback(monkeypatch, copied):
     class Requests:
         def begin_execution(self, _request_id):
-            return {'source': {'agent': 'codex'}, 'from_account': 'default'}
+            return {'action': 'switch_account', 'source': {'agent': 'codex'}, 'from_account': 'default'}
         def finish(self, _request_id, *, error, detail):
             return {'error': error, 'result': detail}
-    async def execute(_item):
+    async def execute(_item, nonce):
+        assert nonce is None
         raise server.AccountSwitchRecoveryFailed('session', server.AccountsUnavailable('original failure', 'carry_failed'),
                                                  target_copy_remains=copied)
     monkeypatch.setattr(server, '_execute_session_action', execute)
@@ -247,10 +249,11 @@ async def test_failed_switch_recovery_retains_original_error_and_never_claims_ro
 async def test_uncertain_carry_never_claims_target_cleanup(monkeypatch, code, restart_succeeds):
     class Requests:
         def begin_execution(self, _request_id):
-            return {'source': {'agent': 'codex'}, 'from_account': 'default'}
+            return {'action': 'switch_account', 'source': {'agent': 'codex'}, 'from_account': 'default'}
         def finish(self, _request_id, *, error, detail):
             return {'error': error, 'result': detail}
-    async def execute(_item):
+    async def execute(_item, nonce):
+        assert nonce is None
         failure = server.AccountsUnavailable('carry outcome unavailable', code)
         if restart_succeeds:
             raise server.AccountSwitchUndone('session', failure.code, str(failure))
@@ -267,9 +270,11 @@ async def test_uncertain_carry_never_claims_target_cleanup(monkeypatch, code, re
 
 async def test_unconfirmed_target_start_retains_copy_and_requires_inspection(monkeypatch):
     class Requests:
-        def begin_execution(self, _request_id): return {'source': {'agent': 'codex'}, 'from_account': 'default'}
+        def begin_execution(self, _request_id): return {'action': 'switch_account', 'source': {'agent': 'codex'}, 'from_account': 'default'}
         def finish(self, _request_id, *, error, detail): return {'error': error, 'result': detail}
-    async def execute(_item): raise server.AccountSwitchTargetStartUnconfirmed('session')
+    async def execute(_item, nonce):
+        assert nonce is None
+        raise server.AccountSwitchTargetStartUnconfirmed('session')
     monkeypatch.setattr(server, '_execute_session_action', execute)
     result = await server._run_session_action({'session_requests': Requests()}, 'request')
     assert result['result']['target_copy_remains'] is True
