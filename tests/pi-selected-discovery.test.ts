@@ -7,7 +7,7 @@ import {test} from 'node:test';
 test('Pi discovery reads only the selected history and refuses invalid roots', () => {
   const script = String.raw`
 import json, os, pathlib, tempfile, time
-import discover
+import discover, server
 with tempfile.TemporaryDirectory() as tmp:
     root = pathlib.Path(tmp)
     ambient = root / 'ambient' / 'sessions' / 'project'
@@ -26,10 +26,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert discover.pi_info(1)['session_id'].startswith('1111')
     assert discover.pi_info(1, str(selected_root))['session_id'].startswith('2222')
     assert discover.pi_session_path('22222222-2222-2222-2222-222222222222', str(selected_root)) == str(selected / '22222222-2222-2222-2222-222222222222.jsonl')
+    assert server._selected_pi_transcript(str(selected / '22222222-2222-2222-2222-222222222222.jsonl'), str(selected_root))
+    assert not server._selected_pi_transcript(str(ambient / '11111111-1111-1111-1111-111111111111.jsonl'), str(selected_root))
     assert 'session_id' not in discover.pi_info(1, '')
     assert 'session_id' not in discover.pi_info(1, 'relative')
     transcript(selected, '33333333-3333-3333-3333-333333333333')
     assert 'session_id' not in discover.pi_info(1, str(selected_root))
+    (selected / 'duplicate.jsonl').write_text((selected / '22222222-2222-2222-2222-222222222222.jsonl').read_text())
+    assert not server._selected_pi_transcript(str(selected / '22222222-2222-2222-2222-222222222222.jsonl'), str(selected_root))
 `;
   assert.doesNotThrow(() => execFileSync(process.env.MESH_PYTHON || 'python3', ['-c', script], {cwd: process.cwd()}));
 });
