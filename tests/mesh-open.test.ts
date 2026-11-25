@@ -166,13 +166,20 @@ describe('native mesh-open against the web server', () => {
       fs.writeFileSync(path.join(conf, 'token'), 'fixture-master\n');
       const passwd = path.join(fixture, 'passwd');
       fs.writeFileSync(passwd, `fixture:x:${process.getuid!()}:${process.getgid!()}::/passwd-home:/usr/bin/sh\n`);
+      // An override can launch a wrapper with the native binary as an argument.
+      // Preserve the argument vector and mount named executables, not their directories.
+      const executables = [...new Set(command)].flatMap(file => {
+        if (!path.isAbsolute(file)) return [];
+        const stat = fs.statSync(file, {throwIfNoEntry: false});
+        return stat?.isFile() && (stat.mode & 0o111) !== 0 ? ['--ro-bind', file, file] : [];
+      });
       // Mount the fixture's account and credential only. The sandbox shares
       // loopback with the test, and its root has no master token.
       const sandbox = ['/usr/bin/bwrap', '--unshare-user', '--die-with-parent',
-        '--ro-bind', '/usr', '/usr', '--ro-bind', '/lib', '/lib', '--ro-bind-try', '/lib64', '/lib64',
+        '--ro-bind', '/usr', '/usr', '--ro-bind', '/bin', '/bin',
+        '--ro-bind', '/lib', '/lib', '--ro-bind-try', '/lib64', '/lib64', ...executables,
         '--dev', '/dev', '--ro-bind', passwd, '/etc/passwd', '--ro-bind', home, '/passwd-home',
-        '--ro-bind', fs.realpathSync(command[0]!), '/mesh-open', '--chdir', '/',
-        '--', '/mesh-open', ...command.slice(1)];
+        '--chdir', '/', '--', ...command];
 
       const seen: {target: string; authorization: string | undefined}[] = [];
       const listener = http.createServer(async (request, response) => {
