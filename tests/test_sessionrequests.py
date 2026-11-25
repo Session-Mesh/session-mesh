@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 from concurrent.futures import ThreadPoolExecutor
+import sqlite3
 import os
 import sqlite3
 from pathlib import Path
@@ -60,6 +61,23 @@ def test_fence_evidence_retains_terminal_result_across_expiry_and_budget(tmp_pat
     assert requests.status(made['id'])['state'] == 'failed'
     protected.clear()
     assert requests.status(made['id']) is None
+    requests.close()
+
+
+def test_retention_io_failure_does_not_purge_terminal_result(tmp_path):
+    now = [10.0]
+    def retention(_request_id): raise PermissionError('unavailable')
+    path = tmp_path / 'actions.sqlite3'
+    requests = sessionrequests.Requests(path, clock=lambda: now[0], retain_terminal=retention)
+    made = requests.create(source(), {'action': 'restart'}, enabled_agents={'codex'}, resumable={'codex'})
+    claim = requests.claim(made['id'], 'a' * 32)
+    requests.decide(made['id'], True, claim['claim_nonce'])
+    requests.begin_execution(made['id'])
+    # The retention error rolls back finish, preserving the in-flight evidence.
+    with pytest.raises(sqlite3.OperationalError):
+        requests.finish(made['id'], error='inspect')
+    with sqlite3.connect(path) as raw:
+        assert raw.execute('SELECT state FROM session_requests WHERE id = ?', (made['id'],)).fetchone() == ('executing',)
     requests.close()
 
 
