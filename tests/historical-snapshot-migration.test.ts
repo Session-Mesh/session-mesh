@@ -30,6 +30,8 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
   assert.ok(supported, 'historical binaries require Linux x86_64');
   assert.ok(artifacts, 'MESH_HISTORICAL_ARTIFACTS required');
   assert.ok(candidate && path.isAbsolute(candidate) && !candidate.includes(' '), 'MESH_PTYHOST_CMD must name one absolute binary');
+  if (required) assert.match(process.env.MESH_CANDIDATE_PTYHOST_SHA256 ?? '', /^[0-9a-f]{64}$/,
+    'MESH_CANDIDATE_PTYHOST_SHA256 required for qualification');
   const archive = path.join(artifacts, version.archive), oldHost = path.join(artifacts, version.host);
   assert.equal(sha(archive), version.archiveSha, 'historical source archive digest');
   assert.equal(sha(oldHost), version.hostSha, 'historical PTY host digest');
@@ -57,8 +59,11 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
     const token = fs.readFileSync(path.join(where.confDir,'token'),'utf8').trim();
     const headers = {Authorization:`Bearer ${token}`, Origin:`http://127.0.0.1:${where.port}`, 'Content-Type':'application/json'};
     const url = `http://127.0.0.1:${where.port}`;
+    const directories = Object.fromEntries(['alpha','bravo'].map(name => {
+      const cwd = path.join(where.home,`work-${name}`); fs.mkdirSync(cwd, {mode:0o700}); return [name,cwd];
+    }));
     for (const name of ['alpha','bravo']) {
-      const response = await fetch(`${url}/api/new`, {method:'POST', headers, body:JSON.stringify({preset:'shell', cwd:where.home, name})});
+      const response = await fetch(`${url}/api/new`, {method:'POST', headers, body:JSON.stringify({preset:'shell', cwd:directories[name], name})});
       assert.equal(response.status,200,await response.text());
     }
     const snapshot = path.join(where.confDir,'sessions-snapshot.json');
@@ -68,7 +73,9 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
       return JSON.parse(fs.readFileSync(snapshot,'utf8')).live?.length === 2;
     });
     const before = fs.readFileSync(snapshot);
-    assert.deepEqual(JSON.parse(before.toString()).live.map((row:{name:string}) => row.name).sort(), ['alpha','bravo']);
+    const historical = JSON.parse(before.toString()).live as {name:string; cwd:string; agent:unknown}[];
+    assert.deepEqual(historical.map(row => [row.name,row.cwd,row.agent]).sort(),
+      [['alpha',directories.alpha,null],['bravo',directories.bravo,null]]);
     await stopServer(server); server = undefined; await host.stop(); host = undefined;
     const next = await runServer(where, REPO); assert.ok(next.result.listened, next.output()); server = next.child;
     await fetch(`${url}/api/sessions`,{headers});
@@ -81,16 +88,24 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
       return offers.length === 2;
     });
     assert.deepEqual(offers.map(offer => offer.name).sort(), ['alpha','bravo']);
+    for (const offer of offers) {
+      assert.equal(offer.cwd, directories[offer.name]);
+      assert.equal(offer.agent, null);
+    }
     const restored = await fetch(`${url}/api/restore`,{method:'POST',headers,body:JSON.stringify({names:['alpha','bravo']})});
     assert.equal(restored.status,200,await restored.clone().text());
     const body = await restored.json();
     assert.equal(body.results.alpha.ok,true); assert.equal(body.results.bravo.ok,true);
+    let restoredRows: {name:string; cwd:string; agent:unknown}[] = [];
     await waitFor('restored sessions recorded',15000,async () => {
       const response = await fetch(`${url}/api/sessions`,{headers});
       const data = await response.json();
-      const names = (data.mesh ?? []).map((row:{name:string}) => row.name).sort();
+      restoredRows = data.mesh ?? [];
+      const names = restoredRows.map(row => row.name).sort();
       return JSON.stringify(names) === JSON.stringify(['alpha','bravo']) && (data.restorable ?? []).length === 0;
     });
+    assert.deepEqual(restoredRows.map(row => [row.name,row.cwd,row.agent]).sort(),
+      [['alpha',directories.alpha,null],['bravo',directories.bravo,null]]);
   } finally {
     try { if (server) await stopServer(server); } finally {
       try { await host?.stop(); } finally { removeScratch(where.scratch); }
