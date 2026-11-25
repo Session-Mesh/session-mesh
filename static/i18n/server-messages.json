@@ -874,5 +874,9 @@
   {
     "pattern": "^Settings approval invalidated during upgrade$",
     "key": "server.settingsApprovalInvalidated"
+  },
+  {
+    "pattern": "^Flow journal unavailable$",
+    "key": "server.flowJournalUnavailable"
   }
 ]

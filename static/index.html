@@ -18,6 +18,7 @@
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/backend-account-panel.css">
 <link rel="stylesheet" href="/static/themes.css">
+<link rel="stylesheet" href="/static/flow.css">
 </head>
 <body>
 <div id="app">
@@ -29,6 +30,7 @@
     <nav class="main-modes" aria-label="Main workspace" data-i18n-aria-label="projectWorkspace.modes">
       <button id="btn-sessions" aria-label="Sessions mode" data-i18n-aria-label="projectWorkspace.sessionsMode" type="button" class="btn on" aria-pressed="true" data-i18n="bar.sessions">Sessions</button>
       <button id="btn-projects" aria-label="Projects mode" data-i18n-aria-label="projectWorkspace.projectsMode" type="button" class="btn" aria-pressed="false" title="Projects" data-i18n-title="projects.title"><span data-i18n="projects.title">Projects</span><span class="projects-question-badge" aria-hidden="true" hidden></span></button>
+      <button id="btn-flow" type="button" class="btn" aria-pressed="false" data-i18n="flow.title">Agent flow</button>
       <span id="projects-questions-description" class="sr-only"></span>
     </nav>
     <section id="project-navigation" hidden aria-label="Projects" data-i18n-aria-label="projects.title">
@@ -89,6 +91,7 @@
         <button class="btn" type="button" data-mobile-action="pi-scroll" id="mobile-pi-scroll" hidden data-i18n="mobile.piScroll">Restore Pi full-screen scrolling</button>
         <button class="btn" type="button" data-mobile-action="raw-scrollback" id="mobile-raw-scrollback" hidden data-i18n="mobile.rawScrollback">Enable Codex scrollback</button>
         <button class="btn" type="button" data-mobile-action="btn-projects"><span data-i18n="projects.title">Projects</span><span class="projects-question-badge" aria-hidden="true" hidden></span></button>
+        <button class="btn" type="button" data-mobile-action="btn-flow" data-i18n="flow.title">Agent flow</button>
         <button class="btn" type="button" data-mobile-action="btn-config" data-i18n="config.title">Configuration</button>
         <button class="btn" type="button" hidden data-mobile-action="btn-accounts" data-i18n="backendAccounts.title"></button>
         <button class="btn" type="button" data-mobile-action="btn-management" data-i18n="management.title">Mesh management</button>
@@ -136,6 +139,8 @@
       <div id="work-root" hidden></div>
       <div id="projects-root"></div>
     </section>
+
+    <section id="flow" hidden></section>
 
     <section id="management" hidden aria-labelledby="management-title">
       <header class="management-head">

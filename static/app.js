@@ -4046,6 +4046,7 @@ function openSession(id, opts = {}) {
   }
   if (projecting) setProjects(false);
   if (exploring) setExplorer(false);
+  if (flowing) setFlow(false);
   document.body.classList.remove("drawer");
   // already open in another column: activate that column
   const there = panes.find((p) => p.id === id);
@@ -5663,6 +5664,9 @@ async function deleteHist(items) {
 
 let exploring = false;
 let managing = false;
+let flowing = false;
+let flowController = null;
+let flowGeneration = 0;
 const exSel = new Set();
 let exAll = false;
 const EX_PAGE = 400;
@@ -5672,6 +5676,7 @@ function setExplorer(on) {
   endDirectLine();   // a change of view ends direct writing
   if (on && projecting) setProjects(false);
   if (on && managing) setManagement(false);
+  if (on && flowing) setFlow(false);
   exploring = on;
   document.body.classList.toggle("exploring", on);
   $("#explorer").hidden = !on;
@@ -5903,6 +5908,7 @@ function setProjects(on) {
   endDirectLine();   // a change of view ends direct writing
   if (on && exploring) setExplorer(false);
   if (on && managing) setManagement(false);
+  if (on && flowing) setFlow(false);
   if (on && !projecting && document.activeElement instanceof HTMLElement && document.activeElement.closest("#panes,#keys,#line")) projectsReturnFocus = document.activeElement;
   const leavingProjects = projecting && !on;
   projecting = on;
@@ -5941,6 +5947,7 @@ $("#btn-projects").addEventListener("click", () => setProjects(true));
 $("#btn-sessions").addEventListener("click", () => {
   if (exploring) setExplorer(false);
   if (managing) setManagement(false);
+  if (flowing) setFlow(false);
   setProjects(false);
 });
 $("#project-refresh").addEventListener("click", () => { if (projecting) projectsController?.open(); });
@@ -6139,6 +6146,7 @@ function setManagement(on) {
   endDirectLine();   // a change of view ends direct writing
   if (on && projecting) setProjects(false);
   if (on && exploring) setExplorer(false);
+  if (on && flowing) setFlow(false);
   managing = on;
   document.body.classList.toggle("managing", on);
   $("#management").hidden = !on;
@@ -6151,6 +6159,44 @@ function setManagement(on) {
 }
 
 $("#btn-management").addEventListener("click", () => setManagement(!managing));
+
+async function setFlow(on) {
+  if (on && localActionUnavailable()) return;
+  endDirectLine();
+  if (on && projecting) setProjects(false);
+  if (on && exploring) setExplorer(false);
+  if (on && managing) setManagement(false);
+  flowing = on;
+  const turn = ++flowGeneration;
+  document.body.classList.toggle("flowing", on);
+  $("#flow").hidden = !on;
+  $("#btn-flow").classList.toggle("on", on);
+  $("#btn-flow").setAttribute("aria-pressed", String(on));
+  $("#btn-sessions").classList.toggle("on", !on);
+  $("#btn-sessions").setAttribute("aria-pressed", String(!on));
+  if (!on) {
+    flowController?.close();
+    for (const pane of panes) pane.refit();
+    active?.focus();
+    return;
+  }
+  document.body.classList.remove("drawer");
+  const root = $("#flow");
+  try {
+    const module = await import(`/static/flow-view.js?v=${encodeURIComponent($("meta[name=client-version]").content)}`);
+    if (!flowing || turn !== flowGeneration || !localMeshEffectsAllowed()) return;
+    flowController ||= module.mountFlowView({root, request: requestLocal, translate: t, locale: () => MeshI18n.locale(), now: serverNow,
+      current: () => {
+        const row = data.mesh.find(session => session.id === active?.id);
+        return row && Number.isFinite(row.created) ? {id: row.id, created: row.created} : null;
+      }});
+    flowController.open();
+  } catch {
+    if (flowing && turn === flowGeneration) root.textContent = t("flow.unavailable");
+  }
+}
+$("#btn-flow").addEventListener("click", () => void setFlow(true));
+$("#flow").addEventListener("flow-close", () => void setFlow(false));
 
 function exList() {
   const list = hist.list.filter(histMatch($("#ex-q").value));
@@ -7596,6 +7642,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && projecting && !document.querySelector("dialog[open]")) { e.preventDefault(); return setProjects(false); }
   if (e.key === "Escape" && exploring && !document.querySelector("dialog[open]")) { e.preventDefault(); return setExplorer(false); }
   if (e.key === "Escape" && managing && !document.querySelector("dialog[open]")) { e.preventDefault(); return setManagement(false); }
+  if (e.key === "Escape" && flowing && !document.querySelector("dialog[open]")) { e.preventDefault(); return setFlow(false); }
   if (e.ctrlKey || e.metaKey || e.altKey || document.activeElement !== document.body) return;
   if (e.key === "n") { e.preventDefault(); if (projecting) projectsController?.create(); else openNew(); }
   if (e.key === "o") { e.preventDefault(); openWebDialog(); }
@@ -8099,6 +8146,7 @@ async function startMesh(context) {
     dispose() {
       meshStopped = true;
       disposeBackendAccountSettings();
+      flowGeneration++; flowing = false; flowController?.close();
       projectsGeneration++; workGeneration++;
       projectsController?.close(); workController?.close();
       inventoryPoller?.stop();
