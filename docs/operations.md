@@ -348,7 +348,9 @@ account is active. Fence receipts are private: do not publish their contents.
 
 If the request is no longer visible, use the same user and `MESH_CONF_DIR` as the
 server. From the server's application directory and Python environment, list the
-session name and incarnation alongside each recovery handle (no secret is printed):
+session name and its original incarnation alongside each recovery handle (no secret is printed).
+The incarnation is the one before the stop; a successful stop advances it. The server
+checks terminal continuity using the private creation receipt, not this timestamp alone:
 
 ```sh
 python - <<'PY'
@@ -359,7 +361,7 @@ for path in sorted((meshpaths.CONF_DIR / 'switch-fences').glob('*.json')):
     if not re.fullmatch(r'[0-9a-f]{64}\.json', path.name):
         continue
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, 'rb') as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 raise ValueError('not a regular file')
