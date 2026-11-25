@@ -1010,6 +1010,7 @@
   "server.ptyhostEnvInvalid": "Invalid request: env must map MESH_* names to strings",
   "server.preparedStandbyOwnershipLost": "Prepared standby no longer belongs to this restart",
   "server.ptyhostInvalidReply": "Invalid ptyhost reply",
+  "server.restoreOfferChanged": "The saved session offer has changed",
   "server.ptyhostInvalidRequest": "Invalid request",
   "server.ptyhostNameTaken": "Name already taken",
   "server.ptyhostNoConditionalKill": "ptyhost does not support conditional stop",
