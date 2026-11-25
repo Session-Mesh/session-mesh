@@ -149,6 +149,8 @@ def test_legacy_switch_requires_legacy_resolver_at_carry(monkeypatch):
     monkeypatch.setattr(respawn, 'forget_live', lambda *args: None)
     async def helper(*args, **kwargs):
         calls.append(args)
+        if args == ('carry-capabilities',):
+            return {'version': 1, 'legacy_only': True}
         return {'carried': {'replaced': 0}}
     async def replace(*args, switch, **kwargs):
         await switch[1]()
@@ -158,7 +160,29 @@ def test_legacy_switch_requires_legacy_resolver_at_carry(monkeypatch):
     item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
     raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
     assert asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))['account'] == 'work'
-    assert calls[0][0] == 'carry' and calls[0][-1] == '--legacy-only'
+    assert calls[0] == ('carry-capabilities',)
+    assert calls[1][0] == 'carry' and calls[1][-1] == '--legacy-only'
+
+
+@pytest.mark.parametrize('reply', [None, {}, {'version': 1, 'legacy_only': False},
+                                   {'version': True, 'legacy_only': True}])
+def test_legacy_switch_refuses_old_or_invalid_helper_before_stop(monkeypatch, reply):
+    calls = []
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    async def helper(*args, **kwargs):
+        if reply is None:
+            raise server.AccountsUnavailable('old helper')
+        return reply
+    async def replace(*args, **kwargs):
+        calls.append('stopped')
+    monkeypatch.setattr(server, '_accounts_program', helper)
+    monkeypatch.setattr(server, 'replace_session', replace)
+    item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
+    with pytest.raises(web.HTTPConflict) as error:
+        asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
+    assert 'nothing was stopped' in error.value.text
+    assert calls == []
 
 
 @pytest.mark.parametrize('scenario', ['carry_failure', 'target_refused', 'target_timeout'])
