@@ -8054,11 +8054,22 @@ wform.addEventListener("submit", async (e) => {
 const dlg = $("#dlg-new"), form = $("#form-new");
 let newDialogGeneration = 0;
 const currentNewDialog = (generation) => generation === newDialogGeneration && dlg.open;
-let newAccountsReady = false;
+let newAccountsReady = false, newAccountsFailed = false;
+
+const accountRetry = document.createElement("button");
+accountRetry.type = "button"; accountRetry.className = "btn ghost sm"; accountRetry.hidden = true;
+accountRetry.textContent = t("new.accountRetry");
+$("#new-err").after(accountRetry);
+let retryAccounts = () => {};
+accountRetry.addEventListener("click", () => retryAccounts());
 async function openNew() {
   if (localActionUnavailable()) return;
   const generation = ++newDialogGeneration;
-  newAccountsReady = false;
+  newAccountsReady = false; newAccountsFailed = false;
+  accountRetry.textContent = t("new.accountRetry");
+  newAccounts = [];
+  form.account.replaceChildren(new Option(t("new.accountDefault"), ""));
+  accountRetry.hidden = true;
   form.reset();
   $("#new-err").textContent = "";
   // the last kind started (claude by default): what is wanted most of the time
@@ -8076,6 +8087,7 @@ async function openNew() {
   const openButton = form.querySelector('button[value="ok"]');
   if (openButton) openButton.textContent = t("common.open");
   syncOptionsRow();
+  syncAccountChoice();
   const cur = active?.id && find(active.id);
   form.cwd.value = short(cur?.cwd || data.home).replace(/^~/, data.home);
   dlg.showModal();
@@ -8085,15 +8097,46 @@ async function openNew() {
   $("#new-folder-status").textContent = "";
   folderField.known = knownFoldersFrom([], [], []);
   renderFolderList();
-  const [listed, config] = await Promise.allSettled([readJson("/api/dirs"),   // the moved folders are in the config's answer
-    moveRecentFoldersToRunner().then(() => readJson("/api/config", { cache: "no-store" }))]);
-  if (!currentNewDialog(generation)) return;
-  if (config.status === "fulfilled") { rememberLaunchOptions(config.value?.launch); syncOptionsRow(); }
-  fillAccounts(config.status === "fulfilled" && Array.isArray(config.value?.accounts) ? config.value.accounts : []);
-  folderField.roots = config.status === "fulfilled" ? MeshFolderState.workspaceRoots(config.value) : [];
-  const recent = (config.status === "fulfilled" && MeshFolderState.runnerRecentFolders(config.value)) || [];
-  folderField.known = knownFoldersFrom(listed.status === "fulfilled" && Array.isArray(listed.value) ? listed.value : [], folderField.roots, recent);
-  renderFolderList();   // keeps what was typed while the requests were pending
+  let listed = [], roots = [], recent = [];
+  const current = () => currentNewDialog(generation);
+  const updateFolders = () => {
+    if (!current()) return;
+    folderField.roots = roots;
+    folderField.known = knownFoldersFrom(listed, roots, recent);
+    renderFolderList();
+  };
+  // Folder migration and suggestions are optional and must not delay account selection.
+  const hadRecentFolders = store.get(RECENT_FOLDERS_KEY, null) !== null;
+  void moveRecentFoldersToRunner().then(async () => {
+    if (!hadRecentFolders || !current()) return;
+    const config = await readJson("/api/config", { cache: "no-store" });
+    if (!current()) return;
+    roots = MeshFolderState.workspaceRoots(config);
+    recent = MeshFolderState.runnerRecentFolders(config) || [];
+    updateFolders();
+  }).catch(() => {});
+  void readJson("/api/dirs").then(value => { if (Array.isArray(value)) listed = value; updateFolders(); }).catch(() => {});
+  let requestGeneration = 0;
+  retryAccounts = async () => {
+    const request = ++requestGeneration;
+    newAccountsReady = false; newAccountsFailed = false; accountRetry.hidden = true;
+    try {
+      const config = await readJson("/api/config", { cache: "no-store" });
+      if (!current() || request !== requestGeneration) return;
+      if (!Array.isArray(config?.accounts)) throw new Error();
+      rememberLaunchOptions(config.launch); syncOptionsRow();
+      fillAccounts(config.accounts);
+      roots = MeshFolderState.workspaceRoots(config);
+      recent = MeshFolderState.runnerRecentFolders(config) || [];
+      updateFolders();
+    } catch {
+      if (!current() || request !== requestGeneration) return;
+      newAccountsFailed = true;
+      $("#new-err").textContent = t("new.accountLoadFailed");
+      accountRetry.hidden = false;
+    }
+  };
+  await retryAccounts();
 }
 window.openNew = openNew;
 
@@ -8175,7 +8218,7 @@ function fillAccounts(accounts) {
   select.value = gone || newAccounts.some((a) => a.id === last) ? last : "";
   syncAccountChoice();
   newAccountsReady = true;
-  if ($("#new-err").textContent === t("common.loading")) $("#new-err").textContent = "";
+  if ([t("common.loading"), t("new.accountLoadFailed")].includes($("#new-err").textContent)) $("#new-err").textContent = "";
 }
 function syncAccountChoice() {
   const agent = ACCOUNT_PRESETS[form.preset.value], offered = form.account.options.length > 1;
@@ -8355,7 +8398,7 @@ async function submitNew(generation) {
     return;
   }
   if (ACCOUNT_PRESETS[form.preset.value] && !newAccountsReady) {
-    $("#new-err").textContent = t("common.loading");
+    $("#new-err").textContent = t(newAccountsFailed ? "new.accountLoadFailed" : "common.loading");
     return;
   }
   const body = Object.fromEntries(new FormData(form));

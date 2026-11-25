@@ -57,6 +57,13 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
   after(() => mesh.stop());
   afterEach(async () => { for (const page of pages.splice(0)) await page.context().close(); });
 
+  async function bounded(promise: Promise<void>, label: string): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { await Promise.race([promise, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 10_000);
+    })]); } finally { if (timer) clearTimeout(timer); }
+  }
+
   const account = (page: Page) => page.locator('#form-new select[name="account"]');
   const submit = (page: Page) => page.locator('#form-new button[value="ok"]').click();
   const preset = (page: Page, value: string) => page.locator(`#form-new .presets label:has(input[value="${value}"])`).click();
@@ -85,8 +92,8 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
       ]}});
     });
     try {
-      await page.evaluate(value => { store.set('preset', value); store.set('account', 'work'); void openNew(); }, kind);
-      await held;
+      await Promise.all([bounded(held, "account request"),
+        page.evaluate(value => { store.set('preset', value); store.set('account', 'work'); void openNew(); }, kind)]);
       await page.locator('#dlg-new[open]').waitFor();
       await page.locator('#form-new input[name="cwd"]').fill(mesh.home);
       await page.locator('#form-new input[name="cwd"]').press('Tab');
@@ -126,8 +133,8 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
       ]}});
     });
     try {
-      await page.evaluate(() => { store.set('preset', 'codex'); store.set('account', 'new'); (window as any).__oldOpen = openNew(); });
-      await held;
+      await Promise.all([bounded(held, "account request"),
+        page.evaluate(() => { store.set('preset', 'codex'); store.set('account', 'new'); (window as any).__oldOpen = openNew(); })]);
       await page.evaluate(() => { (document.querySelector('#dlg-new') as HTMLDialogElement).close(); void openNew(); });
       await page.waitForFunction(() => (document.querySelector('#form-new select[name="account"]') as HTMLSelectElement).value === 'new');
       releaseOld();
@@ -136,6 +143,68 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
       assert.equal(await account(page).inputValue(), 'new');
       assert.deepEqual(await optionTexts(page), ['Default account', 'New']);
     } finally { releaseOld(); await page.unrouteAll({behavior: 'wait'}); }
+  });
+
+  for (const phone of [false, true]) test(`failed accounts require an explicit retry (${phone ? 'phone' : 'desktop'})`, async () => {
+    const page = await mesh.signIn(phone ? {width:390,height:844} : {width:1440,height:900}, undefined, undefined, {phone});
+    pages.push(page);
+    await page.waitForFunction(() => typeof data.home === 'string' && data.home.length > 0);
+    let calls = 0; const sent: Record<string, unknown>[] = [];
+    await page.route('**/api/new', route => { sent.push(route.request().postDataJSON()); return route.fulfill({status:400,body:'fixture'}); });
+    await page.route('**/api/config', async route => {
+      if (++calls === 1) return route.fulfill({status:503,body:'unavailable'});
+      const response = await route.fetch(); const config = await response.json();
+      return route.fulfill({response,json:{...config,accounts:[]}});
+    });
+    try {
+      await page.evaluate(() => { store.set('preset','codex'); store.set('account',''); void openNew(); });
+      await page.getByRole('button',{name:'Retry loading accounts'}).waitFor();
+      await page.locator('#form-new input[name="cwd"]').fill(mesh.home);
+      await submit(page); assert.deepEqual(sent, []);
+      assert.match((await page.locator('#new-err').textContent())!, /could not be loaded/i);
+      await page.getByRole('button',{name:'Retry loading accounts'}).click();
+      await page.getByRole('button',{name:'Retry loading accounts'}).waitFor({state:'hidden'});
+      await submit(page); await page.waitForFunction(() => document.querySelector('#new-err')?.textContent === 'fixture');
+      assert.equal(sent.length, 1); assert.equal(sent[0]!.account, undefined);
+    } finally { await page.unrouteAll({behavior:'wait'}); }
+  });
+
+  test('stalled folder suggestions do not block loaded accounts or keep old choices', async () => {
+    const page = await mesh.signIn({width:1440,height:900}); pages.push(page);
+    await page.waitForFunction(() => typeof data.home === 'string' && data.home.length > 0);
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => {release = resolve;});
+    const held = new Promise<void>(resolve => {entered = resolve;});
+    let releaseConfig!: () => void, enteredConfig!: () => void, configCalls = 0;
+    const configGate = new Promise<void>(resolve => {releaseConfig = resolve;});
+    const configHeld = new Promise<void>(resolve => {enteredConfig = resolve;});
+    const sent: Record<string, unknown>[] = [];
+    await page.route('**/api/new', route => {sent.push(route.request().postDataJSON()); return route.fulfill({status:400,body:'fixture'});});
+    await page.route('**/api/config', async route => {
+      const response = await route.fetch(), config = await response.json();
+      if (++configCalls === 2) { enteredConfig(); await configGate; }
+      return route.fulfill({response,json:{...config,accounts:[{id:'work',label:'Work',codex:true}]}});
+    });
+    try {
+      await page.evaluate(() => {store.set('preset','codex'); store.set('account','work'); void openNew();});
+      await page.waitForFunction(() => (document.querySelector('#form-new select[name="account"]') as HTMLSelectElement).value === 'work');
+      await page.evaluate(() => (document.querySelector('#dlg-new') as HTMLDialogElement).close());
+      await page.route('**/api/dirs', async route => { entered(); await gate; await route.fulfill({json:[]}); });
+      await page.evaluate(() => {void openNew();});
+      await bounded(Promise.all([held, configHeld]).then(() => {}),'folder and account requests');
+      assert.deepEqual(await optionTexts(page), ['Default account']);
+      assert.equal(await account(page).isDisabled(), true);
+      await preset(page,'claude');
+      assert.equal(await account(page).isDisabled(), true, 'changing preset cannot re-enable old choices');
+      await preset(page,'codex');
+      releaseConfig();
+      await page.waitForFunction(() => (document.querySelector('#form-new select[name="account"]') as HTMLSelectElement).value === 'work');
+      await page.locator('#form-new input[name="cwd"]').fill(mesh.home);
+      await page.locator('#form-new input[name="cwd"]').press('Tab');
+      await submit(page);
+      await page.waitForFunction(() => document.querySelector('#new-err')?.textContent === 'fixture', undefined, {timeout:5000});
+      assert.equal(sent.length,1); assert.equal(sent[0]!.account,'work');
+    } finally { release(); releaseConfig(); await page.unrouteAll({behavior:'wait'}); }
   });
 
   /** The dialog, open, with `count` account options loaded; every POST /api/new is recorded and answered 400.

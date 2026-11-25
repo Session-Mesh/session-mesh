@@ -577,6 +577,8 @@
   "mobilePanels.closeTitle": "Fermer le panneau — la session continue",
   "mobilePanels.unknownIdentity": "Provenance inconnue · Droits : non exposés",
   "new.account": "Compte",
+  "new.accountLoadFailed": "Impossible de charger les comptes. Réessayez avant de démarrer un agent.",
+  "new.accountRetry": "Réessayer le chargement des comptes",
   "new.accountDefault": "Compte par défaut",
   "new.accountGone": "Le compte {id} choisi la dernière fois sur cet appareil n’est plus déclaré sur le runner : choisissez un compte",
   "new.accountGoneOption": "{id} (plus déclaré)",
