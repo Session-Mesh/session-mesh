@@ -2328,7 +2328,7 @@ def _observe_names(rows, *, listed=True, now=None, project=True):
         sessions.append({"name": row["name"], "created": row["created"],
                          "label": label if isinstance(label, str) else None, "agent": identity})
     times = {} if now is None else {"now": now}
-    aliases = fsutil.conversation_request("observe", sessions=sessions, listed=listed, project=project, **times)
+    aliases = fsutil.conversation_optional("observe", sessions=sessions, listed=listed, project=project, **times)
     if project:
         if (not isinstance(aliases, list) or len(aliases) != len(rows)
                 or any(not isinstance(group, list) for group in aliases)):
@@ -4268,7 +4268,7 @@ async def api_history_delete(request):
         raise web.HTTPBadRequest(text=f"Mesh does not delete {agent} conversations: remove it with {agent} itself")
     except history.Busy:
         raise web.HTTPConflict(text="Transcript modified less than 2 min ago: the session may still be running")
-    await asyncio.to_thread(fsutil.conversation_request, "forget", agent=agent, sid=sid)
+    await asyncio.to_thread(fsutil.conversation_optional, "forget", agent=agent, sid=sid)
     return web.json_response({"ok": True})
 
 
@@ -4598,7 +4598,7 @@ async def api_kill(request):
         raise web.HTTPConflict(text="Session replaced or stop already requested")
     if killed != {"ok": True}:
         raise web.HTTPServiceUnavailable(text="Invalid ptyhost reply")
-    await asyncio.to_thread(fsutil.conversation_request, "close", name=name, created=created)
+    await asyncio.to_thread(fsutil.conversation_optional, "close", name=name, created=created)
     await asyncio.to_thread(respawn.forget_live, name, created)   # forget only the killed identity
     await asyncio.to_thread(board.remove, name, created)
     SIGNALS.discard_if(lambda reference, identity: reference.get("type") == "board.updated"

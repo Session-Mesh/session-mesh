@@ -77,8 +77,17 @@ def helper_command(program):
 
     if (explicit := os.environ.get(f"MESH_{program.upper().replace('-', '_')}_CMD")) is not None:
         return explicit if os.path.isabs(explicit) and os.path.isfile(explicit) else None
+    if program == "mesh-history" and (explicit := os.environ.get("MESH_HISTORY_CMD")):
+        # History accepts a relative executable from the server's working directory;
+        # the one-shot helper runs in /, so make the same path absolute first.
+        explicit = os.path.abspath(explicit)
+        return explicit if os.access(explicit, os.X_OK) else None
     dirs = [agentmcp.runtime_bin()] + ([] if os.environ.get("MESH_BIN_DIR") else [agentmcp.switch_bin()])
     return next((str(d / program) for d in dirs if (d / program).is_file()), None)
+
+
+class ConversationRegistryUnreadable(RuntimeError):
+    """The registry could not be decoded, and was left untouched."""
 
 
 def conversation_request(op, **fields):
@@ -104,6 +113,23 @@ def conversation_request(op, **fields):
     if (not isinstance(response, dict) or type(response.get("version")) is not int
             or response["version"] != 1):
         raise RuntimeError("incompatible mesh-history conversation-name response")
+    if response == {"version": 1, "error": "registry_unreadable"}:
+        raise ConversationRegistryUnreadable("conversation-name registry unreadable")
     if set(response) != {"version", "result"}:
         raise RuntimeError("mesh-history conversation-name operation failed or helper is incompatible")
     return response["result"]
+
+
+def conversation_optional(op, **fields):
+    """Keep the primary operation working when a registry cannot be decoded.
+
+    Other helper errors still propagate: a failed or uncertain write must not
+    be mistaken for this deliberate, read-only degradation.
+    """
+    try:
+        return conversation_request(op, **fields)
+    except ConversationRegistryUnreadable:
+        print(f"conversation names: registry unreadable; {op} skipped, file preserved", flush=True)
+        if op == "observe" and fields.get("project", True):
+            return [[] for _ in fields["sessions"]]
+        return None
