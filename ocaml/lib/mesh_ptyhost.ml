@@ -336,6 +336,7 @@ type session = {
   notified_order : string Queue.t;
   input : Mesh_pty_input.t;
   mutable switch_input_fence : string option;
+  retired_switch_fences : (string, unit) Hashtbl.t;
   replay : Mesh_pty_replay.t;
   mutable clients : Mesh_pty_output.t list;
   mutable size_owner : Mesh_pty_output.t option;
@@ -1080,8 +1081,19 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
                           && s.creation_receipt = receipt && s.alive
                           && not s.finishing && not s.kill_requested
                           && not s.agent_stopping ->
+                (* Retirements live for the whole PTY, not just one agent
+                   incarnation. Never evict them: a delayed acquire can arrive
+                   on another connection after a successful release reply. *)
+                let fence_limit = 256 in
+                let retire () =
+                  if Hashtbl.mem s.retired_switch_fences fence_id then true
+                  else if Hashtbl.length s.retired_switch_fences >= fence_limit then false
+                  else (Hashtbl.add s.retired_switch_fences fence_id (); true)
+                in
                 if op = "switch_input_acquire" then
-                  (match s.switch_input_fence with
+                  if Hashtbl.mem s.retired_switch_fences fence_id then
+                    agent_refusal "fence_retired"
+                  else (match s.switch_input_fence with
                   | Some id when id = fence_id -> `Assoc [ ("ok", `Bool true) ]
                   | Some _ -> agent_refusal "fence_owned"
                   | None when List.exists
@@ -1091,17 +1103,25 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
                           s.input_ack_clients))
                       s.clients ->
                       agent_refusal "legacy_attachment"
+                  | None when Hashtbl.length s.retired_switch_fences >= fence_limit ->
+                      agent_refusal "fence_history_full"
                   | None ->
                       if (not s.launch_pending)
                          && not (human_dirty s
                            ~now:(Eio.Time.Mono.now
                              (Eio.Stdenv.mono_clock env)))
+                         && not (Hashtbl.mem s.retired_switch_fences fence_id)
+                         && Hashtbl.length s.retired_switch_fences < fence_limit
                          && Mesh_pty_input.acquire_fence s.input then (
                         s.switch_input_fence <- Some fence_id;
                         `Assoc [ ("ok", `Bool true) ])
                       else agent_refusal "input_pending")
+                else if s.switch_input_fence = None then
+                  if retire () then `Assoc [ ("ok", `Bool true) ]
+                  else agent_refusal "fence_history_full"
                 else if s.switch_input_fence = Some fence_id then (
-                  if Mesh_pty_input.release_fence s.input then (
+                  if not (retire ()) then agent_refusal "fence_history_full"
+                  else if Mesh_pty_input.release_fence s.input then (
                     s.switch_input_fence <- None;
                     `Assoc [ ("ok", `Bool true) ])
                   else agent_refusal "control_pending")
@@ -1667,6 +1687,7 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
                           notified_order = Queue.create ();
                           input;
                           switch_input_fence = None;
+                          retired_switch_fences = Hashtbl.create 16;
                           replay = Mesh_pty_replay.create ();
                           clients = [];
                           size_owner = None;
