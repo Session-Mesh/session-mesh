@@ -226,7 +226,10 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
         pane.inputAcks.set(`${pane.conn.name}\0fixture`, {input}); pane.renderRetainedInput();
       });
       await other.getByRole('button', {name: /Discard/}).click();
-      assert.equal(await other.count(), 0, 'discard removes only the chosen closed-session record');
+      assert.equal(await other.locator('textarea').count(), 0, 'discard removes the retained bytes');
+      phone.once('dialog', dialog => dialog.accept());
+      await other.getByRole('button', {name: /Forget obsolete draft/}).click();
+      assert.equal(await other.count(), 0, 'forget removes only the chosen closed-session record');
       assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').inputValue(), 'draft B');
       assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch'], 'discard never sends a frame');
     } finally {

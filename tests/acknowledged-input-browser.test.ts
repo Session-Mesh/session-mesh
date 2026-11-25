@@ -397,6 +397,51 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
     await page.context().close();
   });
 
+  for (const phone of [false, true]) test(`closed session's acknowledged draft can be forgotten (${phone ? 'phone' : 'desktop'})`, async () => {
+    const suffix = phone ? 'phone' : 'desktop';
+    const old = `dirty-old-${suffix}`, current = `dirty-current-${suffix}`;
+    await mesh.newShell(old);
+    await mesh.newShell(current);
+    const page = await mesh.signIn(phone ? {width: 390, height: 780} : VIEWPORT, () => {
+      (window as any).__draftControls = [];
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function(data) {
+        if (typeof data === 'string') {
+          try { if (JSON.parse(data).t === 'h') (window as any).__draftControls.push(data); } catch {}
+        }
+        return send.call(this, data);
+      };
+    }, undefined, {phone});
+    try {
+      if (phone) await page.locator('#btn-menu').click();
+      await page.locator(`#list .loose .item[data-id="${old}"]`).click();
+      await page.waitForFunction(() => active?.inputAck?.state === 'ready' && active.inputAck.binding && !active.conn?.v2AwaitingCapability);
+      await page.evaluate(() => active.send('unfinished command'));
+      await page.waitForFunction(() => active.inputAck?.pendingBytes === 0 && active.inputLease?.dirty);
+      const entry = (await request(mesh.socketPath, {op: 'list_bound'}) as {name:string;created:number}[]).find(row => row.name === old)!;
+      await page.evaluate(name => (active as any).show(name), current);
+      await page.waitForFunction(name => (active as any)?.conn?.name === name && active?.conn?.ws?.readyState === WebSocket.OPEN, current);
+      assert.deepEqual(await request(mesh.socketPath, {op: 'kill_if', name: old, created: entry.created}), {ok: true});
+      await waitFor('old session gone', 10000, async () => !(await request(mesh.socketPath, {op: 'list'}) as {name:string}[]).some(row => row.name === old));
+      const card = page.locator('.pane.active .p-input-other-draft');
+      assert.equal(await card.locator('strong').textContent(), old);
+      assert.equal(await card.locator('textarea').count(), 0, 'acknowledged bytes are not claimed to be recoverable');
+      const forget = card.getByRole('button', {name: /Forget obsolete draft/});
+      assert.equal(await forget.isVisible(), true);
+      assert.equal(await page.evaluate(() => reloadHolds().some(h => h.kind === 'input-draft')), true);
+      await page.evaluate(() => { (window as any).__draftControls = []; });
+      page.once('dialog', dialog => dialog.dismiss());
+      await forget.click();
+      assert.equal(await card.count(), 1, 'cancelling preserves the record');
+      page.once('dialog', dialog => dialog.accept());
+      await forget.click();
+      assert.equal(await card.count(), 0);
+      assert.equal(await page.evaluate(() => reloadHolds().some(h => h.kind === 'input-draft')), false);
+      assert.equal(await page.evaluate(() => reloadHolds().length), 0, 'no other recovery hold remains');
+      assert.deepEqual(await page.evaluate(() => (window as any).__draftControls), [], 'forget sends no remote lease release');
+    } finally { await page.context().close(); }
+  });
+
   test('discarding a rejected final frame does not clear an acknowledged partial draft lease', async () => {
     await mesh.newShell('ack-partial');
     const page = await mesh.openPage('ack-partial', VIEWPORT);
