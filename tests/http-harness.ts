@@ -141,6 +141,12 @@ const ACCEPTED_STATUS = `
   POST /api/push/detail 400
   POST /api/push/act 400
   POST /api/logout 200
+  GET /api/transcribe/config 200
+  POST /api/transcribe 503 Dictation is disabled.
+  GET /api/transcribe/request/{request_id} 503 Dictation is disabled.
+  GET /api/transcribe/{job_id} 503 Dictation is disabled.
+  POST /api/transcribe/{job_id}/cancel 503 Dictation is disabled.
+  POST /api/transcribe/{job_id}/settle 503 Dictation is disabled.
   POST /api/new 400
   POST /api/adopt 400
   POST /api/kill/{name} 400
@@ -369,7 +375,11 @@ export async function startMesh(options: {session: boolean}): Promise<Mesh> {
   const env = isolatedEnvironment(home, port);
   // A session the server recognises as an agent (the mail and session-action routes refuse a plain shell).
   const fake = options.session ? installFakeClaude() : undefined;
-  if (fake !== undefined) Object.assign(env, {PATH: fake.PATH, MESH_BIN_DIR: fake.MESH_BIN_DIR});
+  if (fake !== undefined) {
+    Object.assign(env, {PATH: fake.PATH, MESH_BIN_DIR: fake.MESH_BIN_DIR});
+    const quoted = "'" + fake.PATH.replaceAll("'", "'\\''") + "'";
+    fs.writeFileSync(path.join(home, '.bash_profile'), `export PATH=${quoted}\n`, {mode: 0o600});
+  }
   const children: ChildProcess[] = [];
   const stop = async (): Promise<void> => {
     for (const child of children.reverse()) await killAndWait(child, 'SIGKILL');

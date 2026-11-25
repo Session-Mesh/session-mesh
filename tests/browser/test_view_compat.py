@@ -77,6 +77,10 @@ async def test_c5_mesh_frame_sandbox_follows_the_server(page, mesh, home_dir):
     expected = (await mesh.describe(md))["sandbox"]
     assert await frame.get_attribute("sandbox") == expected
 
+    # The initial iframe load invalidates menus captured against its loading view.
+    await page.wait_for_function(
+        "(target) => panes.some(pane => pane.id === 'web:' + target "
+        "&& pane.identityLoad === 'frame-loaded')", arg=str(md))
     pane = page.locator("section.pane", has=frame)
     await pane.locator('[data-act="more"]').click()
     async with page.expect_response(

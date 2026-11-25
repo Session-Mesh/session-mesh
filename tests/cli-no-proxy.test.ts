@@ -143,7 +143,11 @@ const ptyhost = net.createServer(socket => {
           errors: pids.filter((_pid, i) => !rows[i]).map(pid => ({pid, kind: 'not_found'}))}));
         return;
       }
-      socket.end(frame('R', [{name: 's1', pid: sessionShellPid, cwd: '/', created: 0, activity: 0, attached: 0, meta: {}}]));
+      if (request.op === 'list') {
+        socket.end(frame('C', [{name: 's1', pid: sessionShellPid, cwd: '/', created: 0, activity: 0, attached: 0, meta: {}}]));
+        return;
+      }
+      socket.destroy();
     }
   });
 });

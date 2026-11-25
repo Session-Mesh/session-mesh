@@ -128,6 +128,24 @@ describe('single-flight poller', () => {
     assert.equal(statusLine({...input, poller: state})?.key, 'sessions.status.timeout');
   });
 
+  test('a short first recovery deadline does not truncate the next slow listing', async () => {
+    const clock = new FakeClock(), script = scriptedLoad(clock);
+    let deadlines = 0;
+    const poller = createPoller({clock, load: script.load, apply: value => value,
+      timeoutMs: () => ++deadlines === 1 ? 5000 : 180000});
+    void poller.start(); await flush();
+    await clock.advance(5000);
+    assert.equal(script.calls[0]!.signal.aborted, true);
+    script.calls[0]!.resolve({kind: 'failed', status: null}); await flush();
+    assert.equal(poller.state().lastFailureKind, 'timeout');
+    await clock.advance(2000); assert.equal(script.calls.length, 2);
+    await clock.advance(8000);
+    assert.equal(script.calls[1]!.signal.aborted, false, 'the retry retains the normal slow-listing budget');
+    script.calls[1]!.resolve({kind: 'loaded', value: {mesh: []}}); await flush();
+    assert.equal(poller.state().everLoaded, true); assert.equal(deadlines, 2);
+    poller.stop();
+  });
+
   test('an exception in apply is a client error: the server state stays answered', async () => {
     const clock = new FakeClock();
     const script = scriptedLoad(clock);

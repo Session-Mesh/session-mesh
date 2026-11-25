@@ -80,15 +80,21 @@ describe('update check', () => {
     const mesh = await startMesh('upd-none-');
     try {
       assert.equal((await listing(mesh)).update, null, 'no host');
-      const source = startUpdateHost(mesh, {release: false});
+      const cache = path.join(mesh.home, '.cache', 'session-mesh');
+      fs.mkdirSync(cache, {recursive: true});
+      fs.writeFileSync(path.join(cache, 'unrelated-cache'), 'another feature may use this directory');
+      const requested = path.join(mesh.home, 'update-requested');
+      const source = startUpdateHost(mesh, {release: false,
+        curl: '#!/bin/sh\nprintf called > "$HOME/update-requested"\nexit 1\n'});
       try {
         await until('the host', async () => fs.existsSync(source.socket));
         await new Promise(resolve => setTimeout(resolve, 500));
         assert.equal((await listing(mesh)).update, null, 'a source install');
-        // the update check's own cache file: the folder itself also holds the listing's caches, written when a
-        // test running alongside leaves a process named codex on the machine
-        assert.equal(fs.existsSync(path.join(mesh.home, '.cache', 'session-mesh', 'update-check.json')), false,
-          'and no request, no cache');
+        // Only the updater's file/request are absent; listing/history caches may use this directory.
+        assert.equal(fs.existsSync(path.join(cache, 'update-check.json')), false, 'no update cache');
+        assert.equal(fs.existsSync(requested), false, 'no update request');
+        assert.equal(fs.readFileSync(path.join(cache, 'unrelated-cache'), 'utf8'),
+          'another feature may use this directory', 'unrelated cache entries are preserved');
       } finally {
         await source.stop();
       }
