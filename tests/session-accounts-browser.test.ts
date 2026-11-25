@@ -156,7 +156,7 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
     const held = new Promise<void>(resolve => { entered = resolve; });
     await page.route('**/api/new', route => { sent.push(route.request().postDataJSON()); return route.fulfill({status:400,body:'fixture'}); });
     await page.route('**/api/config', async route => {
-      if (++calls === 1) return route.fulfill({status:503,body:'unavailable'});
+      if (++calls === 1) return route.fulfill({json:{accounts:[],accounts_available:false}});
       const response = await route.fetch(); const config = await response.json();
       entered(); await gate;
       return route.fulfill({response,json:{...config,accounts:[]}});
@@ -174,6 +174,31 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
       await page.waitForFunction(() => newAccountsReady);
       await submit(page); await page.waitForFunction(() => document.querySelector('#new-err')?.textContent === 'fixture');
       assert.equal(sent.length, 1); assert.equal(sent[0]!.account, undefined);
+    } finally { release(); await page.unrouteAll({behavior:'wait'}); }
+  });
+
+  test('stalled account discovery times out and an explicit retry can succeed', {timeout: 30000}, async () => {
+    const page = await mesh.signIn({width:1440,height:900}); pages.push(page);
+    await page.waitForFunction(() => typeof data.home === 'string' && data.home.length > 0);
+    let release!: () => void, entered!: () => void, calls = 0;
+    const gate = new Promise<void>(resolve => {release = resolve;});
+    const held = new Promise<void>(resolve => {entered = resolve;});
+    const sent: object[] = [];
+    await page.route('**/api/new', route => {sent.push(route.request().postDataJSON()); return route.fulfill({status:400,body:'fixture'});});
+    await page.route('**/api/config', async route => {
+      if (++calls === 1) { entered(); await gate; return route.abort().catch(() => {}); }
+      const response = await route.fetch(); const config = await response.json();
+      return route.fulfill({response,json:{...config,accounts:[],accounts_available:true}});
+    });
+    try {
+      await Promise.all([bounded(held, 'stalled account request'), page.evaluate(() => {store.set('preset','codex'); void openNew();})]);
+      await page.locator('#form-new input[name="cwd"]').fill(mesh.home);
+      await submit(page); assert.deepEqual(sent, []);
+      await page.getByRole('button',{name:'Retry loading accounts'}).waitFor({timeout:15000});
+      await page.getByRole('button',{name:'Retry loading accounts'}).click();
+      await page.waitForFunction(() => newAccountsReady);
+      await submit(page); await page.waitForFunction(() => document.querySelector('#new-err')?.textContent === 'fixture');
+      assert.equal(sent.length, 1);
     } finally { release(); await page.unrouteAll({behavior:'wait'}); }
   });
 
