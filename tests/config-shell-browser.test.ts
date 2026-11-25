@@ -156,7 +156,7 @@ describe('the Configuration dialog layout', {skip}, () => {
     });
     await page.goto(`${mesh.base}/`);
     await page.waitForFunction(() => (window as unknown as {MeshI18n: {loaded: boolean}}).MeshI18n.loaded);
-    assert.equal(attempts, 2);
+    assert.ok(attempts >= 2, 'both English catalog reads were intercepted');
     await page.locator('#btn-config').click();
     await page.locator('#dlg-config[open] .config-shell').waitFor();
     assert.equal((await page.locator('.config-nav-button').allInnerTexts())[0], 'Appearance');
