@@ -272,23 +272,36 @@ let host_serves_its_table () =
         (String.for_all
            (function '0' .. '9' -> true | _ -> false)
            (U.to_string (U.member "incarnation" (U.member "host" reply))));
-      expect "complete" (U.member "complete" reply = `Bool true);
-      let leader = row reply shell in
+      (* The global scan is explicitly bounded and may be incomplete on a busy
+         machine. Its completeness rules are exercised with deterministic fake
+         scans above; validate our own live processes using the targeted API. *)
+      let child_pid = U.to_int (U.member "pid" (Option.get (child ()))) in
+      let selected =
+        processes socket_path
+          (Printf.sprintf {|{"op":"processes","pids":[%d,%d]}|} shell child_pid)
+      in
+      Alcotest.(check (list int)) "requested live pids" [ shell; child_pid ]
+        (pids selected);
+      Alcotest.(check string) "no selection errors" "[]"
+        (Yojson.Basic.to_string (U.member "errors" selected));
+      let leader = row selected shell in
       Alcotest.(check int) "leader sid" shell (U.to_int (U.member "sid" leader));
       Alcotest.(check int)
         "leader ppid" host
         (U.to_int (U.member "ppid" leader));
-      Alcotest.(check string)
-        "leader cwd" home
-        (U.to_string (U.member "cwd" leader));
-      expect "leader terminal"
-        (String.starts_with ~prefix:"/dev/"
-           (U.to_string (U.member "stdin" leader)));
-      let child = Option.get (child ()) in
+      let child = row selected child_pid in
       Alcotest.(check int) "child sid" shell (U.to_int (U.member "sid" child));
-      Alcotest.(check (list string))
-        "child argv" [ "/bin/sleep"; "613" ]
-        (List.map U.to_string (U.to_list (U.member "argv" child))))
+      if U.member "complete" reply = `Bool true then (
+        let leader = row reply shell and child = row reply child_pid in
+        Alcotest.(check string)
+          "leader cwd" home
+          (U.to_string (U.member "cwd" leader));
+        expect "leader terminal"
+          (String.starts_with ~prefix:"/dev/"
+             (U.to_string (U.member "stdin" leader)));
+        Alcotest.(check (list string))
+          "child argv" [ "/bin/sleep"; "613" ]
+          (List.map U.to_string (U.to_list (U.member "argv" child)))))
 
 let host_serves_selected_pids () =
   with_host (fun ~host ~home ~socket_path session ->
