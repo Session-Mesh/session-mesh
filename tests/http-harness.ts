@@ -121,6 +121,7 @@ const ACCEPTED_STATUS = `
   GET /view/{tail} 403
   GET /viewlib/monaco/{tail} 200
   GET /viewlib/{name} 200
+  GET /api/restore/rebind 200
   GET /api/sessions 200
   GET /api/portfolio/diff/{selector} 404
   GET /api/dirs 200
@@ -161,6 +162,7 @@ const ACCEPTED_STATUS = `
   POST /api/session-actions/{request_id}/recover-fence 400
   POST /api/session-actions/{request_id}/decision 400
   POST /api/organize 400
+  POST /api/restore/rebind 400
   POST /api/restore 400
   POST /api/restore/discard 400
   POST /api/upload 400

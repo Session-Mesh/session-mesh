@@ -1019,6 +1019,7 @@
   "server.ptyhostEnvInvalid": "requête invalide: env doit associer des noms MESH_* à des textes",
   "server.preparedStandbyOwnershipLost": "le terminal de secours n'est plus rattaché à cette relance",
   "server.ptyhostInvalidReply": "réponse ptyhost invalide",
+  "server.restoreOfferChanged": "La session enregistrée a changé",
   "server.ptyhostInvalidRequest": "requête invalide",
   "server.ptyhostNameTaken": "nom déjà pris",
   "server.ptyhostNoConditionalKill": "ptyhost ne prend pas en charge l'arrêt conditionnel",

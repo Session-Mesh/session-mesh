@@ -116,6 +116,14 @@
     "key": "server.ptyhostEnvInvalid"
   },
   {
+    "pattern": "^Invalid request$",
+    "key": "server.ptyhostInvalidRequest"
+  },
+  {
+    "pattern": "^The offer is not the expected one$",
+    "key": "server.restoreOfferChanged"
+  },
+  {
     "pattern": "^invalid request$",
     "key": "server.ptyhostInvalidRequest"
   },
