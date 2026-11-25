@@ -7909,9 +7909,11 @@ wform.addEventListener("submit", async (e) => {
 const dlg = $("#dlg-new"), form = $("#form-new");
 let newDialogGeneration = 0;
 const currentNewDialog = (generation) => generation === newDialogGeneration && dlg.open;
+let newAccountsReady = false;
 async function openNew() {
   if (localActionUnavailable()) return;
   const generation = ++newDialogGeneration;
+  newAccountsReady = false;
   form.reset();
   $("#new-err").textContent = "";
   // the last kind started (claude by default): what is wanted most of the time
@@ -8027,6 +8029,8 @@ function fillAccounts(accounts) {
     ...newAccounts.map((a) => new Option(shortAccountLabel(a.label), a.id)), ...(gone ? [gone] : []));
   select.value = gone || newAccounts.some((a) => a.id === last) ? last : "";
   syncAccountChoice();
+  newAccountsReady = true;
+  if ($("#new-err").textContent === t("common.loading")) $("#new-err").textContent = "";
 }
 function syncAccountChoice() {
   const agent = ACCOUNT_PRESETS[form.preset.value], offered = form.account.options.length > 1;
@@ -8158,7 +8162,7 @@ folderList.addEventListener("click", (e) => {
   const option = e.target.closest('[role="option"]');
   if (option) acceptFolder(Number(option.dataset.index));
 });
-dlg.addEventListener("close", () => folderSuggester.reset());   // no pending timer or answer after the dialog closes
+dlg.addEventListener("close", () => { if (!dlg.open) { newAccountsReady = false; folderSuggester.reset(); } });
 $("#btn-new").addEventListener("click", () => { if (projecting) projectsController?.create(); else openNew(); });
 form.addEventListener("change", () => { form.command.hidden = form.preset.value !== "custom"; syncOptionsRow(); syncAccountChoice(); });
 let newSubmitGeneration = null;   // one submission per opening; an old completion cannot unlock a newer one
@@ -8203,6 +8207,10 @@ async function submitNew(generation) {
     dlg.close();
     await refresh();
     if (generation === newDialogGeneration) showCreatedSession(pending.id);
+    return;
+  }
+  if (ACCOUNT_PRESETS[form.preset.value] && !newAccountsReady) {
+    $("#new-err").textContent = t("common.loading");
     return;
   }
   const body = Object.fromEntries(new FormData(form));
