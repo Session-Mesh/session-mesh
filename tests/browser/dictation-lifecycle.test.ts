@@ -175,4 +175,3 @@ test('a manual selection while inventory is unavailable retires the old cached p
     assert.equal(sockets.get('B')!.length, 1);
   });
 });
-
