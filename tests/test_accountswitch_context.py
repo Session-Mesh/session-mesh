@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 import hashlib
+import json
 import os
 import asyncio
 import subprocess
@@ -194,6 +195,27 @@ def test_legacy_switch_keeps_marker_on_uncertain_outcome(monkeypatch, tmp_path):
     assert (tmp_path / '.backend-profiles.legacy-switch').exists()
     with pytest.raises(web.HTTPConflict):
         server._legacy_switch_begin({'id': 'next'}, {'name': 'session', 'created': 1})
+
+
+def test_legacy_switch_excludes_real_migrator_during_and_after_uncertain_outcome(monkeypatch, tmp_path):
+    profile = os.environ.get('MESH_PROFILE_CMD')
+    if not profile:
+        if os.environ.get('MESH_REQUIRE_MESH_PROFILE') == '1':
+            pytest.fail('MESH_PROFILE_CMD is required')
+        pytest.skip('MESH_PROFILE_CMD not configured')
+    monkeypatch.setattr(server, 'CONF_DIR', tmp_path)
+    env = {**os.environ, 'MESH_CONF_DIR': str(tmp_path)}
+    lease = server._legacy_switch_begin({'id': 'request'}, {'name': 'session', 'created': 1})
+    def migration():
+        result = subprocess.run([profile, 'migrate'], env=env, capture_output=True, text=True, timeout=10)
+        assert result.returncode != 0
+        assert json.loads(result.stdout)['code'] == 'migration-busy'
+    try:
+        migration()
+    finally:
+        server._legacy_switch_end(lease, completed=False)
+    migration()
+    assert not (tmp_path / 'backend-profiles.json').exists()
 
 
 def test_cancelled_legacy_switch_preserves_marker_without_replay(monkeypatch, tmp_path):
