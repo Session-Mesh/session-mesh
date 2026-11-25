@@ -36,7 +36,7 @@ describe('explicit restore profile binding', {skip}, () => {
       assert.deepEqual(actions,['preview','confirm']);
     } finally { await context.close(); }
   });
-  test('a stale confirmation is refused and is never retried', async () => {
+  for (const status of [409, 500]) test(`confirmation HTTP ${status} is not retried`, async () => {
     const context = await browser.newContext({locale:'en-US', viewport:{width:1400,height:900}});
     try {
       const page = await context.newPage(); const actions: string[] = [];
@@ -45,14 +45,14 @@ describe('explicit restore profile binding', {skip}, () => {
       await page.route('**/api/restore/rebind', async route => {
         if (route.request().method() === 'GET') return route.fulfill({json:{offers:[{expected,previous_account:'old'}]}});
         const body = route.request().postDataJSON(); actions.push(body.action);
-        if (body.action === 'confirm') return route.fulfill({status:409,json:{ok:false}});
+        if (body.action === 'confirm') return route.fulfill({status,json:{ok:false}});
         return route.fulfill({json:{ok:true,account:'personal',label:'Personal',config_root:'/profiles/personal',context_revision:'revision-proof',offer_digest:'offer-proof'}});
       });
       await page.goto(`${lab.mesh.base}/login?token=${encodeURIComponent(lab.mesh.token())}`); await page.goto(`${lab.mesh.base}/`);
       await page.getByRole('button',{name:'Link an old session to a profile'}).click();
       await page.getByRole('button',{name:'Review binding'}).click();
       await page.getByRole('button',{name:'Confirm binding'}).click();
-      await page.getByText('The offer or profile changed, or the request was refused. Close and review it again.').waitFor();
+      await page.getByText(status === 409 ? 'The offer or profile changed, or the request was refused. Close and review it again.' : 'The result is unknown. Close and refresh before trying again; the request was not repeated.').waitFor();
       assert.equal(await page.getByRole('button',{name:'Confirm binding'}).count(),0);
       assert.deepEqual(actions,['preview','confirm']);
     } finally { await context.close(); }
