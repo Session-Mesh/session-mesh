@@ -70,6 +70,19 @@ body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--mono); ove
   font-size: 11px; font-weight: 700; line-height: 16px; padding: 0 7px; border-radius: 8px;
   background: var(--fg); color: var(--bg); }
 .account-badge[hidden] { display: none; }
+.account-badge[data-account-color] { color: #151922; }
+.account-badge[data-account-color="0"] { background: #a6d9ff; }
+.account-badge[data-account-color="1"] { background: #f4b7c9; }
+.account-badge[data-account-color="2"] { background: #a8e4bb; }
+.account-badge[data-account-color="3"] { background: #e3c0ff; }
+.account-badge[data-account-color="4"] { background: #ffd09e; }
+.account-badge[data-account-color="5"] { background: #9de3e0; }
+.account-badge[data-account-color="6"] { background: #f1c8a7; }
+.account-badge[data-account-color="7"] { background: #c8d5a2; }
+.account-badge[data-account-color="8"] { background: #b9c7ff; }
+.account-badge[data-account-color="9"] { background: #f4b9a4; }
+.account-badge[data-account-color="10"] { background: #a7dbce; }
+.account-badge[data-account-color="11"] { background: #e6bde0; }
 .pane-head .p-identity .account-badge { display: inline-block; vertical-align: middle; margin-left: 6px; }
 /* The New session Account choice: any number of aliases, one native list (keyboard and phone pickers), never wider than the dialog. */
 #new-account-row select { display: block; width: 100%; max-width: 100%; min-height: 36px; }

@@ -3956,7 +3956,7 @@ function pinnedHtml(query) {
       const id = live?.kind === "mesh" ? live.id : `h:${p.agent}:${p.id}`;
       const shownLabel = live?.kind === "mesh" ? label(live) : p.label;
       const hint = live?.kind === "mesh" ? t("pins.running") : p.guessed ? t("pins.guessed") : t("pins.openCard");
-      return `<div class="pin-row"><button class="item hitem" data-id="${esc(id)}"><div class="top"><span class="dot ${live ? state(live) : "hist"}"></span><span class="name">${esc(shownLabel)}</span><span class="tag">${esc(p.agent)}</span></div><div class="meta">${esc(hint)}</div></button><button class="pin-remove" data-unpin-agent="${esc(p.agent)}" data-unpin-id="${esc(p.id)}" aria-label="${esc(t("pins.unpinLabel", { label: shownLabel }))}" title="${esc(t("pins.unpin"))}">×</button></div>`;
+      return `<div class="pin-row"><button class="item hitem" data-id="${esc(id)}"><div class="top"><span class="dot ${live ? state(live) : "hist"}"></span><span class="name">${esc(shownLabel)}</span>${live?.kind === "mesh" ? accountBadgeHtml(live) : ""}<span class="tag">${esc(p.agent)}</span></div><div class="meta">${esc(hint)}</div></button><button class="pin-remove" data-unpin-agent="${esc(p.agent)}" data-unpin-id="${esc(p.id)}" aria-label="${esc(t("pins.unpinLabel", { label: shownLabel }))}" title="${esc(t("pins.unpin"))}">×</button></div>`;
     }).join("")) + `</section>`;
 }
 
@@ -3966,15 +3966,87 @@ const accountLabel = (s) => (typeof s?.account === "string" && s.account ? [...S
   : (s?.account == null || s.account === "") && s?.kind === "mesh"
     && ["claude", "codex"].includes(s.agent?.type || s.known_agent) ? t("list.accountDefault") : "");
 const accountTitle = (s, shown) => s?.account ? t("list.accountTitle", { label: shown }) : t("list.accountDefaultTitle");
+// Keep the colors of active aliases; returning aliases reuse their saved color
+// when it is free. The registry is browser-local and scoped to this Mesh.
+let accountColorRows = null, accountColorPrefix = null, accountColors = new Map(), activeAccountColors = new Map();
+function accountColor(s) {
+  if (typeof s?.account !== "string" || !s.account) return "";
+  const prefix = meshContext?.storagePrefix ?? null;
+  if (accountColorPrefix !== prefix) {
+    accountColorPrefix = prefix;
+    accountColorRows = null;
+    activeAccountColors = new Map();
+    const saved = store.get("account-colors.v1", []);
+    accountColors = new Map(Array.isArray(saved) ? saved.filter(pair => Array.isArray(pair)
+      && pair.length === 2 && typeof pair[0] === "string" && pair[0].length > 0 && pair[0].length <= 128
+      && Number.isInteger(pair[1]) && pair[1] >= 0 && pair[1] < 12).slice(0, 1024) : []);
+  }
+  if (accountColorRows !== data.mesh) {
+    accountColorRows = data.mesh;
+    const aliases = [...new Set(data.mesh.map(row => row.account)
+      .filter(alias => typeof alias === "string" && alias && alias.length <= 128))].sort();
+    const used = new Set(), next = new Map(), pending = [];
+    // Current aliases keep their slots first. If more than twelve were active,
+    // resolve a surviving collision whenever a slot becomes available.
+    for (const alias of aliases) {
+      const slot = activeAccountColors.get(alias);
+      if (slot !== undefined && (!used.has(slot) || used.size === 12)) {
+        used.add(slot);
+        next.set(alias, slot);
+      } else pending.push(alias);
+    }
+    let changed = false;
+    for (const alias of pending) {
+      let hash = 2166136261;
+      for (const c of alias) hash = Math.imul(hash ^ c.codePointAt(0), 16777619);
+      let slot = activeAccountColors.get(alias) ?? accountColors.get(alias) ?? (hash >>> 0) % 12;
+      if (used.size < 12) while (used.has(slot)) slot = (slot + 1) % 12;
+      used.add(slot);
+      next.set(alias, slot);
+      if (accountColors.get(alias) !== slot && (accountColors.has(alias) || accountColors.size < 1024)) {
+        accountColors.set(alias, slot);
+        changed = true;
+      }
+    }
+    activeAccountColors = next;
+    if (changed) store.set("account-colors.v1", [...accountColors]);
+  }
+  const color = activeAccountColors.get(s.account);
+  return color === undefined ? "" : String(color);
+}
 function accountBadgeHtml(s) {
   const shown = accountLabel(s);
-  return shown ? `<span class="account-badge" title="${esc(accountTitle(s, shown))}">${esc(shown)}</span>` : "";
+  const color = accountColor(s);
+  return shown ? `<span class="account-badge"${color === "" ? "" : ` data-account-color="${color}"`} title="${esc(accountTitle(s, shown))}">${esc(shown)}</span>` : "";
 }
 function showAccountBadge(element, s) {
   const shown = accountLabel(s);
+  const color = accountColor(s);
   element.hidden = !shown;
   element.textContent = shown;
   element.title = shown ? accountTitle(s, shown) : "";
+  if (color === "") delete element.dataset.accountColor;
+  else element.dataset.accountColor = color;
+}
+
+// A focused or dragged row holds list reordering, but account metadata must
+// still follow the latest inventory. Updating just this non-interactive span
+// keeps the row and its focus intact.
+function syncAccountBadges() {
+  for (const row of document.querySelectorAll("#list .item[data-id]")) {
+    const s = find(row.dataset.id);
+    const shown = s?.kind === "mesh" && accountLabel(s);
+    let badge = row.querySelector(".account-badge");
+    if (!shown) { badge?.remove(); continue; }
+    if (!badge) {
+      const name = row.querySelector(".top .name");
+      if (!name) continue;
+      badge = document.createElement("span");
+      badge.className = "account-badge";
+      name.after(badge);
+    }
+    showAccountBadge(badge, s);
+  }
 }
 
 function itemHtml(s, opts = {}) {
@@ -4239,6 +4311,7 @@ function renderList(completedDrop = false) {
   const restoreFocusId = completedDrop ? focusedRow?.dataset.id : null;
   const retriedId = document.activeElement?.closest?.("#list .row-retry")?.dataset.retry;   // its row may lose the button
   if (listBusy || listPointerHeld || (focusedRow && !completedDrop)) {
+    syncAccountBadges();
     pendingListRender = true;
     return;
   }
