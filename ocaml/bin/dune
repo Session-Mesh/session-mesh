@@ -2,7 +2,8 @@
  (name mesh_board_mcp_main)
  (public_name mesh-board-mcp)
  (modules mesh_board_mcp_main)
- (libraries mesh_board_mcp mcp-kit.stdio))
+ (libraries mesh_board_mcp mcp-kit.stdio mcp-kit.trace-plugin mesh_trace_journal)
+ (link_flags (:standard -linkall)))
 
 (executable
  (name mesh_read_main)
@@ -14,7 +15,7 @@
  (name mesh_history_main)
  (public_name mesh-history)
  (modules mesh_history_main)
- (libraries mesh_history unix))
+ (libraries mesh_history mesh_flow yojson unix))
 
 (executable
  (name mesh_ptyhost_main)

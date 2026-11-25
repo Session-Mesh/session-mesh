@@ -92,11 +92,18 @@ SERVER_NAME = "mesh-board"
 # Codex deliberately filters the process environment of stdio MCP servers.
 # This is an allow-list of *names*, never token values.
 CODEX_ENV_VARS = ["MESH_SESSION_TOKEN", "MESH_PORT", "MESH_RUNNER_DEMO_CAP"]
+if os.path.isabs(os.environ.get("MESH_MCP_TRACE_JOURNAL", "")):
+    CODEX_ENV_VARS.append("MESH_MCP_TRACE_JOURNAL")
+if os.path.isabs(os.environ.get("MESH_MCP_TRACE_PLUGIN", "")):
+    CODEX_ENV_VARS.append("MESH_MCP_TRACE_PLUGIN")
 # The project tracker (docs/work-mcp.md), found like the board.  Its entry names the agent kind (WL_AGENT);
 # the session name (MESH_SESSION) and a WL_HOME the user set come from the agent's environment.
 WORK_MCP = str(mesh_executable("work-mcp"))
 WORK_SERVER_NAME = "mesh-work"
-WORK_ENV_VARS = ["MESH_SESSION", "WL_HOME"]
+WORK_IDENTITY_ENV = ["MESH_SESSION", "WL_HOME"]
+WORK_ENV_VARS = list(WORK_IDENTITY_ENV)
+if os.path.isabs(os.environ.get("MESH_MCP_TRACE_JOURNAL", "")):
+    WORK_ENV_VARS.append("MESH_MCP_TRACE_JOURNAL")
 # Reserved names.  Whatever a command, a snapshot or a user's configuration defines under one of them, the
 # definition (command, arguments, environment) is Mesh's, and the user's restrictions on it (server turned
 # off, tools disabled, approvals required) are kept.  The recognisers and the removal on resume use this list.
@@ -199,7 +206,10 @@ def _with_board(kind, reach=None, bridge=None):
     servers = [MeshServer(SERVER_NAME, BOARD_MCP if bridge is None else bridge, list(BOARD_MCP_ARGS),
                           dict(reach or {}), CODEX_ENV_VARS, ["MESH_SESSION_TOKEN"])]
     if work_available():
-        servers.append(MeshServer(WORK_SERVER_NAME, WORK_MCP, [], {"WL_AGENT": kind}, WORK_ENV_VARS, WORK_ENV_VARS))
+        work_env = {"WL_AGENT": kind}
+        if (reach or {}).get("MESH_MCP_TRACE_JOURNAL"):
+            work_env["MESH_MCP_TRACE_JOURNAL"] = reach["MESH_MCP_TRACE_JOURNAL"]
+        servers.append(MeshServer(WORK_SERVER_NAME, WORK_MCP, [], work_env, WORK_ENV_VARS, WORK_IDENTITY_ENV))
     return servers
 
 

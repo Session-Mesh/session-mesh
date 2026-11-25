@@ -1,0 +1,16 @@
+(library
+ (name mesh_trace_journal)
+ (modules mesh_trace_journal)
+ (libraries mcp-kit yojson digestif unix threads))
+
+(executable
+ (name mesh_mcp_trace_plugin)
+ (modules mesh_mcp_trace_plugin)
+ (modes (native plugin))
+ (link_flags ())
+ (libraries mesh_trace_journal mcp-kit.trace-plugin))
+
+(install
+ (section libexec)
+ (package session_mesh)
+ (files (mesh_mcp_trace_plugin.cmxs as mesh-mcp-trace.cmxs)))

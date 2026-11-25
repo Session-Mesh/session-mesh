@@ -431,3 +431,19 @@
  (name mesh_agent_settings_test)
  (modules mesh_agent_settings_test)
  (libraries mesh_agent_settings alcotest))
+
+(executable
+ (name mesh_trace_plugin_fixture)
+ (modules mesh_trace_plugin_fixture)
+ (modes (native plugin))
+ (libraries mcp-kit.trace-plugin))
+
+(test
+ (name board_trace_plugin_test)
+ (modules board_trace_plugin_test)
+ (libraries alcotest unix yojson)
+ (enabled_if %{ocaml-config:supports_shared_libraries})
+ (deps mesh_trace_plugin_fixture.cmxs ../trace/mesh_mcp_trace_plugin.cmxs)
+ (action
+  (run %{test} %{exe:../bin/mesh_board_mcp_main.exe}
+   %{dep:mesh_trace_plugin_fixture.cmxs} %{dep:../trace/mesh_mcp_trace_plugin.cmxs})))
