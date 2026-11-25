@@ -1053,6 +1053,8 @@ def pi_session_path(sid, session_dir=None):
     """Only resume a unique, existing v3 transcript; Pi creates missing paths."""
     if not isinstance(sid, str) or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", sid):
         return None
+    if session_dir is not None and (not isinstance(session_dir, str) or not os.path.isabs(session_dir)):
+        return None
     matches = [p for p in _pi_sessions(session_dir)
                if (h := _pi_header(p)) and h["id"] == sid]
     return matches[0] if len(matches) == 1 else None

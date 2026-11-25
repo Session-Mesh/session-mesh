@@ -28,6 +28,13 @@ with tempfile.TemporaryDirectory() as tmp:
     assert discover.pi_session_path('22222222-2222-2222-2222-222222222222', str(selected_root)) == str(selected / '22222222-2222-2222-2222-222222222222.jsonl')
     assert server._selected_pi_transcript(str(selected / '22222222-2222-2222-2222-222222222222.jsonl'), str(selected_root))
     assert not server._selected_pi_transcript(str(ambient / '11111111-1111-1111-1111-111111111111.jsonl'), str(selected_root))
+    alias = root / 'history-alias'
+    alias.symlink_to(selected_root, target_is_directory=True)
+    assert server._selected_pi_transcript(str(alias / '22222222-2222-2222-2222-222222222222.jsonl'), str(alias))
+    (selected / 'outside.jsonl').symlink_to(ambient / '11111111-1111-1111-1111-111111111111.jsonl')
+    assert not server._selected_pi_transcript(str(selected / 'outside.jsonl'), str(selected_root))
+    assert discover.pi_session_path('11111111-1111-1111-1111-111111111111', '') is None
+    assert discover.pi_session_path('11111111-1111-1111-1111-111111111111', 'relative') is None
     assert 'session_id' not in discover.pi_info(1, '')
     assert 'session_id' not in discover.pi_info(1, 'relative')
     transcript(selected, '33333333-3333-3333-3333-333333333333')
