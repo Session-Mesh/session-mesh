@@ -20,6 +20,8 @@ import {REPO, TerminalMesh, skip} from './terminal-browser-lib.ts';
 declare function openNew(): Promise<void>;
 declare function fillAccounts(accounts: unknown[]): void;
 declare const meshContext: {storagePrefix: string};
+declare const data: {home?: string};
+declare const store: {set(key: string, value: unknown): void};
 
 const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD
   || path.join(REPO, 'ocaml', '_build', 'default', 'platform', 'cli', 'mesh_platform_main.exe');
@@ -59,6 +61,82 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
   const submit = (page: Page) => page.locator('#form-new button[value="ok"]').click();
   const preset = (page: Page, value: string) => page.locator(`#form-new .presets label:has(input[value="${value}"])`).click();
   const optionTexts = (page: Page) => account(page).evaluate((select: HTMLSelectElement) => [...select.options].map(option => option.text));
+
+  for (const kind of ['codex', 'opencode', 'pi']) test(`pending accounts never launch ${kind} under the default account`, async () => {
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const held = new Promise<void>(resolve => { entered = resolve; });
+    const sent: Record<string, unknown>[] = [];
+    const phone = kind === 'pi';
+    const page = await mesh.signIn(phone ? {width: 390, height: 844} : {width: 1440, height: 900}, undefined, undefined, {phone});
+    pages.push(page);
+    await page.waitForFunction(() => typeof data.home === 'string' && data.home.length > 0);
+    await page.route('**/api/new', route => {
+      sent.push(route.request().postDataJSON() as Record<string, unknown>);
+      return route.fulfill({status: 400, body: 'fixture'});
+    });
+    await page.route('**/api/config', async route => {
+      const response = await route.fetch();
+      const config = await response.json();
+      entered();
+      await gate;
+      await route.fulfill({response, json: {...config, accounts: [
+        {id: 'work', label: 'Travail 🪶', codex: true, opencode: true, pi: false},
+      ]}});
+    });
+    try {
+      await page.evaluate(value => { store.set('preset', value); store.set('account', 'work'); void openNew(); }, kind);
+      await held;
+      await page.locator('#dlg-new[open]').waitFor();
+      await page.locator('#form-new input[name="cwd"]').fill(mesh.home);
+      await page.locator('#form-new input[name="cwd"]').press('Tab');
+      await submit(page);
+      assert.deepEqual(sent, [], 'a pending account read cannot submit a default launch');
+      assert.notEqual(await page.locator('#new-err').textContent(), '');
+      release();
+      await page.waitForFunction(() => (document.querySelector('#form-new select[name="account"]') as HTMLSelectElement).options.length === 2);
+      assert.equal(await account(page).inputValue(), 'work');
+      await submit(page);
+      if (kind === 'pi') {
+        assert.deepEqual(sent, [], 'the unavailable remembered Pi account is refused');
+        assert.notEqual(await page.locator('#new-err').textContent(), '');
+      } else {
+        await page.waitForFunction(() => document.querySelector('#new-err')?.textContent === 'fixture');
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0]!.account, 'work');
+        assert.equal(sent[0]!.preset, kind);
+      }
+    } finally { release(); await page.unrouteAll({behavior: 'wait'}); }
+  });
+
+  test('an old account response cannot overwrite a reopened dialog', async () => {
+    let releaseOld!: () => void, enteredOld!: () => void;
+    const gate = new Promise<void>(resolve => { releaseOld = resolve; });
+    const held = new Promise<void>(resolve => { enteredOld = resolve; });
+    let count = 0;
+    const page = await mesh.signIn({width: 1440, height: 900});
+    pages.push(page);
+    await page.waitForFunction(() => typeof data.home === 'string' && data.home.length > 0);
+    await page.route('**/api/config', async route => {
+      const response = await route.fetch(), config = await response.json();
+      const current = ++count;
+      if (current === 1) { enteredOld(); await gate; }
+      await route.fulfill({response, json: {...config, accounts: [
+        {id: current === 1 ? 'old' : 'new', label: current === 1 ? 'Old' : 'New', codex: true},
+      ]}});
+    });
+    try {
+      await page.evaluate(() => { store.set('preset', 'codex'); store.set('account', 'new'); (window as any).__oldOpen = openNew(); });
+      await held;
+      await page.evaluate(() => { (document.querySelector('#dlg-new') as HTMLDialogElement).close(); void openNew(); });
+      await page.waitForFunction(() => (document.querySelector('#form-new select[name="account"]') as HTMLSelectElement).value === 'new');
+      releaseOld();
+      await page.evaluate(async () => { await (window as any).__oldOpen; });
+      await page.unrouteAll({behavior: 'wait'});
+      assert.equal(await account(page).inputValue(), 'new');
+      assert.deepEqual(await optionTexts(page), ['Default account', 'New']);
+    } finally { releaseOld(); await page.unrouteAll({behavior: 'wait'}); }
+  });
 
   /** The dialog, open, with `count` account options loaded; every POST /api/new is recorded and answered 400.
    * `remembered`: the alias this device chose last time. */
