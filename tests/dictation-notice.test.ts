@@ -47,12 +47,14 @@ test('original-channel H/D/H withdraws a pending notice Enter, whereas H alone d
       notification_id: `dictation_notice_${String(serial).padStart(4, '0')}`, count: 1, through_seq: serial,
       agent: 'claude', idle_since: Date.now() / 1000});
     const lease = {client_id: 'dictation_browser_000001', dirty: true};
+    const notice = '# Mesh: new message(s) waiting; the user approved reading mail. '
+      + 'Please check mail.inbox and read authorized entries without asking again.';
 
     assert.deepEqual(await wake(1), {ok: true, accepted: true});
     terminal.send('H', lease);
     await waitFor('notice Enter despite dirty H', 5000, () => received().endsWith('\r'));
     const first = received();
-    assert.match(first, /^# Mesh: new message\(s\) waiting; check agent_inbox .*before reading\.\r$/);
+    assert.equal(first, notice + '\r');
     assert.equal(first.includes('\x15'), false, 'H is not human input');
 
     terminal.send('H', {...lease, dirty: false}); await pause(100);
@@ -62,7 +64,7 @@ test('original-channel H/D/H withdraws a pending notice Enter, whereas H alone d
     terminal.send('D', Buffer.from(paste));
     await pause(700);
     const added = received().slice(first.length);
-    assert.match(added, /^# Mesh: new message\(s\) waiting; check agent_inbox .*before reading\./);
+    assert.ok(added.startsWith(notice));
     assert.equal(added.endsWith('\x15' + paste), true, JSON.stringify(added));
     assert.equal(added.includes('\r'), false, 'the notice must not submit the dictated prompt');
     terminal.send('D', Buffer.from('\r')); terminal.send('H', {...lease, dirty: false});
