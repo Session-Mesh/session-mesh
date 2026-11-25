@@ -196,6 +196,7 @@ val carry_accounts :
   ?io:io ->
   ?limits:limits ->
   ?expected_contexts:(string * string) ->
+  ?legacy_only:bool ->
   uid:int ->
   getenv:(string -> string option) ->
   file:string ->
@@ -206,6 +207,8 @@ val carry_accounts :
   unit ->
   (outcome, error) result
 (** {!carry} between two accounts found by {!account_folder}. When supplied,
+    [legacy_only] refuses native named entries from the same loaded snapshot,
+    before any target is prepared. It cannot be combined with [expected_contexts].
     [expected_contexts] binds source and target revisions to the same loaded
     native snapshot before any target is created; legacy entries are refused.
     A default entry uses SHA-256 of [mesh-default-v1], NUL, the backend,

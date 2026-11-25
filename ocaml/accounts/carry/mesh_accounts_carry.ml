@@ -362,12 +362,21 @@ let bound_io check_roots (io : io) =
         ensure ());
   }
 
-let carry_accounts ?(io = default_io) ?(limits = default_limits) ?expected_contexts ~uid ~getenv
+let carry_accounts ?(io = default_io) ?(limits = default_limits) ?expected_contexts ?(legacy_only = false) ~uid ~getenv
     ~file ~kind ~conversation ~from_account ~to_account () =
   sanitized
     (let* () = check_id kind conversation in
      let* (source_entry, target_entry) =
        pair_entries ~uid ~file ~kind ~from_account ~to_account
+     in
+     let* () =
+       if legacy_only && Option.is_some expected_contexts then
+         fail "profile-context-changed" "conflicting account source bindings"
+       else if legacy_only
+               && ((from_account <> R.default_id && Option.is_some (R.context_revision source_entry))
+                   || (to_account <> R.default_id && Option.is_some (R.context_revision target_entry))) then
+         fail "profile-context-changed" "account source changed to the native registry"
+       else Ok ()
      in
      let* () =
        match expected_contexts with

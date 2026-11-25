@@ -65,6 +65,37 @@ let resolved = function
   | Ok value -> value
   | Error { C.code; message } -> Alcotest.failf "%s: %s" code message
 
+let test_legacy_only_binds_the_loaded_source root =
+  let module R = Mesh_account_resolver in
+  legacy_pair root;
+  let source = claude_account root "legacy-source" in
+  with_conversation source;
+  let run from_account to_account getenv =
+    C.carry_accounts ~legacy_only:true ~uid ~getenv ~file:(file root)
+      ~kind:C.Claude ~conversation:sid ~from_account ~to_account ()
+  in
+  (* A caller can observe the legacy source, then a native registry can be
+     published before the carry resolves its own snapshot. *)
+  let observed = Result.get_ok (R.load ~uid ~file:(file root)) in
+  let old = Result.get_ok (R.find observed { R.backend = R.Claude; id = "work" }) in
+  Alcotest.(check bool) "initial alias is legacy" true (R.context_revision old = None);
+  native_pair root;
+  let default_getenv name = if name = "CLAUDE_CONFIG_DIR" then Some source else None in
+  refused_with "profile-context-changed" (run "work" "other" getenv);
+  refused_with "profile-context-changed" (run "default" "other" default_getenv);
+  refused_with "profile-context-changed" (run "work" "default" default_getenv);
+  Alcotest.(check bool) "native target is never prepared" false (exists (path root "native-target"));
+  Alcotest.(check bool) "legacy target is never prepared" false (exists (path root "legacy-target"));
+  Alcotest.(check bool) "source transcript remains" true (exists (path source transcript));
+  Unix.unlink (registry_file root);
+  ignore (carried (run "work" "other" getenv));
+  Alcotest.(check bool) "unchanged legacy source carries normally" true
+    (exists (path root ("legacy-target/" ^ transcript)));
+  refused_with "profile-context-changed"
+    (C.carry_accounts ~legacy_only:true ~expected_contexts:(String.make 64 'a', String.make 64 'b')
+       ~uid ~getenv ~file:(file root) ~kind:C.Claude ~conversation:sid
+       ~from_account:"work" ~to_account:"other" ())
+
 let test_expected_pair_revisions root =
   let module R = Mesh_account_resolver in
   let source = claude_account root "native-source" in
@@ -1077,6 +1108,7 @@ let () =
           (fun (name, test) ->
             Alcotest.test_case name `Quick (with_native_root test))
           [
+            ("legacy-only binds loaded source", test_legacy_only_binds_the_loaded_source);
             ("bound pair revisions", test_expected_pair_revisions);
             ("bound default revision", test_bound_default);
             ("migrated actual Claude/Codex carry", test_migrated_actual_carry);

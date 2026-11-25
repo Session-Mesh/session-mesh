@@ -471,7 +471,7 @@ let accounts_resolve file backend name =
    file left in place and need someone to step in. One process per carry: the
    lock does not exclude carries inside one process. For Codex only the rollout is
    copied: that is enough to resume it (Mesh_accounts_carry). *)
-let accounts_carry ?expected_contexts file kind conversation from_account to_account =
+let accounts_carry ?expected_contexts ?(legacy_only = false) file kind conversation from_account to_account =
   let module Carry = Mesh_accounts_carry in
   let refuse { Carry.code; message } =
     print_error ("mesh-platform: " ^ message);
@@ -496,7 +496,7 @@ let accounts_carry ?expected_contexts file kind conversation from_account to_acc
       refuse { Carry.code = "conversation_unknown"; message = "not a conversation id" }
   | Some kind -> (
       match
-        Carry.carry_accounts ?expected_contexts ~uid ~getenv:Sys.getenv_opt ~file ~kind
+        Carry.carry_accounts ?expected_contexts ~legacy_only ~uid ~getenv:Sys.getenv_opt ~file ~kind
           ~conversation ~from_account ~to_account ()
       with
       | Ok outcome ->
@@ -522,6 +522,9 @@ let run = function
   | [ "accounts"; "carry"; file; kind; conversation; from_account; to_account ]
     ->
       accounts_carry file kind conversation from_account to_account
+  | [ "accounts"; "carry"; file; kind; conversation; from_account; to_account;
+      "--legacy-only" ] ->
+      accounts_carry ~legacy_only:true file kind conversation from_account to_account
   | [ "accounts"; "carry"; file; kind; conversation; from_account; to_account;
       source_revision; target_revision ]
     when List.for_all

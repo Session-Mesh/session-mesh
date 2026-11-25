@@ -154,6 +154,33 @@ let test_refusals_leave_nothing () =
                 (fun index -> String.sub error index 3 = "RED")
                 (List.init (String.length error - 2) Fun.id)))
 
+let test_legacy_only_cli () =
+  let root = Filename.temp_dir "carrycli-legacy" "" in
+  Fun.protect ~finally:(fun () -> remove root) (fun () ->
+    let file = Filename.concat root "accounts.json" in
+    let registry = Filename.concat root "backend-profiles.json" in
+    let legacy = Filename.concat root "legacy-target" in
+    let native = Filename.concat root "native-target" in
+    let transcript = "projects/-home-me/" ^ sid ^ ".jsonl" in
+    write (Filename.concat root (".claude/" ^ transcript)) "{\"line\":1}\n";
+    write file (Printf.sprintf
+      {|{"v":1,"accounts":[{"id":"work","label":"Work","claude_config_dir":"%s"}]}|} legacy);
+    write registry (Printf.sprintf
+      {|{"version":1,"profiles":[{"id":"work","label":"Work","backend":"claude","enabled":true,"roots":{"config":"%s","history":"%s/projects"}}]}|}
+      native native);
+    let args = ["accounts"; "carry"; file; "claude"; sid; "default"; "work"; "--legacy-only"] in
+    let status, answer = run root args in
+    Alcotest.(check bool) "native source refused" true (status = Unix.WEXITED 1);
+    Alcotest.(check bool) "profile context refusal" true
+      (field "code" answer = Some (`String "profile-context-changed"));
+    Alcotest.(check bool) "no native directory created" false (Sys.file_exists native);
+    Alcotest.(check bool) "no legacy directory created" false (Sys.file_exists legacy);
+    Unix.unlink registry;
+    let status, _ = run root args in
+    Alcotest.(check bool) "legacy source allowed" true (status = Unix.WEXITED 0);
+    Alcotest.(check bool) "legacy target copied" true
+      (Sys.file_exists (Filename.concat legacy transcript)))
+
 let () =
   Alcotest.run "mesh-platform-accounts-carry"
     [
@@ -161,6 +188,7 @@ let () =
         [
           Alcotest.test_case "carry from the default account to an alias" `Quick
             test_carry_from_default_to_alias;
+          Alcotest.test_case "legacy-only pins source" `Quick test_legacy_only_cli;
           Alcotest.test_case "refusals leave nothing" `Quick
             test_refusals_leave_nothing;
         ] );
