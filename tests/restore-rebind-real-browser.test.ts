@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {chromium, type Browser} from 'playwright-core';
 import {Lab, SID} from './restore-exact-lib.ts';
+import {REPO} from './mesh-server-lib.ts';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 const executable = process.env.MESH_CHROMIUM ?? '';
 const skip = !executable && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM not set' : false;
@@ -14,8 +15,14 @@ before(async () => { if (!skip) browser = await chromium.launch(chromiumLaunchOp
 after(async () => { await browser?.close(); });
 describe('real restore profile binding', {skip}, () => {
   for (const {width, stale} of [{width:1400,stale:false},{width:390,stale:false},{width:1400,stale:true}]) test(`real backend at ${width}px, stale=${stale}`, async () => {
+    const profile = process.env.MESH_PROFILE_CMD || process.env.MESH_MESH_PROFILE_CMD
+      || path.join(REPO, 'ocaml/_build/default/bin/mesh_profile_main.exe');
+    const platform = process.env.MESH_MESH_PLATFORM_CMD
+      || path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
+    fs.accessSync(profile, fs.constants.X_OK);
+    fs.accessSync(platform, fs.constants.X_OK);
     const lab = await Lab.start({alphaExtra:{account:'old'},
-      env: {MESH_MESH_PROFILE_CMD: process.env.MESH_PROFILE_CMD || process.env.MESH_MESH_PROFILE_CMD}, prepare: (home, confDir) => {
+      env: {MESH_MESH_PROFILE_CMD: profile, MESH_MESH_PLATFORM_CMD: platform}, prepare: (home, confDir) => {
       const config = path.join(home, 'profiles', 'work', 'claude');
       const history = path.join(home, 'profiles', 'work', 'history');
       fs.mkdirSync(config, {recursive:true, mode:0o700}); fs.mkdirSync(history, {recursive:true, mode:0o700});
