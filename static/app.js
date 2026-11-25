@@ -5533,6 +5533,11 @@ function renderRestore() {
   const actions = document.createElement("div");
   actions.className = "restore-actions";
   actions.innerHTML = `<button id="restore-go" class="btn primary sm"></button><button id="restore-ignore" class="btn ghost sm" title="${esc(t("restore.ignoreHint"))}">${esc(t("restore.ignore"))}</button>`;
+  const rebind = document.createElement("button");
+  rebind.className = "btn ghost sm";
+  rebind.textContent = t("restore.rebind.open");
+  rebind.addEventListener("click", openRestoreRebind);
+  actions.append(rebind);
   const hint = document.createElement("div");
   hint.className = "mute restore-hint";
   hint.textContent = t("restore.ignoreHint");
@@ -5544,6 +5549,76 @@ function renderRestore() {
   notice.hidden = !restoreNotice;
   box.replaceChildren(head, ...offer.map(restoreRow), notice, actions, hint);
   restoreButtons();
+}
+
+// Rebinding changes only the saved offer; it never launches an agent. The preview
+// binds confirmation to both the exact offer and the profile revision.
+async function openRestoreRebind() {
+  if (localActionUnavailable()) return;
+  const dialog = document.createElement("dialog");
+  dialog.className = "restore-rebind";
+  const heading = document.createElement("h2"); heading.id = "restore-rebind-title"; heading.textContent = t("restore.rebind.title");
+  dialog.setAttribute("aria-labelledby", heading.id);
+  const explanation = document.createElement("p"); explanation.textContent = t("restore.rebind.hint");
+  const offerLabel = document.createElement("label"); offerLabel.textContent = t("restore.rebind.session");
+  const offerSelect = document.createElement("select"); offerLabel.append(offerSelect);
+  const accountLabel = document.createElement("label"); accountLabel.textContent = t("restore.rebind.account");
+  const accountSelect = document.createElement("select"); accountLabel.append(accountSelect);
+  const details = document.createElement("pre"); details.className = "restore-rebind-details"; details.hidden = true;
+  const status = document.createElement("p"); status.setAttribute("role", "status");
+  const preview = document.createElement("button"); preview.className = "btn primary"; preview.textContent = t("restore.rebind.preview"); preview.disabled = true;
+  const confirm = document.createElement("button"); confirm.className = "btn primary"; confirm.textContent = t("restore.rebind.confirm"); confirm.hidden = true;
+  const close = document.createElement("button"); close.className = "btn ghost"; close.textContent = t("restore.rebind.close");
+  const actions = document.createElement("div"); actions.className = "restore-actions"; actions.append(preview, confirm, close);
+  dialog.append(heading, explanation, offerLabel, accountLabel, details, status, actions);
+  document.body.append(dialog); dialog.addEventListener("close", () => dialog.remove(), {once: true});
+  close.addEventListener("click", () => dialog.close()); dialog.showModal();
+  let offers = [], profiles = [], proposal = null, busy = false;
+  const reset = () => { proposal = null; details.hidden = true; confirm.hidden = true; preview.hidden = false; status.textContent = ""; };
+  const updateProfiles = () => {
+    reset(); accountSelect.replaceChildren();
+    const offer = offers[Number(offerSelect.value)];
+    profiles.filter(p => p.enabled === true && p.backend === offer?.expected?.agent_kind).forEach(p => {
+      const option = document.createElement("option"); option.value = p.id; option.textContent = p.label; accountSelect.append(option);
+    });
+    preview.disabled = !accountSelect.options.length;
+  };
+  offerSelect.addEventListener("change", updateProfiles); accountSelect.addEventListener("change", reset);
+  try {
+    const [a, b] = await Promise.all([requestLocal("/api/restore/rebind", {cache:"no-store"}), requestLocal("/api/accounts/profiles", {cache:"no-store"})]);
+    if (!a.ok || !b.ok) throw new Error();
+    const listed = await a.json(), registry = await b.json();
+    if (!Array.isArray(listed.offers) || !Array.isArray(registry?.data?.profiles)) throw new Error();
+    offers = listed.offers.filter(o => o?.expected && typeof o.expected.name === "string"); profiles = registry.data.profiles;
+    offers.forEach((o, i) => { const option = document.createElement("option"); option.value = String(i); option.textContent = `${o.expected.name} · ${o.previous_account}`; offerSelect.append(option); });
+    if (!offers.length) status.textContent = t("restore.rebind.none"); else updateProfiles();
+  } catch { status.textContent = t("restore.rebind.unavailable"); }
+  preview.addEventListener("click", async () => {
+    if (busy) return; busy = true; preview.disabled = true; offerSelect.disabled = accountSelect.disabled = true;
+    try {
+      const selected = offers[Number(offerSelect.value)];
+      const r = await requestLocal("/api/restore/rebind", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"preview", expected:selected.expected, account:accountSelect.value})});
+      if (!r.ok) throw new Error();
+      const result = await r.json();
+      if (result.ok !== true || typeof result.offer_digest !== "string" || typeof result.context_revision !== "string" || typeof result.config_root !== "string") throw new Error();
+      proposal = {expected:selected.expected, account:accountSelect.value, context_revision:result.context_revision, offer_digest:result.offer_digest};
+      details.textContent = `${t("restore.rebind.account")}: ${result.label} (${result.account})\n${t("restore.rebind.root")}: ${result.config_root}\n${t("restore.rebind.revision")}: ${result.context_revision}`;
+      details.hidden = false; preview.hidden = true; confirm.hidden = false;
+    } catch { status.textContent = t("restore.rebind.stale"); }
+    finally { busy = false; preview.disabled = false; offerSelect.disabled = accountSelect.disabled = false; }
+  });
+  confirm.addEventListener("click", async () => {
+    if (busy || !proposal) return; busy = true; confirm.disabled = true; offerSelect.disabled = accountSelect.disabled = true;
+    try {
+      const r = await requestLocal("/api/restore/rebind", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"confirm", ...proposal})});
+      if (!r.ok) { status.textContent = t("restore.rebind.stale"); confirm.hidden = true; proposal = null; return; }
+      const result = await r.json();
+      if (result.ok !== true) throw new Error();
+      status.textContent = t("restore.rebind.done"); confirm.hidden = true; proposal = null;
+      restoreKey = ""; await refresh();
+    } catch { status.textContent = t("restore.rebind.uncertain"); confirm.hidden = true; proposal = null; }
+    finally { busy = false; confirm.disabled = false; offerSelect.disabled = accountSelect.disabled = false; }
+  });
 }
 
 // The restore routes take at most 50 names per request: larger offers go in batches, one after
