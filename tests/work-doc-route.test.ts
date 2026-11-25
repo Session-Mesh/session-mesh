@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import { REPO, type Mesh, startMesh } from './mesh-server-lib.ts';
+import { type Mesh, startMesh } from './mesh-server-lib.ts';
 
 let mesh: Mesh;
 let notes: string;
@@ -29,7 +29,7 @@ before(async () => {
   fs.writeFileSync(path.join(notes, 'huge.html'), Buffer.alloc(8 * 1024 * 1024 + 1, 0x20));
   fs.mkdirSync(path.join(mesh.home, '.ssh'), { recursive: true });
   fs.writeFileSync(path.join(mesh.home, '.ssh', 'notes.md'), 'secret\n');
-  fs.symlinkSync(path.join(REPO, 'README.md'), path.join(notes, 'outside.md'));
+  fs.symlinkSync('/etc/hosts', path.join(notes, 'outside.md'));
   fs.symlinkSync(path.join(mesh.home, '.ssh', 'notes.md'), path.join(notes, 'keys.md'));
   fs.symlinkSync(path.join(mesh.home, '.ssh'), path.join(notes, 'keydir'));
 });
@@ -53,7 +53,9 @@ describe('which references the panel may show', () => {
   });
 
   test('outside the view roots, protected, through a symbolic link or by traversal: refused', async () => {
-    for (const target of [path.join(REPO, 'README.md'), '~/.ssh/notes.md', '~/notes/2026-11-20-fictional/../../.ssh/notes.md',
+    assert.equal((await view('/etc/hosts')).status, 403, 'an existing outside file is forbidden');
+    assert.equal((await view('~/notes/2026-11-20-fictional/outside.md')).status, 403, 'a symlink to that file is forbidden');
+    for (const target of ['/etc/hosts', '~/.ssh/notes.md', '~/notes/2026-11-20-fictional/../../.ssh/notes.md',
       '~/notes/2026-11-20-fictional/outside.md', '~/notes/2026-11-20-fictional/keys.md', '~/notes/2026-11-20-fictional/keydir/notes.md']) {
       const response = await view(target);
       assert.ok(response.status === 403 || response.status === 404, `${target}: ${response.status}`);
