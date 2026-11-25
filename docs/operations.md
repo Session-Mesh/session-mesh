@@ -25,6 +25,7 @@ for agents installed without one, and `system` for boot-time daemons, whose comm
 - [Complete removal](#complete-removal)
 - [Logging out devices and replacing the token](#logging-out-devices-and-replacing-the-token)
 - [Answer buttons in notifications](#answer-buttons-in-notifications)
+- [Whisper dictation](#whisper-dictation)
 - [Documents opened with mesh-open](#documents-opened-with-mesh-open)
 - [Making every new terminal a mesh session](#making-every-new-terminal-a-mesh-session)
 - [Using another port than 7690](#using-another-port-than-7690)
@@ -1186,6 +1187,63 @@ systemctl --user restart session-mesh
 Only the value `1` turns them on, and nothing in the page or the API can change it. Even then, the
 buttons only reach devices that ticked "details" in the sidebar footer. When they are off, no
 notification carries buttons and `/api/push/act` answers 403.
+
+## Whisper dictation
+
+Voice dictation is disabled unless the web service has `MESH_WHISPER_URL`. Set the full URL of a
+Whisper-compatible transcription endpoint. HTTPS is required for remote endpoints; HTTP is accepted
+only for `localhost` and loopback IP addresses. URL credentials and fragments are refused and
+redirects are not followed. The URL is operator-controlled, shared by all sessions, and cannot be
+supplied by a browser request.
+
+For a systemd install, use `systemctl --user edit session-mesh.service`, for example:
+
+```ini
+[Service]
+Environment="MESH_WHISPER_URL=https://transcription.example.invalid/audio/transcriptions"
+Environment="MESH_WHISPER_LANGUAGE=en"
+```
+
+Replace the illustrative URL with your service, then run `systemctl --user daemon-reload` and
+`systemctl --user restart session-mesh.service`. On macOS, set the variables in the web job's
+`EnvironmentVariables` and restart that job as described under [macOS](#macos). Restart only the
+web service, not the PTY host: terminal sessions stay running, but in-flight recognition is lost.
+Source installs need Node on the web service's PATH, or an absolute executable path in `MESH_NODE`;
+bundles select their bundled Node without changing the Node available to agents.
+
+Dictation is optional: invalid configuration or worker startup failure disables only dictation,
+not the web server. The authenticated, same-origin `GET /api/transcribe/config` returns
+`{"enabled":false,"disabled_reason":"CODE"}` when disabled (`HEAD` has the same status and
+headers without a body). The closed reason codes are `not_configured`, `invalid_configuration`,
+`runtime_unavailable`, `startup_timeout` and `worker_failed`. They contain no endpoint, runtime
+path or child output; clients translate them locally. Unexpected worker exit also disables
+dictation. Correct the configuration/runtime and restart the web service to retry.
+
+Audio preparation does not start inference until the bridge commits it against a live session.
+Matching retries share that preparation: a failed attempt leaves it available for another attempt,
+or until its 15-second preparation deadline. During that interval, a fresh recording for the same
+session can be refused as busy.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MESH_WHISPER_URL` | unset | Complete transcription endpoint; unset disables dictation. |
+| `MESH_WHISPER_LANGUAGE` | unset | Auto-detect when unset; an explicit language (for example `fr`) is forwarded. |
+| `MESH_WHISPER_MAX_BYTES` | `8388608` | Maximum audio bytes per recording (8 MiB). |
+| `MESH_WHISPER_AGGREGATE_BYTES` | `67108864` | Maximum retained audio bytes (64 MiB). |
+| `MESH_WHISPER_QUEUE_SIZE` | `16` | Maximum queued jobs. |
+| `MESH_WHISPER_WORKERS` | `1` | Concurrent transcription requests. |
+| `MESH_WHISPER_TIMEOUT` | `60` | Active-request timeout, seconds. |
+| `MESH_WHISPER_QUEUE_TTL` | `600` | Queue-wait deadline, seconds. |
+| `MESH_WHISPER_RESULT_TTL` | `1800` | Ready-result retention, seconds. |
+| `MESH_WHISPER_CAPTURE_SECONDS` | `120` | Recording-duration limit, seconds. |
+
+The endpoint receives a multipart POST containing only `file`, `response_format=json` and,
+when explicitly configured, `language`, without Mesh credentials. Enabled public configuration
+reports `language: null` for auto-detection, or the configured language string. A successful response must have status 200 and
+contain JSON with a `text` string, or `text/plain`. The response body is capped at 64 KiB and the
+normalized transcript at 32 KiB; terminal control characters are rejected. API-key headers, model
+selection and provider-specific parameters are not implemented. See
+[Voice dictation](features.md#voice-dictation) for the desktop and phone editing flows.
 
 ## Documents opened with mesh-open
 

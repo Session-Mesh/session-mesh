@@ -40,8 +40,16 @@ test('the readiness budget is at least 30 seconds', () => {
   assert.ok(READY_TIMEOUT_MS >= 30_000);
 });
 
+test('explicit headless and sandbox settings survive the shared launch helper', () => {
+  const options = chromiumLaunchOptions('/chrome', ['--use-fake-device-for-media-stream'],
+    {headless: true, chromiumSandbox: true});
+  assert.equal(options.headless, true);
+  assert.equal(options.chromiumSandbox, true);
+  assert.deepEqual(options.args, ['--use-fake-device-for-media-stream', `--lang=${BROWSER_LOCALE}`]);
+});
+
 test('every test that launches Chromium goes through chromiumLaunchOptions', () => {
-  const offenders = sources(TESTS)
+  const offenders = [...sources(TESTS), ...sources(path.resolve(TESTS, '..', 'checks'))]
     .filter(file => !file.endsWith('browser-launch-helper.test.ts'))
     .filter(file => /chromium\.launch\(/.test(fs.readFileSync(file, 'utf8')))
     .filter(file => /chromium\.launch\((?!chromiumLaunchOptions\()/.test(fs.readFileSync(file, 'utf8')))

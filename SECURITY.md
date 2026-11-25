@@ -33,6 +33,15 @@ install.
   software that already runs as you.
 - **The agents you start.** Claude Code, Codex, Pi or any other program in a mesh session run with
   your rights. session-mesh does not sandbox them.
+- **An optional transcription service.** Enabling dictation sends the recorded audio and configured
+  language to the fixed endpoint the operator selected. A remote endpoint receives that audio
+  off-host; HTTPS is required except for loopback HTTP endpoints. Mesh login cookies and
+  bearer/session tokens are not forwarded. The returned
+  transcript is untrusted text, not permission to execute it: the header microphone inserts it
+  without Enter on desktop and stages it in an editable field on phones. Review it before submitting
+  manually. The separate composer's explicit auto-send preference does not authorize the header flow.
+  This does not attest that the service transcribed the recording accurately. Endpoint configuration
+  and the current API contract are documented under [Whisper dictation](docs/operations.md#whisper-dictation).
 - **GitHub and everyone who can push to the repository**, for a release install. A release is
   built and published by the repository's release workflow when a `v*` tag is pushed. The build
   attestation that the installer checks (with `gh` logged in) proves that a file was built by that

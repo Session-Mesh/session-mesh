@@ -82,14 +82,31 @@ let read_frame socket =
   (Bytes.get head 0, Bytes.to_string (read_exactly socket length))
 
 (* Attach, check the reply, and give [f] the socket and the replay. *)
-let attached socket_path f =
+let attached ?(conditional = false) socket_path f =
   let socket = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Fun.protect
     ~finally:(fun () -> Unix.close socket)
     (fun () ->
       Unix.setsockopt_float socket Unix.SO_RCVTIMEO 10.;
       Unix.connect socket (Unix.ADDR_UNIX socket_path);
-      let payload = {|{"op":"attach","name":"modes"}|} in
+      let payload =
+        if not conditional then {|{"op":"attach","name":"modes"}|}
+        else
+          let sessions = request socket_path {|{"op":"list"}|} in
+          let session =
+            List.find
+              (fun session -> member "name" session = `String "modes")
+              (Yojson.Basic.Util.to_list sessions)
+          in
+          Yojson.Basic.to_string
+            (`Assoc
+               [
+                 ("op", `String "attach_if");
+                 ("name", `String "modes");
+                 ("created", member "created" session);
+                 ("size", `String "claim");
+               ])
+      in
       let head = Bytes.create 5 in
       Bytes.set head 0 'C';
       Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
@@ -101,6 +118,11 @@ let attached socket_path f =
       expect "a control reply first" (kind = 'C');
       expect "attached"
         (member "ok" (Yojson.Basic.from_string reply) = `Bool true);
+      if conditional then
+        expect "conditional input is acknowledged"
+          (List.mem (`String "conditional_input_v1")
+             (Yojson.Basic.Util.to_list
+                (member "pty_capabilities" (Yojson.Basic.from_string reply))));
       let kind, replay = read_frame socket in
       expect "the replay next" (kind = 'D');
       f socket replay)
@@ -145,7 +167,7 @@ let check_late_replay label replay =
     true
     (contains window "MARK-END")
 
-let late_clients_get_the_modes () =
+let late_clients_get_the_modes conditional () =
   with_host `Fullscreen (fun ~home socket_path ->
       attached socket_path (fun live replay ->
           Alcotest.(check string) "attached from the start: no prefix" "" replay;
@@ -154,17 +176,17 @@ let late_clients_get_the_modes () =
           Alcotest.(check bool)
             "more than the capacity went by" true
             (received > 2 * 1024 * 1024);
-          attached socket_path (fun _ replay ->
+          attached ~conditional socket_path (fun _ replay ->
               check_late_replay "a late client" replay);
-          attached socket_path (fun _ replay ->
+          attached ~conditional socket_path (fun _ replay ->
               check_late_replay "a later client" replay)))
 
-let uncut_replay_is_unchanged () =
+let uncut_replay_is_unchanged conditional () =
   with_host `Small (fun ~home:_ socket_path ->
       let replay = ref "" in
       ignore
         (wait_until "the program wrote" 10. (fun () ->
-             attached socket_path (fun _ bytes ->
+              attached ~conditional socket_path (fun _ bytes ->
                  replay := bytes;
                  contains bytes "small\r\n")));
       Alcotest.(check string)
@@ -185,8 +207,12 @@ let () =
       ( "attach",
         [
           Alcotest.test_case "late clients receive the modes first" `Quick
-            late_clients_get_the_modes;
+            (late_clients_get_the_modes false);
           Alcotest.test_case "an uncut replay is unchanged" `Quick
-            uncut_replay_is_unchanged;
+            (uncut_replay_is_unchanged false);
+          Alcotest.test_case "conditional clients receive the modes first" `Quick
+            (late_clients_get_the_modes true);
+          Alcotest.test_case "an uncut conditional replay is unchanged" `Quick
+            (uncut_replay_is_unchanged true);
         ] );
     ]

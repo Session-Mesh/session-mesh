@@ -11,10 +11,12 @@
 # same pull request). Keep the lists sorted. When you list a file below, delete its line of the
 # "not listed" comments at the end.
 #
-# Listed here: every file that passed twice in a row on macOS 15.6 arm64 (Homebrew Node 24,
+# Original entries: every file that passed twice in a row on macOS 15.6 arm64 (Homebrew Node 24,
 # Python 3.11 venv, system bash 3.2), with the OCaml programs built from this tree except
 # mesh-history (its sqlite dependencies were not installed there). The browser tests (file names
 # with `browser`) are not listed: no Chromium runs in this job.
+# The dictation additions use only portable in-process Node APIs; no macOS run is claimed.
+# The owner signal tests use Node APIs and their own private native fixture; no macOS run is claimed.
 #
 # Node tests
 tests/agentcap-history.test.ts
@@ -45,6 +47,22 @@ tests/copilot-launch-line.test.ts
 tests/copilot-real.test.ts
 tests/copilot-resume.test.ts
 tests/direct-line.test.ts
+tests/direct-line-pending-paste.test.ts
+tests/dictation-check-chain.test.ts
+tests/dictation-inline-view.test.ts
+tests/dictation-native-editor.test.ts
+tests/dictation-owner-signals.test.ts
+tests/dictation-python-compat.test.ts
+tests/dictation-projects-lifecycle.test.ts
+tests/dictation-review-fixtures.test.ts
+tests/dictation-review-lifecycle.test.ts
+tests/dictation-review-pane-replay.test.ts
+tests/dictation-review-server.test.ts
+tests/dictation-service-review.test.ts
+tests/dictation-service-second-review.test.ts
+tests/dictation-startup.test.ts
+tests/dictation-state.test.ts
+tests/login-path-fixture.test.ts
 tests/event-sequence.test.ts
 tests/flow-build.test.ts
 tests/flow-events.test.ts
@@ -59,6 +77,7 @@ tests/history-review4-fixes.test.ts
 tests/history-review5-fixes.test.ts
 tests/history-review-fixes.test.ts
 tests/host-loopback.test.ts
+tests/human-input-review-lease.test.ts
 tests/i18n-coverage.test.ts
 tests/i18n.test.ts
 tests/idle-observable.test.ts
@@ -151,6 +170,9 @@ tests/server-robustness.test.ts
 tests/session-activity-idle.test.ts
 tests/shortcuts.test.ts
 tests/site-workflow.test.ts
+tests/terminal-cache-lifecycle.test.ts
+tests/terminal-clipboard-context.test.ts
+tests/terminal-compat-input.test.ts
 tests/terminal-links.test.ts
 tests/terminal-replay.test.ts
 tests/test-local-python.test.ts

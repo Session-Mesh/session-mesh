@@ -25,8 +25,13 @@ class _EchoAttach:
         self.capabilities = capabilities
         self.attachments = []
 
-    async def attach_info(self, _name, _rows, _cols, size=None):
+    async def attach_info(self, _name, _rows, _cols, *, created=None, size=None):
+        if created is not None:
+            listed = await ptyhost.request({"op": "list"})
+            assert any(row["name"] == _name and row["created"] == created for row in listed)
         reader = asyncio.StreamReader()
+        # Every native attach starts with a replay D frame, even when it is empty.
+        reader.feed_data(ptyhost.frame(b"D", b""))
         record = []
         self.attachments.append(record)
 
@@ -112,7 +117,15 @@ async def test_old_attach_keeps_input_across_reconnect_and_reload(
                 await tab.reload(wait_until="domcontentloaded")
                 await tab.wait_for_function(
                     "active?.id === 'old-input' && active.conn?.ws?.readyState === WebSocket.OPEN")
-            await _type_terminal(tab, phone, marker)
+            # Limited hosts admit immediate xterm keys on either form factor;
+            # the phone's buffered line requires verified deferred input.
+            await tab.wait_for_function("""() => {
+              const c = active?.conn;
+              return active?.id === 'old-input' && c?.ws?.readyState === WebSocket.OPEN
+                && c.terminal?.socket === c.ws && c.terminal.limited && !c.closed && !c.ended
+                && !c.replayPending && !c.replaying && !c.draining;
+            }""")
+            await _type_terminal(tab, False, marker)
             script, argument = _terminal_text_script(marker)
             await tab.wait_for_function(script, arg=argument)
 
@@ -325,16 +338,22 @@ async def test_unfinished_input_lease_stays_with_its_session_incarnation(browser
         await tab.wait_for_function("data?.mesh?.some((session) => session.id === 'lease-a')")
         await tab.locator('#list .item[data-id="lease-a"]').click()
         await tab.wait_for_function("active?.id === 'lease-a' && active.conn?.ws?.readyState === WebSocket.OPEN")
-        assert await tab.evaluate("active.send('partial'); active.inputLease.dirty")
+        await tab.wait_for_function("active.conn.terminal.isBound(active.conn.name, active.conn.created) && !active.conn.replayPending && !active.conn.replaying && !active.conn.draining")
+        await tab.evaluate("active.send('partial')")
+        await tab.wait_for_function("active.inputLease.dirty")
         await tab.evaluate("active.show('lease-b')")
         await tab.wait_for_function("active?.id === 'lease-b' && active.conn?.ws?.readyState === WebSocket.OPEN")
+        await tab.wait_for_function("active.conn.terminal.isBound(active.conn.name, active.conn.created) && !active.conn.replayPending && !active.conn.replaying && !active.conn.draining")
         state = await tab.evaluate("""() => ({
           currentDirty: active.inputLease.dirty,
           retained: [...active.inputLeases.values()].map(lease => lease.dirty),
           leases: active.inputLeases.size,
         })""")
         assert state == {"currentDirty": False, "retained": [True, False], "leases": 2}
-        assert await tab.evaluate("active.send('safe'); active.send('\\r'); !active.inputLease.dirty")
+        await tab.evaluate("active.send('safe')")
+        await tab.wait_for_function("active.inputLease.dirty")
+        await tab.evaluate("active.send('\\r')")
+        await tab.wait_for_function("!active.inputLease.dirty")
         assert await tab.evaluate("[...active.inputLeases.values()].map(lease => lease.dirty)") == [True, False]
     finally:
         await context.close()

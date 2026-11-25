@@ -10,6 +10,9 @@
   "scripts": {
     "build:flow": "esbuild static/flow-view.ts --bundle --format=esm --target=es2022 --outfile=static/flow-view.js --minify --legal-comments=none --banner:js='/* SPDX-License-Identifier: AGPL-3.0-or-later; Copyright (c) 2026 Atacama <contact@atacama.tech> */'",
     "check:flow": "tsc --noEmit --strict --exactOptionalPropertyTypes --noUncheckedIndexedAccess --target es2022 --module esnext --moduleResolution bundler --allowImportingTsExtensions --lib dom,es2022 --skipLibCheck static/flow-model.ts static/flow-view.ts && esbuild static/flow-view.ts --bundle --format=esm --target=es2022 --minify --legal-comments=none --banner:js='/* SPDX-License-Identifier: AGPL-3.0-or-later; Copyright (c) 2026 Atacama <contact@atacama.tech> */' | cmp -s - static/flow-view.js",
+    "build:dictation": "node tools/build-dictation.mjs",
+    "typecheck:dictation": "tsc --project tsconfig.dictation.json",
+    "check:dictation": "tsc --project tsconfig.dictation.json && node tools/build-dictation.mjs --check && node --experimental-strip-types --test --test-concurrency=2 tests/dictation.test.ts tests/dictation-auth.test.ts tests/dictation-service*.test.ts tests/dictation-startup.test.ts tests/dictation-check-chain.test.ts tests/dictation-review-server.test.ts",
     "build:board": "node tools/build-board.mjs",
     "check:third-party": "node tools/check-third-party.mjs",
     "check:board": "node --check static/board-src.mjs && node --check tools/build-board.mjs",
@@ -46,7 +49,7 @@
     "build:demo-input": "node tools/build-demo-input.mjs",
     "check:demo-input": "tsc --project tsconfig.demo-input.json && node tools/build-demo-input.mjs --check && node tools/test-demo-input.mjs && node demo-runtime/test-input-schema-vectors.mjs",
     "check:issue-triage": "tsc --project tsconfig.issue-triage.json && node --experimental-strip-types --test tests/issue-triage.test.ts tests/issue-triage-workflow.test.ts",
-    "check": "npm run lint:js && npm run check:terminal-links && npm run check:update-notice && npm run check:sessions-progress && npm run check:themes && npm run check:diff-view && npm run check:third-party && npm run check:bridge-quality && npm run check:board && npm run check:demo-runtime && npm run check:demo-catalog && npm run check:demo-view && npm run check:demo-input && npm run check:projects && npm run check:work-view && npm run check:issue-triage && npm run check:changelog && npm run check:agent-hooks",
+    "check": "npm run lint:js && npm run check:dictation && npm run check:terminal-links && npm run check:update-notice && npm run check:sessions-progress && npm run check:themes && npm run check:diff-view && npm run check:third-party && npm run check:bridge-quality && npm run check:board && npm run check:demo-runtime && npm run check:demo-catalog && npm run check:demo-view && npm run check:demo-input && npm run check:projects && npm run check:work-view && npm run check:issue-triage && npm run check:changelog && npm run check:agent-hooks",
     "check:changelog": "tsc --project tsconfig.changelog.json && node --experimental-strip-types tools/changelog/changelog.ts check",
     "check:agent-hooks": "tsc --project tsconfig.agent-hooks.json",
     "build:projects": "node tools/build-projects.mjs",

@@ -59,7 +59,7 @@ export type PollerOptions<R> = {
   baseIntervalMs?: number | (() => number);   // a function is read after each answer
   maxIntervalMs?: number;
   minDelayMs?: () => number;   // a floor for every scheduled delay, read when scheduling
-  timeoutMs?: number;
+  timeoutMs?: number | (() => number);   // read once per attempt
   onChange?: (state: PollerState) => void;
   onApplyError?: (error: unknown) => void;
 };
@@ -163,7 +163,8 @@ function schedule<R>(core: Core<R>, delay: number): void {
 async function attempt<R>(core: Core<R>, controller: AbortController, requested: boolean): Promise<{ outcome: AttemptOutcome; result: R | undefined }> {
   const { clock, load, apply } = core.options;
   let timedOut = false;
-  const deadline = clock.setTimeout(() => { timedOut = true; controller.abort(); }, core.options.timeoutMs ?? TIMEOUT_MS);
+  const timeout = typeof core.options.timeoutMs === "function" ? core.options.timeoutMs() : core.options.timeoutMs ?? TIMEOUT_MS;
+  const deadline = clock.setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
   let outcome: LoadOutcome;
   try {
     outcome = await load(controller.signal, { requested });
