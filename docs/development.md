@@ -33,7 +33,11 @@ stable release and nightly, validates each asset's advertised SHA-256 and size, 
 native programs on `main`, and runs the same snapshot and account scenarios. This separate workflow
 reports failures without making mutable release downloads a merge queue dependency. It has no write
 token, and checkout credentials are not retained for the historical
-processes. The checks do not cover installer upgrades, rollback or real provider credentials.
+processes. The disposable home and restricted environment are not a filesystem or network sandbox;
+only run trusted historical releases. Stable-release coverage exercises shell sessions; synthetic
+Codex alias restoration is tested from the nightly only. The checks do not cover installer upgrades,
+native account profile migration, rollback or real provider credentials, and a failure does not block
+nightly publication.
 To reproduce with the current published releases, choose a new absolute directory and run
 `node --experimental-strip-types tools/fetch-historical-releases.ts /absolute/new-directory`, then
 use that path as `MESH_HISTORICAL_ARTIFACTS` and set `MESH_HISTORICAL_DYNAMIC=1` in addition to
