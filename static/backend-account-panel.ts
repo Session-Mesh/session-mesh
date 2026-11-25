@@ -16,8 +16,12 @@ let serial = 0;
  * No app globals, credential editor, network fallback, provider access or switch operation. */
 export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccountPanelPorts) {
   const doc = host.ownerDocument, prefix = `backend-accounts-${++serial}`;
-  const controller = createBackendAccountController(ports, ports.inspect
-    ? provisionJournal(doc.defaultView!.localStorage, doc.defaultView!.indexedDB, doc.defaultView!.crypto) : undefined);
+  const journal = () => provisionJournal(doc.defaultView!.localStorage, doc.defaultView!.indexedDB, doc.defaultView!.crypto);
+  const controller = createBackendAccountController(ports, ports.inspect ? {
+    async load() { return journal().load(); },
+    async acquire() { return journal().acquire(); },
+    async save(id, value) { return journal().save(id, value); },
+  } : undefined);
   const t = ports.t;
   const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] => {
     const element = doc.createElement(tag); if (text !== undefined) element.textContent = text; return element;
@@ -41,6 +45,8 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
   let creation: {mode: 'associate' | 'provision'; backend: Backend; id: string; label: string; roots: Record<string, string>} | null = null;
   const trimLabel = (value: string) => value.replace(/^[\x09-\x0d\x20]+|[\x09-\x0d\x20]+$/g, '');
   let draft: {backend: Backend; a: string; b: string; confirmation: Confirmation} | null = null;
+  let globalDraft: Confirmation | null = null;
+  let previousProvisionPending = false;
   let restoreFocus: string | null = null;
   const writable = () => !!controller.state.snapshot && (controller.state.phase === 'ready' || controller.state.phase === 'saved');
   const canAssociate = () => writable() || (!!controller.state.inspected &&
@@ -55,10 +61,10 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
     const profiles = profilesFor(draft.backend), a = profiles.find(p => p.id === draft!.a), b = profiles.find(p => p.id === draft!.b);
     return a && b && a.id !== b.id ? {a, b} : null;
   };
-  function clearDraft() { draft = null; editHost?.replaceChildren(); }
+  function clearDraft() { draft = null; globalDraft = null; editHost?.replaceChildren(); }
   function close() {
     ++generation;
-    controller.close(); clearDraft(); creation = null; shown = null;
+    controller.close(); clearDraft(); creation = null; shown = null; previousProvisionPending = false;
     content.replaceChildren();
     inspected = undefined;
     if (dialog.open) dialog.close();
@@ -243,10 +249,10 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
     content.replaceChildren(profileControls(snapshot.registry));
     const controls = node('fieldset'); controls.dataset.controls = '';
     controls.append(node('legend', t('backendAccounts.confirmations')));
-    let globalDraft = snapshot.policy.global;
-    const global = radios('global', 'global', globalDraft, value => { globalDraft = value; });
+    const globalValue = globalDraft ?? snapshot.policy.global;
+    const global = radios('global', 'global', globalValue, value => { globalDraft = value; });
     const warning = node('p', t('backendAccounts.globalWarning')); warning.id = `${prefix}-global-warning`; global.setAttribute('aria-describedby', warning.id);
-    const saveGlobal = button('saveGlobal', 'save-global', () => { if (writable()) void controller.saveGlobal(globalDraft); });
+    const saveGlobal = button('saveGlobal', 'save-global', () => { if (writable()) void controller.saveGlobal(globalDraft ?? globalValue); });
     controls.append(global, warning, saveGlobal, node('h3', t('backendAccounts.pairRules')), node('p', t('backendAccounts.pairScope')));
     if (!snapshot.policy.pairs.length) controls.append(node('p', t('backendAccounts.noRules')));
     for (const rule of snapshot.policy.pairs) {
@@ -283,9 +289,10 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
         ? ` ${t(`backendAccounts.refusal.${state.refusal}`)}` : '');
     dialog.setAttribute('aria-busy', String(state.phase === 'loading' || state.phase === 'saving'));
     refresh.disabled = state.phase === 'saving' || state.phase === 'loading';
-    if (state.phase === 'saved' && !state.provisionPending && creation?.mode === 'provision') {
+    if (state.phase === 'saved' && previousProvisionPending && !state.provisionPending && creation?.mode === 'provision') {
       creation = null; createHost?.replaceChildren();
     }
+    previousProvisionPending = !!state.provisionPending;
     const capability = ports.provision?.backends.join(',') ?? '';
     if (state.snapshot !== shown || state.inspected !== inspected || capability !== shownCapability) {
       if (state.snapshot !== shown || state.inspected !== inspected) clearDraft();
