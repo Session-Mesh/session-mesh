@@ -36,7 +36,7 @@ describe('explicit restore profile binding', {skip}, () => {
       assert.deepEqual(actions,['preview','confirm']);
     } finally { await context.close(); }
   });
-  for (const status of [409, 500]) test(`confirmation HTTP ${status} is not retried`, async () => {
+  for (const status of [409, 408, 429, 500]) test(`confirmation HTTP ${status} is not retried`, async () => {
     const context = await browser.newContext({locale:'en-US', viewport:{width:1400,height:900}});
     try {
       const page = await context.newPage(); const actions: string[] = []; let reads = 0;
@@ -55,7 +55,7 @@ describe('explicit restore profile binding', {skip}, () => {
       await page.getByText(status === 409 ? 'The offer or profile changed, or the request was refused. Close and review it again.' : 'The result is unknown. Close and refresh before trying again; the request was not repeated.').waitFor();
       assert.equal(await page.getByRole('button',{name:'Confirm binding'}).count(),0);
       assert.deepEqual(actions,['preview','confirm']);
-      assert.equal(reads, status === 500 ? 2 : 1, 'uncertain results are refreshed before another preview');
+      assert.equal(reads, status === 409 ? 1 : 2, 'uncertain results are refreshed before another preview');
       await page.getByRole('button',{name:'Review binding'}).waitFor({state:'visible'});
       await page.getByRole('button',{name:'Review binding'}).click();
       assert.deepEqual(actions,['preview','confirm','preview']);

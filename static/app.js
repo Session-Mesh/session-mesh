@@ -5627,7 +5627,7 @@ async function openRestoreRebind() {
       const r = await requestLocal("/api/restore/rebind", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"confirm", ...proposal})});
       if (!r.ok) {
         confirm.hidden = true; proposal = null;
-        if (r.status >= 400 && r.status < 500) { status.textContent = t("restore.rebind.stale"); preview.hidden = false; preview.disabled = false; }
+        if ([400, 401, 403, 409].includes(r.status)) { status.textContent = t("restore.rebind.stale"); preview.hidden = false; preview.disabled = false; }
         else await refreshOffersAfterUncertain();
         return;
       }
