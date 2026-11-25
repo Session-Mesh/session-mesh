@@ -112,7 +112,7 @@ describe('merge queue: every required check name is reported', () => {
         }
       }
     }
-    assert.equal(checked, 3, 'frontend and python need native; browser needs the guarded browser matrix');
+    assert.equal(checked, 3, 'frontend and browser require guarded matrices; python needs native');
   });
 
   test('the three jobs that wait for the native PTY host carry the guard on needs.native.result', () => {
@@ -126,10 +126,23 @@ describe('merge queue: every required check name is reported', () => {
     for (const name of ['frontend and Node tests', 'ruff and pytest (without browser)', 'browser tests (Chromium, shard ${{ matrix.shard }} of 4)']) {
       const steps = jobOf('public-ci.yml', name).split('    steps:\n')[1];
       const guardName = name.startsWith('browser tests (Chromium')
-        ? 'Require every browser test shard' : 'Fail unless the native PTY host job succeeded';
+        ? 'Require every browser test shard' : name === 'frontend and Node tests'
+          ? 'Require both frontend shards' : 'Fail unless the native PTY host job succeeded';
       assert.ok(steps.startsWith(`      - name: ${guardName}\n        env:`));
       assert.doesNotMatch(steps.split(/^ {6}- /m)[1], /^ {8}if:/m);
     }
+  });
+
+  test('the non-required frontend matrix checks native before running either shard', () => {
+    const name = 'frontend and Node tests (shard ${{ matrix.shard }} of 2)';
+    const body = jobOf('public-ci.yml', name);
+    assert.match(body, /^ {4}needs: native$/m);
+    assert.match(body, /^ {4}if: "!cancelled\(\)"$/m);
+    const steps = body.split('    steps:\n')[1];
+    assert.ok(steps.startsWith('      - name: Fail unless the native PTY host job succeeded\n        env:'));
+    assert.match(steps, /NATIVE_RESULT: \$\{\{ needs\.native\.result \}\}/);
+    assert.match(steps, /"\$NATIVE_RESULT" != success/);
+    assert.doesNotMatch(steps.split(/^ {6}- /m)[1], /^ {8}if:/m);
   });
 
   // The names the ruleset requires, as CONTRIBUTING.md ("Required checks") lists them, with the
@@ -144,7 +157,7 @@ describe('merge queue: every required check name is reported', () => {
       .map((match) => match[1] === 'browser tests (Chromium, shard N of 4)' ? SHARD_NAME : match[1]);
   }
   function declaredShards(): number[] {
-    const match = /^ {8}shard: \[([0-9, ]+)\]$/m.exec(read('public-ci.yml'));
+    const match = /^ {8}shard: \[([0-9, ]+)\]$/m.exec(jobOf('public-ci.yml', SHARD_NAME));
     assert.ok(match, 'no shard matrix in public-ci.yml');
     return match[1].split(',').map((item) => Number(item.trim()));
   }
@@ -162,7 +175,8 @@ describe('merge queue: every required check name is reported', () => {
     // Both helpers are non-required themselves; required jobs explicitly
     // guard their result, so neither failure can pass as a skipped check.
     const helpers = new Set(['native PTY host (linux-x86_64)',
-      'browser ${{ matrix.kind }} tests (Chromium, shard ${{ matrix.shard }} of 4)']);
+      'browser ${{ matrix.kind }} tests (Chromium, shard ${{ matrix.shard }} of 4)',
+      'frontend and Node tests (shard ${{ matrix.shard }} of 2)']);
     for (const workflow of Object.keys(REQUIRED)) {
       for (const job of jobBlocks(parseLines(read(workflow)))) {
         const name = /^ {4}name: (.*)$/m.exec(job.block.map((line) => line.raw).join('\n'))?.[1] ?? '';
