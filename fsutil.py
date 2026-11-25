@@ -113,14 +113,14 @@ def conversation_request(op, **fields):
     life_read, life_write = os.pipe()
     try:
         info = os.fstat(life_read)
-        # OCaml's Unix.fstat represents inode numbers as tagged machine ints.
-        # Darwin can return an unsigned inode wider than that representation.
+        # OCaml's Unix.fstat represents device and inode numbers as tagged
+        # machine ints. Darwin can return an unsigned inode wider than that.
         # Encode the same signed value that the native helper will observe.
         inode = _ocaml_int(info.st_ino)
         run = subprocess.run([command, "--conversation-names"], input=body + b"\n", stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, cwd="/", pass_fds=(life_read,),
                              env={"MESH_CONF_DIR": str(meshpaths.CONF_DIR), "PATH": "/usr/bin:/bin",
-                                  "MESH_CONVERSATION_LIFELINE": f"{life_read}:{info.st_dev}:{inode}"})
+                                  "MESH_CONVERSATION_LIFELINE": f"{life_read}:{_ocaml_int(info.st_dev)}:{inode}"})
     finally:
         try:
             os.close(life_read)
