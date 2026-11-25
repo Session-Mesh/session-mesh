@@ -3639,7 +3639,7 @@ def _conversation_found_in_root(root, data, pattern):
         os.path.isfile(match) for match in glob.glob(os.path.join(glob.escape(folder), *pattern)))
 
 
-def _conversation_missing(kind, sid, account=None, *, bound_default_root=None, bound_named=False):
+def _conversation_missing(kind, sid, account=None, *, bound_default_root=None):
     """Whether the conversation is known to be gone: no Claude transcript, no Codex rollout of that id.
     Pi and OpenCode are checked when their launch line is built; the others are not checked. Claude's and
     Codex's data folders are looked for in ``$CLAUDE_CONFIG_DIR`` and ``$CODEX_HOME`` (absolute) and in
@@ -3658,8 +3658,6 @@ def _conversation_missing(kind, sid, account=None, *, bound_default_root=None, b
         return not _conversation_found_in_root(bound_default_root, data, pattern)
     if account is not None:
         folder = account_folder(account, kind)
-        if bound_named:
-            return not _conversation_found_in_root(folder, data, pattern)
         folders = [os.path.join(folder, data)] if folder else []
     present = [folder for folder in folders if os.path.isdir(folder)]
     return bool(present) and not any(os.path.isfile(match) for folder in present   # a dangling link is no transcript
@@ -3685,9 +3683,13 @@ def _restore_identity(entry):
     bound_named = bool(entry.get("account") and entry.get("account_context_revision"))
     missing = False
     if agent and agent["session_id"]:
-        if bound_root is not None or bound_named:
+        if bound_named:
+            # The asynchronous profile resolver is authoritative, not the
+            # eventually consistent account label/root cache.
+            missing = False
+        elif bound_root is not None:
             missing = _conversation_missing(agent["type"], agent["session_id"], entry.get("account"),
-                                            bound_default_root=bound_root, bound_named=bound_named)
+                                            bound_default_root=bound_root)
         else:
             missing = _conversation_missing(agent["type"], agent["session_id"], entry.get("account"))
     if missing:
@@ -7008,6 +7010,28 @@ async def _restore_launch_context(entry):
     return await _profile_launch_context(account, agent["type"], revision)
 
 
+async def _verified_restore_context(entry):
+    """Validate transcript against the exact bound context selected for launch."""
+    context = await _restore_launch_context(entry)
+    agent = entry.get('agent')
+    if not agent or not agent.get('session_id'):
+        return context
+    layout = _conversation_layout(agent['type'], agent['session_id'])
+    if layout is None:
+        return context
+    root = None
+    if entry.get('account') and entry.get('account_context_revision'):
+        root = (context or {}).get('roots', {}).get('config')
+    elif not entry.get('account') and entry.get('default_context_revision'):
+        root = accountswitch.default_context(agent['type'], os.environ)['root']
+    else:
+        return context
+    _, _, data, pattern = layout
+    if not await asyncio.to_thread(_conversation_found_in_root, root, data, pattern):
+        raise web.HTTPConflict(text='Bound account conversation unavailable; restore refused')
+    return context
+
+
 async def _create_restored(name, entry, running, reason=None):
     """The page path's creation: (the new session's name, None), or (None, the refusal result). A creation sent to
     the host whose outcome is unknown holds the conversation (``running``) and the offer, then re-raises.
@@ -7021,7 +7045,7 @@ async def _create_restored(name, entry, running, reason=None):
             _validate_default_restore(agent["type"], entry["default_context_revision"])
         if agent and not resumable and (entry.get("account_context_revision") or entry.get("default_context_revision")):
             raise web.HTTPConflict(text="Bound account conversation unavailable; restore refused")
-        context = await _restore_launch_context(entry) if resumable else None
+        context = await _verified_restore_context(entry) if resumable else None
         command = shlex.join(_resume_argv(agent, context)) if resumable else _not_relaunched_line(agent, reason)
         new = await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
                                 agent["type"] if resumable else None, keep=48,
@@ -7176,6 +7200,11 @@ async def _precheck_exact(app, name, entry, running):
     if agent and not sid:
         return _result("not-resumable", "not-started",
                        "An agent without a conversation id is not restored as a plain shell by a guarded restore")
+    if sid and (entry.get('account_context_revision') or entry.get('default_context_revision')):
+        try:
+            await _verified_restore_context(entry)
+        except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, web.HTTPServiceUnavailable) as exc:
+            return _result('launch-refused', 'not-started', exc.text, status=exc.status)
     if sid and (sid in running or sid in recent_conversations(app) or sid in resuming_conversations()):
         return _result("conversation-running", "not-started",
                        "This conversation is already running: nothing was restarted")
@@ -7189,7 +7218,7 @@ async def _create_exact(name, entry, nonce):
     agent = entry["agent"]
     resumable = bool(agent and agent["session_id"])
     try:
-        context = await _restore_launch_context(entry) if resumable else None
+        context = await _verified_restore_context(entry) if resumable else None
         command = shlex.join(_resume_argv(agent, context)) if resumable else None
         await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
                           agent["type"] if resumable else None, keep=48, exact=True, nonce=nonce,
