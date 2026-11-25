@@ -223,6 +223,20 @@ let test_symlink_journal () =
   Alcotest.(check string) "target not modified" "" content;
   Alcotest.(check bool) "link refused" true (String.length diagnostics > 0)
 
+let test_dangling_journal () =
+  List.iter
+    (fun plugin_path ->
+      let target = Filename.temp_file "mesh-trace-dangling-" ".txt" in
+      Sys.remove target;
+      let path = target ^ ".link" in
+      Unix.symlink target path;
+      Fun.protect ~finally:(fun () -> Sys.remove path; if Sys.file_exists target then Sys.remove target)
+        (fun () ->
+          let _, diagnostics = run ?plugin_path ~journal:path () in
+          Alcotest.(check bool) "dangling target never created" false (Sys.file_exists target);
+          Alcotest.(check bool) "link refused" true (String.length diagnostics > 0)))
+    [ None; Some mesh_plugin ]
+
 let test_hardlink_journal () =
   let target = Filename.temp_file "mesh-trace-hard-target-" ".txt" in
   let path = target ^ ".link" in
@@ -257,6 +271,7 @@ let () =
             test_locked_journal;
           Alcotest.test_case "refuses a FIFO" `Quick test_fifo_journal;
           Alcotest.test_case "refuses a symlink" `Quick test_symlink_journal;
+          Alcotest.test_case "refuses a dangling symlink" `Quick test_dangling_journal;
           Alcotest.test_case "refuses a hard link" `Quick test_hardlink_journal;
         ] );
     ]

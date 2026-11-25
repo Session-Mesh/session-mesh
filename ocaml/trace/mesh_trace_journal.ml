@@ -60,9 +60,14 @@ let lock_bounded fd =
 
 let append path line =
   let fd =
-    Unix.openfile path
-      [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_APPEND; Unix.O_NONBLOCK ]
-      0o600
+    (* O_EXCL refuses a dangling symlink; reopening an existing name must
+       never use O_CREAT, which would otherwise create the link target. *)
+    try
+      Unix.openfile path
+        [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_APPEND; Unix.O_NONBLOCK ]
+        0o600
+    with Unix.Unix_error (Unix.EEXIST, _, _) ->
+      Unix.openfile path [ Unix.O_WRONLY; Unix.O_APPEND; Unix.O_NONBLOCK ] 0
   in
   Fun.protect
     ~finally:(fun () -> Unix.close fd)

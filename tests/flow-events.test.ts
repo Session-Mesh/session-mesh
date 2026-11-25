@@ -51,6 +51,19 @@ describe('flow journal helper', {skip}, () => {
     } finally { fs.rmSync(dir, {recursive: true, force: true}); }
   });
 
+  test('refuses a dangling lock symlink without creating its target', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-flow-dangling-'));
+    try {
+      const target = path.join(dir, 'missing-target');
+      fs.symlinkSync(target, path.join(dir, 'flow-events.lock'));
+      assert.notEqual(invoke(dir, 'read').status, 0);
+      assert.equal(fs.existsSync(target), false);
+      assert.notEqual(invoke(dir, 'write', JSON.stringify(event('one'))).status, 0);
+      assert.equal(fs.existsSync(target), false);
+      assert.equal(fs.existsSync(path.join(dir, 'flow-events.json')), false);
+    } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+  });
+
   test('refuses a FIFO in place of its lock without waiting', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-flow-fifo-'));
     try {

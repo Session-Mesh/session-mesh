@@ -80,7 +80,13 @@ let private_file fd path =
 
 let with_lock directory f =
   let path = Filename.concat directory "flow-events.lock" in
-  let fd = Unix.openfile path [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_NONBLOCK ] 0o600 in
+  (* Exclusive creation refuses even a dangling final symlink. If the name
+     exists, open without O_CREAT so a link cannot create its target. *)
+  let fd =
+    try Unix.openfile path [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_EXCL; Unix.O_NONBLOCK ] 0o600
+    with Unix.Unix_error (Unix.EEXIST, _, _) ->
+      Unix.openfile path [ Unix.O_RDWR; Unix.O_NONBLOCK ] 0
+  in
   Fun.protect
     ~finally:(fun () -> Unix.close fd)
     (fun () ->
