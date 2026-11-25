@@ -70,6 +70,28 @@ describe('account choice of the New session dialog', {skip: SKIP}, () => {
   const preset = (page: Page, value: string) => page.locator(`#form-new .presets label:has(input[value="${value}"])`).click();
   const optionTexts = (page: Page) => account(page).evaluate((select: HTMLSelectElement) => [...select.options].map(option => option.text));
 
+  test('Pi with no remembered alias can launch when account discovery fails', async () => {
+    const page = await mesh.signIn({width: 1440, height: 900}); pages.push(page);
+    await page.waitForFunction(() => typeof data.home === 'string' && data.home.length > 0);
+    const sent: Record<string, unknown>[] = [];
+    await page.route('**/api/new', route => {
+      sent.push(route.request().postDataJSON() as Record<string, unknown>);
+      return route.fulfill({status: 400, body: 'fixture'});
+    });
+    await page.route('**/api/config', route => route.fulfill({status: 503, body: 'unavailable'}));
+    try {
+      await page.evaluate(() => { store.set('preset', 'pi'); store.set('account', ''); void openNew(); });
+      await page.getByRole('button', {name: 'Retry loading accounts'}).waitFor();
+      await page.locator('#form-new input[name="cwd"]').fill(mesh.home);
+      await page.locator('#form-new input[name="cwd"]').press('Tab');
+      await submit(page);
+      await page.waitForFunction(() => document.querySelector('#new-err')?.textContent === 'fixture', undefined, {timeout: 3000});
+      assert.equal(sent.length, 1);
+      assert.equal(sent[0]!.preset, 'pi');
+      assert.equal(sent[0]!.account, undefined);
+    } finally { await page.unrouteAll({behavior: 'wait'}); }
+  });
+
   for (const kind of ['codex', 'opencode', 'pi']) test(`pending accounts never launch ${kind} under the default account`, async () => {
     let release!: () => void, entered!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
