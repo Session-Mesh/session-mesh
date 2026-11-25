@@ -143,6 +143,28 @@ def test_approved_native_switch_does_not_fall_back_when_registry_disappears(monk
     assert events == []
 
 
+def test_helper_snapshot_works_without_python_311_file_digest(monkeypatch, tmp_path):
+    path = tmp_path / 'helper'
+    path.write_bytes(b'fixture')
+    monkeypatch.delattr(server.hashlib, 'file_digest', raising=False)
+    assert server._carry_helper_snapshot(str(path))[2] == server.hashlib.sha256(b'fixture').digest()
+
+
+def test_helper_snapshot_rejects_oversized_file(tmp_path):
+    path = tmp_path / 'helper'
+    with path.open('wb') as output:
+        output.truncate(128 * 1024 * 1024 + 1)
+    with pytest.raises(server.AccountsUnavailable):
+        server._carry_helper_snapshot(str(path))
+
+
+def test_helper_snapshot_refuses_fifo_without_waiting(tmp_path):
+    path = tmp_path / 'helper'
+    os.mkfifo(path)
+    with pytest.raises(server.AccountsUnavailable):
+        server._carry_helper_snapshot(str(path))
+
+
 def test_legacy_switch_requires_legacy_resolver_at_carry(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
