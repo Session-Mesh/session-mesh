@@ -3,7 +3,7 @@
 // Real previous-nightly legacy alias and PTY; synthetic account, conversation and agent only.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {execFileSync, spawnSync, type ChildProcess} from 'node:child_process';
+import {execFileSync, type ChildProcess} from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {test} from 'node:test';
@@ -11,7 +11,7 @@ import {REPO, scratchHome, runServer, stopServer, removeScratch} from './mesh-se
 import {startTestPtyhost} from './helpers/managed-test-ptyhost.ts';
 import {installFakeCodex, launchesIn} from './fake-codex-lib.ts';
 import {appendFixturePath} from './fixture-login-path.ts';
-import {waitFor} from './ptyhost-wire-lib.ts';
+import {request, waitFor} from './ptyhost-wire-lib.ts';
 
 const artifacts = process.env.MESH_HISTORICAL_ARTIFACTS;
 const candidateHost = process.env.MESH_PTYHOST_CMD;
@@ -21,6 +21,19 @@ const supported = process.platform === 'linux' && process.arch === 'x64';
 const skip = !required && (!supported || !artifacts || !candidateHost || !candidatePlatform)
   ? 'Linux x86_64; set historical artifacts, candidate PTY host and candidate platform' : false;
 const sha = (file:string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+
+// The private fixture host owns this socket and records each incarnation. Ask
+// it to retire exactly that incarnation; never signal a bare, reusable PID.
+async function retireFixtureSession(socket: string): Promise<void> {
+  const rows = await request(socket,{op:'list'}) as {name:string; created:number}[];
+  assert.ok(rows.every(row => row.name === 'alias-session'), 'unexpected session in fixture host');
+  for (const row of rows) {
+    const result = await request(socket,{op:'kill_if',name:row.name,created:row.created}) as {ok:boolean};
+    assert.equal(result.ok,true,'fixture incarnation retired');
+  }
+  await waitFor('fixture session retirement',15000,async () =>
+    ((await request(socket,{op:'list'})) as unknown[]).length === 0);
+}
 
 for (const removeAlias of [false,true]) test(`previous nightly account ${removeAlias ? 'removed: refuse fallback' : 'preserved: resume same alias'}`, {skip,timeout:90000}, async () => {
   assert.ok(supported && artifacts && candidateHost && candidatePlatform);
@@ -76,8 +89,7 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
     assert.equal(recorded.account,'work'); assert.equal(recorded.agent.type,'codex'); assert.equal(recorded.cwd,where.home);
     assert.equal(launchesIn(fake.log)[0]?.[1],aliasHome);
     await stopServer(server); server = undefined;
-    assert.equal(fs.readlinkSync(`/proc/${agentPid}/exe`), path.join(bin,'real/codex'), 'stop only this fixture process');
-    process.kill(agentPid,'SIGKILL'); await host.stop(); host = undefined;
+    await retireFixtureSession(socket); await host.stop(); host = undefined;
     if (removeAlias) fs.writeFileSync(accounts,JSON.stringify({v:1,accounts:[]}),{mode:0o600});
     where.env.MESH_MESH_PLATFORM_CMD = candidatePlatform;
     const next = await runServer(where,REPO); assert.ok(next.result.listened,next.output()); server = next.child;
@@ -114,10 +126,8 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
     }
   } finally {
     try { if (server) await stopServer(server); } finally {
-      try { await host?.stop(); } finally {
-        spawnSync('pkill',['-KILL','-f',path.join(bin,'real/codex')]);
-        removeScratch(where.scratch);
-      }
+      try { if (host) { try { await retireFixtureSession(socket); } finally { await host.stop(); } } }
+      finally { removeScratch(where.scratch); }
     }
   }
 });
