@@ -363,11 +363,16 @@ describe('the public CI as committed', () => {
       for (const [result, status] of [['success', 0], ['failure', 1], ['skipped', 1], ['cancelled', 1]]) {
         assert.equal(spawnSync('bash', ['-c', guard], {env: {...process.env, PARTS_RESULT: String(result)}}).status, status);
       }
-      const script = `mapfile -d '' files < <(find tests -type f \\( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \\) -not -path '*/node_modules/*' -print0 | sort -z)
-        selected=(); for i in "\${!files[@]}"; do if (( i % 2 == shard )); then selected+=("\${files[i]}"); fi; done
-        printf '%s\\0' "\${selected[@]}"`;
-      const all = spawnSync('bash', ['-c', "find tests -type f \\( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \\) -not -path '*/node_modules/*' -print0 | sort -z"], {cwd: ROOT}).stdout.toString().split('\0').filter(Boolean);
-      const shards = [0, 1].map(shard => spawnSync('bash', ['-c', script], {cwd: ROOT, env: {...process.env, shard: String(shard)}}).stdout.toString().split('\0').filter(Boolean));
+      // Enumerate portably: this test is also run by the macOS job, whose
+      // bash 3.2 has no mapfile and whose sort has no -z option.
+      const discover = (dir: string): string[] => fs.readdirSync(path.join(ROOT, dir), {withFileTypes: true})
+        .flatMap(entry => {
+          const relative = `${dir}/${entry.name}`;
+          if (entry.isDirectory()) return entry.name === 'node_modules' ? [] : discover(relative);
+          return entry.isFile() && /\.test\.(?:ts|mjs|cjs)$/.test(entry.name) ? [relative] : [];
+        });
+      const all = discover('tests').sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+      const shards = [0, 1].map(shard => all.filter((_, index) => index % 2 === shard));
       assert.ok(shards.every(shard => shard.length > 0));
       assert.deepEqual(shards.flat().sort(), all.sort());
       assert.equal(new Set(shards.flat()).size, all.length);
