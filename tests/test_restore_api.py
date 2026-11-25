@@ -149,7 +149,8 @@ async def test_missing_bound_named_conversation_preserves_offer(client, auth_coo
     item.update(account='work', account_context_revision='a' * 64)
     lose(tmp_path, item)
     before = respawn.lost_entry('bound-named')
-    monkeypatch.setattr(server, '_conversation_missing', lambda *_args, **_kwargs: True)
+    async def context(_entry): return {'roots': {'config': str(tmp_path / 'missing')}}
+    monkeypatch.setattr(server, '_restore_launch_context', context)
     status, body = await restore(client, auth_cookie, 'bound-named')
     assert status == 200
     assert body['results']['bound-named']['ok'] is False
@@ -161,17 +162,28 @@ async def test_missing_bound_named_conversation_preserves_offer(client, auth_coo
 async def test_exact_missing_bound_named_conversation_refuses_before_creation(monkeypatch, tmp_path):
     entry = {'name': 'bound-named', 'created': 1.0, 'cwd': str(tmp_path), 'account': 'work',
              'account_context_revision': 'a' * 64, 'agent': claude()}
-    expected = {'resume_id': SID}
-    monkeypatch.setattr(respawn, 'restore_identity', lambda value: (value, None))
-    monkeypatch.setattr(server, '_conversation_missing', lambda *_args, **_kwargs: True)
-    _, refusal = await server._exact_identity(entry, expected)
-    assert refusal['code'] == 'not-resumable' and refusal['phase'] == 'not-started'
+    async def context(_entry): return {'roots': {'config': str(tmp_path / 'missing')}}
+    monkeypatch.setattr(server, '_restore_launch_context', context)
+    refusal, marker = await server._start_exact({}, 'bound-named', entry, set())
+    assert marker is None and refusal['code'] == 'launch-refused' and refusal['phase'] == 'not-started'
 
 
-def test_bound_named_missing_root_is_not_assumed_restorable(monkeypatch):
-    monkeypatch.setattr(server, 'account_folder', lambda *_args: None)
-    assert server._conversation_missing('claude', SID, 'work') is False
-    assert server._conversation_missing('claude', SID, 'work', bound_named=True) is True
+async def test_bound_named_checks_resolved_root_not_stale_cached_root(monkeypatch, tmp_path):
+    cached, selected = tmp_path / 'cached', tmp_path / 'selected'
+    transcript = cached / 'projects' / 'project' / f'{SID}.jsonl'
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('fixture')
+    entry = {'account': 'work', 'account_context_revision': 'a' * 64, 'agent': claude()}
+    monkeypatch.setattr(server, 'account_folder', lambda *_args: str(cached))
+    async def context(_entry): return {'roots': {'config': str(selected)}}
+    monkeypatch.setattr(server, '_restore_launch_context', context)
+    with pytest.raises(server.web.HTTPConflict):
+        await server._verified_restore_context(entry)
+    transcript.unlink()
+    transcript = selected / 'projects' / 'project' / f'{SID}.jsonl'
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('fixture')
+    assert (await server._verified_restore_context(entry))['roots']['config'] == str(selected)
 
 
 async def test_exact_profiled_pi_restore_refuses_before_intent(monkeypatch, tmp_path):
