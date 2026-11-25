@@ -2,7 +2,10 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {cleanupHistoricalFixture} from './helpers/historical-cleanup.ts';
+import {mkdtempSync, existsSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {cleanupHistoricalFixture, onceAsync} from './helpers/historical-cleanup.ts';
 
 test('unconfirmed retirement retains the scratch and still stops the fixture host', async () => {
   const calls: string[] = [];
@@ -35,4 +38,28 @@ for (const failed of ['server', 'host'] as const) test(`unconfirmed ${failed} st
     removeScratch: () => { removed = true; },
   }), /cleanup unconfirmed; retained \/fixture\/scratch/);
   assert.equal(removed,false);
+});
+
+test('failure during the pre-upgrade server stop is not retried by the final cleanup', async () => {
+  const scratch = mkdtempSync(path.join(tmpdir(),'mesh-cleanup-flow-'));
+  let stopCalls = 0, retired = 0, hostStops = 0;
+  const stopServer = onceAsync(async () => { stopCalls++; throw new Error('ambiguous stop'); });
+  try {
+    await assert.rejects((async () => {
+      try {
+        // Same ordering as the migration: stop the old server before retiring its host.
+        await stopServer();
+        assert.fail('upgrade must not advance after an uncertain stop');
+      } finally {
+        await cleanupHistoricalFixture(scratch, {
+          stopServer,
+          retireHost: async () => { retired++; },
+          stopHost: async () => { hostStops++; },
+          removeScratch: () => rmSync(scratch,{recursive:true,force:true}),
+        });
+      }
+    })(), /cleanup unconfirmed; retained/);
+    assert.equal(stopCalls,1); assert.equal(retired,1); assert.equal(hostStops,1);
+    assert.equal(existsSync(scratch),true);
+  } finally { rmSync(scratch,{recursive:true,force:true}); }
 });
