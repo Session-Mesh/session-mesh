@@ -298,5 +298,5 @@ def apply(op, sessions):
             raise ValueError(f"Unknown operation: {kind}")
         _save(data)
         if kind == "rename":
-            fsutil.conversation_request("rename", name=name, created=e["created"], old=previous_label, new=label)
+            fsutil.conversation_optional("rename", name=name, created=e["created"], old=previous_label, new=label)
     return view(sessions)

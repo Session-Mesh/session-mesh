@@ -111,7 +111,7 @@ let load clock = function
   | Store.Contents contents ->
       Conversation_codec.decode_with_clock ~clock:(fun () -> time_as_float (clock ())) contents
   | Store.Missing -> Some []
-  | Store.Unreadable _ -> None
+  | Store.Unreadable error -> raise (Unix.Unix_error (error, "read registry", ""))
 
 let changes result =
   if result.Mutations.dirty then Some (Conversation_codec.encode result.entries)
@@ -212,7 +212,8 @@ let execute ?(clock = Unix.gettimeofday) ~path request =
   with
   | Invalid_request -> error "invalid_request"
   | Unsupported_version -> error "unsupported_version"
-  | Unix.Unix_error _ | Sys_error _ | Unreadable_registry -> error "registry_io"
+  | Unreadable_registry -> error "registry_unreadable"
+  | Unix.Unix_error _ | Sys_error _ -> error "registry_io"
 
 let handle ?clock ~path request =
   let response =

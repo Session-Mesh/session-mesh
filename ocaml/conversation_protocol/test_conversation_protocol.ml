@@ -167,7 +167,7 @@ let test_unreadable_registry_is_preserved () =
           expect ~path "unreadable registry has no snapshot"
             {|"op":"snapshot","now":101|} "[]";
           check_json "rename cannot replace an unreadable registry"
-            {|{"version":1,"error":"registry_io"}|}
+            {|{"version":1,"error":"registry_unreadable"}|}
             (Conversation_protocol.handle ~path
               {|{"version":1,"op":"rename","name":"w","created":1,"now":101,"old":"","new":"Changed"}|});
           Alcotest.(check string) "file preserved byte for byte" contents (read path))
