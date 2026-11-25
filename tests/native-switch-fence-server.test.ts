@@ -8,7 +8,7 @@ import path from 'node:path';
 const repo = path.resolve(import.meta.dirname, '..');
 test('native switch fence binds one session and never replays an uncertain operation', () => {
   const script = `
-import asyncio, sys, tempfile, pathlib, json
+import asyncio, sys, tempfile, pathlib, json, hashlib
 sys.path.insert(0, ${JSON.stringify(repo)})
 import server
 server.CONF_DIR = pathlib.Path(tempfile.mkdtemp())
@@ -96,6 +96,18 @@ async def main():
     Request.app['session_requests'] = PrunedStore()
     assert json.loads((await server.api_session_action_recover_fence(Request())).text) == {'ok':True}
     assert not server._native_fence_path(switch[4]).exists()
+    server._save_native_fence(switch[4], saved)
+    Request.match_info['request_id'] = 'sha256-' + hashlib.sha256(switch[4].encode()).hexdigest()
+    task = asyncio.create_task(asyncio.sleep(30))
+    Request.app['session_action_tasks'][switch[4]] = task
+    try: await server.api_session_action_recover_fence(Request()); assert False
+    except web.HTTPConflict: pass
+    task.cancel()
+    try: await task
+    except asyncio.CancelledError: pass
+    Request.app['session_action_tasks'].clear()
+    assert json.loads((await server.api_session_action_recover_fence(Request())).text) == {'ok':True}
+    Request.match_info['request_id'] = switch[4]
     Request.app['session_requests'] = Store()
     calls.clear()
     server.host = host

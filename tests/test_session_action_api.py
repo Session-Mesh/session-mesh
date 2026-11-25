@@ -192,6 +192,13 @@ async def test_recovered_create_executes_approved_options_not_current_options(
     recovered.close()
 
 
+def test_fence_retention_check_fails_closed_on_inaccessible_storage(monkeypatch):
+    def denied(_path): raise PermissionError('denied')
+    monkeypatch.setattr(server.os, 'lstat', denied)
+    with pytest.raises(PermissionError):
+        server._native_fence_exists('request')
+
+
 @pytest.mark.parametrize('outcome', [
     {'switch_phase': 'not_stopped', 'target_copy_remains': False, 'target_copy_uncertain': False},
     {'switch_phase': 'target_start_accepted', 'id': 'alpha', 'target_copy_remains': True, 'target_copy_uncertain': False},

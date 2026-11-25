@@ -340,6 +340,27 @@ The digest is checked while holding the mailbox lock. If the mailbox changed, th
 selection is invalid, or another migration blocker remains, recovery fails without
 writing: inspect and back up the current file again before deciding what to do. Keep
 the backup until migration and message handling have been verified.
+### Recovering an orphaned account-switch input fence
+
+If a switch was interrupted, inspect the terminal and both accounts before releasing
+its input fence. Releasing the fence does not resume the switch or establish which
+account is active. Fence receipts are private: do not publish their contents.
+
+If the request is no longer visible, list the filenames (not their contents) in
+`~/.config/session-mesh/switch-fences/`, or `switch-fences/` under the server's
+`MESH_CONF_DIR`. Each receipt filename is a 64-character hexadecimal digest followed
+by `.json`. For the receipt you have inspected, open the authenticated Mesh page's
+developer console and replace `DIGEST` below with that filename without `.json`:
+
+```js
+await fetch('/api/session-actions/sha256-DIGEST/recover-fence', {
+  method: 'POST', headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({action: 'release_fence'})
+}).then(async r => ({status: r.status, result: await r.json().catch(() => null)}))
+```
+
+The server refuses a running switch or a replaced terminal. A refused or uncertain
+release needs further inspection; it is not permission to replay the switch.
 
 ### Upgrading a source install
 

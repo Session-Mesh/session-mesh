@@ -1762,6 +1762,14 @@ def _native_fence_path(request_id):
     return CONF_DIR / "switch-fences" / (hashlib.sha256(request_id.encode()).hexdigest() + ".json")
 
 
+def _native_fence_exists(request_id):
+    try:
+        os.lstat(_native_fence_path(request_id))
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def _save_native_fence(request_id, fence):
     path = _native_fence_path(request_id)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -5867,14 +5875,22 @@ async def api_session_action_recover_fence(request):
     body = await json_object(request)
     if body != {"action": "release_fence"}:
         raise web.HTTPBadRequest(text="Explicit fence release required")
-    task = request.app["session_action_tasks"].get(request_id)
+    orphan = re.fullmatch(r"sha256-([0-9a-f]{64})", request_id)
+    tasks = request.app["session_action_tasks"]
+    if orphan:
+        task = next((task for key, task in tasks.items()
+                     if hashlib.sha256(key.encode()).hexdigest() == orphan.group(1)), None)
+    else:
+        task = tasks.get(request_id)
     if task is not None and not task.done():
         raise web.HTTPConflict(text="Switch is still executing")
-    item = request.app["session_requests"].status(request_id)
+    item = None if orphan else request.app["session_requests"].status(request_id)
     if item is not None and item.get("action") != "switch_account":
         raise web.HTTPNotFound()
     try:
-        saved = json.loads(fsutil.read_bounded(_native_fence_path(request_id), 4096))
+        path = (CONF_DIR / "switch-fences" / (orphan.group(1) + ".json")
+                if orphan else _native_fence_path(request_id))
+        saved = json.loads(fsutil.read_bounded(path, 4096))
     except (OSError, ValueError, TypeError):
         raise web.HTTPNotFound(text="No recoverable fence evidence") from None
     source = (item.get("source") or {}) if item is not None else None
@@ -5894,7 +5910,7 @@ async def api_session_action_recover_fence(request):
         if str(exc) == "Fence may already be released or held by another owner":
             raise web.HTTPConflict(text="Fence may already be released or held by another owner; inspect before another action") from None
         raise web.HTTPServiceUnavailable(text="Fence release could not be confirmed; inspect before another action") from None
-    _forget_native_fence(request_id)
+    path.unlink(missing_ok=True)
     return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
@@ -7708,7 +7724,7 @@ def make_app(*, session_request_path=None):
     try:
         app["session_requests"] = sessionrequests.Requests(
             SESSION_REQUESTS_FILE if session_request_path is None else session_request_path,
-            retain_terminal=lambda request_id: os.path.lexists(_native_fence_path(request_id)))
+            retain_terminal=_native_fence_exists)
     except ValueError as exc:   # a symlinked or shared database: one line, not a restart loop of tracebacks
         raise SystemExit(f"session-mesh: refusing to start: {exc}") from None
     app["session_action_tasks"] = {}
