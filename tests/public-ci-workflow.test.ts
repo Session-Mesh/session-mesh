@@ -291,7 +291,7 @@ describe('the public CI as committed', () => {
       const at = lines.findIndex((line) => line.key === 'name' && line.value.startsWith('Node browser tests'));
       assert.ok(at >= 0, 'no Node browser tests step');
       const step = stepOf(lines, at);
-      assert.deepEqual(step.filter((line) => line.key === 'if').map(line => line.value), ["matrix.kind == 'node'"], 'the step runs on every Node shard');
+      assert.deepEqual(step.filter((line) => line.key === 'if').map(line => line.value), [], 'the step runs on every shard');
       const body = step.map((line) => line.raw).join('\n');
       for (const needle of ['MESH_REQUIRE_BROWSER=1', 'MESH_PYTHON="$(command -v python)"',
         "grep -lZE 'MESH_CHROMIUM|terminal-browser-lib' -- tests/*.test.ts", 'xargs -0 -r grep -LZ MESH_NATIVE_PTYHOST --',
@@ -308,36 +308,27 @@ describe('the public CI as committed', () => {
     test(`${name} retains the required browser checks and partitions both test sets exactly once`, () => {
       const jobs = jobBlocks(parseLines(text));
       const body = (name: string) => jobs.find(job => job.name === name)!.block.map(line => line.raw).join('\n');
-      const parts = body('browser_parts'), gate = body('browser');
+      const parts = body('browser_parts');
       assert.match(parts, /shard: \[0, 1, 2, 3\]/);
-      assert.match(parts, /kind: \[python, node\]/);
-      assert.match(parts, /if: matrix\.kind == 'python'/);
-      assert.match(parts, /if: matrix\.kind == 'node'/);
-      assert.match(gate, /name: browser tests \(Chromium, shard \$\{\{ matrix\.shard \}\} of 4\)/);
-      assert.match(gate, /needs: \[scope, browser_parts\]/);
-      assert.match(gate, /needs\.browser_parts\.result/);
-      assert.match(gate, /\"\$PARTS_RESULT\" != success/);
-      assert.match(gate, /if: \"!cancelled\(\)\"/);
-      const guard = (gate + '\n').match(/run: \|\n((?:          .*\n)+)/)?.[1];
-      assert.ok(guard, 'missing required-check guard');
-      for (const [parts, expected] of [['success', 0], ['failure', 1], ['skipped', 1], ['cancelled', 1]]) {
-        const result = spawnSync('bash', ['-c', guard], {env: {...process.env, GITHUB_EVENT_NAME: 'merge_group', DOCS_ONLY: 'true', PARTS_RESULT: String(parts)}});
-        assert.equal(result.status, expected, `guard accepted ${parts}`);
-      }
-      for (const [event, docsOnly, parts, expected] of [
-        ['pull_request', 'true', 'skipped', 0],
-        ['pull_request', 'true', 'failure', 1],
-        ['pull_request', '', 'skipped', 1],
-        ['push', 'true', 'skipped', 1],
-      ] as const) {
-        const result = spawnSync('bash', ['-c', guard], {
-          env: {...process.env, GITHUB_EVENT_NAME: event, DOCS_ONLY: docsOnly, PARTS_RESULT: parts},
-        });
-        assert.equal(result.status, expected, `${event}, docs=${docsOnly}: ${parts}`);
-      }
-      assert.match(parts, /needs: \[scope, native\]/);
+      assert.doesNotMatch(parts, /kind: \[/);
+      assert.match(parts, /name: browser tests \(Chromium, shard \$\{\{ matrix\.shard \}\} of 4\)/);
+      assert.ok(parts.includes(`if: "!cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.docs_only != 'true')"`));
+      assert.ok(parts.includes("needs: [scope, native]"));
+      assert.ok(parts.includes("needs.scope.outputs.docs_only"));
       assert.match(parts, /needs\.native\.result/);
-      assert.match(parts, /\"\$NATIVE_RESULT\" != success/);
+      assert.match(parts, /"\$NATIVE_RESULT" != success/);
+      const guard = (parts + '\n').match(/run: \|\n((?:          .*\n)+)/)?.[1];
+      assert.ok(guard, 'missing native guard');
+      for (const [native, expected] of [['success', 0], ['failure', 1], ['skipped', 1], ['cancelled', 1]]) {
+        const result = spawnSync('bash', ['-c', guard], {env: {...process.env, NATIVE_RESULT: String(native)}});
+        assert.equal(result.status, expected, `native guard accepted ${native}`);
+      }
+      for (const name of ['Browser tests', "Node browser tests (this shard's part)"]) {
+        const step = stepOf(parseLines(text), parseLines(text).findIndex(line => line.key === 'name' && line.value === name));
+        assert.ok(step.length > 0, `missing ${name}`);
+        assert.equal(step.filter(line => line.key === 'if').length, 0, `${name} must run in every shard`);
+        assert.doesNotMatch(step.map(line => line.raw).join('\n'), /continue-on-error/);
+      }
       const files = fs.readdirSync(path.join(ROOT, 'tests')).filter(file => file.endsWith('.test.ts'));
       const read = (file: string) => fs.readFileSync(path.join(ROOT, 'tests', file), 'utf8');
       const candidates = files.filter(file => /MESH_CHROMIUM|terminal-browser-lib/.test(read(file)))
