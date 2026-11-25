@@ -9,6 +9,8 @@ test('scheduled migration checks run isolated on main and do not skip historical
   assert.match(workflow, /^  schedule:$/m);
   assert.match(workflow, /^  workflow_dispatch:$/m);
   assert.match(workflow, /^  pull_request:$/m);
+  for (const covered of ["'**/*.py'", "'ocaml/**'", "'tests/**'", "'requirements*.txt'"])
+    assert.ok(workflow.includes(covered), `migration-sensitive path ${covered} must trigger the check`);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /persist-credentials: false/);
   assert.doesNotMatch(workflow, /github\.token|secrets\.|workflow_run|pull_request_target/);

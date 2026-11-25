@@ -8,10 +8,15 @@ on:
   pull_request:
     paths:
       - '.github/workflows/historical-migrations.yml'
+      - '**/*.py'
+      - 'ocaml/**'
+      - 'scripts/bootstrap.sh'
+      - 'scripts/release-pins.sh'
+      - 'requirements*.txt'
+      - 'package*.json'
       - 'tools/historical-release-selection.ts'
       - 'tools/fetch-historical-releases.ts'
-      - 'tests/historical-*.ts'
-      - 'tests/helpers/historical-*.ts'
+      - 'tests/**'
 
 permissions:
   contents: read
