@@ -346,14 +346,40 @@ If a switch was interrupted, inspect the terminal and both accounts before relea
 its input fence. Releasing the fence does not resume the switch or establish which
 account is active. Fence receipts are private: do not publish their contents.
 
-If the request is no longer visible, list the filenames (not their contents) in
-`~/.config/session-mesh/switch-fences/`, or `switch-fences/` under the server's
-`MESH_CONF_DIR`. Each receipt filename is a 64-character hexadecimal digest followed
-by `.json`. For the receipt you have inspected, open the authenticated Mesh page's
-developer console and replace `DIGEST` below with that filename without `.json`:
+If the request is no longer visible, use the same user and `MESH_CONF_DIR` as the
+server. From the server's application directory and Python environment, list the
+session name and incarnation alongside each recovery handle (no secret is printed):
+
+```sh
+python - <<'PY'
+import json, os, re, stat
+import meshpaths
+
+for path in sorted((meshpaths.CONF_DIR / 'switch-fences').glob('*.json')):
+    if not re.fullmatch(r'[0-9a-f]{64}\.json', path.name):
+        continue
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError('not a regular file')
+            raw = stream.read(4097)
+        if len(raw) > 4096:
+            raise ValueError('receipt too large')
+        receipt = json.loads(raw)
+        if not isinstance(receipt.get('name'), str) or not isinstance(receipt.get('created'), (int, float)):
+            raise ValueError('invalid identity')
+        print('sha256-' + path.stem, repr(receipt['name']), receipt['created'])
+    except (OSError, ValueError, TypeError, AttributeError):
+        print('sha256-' + path.stem, 'unreadable; inspect locally')
+PY
+```
+
+After identifying and inspecting the exact session, open the authenticated Mesh
+page's developer console and replace `HANDLE` with its printed `sha256-…` handle:
 
 ```js
-await fetch('/api/session-actions/sha256-DIGEST/recover-fence', {
+await fetch('/api/session-actions/HANDLE/recover-fence', {
   method: 'POST', headers: {'Content-Type': 'application/json'},
   body: JSON.stringify({action: 'release_fence'})
 }).then(async r => ({status: r.status, result: await r.json().catch(() => null)}))
