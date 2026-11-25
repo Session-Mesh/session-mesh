@@ -744,6 +744,7 @@ let acknowledged_reports () =
       expect "release after focus" (member "ok"
         (switch_fence fixture "switch_input_release" created fence_id)
         = `Bool true);
+      let fence_id = "switch-mouse-0123456789abcdef" in
       List.iteri (fun i report -> accepted (i + 2) report)
         [ "\x1b[<0;5;5M"; "\x1b[<32;6;7M"; "\x1b[<0;6;7m";
           "\x1b[7;9R"; "\x1b[0n" ];
@@ -754,6 +755,7 @@ let acknowledged_reports () =
       expect "release after mouse" (member "ok"
         (switch_fence fixture "switch_input_release" created fence_id)
         = `Bool true);
+      let fence_id = "switch-human-0123456789abcdef" in
       accepted 7 "human-draft";
       accepted 8 "\x1b[O";
       expect "focus report never clears a human draft"
@@ -768,6 +770,7 @@ let acknowledged_reports () =
       expect "release after human completion" (member "ok"
         (switch_fence fixture "switch_input_release" created fence_id)
         = `Bool true);
+      let fence_id = "switch-mixed-0123456789abcdef" in
       accepted 9 "\x1b[I\r";
       expect "mixed focus and CR is human input"
         (member "reason" (switch_fence fixture "switch_input_acquire" created fence_id)
