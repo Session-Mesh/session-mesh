@@ -1709,10 +1709,16 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     try:
         reply = await host({"op": "switch_input_acquire", **fence})
     except Exception as exc:
-        raise NativeFenceRecoveryRequired(fence, "Acquisition outcome uncertain") from exc
+        error = NativeFenceRecoveryRequired(fence, "Acquisition outcome uncertain")
+        error.switch_outcome = {"switch_phase": "not_stopped", "target_copy_remains": False,
+                                "target_copy_uncertain": False}
+        raise error from exc
     if reply != {"ok": True}:
         if not isinstance(reply, dict) or reply.get("ok") is not False:
-            raise NativeFenceRecoveryRequired(fence, "Acquisition outcome uncertain")
+            error = NativeFenceRecoveryRequired(fence, "Acquisition outcome uncertain")
+            error.switch_outcome = {"switch_phase": "not_stopped", "target_copy_remains": False,
+                                    "target_copy_uncertain": False}
+            raise error
         reason = reply.get("reason", "refused")
         reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,40}", reason) else "refused"
         _forget_native_fence(switch[4])
@@ -1721,17 +1727,33 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
         result = await _relaunch_in_place(source, cwd, command, agent, known_agent, account, switch,
                                           settings_guard=settings_guard, settings_binding=settings_binding, fence=fence,
                                           fence_state=state)
-    except AccountSwitchUndone:
-        await _release_native_fence(fence)
+    except AccountSwitchUndone as undone:
+        try:
+            await _release_native_fence(fence)
+        except NativeFenceRecoveryRequired as exc:
+            exc.switch_outcome = {"switch_phase": "source_restart_accepted",
+                                  "target_copy_remains": undone.target_copy_remains,
+                                  "target_copy_uncertain": undone.target_copy_uncertain}
+            raise
         _forget_native_fence(switch[4])
         raise
     except Exception as exc:
         if not state["stop_started"] or state["stop_refused"]:
-            await _release_native_fence(fence)
+            try:
+                await _release_native_fence(fence)
+            except NativeFenceRecoveryRequired as release_error:
+                release_error.switch_outcome = {"switch_phase": "not_stopped", "target_copy_remains": False,
+                                                "target_copy_uncertain": False}
+                raise
             _forget_native_fence(switch[4])
             raise
         raise NativeFenceRecoveryRequired(fence, "Switch outcome requires inspection") from exc
-    await _release_native_fence(fence)
+    try:
+        await _release_native_fence(fence)
+    except NativeFenceRecoveryRequired as exc:
+        exc.switch_outcome = {"switch_phase": "target_start_accepted", "id": result,
+                              "target_copy_remains": True, "target_copy_uncertain": False}
+        raise
     _forget_native_fence(switch[4])
     return result
 
@@ -1762,6 +1784,7 @@ class NativeFenceRecoveryRequired(Exception):
     def __init__(self, fence, message):
         super().__init__(message)
         self.fence = dict(fence)
+        self.switch_outcome = None
 
 
 async def _release_native_fence(fence):
@@ -5719,10 +5742,11 @@ async def _run_session_action_once(app, request_id):
     try:
         result = await _execute_session_action(item, create_nonce)
     except NativeFenceRecoveryRequired as exc:
+        outcome = exc.switch_outcome or {"switch_phase": "unknown", "target_copy_uncertain": True}
         return app["session_requests"].finish(
             request_id, error=str(exc) + "; inspect the session before explicit fence recovery.",
             detail={"code": "switch_fence_recovery", "retryable": False, "operator_action": True,
-                    "target_copy_uncertain": True})
+                    **outcome})
     except AccountSwitchTargetStartUnconfirmed as exc:
         return app["session_requests"].finish(
             request_id, error=("The conversation was copied, but the target start failed or could not be confirmed. "
@@ -5846,15 +5870,15 @@ async def api_session_action_recover_fence(request):
     if task is not None and not task.done():
         raise web.HTTPConflict(text="Switch is still executing")
     item = request.app["session_requests"].status(request_id)
-    if item is None or item.get("action") != "switch_account":
+    if item is not None and item.get("action") != "switch_account":
         raise web.HTTPNotFound()
     try:
         saved = json.loads(fsutil.read_bounded(_native_fence_path(request_id), 4096))
     except (OSError, ValueError, TypeError):
         raise web.HTTPNotFound(text="No recoverable fence evidence") from None
-    source = item.get("source") or {}
+    source = (item.get("source") or {}) if item is not None else None
     if (not isinstance(saved, dict) or set(saved) != {"name", "created", "creation_receipt", "fence_id"}
-            or saved.get("name") != source.get("id") or saved.get("created") != source.get("created")
+            or (source is not None and (saved.get("name") != source.get("id") or saved.get("created") != source.get("created")))
             or not isinstance(saved.get("creation_receipt"), str) or not isinstance(saved.get("fence_id"), str)):
         raise web.HTTPConflict(text="Fence evidence does not match the request")
     rows = await host({"op": "list_bound"})
@@ -7682,7 +7706,8 @@ def make_app(*, session_request_path=None):
     app["sessions_state"] = SessionsState()
     try:
         app["session_requests"] = sessionrequests.Requests(
-            SESSION_REQUESTS_FILE if session_request_path is None else session_request_path)
+            SESSION_REQUESTS_FILE if session_request_path is None else session_request_path,
+            retain_terminal=lambda request_id: os.path.lexists(_native_fence_path(request_id)))
     except ValueError as exc:   # a symlinked or shared database: one line, not a restart loop of tracebacks
         raise SystemExit(f"session-mesh: refusing to start: {exc}") from None
     app["session_action_tasks"] = {}

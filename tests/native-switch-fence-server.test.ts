@@ -89,6 +89,14 @@ async def main():
     response = await server.api_session_action_recover_fence(Request())
     assert json.loads(response.text) == {'ok':True}
     assert not server._native_fence_path(switch[4]).exists()
+    # Evidence remains authoritative even if a previous version pruned its row.
+    server._save_native_fence(switch[4], saved)
+    class PrunedStore:
+        def status(self, rid): return None
+    Request.app['session_requests'] = PrunedStore()
+    assert json.loads((await server.api_session_action_recover_fence(Request())).text) == {'ok':True}
+    assert not server._native_fence_path(switch[4]).exists()
+    Request.app['session_requests'] = Store()
     calls.clear()
     server.host = host
     async def refused_before_stop(*args, **kwargs): raise web.HTTPConflict(text='unchanged')
@@ -98,6 +106,28 @@ async def main():
     assert [c['op'] for c in calls] == ['list_bound','switch_input_acquire','switch_input_release']
     assert not server._native_fence_path(switch[4]).exists()
     calls.clear()
+    async def release_lost(message, **kwargs):
+        calls.append(message.copy())
+        if message['op'] == 'list_bound': return [{'name':'one','created':1.0,'creation_receipt':receipt}]
+        if message['op'] == 'switch_input_acquire': return {'ok':True}
+        if message['op'] == 'switch_input_release': raise web.HTTPServiceUnavailable()
+        raise AssertionError(message)
+    server.host, server._relaunch_in_place = release_lost, relaunch
+    try: await server.relaunch_in_place(raw, '/', 'codex', 'codex', 'codex', switch=switch); assert False
+    except server.NativeFenceRecoveryRequired as exc:
+        assert exc.switch_outcome == {'switch_phase':'target_start_accepted', 'id':'one',
+                                      'target_copy_remains':True, 'target_copy_uncertain':False}
+    assert [c['op'] for c in calls] == ['list_bound','switch_input_acquire','switch_input_release']
+    server._forget_native_fence(switch[4])
+    calls.clear()
+    server._relaunch_in_place = refused_before_stop
+    try: await server.relaunch_in_place(raw, '/', 'codex', 'codex', 'codex', switch=switch); assert False
+    except server.NativeFenceRecoveryRequired as exc:
+        assert exc.switch_outcome == {'switch_phase':'not_stopped', 'target_copy_remains':False,
+                                      'target_copy_uncertain':False}
+    server._forget_native_fence(switch[4])
+    calls.clear()
+    server.host = host
     async def cancelled(*args, fence_state, **kwargs):
         fence_state['stop_started'] = True
         raise asyncio.CancelledError()
