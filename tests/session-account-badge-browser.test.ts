@@ -287,4 +287,43 @@ describe('Mesh account metadata badges in list and terminal header', {skip}, () 
       }
     });
   }
+
+  test('windowed scroll retains latest account on unheld rows while focus is held', async () => {
+    const context = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(READY_TIMEOUT_MS);
+      const rows = Array.from({length: 220}, (_, index) => ({
+        id: `window-${String(index).padStart(3, '0')}`, kind: 'mesh', name: `window-${String(index).padStart(3, '0')}`,
+        agent: {type: 'codex', status: 'idle'}, account: 'before', account_label: 'Before',
+        created: 1000 + index, activity: 1000 + index, attached: 0, cwd: mesh.home,
+        folder: null, rank: index, notice: null,
+      }));
+      await page.route('**/api/sessions*', route => route.fulfill({json: {
+        mesh: rows, external: [], folders: [], moved: {}, opens: {}, home: mesh.home, now: 2000, gen: 1, full: true,
+      }}));
+      await page.routeWebSocket('**/ws/**', socket => socket.onMessage(() => {}));
+      await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
+      await page.goto(`${mesh.base}/`);
+      const held = page.locator('#list .item[data-id="window-000"]');
+      const other = page.locator('#list .item[data-id="window-001"]');
+      await held.waitFor({state: 'visible'});
+      await other.waitFor({state: 'visible'});
+      assert.equal(await page.locator('#list .vrun').count() > 0, true, 'the list is windowed');
+      await held.focus();
+      rows[0]!.account = rows[1]!.account = 'after';
+      rows[0]!.account_label = rows[1]!.account_label = 'After';
+      await page.evaluate(() => refresh());
+      await page.waitForFunction(() => [...document.querySelectorAll('#list .item[data-id="window-000"] .account-badge, #list .item[data-id="window-001"] .account-badge')]
+        .every(el => el.textContent === 'After'));
+      const before = await held.locator('.account-badge').elementHandle();
+      await page.locator('#list').evaluate(el => { el.scrollTop += 12; el.dispatchEvent(new Event('scroll')); });
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      assert.equal(await other.locator('.account-badge').textContent(), 'After', 'scroll redraw uses the latest account');
+      assert.equal(await held.locator('.account-badge').textContent(), 'After', 'the held badge is unchanged');
+      assert.equal(await held.locator('.account-badge').evaluate((el, previous) => el === previous, before), true,
+        'the held badge node is preserved');
+      assert.equal(await held.evaluate(el => document.activeElement === el), true, 'focus remains on the held row');
+    } finally { await context.close(); }
+  });
 });

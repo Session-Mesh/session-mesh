@@ -4032,8 +4032,9 @@ function showAccountBadge(element, s) {
 // A focused or dragged row holds list reordering, but account metadata must
 // still follow the latest inventory. Updating just this non-interactive span
 // keeps the row and its focus intact.
-function syncAccountBadges() {
+function syncAccountBadges(skipHeld = false) {
   for (const row of document.querySelectorAll("#list .item[data-id]")) {
+    if (skipHeld && (listWindow.keep(row) || (row.parentElement && listWindow.keep(row.parentElement)))) continue;
     const s = find(row.dataset.id);
     const shown = s?.kind === "mesh" && accountLabel(s);
     let badge = row.querySelector(".account-badge");
@@ -4300,6 +4301,9 @@ function drawList(fromScroll = false) {
     groups(model.external).map(([host, list]) => groupHtml(host, host, list)).join("");
   // A scroll leaves the held rows (focus, inline rename, drag) exactly as they are.
   Progress.morphChildren($("#list"), next, fromScroll ? { ...LIST_MORPH, keep: listWindow.keep } : LIST_MORPH);
+  // Windowed scroll redraws use the held list model, whose account metadata may
+  // predate a deferred inventory update. Refresh only rows not held by the user.
+  if (fromScroll) syncAccountBadges(true);
   listWindow.measure();
   // A run above changed height (folded, rows added): the windows below were placed at its old offsets.
   if (!fromScroll && listWindow.offsetsMoved()) listScroll.request();
