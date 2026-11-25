@@ -17,6 +17,25 @@ import {
 describe('phone direct writing: what the field receives', {skip}, () => {
   const {phone, withoutBracketedPaste} = useMesh();
 
+  test('a full acknowledged input budget preserves typed text without sending the next key', async () => {
+    const page = await phone('ack-full-direct', 'claude');
+    await page.waitForFunction(() => !!active.inputAck);
+    await page.keyboard.type('/');
+    await page.waitForFunction(() => document.querySelector('#line-direct') && !document.querySelector('#line-direct')!.hasAttribute('hidden'));
+    await forget(page);
+    const result = await page.evaluate(() => {
+      const pane = active as any;
+      pane.inputAcks.set('test-budget', {input: {pendingBytes: 1024 * 1024}});
+      const textarea = document.querySelector('#line-text') as HTMLTextAreaElement;
+      textarea.value = 'kept text';
+      const delivered = sendKeyToAgent('\r');
+      pane.inputAcks.delete('test-budget');
+      return {delivered, text: textarea.value, mode: !!lineDirect};
+    });
+    assert.deepEqual(result, {delivered: false, text: 'kept text', mode: false});
+    assert.deepEqual(await frames(page), [], 'neither held text nor Enter was sent');
+  });
+
   test('a paste into the field while writing directly is one paste at the terminal, and the field stays empty', async () => {
     const page = await phone('paste-direct', 'claude');
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
