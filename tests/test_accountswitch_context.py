@@ -143,6 +143,24 @@ def test_approved_native_switch_does_not_fall_back_when_registry_disappears(monk
     assert events == []
 
 
+def test_legacy_switch_requires_legacy_resolver_at_carry(monkeypatch):
+    calls = []
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    monkeypatch.setattr(respawn, 'forget_live', lambda *args: None)
+    async def helper(*args, **kwargs):
+        calls.append(args)
+        return {'carried': {'replaced': 0}}
+    async def replace(*args, switch, **kwargs):
+        await switch[1]()
+        return 'synthetic'
+    monkeypatch.setattr(server, '_accounts_program', helper)
+    monkeypatch.setattr(server, 'replace_session', replace)
+    item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
+    assert asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))['account'] == 'work'
+    assert calls[0][0] == 'carry' and calls[0][-1] == '--legacy-only'
+
+
 @pytest.mark.parametrize('scenario', ['carry_failure', 'target_refused', 'target_timeout'])
 def test_legacy_carry_and_start_failures_keep_the_outcome(monkeypatch, scenario):
     async def no_context(*_args, **_kwargs): return None

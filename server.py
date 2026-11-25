@@ -5526,7 +5526,8 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
     carried = {}
 
     async def carry():
-        revisions = ((source_context["context_revision"], target_context["context_revision"]) if native else ())
+        revisions = ((source_context["context_revision"], target_context["context_revision"])
+                     if native else ("--legacy-only",))
         environ = _carry_env(kind)
         if native:
             default_context = next((c for c in (source_context, target_context) if c["id"] == "default"), None)
