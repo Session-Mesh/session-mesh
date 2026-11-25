@@ -54,6 +54,7 @@ jobs:
         run: node --experimental-strip-types tools/fetch-historical-releases.ts "$RUNNER_TEMP/migration-releases"
       - name: Test snapshot and account migrations
         run: |
+          set -o pipefail
           export MESH_HISTORICAL_ARTIFACTS="$RUNNER_TEMP/migration-releases" MESH_HISTORICAL_DYNAMIC=1 MESH_REQUIRE_HISTORICAL_MIGRATION=1
           export MESH_PYTHON="$(command -v python)" MESH_PTYHOST_CMD="$GITHUB_WORKSPACE/ocaml/_build/install/default/bin/mesh-ptyhost" MESH_CANDIDATE_PLATFORM_CMD="$GITHUB_WORKSPACE/ocaml/_build/install/default/bin/mesh-platform"
           export MESH_CANDIDATE_PTYHOST_SHA256="$(sha256sum "$MESH_PTYHOST_CMD" | cut -d ' ' -f 1)" MESH_CANDIDATE_PLATFORM_SHA256="$(sha256sum "$MESH_CANDIDATE_PLATFORM_CMD" | cut -d ' ' -f 1)"
