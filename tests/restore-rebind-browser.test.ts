@@ -39,11 +39,11 @@ describe('explicit restore profile binding', {skip}, () => {
   for (const status of [409, 500]) test(`confirmation HTTP ${status} is not retried`, async () => {
     const context = await browser.newContext({locale:'en-US', viewport:{width:1400,height:900}});
     try {
-      const page = await context.newPage(); const actions: string[] = [];
+      const page = await context.newPage(); const actions: string[] = []; let reads = 0;
       const expected = {name:'alpha',created:1,agent_kind:'codex',resume_id:'fake',cwd:'/project'};
       await page.route('**/api/accounts/profiles', route => route.fulfill({json:{data:{profiles:[{backend:'codex',id:'personal',label:'Personal',enabled:true}]}}}));
       await page.route('**/api/restore/rebind', async route => {
-        if (route.request().method() === 'GET') return route.fulfill({json:{offers:[{expected,previous_account:'old'}]}});
+        if (route.request().method() === 'GET') { reads++; return route.fulfill({json:{offers:[{expected,previous_account:'old'}]}}); }
         const body = route.request().postDataJSON(); actions.push(body.action);
         if (body.action === 'confirm') return route.fulfill({status,json:{ok:false}});
         return route.fulfill({json:{ok:true,account:'personal',label:'Personal',config_root:'/profiles/personal',context_revision:'revision-proof',offer_digest:'offer-proof'}});
@@ -55,6 +55,33 @@ describe('explicit restore profile binding', {skip}, () => {
       await page.getByText(status === 409 ? 'The offer or profile changed, or the request was refused. Close and review it again.' : 'The result is unknown. Close and refresh before trying again; the request was not repeated.').waitFor();
       assert.equal(await page.getByRole('button',{name:'Confirm binding'}).count(),0);
       assert.deepEqual(actions,['preview','confirm']);
+      assert.equal(reads, status === 500 ? 2 : 1, 'uncertain results are refreshed before another preview');
+      await page.getByRole('button',{name:'Review binding'}).waitFor({state:'visible'});
+      await page.getByRole('button',{name:'Review binding'}).click();
+      assert.deepEqual(actions,['preview','confirm','preview']);
+    } finally { await context.close(); }
+  });
+
+  test('uncertain confirmation with failed reload never offers a blind retry', async () => {
+    const context = await browser.newContext({locale:'en-US', viewport:{width:1400,height:900}});
+    try {
+      const page = await context.newPage(); const actions: string[] = []; let reads = 0;
+      const expected = {name:'alpha',created:1,agent_kind:'codex',resume_id:'fake',cwd:'/project'};
+      await page.route('**/api/accounts/profiles', route => route.fulfill({json:{data:{profiles:[{backend:'codex',id:'personal',label:'Personal',enabled:true}]}}}));
+      await page.route('**/api/restore/rebind', async route => {
+        if (route.request().method() === 'GET') return ++reads === 1 ? route.fulfill({json:{offers:[{expected,previous_account:'old'}]}}) : route.fulfill({status:503});
+        const body = route.request().postDataJSON(); actions.push(body.action);
+        if (body.action === 'confirm') return route.abort();
+        return route.fulfill({json:{ok:true,account:'personal',label:'Personal',config_root:'/profiles/personal',context_revision:'revision-proof',offer_digest:'offer-proof'}});
+      });
+      await page.goto(`${lab.mesh.base}/login?token=${encodeURIComponent(lab.mesh.token())}`); await page.goto(`${lab.mesh.base}/`);
+      await page.getByRole('button',{name:'Link an old session to a profile'}).click();
+      await page.getByRole('button',{name:'Review binding'}).click();
+      await page.getByRole('button',{name:'Confirm binding'}).click();
+      await page.getByText('The result is unknown. Close and refresh before trying again; the request was not repeated.').waitFor();
+      assert.equal(reads, 2); assert.deepEqual(actions,['preview','confirm']);
+      assert.equal(await page.getByRole('button',{name:'Review binding'}).count(), 0);
+      assert.equal(await page.getByRole('button',{name:'Confirm binding'}).count(), 0);
     } finally { await context.close(); }
   });
 

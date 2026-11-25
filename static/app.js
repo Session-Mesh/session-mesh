@@ -5607,16 +5607,35 @@ async function openRestoreRebind() {
     } catch { status.textContent = t("restore.rebind.stale"); }
     finally { busy = false; preview.disabled = false; offerSelect.disabled = accountSelect.disabled = false; }
   });
+  const refreshOffersAfterUncertain = async () => {
+    preview.hidden = true; preview.disabled = true;
+    try {
+      const response = await requestLocal("/api/restore/rebind", {cache:"no-store"});
+      if (!response.ok) throw new Error();
+      const listed = await response.json();
+      if (!Array.isArray(listed.offers)) throw new Error();
+      offers = listed.offers.filter(o => o?.expected && typeof o.expected.name === "string");
+      offerSelect.replaceChildren();
+      offers.forEach((o, i) => { const option = document.createElement("option"); option.value = String(i); option.textContent = `${o.expected.name} · ${o.previous_account}`; offerSelect.append(option); });
+      if (offers.length) { updateProfiles(); preview.hidden = false; }
+    } catch { /* Keep preview unavailable until the dialog is reopened. */ }
+    status.textContent = t("restore.rebind.uncertain");
+  };
   confirm.addEventListener("click", async () => {
     if (busy || !proposal) return; busy = true; confirm.disabled = true; offerSelect.disabled = accountSelect.disabled = true;
     try {
       const r = await requestLocal("/api/restore/rebind", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"confirm", ...proposal})});
-      if (!r.ok) { status.textContent = t(r.status >= 400 && r.status < 500 ? "restore.rebind.stale" : "restore.rebind.uncertain"); confirm.hidden = true; proposal = null; return; }
+      if (!r.ok) {
+        confirm.hidden = true; proposal = null;
+        if (r.status >= 400 && r.status < 500) { status.textContent = t("restore.rebind.stale"); preview.hidden = false; preview.disabled = false; }
+        else await refreshOffersAfterUncertain();
+        return;
+      }
       const result = await r.json();
       if (result.ok !== true) throw new Error();
       status.textContent = t("restore.rebind.done"); confirm.hidden = true; proposal = null;
       restoreKey = ""; await refresh();
-    } catch { status.textContent = t("restore.rebind.uncertain"); confirm.hidden = true; proposal = null; }
+    } catch { confirm.hidden = true; proposal = null; await refreshOffersAfterUncertain(); }
     finally { busy = false; confirm.disabled = false; offerSelect.disabled = accountSelect.disabled = false; }
   });
 }
@@ -8121,9 +8140,9 @@ async function openNew() {
     const request = ++requestGeneration;
     newAccountsReady = false; newAccountsFailed = false; accountRetry.hidden = true;
     try {
-      const config = await readJson("/api/config", { cache: "no-store" });
+      const config = await readJson("/api/config", { cache: "no-store", signal: AbortSignal.timeout(10000) });
       if (!current() || request !== requestGeneration) return;
-      if (!Array.isArray(config?.accounts)) throw new Error();
+      if (!Array.isArray(config?.accounts) || ("accounts_available" in config && config.accounts_available !== true)) throw new Error();
       rememberLaunchOptions(config.launch); syncOptionsRow();
       fillAccounts(config.accounts);
       roots = MeshFolderState.workspaceRoots(config);
