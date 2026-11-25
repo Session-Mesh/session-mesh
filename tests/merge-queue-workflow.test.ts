@@ -112,7 +112,7 @@ describe('merge queue: every required check name is reported', () => {
         }
       }
     }
-    assert.equal(checked, 3, 'frontend, python and browser need `native`, which is not required');
+    assert.equal(checked, 3, 'frontend and python need native; browser needs the guarded browser matrix');
   });
 
   test('the three jobs that wait for the native PTY host carry the guard on needs.native.result', () => {
@@ -125,7 +125,9 @@ describe('merge queue: every required check name is reported', () => {
   test('the guard is the first step of each of those jobs and has no condition of its own', () => {
     for (const name of ['frontend and Node tests', 'ruff and pytest (without browser)', 'browser tests (Chromium, shard ${{ matrix.shard }} of 4)']) {
       const steps = jobOf('public-ci.yml', name).split('    steps:\n')[1];
-      assert.match(steps, /^ {6}- name: Fail unless the native PTY host job succeeded\n {8}env:/);
+      const guardName = name.startsWith('browser tests (Chromium')
+        ? 'Require every browser test shard' : 'Fail unless the native PTY host job succeeded';
+      assert.ok(steps.startsWith(`      - name: ${guardName}\n        env:`));
       assert.doesNotMatch(steps.split(/^ {6}- /m)[1], /^ {8}if:/m);
     }
   });
@@ -157,11 +159,14 @@ describe('merge queue: every required check name is reported', () => {
 
   test('a job that reports no required name is a known one: a new job is a decision about the ruleset', () => {
     const reportedNames = new Set(Object.values(REQUIRED).flat());
-    const informational = new Set(['native PTY host (linux-x86_64)']);
+    // Both helpers are non-required themselves; required jobs explicitly
+    // guard their result, so neither failure can pass as a skipped check.
+    const helpers = new Set(['native PTY host (linux-x86_64)',
+      'browser ${{ matrix.kind }} tests (Chromium, shard ${{ matrix.shard }} of 4)']);
     for (const workflow of Object.keys(REQUIRED)) {
       for (const job of jobBlocks(parseLines(read(workflow)))) {
         const name = /^ {4}name: (.*)$/m.exec(job.block.map((line) => line.raw).join('\n'))?.[1] ?? '';
-        assert.ok(reportedNames.has(name) || informational.has(name), `${workflow}: job "${name}" is neither required nor listed as informational`);
+        assert.ok(reportedNames.has(name) || helpers.has(name), `${workflow}: job "${name}" is neither required nor a known guarded helper`);
       }
     }
   });

@@ -313,18 +313,19 @@ describe('the public CI as committed', () => {
       assert.match(parts, /if: matrix\.kind == 'python'/);
       assert.match(parts, /if: matrix\.kind == 'node'/);
       assert.match(gate, /name: browser tests \(Chromium, shard \$\{\{ matrix\.shard \}\} of 4\)/);
-      assert.match(gate, /needs: \[native, browser_parts\]/);
+      assert.match(gate, /needs: browser_parts/);
       assert.match(gate, /needs\.browser_parts\.result/);
       assert.match(gate, /\"\$PARTS_RESULT\" != success/);
       assert.match(gate, /if: \"!cancelled\(\)\"/);
       const guard = (gate + '\n').match(/run: \|\n((?:          .*\n)+)/)?.[1];
       assert.ok(guard, 'missing required-check guard');
-      for (const [native, parts, expected] of [['success', 'success', 0], ['failure', 'success', 1],
-        ['success', 'failure', 1], ['success', 'skipped', 1], ['success', 'cancelled', 1]]) {
-        const result = spawnSync('bash', ['-c', guard], {env: {...process.env,
-          NATIVE_RESULT: String(native), PARTS_RESULT: String(parts)}});
-        assert.equal(result.status, expected, `guard accepted ${native}/${parts}`);
+      for (const [parts, expected] of [['success', 0], ['failure', 1], ['skipped', 1], ['cancelled', 1]]) {
+        const result = spawnSync('bash', ['-c', guard], {env: {...process.env, PARTS_RESULT: String(parts)}});
+        assert.equal(result.status, expected, `guard accepted ${parts}`);
       }
+      assert.match(parts, /needs: native/);
+      assert.match(parts, /needs\.native\.result/);
+      assert.match(parts, /\"\$NATIVE_RESULT\" != success/);
       const files = fs.readdirSync(path.join(ROOT, 'tests')).filter(file => file.endsWith('.test.ts'));
       const read = (file: string) => fs.readFileSync(path.join(ROOT, 'tests', file), 'utf8');
       const candidates = files.filter(file => /MESH_CHROMIUM|terminal-browser-lib/.test(read(file)))
