@@ -166,7 +166,8 @@ async function entryTree(page: Page, width: number): Promise<void> {
   assert.equal(await item(page, 'zone:platform').locator('> .work-tree-row .work-tree-questions').innerText(), '? 1', 'counted once');
   const chevron = await row(page, 'product:relay').locator('.work-tree-chev').boundingBox();
   const rowBox = await row(page, 'product:relay').boundingBox();
-  if (width < 600) assert.ok(chevron && chevron.width >= 44 && chevron.height >= 44, `the fold arrow is a touch target: ${JSON.stringify(chevron)}`);
+  // DOM geometry is floating point: Chromium can report 44 CSS pixels as 43.999998.
+  if (width < 600) assert.ok(chevron && chevron.width >= 44 - 0.001 && chevron.height >= 44 - 0.001, `the fold arrow is a touch target: ${JSON.stringify(chevron)}`);
   else assert.deepEqual([chevron?.width, rowBox?.height], [10, 32], 'the rows of a wide screen keep their layout');
   await noOverflow(page);
   await shot(page, `rail-entry-${width}`);
