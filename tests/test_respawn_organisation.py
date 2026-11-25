@@ -100,6 +100,11 @@ def test_the_organisation_is_never_shown_in_the_offer(snapshot_file, tmp_path):
 @pytest.fixture
 def fake_host(monkeypatch, snapshot_file, tmp_path):
     monkeypatch.setattr(organize, "FILE", tmp_path / "mesh.json")
+    # The fake host has no relationship with this machine's process table.
+    monkeypatch.setattr(server.discover, "snapshot", lambda: {})
+    monkeypatch.setattr(server.discover, "describe", lambda _procs, _pid: {
+        "cwd": str(tmp_path), "cmd": "test shell", "agent": None,
+    })
     host = FakeHost()
     monkeypatch.setattr(ptyhost, "request", host.request)
     return host
@@ -293,10 +298,13 @@ async def test_ignoring_a_lost_session_drops_its_organisation(client, auth_cooki
     resp = await client.post("/api/restore/discard", json={"names": ["a"]}, headers=auth_cookie)
     assert resp.status == 200
     assert respawn.lost_entry("a") is None
-    assert "Alpha" not in respawn.FILE.read_text()
+    snapshot = json.loads(respawn.FILE.read_text())
+    assert {entry["name"] for entry in snapshot["lost"]} == {"b", "c"}
     _, body = await restore(client, auth_cookie, "a")
     assert not body["results"]["a"]["ok"]
-    assert "Alpha" not in json.dumps(await api_get(client, auth_cookie))
+    data = await api_get(client, auth_cookie)
+    assert all(session["name"] != "a" for session in data["mesh"])
+    assert all(entry["name"] != "a" for entry in data["restorable"])
 
 
 async def test_a_description_of_an_older_host_list_never_overwrites_a_newer_one(snapshot_file, tmp_path, monkeypatch):
