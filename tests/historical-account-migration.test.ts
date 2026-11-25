@@ -9,7 +9,7 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {REPO, scratchHome, runServer, stopServer, removeScratch} from './mesh-server-lib.ts';
 import {startTestPtyhost} from './helpers/managed-test-ptyhost.ts';
-import {cleanupHistoricalFixture} from './helpers/historical-cleanup.ts';
+import {cleanupHistoricalFixture, onceAsync} from './helpers/historical-cleanup.ts';
 import {installFakeCodex, launchesIn} from './fake-codex-lib.ts';
 import {appendFixturePath} from './fixture-login-path.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
@@ -57,6 +57,7 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
   const accounts = path.join(where.confDir,'accounts.json');
   const hostEnv = {HOME:where.home, PATH:`${bin}:/usr/bin:/bin`, SHELL:'/bin/bash', LANG:'C.UTF-8', XDG_RUNTIME_DIR:path.join(where.home,'run')};
   let host: ReturnType<typeof startTestPtyhost> | undefined, server: ChildProcess | undefined;
+  let stopCurrentServer: (() => Promise<void>) | undefined;
   let retirementUncertain: unknown;
   let hostStopUncertain: unknown;
   try {
@@ -75,6 +76,7 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
       MESH_SESSIONS_WAIT:'60', MESH_TEST_SESSIONS_COMPLETE:'1', MESH_MESH_PLATFORM_CMD:oldPlatformCopy};
     host = startTestPtyhost([oldHostCopy],{cwd:source,env:hostEnv,stdio:'ignore'},socket); await host.ready;
     const prior = await runServer(where,source); assert.ok(prior.result.listened,prior.output()); server = prior.child;
+    stopCurrentServer = onceAsync(() => stopServer(prior.child));
     const token = fs.readFileSync(path.join(where.confDir,'token'),'utf8').trim();
     const url = `http://127.0.0.1:${where.port}`;
     const headers = {Authorization:`Bearer ${token}`, Origin:url, 'Content-Type':'application/json'};
@@ -91,13 +93,14 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
     const recorded = JSON.parse(fs.readFileSync(snapshot,'utf8')).live[0];
     assert.equal(recorded.account,'work'); assert.equal(recorded.agent.type,'codex'); assert.equal(recorded.cwd,where.home);
     assert.equal(launchesIn(fake.log)[0]?.[1],aliasHome);
-    await stopServer(server); server = undefined;
+    await stopCurrentServer(); server = undefined; stopCurrentServer = undefined;
     try { await retireFixtureSession(socket); } catch (error) { retirementUncertain = error; throw error; }
     try { await host.stop(); } catch (error) { hostStopUncertain = error; throw error; }
     host = undefined;
     if (removeAlias) fs.writeFileSync(accounts,JSON.stringify({v:1,accounts:[]}),{mode:0o600});
     where.env.MESH_MESH_PLATFORM_CMD = candidatePlatform;
     const next = await runServer(where,REPO); assert.ok(next.result.listened,next.output()); server = next.child;
+    stopCurrentServer = onceAsync(() => stopServer(next.child));
     host = startTestPtyhost([candidateHost],{cwd:REPO,env:hostEnv,stdio:'ignore'},socket); await host.ready;
     let offer: any;
     await waitFor('historical alias recovery offer',15000,async () => {
@@ -131,7 +134,7 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
     }
   } finally {
     await cleanupHistoricalFixture(where.scratch, {
-      stopServer: async () => { if (server) await stopServer(server); },
+      stopServer: async () => { if (server) await stopCurrentServer!(); },
       retireHost: async () => { if (retirementUncertain) throw retirementUncertain; if (host) await retireFixtureSession(socket); },
       stopHost: async () => { if (hostStopUncertain) throw hostStopUncertain; if (host) await host.stop(); },
       removeScratch: () => removeScratch(where.scratch),

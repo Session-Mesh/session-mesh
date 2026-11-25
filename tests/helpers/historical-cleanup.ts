@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
+/** An uncertain stop must be observed again, never issued again. */
+export function onceAsync(action: () => Promise<void>): () => Promise<void> {
+  let attempt: Promise<void> | undefined;
+  return () => attempt ??= Promise.resolve().then(action);
+}
+
 /** Only remove the fixture after every applicable retirement has succeeded. */
 export async function cleanupHistoricalFixture(scratch: string, steps: {
   stopServer(): Promise<void>;
