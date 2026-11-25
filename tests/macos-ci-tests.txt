@@ -46,6 +46,9 @@ tests/copilot-real.test.ts
 tests/copilot-resume.test.ts
 tests/direct-line.test.ts
 tests/event-sequence.test.ts
+tests/flow-build.test.ts
+tests/flow-events.test.ts
+tests/flow-model.test.ts
 tests/gemini-resume.test.ts
 tests/history-agents-db.test.ts
 tests/history-agents.test.ts
@@ -78,6 +81,7 @@ tests/leak-guard-hooks.test.ts
 tests/leak-guard-secret-exceptions.test.ts
 tests/leak-guard.test.ts
 tests/mailbox-panel.test.ts
+tests/mcp-trace-launch.test.ts
 tests/mesh-attach-name-taken.test.ts
 tests/mesh-attach-not-responding.test.ts
 tests/mobile-actions-focus.test.ts

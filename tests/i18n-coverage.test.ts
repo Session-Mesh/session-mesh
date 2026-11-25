@@ -26,7 +26,7 @@ const loadCatalog = (code: string) => readJson(path.join(I18N, `${code}.json`)) 
 
 // Files the scan does not apply to, with the reason.
 const GENERATED = new Set(['pane-actions.js', 'folder-state.js', 'history-state.js', 'session-activity.js',
-  'demo-catalog.js', 'demo-view.js', 'diff-view.js', 'workspace-spec.js', 'shortcuts.js', 'terminal-links.js', 'projects.js', 'work-view.js', 'themes.js', 'update-notice.js', 'sessions-progress.js']);   // built from the .ts next to them
+  'demo-catalog.js', 'demo-view.js', 'diff-view.js', 'workspace-spec.js', 'shortcuts.js', 'terminal-links.js', 'projects.js', 'work-view.js', 'themes.js', 'update-notice.js', 'sessions-progress.js', 'flow-view.js']);   // built from the .ts next to them
 // Sandboxed documents rendered by the server (/view, demo scenes): no network
 // (connect-src 'none'), no storage, so no catalog can reach them until the
 // server injects the language. Their text is English; the French check applies.
@@ -323,6 +323,12 @@ test('generated Projects bundle is covered by every authored TypeScript module',
   const sources=fs.readdirSync(STATIC).filter(name=>/^project.*\.ts$/.test(name));
   assert.ok(sources.includes('projects.ts'));
   for(const source of sources)assert.ok(scanned.has(path.join(STATIC,source)),`${source} must stay in the literal/key scan`);
+});
+
+test('generated Flow bundle is covered by its authored TypeScript modules', () => {
+  const scanned = new Set(interfaceFiles());
+  assert.equal(scanned.has(path.join(STATIC, 'flow-view.js')), false);
+  for (const source of ['flow-view.ts', 'flow-model.ts']) assert.ok(scanned.has(path.join(STATIC, source)));
 });
 
 export function scanFiles(files: string[]): ScanResult {

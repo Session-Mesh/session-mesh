@@ -185,6 +185,8 @@ describe('the Options field of New session', {skip}, () => {
   test('a failed default save opens the already created session without a second launch', async () => {
     const {page, problems} = await signedIn();
     assert.equal(await storeDefault(page, {pi: '-e /tmp/before-failure.mjs'}), 'ok');
+    await page.locator('#btn-flow').click();
+    await page.locator('#flow').waitFor({state: 'visible'});
     await openNew(page, 'pi');
     let launches = 0, created = '';
     await page.route('**/api/new', async route => {
@@ -204,6 +206,8 @@ describe('the Options field of New session', {skip}, () => {
       await page.locator('#dlg-new button[value="ok"]').click();
       await page.locator('#dlg-new[open]').waitFor({state:'detached'});
       await page.waitForFunction(id => active?.id === id, created);
+      assert.equal(await page.locator('#flow').isHidden(), true, 'recovery exposes the created session');
+      assert.equal(await page.locator('#panes').isVisible(), true);
       assert.equal(launches, 1, 'closing recovery cannot create a second session');
       assert.deepEqual(problems, []);
     } finally { await page.unrouteAll({behavior:'wait'}); }

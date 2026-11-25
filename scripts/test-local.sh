@@ -113,6 +113,7 @@ frontend_checks() {
   npm ci --ignore-scripts --no-audit --no-fund
   npm run check
   npm run check:folder-state
+  npm run check:flow
   npm run check:pane-actions
   npm run check:workspace-spec
   npm run check:ptyhost-lifecycle

@@ -934,5 +934,9 @@
   {
     "pattern": "^OpenCode 2 cannot use a model option on a new session$",
     "key": "server.opencode2FreshModel"
+  },
+  {
+    "pattern": "^Flow journal unavailable$",
+    "key": "server.flowJournalUnavailable"
   }
 ]
