@@ -13,11 +13,11 @@ host. Place the source archives for `v0.1.1` and `v0.2.0-nightly.20261124`, and 
 `mesh-ptyhost-linux-x86_64`, in a scratch artifact directory; place the latter host under its
 `nightly-20261124/` subdirectory. The test verifies pinned SHA-256 hashes before extraction.
 Set `MESH_HISTORICAL_ARTIFACTS` to that directory, `MESH_PTYHOST_CMD` to the candidate binary,
-and `MESH_REQUIRE_HISTORICAL_MIGRATION=1` to make missing inputs fail instead of skip. Optionally
-set `MESH_CANDIDATE_PTYHOST_SHA256` to bind the candidate binary to a known digest. Run with
+and `MESH_REQUIRE_HISTORICAL_MIGRATION=1` to make missing inputs fail instead of skip. For a
+required run, set `MESH_CANDIDATE_PTYHOST_SHA256` to bind the candidate binary to a known digest. Run with
 `node --experimental-strip-types --test tests/historical-snapshot-migration.test.ts`.
-Each case uses a disposable home and checks two shell sessions, unavailable-host snapshot
-preservation, restoration offers and successful restore. This does not qualify account profiles,
+Each case uses a disposable home and checks two shell sessions with distinct working directories,
+unavailable-host snapshot preservation, restoration offers and the restored directories and types. This does not qualify account profiles,
 real agent credentials, the release installer or rollback.
 
 `scripts/test-local.sh` runs the complete local suite: the OCaml build and its tests (which
