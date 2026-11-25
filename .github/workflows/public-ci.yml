@@ -411,7 +411,7 @@ jobs:
   # succeeded; skipped, cancelled and failed parts cannot pass the guard.
   browser:
     name: browser tests (Chromium, shard ${{ matrix.shard }} of 4)
-    needs: [native, browser_parts]
+    needs: browser_parts
     if: "!cancelled()"
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -422,11 +422,10 @@ jobs:
     steps:
       - name: Require every browser test shard
         env:
-          NATIVE_RESULT: ${{ needs.native.result }}
           PARTS_RESULT: ${{ needs.browser_parts.result }}
         run: |
-          if [[ "$NATIVE_RESULT" != success || "$PARTS_RESULT" != success ]]; then
-            echo "Native or browser test matrix did not succeed"
+          if [[ "$PARTS_RESULT" != success ]]; then
+            echo "Browser test matrix did not succeed"
             exit 1
           fi
 
