@@ -344,7 +344,12 @@ test('a session-list read refreshes backend-specific labels without a configurat
       assert.equal(response.status, 200); const data = await response.json();
       return data.mesh.find((s: any) => s.id === 'alpha' || s.name === 'alpha')?.account_label;
     };
-    assert.equal(await label(), 'codex Work');
+    // Listing schedules account discovery without delaying the first session response.
+    const initialDeadline = Date.now() + 8000;
+    while (await label() !== 'codex Work') {
+      assert.ok(Date.now() < initialDeadline, 'session-list reads must obtain the initial profile label');
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
     const file = path.join(where.confDir, 'backend-profiles.json');
     const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
     registry.profiles[1].label = 'Refreshed Codex'; fs.writeFileSync(file, JSON.stringify(registry));
