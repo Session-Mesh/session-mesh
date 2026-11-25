@@ -35,7 +35,7 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
     fake = installFakeCodex(bin);
     marker = path.join(bin, 'carry-entered');
     release = path.join(bin, 'release-carry');
-    const platform = process.env.MESH_MESH_PLATFORM_CMD!;
+    const platform = process.env.MESH_MESH_PLATFORM_CMD || path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
     const wrapper = path.join(bin, 'platform-wrapper');
     fs.writeFileSync(wrapper, `#!/bin/sh\nif [ "$1" = accounts ] && [ "$2" = carry ]; then\n  : > '${marker}'\n  count=0\n  while [ ! -e '${release}' ]; do\n    [ "$count" -lt 150 ] || exit 124\n    sleep .1\n    count=$((count+1))\n  done\nfi\nexec '${platform}' "$@"\n`, {mode: 0o700});
     mesh = new TerminalMesh({PATH: fake.PATH, EIO_BACKEND: 'posix',
