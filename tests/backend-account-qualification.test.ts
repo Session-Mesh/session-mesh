@@ -37,7 +37,9 @@ for bad in ({'unexpected': 'object'}, ['not a session'], [raw, {'name':'partial'
 # Exercise the owner route's actual malformed-host path, not only the helper.
 server._require_owner_cookie = lambda request: None
 server.same_origin = lambda request: True
-async def run(op, body): return (0, b'{}\\n')
+async def run(authority, op, body):
+    assert authority == 'accounts'
+    return (0, b'{}\\n')
 server._profile_run = run
 server._profile_envelope = lambda op, code, out: {'ok':True, 'http_status':200, 'data':{'profiles':profiles}}
 async def host(body): return {'unexpected':'object'}
