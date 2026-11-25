@@ -59,7 +59,12 @@ let test_read_tools () =
       check_str "kind" "task" (str got "kind");
       check_str "body of the task file" "initial body text" (str got "notes");
       Alcotest.(check bool) "session linked" true (contains (Yojson.Safe.to_string (member "sessions" got)) "probe-session");
-      let prefix = String.sub task_a 0 4 in
+      let rec unique_prefix n =
+        let prefix = String.sub task_a 0 n in
+        if n < String.length task_a && String.starts_with ~prefix task_b then unique_prefix (n + 1)
+        else prefix
+      in
+      let prefix = unique_prefix 4 in
       check_str "id prefix" task_a (str (member "task" (ok c "work_get" (`Assoc [ ("id", `String prefix) ]))) "id");
       let p = ok c "work_get" (`Assoc [ ("id", `String project) ]) in
       check_str "project kind" "project" (str p "kind");
