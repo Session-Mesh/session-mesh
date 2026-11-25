@@ -311,18 +311,23 @@ let rec next_size socket =
   let kind, payload = next_frame socket in
   if kind = 'S' then Yojson.Basic.from_string payload else next_size socket
 
-let no_size socket =
-  Unix.setsockopt_float socket Unix.SO_RCVTIMEO 0.15;
-  let rec drain () =
-    match next_frame socket with
-    | 'S', _ -> false
-    | _ -> drain ()
-    | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) ->
-        true
+(* The input refusal is ordered after preceding frames sent by this watcher.
+   Reject any size notification before that barrier rather than timing out. *)
+let fenced_input_without_size socket =
+  let head = Bytes.create 4 in
+  Bytes.set_int32_be head 0 1l;
+  write_frame socket 'I' (Bytes.to_string head ^ "barrier");
+  let rec await_ack remaining =
+    if remaining = 0 then failwith "missing fenced watcher input ACK";
+    let kind, payload = next_frame socket in
+    if kind = 'S' then failwith "size frame after fenced resize";
+    if kind = 'C' && contains payload "input_ack" then
+      expect "watcher barrier refused by fence"
+        (member "reason" (Yojson.Basic.from_string payload)
+         = `String "switch_input_fenced")
+    else await_ack (remaining - 1)
   in
-  let result = drain () in
-  Unix.setsockopt_float socket Unix.SO_RCVTIMEO 3.;
-  expect "no size frame after refused resize" result
+  await_ack 100
 
 let size_claim = [ ("size", `String "claim");
                    ("rows", `Int 24); ("cols", `Int 80) ]
@@ -349,7 +354,10 @@ let acknowledged_v2_resize_fences () =
       member "ok" (switch_fence fixture "switch_input_acquire" created fence_id)
       = `Bool true));
     resize owner ~mode:"take" 39 101;
-    no_size watcher;
+    expect "owner resize processed before fence release"
+      (member "reason" (v2_input owner 1 "barrier")
+       = `String "switch_input_fenced");
+    fenced_input_without_size watcher;
     expect "release fence" (member "ok"
       (switch_fence fixture "switch_input_release" created fence_id)
       = `Bool true);
@@ -547,7 +555,8 @@ let acknowledged_v2 () =
     let malformed, denied = v2_attachment fixture
       [ ("mode", `String "resume"); ("created", created);
         ("slot", member "slot" next_ack);
-        ("generation", `Int (-1)) ] in
+        ("generation", `Int (-1));
+        ("actor_nonce", member "actor_nonce" next_ack) ] in
     expect "malformed generation rejected"
       (member "ok" denied <> `Bool true);
     Unix.close malformed;
