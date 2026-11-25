@@ -120,7 +120,9 @@ async def test_dragging_near_the_bottom_edge_scrolls_the_list_and_the_drop_lands
     await tab.fill("#filter", "drag-bottom-")
     assert len(await visible_order(tab)) == 10
     assert await tab.evaluate("$('#list').scrollHeight > $('#list').clientHeight + 100")
-    first, last = (await visible_order(tab))[0], (await visible_order(tab))[-1]
+    order = await visible_order(tab)
+    first, last = order[0], order[-1]
+    assert first != last
     assert await tab.evaluate("$('#list').scrollTop") == 0
     box = await start_drag(tab, first)
     start = await tab.evaluate("$('#list').scrollTop")
@@ -478,7 +480,9 @@ async def test_a_long_press_opens_the_menu_on_a_phone(desk):
     await tab.click("#btn-menu")
     await tab.wait_for_selector(item("mq"), state="visible")
     await tab.wait_for_timeout(600)                          # the drawer slides in
-    box = await (await tab.query_selector(item("mq"))).bounding_box()
+    row = tab.locator(item("mq"))
+    await row.scroll_into_view_if_needed()
+    box = await row.bounding_box()
     point = {"x": box["x"] + 60, "y": box["y"] + 20, "id": 1}
     cdp = await tab.context.new_cdp_session(tab)
     await cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [point]})
