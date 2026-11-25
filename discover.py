@@ -30,7 +30,11 @@ PROCESS_AGENTS = {"vibe-rs": "vibe"}
 def _pi_sessions(session_dir=None):
     base = os.environ.get("PI_CODING_AGENT_DIR") or f"{HOME}/.pi/agent"
     if session_dir is not None:
-        return glob.glob(f"{glob.escape(session_dir)}/*.jsonl")
+        # Exclude stable out-of-root links; this path check is not an atomic
+        # confinement guarantee if a directory entry changes before reading.
+        root = os.path.realpath(session_dir)
+        return [path for path in glob.glob(f"{glob.escape(session_dir)}/*.jsonl")
+                if os.path.commonpath((root, os.path.realpath(path))) == root]
     return glob.glob(f"{glob.escape(os.path.expanduser(base))}/sessions/*/*.jsonl")
 
 
