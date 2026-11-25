@@ -1265,6 +1265,41 @@ let first_create_interruption () =
             M.write_first_intent ~root ~directory ~stage ~content);
         f root stage content original)
   in
+  fixture (fun root ->
+      let config = Filename.concat root "config" and history = Filename.concat root "history" in
+      Unix.mkdir config 0o700; Unix.mkdir history 0o700;
+      let marker = Filename.concat root ".backend-profiles.legacy-switch" in
+      write marker "retained switch evidence";
+      let profile = `Assoc [ ("id", s "work"); ("label", s "Work");
+        ("backend", s "claude"); ("roots", `Assoc [("config", s config); ("history", s history)]) ] in
+      Alcotest.(check bool) "legacy switch blocks initial profile create" true
+        (M.create_profile ~root ~expected_revision:None ~profile = Error "profile-migration-required");
+      Alcotest.(check bool) "no registry created" false (Sys.file_exists (target root));
+      Alcotest.(check string) "legacy switch evidence retained" "retained switch evidence" (read marker));
+  fixture (fun root ->
+      let config = Filename.concat root "config" and history = Filename.concat root "history" in
+      Unix.mkdir config 0o700; Unix.mkdir history 0o700;
+      let profile = `Assoc [ ("id", s "work"); ("label", s "Work");
+        ("backend", s "claude"); ("roots", `Assoc [("config", s config); ("history", s history)]) ] in
+      let revision = match M.create_profile ~root ~expected_revision:None ~profile with
+        | Ok (revision, _) -> revision | Error err -> Alcotest.fail err in
+      let original = read (target root) in
+      let marker = Filename.concat root ".backend-profiles.legacy-switch" in
+      Unix.symlink "missing" marker;
+      Alcotest.(check bool) "dangling marker blocks append" true
+        (M.create_profile ~root ~expected_revision:(Some revision) ~profile = Error "profile-migration-required");
+      Alcotest.(check string) "registry retained" original (read (target root));
+      Alcotest.(check bool) "marker retained" true ((Unix.lstat marker).Unix.st_kind = Unix.S_LNK));
+  prelink_fixture (fun root stage content original ->
+      let marker = Filename.concat root ".backend-profiles.legacy-switch" in
+      write marker "retained switch evidence";
+      let status, _ = run root [ "recover-create" ] in
+      Alcotest.(check bool) "legacy switch blocks recovery" true (status = Unix.WEXITED 1);
+      Alcotest.(check string) "stage retained" content (read stage);
+      Alcotest.(check string) "source retained" original (read (source root));
+      Alcotest.(check string) "switch evidence retained" "retained switch evidence" (read marker);
+      Alcotest.(check bool) "create intent retained" true
+        (Sys.file_exists (Filename.concat root ".backend-profiles.create-intent")));
   prelink_fixture (fun root stage _ original ->
       refusal root "migration-target-exists";
       Alcotest.(check bool) "create cannot replay pending first intent" true
