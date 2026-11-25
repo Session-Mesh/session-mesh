@@ -1214,7 +1214,8 @@ async def _send_new(request):
 
 async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, pi_runtime=None,
                       notice=None, vibe=None, opencode=None, exact=False, nonce=None, conversation=None,
-                      account=None, account_env=None, account_revision=None, default_context_revision=None, fresh=False):
+                      account=None, account_env=None, account_revision=None, default_context_revision=None, fresh=False,
+                      standby_phase=None):
     """Start a session. Every way to start one ends here ("New session", a
     conversation resumed from the history, a restored session, an agent moved
     in from another terminal, a restart), so workspace_roots is applied here.
@@ -1292,8 +1293,19 @@ async def new_session(base, cwd, command=None, agent=None, known_agent=None, kee
         meta["account_context_revision"] = default_context_revision
     if vibe and vibe.hooks:
         meta["vibe_hooks"] = vibe.hooks
-    await _send_launch({"op": "new", "name": name, "cwd": cwd, "command": command, "env": env, "meta": meta},
-                       conversation)
+    if standby_phase is not None:
+        # Standby has no conversation claim: the next await sends only the new request.
+        if conversation is not None:
+            raise ValueError("standby must not claim a conversation")
+        _legacy_check_active()
+        standby_phase["effect_started"] = True
+    try:
+        await _send_launch({"op": "new", "name": name, "cwd": cwd, "command": command, "env": env, "meta": meta},
+                           conversation)
+    except HostNotReached:
+        if standby_phase is not None:
+            standby_phase["effect_started"] = False
+        raise
     return name
 
 
@@ -1512,11 +1524,10 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
     standby_nonce = sessiontoken.new_nonce()
     _legacy_check_active()
     phase = _LEGACY_SWITCH_PHASE.get()
-    if phase is not None:
-        phase['effect_started'] = True  # standby creation can be uncertain
     name = await new_session(base, cwd, None, agent, known_agent, keep=48, notice=notice, vibe=vibe,
                              nonce=standby_nonce, account=target, account_env=account_env,
-                             account_revision=context["context_revision"] if context else None)
+                             account_revision=context["context_revision"] if context else None,
+                             standby_phase=phase)
     listed = await host({"op": "list"})
     replacement = next((item for item in listed if item.get("name") == name), None)
     if replacement is None or (replacement.get("meta") or {}).get("nonce") != standby_nonce:
@@ -6581,6 +6592,8 @@ async def api_config(request):
     report = await asyncio.to_thread(config_report, public_origin(request), await _config_host())
     await declared_accounts()
     report["accounts"] = accounts_projection()
+    report["accounts_available"] = (_ACCOUNTS["file"] != "refused"
+                                    and (not _native_profile_mode() or _ACCOUNTS["file"] == "ok"))
     report["elevation"] = {"active": (left := elevation_seconds_left(request)) > 0, "seconds_left": left,
                            "duration": ELEVATION_SECONDS}
     return web.json_response(report, headers={"Cache-Control": "no-store"})

@@ -837,3 +837,27 @@ async def test_restart_refuses_missing_named_transcript_before_replacement(monke
     item = {'source':{'id':'alpha', 'created':1, 'agent':'codex'}, 'action':'restart', 'model':None}
     with pytest.raises(server.web.HTTPConflict):
         await server._execute_session_action(item)
+
+@pytest.mark.parametrize("failure,expected", [("list", False), ("not-sent", False), ("lost-ack", True)])
+async def test_standby_marks_only_possible_creation(monkeypatch, failure, expected):
+    phase = {"effect_started": False}
+    sent = []
+
+    async def unique(*_args):
+        if failure == "list":
+            raise server.HostNotReached(text="no list")
+        return "standby"
+
+    async def send(*_args):
+        sent.append(phase["effect_started"])
+        if failure == "not-sent":
+            raise server.HostNotReached(text="not sent")
+        raise server.CreationUncertain(text="reply lost")
+
+    monkeypatch.setattr(server, "unique_name", unique)
+    monkeypatch.setattr(server, "_send_launch", send)
+    with pytest.raises(server.web.HTTPServiceUnavailable):
+        await server.new_session("standby", str(Path.home()), None, "codex", "codex", account_env={},
+                                 standby_phase=phase)
+    assert phase["effect_started"] is expected
+    assert sent == ([] if failure == "list" else [True])

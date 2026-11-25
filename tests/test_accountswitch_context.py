@@ -853,3 +853,26 @@ def test_profile_qualification_uses_live_host_and_supported_backend(monkeypatch)
                  "pty_capabilities": ["agent_relaunch_v1", "agent_relaunch_bound_v1"]},
                 {**base, "meta": {"known_agent": "claude"}, "pty_capabilities": ["agent_relaunch_v1"]}]
     assert [p["switch_qualified"] for p in server._qualify_profiles(profiles, sessions)] == [True, False, False, False]
+
+@pytest.mark.parametrize("state,native,available", [
+    ("refused", False, False), ("refused", True, False), ("absent", True, False),
+    ("absent", False, True), ("ok", True, True),
+])
+async def test_config_reports_inventory_availability_without_hiding_other_config(monkeypatch, state, native, available):
+    from types import SimpleNamespace
+    async def no_accounts():
+        return []
+    async def config_host():
+        return {}
+    monkeypatch.setattr(server, "_require_owner_cookie", lambda _request: None)
+    monkeypatch.setattr(server, "public_origin", lambda _request: "http://localhost")
+    monkeypatch.setattr(server, "_config_host", config_host)
+    monkeypatch.setattr(server, "config_report", lambda *_args: {"sentinel": "present"})
+    monkeypatch.setattr(server, "declared_accounts", no_accounts)
+    monkeypatch.setattr(server, "_native_profile_mode", lambda: native)
+    monkeypatch.setattr(server, "_ACCOUNTS", {"file": state, "accounts": [], "launch_profiles": None})
+    monkeypatch.setattr(server, "elevation_seconds_left", lambda _request: 0)
+    response = await server.api_config(SimpleNamespace(query={}))
+    body = json.loads(response.body)
+    assert response.status == 200 and body["sentinel"] == "present"
+    assert body["accounts"] == [] and body["accounts_available"] is available
