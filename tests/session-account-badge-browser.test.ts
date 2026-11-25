@@ -42,6 +42,8 @@ async function drawer(page: Page, phone: boolean): Promise<void> {
     await page.locator('#btn-menu').click();
     await page.waitForFunction(() => document.body.classList.contains('drawer'));
   }
+  // The class starts a slide transition; measure only after it has finished.
+  if (phone) await page.waitForFunction(() => getComputedStyle(document.querySelector('#side')!).transform === 'none');
 }
 
 async function fits(page: Page, badge?: Locator): Promise<void> {
