@@ -1715,8 +1715,8 @@ configuration folder (`~/.config/session-mesh`), one JSON array of arguments per
   (`--session-id`, `--continue`, `--resume`, `--fork-session`, Pi's `--session`, `--session-dir`,
   `--fork`, and a Codex subcommand). The check reads the parsed arguments, so `--sandbox=…`,
   `-a=never` and `-c 'approval_policy="never"'` are recognised like their spaced forms. A refused
-  argument is refused both when you save it and again just before a launch, so a hand-edited file
-  cannot slip it through.
+  recognized argument is refused both when you save it and again just before a launch. The check
+  does not model every form an agent CLI may accept; it is a guard rail, not a complete block.
 - **When the file cannot be read.** The server keeps running, but every agent launch is refused with
   the reason: Mesh cannot know which presets an unreadable file grants options to, and starting
   without a restrictive argument would widen what the agent may do. The shell and `other` still

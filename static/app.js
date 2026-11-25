@@ -7680,7 +7680,12 @@ async function submitNew(generation) {
   // and never starts a second session.
   const pending = dlg.dataset.pendingDefault ? JSON.parse(dlg.dataset.pendingDefault) : null;
   if (pending) {
-    if (pending.close) { delete dlg.dataset.pendingDefault; dlg.close(); return; }
+    if (pending.close) {
+      delete dlg.dataset.pendingDefault; dlg.close();
+      await refresh();
+      if (generation === newDialogGeneration) active.show(pending.id, false, { focusTerminal: true });
+      return;
+    }
     const token = form.masterToken.value;
     form.masterToken.value = "";
     if (!token) { $("#new-err").textContent = t("new.optionsCancelled"); return; }
@@ -7741,7 +7746,7 @@ async function submitNew(generation) {
       }
       if (saved.error === "stale-revision") launchOptionsRevision = saved.revision ?? launchOptionsRevision;
       $("#new-err").textContent = t("new.optionsNotSaved", { message: saved.message || saved.error });
-      dlg.dataset.pendingDefault = JSON.stringify({ close: true });   // the next click only closes
+      dlg.dataset.pendingDefault = JSON.stringify({ close: true, id });   // the next click opens the existing session
       return;
     }
     rememberLaunchOptions(saved.launch);
