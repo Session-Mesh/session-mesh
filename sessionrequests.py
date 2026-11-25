@@ -40,7 +40,8 @@ SETTINGS_EFFORTS = frozenset(("low", "medium", "high"))
 # Presets an agent may never request: a session without approvals or sandbox
 # would let one agent obtain an unconfined sibling. The owner still can.
 OWNER_ONLY_PRESETS = frozenset(("codex-yolo",))
-ACTIVE_STATES = ("pending", "claimed", "approved", "approved_options_v1", "executing", "settings_approved", "settings_executing")
+ACTIVE_STATES = ("pending", "claimed", "approved", "approved_options_v1", "executing",
+                 "settings_approved", "settings_executing", "native_approved", "native_executing")
 TERMINAL_STATES = ("rejected", "completed", "failed", "execution_unknown")
 _UMASK_LOCK = threading.Lock()
 
@@ -206,6 +207,16 @@ class Requests:
                 self._db.execute(f"CREATE TRIGGER IF NOT EXISTS {trigger} BEFORE {operation} ON session_requests "
                                  "WHEN NEW.action = 'settings' AND NEW.state IN ('approved', 'executing') "
                                  "BEGIN SELECT RAISE(ABORT, 'settings action requires a compatible server'); END")
+            # A rolled-back server does not know the native binding. Prevent it
+            # from approving or executing that request through its legacy path.
+            for operation in ("INSERT", "UPDATE OF state, action, switch_binding_json"):
+                trigger = "native_switch_legacy_insert" if operation == "INSERT" else "native_switch_legacy_update"
+                self._db.execute(f"CREATE TRIGGER IF NOT EXISTS {trigger} BEFORE {operation} ON session_requests "
+                                 "WHEN NEW.action = 'switch_account' AND NEW.switch_binding_json IS NOT NULL "
+                                 "AND NEW.state IN ('approved', 'executing') "
+                                 "BEGIN SELECT RAISE(ABORT, 'native switch requires a compatible server'); END")
+            self._db.execute("UPDATE session_requests SET state = 'native_approved' "
+                             "WHERE action = 'switch_account' AND switch_binding_json IS NOT NULL AND state = 'approved'")
             # Prior deployments lacked the barrier: never turn their approval
             # into authority on upgrade. An in-flight result is still unknown.
             self._db.execute("UPDATE session_requests SET state = 'failed', result_json = ?, terminal_at = ? "
@@ -213,7 +224,7 @@ class Requests:
                              (self._encode({"error": "Settings approval invalidated during upgrade"}), self._clock()))
             self._db.execute(
                 "UPDATE session_requests SET state = 'execution_unknown', "
-                "result_json = ?, terminal_at = ? WHERE state IN ('executing', 'settings_executing')",
+                "result_json = ?, terminal_at = ? WHERE state IN ('executing', 'settings_executing', 'native_executing')",
                 (self._encode({"error": "Execution result unknown after restart"}),
                  self._clock()))
             self._prune_locked(self._clock())
@@ -259,7 +270,7 @@ class Requests:
         # visibly rather than allowing an arbitrarily late launch.
         self._db.execute(
             "UPDATE session_requests SET state = 'failed', result_json = ?, terminal_at = ? "
-            "WHERE state IN ('approved', 'approved_options_v1', 'settings_approved') AND created_at + ? <= ?",
+            "WHERE state IN ('approved', 'approved_options_v1', 'settings_approved', 'native_approved') AND created_at + ? <= ?",
             (self._encode({"error": "Authorization expired before execution"}), now, TTL, now))
         self._db.execute(
             "DELETE FROM session_requests WHERE "
@@ -293,7 +304,9 @@ class Requests:
             "name": row["requested_name"], "model": row["model"],
             **({"effort": row["effort"], "conversation": row["conversation"]} if row["action"] == "settings" else {}),
             "account": row["account"], "from_account": row["from_account"],
-            "state": {"settings_approved": "approved", "settings_executing": "executing", "approved_options_v1": "approved"}.get(row["state"], row["state"]), "created_at": row["created_at"],
+            "state": {"settings_approved": "approved", "settings_executing": "executing",
+                      "approved_options_v1": "approved", "native_approved": "approved",
+                      "native_executing": "executing"}.get(row["state"], row["state"]), "created_at": row["created_at"],
             "result": cls._decode(row["result_json"]),
             # Scheduling hint only. It grants no authority and is safe for the
             # owner inventory/status projection.
@@ -517,8 +530,10 @@ class Requests:
                     not isinstance(approved_options, list) or not isinstance(options_revision, str)
                     or any(not isinstance(token, str) for token in approved_options)):
                 return None
-            state = ({"create": "approved_options_v1", "settings": "settings_approved"}.get(row["action"], "approved")
-                     if approve else "rejected")
+            state = ("rejected" if not approve else "approved_options_v1" if row["action"] == "create" else
+                     "settings_approved" if row["action"] == "settings" else
+                     "native_approved" if row["action"] == "switch_account" and row["switch_binding_json"] is not None
+                     else "approved")
             terminal_at = None if approve else now
             self._db.execute(
                 "UPDATE session_requests SET state = ?, decision = ?, "
@@ -537,7 +552,7 @@ class Requests:
         with self._transaction():
             self._prune_locked(now)
             rows = self._db.execute(
-                "SELECT * FROM session_requests WHERE state IN ('approved', 'approved_options_v1', 'settings_approved') "
+                "SELECT * FROM session_requests WHERE state IN ('approved', 'approved_options_v1', 'settings_approved', 'native_approved') "
                 "ORDER BY created_at, id").fetchall()
         return [self._row(row) for row in rows]
 
@@ -546,8 +561,9 @@ class Requests:
         with self._transaction():
             self._prune_locked(now)
             changed = self._db.execute(
-                "UPDATE session_requests SET state = CASE WHEN action = 'settings' THEN 'settings_executing' ELSE 'executing' END "
-                "WHERE id = ? AND state IN ('approved', 'approved_options_v1', 'settings_approved')", (request_id,)).rowcount
+                "UPDATE session_requests SET state = CASE WHEN action = 'settings' THEN 'settings_executing' "
+                "WHEN state = 'native_approved' THEN 'native_executing' ELSE 'executing' END "
+                "WHERE id = ? AND state IN ('approved', 'approved_options_v1', 'settings_approved', 'native_approved')", (request_id,)).rowcount
             if changed != 1:
                 return None
             row = self._db.execute("SELECT * FROM session_requests WHERE id = ?",
@@ -565,7 +581,7 @@ class Requests:
         with self._transaction():
             changed = self._db.execute(
                 "UPDATE session_requests SET state = ?, result_json = ?, terminal_at = ? "
-                "WHERE id = ? AND state IN ('executing', 'settings_executing')",
+                "WHERE id = ? AND state IN ('executing', 'settings_executing', 'native_executing')",
                 (state, self._encode(value), now, request_id)).rowcount
             if changed != 1:
                 return None

@@ -40,6 +40,26 @@ def test_binding_survives_claim_approval_and_restart_without_paths(tmp_path):
     db.close()
 
 
+def test_native_binding_cannot_be_approved_or_executed_by_legacy_state_machine(tmp_path):
+    path = tmp_path / 'requests.sqlite3'
+    db = sessionrequests.Requests(path, clock=lambda: 10.0)
+    request = make(db)
+    claim = db.claim(request['id'], 'a' * 32)
+    with sqlite3.connect(path) as old:
+        with pytest.raises(sqlite3.IntegrityError, match='native switch requires'):
+            old.execute("UPDATE session_requests SET state = 'approved' WHERE id = ?", (request['id'],))
+    assert db.decide(request['id'], True, claim['claim_nonce'])['state'] == 'approved'
+    with sqlite3.connect(path) as old:
+        assert old.execute("SELECT count(*) FROM session_requests WHERE state = 'approved'").fetchone()[0] == 0
+        with pytest.raises(sqlite3.IntegrityError, match='native switch requires'):
+            old.execute("UPDATE session_requests SET state = 'executing' WHERE id = ?", (request['id'],))
+    assert db.begin_execution(request['id'])['state'] == 'executing'
+    db.close()
+    db = sessionrequests.Requests(path, clock=lambda: 11.0)
+    assert db.status(request['id'])['state'] == 'execution_unknown'
+    db.close()
+
+
 @pytest.mark.parametrize("change", ["backend", "source", "target", "revision", "path", "missing"])
 def test_invalid_binding_is_rejected_before_any_intent(tmp_path, change):
     binding = copy.deepcopy(PAIR)
@@ -66,6 +86,8 @@ def test_old_database_migrates_without_inventing_binding(tmp_path):
     old = make(db, None)
     db.close()
     with sqlite3.connect(path) as raw:
+        raw.execute("DROP TRIGGER native_switch_legacy_insert")
+        raw.execute("DROP TRIGGER native_switch_legacy_update")
         raw.execute("ALTER TABLE session_requests DROP COLUMN switch_binding_json")
     db = sessionrequests.Requests(path, clock=lambda: 11.0)
     assert db.status(old["id"]) == old
