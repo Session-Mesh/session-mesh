@@ -2,7 +2,6 @@
 # Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 from concurrent.futures import ThreadPoolExecutor
-import sqlite3
 import os
 import sqlite3
 from pathlib import Path

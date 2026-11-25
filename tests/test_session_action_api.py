@@ -767,8 +767,8 @@ async def test_new_session_passes_fresh_context_to_opencode_preflight(monkeypatc
     async def unique(*_args):
         return "created"
 
-    async def preflight(_command, _cwd, *, fresh=False):
-        seen.append(fresh)
+    async def preflight(_command, _cwd, environ=None, *, fresh=False, require_v2=False):
+        seen.append((fresh, environ, require_v2))
         raise server.web.HTTPConflict(text="preflight stopped")
 
     monkeypatch.setattr(server, "unique_name", unique)
@@ -776,7 +776,30 @@ async def test_new_session_passes_fresh_context_to_opencode_preflight(monkeypatc
     with pytest.raises(server.web.HTTPConflict):
         await server.new_session("created", str(Path.home()), "opencode --model a/b", "opencode", "opencode",
                                  account_env={}, fresh=True)
-    assert seen == [True]
+    assert seen == [(True, None, False)]
+
+
+async def test_new_profiled_opencode_keeps_profile_and_fresh_preflight(monkeypatch):
+    async def context(*_args):
+        return {"env": {"HOME": "/profile"}}
+
+    async def unique(*_args):
+        return "created"
+
+    seen = []
+
+    async def preflight(_command, _cwd, environ=None, *, fresh=False, require_v2=False):
+        seen.append((environ, fresh, require_v2))
+        raise server.web.HTTPConflict(text="preflight stopped")
+
+    monkeypatch.setattr(server, "_profile_launch_context", context)
+    monkeypatch.setattr(server, "_profile_environ", lambda ctx, _agent: ctx["env"])
+    monkeypatch.setattr(server, "unique_name", unique)
+    monkeypatch.setattr(server, "_opencode_command", preflight)
+    with pytest.raises(server.web.HTTPConflict):
+        await server.new_session("created", str(Path.home()), "opencode", "opencode", "opencode",
+                                 account="profile", fresh=True)
+    assert seen == [({"HOME": "/profile"}, True, True)]
 
 
 async def test_fenced_target_start_failure_preserves_copy_outcome(monkeypatch):
