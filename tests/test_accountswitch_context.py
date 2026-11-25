@@ -143,9 +143,12 @@ def test_approved_native_switch_does_not_fall_back_when_registry_disappears(monk
     assert events == []
 
 
-def test_legacy_switch_requires_legacy_resolver_at_carry(monkeypatch):
+def test_legacy_switch_requires_legacy_resolver_at_carry(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    executable = tmp_path / 'mesh-platform'
+    executable.write_bytes(b'fixture')
+    monkeypatch.setattr(server, 'work_command', lambda _name: str(executable))
     monkeypatch.setattr(respawn, 'forget_live', lambda *args: None)
     async def helper(*args, **kwargs):
         calls.append(args)
@@ -166,9 +169,12 @@ def test_legacy_switch_requires_legacy_resolver_at_carry(monkeypatch):
 
 @pytest.mark.parametrize('reply', [None, {}, {'version': 1, 'legacy_only': False},
                                    {'version': True, 'legacy_only': True}])
-def test_legacy_switch_refuses_old_or_invalid_helper_before_stop(monkeypatch, reply):
+def test_legacy_switch_refuses_old_or_invalid_helper_before_stop(monkeypatch, reply, tmp_path):
     calls = []
     monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    executable = tmp_path / 'mesh-platform'
+    executable.write_bytes(b'fixture')
+    monkeypatch.setattr(server, 'work_command', lambda _name: str(executable))
     async def helper(*args, **kwargs):
         if reply is None:
             raise server.AccountsUnavailable('old helper')
@@ -183,6 +189,83 @@ def test_legacy_switch_refuses_old_or_invalid_helper_before_stop(monkeypatch, re
         asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
     assert 'nothing was stopped' in error.value.text
     assert calls == []
+
+
+@pytest.mark.parametrize('replacement', ['rename', 'in_place'])
+def test_legacy_switch_refuses_changed_helper_before_carry(monkeypatch, tmp_path, replacement):
+    executable = tmp_path / 'mesh-platform'
+    executable.write_bytes(b'new-helper')
+    monkeypatch.setattr(server, 'work_command', lambda _name: str(executable))
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    calls = []
+    async def helper(*args, **kwargs):
+        calls.append(args)
+        assert args == ('carry-capabilities',)
+        return {'version': 1, 'legacy_only': True}
+    async def replace(*args, switch, **kwargs):
+        if replacement == 'rename':
+            other = tmp_path / 'replacement'
+            other.write_bytes(b'old-helper')
+            other.replace(executable)
+        else:
+            executable.write_bytes(b'old-helper')
+        await switch[1]()
+    monkeypatch.setattr(server, '_accounts_program', helper)
+    monkeypatch.setattr(server, 'replace_session', replace)
+    item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
+    with pytest.raises(server.AccountsUnavailable) as error:
+        asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
+    assert error.value.code == 'profile-context-changed'
+    assert calls == [('carry-capabilities',)]
+
+
+def test_legacy_switch_keeps_versioned_helper_after_current_link_moves(monkeypatch, tmp_path):
+    first, second, current = tmp_path / 'first', tmp_path / 'second', tmp_path / 'current'
+    first.write_bytes(b'first-helper')
+    second.write_bytes(b'second-helper')
+    current.symlink_to(first)
+    monkeypatch.setattr(server, 'work_command', lambda _name: str(current))
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    monkeypatch.setattr(respawn, 'forget_live', lambda *args: None)
+    calls = []
+    async def helper(*args, **kwargs):
+        calls.append((args, kwargs['program']))
+        if args == ('carry-capabilities',):
+            current.unlink()
+            current.symlink_to(second)
+            return {'version': 1, 'legacy_only': True}
+        return {'carried': {'replaced': 0}}
+    async def replace(*args, switch, **kwargs):
+        await switch[1]()
+        return 'synthetic'
+    monkeypatch.setattr(server, '_accounts_program', helper)
+    monkeypatch.setattr(server, 'replace_session', replace)
+    item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
+    asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
+    assert len(calls) == 2 and all(program == str(first) for _, program in calls)
+
+
+def test_legacy_switch_never_runs_replaced_real_helper(monkeypatch, tmp_path):
+    executable, marker = tmp_path / 'mesh-platform', tmp_path / 'ran-old'
+    executable.write_text('#!/bin/sh\nprintf \'{"version":1,"legacy_only":true}\\n\'\n')
+    executable.chmod(0o700)
+    monkeypatch.setattr(server, 'work_command', lambda _name: str(executable))
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    async def replace(*args, switch, **kwargs):
+        old = tmp_path / 'old-helper'
+        old.write_text(f'#!/bin/sh\nprintf ran > {marker}\n')
+        old.chmod(0o700)
+        old.replace(executable)
+        await switch[1]()
+    monkeypatch.setattr(server, 'replace_session', replace)
+    item = {'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    raw = {'name': 'synthetic', 'created': 1, 'cwd': '/tmp', 'meta': {}}
+    with pytest.raises(server.AccountsUnavailable) as error:
+        asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
+    assert error.value.code == 'profile-context-changed'
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize('scenario', ['carry_failure', 'target_refused', 'target_timeout'])

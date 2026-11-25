@@ -487,9 +487,9 @@ def _accounts_signature():
     return (custody, *signatures)
 
 
-async def _accounts_program(*args, timeout=10, env=None):
+async def _accounts_program(*args, timeout=10, env=None, program=None):
     """The JSON answer of `mesh-platform accounts ARGS`; AccountsUnavailable on any refusal."""
-    program, proc = work_command("mesh-platform"), None
+    program, proc = program or work_command("mesh-platform"), None
     if not program:
         raise AccountsUnavailable("mesh-platform not found", code="helper-unavailable")
     try:
@@ -5496,6 +5496,31 @@ def _carry_env(kind):
     return {**work_child_env(), **({variable: configured} if os.path.isabs(configured) else {})}
 
 
+def _carry_helper_snapshot(path):
+    """Pin an ordinary versioned helper path and detect replacement or in-place edits.
+
+    The check is not an atomic executable snapshot: same-user writes between the
+    final check and exec remain outside this check's guarantee.
+    """
+    if not path:
+        raise AccountsUnavailable('mesh-platform not found', 'helper-unavailable')
+    path = os.path.realpath(path)
+    try:
+        with open(path, 'rb') as executable:
+            before = os.fstat(executable.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size > 128 * 1024 * 1024:
+                raise OSError('invalid helper')
+            digest = hashlib.file_digest(executable, 'sha256').digest()
+            after = os.fstat(executable.fileno())
+        def identity(value):
+            return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
+        if identity(before) != identity(after):
+            raise OSError('helper changed during read')
+        return path, identity(after), digest
+    except OSError as exc:
+        raise AccountsUnavailable('account carry helper unavailable', 'helper-unavailable') from exc
+
+
 async def _switch_session(item, raw, conversation, argv, observed_agent=None):
     """Carry out an approved switch: the source stopped, its conversation carried, then resumed under the target
     (a failed carry: under the source again, AccountSwitchUndone)."""
@@ -5510,11 +5535,13 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
         raise web.HTTPConflict(text="Account profile context changed; nothing was stopped")
     if native and not NATIVE_SWITCH_QUALIFIED:
         raise web.HTTPConflict(text="Native profile switching is not qualified")
+    legacy_helper = None
     if not native:
         # Older helpers do not understand --legacy-only. Refuse before the
         # source agent is stopped, rather than discovering that after a carry.
         try:
-            capabilities = await _accounts_program("carry-capabilities")
+            legacy_helper = await asyncio.to_thread(_carry_helper_snapshot, work_command('mesh-platform'))
+            capabilities = await _accounts_program("carry-capabilities", program=legacy_helper[0])
         except AccountsUnavailable as exc:
             raise web.HTTPConflict(text="Account carry safety capability unavailable; nothing was stopped") from exc
         if (set(capabilities) != {"version", "legacy_only"} or type(capabilities["version"]) is not int
@@ -5544,6 +5571,8 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
     carried = {}
 
     async def carry():
+        if not native and await asyncio.to_thread(_carry_helper_snapshot, legacy_helper[0]) != legacy_helper:
+            raise AccountsUnavailable('account carry helper changed', 'profile-context-changed')
         revisions = ((source_context["context_revision"], target_context["context_revision"])
                      if native else ("--legacy-only",))
         environ = _carry_env(kind)
@@ -5552,7 +5581,8 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
             if default_context:
                 environ.update(default_context["env"])
         result = await _accounts_program("carry", str(ACCOUNTS_FILE), kind, conversation, item["from_account"],
-                                         item["account"], *revisions, timeout=CARRY_TIMEOUT, env=environ)
+                                         item["account"], *revisions, timeout=CARRY_TIMEOUT, env=environ,
+                                         program=legacy_helper[0] if legacy_helper else None)
         summary = result.get("carried")
         if not isinstance(summary, dict) or type(summary.get("replaced")) is not int or summary["replaced"] < 0:
             raise AccountsUnavailable("Invalid carry result", "carry_rollback_incomplete")
