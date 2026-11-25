@@ -471,6 +471,9 @@ test('component: pending writes disable controls; old write/load after close/reo
     assert.equal(await page.evaluate(() => lab.calls.length), 1);
     await page.evaluate(() => { lab.panel.close(); lab.holdLoad = true; void lab.panel.open(); });
     await statusIs(page, 'en', 'loading');
+    // Loading is rendered before asynchronous journal inspection reaches load().
+    // Ensure the old load is actually pending before closing its generation.
+    await page.waitForFunction(() => typeof lab.finishLoad === 'function');
     await page.evaluate(() => { lab.panel.close(); lab.holdLoad = false; lab.policy = {...lab.policy, revision: 10, global: 'ask'}; void lab.panel.open(); });
     await statusIs(page, 'en', 'ready');
     await page.evaluate(() => { lab.finishLoad(); });
