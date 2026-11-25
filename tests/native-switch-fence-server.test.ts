@@ -4,8 +4,28 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {test} from 'node:test';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 
 const repo = path.resolve(import.meta.dirname, '..');
+test('operator inventory distinguishes orphan receipts without exposing fence secrets', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-fence-inventory-'));
+  try {
+    const folder = path.join(dir, 'switch-fences');
+    fs.mkdirSync(folder);
+    for (const [id, name, created] of [['a'.repeat(64), 'first', 1], ['b'.repeat(64), 'second', 2]] as const)
+      fs.writeFileSync(path.join(folder, `${id}.json`), JSON.stringify({name, created, fence_id: 'secret-owner', creation_receipt: 'secret-receipt'}));
+    const docs = fs.readFileSync(path.join(repo, 'docs/operations.md'), 'utf8');
+    const section = docs.split('### Recovering an orphaned account-switch input fence')[1]!;
+    const code = section.match(/```sh\npython - <<'PY'\n([\s\S]*?)\nPY\n```/)?.[1];
+    assert.ok(code);
+    const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-c', code],
+      {cwd: repo, env: {...process.env, MESH_CONF_DIR: dir}, encoding: 'utf8'});
+    assert.match(output, new RegExp(`sha256-${'a'.repeat(64)} 'first' 1`));
+    assert.match(output, new RegExp(`sha256-${'b'.repeat(64)} 'second' 2`));
+    assert.doesNotMatch(output, /secret-owner|secret-receipt/);
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});
 test('native switch fence binds one session and never replays an uncertain operation', () => {
   const script = `
 import asyncio, sys, tempfile, pathlib, json, hashlib
