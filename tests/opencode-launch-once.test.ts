@@ -50,8 +50,8 @@ asyncio.run(main())
   test('a plain new session still prepares it, once', () => {
     assert.deepEqual(python(`
 prepared, sent = [], []
-async def opencode_command(command, cwd="/"):
-    prepared.append(command)
+async def opencode_command(command, cwd="/", environ=None, *, fresh=False, require_v2=False):
+    prepared.append([command, cwd, environ, fresh, require_v2])
     return command, None
 async def host(request):
     sent.append(request)
@@ -59,8 +59,8 @@ async def host(request):
 server._opencode_command, server.host = opencode_command, host
 async def main():
     await server.new_session("o", CONF, "opencode", "opencode", "opencode")
-    print(json.dumps(len(prepared)))
+    print(json.dumps([len(prepared), prepared[0][0], prepared[0][2:]]))
 asyncio.run(main())
-`), 1);
+`), [1, 'opencode', [null, false, false]]);
   });
 });

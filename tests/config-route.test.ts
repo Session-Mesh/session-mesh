@@ -103,7 +103,8 @@ describe('GET /api/config', () => {
     walk(report, 'config');
     // accounts: the operator's aliases as {id, label, claude, codex}, never a folder (session-accounts.test.ts)
     assert.deepEqual(report.accounts, []);
-    assert.deepEqual(Object.keys(report).sort(), ['accounts', 'agents', 'capabilities', 'elevation', 'host', 'launch', 'network', 'notifications', 'paths', 'runner_settings', 'version']);
+    assert.equal(typeof report.accounts_available, 'boolean');
+    assert.deepEqual(Object.keys(report).sort(), ['accounts', 'accounts_available', 'agents', 'capabilities', 'elevation', 'host', 'launch', 'network', 'notifications', 'paths', 'runner_settings', 'version']);
     assert.deepEqual(report.capabilities, {account_settings: true});
   });
 });
