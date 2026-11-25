@@ -96,11 +96,11 @@ export async function scratchHome(prefix: string, extraEnv: NodeJS.ProcessEnv = 
 export type Exit = {code: number | null; output: string; listened: boolean};
 
 /** Run server.py until it listens or exits; the caller decides which one is expected. */
-export async function runServer(where: Scratch): Promise<{child: ChildProcess; result: Exit; output: () => string}> {
+export async function runServer(where: Scratch, source = REPO): Promise<{child: ChildProcess; result: Exit; output: () => string}> {
   if (!OWNER_CHECK) throw new Error('Cannot verify server listener ownership: /proc or lsof required');
   let output = '';
   const [program, ...args] = [PYTHON, 'server.py'];
-  const child = spawn(program!, args, {cwd: REPO, env: where.env, stdio: ['ignore', 'pipe', 'pipe']});
+  const child = spawn(program!, args, {cwd: source, env: where.env, stdio: ['ignore', 'pipe', 'pipe']});
   child.stdout?.on('data', chunk => { output += chunk; });
   child.stderr?.on('data', chunk => { output += chunk; });
   let exited = false;
