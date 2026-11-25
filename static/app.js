@@ -544,6 +544,9 @@ class Pane {
     forgetDraft.type = "button";
     forgetDraft.className = "p-input-forget-draft";
     $(".p-input-review", this.el).append(forgetDraft);
+    const otherDrafts = document.createElement("div");
+    otherDrafts.className = "p-input-other-drafts";
+    $(".p-input-review", this.el).append(otherDrafts);
     forgetDraft.addEventListener("click", () => {
       const obsolete = this.obsoleteDirtyInput();
       if (!obsolete || !confirm(t("conn.inputForgetOldDraftConfirm"))) return;
@@ -889,13 +892,61 @@ class Pane {
     const pending = entries.reduce((total, entry) => total + entry.input.pendingBytes, 0);
     const current = this.inputAck;
     const obsolete = this.obsoleteDirtyInput();
+    const other = [...this.inputAcks].filter(([key, entry]) =>
+      !key.startsWith(`${this.conn?.name ?? ""}\0`) && entry.input.pendingBytes);
     const forgetDraft = $(".p-input-forget-draft", container);
     forgetDraft.textContent = t("conn.inputForgetOldDraft");
     forgetDraft.hidden = !obsolete;
     // Routine ACKs must not move the terminal under the cursor or a finger.
     // Retained input needing review, including from an old attachment, still needs a choice.
     const reviewPending = entries.some(({ input }) => input !== current || input.state !== "sending");
-    container.hidden = !reviewPending && current?.state !== "halted" && !obsolete;
+    container.hidden = !reviewPending && current?.state !== "halted" && !obsolete && !other.length;
+    const otherContainer = $(".p-input-other-drafts", container);
+    const otherState = JSON.stringify(other.map(([key, entry]) =>
+      [key, entry.input.pendingBytes, entry.input.pendingHumanBytes, entry.input.deliveryUncertain, entry.input.retainedText]));
+    if (this.otherDraftsState !== otherState || !this.otherDraftsEntries ||
+        other.some(([key, entry], i) => this.otherDraftsEntries[i]?.[0] !== key || this.otherDraftsEntries[i]?.[1] !== entry)) {
+      this.otherDraftsState = otherState;
+      this.otherDraftsEntries = other;
+      otherContainer.replaceChildren();
+      for (const [key, entry] of other) {
+        const card = document.createElement("section");
+        card.className = "p-input-other-draft";
+        const heading = document.createElement("strong");
+        heading.textContent = key.split("\0", 1)[0];
+        const summary = document.createElement("span");
+        summary.textContent = t("conn.inputRetained", { count: entry.input.pendingBytes,
+          state: t(entry.input.deliveryUncertain ? "conn.inputUncertain" : "conn.inputReview") });
+        card.append(heading, summary);
+        if (entry.input.pendingHumanBytes) {
+          const label = document.createElement("label");
+          label.textContent = t("conn.inputCopyDraft");
+          const text = document.createElement("textarea");
+          text.readOnly = true; text.spellcheck = false; text.value = entry.input.retainedText;
+          label.append(text); card.append(label);
+          const copy = document.createElement("button");
+          copy.type = "button"; copy.className = "btn ghost sm"; copy.textContent = t("common.copy");
+          copy.addEventListener("click", async () => {
+            if (this.inputAcks.get(key) !== entry) return;
+            try { await navigator.clipboard.writeText(text.value); flash(t("clipboard.copied")); }
+            catch { text.focus(); text.select(); flash(t("clipboard.copyDenied")); }
+          });
+          card.append(copy);
+        }
+        const discard = document.createElement("button");
+        discard.type = "button"; discard.className = "btn ghost sm";
+        discard.textContent = t(entry.input.deliveryUncertain ? "conn.inputDiscardUnknown" : "conn.inputDiscard");
+        discard.addEventListener("click", () => {
+          if (this.inputAcks.get(key) !== entry || !entry.input.pendingBytes) return;
+          const uncertain = entry.input.deliveryUncertain;
+          entry.input.discard();
+          if (!uncertain && !entry.input.incompleteHumanInput) entry.lease?.release();
+          this.renderRetainedInput();
+          renderReloadStatus();
+        });
+        card.append(discard); otherContainer.append(card);
+      }
+    }
     const drafts = $(".p-input-drafts", container);
     const texts = [];
     if (!container.hidden && this.conn?.name) {

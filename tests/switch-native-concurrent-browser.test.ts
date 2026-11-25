@@ -73,13 +73,16 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
     const sid = before.agent!.session_id;
     const transcript = rolloutIn(path.join(mesh.home, '.codex'), sid);
     const original = fs.readFileSync(transcript);
-    const desktop = await mesh.signIn({width: 1200, height: 720});
+    const desktop = await mesh.signIn({width: 1200, height: 720}, () => {
+      Object.defineProperty(navigator, 'clipboard', {value: {writeText: async (value: string) => { (window as any).__copiedDraft = value; }}, configurable: true});
+    });
     let phone: Page | undefined;
     let decision: Promise<Response> | undefined;
     let decisionSettled: Promise<unknown> | undefined;
     try {
       await openPrimary(desktop, false);
       phone = await mesh.signIn({width: 390, height: 780}, () => {
+        Object.defineProperty(navigator, 'clipboard', {value: {writeText: async (value: string) => { (window as any).__copiedDraft = value; }}, configurable: true});
         const send = WebSocket.prototype.send;
         (window as any).__inputFrames = [];
         WebSocket.prototype.send = function(data) {
@@ -152,8 +155,9 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
         pane.inputAcks.set('another-session\0fixture', {input: {pendingBytes: 6, pendingHumanBytes: 6, retainedText: 'secret', state: 'review'}});
         pane.renderRetainedInput();
       });
-      assert.equal(await draft.count(), 1, 'another session’s retained text is never shown here');
+      assert.equal(await draft.count(), 1, 'another session is not treated as the current draft');
       assert.equal(await draft.inputValue(), 'phone-during-switch');
+      assert.equal(await phone.locator('.pane.active .p-input-other-draft strong').textContent(), 'another-session');
       await phone.evaluate(() => { const pane = active as any; pane.inputAcks.delete('another-session\0fixture'); pane.renderRetainedInput(); });
       await desktop.evaluate(() => {
         const pane = active as any;
@@ -162,6 +166,23 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       });
       assert.equal(await desktop.locator('.pane.active .p-input-drafts textarea').inputValue(), 'desktop-draft');
       assert.equal(await draft.inputValue(), 'phone-during-switch', 'desktop and phone drafts remain independent');
+      await desktop.evaluate(() => {
+        const pane = active as any;
+        const input = {pendingBytes: 8, pendingHumanBytes: 8, retainedText: 'old text', state: 'review', deliveryUncertain: false,
+          incompleteHumanInput: false, discard() { this.pendingBytes = 0; this.pendingHumanBytes = 0; }};
+        pane.inputAcks.set('closed-desktop\0fixture', {input}); pane.renderRetainedInput();
+      });
+      const desktopOther = desktop.locator('.pane.active .p-input-other-draft');
+      assert.equal(await desktopOther.locator('strong').textContent(), 'closed-desktop');
+      await desktopOther.getByRole('button', {name: 'Copy', exact: true}).click();
+      assert.equal(await desktop.evaluate(() => (window as any).__copiedDraft), 'old text');
+      await desktop.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error('unavailable'); }; });
+      await desktopOther.getByRole('button', {name: 'Copy', exact: true}).click();
+      assert.deepEqual(await desktopOther.locator('textarea').evaluate((field: HTMLTextAreaElement) =>
+        [document.activeElement === field, field.selectionStart, field.selectionEnd]), [true, 0, 8], 'clipboard refusal selects text for manual copy');
+      await desktopOther.getByRole('button', {name: /Discard/}).click();
+      assert.equal(await desktopOther.count(), 0);
+      assert.equal(await desktop.locator('.pane.active .p-input-drafts textarea').inputValue(), 'desktop-draft');
       await desktop.evaluate(() => { const pane = active as any; pane.inputAcks.delete(`${pane.conn.name}\0desktop-fixture`); pane.renderRetainedInput(); });
       assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch'], 'reconnection does not resend input');
       await mesh.newShell('other-draft-session');
@@ -181,10 +202,33 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       assert.match(await phone.locator('.pane.active .p-input-state').innerText(), /7/);
       await phone.locator('.pane.active .p-input-discard').click();
       assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').count(), 0);
+      const other = phone.locator('.pane.active .p-input-other-draft');
+      assert.equal(await other.locator('strong').textContent(), 'fenced-account');
+      assert.equal(await other.locator('textarea').inputValue(), 'phone-during-switch');
+      await other.getByRole('button', {name: 'Copy', exact: true}).click();
+      assert.equal(await phone.evaluate(() => (window as any).__copiedDraft), 'phone-during-switch');
+      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch'], 'copy never sends a frame');
       await phone.locator('#btn-menu').click();
       await phone.locator('#list .loose .item[data-id="fenced-account"]').click();
       await phone.waitForFunction(() => (active as any)?.conn?.name === 'fenced-account' && active?.conn?.ws?.readyState === WebSocket.OPEN);
       assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').inputValue(), 'phone-during-switch', 'discarding B preserves A');
+      await phone.locator('#btn-menu').click();
+      await phone.locator('#list .loose .item[data-id="other-draft-session"]').click();
+      await phone.waitForFunction(() => (active as any)?.conn?.name === 'other-draft-session' && active?.conn?.ws?.readyState === WebSocket.OPEN);
+      const stopped = await request(mesh.socketPath, {op: 'kill_if', name: 'fenced-account', created: after.created}) as {ok:boolean};
+      assert.equal(stopped.ok, true);
+      await waitFor('original session gone', 10000, async () => !(await listing()));
+      assert.equal(await other.locator('textarea').inputValue(), 'phone-during-switch', 'closed session input remains copyable');
+      await phone.evaluate(() => {
+        const pane = active as any;
+        const input = {pendingBytes: 7, pendingHumanBytes: 7, retainedText: 'draft B', state: 'review', deliveryUncertain: false,
+          incompleteHumanInput: false, discard() { this.pendingBytes = 0; this.pendingHumanBytes = 0; }};
+        pane.inputAcks.set(`${pane.conn.name}\0fixture`, {input}); pane.renderRetainedInput();
+      });
+      await other.getByRole('button', {name: /Discard/}).click();
+      assert.equal(await other.count(), 0, 'discard removes only the chosen closed-session record');
+      assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').inputValue(), 'draft B');
+      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch'], 'discard never sends a frame');
     } finally {
       try {
         fs.writeFileSync(release, 'release');
