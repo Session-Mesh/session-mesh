@@ -613,6 +613,10 @@ test('running app: a config response received after its dialog closes cannot ena
     const config: {flag: boolean; status: number; hold?: ReturnType<typeof deferred<void>>} = {flag: true, status: 503};
     const context = await lab.context('en', 1440, config);
     const page = await lab.page(context, 'en', true, false);
+    // Settle the independent startup read before arming the dialog's held reply.
+    // Otherwise that startup request can observe the later 200 and enable the panel.
+    await page.locator('#btn-accounts-retry').waitFor({state: 'visible'});
+    assert.equal(lab.configRequests.length, 1);
     const hold = config.hold = deferred<void>(); config.status = 200;
     const request = page.waitForRequest(r => new URL(r.url()).pathname === '/api/config');
     await page.locator('#btn-config').click(); await request;
