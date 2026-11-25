@@ -10,7 +10,7 @@ test('the initial owner-none snapshot does not duplicate a claim, but a later re
   await harness(async (page, _api, sockets, writes) => {
     await page.waitForFunction(() => !active.conn.autoRedraw && !active.conn.initialFollow
       && !active.conn.replayPending && !active.conn.replaying && !active.conn.draining);
-    assert.ok(writes.get('A')?.some(data => typeof data === 'string'
+    assert.ok(writes.get('A:0')?.some(data => typeof data === 'string'
       && JSON.parse(data).t === 'r' && (JSON.parse(data).size ?? 'claim') === 'claim'),
     'an initial claim was sent before the first owner snapshot');
     const size = await page.evaluate(() => {
