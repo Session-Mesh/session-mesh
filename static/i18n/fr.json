@@ -2329,5 +2329,6 @@
   "server.switchReleaseAmbiguous": "Le verrou est peut-être déjà levé ou détenu par un autre acteur ; inspectez avant toute autre action.",
   "server.switchReleaseUnconfirmed": "La levée du verrou n’a pas pu être confirmée ; inspectez avant toute autre action.",
   "server.switchCarryCapability": "La capacité de transfert sécurisé des comptes est indisponible ; rien n’a été arrêté.",
-  "server.switchMigrationBusy": "Une migration ou une bascule de compte est en cours ; rien n’a été arrêté."
+  "server.switchMigrationBusy": "Une migration ou une bascule de compte est en cours ; rien n’a été arrêté.",
+  "server.switchMigrationChanged": "Le contexte de migration ou de bascule a changé ; inspectez la session."
 }

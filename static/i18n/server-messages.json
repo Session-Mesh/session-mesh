@@ -1110,5 +1110,9 @@
   {
     "pattern": "^Account migration or switch is busy; nothing was stopped$",
     "key": "server.switchMigrationBusy"
+  },
+  {
+    "pattern": "^Account migration or switch context changed; inspect the session$",
+    "key": "server.switchMigrationChanged"
   }
 ]

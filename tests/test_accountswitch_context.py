@@ -244,6 +244,39 @@ def test_cancelled_legacy_switch_preserves_marker_without_replay(monkeypatch, tm
     assert calls == ['stop-outcome-unknown']
 
 
+def test_legacy_switch_removes_marker_on_proven_pre_stop_refusal(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, 'CONF_DIR', tmp_path)
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    executable = tmp_path / 'helper'
+    executable.write_bytes(b'fixture')
+    monkeypatch.setattr(server, 'work_command', lambda _name: str(executable))
+    async def helper(*args, **kwargs): return {'version': 1, 'legacy_only': True}
+    async def replace(*args, **kwargs): raise web.HTTPConflict(text='source unchanged')
+    monkeypatch.setattr(server, '_accounts_program', helper)
+    monkeypatch.setattr(server, 'replace_session', replace)
+    item = {'id': 'request', 'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    raw = {'name': 'session', 'created': 1, 'cwd': '/tmp', 'meta': {}}
+    with pytest.raises(web.HTTPConflict):
+        asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
+    assert not (tmp_path / '.backend-profiles.legacy-switch').exists()
+
+
+def test_legacy_switch_detects_configuration_directory_replacement(monkeypatch, tmp_path):
+    root = tmp_path / 'configuration'
+    root.mkdir()
+    monkeypatch.setattr(server, 'CONF_DIR', root)
+    lease = server._legacy_switch_begin({'id': 'request'}, {'name': 'session', 'created': 1})
+    old = tmp_path / 'old-configuration'
+    root.rename(old)
+    root.mkdir()
+    try:
+        with pytest.raises(OSError):
+            server._legacy_verify_directory(lease[1], lease[2])
+    finally:
+        server._legacy_switch_end(lease, completed=False)
+    assert (old / '.backend-profiles.legacy-switch').exists()
+
+
 def test_helper_snapshot_refuses_fifo_without_waiting(tmp_path):
     path = tmp_path / 'helper'
     os.mkfifo(path)
@@ -381,7 +414,7 @@ def test_legacy_switch_never_runs_replaced_real_helper(monkeypatch, tmp_path):
     assert not marker.exists()
 
 
-@pytest.mark.parametrize('scenario', ['carry_failure', 'target_refused', 'target_timeout'])
+@pytest.mark.parametrize('scenario', ['carry_failure', 'carry_uncertain', 'target_refused', 'target_timeout'])
 def test_legacy_carry_and_start_failures_keep_the_outcome(monkeypatch, scenario):
     async def no_context(*_args, **_kwargs): return None
     async def environment(*_args, **_kwargs): return {}
@@ -400,6 +433,8 @@ def test_legacy_carry_and_start_failures_keep_the_outcome(monkeypatch, scenario)
     async def carry():
         if scenario == 'carry_failure':
             raise server.AccountsUnavailable('original carry failure', 'carry_failed')
+        if scenario == 'carry_uncertain':
+            raise server.AccountsUnavailable('malformed carry reply', None)
     async def start(*_args, **_kwargs):
         if scenario == 'target_timeout':
             raise asyncio.TimeoutError()
@@ -413,7 +448,7 @@ def test_legacy_carry_and_start_failures_keep_the_outcome(monkeypatch, scenario)
     monkeypatch.setattr(server, 'host', host)
     for name in ('_confirm_standby', '_arrangement_of', '_carry_arrangement', '_wait_source_gone'):
         monkeypatch.setattr(server, name, no_op)
-    expected = server.AccountSwitchRecoveryFailed if scenario == 'carry_failure' else server.AccountSwitchTargetStartUnconfirmed
+    expected = server.AccountSwitchRecoveryFailed if scenario in ('carry_failure', 'carry_uncertain') else server.AccountSwitchTargetStartUnconfirmed
     with pytest.raises(expected) as failure:
         asyncio.run(server._replace_with_new_session('original', 1, 'original', '/tmp', 'codex', 'codex',
                                                      'codex', None, ('work', carry), None))
@@ -422,9 +457,32 @@ def test_legacy_carry_and_start_failures_keep_the_outcome(monkeypatch, scenario)
         assert str(failure.value) == 'original carry failure'
         assert failure.value.target_copy_remains is False
         assert len(calls) == 2
+    elif scenario == 'carry_uncertain':
+        assert failure.value.target_copy_uncertain is True
+        assert len(calls) == 1, 'uncertain carry must not restart the source'
     else:
         assert failure.value.name == 'standby'
         assert len(calls) == 1, 'do not automatically restart the source after an uncertain target start'
+
+
+def test_legacy_in_place_uncertain_carry_never_restarts_source(monkeypatch):
+    async def no_context(*_args, **_kwargs): return None
+    async def environment(*_args, **_kwargs): return {}
+    async def prepared(_agent, command, _cwd, _context): return command, None, None
+    async def stop(*_args, **_kwargs): return 2
+    async def no_op(*_args, **_kwargs): return None
+    async def carry(): raise server.AccountsUnavailable('malformed carry reply', None)
+    calls = []
+    async def start(*_args, **_kwargs): calls.append('started')
+    for name, value in [('_restart_profile_context', no_context), ('account_environment', environment),
+                        ('_prepared_launch', prepared), ('_stop_agent', stop), ('_arrangement_of', no_op),
+                        ('_carry_arrangement', no_op), ('_start_in_place', start)]:
+        monkeypatch.setattr(server, name, value)
+    source = {'name': 'session', 'created': 1}
+    with pytest.raises(server.AccountSwitchRecoveryFailed) as error:
+        asyncio.run(server._relaunch_in_place(source, '/tmp', 'codex', 'codex', 'codex', switch=('work', carry)))
+    assert error.value.target_copy_uncertain is True
+    assert calls == []
 
 
 @pytest.mark.parametrize("scenario", ["success", "carry_failure", "target_changed", "source_changed", "target_changed_during_launch", "restart_fails_after_carry_failure", "restart_fails_after_copy", "uncertain_carry", "uncertain_carry_restart_fails", "target_start_refused", "target_start_timeout"])
