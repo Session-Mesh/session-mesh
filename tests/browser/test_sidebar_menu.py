@@ -115,7 +115,34 @@ async def start_drag(tab, name):
     return box
 
 
-async def test_dragging_near_the_bottom_edge_scrolls_the_list_and_the_drop_lands_there(desk):
+async def drag_to_visible_row(tab, name, x):
+    """Keep dragging toward the row, reversing at the edge if scrolling passed it."""
+    for _ in range(160):
+        pos = await tab.evaluate("""(selector) => {
+          const list = $('#list').getBoundingClientRect(), row = $(selector).getBoundingClientRect();
+          return {top: list.top, bottom: list.bottom, rowTop: row.top};
+        }""", loose(name))
+        zone = min(56, (pos["bottom"] - pos["top"]) / 3)
+        drop_y = pos["rowTop"] + 8
+        if pos["top"] + zone + 4 < drop_y < pos["bottom"] - zone - 4:
+            for step in range(20):
+                drop_x = x + step % 2
+                await tab.mouse.move(drop_x, drop_y)
+                if await tab.evaluate("""([selector,x,y]) => {
+                  const row = $(selector);
+                  return row?.classList.contains('drop-before') && document.elementFromPoint(x,y)?.closest('.item') === row;
+                }""", [loose(name), drop_x, drop_y]):
+                    return
+                await tab.wait_for_timeout(50)
+            raise AssertionError(f"drag target was not accepted: {name}")
+        edge = pos["top"] + 2 if drop_y <= pos["top"] + zone + 4 else pos["bottom"] - 2
+        await tab.mouse.move(x, edge)
+        await tab.wait_for_timeout(50)
+    raise AssertionError(f"drag target did not come into view: {name}")
+
+
+@pytest.mark.parametrize("observation_delay", [0, 2200], ids=["prompt", "late-observation"])
+async def test_dragging_near_the_bottom_edge_scrolls_the_list_and_the_drop_lands_there(desk, observation_delay):
     tab, _ = await desk([f"drag-bottom-{i:02d}" for i in range(10)])
     await tab.fill("#filter", "drag-bottom-")
     assert len(await visible_order(tab)) == 10
@@ -127,12 +154,11 @@ async def test_dragging_near_the_bottom_edge_scrolls_the_list_and_the_drop_lands
     box = await start_drag(tab, first)
     start = await tab.evaluate("$('#list').scrollTop")
     await tab.mouse.move(box["x"] + 40, await tab.evaluate("innerHeight") - 8, steps=4)   # bottom edge
+    if observation_delay:
+        await tab.wait_for_timeout(observation_delay)  # The dragged list can move while the observer is late.
     await until(tab, f"$('#list').scrollTop > {start + 60}")
-    await until(tab, f"""(() => {{ const r = $('#list').getBoundingClientRect(), t = $('{loose(last)}').getBoundingClientRect();
-                         return t.top > r.top + 20 && t.bottom < r.bottom - 20; }})()""")   # the last row is in view
     await tab.mouse.move(box["x"] + 40, box["y"] + 100)                    # off the edge: it stops
-    target = await (await tab.query_selector(loose(last))).bounding_box()
-    await tab.mouse.move(target["x"] + 40, target["y"] + 8, steps=3)
+    await drag_to_visible_row(tab, last, box["x"] + 40)
     focused_id = await tab.evaluate("document.activeElement?.closest('#list .item')?.dataset.id || null")
     await tab.mouse.up()
     await tab.wait_for_function(f"data.mesh.map((s) => s.id).indexOf('{first}') === data.mesh.length - 2")
