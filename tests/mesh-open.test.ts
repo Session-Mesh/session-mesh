@@ -4,7 +4,9 @@
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
+import {constants} from 'node:os';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {nativeMeshCommand} from './helpers/native-cli.ts';
@@ -31,13 +33,13 @@ before(async () => {
 
 after(async () => { if (mesh) await mesh.stop(); });
 
-function run(args: string[], extra: NodeJS.ProcessEnv = {}, cwd = mesh.home) {
+function run(args: string[], extra: NodeJS.ProcessEnv = {}, cwd = mesh.home, argv = command) {
   const env = {...process.env};
   for (const key of Object.keys(env)) if (key.startsWith('MESH_')) delete env[key];
   Object.assign(env, {HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'),
     MESH_PORT: new URL(mesh.base).port}, extra);
   return new Promise<{code: number; stdout: string; stderr: string}>((resolve, reject) => {
-    execFile(command[0]!, [...command.slice(1), ...args], {env, cwd, timeout: 7500}, (error, stdout, stderr) => {
+    execFile(argv[0]!, [...argv.slice(1), ...args], {env, cwd, timeout: 7500}, (error, stdout, stderr) => {
       if (error && typeof error.code !== 'number') reject(error);
       else resolve({code: error ? Number(error.code) : 0, stdout, stderr});
     });
@@ -155,6 +157,46 @@ describe('native mesh-open against the web server', () => {
     assert.equal(fs.existsSync(path.join(emptyHome, '.config')), false);
   });
 
+  test('empty HOME resolves to root, while absent HOME uses the passwd home',
+    {skip: process.platform !== 'linux' && 'uses Linux Bubblewrap isolation'}, async t => {
+      const fixture = fs.mkdtempSync(path.join(mesh.home, 'passwd-'));
+      const home = path.join(fixture, 'home');
+      const conf = path.join(home, '.config/session-mesh');
+      fs.mkdirSync(conf, {recursive: true});
+      fs.writeFileSync(path.join(conf, 'token'), 'fixture-master\n');
+      const passwd = path.join(fixture, 'passwd');
+      fs.writeFileSync(passwd, `fixture:x:${process.getuid!()}:${process.getgid!()}::/passwd-home:/usr/bin/sh\n`);
+      // Mount the fixture's account and credential only. The sandbox shares
+      // loopback with the test, and its root has no master token.
+      const sandbox = ['/usr/bin/bwrap', '--unshare-user', '--die-with-parent',
+        '--ro-bind', '/usr', '/usr', '--ro-bind', '/lib', '/lib', '--ro-bind-try', '/lib64', '/lib64',
+        '--dev', '/dev', '--ro-bind', passwd, '/etc/passwd', '--ro-bind', home, '/passwd-home',
+        '--ro-bind', fs.realpathSync(command[0]!), '/mesh-open', '--chdir', '/',
+        '--', '/mesh-open', ...command.slice(1)];
+
+      const seen: {target: string; authorization: string | undefined}[] = [];
+      const listener = http.createServer(async (request, response) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(chunk);
+        const {target} = JSON.parse(Buffer.concat(chunks).toString());
+        seen.push({target, authorization: request.headers.authorization});
+        response.end(JSON.stringify({target}));
+      });
+      t.after(() => listener.close());
+      await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+      const env = {MESH_PORT: String((listener.address() as net.AddressInfo).port), MESH_RUNTIME_DIR: '/run'};
+      const empty = await run(['~/doc.md'], {...env, HOME: '', MESH_SESSION_TOKEN: 'fixture-session'}, mesh.home, sandbox);
+      const missing = await run(['~/doc.md'], {...env, HOME: ''}, mesh.home, sandbox);
+      const absent = await run(['~/doc.md'], {...env, HOME: undefined}, mesh.home, sandbox);
+
+      assert.deepEqual(seen, [{target: '/doc.md', authorization: 'MeshSession fixture-session'},
+        {target: '/passwd-home/doc.md', authorization: 'Bearer fixture-master'}]);
+      assert.deepEqual(empty, {code: 0, stdout: 'opened in session-mesh: /doc.md\n', stderr: ''});
+      assert.equal(missing.code, 1);
+      assert.match(missing.stderr, /token not found .*\/\.config\/session-mesh\/token/);
+      assert.deepEqual(absent, {code: 0, stdout: 'opened in session-mesh: /passwd-home/doc.md\n', stderr: ''});
+    });
+
   test('a dead listener gives a clean error', async () => {
     const listener = net.createServer();
     await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
@@ -164,6 +206,44 @@ describe('native mesh-open against the web server', () => {
     assert.equal(result.code, 1);
     assert.match(result.stderr, /^mesh-open: session-mesh is not responding/);
   });
+
+  test('a peer that closes during a request cannot terminate mesh-open with SIGPIPE',
+    {skip: process.platform !== 'linux' && 'uses Linux process signal dispositions'}, async t => {
+      let pid: number | undefined;
+      let ignoresSigpipe = false;
+      const listener = net.createServer({pauseOnConnect: true}, socket => {
+        try {
+          assert.ok(pid);
+          // A fast close can produce ECONNRESET instead of EPIPE. Inspect the
+          // connected process so the regression check is independent of that race.
+          const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
+          const ignored = /^SigIgn:\s+([0-9a-f]+)$/im.exec(status);
+          assert.ok(ignored);
+          const sigpipe = 1n << BigInt(constants.signals.SIGPIPE - 1);
+          ignoresSigpipe = (BigInt(`0x${ignored[1]}`) & sigpipe) !== 0n;
+        } finally {
+          socket.destroy();
+        }
+      });
+      t.after(() => listener.close());
+      await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+      const port = (listener.address() as net.AddressInfo).port;
+      const result = await new Promise<{code: number | string | undefined; signal: NodeJS.Signals | null | undefined;
+        stdout: string; stderr: string}>(resolve => {
+        const child = execFile('env', ['--default-signal=PIPE', ...command, doc], {
+          env: {HOME: mesh.home, PATH: process.env.PATH, MESH_PORT: String(port),
+            // Keep the session-token path and make the request span multiple writes.
+            MESH_SESSION_TOKEN: 'x'.repeat(120 * 1024)},
+          timeout: 7500,
+        }, (error, stdout, stderr) => resolve({code: error ? error.code : 0, signal: error?.signal, stdout, stderr}));
+        pid = child.pid;
+      });
+      assert.equal(result.signal, null);
+      assert.equal(result.code, 1);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /^mesh-open: session-mesh is not responding/);
+      assert.ok(ignoresSigpipe, 'mesh-open handles SIGPIPE before sending the request');
+    });
 
   test('a silent HTTP peer is bounded by the five-second request deadline', async t => {
     const sockets = new Set<net.Socket>();
