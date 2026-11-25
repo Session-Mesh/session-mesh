@@ -288,7 +288,10 @@ for (const reload of [true, false]) test(`lost creation receipt remains inspecta
     assert.equal(await control('provision-account').count(),0);
     await control('add-account').click();
     assert.equal(await control('create-config').count(),1);
-    assert.deepEqual(traffic,['GET /api/accounts/profiles']);
+    // A reopened panel retains a policy snapshot and refreshes its revision;
+    // after a page reload only the public profile list is inspected.
+    assert.deepEqual(traffic, reload ? ['GET /api/accounts/profiles']
+      : ['GET /api/accounts/profiles', 'GET /api/accounts/consent']);
     fs.chmodSync(fake,0o700);
     if (reload) await control('refresh').click();
     else {
@@ -338,7 +341,8 @@ for (const reload of [true, false]) test(`lost creation receipt remains inspecta
     await status.filter({hasText:'Creation has no confirmed receipt'}).waitFor();
     await control('provision-account').waitFor();
     assert.equal(await control('provision-account').isDisabled(),true);
-    assert.ok(traffic.every(call => call === 'GET /api/accounts/profiles'));
+    assert.ok(traffic.every(call => call === 'GET /api/accounts/profiles' || call === 'GET /api/accounts/consent'),
+      'reopening and refreshing never mutates account state');
     await control('create-backend').selectOption('codex');
     await control('create-id').fill('existing');
     await control('create-label').fill('Existing directory');
@@ -351,7 +355,8 @@ for (const reload of [true, false]) test(`lost creation receipt remains inspecta
     await page.locator('dialog li').filter({hasText:'Existing directory'}).waitFor();
     await status.filter({hasText:'Creation has no confirmed receipt'}).waitFor();
     assert.equal(await control('provision-account').isDisabled(),true);
-    assert.deepEqual(traffic.filter(call => call !== 'GET /api/accounts/profiles'),['POST /api/accounts/profiles/create']);
+    assert.deepEqual(traffic.filter(call => call !== 'GET /api/accounts/profiles' && call !== 'GET /api/accounts/consent'),
+      ['POST /api/accounts/profiles/create']);
   } finally {
     try { await browser?.close(); } finally { await mesh.stop(); }
   }
