@@ -92,6 +92,7 @@ describe('native mesh-open against the web server', () => {
     const relative = document();
     fs.symlinkSync(path.basename(relative), path.join(mesh.home, 'cli link.md'));
     await succeeds(['./cli link.md'], relative);
+    await accepted(relative, {session: null, reload: false, watch: false});
     const homeRelative = document();
     fs.symlinkSync(path.basename(homeRelative), path.join(mesh.home, 'home link.md'));
     await succeeds(['~/home link.md', '--reload', '--watch'], homeRelative);
@@ -107,6 +108,7 @@ describe('native mesh-open against the web server', () => {
       target = alias;
     }
     await succeeds([target], file);
+    await accepted(file, {session: null, reload: false, watch: false});
   });
 
   test('URL and syntax errors leave the server queue untouched', async () => {
