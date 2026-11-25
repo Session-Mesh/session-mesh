@@ -667,8 +667,9 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
       {name: string; created: number; creation_receipt: string}[];
     const entry = listing.find(s => s.name === 'ack-reports');
     assert.ok(entry);
+    let fenceId = fence;
     const control = (op: string) => request(mesh.socketPath,
-      {op, name: entry.name, created: entry.created, creation_receipt: entry.creation_receipt, fence_id: fence});
+      {op, name: entry.name, created: entry.created, creation_receipt: entry.creation_receipt, fence_id: fenceId});
     await page.locator('.pane.active .xterm textarea').focus();
     await page.evaluate(() => (document.activeElement as HTMLElement).blur());
     await page.waitForFunction(() => window.__ackFrames.some(frame => frame === '\x1b[O'));
@@ -677,6 +678,8 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
     await waitFor('focus report drained without dirty draft', 3000,
       async () => (await control('switch_input_acquire') as {ok?: boolean}).ok === true);
     assert.deepEqual(await control('switch_input_release'), {ok: true});
+    assert.equal((await control('switch_input_acquire') as {reason?: string}).reason, 'fence_retired');
+    fenceId = `${fence}-mouse`;
 
     const box = await page.locator('.pane.active .xterm-screen').boundingBox();
     assert.ok(box);
@@ -689,6 +692,7 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
     await waitFor('mouse reports drained without dirty draft', 3000,
       async () => (await control('switch_input_acquire') as {ok?: boolean}).ok === true);
     assert.deepEqual(await control('switch_input_release'), {ok: true});
+    fenceId = `${fence}-human`;
 
     await page.evaluate(() => active.send('HUMAN-DRAFT'));
     await page.waitForFunction(() => active.inputAck?.state === 'ready' && active.inputAck.pendingBytes === 0);
