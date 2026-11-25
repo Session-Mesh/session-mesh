@@ -13,6 +13,7 @@ let target root = Filename.concat root "backend-profiles.json"
 let marker root = Filename.concat root "backend-profiles.migrated"
 let intent root = Filename.concat root ".backend-profiles.migration-intent"
 let migration_lock root = Filename.concat root ".backend-profiles.lock"
+let legacy_switch_marker root = Filename.concat root ".backend-profiles.legacy-switch"
 
 let write path bytes =
   Out_channel.with_open_gen [ Open_wronly; Open_creat; Open_excl ] 0o600 path
@@ -887,6 +888,63 @@ let live_publication () =
       Alcotest.(check bool) "lock file remains stable" true
         (M.private_file (Unix.lstat (migration_lock root))))
 
+let legacy_switch_crash_keeps_migration_blocked () =
+  fixture (fun root ->
+    write (source root) (legacy []);
+    let ready_read, ready_write = Unix.pipe ~cloexec:true () in
+    let child = Unix.fork () in
+    if child = 0 then (
+      Unix.close ready_read;
+      let status =
+        try
+          match M.with_migration_lock ~root (fun () ->
+            write (legacy_switch_marker root) "private switch receipt";
+            let fd = Unix.openfile (legacy_switch_marker root) [Unix.O_RDONLY] 0 in
+            Unix.fsync fd;
+            Unix.close fd;
+            let dir = Unix.openfile root [Unix.O_RDONLY] 0 in
+            Unix.fsync dir;
+            Unix.close dir;
+            ignore (Unix.write_substring ready_write "1" 0 1);
+            while true do Unix.pause () done;
+            Ok ()) with
+          | Ok () -> 0 | Error _ -> 1
+        with _ -> 2
+      in Unix._exit status);
+    Unix.close ready_write;
+    let cleaned = ref false in
+    Fun.protect ~finally:(fun () ->
+      Unix.close ready_read;
+      if not !cleaned then (
+        (try Unix.kill child Sys.sigkill with Unix.Unix_error _ -> ());
+        ignore (Unix.waitpid [] child))) (fun () ->
+      let byte = Bytes.create 1 in
+      Alcotest.(check int) "switch owns migration lock" 1 (Unix.read ready_read byte 0 1);
+      refusal root "migration-busy";
+      no_target root;
+      Unix.kill child Sys.sigkill;
+      ignore (Unix.waitpid [] child);
+      cleaned := true;
+      (* Kernel releases the POSIX lock on crash; durable evidence must still
+         block a later migrator, without modifying or replaying the switch. *)
+      refusal root "migration-busy";
+      no_target root;
+      Alcotest.(check string) "switch evidence preserved" "private switch receipt"
+        (read (legacy_switch_marker root));
+      Unix.unlink (legacy_switch_marker root);
+      success root 0 0))
+
+let legacy_switch_foreign_entry_fails_closed () =
+  List.iter (fun kind -> fixture (fun root ->
+    write (source root) (legacy []);
+    let path = legacy_switch_marker root in
+    (match kind with
+     | `File -> write path "malformed"
+     | `Directory -> Unix.mkdir path 0o700
+     | `Symlink -> Unix.symlink "missing" path);
+    refusal root "migration-busy";
+    no_target root)) [`File; `Directory; `Symlink]
+
 let unsafe_migration_lock () =
   List.iter
     (fun poison ->
@@ -1214,6 +1272,8 @@ let () =
             ("all 64 dual-backend aliases migrate", capacity);
              ("concurrent no-clobber publication", concurrent);
              ("live publisher cannot be recovered", live_publication);
+             ("legacy switch crash blocks migration", legacy_switch_crash_keeps_migration_blocked);
+             ("foreign legacy switch evidence blocks migration", legacy_switch_foreign_entry_fails_closed);
              ("unsafe migration lock refused", unsafe_migration_lock);
             ("preexisting retirement marker refuses migration", already_retired);
              ("marker publication failures retain registry", marker_failures);

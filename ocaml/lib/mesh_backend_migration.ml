@@ -48,6 +48,9 @@ let target root = Filename.concat root "backend-profiles.json"
 let marker root = Filename.concat root "backend-profiles.migrated"
 let intent root = Filename.concat root ".backend-profiles.migration-intent"
 let migration_lock root = Filename.concat root ".backend-profiles.lock"
+(* A legacy switch records its uncertain outcome durably under this same
+   lock. Never interpret or remove its evidence on behalf of the operator. *)
+let legacy_switch_marker root = Filename.concat root ".backend-profiles.legacy-switch"
 let hash bytes = Digestif.SHA256.(to_hex (digest_string bytes))
 let same a b = a.Unix.st_dev = b.Unix.st_dev && a.Unix.st_ino = b.Unix.st_ino
 
@@ -692,6 +695,9 @@ let migrate ~root =
          let* () = recheck_root () in
          with_migration_lock ~root (fun () ->
              let* () = recheck_root () in
+             (* Only ENOENT permits publication. A dangling link, directory,
+                unreadable entry, or other lstat error all fail closed. *)
+             let* () = absent ~error:Migration_busy (legacy_switch_marker root) in
              let existing =
                match Unix.lstat (target root) with
                | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
