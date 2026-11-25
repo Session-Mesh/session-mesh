@@ -88,6 +88,7 @@ async function start(extra: Record<string, string>, prepare?: (wl: string) => vo
       MESH_CONF_DIR: conf, MESH_CACHE_DIR: path.join(temp, 'cache'), MESH_RUNTIME_DIR: runtime,
       MESH_HOST: '127.0.0.1', MESH_PORT: String(port), MESH_AUTH_MODE: 'legacy', PYTHONDONTWRITEBYTECODE: '1',
       WL_HOME: wl, MESH_WORK_READ_CMD: READER, MESH_WORK_WRITE_CMD: WRITER,
+      MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD,
       MESH_WORK_READ_TIMEOUT: process.env.MESH_WORK_READ_TIMEOUT ?? '30', ...extra,
     };
     let diagnostics = '';

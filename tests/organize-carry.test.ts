@@ -28,7 +28,8 @@ function organize(before: MeshJson, call: string, args: unknown[]): [unknown, Me
     const output = execFileSync(process.env.MESH_PYTHON || 'python3', ['-I', '-c',
       `import sys, json; sys.path.insert(0, ${JSON.stringify(REPO)})\nimport organize\n`
       + `print(json.dumps(organize.${call}(*json.loads(sys.argv[1]))))`, JSON.stringify(args)],
-    {cwd: REPO, env: {PATH: process.env.PATH, HOME: conf, MESH_CONF_DIR: conf}, encoding: 'utf8'});
+    {cwd: REPO, env: {PATH: process.env.PATH, HOME: conf, MESH_CONF_DIR: conf,
+      MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD}, encoding: 'utf8'});
     const names = path.join(conf, 'conversation-names.json');
     return [JSON.parse(output), JSON.parse(fs.readFileSync(file, 'utf8')), fs.statSync(file).mode & 0o777,
       fs.existsSync(names) ? JSON.parse(fs.readFileSync(names, 'utf8')) : []];

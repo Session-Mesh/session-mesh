@@ -107,7 +107,6 @@ def _check_bound_paths():
                    "UPLOAD_DIR": TEST_HOME, "SESSION_REQUESTS_FILE": TEST_HOME},
         "board": {"FILE": TEST_HOME},
         "demo_scene": {"FILE": TEST_HOME},
-        "conversation_names": {"FILE": TEST_HOME},
         "management": {"FILE": TEST_HOME},
         "organize": {"FILE": TEST_HOME},
         "respawn": {"FILE": TEST_HOME},

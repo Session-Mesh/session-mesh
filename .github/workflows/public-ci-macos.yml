@@ -183,6 +183,7 @@ jobs:
           /bin/bash scripts/bootstrap.sh --install-only 2>&1 | tee "$RUNNER_TEMP/build.log"
           bin="$(opam var bin)"
           echo "MESH_PTYHOST_CMD=$bin/mesh-ptyhost" >> "$GITHUB_ENV"
+          echo "MESH_MESH_HISTORY_CMD=$bin/mesh-history" >> "$GITHUB_ENV"
           echo "MESH_LOGOUT_ALL_CMD=$bin/mesh-logout-all" >> "$GITHUB_ENV"
       # The native tests, as scripts/bootstrap.sh runs them (same environment, same dune runtest), but
       # as a step of their own: a red native test fails the job (a real regression stays visible) while

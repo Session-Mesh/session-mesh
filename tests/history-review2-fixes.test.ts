@@ -35,7 +35,8 @@ function confinedEnv(helper: string | null): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = {PATH: process.env.PATH, HOME: home, MESH_CONF_DIR: at('conf'), MESH_CACHE_DIR: at('cache'),
     XDG_DATA_HOME: at('data'), XDG_CONFIG_HOME: at('xdg-config'), XDG_CACHE_HOME: at('xdg-cache'), XDG_STATE_HOME: at('xdg-state'),
     PI_CODING_AGENT_DIR: at('pi'), COPILOT_HOME: at('.copilot'), VIBE_HOME: at('.vibe'), GEMINI_CLI_HOME: home,
-    CODEX_HOME: at('.codex'), CLAUDE_CONFIG_DIR: at('.claude'), OPENCODE_DB: at('data', 'opencode', 'opencode.db'), TMPDIR: home};
+    CODEX_HOME: at('.codex'), CLAUDE_CONFIG_DIR: at('.claude'), OPENCODE_DB: at('data', 'opencode', 'opencode.db'), TMPDIR: home,
+    MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD};
   if (process.env.MESH_PTYHOST_CMD) base.MESH_PTYHOST_CMD = process.env.MESH_PTYHOST_CMD;
   return helper ? {...base, MESH_HISTORY_CMD: helper} : {...base, MESH_HISTORY_DB_DISABLE: '1'};
 }

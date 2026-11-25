@@ -1,0 +1,9 @@
+(library
+ (name conversation_codec)
+ (modules conversation_codec)
+ (libraries conversation_registry_model yojson uucp))
+
+(test
+ (name test_conversation_codec)
+ (modules test_conversation_codec)
+ (libraries conversation_codec alcotest yojson))

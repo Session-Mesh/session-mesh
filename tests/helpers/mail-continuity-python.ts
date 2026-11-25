@@ -63,6 +63,7 @@ export function runPython<T>(code: string): T {
         XDG_CONFIG_HOME: path.join(root, 'config'), XDG_CACHE_HOME: path.join(root, 'cache'),
         XDG_DATA_HOME: path.join(root, 'data'), MESH_CONF_DIR: path.join(root, 'conf'),
         MESH_CACHE_DIR: path.join(root, 'cache-mesh'), PYTHONPATH: REPO, SHELL: '/bin/sh',
+        MESH_MESH_HISTORY_CMD: process.env.MESH_MESH_HISTORY_CMD,
       },
     });
     if (result.status !== 0) throw new Error(`python failed: ${result.stderr || result.stdout}`);

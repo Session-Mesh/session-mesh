@@ -1,0 +1,4 @@
+(test
+ (name test_conversation_vectors)
+ (libraries conversation_codec conversation_protocol alcotest yojson unix)
+ (deps fixtures/vectors.json))

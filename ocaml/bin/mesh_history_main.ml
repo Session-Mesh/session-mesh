@@ -44,8 +44,42 @@ let serve_history () =
   in
   Mesh_history_protocol.serve protocol stdin stdout
 
+let registry_path () =
+  let dir =
+    match Sys.getenv_opt "MESH_CONF_DIR" with
+    | Some d when d <> "" ->
+        if Filename.is_relative d then invalid_arg "MESH_CONF_DIR must be absolute";
+        d
+    | _ ->
+        let home = match Sys.getenv_opt "HOME" with
+          | Some d when d <> "" -> d
+          | _ -> (Unix.getpwuid (Unix.getuid ())).pw_dir
+        in
+        Filename.concat home ".config/session-mesh"
+  in
+  Filename.concat dir "conversation-names.json"
+
+let read_registry_frame () =
+  let frame = In_channel.input_all stdin in
+  let length = String.length frame in
+  if length = 0 || String.index_opt frame '\n' <> Some (length - 1) then
+    invalid_arg "expected one newline-terminated frame";
+  String.sub frame 0 (length - 1)
+
+let serve_registry () =
+  try
+    let request = read_registry_frame () in
+    let response = Conversation_protocol.handle ~path:(registry_path ()) request in
+    print_endline response
+  with
+  | Invalid_argument _ ->
+      prerr_endline "mesh-history: invalid conversation-name invocation or frame";
+      exit 64
+  | Mesh_conversation_store.Parent_exited -> exit 75
+
 let () =
   match Array.to_list Sys.argv with
+  | [ _; "--conversation-names" ] -> serve_registry ()
   | [ _; "--flow-read" ] -> Mesh_flow_cli.run "read"
   | [ _; "--flow-write" ] -> Mesh_flow_cli.run "write"
   | _ -> serve_history ()

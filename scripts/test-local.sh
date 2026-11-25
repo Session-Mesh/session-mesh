@@ -121,13 +121,15 @@ frontend_checks() {
   npm test --prefix demo-compiler
 }
 
-# Builds, tests and installs the OCaml package, then makes the installed host the one
-# every test starts (MESH_PTYHOST_CMD).
+# Build, test and install the OCaml package, then point the tests at the installed programs.
 build_native_host() {
   bash scripts/bootstrap.sh
   local switch="${MESH_OPAM_SWITCH:-$(opam switch show)}"
-  NATIVE_HOST="$(opam var --switch="$switch" bin)/mesh-ptyhost"
+  local bin
+  bin="$(opam var --switch="$switch" bin)"
+  NATIVE_HOST="$bin/mesh-ptyhost"
   export MESH_PTYHOST_CMD="$NATIVE_HOST"
+  export MESH_MESH_HISTORY_CMD="$bin/mesh-history"
 }
 
 ptyhost_gate() {

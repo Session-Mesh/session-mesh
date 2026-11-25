@@ -66,7 +66,6 @@ import portfolio
 import projectartifacts
 import projectissues
 import history
-import conversation_names
 import meshpaths
 import notify
 import webpush
@@ -2274,7 +2273,7 @@ async def _read_host():
         # an excuse to mask unrelated programming errors with a broad catch.
         if not _valid_ptyhost_list(raw):
             raw, listed = [], False
-    at = time.time()    # when the host listed them: what a listing of these rows observed (conversation_names)
+    at = time.time()    # when the host listed them: the observation time for the conversation-name registry
     return raw, listed, host_before if host_before == await ptyhost.host_identity() else None, at, order
 
 
@@ -2319,6 +2318,25 @@ async def sessions(event_state=None, organisation_lock=None):
     return (await _listing(event_state, organisation_lock))[0]
 
 
+def _observe_names(rows, *, listed=True, now=None, project=True):
+    sessions = []
+    for row in rows:
+        agent = row.get("agent") or {}
+        label = row.get("label")
+        identity = {k: agent[k] for k in ("type", "session_id", "identity_source")
+                    if isinstance(agent.get(k), str)}
+        sessions.append({"name": row["name"], "created": row["created"],
+                         "label": label if isinstance(label, str) else None, "agent": identity})
+    times = {} if now is None else {"now": now}
+    aliases = fsutil.conversation_request("observe", sessions=sessions, listed=listed, project=project, **times)
+    if project:
+        if (not isinstance(aliases, list) or len(aliases) != len(rows)
+                or any(not isinstance(group, list) for group in aliases)):
+            raise RuntimeError("invalid mesh-history conversation-name aliases")
+        for row, group in zip(rows, aliases):
+            row["aliases"] = group
+
+
 async def _listing(event_state=None, organisation_lock=None, read=None):
     """One full listing, and whether the host listed. ``read``: the host's listing, already read."""
     if event_state is None:
@@ -2336,8 +2354,7 @@ async def _listing(event_state=None, organisation_lock=None, read=None):
         # what a restart restores.
         _apply_hook_state(event_state, data["mesh"], raw, history_identity=False)
         await run_history_identity(_apply_history_identity, data["mesh"])   # reads the index: off the loop, and off HISTORY_READS
-    await asyncio.to_thread(conversation_names.observe, data["mesh"], listed=listed, now=observed_at)
-    await asyncio.to_thread(conversation_names.active_aliases, data["mesh"])
+    await asyncio.to_thread(_observe_names, data["mesh"], listed=listed, now=observed_at)
     data["restorable"], durable = [], False
     if listed:   # lock order: restore_lock, then organisation_lock; only the latter is taken here
         async with organisation_lock or contextlib.AsyncExitStack():
@@ -3419,12 +3436,7 @@ def work_error(status, code, message):
                              headers={"Cache-Control": "no-store"})
 
 
-def work_command(program):
-    """MESH_WORK_READ_CMD / MESH_WORK_WRITE_CMD (absolute, else none), else bin/<program>, else the switch's."""
-    if (explicit := os.environ.get(f"MESH_{program.upper().replace('-', '_')}_CMD")) is not None:
-        return explicit if os.path.isabs(explicit) and os.path.isfile(explicit) else None
-    dirs = [agentmcp.runtime_bin()] + ([] if os.environ.get("MESH_BIN_DIR") else [agentmcp.switch_bin()])
-    return next((str(d / program) for d in dirs if (d / program).is_file()), None)
+work_command = fsutil.helper_command
 
 
 def work_program(request, body):
@@ -4150,7 +4162,7 @@ async def api_history(request):
     since = _int_param(request.query.get("gen"), None, 0, 2 ** 63)
     gen = history.gen
     # Mesh names/closures change independently of transcript generations.
-    entries = await asyncio.to_thread(conversation_names.snapshot)
+    entries = await asyncio.to_thread(fsutil.conversation_request, "snapshot")
     names_gen = hashlib.sha256(json.dumps(entries, sort_keys=True, ensure_ascii=False,
                                           separators=(",", ":")).encode()).hexdigest()[:16]
     names_unchanged = request.query.get("names_gen") == names_gen
@@ -4234,7 +4246,8 @@ async def history_detail(agent, sid):
 
 async def api_history_detail(request):
     detail = await history_detail(*_hist_key(request))
-    return web.json_response(conversation_names.enrich(detail, await asyncio.to_thread(conversation_names.snapshot)))
+    fields = await asyncio.to_thread(fsutil.conversation_request, "enrich", agent=detail["agent"], id=detail["id"])
+    return web.json_response({**detail, **fields})
 
 
 async def api_history_delete(request):
@@ -4255,7 +4268,7 @@ async def api_history_delete(request):
         raise web.HTTPBadRequest(text=f"Mesh does not delete {agent} conversations: remove it with {agent} itself")
     except history.Busy:
         raise web.HTTPConflict(text="Transcript modified less than 2 min ago: the session may still be running")
-    await asyncio.to_thread(conversation_names.forget, agent, sid)
+    await asyncio.to_thread(fsutil.conversation_request, "forget", agent=agent, sid=sid)
     return web.json_response({"ok": True})
 
 
@@ -4348,7 +4361,7 @@ async def _with_last_label(name, agent, sid):
     (its label, or its host name), so the sidebar never holds two alike. The agent is running by now:
     a failure here is logged, it never fails the resume."""
     try:
-        label = await asyncio.to_thread(conversation_names.last_label, agent, sid)
+        label = await asyncio.to_thread(fsutil.conversation_request, "last_label", agent=agent, sid=sid)
         live = await host({"op": "list"})
         if not _valid_ptyhost_list(live):
             raise ValueError("the host's list is not usable")
@@ -4575,7 +4588,7 @@ async def api_kill(request):
         raise web.HTTPConflict(text="Session replaced or missing")
     # Capture discovery before killing the process which owns the identity.
     described = await asyncio.to_thread(_describe_with_hooks, listed)
-    await asyncio.to_thread(conversation_names.observe, described["mesh"])
+    await asyncio.to_thread(_observe_names, described["mesh"], project=False)
     try:
         killed = await host({"op": "kill_if", "name": name, "created": created})
     except web.HTTPBadRequest as exc:
@@ -4585,7 +4598,7 @@ async def api_kill(request):
         raise web.HTTPConflict(text="Session replaced or stop already requested")
     if killed != {"ok": True}:
         raise web.HTTPServiceUnavailable(text="Invalid ptyhost reply")
-    await asyncio.to_thread(conversation_names.close, name, created)
+    await asyncio.to_thread(fsutil.conversation_request, "close", name=name, created=created)
     await asyncio.to_thread(respawn.forget_live, name, created)   # forget only the killed identity
     await asyncio.to_thread(board.remove, name, created)
     SIGNALS.discard_if(lambda reference, identity: reference.get("type") == "board.updated"

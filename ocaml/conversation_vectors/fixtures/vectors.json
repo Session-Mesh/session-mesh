@@ -1,0 +1,1037 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "sanitized-rows-and-projections",
+      "registry_rows": [
+        {
+          "name": "atelier",
+          "created": 9007199254740993,
+          "seen": 1999999995,
+          "agent": "codex",
+          "sid": "abcdefgh-1234",
+          "label": " Earlier ",
+          "aliases": [
+            " partagé ",
+            "ancien"
+          ]
+        },
+        {
+          "name": "  atel‮ier ",
+          "created": 9007199254740993,
+          "seen": 1999999999,
+          "agent": "codex",
+          "sid": "abcdefgh-1234",
+          "label": " Café\t猫 🍐⁩ ",
+          "aliases": [
+            "",
+            null,
+            "partagé",
+            "nou‪veau",
+            "nouveau",
+            "  œil 　 雪 "
+          ],
+          "ignored": "fixture-only"
+        },
+        {
+          "name": "frère",
+          "created": 9007199254740994,
+          "seen": 1999999999,
+          "agent": "codex",
+          "sid": "abcdefgh-5678",
+          "label": "🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋",
+          "closed_at": 9007199254740995
+        },
+        {
+          "name": "shell",
+          "created": -1.5,
+          "seen": 1999999996.75,
+          "aliases": [
+            "sans agent"
+          ]
+        },
+        {
+          "name": "atelier",
+          "created": 9007199254740994,
+          "seen": 1999999998,
+          "agent": "codex",
+          "sid": "abcdefgh-5678",
+          "aliases": [
+            "adjacent"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "at": 2000000000,
+          "call": "snapshot",
+          "args": [],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 1999999999,
+              "label": "Café猫 🍐",
+              "aliases": [
+                "partagé",
+                "nouveau",
+                "œil 雪"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            },
+            {
+              "name": "frère",
+              "created": 9007199254740994,
+              "seen": 1999999999,
+              "label": "🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋🍋",
+              "aliases": [],
+              "agent": "codex",
+              "sid": "abcdefgh-5678",
+              "closed_at": 9007199254740995
+            },
+            {
+              "name": "atelier",
+              "created": 9007199254740994,
+              "seen": 1999999998,
+              "label": "",
+              "aliases": [
+                "adjacent"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-5678",
+              "closed_at": null
+            },
+            {
+              "name": "shell",
+              "created": -1.5,
+              "seen": 1999999996.75,
+              "label": "",
+              "aliases": [
+                "sans agent"
+              ],
+              "agent": null,
+              "sid": null,
+              "closed_at": null
+            },
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 1999999995,
+              "label": "Earlier",
+              "aliases": [
+                "partagé",
+                "ancien"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            }
+          ]
+        },
+        {
+          "at": 2000000000,
+          "call": "active_aliases",
+          "args": [
+            [
+              {
+                "name": "atelier",
+                "created": 9007199254740993
+              },
+              {
+                "name": "atelier",
+                "created": 9007199254740994
+              }
+            ]
+          ],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "aliases": [
+                "partagé",
+                "ancien",
+                "nouveau",
+                "œil 雪"
+              ]
+            },
+            {
+              "name": "atelier",
+              "created": 9007199254740994,
+              "aliases": [
+                "adjacent"
+              ]
+            }
+          ]
+        },
+        {
+          "at": 2000000000,
+          "call": "enrich",
+          "args": [
+            {
+              "agent": "codex",
+              "id": "abcdefgh-1234",
+              "title": "Example"
+            }
+          ],
+          "kwargs": {},
+          "expected": {
+            "agent": "codex",
+            "id": "abcdefgh-1234",
+            "title": "Example",
+            "mesh_name": "atelier",
+            "mesh_label": "Café猫 🍐",
+            "mesh_aliases": [
+              "partagé",
+              "ancien",
+              "nouveau",
+              "œil 雪"
+            ]
+          }
+        },
+        {
+          "at": 2000000000,
+          "call": "enrich",
+          "args": [
+            {
+              "agent": "claude",
+              "id": "abcdefgh-1234",
+              "title": "Example"
+            }
+          ],
+          "kwargs": {},
+          "expected": {
+            "agent": "claude",
+            "id": "abcdefgh-1234",
+            "title": "Example"
+          }
+        },
+        {
+          "at": 2000000000,
+          "call": "last_label",
+          "args": [
+            "codex",
+            "abcdefgh-1234"
+          ],
+          "kwargs": {},
+          "expected": "Café猫 🍐"
+        },
+        {
+          "at": 2000000000,
+          "call": "last_label",
+          "args": [
+            "pi",
+            "abcdefgh-1234"
+          ],
+          "kwargs": {},
+          "expected": ""
+        }
+      ]
+    },
+    {
+      "id": "alias-tail",
+      "registry_rows": [
+        {
+          "name": "atelier",
+          "created": 9007199254740993,
+          "seen": 1999999991,
+          "agent": "codex",
+          "sid": "abcdefgh-1234",
+          "aliases": [
+            "alias 00",
+            "alias 01",
+            "alias 02",
+            "alias 03",
+            "alias 04",
+            "alias 05",
+            "alias 06",
+            "alias 07",
+            "alias 08",
+            "alias 09",
+            "alias 10",
+            "alias 11",
+            "alias 12",
+            "alias 13",
+            "alias 14",
+            "alias 15",
+            "alias 16",
+            "alias 17"
+          ]
+        },
+        {
+          "name": "atelier",
+          "created": 9007199254740993,
+          "seen": 1999999999,
+          "agent": "codex",
+          "sid": "abcdefgh-1234",
+          "aliases": [
+            "alias 15",
+            "alias 16",
+            "alias 17",
+            "alias 18",
+            "alias 19",
+            "alias 20",
+            "alias 21",
+            "alias 22",
+            "alias 23",
+            "alias 24",
+            "alias 25",
+            "alias 26",
+            "alias 27",
+            "alias 28",
+            "alias 29",
+            "alias 30",
+            "alias 31",
+            "alias 32",
+            "alias 33",
+            "alias 34",
+            "alias 35",
+            "alias 36",
+            "alias 19"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "at": 2000000000,
+          "call": "snapshot",
+          "args": [],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 1999999999,
+              "label": "",
+              "aliases": [
+                "alias 17",
+                "alias 18",
+                "alias 19",
+                "alias 20",
+                "alias 21",
+                "alias 22",
+                "alias 23",
+                "alias 24",
+                "alias 25",
+                "alias 26",
+                "alias 27",
+                "alias 28",
+                "alias 29",
+                "alias 30",
+                "alias 31",
+                "alias 32",
+                "alias 33",
+                "alias 34",
+                "alias 35",
+                "alias 36"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            },
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 1999999991,
+              "label": "",
+              "aliases": [
+                "alias 00",
+                "alias 01",
+                "alias 02",
+                "alias 03",
+                "alias 04",
+                "alias 05",
+                "alias 06",
+                "alias 07",
+                "alias 08",
+                "alias 09",
+                "alias 10",
+                "alias 11",
+                "alias 12",
+                "alias 13",
+                "alias 14",
+                "alias 15",
+                "alias 16",
+                "alias 17"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            }
+          ]
+        },
+        {
+          "at": 2000000000,
+          "call": "active_aliases",
+          "args": [
+            [
+              {
+                "name": "atelier",
+                "created": 9007199254740993
+              }
+            ]
+          ],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "aliases": [
+                "alias 17",
+                "alias 18",
+                "alias 19",
+                "alias 20",
+                "alias 21",
+                "alias 22",
+                "alias 23",
+                "alias 24",
+                "alias 25",
+                "alias 26",
+                "alias 27",
+                "alias 28",
+                "alias 29",
+                "alias 30",
+                "alias 31",
+                "alias 32",
+                "alias 33",
+                "alias 34",
+                "alias 35",
+                "alias 36"
+              ]
+            }
+          ]
+        },
+        {
+          "at": 2000000000,
+          "call": "enrich",
+          "args": [
+            {
+              "agent": "codex",
+              "id": "abcdefgh-1234",
+              "title": "Example"
+            }
+          ],
+          "kwargs": {},
+          "expected": {
+            "agent": "codex",
+            "id": "abcdefgh-1234",
+            "title": "Example",
+            "mesh_name": "atelier",
+            "mesh_label": "",
+            "mesh_aliases": [
+              "alias 17",
+              "alias 18",
+              "alias 19",
+              "alias 20",
+              "alias 21",
+              "alias 22",
+              "alias 23",
+              "alias 24",
+              "alias 25",
+              "alias 26",
+              "alias 27",
+              "alias 28",
+              "alias 29",
+              "alias 30",
+              "alias 31",
+              "alias 32",
+              "alias 33",
+              "alias 34",
+              "alias 35",
+              "alias 36"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "retention-and-malformed-rows",
+      "registry_rows": [
+        null,
+        7,
+        {},
+        {
+          "name": "‮ ",
+          "created": 9007199254740993,
+          "seen": 1999999999,
+          "agent": "codex",
+          "sid": "abcdefgh-1234"
+        },
+        {
+          "name": "atelier",
+          "created": true,
+          "seen": 1999999999,
+          "agent": "codex",
+          "sid": "abcdefgh-1234"
+        },
+        {
+          "name": "atelier",
+          "created": 9007199254740993,
+          "seen": false,
+          "agent": "codex",
+          "sid": "abcdefgh-1234"
+        },
+        {
+          "name": "atelier",
+          "created": 9007199254740993,
+          "seen": 1999999999,
+          "agent": "codex",
+          "sid": "abcdefgh-1234",
+          "closed_at": "yesterday"
+        },
+        {
+          "name": "atelier",
+          "created": 9007199254740993,
+          "seen": 1999999999,
+          "agent": "unknown",
+          "sid": "abcdefgh-1234"
+        },
+        {
+          "name": "atelier",
+          "created": 9007199254740993,
+          "seen": 1999999999,
+          "agent": "codex",
+          "sid": "--invalid"
+        },
+        {
+          "name": "atelier",
+          "created": 9007199254740993,
+          "seen": 1999999999,
+          "agent": null,
+          "sid": "abcdefgh-1234"
+        },
+        {
+          "name": "atelier",
+          "created": 9007199254740993,
+          "seen": 1999999999,
+          "agent": "codex",
+          "sid": "abcdefgh-1234",
+          "aliases": "bad"
+        },
+        {
+          "name": "boundary",
+          "created": 9007199254740993,
+          "seen": 1992224000,
+          "agent": "codex",
+          "sid": "abcdefgh-1234"
+        },
+        {
+          "name": "retained",
+          "created": 9007199254740993,
+          "seen": 1992224001,
+          "agent": "codex",
+          "sid": "abcdefgh-1234"
+        },
+        {
+          "name": "future",
+          "created": 9007199254740993,
+          "seen": 2000000001,
+          "agent": "codex",
+          "sid": "abcdefgh-1234"
+        },
+        {
+          "name": "current",
+          "created": 9007199254740993,
+          "seen": 2000000000,
+          "agent": "codex",
+          "sid": "abcdefgh-1234"
+        }
+      ],
+      "steps": [
+        {
+          "at": 2000000000,
+          "call": "snapshot",
+          "args": [],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "current",
+              "created": 9007199254740993,
+              "seen": 2000000000,
+              "label": "",
+              "aliases": [],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            },
+            {
+              "name": "retained",
+              "created": 9007199254740993,
+              "seen": 1992224001,
+              "label": "",
+              "aliases": [],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "out-of-order-observations-and-tombstone",
+      "registry_rows": [],
+      "steps": [
+        {
+          "at": 2000000000,
+          "call": "rename",
+          "args": [
+            "atelier",
+            9007199254740993,
+            "Avant",
+            "Après"
+          ],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000000,
+              "label": "Après",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après"
+              ],
+              "agent": null,
+              "sid": null,
+              "closed_at": null
+            }
+          ],
+          "registry_bytes_changed": true
+        },
+        {
+          "at": 2000000002,
+          "call": "observe",
+          "args": [
+            [
+              {
+                "name": "atelier",
+                "created": 9007199254740993,
+                "label": "Après",
+                "agent": {
+                  "type": "codex",
+                  "session_id": "abcdefgh-1234",
+                  "identity_source": "open_rollout"
+                }
+              }
+            ]
+          ],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000002,
+              "label": "Après",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            }
+          ],
+          "registry_bytes_changed": true
+        },
+        {
+          "at": 2000000003,
+          "call": "rename",
+          "args": [
+            "atelier",
+            9007199254740993,
+            "Après",
+            "Dernier"
+          ],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000003,
+              "label": "Dernier",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            }
+          ],
+          "registry_bytes_changed": true
+        },
+        {
+          "at": 2000000004,
+          "call": "observe",
+          "args": [
+            [
+              {
+                "name": "atelier",
+                "created": 9007199254740993,
+                "label": "Après",
+                "agent": {
+                  "type": "codex",
+                  "session_id": "abcdefgh-1234",
+                  "identity_source": "open_rollout"
+                }
+              }
+            ]
+          ],
+          "kwargs": {
+            "now": 2000000001
+          },
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000003,
+              "label": "Dernier",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            }
+          ],
+          "registry_bytes_changed": false
+        },
+        {
+          "at": 2000000005,
+          "call": "observe",
+          "args": [
+            []
+          ],
+          "kwargs": {
+            "listed": false
+          },
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000003,
+              "label": "Dernier",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            }
+          ],
+          "registry_bytes_changed": false
+        },
+        {
+          "at": 2000000006,
+          "call": "observe",
+          "args": [
+            [
+              {
+                "name": "atelier",
+                "created": 9007199254740993,
+                "label": "Ambigu",
+                "agent": {
+                  "type": "codex",
+                  "session_id": "abcdefgh-5678",
+                  "identity_source": "cwd_unique"
+                }
+              }
+            ]
+          ],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000006,
+              "label": "Ambigu",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier",
+                "Ambigu"
+              ],
+              "agent": null,
+              "sid": null,
+              "closed_at": null
+            },
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000003,
+              "label": "Dernier",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            }
+          ],
+          "registry_bytes_changed": true
+        },
+        {
+          "at": 2000000007,
+          "call": "observe",
+          "args": [
+            [
+              {
+                "name": "atelier",
+                "created": 9007199254740993,
+                "label": "Exact",
+                "agent": {
+                  "type": "codex",
+                  "session_id": "abcdefgh-5678",
+                  "identity_source": "open_rollout"
+                }
+              }
+            ]
+          ],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000007,
+              "label": "Exact",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier",
+                "Ambigu",
+                "Exact"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-5678",
+              "closed_at": null
+            },
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000003,
+              "label": "Dernier",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": null
+            }
+          ],
+          "registry_bytes_changed": true
+        },
+        {
+          "at": 2000000008,
+          "call": "close",
+          "args": [
+            "atelier",
+            9007199254740993
+          ],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000008,
+              "label": "Exact",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier",
+                "Ambigu",
+                "Exact"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-5678",
+              "closed_at": 2000000008
+            },
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000008,
+              "label": "Dernier",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": 2000000008
+            }
+          ],
+          "registry_bytes_changed": true
+        },
+        {
+          "at": 2000000009,
+          "call": "observe",
+          "args": [
+            [
+              {
+                "name": "atelier",
+                "created": 9007199254740993,
+                "label": "Tardif",
+                "agent": {
+                  "type": "codex",
+                  "session_id": "abcdefgh-1234",
+                  "identity_source": "open_rollout"
+                }
+              }
+            ]
+          ],
+          "kwargs": {
+            "now": 2000000007
+          },
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000008,
+              "label": "Exact",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier",
+                "Ambigu",
+                "Exact"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-5678",
+              "closed_at": 2000000008
+            },
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000008,
+              "label": "Dernier",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-1234",
+              "closed_at": 2000000008
+            }
+          ],
+          "registry_bytes_changed": false
+        },
+        {
+          "at": 2000000010,
+          "call": "last_label",
+          "args": [
+            "codex",
+            "abcdefgh-5678"
+          ],
+          "kwargs": {},
+          "expected": "Exact"
+        },
+        {
+          "at": 2000000011,
+          "call": "forget",
+          "args": [
+            "codex",
+            "abcdefgh-1234"
+          ],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "atelier",
+              "created": 9007199254740993,
+              "seen": 2000000008,
+              "label": "Exact",
+              "aliases": [
+                "atelier",
+                "Avant",
+                "Après",
+                "Dernier",
+                "Ambigu",
+                "Exact"
+              ],
+              "agent": "codex",
+              "sid": "abcdefgh-5678",
+              "closed_at": 2000000008
+            }
+          ],
+          "registry_bytes_changed": true
+        }
+      ]
+    },
+    {
+      "id": "invalid-json",
+      "registry_json": "[{\"",
+      "steps": [
+        {
+          "at": 2000000000,
+          "call": "snapshot",
+          "args": [],
+          "kwargs": {},
+          "expected": []
+        }
+      ]
+    },
+    {
+      "id": "non-list-top-level",
+      "registry_json": "{\"name\":\"atelier\"}",
+      "steps": [
+        {
+          "at": 2000000000,
+          "call": "snapshot",
+          "args": [],
+          "kwargs": {},
+          "expected": []
+        }
+      ]
+    },
+    {
+      "id": "nonfinite-json-numbers",
+      "registry_json": "[{\"name\":\"a\",\"created\":1,\"seen\":NaN},{\"name\":\"b\",\"created\":Infinity,\"seen\":2000000000},{\"name\":\"c\",\"created\":1,\"seen\":2000000000,\"closed_at\":-Infinity},{\"name\":\"d\",\"created\":1,\"seen\":1e400},{\"name\":\"finite\",\"created\":1.0,\"seen\":2000000000}]",
+      "steps": [
+        {
+          "at": 2000000000,
+          "call": "snapshot",
+          "args": [],
+          "kwargs": {},
+          "expected": [
+            {
+              "name": "finite",
+              "created": 1.0,
+              "seen": 2000000000,
+              "label": "",
+              "aliases": [],
+              "agent": null,
+              "sid": null,
+              "closed_at": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -468,6 +468,24 @@ describe('the public CI as committed', () => {
         assert.ok(frontend.includes(needle), `${needle} missing from the frontend job`);
       }
     });
+    test(`${name} supplies the native conversation registry to every server test job`, () => {
+      const jobs = jobBlocks(parseLines(text));
+      const body = (jobName: string): string => {
+        const job = jobs.find((item) => item.name === jobName);
+        assert.ok(job, `no ${jobName} job`);
+        return job.block.map((line) => line.raw).join('\n');
+      };
+      const native = body('native');
+      for (const needle of ['cp -L ocaml/_build/install/default/bin/mesh-history native-host/mesh-history',
+        'test -x native-host/mesh-history', '            native-host/mesh-history', 'key: native-programs-v5-']) {
+        assert.ok(native.includes(needle), `${needle} missing from the native job`);
+      }
+      for (const jobName of ['frontend_parts', 'python', 'browser_parts']) {
+        const job = body(jobName);
+        assert.ok(job.includes('"$RUNNER_TEMP/native-host/mesh-history"'), `mesh-history not made executable in ${jobName}`);
+        assert.ok(job.includes('MESH_MESH_HISTORY_CMD=$RUNNER_TEMP/native-host/mesh-history'), `mesh-history not selected in ${jobName}`);
+      }
+    });
     test(`${name} requires the real account helper for the running-app browser tests`, () => {
       const browser = jobBlocks(parseLines(text)).find(item => item.name === 'browser_parts');
       assert.ok(browser);
