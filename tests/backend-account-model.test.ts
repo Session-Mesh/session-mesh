@@ -6,6 +6,7 @@ import {test} from 'node:test';
 import {readFileSync} from 'node:fs';
 import {BACKENDS, parseProfilesReply, parsePolicyReply, effectiveConfirmation, pairKey,
   createBackendAccountController, type Backend, type Profile, type Policy} from '../static/backend-account-model.ts';
+import type {ProvisionJournal} from '../static/backend-account-provision-journal.ts';
 
 const digest = 'a'.repeat(64);
 const reply = (data: unknown) => ({version: 1, ok: true, data});
@@ -49,6 +50,42 @@ const requestedProvision = {backend: 'codex', label: 'Travel'} as const;
 const newRevision = 'b'.repeat(64);
 const provisioned = {...profile('p-0123456789abcdef', 'codex'), label: 'Travel', enabled: false};
 const unconfigured = reply({configured:false, registry_revision:null, profiles:[]});
+
+test('concurrent controllers serialize provision and preserve uncertainty', async () => {
+  const rows = new Map<string, string>();
+  let sequence = 0;
+  const journal: ProvisionJournal = {
+    load: async () => { const row = rows.entries().next().value; return row ? {id: row[0], value: row[1]} : null; },
+    acquire: async () => {
+      const existing = rows.entries().next().value;
+      if (existing) return {entry: {id: existing[0], value: existing[1]}, acquired: false};
+      const entry = {id: String(++sequence), value: 'uncertain'}; rows.set(entry.id, entry.value);
+      return {entry, acquired: true};
+    },
+    save: async (id, value) => { if (value === null) rows.delete(id); else rows.set(id, value); },
+  };
+  const held = defer();
+  const createPorts = (write: () => Promise<unknown>) => ({
+    load: async () => ({profiles: listing(), policy: reply(policy())}),
+    mutate: async () => reply(policy()),
+    inspect: async () => listing(),
+    provision: {backends: ['codex'] as ('codex')[], write},
+  });
+  const second = createBackendAccountController(createPorts(async () => assert.fail('must not dispatch')), journal);
+  const first = createBackendAccountController(createPorts(() => held.promise), journal);
+  await first.open(); await second.open();
+  const firstWrite = first.provisionProfile(requestedProvision);
+  const secondWrite = second.provisionProfile(requestedProvision);
+  assert.equal(await secondWrite, false);
+  held.resolve({version: 1, ok: false, http_status: 503, code: 'profile-publication-uncertain'});
+  assert.equal(await firstWrite, false);
+  assert.equal(rows.size, 1, 'the outstanding operation keeps its durable entry');
+  assert.equal([...rows.values()][0], 'uncertain');
+  const reopened = createBackendAccountController(createPorts(async () => assert.fail('must not replay')), journal);
+  await reopened.open();
+  assert.equal(reopened.state.provisionPending, 'provisionUncertain');
+  assert.equal(await reopened.provisionProfile(requestedProvision), false);
+});
 
 for (const append of [false, true]) for (const published of [false, true]) {
   test(`lost provision receipt stays blocked across inspection and reopen (${append ? 'append' : 'first'}, ${published ? 'published' : 'unpublished'})`, async () => {

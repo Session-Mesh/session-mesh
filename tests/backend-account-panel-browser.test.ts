@@ -34,6 +34,8 @@ before(async () => {
   if (skip) return;
   const built = await build({stdin: {resolveDir: root, contents: `
     import {createBackendAccountPanel} from './static/backend-account-panel.ts';
+    import {provisionJournal} from './static/backend-account-provision-journal.ts';
+    window.testProvisionJournal = () => provisionJournal(localStorage, indexedDB, crypto);
     const catalog = await (await fetch('/catalog.json' + location.search)).json();
     const t = (key, params = {}) => {
       if (!(key in catalog)) throw new Error('Missing catalog key: ' + key);
@@ -132,6 +134,51 @@ async function statusIs(page: Page, lang: string, phase: string) {
   await page.getByRole('status').filter({hasText: catalogs[lang]![`backendAccounts.status.${phase}`]!}).waitFor();
 }
 const control = (page: Page, key: string) => page.locator(`[data-focus="${key}"]`);
+test('provision journal acquisition is atomic across tabs and preserves legacy uncertainty', {skip}, async () => {
+  const {page, context, errors} = await fixture();
+  try {
+    const other = await context.newPage();
+    await other.goto(base + '/?lang=en');
+    const acquire = (p: Page) => p.evaluate(async () => {
+      // A key-index scan is unsafe when removals shift localStorage indices.
+      Storage.prototype.key = () => { throw new Error('non-atomic enumeration'); };
+      return (window as any).testProvisionJournal().acquire();
+    });
+    const results = await Promise.all([acquire(page), acquire(other)]);
+    assert.equal(results.filter(r => r.acquired).length, 1);
+    assert.deepEqual(results[0].entry, results[1].entry);
+    const record = await page.evaluate(async () => (window as any).testProvisionJournal().load());
+    assert.deepEqual(record, results[0].entry);
+    const stable = 'f'.repeat(32);
+    const receipt = JSON.stringify({version: 1, ok: true, data: {registry_revision: 'b'.repeat(64),
+      profile: {backend: 'codex', id: 'p-0123456789abcdef', label: 'Travel',
+        context_revision: 'a'.repeat(64), enabled: false, switch_qualified: false}}});
+    await page.evaluate(async ({id, receipt}) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('mesh.backendAccounts.provision.v2', 1);
+        request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction('entries', 'readwrite');
+        tx.objectStore('entries').add({id, value: receipt});
+        tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error);
+      });
+      db.close();
+    }, {id: stable, receipt});
+    const [, duringDelete] = await Promise.all([
+      page.evaluate(async id => (window as any).testProvisionJournal().save(id, null), record.id),
+      acquire(other),
+    ]);
+    assert.equal(duringDelete.acquired, false, 'deleting one record must not hide the other');
+    assert.deepEqual(await other.evaluate(async () => (window as any).testProvisionJournal().load()),
+      {id: stable, value: receipt});
+    await page.evaluate(() => localStorage.setItem('mesh.backendAccounts.provision.v1', 'uncertain'));
+    const legacy = await other.evaluate(async () => (window as any).testProvisionJournal().acquire());
+    assert.equal(legacy.acquired, false);
+    assert.equal(legacy.entry.value, 'uncertain');
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
 for (const lang of ['en','fr']) test(`component ${lang}: provision collects only backend and label and never retries an uncertain write`,{skip},async()=>{
   const {page,context,errors}=await fixture(lang);
   try {

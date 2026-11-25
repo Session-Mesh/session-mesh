@@ -4,6 +4,7 @@
 import {BACKENDS, PROFILE_ROLES, createBackendAccountController, effectiveConfirmation, pairKey, ruleStatus, validProfileInput, validProvisionInput,
   type AccountState, type Backend, type BackendAccountPorts, type Confirmation, type PairRule, type Profile,
   type ProvisionBackend, type Registry, type Snapshot} from './backend-account-model.ts';
+import {provisionJournal} from './backend-account-provision-journal.ts';
 
 export type AccountTranslate = (key: string, params?: Record<string, string | number>) => string;
 export type BackendAccountPanelPorts = BackendAccountPorts & Readonly<{
@@ -15,15 +16,8 @@ let serial = 0;
  * No app globals, credential editor, network fallback, provider access or switch operation. */
 export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccountPanelPorts) {
   const doc = host.ownerDocument, prefix = `backend-accounts-${++serial}`;
-  const provisionKey = 'mesh.backendAccounts.provision.v1';
-  const controller = createBackendAccountController(ports, ports.inspect ? {
-    load: () => doc.defaultView!.localStorage.getItem(provisionKey),
-    save: value => {
-      const journal = doc.defaultView!.localStorage;
-      if (value === null) journal.removeItem(provisionKey);
-      else journal.setItem(provisionKey, value);
-    },
-  } : undefined);
+  const controller = createBackendAccountController(ports, ports.inspect
+    ? provisionJournal(doc.defaultView!.localStorage, doc.defaultView!.indexedDB, doc.defaultView!.crypto) : undefined);
   const t = ports.t;
   const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] => {
     const element = doc.createElement(tag); if (text !== undefined) element.textContent = text; return element;
