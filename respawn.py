@@ -514,6 +514,18 @@ def offer_mismatch(entry, expected):
     return [key for key in EXPECTED_KEYS if actual[key] != expected[key]]
 
 
+def legacy_rebind_offers():
+    """Owner-only projection; excludes commands, arguments and credentials."""
+    with _lock:
+        entries = _load()["lost"]
+    return [{"expected": {"name": e["name"], "created": e["created"],
+                          "agent_kind": e["agent"]["type"], "resume_id": e["agent"]["session_id"],
+                          "cwd": e["cwd"]}, "previous_account": e["account"]}
+            for e in entries if usable(e) and e.get("account") and not e.get("account_context_revision")
+            and not e.get("restoring") and e.get("agent")
+            and e["agent"]["type"] in ("claude", "codex") and e["agent"].get("session_id")]
+
+
 def rebind_offer(expected, original, account, revision):
     """Bind exactly the unchanged legacy offer; never create or resume a session."""
     with _lock:
