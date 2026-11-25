@@ -21,6 +21,7 @@ import {ptyhostArgv} from './ptyhost-command.ts';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
 declare const newSubmitGeneration: number | null;
+declare const active: {id?: string} | null;
 
 const CHROMIUM = process.env.MESH_CHROMIUM ?? '';
 const skip = !CHROMIUM && !process.env.MESH_REQUIRE_BROWSER ? 'MESH_CHROMIUM is required' : false;
@@ -179,6 +180,33 @@ describe('the Options field of New session', {skip}, () => {
     await page.locator('.pane').first().waitFor();
     assert.deepEqual(stored()?.options?.pi, ['-e', '/tmp/ext.mjs']);
     assert.deepEqual(problems, []);
+  });
+
+  test('a failed default save opens the already created session without a second launch', async () => {
+    const {page, problems} = await signedIn();
+    assert.equal(await storeDefault(page, {pi: '-e /tmp/before-failure.mjs'}), 'ok');
+    await openNew(page, 'pi');
+    let launches = 0, created = '';
+    await page.route('**/api/new', async route => {
+      launches++;
+      const response = await route.fetch();
+      if (response.ok()) created = (await response.json()).id;
+      await route.fulfill({response});
+    });
+    await page.route('**/api/config/launch-options', route => route.fulfill({status:500, body:'failed'}));
+    try {
+      await page.locator('#form-new input[name="options"]').fill('-e /tmp/one-launch.mjs');
+      await page.locator('#form-new input[name="optionsDefault"]').check();
+      await page.locator('#dlg-new button[value="ok"]').click();
+      await page.locator('#new-err').filter({hasText:/not saved/i}).waitFor();
+      assert.equal(launches, 1); assert.ok(created);
+      assert.equal(await page.locator('#dlg-new[open]').count(), 1);
+      await page.locator('#dlg-new button[value="ok"]').click();
+      await page.locator('#dlg-new[open]').waitFor({state:'detached'});
+      await page.waitForFunction(id => active?.id === id, created);
+      assert.equal(launches, 1, 'closing recovery cannot create a second session');
+      assert.deepEqual(problems, []);
+    } finally { await page.unrouteAll({behavior:'wait'}); }
   });
 
   test('a stale default can be saved after the token is entered again', async () => {

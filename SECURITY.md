@@ -502,17 +502,19 @@ does not come from a page of another site, and the `SameSite=Strict` cookies are
 
 ### Extra launch options per agent
 
-The "Options" field of "New session" and the per-agent editor of "Configuration" store arguments
-Mesh adds to an agent at every new launch of that preset, including a session an agent asks for.
-They go through the same route family and the same elevation as the launch settings
+The "Options" field of "New session" can supply arguments for that launch alone. When saved as
+a default, there or in the per-agent editor of "Configuration", Mesh adds them to each new launch
+of that preset, including a session an agent asks for.
+Saving defaults uses the same elevation as the launch settings
 (`POST /api/config/launch-options`, owner cookie only, elevation re-checked inside the write lock,
 32 KiB body, revision checked so two tabs cannot overwrite each other).
 
 - **What is checked.** Only the arguments that would make the agent run without approvals and
   without a sandbox (the "codex-yolo" class, listed in
   [Extra options per agent](docs/operations.md#extra-options-per-agent)) and the ones that pick a
-  conversation. The check reads the parsed arguments and runs again before each launch, so a
-  hand-edited file cannot carry `--yolo` or `-c 'approval_policy="never"'` into a session.
+  conversation. The check reads the parsed arguments and runs again before each launch. It refuses
+  recognized forms, but does not model every argument spelling an agent CLI may accept; treat it
+  as a guard rail, not a complete security boundary.
 - **What is not checked, and what it means.** Everything else is accepted, by design: `--settings`
   (Claude hooks), `--mcp-config` (an MCP server naming any command), `codex -c mcp_servers.…`
   overrides, an extension path for Pi, or a flag an extension registers. Each of those is code the
