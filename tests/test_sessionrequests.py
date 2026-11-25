@@ -40,6 +40,29 @@ def test_launch_options_and_settings_keep_distinct_approved_states(tmp_path):
     assert rows == {"create": "executing", "settings": "settings_executing"}
 
 
+def test_fence_evidence_retains_terminal_result_across_expiry_and_budget(tmp_path, monkeypatch):
+    now = [10.0]
+    protected = set()
+    requests = sessionrequests.Requests(tmp_path / 'actions.sqlite3', clock=lambda: now[0],
+                                        retain_terminal=lambda request_id: request_id in protected)
+    made = requests.create(source(), {'action': 'restart'}, enabled_agents={'codex'}, resumable={'codex'})
+    claim = requests.claim(made['id'], 'a' * 32)
+    requests.decide(made['id'], True, claim['claim_nonce'])
+    requests.begin_execution(made['id'])
+    protected.add(made['id'])
+    requests.finish(made['id'], error='inspect')
+    now[0] += sessionrequests.TTL + 1
+    monkeypatch.setattr(sessionrequests, 'MAX_TERMINAL_REQUESTS', 0)
+    assert requests.status(made['id'])['state'] == 'failed'
+    requests.close()
+    requests = sessionrequests.Requests(tmp_path / 'actions.sqlite3', clock=lambda: now[0],
+                                        retain_terminal=lambda request_id: request_id in protected)
+    assert requests.status(made['id'])['state'] == 'failed'
+    protected.clear()
+    assert requests.status(made['id']) is None
+    requests.close()
+
+
 def test_agent_request_is_pending_and_only_visible_to_its_incarnation(tmp_path):
     requests = store(tmp_path)
     made = requests.create(source(), {"action": "create", "preset": "claude",

@@ -111,8 +111,9 @@ def _prune_set_aside(path):
 
 
 class Requests:
-    def __init__(self, path, *, clock=time.time):
+    def __init__(self, path, *, clock=time.time, retain_terminal=None):
         self._clock = clock
+        self._retain_terminal = retain_terminal or (lambda _request_id: False)
         self._lock = threading.RLock()
         self._path = str(path)
         try:
@@ -144,6 +145,7 @@ class Requests:
             try:
                 self._db = sqlite3.connect(self._path, timeout=5, isolation_level=None,
                                            check_same_thread=False)
+                self._db.create_function("mesh_retain_terminal", 1, self._retain_terminal)
                 self._db.row_factory = sqlite3.Row
                 self._db.execute("PRAGMA foreign_keys = ON")
                 if self._path != ":memory:":
@@ -263,13 +265,13 @@ class Requests:
             "DELETE FROM session_requests WHERE "
             "(state IN ('pending', 'claimed') AND created_at + ? <= ?) OR "
             "(state IN ('rejected', 'completed', 'failed', 'execution_unknown') "
-            " AND terminal_at + ? <= ?)", (TTL, now, TTL, now))
+            " AND terminal_at + ? <= ? AND NOT mesh_retain_terminal(id))", (TTL, now, TTL, now))
         # Terminal history has its own bounded budget and can never crowd out
         # a fresh active request. Oldest results are the first to be evicted.
         terminal_slots = ",".join("?" for _ in TERMINAL_STATES)
         self._db.execute(
             f"DELETE FROM session_requests WHERE id IN ("
-            f"SELECT id FROM session_requests WHERE state IN ({terminal_slots}) "
+            f"SELECT id FROM session_requests WHERE state IN ({terminal_slots}) AND NOT mesh_retain_terminal(id) "
             "ORDER BY terminal_at DESC, id DESC LIMIT -1 OFFSET ?)",
             (*TERMINAL_STATES, MAX_TERMINAL_REQUESTS))
 

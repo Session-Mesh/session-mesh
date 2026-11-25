@@ -192,6 +192,28 @@ async def test_recovered_create_executes_approved_options_not_current_options(
     recovered.close()
 
 
+@pytest.mark.parametrize('outcome', [
+    {'switch_phase': 'not_stopped', 'target_copy_remains': False, 'target_copy_uncertain': False},
+    {'switch_phase': 'target_start_accepted', 'id': 'alpha', 'target_copy_remains': True, 'target_copy_uncertain': False},
+    None,
+])
+async def test_fence_release_failure_reports_known_switch_outcome_without_retry(monkeypatch, outcome):
+    class Requests:
+        def begin_execution(self, _request_id): return {'source': {'agent': 'codex'}}
+        def finish(self, _request_id, *, error, detail): return {'error': error, 'result': detail}
+    async def execute(_item):
+        error = server.NativeFenceRecoveryRequired({'fence_id': 'private'}, 'Release outcome uncertain')
+        error.switch_outcome = outcome
+        raise error
+    monkeypatch.setattr(server, '_execute_session_action', execute)
+    result = await server._run_session_action({'session_requests': Requests()}, 'request')
+    detail = result['result']
+    assert detail['retryable'] is False and detail['operator_action'] is True
+    assert detail['switch_phase'] == (outcome or {'switch_phase': 'unknown'})['switch_phase']
+    assert detail['target_copy_uncertain'] == (outcome or {'target_copy_uncertain': True})['target_copy_uncertain']
+    assert 'fence_id' not in str(detail)
+
+
 @pytest.mark.parametrize('copied', [False, True])
 async def test_failed_switch_recovery_retains_original_error_and_never_claims_rollback(monkeypatch, copied):
     class Requests:
