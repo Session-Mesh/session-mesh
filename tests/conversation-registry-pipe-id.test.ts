@@ -21,7 +21,7 @@ test('pipe identifiers wider than an OCaml integer retain their identity', () =>
       'original = os.fstat',
       'def wide(fd):',
       '    s = original(fd)',
-      '    return types.SimpleNamespace(st_dev=s.st_dev, st_ino=s.st_ino + (1 << 63))',
+      '    return types.SimpleNamespace(st_dev=s.st_dev + (1 << 63), st_ino=s.st_ino + (1 << 63))',
       'os.fstat = wide',
       'assert fsutil.conversation_request("snapshot") == []',
     ].join('\n');
