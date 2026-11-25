@@ -495,7 +495,10 @@ describe('the public CI as committed', () => {
       assert.match(raw('browser_parts'), new RegExp(`name: ${artifact}\\s+path: \\$\\{\\{ runner.temp \\}\\}/native-test`));
       assert.ok(raw('browser_parts').includes('MESH_REQUIRE_MANAGED_PROFILE=1'));
       assert.ok(!raw('frontend_parts').includes(artifact));
-      assert.doesNotMatch(raw('native'), /^\s{12}native-host\/mesh-profile-fixture$/m, 'not in the ordinary multi-file artifact');
+      const ordinary = /name: mesh-work-programs-linux-x86_64\s+path: \|\s*\n([\s\S]*?)\n\s*if-no-files-found:/.exec(raw('native'));
+      assert.ok(ordinary, 'ordinary work-program artifact must have explicit multiline paths');
+      assert.deepEqual(ordinary[1]!.trim().split('\n').map(line => line.trim()),
+        ['native-host/work-read', 'native-host/work-write', 'native-host/mesh-platform', 'native-host/mesh-profile']);
     });
   }
 });

@@ -2,14 +2,13 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 import assert from 'node:assert/strict';
-import {spawn, type ChildProcess} from 'node:child_process';
-import {once} from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import {test} from 'node:test';
 import {chromium, type Browser} from 'playwright-core';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+import {startTestPtyhost} from './helpers/managed-test-ptyhost.ts';
 import {REPO, startMesh} from './mesh-server-lib.ts';
 import {attach, request, waitFor, type Attachment} from './ptyhost-wire-lib.ts';
 
@@ -39,16 +38,16 @@ for (const lateConfig of [false, true]) test(lateConfig
   });
   const socket = path.join(mesh.home, 'run/session-mesh/ptyhost.sock');
   const registry = path.join(mesh.confDir, 'backend-profiles.json');
-  let host: ChildProcess | undefined, browser: Browser | undefined, terminalB: Attachment | undefined;
+  let host: ReturnType<typeof startTestPtyhost> | undefined, browser: Browser | undefined, terminalB: Attachment | undefined;
   try {
     assert.equal(fs.existsSync(registry), false);
     const argv = nativePtyhost();
-    host = spawn(argv[0], argv.slice(1), {cwd:REPO, stdio:'ignore',
+    host = startTestPtyhost(argv, {cwd:REPO, stdio:'ignore',
       env:{HOME:mesh.home, PATH:'/usr/bin:/bin', SHELL:'/bin/sh', LANG:'C.UTF-8',
-        XDG_RUNTIME_DIR:path.join(mesh.home,'run')}});
+        XDG_RUNTIME_DIR:path.join(mesh.home,'run')}}, socket);
     const list = () => request(socket, {op:'list'}) as Promise<
       {name:string; pid:number; created:number; meta:Record<string,string>}[]>;
-    await waitFor('private PTY host',10000,() => list().then(() => true, () => false));
+    await host.ready;
     browser = await chromium.launch(chromiumLaunchOptions(chrome, ['--no-sandbox']));
     const context = await browser.newContext({locale:'en', viewport:{width:1440,height:900}});
     const page = await context.newPage();
@@ -146,17 +145,19 @@ for (const lateConfig of [false, true]) test(lateConfig
     terminalB.send('D',Buffer.from('B-before\r'));
     await waitFor('B receives its input',10000,()=>observe(1,'input') === 'B-before\n');
 
-    let oldReady!: () => void, releaseOld!: () => void;
-    const oldConfigReady = new Promise<void>(resolve => { oldReady = resolve; });
+    let oldReady!: () => void, oldFailed!: (error: unknown) => void, releaseOld!: () => void;
+    const oldConfigReady = new Promise<void>((resolve, reject) => { oldReady = resolve; oldFailed = reject; });
     const oldConfigRelease = new Promise<void>(resolve => { releaseOld = resolve; });
     const configURL = `${mesh.base}/api/config`;
     if (lateConfig) {
       fs.chmodSync(fake,0o600);
       await page.route(configURL, async route => {
-        const response = await route.fetch();
-        oldReady();
-        await oldConfigRelease;
-        await route.fulfill({response});
+        try {
+          const response = await route.fetch();
+          oldReady();
+          await oldConfigRelease;
+          await route.fulfill({response});
+        } catch (error) { oldFailed(error); }
       }, {times:1});
       await page.locator('#btn-new').click();
       await oldConfigReady;
@@ -236,12 +237,7 @@ for (const lateConfig of [false, true]) test(lateConfig
   } finally {
     try { await browser?.close(); } finally {
       terminalB?.close();
-      if (host && host.exitCode === null && host.signalCode === null) {
-        const closed = once(host,'close');
-        host.kill('SIGKILL');
-        await closed;
-      }
-      await mesh.stop();
+      try { await host?.stop(); } finally { await mesh.stop(); }
     }
   }
 });
@@ -296,8 +292,8 @@ for (const reload of [true, false]) test(`lost creation receipt remains inspecta
     else {
       await control('close').click();
       const configURL = `${mesh.base}/api/config`;
-      let releaseOld!: () => void, oldReady!: () => void;
-      const old = new Promise<void>(resolve => { oldReady = resolve; });
+      let releaseOld!: () => void, oldReady!: () => void, oldFailed!: (error: unknown) => void;
+      const old = new Promise<void>((resolve, reject) => { oldReady = resolve; oldFailed = reject; });
       const release = new Promise<void>(resolve => { releaseOld = resolve; });
       // Simulate a transport that delivers the old reply despite cancellation.
       await page.evaluate(() => {
@@ -309,11 +305,13 @@ for (const reload of [true, false]) test(`lost creation receipt remains inspecta
         };
       });
       await page.route(configURL, async route => {
-        const response = await route.fetch();
-        assert.deepEqual((await response.json()).capabilities.profile_provision, ['codex']);
-        oldReady();
-        await release;
-        await route.fulfill({response});
+        try {
+          const response = await route.fetch();
+          assert.deepEqual((await response.json()).capabilities.profile_provision, ['codex']);
+          oldReady();
+          await release;
+          await route.fulfill({response});
+        } catch (error) { oldFailed(error); }
       }, {times:1});
       await page.locator('#btn-accounts').click();
       await old;
@@ -376,15 +374,15 @@ test('ordinary account cancellation and managed argv remain separate', {skip, ti
     });
     fs.writeFileSync(path.join(where.confDir,'backend-profiles.json'),JSON.stringify({version:1,profiles}),{mode:0o600});
   });
-  let host: ChildProcess | undefined, browser: Browser | undefined;
+  let host: ReturnType<typeof startTestPtyhost> | undefined, browser: Browser | undefined;
   try {
     const socket = path.join(mesh.home,'run/session-mesh/ptyhost.sock');
     const argv = nativePtyhost();
-    host = spawn(argv[0],argv.slice(1),{cwd:REPO,stdio:'ignore',env:{
+    host = startTestPtyhost(argv,{cwd:REPO,stdio:'ignore',env:{
       HOME:mesh.home, PATH:`${mesh.home}/bin:/usr/bin:/bin`, SHELL:'/bin/sh', LANG:'C.UTF-8',
       XDG_RUNTIME_DIR:path.join(mesh.home,'run'),
-    }});
-    await waitFor('private PTY host',10000,()=>request(socket,{op:'list'}).then(()=>true,()=>false));
+    }}, socket);
+    await host.ready;
     browser = await chromium.launch(chromiumLaunchOptions(chrome,['--no-sandbox']));
     const page = await browser.newPage({locale:'en',viewport:{width:1440,height:900}});
     page.setDefaultTimeout(10000);
@@ -469,10 +467,7 @@ test('ordinary account cancellation and managed argv remain separate', {skip, ti
     });
   } finally {
     try { await browser?.close(); } finally {
-      if (host && host.exitCode === null && host.signalCode === null) {
-        const closed = once(host,'close'); host.kill('SIGKILL'); await closed;
-      }
-      await mesh.stop();
+      try { await host?.stop(); } finally { await mesh.stop(); }
     }
   }
 });
