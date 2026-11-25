@@ -652,3 +652,28 @@ async def test_rebind_offers_owner_projection_excludes_ineligible_and_sensitive_
     respawn.begin_restoring('legacy', entry['created'], 'a' * 32)
     response = await client.get('/api/restore/rebind', headers=auth_cookie)
     assert (await response.json())['offers'] == []
+
+
+async def test_rebind_rejects_registry_conversation_change(client, auth_cookie, fake_host, tmp_path, monkeypatch):
+    item = mesh_item('legacy-identity', tmp_path, 1.0, claude())
+    item['account'] = 'old'
+    lose(tmp_path, item)
+    original = respawn.lost_entry('legacy-identity')
+    expected = {'name': original['name'], 'created': original['created'], 'agent_kind': 'claude',
+                'resume_id': original['agent']['session_id'], 'cwd': original['cwd']}
+    monkeypatch.setattr(respawn, 'restore_identity', lambda entry: (
+        {**entry, 'agent': {**entry['agent'], 'session_id': SID2}}, None))
+    response = await client.post('/api/restore/rebind', json={'action': 'preview', 'expected': expected,
+                                                               'account': 'work'}, headers=auth_cookie)
+    assert response.status == 409
+    assert respawn.lost_entry('legacy-identity') == original
+    assert fake_host.new_requests == []
+
+
+def test_bound_restore_does_not_adopt_new_registry_conversation(monkeypatch):
+    entry = {'name': 'alpha', 'created': 1.0, 'account_context_revision': 'a' * 64,
+             'agent': {'type': 'claude', 'session_id': SID}}
+    monkeypatch.setattr(respawn, 'resolve_identity', lambda *_args: ('active', SID2))
+    resolved, reason = respawn.resolved_identity(entry, {})
+    assert resolved['agent']['session_id'] is None
+    assert reason == 'contested'

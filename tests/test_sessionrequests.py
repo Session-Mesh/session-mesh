@@ -73,11 +73,11 @@ def test_retention_io_failure_does_not_purge_terminal_result(tmp_path):
     claim = requests.claim(made['id'], 'a' * 32)
     requests.decide(made['id'], True, claim['claim_nonce'])
     requests.begin_execution(made['id'])
-    # The retention error rolls back finish, preserving the in-flight evidence.
-    with pytest.raises(sqlite3.OperationalError):
-        requests.finish(made['id'], error='inspect')
+    # An evidence read failure retains the completed result without replay.
+    assert requests.finish(made['id'], error='inspect')['state'] == 'failed'
     with sqlite3.connect(path) as raw:
-        assert raw.execute('SELECT state FROM session_requests WHERE id = ?', (made['id'],)).fetchone() == ('executing',)
+        assert raw.execute('SELECT state FROM session_requests WHERE id = ?', (made['id'],)).fetchone() == ('failed',)
+    assert requests.begin_execution(made['id']) is None
     requests.close()
 
 
