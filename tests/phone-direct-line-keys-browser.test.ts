@@ -93,7 +93,7 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
       const message = await flashed(page);
       assert.ok(message.includes('control characters'), message);
       assert.deepEqual(await frames(page), [], `no ${via} after the refused text`);
-      assert.equal(await field(page), '');
+      assert.equal(await field(page), 'iew\u0001', 'the refused text remains for review');
       assert.equal(await direct(page), true, 'the mode goes on: nothing was sent');
     }
   });
@@ -108,6 +108,7 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
     await waitForFlash(page, 'not delivered as typed');
     assert.ok((await flashed(page)).includes('bracketed paste'));
     assert.deepEqual(await frames(page), []);
+    assert.equal(await field(page), 'iew\tx', 'the refused text remains for review');
     assert.equal(await direct(page), true);
   });
 

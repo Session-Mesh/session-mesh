@@ -14,6 +14,8 @@ import {
   useMesh, waitForFlash, waitForRow, waitForRowContaining, waitForShellLine,
 } from './phone-direct-line-lib.ts';
 
+declare const paneInput: {deliver: (...args: any[]) => unknown};
+
 describe('phone direct writing: what the field receives', {skip}, () => {
   const {phone, withoutBracketedPaste} = useMesh();
 
@@ -140,7 +142,7 @@ describe('phone direct writing: what the field receives', {skip}, () => {
       textarea.dispatchEvent(new InputEvent('input', {inputType: 'insertReplacementText', data: 'the', bubbles: true}));
     });
     assert.deepEqual(await frames(page), []);
-    assert.equal(await field(page), '', 'the field is emptied, nothing hidden stays in it');
+    assert.equal(await field(page), 'the', 'a correction refused before send stays available for review');
   });
 
   // ---- what the review demonstrated: nothing the agent line holds may be hidden
@@ -203,7 +205,7 @@ describe('phone direct writing: what the field receives', {skip}, () => {
     await page.keyboard.insertText('a\nb');
     await waitForFlash(page, 'multi-line text refused');
     assert.deepEqual(await frames(page), [], 'nothing, not even the first line');
-    assert.equal(await field(page), '');
+    assert.equal(await field(page), 'a\nb', 'the refused text stays available for review');
     assert.equal(await direct(page), true, 'nothing was sent, so nothing is claimed');
   });
 
@@ -214,7 +216,35 @@ describe('phone direct writing: what the field receives', {skip}, () => {
     await page.keyboard.insertText('a\x1b[201~b\nrm');
     await waitForFlash(page, 'control characters');
     assert.deepEqual(await frames(page), []);
+    assert.equal(await field(page), 'a\x1b[201~b\nrm', 'the refused text stays available for review');
   });
+
+  for (const [result, kept] of [['refused', true], ['uncertain', false]] as const) {
+    test(`a ${result} paste delivery ${kept ? 'keeps' : 'does not offer to replay'} the text`, async () => {
+      const page = await phone(`paste-${result}`, 'claude');
+      await page.keyboard.type('/');
+      await waitForShellLine(page, '/');
+      await forget(page);
+      const value = await page.evaluate((outcome) => {
+        // The delivery boundary is replaced only for this synchronous event:
+        // an uncertain result represents bytes that may already have left.
+        const delivery = paneInput;
+        const original = delivery.deliver;
+        delivery.deliver = (_binding: unknown, _text: string, _enter: boolean, settle: (r: unknown) => void) => {
+          settle({kind: outcome});
+          return {cancel() {}};
+        };
+        try {
+          const textarea = document.querySelector('#line-text') as HTMLTextAreaElement;
+          textarea.value = 'one\ntwo';
+          textarea.dispatchEvent(new InputEvent('input', {inputType: 'insertFromPaste', data: 'one\ntwo', bubbles: true}));
+          return textarea.value;
+        } finally { delivery.deliver = original; }
+      }, result);
+      assert.equal(value, kept ? 'one\ntwo' : '');
+      assert.deepEqual(await frames(page), []);
+    });
+  }
 
   test('the key bar Paste with an empty clipboard says so instead of doing nothing', async () => {
     const page = await phone('paste-empty', 'claude');

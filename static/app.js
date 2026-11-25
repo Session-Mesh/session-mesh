@@ -7152,21 +7152,23 @@ function writeDirect(text, complete = false, held = false) {
   return false;
 }
 // One bracketed paste, verified by the same delivery as the ordinary line. Never raw bytes.
-// True when the text was delivered as one paste.
+// Distinguish a definite refusal from an uncertain delivery: only the former can be kept for review.
 function pasteDirect(text, kind, held = false) {
   directInputCount += 1;
   const { pane } = lineDirect;
   const refusal = kind === "refused" ? "line.directRefused" : kind === "replacement" ? "line.directReplacement"
     : kind === "multiline" && !pane.term.modes.bracketedPasteMode ? "line.directNoBracket" : null;
-  if (refusal) { reportDirect(refusal, held); return false; }
+  if (refusal) { reportDirect(refusal, held); return "refused"; }
   const target = paneTargets.capture(pane);
   const binding = target && paneInput.capture(pane, target);
   let result = null;
   if (binding) paneInput.deliver(binding, text, false, (r) => { result = r; });   // settles synchronously
   if (target) paneTargets.release(target);
-  if (result?.kind === "paste") return true;
+  if (result?.kind === "paste") return "paste";
   endDirectLine("line.directPasteFailed", held);
-  return false;
+  // Without a binding no delivery was attempted. A missing callback after delivery began,
+  // or any uncertain result, may have sent bytes and must never be offered for replay.
+  return !binding || result?.kind === "refused" ? "refused" : "uncertain";
 }
 // Ctrl armed: the letter is a control key, and that ends the mode. True when it was sent.
 function sendDirectControl(letter, held = false) {
@@ -7178,15 +7180,21 @@ function sendDirectControl(letter, held = false) {
   endDirectLine();
   return true;
 }
+let directFieldAttempt = 0;   // a held-key attempt supersedes a pending composition flush
 // Sends what the field received, then empties it. True when the text was delivered as typed
 // (or as one paste); a definitely refused acknowledged write stays in the field for review.
 function flushDirectField(inputType, held = false) {
   const text = line.value;
   if (!text) return true;
+  directFieldAttempt += 1;
   line.value = "";
   fitLine();
   const kind = MeshPaneActions.directInput(text, inputType);
-  if (kind !== "typed") return pasteDirect(text, kind, held);
+  if (kind !== "typed") {
+    const outcome = pasteDirect(text, kind, held);
+    if (outcome === "refused") { line.value = text; fitLine(); }
+    return outcome === "paste";
+  }
   if (ctrlArmed && Array.from(text).length === 1) return sendDirectControl(text, held);
   // ACK writes returning false did not enqueue these bytes. Keep them for explicit review;
   // a legacy write can have an uncertain outcome and must never be offered for replay here.
@@ -7364,7 +7372,10 @@ line.addEventListener("compositionstart", () => {
 line.addEventListener("compositionend", () => {
   lineComposing = false;
   const composedOn = lineCompositionPane;
-  setTimeout(() => { if (settleLine("insertCompositionText", composedOn)) fitLine(); }, 0);
+  const before = directFieldAttempt;
+  setTimeout(() => {
+    if (directFieldAttempt === before && settleLine("insertCompositionText", composedOn)) fitLine();
+  }, 0);
 });
 
 const cdlg = $("#dlg-compose"), ctext = $("#compose-text");
