@@ -117,7 +117,7 @@ async def start_drag(tab, name):
 
 async def drag_to_visible_row(tab, name, x):
     """Keep dragging toward the row, reversing at the edge if scrolling passed it."""
-    for _ in range(160):
+    for attempt in range(160):
         pos = await tab.evaluate("""(selector) => {
           const list = $('#list').getBoundingClientRect(), row = $(selector).getBoundingClientRect();
           return {top: list.top, bottom: list.bottom, rowTop: row.top};
@@ -125,16 +125,15 @@ async def drag_to_visible_row(tab, name, x):
         zone = min(56, (pos["bottom"] - pos["top"]) / 3)
         drop_y = pos["rowTop"] + 8
         if pos["top"] + zone + 4 < drop_y < pos["bottom"] - zone - 4:
-            for step in range(20):
-                drop_x = x + step % 2
-                await tab.mouse.move(drop_x, drop_y)
-                if await tab.evaluate("""([selector,x,y]) => {
-                  const row = $(selector);
-                  return row?.classList.contains('drop-before') && document.elementFromPoint(x,y)?.closest('.item') === row;
-                }""", [loose(name), drop_x, drop_y]):
-                    return
-                await tab.wait_for_timeout(50)
-            raise AssertionError(f"drag target was not accepted: {name}")
+            drop_x = x + attempt % 2
+            await tab.mouse.move(drop_x, drop_y)
+            if await tab.evaluate("""([selector,x,y]) => {
+              const row = $(selector);
+              return row?.classList.contains('drop-before') && document.elementFromPoint(x,y)?.closest('.item') === row;
+            }""", [loose(name), drop_x, drop_y]):
+                return
+            await tab.wait_for_timeout(50)
+            continue  # The list may still be moving; measure the row again.
         edge = pos["top"] + 2 if drop_y <= pos["top"] + zone + 4 else pos["bottom"] - 2
         await tab.mouse.move(x, edge)
         await tab.wait_for_timeout(50)
