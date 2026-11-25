@@ -11,6 +11,9 @@ const start = source.indexOf('const accountLabel =');
 const end = source.indexOf('\nfunction ', source.indexOf('\nfunction showAccountBadge', start) + 1);
 assert.ok(start >= 0 && end > start, 'account badge functions exist');
 const sandbox: any = {
+  meshContext: {storagePrefix: 'mesh'},
+  data: {mesh: []},
+  store: {get: (_key: string, fallback: unknown) => fallback, set: () => {}},
   t: (key: string, vars?: {label: string}) => ({
     'list.accountDefault': 'Mesh default',
     'list.accountDefaultTitle': 'No alias recorded; login unverified.',
@@ -24,9 +27,9 @@ test('default alias badge applies only to Mesh Claude or Codex sessions', () => 
   for (const session of [{kind: 'mesh', agent: {type: 'codex'}}, {kind: 'mesh', known_agent: 'claude'}]) {
     assert.match(sandbox.badge(session), />Mesh default<\/span>/);
     assert.match(sandbox.badge(session), /login unverified/);
-    const pane = {hidden: true, textContent: '', title: ''};
+    const pane = {hidden: true, textContent: '', title: '', dataset: {}};
     sandbox.show(pane, session);
-    assert.deepEqual(pane, {hidden: false, textContent: 'Mesh default', title: 'No alias recorded; login unverified.'});
+    assert.deepEqual(pane, {hidden: false, textContent: 'Mesh default', title: 'No alias recorded; login unverified.', dataset: {}});
   }
   for (const session of [{kind: 'external', agent: {type: 'codex'}}, {kind: 'mesh'},
     {kind: 'mesh', agent: {type: 'pi'}}, {kind: 'mesh', agent: {type: 'codex'}, account: 42}]) {
@@ -36,9 +39,10 @@ test('default alias badge applies only to Mesh Claude or Codex sessions', () => 
 
 test('named aliases retain labels and escape markup in list and pane', () => {
   const session = {kind: 'mesh', agent: {type: 'codex'}, account: 'work', account_label: '<Work>'};
+  sandbox.data.mesh = [session];
   assert.match(sandbox.badge(session), /&lt;Work>/);
   assert.doesNotMatch(sandbox.badge(session), /<Work>/);
-  const pane = {hidden: true, textContent: '', title: ''};
+  const pane = {hidden: true, textContent: '', title: '', dataset: {}};
   sandbox.show(pane, session);
   assert.equal(pane.textContent, '<Work>');
   assert.equal(pane.title, 'Account: <Work>');
