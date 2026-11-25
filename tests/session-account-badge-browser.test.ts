@@ -172,6 +172,9 @@ describe('Mesh account metadata badges in list and terminal header', {skip}, () 
           await shot(page, `${width}-${language}-${session.id}`);
         }
         await drawer(page, phone);
+        // Storage events defer a list redraw while a row retains focus. Exercise
+        // that contract, then release focus as the owner moves to the filter.
+        await page.locator('#list .item[data-id="badge-claude-default"]').focus();
         await page.evaluate(() => {
           localStorage.setItem('mesh.pinnedSessions', JSON.stringify([
             {agent: 'claude', id: '11111111-1111-1111-1111-111111111111', label: 'work'},
@@ -181,6 +184,8 @@ describe('Mesh account metadata badges in list and terminal header', {skip}, () 
           ]));
           window.dispatchEvent(new StorageEvent('storage', {key: 'mesh.pinnedSessions'}));
         });
+        assert.equal(await page.locator('.pinned-sessions').count(), 0, 'the focused row holds the list redraw');
+        await page.locator('#filter').focus();
         const pinnedWork = page.locator('.pinned-sessions .item[data-id="badge-claude-named"] .account-badge');
         const pinnedPersonal = page.locator('.pinned-sessions .item[data-id="badge-codex-named"] .account-badge');
         await pinnedWork.waitFor({state: 'visible'});
