@@ -821,8 +821,9 @@ async def test_fenced_target_start_failure_preserves_copy_outcome(monkeypatch):
                                         'target_copy_remains':True, 'target_copy_uncertain':False}
 
 
-async def test_restart_refuses_missing_named_transcript_before_replacement(monkeypatch, tmp_path):
-    raw = {'name':'alpha', 'created':1, 'cwd':str(tmp_path), 'meta':{'account':'work'}}
+@pytest.mark.parametrize('account', ['work', None])
+async def test_restart_refuses_missing_bound_transcript_before_replacement(monkeypatch, tmp_path, account):
+    raw = {'name':'alpha', 'created':1, 'cwd':str(tmp_path), 'meta':{'account':account}}
     described = {'agent': {'type':'codex', 'session_id':'12345678-abcd', 'argv':['codex']}, 'cwd':str(tmp_path)}
     async def host(_req): return [raw]
     async def context(*_args): return {'roots':{'config':str(tmp_path / 'selected')}}
@@ -831,7 +832,7 @@ async def test_restart_refuses_missing_named_transcript_before_replacement(monke
     monkeypatch.setattr(server, 'LAUNCH_SETTINGS', SimpleNamespace(allows_cwd=lambda _cwd: True))
     monkeypatch.setattr(server, '_describe_with_hooks', lambda *_args: {})
     monkeypatch.setattr(server, '_session_action_entry', lambda *_args: described)
-    monkeypatch.setattr(server, 'session_account', lambda *_args: 'work')
+    monkeypatch.setattr(server, 'session_account', lambda *_args: account)
     monkeypatch.setattr(server, '_restart_profile_context', context)
     monkeypatch.setattr(server, 'replace_session', replace)
     item = {'source':{'id':'alpha', 'created':1, 'agent':'codex'}, 'action':'restart', 'model':None}
@@ -861,3 +862,65 @@ async def test_standby_marks_only_possible_creation(monkeypatch, failure, expect
                                  standby_phase=phase)
     assert phase["effect_started"] is expected
     assert sent == ([] if failure == "list" else [True])
+
+@pytest.mark.parametrize('mode', ['source-refused', 'carry-failed'])
+async def test_standby_refusal_never_launches_replacement(monkeypatch, mode):
+    async def context(*_args): return None
+    async def env(*_args): return {}
+    async def prepared(_kind, command, _cwd, _context): return command, None, None
+    async def noop(*_args): return None
+    created = []
+    async def create(*_args, **_kwargs):
+        created.append('standby')
+        return 'standby'
+    async def carry(): raise server.AccountsUnavailable('carry failed', 'carry_failed')
+    async def host(req):
+        if req['op'] == 'list':
+            return [{'name':'standby','created':2,'meta':{'nonce':'nonce'}}]
+        if req['name'] == 'source':
+            return {'ok': mode != 'source-refused'}
+        return {'ok': False}
+    for name, value in [('_restart_profile_context', context), ('account_environment', env), ('_prepared_launch', prepared),
+                        ('_confirm_standby', noop), ('_arrangement_of', noop), ('_carry_arrangement', noop),
+                        ('_wait_source_gone', noop), ('new_session', create), ('host', host)]:
+        monkeypatch.setattr(server, name, value)
+    monkeypatch.setattr(server.sessiontoken, 'new_nonce', lambda: 'nonce')
+    expected = server.web.HTTPServiceUnavailable if mode == 'source-refused' else server.AccountSwitchRecoveryFailed
+    with pytest.raises(expected):
+        await server._replace_with_new_session('source', 1, 'source', '/tmp', 'codex', 'codex', 'codex', None,
+                                                ('work', carry))
+    assert created == ['standby'], 'unconfirmed standby retirement must never launch another session'
+
+
+async def test_native_acquire_unreachable_discards_unsent_receipt(monkeypatch):
+    saved, forgotten = [], []
+    async def host(req):
+        if req['op'] == 'list_bound':
+            return [{'name':'alpha','created':1,'creation_receipt':'receipt'}]
+        raise server.HostNotReached(text='no host connection')
+    monkeypatch.setattr(server, 'host', host)
+    monkeypatch.setattr(server, '_save_native_fence', lambda *args: saved.append(args))
+    monkeypatch.setattr(server, '_forget_native_fence', lambda ident: forgotten.append(ident))
+    with pytest.raises(server.HostNotReached):
+        await server.relaunch_in_place({'name':'alpha','created':1}, '/tmp', 'codex', 'codex', 'codex',
+                                       switch=('a','b','c','d','request'))
+    assert len(saved) == 1 and forgotten == ['request']
+
+
+@pytest.mark.parametrize('code,remains,uncertain', [('carry_failed', False, False), ('carry_rollback_incomplete', True, True)])
+async def test_native_fence_recovery_preserves_failed_carry_evidence(monkeypatch, code, remains, uncertain):
+    async def host(req):
+        if req['op'] == 'list_bound':
+            return [{'name':'alpha','created':1,'creation_receipt':'receipt'}]
+        return {'ok': True}
+    async def relaunch(*_args, fence_state=None, **_kwargs):
+        fence_state['stop_started'] = True
+        raise server.AccountSwitchRecoveryFailed('alpha', server.AccountsUnavailable('failure', code))
+    monkeypatch.setattr(server, 'host', host)
+    monkeypatch.setattr(server, '_save_native_fence', lambda *_args: None)
+    monkeypatch.setattr(server, '_relaunch_in_place', relaunch)
+    with pytest.raises(server.NativeFenceRecoveryRequired) as exc:
+        await server.relaunch_in_place({'name':'alpha','created':1}, '/tmp', 'codex', 'codex', 'codex',
+                                       switch=('a','b','c','d','request'))
+    assert exc.value.switch_outcome == {'switch_phase':'source_restart_unconfirmed',
+                                        'target_copy_remains':remains, 'target_copy_uncertain':uncertain}

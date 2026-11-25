@@ -1557,7 +1557,9 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
     killed = await host({"op": "kill_if", "name": old_name, "created": old_created})
     if killed != {"ok": True}:
         await _confirm_standby(replacement, standby_nonce)
-        await host({"op": "kill_if", "name": name, "created": replacement["created"]})
+        retired = await host({"op": "kill_if", "name": name, "created": replacement["created"]})
+        if retired != {"ok": True}:
+            raise web.HTTPServiceUnavailable(text="Standby cleanup unconfirmed; inspect before another action")
         raise web.HTTPConflict(text="Session replaced or stop already requested")
     await _carry_arrangement((old_name, old_created), name, saved, replacement["created"])
     await _wait_source_gone(old_name, old_created, name)
@@ -1572,7 +1574,9 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
                 await _confirm_standby(replacement, standby_nonce)
                 standby = (name, replacement["created"])   # what the owner arranged meanwhile is on the standby
                 saved = await _arrangement_of(*standby) or saved
-                await host({"op": "kill_if", "name": name, "created": replacement["created"]})
+                retired = await host({"op": "kill_if", "name": name, "created": replacement["created"]})
+                if retired != {"ok": True}:
+                    raise web.HTTPServiceUnavailable(text="Standby cleanup unconfirmed; inspect before another action")
                 resumed = await new_session(base, cwd, command, agent, known_agent, keep=48, account=account,
                                             account_env=source_env)
                 await _carry_arrangement(standby, resumed, saved)
@@ -1729,6 +1733,9 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
     state = {"stop_started": False, "stop_refused": False}
     try:
         reply = await host({"op": "switch_input_acquire", **fence})
+    except HostNotReached:
+        _forget_native_fence(switch[4])
+        raise
     except Exception as exc:
         error = NativeFenceRecoveryRequired(fence, "Acquisition outcome uncertain")
         error.switch_outcome = {"switch_phase": "not_stopped", "target_copy_remains": False,
@@ -1769,7 +1776,11 @@ async def relaunch_in_place(source, cwd, command, agent, known_agent, account=No
             _forget_native_fence(switch[4])
             raise
         recovery = NativeFenceRecoveryRequired(fence, "Switch outcome requires inspection")
-        if isinstance(exc, AccountSwitchTargetStartUnconfirmed):
+        if isinstance(exc, AccountSwitchRecoveryFailed):
+            recovery.switch_outcome = {"switch_phase": "source_restart_unconfirmed",
+                                       "target_copy_remains": exc.target_copy_remains,
+                                       "target_copy_uncertain": exc.target_copy_uncertain}
+        elif isinstance(exc, AccountSwitchTargetStartUnconfirmed):
             recovery.switch_outcome = {"switch_phase": "target_start_unconfirmed", "id": exc.name,
                                        "target_copy_remains": True, "target_copy_uncertain": False}
         raise recovery from exc
@@ -5924,7 +5935,7 @@ async def _execute_session_action(item, create_nonce=None):
     agent = entry["agent"]
     account = session_account(raw)
     context = await _restart_profile_context(raw, account, source["agent"], None)
-    if item["action"] != "switch_account" and account and context is not None:
+    if item["action"] != "switch_account" and context is not None:
         sid = agent.get("session_id")
         layout = _conversation_layout(source["agent"], sid) if sid else None
         if source["agent"] in ("claude", "codex"):
