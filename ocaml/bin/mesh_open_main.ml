@@ -93,7 +93,11 @@ let parse args =
   in
   loop true false false None args
 
-let getenv = Sys.getenv_opt
+let getenv name =
+  match Sys.getenv_opt name with
+  (* pathlib expands a present but empty HOME to the root directory. *)
+  | Some "" when name = "HOME" -> Some "/"
+  | value -> value
 
 let expand_home file =
   match String.split_on_char '/' file with
@@ -261,6 +265,8 @@ let open_document ~port ~by_session auth ~target ~reload ~watch =
       fail ("session-mesh is not responding (" ^ reason ^ ")")
 
 let () =
+  (* Let the HTTP client report EPIPE when the peer closes during a write. *)
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   let conf = value (Mesh_paths.conf_dir getenv) in
   ignore (value (Mesh_paths.cache_dir getenv));
   let file, reload, watch = parse (List.tl (Array.to_list Sys.argv)) in
