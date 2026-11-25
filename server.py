@@ -14,6 +14,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 from collections import deque
+import fcntl
 import glob
 import hashlib
 import hmac
@@ -5529,6 +5530,88 @@ def _carry_helper_snapshot(path):
         raise AccountsUnavailable('account carry helper unavailable', 'helper-unavailable') from exc
 
 
+_LEGACY_SWITCH_MUTEX = threading.Lock()
+
+
+def _legacy_switch_begin(item, raw):
+    """Exclude cooperating migration until a durable switch marker is resolved."""
+    if not _LEGACY_SWITCH_MUTEX.acquire(blocking=False):
+        raise web.HTTPConflict(text="Account migration or switch is busy; nothing was stopped")
+    fd = None
+    try:
+        lock_path = CONF_DIR / '.backend-profiles.lock'
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        def valid_lock():
+            opened, named = os.fstat(fd), os.lstat(lock_path)
+            return (stat.S_ISREG(opened.st_mode) and stat.S_ISREG(named.st_mode)
+                    and opened.st_uid == os.geteuid() and named.st_uid == os.geteuid()
+                    and stat.S_IMODE(opened.st_mode) == stat.S_IMODE(named.st_mode) == 0o600
+                    and opened.st_nlink == named.st_nlink == 1
+                    and (opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino))
+        if not valid_lock():
+            raise OSError('unsafe migration lock')
+        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not valid_lock():
+            raise OSError('migration changed')
+        for name in ('backend-profiles.json', 'backend-profiles.migrated', '.backend-profiles.migration-intent'):
+            try:
+                os.lstat(CONF_DIR / name)
+            except FileNotFoundError:
+                continue
+            raise OSError('migration changed')
+        marker = CONF_DIR / '.backend-profiles.legacy-switch'
+        marker_fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        contents = json.dumps({'version': 1, 'request_id': item['id'], 'name': raw['name'],
+                               'created': raw['created']}, separators=(',', ':')).encode()
+        try:
+            identity = os.fstat(marker_fd)
+            with os.fdopen(marker_fd, 'wb') as stream:
+                stream.write(contents)
+                stream.flush()
+                os.fsync(stream.fileno())
+            directory = os.open(CONF_DIR, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except BaseException:
+            # An incomplete or uncertain marker is deliberately left in place.
+            raise
+        return fd, marker, identity, contents
+    except BaseException as exc:
+        if fd is not None:
+            os.close(fd)
+        _LEGACY_SWITCH_MUTEX.release()
+        if isinstance(exc, (OSError, KeyError)):
+            raise web.HTTPConflict(text="Account migration or switch is busy; nothing was stopped") from exc
+        raise
+
+
+def _legacy_switch_end(lease, *, completed):
+    fd, marker, identity, contents = lease
+    try:
+        if completed:
+            opened = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(opened, 'rb') as stream:
+                current = os.fstat(stream.fileno())
+                named = os.lstat(marker)
+                if (not stat.S_ISREG(current.st_mode) or current.st_uid != os.geteuid()
+                        or stat.S_IMODE(current.st_mode) != 0o600 or current.st_nlink != 1
+                        or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino)
+                        or (named.st_dev, named.st_ino) != (identity.st_dev, identity.st_ino)
+                        or stream.read(len(contents) + 1) != contents):
+                    raise OSError('switch marker changed')
+            marker.unlink()
+            directory = os.open(CONF_DIR, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        os.close(fd)
+        _LEGACY_SWITCH_MUTEX.release()
+
+
 async def _switch_session(item, raw, conversation, argv, observed_agent=None):
     """Carry out an approved switch: the source stopped, its conversation carried, then resumed under the target
     (a failed carry: under the source again, AccountSwitchUndone)."""
@@ -5597,14 +5680,22 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
         carried.update(summary)
 
     target = None if item["account"] == DEFAULT_ACCOUNT["id"] else item["account"]
+    lease = _legacy_switch_begin(item, raw) if not native else None
+    completed = False
     try:
-        name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"], shlex.join(argv), kind,
-                                     kind, account=account,
-                                     switch=(target, carry, source_context, target_context, item["id"]) if native else (target, carry),
-                                     source=raw)
-    except AccountSwitchUndone:   # the source was stopped all the same
-        await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
-        raise
+        try:
+            name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"], shlex.join(argv), kind,
+                                         kind, account=account,
+                                         switch=(target, carry, source_context, target_context, item["id"]) if native else (target, carry),
+                                         source=raw)
+        except AccountSwitchUndone as exc:   # the source was stopped all the same
+            completed = not exc.target_copy_remains and not exc.target_copy_uncertain
+            await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
+            raise
+        completed = True
+    finally:
+        if lease is not None:
+            _legacy_switch_end(lease, completed=completed)
     await asyncio.to_thread(respawn.forget_live, raw["name"], raw["created"])
     result = {"id": name, "account": item["account"]}
     if carried.get("recovery_copies", 0):

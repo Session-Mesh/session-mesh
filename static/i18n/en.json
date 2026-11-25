@@ -2313,5 +2313,6 @@
   "server.switchTerminalMissing": "Original terminal not found; fence was not released",
   "server.switchReleaseAmbiguous": "Fence may already be released or held by another owner; inspect before another action",
   "server.switchReleaseUnconfirmed": "Fence release could not be confirmed; inspect before another action",
-  "server.switchCarryCapability": "Account carry safety capability unavailable; nothing was stopped"
+  "server.switchCarryCapability": "Account carry safety capability unavailable; nothing was stopped",
+  "server.switchMigrationBusy": "Account migration or switch is busy; nothing was stopped"
 }

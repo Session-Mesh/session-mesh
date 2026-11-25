@@ -390,6 +390,21 @@ await fetch('/api/session-actions/HANDLE/recover-fence', {
 The server refuses a running switch or a replaced terminal. A refused or uncertain
 release needs further inspection; it is not permission to replay the switch.
 
+### Inspecting an interrupted legacy account switch
+
+An interrupted legacy switch leaves `.backend-profiles.legacy-switch` in the
+server's configuration directory. Its JSON names the original session and request;
+the file intentionally blocks migration and another legacy switch after a crash.
+The marker does not prove whether the agent stopped, whether the conversation was
+copied, or which account is now active. Inspect the session and both account stores
+before deciding how to recover; never replay the switch just because a reply was lost.
+
+After resolving the outcome, stop the web server and ensure no migration command is
+running. Back up the private marker, then remove it from the same configuration
+directory and start the server again. Do not remove `.backend-profiles.lock`.
+The marker coordinates only cooperating versions; manual registry writes and older
+programs do not honor it.
+
 ### Upgrading a source install
 
 ```sh
