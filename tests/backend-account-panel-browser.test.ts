@@ -27,7 +27,8 @@ const hostile = '<img src=x onerror=1>';
 declare const lab: {
   calls: (ConsentMutation | ProfileMutation | ProvisionMutation)[]; loads: number; profiles: Profile[]; policy: Policy; holdWrite: boolean; holdLoad: boolean;
   fail: string | null; createFail: string | null; readFail: string | null; finishWrite: () => void; finishLoad: () => void;
-  panel: {open: () => Promise<void>; close: () => void};
+  panel: {open: () => Promise<void>; close: () => void; refreshProvisionView: () => void};
+  provisionBackends: string[];
 };
 
 before(async () => {
@@ -48,6 +49,7 @@ before(async () => {
       profiles: backends.flatMap(backend => ['a', 'b', 'c'].map(id => ({backend, id, label: id === 'a' ? ${JSON.stringify(hostile)} : id === 'c' ? '界'.repeat(24) : 'Account ' + id,
         context_revision: digest, enabled: true, switch_qualified: false})))};
     const ref = ({backend, id, context_revision}) => ({backend, id, context_revision});
+    lab.provisionBackends = ['codex'];
     const panel = createBackendAccountPanel(document.querySelector('main'), {t, timeoutMs: 10000,
       load: async () => {
         lab.loads++;
@@ -93,7 +95,7 @@ before(async () => {
         if (lab.readFail) return {version:1,ok:false,http_status:503,code:lab.readFail};
         return reply({configured:true,registry_revision:lab.registryRevision,profiles:lab.profiles});
       },
-      provision: {backends:['codex'], write:async request => {
+      provision: {backends:lab.provisionBackends, write:async request => {
         lab.calls.push(structuredClone(request));
         if (lab.createFail) return {http_status:lab.createFail==='profile-publication-uncertain'?503:409,
           version:1,ok:false,code:lab.createFail};
@@ -133,6 +135,44 @@ async function fixture(lang = 'en', width = 1440) {
 async function statusIs(page: Page, lang: string, phase: string) {
   await page.getByRole('status').filter({hasText: catalogs[lang]![`backendAccounts.status.${phase}`]!}).waitFor();
 }
+
+test('capability repaint preserves the unsaved global confirmation', {skip}, async () => {
+  const {page, context} = await fixture();
+  try {
+    await control(page, 'global-skip').check();
+    await page.evaluate(() => { lab.provisionBackends.push('claude'); lab.panel.refreshProvisionView(); });
+    assert.equal(await control(page, 'global-skip').isChecked(), true);
+    await control(page, 'save-global').click(); await statusIs(page, 'en', 'saved');
+    assert.equal(await page.evaluate(() => lab.policy.global), 'skip');
+  } finally { await context.close(); }
+});
+
+test('saving consent preserves an unsubmitted provision draft', {skip}, async () => {
+  const {page, context} = await fixture();
+  try {
+    await control(page, 'provision-account').click();
+    await control(page, 'create-label').fill('Travel');
+    await control(page, 'global-skip').check();
+    await control(page, 'save-global').click(); await statusIs(page, 'en', 'saved');
+    assert.equal(await control(page, 'create-label').inputValue(), 'Travel');
+    assert.equal(await control(page, 'save-account').isEnabled(), true);
+  } finally { await context.close(); }
+});
+
+test('blocked localStorage still permits account association but prevents provisioning', {skip}, async () => {
+  const context = await browser.newContext(), page = await context.newPage();
+  try {
+    await page.addInitScript(() => Object.defineProperty(window, 'localStorage', {get() { throw new DOMException('blocked', 'SecurityError'); }}));
+    await page.goto(`${base}/?lang=en`);
+    await page.locator('#open').filter({hasText: catalogs.en!['backendAccounts.title']!}).click();
+    await statusIs(page, 'en', 'provisionUncertain');
+    assert.equal(await control(page, 'provision-account').isDisabled(), true);
+    assert.equal(await control(page, 'add-account').isEnabled(), true);
+    await control(page, 'add-account').click();
+    assert.equal(await control(page, 'create-id').isVisible(), true);
+    assert.equal(await page.evaluate(() => lab.calls.length), 0);
+  } finally { await context.close(); }
+});
 const control = (page: Page, key: string) => page.locator(`[data-focus="${key}"]`);
 test('provision journal acquisition is atomic across tabs and preserves legacy uncertainty', {skip}, async () => {
   const {page, context, errors} = await fixture();
