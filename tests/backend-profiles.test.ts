@@ -13,7 +13,7 @@ import {test} from 'node:test';
 const repo=path.resolve(import.meta.dirname,'..');
 const candidate=path.join(repo,'ocaml/_build/default/bin/mesh_profile_main.exe');
 const binary=process.env.MESH_PROFILE_CMD || (fs.existsSync(candidate)?candidate:path.join(repo,'_opam/bin/mesh-profile'));
-const platform=path.join(repo,'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
+const platform=process.env.MESH_MESH_PLATFORM_CMD || path.join(repo,'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
 // Without mesh-profile the file is skipped, with the reason, unless MESH_REQUIRE_MESH_PROFILE is set (CI):
 // then a missing program fails every test. ocaml/test covers the modules themselves.
 const skip=fs.existsSync(binary)||process.env.MESH_REQUIRE_MESH_PROFILE?false
@@ -71,6 +71,7 @@ test('host-only provision creates private native roots without offering an unqua
   assert.equal(fs.existsSync(f.db),false);
   assert.deepEqual(f.request('profiles.list').data.profiles,[receipt]);
   assert.equal(f.request('profiles.resolve',{backend:'codex',id:receipt.id,expected_context:receipt.context_revision}).ok,false);
+  if(process.env.MESH_REQUIRE_MESH_PLATFORM) assert.ok(fs.existsSync(platform), `required platform missing: ${platform}`);
   if(fs.existsSync(platform)){
     const args=['accounts','list',path.join(f.conf,'accounts.json')];
     const listed=spawnSync(platform,args,{encoding:'utf8',env:{HOME:f.root,MESH_CONF_DIR:f.conf,PATH:'/usr/bin:/bin'}});

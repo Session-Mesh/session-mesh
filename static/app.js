@@ -8403,6 +8403,7 @@ function syncAccountChoice() {
 const ACCOUNT_AGENT_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", pi: "Pi" };
 function accountChoice() {
   const agent = ACCOUNT_PRESETS[form.preset.value], option = form.account.selectedOptions[0];
+  if (!agent) return {};
   if (option?.value.startsWith("managed:")) {
     const p = managedOffers.get(option.value);
     if (!p || option.disabled || form.preset.value !== "codex") return {refused: t("new.managedProfileRefused")};
