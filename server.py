@@ -1585,8 +1585,10 @@ async def _replace_with_new_session(old_name, old_created, base, cwd, command, a
                 retired = await host({"op": "kill_if", "name": name, "created": replacement["created"]})
                 if not _exact_host_ack(retired, True):
                     raise web.HTTPServiceUnavailable(text="Standby cleanup unconfirmed; inspect before another action")
+                if _native_profile_mode():
+                    raise web.HTTPConflict(text="Account profile context changed; restart refused")
                 resumed = await new_session(base, cwd, command, agent, known_agent, keep=48, account=account,
-                                            account_env=source_env)
+                                            account_env=source_env, account_revision="legacy")
                 await _carry_arrangement(standby, resumed, saved)
             except Exception as recovery_error:
                 raise AccountSwitchRecoveryFailed(old_name, exc) from recovery_error
@@ -1974,6 +1976,9 @@ async def _stop_agent(source, known_agent, settings_binding=None, profile_bindin
     """stop_agent_if on the incarnation ``source``: the new ``created`` once the agent is gone. WholeSessionOnly or
     HTTPConflict when the host stopped nothing. A reply that comes too late is checked in the listing: when the
     incarnation moved on, the agent was stopped and the session is still there, and the error says so."""
+    phase = _LEGACY_SWITCH_PHASE.get()
+    previous_effect = phase['effect_started'] if phase is not None else None
+    previous_stop = fence_state.get('stop_started', False) if fence_state is not None else None
     try:
         message = {"op": "stop_agent_if", "name": source["name"], "created": source["created"], "agent": known_agent}
         if fence_id is not None:
@@ -1985,10 +1990,15 @@ async def _stop_agent(source, known_agent, settings_binding=None, profile_bindin
         if fence_state is not None:
             fence_state["stop_started"] = True
         _legacy_check_active()
-        phase = _LEGACY_SWITCH_PHASE.get()
         if phase is not None:
             phase['effect_started'] = True
         stopped = await host(message, timeout=STOP_AGENT_TIMEOUT)
+    except HostNotReached:
+        if phase is not None:
+            phase['effect_started'] = previous_effect
+        if fence_state is not None:
+            fence_state['stop_started'] = previous_stop
+        raise
     except web.HTTPServiceUnavailable:
         if await _incarnation_moved_on(source):
             raise _not_started_again(source["name"]) from None
@@ -2004,7 +2014,7 @@ async def _stop_agent(source, known_agent, settings_binding=None, profile_bindin
                      "unsupported_foreground", "agent_not_foreground", "agent_changed",
                      "agent_starting", "input_pending"}
     if phase is not None and isinstance(stopped, dict) and stopped.get('ok') is False and reason in before_signal:
-        phase['effect_started'] = False
+        phase['effect_started'] = previous_effect
     if fence_state is not None and isinstance(stopped, dict) and stopped.get("ok") is False and reason in before_signal:
         fence_state["stop_refused"] = True
     if reason in {"agent_stop_uncertain", "agent_still_running", "stale_incarnation"} or (fence_state is not None and reason not in before_signal):
@@ -7087,6 +7097,8 @@ async def _create_restored(name, entry, running, reason=None):
             _validate_default_restore(agent["type"], entry["default_context_revision"])
         if agent and not resumable and (entry.get("account_context_revision") or entry.get("default_context_revision")):
             raise web.HTTPConflict(text="Bound account conversation unavailable; restore refused")
+        if agent and not resumable and entry.get("account") and _native_profile_mode():
+            raise web.HTTPConflict(text="Account profile context unknown; resume refused")
         context = await _verified_restore_context(entry) if resumable else None
         command = shlex.join(_resume_argv(agent, context)) if resumable else _not_relaunched_line(agent, reason)
         new = await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
