@@ -36,7 +36,8 @@ async function retireFixtureSession(socket: string): Promise<void> {
     ((await request(socket,{op:'list'})) as unknown[]).length === 0);
 }
 
-for (const removeAlias of [false,true]) test(`previous nightly account ${removeAlias ? 'removed: refuse fallback' : 'preserved: resume same alias'}`, {skip,timeout:90000}, async () => {
+for (const removeAlias of [false,true]) test(`previous nightly account ${removeAlias ? 'removed: refuse fallback' : 'preserved: resume same alias'}`, {skip,timeout:90000}, async (t) => {
+  const requestSignal = () => AbortSignal.any([t.signal, AbortSignal.timeout(10000)]);
   assert.ok(supported && artifacts && candidateHost && candidatePlatform);
   for (const binary of [candidateHost,candidatePlatform]) assert.ok(path.isAbsolute(binary) && !binary.includes(' '));
   const expectedHost = process.env.MESH_CANDIDATE_PTYHOST_SHA256;
@@ -80,12 +81,12 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
     const token = fs.readFileSync(path.join(where.confDir,'token'),'utf8').trim();
     const url = `http://127.0.0.1:${where.port}`;
     const headers = {Authorization:`Bearer ${token}`, Origin:url, 'Content-Type':'application/json'};
-    const start = await fetch(`${url}/api/new`,{method:'POST',headers,body:JSON.stringify({preset:'codex',name:'alias-session',cwd:where.home,account:'work'})});
+    const start = await fetch(`${url}/api/new`,{method:'POST',headers,signal:requestSignal(),body:JSON.stringify({preset:'codex',name:'alias-session',cwd:where.home,account:'work'})});
     assert.equal(start.status,200,await start.text());
     const snapshot = path.join(where.confDir,'sessions-snapshot.json');
     let sid = '', agentPid = 0;
     await waitFor('historical account session',20000,async () => {
-      const rows = (await (await fetch(`${url}/api/sessions`,{headers})).json()).mesh ?? [];
+      const rows = (await (await fetch(`${url}/api/sessions`,{headers,signal:requestSignal()})).json()).mesh ?? [];
       const row = rows.find((item:{name:string}) => item.name === 'alias-session');
       sid = row?.agent?.session_id ?? ''; agentPid = row?.agent?.pid ?? 0;
       return !!sid && agentPid > 0 && fs.existsSync(snapshot) && JSON.parse(fs.readFileSync(snapshot,'utf8')).live?.[0]?.agent?.session_id === sid;
@@ -104,13 +105,13 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
     host = startTestPtyhost([candidateHost],{cwd:REPO,env:hostEnv,stdio:'ignore'},socket); await host.ready;
     let offer: any;
     await waitFor('historical alias recovery offer',15000,async () => {
-      const data = await (await fetch(`${url}/api/sessions`,{headers})).json();
+      const data = await (await fetch(`${url}/api/sessions`,{headers,signal:requestSignal()})).json();
       offer = data.restorable?.find((item:{name:string}) => item.name === 'alias-session'); return !!offer;
     });
     assert.equal(offer.agent,'codex'); assert.equal(offer.cwd,where.home);
     const lost = JSON.parse(fs.readFileSync(snapshot,'utf8')).lost.find((item:{name:string}) => item.name === 'alias-session');
     assert.equal(lost.account,'work'); assert.equal(lost.agent.session_id,sid);
-    const response = await fetch(`${url}/api/restore`,{method:'POST',headers,body:JSON.stringify({names:['alias-session']})});
+    const response = await fetch(`${url}/api/restore`,{method:'POST',headers,signal:requestSignal(),body:JSON.stringify({names:['alias-session']})});
     assert.equal(response.status,200,await response.clone().text());
     const result = (await response.json()).results['alias-session'];
     if (removeAlias) {
@@ -125,7 +126,7 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
       const resumed = launchesIn(fake.log)[1]!;
       assert.equal(resumed[1],aliasHome); assert.match(resumed[3],new RegExp(sid));
       await waitFor('resumed account identity',15000,async () => {
-        const data = await (await fetch(`${url}/api/sessions`,{headers})).json();
+        const data = await (await fetch(`${url}/api/sessions`,{headers,signal:requestSignal()})).json();
         const row = data.mesh?.find((item:{name:string}) => item.name === 'alias-session');
         return row?.account === 'work' && row?.agent?.session_id === sid && row?.cwd === where.home;
       });
