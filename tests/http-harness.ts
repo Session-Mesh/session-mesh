@@ -59,6 +59,8 @@ const CONCRETE: Record<string, string> = {
   // The account reads refuse any query before running mesh-profile, so the answer does not depend on the helper.
   '/api/accounts/profiles': '/api/accounts/profiles?probe=1',
   '/api/accounts/consent': '/api/accounts/consent?probe=1',
+  // The flow read also refuses a query before starting its optional journal helper.
+  '/api/flow/events': '/api/flow/events?probe=1',
 };
 
 // A concrete request path for a canonical resource: other placeholders take a value nothing has.
@@ -168,6 +170,7 @@ const ACCEPTED_STATUS = `
   GET /api/agent-mail/consent 200
   GET /api/agent-mail/overview 200
   GET /api/agent-mail/messages 400
+  GET /api/flow/events 400
   GET /api/update/notes 404 no release notes
   GET /api/update/image 400
   GET /api/config 200

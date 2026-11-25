@@ -2240,6 +2240,29 @@ that you add to an agent's configuration, by their path in one of these places.
 Building from source with `scripts/bootstrap.sh` ([install.md](install.md#native-pty-host)) remains
 supported and installs the same programs into an opam switch.
 
+#### MCP call tracing
+
+Set `MESH_MCP_TRACE_JOURNAL` on the Mesh server to an absolute path to opt in to the
+built-in MCP call journal for the board and work servers of newly launched agent sessions. Leave
+it unset to disable this journal. The containing directory must already exist; the journal is created private
+to the server user, and an existing file must be a private regular file owned by that user.
+The server rejects symbolic links and hard links. This works in the statically linked Linux
+release as well as source builds.
+
+The journal records call timing, protocol method, registered tool and subcommand, and outcome.
+It does not contain tool arguments, responses or session tokens. Board calls use a digest of the
+session credential; work calls have no session identity in this journal. Journal writes can fail
+independently of a call, so the file is not an exhaustive
+audit record. A writer that cannot acquire the journal lock promptly drops the event; the MCP server
+reports a write failure to its standard error and continues serving.
+The operator is responsible for the journal's location, retention and removal.
+
+On a dynamically linked build, `MESH_MCP_TRACE_PLUGIN` may instead name an absolute path to an
+OCaml tracing plugin for `mesh-board-mcp`. When both variables are set, the plugin takes precedence
+for board calls; work calls continue to use the built-in journal. A plugin load failure is reported
+and board calls continue without tracing. Dynamically loading a plugin is not supported by the
+statically linked Linux release; use the built-in journal there.
+
 #### Publishing a release
 
 A maintainer publishes a release by pushing a tag on a commit of `main`; nothing else:

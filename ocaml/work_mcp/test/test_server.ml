@@ -112,6 +112,38 @@ let test_no_leaks () =
   assert_no_leaks ~what:"folder" ~forbidden:[ Unix.realpath (Sys.getcwd ()); "\"cwd\"" ];
   Alcotest.(check bool) "token not in the data repository" false (contains (events_text wl_home) secret)
 
+let test_trace_without_credentials () =
+  let home, wl_home = fresh () in
+  let journal = Filename.concat home "mcp-trace.jsonl" in
+  let c = connect ~extra:[ "MESH_MCP_TRACE_JOURNAL=" ^ journal ] ~wl_home ~home () in
+  ignore
+    (ok c "work_add_task"
+       (`Assoc [ ("title", `String "trace-private-title"); ("product", `String "gateway") ]));
+  stop c;
+  let raw = read_file journal in
+  Alcotest.(check bool) "token absent from journal" false (contains raw secret);
+  Alcotest.(check bool) "tool input absent from journal" false (contains raw "trace-private-title");
+  let lines = String.split_on_char '\n' raw |> List.filter (fun line -> line <> "") in
+  let events = List.map Yojson.Safe.from_string lines in
+  Alcotest.(check bool) "records the tool call" true
+    (List.exists (fun event -> member "tool" event = `String "work_add_task") events);
+  List.iter
+    (fun event ->
+      Alcotest.(check bool) "work server marked" true (member "server" event = `String "work-mcp");
+      Alcotest.(check bool) "no invented session" true (member "session" event = `Null))
+    events
+
+let test_trace_failure_is_nonfatal () =
+  let home, wl_home = fresh () in
+  let journal = Filename.concat home "public-journal" in
+  Out_channel.with_open_text journal (fun _ -> ());
+  Unix.chmod journal 0o644;
+  let c = connect ~extra:[ "MESH_MCP_TRACE_JOURNAL=" ^ journal ] ~wl_home ~home () in
+  ignore (ok c "work_list_products" (`Assoc []));
+  stop c;
+  Alcotest.(check string) "unsafe file unchanged" "" (read_file journal);
+  Alcotest.(check bool) "failure reported" true (contains (read_file c.stderr_path) "cannot write the journal")
+
 let () =
   Alcotest.run "work_mcp server"
     [
@@ -123,6 +155,8 @@ let () =
           Alcotest.test_case "repository created at first use" `Quick test_first_use;
           Alcotest.test_case "never overwrites" `Quick test_never_overwrites;
           Alcotest.test_case "no token, no folder in outputs" `Quick test_no_leaks;
+          Alcotest.test_case "anonymous trace without credentials" `Quick test_trace_without_credentials;
+          Alcotest.test_case "trace write failure is nonfatal" `Quick test_trace_failure_is_nonfatal;
         ] );
       ("questions", Test_questions.tests);
       ("answer", Test_answer.tests);

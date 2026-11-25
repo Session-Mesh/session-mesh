@@ -30,7 +30,8 @@ async def test_startup_worker_recovers_approved_but_not_uncertain_work(tmp_path,
     requests.decide(made["id"], True, claim["claim_nonce"])
     calls = []
 
-    async def execute(item):
+    async def execute(item, create_nonce=None):
+        assert create_nonce is not None
         calls.append(item["id"])
         return {"id": "created"}
 
@@ -177,7 +178,8 @@ async def test_owner_approval_uses_current_directory_closed_preset_and_model(
     headers = agent(mesh_listing)
     calls, chosen = [], []
 
-    async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, conversation=None):
+    async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, conversation=None, nonce=None):
+        assert nonce is not None
         calls.append((base, cwd, shlex.split(command), agent, known_agent, keep))
         chosen.append(conversation)
         return "review-codex"
@@ -206,7 +208,8 @@ async def test_claude_opus_baker_unlock_uses_the_exact_catalogue_argv(
     headers = agent(mesh_listing)
     calls, chosen = [], []
 
-    async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, conversation=None):
+    async def new_session(base, cwd, command=None, agent=None, known_agent=None, keep=32, conversation=None, nonce=None):
+        assert nonce is not None
         calls.append((base, cwd, shlex.split(command), agent, known_agent, keep))
         chosen.append(conversation)
         return "baker-unlock"

@@ -14,7 +14,8 @@ let cache_dir () =
   | Some d when d <> "" -> d
   | _ -> (
       match Sys.getenv_opt "HOME" with
-      | Some h when h <> "" -> Filename.concat (Filename.concat h ".cache") "session-mesh"
+      | Some h when h <> "" ->
+          Filename.concat (Filename.concat h ".cache") "session-mesh"
       | _ ->
           prerr_endline "mesh-history: HOME is not set";
           exit 78)
@@ -34,7 +35,7 @@ let open_store path () =
   (try mkdir_private (Filename.dirname path) with Unix.Unix_error _ -> ());
   Mesh_history_store.open_ ~path ()
 
-let () =
+let serve_history () =
   (* The index holds prompts and replies: private to the user, WAL files too. *)
   ignore (Unix.umask 0o077);
   Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
@@ -42,3 +43,9 @@ let () =
     Mesh_history_protocol.create ~open_store:(open_store (database_path ()))
   in
   Mesh_history_protocol.serve protocol stdin stdout
+
+let () =
+  match Array.to_list Sys.argv with
+  | [ _; "--flow-read" ] -> Mesh_flow_cli.run "read"
+  | [ _; "--flow-write" ] -> Mesh_flow_cli.run "write"
+  | _ -> serve_history ()
