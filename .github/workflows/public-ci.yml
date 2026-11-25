@@ -51,8 +51,12 @@ env:
   BASH32_IMAGE: bash:3.2@sha256:2556c2da19c32c1614d318645c73a7bf64d38be21cf69e98e3ca51f053983719
 
 jobs:
-  frontend:
-    name: frontend and Node tests
+  frontend_parts:
+    name: frontend and Node tests (shard ${{ matrix.shard }} of 2)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
     needs: native
     # A skipped required check counts as passing for the ruleset, and `native` is not itself required:
     # the job runs even when `native` failed or was skipped, and its first step turns that into a red check.
@@ -156,15 +160,18 @@ jobs:
         run: |
           bash .github/scripts/install-gitleaks.sh "$RUNNER_TEMP/gitleaks"
           echo "MESH_LEAK_GITLEAKS=$RUNNER_TEMP/gitleaks/gitleaks" >> "$GITHUB_ENV"
-      - name: Frontend checks
+      - name: Install Node dependencies
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund --prefix demo-compiler
+      - name: Frontend checks
+        if: matrix.shard == 0
+        run: |
           npm run check
           npm run check:folder-state
           npm run check:pane-actions
           npm run check:workspace-spec
           npm run check:ptyhost-lifecycle
-          npm ci --ignore-scripts --no-audit --no-fund --prefix demo-compiler
           npm test --prefix demo-compiler
       # MESH_BASH32 runs the digest-pinned bash 3.2 image on the checkout, read-only.
       - name: A bash 3.2 for the installer parse test
@@ -189,9 +196,29 @@ jobs:
           mesh_prepare_test_tmpdir
           mapfile -d '' files < <(find tests -type f \( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \) \
             -not -path '*/node_modules/*' -print0 | sort -z)
-          # Four files at a time on any runner: most tests wait on servers and timers, and a 2-vCPU
-          # runner would otherwise run one file at a time (Node's default there), far past 10 minutes.
-          node --experimental-strip-types --test --test-concurrency=4 "${files[@]}"
+          shard=${{ matrix.shard }}
+          selected=()
+          for i in "${!files[@]}"; do
+            if (( i % 2 == shard )); then selected+=("${files[i]}"); fi
+          done
+          ((${#selected[@]} > 0)) || { echo "empty Node test shard" >&2; exit 1; }
+          node --experimental-strip-types --test --test-concurrency=4 "${selected[@]}"
+
+  frontend:
+    name: frontend and Node tests
+    needs: frontend_parts
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require both frontend shards
+        env:
+          PARTS_RESULT: ${{ needs.frontend_parts.result }}
+        run: |
+          if [[ "$PARTS_RESULT" != success ]]; then
+            echo "frontend shards result: $PARTS_RESULT (success expected)"
+            exit 1
+          fi
 
   python:
     name: ruff and pytest (without browser)
