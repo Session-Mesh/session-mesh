@@ -146,6 +146,28 @@ def test_approved_native_switch_does_not_fall_back_when_registry_disappears(monk
     assert events == []
 
 
+def test_native_switch_preserves_http_refusal_without_legacy_phase(monkeypatch):
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: True)
+    monkeypatch.setattr(server, 'NATIVE_SWITCH_QUALIFIED', True)
+    monkeypatch.setattr(server, '_conversation_found_in_root', lambda *_args: True)
+    async def context(name, *_args):
+        return {'id': name, 'context_revision': 'a' * 64, 'process_pid': 123,
+                'process_start': '456', 'roots': {'config': '/tmp'}}
+    async def replace(*_args, **_kwargs):
+        raise web.HTTPConflict(text='native source unchanged')
+    monkeypatch.setattr(server, '_switch_profile_context', context)
+    monkeypatch.setattr(server, 'replace_session', replace)
+    binding = {'backend': 'codex', 'conversation': '12345678-abcd', 'agent_pid': 123, 'agent_start': '456',
+               'source': {'id': 'default', 'context_revision': 'a' * 64},
+               'target': {'id': 'work', 'context_revision': 'b' * 64}}
+    item = {'id': 'request', 'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work',
+            'switch_binding': binding}
+    raw = {'name': 'session', 'created': 1, 'cwd': '/tmp', 'meta': {}}
+    with pytest.raises(web.HTTPConflict) as error:
+        asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
+    assert error.value.text == 'native source unchanged'
+
+
 def test_helper_snapshot_works_without_python_311_file_digest(monkeypatch, tmp_path):
     path = tmp_path / 'helper'
     path.write_bytes(b'fixture')
@@ -273,6 +295,63 @@ def test_legacy_switch_detects_configuration_directory_replacement(monkeypatch, 
         with pytest.raises(OSError):
             server._legacy_verify_directory(lease[1], lease[2])
     finally:
+        server._legacy_switch_end(lease, completed=False)
+    assert (old / '.backend-profiles.legacy-switch').exists()
+
+
+def test_legacy_switch_refuses_replaced_directory_after_helper_snapshot(monkeypatch, tmp_path):
+    root, old = tmp_path / 'configuration', tmp_path / 'old-configuration'
+    root.mkdir()
+    monkeypatch.setattr(server, 'CONF_DIR', root)
+    monkeypatch.setattr(server, '_native_profile_mode', lambda: False)
+    monkeypatch.setattr(server, 'work_command', lambda _name: '/fixture')
+    observed = []
+    async def helper(*args, **kwargs):
+        observed.append(args[0])
+        return {'version': 1, 'legacy_only': True}
+    async def replace(*args, switch, **kwargs):
+        server._LEGACY_SWITCH_PHASE.get()['effect_started'] = True
+        await switch[1]()
+    # Count snapshots separately from calls to the helper.
+    snapshots = []
+    def snapshot_counted(path):
+        snapshots.append(path)
+        if len(snapshots) == 2:
+            root.rename(old)
+            root.mkdir()
+        return ('/fixture', 'identity', b'digest')
+    monkeypatch.setattr(server, '_carry_helper_snapshot', snapshot_counted)
+    monkeypatch.setattr(server, '_accounts_program', helper)
+    monkeypatch.setattr(server, 'replace_session', replace)
+    item = {'id': 'request', 'source': {'agent': 'codex'}, 'from_account': 'default', 'account': 'work'}
+    raw = {'name': 'session', 'created': 1, 'cwd': '/tmp', 'meta': {}}
+    with pytest.raises(web.HTTPConflict):
+        asyncio.run(server._switch_session(item, raw, '12345678-abcd', ['codex']))
+    assert observed == ['carry-capabilities']
+    assert (old / '.backend-profiles.legacy-switch').exists()
+
+
+def test_legacy_start_refuses_directory_replaced_during_preparation(monkeypatch, tmp_path):
+    root, old = tmp_path / 'configuration', tmp_path / 'old-configuration'
+    root.mkdir()
+    monkeypatch.setattr(server, 'CONF_DIR', root)
+    lease = server._legacy_switch_begin({'id': 'request'}, {'name': 'session', 'created': 1})
+    token = server._LEGACY_SWITCH_PHASE.set({'effect_started': True, 'directory': lease[1], 'identity': lease[2]})
+    calls = []
+    def clear(*_args):
+        root.rename(old)
+        root.mkdir()
+    monkeypatch.setattr(server.claudewake, 'clear_socket', clear)
+    monkeypatch.setattr(server.claudewake, 'launch_command', lambda *_args: 'claude')
+    async def host(*_args, **_kwargs): calls.append('start')
+    monkeypatch.setattr(server, 'host', host)
+    try:
+        with pytest.raises(web.HTTPConflict):
+            asyncio.run(server._start_in_place({'name': 'session', 'meta': {}}, 2, '/tmp', 'claude',
+                                               'claude', 'claude', None, None, None, {}))
+        assert calls == []
+    finally:
+        server._LEGACY_SWITCH_PHASE.reset(token)
         server._legacy_switch_end(lease, completed=False)
     assert (old / '.backend-profiles.legacy-switch').exists()
 
