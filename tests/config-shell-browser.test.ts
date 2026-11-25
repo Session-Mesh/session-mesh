@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
 import {chromium, type Browser, type BrowserContext, type Page} from 'playwright-core';
-import {type Mesh} from './mesh-server-lib.ts';
+import {REPO, type Mesh} from './mesh-server-lib.ts';
 import {AgentMesh} from './helpers/agent-mail-mesh.ts';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 import {SECTIONS, showSection} from './helpers/config-sections.ts';
@@ -85,6 +85,86 @@ const visible = (page: Page, selector: string): Promise<boolean> => page.locator
 const focusedSection = (page: Page): Promise<string | null> => page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.sectionId ?? null);
 
 describe('the Configuration dialog layout', {skip}, () => {
+  for (const width of [900, 390]) test(`an early configuration click waits for translations at ${width}px`, async () => {
+    const context = await browser.newContext({locale: 'en-US', viewport: {width, height: 844}});
+    contexts.push(context);
+    const page = await context.newPage();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let requested!: () => void;
+    const seen = new Promise<void>(resolve => { requested = resolve; });
+    try {
+      await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
+      await page.route(/\/static\/i18n\/en\.json(?:\?|$)/, async route => { requested(); await gate; await route.continue(); });
+      await page.goto(`${mesh.base}/`, {waitUntil: 'domcontentloaded'});
+      await seen;
+      if (width === 390) {
+        await page.locator('#btn-mobile-actions').click();
+        await page.locator('[data-mobile-action="btn-config"]').click();
+      } else await page.locator('#btn-config').click();
+      assert.equal(await page.locator('#dlg-config').evaluate((node: HTMLDialogElement) => node.open), false);
+      release();
+      await page.locator('#dlg-config[open] .config-shell').waitFor();
+      const names = await page.locator('.config-nav-button').allInnerTexts();
+      assert.equal(names.length, SECTIONS.length);
+      assert.ok(names.every(name => name !== '' && !/config\.[a-z]/.test(name)), names.join('|'));
+    } finally { release(); }
+  });
+  test('a stalled translation opens usable English settings and never reopens after closing', async () => {
+    const context = await browser.newContext({locale: 'en-US', viewport: {width: 900, height: 900}});
+    contexts.push(context);
+    const page = await context.newPage();
+    let release!: () => void, requested!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const seen = new Promise<void>(resolve => { requested = resolve; });
+    try {
+      await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
+      await page.route(/\/static\/i18n\/en\.json(?:\?|$)/, async route => { requested(); await gate; await route.continue(); });
+      await page.goto(`${mesh.base}/`, {waitUntil: 'domcontentloaded'});
+      await seen;
+      await page.locator('#btn-config').click();
+      await page.locator('#flash[role=status]').filter({hasText: 'Opening configuration in English'}).waitFor({timeout: 6000});
+      await page.locator('#dlg-config[open] .config-shell').waitFor();
+      assert.equal((await page.locator('.config-nav-button').allInnerTexts())[0], 'Appearance');
+      await page.locator('.config-nav-button').filter({hasText: 'System'}).click();
+      assert.equal(await page.locator('.config-nav-button[aria-current]').innerText(), 'System');
+      await page.locator('#dlg-config [data-close-dialog]').click();
+      assert.equal(await page.locator('#dlg-config').evaluate((node: HTMLDialogElement) => node.open), false);
+      release();
+      await page.waitForFunction(() => (window as unknown as {MeshI18n: {loaded: boolean}}).MeshI18n.loaded);
+      assert.equal(await page.locator('#dlg-config').evaluate((node: HTMLDialogElement) => node.open), false);
+      await page.locator('#btn-config').click();
+      await page.locator('#dlg-config[open] .config-shell').waitFor();
+    } finally { release(); }
+  });
+  test('offline configuration strings match the English catalog', async () => {
+    const source = fs.readFileSync(path.join(REPO, 'static/i18n/en.json'), 'utf8');
+    const expected = Object.fromEntries(Object.entries(JSON.parse(source)).filter(([key]) => key.startsWith('config.') || key.startsWith('common.')));
+    const {page} = await signedIn('en-US', 900);
+    const actual = await page.evaluate(() => (window as unknown as {MeshConfigFallback: unknown}).MeshConfigFallback);
+    assert.deepEqual(actual, expected);
+  });
+  for (const broken of ['404', 'invalid-json']) test(`configuration falls back when both English loads return ${broken}`, async () => {
+    const context = await browser.newContext({locale: 'en-US', viewport: {width: 900, height: 900}});
+    contexts.push(context);
+    const page = await context.newPage();
+    await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
+    let attempts = 0;
+    await page.route(/\/static\/i18n\/en\.json(?:\?|$)/, async route => {
+      attempts++;
+      await route.fulfill(broken === '404' ? {status: 404, body: ''} : {status: 200, body: '{'});
+    });
+    await page.goto(`${mesh.base}/`);
+    await page.waitForFunction(() => (window as unknown as {MeshI18n: {loaded: boolean}}).MeshI18n.loaded);
+    assert.equal(attempts, 2);
+    await page.locator('#btn-config').click();
+    await page.locator('#dlg-config[open] .config-shell').waitFor();
+    assert.equal((await page.locator('.config-nav-button').allInnerTexts())[0], 'Appearance');
+    await page.locator('.config-nav-button').filter({hasText: 'System'}).click();
+    const label = await page.locator('.config-copy').first().getAttribute('aria-label');
+    assert.match(label ?? '', /^Copy: .+/);
+    assert.ok(!label?.includes('{label}'));
+  });
   for (const [locale, code] of LOCALES) {
     for (const width of [1440, 900, 390]) {
       test(`fits and lays out its sections at ${width}px, ${code}`, async () => {
@@ -93,6 +173,7 @@ describe('the Configuration dialog layout', {skip}, () => {
         const names = await page.locator('.config-nav-button').allInnerTexts();
         assert.equal(names.length, SECTIONS.length);
         assert.ok(names.every(name => name !== '' && !/config\.[a-z]/.test(name)), names.join('|'));
+        assert.equal(names[0], code === 'fr' ? 'Apparence' : 'Appearance');
         await fits(page);
         if (width === 390) {
           assert.equal(await visible(page, '.config-nav'), true, 'the list of sections is the first screen');
