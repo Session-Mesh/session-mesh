@@ -21,6 +21,7 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
     async load() { return journal().load(); },
     async acquire() { return journal().acquire(); },
     async save(id, value) { return journal().save(id, value); },
+    async remember(id, value) { return journal().remember!(id, value); },
     async clearUncertain(id) { return journal().clearUncertain!(id); },
   } : undefined);
   const t = ports.t;
@@ -102,11 +103,10 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
             void (async () => {
               const claim = JSON.stringify({cleanup: proof});
               if (await recoveryJournal().claim(claim) !== claim) throw new Error('recovery-pending');
-              try {
-                const result = await ports.forgetProvisionReceipt!(proof, new AbortController().signal) as {ok?: unknown; data?: {forgotten?: unknown}};
-                if (result.ok !== true || result.data?.forgotten !== true) throw new Error('unconfirmed');
-                if (request === recoveryRequest && dialog.open) row.remove();
-              } finally { await recoveryJournal().clear(claim); }
+              const result = await ports.forgetProvisionReceipt!(proof, new AbortController().signal) as {ok?: unknown; data?: {forgotten?: unknown}};
+              if (result.ok !== true || result.data?.forgotten !== true) throw new Error('unconfirmed');
+              await recoveryJournal().clear(claim);
+              if (request === recoveryRequest && dialog.open) row.remove();
             })().catch(() => { if (request === recoveryRequest && dialog.open) {
               confirm.disabled = false; recoveryStatus.textContent = t('backendAccounts.receiptRemovalUnavailable');
             } });

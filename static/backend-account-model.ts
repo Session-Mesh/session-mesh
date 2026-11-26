@@ -219,9 +219,12 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
   }
   async function remember(receipt?: Receipt) {
     if (!pending?.id) return;
-    await provisionJournal?.save(pending.id, receipt ? JSON.stringify({version: 1, ok: true, data: {
+    const value = receipt ? JSON.stringify({version: 1, ok: true, data: {
       registry_revision: receipt.revision, profile: receipt.profile,
-    }}) : 'uncertain');
+    }}) : 'uncertain';
+    if (receipt && provisionJournal?.remember && !await provisionJournal.remember(pending.id, value))
+      throw new Error('provision-journal-changed');
+    if (!receipt || !provisionJournal?.remember) await provisionJournal?.save(pending.id, value);
   }
   async function clearPending() {
     if (pending?.id) await provisionJournal?.save(pending.id, null);

@@ -93,7 +93,7 @@ for (const lateConfig of [false, true]) test(lateConfig
       await control('create-label').waitFor({state:'detached'});
       await panel.locator('li').filter({hasText:label}).waitFor();
       await control('recovery-confirm').waitFor({state:'visible'});
-      await page.waitForFunction(() => !(document.querySelector('[data-focus="recovery-confirm"]') as HTMLButtonElement).disabled);
+      await page.waitForFunction(() => { const button = document.querySelector('[data-focus="recovery-confirm"]') as HTMLButtonElement | null; return !!button && !button.disabled; });
       await control('recovery-confirm').click();
       await panel.getByText('Result acknowledged.').waitFor();
       assert.deepEqual(await list(), []);
@@ -353,7 +353,7 @@ for (const reload of [true, false]) test(`lost creation receipt remains inspecta
     await page.getByText('The account was recorded.', {exact:false}).waitFor();
     await control('recovery-confirm').click();
     await page.getByText('Result acknowledged.').waitFor();
-    await page.waitForFunction(() => !(document.querySelector('[data-focus="provision-account"]') as HTMLButtonElement).disabled);
+    await page.waitForFunction(() => { const button = document.querySelector('[data-focus="provision-account"]') as HTMLButtonElement | null; return !!button && !button.disabled; });
     assert.equal(traffic.filter(call => call === 'POST /api/accounts/profiles/provision').length,0,
       'recovery never repeats the creation');
   } finally {

@@ -29,6 +29,7 @@ declare const lab: {
   fail: string | null; createFail: string | null; readFail: string | null; finishWrite: () => void; finishLoad: () => void;
   panel: {open: () => Promise<void>; close: () => void; refreshProvisionView: () => void};
   provisionBackends: string[]; recoveryCalls: string[]; recoveryFailOnce: boolean; lostProvision: boolean; recoveryOperation: string | null;
+  holdProvision: boolean; finishProvision: () => void;
 };
 
 before(async () => {
@@ -106,6 +107,7 @@ before(async () => {
           version:1,ok:false,code:lab.createFail};
         const p={...request.profile,id:'p-0123456789abcdef',enabled:false,context_revision:digest,switch_qualified:false};
         lab.profiles.push(p);lab.registryRevision='c'.repeat(64); lab.recoveryOperation=request.operation_id ?? null;
+        if (lab.holdProvision) await new Promise(resolve => { lab.finishProvision = resolve; });
         if (lab.lostProvision) throw new Error('response-lost');
         return reply({registry_revision:lab.registryRevision,profile:p});
       }},
@@ -261,6 +263,23 @@ test('recovery clears only the matching uncertain browser journal', {skip}, asyn
   } finally { await context.close(); }
 });
 
+test('a late receipt cannot recreate a cleared pending operation', {skip}, async () => {
+  const {page, context} = await fixture();
+  try {
+    const result = await page.evaluate(async () => {
+      const first = (window as any).testProvisionJournal();
+      const second = (window as any).testProvisionJournal();
+      const {entry} = await first.acquire();
+      const cleared = await second.clearUncertain(entry.id);
+      const remembered = await first.remember(entry.id, 'late receipt');
+      return {cleared, remembered, remaining: await second.load()};
+    });
+    assert.equal(result.cleared, 'cleared');
+    assert.equal(result.remembered, false);
+    assert.equal(result.remaining, null);
+  } finally { await context.close(); }
+});
+
 test('two tabs settle the same lost operation after a verified native acknowledgement', {skip}, async () => {
   const {page, context} = await fixture();
   try {
@@ -337,6 +356,27 @@ test('blocked localStorage prevents account writes when provisioning state is un
   } finally { await context.close(); }
 });
 const control = (page: Page, key: string) => page.locator(`[data-focus="${key}"]`);
+test('a second tab cannot provision while the first response is pending', {skip}, async () => {
+  const {page, context} = await fixture();
+  try {
+    await page.evaluate(() => { lab.holdProvision = true; });
+    await control(page, 'provision-account').click();
+    await control(page, 'create-label').fill('Travel');
+    await control(page, 'save-account').click();
+    await page.waitForFunction(() => typeof lab.finishProvision === 'function');
+    const other = await context.newPage();
+    await other.goto(base + '/?lang=en');
+    await other.locator('#open').click();
+    await statusIs(other, 'en', 'provisionUncertain');
+    assert.equal(await control(other, 'provision-account').isDisabled(), true);
+    assert.equal(await other.evaluate(() => lab.calls.length), 0);
+    assert.equal((await page.evaluate(async () => (window as any).testProvisionJournal().load())).value, 'uncertain');
+    await page.evaluate(() => lab.finishProvision());
+    await page.waitForFunction(async () => (await (window as any).testProvisionJournal().load())?.value !== 'uncertain');
+    assert.equal(await page.evaluate(() => lab.calls.length), 1);
+    assert.equal(await other.evaluate(() => lab.calls.length), 0);
+  } finally { await context.close(); }
+});
 test('provision journal acquisition is atomic across tabs and preserves legacy uncertainty', {skip}, async () => {
   const {page, context, errors} = await fixture();
   try {

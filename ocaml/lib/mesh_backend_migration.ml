@@ -1117,7 +1117,10 @@ let recover_provision_with_checkpoint ?(apply = true) ~checkpoint ~root ~expecte
         if not (same root_id (Unix.lstat root)
                 && is_absent (intent root) && is_absent (legacy_switch_marker root)) then fail ()
         else match (try read (provision_intent root) with Unix.Unix_error (Unix.ENOENT, _, _) -> None) with
-        | None -> receipt ()
+        | None ->
+          let* result = receipt () in
+          Unix.fsync directory;
+          Ok result
         | Some (identity, bytes) ->
           let proof = Printf.sprintf "%d:%d:%d:%d:%s" root_id.Unix.st_dev root_id.Unix.st_ino
               identity.Unix.st_dev identity.Unix.st_ino (hash bytes) in
@@ -1179,16 +1182,18 @@ let recover_provision_with_checkpoint ?(apply = true) ~checkpoint ~root ~expecte
                 ("outcome", `String (match result with Published_reconciled -> "published" | Unpublished_aborted -> "unpublished"));
                 ("operation", member "operation" record); ("record", `String bytes)]) ^ "\n" in
               let receipt_path = provision_receipt root proof in
-              let* () =
+              let* exists =
                 let exists = not (is_absent receipt_path) in
                 if exists then (match read receipt_path with
-                  | Some (_, value) when value = receipt -> Ok () | _ -> fail ())
+                  | Some (_, value) when value = receipt -> Ok true | _ -> fail ())
                 else if Array.fold_left (fun n name -> if String.starts_with ~prefix:receipt_prefix name then n + 1 else n) 0 (Sys.readdir root) >= 256
-                then fail () else Ok () in
-              let stage, fd = create_temp root in
-              Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
-                write_all fd receipt 0; Unix.fchmod fd 0o600; Unix.fsync fd);
-              Unix.rename stage receipt_path; Unix.fsync directory;
+                then fail () else Ok false in
+              if not exists then (
+                let stage, fd = create_temp root in
+                Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+                  write_all fd receipt 0; Unix.fchmod fd 0o600; Unix.fsync fd);
+                Unix.rename stage receipt_path);
+              Unix.fsync directory;
               checkpoint `Receipt_published;
               if not (same root_id (Unix.lstat root)) then fail () else (
                 Unix.unlink (provision_intent root); Unix.fsync directory;
@@ -1506,6 +1511,11 @@ let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random
     in
     let* candidate = project "invalid-profile-config" (P.of_string content) in
     let* () = check_root () in
+    let* () = match new_dirs, existing_registry with
+      | [], _ | _, None -> Ok ()
+      | _, Some registry -> project "unsafe-profile-roots" (check_roots registry) in
+    let* () = if new_dirs = [] then Ok ()
+      else project "unsafe-configuration-root" (P.validate_private_root root) in
     let prepared = if not provision then None else (
       let stage, fd = create_temp root in
       let identity = Unix.fstat fd in
@@ -1528,10 +1538,11 @@ let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random
         ("candidate", `String (hash content));
         ("id", List.assoc "id" fields)
       ]) ^ "\n" in
-      let fd = Unix.openfile (provision_intent root)
-        [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC] 0o600 in
+      let temporary, fd = create_temp root in
       Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
         write_all fd record 0; Unix.fsync fd);
+      Fun.protect ~finally:(fun () -> try Unix.unlink temporary with Unix.Unix_error _ -> ())
+        (fun () -> Unix.link temporary (provision_intent root));
       let directory = Unix.openfile root [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
       Fun.protect ~finally:(fun () -> Unix.close directory) (fun () -> Unix.fsync directory);
       Ok ()) in
