@@ -69,6 +69,15 @@ async def main():
     for index, agent in enumerate(['claude','codex','opencode','pi']):
         await server.new_session('test', ${JSON.stringify(cwd)}, agent, agent, agent,
                                  account=f'selected-{index}')
+    pi = await server._restart_profile_context({'meta':metas[-1]}, 'selected-3', 'pi', None)
+    assert pi['context_revision'] == metas[-1]['account_context_revision']
+    try:
+        await server._restart_profile_context({'meta':{'account_context_revision':'0'*64}},
+                                              'selected-3', 'pi', None)
+    except server.web.HTTPConflict:
+        pass
+    else:
+        raise AssertionError('A stale Pi profile revision was admitted')
     print(json.dumps(metas))
 asyncio.run(main())
 `;
