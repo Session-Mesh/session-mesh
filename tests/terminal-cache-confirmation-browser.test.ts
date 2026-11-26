@@ -63,6 +63,15 @@ for (const transition of ['missing', 'moved']) test(`an unconfirmed cached resto
     await page.evaluate(() => refresh());
     assert.equal(await page.evaluate(() => active.conn === null && active.id === 'A'), true);
     assert.equal(attempts.length, 1);
+    if (transition === 'moved') {
+      await page.evaluate(() => refresh());
+      assert.equal(await page.evaluate(() => active.conn === null && active.id === 'A'), true,
+        'a later listing cannot authorize a replacement');
+      assert.equal(attempts.length, 1);
+      await page.evaluate(() => active.show('B'));
+      await page.waitForFunction(() => active.conn?.name === 'B' && active.conn.terminal?.isOpen());
+      assert.equal(attempts.length, 2);
+    }
   }, false, 'en');
 });
 
