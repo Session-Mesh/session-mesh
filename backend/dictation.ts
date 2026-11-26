@@ -430,6 +430,7 @@ export class Dictation {
       };
       expire();
       const text = normalizeText(await this.infer(r.chunks, r.meta, controller.signal));
+      if (this.now() >= deadline) throw new Fault('upstream_timeout');
       if (r.job.state === 'processing') {
         this.terminal(r, 'ready');
         r.job.text = text;
