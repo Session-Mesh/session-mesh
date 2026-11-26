@@ -39,8 +39,9 @@
     scan ([Denied] or [Malformed] entry, see {!Mesh_platform.scan}), or when the
     budget dropped a row or a detail.
 
-    The reply fits one control frame. Rows are in pid order. Priority, highest
-    first: a session leader with a terminal, a process in its terminal's
+    The reply fits one control frame. Rows are in pid order. Managed sessions
+    have priority. Within each group, highest priority goes to a session
+    leader with a terminal, a process in its terminal's
     foreground group, or a process named like an agent ([claude], [codex], [pi],
     [node], [nodejs]); then any other process with a terminal; then the rest.
     When the bare rows of every process fit the budget, all are sent and details
@@ -75,6 +76,12 @@ val default_budget : int
 (** Bytes the [processes] list may take: a control frame minus room for the rest
     of the reply. *)
 
-val reply : ?platform:platform -> ?budget:int -> request -> Yojson.Basic.t
-(** Reads the process table. It can take tens of milliseconds and blocks the
-    calling thread: the host runs it in a system thread. *)
+val reply :
+  ?platform:platform ->
+  ?budget:int ->
+  ?managed_sessions:int list ->
+  request ->
+  Yojson.Basic.t
+(** Reads the process table, prioritizing processes whose session IDs are in
+    [managed_sessions] when space is limited. It can take tens of milliseconds
+    and blocks the calling thread: the host runs it in a system thread. *)

@@ -54,8 +54,8 @@ let fake ?(failing = []) ?(skipped = 0) ?(snapshot = Ok []) () =
     process_owner = (fun pid -> read pid 1000);
   }
 
-let table ?budget facts =
-  Facts.reply ~platform:facts ?budget
+let table ?budget ?managed_sessions facts =
+  Facts.reply ~platform:facts ?budget ?managed_sessions
     (Facts.parse [ ("op", `String "processes") ])
 
 let rows reply = U.to_list (U.member "processes" reply)
@@ -139,6 +139,17 @@ let bare_rows_first_then_details_by_priority () =
   Alcotest.(check bool)
     "incomplete" true
     (U.member "complete" reply = `Bool false)
+
+let managed_session_details_win_under_pressure () =
+  let session = proc ~pid:5000 ~sid:5000 ~tpgid:5000 () in
+  let facts = fake ~snapshot:(Ok [ leader; session ]) () in
+  let full = table facts in
+  let budget = row_size (bare (row full 10)) + row_size (row full 5000) in
+  let reply = table ~budget ~managed_sessions:[ 5000 ] facts in
+  within_budget budget reply;
+  expect "managed details retained" (has_details (row reply 5000));
+  expect "unmanaged details omitted" (not (has_details (row reply 10)));
+  expect "incomplete" (U.member "complete" reply = `Bool false)
 
 (* Two hundred daemons with lower pids than the session and the agent. *)
 let a_table_over_the_budget_keeps_what_matters () =
@@ -370,6 +381,8 @@ let () =
             an_unreadable_table_is_empty;
           Alcotest.test_case "bare rows first, then details by priority" `Quick
             bare_rows_first_then_details_by_priority;
+          Alcotest.test_case "managed details win under pressure" `Quick
+            managed_session_details_win_under_pressure;
           Alcotest.test_case "a table over the budget keeps what matters" `Quick
             a_table_over_the_budget_keeps_what_matters;
           Alcotest.test_case "a skipped process makes the table incomplete"
