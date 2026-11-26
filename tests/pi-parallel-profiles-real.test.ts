@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import {execFile, execFileSync, spawnSync} from 'node:child_process';
-import {mkdir, mkdtemp, readdir, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -20,10 +20,21 @@ test('real Pi keeps parallel profiles isolated across exact resumes', {timeout: 
 
   const root = await mkdtemp(join(tmpdir(), 'mesh-pi-parallel-'));
   const requests: {authorization?: string; messages: unknown}[] = [];
+  const reports: {source: string; session: string; pid: number}[] = [];
   const model = createServer(async (request, response) => {
     try {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(chunk);
+      if (request.url === '/api/event' && request.headers.authorization === 'MeshSession fixture-token') {
+        const {detail} = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        reports.push(detail);
+        response.writeHead(200).end();
+        return;
+      }
+      if (request.url !== '/v1/chat/completions') {
+        response.writeHead(404).end();
+        return;
+      }
       const {messages} = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       requests.push({authorization: request.headers.authorization, messages});
       response.writeHead(200, {'content-type': 'text/event-stream'});
@@ -55,7 +66,8 @@ test('real Pi keeps parallel profiles isolated across exact resumes', {timeout: 
         if (transcript) args.push('--session', transcript);
         args.push(message);
         const env = {HOME: profile, PATH: process.env.PATH,
-          PI_CODING_AGENT_DIR: profile, PI_OFFLINE: '1'};
+          PI_CODING_AGENT_DIR: profile, PI_OFFLINE: '1', MESH_PORT: String(address.port),
+          MESH_SESSION_TOKEN: 'fixture-token'};
         const command = execFileSync(process.env.MESH_PYTHON || 'python3', ['-c', [
           'import os, shlex, shutil, sys',
           'import agentmcp, pimcp, server',
@@ -73,8 +85,13 @@ test('real Pi keeps parallel profiles isolated across exact resumes', {timeout: 
       assert.equal(files.length, 1);
       assert.match(await send('continue-' + name, join(history, files[0])), /fixture reply/);
       assert.deepEqual(await readdir(history), files);
+      return JSON.parse((await readFile(join(history, files[0]), 'utf8')).split('\n', 1)[0]).id as string;
     }));
-    for (const run of runs) if (run.status === 'rejected') throw run.reason;
+    for (const run of runs) {
+      if (run.status === 'rejected') throw run.reason;
+      const matching = reports.filter(report => report.source === 'pi' && report.session === run.value);
+      assert.equal(new Set(matching.map(report => report.pid)).size, 2, 'launch and resume each report the exact transcript');
+    }
     assert.equal(requests.length, 4);
     for (const [name, other] of [['alpha', 'beta'], ['beta', 'alpha']]) {
       const turns = requests.filter(request => request.authorization === 'Bearer fixture-' + name);

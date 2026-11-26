@@ -649,3 +649,24 @@ else:
       env: {...process.env, HOME: root, XDG_RUNTIME_DIR: root, MESH_CONF_DIR: root}});
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });
+
+test('a Pi hook binds the conversation only to its observed foreground process', () => {
+  const script = `
+import sys
+sys.path.insert(0, ${JSON.stringify(repo)})
+import server
+
+sid = '22222222-2222-2222-2222-222222222222'
+for pid, foreground, received, source, accepted in (
+        (42, True, 10, 'pi', True), (43, True, 10, 'pi', False),
+        (42, False, 10, 'pi', False), (42, True, 1, 'pi', False),
+        (True, True, 10, 'pi', False), (42, True, 10, 'codex', False)):
+    agent = {'type':'pi','pid':42,'foreground':foreground,'started':10}
+    entry = {'agent':agent,'hook':{'type':'done','received':received,
+             'detail':{'source':source,'pid':pid,'session':sid}}}
+    server._apply_reported_state([entry])
+    assert (agent.get('session_id') == sid) == accepted, agent
+    assert ('status' not in agent) and (agent.get('identity_source') == 'pi_hook') == accepted
+`;
+  execFileSync(python, ['-I', '-c', script], {timeout: 10000});
+});

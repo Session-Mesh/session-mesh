@@ -2927,7 +2927,8 @@ _OPENCODE_HOOK_STATUS = {"working": ("busy", None), "done": ("idle", None),
                          "waiting_question": ("waiting", "input needed")}
 # Agents whose state and conversation are reported by their own hook or plugin, and the form of the
 # conversation id each may report (it ends up in argv on resume).
-_HOOK_SESSION_RE = {"opencode": re.compile(r"^ses_[0-9A-Za-z]{8,60}$"),
+_HOOK_SESSION_RE = {"pi": respawn.CONVERSATION_RE["pi"],
+                    "opencode": re.compile(r"^ses_[0-9A-Za-z]{8,60}$"),
                     "gemini": re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"),
                     "agy": re.compile(r"^[0-9A-Za-z][0-9A-Za-z_-]{7,63}$"),
                     "vibe": re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")}
@@ -2990,6 +2991,15 @@ def _apply_reported_state(mesh):
         if kind not in _HOOK_SESSION_RE or not isinstance(hook, dict):
             continue
         if _hook_predates_process(agent, hook):
+            continue
+        if kind == "pi":
+            detail = hook.get("detail") or {}
+            session = detail.get("session")
+            pid = detail.get("pid")
+            if (detail.get("source") == "pi" and type(pid) is int and pid > 0 and pid == agent.get("pid")
+                    and agent.get("foreground") is True and isinstance(session, str)
+                    and _HOOK_SESSION_RE["pi"].fullmatch(session)):
+                agent["session_id"], agent["identity_source"] = session, "pi_hook"
             continue
         state = _OPENCODE_HOOK_STATUS.get(hook.get("type"))
         if state is not None:
@@ -3197,7 +3207,8 @@ async def _claim_reported_conversation(name, nonce, created, agent, detail):
     _apply_reported_state, the hooks of Gemini, Antigravity and Vibe only fill in a missing conversation:
     they never replace the one the registry holds for the session."""
     sid = (detail or {}).get("session")
-    if agent is None or not isinstance(sid, str):
+    # Pi's report is only applied alongside a matching observed foreground PID.
+    if agent is None or agent == "pi" or not isinstance(sid, str):
         return
     hook = (detail or {}).get("hook")
     evidence = f"hook:{hook}" if isinstance(hook, str) and respawn.EVIDENCE_RE.fullmatch(f"hook:{hook}") else "hook:report"
