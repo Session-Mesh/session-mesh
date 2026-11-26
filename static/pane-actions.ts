@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
+export {createRetainedLifetime} from './dictation.ts';
+export {createDictationModeObserver} from './terminal-mode.ts';
+export {createTerminalInputOrigin} from './terminal-origin.ts';
 // Pane-local presentation only. The app supplies data and keeps action authority.
 
 export { replayPrefix } from "./terminal-replay.ts";
-export { parsePtySize, sendsSize, sizePlan } from "./terminal-size-owner.ts";
+export { isPtySizeFrame, parsePtySize, sendsSize, sizePlan } from "./terminal-size-owner.ts";
 export { SIZE_TAKEOVER_KEY, listenForActivation, shouldTakeSize, showsSizeBanner, sizeTakeoverMode } from "./size-takeover.ts";
 
 // Displayed text comes from the app's catalogs. The app installs its translator
@@ -27,59 +30,236 @@ export function setTranslator(fn: Translator): void {
 
 export type AgentState = "busy" | "waiting" | "shell" | "idle" | "unknown";
 
+export interface HumanInputTransport {
+  control(clientId: string, dirty: boolean): void;
+  data(bytes: Uint8Array): void;
+}
+
+/** Stable across reconnects, distinct across same-PTY incarnations even on old
+ * hosts whose human-lease table is keyed only by this opaque id (96 bytes max). */
+export function humanInputClientId(tab: string, slot: number, name: string, created: number | null): string {
+  if (!Number.isSafeInteger(slot) || slot < 1 || (created !== null && (!Number.isFinite(created) || created <= 0)))
+    throw new TypeError(translate("paneActions.inputIdentityInvalid"));
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setFloat64(0, created ?? 0, false);
+  const epoch = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+  return `${tab.slice(0, 32)}_${slot.toString(36)}_${name.slice(0, 32)}_${epoch}`;
+}
+export interface DeferredHumanInput {
+  flush(): boolean;
+  cancel(): void;
+  /** Write a reserved operation's chunks on its original transport. */
+  write(bytes: Uint8Array, complete: boolean): boolean;
+}
 export interface HumanInputLease {
   readonly dirty: boolean;
+  readonly releasePending: boolean;
+  readonly inputDirty: boolean;
+  readonly revision: number;
+  claim(): HumanInputAttempt | null;
+  canInsert(): boolean;
+  claimInsertion(expectedCaptureRevision: number): HumanInputAttempt | null;
   reconnect(): void;
   hold(): void;
   release(): void;
-  write(bytes: Uint8Array, complete?: boolean): boolean;
+  write(bytes: Uint8Array, complete?: boolean, transport?: HumanInputTransport): boolean;
+  defer(bytes: Uint8Array, complete: boolean): DeferredHumanInput;
   atomic(bytes: Uint8Array): boolean;
+  readonly retired: boolean; readonly retained: number;
+  bind(transport: HumanInputTransport): void;
+  retain(): () => void; retire(): void; dispose(): void;
+}
+// Exact-session history spans known local views; H identity/dirty stay per lease.
+// Count attempted D writes, including completed or uncertain foreign input.
+export interface HumanInputScope {
+  readonly revision: number;
+  readonly attempts: number;
+  readonly dirty: boolean;
+  attempt(revision: number): void;
+  observe(dirty: () => boolean, owner?: HumanInputLease): () => void;
+  canInsert(lease: HumanInputLease): boolean;
+  mutate(): number;
+  track(lease: HumanInputLease): void; forget(lease: HumanInputLease): void;
+  adopt(transport: HumanInputTransport, options?: {retained?: boolean}): HumanInputLease | null;
+  dispose(): void;
+}
+export interface HumanInputAttempt {
+  valid(): boolean;
+  write(bytes: Uint8Array, complete: boolean, transport: HumanInputTransport): boolean;
+}
+export function createHumanInputScope(empty: () => void = () => {}): HumanInputScope {
+  let revision = 0, attempts = 0;
+  const observations = new Map<() => boolean, HumanInputLease | undefined>();
+  const leases = new Set<HumanInputLease>();
+  return {get revision() {return revision;}, get attempts() {return attempts;}, attempt(order) {attempts = Math.max(attempts, order);}, get dirty() {for (const read of observations.keys()) if (read()) return true; return false;},
+    observe(read, owner) {observations.set(read, owner); return () => {observations.delete(read);};}, mutate() {return ++revision;},
+    canInsert(lease) {
+      if (!leases.has(lease)) return false;
+      for (const [read, owner] of observations) if (owner !== lease && read()) return false;
+      return true;
+    },
+    track(lease) {leases.add(lease);}, forget(lease) {leases.delete(lease); if (!leases.size && !observations.size) empty();},
+    adopt(transport, options) {
+      // Explicit user-opened views may share a retired job's input identity;
+      // bind only ordinary input, never the job's explicit original transport.
+      for (const lease of leases) if (lease.retired
+        && ((!lease.retained && (lease.dirty || lease.releasePending)) || (options?.retained === true && lease.retained > 0))) {
+        lease.bind(transport); return lease;
+      }
+      return null;
+    }, dispose() {revision++; for (const lease of leases) lease.dispose(); observations.clear(); empty();}};
+}
+function claimHumanInput(scope: HumanInputScope, write: HumanInputLease['write'], expected = scope.revision,
+  eligible: () => boolean = () => true): HumanInputAttempt | null {
+  if (scope.revision !== expected || !eligible()) return null;
+  const valid = (): boolean => scope.revision === expected && eligible();
+  return {valid,
+    write(bytes, complete, transport) {
+      if (!valid()) return false;
+      const delivered = write(bytes, complete, transport);
+      if (scope.revision !== expected + 1) return false;
+      expected = scope.revision; return delivered;
+    }};
 }
 
 // One browser tab owns one opaque client id. WebSocket ordering makes each
 // successful H/D/H sequence visible to the PTY arbiter in that order. H is an
 // advisory extension, though: an older relay or a transient control failure
 // must never prevent the baseline D frame from reaching the terminal.
-export function createHumanInputLease(ports: {
-  readonly clientId: string;
-  readonly control: (clientId: string, dirty: boolean) => void;
-  readonly data: (bytes: Uint8Array) => void;
-}): HumanInputLease {
-  let dirty = false;
-  const set = (next: boolean): void => {
-    if (dirty === next) return;
-    ports.control(ports.clientId, next);
-    dirty = next;
-  };
-  const write = (bytes: Uint8Array, complete = false): boolean => {
-    if (!bytes.byteLength) return false;
-    if (!dirty) {
-      try { set(true); } catch { /* H is optional; D remains the authority. */ }
+class NativeInputLease implements HumanInputLease {
+  private readonly clientId: string; private readonly scope: HumanInputScope;
+  private pending = false; private pendingRelease = false; private isRetired = false; private refs = 0;
+  private completedReservation: {transport: HumanInputTransport; releaseNeeded: boolean} | null = null;
+  private disposed = false; private queued = 0;
+  private transport: HumanInputTransport | null;
+  private readonly unobserve: () => void;
+  constructor(clientId: string, scope: HumanInputScope, transport: HumanInputTransport) {
+    this.clientId = clientId; this.scope = scope;
+    this.transport = transport;
+    const unobservePending = scope.observe(() => this.dirty, this);
+    // Deferred input is a barrier even when it belongs to this same lease.
+    const unobserveQueued = scope.observe(() => this.queued > 0);
+    this.unobserve = () => {unobservePending(); unobserveQueued();}; scope.track(this);
+  }
+  get inputDirty(): boolean {return this.scope.dirty;}
+  get dirty(): boolean {return this.pending;}
+  get releasePending(): boolean {return this.pendingRelease;}
+  get retired(): boolean {return this.isRetired;}
+  get retained(): number {return this.refs;}
+  get revision(): number {return this.scope.revision;}
+  private set(next: boolean, transport: HumanInputTransport, force = false): void {
+    if (this.dirty === next && !force) return;
+    // Keep the barrier until advisory release succeeds, but remember that
+    // completed D needs only H(false), never another D, on reconnect.
+    this.pendingRelease = !next;
+    transport.control(this.clientId, next); this.pending = next; this.pendingRelease = false;
+  }
+  defer(bytes: Uint8Array, complete: boolean): DeferredHumanInput {
+    const transport = this.transport, payload = bytes.slice();
+    let held = !this.disposed && !!transport && !!payload.byteLength;
+    if (!this.disposed && payload.byteLength) this.scope.mutate();
+    const deferredRevision = this.scope.revision;
+    if (held) this.queued++;
+    const cancel = (): void => {if (held) {
+      held = false; this.queued--;
+      if (!this.queued && this.completedReservation) {
+        const completed = this.completedReservation; this.completedReservation = null;
+        if (!completed.releaseNeeded) this.pending = false;
+        else try {this.set(false, completed.transport);} catch { /* Retry release on reconnect. */ }
+      }
+      this.cleanup();
+    }};
+    let flushing = false, writing = false;
+    const write = (bytes: Uint8Array, finished: boolean): boolean => {
+      if (!held || writing) return false;
+      writing = true;
+      try {return this.deliver(bytes, finished && this.scope.attempts <= deferredRevision, transport, true, deferredRevision);}
+      finally {writing = false;}
+    };
+    return {cancel, write, flush: () => {
+      if (!held || flushing) return false;
+      flushing = true;
+      try {return write(payload, complete);}
+      finally {cancel();}
+    }};
+  }
+  write(bytes: Uint8Array, complete = false, transport = this.transport): boolean {
+    return this.deliver(bytes, complete, transport, false);
+  }
+  private deliver(bytes: Uint8Array, complete: boolean, transport: HumanInputTransport | null, reserved: boolean, attemptOrder?: number): boolean {
+    if (this.disposed || !bytes.byteLength) return false;
+    // A deferred operation invalidated captures when reserved. Flushing it must
+    // not make subsequent reservations look like newer human input.
+    const revision = reserved ? this.scope.revision : this.scope.mutate();
+    if (!transport) return false;
+    this.scope.attempt(attemptOrder ?? revision);
+    this.completedReservation = null;
+    const reacquire = this.pendingRelease;
+    this.pendingRelease = false;   // a new D attempt supersedes an older completed operation
+    if (!this.dirty || reacquire) {
+      try { this.set(true, transport, reacquire); } catch { /* H is optional; D remains the authority. */ }
     }
+    const releaseNeeded = this.dirty;
+    this.pending = true;   // unfinished local D is a barrier even when optional H(true) failed
     let delivered = false;
     try {
-      ports.data(bytes);
+      transport.data(bytes);
       delivered = true;
-    } catch { /* An uncertain/failed D is reported to the caller below. */ }
-    if (delivered && complete && dirty) {
-      try { set(false); } catch { /* Keep dirty: reconnect must retry release. */ }
+    } catch {this.pending = true; /* An uncertain/failed D remains dirty, even if advisory acquisition failed. */ }
+    if (delivered && complete && this.dirty && this.scope.revision === revision) {
+      if (reserved && this.queued > 1)
+        this.completedReservation = {transport, releaseNeeded};
+      else if (!releaseNeeded) this.pending = false;
+      else try { this.set(false, transport); } catch { /* Reconnect retries H(false), never D. */ }
     }
+    this.cleanup();
     return delivered;
-  };
-  return {
-    get dirty() { return dirty; },
-    hold() {
-      if (dirty) return;
-      dirty = true;
-      try { ports.control(ports.clientId, true); } catch { /* Reassert on reconnect. */ }
-    },
-    release() { try { set(false); } catch { /* Retry on reconnect. */ } },
-    reconnect() {
-      try { ports.control(ports.clientId, dirty); } catch { /* Socket setup must continue. */ }
-    },
-    write,
-    atomic(bytes) { return write(bytes, true); },
-  };
+  }
+  hold(): void {
+    this.completedReservation = null;
+    if (this.disposed || this.dirty) return;
+    this.scope.mutate();
+    this.pending = true;
+    try { if (this.transport) this.set(true, this.transport, true); } catch { /* Reassert on reconnect. */ }
+  }
+  release(): void {
+    if (this.disposed || !this.dirty) return;
+    this.scope.mutate();
+    this.pendingRelease = true;
+    try { if (this.transport) this.set(false, this.transport); } catch { /* Retry on reconnect. */ }
+    this.cleanup();
+  }
+  atomic(bytes: Uint8Array): boolean {return this.write(bytes, true);}
+  claim(): HumanInputAttempt | null {
+    return this.disposed || this.scope.dirty ? null
+      : claimHumanInput(this.scope, this.write.bind(this), this.scope.revision, () => !this.disposed);
+  }
+  canInsert(): boolean {return !this.disposed && this.scope.canInsert(this);}
+  claimInsertion(expectedCaptureRevision: number): HumanInputAttempt | null {
+    return claimHumanInput(this.scope, this.write.bind(this), expectedCaptureRevision, () => this.canInsert());
+  }
+  reconnect(): void {
+    try {if (this.transport) {
+      const dirty = this.releasePending ? false : this.dirty;
+      this.transport.control(this.clientId, dirty); this.pending = dirty; this.pendingRelease = false;
+      if (dirty && this.completedReservation) this.completedReservation.releaseNeeded = true;
+    }}
+    catch { /* Socket setup must continue. */ }
+    this.cleanup();
+  }
+  bind(transport: HumanInputTransport): void {if (!this.disposed) {this.isRetired = false; this.transport = transport;}}
+  retain(): () => void {
+    if (this.disposed) return () => {};
+    this.refs++; let held = true;
+    return () => {if (!held) return; held = false; this.refs--; this.cleanup();};
+  }
+  retire(): void {this.isRetired = true; this.transport = null; this.cleanup();}
+  private cleanup(): void {if (this.retired && !this.retained && !this.dirty && !this.releasePending && !this.queued) this.dispose();}
+  dispose(): void {if (this.disposed) return; this.disposed = true; this.transport = null; this.unobserve(); this.scope.forget(this);}
+}
+export function createHumanInputLease(ports: HumanInputTransport & {clientId: string; scope?: HumanInputScope}): HumanInputLease {
+  return new NativeInputLease(ports.clientId, ports.scope ?? createHumanInputScope(), ports);
+
 }
 
 export type RetainedInputState = "ready" | "sending" | "uncertain" | "review" | "halted";
@@ -146,7 +326,7 @@ export function createAcknowledgedInput(ports: {
 }) {
   const maxPending = 1024 * 1024;
   const maxFrame = 65536;
-  type Pending = { seq: number; data: Uint8Array; complete: boolean; reportOnly: boolean };
+  type Pending = { seq: number; data: Uint8Array; complete: boolean; reportOnly: boolean; reviewOnly: boolean };
   const pending: Pending[] = [];
   let nextSeq = 1;
   let active = false;
@@ -162,6 +342,7 @@ export function createAcknowledgedInput(ports: {
     if (!active || state === "halted") return;
     const frame = pending[0];
     if (!frame) return;
+    if (frame.reviewOnly) { updateState("review"); return; }
     const payload = new Uint8Array(4 + frame.data.length);
     new DataView(payload.buffer).setUint32(0, frame.seq);
     payload.set(frame.data, 4);
@@ -170,6 +351,23 @@ export function createAcknowledgedInput(ports: {
     updateState("sending");
     try { ports.send(payload); }
     catch { updateState("uncertain"); }
+  };
+  const enqueue = (bytes: Uint8Array, complete: boolean, retainOnly: boolean) => {
+    if ((!retainOnly && (blocked || state === "halted")) || !bytes.length || bytes.length > maxPending - size() ||
+        nextSeq + Math.ceil(bytes.length / maxFrame) > 0x80000000) return false;
+    const reportOnly = terminalReportsOnly(bytes);
+    const wasEmpty = pending.length === 0;
+    if (retainOnly) active = false;
+    for (let offset = 0; offset < bytes.length; offset += maxFrame) {
+      const end = Math.min(bytes.length, offset + maxFrame);
+      pending.push({ seq: nextSeq++, data: bytes.slice(offset, end),
+        complete: complete && !reportOnly && end === bytes.length, reportOnly, reviewOnly: retainOnly });
+    }
+    completed = false;
+    if (retainOnly) updateState(blocked || state === "halted" ? "halted" : sent ? "uncertain" : "review");
+    else if (wasEmpty && active && state === "ready") transmit();
+    else if (wasEmpty && state === "ready") updateState("review");
+    return true;
   };
   return {
     get version() { return ports.version ?? 1; },
@@ -227,21 +425,9 @@ export function createAcknowledgedInput(ports: {
         updateState(sent ? "uncertain" : "review");
     },
     write(bytes: Uint8Array, complete = false) {
-      if (blocked || state === "halted" || !bytes.length || bytes.length > maxPending - size() ||
-          nextSeq + Math.ceil(bytes.length / maxFrame) > 0x80000000)
-        return false;
-      const reportOnly = terminalReportsOnly(bytes);
-      const wasEmpty = pending.length === 0;
-      for (let offset = 0; offset < bytes.length; offset += maxFrame) {
-        const end = Math.min(bytes.length, offset + maxFrame);
-        pending.push({ seq: nextSeq++, data: bytes.slice(offset, end),
-          complete: complete && !reportOnly && end === bytes.length, reportOnly });
-      }
-      completed = false;
-      if (wasEmpty && active && state === "ready") transmit();
-      else if (wasEmpty && state === "ready") updateState("review");
-      return true;
+      return enqueue(bytes, complete, false);
     },
+    retain(bytes: Uint8Array, complete = false) { return enqueue(bytes, complete, true); },
     ack(created: number, id: string, seq: number, ok: boolean, reason?: string) {
       if (ports.version === 2 || !active || created !== ports.created || id !== ports.attachmentId ||
           !Number.isSafeInteger(seq) || !sent ||
@@ -289,6 +475,7 @@ export function createAcknowledgedInput(ports: {
     retry() {
       if (!active || !pending.length || (state !== "uncertain" && state !== "review"))
         return false;
+      for (const frame of pending) frame.reviewOnly = false;
       transmit();
       return true;
     },
@@ -296,13 +483,14 @@ export function createAcknowledgedInput(ports: {
       const head = pending[0];
       if (!head) return false;
       const uncertain = sent;
+      const halted = state === "halted";
       const first = head.seq;
       pending.length = 0;
       sent = false;
       completed = false;
       // The host may have committed the discarded sequence. Never send another
       // frame on this actor after uncertain delivery.
-      if (uncertain || blocked) updateState("halted");
+      if (uncertain || blocked || halted) updateState("halted");
       else { nextSeq = first; updateState(active ? "ready" : "review"); }
       return true;
     },
@@ -786,6 +974,7 @@ export interface PasteConnection {
 export interface PasteBinding {
   readonly pane: object; readonly target: CapturedTarget;
   readonly connection: PasteConnection; readonly socket: PasteSocket;
+  readonly current?: () => boolean;
 }
 export type PasteResultKind = "refused" | "paste" | "submitted" | "uncertain";
 export interface PasteResult {
@@ -801,12 +990,13 @@ export interface PastePorts {
   readonly paste: (pane: object, text: string) => void;
   readonly encode: (text: string) => Uint8Array;
   readonly send?: (pane: object, socket: PasteSocket, bytes: Uint8Array, complete: boolean) => boolean;
+  readonly defer?: (binding: PasteBinding, text: string, resume: () => void, cancel: () => void) => {start(): void; settle(): void};
   readonly schedule: (callback: () => void) => void;
 }
 export interface PasteDelivery {
-  readonly capture: (pane: object, target: CapturedTarget) => PasteBinding | null;
+  readonly capture: (pane: object, target: CapturedTarget, current?: () => boolean) => PasteBinding | null;
   readonly onData: (pane: object, frame: string, ordinary: () => void) => void;
-  readonly deliver: (binding: PasteBinding, text: string, enter: boolean,
+  readonly deliver: (binding: PasteBinding, text: string | Promise<string>, enter: boolean,
     settle: (result: PasteResult) => void) => { readonly cancel: () => void };
 }
 export function createPasteDelivery(ports: PastePorts): PasteDelivery {
@@ -814,6 +1004,7 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
     stopped: boolean; unknown: boolean; reason: PasteResult["reason"] };
   let current: Attempt | null = null;
   const valid = (binding: PasteBinding): boolean => ports.valid(binding.target)
+    && (!binding.current || binding.current())
     && ports.connection(binding.pane) === binding.connection
     && binding.connection.ws === binding.socket
     && !binding.connection.closed && !binding.connection.ended && !binding.connection.initializing
@@ -836,10 +1027,10 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
     attempt.frames++; attempt.wireBytes += bytes.byteLength; attempt.joined += frame;
   };
   return {
-    capture(pane, target) {
+    capture(pane, target, current) {
       const connection = ports.connection(pane), socket = connection?.ws;
       if (!connection || !socket) return null;
-      const binding = Object.freeze({ pane, target, connection, socket });
+      const binding = Object.freeze({ pane, target, connection, socket, ...(current ? {current} : {}) });
       return valid(binding) ? binding : null;
     },
     onData(pane, frame, ordinary) {
@@ -847,50 +1038,72 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
       if (attempt?.binding.pane === pane) send(attempt, frame);
       else ordinary();
     },
-    deliver(binding, text, enter, settle) {
-      const requestedBytes = ports.encode(text).byteLength;
+    deliver(binding, payload, enter, settle) {
+      let ready = typeof payload === "string", running = false;
+      let text = ready ? payload as string : "";
+      let requestedBytes = ports.encode(text).byteLength;
       const attempt: Attempt = { binding, frames: 0, wireBytes: 0, joined: "",
         stopped: false, unknown: false, reason: null };
-      let settled = false;
+      let settled = false, deferred: {start(): void; settle(): void} | null = null;
       const finish = (kind: PasteResultKind): void => {
         if (settled) return;
-        settled = true; settle(result(attempt, requestedBytes, kind));
+        settled = true;
+        try {settle(result(attempt, requestedBytes, kind));}
+        finally {deferred?.settle();}
       };
       const operation = { cancel: (): void => {
         if (settled) return;
         attempt.stopped = true; attempt.reason = "cancel";
         finish(attempt.frames || attempt.unknown ? "uncertain" : "refused");
       } };
-      if (!valid(binding)) { attempt.reason = "guard"; finish("refused"); return operation; }
-      if (!text) {
-        if (!enter) { attempt.reason = "incomplete"; finish("refused"); return operation; }
-        send(attempt, "\r");
-        finish(attempt.stopped ? (attempt.unknown ? "uncertain" : "refused") : "submitted");
-        return operation;
-      }
-      const previous = current;
-      current = attempt;
-      try { ports.paste(binding.pane, text); }
-      catch { attempt.stopped = true; attempt.unknown = true; attempt.reason = "paste"; }
-      finally { current = previous; }
-      // xterm may normalize line endings and surround the payload with bracketed
-      // paste frames. Do not accept a framing-only or truncated synchronous paste.
-      const normalize = (value: string): string => value.replace(/\r\n|\n/g, "\r");
-      if (!attempt.stopped && (!attempt.frames || !normalize(attempt.joined).includes(normalize(text)))) {
-        attempt.stopped = true; attempt.reason = "incomplete";
-      }
-      if (attempt.stopped) {
-        finish(attempt.frames || attempt.unknown ? "uncertain" : "refused");
-        return operation;
-      }
-      if (!enter) { finish("paste"); return operation; }
-      try {
-        ports.schedule(() => {
-          if (settled) return;
+      const run = (): void => {
+        if (settled || running) return;
+        if (!ready) return;
+        running = true;
+        if (!valid(binding)) { attempt.reason = "guard"; finish("refused"); return; }
+        if (!text) {
+          if (!enter) { attempt.reason = "incomplete"; finish("refused"); return; }
           send(attempt, "\r");
-          finish(attempt.stopped ? "uncertain" : "submitted");
-        });
-      } catch { attempt.reason = "schedule"; finish("uncertain"); }
+          finish(attempt.stopped ? (attempt.unknown ? "uncertain" : "refused") : "submitted");
+          return;
+        }
+        const previous = current;
+        current = attempt;
+        try { ports.paste(binding.pane, text); }
+        catch { attempt.stopped = true; attempt.unknown = true; attempt.reason = "paste"; }
+        finally { current = previous; }
+        // xterm may normalize line endings and surround the payload with bracketed
+        // paste frames. Do not accept a framing-only or truncated synchronous paste.
+        const normalize = (value: string): string => value.replace(/\r\n|\n/g, "\r");
+        if (!attempt.stopped && (!attempt.frames || !normalize(attempt.joined).includes(normalize(text)))) {
+          attempt.stopped = true; attempt.reason = "incomplete";
+        }
+        if (attempt.stopped) {
+          finish(attempt.frames || attempt.unknown ? "uncertain" : "refused");
+          return;
+        }
+        if (!enter) { finish("paste"); return; }
+        try {
+          ports.schedule(() => {
+            if (settled) return;
+            send(attempt, "\r");
+            finish(attempt.stopped ? "uncertain" : "submitted");
+          });
+        } catch { attempt.reason = "schedule"; finish("uncertain"); }
+      };
+      if (!ready) void (payload as Promise<string>).then(value => {
+        if (settled) return;
+        text = value; requestedBytes = ports.encode(text).byteLength; ready = true;
+        if (deferred) deferred.start();
+        else run();
+      }, () => {
+        if (settled) return;
+        attempt.reason = "paste"; finish("refused");
+      });
+      if (!valid(binding)) {attempt.reason = "guard"; finish("refused"); return operation;}
+      deferred = ports.defer?.(binding, text, run, operation.cancel) ?? null;
+      if (deferred) deferred.start();
+      else run();
       return operation;
     },
   };

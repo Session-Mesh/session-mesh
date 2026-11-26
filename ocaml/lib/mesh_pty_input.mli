@@ -15,10 +15,20 @@ val create : string -> t
 val pending : t -> bool
 (** True while an input frame is queued or being written. *)
 
+val enqueue : ?current:(unit -> bool) -> t -> string -> bool
+(** [current] fences conditional attachment data at dispatch. Before changing
+    the incarnation, call {!retire_guarded} to cancel and join an in-flight
+    conditional write as well as discard queued conditional data. *)
+val quiesce_guarded : t -> _ Eio.Time.clock -> float -> bool
+(** Wait, without cancellation, for an active conditional write. Returns false
+    at the deadline; callers must pause guarded admission throughout. *)
+val retire_guarded : t -> unit
+(** Discard only conditional data and wait until its active write has stopped.
+    Ordinary input and wake frames are retained. Callers must prevent new
+    conditional admissions until the incarnation transition is complete. *)
 val terminal_reports_only : string -> bool
 (** Strict complete focus, mouse, cursor-position and status reply grammar.
     Mixed human bytes (including Enter or paste framing) are not reports. *)
-val enqueue : t -> string -> bool
 val acquire_fence : t -> bool
 (** Only succeeds with no queued or in-flight PTY write. No implicit timeout
     or release on a caller disconnect. *)

@@ -32,9 +32,11 @@ describe('phone direct writing: what the field receives', {skip}, () => {
       textarea.value = 'kept text';
       const delivered = sendKeyToAgent('\r');
       pane.inputAcks.delete('test-budget');
-      return {delivered, text: textarea.value, mode: !!lineDirect};
+      return {delivered, text: textarea.value, mode: !!lineDirect,
+        recovered: lineRecovery?.text, target: lineRecovery?.target.displayName};
     });
-    assert.deepEqual(result, {delivered: false, text: 'kept text', mode: false});
+    assert.deepEqual(result, {delivered: false, text: '', mode: false,
+      recovered: 'kept text', target: 'ack-full-direct'});
     assert.deepEqual(await frames(page), [], 'neither held text nor Enter was sent');
   });
 
@@ -142,7 +144,8 @@ describe('phone direct writing: what the field receives', {skip}, () => {
       textarea.dispatchEvent(new InputEvent('input', {inputType: 'insertReplacementText', data: 'the', bubbles: true}));
     });
     assert.deepEqual(await frames(page), []);
-    assert.equal(await field(page), 'the', 'a correction refused before send stays available for review');
+    assert.equal(await field(page), '');
+    assert.equal(await page.evaluate(() => lineRecovery?.text), 'the', 'the correction stays available for review');
   });
 
   // ---- what the review demonstrated: nothing the agent line holds may be hidden
@@ -205,8 +208,9 @@ describe('phone direct writing: what the field receives', {skip}, () => {
     await page.keyboard.insertText('a\nb');
     await waitForFlash(page, 'multi-line text refused');
     assert.deepEqual(await frames(page), [], 'nothing, not even the first line');
-    assert.equal(await field(page), 'a\nb', 'the refused text stays available for review');
-    assert.equal(await direct(page), true, 'nothing was sent, so nothing is claimed');
+    assert.equal(await field(page), '');
+    assert.equal(await page.evaluate(() => lineRecovery?.text), 'a\nb');
+    assert.equal(await direct(page), false);
   });
 
   test('a control character in an insertion is refused', async () => {
@@ -216,7 +220,8 @@ describe('phone direct writing: what the field receives', {skip}, () => {
     await page.keyboard.insertText('a\x1b[201~b\nrm');
     await waitForFlash(page, 'control characters');
     assert.deepEqual(await frames(page), []);
-    assert.equal(await field(page), 'a\x1b[201~b\nrm', 'the refused text stays available for review');
+    assert.equal(await field(page), '');
+    assert.equal(await page.evaluate(() => lineRecovery?.text), 'a\x1b[201~b\nrm');
   });
 
   for (const [result, kept] of [['refused', true], ['uncertain', false]] as const) {
@@ -238,10 +243,10 @@ describe('phone direct writing: what the field receives', {skip}, () => {
           const textarea = document.querySelector('#line-text') as HTMLTextAreaElement;
           textarea.value = 'one\ntwo';
           textarea.dispatchEvent(new InputEvent('input', {inputType: 'insertFromPaste', data: 'one\ntwo', bubbles: true}));
-          return textarea.value;
+          return {field: textarea.value, recovered: lineRecovery?.text ?? null};
         } finally { delivery.deliver = original; }
       }, result);
-      assert.equal(value, kept ? 'one\ntwo' : '');
+      assert.deepEqual(value, {field: '', recovered: kept ? 'one\ntwo' : null});
       assert.deepEqual(await frames(page), []);
     });
   }
@@ -257,6 +262,21 @@ describe('phone direct writing: what the field receives', {skip}, () => {
     await waitForFlash(page, 'clipboard is empty');
     assert.deepEqual(await frames(page), []);
     assert.equal(await direct(page), true);
+  });
+
+  test('a refused key bar paste is kept for explicit recovery', async () => {
+    const page = await phone('paste-keybar-refused', 'claude');
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.evaluate(() => navigator.clipboard.writeText('one\ntwo'));
+    await withoutBracketedPaste(page);
+    await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
+    await forget(page);
+    await page.locator('#keys [data-k="paste"]').click();
+    await page.waitForFunction(() => !!lineRecovery);
+    assert.equal(await page.evaluate(() => lineRecovery?.text), 'one\ntwo');
+    assert.equal(await page.evaluate(() => lineRecovery?.target.displayName), 'paste-keybar-refused');
+    assert.deepEqual(await frames(page), []);
   });
 
   test('the key bar Paste is delivered at the terminal while writing directly', async () => {

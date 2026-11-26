@@ -2396,5 +2396,16 @@
   "server.switchMigrationChanged": "Le contexte de migration ou de bascule a changé ; inspectez la session.",
   "server.boundRestoreUnavailable": "La conversation du compte lié est indisponible ; restauration refusée.",
   "server.switchStandbyCleanupUnconfirmed": "Nettoyage de la session de secours non confirmé ; inspectez avant toute autre action.",
-  "server.switchSourceStopUnconfirmed": "Arrêt de la session source non confirmé ; inspectez avant toute autre action."
+  "server.switchSourceStopUnconfirmed": "Arrêt de la session source non confirmé ; inspectez avant toute autre action.",
+  "dictation.inline.invalidIncarnation": "Incarnation du terminal invalide.",
+  "compose.recovery.pageSuspended": "Page suspendue ; brouillon non envoyé conservé pour examen.",
+  "conn.cachedUnconfirmed": "Terminal restauré non confirmé — sélectionnez à nouveau la session",
+  "server.invalidTerminalIncarnation": "Incarnation du terminal invalide",
+  "server.conflictingTerminalIncarnation": "L’incarnation du terminal ne correspond pas",
+  "terminal.limited": "Terminal en direct en mode limité : taille automatique, saisie différée et dictée indisponibles.",
+  "terminal.limitedResize": "Adapter à ce panneau",
+  "terminal.limitedKeyboard": "Utiliser le clavier en direct",
+  "terminal.limitedKeyboardWaiting": "Attendez la fin du chargement du terminal, puis choisissez à nouveau Utiliser le clavier en direct.",
+  "terminal.limitedInput": "Cette connexion ne peut pas vérifier les saisies différées. Le texte est conservé ; saisissez directement dans le terminal en direct.",
+  "paneActions.inputIdentityInvalid": "Identité de saisie du terminal invalide."
 }

@@ -189,6 +189,41 @@ let lost_identity_is_never_success () =
     "uncertain after first signal" true
     (result = `Identity_changed_after_signal)
 
+let failed_final_validation_preserves_signal_boundary () =
+  let check_epoch initial current expected_reason expected_stream =
+    Alcotest.(check string) "final validation refusal" expected_reason
+      (Stop.final_refusal ~initial_epoch:initial ~current_epoch:current);
+    Alcotest.(check bool) "conditional attachment remains usable" expected_stream
+      (Stop.stream_current ~initial_epoch:initial ~current_epoch:current)
+  in
+  check_epoch 4 4 "agent_changed" true;
+  check_epoch 4 5 "agent_stop_uncertain" false;
+  check_epoch 5 5 "agent_changed" true
+
+let captured_foreground_identities () =
+  let agent1 = process ~tpgid:200 ~pid:200 ~pgrp:200 "claude" in
+  let agent2 = process ~tpgid:200 ~pid:201 ~pgrp:200 "claude" in
+  let original = [ shell ~tpgid:200 (); agent1; agent2 ] in
+  let identities =
+    Stop.foreground_identities ~runs_agent:runs_claude ~leader:100 ~group:200 original
+  in
+  let matches table =
+    Stop.any_bound_foreground ~runs_agent:runs_claude ~leader:100 ~group:200
+      ~identities table
+  in
+  Alcotest.(check int) "capture both initial agents" 2 (List.length identities);
+  Alcotest.(check bool) "unchanged foreground" true (matches original);
+  Alcotest.(check bool) "second original agent remains" true
+    (matches [ shell ~tpgid:200 (); agent2 ]);
+  Alcotest.(check bool) "reused pid is not original identity" false
+    (matches [ shell ~tpgid:200 (); { agent1 with incarnation = 2L } ]);
+  Alcotest.(check bool) "new agent in same group is not original" false
+    (matches [ shell ~tpgid:200 (); process ~tpgid:200 ~pid:202 ~pgrp:200 "claude" ]);
+  Alcotest.(check bool) "only a non-agent descendant remains" false
+    (matches [ shell ~tpgid:200 (); process ~tpgid:200 ~pid:202 ~pgrp:200 "sleep" ]);
+  Alcotest.(check bool) "different foreground group" false
+    (matches [ shell ~tpgid:300 (); agent1 ])
+
 let bound_foreground () =
   let agent = process ~tpgid:200 ~pid:200 ~pgrp:200 "claude" in
   let matches table = Stop.bound_foreground ~runs_agent:runs_claude ~leader:100
@@ -209,6 +244,10 @@ let () =
             escalation;
           Alcotest.test_case "lost identity cannot become stopped" `Quick
             lost_identity_is_never_success;
+          Alcotest.test_case "failed final validation preserves signal boundary" `Quick
+            failed_final_validation_preserves_signal_boundary;
+          Alcotest.test_case "captured foreground identities" `Quick
+            captured_foreground_identities;
           Alcotest.test_case "bound agent must remain foreground" `Quick bound_foreground;
         ] );
     ]

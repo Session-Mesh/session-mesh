@@ -7,7 +7,9 @@
 
 let capacity = 8 * 1024 * 1024
 
-type frame = Data of string | Control of string | Submit_delay | Submit_enter
+type frame = Data of string * (unit -> bool) option | Control of string | Submit_delay | Submit_enter
+
+exception Retired_input
 
 type t = {
   name : string;
@@ -19,6 +21,7 @@ type t = {
   mutable writing : bool;
   mutable dropping : bool;
   mutable closed : bool;
+  mutable guarded_write : (Eio.Cancel.t * unit Eio.Promise.t) option;
   mutable fenced : bool;
 }
 
@@ -34,6 +37,7 @@ let create name =
     writing = false;
     dropping = false;
     closed = false;
+    guarded_write = None;
     fenced = false;
   }
 
@@ -70,7 +74,7 @@ let close t =
 let cancel_submit t =
   let enters =
     Queue.fold
-      (fun count frame -> if frame = Submit_enter then count + 1 else count)
+      (fun count frame -> match frame with Submit_enter -> count + 1 | _ -> count)
       0 t.frames
   in
   if enters > 0 then (
@@ -133,7 +137,7 @@ let terminal_reports_only data =
   in
   length > 0 && all 0
 
-let enqueue_unchecked t data =
+let enqueue_unchecked ?current t data =
   if t.closed then false
   else if data = "" then true
   else if String.length data > capacity - t.bytes then (
@@ -153,12 +157,12 @@ let enqueue_unchecked t data =
       else data
     in
     t.bytes <- t.bytes + String.length data;
-    Queue.add (Data data) t.frames;
+    Queue.add (Data (data, current)) t.frames;
     Eio.Condition.broadcast t.wake;
     true
 
-let enqueue t data =
-  if t.fenced then false else enqueue_unchecked t data
+let enqueue ?current t data =
+  if t.fenced then false else enqueue_unchecked ?current t data
 
 let enqueue_fenced t data =
   if not t.fenced || t.closed || data = ""
@@ -182,7 +186,7 @@ let enqueue_submit t data =
     false)
   else (
     t.bytes <- t.bytes + length;
-    Queue.add (Data data) t.frames;
+    Queue.add (Data (data, None)) t.frames;
     Queue.add Submit_delay t.frames;
     Queue.add Submit_enter t.frames;
     Eio.Condition.broadcast t.wake;
@@ -197,14 +201,62 @@ let rec next t =
     next t)
   else Some (Queue.peek t.frames)
 
+(* Wait for the current conditional write to finish without cancelling it.
+   While the caller pauses admission, no subsequent guarded write can start. *)
+let quiesce_guarded t clock timeout =
+  let drained = match t.guarded_write with
+    | None -> true
+    | Some (_, finished) ->
+        try Eio.Time.with_timeout_exn clock timeout (fun () -> Eio.Promise.await finished); true
+        with Eio.Time.Timeout -> false
+  in
+  (* A completed write can have later accepted frames behind it. Refuse the
+     stop rather than retiring bytes for which the client already has an ACK. *)
+  drained && not (Queue.fold (fun pending frame -> pending || match frame with
+    | Data (_, Some _) -> true | _ -> false) false t.frames)
+
+let retire_guarded t =
+  let kept = Queue.create () in
+  Queue.iter
+    (function
+      | Data (data, Some _) -> t.bytes <- t.bytes - String.length data
+      | frame -> Queue.add frame kept)
+    t.frames;
+  Queue.clear t.frames;
+  Queue.transfer kept t.frames;
+  if Queue.is_empty t.frames then t.dropping <- false;
+  match t.guarded_write with
+  | None -> ()
+  | Some (context, finished) ->
+      Eio.Cancel.cancel context Retired_input;
+      Eio.Promise.await finished
+
 let run t clock sink =
+  let guarded frame current data =
+    if current () && not t.closed
+       && Option.fold ~none:false ~some:(( == ) frame) (Queue.peek_opt t.frames) then
+      let finished, finish = Eio.Promise.create () in
+      Fun.protect
+        ~finally:(fun () ->
+          t.guarded_write <- None;
+          Eio.Promise.resolve finish ())
+        (fun () ->
+          try
+            Eio.Cancel.sub (fun context ->
+                t.guarded_write <- Some (context, finished);
+                Eio.Flow.write sink [Cstruct.of_string data])
+          with Eio.Cancel.Cancelled Retired_input -> ())
+  in
   let rec write () =
     match next t with
     | None -> ()
     | Some Submit_delay ->
         Eio.Time.sleep clock 0.25;
         (* Input during the delay may have withdrawn this frame. *)
-        (if (not t.closed) && Queue.peek_opt t.frames = Some Submit_delay then
+        (if
+           (not t.closed)
+           && match Queue.peek_opt t.frames with Some Submit_delay -> true | _ -> false
+         then
            ignore (Queue.take t.frames));
         write ()
     | Some Submit_enter ->
@@ -218,12 +270,27 @@ let run t clock sink =
             Eio.Flow.write sink [ Cstruct.of_string "\r" ]);
         Eio.Fiber.yield ();
         write ()
-    | Some (Data data | Control data) ->
+    | Some (Data (data, current) as frame) ->
+        t.writing <- true;
+        Fun.protect ~finally:(fun () -> t.writing <- false) (fun () ->
+          match current with
+          | None -> Eio.Flow.write sink [ Cstruct.of_string data ]
+          | Some current -> guarded frame current data);
+        if
+          not t.closed
+          && Option.fold ~none:false ~some:(( == ) frame) (Queue.peek_opt t.frames)
+        then (
+          ignore (Queue.take t.frames);
+          t.bytes <- t.bytes - String.length data;
+          if Queue.is_empty t.frames then t.dropping <- false);
+        Eio.Fiber.yield ();
+        write ()
+    | Some (Control data as frame) ->
         t.writing <- true;
         Fun.protect
           ~finally:(fun () -> t.writing <- false)
           (fun () -> Eio.Flow.write sink [ Cstruct.of_string data ]);
-        if not t.closed then (
+        if not t.closed && Option.fold ~none:false ~some:(( == ) frame) (Queue.peek_opt t.frames) then (
           ignore (Queue.take t.frames);
           t.bytes <- t.bytes - String.length data;
           if Queue.is_empty t.frames then t.dropping <- false);

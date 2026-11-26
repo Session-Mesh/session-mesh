@@ -51,6 +51,12 @@ val classify :
 (** What holds the terminal of the session led by [leader], from one table.
     [runs_agent] tells whether a process runs the requested agent. *)
 
+val final_refusal : initial_epoch:int -> current_epoch:int -> string
+(** Distinguish a refusal before signalling from one after a signal. *)
+
+val stream_current : initial_epoch:int -> current_epoch:int -> bool
+(** A conditional stream cannot cross a signal boundary. *)
+
 val bound_foreground :
   runs_agent:(Mesh_platform.process -> bool) -> leader:int -> group:int ->
   pid:int -> incarnation:int64 -> Mesh_platform.process list -> bool
@@ -103,6 +109,18 @@ val bound_foreground :
   incarnation:int64 ->
   Mesh_platform.process list ->
   bool
+
+val foreground_identities :
+  runs_agent:(Mesh_platform.process -> bool) ->
+  leader:int -> group:int -> Mesh_platform.process list -> (int * int64) list
+(** Capture the live, recognised agents of this foreground job. *)
+
+val any_bound_foreground :
+  runs_agent:(Mesh_platform.process -> bool) ->
+  leader:int -> group:int -> identities:(int * int64) list ->
+  Mesh_platform.process list -> bool
+(** Whether any captured process identity remains a recognised agent in the
+    same foreground job. New processes or reused PIDs do not count. *)
 
 val stop_guarded :
   timing ->

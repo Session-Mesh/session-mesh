@@ -64,15 +64,20 @@ describe('a replay is interpreted at the width it was produced at', {skip}, () =
     const frames: (string | Buffer)[] = [];
     const narrow = await mesh.openPage('rw', NARROW, undefined, page => page.on('websocket', socket =>
       socket.on('framereceived', ({payload}) => {
-        // Input negotiation precedes geometry on current hosts; geometry still precedes replay.
+        // Input negotiation precedes conditional identity, geometry and replay.
         if (typeof payload === 'string' && JSON.parse(payload).t === 'input_capability') return;
-        if (frames.length < 2) frames.push(payload);
+        if (frames.length < 3) frames.push(payload);
       })));
     assert.ok(await cols(narrow) < produced, 'the narrow page is narrower than the program');
     const narrowLines = region(await logicalLines(narrow), 'a');
     assert.equal(readText(narrowLines), source, narrowLines.join('\n'));
-    // server.py relayed the host's geometry before the replay: the wide page's size.
-    const [geometry, replay] = frames;
+    // Conditional identity precedes the host's geometry and its first binary replay.
+    const [bound, geometry, replay] = frames;
+    assert.equal(typeof bound, 'string');
+    const identity = JSON.parse(bound as string);
+    assert.equal(identity.t, 'bound');
+    assert.equal(identity.name, 'rw');
+    assert.ok(Number.isFinite(identity.created) && identity.created > 0);
     assert.equal(typeof geometry, 'string');
     assert.deepEqual(JSON.parse(geometry as string), {t: 'g', rows: wideTermRows, cols: produced});
     assert.ok(Buffer.isBuffer(replay));

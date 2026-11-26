@@ -56,6 +56,12 @@ const installFakeBridge = () => {
       created: Number(new URL(this.url).searchParams.get('input_ack_created')), slot: 4, generation: 17,
       actor_nonce: '0123456789abcdef0123456789abcdef'}) {
       this.onmessage?.(new MessageEvent('message', {data: JSON.stringify(cap)}));
+      if (this.readyState === RealSocket.OPEN) {
+        const created = Number(new URL(this.url).searchParams.get('created'));
+        const name = decodeURIComponent(new URL(this.url).pathname.split('/').at(-1)!);
+        this.onmessage?.(new MessageEvent('message', {data: JSON.stringify({t: 'bound', name, created})}));
+        this.onmessage?.(new MessageEvent('message', {data: new Uint8Array().buffer}));
+      }
     }
     receipt(ack: object) {
       this.onmessage?.(new MessageEvent('message', {data: JSON.stringify({t: 'input_ack',

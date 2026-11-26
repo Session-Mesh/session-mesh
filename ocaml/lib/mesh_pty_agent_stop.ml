@@ -7,6 +7,11 @@
 
 type foreground = Idle | Running of int | Refused of string
 
+let final_refusal ~initial_epoch ~current_epoch =
+  if initial_epoch = current_epoch then "agent_changed" else "agent_stop_uncertain"
+
+let stream_current ~initial_epoch ~current_epoch = initial_epoch = current_epoch
+
 let live (found : Mesh_platform.process) = found.state <> 'Z'
 
 (* Live processes of the session other than its leader that run the agent. *)
@@ -54,6 +59,18 @@ let bound_foreground ~runs_agent ~leader ~group ~pid ~incarnation table =
          && p.incarnation = incarnation
          && p.pgrp = group && p.sid = leader && live p && runs_agent p)
        table
+
+let foreground_identities ~runs_agent ~leader ~group table =
+  match classify ~runs_agent ~leader table with
+  | Running current when current = group ->
+      agents ~runs_agent ~leader table
+      |> List.filter (fun (p : Mesh_platform.process) -> p.pgrp = group)
+      |> List.map (fun (p : Mesh_platform.process) -> (p.pid, p.incarnation))
+  | Idle | Running _ | Refused _ -> []
+
+let any_bound_foreground ~runs_agent ~leader ~group ~identities table =
+  let current = foreground_identities ~runs_agent ~leader ~group table in
+  List.exists (fun identity -> List.mem identity current) identities
 
 let gone ~runs_agent ~leader ~group table =
   match

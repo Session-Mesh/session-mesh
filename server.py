@@ -386,12 +386,18 @@ class HostNotReached(web.HTTPServiceUnavailable):
     is safe (unlike CreationUncertain)."""
 
 
+class HostBadReply(web.HTTPServiceUnavailable):
+    """The host replied with invalid data after the request may have taken effect."""
+
+
 async def host(req, timeout=None):
     """The PTY host's reply; ``timeout``: seconds instead of ptyhost.REQUEST_TIMEOUT, for a longer operation."""
     try:
         reply = await (ptyhost.request(req) if timeout is None else ptyhost.request(req, timeout))
     except ptyhost.NotSent as exc:
         raise HostNotReached(text="ptyhost is not responding (systemctl --user start session-mesh-pty)") from exc
+    except ValueError as exc:
+        raise HostBadReply(text="ptyhost is not responding (systemctl --user start session-mesh-pty)") from exc
     except (OSError, asyncio.IncompleteReadError, asyncio.TimeoutError):
         # asyncio.TimeoutError is an OSError only from Python 3.11 on: named for 3.10
         # IncompleteReadError: an older ptyhost closes some failed requests without replying
@@ -6683,6 +6689,8 @@ async def _config_host():
         raw = await host({"op": "list"})
     except HostNotReached:      # no process accepts connections on the socket: a fact to report
         raw, answered = [], False
+    except HostBadReply:
+        raw, reply_valid = [], False
     except web.HTTPException:   # one accepted the connection, then failed or refused the request
         raw = []
     except ValueError:          # bytes that are not JSON: the host answers, but badly
@@ -7740,11 +7748,19 @@ def releases_human_input(text):
 
 def attach_supports(reply, capability):
     """Fail closed for optional frames not announced by this exact attach."""
-    capabilities = reply.get("pty_capabilities") if isinstance(reply, dict) else None
-    return (isinstance(capabilities, list)
-            and all(isinstance(value, str) for value in capabilities)
-            and len(capabilities) == len(set(capabilities))
-            and capability in capabilities)
+    return ptyhost.supports(reply, capability)
+
+
+def attached_control(text, pty_size, human_input_lease, limited):
+    """An old R may ignore Claim/Keep: only an explicit Take may resize it."""
+    control = browser_control_frame(text, pty_size)
+    if not control or (control[:1] == b"H" and not human_input_lease):
+        return None
+    if limited and control[:1] == b"R":
+        message = json.loads(text)   # browser_control_frame already validated it
+        if message.get("size") != "take":
+            return None
+    return control
 
 
 def _ack_v2_binding(value, created, nonce=False):
@@ -7796,6 +7812,17 @@ async def ws_term(request):
         raise web.HTTPForbidden()
     rows = _int_param(request.query.get("rows"), 40)
     cols = _int_param(request.query.get("cols"), 120)
+    created = None
+    if "created" in request.query:
+        values = request.query.getall("created")
+        try:
+            if len(values) != 1:
+                raise ValueError("duplicate incarnation")
+            created = float(values[0])
+            if not math.isfinite(created) or created <= 0:
+                raise ValueError("invalid incarnation")
+        except ValueError:
+            raise web.HTTPBadRequest(text="Invalid terminal incarnation") from None
     ws = web.WebSocketResponse(heartbeat=25, max_msg_size=4 * 1024 * 1024)
     if not ws.can_prepare(request).ok:     # not a websocket upgrade: nothing to attach
         raise web.HTTPBadRequest(text="WebSocket expected")
@@ -7823,10 +7850,10 @@ async def ws_term(request):
                 or not isinstance(ack_created, str)
                 or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", ack_created)):
             raise web.HTTPBadRequest(text="Invalid acknowledged input v2 binding")
-        created = float(ack_created)
-        if not math.isfinite(created) or created <= 0:
+        ack_created = float(ack_created)
+        if not math.isfinite(ack_created) or ack_created <= 0:
             raise web.HTTPBadRequest(text="Invalid acknowledged input incarnation")
-        v2_request = {"mode": mode, "created": created}
+        v2_request = {"mode": mode, "created": ack_created}
         if mode == "resume":
             slot = request.query["input_ack_slot"]
             generation = request.query["input_ack_generation"]
@@ -7850,14 +7877,18 @@ async def ws_term(request):
         if not math.isfinite(ack_created) or ack_created <= 0:
             raise web.HTTPBadRequest(text="Invalid acknowledged input incarnation")
     try:
-        reader, writer, attach_reply = await ptyhost.attach_info(name, rows, cols,
-            size="claim" if pty_size else None,
+        if created is not None and (requested_ack or requested_v2) and created != ack_created:
+            raise web.HTTPBadRequest(text="Conflicting terminal incarnation")
+        reader, writer, attach_reply = await ptyhost.attach_info(
+            name, rows, cols, created=created, size="claim" if pty_size else None,
             **({"input_ack": (ack_created, ack_id)} if requested_ack else
                {"input_ack_v2": v2_request} if requested_v2 else {}))
-    except (OSError, LookupError, asyncio.IncompleteReadError, asyncio.TimeoutError):
+    except (OSError, LookupError, ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError):
         # IncompleteReadError: an older ptyhost closes some failed requests without replying
         raise web.HTTPNotFound()
     human_input_lease = attach_supports(attach_reply, "human_input_lease_v1")
+    verified = created is not None and attach_reply.get("_conditional_input_verified") is True
+    limited = created is not None and not verified
     native_ack = attach_reply.get("input_ack") if isinstance(attach_reply, dict) else None
     acknowledged = (requested_ack
                     and attach_supports(attach_reply, "acknowledged_input_v1")
@@ -7875,12 +7906,19 @@ async def ws_term(request):
             raise web.HTTPNotFound()
     # The geometry the host's replay was produced at, for a browser that asks for it; the
     # browser validates it. A host that does not give it sends nothing more.
+
     geometry = attach_reply.get("replay_geometry") if request.query.get("replay_geometry") == "1" else None
     try:
         await ws.prepare(request)
     except BaseException:
         writer.close()          # never leave a ptyhost client attached for a failed upgrade
         raise
+    # Logout-all can revoke the cookie while the PTY attachment or upgrade is awaited.
+    # Register without another yield after this check so logout sees every admitted socket.
+    if not authed(request):
+        writer.close()
+        await ws.close(code=aiohttp.WSCloseCode.POLICY_VIOLATION, message=b"logout")
+        return ws
     request.app["sockets"].add(ws)
 
     async def downstream():
@@ -7891,13 +7929,17 @@ async def ws_term(request):
             elif requested_ack:
                 await ws.send_str(json.dumps({"t": "input_capability",
                     "supported": acknowledged, "created": ack_created, "id": ack_id}))
+            if verified:   # exact connected host confirms lifetime fencing and size watching
+                await ws.send_str(json.dumps({"t": "bound", "name": name, "created": created}))
+            elif limited:
+                await ws.send_str(json.dumps({"t": "limited"}))
             if isinstance(geometry, dict):   # before the replay, the host's first D frame
                 await ws.send_str(json.dumps({"t": "g", "rows": geometry.get("rows"), "cols": geometry.get("cols")}))
             while True:
                 kind, payload = await ptyhost.read_frame(reader)
                 if kind == b"D":
                     await ws.send_bytes(payload)
-                elif kind == b"S" and pty_size:
+                elif kind == b"S" and pty_size and not limited:
                     size = pty_size_message(payload)
                     if size:
                         await ws.send_str(size)
@@ -7938,7 +7980,7 @@ async def ws_term(request):
                     writer.write(ptyhost.frame(b"D", msg.data))
             elif msg.type == web.WSMsgType.TEXT:
                 v2_h = _ack_v2_h(msg.data, v2_binding) if requested_v2 else None
-                control = v2_h or browser_control_frame(msg.data, pty_size)
+                control = v2_h or attached_control(msg.data, pty_size, human_input_lease, limited)
                 # H is an optional extension.  Forwarding it to the former
                 # OCaml owner closes the whole attachment, including ordinary
                 # keyboard D frames.  R remains part of the baseline protocol.

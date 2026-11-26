@@ -136,6 +136,35 @@ let in_flight_control () =
           wait 100;
           Mesh_pty_input.close t))
 
+let retire_guarded_before_fence () =
+  Eio_posix.run (fun env ->
+      Eio.Switch.run (fun sw ->
+          let t = Mesh_pty_input.create "test" in
+          let writing, began = Eio.Promise.create () in
+          let never, _ = Eio.Promise.create () in
+          let module Sink = struct
+            type t = unit
+            let single_write () buffers =
+              Eio.Promise.resolve began ();
+              Eio.Promise.await never;
+              List.fold_left (fun size b -> size + Cstruct.length b) 0 buffers
+            let copy t ~src = Eio.Flow.Pi.simple_copy ~single_write t ~src
+          end in
+          let sink = Eio.Resource.T
+            ((), Eio.Resource.handler [ Eio.Resource.H (Eio.Flow.Pi.Sink, (module Sink)) ]) in
+          Eio.Fiber.fork ~sw (fun () -> Mesh_pty_input.run t (Eio.Stdenv.clock env) sink);
+          check "guarded input accepted" true
+            (Mesh_pty_input.enqueue ~current:(fun () -> true) t "guarded");
+          Eio.Promise.await writing;
+          check "guarded write prevents fence" false (Mesh_pty_input.acquire_fence t);
+          Mesh_pty_input.retire_guarded t;
+          check "retired guarded write no longer pending" false (Mesh_pty_input.pending t);
+          check "fence acquired after retirement" true (Mesh_pty_input.acquire_fence t);
+          check "fence rejects guarded input" false
+            (Mesh_pty_input.enqueue ~current:(fun () -> true) t "late");
+          check "fence releases" true (Mesh_pty_input.release_fence t);
+          Mesh_pty_input.close t))
+
 let retired_receipts () =
   let history = Hashtbl.create 64 in
   for n = 1 to 64 do
@@ -156,4 +185,5 @@ let () =
                     Alcotest.test_case "control drains before release" `Quick (fenced_control ~fail_write:false);
                     Alcotest.test_case "failed control write cannot release" `Quick (fenced_control ~fail_write:true);
                    Alcotest.test_case "in-flight write is not a checkpoint" `Quick in_flight_write;
+                   Alcotest.test_case "retire guarded write before fence" `Quick retire_guarded_before_fence;
                    Alcotest.test_case "in-flight control remains pending" `Quick in_flight_control ]) ]

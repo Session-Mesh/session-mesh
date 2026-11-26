@@ -158,8 +158,10 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
     await page.waitForFunction(() => active.conn?.ws?.readyState === 3);
     const beforeReconnect = await page.evaluate(() => active.inputAck?.pendingBytes);
     await page.evaluate(() => active.send('OFFLINE-NO-ADMISSION'));
-    assert.equal(await page.evaluate(() => active.inputAck?.pendingBytes), beforeReconnect,
-      'input entered without an attachment must not become an invisible host debt');
+    assert.equal(await page.evaluate(() => active.inputAck?.pendingBytes), beforeReconnect! + 20,
+      'offline input is retained locally for review');
+    assert.equal(await page.locator('.pane.active .p-input-review').isVisible(), true);
+    assert.match(await page.locator('.pane.active .p-input-drafts textarea').inputValue(), /OFFLINE-NO-ADMISSION/);
     await page.waitForFunction(() => active.conn?.ws?.readyState === 1 &&
       active.conn.v2AwaitingCapability === false);
     const recovered = new URL(await page.evaluate(() => active.conn!.ws.url)).searchParams;
@@ -173,6 +175,8 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
     assert.deepEqual((await page.evaluate(() => window.__ackFrames)).filter(
       text => text.includes('UNCERTAIN-ONCE')), ['echo UNCERTAIN-ONCE\r'],
     'reconnecting must not replay an uncertain input frame');
+    assert.equal((await page.evaluate(() => window.__ackFrames)).some(text => text.includes('OFFLINE-NO-ADMISSION')),
+      false, 'offline input is not automatically sent on reconnect');
     await page.locator('.pane.active .p-input-discard').click();
     assert.equal(await page.evaluate(() => active.inputAck?.state), 'halted');
     assert.equal(await page.evaluate(() => active.inputLease?.dirty), true,

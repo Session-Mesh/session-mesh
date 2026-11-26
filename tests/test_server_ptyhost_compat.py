@@ -43,6 +43,18 @@ async def close_without_reply(fake, reader, writer):
     await ptyhost.read_frame(reader)
 
 
+async def reply_with_wrong_frame(fake, reader, writer):
+    kind, payload = await ptyhost.read_frame(reader)
+    fake.frames.append((kind, payload))
+    request = json.loads(payload)
+    if request.get("op") == "list":
+        writer.write(ptyhost.frame(b"C", [{"name": "x", "created": 1.0, "pid": 12345,
+                                         "attached": 0, "activity": 0}]))
+    else:
+        writer.write(ptyhost.frame(b"D", b"not a control reply"))
+    await writer.drain()
+
+
 async def never_reply(fake, reader, writer):
     await ptyhost.read_frame(reader)
     await reader.read()           # until the client gives up and closes
@@ -92,6 +104,27 @@ async def test_kill_answered_by_a_closed_connection_is_503(client, auth_cookie, 
     await fake_ptyhost(close_without_reply)
     resp = await asyncio.wait_for(client.post("/api/kill/x", json={"created": 1.0}, headers=auth_cookie), 5)
     assert resp.status == 503
+
+
+async def test_kill_with_malformed_reply_is_503_after_request_sent(client, auth_cookie, fake_ptyhost):
+    fake = await fake_ptyhost(reply_with_wrong_frame)
+    resp = await asyncio.wait_for(client.post("/api/kill/x", json={"created": 1.0}, headers=auth_cookie), 5)
+    assert resp.status == 503
+    assert [json.loads(payload)["op"] for _, payload in fake.frames] == ["list", "kill_if"]
+
+
+async def test_config_reports_malformed_host_reply(monkeypatch):
+    async def identity():
+        return None
+
+    async def invalid_reply(_request):
+        raise ValueError("invalid control reply")
+
+    monkeypatch.setattr(ptyhost, "host_identity", identity)
+    monkeypatch.setattr(ptyhost, "request", invalid_reply)
+    result = await server._config_host()
+    assert result["running"] is True
+    assert result["reply_valid"] is False
 
 
 async def test_kill_against_a_frozen_ptyhost_is_503_within_the_timeout(

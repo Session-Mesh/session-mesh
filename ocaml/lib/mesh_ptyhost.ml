@@ -320,17 +320,17 @@ type session = {
   mutable last_input : float;
       (** Wall-clock time of the last bytes queued for the program (keystrokes,
           a typed command, a wake). A wake's idle evidence must postdate it. *)
-  human_leases : (string, bool) Hashtbl.t;
+  human_leases : (float option * string, bool) Hashtbl.t;
   input_ack_history : (string, float * int * string) Hashtbl.t;
   input_ack_active : (string, Mesh_pty_output.t) Hashtbl.t;
   input_ack_v1_pending : (string, unit) Hashtbl.t;
   input_ack_slots : input_actor_v2 option array;
   mutable input_ack_generation : int;
   mutable input_ack_clients : (Mesh_pty_output.t * float) list;
-  lease_connections : (string, int) Hashtbl.t;
-      (** Client id -> its attached connections that named it. *)
-  lease_expires : (string, Mtime.t) Hashtbl.t;
-      (** Client id -> end of its lease, while none of its connections is
+  lease_connections : (float option * string, int) Hashtbl.t;
+      (** Conditional incarnation (or legacy) and client id -> connections. *)
+  lease_expires : (float option * string, Mtime.t) Hashtbl.t;
+      (** Incarnation/client id -> end of its lease, while no connection is
           attached. *)
   notified : (string, unit) Hashtbl.t;
   notified_order : string Queue.t;
@@ -339,6 +339,7 @@ type session = {
   retired_switch_fences : (string, unit) Hashtbl.t;
   replay : Mesh_pty_replay.t;
   mutable clients : Mesh_pty_output.t list;
+  mutable conditional_clients : (Mesh_pty_output.t * (unit -> unit)) list;
   mutable size_owner : Mesh_pty_output.t option;
       (** The attachment that owns the PTY size (Mesh_pty_size). *)
   mutable size_watchers : Mesh_pty_output.t list;
@@ -432,6 +433,11 @@ let supported_foreground s requested =
               && runs_agent found requested)
             processes)
 
+(* Conditional attach may subscribe to size ownership without resizing. Its
+   D/H/R input and queued D writes retire at an incarnation change. In a C ack
+   this capability describes this exact, conditional size-watching stream. *)
+let conditional_input_capability = `String "conditional_input_v1"
+
 (* [agent_relaunch_v1]: [stop_agent_if] and a [start_if] with [meta] are
    served (not in the Unix identity split, whose sessions are another
    account's processes). *)
@@ -448,10 +454,17 @@ let session_json ?(relaunch = true) s =
       ("attached", `Int (List.length s.clients));
       ( "pty_capabilities",
         `List
-           ([ `String "agent_wake_v1"; `String "human_input_lease_v1";
+           ([
+              `String "agent_wake_v1";
+              `String "human_input_lease_v1";
+              conditional_input_capability;
               `String "acknowledged_input_v1";
-              `String "acknowledged_input_v2" ]
-          @ if relaunch then [ `String "agent_relaunch_v1"; `String "agent_relaunch_bound_v1" ] else []) );
+              `String "acknowledged_input_v2";
+            ]
+           @
+           if relaunch then
+             [ `String "agent_relaunch_v1"; `String "agent_relaunch_bound_v1" ]
+           else []) );
     ]
 
 (* A dirty human-input lease defers agent wakes. Its client may never come
@@ -628,23 +641,33 @@ let stop_agent env s agent expected =
         let classified =
           Mesh_pty_agent_stop.classify ~runs_agent ~leader:s.pid table
         in
-        match (expected, classified) with
+        let identities =
+          match classified with
+          | Mesh_pty_agent_stop.Running group ->
+              Mesh_pty_agent_stop.foreground_identities ~runs_agent
+                ~leader:s.pid ~group table
+          | Idle | Refused _ -> []
+        in
+        let classified = match (expected, classified) with
         | None, _ -> classified
         | Some (pid, incarnation), Mesh_pty_agent_stop.Running group
           when Mesh_pty_agent_stop.bound_foreground ~runs_agent ~leader:s.pid
                  ~group ~pid ~incarnation table ->
             classified
-        | Some _, _ -> Mesh_pty_agent_stop.Refused "agent_changed")
+        | Some _, _ -> Mesh_pty_agent_stop.Refused "agent_changed"
+        in
+        (classified, identities))
   with
   | None -> agent_refusal "process_scan_failed"
-  | Some (Mesh_pty_agent_stop.Refused reason) -> agent_refusal reason
+  | Some (Mesh_pty_agent_stop.Refused reason, _) -> agent_refusal reason
   (* An idle shell that was just sent a line may be about to start the agent:
      the table read now would miss it. *)
-  | Some Mesh_pty_agent_stop.Idle
+  | Some (Mesh_pty_agent_stop.Idle, _)
     when (Option.is_some s.switch_input_fence && s.command_started)
          || Eio.Time.now (Eio.Stdenv.clock env) -. s.last_input < agent_start_window ->
       agent_refusal "agent_starting"
-  | Some foreground -> (
+  | Some (foreground, initial_identities) -> (
+      let initial_epoch = s.input_signal_epoch in
       let group =
         match foreground with
         | Mesh_pty_agent_stop.Running group -> Some group
@@ -665,12 +688,30 @@ let stop_agent env s agent expected =
                   = Some true
             in
             if (not s.alive) || not bound then false
-            else
+            else (
+              (* Finish the in-flight conditional frame before signalling.
+                 If it cannot drain, refuse instead of losing a partial write. *)
+              let drained = Mesh_pty_input.quiesce_guarded s.input (Eio.Stdenv.clock env) 1. in
+              let still_bound =
+                match expected with
+                | None ->
+                    (* The foreground can change while a guarded write drains.
+                       Require one of the initially seen agents to survive. *)
+                    s.alive && read_table
+                      (Mesh_pty_agent_stop.any_bound_foreground ~runs_agent
+                         ~leader:s.pid ~group ~identities:initial_identities)
+                      = Some true
+                | Some (pid, incarnation) ->
+                    s.alive && read_table
+                      (Mesh_pty_agent_stop.bound_foreground ~runs_agent
+                         ~leader:s.pid ~group ~pid ~incarnation) = Some true
+              in
+              if not drained || not still_bound || not s.alive then false else
               try
                 Unix.kill (-group) signum;
                 s.input_signal_epoch <- s.input_signal_epoch + 1;
                 true
-              with Unix.Unix_error _ -> Option.is_none expected)
+              with Unix.Unix_error _ -> Option.is_none expected))
       in
       let clock = Eio.Stdenv.clock env in
       let stopped () =
@@ -689,22 +730,38 @@ let stop_agent env s agent expected =
       | `Stopped when (not s.alive) || s.finishing || s.kill_requested ->
           agent_refusal "stale_incarnation"
       | `Stopped ->
-          let now = Eio.Time.now clock in
-          (* The same shell may retain a draft even after a successful stop,
-             including the Idle case. Revocation does not clear dirty leases:
-             an attached old actor must disconnect before its existing grace
-             can expire. A permanently attached dirty actor remains a
-             conservative blocker, rather than silently losing unknown text. *)
-          s.created <- (if now > s.created then now else Float.succ s.created);
-          (* Retain actor identities to reject replay in later incarnations,
-             but never retain their terminal payloads after retirement. Only
-             the current incarnation needs the data for ACK-lost retries. *)
-          Mesh_pty_receipts.retire_v1 s.input_ack_history;
-          Hashtbl.clear s.input_ack_v1_pending;
-          s.command_started <- false;
-          s.launch_pending <- false;
-          s.agent_stopped <- true;
-          `Assoc [ ("ok", `Bool true); ("created", `Float s.created) ])
+          let drained = Mesh_pty_input.quiesce_guarded s.input clock 1. in
+          let still_idle =
+            read_table (fun table ->
+              Mesh_pty_agent_stop.classify ~runs_agent ~leader:s.pid table
+              = Mesh_pty_agent_stop.Idle) = Some true
+          in
+          if not drained || not still_idle then
+            agent_refusal (Mesh_pty_agent_stop.final_refusal
+              ~initial_epoch ~current_epoch:s.input_signal_epoch)
+          else (
+          (* Join any conditional PTY write before moving the incarnation on.
+             No new conditional data is admitted while [agent_stopping]. *)
+          Mesh_pty_input.retire_guarded s.input;
+          if (not s.alive) || s.finishing || s.kill_requested then
+            agent_refusal "stale_incarnation"
+          else (
+            List.iter (fun (_, retire) -> retire ()) s.conditional_clients;
+            let legacy (incarnation, _) value =
+              if Option.is_none incarnation then Some value else None
+            in
+            Hashtbl.filter_map_inplace legacy s.human_leases;
+            Hashtbl.filter_map_inplace legacy s.lease_connections;
+            Hashtbl.filter_map_inplace legacy s.lease_expires;
+            let now = Eio.Time.now clock in
+            s.created <- (if now > s.created then now else Float.succ s.created);
+            (* Retire payloads while retaining actor identities for replay protection. *)
+            Mesh_pty_receipts.retire_v1 s.input_ack_history;
+            Hashtbl.clear s.input_ack_v1_pending;
+            s.command_started <- false;
+            s.launch_pending <- false;
+            s.agent_stopped <- true;
+            `Assoc [ ("ok", `Bool true); ("created", `Float s.created) ])))
 
 let nonce_of = function
   | `Assoc fields -> List.assoc_opt "nonce" fields
@@ -1690,6 +1747,7 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
                           retired_switch_fences = Hashtbl.create 16;
                           replay = Mesh_pty_replay.create ();
                           clients = [];
+                          conditional_clients = [];
                           size_owner = None;
                           size_watchers = [];
                           geometry;
@@ -2004,6 +2062,7 @@ let prepare_attach env observer sessions fields =
         (* The replay and the geometry it was last produced at, both taken
            after nonce minting but before this client's geometry is applied,
            as ptyhost.py does; the reply names the geometry when readable. *)
+
         let snapshot = Mesh_pty_replay.replay s.replay in
         let replay_geometry =
           try Some (s.geometry ())
@@ -2047,7 +2106,7 @@ let prepare_attach env observer sessions fields =
               let available actor =
                 not (Hashtbl.mem s.input_ack_active actor.lease_id)
                 && not (Option.value ~default:false
-                  (Hashtbl.find_opt s.human_leases actor.lease_id))
+                  (Hashtbl.find_opt s.human_leases (None, actor.lease_id)))
               in
               let slot =
                 match Array.find_index Option.is_none s.input_ack_slots with
@@ -2065,8 +2124,8 @@ let prepare_attach env observer sessions fields =
               if s.input_ack_generation >= max_actor_generation then
                 invalid_arg "input_ack_v2_generation_exhausted";
               Option.iter (fun actor ->
-                Hashtbl.remove s.human_leases actor.lease_id;
-                Hashtbl.remove s.lease_expires actor.lease_id)
+                Hashtbl.remove s.human_leases (None, actor.lease_id);
+                Hashtbl.remove s.lease_expires (None, actor.lease_id))
                 s.input_ack_slots.(slot);
               s.input_ack_generation <- s.input_ack_generation + 1;
               let generation = s.input_ack_generation in
@@ -2087,7 +2146,7 @@ let prepare_attach env observer sessions fields =
         Some (s, snapshot, replay_geometry, { client; claimed; watch }, input_ack)
       with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None)
 
-let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
+let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach ?incarnation
     ?input_ack env
     observer s flow =
   let { client; claimed; watch } =
@@ -2100,6 +2159,28 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
   let held_input = Queue.create () in
   let held_bytes = ref 0 in
   let holding = ref false in
+  let attachment_epoch = s.input_signal_epoch in
+  let stream_current () =
+    Option.is_none incarnation || Mesh_pty_agent_stop.stream_current
+      ~initial_epoch:attachment_epoch ~current_epoch:s.input_signal_epoch
+  in
+  let current () =
+    Option.fold ~none:true
+      ~some:(fun created -> s.created = created && not s.agent_stopping)
+      incarnation && stream_current ()
+  in
+  (* A frame arriving during an undecided stop is held in the attachment's
+     own stream. No-signal refusals resume it; any signal retires it. *)
+  let wait_for_stop epoch =
+    let rec wait () =
+      if s.agent_stopping && not s.finishing then (
+        Eio.Time.sleep (Eio.Stdenv.clock env) 0.01;
+        wait ())
+    in
+    wait ();
+    not s.finishing && s.input_signal_epoch = epoch && stream_current () &&
+    Option.fold ~none:true ~some:(( = ) s.created) incarnation
+  in
   let snapshot, origin_metadata, ready =
     if not origin then
       ( (match snapshot with
@@ -2137,6 +2218,8 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
             ( "pty_capabilities",
               `List
                 ([ `String "agent_wake_v1"; `String "human_input_lease_v1" ]
+                @ (if Option.is_some incarnation && watch then
+                     [ conditional_input_capability ] else [])
                 @ (match input_ack with
                    | Some (Ack_v1 _) -> [ `String "acknowledged_input_v1" ]
                    | Some (Ack_v2 _) -> [ `String "acknowledged_input_v2" ]
@@ -2185,15 +2268,19 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
     | Ack_v1 _ when not (Hashtbl.mem s.input_ack_history id) ->
         Hashtbl.replace s.input_ack_v1_pending id ()
     | _ -> ());
-    lease_connection_opened s id;
+    lease_connection_opened s (None, id);
     input_client_id := Some id) input_ack;
   (* Still no yield: a watcher's first S frame follows its replay. *)
   if claimed then s.size_owner <- Some client;
   if watch then s.size_watchers <- client :: s.size_watchers;
   if claimed || watch then announce_size s;
   observe observer env Observe.Attach;
-  Fun.protect
-    ~finally:(fun () ->
+  let released = ref false in
+  let release () =
+    if not !released then (
+      released := true;
+      s.conditional_clients <-
+        List.filter (fun (other, _) -> other != client) s.conditional_clients;
       s.clients <- List.filter (fun other -> other != client) s.clients;
       s.input_ack_clients <-
         List.filter (fun (other, _) -> other != client) s.input_ack_clients;
@@ -2216,11 +2303,18 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
           announce_size s
       | _ -> ());
       Option.iter
-        (lease_connection_closed s
-           ~now:(Eio.Time.Mono.now (Eio.Stdenv.mono_clock env)))
+        (fun client_id ->
+          lease_connection_closed s
+            ~now:(Eio.Time.Mono.now (Eio.Stdenv.mono_clock env))
+            ((if Option.is_some input_ack then None else incarnation), client_id))
         !input_client_id;
       observe observer env Observe.Detach;
       Mesh_pty_output.detached client)
+  in
+  Option.iter
+    (fun _ -> s.conditional_clients <- (client, release) :: s.conditional_clients)
+    incarnation;
+  Fun.protect ~finally:release
     (fun () ->
       Eio.Switch.run (fun input_switch ->
       let rec output () =
@@ -2233,7 +2327,14 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
       in
       let rec input () =
         let frame = read_frame flow in
-        if frame.kind = 'R' then (
+        if not (Option.fold ~none:true ~some:(( = ) s.created) incarnation)
+           || not (stream_current ()) then
+          Mesh_pty_output.close client
+        else if Option.is_some incarnation && s.agent_stopping
+                && not (wait_for_stop s.stop_input_epoch) then
+          Mesh_pty_output.close client
+        else if not (current ()) then input ()
+        else if frame.kind = 'R' then (
           let stale_ack =
             match input_ack with
             | Some (Ack_v1 (_, created)) -> created <> s.created
@@ -2304,7 +2405,10 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
               | Some (_, last, _) when seq <> last + 1 -> Some "sequence_gap"
               | None when seq <> 1 -> Some "sequence_gap"
               | _ ->
-                  if Mesh_pty_input.enqueue s.input data then (
+                  let epoch = s.input_signal_epoch in
+                  if Mesh_pty_input.enqueue
+                       ~current:(fun () -> wait_for_stop epoch && s.created = created)
+                       s.input data then (
                     (match ack with
                     | Ack_v1 _ ->
                         Hashtbl.replace s.input_ack_history id (created, seq, data);
@@ -2313,7 +2417,7 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
                         actor.last <- seq;
                         actor.previous <- data);
                     if not (Mesh_pty_input.terminal_reports_only data) then
-                      Hashtbl.replace s.human_leases id true;
+                      Hashtbl.replace s.human_leases (None, id) true;
                     s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);
                     observe observer env (Observe.Input (String.length data));
                     None)
@@ -2336,6 +2440,7 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
           ignore (Mesh_pty_output.enqueue client
             (Mesh_wire.encode { kind = 'C';
               payload = Yojson.Basic.to_string response }));
+
           input ())
         else if frame.kind = 'D' then (
           if Option.is_some input_ack || Option.is_some s.switch_input_fence then
@@ -2344,7 +2449,7 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
                  (Mesh_wire.encode
                     { kind = 'C';
                       payload = {|{"ok":false,"reason":"switch_input_fenced"}|} }))
-          else if s.agent_stopping || !holding then (
+          else if Option.is_none incarnation && (s.agent_stopping || !holding) then (
             if String.length frame.payload <= (8 * 1024 * 1024) - !held_bytes then (
               let epoch = if s.agent_stopping then s.stop_input_epoch else s.input_signal_epoch in
               Queue.add (s.created, epoch, frame.payload) held_input;
@@ -2359,9 +2464,9 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
                   in
                   wait ();
                   while not (Queue.is_empty held_input) do
-                    let incarnation, epoch, payload = Queue.take held_input in
+                    let created, epoch, payload = Queue.take held_input in
                     held_bytes := !held_bytes - String.length payload;
-                    if not s.finishing && s.created = incarnation && s.input_signal_epoch = epoch then (
+                    if not s.finishing && s.created = created && s.input_signal_epoch = epoch then (
                       s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);
                       if Mesh_pty_input.enqueue s.input payload then
                         observe observer env (Observe.Input (String.length payload)))
@@ -2369,7 +2474,12 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
                   holding := false)))
           else if not s.finishing then (
             s.last_input <- Eio.Time.now (Eio.Stdenv.clock env);
-            if Mesh_pty_input.enqueue s.input frame.payload then
+            let epoch = s.input_signal_epoch in
+            if
+              Mesh_pty_input.enqueue
+                ?current:(Option.map (fun _ -> fun () -> wait_for_stop epoch) incarnation)
+                s.input frame.payload
+            then
               observe observer env (Observe.Input (String.length frame.payload)));
           input ())
         else if frame.kind = 'H' then (
@@ -2387,7 +2497,7 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
                      && (match Hashtbl.find_opt s.input_ack_active actor.lease_id with
                          | Some active -> active == client
                          | None -> false) ->
-                  Hashtbl.replace s.human_leases actor.lease_id dirty
+                  Hashtbl.replace s.human_leases (None, actor.lease_id) dirty
               | _ -> ())
           | Ok (`Assoc fields)
             when List.sort String.compare (List.map fst fields)
@@ -2405,9 +2515,10 @@ let attach ?(origin = false) ?snapshot ?replay_geometry ?size_attach
                      && Option.fold ~none:true ~some:(String.equal client_id)
                           !input_client_id ->
                   if Option.is_none !input_client_id then
-                    lease_connection_opened s client_id;
+                    lease_connection_opened s (incarnation, client_id);
                   input_client_id := Some client_id;
-                  Hashtbl.replace s.human_leases client_id dirty
+                  let owner = if Option.is_some input_ack then None else incarnation in
+                  Hashtbl.replace s.human_leases (owner, client_id) dirty
               | _ -> ())
           | _ -> ());
           input ())
@@ -2426,7 +2537,8 @@ let write_reply flow reply =
   Eio.Flow.copy_string (Mesh_wire.encode { kind = 'C'; payload }) flow
 
 let conditional_selection sessions fields =
-  let allowed = [ "op"; "name"; "created"; "rows"; "cols" ] in
+  let allowed = [ "op"; "name"; "created"; "rows"; "cols"; "size";
+                  "input_ack_created"; "input_ack_id"; "input_ack_v2" ] in
   let rec keys seen = function
     | [] -> ()
     | (key, _) :: rest ->
@@ -2437,6 +2549,9 @@ let conditional_selection sessions fields =
   keys [] fields;
   if List.assoc_opt "op" fields <> Some (`String "attach_if") then
     invalid_arg "op";
+  (match List.assoc_opt "size" fields with
+  | None | Some (`String "claim") -> ()
+  | _ -> invalid_arg "size");
   let name =
     match List.assoc_opt "name" fields with
     | Some (`String name) when name <> "" && valid_string ~maximum:max_int name
@@ -2466,7 +2581,7 @@ let conditional_selection sessions fields =
     List.find_opt
       (fun s ->
         s.name = name && s.created = created && (not s.finishing)
-        && not s.kill_requested)
+        && not s.kill_requested && not s.agent_stopping)
       !sessions
   with
   | None -> invalid_arg "incarnation"
@@ -2492,33 +2607,65 @@ let conditional_attach env observer sessions fields flow =
     with Invalid_argument _ -> None
   with
   | None -> refusal "denied"
-  | Some (s, _) when Option.is_some s.switch_input_fence ->
-      refusal "switch_input_fenced"
   | Some (s, geometry) -> (
       let streaming = ref false in
       try
+        let acknowledged = List.mem_assoc "input_ack_created" fields
+          || List.mem_assoc "input_ack_id" fields || List.mem_assoc "input_ack_v2" fields in
+        if acknowledged then (
+          if List.assoc_opt "op" fields <> Some (`String "attach_if") then
+            invalid_arg "conditional_ack_operation";
+          match prepare_attach env observer sessions fields with
+          | Some (selected, snapshot, replay_geometry, size_attach, Some input_ack)
+            when selected == s && selected.created = s.created
+                 && selected.alive && not selected.finishing && not selected.kill_requested
+                 && not selected.agent_stopping ->
+              streaming := true;
+              attach ~snapshot ?replay_geometry ~incarnation:s.created ~input_ack
+                ~size_attach env observer s flow
+          | _ -> refusal "denied")
+        else if Option.is_some s.switch_input_fence then refusal "switch_input_fenced"
+        else (
+        let snapshot, replay_geometry =
+          if List.assoc_opt "op" fields = Some (`String "attach_if") then
+            (* Capture retained bytes and current pre-attach geometry, as for
+               ordinary attach, but only after strict incarnation selection. *)
+            let snapshot = Mesh_pty_replay.replay s.replay in
+            let replay_geometry =
+              try Some (s.geometry ())
+              with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None
+            in
+            (Some snapshot, replay_geometry)
+          else (None, None)
+        in
+        let watch = List.assoc_opt "size" fields = Some (`String "claim") in
+        let client = Mesh_pty_output.create () in
+        let claimed =
+          Option.is_some geometry
+          && (Mesh_pty_size.resize ~same:( == ) ~owner:s.size_owner ~client
+                (if watch then Mesh_pty_size.Claim else Mesh_pty_size.Take))
+               .apply
+        in
+        let size_attach = { client; claimed; watch } in
         Option.iter
           (fun (rows, cols) ->
-            s.resize rows cols;
-            observe observer env Observe.Resize)
+            if claimed then (
+              s.resize rows cols;
+              observe observer env Observe.Resize))
           geometry;
         if (not s.alive) || s.finishing || s.kill_requested
            || Option.is_some s.switch_input_fence then
           refusal "indeterminate"
         else (
           streaming := true;
-          (* As before the size owner rule, a geometry here takes the size. *)
-          let size_attach =
-            {
-              client = Mesh_pty_output.create ();
-              claimed = Option.is_some geometry;
-              watch = false;
-            }
-          in
-          attach
+          attach ?snapshot ?replay_geometry
+            ?incarnation:
+              (if List.assoc_opt "op" fields = Some (`String "attach_if") then
+                 Some s.created
+               else None)
             ~origin:
               (List.assoc_opt "op" fields = Some (`String "attach_origin_bound"))
-            ~size_attach env observer s flow)
+            ~size_attach env observer s flow))
       with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ ->
         (* Once attach may have emitted its success frame, close the stream;
            never append a contradictory second control outcome. *)

@@ -18,7 +18,131 @@ let replay label input expected =
   Replay.feed t input;
   expect label (Replay.snapshot t = expected)
 
+let retire_conditional_input () =
+  Eio_main.run @@ fun env ->
+  Eio.Time.with_timeout_exn (Eio.Stdenv.clock env) 5. @@ fun () ->
+  Eio.Switch.run @@ fun sw ->
+  let queue = Input.create "conditional-retirement" in
+  let began, begin_write = Eio.Promise.create () in
+  let never, _ = Eio.Promise.create () in
+  let done_, finish = Eio.Promise.create () in
+  let output = Buffer.create 64 in
+  let live = ref true in
+  let module Sink = struct
+    type t = unit
+    let single_write () buffers =
+      let text = String.concat "" (List.map Cstruct.to_string buffers) in
+      if text = "blocked" then (
+        Buffer.add_string output "bl";
+        Eio.Promise.resolve begin_write ();
+        Eio.Promise.await never);
+      Buffer.add_string output text;
+      if text = "fresh" then Eio.Promise.resolve finish ();
+      String.length text
+    let copy t ~src = Eio.Flow.Pi.simple_copy ~single_write t ~src
+  end in
+  let sink =
+    Eio.Resource.T
+      ((), Eio.Resource.handler [Eio.Resource.H (Eio.Flow.Pi.Sink, (module Sink))])
+  in
+  ignore (Input.enqueue ~current:(fun () -> !live) queue "blocked");
+  ignore (Input.enqueue ~current:(fun () -> true) queue "old-queued");
+  ignore (Input.enqueue queue "legacy");
+  Eio.Fiber.fork ~sw (fun () -> Input.run queue (Eio.Stdenv.clock env) sink);
+  Eio.Promise.await began;
+  live := false;
+  Input.retire_guarded queue;
+  Buffer.add_string output "|new|";
+  ignore (Input.enqueue ~current:(fun () -> false) queue "stale-dispatch");
+  ignore (Input.enqueue ~current:(fun () -> true) queue "fresh");
+  Eio.Promise.await done_;
+  expect "retirement joins the blocked write and preserves only legacy/fresh input"
+    (Buffer.contents output = "bl|new|legacyfresh");
+  Input.close queue;
+  let budget = Input.create "retirement-accounting" in
+  let maximum = String.make (8 * 1024 * 1024) 'x' in
+  expect "guarded queue fills capacity"
+    (Input.enqueue ~current:(fun () -> true) budget maximum);
+  Input.retire_guarded budget;
+  Input.retire_guarded budget;
+  expect "retirement restores guarded byte capacity exactly once"
+    (Input.enqueue budget maximum);
+  expect "retirement does not over-credit capacity"
+    (not (Input.enqueue budget "x"));
+  Input.close budget
+
+let quiesce_partial_input () =
+  Eio_main.run @@ fun env ->
+  Eio.Time.with_timeout_exn (Eio.Stdenv.clock env) 5. @@ fun () ->
+  Eio.Switch.run @@ fun sw ->
+  let queue = Input.create "partial-quiescence" in
+  let began, mark_began = Eio.Promise.create () in
+  let proceed, unblock = Eio.Promise.create () in
+  let finished, mark_finished = Eio.Promise.create () in
+  let output = Buffer.create 16 in
+  let module Sink = struct
+    type t = unit
+    let single_write () buffers =
+      let data = String.concat "" (List.map Cstruct.to_string buffers) in
+      if data = "abcd" then (
+        Buffer.add_string output "ab";
+        Eio.Promise.resolve mark_began ();
+        Eio.Promise.await proceed;
+        2
+      ) else (
+        Buffer.add_string output data;
+        Eio.Promise.resolve mark_finished ();
+        String.length data)
+    let copy t ~src = Eio.Flow.Pi.simple_copy ~single_write t ~src
+  end in
+  let sink = Eio.Resource.T
+    ((), Eio.Resource.handler [Eio.Resource.H (Eio.Flow.Pi.Sink, (module Sink))]) in
+  expect "conditional input accepted" (Input.enqueue ~current:(fun () -> true) queue "abcd");
+  Eio.Fiber.fork ~sw (fun () -> Input.run queue (Eio.Stdenv.clock env) sink);
+  Eio.Promise.await began;
+  expect "partial write cannot be reported drained"
+    (not (Input.quiesce_guarded queue (Eio.Stdenv.clock env) 0.05));
+  expect "timeout preserves the pending write" (Buffer.contents output = "ab");
+  Eio.Promise.resolve unblock ();
+  Eio.Promise.await finished;
+  expect "complete write drains" (Input.quiesce_guarded queue (Eio.Stdenv.clock env) 1.);
+  expect "all input is delivered in order" (Buffer.contents output = "abcd");
+  Input.close queue
+
+let retire_during_predicate () =
+  Eio_main.run @@ fun env ->
+  Eio.Time.with_timeout_exn (Eio.Stdenv.clock env) 5. @@ fun () ->
+  Eio.Switch.run @@ fun sw ->
+  let queue = Input.create "retire-during-predicate" in
+  let began, mark_began = Eio.Promise.create () in
+  let proceed, release = Eio.Promise.create () in
+  let finished, mark_finished = Eio.Promise.create () in
+  let output = Buffer.create 16 in
+  let module Sink = struct
+    type t = unit
+    let single_write () buffers =
+      let data = String.concat "" (List.map Cstruct.to_string buffers) in
+      Buffer.add_string output data;
+      if data = "fresh" then Eio.Promise.resolve mark_finished ();
+      String.length data
+    let copy t ~src = Eio.Flow.Pi.simple_copy ~single_write t ~src
+  end in
+  let sink = Eio.Resource.T
+    ((), Eio.Resource.handler [Eio.Resource.H (Eio.Flow.Pi.Sink, (module Sink))]) in
+  ignore (Input.enqueue ~current:(fun () -> Eio.Promise.resolve mark_began (); Eio.Promise.await proceed; true) queue "retired");
+  Eio.Fiber.fork ~sw (fun () -> Input.run queue (Eio.Stdenv.clock env) sink);
+  Eio.Promise.await began;
+  Input.retire_guarded queue;
+  ignore (Input.enqueue queue "fresh");
+  Eio.Promise.resolve release ();
+  Eio.Promise.await finished;
+  expect "retired frame must not be written after its predicate resumes" (Buffer.contents output = "fresh");
+  Input.close queue
+
 let () =
+  retire_conditional_input ();
+  retire_during_predicate ();
+  quiesce_partial_input ();
   replay "empty" "" "";
   replay "unchanged at exact capacity" (String.make cap 'a')
     (String.make cap 'a');

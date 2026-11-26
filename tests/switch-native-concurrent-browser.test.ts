@@ -112,10 +112,17 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       decisionSettled = decision.then(() => undefined, () => undefined);
       await waitFor('carry helper entered', 7000, () => fs.existsSync(marker));
       assert.equal(await phone.evaluate(() => active.inputAck?.state), 'ready');
-      const sent = await phone.evaluate(() => { const pane = active as any; return {before:pane.inputAck.state, accepted:pane.sendRaw(new TextEncoder().encode('phone-during-switch')), pending:pane.inputAck.pendingBytes}; });
-      assert.deepEqual(sent, {before: 'ready', accepted: true, pending: 19});
-      await phone.waitForFunction(() => active.inputAck?.state === 'halted', undefined, {timeout: 4000});
-      assert.equal(await phone.evaluate(() => (active as any).inputAck.pendingBytes), 19, 'accepted input remains available for review');
+      const sent = await phone.evaluate(() => { const pane = active as any; return {created:pane.conn.created, before:pane.inputAck.state, accepted:pane.sendRaw(new TextEncoder().encode('phone-during-switch')), pending:pane.inputAck.pendingBytes}; });
+      assert.deepEqual({before:sent.before, accepted:sent.accepted, pending:sent.pending}, {before: 'ready', accepted: true, pending: 19});
+      await phone.waitForFunction(created => {
+        const input = (active as any).inputAcks.get(`fenced-account\0${created}`)?.input;
+        return input && ['review', 'uncertain', 'halted'].includes(input.state);
+      }, sent.created, {timeout: 4000});
+      const retained = await phone.evaluate(created => {
+        const input = (active as any).inputAcks.get(`fenced-account\0${created}`)?.input;
+        return input && {bytes: input.pendingBytes, text: input.retainedText};
+      }, sent.created);
+      assert.deepEqual(retained, {bytes: 19, text: 'phone-during-switch'}, 'accepted input remains available for review on its original incarnation');
       assert.deepEqual(launchesIn(fake.log), launchesBefore, 'target has not launched while carry is held');
       assert.deepEqual(fs.readFileSync(transcript), original);
       assert.equal(fs.existsSync(rolloutIn(target, sid)), false);
@@ -133,23 +140,30 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       assert.equal(after.pid, before.pid, 'the PTY shell remains the same');
       assert.notEqual(after.created, before.created, 'the session incarnation advances');
       assert.equal(after.agent?.session_id, sid, 'the same conversation is resumed');
+      assert.ok(sent.created === before.created || sent.created === after.created, 'input stays tied to an observed incarnation');
       const calls = launchesIn(fake.log).filter(row => row[2] === 'fenced-account');
       assert.equal(calls.length, 2);
       assert.equal(calls[1]![1], target, 'the resumed agent uses the target account');
       assert.match(calls[1]![3]!, new RegExp(`^resume ${sid}(?:\\s|$)`));
       assert.equal(fs.existsSync(rolloutIn(target, sid)), true);
-      assert.equal(await phone.evaluate(() => (active as any).inputAck.pendingBytes), 19, 'input remains retained after the switch');
-      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch']);
+      assert.equal(await phone.evaluate(created => (active as any).inputAcks.get(`fenced-account\0${created}`)?.input.retainedText,
+        sent.created), 'phone-during-switch', 'input remains bound to its original incarnation');
+      const attempted = await phone.evaluate(() => (window as any).__inputFrames);
+      assert.ok(attempted.length <= 1 && attempted.every((frame: string) => frame === 'phone-during-switch'),
+        'the text is never replayed automatically');
       await phone.evaluate(() => active.conn!.ws!.close());
-      await phone.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN, undefined, {timeout: 15000});
+      await phone.waitForFunction(created => (active as any)?.conn?.created === created &&
+        active?.conn?.ws?.readyState === WebSocket.OPEN, after.created, {timeout: 15000});
       assert.equal(await phone.evaluate(() => [...(active as any).inputAcks.values()].reduce((sum: number, entry: any) => sum + entry.input.pendingBytes, 0)), 19, 'reconnection keeps input from the old incarnation');
       assert.equal(await phone.locator('.pane.active .p-input-review').isVisible(), true, 'the retained input is presented for review');
       assert.equal(await phone.locator('.pane.active .p-input-discard').isVisible(), true);
-      assert.equal(await phone.locator('.pane.active .p-input-retry').isVisible(), false, 'old incarnation cannot be retried here');
+      const previous = sent.created !== after.created;
+      assert.equal(await phone.locator('.pane.active .p-input-retry').isVisible(), !previous,
+        'only input for the current incarnation can be retried');
       const draft = phone.locator('.pane.active .p-input-drafts textarea');
       assert.equal(await draft.inputValue(), 'phone-during-switch');
       assert.equal(await draft.getAttribute('readonly'), '');
-      assert.equal(await draft.getAttribute('data-previous'), 'true');
+      assert.equal(await draft.getAttribute('data-previous'), String(previous));
       await phone.evaluate(() => {
         const pane = active as any;
         pane.inputAcks.set('another-session\0fixture', {input: {pendingBytes: 6, pendingHumanBytes: 6, retainedText: 'secret', state: 'review'}});
@@ -184,7 +198,7 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       assert.equal(await desktopOther.count(), 0);
       assert.equal(await desktop.locator('.pane.active .p-input-drafts textarea').inputValue(), 'desktop-draft');
       await desktop.evaluate(() => { const pane = active as any; pane.inputAcks.delete(`${pane.conn.name}\0desktop-fixture`); pane.renderRetainedInput(); });
-      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch'], 'reconnection does not resend input');
+      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), attempted, 'reconnection does not resend input');
       await mesh.newShell('other-draft-session');
       await phone.waitForFunction(() => document.querySelector('#list .loose .item[data-id="other-draft-session"]') !== null);
       await phone.locator('#btn-menu').click();
@@ -207,7 +221,7 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       assert.equal(await other.locator('textarea').inputValue(), 'phone-during-switch');
       await other.getByRole('button', {name: 'Copy', exact: true}).click();
       assert.equal(await phone.evaluate(() => (window as any).__copiedDraft), 'phone-during-switch');
-      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch'], 'copy never sends a frame');
+      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), attempted, 'copy never sends a frame');
       await phone.locator('#btn-menu').click();
       await phone.locator('#list .loose .item[data-id="fenced-account"]').click();
       await phone.waitForFunction(() => (active as any)?.conn?.name === 'fenced-account' && active?.conn?.ws?.readyState === WebSocket.OPEN);
@@ -231,7 +245,7 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       await other.getByRole('button', {name: /Forget obsolete draft/}).click();
       assert.equal(await other.count(), 0, 'forget removes only the chosen closed-session record');
       assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').inputValue(), 'draft B');
-      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), ['phone-during-switch'], 'discard never sends a frame');
+      assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), attempted, 'discard never sends a frame');
     } finally {
       try {
         fs.writeFileSync(release, 'release');
