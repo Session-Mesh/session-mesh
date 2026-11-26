@@ -670,3 +670,56 @@ for pid, foreground, received, source, accepted in (
 `;
   execFileSync(python, ['-I', '-c', script], {timeout: 10000});
 });
+
+test('Pi switch preparation verifies its live overlay, profile history and provider environment', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-pi-live-profile-'));
+  try {
+    const script = `
+import asyncio, sys
+from pathlib import Path
+sys.path.insert(0, ${JSON.stringify(repo)})
+import server
+
+root = Path(${JSON.stringify(root)})
+config, history = root / 'profile', root / 'history'
+overlay_root = root / 'pi-agent-overlays'
+overlay = overlay_root / 'session-fixture'
+proc = root / 'proc' / '42'
+for folder in (config, history, overlay_root, overlay, proc):
+    folder.mkdir(mode=0o700, parents=True)
+(overlay / 'sessions').symlink_to(config / 'sessions', target_is_directory=True)
+(proc / 'stat').write_text('42 (node) ' + ' '.join(['S'] * 19 + ['1234']))
+context = {'roots':{'config':str(config),'history':str(history)}, 'unset':['OPENAI_API_KEY']}
+server.CONF_DIR = root
+async def profile(*_args): return context
+server._profile_launch_context = profile
+read_environment = server.accountswitch.process_environment
+server.accountswitch.process_environment = lambda pid, keys: read_environment(pid, keys, root / 'proc')
+observed = {'type':'pi','foreground':True,'pid':42,'argv':['pi','--session-dir',str(history)]}
+async def verify():
+    return await server._switch_profile_context('work','pi','a'*64,observed)
+async def refused():
+    try:
+        await verify()
+    except server.web.HTTPConflict:
+        return
+    raise AssertionError('unsafe Pi selection accepted')
+async def main():
+    env = ('PI_CODING_AGENT_DIR=' + str(overlay)).encode() + bytes(1)
+    (proc / 'environ').write_bytes(env)
+    assert (await verify())['process_start'] == '1234'
+    observed['argv'][2] = '/foreign-history'
+    await refused()
+    observed['argv'][2] = str(history)
+    (proc / 'environ').write_bytes(env + b'OPENAI_API_KEY=fixture-ambient' + bytes(1))
+    await refused()
+    (proc / 'environ').write_bytes(env)
+    (overlay / 'sessions').unlink()
+    (overlay / 'sessions').symlink_to(root / 'foreign', target_is_directory=True)
+    await refused()
+asyncio.run(main())
+`;
+    execFileSync(python, ['-I', '-c', script], {timeout: 10000,
+      env: {...process.env, HOME: root, MESH_CONF_DIR: root, XDG_RUNTIME_DIR: root}});
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});

@@ -869,6 +869,28 @@ async def _switch_profile_context(account, agent, expected_revision=None, observ
     default target is explicitly bound to this server's environment. Neither
     path is permitted to silently fall back when its binding has changed.
     """
+    if agent == "pi":
+        if account == DEFAULT_ACCOUNT["id"]:
+            raise web.HTTPConflict(text="Pi switching requires two named profiles")
+        context = await _profile_launch_context(account, agent, expected_revision)
+        if observed_agent is None:
+            return context
+        if observed_agent.get("type") != "pi" or observed_agent.get("foreground") is not True:
+            raise web.HTTPConflict(text="Foreground Pi process unavailable; nothing was stopped")
+        overrides = tuple(context["unset"])
+        try:
+            values, binding = await asyncio.to_thread(
+                accountswitch.process_environment, observed_agent.get("pid"),
+                {"PI_CODING_AGENT_DIR", *overrides})
+            argv = observed_agent.get("argv") or []
+            if (any(values.get(key) for key in overrides) or argv.count("--session-dir") != 1
+                    or argv[argv.index("--session-dir") + 1:argv.index("--session-dir") + 2] != [context["roots"]["history"]]
+                    or not await asyncio.to_thread(pimcp.profile_overlay_matches,
+                        values.get("PI_CODING_AGENT_DIR", ""), CONF_DIR, context["roots"]["config"])):
+                raise accountswitch.UnboundDefault("Pi profile differs from the observed process")
+        except accountswitch.UnboundDefault as exc:
+            raise web.HTTPConflict(text="Pi account context unavailable; nothing was stopped") from exc
+        return {**context, **binding}
     try:
         selected = None
         if observed_agent is not None:

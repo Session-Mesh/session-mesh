@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 
@@ -95,3 +96,18 @@ def prepare(config_dir, environ=None):
     except OSError as exc:
         raise PiUnavailable(f"Could not prepare Mesh MCP for Pi: {exc.strerror}") from exc
     return executable, overlay
+
+def profile_overlay_matches(overlay, config_dir, profile):
+    """Accept the private overlay created for this profile, without reading auth files."""
+    path = Path(overlay)
+    root = Path(config_dir) / "pi-agent-overlays"
+    try:
+        if not path.is_absolute() or path.parent.resolve(strict=True) != root.resolve(strict=True):
+            return False
+        for directory in (root, path):
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                return False
+        return (path / "sessions").readlink() == Path(profile) / "sessions"
+    except OSError:
+        return False
