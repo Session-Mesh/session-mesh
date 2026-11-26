@@ -174,6 +174,31 @@ test('cancelling a completed upload awaiting replay releases its captured target
   assert.deepEqual(f.frames, []); assert.equal(releases, 1); assert.equal(f.context.uploadHolds.size, 0);
   assert.equal((record as any).delivery.kind, 'refused'); assert.equal((record as any).inserted, false);
 });
+
+for (const newer of [false, true]) test(`discarding compose recovery ${newer ? 'preserves newer edits' : 'clears only its identical retained text'}`, () => {
+  const buttons: any[] = [], draft = {text: newer ? 'newer draft' : 'failed draft', edit(text: string) {this.text = text;}};
+  const record = {target: {name: 'A', created: 1, displayName: 'A'}, text: 'failed draft', result: {kind: 'refused', frames: 0, wireBytes: 0, reason: 'guard'}};
+  const context = vm.createContext({document: {createElement(tag: string) {
+    const node: any = {style: {}, append() {}, addEventListener(type: string, callback: () => void) {this[type] = callback;}};
+    if (tag === 'button') buttons.push(node); return node;
+  }}, t: (key: string) => key, composeRecovery: [record], dictation: {peekSession: () => draft}, composeStatus: {append() {}}, renderComposeStatus() {}});
+  vm.runInContext(source.slice(source.indexOf('function renderComposeRecovery('), source.indexOf('function renderComposeUpload(')), context);
+  context.renderComposeRecovery(record);
+  buttons.find(button => button.textContent === 'compose.discardResult').click();
+  assert.equal(draft.text, newer ? 'newer draft' : ''); assert.equal(context.composeRecovery.length, 0);
+});
+
+test('a pane header updates dictation presentation for only that pane, not every column', () => {
+  const queries = [0, 0, 0], panes = queries.map((_count, index) => ({id: String(index), conn: null, el: {querySelector() {
+    queries[index]++; return {dataset: {}};
+  }}}));
+  const context = vm.createContext({panes, find: () => ({kind: 'mesh'}), inlineDictation: null, dictation: null});
+  vm.runInContext(source.slice(source.indexOf('function renderInlineDictation('), source.indexOf('function renderComposeStatus(')), context);
+  context.renderDictationBadges(panes[1]);
+  assert.deepEqual(queries, [0, 3, 0]);
+  assert.match(source.slice(source.indexOf('  header() {'), source.indexOf('  remember(nextId) {')), /renderDictationBadges\(this\)/);
+});
+
 for (const timerFirst of [false, true]) test(`deferred paste failure cannot submit when replay ends ${timerFirst ? 'after' : 'before'} the Enter delay`, () => {
   const f = fixture(); f.deliver();
   assert.deepEqual(f.results, [], 'a queued operation cannot report submission');
@@ -281,16 +306,7 @@ for (const prefix of [null, 'reset']) test(`obsolete replay callback cannot flus
   callbacks[1]!();
   assert.equal((c as any).replaying, false); assert.equal(flushes, 1);
 });
-test('a pane header updates dictation presentation for only that pane, not every column', () => {
-  const queries = [0, 0, 0], panes = queries.map((_count, index) => ({id: String(index), conn: null, el: {querySelector() {
-    queries[index]++; return {dataset: {}};
-  }}}));
-  const context = vm.createContext({panes, find: () => ({kind: 'mesh'}), inlineDictation: null});
-  vm.runInContext(source.slice(source.indexOf('function renderInlineDictation('), source.indexOf('function renderComposeStatus(')), context);
-  context.renderDictationBadges(panes[1]);
-  assert.deepEqual(queries, [0, 3, 0]);
-  assert.match(source.slice(source.indexOf('  header() {'), source.indexOf('  remember(nextId) {')), /renderDictationBadges\(this\)/);
-});
+
 test('detaching another column showing the same session does not cancel the held capture', () => {
   const session = {}, original = {conn: {name: 'A', created: 1}}, other = {conn: {name: 'A', created: 1}};
   const contexts = new WeakMap([[session, {pane: original, connection: original.conn}]]);
@@ -312,7 +328,7 @@ test('encoder constructor/open failures remove the private DOM host and dispose 
         constructor() {if (phase === 'constructor') throw Error('construction failed');}
         open() {throw Error('open failed');} dispose() {disposed++;}
       }});
-    vm.runInContext(source.slice(source.indexOf('function createDictationEncoder('), source.indexOf('function reportDictationInventory(')), context);
+    vm.runInContext(source.slice(source.indexOf('function createDictationEncoder('), source.indexOf('function dictationCaptureEligible(')), context);
     assert.throws(() => context.createDictationEncoder(), /failed/);
     assert.equal(removed, 1); assert.equal(disposed, phase === 'open' ? 1 : 0);
   }
@@ -324,7 +340,7 @@ for (const phase of ['append', 'dispose']) test(`encoder ${phase} failure still 
     createElement: () => ({setAttribute() {}, remove() {removed++;}})}, Terminal: class {
       open() {} dispose() {disposed++; throw Error('dispose failed');}
     }});
-  vm.runInContext(source.slice(source.indexOf('function createDictationEncoder('), source.indexOf('function reportDictationInventory(')), context);
+  vm.runInContext(source.slice(source.indexOf('function createDictationEncoder('), source.indexOf('function dictationCaptureEligible(')), context);
   if (phase === 'append') assert.throws(() => context.createDictationEncoder(), /append failed/);
   else {
     const encoder = context.createDictationEncoder(); assert.throws(() => encoder.dispose(), /dispose failed/);
@@ -353,7 +369,8 @@ function channelSetupFixture(touch: boolean, failure: string) {
     paneTargets: {capture: () => ({}), release() {counts.target++; if (failure === 'release') throw Error('target release failed');}},
     createDictationEncoder: () => ({onData: () => ({dispose() {}}), dispose() {}}),
     MeshPaneActions: {createDictationChannel}});
-  for (const [start, end] of [['retainInlinePhonePrompt', 'retainInlineChannel'], ['retainInlineChannel', 'inlineInsertionFinished']]) {
+  for (const [start, end] of [['retainInlinePhonePrompt', 'retainInlineChannel'], ['retainInlineChannel', 'inlineInsertionFinished'],
+    ['retainDictationChannel', 'startDictation']]) {
     vm.runInContext(source.slice(source.indexOf(`function ${start}(`), source.indexOf(`function ${end}(`)), context);
   }
   return {counts, context, session};
@@ -371,6 +388,12 @@ for (const touch of [false, true]) test(`${touch ? 'phone' : 'native'} app chann
   assert.doesNotThrow(() => channel.release()); assert.doesNotThrow(() => channel.release());
   assert.deepEqual(f.counts, {target: 1, terminal: 1, lease: 1});
 });
+test('compose app channel releases the original terminal when pre-factory mode lookup throws', () => {
+  const f = channelSetupFixture(false, 'mode');
+  assert.throws(() => f.context.retainDictationChannel(f.session), /mode lookup failed/);
+  assert.equal(f.counts.terminal, 1);
+});
+
 test('inline header marks recording only after permission and recorder startup', () => {
   const attributes = new Map<string,string>(), button = {setAttribute(key: string,value: string) {attributes.set(key,value);}};
   const status = {id: 'native-status', dataset: {}}, session = {state: 'requesting'};

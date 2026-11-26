@@ -227,12 +227,25 @@ export async function open(page: Page): Promise<void> {
   await page.locator('.pane.active [data-act="more"]').click();
   await page.locator('.pane.active [data-menu-action="compose"]').click();
 }
+export async function record(page: Page): Promise<void> {
+  await open(page);
+  await page.locator('#compose-mic[aria-disabled="false"]').waitFor({state: 'visible'});
+  await page.locator('#compose-mic').focus(); await page.keyboard.down('Space');
+  await page.waitForFunction(() => composeDictationSession()?.state === 'recording');
+  await page.waitForTimeout(350); await page.keyboard.up('Space');
+}
 export async function closeCompose(page: Page): Promise<void> {await page.locator('#dlg-compose [data-close-dialog]').click();}
 export function dataFrames(writes: Writes): (string | Buffer)[] {
   return [...writes.values()].flat().filter(value => typeof value !== 'string');
 }
 export function wire(writes: Writes, key: string): string[] {
   return (writes.get(key) || []).filter(v => typeof v !== 'string').map(v => v.toString());
+}
+export async function ready(page: Page, api: FakeDictationApi): Promise<void> {
+  for (let i = 0; !api.jobs.length && i < 500; i++) await page.waitForTimeout(10);
+  assert.ok(api.jobs[0], 'capture must reach fake API');
+  api.jobs[0].state = 'ready'; api.jobs[0].text = 'alpha\nbeta'; api.ack('A');
+  await page.waitForFunction(() => dictation.session('A', 1).state === 'ready');
 }
 export async function typeNative(page: Page, text: string): Promise<void> {
   await page.locator('.pane.active .xterm-helper-textarea').evaluate(e => (e as HTMLElement).focus());

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-export {createRetainedLifetime, browserDictationMedia} from './dictation.ts';
+import {setDictationTranslator} from './dictation-view.ts';
+export {createDictationController, createRetainedLifetime, browserDictationMedia} from './dictation.ts';
 export {createInlineDictationController} from './dictation-inline.ts';
 export {createInlineDictationView} from './dictation-inline-view.ts';
-export {createDictationChannel} from './dictation-channel.ts';
-export {createDictationModeObserver} from './terminal-mode.ts';
+export {createDictationView, dictationLabel} from './dictation-view.ts';
+export {createDictationChannel, createDictationModeObserver} from './dictation-channel.ts';
 export {createTerminalInputOrigin} from './terminal-origin.ts';
 // Pane-local presentation only. The app supplies data and keeps action authority.
 
@@ -29,6 +30,7 @@ const untranslated: Translator = (key) => key;
 let translate: Translator = untranslated;
 export function setTranslator(fn: Translator): void {
   translate = typeof fn === "function" ? fn : untranslated;
+  setDictationTranslator(translate);
 }
 
 export type AgentState = "busy" | "waiting" | "shell" | "idle" | "unknown";
