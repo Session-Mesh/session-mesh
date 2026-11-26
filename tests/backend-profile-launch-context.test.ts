@@ -617,3 +617,35 @@ asyncio.run(main())
       env: {...process.env, HOME: root, XDG_RUNTIME_DIR: root, MESH_CONF_DIR: root}});
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });
+
+test('Pi relaunch pins the history directory as well as its config', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-pi-switch-roots-'));
+  try {
+    const script = `
+import sys
+from pathlib import Path
+sys.path.insert(0, ${JSON.stringify(repo)})
+import server
+
+root = Path(${JSON.stringify(root)})
+config, history = root / 'config', root / 'history'
+config.mkdir()
+history.mkdir()
+context = {'backend':'pi','roots':{'config':str(config),'history':str(history)}}
+old = server._switch_root_identity(context)
+history.rename(root / 'old')
+history.mkdir()
+assert server._switch_root_identity(context) != old
+history.rmdir()
+history.symlink_to(root / 'old', target_is_directory=True)
+try:
+    server._switch_root_identity(context)
+except server.web.HTTPConflict:
+    pass
+else:
+    raise AssertionError('replacement history symlink was admitted')
+`;
+    execFileSync(python, ['-I', '-c', script], {timeout: 10000,
+      env: {...process.env, HOME: root, XDG_RUNTIME_DIR: root, MESH_CONF_DIR: root}});
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});

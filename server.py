@@ -917,12 +917,16 @@ async def _validate_native_switch(source, kind, source_context, target_context):
 
 
 def _switch_root_identity(context):
-    try:
-        info = os.stat(context["roots"]["config"], follow_symlinks=False)
+    def identity(role):
+        info = os.stat(context["roots"][role], follow_symlinks=False)
         if not stat.S_ISDIR(info.st_mode):
             raise OSError("not a directory")
         return info.st_dev, info.st_ino
-    except OSError as exc:
+
+    try:
+        config = identity("config")
+        return (config, identity("history")) if context.get("backend") == "pi" else config
+    except (KeyError, OSError) as exc:
         raise web.HTTPConflict(text="Account folder unavailable") from exc
 
 
