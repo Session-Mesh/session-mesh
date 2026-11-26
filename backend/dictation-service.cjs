@@ -262,7 +262,14 @@ var Dictation = class {
     }
   }
   async verifySession(session) {
-    const live = await this.isLive(session);
+    const controller = new AbortController();
+    this.controllers.add(controller);
+    let live;
+    try {
+      live = await this.isLive(session, controller.signal);
+    } finally {
+      this.controllers.delete(controller);
+    }
     this.authorize(session.principal);
     if (!live) throw new Fault("stale_session");
   }
