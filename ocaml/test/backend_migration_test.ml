@@ -1582,7 +1582,7 @@ let first_create_interruption () =
           Alcotest.(check bool) "migration made no target" false
             (Sys.file_exists (target root))))
 
-let provision_interruption ~append ~point () =
+let provision_interruption ~replace_stage ~append ~point () =
   fixture (fun root ->
       let profile label = `Assoc [ ("backend", s "codex"); ("label", s label) ] in
       let before =
@@ -1634,6 +1634,9 @@ let provision_interruption ~append ~point () =
       write (sentinel new_root) "retained";
       let witnesses = List.map (fun root -> snapshot (sentinel root)) allocated in
       let published = point = M.After_publish in
+      let provision_stage =
+        let intent = Filename.concat root ".backend-profiles.provision-intent" in
+        Filename.concat root Yojson.Safe.Util.(Yojson.Safe.from_string (read intent) |> member "stage" |> to_string) in
       let destination = target root in
       let recorded = if Sys.file_exists destination then Some (snapshot destination) else None in
       (match before with
@@ -1674,7 +1677,8 @@ let provision_interruption ~append ~point () =
         Alcotest.(check bool) "same bytes from another inode cannot resolve" true
           (recover_provision root = Error "profile-publication-uncertain");
         Unix.unlink destination;
-        Unix.rename old destination);
+        Unix.rename old destination;
+        if replace_stage then (Unix.unlink provision_stage; write provision_stage "foreign-stage"));
       let status, response = run root ["recover-create"] in
       if append then
         Alcotest.(check bool) "first-create recovery does not interpret an append" true
@@ -1686,6 +1690,10 @@ let provision_interruption ~append ~point () =
           (if published then "published-reconciled" else "unpublished-aborted") outcome);
       Alcotest.(check bool) "explicit provision reconciliation" true
         (recover_provision root = Ok (if published then M.Published_reconciled else M.Unpublished_aborted));
+      if append && not published then
+        if replace_stage then
+          Alcotest.(check string) "foreign stage preserved" "foreign-stage" (read provision_stage)
+        else Alcotest.(check bool) "verified unpublished stage removed" false (Sys.file_exists provision_stage);
       Alcotest.(check bool) "recovery never replaces the registry" true
         (recorded = (if Sys.file_exists destination then Some (snapshot destination) else None));
       let count = Bool.to_int append + Bool.to_int published in
@@ -1995,7 +2003,7 @@ let () =
             ("foreign custody predicate", custody_predicate);
             ("missing and aliased Mesh root", missing_or_aliased_mesh_root);
             ("explicit first-create recovery requires witnessed state", first_create_interruption);
-            ("provision killed before first link", provision_interruption ~append:false ~point:Before_publish);
+            ("provision killed before first link", provision_interruption ~replace_stage:false ~append:false ~point:Before_publish);
             ("provision killed before allocation", (fun () -> provision_interrupted_before_allocation ()));
             ("provision killed after intent rename", provision_interrupted_before_allocation ~point:M.After_intent_publish);
             ("provision refuses changed registry at recovery", provision_recovery_refuses_changed_registry);
@@ -2011,9 +2019,10 @@ let () =
             ("recovery resumes after receipt", provision_receipt_interruption `Receipt_published);
             ("recovery resumes after intent removal", provision_receipt_interruption `Intent_removed);
             ("old acknowledgement cannot clear a newer provision", provision_old_acknowledgement_cannot_resolve_new_intent);
-            ("provision killed after first link", provision_interruption ~append:false ~point:After_publish);
-            ("provision killed before append rename", provision_interruption ~append:true ~point:Before_publish);
-            ("provision killed after append rename", provision_interruption ~append:true ~point:After_publish);
+            ("provision killed after first link", provision_interruption ~replace_stage:false ~append:false ~point:After_publish);
+            ("provision killed before append rename", provision_interruption ~replace_stage:false ~append:true ~point:Before_publish);
+            ("unpublished foreign stage is preserved", provision_interruption ~replace_stage:true ~append:true ~point:Before_publish);
+            ("provision killed after append rename", provision_interruption ~replace_stage:false ~append:true ~point:After_publish);
             ("provision refuses a real mkdir collision", provision_mkdir_collision);
           ] );
     ]

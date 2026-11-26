@@ -1197,7 +1197,21 @@ let recover_provision_with_checkpoint ?(apply = true) ~checkpoint ~root ~expecte
               checkpoint `Receipt_published;
               if not (same root_id (Unix.lstat root)) then fail () else (
                 Unix.unlink (provision_intent root); Unix.fsync directory;
-                checkpoint `Intent_removed; Ok result)
+                checkpoint `Intent_removed;
+                (* Best-effort removal is limited to the original private stage;
+                   allocated profile roots and replaced files remain untouched. *)
+                if result = Unpublished_aborted then (
+                  let stage = Filename.concat root (member "stage" record |> to_string) in
+                  try match read stage with
+                    | Some (st, content)
+                      when member "candidate_dev" record = `Int st.Unix.st_dev
+                        && member "candidate_ino" record = `Int st.Unix.st_ino
+                        && candidate = `String (hash content)
+                        && same root_id (Unix.lstat root) ->
+                        cleanup_temp stage st; Unix.fsync directory
+                    | _ -> ()
+                  with Unix.Unix_error _ | Sys_error _ -> ());
+                Ok result)
           | _ -> fail ()))
   with Unix.Unix_error _ | Sys_error _ | Yojson.Json_error _ -> fail ()
 
