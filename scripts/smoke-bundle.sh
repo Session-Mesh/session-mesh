@@ -15,7 +15,7 @@ launcher=$(find "$scratch" -maxdepth 3 -type f -name mesh -print)
 [ -n "$launcher" ] && [ "$(printf '%s\n' "$launcher" | wc -l | tr -d ' ')" = 1 ]
 bundle=$(dirname "$launcher")
 mkdir -p "$scratch/home" "$scratch/run" "$scratch/work"
-chmod 700 "$scratch/run"
+chmod 700 "$scratch/home" "$scratch/run"
 bash "$(dirname "$0")/smoke-profile.sh" "$bundle/bin/mesh-profile" "$scratch"
 # mesh-history carries its own pinned SQLite: on Linux it must not need a libsqlite3 shared library
 # (readelf -d, which must succeed; when binutils is missing, the first libsqlite3 name found by
@@ -48,6 +48,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
+import http from 'node:http';
+import {randomUUID} from 'node:crypto';
 import {spawn, spawnSync} from 'node:child_process';
 const bundle = process.argv[2];
 const probe = net.createServer();
@@ -60,10 +62,25 @@ const noNode = path.join(process.env.HOME, 'no-system-node');
 fs.mkdirSync(noNode, {recursive: true});
 fs.writeFileSync(path.join(noNode, 'node'), '#!/bin/sh\nexit 97\n', {mode: 0o700});
 const env = {...process.env, PATH: `${noNode}:${process.env.PATH}`, MESH_PORT: String(port), SHELL: '/bin/sh'};
+// Keep the fixture's poisoned agent PATH through native login-shell invocation.
+env.SHELL = path.join(env.HOME, 'smoke-shell');
+fs.writeFileSync(env.SHELL, '#!/bin/sh\nexec /bin/sh\n', {mode: 0o700});
 const logs = [];
+const dictationAudio = Buffer.from('synthetic bundle audio');
+function assertWhisperMultipart(contentType, body, audio) {
+  const match = /^multipart\/form-data; boundary=([A-Za-z0-9_-]{1,70})$/.exec(contentType);
+  assert.ok(match, 'multipart Content-Type with exactly one boundary');
+  const boundary = match[1];
+  const fields = `--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n` +
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.webm"\r\nContent-Type: audio/webm\r\n\r\n`;
+  assert.deepEqual(body, Buffer.concat([Buffer.from(fields), audio, Buffer.from(`\r\n--${boundary}--\r\n`)]));
+}
 let app;
 let mcp;
 let session;
+let whisper;
+let whisperCalls = 0;
+let whisperFailure;
 const socketPath = path.join(env.MESH_RUNTIME_DIR, 'session-mesh', 'ptyhost.sock');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(label, fn) {
@@ -135,6 +152,22 @@ try {
   fs.mkdirSync(worklog, {mode: 0o700});
   fs.writeFileSync(path.join(worklog, 'taxonomy.yaml'),
     'categories:\n  smoke:\n    name: Smoke\n    products:\n      - bundle-product\n');
+  // Only this owned HTTP peer receives the declared synthetic clip; no model or microphone.
+  whisper = http.createServer(async (req, res) => {
+    try {
+      assert.equal(req.url, '/fixed-whisper'); assert.equal(req.method, 'POST');
+      assert.equal(req.headers.authorization, undefined); assert.equal(req.headers.cookie, undefined);
+      assert.equal(req.headers['content-encoding'], undefined);
+      const parts = []; let size = 0;
+      for await (const part of req) {size += part.length; assert.ok(size <= 4096); parts.push(part);}
+      assertWhisperMultipart(req.headers['content-type'], Buffer.concat(parts), dictationAudio);
+      whisperCalls++; res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({text: 'bundle transcription'}));
+    } catch (error) {whisperFailure = error; res.writeHead(400); res.end();}
+  });
+  await new Promise(resolve => whisper.listen(0, '127.0.0.1', resolve));
+  env.MESH_WHISPER_URL = `http://127.0.0.1:${whisper.address().port}/fixed-whisper`;
+  delete env.MESH_WHISPER_LANGUAGE; // Exercise auto-detection, independent of the invoking environment.
   app = spawn(path.join(bundle, 'mesh'), ['run'], {env, stdio: ['ignore', 'pipe', 'pipe']});
   for (const stream of [app.stdout, app.stderr]) stream.on('data', chunk => logs.push(chunk.toString()));
   await until('HTTP server', async () => {
@@ -179,8 +212,9 @@ try {
   assert.equal(products.command, 'products', workText);
   assert.equal(products.categories[0].products[0].id, 'bundle-product', workText);
   const tokenFile = path.join(env.HOME, 'session-token');
+  const agentNodeFile = path.join(env.HOME, 'session-node');
   const script = path.join(env.HOME, 'smoke-session.sh');
-  fs.writeFileSync(script, `#!/bin/sh\nprintf '%s' "$MESH_SESSION_TOKEN" > '${tokenFile}'\nexec /bin/sleep 300\n`, {mode: 0o700});
+  fs.writeFileSync(script, `#!/bin/sh\nprintf '%s' "$MESH_SESSION_TOKEN" > '${tokenFile}'\ncommand -v node > '${agentNodeFile}'\nexec /bin/sleep 300\n`, {mode: 0o700});
   const response = await fetch(`http://127.0.0.1:${port}/api/new`, {
     method: 'POST', headers: {'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json'},
     body: JSON.stringify({name: 'bundle-smoke', preset: 'custom', cwd: env.HOME, command: script}),
@@ -191,6 +225,49 @@ try {
   assert.match(sessionToken, /^ms1\./);
   const sessions = await control({op: 'list'});
   assert.ok(sessions.some(item => item.name === session));
+  const agentNode = await until('session Node path', async () => fs.readFileSync(agentNodeFile, 'utf8').trim());
+  assert.equal(agentNode, path.join(noNode, 'node'), 'agent PATH keeps user Node');
+  const processes = spawnSync('/bin/ps', ['-axo', 'pid=,ppid=,command='], {env, encoding: 'utf8'});
+  assert.equal(processes.status, 0, processes.stderr);
+  const rows = processes.stdout.split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line)).filter(Boolean);
+  const web = rows.find(row => Number(row[2]) === app.pid && row[3].includes(path.join(bundle, 'app', 'server.py')));
+  assert.ok(web, 'owned bundle web process');
+  const worker = rows.find(row => Number(row[2]) === Number(web[1])
+    && row[3].includes(path.join(bundle, 'app', 'backend', 'dictation-service.cjs')));
+  assert.ok(worker, 'owned enabled dictation worker');
+  const bundledNode = path.join(bundle, 'runtime', 'node', 'bin', 'node');
+  if (process.platform === 'linux') assert.equal(fs.realpathSync(`/proc/${worker[1]}/exe`), fs.realpathSync(bundledNode));
+  else {
+    const image = spawnSync('/bin/ps', ['-p', worker[1], '-o', 'comm='], {env, encoding: 'utf8'});
+    assert.equal(image.status, 0, image.stderr); assert.equal(image.stdout.trim(), bundledNode);
+  }
+  const dictationHeaders = {Authorization: `Bearer ${token}`, 'Content-Type': 'audio/webm',
+    'X-Mesh-Dictation-Client': randomUUID(), 'X-Mesh-Session': session,
+    'X-Mesh-Created': String(sessions.find(item => item.name === session).created)};
+  assert.equal((await fetch(`http://127.0.0.1:${port}/api/transcribe/config`)).status, 401);
+  const dictationConfig = await fetch(`http://127.0.0.1:${port}/api/transcribe/config`, {headers: dictationHeaders});
+  assert.equal(dictationConfig.status, 200); assert.equal((await dictationConfig.json()).enabled, true);
+  async function readyDictation() {
+    const admitted = await fetch(`http://127.0.0.1:${port}/api/transcribe`, {method: 'POST',
+      headers: {...dictationHeaders, 'X-Mesh-Request-Id': randomUUID()}, body: dictationAudio});
+    assert.equal(admitted.status, 202);
+    const jobURL = `http://127.0.0.1:${port}/api/transcribe/${(await admitted.json()).job_id}`;
+    const job = await until('bundled dictation', async () => {
+      const result = await fetch(jobURL, {headers: dictationHeaders}); assert.equal(result.status, 200);
+      const value = await result.json(); return ['ready', 'error'].includes(value.state) ? value : false;
+    });
+    assert.ifError(whisperFailure); assert.equal(job.state, 'ready', JSON.stringify(job.error));
+    assert.equal(job.text, 'bundle transcription'); return jobURL;
+  }
+  async function settleInserted(jobURL) {
+    const result = await fetch(`${jobURL}/settle`, {method: 'POST', headers: {...dictationHeaders, 'Content-Type': 'application/json'},
+      body: '{"outcome":"inserted"}'});
+    assert.equal(result.status, 200); const job = await result.json();
+    assert.equal(job.state, 'settled'); assert.equal(job.outcome, 'inserted');
+  }
+  await settleInserted(await readyDictation());
+  assert.equal(whisperCalls, 1);
+  const revokedJobURL = await readyDictation(); // Ready, deliberately unsettled across native logout.
   // Installation links must select our wrappers, including through ~/.local/bin,
   // rather than a source helper's /usr/bin/env python3 shebang.
   const commands = path.join(env.HOME, '.local', 'bin');
@@ -229,6 +306,10 @@ try {
   assert.equal(loggedOut.status, 0, loggedOut.stderr);
   assert.equal(loggedOut.stderr, '');
   assert.match(loggedOut.stdout, /^All devices are signed out \(generation \d+\)\.$/m);
+  assert.equal((await fetch(revokedJobURL, {headers: dictationHeaders})).status, 404,
+    'native logout revokes the previous-principal result');
+  await settleInserted(await readyDictation());
+  assert.equal(whisperCalls, 3, 'old reservation retired without preventing a fresh insertion');
   mcp = spawn(path.join(bundle, 'bin', 'mesh-board-mcp'), [], {
     env: {...env, MESH_SESSION_TOKEN: sessionToken}, stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -262,7 +343,8 @@ try {
   assert.ok(catalogue.commands.some(command => command.name === 'inbox'), JSON.stringify(described));
   console.log(JSON.stringify({ok: true, platform: process.platform, arch: process.arch,
     http: true, nativePty: true, projectObservation: true, rosterObservation: rosterSources.length > 0,
-    workRead: true, sessionCredential: true, mcpInitialize: true, mcpTools: listed.result.tools.length}));
+    workRead: true, sessionCredential: true, bundledDictation: true, bundledNode: true,
+    nativeLogoutDictationRevocation: true, mcpInitialize: true, mcpTools: listed.result.tools.length}));
 } catch (error) {
   // Runtime diagnostics can contain session tokens: redact before CI output.
   console.error(logs.join('').replace(/ms1\.[A-Za-z0-9._-]+/g, '[redacted]'));
@@ -275,5 +357,6 @@ try {
     await Promise.race([new Promise(resolve => app.once('exit', resolve)), delay(5000)]);
     if (app.exitCode === null) app.kill('SIGKILL');
   }
+  if (whisper) {whisper.closeAllConnections(); await new Promise(resolve => whisper.close(resolve));}
 }
 JS

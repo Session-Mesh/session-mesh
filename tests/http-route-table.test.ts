@@ -85,11 +85,15 @@ describe('the route table, parsed from tests/test_route_auth_table.py', () => {
 });
 
 describe('the golden tables of http-harness.ts', () => {
-  test('the expected status table covers exactly the routes (POST /login aside) with statuses that are never 405 or 5xx', () => {
+  test('the expected status table covers exactly the routes (POST /login aside), including disabled dictation', () => {
     const table = expectedStatusTable('host');
     const keys = routes.map(routeKey).filter(key => key !== 'POST /login').sort();
     assert.deepEqual([...table.keys()].sort(), keys);
-    for (const [key, cell] of table) assert.ok([200, 400, 403, 404].includes(cell.status), `${key}: ${cell.status}`);
+    const disabled = new Set(['POST /api/transcribe', 'GET /api/transcribe/request/{request_id}',
+      'GET /api/transcribe/{job_id}', 'POST /api/transcribe/{job_id}/cancel', 'POST /api/transcribe/{job_id}/settle']);
+    for (const [key, cell] of table) assert.ok([200, 400, 403, 404].includes(cell.status)
+      || (disabled.has(key) && cell.status === 503 && cell.body === 'Dictation is disabled.'),
+    `${key}: ${cell.status}`);
   });
 
   test('the no-host table only overrides routes of the table, with 503 (the PTY host is not responding)', () => {
