@@ -41,6 +41,14 @@ tests/cla-check-merge.test.ts
 tests/cla-check.test.ts
 tests/codex-queue-wake-state.test.ts
 tests/compile-demo-tsx-mounts.test.ts
+tests/conversation-registry-corruption.test.ts
+tests/conversation-registry-environment.test.ts
+tests/conversation-registry-legacy-history.test.ts
+tests/conversation-registry-override.test.ts
+tests/conversation-registry-permissions.test.ts
+tests/conversation-registry-pipe-id.test.ts
+tests/conversation-registry-wrappers.test.ts
+tests/conversation-registry.test.ts
 tests/copilot-discover.test.ts
 tests/copilot-hook-state.test.ts
 tests/copilot-idle.test.ts
