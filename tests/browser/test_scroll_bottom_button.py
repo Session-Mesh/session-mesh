@@ -118,7 +118,17 @@ async def mesh_page(browser, mesh, home_dir, plain_transport_shell):
             await tab.evaluate(f"document.querySelector('#list .item[data-id=\"{name}\"]').click()")
         else:
             await tab.click(f'#list .item[data-id="{name}"]')
-        await tab.wait_for_function("active?.conn?.ws?.readyState === 1", timeout=10000)
+        await tab.wait_for_function(
+            """name => {
+                const c = active?.conn;
+                return c?.name === name && c.terminal?.isOpen()
+                    && c.terminal.isBound(c.name, c.created)
+                    && !c.replayPending && !c.replaying && !c.draining
+                    && !c.v2AwaitingCapability;
+            }""",
+            arg=name,
+            timeout=10000,
+        )
         await tab.evaluate("(c) => active.send(c)", command)
         await tab.wait_for_function(ready, timeout=10000)
         await tab.wait_for_timeout(300)
