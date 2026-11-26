@@ -612,10 +612,6 @@ async def _dictation_transfer(request, headers, exchange):
         # Matching attempts share a preparation. A failed attempt must leave it
         # for another attempt to commit, or for the worker's 15-second expiry.
         prepared = payload
-        live = await _dictation_live(names[0], created)
-        check_authority()
-        if not live:
-            return _dictation_error("stale_session", 409)
         internal = _dictation_internal_headers(headers, prepared)
         status, payload = await exchange("POST", "/internal/commit/" + prepared["job"]["job_id"], b"{}", internal)
         check_authority()
