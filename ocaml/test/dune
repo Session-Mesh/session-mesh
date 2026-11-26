@@ -459,7 +459,7 @@
 (test
  (name ptyhost_agent_relaunch_test)
  (modules ptyhost_agent_relaunch_test)
- (libraries ptyhost_blackbox test_scratch alcotest unix yojson)
+ (libraries ptyhost_blackbox mesh_platform test_scratch alcotest unix yojson)
  (action
   (run %{test} %{exe:../bin/mesh_ptyhost_main.exe})))
 

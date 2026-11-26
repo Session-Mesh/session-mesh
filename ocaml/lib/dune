@@ -66,6 +66,7 @@
  (name mesh_ptyhost)
  (modules mesh_ptyhost)
  (libraries
+  mesh_agent
   mesh_agent_resume_preset
   mesh_platform
   mesh_pty_agent_stop
