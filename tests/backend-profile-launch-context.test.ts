@@ -16,7 +16,7 @@ const python = process.env.MESH_PYTHON || 'python3';
 const skip = fs.existsSync(native) || process.env.MESH_REQUIRE_MESH_PLATFORM === '1' ? false
   : 'build mesh-platform or set MESH_MESH_PLATFORM_CMD';
 
-test('selected native profiles reach executed argv without ambient providers, while Pi profiles are refused', {skip}, () => {
+test('selected native profiles reach executed argv without ambient providers', {skip}, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-four-launch-'));
   try {
     const bin = path.join(root, 'bin'), conf = path.join(root, 'conf'), cwd = path.join(root, 'project');
@@ -66,14 +66,9 @@ async def launch(request, conversation):
 server.host = fake_host
 server._send_launch = launch
 async def main():
-    for index, agent in enumerate(['claude','codex','opencode']):
+    for index, agent in enumerate(['claude','codex','opencode','pi']):
         await server.new_session('test', ${JSON.stringify(cwd)}, agent, agent, agent,
                                  account=f'selected-{index}')
-    try:
-        await server.new_session('test', ${JSON.stringify(cwd)}, 'pi', 'pi', 'pi', account='selected-3')
-        raise AssertionError('Pi profile admitted')
-    except server.web.HTTPConflict as error:
-        assert error.text == server.PI_PROFILE_UNAVAILABLE
     print(json.dumps(metas))
 asyncio.run(main())
 `;
@@ -85,19 +80,23 @@ asyncio.run(main())
         XDG_CONFIG_HOME: path.join(root, 'ambient-config'), XDG_DATA_HOME: path.join(root, 'ambient-data'),
         XDG_STATE_HOME: path.join(root, 'ambient-state'), XDG_CACHE_HOME: path.join(root, 'ambient-cache'),
         PI_CODING_AGENT_DIR: path.join(root, 'ambient-pi')}})) as Array<Record<string, string>>;
-    assert.equal(metas.length, 3);
+    assert.equal(metas.length, 4);
     for (const [index, meta] of metas.entries()) {
       assert.equal(meta.account, `selected-${index}`);
       assert.match(meta.account_context_revision!, /^[0-9a-f]{64}$/);
     }
     const calls = fs.readFileSync(record, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-    assert.deepEqual(calls.map(call => call.name), ['claude', 'codex', 'opencode']);
+    assert.deepEqual(calls.map(call => call.name), ['claude', 'codex', 'opencode', 'pi']);
     const probes = fs.readFileSync(preflight, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     assert(probes.some(call => call.name === 'opencode' && call.args[0] === 'api'
       && call.env.XDG_CONFIG_HOME === profiles[2]!.roots.config
       && call.env.XDG_DATA_HOME === profiles[2]!.roots.data
       && call.env.OPENCODE_DB === undefined && call.env.OPENCODE_CONFIG === undefined
       && call.env.OPENCODE_CONFIG_CONTENT === undefined));
+    assert(probes.some(call => call.name === 'pi'
+      && call.env.PI_CODING_AGENT_DIR === profiles[3]!.roots.config
+      && call.env.OPENAI_API_KEY === undefined));
+    assert.equal(calls[3].args[calls[3].args.indexOf('--session-dir') + 1], profiles[3]!.roots.history);
     for (let index = 0; index < calls.length; index++) {
       const {env} = calls[index]!;
       assert.equal(env.OPENAI_API_KEY, undefined);

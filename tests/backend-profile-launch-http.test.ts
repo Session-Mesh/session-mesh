@@ -139,7 +139,7 @@ test('normal helper refuses managed creation and does not offer a host-provision
   }
 });
 
-test('HTTP launches use selected roots and refuse unqualified Pi profiles', {skip, timeout: 60000}, async () => {
+test('HTTP launches use backend-qualified configuration and history roots', {skip, timeout: 60000}, async () => {
   let bin = '', record = '', profiles: Array<{backend: string; roots: Record<string, string>}> = [];
   const mesh = await startMesh('accounts-four-http-', {
     MESH_MESH_PLATFORM_CMD: platform, MESH_SESSION: undefined, MESH_SESSION_TOKEN: undefined,
@@ -213,19 +213,16 @@ setTimeout(() => {}, 30000);
     const headers = {Cookie: cookie, Origin: mesh.base, 'Content-Type': 'application/json'};
     const config = await (await fetch(`${mesh.base}/api/config`, {headers})).json() as any;
     const offered = config.accounts.find((account: any) => account.id === 'work');
-    assert.deepEqual([offered.claude, offered.codex, offered.opencode, offered.pi], [true, true, true, false]);
-    const refused = await fetch(`${mesh.base}/api/new`, {method: 'POST', headers,
-      body: JSON.stringify({preset: 'pi', name: 'selected-pi', cwd: mesh.home, account: 'work'})});
-    assert.equal(refused.status, 409, await refused.clone().text());
-    for (const agent of ['claude', 'codex', 'opencode']) {
+    assert.deepEqual([offered.claude, offered.codex, offered.opencode, offered.pi], [true, true, true, true]);
+    for (const agent of ['claude', 'codex', 'opencode', 'pi']) {
       const response = await fetch(`${mesh.base}/api/new`, {method: 'POST', headers,
         body: JSON.stringify({preset: agent, name: `selected-${agent}`, cwd: mesh.home, account: 'work'})});
       assert.equal(response.status, 200, await response.clone().text());
     }
     const recorded = () => fs.existsSync(record) ? fs.readFileSync(record, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
-    await waitFor('all three recording agents', 10000, () => recorded().length === 3);
+    await waitFor('all four recording agents', 10000, () => recorded().length === 4);
     const calls = recorded();
-    for (const [index, agent] of ['claude', 'codex', 'opencode'].entries()) {
+    for (const [index, agent] of ['claude', 'codex', 'opencode', 'pi'].entries()) {
       const call = calls.find(call => call.name === agent);
       assert.ok(call, agent);
       assert.equal(call.session, `selected-${agent}`);
@@ -235,6 +232,14 @@ setTimeout(() => {}, 30000);
       const roots = profiles[index]!.roots;
       if (agent === 'claude') assert.equal(call.env.CLAUDE_CONFIG_DIR, roots.config);
       if (agent === 'codex') assert.equal(call.env.CODEX_HOME, roots.config);
+      if (agent === 'pi') {
+        const index = call.args.indexOf('--session-dir');
+        assert.ok(index >= 0);
+        assert.equal(call.args[index + 1], roots.history);
+        assert.ok(call.env.PI_CODING_AGENT_DIR.startsWith(path.join(mesh.confDir, 'pi-agent-overlays') + path.sep));
+        assert.equal(fs.realpathSync(path.join(call.env.PI_CODING_AGENT_DIR, 'sessions')),
+          path.join(roots.config, 'sessions'));
+      }
       if (agent === 'opencode') {
         for (const role of ['config', 'data', 'state', 'cache']) {
           assert.equal(call.env[`XDG_${role.toUpperCase()}_HOME`], roots[role]);
@@ -245,7 +250,7 @@ setTimeout(() => {}, 30000);
       }
     }
     const listed = await request(socket, {op: 'list'}) as Array<{name: string; meta: Record<string, string>}>;
-    assert.equal(listed.length, 3);
+    assert.equal(listed.length, 4);
     for (const session of listed) {
       assert.equal(session.meta.account, 'work');
       assert.match(session.meta.account_context_revision!, /^[a-f0-9]{64}$/);
