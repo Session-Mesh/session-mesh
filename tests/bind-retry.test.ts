@@ -9,7 +9,7 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {isBindCollision, retryBindCollision} from './helpers/bind-retry.ts';
 import {listensLoopbackFrom} from './helpers/listener-owner.ts';
-import {runServer, scratchHome, startMesh, type Scratch} from './mesh-server-lib.ts';
+import {listenerReady, runServer, scratchHome, startMesh, type Scratch} from './mesh-server-lib.ts';
 
 const collision = (errno: number) =>
   `OSError: [Errno ${errno}] error while attempting to bind on address: address already in use`;
@@ -49,6 +49,20 @@ test('strict loopback ownership is opt-in and forwarded to the server check', as
   const second = await startMesh('strict-', {}, undefined, {...strict.dependencies, owns: listensLoopbackFrom});
   await second.stop();
   assert.deepEqual(strict.owners, [listensLoopbackFrom]);
+});
+
+test('the connection is not probed when the expected listener is not owned', async () => {
+  const child = {pid: 42, exitCode: null, signalCode: null};
+  let probes = 0;
+  assert.equal(await listenerReady(child, 4567, () => false, async () => { probes++; return true; }), false);
+  assert.equal(probes, 0);
+});
+
+test('listener ownership must still hold after the connection probe', async () => {
+  const child = {pid: 42, exitCode: null, signalCode: null};
+  let checks = 0;
+  assert.equal(await listenerReady(child, 4567, () => ++checks === 1, async () => true), false);
+  assert.equal(checks, 2);
 });
 
 test('only Linux and macOS server bind collisions match', () => {
