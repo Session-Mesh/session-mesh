@@ -26,6 +26,7 @@ tests/backend-profile-launch-http.test.ts
 tests/backport-register-replay.test.ts
 tests/backport-register-workflow.test.ts
 tests/backport-workflow.test.ts
+tests/bind-retry.test.ts
 tests/board-mcp-switch.test.ts
 tests/bootstrap-modes.test.ts
 tests/branch-policy.test.ts

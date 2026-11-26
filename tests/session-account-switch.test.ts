@@ -346,34 +346,38 @@ describe('account switch requests', {skip: SKIP}, () => {
     ]);
     const pidOf = (name: string) => Number(fs.readFileSync(`${log}.${name}`, 'utf8').trim());
     const environment = (pid: number) => fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
-    const actualHome = (pid: number) => {
+    const actualHome = async (pid: number) => {
       if (process.platform === 'darwin') {
         // The live fixture keeps its account's rollout open on fd 3, even after exec.
-        const result = spawnSync('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-d', '3', '-Fn'],
-          {encoding: 'utf8', timeout: 5000});
-        assert.ifError(result.error);
-        assert.equal(result.status, 0, result.stderr);
-        const account = result.stdout.match(/^n(.+)\/sessions\/\d{4}\/\d{2}\/\d{2}\/rollout-[^/]+\.jsonl$/m);
-        assert.ok(account, 'the running fixture holds its account rollout open');
-        return account[1];
+        const deadline = performance.now() + 5000;
+        while (performance.now() < deadline) {
+          const result = spawnSync('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-d', '3', '-Fn'],
+            {encoding: 'utf8', timeout: Math.max(1, Math.ceil(deadline - performance.now()))});
+          assert.ifError(result.error);
+          const account = result.stdout.match(/^n(.+)\/sessions\/\d{4}\/\d{2}\/\d{2}\/rollout-[^/]+\.jsonl$/m);
+          if (result.status === 0 && account) return account[1];
+          await sleep(50);
+        }
+        assert.fail('the running fixture did not open its account rollout');
       }
       const env = environment(pid);
       const variable = env.find(item => item.startsWith('CODEX_HOME='));
       return variable ? variable.slice('CODEX_HOME='.length) : `${env.find(item => item.startsWith('HOME='))!.slice(5)}/.codex`;
     };
     const plainPid = pidOf(plain.name), workPid = pidOf(work.name), movingPid = pidOf(moving.name);
-    assert.deepEqual([actualHome(plainPid), actualHome(workPid), actualHome(movingPid)], [defaultHome, workHome, travelHome]);
+    assert.deepEqual(await Promise.all([actualHome(plainPid), actualHome(workPid), actualHome(movingPid)]),
+      [defaultHome, workHome, travelHome]);
     const workAuth = fs.readFileSync(path.join(workHome, 'auth.json'), 'utf8');
     const defaultAuth = fs.readFileSync(path.join(defaultHome, 'auth.json'), 'utf8');
 
     const switched = await decide(await requested(moving, 'work'), true);
     assert.equal(switched.state, 'completed', JSON.stringify(switched));
     await launchOf(moving.name);
-    assert.equal(actualHome(pidOf(moving.name)), workHome);
+    assert.equal(await actualHome(pidOf(moving.name)), workHome);
     assert.equal(launches().findLast(fields => fields[2] === moving.name)?.[4], moving.token, 'switch stays in the same PTY');
     assert.equal(pidOf(work.name), workPid, 'the other work session was not restarted');
-    assert.equal(actualHome(workPid), workHome);
-    assert.equal(actualHome(plainPid), defaultHome);
+    assert.equal(await actualHome(workPid), workHome);
+    assert.equal(await actualHome(plainPid), defaultHome);
     assert.equal(fs.readFileSync(path.join(workHome, 'auth.json'), 'utf8'), workAuth);
     assert.equal(fs.readFileSync(path.join(defaultHome, 'auth.json'), 'utf8'), defaultAuth);
 
@@ -387,10 +391,10 @@ describe('account switch requests', {skip: SKIP}, () => {
     assert.equal(restarted.state, 'completed', JSON.stringify(restarted));
     assert.equal(restarted.result?.id, plain.name);
     await launchOf(plain.name);
-    assert.equal(actualHome(pidOf(plain.name)), defaultHome, 'default remains default after another account was used');
+    assert.equal(await actualHome(pidOf(plain.name)), defaultHome, 'default remains default after another account was used');
     assert.equal(launches().findLast(fields => fields[2] === plain.name)?.[4], plain.token, 'restart stays in the same PTY');
     assert.equal(pidOf(work.name), workPid);
-    assert.equal(actualHome(workPid), workHome);
+    assert.equal(await actualHome(workPid), workHome);
     assert.equal(fs.readFileSync(path.join(defaultHome, 'auth.json'), 'utf8'), defaultAuth);
   });
 
