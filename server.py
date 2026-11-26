@@ -355,9 +355,8 @@ async def api_logout_all(request):
     for ws in list(request.app["sockets"]):
         await ws.close(code=aiohttp.WSCloseCode.POLICY_VIOLATION, message=b"logout")
     try:
-        async with asyncio.timeout(1):
-            await _sync_dictation_principal(request.app)
-    except (TimeoutError, web.HTTPServiceUnavailable):
+        await asyncio.wait_for(_sync_dictation_principal(request.app), timeout=1)
+    except (asyncio.TimeoutError, web.HTTPServiceUnavailable):
         # Cookie revocation succeeded; dictation requests still require a successful sync.
         print("session-mesh: dictation principal sync unavailable; requests remain gated", file=sys.stderr, flush=True)
     resp = web.json_response({"ok": True, "generation": generation})

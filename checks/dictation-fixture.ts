@@ -69,7 +69,12 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
   });});
   await new Promise<void>(r=>inventory.listen(path.join(run,'session-mesh','ptyhost.sock'),r));
   const upstream=http.createServer(async(req,res)=>{
-    for await(const _ of req){/* drain fake audio */}
+    try {
+      for await(const _ of req){/* drain fake audio */}
+    } catch (error) {
+      if (req.aborted && (error as NodeJS.ErrnoException).code === 'ECONNRESET') return;
+      throw error;
+    }
     upstreamCalls++;activeUpstream++;peakUpstream=Math.max(peakUpstream,activeUpstream);
     if(holdUpstream)await new Promise<void>(resolve=>upstreamReleases.push(resolve));
     activeUpstream--;res.setHeader('Content-Type',response.type);res.end(response.body);
