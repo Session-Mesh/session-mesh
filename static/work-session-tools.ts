@@ -39,6 +39,7 @@ export function workSessionTools(ports: Ports): HTMLElement {
   root.append(title, identity, scopeHint, status, list, select, attach, check, refresh);
   let context: Context | null = null, revision: number | null = null, machine = '', live: Session[] = [];
   let busy = false, epoch = 0, pending: Record<string, unknown> | null = null, invalidated=false;
+  let inventoryLoaded = false;
   const valid = () => root.isConnected && ports.current();
   const drain = () => {
     if(!valid() || busy || pending || !invalidated)return;
@@ -92,15 +93,27 @@ export function workSessionTools(ports: Ports): HTMLElement {
       const next=await readContext();
       context=next;
       const wire=await post('/api/projects/v1',request('read'));
-      const inventory=await (await fetcher('/api/sessions',{credentials:'same-origin',signal:AbortSignal.timeout(10000)})).json() as unknown;
+      const signal = AbortSignal.timeout(10000);
+      let inventory: unknown;
+      // The server can answer while the first post-restart inventory is still being assembled.
+      for (let attempt = 0; attempt < 5 && valid(); attempt++) {
+        const response = await fetcher('/api/sessions', {credentials:'same-origin', signal});
+        if (!response.ok) throw Error('inventory');
+        inventory = await response.json() as unknown;
+        if (!record(inventory) || inventory.complete !== false) break;
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
       if (!record(wire) || typeof wire.machine_id!=='string' || !record(inventory) || inventory.complete!==true || !Array.isArray(inventory.mesh)) throw Error('inventory');
       if (!valid() || epoch!==issue) return;
+      const previous = select.value === '' ? undefined : live[Number(select.value)];
       machine=wire.machine_id;live=[];select.replaceChildren();
       for(const raw of inventory.mesh) if(record(raw) && typeof raw.name==='string' && typeof raw.created==='number' && Number.isFinite(raw.created)) {
         if(ports.fixedSession && (raw.name!==ports.fixedSession.name || raw.created!==ports.fixedSession.created))continue;
         const session={name:raw.name,created:raw.created,machine_id:machine}; live.push(session);
         const option=doc.createElement('option');option.value=String(live.length-1);option.textContent=`${session.name} · ${session.created}`;select.append(option);
       }
+      if (inventoryLoaded) select.selectedIndex = previous ? live.findIndex(session => same(session, previous)) : -1;
+      inventoryLoaded = true;
       if(valid() && epoch===issue) render(wire);
     } catch {if(valid() && epoch===issue) {context=null;revision=null;list.replaceChildren();status.textContent=t('artifacts.projectUnavailable');}}
     finally {if(epoch===issue){busy=false;controls();drain();}}
@@ -121,7 +134,8 @@ export function workSessionTools(ports: Ports): HTMLElement {
     } catch {if(valid())status.textContent=t(pending?'artifacts.projectUncertain':'artifacts.projectChanged');}
     finally {busy=false;controls();drain();}
   };
-  attach.onclick=()=>{const session=live[Number(select.value)];if(session)void mutate('attach',session);};
+  select.onchange = controls;
+  attach.onclick=()=>{const session=live[select.selectedIndex];if(session)void mutate('attach',session);};
   refresh.onclick=()=>{void read();};
   check.onclick=async()=>{
     if(!valid() || busy || !pending)return;

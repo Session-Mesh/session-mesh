@@ -22,7 +22,7 @@ test('current Work Projects attach canonical IDs, preserve receipts and detach a
     MESH_WORK_READ_CMD:process.env.MESH_WORK_READ_CMD || path.join(REPO,'ocaml/_build/default/work_read/bin/work_read_main.exe'),
     MESH_ARTIFACTS_CMD:process.env.MESH_ARTIFACTS_CMD || path.join(REPO,'ocaml/_build/default/bin/mesh_artifacts_main.exe')});
   try {
-    await mesh.start();await mesh.newShell('canonical-tools');
+    await mesh.start();await mesh.newShell('canonical-first');await mesh.newShell('canonical-tools');
     const page=await mesh.openPage('canonical-tools',{width:1440,height:900},()=>{
       sessionStorage.setItem('mesh.workView',JSON.stringify({schema:2,place:{project:'P-5e6f',tab:'board'},drafts:{}}));
       const start=window.setTimeout.bind(window);
@@ -37,6 +37,16 @@ test('current Work Projects attach canonical IDs, preserve receipts and detach a
     await page.locator('#btn-projects').click();
     const tools=page.locator('.work-project > .work-session-tools');
     await tools.getByRole('button',{name:'Attach session tools',exact:true}).waitFor();
+    const session = tools.getByLabel('Exact live Mesh session');
+    const target = session.locator('option').filter({hasText: /^canonical-tools/});
+    await target.waitFor({state:'attached'});
+    await session.selectOption(await target.getAttribute('value') ?? '');
+    const refreshed = page.waitForResponse(response => response.url().endsWith('/api/sessions') &&
+      response.request().method() === 'GET');
+    await tools.getByRole('button',{name:'Refresh',exact:true}).click();
+    await refreshed;
+    await tools.getByRole('button',{name:'Attach session tools',exact:true}).click({trial:true});
+    assert.match(await session.locator('option:checked').innerText(), /^canonical-tools/);
     const saving=page.waitForResponse(response=>response.request().method()==='POST' &&
       response.url().endsWith('/api/projects/v1') && response.request().postDataJSON()?.action==='attach');
     await tools.getByRole('button',{name:'Attach session tools',exact:true}).click();
@@ -55,9 +65,18 @@ test('current Work Projects attach canonical IDs, preserve receipts and detach a
     const denied=await page.request.post(mesh.base+'/api/projects/v1',{headers:{Authorization:`Bearer ${mesh.token()}`},
       data:{op:'work-tools',action:'read',context:scope,session:null,request_id:null,revision:null}});
     assert.equal(denied.status(),401,'master bearer is not an owner write credential');
+    const restartedReads: {path: string; status: number; complete?: boolean}[] = [];
+    page.on('response', async response => {
+      const pathname = new URL(response.url()).pathname;
+      if (!['/api/work/v1', '/api/projects/v1', '/api/sessions'].includes(pathname)) return;
+      const body = await response.json().catch(() => null);
+      restartedReads.push({path: pathname, status: response.status(), complete: body?.complete});
+    });
     await mesh.restartServer();await page.reload();
     if(!await page.evaluate(()=>document.body.classList.contains('projecting')))await page.locator('#btn-projects').click();
-    await tools.getByRole('button',{name:'Detach session tools',exact:true}).waitFor();
+    await tools.getByRole('button',{name:'Detach session tools',exact:true}).waitFor().catch(error => {
+      throw new Error(`Attachment unavailable after restart: ${JSON.stringify(restartedReads.slice(0, 20))}`, {cause: error});
+    });
     let drop=true;
     await page.route('**/api/projects/v1',async route=>{
       const body=route.request().postDataJSON();
