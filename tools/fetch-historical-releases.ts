@@ -9,6 +9,12 @@ import {selectHistoricalReleases, type Release, type ReleaseAsset, type Selected
 
 const repository = 'Session-Mesh/session-mesh';
 const curl = ['--fail', '--silent', '--show-error', '--location', '--proto', '=https', '--proto-redir', '=https', '--retry', '3'];
+export function apiAuthentication(token: string | undefined): {args: string[]; input?: string} {
+  if (!token) return {args: []};
+  if (!/^[A-Za-z0-9_\-]+$/.test(token)) throw new Error('invalid GitHub token');
+  // Feed curl through stdin: do not expose a credential in argv or command errors.
+  return {args: ['--config', '-'], input: `header = "Authorization: Bearer ${token}"\n`};
+}
 export function verifyAsset(file: string, asset: ReleaseAsset): void {
   if (statSync(file).size !== asset.size) throw new Error(`wrong size for ${asset.name}`);
   const digest = createHash('sha256').update(readFileSync(file)).digest('hex');
@@ -20,12 +26,13 @@ export function fetchHistoricalReleases(target: string): void {
   // A fresh directory prevents an old or partial download from being reused.
   mkdirSync(target, {mode: 0o700});
   const releases: Release[] = [];
+  const auth = apiAuthentication(process.env.GITHUB_TOKEN);
   let complete = false;
   for (let page = 1; page <= 10; page++) {
-    const raw = execFileSync('curl', [...curl, '--max-time', '60', '--max-filesize', '32000000',
+    const raw = execFileSync('curl', [...curl.filter(arg => arg !== '--location'), ...auth.args, '--max-time', '60', '--max-filesize', '32000000',
       '--header', 'Accept: application/vnd.github+json', '--header', 'User-Agent: session-mesh-migration-test',
       `https://api.github.com/repos/${repository}/releases?per_page=100&page=${page}`],
-      {encoding: 'utf8', maxBuffer: 32_000_000});
+      {encoding: 'utf8', maxBuffer: 32_000_000, ...(auth.input ? {input: auth.input} : {})});
     const rows: unknown = JSON.parse(raw);
     if (!Array.isArray(rows) || rows.length > 100) throw new Error('invalid release page');
     releases.push(...rows as Release[]);
