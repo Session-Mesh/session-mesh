@@ -417,6 +417,7 @@ test('provision journal acquisition is atomic across tabs and preserves legacy u
     assert.deepEqual(await other.evaluate(async () => (window as any).testProvisionJournal().load()),
       {id: stable, value: receipt});
     await page.evaluate(() => localStorage.setItem('mesh.backendAccounts.provision.v1', 'uncertain'));
+    await other.waitForFunction(() => localStorage.getItem('mesh.backendAccounts.provision.v1') === 'uncertain');
     const legacy = await other.evaluate(async () => (window as any).testProvisionJournal().acquire());
     assert.equal(legacy.acquired, false);
     assert.equal(legacy.entry.value, 'uncertain');
