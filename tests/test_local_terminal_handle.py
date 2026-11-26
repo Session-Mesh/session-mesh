@@ -41,7 +41,7 @@ class Socket {
 }
 const context = vm.createContext({WebSocket: Socket, Uint8Array, TextEncoder, crypto,
   requireLocalMesh: () => {}, localMeshEffectsAllowed: () => true,
-  localActionUnavailable: () => false, t: key => key,
+  localActionUnavailable: () => false, t: key => key, recoveredLineTarget: null,
   location: {protocol: 'https:', host: 'mesh.example'}, touch: false,
   inputLeaseTab: 'a'.repeat(32), humanInputScopes: new Map(), enc: new TextEncoder(), active: null, inventoryLoaded: true,
   lastListing: {management: {state: 'observed'}},
