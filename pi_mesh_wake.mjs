@@ -4,6 +4,7 @@
 // Pi extension: accept only content-free wake notices. Message bodies and
 // consent remain behind Mesh's existing session-scoped MCP tools.
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
@@ -66,6 +67,20 @@ export default function (pi) {
   let backoff = 1000;
   const pending = new Map();
   if (!token || !Number.isInteger(port) || port < 1 || port > 65535) return;
+
+  function reportConversation(context) {
+    const session = context.sessionManager.getSessionId?.();
+    if (typeof session !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(session)) return;
+    const body = JSON.stringify({ type: "done", id: randomUUID(), at: Date.now() / 1000,
+      detail: { source: "pi", session, pid: process.pid } });
+    const req = http.request({ host: "127.0.0.1", port, agent: direct, method: "POST",
+      path: "/api/event",
+      headers: { Authorization: "MeshSession " + token, "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body) } }, res => res.resume());
+    req.setTimeout(1000, () => req.destroy());
+    req.on("error", () => {});
+    req.end(body);
+  }
 
   function ack(id) {
     const state = pending.get(id);
@@ -171,9 +186,11 @@ export default function (pi) {
   pi.on("session_start", (_event, context) => {
     ctx = context;
     stopped = false;
+    reportConversation(context);
     // Without a session file no durable confirmation is possible.
     if (ctx.sessionManager.getSessionFile()) connect();
   });
+  pi.on("agent_end", (_event, context) => reportConversation(context));
   pi.on("message_end", event => {
     if (event.message.role !== "user") return;
     // Pi emits the event before appendMessage; run only after that event returns.
