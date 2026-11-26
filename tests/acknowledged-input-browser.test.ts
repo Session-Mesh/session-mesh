@@ -7,6 +7,7 @@ import {type PaneView, recordControlMessages, settle, skip, TerminalMesh, waitFo
 
 type InputPane = {
   send(text: string): void;
+  sendRaw(bytes: Uint8Array, complete?: boolean): boolean;
   term: PaneView['term'];
   inputLease?: {dirty: boolean};
   inputAck?: {state: string; pendingBytes: number; pendingHumanBytes: number; blocked?: boolean; retry(): boolean;
@@ -263,7 +264,10 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
     assert.match(warning, /already-sent terminal draft is unfinished/);
     await page.waitForFunction(() => active.conn?.ws?.readyState === 1 &&
       active.inputAck?.state === 'ready');
-    await page.evaluate(() => active.send("\x15printf 'RECONNECTED\\n'\r"));
+    await settle(page);
+    assert.equal(await page.evaluate(() =>
+      active.sendRaw(new TextEncoder().encode("\x15printf 'RECONNECTED\\n'\r"), true)), true,
+    'the replacement attachment accepts the new command');
     await waitForRow(page, 'RECONNECTED');
     await page.context().close();
   });
