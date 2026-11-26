@@ -8,7 +8,7 @@ import type {WebSocketRoute} from 'playwright-core';
 declare const active: any;
 declare function refresh(): Promise<unknown>;
 
-for (const transition of ['listing', 'close']) test(`a cached restore remains detached after ${transition} changes its unconfirmed incarnation`, async () => {
+for (const transition of ['listing', 'close', 'bound-close']) test(`a cached restore remains detached after ${transition} changes its unconfirmed incarnation`, async () => {
   await harness(async (page, api) => {
     const attempts: WebSocketRoute[] = [];
     await page.routeWebSocket('**/ws/A**', socket => {attempts.push(socket); socket.onMessage(() => {});});
@@ -18,6 +18,10 @@ for (const transition of ['listing', 'close']) test(`a cached restore remains de
     });
     await page.waitForFunction(() => active.conn?.created === 1 && active.conn.terminal?.isOpen());
     assert.equal(await page.evaluate(() => active.conn.terminal.isBound('A', 1)), false);
+    if (transition === 'bound-close') {
+      attempts[0]!.send(JSON.stringify({t: 'bound', name: 'A', created: 1}));
+      await page.waitForFunction(() => active.conn?.terminal?.isBound('A', 1) && active.conn.replayPending);
+    }
     api.inventory.mesh[0]!.created = 2;
     if (transition === 'listing') await page.evaluate(() => refresh());
     else {
@@ -41,7 +45,8 @@ test('a confirmed cache restoration resumes ordinary live replacement following'
       window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}));
       window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
     });
-    await page.waitForFunction(() => active.conn?.terminal?.isBound('A', 1));
+    await page.waitForFunction(() => active.conn?.terminal?.isBound('A', 1)
+      && !active.conn.replayPending && !active.conn.replaying);
     api.inventory.mesh[0]!.created = 2;
     await page.evaluate(() => refresh());
     await page.waitForFunction(() => active.conn?.terminal?.isBound('A', 2));

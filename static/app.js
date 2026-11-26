@@ -1479,21 +1479,23 @@ class Pane {
     const geometry = c.replayGeometry;
     c.replayed = true;
     c.replayGeometry = null;
-    if (prefix === null) return this.output(bytes, () => {
+    const finish = () => {
       if (!stillCurrent()) return;
-      c.replaying = false; this.flushReplayInput(c);
-    });
+      c.replaying = false;
+      if (prefix !== null) this.leaveReplayGeometry(c);
+      if (c.cacheRestore && c.terminal?.isBound(c.name, c.created)) {
+        c.cacheRestore = false;
+        this.cachedTerminalMoveBlockedId = null;
+      }
+      this.flushReplayInput(c);
+    };
+    if (prefix === null) return this.output(bytes, finish);
     // The retained socket observer sees raw output. A visible replay also has
     // a local reset/mode prefix; mirror that prefix before its raw bytes.
     c.terminal.replayMode(prefix, bytes);
     this.resumeFollowing(c);
     this.enterReplayGeometry(c, geometry);
-    this.output(prefixedBytes(prefix, bytes), () => {
-      if (!stillCurrent()) return;
-      c.replaying = false;
-      this.leaveReplayGeometry(c);
-      this.flushReplayInput(c);
-        });
+    this.output(prefixedBytes(prefix, bytes), finish);
   }
   // A real size change and back: the program gets a genuine SIGWINCH and repaints.
   redraw() {
@@ -2853,10 +2855,7 @@ class Pane {
         protocol: (_terminal, limited) => {
           this.limitedBanner.hidden = !limited;
           this.limitedKeyboard.hidden = !limited || !touch;
-          if (!limited) {
-            if (c.cacheRestore) this.cachedTerminalMoveBlockedId = null;
-            c.cacheRestore = false; this.sendSize(true); this.armAutoRedraw(c);
-          }
+          if (!limited) { this.sendSize(true); this.armAutoRedraw(c); }
         },
         ptySize: (_terminal, size) => {
           const initialClaim = c.pty === null && c.initialSizeClaim;
