@@ -52,9 +52,11 @@ test('a page click that times out, then a second click: one shell, not two', TIM
     assert.equal(first.status, 503, first.text);
     const second = await lab.post({names: ['bravo']});
     assert.equal(second.json.results.bravo.ok, false, second.text);
-    assert.match(second.json.results.bravo.error, /sent a moment ago/);
+    assert.equal(second.json.results.bravo.error, 'The bound restored session is unavailable; nothing was restarted');
+    assert.equal(second.json.results.bravo.phase, 'uncertain');
+    assert.equal(lab.snapshotLost().find(entry => entry.name === 'bravo')?.restoring?.mode, 'ordinary');
     const exact = await lab.exact(lab.offers.bravo);   // the exact restore is held back too
-    assert.deepEqual([exact.json.ok, exact.json.code, exact.json.phase], [false, 'target-occupied', 'not-started']);
+    assert.deepEqual([exact.json.ok, exact.json.code, exact.json.phase], [false, 'completion-required', 'created']);
     slow.release();
     await waitFor('the delayed shell appeared', 15000, async () => (await lab.listed()).length > 0);
     await new Promise(resolve => setTimeout(resolve, 1500));   // a second shell would exist by now

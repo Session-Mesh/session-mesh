@@ -488,7 +488,7 @@ describe('the public CI as committed', () => {
       assert.equal(restore.find(line => line.key === 'path')?.value, 'native-host');
       assert.ok(!restore.some(line => line.key === 'restore-keys'), 'no fallback to a bundle without the fixture');
       const key = restore.find(line => line.key === 'key')?.value ?? '';
-      assert.match(key, /^native-programs-v5-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}/);
+      assert.match(key, /^native-programs-v6-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}/);
       assert.match(key, /hashFiles\('ocaml\/\*\*', '!ocaml\/test\/\*\*', 'ocaml\/test\/provision_runner\/\*\*', '!ocaml\/_build\/\*\*'/);
       const raw = (job: string) => jobs.find(item => item.name === job)!.block.map(line => line.raw).join('\n');
       const artifact = 'mesh-managed-profile-test-linux-x86_64';
@@ -511,6 +511,29 @@ describe('the public CI as committed', () => {
       }
       for (const needle of ['name: mesh-open-linux-x86_64', 'MESH_OPEN_CMD=$RUNNER_TEMP/native-open/mesh-open']) {
         assert.ok(body('frontend_parts').includes(needle), `${needle} missing from the frontend job`);
+      }
+    });
+
+    test(`${name} delivers artifact workers to every Linux test job without skips`, () => {
+      const jobs = jobBlocks(parseLines(text));
+      const body = (jobName: string): string => {
+        const job = jobs.find(item => item.name === jobName);
+        assert.ok(job, `no ${jobName} job`);
+        return job.block.map(line => line.raw).join('\n');
+      };
+      const native = body('native');
+      assert.ok(native.includes('key: native-programs-v6-'));
+      for (const binary of ['mesh-artifacts', 'mesh-board-mcp']) {
+        assert.ok(native.includes(`cp -L ocaml/_build/install/default/bin/${binary} native-host/${binary}`));
+        assert.ok(native.includes(`test -x native-host/${binary}`));
+        assert.ok(native.includes(`            native-host/${binary}`));
+      }
+      for (const jobName of ['frontend_parts', 'python', 'browser_parts']) {
+        const job = body(jobName);
+        assert.ok(job.includes('MESH_REQUIRE_ARTIFACTS=1'));
+        assert.ok(job.includes('cp "$RUNNER_TEMP/native-host/mesh-artifacts" ocaml/_build/default/bin/mesh_artifacts_main.exe'));
+        assert.ok(job.includes('cp "$RUNNER_TEMP/native-host/mesh-board-mcp" ocaml/_build/default/bin/mesh_board_mcp_main.exe'));
+        assert.ok(job.includes('chmod +x ocaml/_build/default/bin/mesh_{artifacts,board_mcp}_main.exe'));
       }
     });
   }

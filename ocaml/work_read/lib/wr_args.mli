@@ -8,8 +8,8 @@
 (** Strict parsing of the command line. A subcommand, its flags and its one
     optional identifier are all validated; anything else (an unknown flag, a
     repeated flag, a flag without value, a stray argument, a value with a
-    control, bidirectional or invisible character, a malformed identifier) is
-    an [invalid_input] error. Nothing is read from the environment here. *)
+    control, bidirectional or invisible character, a malformed identifier) is an
+    [invalid_input] error. Nothing is read from the environment here. *)
 
 type target = Product of string | Project of string | Task of string
 
@@ -19,15 +19,18 @@ type command =
       (** [all]: also [done] and [dropped] projects *)
   | Project_detail of string  (** a [P-<hex>] reference *)
   | Product_detail of string  (** a product id: the product page *)
+  | Attachment_context of { project : string; product : string }
   | Task_detail of string  (** a [T-<hex>] reference *)
   | Resume of { product : string option; project : string option; all : bool }
       (** [all]: also the [todo] section *)
   | Sessions_of of target
   | Session_questions  (** the open questions of each session, by name *)
-  | Ids  (** every task, project and question id with its title, for references *)
+  | Ids
+      (** every task, project and question id with its title, for references *)
   | Open_questions of { after : string option; limit : int }
       (** a page of the open questions, oldest first: those asked after the
-          question [after] ([N-<hex>]), at most [limit] (1 to 100, default 20) *)
+          question [after] ([N-<hex>]), at most [limit] (1 to 100, default 20)
+      *)
 
 val parse : string list -> (command, Work_mcp.Work_err.t) result
 (** The arguments after the program name. *)

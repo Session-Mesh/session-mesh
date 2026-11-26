@@ -1,4 +1,24 @@
 (library
+ (name mesh_artifacts_worker)
+ (modules mesh_artifacts_worker)
+ (libraries mesh_session_artifacts mesh_notes_connector mesh_work_tools yojson unix))
+
+(library
+ (name mesh_work_tools)
+ (modules mesh_work_tools)
+ (libraries mesh_session_artifacts work_read digestif yojson unix))
+
+(library
+ (name mesh_notes_connector)
+ (modules mesh_notes_connector)
+ (libraries mesh_session_artifacts cohttp-lwt-unix lwt.unix yojson uri unix))
+
+(library
+ (name mesh_session_artifacts)
+ (modules mesh_session_artifacts)
+ (libraries yojson uri unix))
+
+(library
  (name mesh_board_mcp)
  (modules mesh_board_mcp)
  (libraries

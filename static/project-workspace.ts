@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-import { requestProject, projectReadRequest, ProjectTransportError } from './project-host.ts';
+import { requestProject, projectReadRequest, ProjectTransportError, PROJECT_SESSION_TOOLS_FEATURE } from './project-host.ts';
+import {projectSessionTools} from './project-session-tools-view.ts';
+import type {SessionToolReference} from './session-project-tools.ts';
 import type { HostReply, ProjectMembership, ProjectDetail, ProjectHTTP, ProjectRequest, ProjectSummary } from './project-host.ts';
 import { safeProjectURL } from './project-catalog.js';
 import { ProjectObservationReader } from './project-observation.ts';
@@ -20,6 +22,8 @@ interface WorkspaceOptions {
   root: HTMLElement; sidebar: HTMLElement; request: ProjectHTTP; translate: Translate;
   availability: (ready: boolean) => void;
   mountArtifact: (root: HTMLElement) => { open: () => void; close: () => void };
+  liveSession?: (reference: SessionToolReference) => boolean;
+  openSessionTools?: (reference: SessionToolReference, current: () => boolean) => void;
 }
 
 class ProjectWorkspace {
@@ -194,7 +198,7 @@ class ProjectWorkspace {
   private abandonObservation(resetBackoff = true) {
     this.observationGeneration++;
     this.clearObservationTimers();
-    if (resetBackoff) { this.observationUnsupported = false; this.contextRefreshFailures = 0; this.capacityRefreshFailures = 0; }
+    if (resetBackoff) { this.observationUnsupported = false; this.contextRefreshFailures = 0; this.capacityRefreshFailures = 0; delete this.observationStatus.dataset.observedAt; }
     this.retryObservation = false; this.reloadObservationContext = false; this.busyObservation = null;
     this.observation = null;
   }
@@ -271,6 +275,7 @@ class ProjectWorkspace {
       this.observationStatus.textContent = this.t(`projectObservation.state.${state ?? 'unknown'}`) + (this.observedView ? ' ' + this.t('projectObservation.stale') : '');
       if (state === 'complete') {
         const catalog = await reader.assemble(); if (!current()) return;
+        this.observationStatus.dataset.observedAt = catalog.generated_at;
         if (this.observedView) {
           this.observedView.clear(true);
           for (const button of this.observationRoot.querySelectorAll(':scope > button')) button.remove();
@@ -391,6 +396,19 @@ class ProjectWorkspace {
     } else this.content.append(this.el('p', this.t('projectObservation.disabled')));
     this.content.append(this.observationStatus);
     this.cockpit.mount(this.content, project, this.machine, this.revision, this.observationUnsupported,this.boot,this.membership);
+    if (this.capability?.boot === this.boot && this.capability.features?.includes(PROJECT_SESSION_TOOLS_FEATURE)) {
+      const boot = this.boot, machine = this.machine, revision = this.revision;
+      const current = () => this.visible && this.ready && this.detail === project && this.selected === project.id
+        && this.boot === boot && this.machine === machine && this.revision === revision;
+      this.content.append(projectSessionTools({document: this.doc, project, machine, request: this.options.request,
+        translate: this.t, current, ...(this.options.liveSession ? {live: this.options.liveSession} : {}),
+        ...(this.options.openSessionTools ? {open: this.options.openSessionTools} : {}),
+        confirmed: receipt => {
+          if (!this.visible || !this.ready || this.selected !== project.id || this.boot !== boot || this.machine !== machine
+              || receipt.project_id !== project.id || receipt.machine_id !== machine || receipt.boot !== boot) return;
+          void this.readSelected();
+        }}));
+    }
   }
   private async readSelected(preserve = false) {
     const id = this.selected, issue = ++this.selectionGeneration, mode = this.generation;

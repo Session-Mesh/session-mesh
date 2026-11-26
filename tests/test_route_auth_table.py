@@ -69,6 +69,8 @@ EXPECTED = {
     ("GET", "/demo-scene/{name}/{version}"): COOKIE,
     ("GET", "/demo-scene/{name}/{demo_id}/{version}"): COOKIE,
     ("GET", "/api/board/{name}"): COOKIE,
+    ("GET", "/api/session-artifacts/{name}"): COOKIE,
+    ("POST", "/api/session-artifacts/@self/notes"): SESSION_ONLY,
     ("PUT", "/api/board/{name}"): COOKIE,
     ("GET", "/api/board/{name}/revisions"): COOKIE,
     ("GET", "/api/board/{name}/revision"): COOKIE,

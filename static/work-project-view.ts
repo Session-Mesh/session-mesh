@@ -12,6 +12,7 @@ import { projectSessions } from './work-project-sessions.ts';
 import { renderQuestionsTab } from './work-questions-view.ts';
 import { renderReprise } from './work-reprise-view.ts';
 import type { ProjectDoc, ProjectHead } from './work-types.ts';
+import {invalidateWorkSessionTools, workSessionTools} from './work-session-tools.ts';
 
 export const TAB_KEYS = ['reprise', 'board', 'frise', 'deps', 'questions'] as const;
 export type TabKey = (typeof TAB_KEYS)[number];
@@ -125,10 +126,16 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
   detailSlot.setAttribute('aria-label', ctx.t('work.detail.label'));
   const split = el('div', 'work-split', main, detailSlot);
   root.append(header(ctx, doc.project, back));
+  const makeTools = (scope:ProjectDoc):HTMLElement => scope.sessionTools ? workSessionTools({document,project:scope.project,translate:ctx.t,
+    current:()=>root.isConnected && doc.sessionTools===true && doc.project.id===scope.project.id &&
+      doc.project.product===scope.project.product}) : Object.assign(document.createElement('div'),{hidden:true});
+  let tools = makeTools(doc);
+  root.append(tools);
   if (doc.truncated) root.append(notice('work-omitted', ctx.t('work.projectTruncated')));
   root.append(split);
   activate(initial, false);
   const replaceDoc = (next: ProjectDoc): void => {
+    const previous = doc;
     doc = next;
     // Update the summary without replacing the Back button, which may own focus.
     const currentHead = root.querySelector<HTMLElement>('.work-project-head');
@@ -144,6 +151,14 @@ export function renderProject(ctx: ViewContext, initialDoc: ProjectDoc, initial:
     const omitted = root.querySelector<HTMLElement>(':scope > .work-omitted');
     if (next.truncated && !omitted) root.insertBefore(notice('work-omitted', ctx.t('work.projectTruncated')), split);
     else if (!next.truncated) omitted?.remove();
+    if (previous.project.id !== next.project.id || previous.project.product !== next.project.product ||
+        previous.sessionTools !== next.sessionTools) {
+      const replacement = makeTools(doc);
+      tools.replaceWith(replacement);tools=replacement;
+    } else if (next.sessionTools) {
+      // Background project polling must not discard an uncertain attachment intent.
+      invalidateWorkSessionTools(document);
+    }
     // The Questions panel holds the owner's unsent answers: once built it is rebuilt now, even when hidden, so that
     // the caller can put them back.
     const keepQuestions = built.has('questions') && currentKey !== 'questions';

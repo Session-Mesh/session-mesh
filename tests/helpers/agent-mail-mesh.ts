@@ -40,9 +40,10 @@ export class AgentMesh {
   private constructor(mesh: Mesh) { this.mesh = mesh; }
 
   static async start(prefix: string, names: string[]): Promise<AgentMesh> {
-    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'mbx-'));
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}bin-`));
     fs.writeFileSync(path.join(bin, 'claude'), [
       '#!/bin/sh',
+      'if [ "$1" = "--version" ]; then exit 0; fi',
       'printf "%s" "$MESH_SESSION_TOKEN" > ./token.tmp && mv ./token.tmp ./token',
       'while IFS= read -r line; do :; done',
       '',
@@ -51,22 +52,26 @@ export class AgentMesh {
     const shell = path.join(bin, 'bash');
     fs.writeFileSync(shell, '#!/bin/sh\nexec /bin/bash --noprofile --norc "$@"\n', {mode: 0o755});
     const PATH = `${bin}:${process.env.PATH}`;
-    const mesh = await startMesh(prefix, {PATH, SHELL: shell, MESH_SESSION_TOKEN: undefined, MESH_SESSION: undefined, MESH_BIN_DIR: undefined});
+    let mesh: Mesh;
+    try { mesh = await startMesh(prefix, {PATH, SHELL: shell, MESH_SESSION_TOKEN: undefined, MESH_SESSION: undefined, MESH_BIN_DIR: undefined}); }
+    catch (error) { fs.rmSync(bin, {recursive: true, force: true}); throw error; }
     const lab = new AgentMesh(mesh);
     lab.scratches.push(bin);
-    const runtime = path.join(mesh.home, 'run');
-    const nativeHost = nativePtyhost();
-    lab.hosts.push(spawn(nativeHost[0], nativeHost.slice(1), {cwd: REPO, stdio: 'ignore',
-      env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: runtime, LANG: 'C', SHELL: shell}}));
-    const socketPath = path.join(runtime, 'session-mesh', 'ptyhost.sock');
-    await waitFor('ptyhost answering', 10000, () => request(socketPath, {op: 'list'}).then(() => true, () => false));
-    const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({token: mesh.token()})});
-    lab.cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
-    assert.ok(lab.cookie, 'the owner signs in');
-    for (const name of names) lab.agents[name] = await lab.launch(name);
-    await lab.learnIncarnations();
-    return lab;
+    try {
+      const runtime = path.join(mesh.home, 'run');
+      const nativeHost = nativePtyhost();
+      lab.hosts.push(spawn(nativeHost[0], nativeHost.slice(1), {cwd: REPO, stdio: 'ignore',
+        env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: runtime, LANG: 'C', SHELL: shell}}));
+      const socketPath = path.join(runtime, 'session-mesh', 'ptyhost.sock');
+      await waitFor('ptyhost answering', 10000, () => request(socketPath, {op: 'list'}).then(() => true, () => false));
+      const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({token: mesh.token()})});
+      lab.cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      assert.ok(lab.cookie, 'the owner signs in');
+      for (const name of names) lab.agents[name] = await lab.launch(name);
+      await lab.learnIncarnations();
+      return lab;
+    } catch (error) { await lab.stop(); throw error; }
   }
 
   async stop(): Promise<void> {

@@ -138,9 +138,9 @@ async def test_resuming_from_the_history_applies_workspace_roots(confined, monke
 
 async def test_restoring_a_lost_session_applies_workspace_roots(confined, monkeypatch):
     _, outside, calls = confined
-    entry = {"cwd": str(outside), "agent": None, "created": 1.0, "org": None}
+    server.respawn.update([{"name": "lost", "cwd": str(outside), "agent": None, "created": 1.0}], listed=True)
+    server.respawn.update([], listed=True)
     dropped = []
-    monkeypatch.setattr(server.respawn, "lost_entry", lambda name: entry)
     monkeypatch.setattr(server.respawn, "drop_lost", dropped.append)
     outcome = await server.restore_one("lost", set(), server.asyncio.Lock())
     assert outcome["ok"] is False and "allowed" in outcome["error"]

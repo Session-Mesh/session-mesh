@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
-import {hostArgv, installFakeClaude, MANAGED} from './claude-wake-lib.ts';
+import {hostArgv, installFakeClaude, fakeAgentShell, MANAGED} from './claude-wake-lib.ts';
 import {REPO, runServer, scratchHome, stopServer} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
 
@@ -38,7 +38,7 @@ async function launched(bridge: boolean): Promise<string[]> {
   servers.push(run.child);
   const hostSocket = path.join(where.home, 'run', 'session-mesh', 'ptyhost.sock');
   hosts.push(spawn(hostArgv()[0], hostArgv().slice(1), {cwd: REPO, stdio: 'ignore',
-    env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C'}}));
+    env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C', SHELL: fakeAgentShell(bin)}}));
   await waitFor('ptyhost answering', 10000, () => request(hostSocket, {op: 'list'}).then(() => true, () => false));
   const token = fs.readFileSync(path.join(where.confDir, 'token'), 'utf8').trim();
   const cwd = path.join(where.home, 'agent');

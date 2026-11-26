@@ -99,6 +99,8 @@ export type OpenQuestionsDoc = Readonly<{
 export type Omitted = Readonly<Record<string, number>>;
 
 export type ProjectDoc = Readonly<{
+  /** Opt-in registered source; a UI hint only, never attachment authority. */
+  sessionTools?: boolean;
   project: ProjectHead; tasks: readonly TaskRow[]; columns: Columns; dependencies: readonly Dependency[];
   reprise: Reprise; openQuestions: number; questions: readonly Question[]; timeline: readonly TimelineEvent[];
   omitted: Omitted; truncated: boolean;

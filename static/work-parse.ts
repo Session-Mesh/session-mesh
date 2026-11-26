@@ -217,6 +217,7 @@ export function parseProject(value: unknown): ProjectDoc | null {
   if (!project) return null;
   return {
     project, tasks: taskRows(value.tasks), columns: parseColumns(value.columns),
+    ...(value.session_tools === true ? {sessionTools:true} : {}),
     dependencies: objects(value.dependencies).map(parseDependency).filter((d): d is Dependency => d !== null).slice(0, MAX_DEPENDENCIES),
     reprise: parseReprise(value.reprise), openQuestions: count(value.open_questions), questions: questions(value.questions),
     timeline: events(value.timeline), omitted: parseOmitted(value), truncated: flag(value.truncated),

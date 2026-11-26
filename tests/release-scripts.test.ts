@@ -241,6 +241,7 @@ describe('bundle-native-libs.sh: the licences of copied libraries', {skip: proce
     }
     fs.writeFileSync(path.join(system, 'libfoo.so.1'), 'library');
     fs.writeFileSync(path.join(bundle, 'bin/tool'), 'program', {mode: 0o755});
+    fs.chmodSync(path.join(bundle, 'bin/tool'), 0o755);
     const fake = (name: string, body: string) => fs.writeFileSync(path.join(fakes, name), `#!/bin/bash\n${body}\n`, {mode: 0o755});
     fake('file', 'echo "$1: ELF 64-bit LSB executable"');
     fake('ldd', `echo "  libfoo.so.1 => ${system}/libfoo.so.1 (0x1)"`);
@@ -350,6 +351,8 @@ describe('bundle-native-libs.sh on macOS: system libraries only', () => {
     fs.writeFileSync(path.join(keg, 'lib/libfoo.1.dylib'), 'library');
     fs.writeFileSync(path.join(bundle, 'bin/tool'), 'program', {mode: 0o755});
     fs.writeFileSync(path.join(bundle, 'runtime/node/bin/node'), 'node', {mode: 0o755});
+    fs.chmodSync(path.join(bundle, 'bin/tool'), 0o755);
+    fs.chmodSync(path.join(bundle, 'runtime/node/bin/node'), 0o755);
     const linked = (dependency ? [dependency] : []).map((name) => `'${name.replace('PREFIX', prefix)}'`).join(' ');
     const fake = (name: string, body: string) => fs.writeFileSync(path.join(fakes, name), `#!/bin/bash\n${body}\n`, {mode: 0o755});
     fake('uname', 'echo Darwin');

@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
+import {fakeAgentShell} from './helpers/fake-agent.ts';
 import os from 'node:os';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
@@ -36,7 +37,7 @@ function startHost(): ChildProcess {
   const argv = nativePtyhost();
   return spawn(argv[0], argv.slice(1), {
     cwd: REPO, stdio: 'ignore',
-    env: {PATH: pathEnv, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C'}});
+    env: {PATH: pathEnv, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C', SHELL: path.join(fakes, 'plain-bash')}});
 }
 
 async function until<T>(what: string, probe: () => T | undefined | false | Promise<T | undefined | false>): Promise<T> {
@@ -58,6 +59,7 @@ while IFS= read -r line; do printf '%s\\n' "$line" >> '${log('input.log')}'; don
 
 before(async () => {
   fakes = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-vibe-'));
+  fakeAgentShell(fakes);
   const bin = path.join(fakes, 'bin');
   const meshBin = path.join(fakes, 'meshbin');
   userHome = path.join(fakes, 'vibe-home');

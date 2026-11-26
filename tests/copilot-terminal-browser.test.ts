@@ -7,7 +7,7 @@
 // pastes "/help" as one bracketed block followed by Enter.
 // First with a witness program that has those modes (a program the kernel names copilot, so that discovery sees
 // the agent and the recovery action is offered), then with the real copilot against a local fake model
-// (no network, no account; skipped without a `copilot` on PATH). A real PTY host, server.py and Chromium
+// (no network, no account; skipped without a working Copilot CLI on PATH). A real PTY host, server.py and Chromium
 // (MESH_CHROMIUM; skipped without it).
 import assert from 'node:assert/strict';
 import {execFileSync, spawnSync} from 'node:child_process';
@@ -18,6 +18,7 @@ import type {Page} from 'playwright-core';
 import {FakeProvider} from './helpers/fake-copilot-provider.ts';
 import {REPO, rows, settle, skip, TerminalMesh, typeLine} from './terminal-browser-lib.ts';
 import {READY_TIMEOUT_MS} from './helpers/browser-launch.ts';
+import {usableCopilot} from './helpers/copilot-availability.ts';
 
 type Line = {translateToString(trim: boolean): string};
 type Pane = {term: {buffer: {active: {type: string; length: number; getLine(y: number): Line | undefined}};
@@ -27,9 +28,7 @@ declare const active: Pane;
 const WITNESS = path.join(REPO, 'tests', 'fixtures', 'alt-screen-witness.mjs');
 const DESKTOP = {width: 1100, height: 700};
 const PHONE = {width: 390, height: 780};
-const REAL = (() => {
-  try { return execFileSync('which', ['copilot'], {encoding: 'utf8'}).trim(); } catch { return ''; }
-})();
+const REAL = usableCopilot(process.env.PATH ?? '');
 let mesh: TerminalMesh;
 const provider = new FakeProvider();
 
@@ -184,7 +183,7 @@ describe('Copilot CLI full-screen TUI in the page (witness)', {skip}, () => {
   });
 });
 
-describe('the real Copilot CLI in the page', {skip: skip || (REAL ? false : 'no copilot on PATH')}, () => {
+describe('the real Copilot CLI in the page', {skip: skip || (REAL ? false : 'no usable Copilot CLI on PATH (version probe failed)')}, () => {
   const home = () => path.join(mesh.scratch, 'copilot-home');
   const text = async (page: Page) => (await rows(page)).map(row => row.slice(2)).join('\n');
 
@@ -194,7 +193,7 @@ describe('the real Copilot CLI in the page', {skip: skip || (REAL ? false : 'no 
     provider.reset();
     provider.enqueue({text: Array.from({length: 160}, (_, i) => `answer-line-${String(i).padStart(3, '0')}`).join('\n\n')});
     await typeLine(page, `exec env COPILOT_HOME=${home()} COPILOT_OFFLINE=true COPILOT_MODEL=fake COPILOT_TELEMETRY_DISABLED=true `
-      + `COPILOT_PROVIDER_BASE_URL=${provider.baseUrl} COPILOT_PROVIDER_API_KEY=unused copilot --no-auto-update`);
+      + `COPILOT_PROVIDER_BASE_URL=${provider.baseUrl} COPILOT_PROVIDER_API_KEY=unused '${REAL.replace(/'/g, "'\\''")}' --no-auto-update`);
     await page.waitForFunction(() => find('real')?.agent?.type === 'copilot' && find('real')?.agent?.foreground === true,
       undefined, {timeout: 30000});
     await page.waitForFunction(() => {

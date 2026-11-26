@@ -30,6 +30,7 @@ import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {ptyhostArgv} from './ptyhost-command.ts';
 import {type Proxy, startProxy} from './ptyhost-proxy-lib.ts';
 import {request as hostRequest, waitFor} from './ptyhost-wire-lib.ts';
+import {fakeAgentShell} from './helpers/fake-agent.ts';
 
 const PLATFORM = process.env.MESH_MESH_PLATFORM_CMD
   || path.join(REPO, 'ocaml', '_build', 'default', 'platform', 'cli', 'mesh_platform_main.exe');
@@ -45,11 +46,11 @@ type Session = {name: string; token: string; sid: string};
 type Layout = {stubborn?: boolean; noJobControl?: boolean; agentLeader?: boolean};
 
 // The session's shell (SHELL, run as `$SHELL -l` in the session's folder): an interactive bash without job control in
-// a folder holding .no-job-control (its rc file turns job control off at each prompt), the fake codex itself in one holding .agent-leader, else /bin/sh.
+// a folder holding .no-job-control (its rc file turns job control off at each prompt), the fake codex itself in one holding .agent-leader, else the isolated fake-agent shell.
 const SHELL_WRAPPER = ['#!/bin/sh',
   'if [ -e ./.no-job-control ]; then exec /bin/bash --noprofile --rcfile ./.no-job-control -i; fi',
   'if [ -e ./.agent-leader ]; then exec codex; fi',
-  'exec /bin/sh "$@"', ''].join('\n');
+  'exec "$(dirname "$0")/plain-bash"', ''].join('\n');
 
 let mesh: Mesh;
 let bin: string, log: string, cookie = '';
@@ -106,6 +107,7 @@ before(async () => {
   fs.mkdirSync(travel, {recursive: true, mode: 0o700});
   fs.writeFileSync(path.join(mesh.confDir, 'accounts.json'), JSON.stringify({v: 1, accounts: [
     {id: 'travel', label: 'Travel', codex_home: path.join(travel, '.codex')}]}), {mode: 0o600});
+  fakeAgentShell(bin);
   fs.writeFileSync(path.join(bin, 'shell'), SHELL_WRAPPER, {mode: 0o755});
   const realRun = path.join(mesh.home, 'real-run');
   fs.mkdirSync(realRun, {mode: 0o700});

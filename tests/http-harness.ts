@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import {type ChildProcess, spawn} from 'node:child_process';
 import {createHmac} from 'node:crypto';
 import fs from 'node:fs';
+import {fakeAgentShell} from './helpers/fake-agent.ts';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -155,6 +156,7 @@ const ACCEPTED_STATUS = `
   GET /demo-scene/{name}/{version} 400
   GET /demo-scene/{name}/{demo_id}/{version} 400
   GET /api/board/{name} 200
+  GET /api/session-artifacts/{name} 400
   PUT /api/board/{name} 400
   GET /api/board/{name}/revisions 200
   GET /api/board/{name}/revision 400
@@ -200,6 +202,7 @@ const ACCEPTED_STATUS = `
   POST /api/open 400
   POST /api/stat 400
   GET /api/board/@self 200
+  POST /api/session-artifacts/@self/notes 400
   PUT /api/board/@self 400 JSON object expected
   GET /api/board/@self/revisions 200
   GET /api/board/@self/revision 200
@@ -396,7 +399,7 @@ export async function startMesh(options: {session: boolean}): Promise<Mesh> {
     if (fake !== undefined) {
       const socket = path.join(home, 'run', 'session-mesh', 'ptyhost.sock');
       await startChild('the PTY host', ptyhostArgv(),
-        {PATH: env.PATH, HOME: home, XDG_RUNTIME_DIR: env.XDG_RUNTIME_DIR, LANG: 'C'}, children, () => fs.existsSync(socket));
+        {PATH: env.PATH, HOME: home, XDG_RUNTIME_DIR: env.XDG_RUNTIME_DIR, LANG: 'C', SHELL: fakeAgentShell(fake.bin)}, children, () => fs.existsSync(socket));
     }
     await startChild('the server', SERVER_COMMAND, env, children, () => accepts(port)); // limit: another listener on this port would also pass; its answers are not told apart
     const token = fs.readFileSync(path.join(env.MESH_CONF_DIR!, 'token'), 'utf8').trim();

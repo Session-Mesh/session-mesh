@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import {type ChildProcess, spawn} from 'node:child_process';
 import fs from 'node:fs';
+import {fakeAgentShell} from './helpers/fake-agent.ts';
 import os from 'node:os';
 import path from 'node:path';
 import {after, describe, test} from 'node:test';
@@ -47,7 +48,7 @@ async function meshWith(enabled: string[]): Promise<Running> {
   const {child, result, output} = await runServer(where);
   assert.equal(result.listened, true, result.output);
   const host = spawn(hostCommand, hostArguments, {cwd: REPO, stdio: 'ignore',
-    env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C'}});
+    env: {PATH, HOME: where.home, XDG_RUNTIME_DIR: path.join(where.home, 'run'), LANG: 'C', SHELL: fakeAgentShell(bin)}});
   await waitFor('ptyhost socket', 10000, () => fs.existsSync(path.join(where.home, 'run', 'session-mesh', 'ptyhost.sock')));
   const mesh = {output, base: `http://127.0.0.1:${where.port}`, home: where.home, scratch: where.scratch, server: child, host,
     token: () => fs.readFileSync(path.join(where.confDir, 'token'), 'utf8').trim()};

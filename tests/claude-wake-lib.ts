@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
+export {fakeAgentShell} from './helpers/fake-agent.ts';
 
 /** The native PTY host to start (fails with a clear message when MESH_PTYHOST_CMD is not set). */
 export const hostArgv = nativePtyhost;

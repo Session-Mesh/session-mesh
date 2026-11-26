@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import {after, before, describe, test} from 'node:test';
-import {hostArgv, MANAGED} from './claude-wake-lib.ts';
+import {hostArgv, MANAGED, fakeAgentShell} from './claude-wake-lib.ts';
 import {approveMail} from './helpers/agent-mail-mesh.ts';
 import {REPO, type Mesh, startMesh} from './mesh-server-lib.ts';
 import {request, waitFor} from './ptyhost-wire-lib.ts';
@@ -75,7 +75,7 @@ before(async () => {
   mesh = await startMesh('crw-', {PATH, MESH_BIN_DIR: bin, MESH_CLAUDE_WAKE_CONFIRM_SECONDS: '2', MESH_MESH_PLATFORM_CMD: PLATFORM});
   const hostSocket = path.join(mesh.home, 'run', 'session-mesh', 'ptyhost.sock');
   host = spawn(hostArgv()[0]!, hostArgv().slice(1), {cwd: REPO, stdio: 'ignore',
-    env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C',
+    env: {PATH, HOME: mesh.home, SHELL: fakeAgentShell(bin), XDG_RUNTIME_DIR: path.join(mesh.home, 'run'), LANG: 'C',
       MESH_PTYHOST_AGENT_STOP_GRACE: '0.5'}});
   await waitFor('ptyhost answering', 10000, () => request(hostSocket, {op: 'list'}).then(() => true, () => false));
   const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',

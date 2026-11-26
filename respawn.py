@@ -139,6 +139,17 @@ def _valid_marker(raw):
     marker = {"nonce": raw["nonce"]}
     if _number(raw.get("created")):
         marker["created"] = raw["created"]
+    for key in ("artifacts_required", "artifacts_empty_confirmed"):
+        if isinstance(raw.get(key), bool):
+            marker[key] = raw[key]
+    if raw.get("mode") == "ordinary":
+        marker["mode"] = "ordinary"
+        reason = raw.get("shell_fallback_reason")
+        if isinstance(reason, str) and 0 < len(reason) <= 80:
+            marker["shell_fallback_reason"] = reason
+        target = raw.get("target")
+        if isinstance(target, str) and NAME_RE.fullmatch(target):
+            marker["target"] = target
     return marker
 
 
@@ -549,22 +560,34 @@ def _set_marker(name, created, marker):
         lost = []
         for e in old["lost"]:
             if _key(e) == (name, created):
+                previous = e.get("restoring", {})
+                if marker and previous.get("nonce") == marker["nonce"]:
+                    marker = {**{key: previous[key] for key in ("artifacts_required", "artifacts_empty_confirmed",
+                                                               "shell_fallback_reason")
+                                  if key in previous}, **marker}
                 e = {k: v for k, v in e.items() if k != "restoring"}
                 e.update({"restoring": marker} if marker else {})
             lost.append(e)
         _store(old, {**old, "lost": lost}, required=True)
 
 
-def begin_restoring(name, created, nonce):
+def begin_restoring(name, created, nonce, mode=None, artifacts_required=None, artifacts_empty_confirmed=None,
+                    shell_fallback_reason=None):
     """Durably record the intent to restore the offer (name, created) under session ``nonce``,
     BEFORE the session is created (the nonce goes into its host meta): whatever happens next, a
     retry finds the session by its nonce or learns that none can be trusted."""
-    _set_marker(name, created, {"nonce": nonce})
+    _set_marker(name, created, {"nonce": nonce, **({"mode": "ordinary"} if mode == "ordinary" else {}),
+                              **({"artifacts_required": artifacts_required} if isinstance(artifacts_required, bool) else {}),
+                              **({"shell_fallback_reason": shell_fallback_reason}
+                                 if mode == "ordinary" and shell_fallback_reason is not None else {}),
+                              **({"artifacts_empty_confirmed": artifacts_empty_confirmed}
+                                 if isinstance(artifacts_empty_confirmed, bool) else {})})
 
 
-def bind_restoring(name, created, nonce, session_created):
+def bind_restoring(name, created, nonce, session_created, mode=None, target=None):
     """Add the born date of the session to the marker (the nonce stays the identity)."""
-    _set_marker(name, created, {"nonce": nonce, "created": session_created})
+    _set_marker(name, created, {"nonce": nonce, "created": session_created,
+                              **({"mode": "ordinary", "target": target} if mode == "ordinary" else {})})
 
 
 def clear_restoring(name, created):

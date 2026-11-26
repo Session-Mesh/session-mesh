@@ -88,3 +88,7 @@ val server : Config.t -> Mcp_kit.Server.t
     Each group exposes its subcommand declarations through [describe]. A negotiated
     [2025-06-18] client receives the standard 2025-06 response wire profile;
     other legacy clients retain the mcp-kit modern profile. *)
+
+val notes_server : Config.t -> Mcp_kit.Server.t
+(** Construct the separate Notes-only server. No board or session groups are
+    exposed. *)

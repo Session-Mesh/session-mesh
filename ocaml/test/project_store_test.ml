@@ -72,11 +72,20 @@ let status store n =
 
 let check_capability_limits store =
   let limits = U.member "limits" (call store "project_capabilities" []) in
-  List.iter (fun (key, expected) ->
-      Alcotest.(check bool) ("native capability " ^ key) true
+  List.iter
+    (fun (key, expected) ->
+      Alcotest.(check bool)
+        ("native capability " ^ key)
+        true
         (U.member key limits = `Int expected))
-    [ "request_bytes", 131072; "reply_bytes", 196608; "config_bytes", 2097152;
-      "max_folders", 100; "max_sources", 20; "max_source_changes", 40 ]
+    [
+      ("request_bytes", 131072);
+      ("reply_bytes", 196608);
+      ("config_bytes", 2097152);
+      ("max_folders", 100);
+      ("max_sources", 20);
+      ("max_source_changes", 40);
+    ]
 
 let lifecycle () =
   with_store (fun root store ->
@@ -434,7 +443,8 @@ let compatibility_fixture () =
             ("patch", `Assoc [ ("description", str "Independent patch") ]);
           ]
       in
-      check "qualified authored-metadata fixture writes" "ok" (value changed "status");
+      check "qualified authored-metadata fixture writes" "ok"
+        (value changed "status");
       let saved =
         List.hd (U.to_list (U.member "projects" (C.parse_config (bytes root))))
       in
@@ -748,112 +758,575 @@ let byte_capacity () =
 let full_source_replacement () =
   with_store (fun root store ->
       let source prefix i =
-        `Assoc [ ("id", str (prefix ^ string_of_int i)); ("kind", str "roster");
-          ("label", str ("Reference " ^ string_of_int i)) ]
+        `Assoc
+          [
+            ("id", str (prefix ^ string_of_int i));
+            ("kind", str "roster");
+            ("label", str ("Reference " ^ string_of_int i));
+          ]
       in
       let old_sources = List.init 20 (source "old_") in
-      let created = call store "project_create"
-          [ ("boot", str "boot1"); ("expected_revision", str "cfg1_missing");
+      let created =
+        call store "project_create"
+          [
+            ("boot", str "boot1");
+            ("expected_revision", str "cfg1_missing");
             ("request_id", str (uid 1));
-            ("project", `Assoc [ ("title", str "Full references"); ("sources", `List old_sources) ]) ] in
+            ( "project",
+              `Assoc
+                [
+                  ("title", str "Full references");
+                  ("sources", `List old_sources);
+                ] );
+          ]
+      in
       check "full create" "ok" (value created "status");
-      let removals = List.init 20 (fun i -> `Assoc [ ("type", str "remove"); ("id", str ("old_" ^ string_of_int i)) ]) in
-      let puts = List.init 20 (fun i -> `Assoc (("type", str "put") :: C.obj (source "new_" i))) in
-      let updated = settings store (value created "revision") 2 [ ("source_changes", `List (removals @ puts)) ] in
+      let removals =
+        List.init 20 (fun i ->
+            `Assoc
+              [ ("type", str "remove"); ("id", str ("old_" ^ string_of_int i)) ])
+      in
+      let puts =
+        List.init 20 (fun i ->
+            `Assoc (("type", str "put") :: C.obj (source "new_" i)))
+      in
+      let updated =
+        settings store (value created "revision") 2
+          [ ("source_changes", `List (removals @ puts)) ]
+      in
       check "all20 replaced by20 in one mutation" "ok" (value updated "status");
       let read = call store "project_read" [ ("project_id", str (uid 1)) ] in
       let actual = U.member "sources" (U.member "project" read) |> U.to_list in
       Alcotest.(check int) "final source bound retained" 20 (List.length actual);
-      List.iteri (fun i item -> check "new source" ("new_" ^ string_of_int i) (value item "id")) actual;
+      List.iteri
+        (fun i item ->
+          check "new source" ("new_" ^ string_of_int i) (value item "id"))
+        actual;
       let before = bytes root in
       let extra = `Assoc (("type", str "put") :: C.obj (source "extra_" 1)) in
-      let refused = settings store (value updated "revision") 3 [ ("source_changes", `List [extra]) ] in
+      let refused =
+        settings store (value updated "revision") 3
+          [ ("source_changes", `List [ extra ]) ]
+      in
       check "source-change state refused" "refused" (value refused "status");
       check "source bound preserves bytes" before (bytes root))
 
 let typed_settings () =
   with_store (fun root store ->
       let created = create store 1 in
-      let plan = `Assoc [("repository", `Bool true); ("source_ids", `List [])] in
-      let changed = settings store (value created "revision") 2
-        [("repository", `Assoc [("url", str "https://example.test/repo"); ("local_path", str "/tmp/repo"); ("primary_ref", str "refs/heads/main")]);
-         ("observation", plan)] in
+      let plan =
+        `Assoc [ ("repository", `Bool true); ("source_ids", `List []) ]
+      in
+      let changed =
+        settings store (value created "revision") 2
+          [
+            ( "repository",
+              `Assoc
+                [
+                  ("url", str "https://example.test/repo");
+                  ("local_path", str "/tmp/repo");
+                  ("primary_ref", str "refs/heads/main");
+                ] );
+            ("observation", plan);
+          ]
+      in
       check "typed settings accepted" "ok" (value changed "status");
       let saved = bytes root in
-      let projection = call store "project_read" [("project_id", str (uid 1)); ("settings", `Assoc [("kind", str "project")])] in
-      Alcotest.(check bool) "plan projected" true (U.member "plan" (U.member "observation_settings" projection) = plan);
-      let refused = settings store (value changed "revision") 3 [("repository", `Assoc [("url", `Null)])] in
+      let projection =
+        call store "project_read"
+          [
+            ("project_id", str (uid 1));
+            ("settings", `Assoc [ ("kind", str "project") ]);
+          ]
+      in
+      Alcotest.(check bool)
+        "plan projected" true
+        (U.member "plan" (U.member "observation_settings" projection) = plan);
+      let refused =
+        settings store (value changed "revision") 3
+          [ ("repository", `Assoc [ ("url", `Null) ]) ]
+      in
       check "URL required" "refused" (value refused "status");
       check "refusal atomic" saved (bytes root);
-      let disabled = settings store (value changed "revision") 4 [("repository", `Null); ("observation", `Null)] in
+      let disabled =
+        settings store (value changed "revision") 4
+          [ ("repository", `Null); ("observation", `Null) ]
+      in
       check "atomic disable" "ok" (value disabled "status");
-      Alcotest.(check bool) "disable preserves observation declaration" true
-        (List.mem (str "project-observation/1") (U.to_list(U.member "features" (Yojson.Basic.from_string(bytes root)))));
-      let selector = `Assoc ["kind",str "board";"path",str "/tmp/board.json"] in
-      let selected = settings store (value disabled "revision") 5
-          ["source_changes",`List [`Assoc ["type",str "put";"id",str "roster";"kind",str "roster";"label",str "Saved label";"url",str "https://example.test/source";"selector",selector]];
-           "observation",`Assoc ["repository",`Bool false;"source_ids",`List [str "roster"]]] in
+      Alcotest.(check bool)
+        "disable preserves observation declaration" true
+        (List.mem
+           (str "project-observation/1")
+           (U.to_list
+              (U.member "features" (Yojson.Basic.from_string (bytes root)))));
+      let selector =
+        `Assoc [ ("kind", str "board"); ("path", str "/tmp/board.json") ]
+      in
+      let selected =
+        settings store
+          (value disabled "revision")
+          5
+          [
+            ( "source_changes",
+              `List
+                [
+                  `Assoc
+                    [
+                      ("type", str "put");
+                      ("id", str "roster");
+                      ("kind", str "roster");
+                      ("label", str "Saved label");
+                      ("url", str "https://example.test/source");
+                      ("selector", selector);
+                    ];
+                ] );
+            ( "observation",
+              `Assoc
+                [
+                  ("repository", `Bool false);
+                  ("source_ids", `List [ str "roster" ]);
+                ] );
+          ]
+      in
       check "atomic source selector and plan" "ok" (value selected "status");
-      let source = call store "project_read" ["project_id",str(uid 1);"settings",`Assoc ["kind",str "source";"source_id",str "roster"]] in
-      let source=U.member "source" (U.member "observation_settings" source) in
-      Alcotest.(check bool) "source scoped selector projected" true (U.member "selector" source=selector);
+      let source =
+        call store "project_read"
+          [
+            ("project_id", str (uid 1));
+            ( "settings",
+              `Assoc [ ("kind", str "source"); ("source_id", str "roster") ] );
+          ]
+      in
+      let source = U.member "source" (U.member "observation_settings" source) in
+      Alcotest.(check bool)
+        "source scoped selector projected" true
+        (U.member "selector" source = selector);
       check "source label projected" "Saved label" (value source "label");
-      let saved=bytes root in
-      let refused=settings store (value selected "revision") 6 ["source_changes",`List [`Assoc ["type",str "selector";"id",str "roster";"selector",`Null]]] in
-      check "enabled source cannot lose selector" "refused" (value refused "status");
+      let saved = bytes root in
+      let refused =
+        settings store
+          (value selected "revision")
+          6
+          [
+            ( "source_changes",
+              `List
+                [
+                  `Assoc
+                    [
+                      ("type", str "selector");
+                      ("id", str "roster");
+                      ("selector", `Null);
+                    ];
+                ] );
+          ]
+      in
+      check "enabled source cannot lose selector" "refused"
+        (value refused "status");
       check "invalid source final state leaves bytes" saved (bytes root);
-      let cleared=settings store (value selected "revision") 7 ["source_changes",`List [`Assoc ["type",str "selector";"id",str "roster";"selector",`Null]];"observation",`Null] in
+      let cleared =
+        settings store
+          (value selected "revision")
+          7
+          [
+            ( "source_changes",
+              `List
+                [
+                  `Assoc
+                    [
+                      ("type", str "selector");
+                      ("id", str "roster");
+                      ("selector", `Null);
+                    ];
+                ] );
+            ("observation", `Null);
+          ]
+      in
       check "atomic selector clear and disable" "ok" (value cleared "status");
-      let source=call store "project_read" ["project_id",str(uid 1);"settings",`Assoc ["kind",str "source";"source_id",str "roster"]] in
-      let source=U.member "source" (U.member "observation_settings" source) in
-      check "selector only change preserves label" "Saved label" (value source "label");
-      check "selector only change preserves URL" "https://example.test/source" (value source "url"))
+      let source =
+        call store "project_read"
+          [
+            ("project_id", str (uid 1));
+            ( "settings",
+              `Assoc [ ("kind", str "source"); ("source_id", str "roster") ] );
+          ]
+      in
+      let source = U.member "source" (U.member "observation_settings" source) in
+      check "selector only change preserves label" "Saved label"
+        (value source "label");
+      check "selector only change preserves URL" "https://example.test/source"
+        (value source "url"))
 
 let pipeline_selector_settings () =
   with_store (fun root store ->
-      let selector root task = `Assoc ["kind",str "pipeline";"root",str root;"task",str task] in
+      let selector root task =
+        `Assoc
+          [ ("kind", str "pipeline"); ("root", str root); ("task", str task) ]
+      in
       let initial = selector "/tmp/first-pipeline" "mesh-roster-observation" in
-      let source label selected = `Assoc ["type",str "put";"id",str "roster";
-        "kind",str "roster";"label",str label;"selector",selected] in
+      let source label selected =
+        `Assoc
+          [
+            ("type", str "put");
+            ("id", str "roster");
+            ("kind", str "roster");
+            ("label", str label);
+            ("selector", selected);
+          ]
+      in
       let created = create store 1 in
-      let added = settings store (value created "revision") 2
-        ["source_changes", `List [source "Actual label" initial]] in
+      let added =
+        settings store (value created "revision") 2
+          [ ("source_changes", `List [ source "Actual label" initial ]) ]
+      in
       check "pipeline source put accepted" "ok" (value added "status");
       let read_source () =
-        let reply = call store "project_read" ["project_id",str(uid 1);
-          "settings",`Assoc ["kind",str "source";"source_id",str "roster"]] in
-        U.member "source" (U.member "observation_settings" reply) in
-      Alcotest.(check bool) "pipeline selector readback" true
+        let reply =
+          call store "project_read"
+            [
+              ("project_id", str (uid 1));
+              ( "settings",
+                `Assoc [ ("kind", str "source"); ("source_id", str "roster") ]
+              );
+            ]
+        in
+        U.member "source" (U.member "observation_settings" reply)
+      in
+      Alcotest.(check bool)
+        "pipeline selector readback" true
         (U.member "selector" (read_source ()) = initial);
       let replacement = selector "/tmp/second-pipeline" "another-task" in
-      let changed = settings store (value added "revision") 3 ["source_changes", `List [
-        `Assoc ["type",str "selector";"id",str "roster";"selector",replacement]]] in
-      check "selector-only pipeline change accepted" "ok" (value changed "status");
+      let changed =
+        settings store (value added "revision") 3
+          [
+            ( "source_changes",
+              `List
+                [
+                  `Assoc
+                    [
+                      ("type", str "selector");
+                      ("id", str "roster");
+                      ("selector", replacement);
+                    ];
+                ] );
+          ]
+      in
+      check "selector-only pipeline change accepted" "ok"
+        (value changed "status");
       let readback = read_source () in
-      Alcotest.(check bool) "replacement selector readback" true
+      Alcotest.(check bool)
+        "replacement selector readback" true
         (U.member "selector" readback = replacement);
       check "real source label retained" "Actual label" (value readback "label");
       let before = bytes root in
-      List.iteri (fun index invalid ->
-        let refused = settings store (value changed "revision") (10+index)
-          ["source_changes", `List [source "Actual label" invalid]] in
-        check "invalid selector refused" "refused" (value refused "status");
-        check "invalid selector does not write" before (bytes root))
-        [selector "relative" "task"; selector "/tmp/pipeline" "";
-         selector "/tmp/pipeline" "Bad_task";
-         `Assoc ["kind",str "pipeline";"root",str "/tmp/pipeline";"task",str "task";"extra",str "closed"]];
-      let refused = settings store (value changed "revision") 20
-        ["source_changes", `List [source "" initial]] in
-      check "actual empty label still refused" "refused" (value refused "status");
+      List.iteri
+        (fun index invalid ->
+          let refused =
+            settings store (value changed "revision") (10 + index)
+              [ ("source_changes", `List [ source "Actual label" invalid ]) ]
+          in
+          check "invalid selector refused" "refused" (value refused "status");
+          check "invalid selector does not write" before (bytes root))
+        [
+          selector "relative" "task";
+          selector "/tmp/pipeline" "";
+          selector "/tmp/pipeline" "Bad_task";
+          `Assoc
+            [
+              ("kind", str "pipeline");
+              ("root", str "/tmp/pipeline");
+              ("task", str "task");
+              ("extra", str "closed");
+            ];
+        ];
+      let refused =
+        settings store (value changed "revision") 20
+          [ ("source_changes", `List [ source "" initial ]) ]
+      in
+      check "actual empty label still refused" "refused"
+        (value refused "status");
       check "actual empty label leaves bytes" before (bytes root))
+
+let session_tools () =
+  with_store (fun root store ->
+      let created = create store 1 in
+      let machine = U.member "machine_id" created in
+      let initial = Yojson.Basic.from_string (bytes root) in
+      let initial_project = List.hd (U.to_list (U.member "projects" initial)) in
+      let authored =
+        `Assoc
+          (("description", str "Preserve authored context")
+          :: ( "participations",
+               `List
+                 [
+                   `Assoc
+                     [
+                       ("id", str "saved-role");
+                       ("recorded_relation", str "saved");
+                       ( "target",
+                         `Assoc
+                           [
+                             ("kind", str "mesh");
+                             ("name", str "other");
+                             ("created", `Int 12);
+                             ("machine_id", str "foreign");
+                           ] );
+                     ];
+                 ] )
+          :: C.obj initial_project)
+      in
+      write root
+        (C.encode
+           (`Assoc
+              (("projects", `List [ authored ])
+              :: List.remove_assoc "projects" (C.obj initial))));
+      let created = call store "project_list" [] in
+      let reference at =
+        `Assoc
+          [ ("machine_id", machine); ("name", str "same"); ("created", at) ]
+      in
+      let change kind reference =
+        `Assoc [ ("type", str kind); ("session", reference) ]
+      in
+      let mutate revision n changes =
+        settings store revision n [ ("session_changes", `List changes) ]
+      in
+      let read () = call store "project_read" [ ("project_id", str (uid 1)) ] in
+      let refs () =
+        U.member "sessions" (U.member "project" (read ())) |> U.to_list
+      in
+      let original =
+        List.hd
+          (U.to_list
+             (U.member "projects" (Yojson.Basic.from_string (bytes root))))
+      in
+      ignore
+        (C.patch original
+           (`Assoc
+              [
+                ( "session_changes",
+                  `List [ change "attach" (reference (`Int 123)) ] );
+              ]));
+      let distinct =
+        C.patch original
+          (`Assoc
+             [
+               ( "session_changes",
+                 `List
+                   [
+                     change "attach" (reference (`Int 9007199254740992));
+                     change "attach" (reference (`Int 9007199254740993));
+                   ] );
+             ])
+      in
+      Alcotest.(check int)
+        "integer identities never collapse through float rounding" 2
+        (List.length (U.to_list (U.member "sessions" distinct)));
+      let first =
+        mutate (value created "revision") 2
+          [ change "attach" (reference (`Int 123)) ]
+      in
+      check "attach exact identity" "ok" (value first "status");
+      let persisted =
+        List.hd
+          (U.to_list
+             (U.member "projects" (Yojson.Basic.from_string (bytes root))))
+      in
+      List.iter
+        (fun (key, old) ->
+          if key <> "sessions" then
+            Alcotest.(check bool)
+              ("preserve " ^ key) true
+              (C.canonical (U.member key persisted) = C.canonical old))
+        (C.obj authored);
+      Alcotest.(check int) "bounded owner read" 1 (List.length (refs ()));
+      let duplicate =
+        mutate (value first "revision") 3
+          [ change "attach" (reference (`Float 123.)) ]
+      in
+      check "numeric-equivalent duplicate" "ok" (value duplicate "status");
+      Alcotest.(check int) "deduplicated" 1 (List.length (refs ()));
+      let replaced =
+        mutate
+          (value duplicate "revision")
+          4
+          [ change "attach" (reference (`Int 124)) ]
+      in
+      Alcotest.(check int)
+        "same name distinct incarnation" 2
+        (List.length (refs ()));
+      let before = bytes root in
+      let stale =
+        mutate
+          (value duplicate "revision")
+          5
+          [ change "detach" (reference (`Int 123)) ]
+      in
+      check "revision checked" "conflict" (value stale "status");
+      check "conflict leaves bytes" before (bytes root);
+      let malformed = `Assoc [ ("name", str "same"); ("created", `Int 123) ] in
+      check "machine required" "refused"
+        (value
+           (mutate (value replaced "revision") 6 [ change "attach" malformed ])
+           "status");
+      check "invalid leaves bytes" before (bytes root);
+      let detached =
+        mutate
+          (value replaced "revision")
+          7
+          [ change "detach" (reference (`Int 123)) ]
+      in
+      check "detach exact tuple" "ok" (value detached "status");
+      let remaining = refs () in
+      Alcotest.(check bool)
+        "replacement retained" true
+        (List.length remaining = 1
+        && C.canonical (List.hd remaining) = C.canonical (reference (`Int 124))
+        );
+      let capability = call store "project_capabilities" [] in
+      Alcotest.(check bool)
+        "feature advertised" true
+        (List.mem
+           (str "project-session-tools/1")
+           (U.to_list (U.member "features" capability)));
+      let config = Yojson.Basic.from_string (bytes root) in
+      let project = List.hd (U.to_list (U.member "projects" config)) in
+      let full = List.init 100 (fun n -> reference (`Int n)) in
+      let project =
+        `Assoc
+          (("sessions", `List full)
+          :: List.remove_assoc "sessions" (C.obj project))
+      in
+      write root
+        (C.encode
+           (`Assoc
+              (("projects", `List [ project ])
+              :: List.remove_assoc "projects" (C.obj config))));
+      let listed = call store "project_list" [] and before = bytes root in
+      check "101 refused" "refused"
+        (value
+           (mutate (value listed "revision") 8
+              [ change "attach" (reference (`Int 1000)) ])
+           "status");
+      check "capacity leaves bytes" before (bytes root);
+      Alcotest.(check int) "all100 read" 100 (List.length (refs ()));
+      Alcotest.(check bool)
+        "reply bound" true
+        (String.length (C.encode (read ())) <= C.reply_bytes);
+      let sessions =
+        List.init 100 (fun n ->
+            `Assoc
+              [
+                ("name", str (String.make 240 'n'));
+                ("created", `Int n);
+                ("machine_id", str (String.make 80 'm'));
+              ])
+      in
+      let sources =
+        List.init 20 (fun n ->
+            `Assoc
+              [
+                ("id", str ("s" ^ string_of_int n));
+                ("kind", str "other");
+                ("label", str (String.make 240 's'));
+              ])
+      in
+      let folders =
+        List.init 40 (fun n ->
+            str ("/" ^ string_of_int n ^ String.make 4090 'f'))
+      in
+      let enlarged =
+        `Assoc
+          (("sessions", `List sessions)
+          :: ("sources", `List sources)
+          :: ("folders", `List folders)
+          :: List.filter
+               (fun (key, _) ->
+                 not (List.mem key [ "sessions"; "sources"; "folders" ]))
+               (C.obj project))
+      in
+      write root
+        (C.encode
+           (`Assoc
+              (("projects", `List [ enlarged ])
+              :: List.remove_assoc "projects" (C.obj config))));
+      let partial = read () in
+      Alcotest.(check bool)
+        "whole session field omitted, never truncated" true
+        (U.member "sessions" (U.member "project" partial) = `Null
+        && List.mem (str "sessions")
+             (U.to_list (U.member "omitted_fields" partial)));
+      Alcotest.(check int)
+        "count survives omission" 100
+        (U.to_int (U.member "sessions_total" (U.member "project" partial)));
+      Alcotest.(check bool)
+        "partial reply bound" true
+        (String.length (C.encode partial) <= C.reply_bytes))
+
+let legacy_session_tools () =
+  with_store (fun root store ->
+      let config =
+        `Assoc
+          [
+            ("kind", str "mesh-project-config");
+            ("schema_version", `Int 1);
+            ("machine_id", str "legacy-machine");
+            ( "projects",
+              `List [ `Assoc [ ("id", str "legacy"); ("title", str "Legacy") ] ]
+            );
+          ]
+      in
+      write root (C.encode config);
+      let before = bytes root in
+      let read = call store "project_read" [ ("project_id", str "legacy") ] in
+      Alcotest.(check bool)
+        "genuinely absent zero field projected" true
+        (U.member "sessions" (U.member "project" read) = `List []);
+      Alcotest.(check int)
+        "legacy session count zero" 0
+        (U.to_int (U.member "sessions_total" (U.member "project" read)));
+      check "read never rewrites legacy config" before (bytes root);
+      let attached =
+        call store "project_settings"
+          [
+            ("boot", str "boot1");
+            ("expected_revision", U.member "revision" read);
+            ("project_id", str "legacy");
+            ("request_id", str (uid 2));
+            ( "patch",
+              `Assoc
+                [
+                  ( "session_changes",
+                    `List
+                      [
+                        `Assoc
+                          [
+                            ("type", str "attach");
+                            ( "session",
+                              `Assoc
+                                [
+                                  ("machine_id", str "legacy-machine");
+                                  ("name", str "live");
+                                  ("created", `Int 1);
+                                ] );
+                          ];
+                      ] );
+                ] );
+          ]
+      in
+      check "legacy first attachment succeeds" "ok" (value attached "status"))
 
 let () =
   Alcotest.run "native project store"
     [
       ( "store",
         [
+          Alcotest.test_case "exact session Tools attachment" `Quick
+            session_tools;
+          Alcotest.test_case "legacy first session Tools attachment" `Quick
+            legacy_session_tools;
           Alcotest.test_case "typed observation settings" `Quick typed_settings;
-          Alcotest.test_case "pipeline source selectors" `Quick pipeline_selector_settings;
+          Alcotest.test_case "pipeline source selectors" `Quick
+            pipeline_selector_settings;
           Alcotest.test_case "lifecycle CAS replay restart" `Quick lifecycle;
           Alcotest.test_case "real file fault boundaries" `Quick
             fault_boundaries;

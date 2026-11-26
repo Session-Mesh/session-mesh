@@ -3345,13 +3345,38 @@ async def api_projects(request):
                                                actual_size=len(data) + len(chunk))
         data.extend(chunk)
     try:
-        body = json.loads(data)
+        body = json.loads(data, object_pairs_hook=projectartifacts.pairs)
     except (ValueError, UnicodeDecodeError):
         raise web.HTTPBadRequest(text="Invalid project request")
+    if isinstance(body, dict) and body.get("op") == "work-tools":
+        return await api_work_tools(request, body)
     if not isinstance(body, dict) or not isinstance(body.get("op"), str) \
             or body["op"] not in PROJECT_HOST_OPS:
         raise web.HTTPBadRequest(text="Unsupported project operation")
     return web.json_response(await host(body), headers={"Cache-Control": "no-store"})
+
+
+async def api_work_tools(request, body):
+    """Owner-only transport for native canonical Work attachment policy; never a tracker write."""
+    _require_owner_cookie(request)
+    if request.content_type != "application/json":
+        raise web.HTTPUnsupportedMediaType()
+    identity = body.get("session")
+    if body.get("action") == "attach":
+        if not isinstance(identity, dict):
+            raise web.HTTPBadRequest(text="Session identity required")
+        listed = await host({"op": "list"})
+        if not any(s.get("name") == identity.get("name") and s.get("created") == identity.get("created") for s in listed):
+            raise web.HTTPConflict(text="Session replaced or missing")
+    if WORK_SLOTS.locked():
+        raise web.HTTPServiceUnavailable(text="Work attachment helper busy")
+    async with WORK_SLOTS:
+        result = await artifact_command(body)
+    if body.get("action") == "attach":
+        listed = await host({"op": "list"})
+        if not any(s.get("name") == identity.get("name") and s.get("created") == identity.get("created") for s in listed):
+            raise web.HTTPConflict(text="Session changed; check the saved receipt")
+    return web.json_response(result, headers={"Cache-Control": "no-store"})
 
 
 # The Projects view's relay: `work-read --request`, or `work-write --request` for a write op, which only the
@@ -3411,10 +3436,13 @@ async def api_work(request):
         return work_error(503, "busy", "too many work requests")
     async with WORK_SLOTS:
         try:
+            env = work_child_env()
+            if program == "work-read" and "MESH_WORK_INSTANCE_REGISTRATION" in os.environ:
+                env["MESH_WORK_INSTANCE_REGISTRATION"] = os.environ["MESH_WORK_INSTANCE_REGISTRATION"]
             proc = await asyncio.create_subprocess_exec(
                 command, "--request", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL, limit=2 * 1024 * 1024, start_new_session=True,
-                env=work_child_env())
+                env=env)
             proc.stdin.write(body)
             proc.stdin.close()
             limit = WORK_TIMEOUT if program == "work-read" else max(WORK_TIMEOUT, 30.0)  # a write may wait for the lock and git
@@ -4535,14 +4563,173 @@ async def api_kill(request):
     await asyncio.to_thread(conversation_names.close, name, created)
     await asyncio.to_thread(respawn.forget_live, name, created)   # forget only the killed identity
     await asyncio.to_thread(board.remove, name, created)
+    artifact_warning = None
+    try:
+        await artifact_lifecycle("remove", name, created)
+    except web.HTTPException:
+        artifact_warning = "Artifact reference cleanup unavailable; private references retained"
     SIGNALS.discard_if(lambda reference, identity: reference.get("type") == "board.updated"
                        and reference.get("object", {}).get("id") == name and identity == created)
     opens.discard_board_open(name, created)
     opens.discard_demo_scene_open(name, created)
-    return web.json_response({"ok": True})
+    return web.json_response({"ok": True, **({"warnings": [artifact_warning]} if artifact_warning else {})})
 
 
 # ---------------------------------------------------------------- Excalidraw whiteboard
+
+# Typed native helper: connector credentials and capability URLs never enter argv
+# or diagnostics. This is separate from project-scoped Roster observations.
+ARTIFACTS_LOCK = asyncio.Lock()
+ARTIFACTS_ACTIVE = 0
+
+
+async def artifact_command(body):
+    configured = os.environ.get("MESH_ARTIFACTS_CMD")
+    executable = configured or agentmcp.BOARD_MCP
+    if not configured and not os.path.isfile(executable):
+        executable = str(ROOT / "ocaml/_build/default/bin/mesh_board_mcp_main.exe")
+    command = [executable] if configured else [executable, "--artifacts-worker"]
+    env = {**os.environ, "MESH_CONF_DIR": str(CONF_DIR)}
+    env.pop("MESH_SESSION_TOKEN", None)
+    if body.get("op") == "work-tools":
+        env = {**work_child_env(), "MESH_CONF_DIR": str(CONF_DIR)}
+        if "MESH_WORK_INSTANCE_REGISTRATION" in os.environ:
+            env["MESH_WORK_INSTANCE_REGISTRATION"] = os.environ["MESH_WORK_INSTANCE_REGISTRATION"]
+    proc = None
+    try:
+        if not os.path.isabs(executable):
+            raise ValueError("helper path")
+        proc = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE,
+                                                    stdout=asyncio.subprocess.PIPE,
+                                                    stderr=asyncio.subprocess.DEVNULL, env=env)
+        output, _ = await asyncio.wait_for(proc.communicate(json.dumps(body).encode() + b"\n"),
+                                           28 if body["op"] == "notes-call" else 3)
+        if proc.returncode or len(output) > 2 * 1024 * 1024:
+            raise ValueError("helper")
+        result = json.loads(output, object_pairs_hook=projectartifacts.pairs)
+        if not isinstance(result, dict) or "error" in result:
+            raise ValueError("helper")
+        return result
+    except (OSError, ValueError, asyncio.TimeoutError):
+        raise web.HTTPServiceUnavailable(text="Artifacts unavailable") from None
+    finally:
+        if proc is not None and proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+
+
+async def artifact_lifecycle(op, name, created, target=None):
+    async with ARTIFACTS_LOCK:
+        if not os.path.lexists(CONF_DIR / "session-artifacts.json"):
+            return {"references": [], "catalogue_present": False, "source_present": False} if op == "list" else {
+                "transferred": False, "transfer_status": "catalogue-unavailable", "catalogue_present": False}
+        body = {"op": op, "session": {"name": name, "created": created}}
+        if target is not None:
+            body["target"] = target
+        return await artifact_command(body)
+
+
+async def artifact_transfer_complete(name, created, target):
+    """Only the native worker can attest completion of the exact transfer."""
+    result = await artifact_lifecycle("restore-transfer", name, created, target)
+    if result.get("complete") is True:
+        return
+    raise web.HTTPServiceUnavailable(text="Artifact transfer completion unverified")
+
+
+async def artifact_transfer_required(name, created):
+    try:
+        result = await artifact_lifecycle("restore-probe", name, created)
+        return result.get("required") is not False
+    except web.HTTPException:
+        return True
+
+
+async def api_session_artifacts(request):
+    name = request.match_info["name"]
+    try:
+        created = float(request.query["created"])
+        if not math.isfinite(created):
+            raise ValueError("created")
+    except (KeyError, ValueError):
+        raise web.HTTPBadRequest(text="created required") from None
+    listed = await host({"op": "list"})
+    if not any(s.get("name") == name and s.get("created") == created for s in listed):
+        raise web.HTTPConflict(text="Session replaced or missing")
+    result = await artifact_lifecycle("list", name, created)
+    listed = await host({"op": "list"})
+    if not any(s.get("name") == name and s.get("created") == created for s in listed):
+        raise web.HTTPConflict(text="Session replaced or missing")
+    return web.json_response(result, headers={"Cache-Control": "no-store"})
+
+
+async def api_session_notes(request):
+    global ARTIFACTS_ACTIVE
+    if ARTIFACTS_ACTIVE >= 4:
+        raise web.HTTPTooManyRequests(text="Connector busy; do not automatically replay")
+    raw = await request.read()
+    if len(raw) > 600 * 1024:
+        raise web.HTTPRequestEntityTooLarge(max_size=600 * 1024, actual_size=len(raw))
+    try:
+        body = json.loads(raw, object_pairs_hook=projectartifacts.pairs)
+        if not isinstance(body, dict) or set(body) != {"tool", "arguments"}:
+            raise ValueError("fields")
+    except (ValueError, UnicodeError):
+        raise web.HTTPBadRequest(text="Invalid Notes operation") from None
+    # Recheck after reading a potentially slow body, before any upstream operation.
+    original = (request["mesh_session"], request["mesh_session_created"])
+    current = await sessionauth.authenticate(request, lambda: host({"op": "list"}))
+    if current != original:
+        raise web.HTTPUnauthorized()
+    identity = {"name": original[0], "created": original[1]}
+    nonce = request["mesh_session_nonce"]
+    try:
+        async with ARTIFACTS_LOCK:
+            grant = await artifact_command({"op": "notes-prepare", "session": identity,
+                                             "nonce": nonce, "tool": body["tool"]})
+    except web.HTTPException:
+        raise web.HTTPForbidden(text="Notes operation not granted") from None
+    if grant.get("allowed") is not True:
+        raise web.HTTPForbidden(text="Notes operation not granted")
+    if grant.get("status") == "unavailable":
+        raise web.HTTPServiceUnavailable(text="Artifacts unavailable")
+    current = await sessionauth.authenticate(request, lambda: host({"op": "list"}))
+    if current != original:
+        raise web.HTTPUnauthorized()
+    if ARTIFACTS_ACTIVE >= 4:
+        raise web.HTTPTooManyRequests(text="Connector busy; do not automatically replay")
+    ARTIFACTS_ACTIVE += 1
+    try:
+        outcome = await artifact_command({"op": "notes-call", "session": identity, "nonce": nonce, **body})
+    except web.HTTPServiceUnavailable:
+        # Helper interruption may follow a committed upstream mutation.
+        outcome = {"status": "uncertain"}
+    finally:
+        ARTIFACTS_ACTIVE -= 1
+    if outcome.get("status") == "success":
+        try:
+            async with ARTIFACTS_LOCK:
+                try:
+                    current = await sessionauth.authenticate(request, lambda: host({"op": "list"}))
+                except web.HTTPException:
+                    current = None
+                outcome = await artifact_command({"op": "notes-record", "session": identity,
+                    "generation": grant.get("generation"), "outcome": outcome, "attributed": current == original})
+        except web.HTTPException:
+            outcome["catalogue"] = "not-recorded"
+    # The upstream payload and observation belong to the owner-only catalogue.
+    status = outcome.get("status")
+    if status not in ("success", "denied", "invalid", "unavailable", "uncertain", "upstream-error"):
+        status = "uncertain"
+    reply = {"status": status}
+    if status == "success":
+        catalogue = outcome.get("catalogue")
+        reply["catalogue"] = catalogue if catalogue in ("recorded", "not-applicable") else "not-recorded"
+        if reply["catalogue"] == "not-recorded":
+            reply["warning"] = "Upstream succeeded; reference not recorded. Do not replay the operation."
+    return web.json_response(reply, status=403 if status == "denied" else 200,
+                             headers={"Cache-Control": "no-store"})
 
 async def _demo_scene_get(name, version=None, expected_created=None, demo_id=None):
     listed = await host({"op": "list"})
@@ -7169,6 +7356,13 @@ async def _settle_restored(name, new, entry, recreated, warnings, offer_done):
     ``warnings`` says so. Appends the warnings it adds."""
     # board.transfer is False both for "no board to move" and for a refused move: not told apart here
     await asyncio.to_thread(board.transfer, name, entry["created"], new, recreated["created"])
+    if (entry.get("restoring") or {}).get("artifacts_empty_confirmed") is not True:
+        try:
+            await artifact_transfer_complete(name, entry["created"],
+                                             {"name": new, "created": recreated["created"]})
+        except web.HTTPException:
+            warnings.append("Artifact references not transferred; kept for the old identity")
+            offer_done = False
     if new != name:
         warnings.append(f"restored under another name: {new}")
     _purge_board_signal(name)
@@ -7234,7 +7428,7 @@ async def _verified_restore_context(entry):
     return context
 
 
-async def _create_restored(name, entry, running, reason=None):
+async def _create_restored(name, entry, running, reason=None, nonce=None):
     """The page path's creation: (the new session's name, None), or (None, the refusal result). A creation sent to
     the host whose outcome is unknown holds the conversation (``running``) and the offer, then re-raises.
     ``reason``: why the agent has no conversation to resume (NOT_RELAUNCHED), said in its shell."""
@@ -7253,18 +7447,23 @@ async def _create_restored(name, entry, running, reason=None):
         command = shlex.join(_resume_argv(agent, context)) if resumable else _not_relaunched_line(agent, reason)
         new = await new_session(name, entry["cwd"], command, agent["type"] if resumable else None,
                                 agent["type"] if resumable else None, keep=48,
+                                **({"nonce": nonce} if nonce is not None else {}),
                                 conversation=_restored_conversation(agent) if resumable else None,
                                 account=entry.get("account") if resumable else None,
                                 default_context_revision=entry.get("default_context_revision") if resumable else None,
                                 account_revision=(entry.get("account_context_revision") if context else
                                                   "legacy" if resumable and entry.get("account") else None))
-    except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, GeminiSettingsRefused) as e:
-        return None, {"ok": False, "error": e.text}
     except (CreationUncertain, asyncio.CancelledError):   # sent, outcome unknown: the agent may still start
         hold_offer(name, entry["created"])
         if resumable:
             running.add(agent["session_id"])
         raise
+    except (web.HTTPBadRequest, web.HTTPConflict, web.HTTPForbidden, web.HTTPServiceUnavailable, GeminiSettingsRefused) as e:
+        if nonce is not None:
+            await _withdraw_intent(name, entry)
+        if isinstance(e, web.HTTPServiceUnavailable) and not isinstance(e, GeminiSettingsRefused):
+            raise
+        return None, {"ok": False, "error": e.text}
     if resumable:
         running.add(agent["session_id"])
     return new, None
@@ -7287,6 +7486,22 @@ async def restore_one(name, running, organisation_lock):
         entry = await asyncio.to_thread(respawn.lost_entry, name)
         if entry is None:
             return {"ok": False, "error": "Not found, already restored or folder gone"}
+        marker = entry.get("restoring")
+        if marker and marker.get("mode") == "ordinary":
+            # Completion only: a created/uncertain intent is never a launch request.
+            listed = await host({"op": "list"})
+            found = [s for s in listed if (s.get("meta") or {}).get("nonce") == marker["nonce"]
+                     and ("target" not in marker or s.get("name") == marker["target"])
+                     and ("created" not in marker or s.get("created") == marker["created"])]
+            if len(found) != 1:
+                return {"ok": False, "error": "The bound restored session is unavailable; nothing was restarted",
+                        "phase": "uncertain"}
+            agent = entry["agent"]
+            reason = marker.get("shell_fallback_reason")
+            if agent and reason is not None:
+                agent = {**agent, "session_id": None}
+                entry = {**entry, "agent": agent}
+            return await _complete_restored(name, entry, found[0]["name"], bool(agent and agent["session_id"]), reason)
         if _unavailable_pi_profile_offer(entry):
             return {"ok": False, "error": PI_PROFILE_UNAVAILABLE}
         if "restoring" in entry:    # an exact restore already recorded its session: never a second one
@@ -7298,7 +7513,19 @@ async def restore_one(name, running, organisation_lock):
         resumable = bool(agent and agent["session_id"])
         if resumable and agent["session_id"] in running:
             return {"ok": False, "error": "This conversation is already running (another session): nothing was restarted"}
-        new, refusal = await _create_restored(name, entry, running, reason)
+        # An unavailable optional catalogue is unknown, not empty. Still restore
+        # the terminal, but retain a durable completion-only path for its data.
+        transfer_required = await artifact_transfer_required(name, entry["created"])
+        nonce = sessiontoken.new_nonce()
+        shell_fallback_reason = (reason or "unknown") if agent and not resumable else None
+        await asyncio.to_thread(respawn.begin_restoring, name, entry["created"], nonce,
+                                mode="ordinary", artifacts_required=transfer_required,
+                                artifacts_empty_confirmed=not transfer_required,
+                                shell_fallback_reason=shell_fallback_reason)
+        entry = {**entry, "restoring": {"nonce": nonce, "mode": "ordinary",
+                                       "artifacts_required": transfer_required,
+                                       "artifacts_empty_confirmed": not transfer_required}}
+        new, refusal = await _create_restored(name, entry, running, reason, nonce=nonce)
         if refusal:
             return refusal
         try:
@@ -7316,6 +7543,14 @@ async def _complete_restored(name, entry, new, resumable, reason=None):
     recreated = next((session for session in listed if session.get("name") == new), None)
     if recreated is None:
         raise web.HTTPServiceUnavailable(text="ptyhost did not confirm the restored session")
+    marker = entry.get("restoring")
+    if marker and marker.get("mode") == "ordinary":
+        if ((recreated.get("meta") or {}).get("nonce") != marker["nonce"]
+                or ("target" in marker and marker["target"] != new)
+                or ("created" in marker and marker["created"] != recreated.get("created"))):
+            raise web.HTTPConflict(text="Restored incarnation changed; nothing was restarted")
+        await asyncio.to_thread(respawn.bind_restoring, name, entry["created"], marker["nonce"],
+                                recreated["created"], mode="ordinary", target=new)
     warnings = []
     mail_warning = await _transfer_restored_mail(entry, new, listed, notes=warnings)
     if mail_warning:
@@ -7378,12 +7613,14 @@ def _expected_body(body):
     return expected
 
 
-async def _finish_exact(name, entry, created, listed, nonce):
+async def _finish_exact(name, entry, created, listed, nonce, artifacts_required=True):
     """Everything after the session exists: board, agent mail, snapshot, organisation. Idempotent,
     so a retry after a failure here (the marker is already written) runs it again without a second
     shell. A mail transfer that did not complete raises: the offer and the marker stay (phase
     created), and the retry resumes the transfer."""
     await asyncio.to_thread(board.transfer, name, entry["created"], name, created)
+    if artifacts_required:
+        await artifact_transfer_complete(name, entry["created"], {"name": name, "created": created})
     _purge_board_signal(name)
     _purge_board_open(name)
     mail_warning = await _transfer_restored_mail(entry, name, listed, expected_nonce=nonce)
@@ -7469,9 +7706,13 @@ async def _start_exact(app, name, entry, running):
     refusal = await _precheck_exact(app, name, entry, running)
     if refusal is not None:
         return refusal, None
-    marker = {"nonce": sessiontoken.new_nonce()}
+    marker = {"nonce": sessiontoken.new_nonce(),
+              "artifacts_required": await artifact_transfer_required(name, entry["created"])}
+    marker["artifacts_empty_confirmed"] = not marker["artifacts_required"]
     try:
-        await asyncio.to_thread(respawn.begin_restoring, name, entry["created"], marker["nonce"])
+        await asyncio.to_thread(respawn.begin_restoring, name, entry["created"], marker["nonce"],
+                                artifacts_required=marker["artifacts_required"],
+                                artifacts_empty_confirmed=marker["artifacts_empty_confirmed"])
     except (OSError, LookupError) as e:
         print(f"restore: intent of {name} not recorded: {e!r}", flush=True)
         await _withdraw_intent(name, entry)   # the file may hold it although the directory sync failed
@@ -7512,6 +7753,8 @@ async def restore_exact(app, expected):
             entry = await asyncio.to_thread(respawn.lost_entry, name)
             if entry is None:
                 return _result("not-found", "not-started", "Not found, already restored or folder gone")
+            if (entry.get("restoring") or {}).get("mode") == "ordinary":
+                return _result("completion-required", "created", "Repeat the original ordinary restore to complete it; nothing was restarted")
             differs = [key for key in respawn.offer_mismatch(entry, expected) if key != "resume_id"]
             if differs:   # the conversation is compared below, with the one the restore would resume
                 return _result("expected-mismatch", "not-started", "The offer is not the expected one",
@@ -7568,7 +7811,8 @@ async def _complete_exact(name, entry, marker):
                                         live["created"])
             except (OSError, LookupError) as e:
                 print(f"restore: birth date of {name} not recorded: {e!r}", flush=True)
-        await _finish_exact(name, entry, live["created"], listed, marker["nonce"])
+        await _finish_exact(name, entry, live["created"], listed, marker["nonce"],
+                            artifacts_required=marker.get("artifacts_empty_confirmed") is not True)
     except Exception as e:   # noqa: BLE001  the session exists: say so, and that a retry completes
         print(f"restore: {name} created but not completed: {e!r}", flush=True)
         return _result("completion-failed", "created", "The session exists; repeat the same request to complete",
@@ -7640,15 +7884,20 @@ async def api_restore_rebind(request):
 
 async def api_restore_discard(request):
     names = await names_body(request)
+    warnings = []
     async with request.app["organisation_lock"]:
         entries = [await asyncio.to_thread(respawn.lost_entry, name) for name in names]
         await asyncio.to_thread(respawn.drop_lost, names)
     for entry in entries:
         if entry is not None:
             await asyncio.to_thread(board.remove, entry["name"], entry["created"])
+            try:
+                await artifact_lifecycle("remove", entry["name"], entry["created"])
+            except web.HTTPException:
+                warnings.append("Artifact reference cleanup unavailable; private references retained")
             _purge_board_signal(entry["name"])
             _purge_board_open(entry["name"])
-    return web.json_response({"ok": True})
+    return web.json_response({"ok": True, **({"warnings": warnings} if warnings else {})})
 
 
 async def snapshot_loop(app):
@@ -8350,6 +8599,8 @@ def make_app(*, session_request_path=None):
     # ``@self`` cannot be a session name (NAME_RE excludes ``@``), so the
     # MeshSession-only capability cannot shadow a browser board named "self".
     app.router.add_get("/api/board/@self", api_board_self_get)
+    app.router.add_post("/api/session-artifacts/@self/notes", api_session_notes)
+    app.router.add_get("/api/session-artifacts/{name}", api_session_artifacts)
     app.router.add_put("/api/board/@self", api_board_self_put)
     app.router.add_get("/api/board/@self/revisions", api_board_self_revisions)
     app.router.add_get("/api/board/@self/revision", api_board_self_revision)

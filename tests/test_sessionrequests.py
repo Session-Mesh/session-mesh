@@ -326,6 +326,7 @@ def test_store_rejects_unsafe_existing_custody(tmp_path, kind):
     private = tmp_path / "private"
     if kind == "directory-mode":
         private.mkdir(mode=0o755)
+        private.chmod(0o755)  # mkdir is filtered by the caller's umask.
         target = private / "requests.sqlite3"
     elif kind == "directory-symlink":
         real = tmp_path / "real"

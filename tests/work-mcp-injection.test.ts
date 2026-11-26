@@ -86,11 +86,11 @@ print(json.dumps({"claude": claude(), "codex": codex(), "copilot": copilot(), "v
                   "gemini": names(agentmcp.gemini_settings({}).get("mcpServers"))}))`;
 
 describe('one list of Mesh servers, one rule', () => {
-  test('mesh_servers gives the board then the tracker, and the reserved names are those two', () => {
+  test('mesh_servers gives the board then the tracker; Notes is reserved but opt-in', () => {
     const r = py(withWork, `
 print(json.dumps({"names": list(agentmcp.MESH_SERVER_NAMES),
                   "servers": [server._asdict() for server in agentmcp.mesh_servers("codex", {"MESH_PORT": "7"})]}))`);
-    assert.deepEqual(r.names, ['mesh-board', 'mesh-work']);
+    assert.deepEqual(r.names, ['mesh-board', 'mesh-work', 'mesh-notes']);
     assert.deepEqual(r.servers.map((server: any) => server.name), ['mesh-board', 'mesh-work']);
     assert.deepEqual(r.servers[0].env, {MESH_PORT: '7'}, 'reach goes to the board only');
     assert.deepEqual(r.servers[1], {name: 'mesh-work', ...work('codex'), env_names: ['MESH_SESSION', 'WL_HOME'],
