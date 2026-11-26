@@ -24,9 +24,10 @@ from pathlib import Path
 from aiohttp import web
 import server,respawn,sessiontoken
 sys.path.insert(0,"tests")
-from respawn_helpers import mesh_item
+from respawn_helpers import codex,mesh_item
 async def main():
     out={}; actual=server.artifact_lifecycle; command=server.artifact_command; drop=respawn.drop_lost
+    transfer_mail=server._transfer_restored_mail
     knowledge={}
     for label,value in [
         ("absent",{"catalogue_present":False,"source_present":False,"references":[]}),
@@ -46,11 +47,13 @@ async def main():
     out["knowledge"]=knowledge;server.artifact_lifecycle=actual
     helper=os.environ["MESH_ARTIFACTS_CMD"]; store=server.CONF_DIR/"session-artifacts.json"
     cases=[(mode,f) for mode in ("ordinary","exact") for f in ("pre-probe-disappear","disappear","native-disappear","unknown-disappear","replacement-empty","unproven-false","unproven-true","receipt-lost","fresh-empty","absent-source","empty-existing","nonempty-existing","corrupt-existing","unreadable-existing","unavailable-helper","never-enabled","confirmed-empty","unknown-probe-recovers")]+[("exact","legacy-marker"),("exact","legacy-false")]
+    cases.append(("ordinary","missing-transcript"))
     for index,(mode,fault) in enumerate(cases):
         key=mode+"-"+fault; old="offer"+str(index); created=index+1; born=2000+index
         backup=server.CONF_DIR/(key+"-backup.json")
         respawn.FILE=server.CONF_DIR/(key+"-snapshot.json")
-        respawn.update([mesh_item(old,Path(os.environ["HOME"]),created,None)],listed=True);respawn.update([],listed=True)
+        offered_agent=codex() if fault=="missing-transcript" else None
+        respawn.update([mesh_item(old,Path(os.environ["HOME"]),created,offered_agent)],listed=True);respawn.update([],listed=True)
         ref={"connector":"notes","id":key,"kind":"note","title":"fixture","url":"https://example.invalid/s/fixture","availability":"observed-present","created_at":1,"updated_at":1}
         has_refs=fault not in ("fresh-empty","absent-source","empty-existing","never-enabled","confirmed-empty","legacy-marker")
         state={"version":1,"sessions":[{"session":{"name":old,"created":created},"references":[ref]}] if has_refs else []}
@@ -86,7 +89,7 @@ async def main():
                 if once[0] and fault.startswith("unproven-"):
                     once[0]=False;return {"transferred":fault=="unproven-true"}
             result=await actual(op,*args,**kwargs)
-            if op=="restore-transfer" and fault=="receipt-lost" and once[0]:once[0]=False;raise web.HTTPServiceUnavailable()
+            if op=="restore-transfer" and fault in ("receipt-lost","missing-transcript") and once[0]:once[0]=False;raise web.HTTPServiceUnavailable()
             return result
         async def artifact_command(body):
             if body["op"]=="restore-transfer" and fault=="native-disappear" and once[0]:
@@ -96,8 +99,13 @@ async def main():
             if fault=="confirmed-empty" and drop_once[0]:drop_once[0]=False;raise OSError("fixture completion write failure")
             return drop(*args,**kwargs)
         server.host=host;server.new_session=create;server.sessions=sessions
-        server._restore_identity=lambda e:(e,None);server._exact_identity=identity
-        server.board.transfer=lambda *args:False;server.restore_organisation=nothing;server._transfer_restored_mail=nothing
+        def restore_identity(entry):
+            if fault=="missing-transcript":
+                return {**entry,"agent":{**entry["agent"],"session_id":None}},"not found"
+            return entry,None
+        server._restore_identity=restore_identity;server._exact_identity=identity
+        server.board.transfer=lambda *args:False;server.restore_organisation=nothing
+        server._transfer_restored_mail=transfer_mail if fault=="missing-transcript" else nothing
         server.artifact_lifecycle=lifecycle;server.artifact_command=artifact_command;respawn.drop_lost=drop_lost;server.HELD_OFFERS.clear()
         app={"organisation_lock":asyncio.Lock(),"restore_lock":asyncio.Lock(),"recent_conversations":{}}
         expected={"name":old,"created":created,"agent_kind":respawn.SHELL_KIND,"resume_id":None,"cwd":str(Path(os.environ["HOME"]))}
@@ -119,6 +127,9 @@ async def main():
         os.environ["MESH_ARTIFACTS_CMD"]=helper
         dest=await actual("list",target,born)
         row.update({"second_ok":second.get("ok") is True,"launches":len(launches),"offer_finished":respawn.lost_entry(old) is None,"data_preserved":dest.get("references")==([ref] if has_refs else [])})
+        if fault=="missing-transcript":
+            row.update({"first_resumed":first["resumed"],"second_resumed":second["resumed"],
+                        "same_note":first["note"]==second["note"],"fallback":saved["restoring"]["shell_fallback_reason"]})
         out[key]=row
     print(json.dumps(out))
 asyncio.run(main())
@@ -141,6 +152,13 @@ test("legacy exact marker is unknown until a fresh existing-store empty proof",o
   const r=(await exercise())["exact-legacy-marker"]!;
   assert.equal(r.first_pending,true);assert.equal(r.warning,true);
   assert.equal(r.second_ok,true);assert.equal(r.launches,0);assert.equal(r.offer_finished,true);
+});
+test("ordinary completion keeps the durable plain-shell fallback when the transcript was missing",options,async()=>{
+  const r=(await exercise())["ordinary-missing-transcript"]!;
+  assert.equal(r.first_pending,true);assert.equal(r.warning,true);
+  assert.equal(r.fallback,"not found");assert.equal(r.first_resumed,false);assert.equal(r.second_resumed,false);
+  assert.equal(r.same_note,true);assert.equal(r.launches,1);
+  assert.equal(r.second_ok,true);assert.equal(r.offer_finished,true);assert.equal(r.data_preserved,true);
 });
 test("legacy required=false is not affirmative empty evidence",options,async()=>{
   const r=(await exercise())["exact-legacy-false"]!;

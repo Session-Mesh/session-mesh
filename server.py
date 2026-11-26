@@ -7489,7 +7489,11 @@ async def restore_one(name, running, organisation_lock):
                 return {"ok": False, "error": "The bound restored session is unavailable; nothing was restarted",
                         "phase": "uncertain"}
             agent = entry["agent"]
-            return await _complete_restored(name, entry, found[0]["name"], bool(agent and agent["session_id"]))
+            reason = marker.get("shell_fallback_reason")
+            if agent and reason is not None:
+                agent = {**agent, "session_id": None}
+                entry = {**entry, "agent": agent}
+            return await _complete_restored(name, entry, found[0]["name"], bool(agent and agent["session_id"]), reason)
         if _unavailable_pi_profile_offer(entry):
             return {"ok": False, "error": PI_PROFILE_UNAVAILABLE}
         if "restoring" in entry:    # an exact restore already recorded its session: never a second one
@@ -7505,9 +7509,11 @@ async def restore_one(name, running, organisation_lock):
         # the terminal, but retain a durable completion-only path for its data.
         transfer_required = await artifact_transfer_required(name, entry["created"])
         nonce = sessiontoken.new_nonce()
+        shell_fallback_reason = (reason or "unknown") if agent and not resumable else None
         await asyncio.to_thread(respawn.begin_restoring, name, entry["created"], nonce,
                                 mode="ordinary", artifacts_required=transfer_required,
-                                artifacts_empty_confirmed=not transfer_required)
+                                artifacts_empty_confirmed=not transfer_required,
+                                shell_fallback_reason=shell_fallback_reason)
         entry = {**entry, "restoring": {"nonce": nonce, "mode": "ordinary",
                                        "artifacts_required": transfer_required,
                                        "artifacts_empty_confirmed": not transfer_required}}
