@@ -148,6 +148,7 @@ describe('ordinary terminal incarnation recovery without dictation', {skip}, () 
       await observeReplacement(page, name, original);
       assert.equal(await page.evaluate(() => active.conn), null);
       assert.deepEqual(sockets, [], 'authoritative replacement inventory still cannot retarget the cached page');
+      await page.locator("#filter").fill(name);
       await page.locator(`#list button.item[data-id="${name}"]`).click();
       await waitForReplacementBinding(page, original);
       await settle(page);
