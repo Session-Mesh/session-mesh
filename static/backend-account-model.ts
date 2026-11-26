@@ -15,7 +15,7 @@ export type ProfileInput = Readonly<{backend: Backend; id: string; label: string
 export type ProfileMutation = Readonly<{version: 1; op: 'profiles.create'; registry_revision: string | null; profile: ProfileInput}>;
 export type ProvisionBackend = Exclude<Backend, 'pi'>;
 export type ProvisionInput = Readonly<{backend: ProvisionBackend; label: string}>;
-export type ProvisionMutation = Readonly<{version: 1; op: 'profiles.provision'; registry_revision: string | null; profile: ProvisionInput}>;
+export type ProvisionMutation = Readonly<{version: 1; op: 'profiles.provision'; registry_revision: string | null; profile: ProvisionInput; operation_id?: string}>;
 type BaseMutation = Readonly<{version: 1; expected_revision: number}>;
 export type ConsentMutation = BaseMutation & (
   | Readonly<{op: 'consent.set_global'; confirmation: Confirmation}>
@@ -31,6 +31,10 @@ export type BackendAccountPorts = Readonly<{
   create?: (request: ProfileMutation, signal: AbortSignal) => Promise<unknown>;
   /** Read-only registry inspection is independent of the native write capability. */
   inspect?: (signal: AbortSignal) => Promise<unknown>;
+  inspectProvision?: (signal: AbortSignal) => Promise<unknown>;
+  acknowledgeProvision?: (proof: string, signal: AbortSignal) => Promise<unknown>;
+  listProvisionReceipts?: (signal: AbortSignal) => Promise<unknown>;
+  forgetProvisionReceipt?: (proof: string, signal: AbortSignal) => Promise<unknown>;
   provision?: Readonly<{backends: readonly ProvisionBackend[];
     managed?: true;
     write: (request: ProvisionMutation, signal: AbortSignal) => Promise<unknown>}> | undefined;
@@ -232,7 +236,7 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
   };
   const writable = () => (state.phase === 'ready' || state.phase === 'saved') && !!state.snapshot;
   const currentRegistry = () => state.snapshot?.registry ?? state.inspected;
-  const canAssociate = () => (state.phase === 'ready' || state.phase === 'saved') && !!currentRegistry();
+  const canAssociate = () => !pending && (state.phase === 'ready' || state.phase === 'saved') && !!currentRegistry();
   async function inspect(signal: AbortSignal): Promise<Registry> {
     if (!ports.inspect) throw new Error('registry-inspection-unavailable');
     return parseProfilesReply(await ports.inspect(signal));
@@ -257,6 +261,26 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
     const request = ++generation, abort = new AbortController(); active = abort;
     publish({phase: 'loading', snapshot: null});
     try {
+      if (pending?.owned && pending.id && !pending.receipt && provisionJournal
+          && ports.listProvisionReceipts && ports.acknowledgeProvision) {
+        const owned = pending, entry = await provisionJournal.load();
+        if (request !== generation) return;
+        if (!entry || entry.id !== owned.id) {
+          const result = exact(data(await bounded(signal => ports.listProvisionReceipts!(signal), abort)), ['receipts']);
+          if (!Array.isArray(result.receipts) || result.receipts.length > 256) return invalid();
+          const matches = result.receipts.map(item => exact(item, ['proof', 'operation', 'outcome']))
+            .filter(item => item.operation === owned.id);
+          if (matches.length === 1) {
+            const match = matches[0]!;
+            if (typeof match.proof !== 'string' || !/^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[a-f0-9]{64}$/.test(match.proof)
+                || (match.outcome !== 'published' && match.outcome !== 'unpublished')) return invalid();
+            const confirmed = exact(data(await bounded(signal => ports.acknowledgeProvision!(match.proof as string, signal), abort)), ['outcome']);
+            if (confirmed.outcome !== match.outcome) return invalid();
+            if (request !== generation) return;
+            if (pending === owned) pending = undefined;
+          }
+        }
+      }
       if ((!pending || !pending.owned) && provisionJournal) {
         const restored = await restoreProvision(pending?.snapshot ?? null);
         if (request !== generation) return;
@@ -350,6 +374,12 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
       } finally { if (active === abort) active = null; }
   }
   return {
+    async acknowledgePending(operation: string): Promise<boolean> {
+      const result = await provisionJournal?.clearUncertain?.(operation);
+      const settled = result === 'cleared' || result === 'missing';
+      if (settled && pending?.id === operation && !pending.receipt) pending = undefined;
+      return settled;
+    },
     get state() { return state; },
     subscribe(listener: (state: AccountState) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     async open() { if (state.phase !== 'closed') return; publish({phase: 'error', snapshot: null}); await refresh(); },
@@ -391,7 +421,8 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
         // acquire() durably stores intent before dispatch. Without a journal,
         // retain the existing in-memory behavior.
         const receipt = profileReceipt(await bounded(signal => provision.write({version: 1, op: 'profiles.provision',
-          registry_revision: snapshot.registry.registry_revision, profile}, signal), abort));
+          registry_revision: snapshot.registry.registry_revision, profile,
+          ...(id && /^[a-f0-9]{32}$/.test(id) ? {operation_id: id} : {})}, signal), abort));
         const answer = receipt.profile;
         if (answer.backend !== profile.backend || answer.label !== profile.label
           || answer.enabled !== !!provision.managed || answer.managed !== provision.managed

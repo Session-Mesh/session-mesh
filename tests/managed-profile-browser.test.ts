@@ -92,6 +92,10 @@ for (const lateConfig of [false, true]) test(lateConfig
       accepted.push(receipt);
       await control('create-label').waitFor({state:'detached'});
       await panel.locator('li').filter({hasText:label}).waitFor();
+      await control('recovery-confirm').waitFor({state:'visible'});
+      await page.waitForFunction(() => !(document.querySelector('[data-focus="recovery-confirm"]') as HTMLButtonElement).disabled);
+      await control('recovery-confirm').click();
+      await panel.getByText('Result acknowledged.').waitFor();
       assert.deepEqual(await list(), []);
     }
     const [a,b] = accepted.map(r => r.profile);
@@ -111,12 +115,15 @@ for (const lateConfig of [false, true]) test(lateConfig
     fs.writeFileSync(marker,'synthetic private marker',{mode:0o600});
     const view = await context.request.post(`${mesh.base}/api/view`,{data:{target:marker},headers:{Origin:mesh.base}});
     assert.equal(view.status(),403);
-    assert.deepEqual(writes, [
-      {registry_revision:null, profile:{backend:'codex',label:'Profile A'}},
-      {registry_revision:accepted[0].registry_revision, profile:{backend:'codex',label:'Profile B'}},
-    ]);
+    assert.equal(writes.length, 2);
+    for (const [index, raw] of writes.entries()) {
+      const item = raw as {registry_revision:string|null;profile:object;operation_id:string};
+      assert.match(item.operation_id, /^[a-f0-9]{32}$/);
+      assert.deepEqual(item.profile, {backend:'codex',label:index === 0 ? 'Profile A' : 'Profile B'});
+      assert.equal(item.registry_revision, index === 0 ? null : accepted[0].registry_revision);
+    }
     assert.deepEqual(launches, []);
-    assert.deepEqual(registryReads, ['/api/accounts/profiles','/api/accounts/profiles']);
+    assert.ok(registryReads.filter(path => path === '/api/accounts/profiles').length >= 2);
     await control('close').click();
     const ref = ({backend,id,context_revision}:{backend:string;id:string;context_revision:string}) =>
       ({backend,id,context_revision});
@@ -286,8 +293,7 @@ for (const reload of [true, false]) test(`lost creation receipt remains inspecta
     await status.filter({hasText:'Creation has no confirmed receipt'}).waitFor();
     await page.locator('dialog li').filter({hasText:'Unconfirmed'}).waitFor();
     assert.equal(await control('provision-account').count(),0);
-    await control('add-account').click();
-    assert.equal(await control('create-config').count(),1);
+    assert.equal(await control('add-account').isDisabled(),true);
     // A reopened panel retains a policy snapshot and refreshes its revision;
     // after a page reload only the public profile list is inspected.
     assert.deepEqual(traffic, reload ? ['GET /api/accounts/profiles']
@@ -332,34 +338,57 @@ for (const reload of [true, false]) test(`lost creation receipt remains inspecta
       await (await deliveredOld).finished();
       await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
       assert.equal(await control('provision-account').count(),0,'the old positive reply cannot restore the grant');
-      await control('add-account').click();
+      await control('add-account').waitFor();
       await control('close').click();
       fs.chmodSync(fake,0o700);
       await page.locator('#btn-accounts').click();
-      await control('add-account').click();
+      await control('add-account').waitFor();
     }
     await status.filter({hasText:'Creation has no confirmed receipt'}).waitFor();
     await control('provision-account').waitFor();
     assert.equal(await control('provision-account').isDisabled(),true);
     assert.ok(traffic.every(call => call === 'GET /api/accounts/profiles' || call === 'GET /api/accounts/consent'),
       'reopening and refreshing never mutates account state');
-    await control('create-backend').selectOption('codex');
-    await control('create-id').fill('existing');
-    await control('create-label').fill('Existing directory');
-    await control('create-config').fill(path.join(mesh.confDir,'existing-config'));
-    await control('create-state').fill(path.join(mesh.confDir,'existing-state'));
-    const association = page.waitForResponse(r => r.url() === `${mesh.base}/api/accounts/profiles/create`);
-    await control('save-account').click();
-    const response = await association;
-    assert.equal(response.status(),200,await response.text());
-    await page.locator('dialog li').filter({hasText:'Existing directory'}).waitFor();
-    await status.filter({hasText:'Creation has no confirmed receipt'}).waitFor();
-    assert.equal(await control('provision-account').isDisabled(),true);
-    assert.deepEqual(traffic.filter(call => call !== 'GET /api/accounts/profiles' && call !== 'GET /api/accounts/consent'),
-      ['POST /api/accounts/profiles/create']);
+    await control('recovery-inspect').click();
+    await page.getByText('The account was recorded.', {exact:false}).waitFor();
+    await control('recovery-confirm').click();
+    await page.getByText('Result acknowledged.').waitFor();
+    await page.waitForFunction(() => !(document.querySelector('[data-focus="provision-account"]') as HTMLButtonElement).disabled);
+    assert.equal(traffic.filter(call => call === 'POST /api/accounts/profiles/provision').length,0,
+      'recovery never repeats the creation');
   } finally {
     try { await browser?.close(); } finally { await mesh.stop(); }
   }
+});
+
+test('two real tabs settle one lost creation without recreating it', {skip, timeout:45000}, async () => {
+  assert.ok(chrome);
+  const mesh = await startMesh('managed-two-tabs-', {MESH_MESH_PROFILE_CMD:helper,MESH_MESH_PLATFORM_CMD:platform}, where => {
+    fs.mkdirSync(where.confDir,{recursive:true,mode:0o700});
+    fs.writeFileSync(path.join(where.confDir,'synthetic-profile-witness'),witness,{mode:0o700});
+  });
+  let browser: Browser | undefined;
+  try {
+    browser = await chromium.launch(chromiumLaunchOptions(chrome,['--no-sandbox']));
+    const context = await browser.newContext({locale:'en',viewport:{width:1440,height:900}});
+    const a = await context.newPage(), b = await context.newPage();
+    a.setDefaultTimeout(10000); b.setDefaultTimeout(10000);
+    const control = (page: import('playwright-core').Page, name:string) => page.locator(`dialog.backend-account-panel [data-focus="${name}"]`);
+    const url = `${mesh.base}/api/accounts/profiles/provision`;
+    let writes = 0; context.on('request', req => { if (req.method() === 'POST' && req.url() === url) writes++; });
+    await a.route(url, async route => { const reply = await route.fetch(); assert.equal(reply.status(),200); await route.abort('failed'); },{times:1});
+    await a.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`); await a.goto(`${mesh.base}/`);
+    await a.locator('#btn-accounts').click(); await control(a,'provision-account').click();
+    await control(a,'create-label').fill('Two tabs'); await control(a,'save-account').click();
+    await a.locator('dialog [role=status]').filter({hasText:'Creation has no confirmed receipt'}).waitFor();
+    await b.goto(`${mesh.base}/`); await b.locator('#btn-accounts').click();
+    await b.locator('dialog [role=status]').filter({hasText:'Creation has no confirmed receipt'}).waitFor();
+    await control(b,'recovery-inspect').click(); await b.getByText('The account was recorded.',{exact:false}).waitFor();
+    await control(b,'recovery-confirm').click(); await b.getByText('Result acknowledged.').waitFor();
+    await control(a,'refresh').click();
+    await a.waitForFunction(() => { const button = document.querySelector('[data-focus="provision-account"]') as HTMLButtonElement | null; return !!button && !button.disabled; });
+    assert.equal(writes,1,'no automatic recreation');
+  } finally { try { await browser?.close(); } finally { await mesh.stop(); } }
 });
 
 test('ordinary account cancellation and managed argv remain separate', {skip, timeout:60000}, async t => {

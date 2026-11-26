@@ -4,7 +4,7 @@
 import {BACKENDS, PROFILE_ROLES, createBackendAccountController, effectiveConfirmation, pairKey, ruleStatus, validProfileInput, validProvisionInput,
   type AccountState, type Backend, type BackendAccountPorts, type Confirmation, type PairRule, type Profile,
   type ProvisionBackend, type Registry, type Snapshot} from './backend-account-model.ts';
-import {provisionJournal} from './backend-account-provision-journal.ts';
+import {provisionJournal, provisionRecoveryJournal} from './backend-account-provision-journal.ts';
 
 export type AccountTranslate = (key: string, params?: Record<string, string | number>) => string;
 export type BackendAccountPanelPorts = BackendAccountPorts & Readonly<{
@@ -21,6 +21,7 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
     async load() { return journal().load(); },
     async acquire() { return journal().acquire(); },
     async save(id, value) { return journal().save(id, value); },
+    async clearUncertain(id) { return journal().clearUncertain!(id); },
   } : undefined);
   const t = ports.t;
   const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] => {
@@ -38,6 +39,91 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
   const refresh = button('refresh', 'refresh', () => { clearDraft(); ports.refreshCapability?.(); void controller.refresh(); });
   const closeButton = button('close', 'close', () => close());
   footer.append(refresh, closeButton); dialog.append(title, description, status, content, footer); host.append(dialog);
+  const recovery = node('section'); recovery.setAttribute('aria-label', t('backendAccounts.recoveryTitle'));
+  const recoveryStatus = node('p'); recoveryStatus.setAttribute('aria-live', 'polite');
+  let recoveryProof: string | null = null, recoveryOperation: string | null = null, recoveryRequest = 0;
+  const recoveryJournal = () => provisionRecoveryJournal(doc.defaultView!.indexedDB);
+  const confirmRecovery = button('recoveryConfirm', 'recovery-confirm', () => {
+    const proof = recoveryProof, operation = recoveryOperation; if (!proof || !ports.acknowledgeProvision) return;
+    const savedRecovery = JSON.stringify({proof, operation});
+    confirmRecovery.disabled = true;
+    const request = ++recoveryRequest;
+    void (async () => {
+      if (await recoveryJournal().claim(savedRecovery) !== savedRecovery) throw new Error('recovery-pending');
+      if (request !== recoveryRequest || !dialog.open) return;
+      const raw = await ports.acknowledgeProvision!(proof, new AbortController().signal);
+      if (request !== recoveryRequest || !dialog.open) return;
+      const value = raw as {ok?: unknown; data?: {outcome?: unknown}};
+      if (value?.ok !== true || !['published', 'unpublished'].includes(String(value.data?.outcome))) throw new Error('unconfirmed');
+      const cleared = operation ? await controller.acknowledgePending(operation) : false;
+      const localPending = !!controller.state.provisionPending && !cleared;
+      await recoveryJournal().clear(savedRecovery);
+      if (request !== recoveryRequest || !dialog.open) return;
+      recoveryProof = null; recoveryOperation = null; recoveryStatus.textContent = t(localPending ? 'backendAccounts.recoveryLocalUnresolved' : 'backendAccounts.recoveryConfirmed'); void controller.refresh();
+    })().catch(() => { if (request === recoveryRequest && dialog.open) {
+      confirmRecovery.disabled = false; recoveryStatus.textContent = t('backendAccounts.recoveryUnavailable');
+    } });
+  });
+  confirmRecovery.disabled = true;
+  const inspectRecovery = button('recoveryInspect', 'recovery-inspect', () => {
+    if (!ports.inspectProvision) return;
+    const request = ++recoveryRequest; recoveryProof = null; recoveryOperation = null; confirmRecovery.disabled = true;
+    recoveryStatus.textContent = t('backendAccounts.recoveryChecking');
+    void ports.inspectProvision(new AbortController().signal).then(raw => {
+      if (request !== recoveryRequest || !dialog.open) return;
+      const value = raw as {ok?: unknown; data?: {proof?: unknown; operation?: unknown; outcome?: unknown}};
+      const proof = value?.data?.proof, operation = value?.data?.operation, outcome = value?.data?.outcome;
+      if (value?.ok !== true || typeof proof !== 'string' || !/^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[a-f0-9]{64}$/.test(proof)
+          || (operation !== null && (typeof operation !== 'string' || !/^[a-f0-9]{32}$/.test(operation)))
+          || (outcome !== 'published' && outcome !== 'unpublished')) throw new Error('unconfirmed');
+      recoveryProof = proof; recoveryOperation = operation; confirmRecovery.disabled = false;
+      recoveryStatus.textContent = t(outcome === 'published' ? 'backendAccounts.recoveryPublished' : 'backendAccounts.recoveryUnpublished');
+    }).catch(() => { if (request === recoveryRequest && dialog.open) recoveryStatus.textContent = t('backendAccounts.recoveryUnavailable'); });
+  });
+  const receiptList = node('div');
+  const listReceipts = button('receiptsInspect', 'receipts-inspect', () => {
+    if (!ports.listProvisionReceipts || !ports.forgetProvisionReceipt) return;
+    const request = ++recoveryRequest; receiptList.replaceChildren();
+    void ports.listProvisionReceipts(new AbortController().signal).then(raw => {
+      if (request !== recoveryRequest || !dialog.open) return;
+      const reply = raw as {ok?: unknown; data?: {receipts?: unknown}};
+      if (reply.ok !== true || !Array.isArray(reply.data?.receipts) || reply.data.receipts.length > 256) throw new Error('invalid-response');
+      const help = node('p', t('backendAccounts.receiptsWarning')); receiptList.append(help);
+      for (const item of reply.data.receipts) {
+        if (!item || typeof item !== 'object' || typeof item.proof !== 'string'
+            || !/^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[a-f0-9]{64}$/.test(item.proof)
+            || (item.outcome !== 'published' && item.outcome !== 'unpublished')) throw new Error('invalid-response');
+        const proof: string = item.proof, row = node('section');
+        row.append(node('p', t(item.outcome === 'published' ? 'backendAccounts.receiptPublished' : 'backendAccounts.receiptUnpublished', {id:proof.slice(-8)})));
+        const remove = button('receiptRemove', 'receipt-remove', () => {
+          remove.disabled = true;
+          const confirm = button('receiptConfirmRemoval', 'receipt-confirm-removal', () => {
+            confirm.disabled = true;
+            void (async () => {
+              const claim = JSON.stringify({cleanup: proof});
+              if (await recoveryJournal().claim(claim) !== claim) throw new Error('recovery-pending');
+              try {
+                const result = await ports.forgetProvisionReceipt!(proof, new AbortController().signal) as {ok?: unknown; data?: {forgotten?: unknown}};
+                if (result.ok !== true || result.data?.forgotten !== true) throw new Error('unconfirmed');
+                if (request === recoveryRequest && dialog.open) row.remove();
+              } finally { await recoveryJournal().clear(claim); }
+            })().catch(() => { if (request === recoveryRequest && dialog.open) {
+              confirm.disabled = false; recoveryStatus.textContent = t('backendAccounts.receiptRemovalUnavailable');
+            } });
+          });
+          row.append(node('p', t('backendAccounts.receiptRemovalWarning')), confirm);
+        });
+        row.append(remove); receiptList.append(row);
+      }
+    }).catch(() => { if (request === recoveryRequest && dialog.open) {
+      receiptList.replaceChildren(); recoveryStatus.textContent = t('backendAccounts.recoveryUnavailable');
+    } });
+  });
+  if (ports.inspectProvision && ports.acknowledgeProvision) {
+    recovery.append(node('h3', t('backendAccounts.recoveryTitle')), inspectRecovery, recoveryStatus, confirmRecovery);
+    if (ports.listProvisionReceipts && ports.forgetProvisionReceipt) recovery.append(listReceipts, receiptList);
+    dialog.insertBefore(recovery, footer);
+  }
   let opener: HTMLElement | null = null, disposed = false, shown: Snapshot | null = null, generation = 0;
   let inspected: Registry | undefined;
   let shownCapability = '';
@@ -49,8 +135,8 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
   let previousProvisionPending = false;
   let restoreFocus: string | null = null;
   const writable = () => !!controller.state.snapshot && (controller.state.phase === 'ready' || controller.state.phase === 'saved');
-  const canAssociate = () => writable() || (!!controller.state.inspected &&
-    (controller.state.phase === 'ready' || controller.state.phase === 'saved'));
+  const canAssociate = () => !controller.state.provisionPending && (writable() || (!!controller.state.inspected &&
+    (controller.state.phase === 'ready' || controller.state.phase === 'saved')));
   const provisionWritable = () => writable() && !controller.state.provisionPending &&
     !!ports.provision?.backends.length && (!creation || creation.mode !== 'provision' ||
       ports.provision.backends.includes(creation.backend as ProvisionBackend));
@@ -63,7 +149,7 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
   };
   function clearDraft() { draft = null; globalDraft = null; editHost?.replaceChildren(); }
   function close() {
-    ++generation;
+    ++generation; ++recoveryRequest; recoveryProof = null; recoveryOperation = null; confirmRecovery.disabled = true; recoveryStatus.textContent = ''; receiptList.replaceChildren();
     controller.close(); clearDraft(); creation = null; shown = null; previousProvisionPending = false;
     content.replaceChildren();
     inspected = undefined;
@@ -125,6 +211,7 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
       const pending = provision ? controller.provisionProfile(provisionInput()) : controller.createProfile(associateInput());
       void pending.then(saved => {
         if (saved && request === generation && dialog.open) {
+          if (provision && ports.inspectProvision) inspectRecovery.click();
           creation = null; createHost?.replaceChildren();
           content.querySelector<HTMLElement>(`[data-focus="${trigger}"]`)?.focus();
         }
@@ -326,9 +413,35 @@ export function createBackendAccountPanel(host: HTMLElement, ports: BackendAccou
     async open(trigger?: HTMLElement) {
       if (disposed || dialog.open) return;
       ++generation;
+      const request = ++recoveryRequest;
       opener = trigger ?? (doc.activeElement instanceof HTMLElement ? doc.activeElement : null);
       ports.refreshCapability?.();
-      dialog.showModal(); closeButton.focus(); await controller.open();
+      dialog.showModal(); closeButton.focus();
+      const opening = controller.open();
+      try {
+        const saved = await recoveryJournal().load();
+        const pending = saved ? JSON.parse(saved) as {proof?: unknown; operation?: unknown; cleanup?: unknown} : null;
+        if (request === recoveryRequest && dialog.open && pending && typeof pending.proof === 'string'
+            && /^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[a-f0-9]{64}$/.test(pending.proof)
+            && (pending.operation === null || (typeof pending.operation === 'string' && /^[a-f0-9]{32}$/.test(pending.operation)))) {
+          recoveryProof = pending.proof; recoveryOperation = pending.operation; confirmRecovery.disabled = false;
+          recoveryStatus.textContent = t('backendAccounts.recoveryRetry');
+        } else if (request === recoveryRequest && dialog.open && pending && typeof pending.cleanup === 'string'
+          && /^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[a-f0-9]{64}$/.test(pending.cleanup) && ports.forgetProvisionReceipt) {
+          const proof = pending.cleanup, claim = saved!;
+          const retry = button('receiptConfirmRemoval', 'receipt-retry-removal', () => {
+            retry.disabled = true;
+            void ports.forgetProvisionReceipt!(proof, new AbortController().signal).then(async raw => {
+              const reply = raw as {ok?: unknown; data?: {forgotten?: unknown}};
+              if (reply.ok !== true || reply.data?.forgotten !== true) throw new Error('unconfirmed');
+              await recoveryJournal().clear(claim);
+              if (dialog.open) { retry.remove(); recoveryStatus.textContent = t('backendAccounts.receiptRemoved'); }
+            }).catch(() => { if (dialog.open) { retry.disabled = false; recoveryStatus.textContent = t('backendAccounts.receiptRemovalUnavailable'); } });
+          });
+          recoveryStatus.textContent = t('backendAccounts.receiptRemovalWarning'); receiptList.replaceChildren(retry);
+        }
+      } catch { /* The confirmation will remain unavailable without durable storage. */ }
+      await opening;
     },
     close,
     dispose() { if (disposed) return; close(); disposed = true; unsubscribe(); dialog.remove(); },

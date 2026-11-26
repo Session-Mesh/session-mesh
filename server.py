@@ -6243,6 +6243,10 @@ def _require_owner_cookie(request):
 # host. The server checks the caller and the request's bounds, then relays the helper's envelope and its status.
 ACCOUNTS_ROUTES = {"/api/accounts/profiles": "profiles.list", "/api/accounts/profiles/create": "profiles.create",
                    "/api/accounts/profiles/provision": "profiles.provision",
+                   "/api/accounts/profiles/provision-inspect": "profiles.provision-inspect",
+                   "/api/accounts/profiles/provision-acknowledge": "profiles.provision-acknowledge",
+                   "/api/accounts/profiles/provision-receipts": "profiles.provision-receipts",
+                   "/api/accounts/profiles/provision-forget-receipt": "profiles.provision-forget-receipt",
                    "/api/accounts/consent": "consent.get",
                    "/api/accounts/consent/set-global": "consent.set_global",
                    "/api/accounts/consent/set-pair": "consent.set_pair",
@@ -6377,10 +6381,32 @@ def _profile_envelope(op, code, out):
         code_text = reply["code"]
         known = isinstance(code_text, str) and _ACCOUNTS_CODE_RE.fullmatch(code_text)
         return reply if known and _ACCOUNTS_CODE_STATUS.get(code_text, 503) == status else None
-    shape = (_public_listing if op == "profiles.list" else
+    shape = (_public_provision_receipts if op == "profiles.provision-receipts" else
+             (lambda data: isinstance(data, dict) and set(data) == {"forgotten"} and data["forgotten"] is True) if op == "profiles.provision-forget-receipt" else
+             (lambda data: _public_provision_recovery(data, op == "profiles.provision-inspect"))
+             if op in ("profiles.provision-inspect", "profiles.provision-acknowledge") else
+             _public_listing if op == "profiles.list" else
              _public_created if op in ("profiles.create", "profiles.provision") else
              _public_provision_capabilities if op == "profiles.provision-capabilities" else _consent_policy)
     return reply if shape(reply["data"]) else None
+
+
+def _public_provision_recovery(data, inspect):
+    if not isinstance(data, dict) or set(data) != ({"proof", "outcome", "operation"} if inspect else {"outcome"}):
+        return False
+    return (data["outcome"] in ("published", "unpublished") and
+            (not inspect or data["operation"] is None or isinstance(data["operation"], str)
+             and re.fullmatch(r"[a-f0-9]{32}", data["operation"]) is not None) and
+            ("proof" not in data or isinstance(data["proof"], str) and len(data["proof"]) <= 256
+             and re.fullmatch(r"[0-9]+:[0-9]+:[0-9]+:[0-9]+:[a-f0-9]{64}", data["proof"]) is not None))
+
+
+def _public_provision_receipts(data):
+    return (isinstance(data, dict) and set(data) == {"receipts"} and isinstance(data["receipts"], list)
+            and len(data["receipts"]) <= 256 and all(
+                _public_provision_recovery(item, True)
+                for item in data["receipts"] if isinstance(item, dict))
+            and all(isinstance(item, dict) for item in data["receipts"]))
 
 
 def _accounts_unique_keys(pairs):
@@ -8315,6 +8341,10 @@ def make_app(*, session_request_path=None):
     app.router.add_get("/api/accounts/profiles", api_accounts)
     app.router.add_post("/api/accounts/profiles/create", api_accounts)
     app.router.add_post("/api/accounts/profiles/provision", api_accounts)
+    app.router.add_get("/api/accounts/profiles/provision-inspect", api_accounts)
+    app.router.add_post("/api/accounts/profiles/provision-acknowledge", api_accounts)
+    app.router.add_get("/api/accounts/profiles/provision-receipts", api_accounts)
+    app.router.add_post("/api/accounts/profiles/provision-forget-receipt", api_accounts)
     app.router.add_get("/api/accounts/consent", api_accounts)
     app.router.add_post("/api/accounts/consent/set-global", api_accounts)
     app.router.add_post("/api/accounts/consent/set-pair", api_accounts)

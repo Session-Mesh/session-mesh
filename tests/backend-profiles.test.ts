@@ -99,6 +99,12 @@ test('provision rejects wrong inputs, stale state and collisions without creatin
   fs.unlinkSync(path.join(f.conf,'.backend-profiles.legacy-switch'));
   const first=provision({backend:'codex',label:'Travel'},null);
   assert.equal(first.ok,true,JSON.stringify(first));
+  assert.equal(provision({backend:'codex',label:'Next'},null).code,'profile-publication-uncertain');
+  const acknowledge = () => {
+    const inspected = f.request('profiles.provision-inspect'); assert.equal(inspected.ok,true);
+    assert.equal(f.request('profiles.provision-acknowledge',{proof:inspected.data.proof}).ok,true);
+  };
+  acknowledge();
   const revision=first.data.registry_revision, bytes=fs.readFileSync(f.file), before=fs.readdirSync(f.conf);
   assert.equal(provision({backend:'codex',label:'Next'},null).code,'profile-registry-changed');
   assert.equal(provision({backend:'codex',label:' travel '},revision).code,'profile-already-exists');
@@ -107,6 +113,7 @@ test('provision rejects wrong inputs, stale state and collisions without creatin
   const second=provision({backend:'claude',label:'Travel'},revision);
   assert.equal(second.ok,true,JSON.stringify(second));
   assert.equal(second.data.profile.enabled,false);
+  acknowledge();
   const pending=path.join(f.conf,'.backend-profiles.create-intent');
   fs.writeFileSync(pending,'retained synthetic evidence',{mode:0o600});
   const held=fs.readdirSync(f.conf);

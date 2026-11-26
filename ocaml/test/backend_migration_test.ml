@@ -21,6 +21,10 @@ let write path bytes =
 
 let read path = In_channel.with_open_bin path In_channel.input_all
 
+let recover_provision root =
+  let expected = match M.inspect_provision ~root with Ok proof -> proof | Error code -> Alcotest.fail code in
+  M.recover_provision ~root ~expected
+
 let record_intent root stage original content =
   let directory = Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
   Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
@@ -1586,7 +1590,10 @@ let provision_interruption ~append ~point () =
         else
           match M.provision_profile ~root ~expected_revision:None ~profile:(profile "Existing") with
           | Error code -> Alcotest.fail code
-          | Ok (revision, _) -> Some (revision, read (target root), Unix.lstat (target root))
+          | Ok (revision, _) ->
+              Alcotest.(check bool) "confirmed provision reconciled" true
+                (recover_provision root = Ok M.Published_reconciled);
+              Some (revision, read (target root), Unix.lstat (target root))
       in
       let revision = Option.map (fun (revision, _, _) -> revision) before in
       let requested = profile "Interrupted" in
@@ -1637,11 +1644,14 @@ let provision_interruption ~append ~point () =
              = Error "profile-publication-uncertain")
       | Some (_, bytes, st) when not published ->
           Alcotest.(check bool) "append before rename preserves old inode and bytes" true
-            (recorded = Some (st.Unix.st_dev, st.Unix.st_ino, bytes))
+            (recorded = Some (st.Unix.st_dev, st.Unix.st_ino, bytes));
+          Alcotest.(check bool) "interrupted allocation blocks a second provision" true
+            (M.provision_profile ~root ~expected_revision:revision ~profile:requested
+             = Error "profile-publication-uncertain")
       | Some _ ->
           Alcotest.(check bool) "stale append cannot replay" true
             (M.provision_profile ~root ~expected_revision:revision ~profile:requested
-             = Error "profile-registry-changed"));
+             = Error "profile-publication-uncertain"));
       if not append then (
         let evidence = Filename.concat root ".backend-profiles.create-intent" in
         let stage = Filename.concat root
@@ -1657,6 +1667,14 @@ let provision_interruption ~append ~point () =
         Alcotest.(check bool) "contradiction does not replace the target" true
           (recorded = (if Sys.file_exists destination then Some (snapshot destination) else None));
         Unix.unlink legacy_switch);
+      if append && not published then (
+        let old = Filename.concat root "original-registry" in
+        Unix.rename destination old;
+        write destination (read old);
+        Alcotest.(check bool) "same bytes from another inode cannot resolve" true
+          (recover_provision root = Error "profile-publication-uncertain");
+        Unix.unlink destination;
+        Unix.rename old destination);
       let status, response = run root ["recover-create"] in
       if append then
         Alcotest.(check bool) "first-create recovery does not interpret an append" true
@@ -1666,6 +1684,8 @@ let provision_interruption ~append ~point () =
         let outcome = Yojson.Safe.Util.(response |> member "data" |> member "outcome" |> to_string) in
         Alcotest.(check string) "recovery never publishes a stage"
           (if published then "published-reconciled" else "unpublished-aborted") outcome);
+      Alcotest.(check bool) "explicit provision reconciliation" true
+        (recover_provision root = Ok (if published then M.Published_reconciled else M.Unpublished_aborted));
       Alcotest.(check bool) "recovery never replaces the registry" true
         (recorded = (if Sys.file_exists destination then Some (snapshot destination) else None));
       let count = Bool.to_int append + Bool.to_int published in
@@ -1679,13 +1699,240 @@ let provision_interruption ~append ~point () =
       Alcotest.(check bool) "directory witnesses retain inodes and bytes" true
         (roots () = allocated && List.map (fun root -> snapshot (sentinel root)) allocated = witnesses))
 
+let provision_old_acknowledgement_cannot_resolve_new_intent () =
+  fixture (fun root ->
+    let profile label = `Assoc [("backend", s "codex"); ("label", s label)] in
+    let revision = match M.provision_profile ~root ~expected_revision:None ~profile:(profile "First") with
+      | Ok (revision, _) -> revision | Error code -> Alcotest.fail code in
+    let first = match M.inspect_provision ~root with Ok proof -> proof | Error code -> Alcotest.fail code in
+    Alcotest.(check bool) "first proof resolves first" true
+      (M.recover_provision ~root ~expected:first = Ok M.Published_reconciled);
+    Alcotest.(check bool) "second provision succeeds" true
+      (Result.is_ok (M.provision_profile ~root ~expected_revision:(Some revision) ~profile:(profile "Second")));
+    let second = match M.inspect_provision ~root with Ok proof -> proof | Error code -> Alcotest.fail code in
+    Alcotest.(check bool) "delayed first proof cannot clear second" true
+      (M.recover_provision ~root ~expected:first = Ok M.Published_reconciled);
+    Alcotest.(check bool) "second proof remains valid" true
+      (M.recover_provision ~root ~expected:second = Ok M.Published_reconciled);
+    Alcotest.(check bool) "first result survives a later completed operation" true
+      (M.recover_provision ~root ~expected:first = Ok M.Published_reconciled))
+
+let provision_combined_first_recovery point () =
+  fixture (fun root ->
+    let profile = `Assoc [("backend", s "codex"); ("label", s "Interrupted first")] in
+    (match Unix.fork () with
+    | 0 -> let checkpoint actual = if actual = point then Unix.kill (Unix.getpid ()) Sys.sigkill in
+      ignore (M.write_profile ~checkpoint ~provision:true ~root ~expected_revision:None ~profile ()); Unix._exit 125
+    | pid -> Alcotest.(check bool) "writer interrupted" true (snd (Unix.waitpid [] pid) = Unix.WSIGNALED Sys.sigkill));
+    let roots = Sys.readdir root |> Array.to_list |> List.filter (String.starts_with ~prefix:"profile-p-") in
+    let proof, outcome = match M.inspect_provision_outcome ~root with Ok result -> result | Error e -> Alcotest.fail e in
+    Alcotest.(check bool) "inspection leaves both intents" true
+      (Sys.file_exists (Filename.concat root ".backend-profiles.create-intent")
+       && Sys.file_exists (Filename.concat root ".backend-profiles.provision-intent"));
+    let expected = if point = M.After_publish then M.Published_reconciled else M.Unpublished_aborted in
+    Alcotest.(check bool) "correct outcome" true (outcome = expected);
+    Alcotest.(check bool) "stale confirmation refused" true
+      (M.recover_provision ~root ~expected:(proof ^ "x") = Error "profile-publication-uncertain");
+    Alcotest.(check bool) "both records reconciled" true (M.recover_provision ~root ~expected:proof = Ok expected);
+    Alcotest.(check bool) "allocated roots retained" true
+      (roots = (Sys.readdir root |> Array.to_list |> List.filter (String.starts_with ~prefix:"profile-p-")));
+    Alcotest.(check bool) "retry succeeds" true (M.recover_provision ~root ~expected:proof = Ok expected))
+
+let provision_old_ack_refuses_new_first_intent () =
+  fixture (fun root ->
+    let profile = `Assoc [("backend", s "codex"); ("label", s "Interrupted")] in
+    let interrupt () = match Unix.fork () with
+      | 0 -> let checkpoint = function M.Before_publish -> Unix.kill (Unix.getpid ()) Sys.sigkill | _ -> () in
+        ignore (M.write_profile ~checkpoint ~provision:true ~root ~expected_revision:None ~profile ()); Unix._exit 125
+      | pid -> Alcotest.(check bool) "publisher killed" true (snd (Unix.waitpid [] pid) = Unix.WSIGNALED Sys.sigkill) in
+    interrupt ();
+    let first, _ = match M.inspect_provision_outcome ~root with Ok v -> v | Error e -> Alcotest.fail e in
+    Alcotest.(check bool) "first reconciled" true (M.recover_provision ~root ~expected:first = Ok M.Unpublished_aborted);
+    interrupt ();
+    let second, _ = match M.inspect_provision_outcome ~root with Ok v -> v | Error e -> Alcotest.fail e in
+    let first_intent = Filename.concat root ".backend-profiles.create-intent" in
+    let before = (read first_intent, (Unix.lstat first_intent).Unix.st_ino) in
+    Alcotest.(check bool) "stale confirmation refused" true
+      (M.recover_provision ~root ~expected:first = Ok M.Unpublished_aborted);
+    Alcotest.(check bool) "new first intent untouched" true
+      ((read first_intent, (Unix.lstat first_intent).Unix.st_ino) = before);
+    Alcotest.(check bool) "second still reconciles" true
+      (M.recover_provision ~root ~expected:second = Ok M.Unpublished_aborted))
+
+let provision_first_recovery_interruption point () =
+  fixture (fun root ->
+    let profile = `Assoc [("backend", s "codex"); ("label", s "Recovery interruption")] in
+    (match Unix.fork () with
+    | 0 -> let checkpoint actual = if actual = point then Unix.kill (Unix.getpid ()) Sys.sigkill in
+      ignore (M.write_profile ~checkpoint ~provision:true ~root ~expected_revision:None ~profile ()); Unix._exit 125
+    | pid -> Alcotest.(check bool) "publisher killed" true (snd (Unix.waitpid [] pid) = Unix.WSIGNALED Sys.sigkill));
+    let proof, outcome = match M.inspect_provision_outcome ~root with Ok v -> v | Error e -> Alcotest.fail e in
+    (match Unix.fork () with
+    | 0 -> let checkpoint actual = if actual = `First_reconciled then Unix.kill (Unix.getpid ()) Sys.sigkill in
+      ignore (M.recover_provision_with_checkpoint ~checkpoint ~root ~expected:proof ()); Unix._exit 125
+    | pid -> Alcotest.(check bool) "reconciler killed" true (snd (Unix.waitpid [] pid) = Unix.WSIGNALED Sys.sigkill));
+    Alcotest.(check bool) "same confirmation resumes" true (M.recover_provision ~root ~expected:proof = Ok outcome))
+
+let provision_inspection_is_read_only () =
+  fixture (fun root ->
+    let profile = `Assoc [("backend", s "codex"); ("label", s "Inspect")] in
+    Alcotest.(check bool) "provision succeeds" true
+      (Result.is_ok (M.provision_profile ~root ~expected_revision:None ~profile));
+    let journal = Filename.concat root ".backend-profiles.provision-intent" in
+    let before = (read journal, (Unix.lstat journal).Unix.st_ino) in
+    let proof, outcome = match M.inspect_provision_outcome ~root with
+      | Ok result -> result | Error e -> Alcotest.fail e in
+    Alcotest.(check bool) "inspection identifies publication" true (outcome = M.Published_reconciled);
+    Alcotest.(check bool) "inspection leaves intent untouched" true ((read journal, (Unix.lstat journal).Unix.st_ino) = before);
+    Alcotest.(check bool) "inspection does not unblock subsequent attempts" true
+      (M.provision_profile ~root ~expected_revision:None ~profile = Error "profile-publication-uncertain");
+    Alcotest.(check bool) "explicit acknowledgement succeeds" true
+      (M.recover_provision ~root ~expected:proof = Ok M.Published_reconciled))
+
+let provision_receipt_refuses_changed_operation () =
+  fixture (fun root ->
+    let profile = `Assoc [("backend", s "codex"); ("label", s "Receipt binding")] in
+    let operation = String.make 32 'a' in
+    Alcotest.(check bool) "provision succeeds" true
+      (Result.is_ok (M.write_profile ~operation_id:operation ~provision:true ~root ~expected_revision:None ~profile ()));
+    let proof, _ = match M.inspect_provision_outcome ~root with Ok result -> result | Error e -> Alcotest.fail e in
+    Alcotest.(check bool) "acknowledgement succeeds" true (M.recover_provision ~root ~expected:proof = Ok M.Published_reconciled);
+    let path = Filename.concat root (".backend-profiles.provision-receipt-" ^ Digestif.SHA256.(to_hex (digest_string proof))) in
+    let receipt = Yojson.Safe.from_string (read path) in
+    let tampered = match receipt with `Assoc fields -> `Assoc (List.map (fun (k,v) ->
+      if k = "operation" then (k, `String (String.make 32 'b')) else (k,v)) fields) | _ -> Alcotest.fail "receipt shape" in
+    Out_channel.with_open_bin path (fun channel -> output_string channel (Yojson.Safe.to_string tampered ^ "\n"));
+    Alcotest.(check bool) "altered binding cannot be listed" true (Result.is_error (M.list_provision_receipts ~root));
+    Alcotest.(check bool) "altered binding cannot confirm retry" true
+      (M.recover_provision ~root ~expected:proof = Error "profile-publication-uncertain"))
+
+let provision_receipt_cleanup () =
+  fixture (fun root ->
+    let profile = `Assoc [("backend", s "codex"); ("label", s "Cleanup")] in
+    Alcotest.(check bool) "provision succeeds" true
+      (Result.is_ok (M.provision_profile ~root ~expected_revision:None ~profile));
+    let proof, _ = match M.inspect_provision_outcome ~root with Ok v -> v | Error e -> Alcotest.fail e in
+    (match Unix.fork () with
+    | 0 -> let checkpoint p = if p = `Receipt_published then Unix.kill (Unix.getpid ()) Sys.sigkill in
+      ignore (M.recover_provision_with_checkpoint ~checkpoint ~root ~expected:proof ()); Unix._exit 125
+    | pid -> Alcotest.(check bool) "recovery interrupted" true (snd (Unix.waitpid [] pid) = Unix.WSIGNALED Sys.sigkill));
+    Alcotest.(check bool) "active receipt cannot be removed" true
+      (M.forget_provision_receipt ~root ~proof = Error "profile-publication-uncertain");
+    Alcotest.(check bool) "intent still resolves" true (M.recover_provision ~root ~expected:proof = Ok M.Published_reconciled);
+    Alcotest.(check bool) "receipt is listed" true
+      (M.list_provision_receipts ~root = Ok [proof, M.Published_reconciled, `Null]);
+    Alcotest.(check bool) "explicit removal succeeds" true (M.forget_provision_receipt ~root ~proof = Ok ());
+    Alcotest.(check bool) "removal is idempotent" true (M.forget_provision_receipt ~root ~proof = Ok ());
+    Alcotest.(check bool) "removed receipt cannot satisfy retry" true
+      (M.recover_provision ~root ~expected:proof = Error "profile-publication-uncertain");
+    Alcotest.(check bool) "registry remains" true (Sys.file_exists (target root)))
+
+let provision_receipt_interruption point () =
+  fixture (fun root ->
+    let profile = `Assoc [("backend", s "codex"); ("label", s "Receipt")] in
+    Alcotest.(check bool) "provision succeeds" true
+      (Result.is_ok (M.provision_profile ~root ~expected_revision:None ~profile));
+    let proof = match M.inspect_provision ~root with Ok p -> p | Error e -> Alcotest.fail e in
+    let registry = read (target root) in
+    (match Unix.fork () with
+    | 0 ->
+      let checkpoint p = if p = point then Unix.kill (Unix.getpid ()) Sys.sigkill in
+      ignore (M.recover_provision_with_checkpoint ~checkpoint ~root ~expected:proof ());
+      Unix._exit 125
+    | pid -> Alcotest.(check bool) "recovery interrupted" true
+        (snd (Unix.waitpid [] pid) = Unix.WSIGNALED Sys.sigkill));
+    Alcotest.(check bool) "same proof resolves interrupted recovery" true
+      (M.recover_provision ~root ~expected:proof = Ok M.Published_reconciled);
+    Alcotest.(check bool) "retry is idempotent" true
+      (M.recover_provision ~root ~expected:proof = Ok M.Published_reconciled);
+    Alcotest.(check bool) "other proof cannot use receipt" true
+      (M.recover_provision ~root ~expected:(proof ^ "x") = Error "profile-publication-uncertain");
+    Alcotest.(check string) "registry unchanged" registry (read (target root)))
+
+let provision_recovery_refuses_replaced_root () =
+  fixture (fun root ->
+    let profile = `Assoc [("backend", s "codex"); ("label", s "Root witness")] in
+    Alcotest.(check bool) "provision succeeds" true
+      (Result.is_ok (M.provision_profile ~root ~expected_revision:None ~profile));
+    let proof = match M.inspect_provision ~root with Ok p -> p | Error e -> Alcotest.fail e in
+    let marker_bytes = read (Filename.concat root ".backend-profiles.provision-intent") in
+    let registry_bytes = read (target root) in
+    let saved = root ^ "-original" in
+    Unix.rename root saved;
+    Unix.mkdir root 0o700;
+    Fun.protect ~finally:(fun () -> cleanup root; Unix.rename saved root) (fun () ->
+      write (Filename.concat root ".backend-profiles.provision-intent") marker_bytes;
+      write (target root) registry_bytes;
+      Alcotest.(check bool) "old proof rejected for replacement root" true
+        (M.recover_provision ~root ~expected:proof = Error "profile-publication-uncertain");
+      Alcotest.(check bool) "fresh proof cannot adopt replaced root" true
+        (recover_provision root = Error "profile-publication-uncertain"));
+    Alcotest.(check bool) "original remains reconcilable" true
+      (M.recover_provision ~root ~expected:proof = Ok M.Published_reconciled))
+
+let provision_recovery_refuses_changed_registry () =
+  fixture (fun root ->
+    let profile = `Assoc [("backend", s "codex"); ("label", s "Confirmed")] in
+    Alcotest.(check bool) "provision succeeds" true
+      (Result.is_ok (M.provision_profile ~root ~expected_revision:None ~profile));
+    let evidence = Filename.concat root ".backend-profiles.provision-intent" in
+    let proof = read evidence in
+    let path = target root in
+    let original = read path in
+    let backup = Filename.concat root "original-candidate" in
+    Unix.rename path backup;
+    write path original;
+    Alcotest.(check bool) "same-content replacement of published candidate refuses recovery" true
+      (recover_provision root = Error "profile-publication-uncertain");
+    Unix.unlink path;
+    Unix.rename backup path;
+    Out_channel.with_open_bin path (fun channel -> output_string channel (original ^ " "));
+    Alcotest.(check bool) "changed registry refuses recovery" true
+      (recover_provision root = Error "profile-publication-uncertain");
+    Alcotest.(check string) "intent retained" proof (read evidence);
+    Alcotest.(check string) "registry retained" (original ^ " ") (read path))
+
+let provision_interrupted_before_allocation () =
+  fixture (fun root ->
+    let profile = `Assoc [("backend", s "codex"); ("label", s "Interrupted")] in
+    (match Unix.fork () with
+    | 0 ->
+        let checkpoint = function M.Before_allocate -> Unix.kill (Unix.getpid ()) Sys.sigkill | _ -> () in
+        ignore (M.write_profile ~checkpoint ~provision:true ~root ~expected_revision:None ~profile ());
+        Unix._exit 125
+    | pid -> Alcotest.(check bool) "killed before allocation" true
+        (snd (Unix.waitpid [] pid) = Unix.WSIGNALED Sys.sigkill));
+    Alcotest.(check bool) "no allocated root" false
+      (Array.exists (String.starts_with ~prefix:"profile-p-") (Sys.readdir root));
+    Alcotest.(check bool) "second caller refused" true
+      (M.provision_profile ~root ~expected_revision:None ~profile = Error "profile-publication-uncertain");
+    Alcotest.(check bool) "stale acknowledgement refuses" true
+      (M.recover_provision ~root ~expected:(String.make 64 '0') = Error "profile-publication-uncertain");
+    let proof_path = Filename.concat root ".backend-profiles.provision-intent" in
+    let proof_bytes = read proof_path and proof_stat = Unix.lstat proof_path in
+    let digest = Digestif.SHA256.(to_hex (digest_string proof_bytes)) in
+    let root_stat = Unix.lstat root in
+    let old_proof = Printf.sprintf "%d:%d:%d:%d:%s" root_stat.Unix.st_dev root_stat.Unix.st_ino proof_stat.Unix.st_dev proof_stat.Unix.st_ino digest in
+    let replacement = Filename.concat root "replacement-intent" in
+    write replacement proof_bytes;
+    Unix.rename replacement proof_path;
+    Alcotest.(check bool) "same-content replacement refuses stale proof" true
+      (M.recover_provision ~root ~expected:old_proof = Error "profile-publication-uncertain");
+    Alcotest.(check bool) "explicit recovery proves no publication" true
+      (recover_provision root = Ok M.Unpublished_aborted);
+    Alcotest.(check bool) "future explicit attempt allowed" true
+      (Result.is_ok (M.provision_profile ~root ~expected_revision:None ~profile)))
+
 let provision_mkdir_collision () =
   fixture (fun root ->
       let profile label = `Assoc [ ("backend", s "codex"); ("label", s label) ] in
       let revision =
         match M.provision_profile ~root ~expected_revision:None ~profile:(profile "Neighbour") with
         | Error code -> Alcotest.fail code
-        | Ok (revision, _) -> revision
+        | Ok (revision, _) ->
+            Alcotest.(check bool) "confirmed provision reconciled" true
+              (recover_provision root = Ok M.Published_reconciled);
+            revision
       in
       let id = "p-0123456789abcdef" in
       let occupied = Filename.concat root ("profile-" ^ id) in
@@ -1749,6 +1996,20 @@ let () =
             ("missing and aliased Mesh root", missing_or_aliased_mesh_root);
             ("explicit first-create recovery requires witnessed state", first_create_interruption);
             ("provision killed before first link", provision_interruption ~append:false ~point:Before_publish);
+            ("provision killed before allocation", provision_interrupted_before_allocation);
+            ("provision refuses changed registry at recovery", provision_recovery_refuses_changed_registry);
+            ("provision refuses replaced root", provision_recovery_refuses_replaced_root);
+            ("inspection is read-only", provision_inspection_is_read_only);
+            ("combined first recovery before publication", provision_combined_first_recovery M.Before_publish);
+            ("combined first recovery after publication", provision_combined_first_recovery M.After_publish);
+            ("stale acknowledgement preserves new first intent", provision_old_ack_refuses_new_first_intent);
+            ("first recovery interrupted before publication", provision_first_recovery_interruption M.Before_publish);
+            ("first recovery interrupted after publication", provision_first_recovery_interruption M.After_publish);
+            ("receipt refuses altered operation binding", provision_receipt_refuses_changed_operation);
+            ("explicit receipt cleanup preserves active intent", provision_receipt_cleanup);
+            ("recovery resumes after receipt", provision_receipt_interruption `Receipt_published);
+            ("recovery resumes after intent removal", provision_receipt_interruption `Intent_removed);
+            ("old acknowledgement cannot clear a newer provision", provision_old_acknowledgement_cannot_resolve_new_intent);
             ("provision killed after first link", provision_interruption ~append:false ~point:After_publish);
             ("provision killed before append rename", provision_interruption ~append:true ~point:Before_publish);
             ("provision killed after append rename", provision_interruption ~append:true ~point:After_publish);
