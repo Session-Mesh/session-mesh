@@ -282,11 +282,11 @@ test('configuration reports qualified availability and backend-specific labels w
     const work = report.accounts.find((a: any) => a.id === 'work');
     const piOnly = report.accounts.find((a: any) => a.id === 'pi-only');
     assert.deepEqual({claude: work.claude, codex: work.codex, opencode: work.opencode, pi: work.pi},
-      {claude: true, codex: true, opencode: true, pi: false});
+      {claude: true, codex: true, opencode: true, pi: true});
     assert.deepEqual(work.backend_labels,
       {claude: 'claude Work', codex: 'codex Work', pi: 'Pi Work', 'opencode-v2': 'OpenCode Work'});
     assert.deepEqual({claude: piOnly.claude, codex: piOnly.codex, opencode: piOnly.opencode, pi: piOnly.pi},
-      {claude: false, codex: false, opencode: false, pi: false});
+      {claude: false, codex: false, opencode: false, pi: true});
     assert(!JSON.stringify(report.accounts).includes(mesh.home), 'no root in the public inventory');
     for (const target of ['opencode-v2-work/data/opencode/auth.json', 'auth-hardlink.md',
                           'pi-work/config/auth.json', 'pi-auth-hardlink.md']) {
