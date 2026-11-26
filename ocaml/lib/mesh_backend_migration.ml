@@ -1308,7 +1308,7 @@ let forget_provision_receipt ~root ~proof =
    linked without replacement; an append replaces only the checked original
    after the complete candidate has been synced. Out-of-band same-UID changes
    are not a filesystem transaction and are outside the native custody model. *)
-type profile_publication_point = Before_allocate | Before_publish | After_publish
+type profile_publication_point = After_intent_publish | Before_allocate | Before_publish | After_publish
 
 let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random_hex ())
     ?managed_admit ?operation_id ~root ~expected_revision ~provision ~profile () =
@@ -1542,7 +1542,8 @@ let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random
       Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
         write_all fd record 0; Unix.fsync fd);
       Fun.protect ~finally:(fun () -> try Unix.unlink temporary with Unix.Unix_error _ -> ())
-        (fun () -> Unix.link temporary (provision_intent root));
+        (fun () -> Mesh_accounts_carry.rename_noreplace temporary (provision_intent root));
+      checkpoint After_intent_publish;
       let directory = Unix.openfile root [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
       Fun.protect ~finally:(fun () -> Unix.close directory) (fun () -> Unix.fsync directory);
       Ok ()) in

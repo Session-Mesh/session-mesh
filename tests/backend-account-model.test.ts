@@ -51,6 +51,23 @@ const newRevision = 'b'.repeat(64);
 const provisioned = {...profile('p-0123456789abcdef', 'codex'), label: 'Travel', enabled: false};
 const unconfigured = reply({configured:false, registry_revision:null, profiles:[]});
 
+test('a late receipt rejected by the journal remains uncertain for reconciliation', async () => {
+  const journal: ProvisionJournal = {
+    load: async () => null,
+    acquire: async () => ({entry: {id: 'a'.repeat(32), value: 'uncertain'}, acquired: true}),
+    remember: async () => false,
+    save: async () => { throw new Error('must not resurrect journal'); },
+  };
+  const controller = createBackendAccountController({
+    load: async () => ({profiles: listing(), policy: reply(policy())}),
+    inspect: async () => listing(), mutate: async () => reply(policy()),
+    provision: {backends: ['codex'], write: async () => reply({registry_revision: newRevision, profile: provisioned})},
+  }, journal);
+  await controller.open();
+  assert.equal(await controller.provisionProfile(requestedProvision), false);
+  assert.equal(controller.state.provisionPending, 'provisionUncertain');
+});
+
 test('concurrent controllers serialize provision and preserve uncertainty', async () => {
   const rows = new Map<string, string>();
   let sequence = 0;
