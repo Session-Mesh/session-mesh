@@ -606,9 +606,10 @@ ASKING_PAGE = f"""<!doctype html><button id='go'>go</button><p id='caps'></p><sc
     parent.postMessage({{smesh: 'goto-session', agent: 'claude', id: '{SID}', token: t}}, '*');
     parent.postMessage({{smesh: 'hello', token: t}}, '*');
   }});
-  document.getElementById('go').addEventListener('click', () => {{
+  document.getElementById('go').addEventListener('click', (event) => {{
     window.clicks++;
-    if (document.testClickNonce) parent.postMessage({{testClickAck: document.testClickNonce, clicks: window.clicks}}, '*');
+    if (document.testClickNonce) parent.postMessage({{testClickAck: document.testClickNonce, clicks: window.clicks,
+      trusted: event.isTrusted, active: navigator.userActivation.isActive}}, '*');
     for (const m of window.MSGS || []) parent.postMessage(m, '*');
   }});
 </script>"""
@@ -683,7 +684,7 @@ async def click_session_link(page, text, expect=HID):
     await page.wait_for_function("(id) => active?.id === id", arg=expect, timeout=5000)
 
 
-async def post_on_click(page, messages):
+async def post_on_click(page, messages, *, keyboard=False):
     """One click on #go in the pane's frame (a real user gesture) so that it posts ``messages``,
     a JS expression over the frame's load token ``t``."""
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -700,6 +701,7 @@ async def post_on_click(page, messages):
         if ((event.source === source || event.source === null) && event.data?.testClickAck === nonce) {
           witness.acknowledged = true;
           witness.clicks = event.data.clicks;
+          witness.trusted = event.data.trusted && event.data.active;
         }
       };
       window.testClickWitness = witness;
@@ -713,13 +715,19 @@ async def post_on_click(page, messages):
           document.testClickNonce = {json.dumps(nonce)};
         }}""")
         await focus_frame(page)
-        # Synchronize the opaque child's painted surface before physical input.
-        await frame.locator("#go").screenshot()
-        await frame.locator("#go").click()
+        button = frame.locator("#go")
+        if keyboard:
+            # Native button activation avoids hit-testing the opaque surface after column relayout.
+            await button.press("Enter")
+        else:
+            # Synchronize the opaque child's painted surface before physical input.
+            await button.screenshot()
+            await button.click()
         try:
             await page.wait_for_function("(nonce) => window.testClickWitness?.nonce === nonce && "
                                          "window.testClickWitness.acknowledged", arg=nonce, timeout=5000)
             assert await page.evaluate("window.testClickWitness.clicks") == 1
+            assert await page.evaluate("window.testClickWitness.trusted") is True
         except PlaywrightTimeoutError as exc:
             try:
                 same = not frame.is_detached() and await frame.evaluate(
@@ -969,7 +977,8 @@ async def test_session_requests_within_one_second_are_throttled(page, mesh, home
         fetched.clear()
     before = await page.evaluate("panes.length")
     await post_on_click(page, f"[{{smesh: 'goto-session', {GOTO}, token: t}},"
-                              f" {{smesh: 'goto-session', agent: 'claude', id: '{OTHER_SID}', token: t}}]")
+                              f" {{smesh: 'goto-session', agent: 'claude', id: '{OTHER_SID}', token: t}}]",
+                        keyboard=True)
     await page.wait_for_function("(id) => active?.id === id", arg=HID, timeout=5000)
     await page.wait_for_timeout(500)
     assert await page.evaluate("panes.length") == before + (0 if shown else 1)
