@@ -108,7 +108,7 @@ let detail_fields platform (p : P.process) =
 
 type candidate = {
   pid : int;
-  rank : int;
+  rank : bool * int;
   full : Yojson.Basic.t;
   base : Yojson.Basic.t;
   base_size : int;
@@ -130,13 +130,15 @@ let rank (p : P.process) =
 
 let row_size row = String.length (Yojson.Basic.to_string row) + 1
 
-let candidate platform (p : P.process) =
+module Session_ids = Set.Make (Int)
+
+let candidate platform managed_sessions (p : P.process) =
   let base = base_fields p in
   let full = `Assoc (base @ detail_fields platform p) and base = `Assoc base in
   let base_size = row_size base in
   {
     pid = p.pid;
-    rank = rank p;
+    rank = (not (Session_ids.mem p.sid managed_sessions), rank p);
     full;
     base;
     base_size;
@@ -197,11 +199,13 @@ let envelope platform ~complete rows extra =
      ]
     @ extra)
 
-let table platform budget =
+let table platform budget managed_sessions =
   match platform.scan () with
   | Error _ -> envelope platform ~complete:false [] []
   | Ok { P.processes; skipped } ->
-      let rows, whole = fit budget (List.map (candidate platform) processes) in
+      let rows, whole =
+        fit budget (List.map (candidate platform managed_sessions) processes)
+      in
       envelope platform ~complete:(whole && skipped = 0) rows []
 
 let selected platform pids =
@@ -219,6 +223,7 @@ let selected platform pids =
 
 let default_budget = Mesh_wire.max_small_frame - 4096
 
-let reply ?(platform = live) ?(budget = default_budget) = function
-  | Table -> table platform budget
+let reply ?(platform = live) ?(budget = default_budget) ?(managed_sessions = []) =
+  function
+  | Table -> table platform budget (Session_ids.of_list managed_sessions)
   | Selected pids -> selected platform pids

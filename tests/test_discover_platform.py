@@ -669,7 +669,16 @@ async def test_the_real_host_agrees_with_proc(daemon, monkeypatch):
     """The non-Linux path, run on Linux against the built host, sees a session as /proc does."""
     await daemon.new("s", command="sleep 600")
     shell = next(s["pid"] for s in await daemon.request({"op": "list"}))
-    await wait_until(lambda: any(st[2] == shell for st in discover.snapshot().values()))
+
+    def sleeping_fixture():
+        processes = discover.snapshot()
+        leader = processes.get(shell)
+        return leader is not None and leader[1] == "S" and any(
+            stat[0] == "sleep" and stat[1] == "S" and stat[2] == shell
+            for stat in processes.values()
+        )
+
+    await wait_until(sleeping_fixture)
     identity = await ptyhost.host_identity()
 
     def seen():

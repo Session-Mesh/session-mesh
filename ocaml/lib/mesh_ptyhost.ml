@@ -1009,8 +1009,13 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
         if !stopping || Option.is_some isolated_agent then
           invalid_arg "processes";
         let request = Mesh_pty_processes.parse fields in
+        let managed_sessions =
+          List.filter_map
+            (fun session -> if session.alive then Some session.pid else None)
+            !sessions
+        in
         Eio_unix.run_in_systhread ~label:"processes" (fun () ->
-            Mesh_pty_processes.reply request)
+            Mesh_pty_processes.reply ~managed_sessions request)
     | Some (`String (("list_bound" | "list_legacy_bound") as operation)) ->
         if List.map fst fields <> [ "op" ] || !stopping then invalid_arg "keys";
         `List
