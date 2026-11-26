@@ -134,10 +134,11 @@ export async function stopServer(child: ChildProcess): Promise<void> {
 }
 
 export async function startMesh(prefix: string, extraEnv: NodeJS.ProcessEnv = {},
-                                prepare?: (where: Scratch) => void): Promise<Mesh> {
-  const where = await scratchHome(prefix, extraEnv);
+                                prepare?: (where: Scratch) => void,
+                                dependencies?: {scratchHome: typeof scratchHome; runServer: typeof runServer}): Promise<Mesh> {
+  const where = await (dependencies?.scratchHome ?? scratchHome)(prefix, extraEnv);
   prepare?.(where);   // before the server reads anything: files it must find at start
-  const {child, result, output} = await runServer(where);
+  const {child, result, output} = await (dependencies?.runServer ?? runServer)(where);
   if (!result.listened) {
     removeScratch(where.scratch);
     throw new Error(`server.py did not listen:\n${result.output}`);
