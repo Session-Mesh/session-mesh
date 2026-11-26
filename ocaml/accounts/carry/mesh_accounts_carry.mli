@@ -222,3 +222,16 @@ val carry_accounts :
     target. *)
 
 val outcome_to_json : outcome -> Yojson.Safe.t
+
+val carry_pi_accounts :
+  uid:int ->
+  file:string ->
+  conversation:string ->
+  from_account:string ->
+  to_account:string ->
+  source_revision:string ->
+  target_revision:string ->
+  (outcome, error) result
+(** Transfer a conversation between two named native Pi histories whose
+    revisions match one registry snapshot. The caller must first stop or
+    checkpoint the source writer and hold its session relaunch fence. *)

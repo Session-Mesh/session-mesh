@@ -18,7 +18,10 @@ let getenv _ = None
 
 let profile ?(enabled = true) backend id label config =
   let role, child =
-    if backend = "codex" then ("state", "sessions") else ("history", "projects")
+    match backend with
+    | "codex" -> ("state", "sessions")
+    | "pi" -> ("history", "sessions")
+    | _ -> ("history", "projects")
   in
   `Assoc
     [
@@ -95,6 +98,39 @@ let test_legacy_only_binds_the_loaded_source root =
     (C.carry_accounts ~legacy_only:true ~expected_contexts:(String.make 64 'a', String.make 64 'b')
        ~uid ~getenv ~file:(file root) ~kind:C.Claude ~conversation:sid
        ~from_account:"work" ~to_account:"other" ())
+
+let test_pi_pair_revisions root =
+  let module R = Mesh_account_resolver in
+  let source = path root "pi-source" and target = path root "pi-target" in
+  registry root
+    [ profile "pi" "work" "Pi work" source;
+      profile "pi" "other" "Pi other" target ];
+  let filename = "2026-11-22T10-00-00_" ^ sid ^ ".jsonl" in
+  let source_history = path source "sessions" in
+  mkdirs source_history;
+  let transcript =
+    Printf.sprintf
+      {|{"type":"session","version":3,"id":"%s","timestamp":"2026-11-22T10:00:00.000Z","cwd":"/work"}|}
+      sid ^ "\n"
+    ^ {|{"type":"message","id":"a0000001","parentId":null,"timestamp":"2026-11-22T10:00:01.000Z","message":{"role":"user","content":"original context","timestamp":1}}|}
+    ^ "\n"
+  in
+  write (path source_history filename) transcript;
+  let snapshot = Result.get_ok (R.load ~uid ~file:(file root)) in
+  let revision id =
+    Result.get_ok (R.find snapshot { R.backend = R.Pi; id })
+    |> R.context_revision |> Option.get
+  in
+  let carry target_revision =
+    C.carry_pi_accounts ~uid ~file:(file root) ~conversation:sid
+      ~from_account:"work" ~to_account:"other" ~source_revision:(revision "work")
+      ~target_revision
+  in
+  refused_with "profile-context-changed" (carry (String.make 64 '0'));
+  Alcotest.(check bool) "stale target is not prepared" false (exists target);
+  ignore (carried (carry (revision "other")));
+  Alcotest.(check string) "full selected transcript" transcript
+    (read (path (path target "sessions") filename))
 
 let test_expected_pair_revisions root =
   let module R = Mesh_account_resolver in
@@ -1135,6 +1171,7 @@ let () =
             ("one snapshot precedes both folder lookups", test_one_snapshot_before_folder_lookup);
             ("registry edit during copy stays pinned", test_registry_change_during_copy_stays_pinned);
             ("default target environment is pinned", test_default_target_environment_is_pinned);
+            ("Pi pair revisions fence the selected histories", test_pi_pair_revisions);
             ("replacement target is not cleaned", test_replaced_target_is_not_cleaned);
             ("replacement during write retains recovery", test_replaced_target_during_write_retains_recovery);
              ("transient root check reports skipped cleanup", test_transient_root_check_reports_skipped_cleanup);
