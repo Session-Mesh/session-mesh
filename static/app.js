@@ -4963,6 +4963,7 @@ function openSession(id, opts = {}) {
     if (!localMeshEffectsAllowed()) return;
     const session = find(id);
     if (!there.conn && session?.kind === "mesh" && rowAuthoritative(session)) {
+      there.cachedTerminalMoveBlockedId = null;
       there.attach(id, {focusTerminal: focus});
     }
     if (isHist(id) && there.hist?.key !== id) there.showHist(id);
