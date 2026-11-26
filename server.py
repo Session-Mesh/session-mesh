@@ -4720,7 +4720,7 @@ async def api_session_notes(request):
             outcome["catalogue"] = "not-recorded"
     # The upstream payload and observation belong to the owner-only catalogue.
     status = outcome.get("status")
-    if status not in ("success", "denied", "unavailable", "uncertain", "upstream-error"):
+    if status not in ("success", "denied", "invalid", "unavailable", "uncertain", "upstream-error"):
         status = "uncertain"
     reply = {"status": status}
     if status == "success":

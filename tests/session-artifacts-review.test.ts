@@ -178,7 +178,7 @@ async def main():
     refused = await server.restore_one("replaced",set(),asyncio.Lock())
     out["replaced_restore"] = refused.get("ok") is False and len(spawned) == count+1 and respawn.lost_entry("replaced") is not None
     await seed_offer("resumable",13,claude()); failures[0] = True; count = len(spawned)
-    server._resume_argv = lambda agent:["synthetic-agent"]
+    server._resume_argv = lambda agent,context:["synthetic-agent"]
     server._transfer_restored_mail = nothing
     running = set()
     first = await server.restore_one("resumable",running,asyncio.Lock())

@@ -25,7 +25,7 @@ function exchange(notes:boolean) {
 test('actual grouped board server never exposes Notes tools; Notes server never exposes board groups',()=>{
   const board=exchange(false),notes=exchange(true);
   const names=(replies:ReturnType<typeof exchange>)=>replies.find(r=>r.id===2).result.tools.map((t:{name:string})=>t.name).sort();
-  assert.deepEqual(names(board),['agent_guide_read','demo','mail','session','whiteboard']);
+  assert.deepEqual(names(board),['agent_guide_read','control','demo','mail','session','whiteboard']);
   assert.deepEqual(names(notes),['notes_create_note','notes_mint_share','notes_replace_note','notes_revoke_share']);
   assert.ok(board.find(r=>r.id===3).error,'Notes operation on board is unknown, not a routed mutation');
   assert.ok(notes.find(r=>r.id===3).error,'board operation on Notes is unknown');
