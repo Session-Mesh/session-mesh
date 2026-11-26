@@ -245,10 +245,6 @@ def restore(kind, argv):
     return server._resume_argv({"type": kind, "session_id": "S", "argv": argv})
 
 
-def board_words(argv):
-    return [word for word in argv if "board" in word]
-
-
 @pytest.mark.parametrize("syntax", [["-c", ""], ["--config="]])
 def test_a_codex_snapshot_from_another_installation_restores_with_the_current_bridge_once(monkeypatch, syntax):
     monkeypatch.setattr(agentmcp, "board_available", lambda: True)
@@ -450,7 +446,7 @@ def test_a_snapshot_restored_without_the_bridge_carries_no_board_block(monkeypat
     else:
         snapshot = ["codex", *[w for v in LEGACY_CODEX_BOARD for w in ("-c", v)], *codex_board()]
     restored = restore(kind, snapshot)
-    assert board_words(restored) == []
+    assert agentmcp.strip_board(kind, restored) == restored
     assert "--mcp-config" not in restored
 
 
