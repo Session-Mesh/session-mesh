@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {describe, test} from 'node:test';
@@ -333,7 +334,7 @@ describe('account switch requests', {skip: SKIP}, () => {
   });
 
   test('parallel Codex accounts remain isolated through a switch, relogin and restart',
-    {skip: CARRY || (process.platform !== 'linux' ? '/proc process environment required' : false)}, async () => {
+    {skip: CARRY || (!['linux', 'darwin'].includes(process.platform) ? 'process inspection unavailable' : false)}, async () => {
     // Synthetic auth files only: never use the operator's accounts or credentials.
     const defaultHome = path.join(mesh.home, '.codex');
     for (const [folder, value] of [[defaultHome, 'default'], [workHome, 'work'], [travelHome, 'travel']]) {
@@ -346,6 +347,16 @@ describe('account switch requests', {skip: SKIP}, () => {
     const pidOf = (name: string) => Number(fs.readFileSync(`${log}.${name}`, 'utf8').trim());
     const environment = (pid: number) => fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
     const actualHome = (pid: number) => {
+      if (process.platform === 'darwin') {
+        // The live fixture keeps its account's rollout open on fd 3, even after exec.
+        const result = spawnSync('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-d', '3', '-Fn'],
+          {encoding: 'utf8', timeout: 5000});
+        assert.ifError(result.error);
+        assert.equal(result.status, 0, result.stderr);
+        const account = result.stdout.match(/^n(.+)\/sessions\/\d{4}\/\d{2}\/\d{2}\/rollout-[^/]+\.jsonl$/m);
+        assert.ok(account, 'the running fixture holds its account rollout open');
+        return account[1];
+      }
       const env = environment(pid);
       const variable = env.find(item => item.startsWith('CODEX_HOME='));
       return variable ? variable.slice('CODEX_HOME='.length) : `${env.find(item => item.startsWith('HOME='))!.slice(5)}/.codex`;
