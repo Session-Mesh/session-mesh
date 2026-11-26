@@ -32,10 +32,20 @@ for (const transition of ['listing', 'close', 'bound-close']) test(`a cached res
     }
     assert.equal(await page.evaluate(() => active.conn === null), true);
     assert.deepEqual(attempts.map(socket => new URL(socket.url()).searchParams.get('created')), ['1']);
-    await page.evaluate(() => active.show('A'));
+    await page.locator('#list .item[data-id="A"]').click();
     await page.waitForFunction(() => active.conn?.created === 2 && active.conn.terminal?.isOpen());
     assert.deepEqual(attempts.map(socket => new URL(socket.url()).searchParams.get('created')), ['1', '2'],
       'explicit selection, not cache restoration, may choose the replacement');
+    if (transition === 'listing') {
+      attempts[1]!.send(JSON.stringify({t: 'bound', name: 'A', created: 2}));
+      attempts[1]!.send(Buffer.alloc(0));
+      await page.waitForFunction(() => active.conn?.terminal?.isBound('A', 2)
+        && !active.conn.replayPending && !active.conn.replaying);
+      (api.inventory as any).moved = {A: 'B'};
+      await page.evaluate(() => refresh());
+      assert.equal(await page.evaluate(() => active.id), 'B',
+        'a confirmed explicit reattachment can follow subsequent moves');
+    }
   }, false, 'en');
 });
 
