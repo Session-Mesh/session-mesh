@@ -265,7 +265,9 @@ http.createServer=function(options,listener){return original.call(this,options,(
     assert.deepEqual(logout.body,{ok:true,generation:1});
     assert.ok(logout.headers['set-cookie']!.some(value=>value.startsWith('mesh_auth=""')));
     assert.equal((await f.call(route,'GET',{Cookie:cookie,...identityHeaders()})).status,401);
-    const executable=process.env.MESH_LOGOUT_ALL_CMD??path.resolve('_opam/bin/mesh-logout-all');
+    const builtExecutable = path.resolve('ocaml/_build/default/bin/mesh_logout_all_main.exe');
+    const executable = process.env.MESH_LOGOUT_ALL_CMD
+      ?? (fs.existsSync(builtExecutable) ? builtExecutable : path.resolve('_opam/bin/mesh-logout-all'));
     assert.ok(path.isAbsolute(executable)&&fs.statSync(executable).isFile(),'select the fresh native logout executable');
     const cli=spawnSync(executable,[],{encoding:'utf8',timeout:5000,env:{PATH:process.env.PATH,
       HOME:path.join(f.directory,'home'),MESH_CONF_DIR:f.config,MESH_CACHE_DIR:path.join(f.directory,'cache'),
