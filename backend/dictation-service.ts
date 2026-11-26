@@ -220,14 +220,30 @@ export async function startService(
   server.maxConnections = 64;
   server.keepAliveTimeout = 1000;
   server.timeout = 16000;
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(socketPath, () => { server.removeListener('error', reject); resolve(); });
-  });
-  await chmod(socketPath, 0o600);
-  return {engine, server, async close() {
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= (async () => {
+    const stopped = new Promise<void>(resolve => server.close(() => resolve()));
     server.closeAllConnections();
-    await engine.close();
-    await new Promise<void>(resolve => server.close(() => resolve()));
-  }};
+    await Promise.all([stopped, engine.close()]);
+  })();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const failed = (error: Error) => {
+        server.off('listening', ready);
+        reject(error);
+      };
+      const ready = () => {
+        server.off('error', failed);
+        resolve();
+      };
+      server.once('error', failed);
+      server.once('listening', ready);
+      server.listen(socketPath);
+    });
+    await chmod(socketPath, 0o600);
+  } catch (error) {
+    await close();
+    throw error;
+  }
+  return {engine, server, close};
 }

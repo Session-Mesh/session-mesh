@@ -804,19 +804,32 @@ async function startService(config, secret, socketPath, inventorySocket, princip
   server.maxConnections = 64;
   server.keepAliveTimeout = 1e3;
   server.timeout = 16e3;
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
-  await (0, import_promises2.chmod)(socketPath, 384);
-  return { engine, server, async close() {
+  let closing;
+  const close = () => closing ??= (async () => {
+    const stopped = new Promise((resolve) => server.close(() => resolve()));
     server.closeAllConnections();
-    await engine.close();
-    await new Promise((resolve) => server.close(() => resolve()));
-  } };
+    await Promise.all([stopped, engine.close()]);
+  })();
+  try {
+    await new Promise((resolve, reject) => {
+      const failed = (error) => {
+        server.off("listening", ready);
+        reject(error);
+      };
+      const ready = () => {
+        server.off("error", failed);
+        resolve();
+      };
+      server.once("error", failed);
+      server.once("listening", ready);
+      server.listen(socketPath);
+    });
+    await (0, import_promises2.chmod)(socketPath, 384);
+  } catch (error) {
+    await close();
+    throw error;
+  }
+  return { engine, server, close };
 }
 
 // backend/dictation-main.ts

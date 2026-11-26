@@ -14,6 +14,28 @@ import {configuration} from '../backend/dictation.ts';
 import {startService} from '../backend/dictation-service.ts';
 import {identityHeaders,until} from '../checks/dictation-fixture.ts';
 
+test('failed socket startup preserves the live worker and its close is shared', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-worker-'));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, 'worker.sock');
+  const config = configuration({MESH_WHISPER_URL: 'http://127.0.0.1:1/fixed'})!;
+  const start = () => startService(config, 'a'.repeat(64), socket,
+    path.join(directory, 'inventory.sock'), 'b'.repeat(64));
+  t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
+  const service = await start();
+  try {
+    await assert.rejects(start(), {code: 'EADDRINUSE'});
+    assert.equal(service.server.listening, true);
+    assert.equal(fs.lstatSync(socket).isSocket(), true);
+    const stopped = service.close();
+    assert.equal(service.close(), stopped);
+    await stopped;
+    assert.equal(fs.existsSync(socket), false);
+  } finally {
+    await service.close();
+  }
+});
+
 for(const kind of ['json','empty','audio'] as const)test(`unfinished ${kind} rejection flushes a typed fault and closes without draining`,async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-body-'));fs.chmodSync(directory,0o700);
   const secret=randomBytes(32).toString('hex'),principal='a'.repeat(64),socketPath=path.join(directory,'worker.sock');
