@@ -7217,6 +7217,11 @@ async def _verified_restore_context(entry):
     agent = entry.get('agent')
     if not agent or not agent.get('session_id'):
         return context
+    if agent['type'] == 'pi' and entry.get('account'):
+        history = (context or {}).get('roots', {}).get('history')
+        if not history or not await asyncio.to_thread(discover.pi_session_path, agent['session_id'], history):
+            raise web.HTTPConflict(text='Bound account conversation unavailable; restore refused')
+        return context
     layout = _conversation_layout(agent['type'], agent['session_id'])
     if layout is None:
         return context
@@ -7271,7 +7276,8 @@ async def _create_restored(name, entry, running, reason=None):
 
 def _unavailable_pi_profile_offer(entry):
     agent = entry.get("agent")
-    return bool(entry.get("account") and isinstance(agent, dict) and agent.get("type") == "pi")
+    return bool(entry.get("account") and isinstance(agent, dict) and agent.get("type") == "pi"
+                and not _accounts_digest(entry.get("account_context_revision")))
 
 
 async def restore_one(name, running, organisation_lock):

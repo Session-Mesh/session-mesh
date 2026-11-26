@@ -558,3 +558,53 @@ asyncio.run(main())
       env: {...process.env, HOME: root, XDG_RUNTIME_DIR: root, MESH_CONF_DIR: path.join(root, 'conf')}});
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });
+
+test('both restore paths keep a Pi offer bound to its selected history and revision', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-pi-restore-profile-'));
+  try {
+    const script = `
+import asyncio, json, sys
+from pathlib import Path
+sys.path.insert(0, ${JSON.stringify(repo)})
+import server
+
+root = Path(${JSON.stringify(root)})
+history = root / 'selected'
+history.mkdir()
+sid = '22222222-2222-2222-2222-222222222222'
+transcript = history / (sid + '.jsonl')
+transcript.write_text(json.dumps({'type':'session','version':3,'id':sid,'cwd':str(root)}) + '\\n')
+entry = {'account':'work','account_context_revision':'a'*64,'cwd':str(root),'created':1,
+         'agent':{'type':'pi','session_id':sid}}
+context = {'roots':{'history':str(history)}}
+launched = []
+
+async def resolve(offer):
+    assert offer['account'] == 'work' and offer['account_context_revision'] == 'a'*64
+    return context
+async def launch(name, cwd, command, *args, **options):
+    launched.append((command, options['account'], options['account_revision']))
+    return name
+server._restore_launch_context = resolve
+server.new_session = launch
+
+async def main():
+    assert not server._unavailable_pi_profile_offer(entry)
+    assert server._unavailable_pi_profile_offer({**entry, 'account_context_revision':None})
+    restored, refusal = await server._create_restored('pi', entry, set())
+    assert (restored, refusal) == ('pi', None)
+    assert await server._create_exact('pi', entry, 'nonce') is None
+    assert len(launched) == 2
+    for command, account, revision in launched:
+        assert str(transcript) in command and account == 'work' and revision == 'a'*64
+    transcript.rename(root / transcript.name)
+    assert (await server._create_exact('pi', entry, 'nonce'))['status'] == 409
+    restored, refusal = await server._create_restored('pi', entry, set())
+    assert restored is None and not refusal['ok']
+    assert len(launched) == 2
+asyncio.run(main())
+`;
+    execFileSync(python, ['-I', '-c', script], {encoding: 'utf8', timeout: 10000,
+      env: {...process.env, HOME: root, XDG_RUNTIME_DIR: root, MESH_CONF_DIR: root}});
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
