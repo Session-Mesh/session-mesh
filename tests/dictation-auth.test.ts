@@ -454,6 +454,35 @@ test('actual cookie adapter rejects stale login and revalidates authorization af
   }finally{await f.close();}
 });
 
+test('logout during the post-upload inventory lookup prevents inference', async () => {
+  const f = await fixture();
+  try {
+    const login = await f.call(`/login?token=${encodeURIComponent(f.token)}`);
+    const cookie = login.headers['set-cookie']![0]!.split(';')[0]!;
+    let lookups = 0;
+    let finishLookup: (() => void) | undefined;
+    f.onInventory(reply => {
+      if (++lookups === 2) finishLookup = reply;
+      else reply();
+    });
+    const pending = f.call('/api/transcribe', 'POST', {
+      Cookie: cookie, ...identityHeaders(),
+    }, 'old audio');
+    void pending.catch(() => {});
+    await until(() => finishLookup !== undefined);
+    assert.equal((await f.call('/api/logout-all', 'POST', f.auth, '{}')).status, 200);
+    finishLookup!();
+    assert.equal((await pending).status, 401);
+    assert.equal(f.upstreamCalls, 0);
+    f.onInventory(null);
+    assert.equal((await f.call('/api/transcribe', 'POST', {
+      ...f.auth, ...identityHeaders(),
+    }, 'new audio')).status, 202);
+  } finally {
+    await f.close();
+  }
+});
+
 test('actual adapter returns typed upload/MIME/metadata/body failures rather than transport errors',async()=>{
   const f=await fixture();
   try{
