@@ -234,7 +234,8 @@ export class Dictation {
       r.phase !== 'committed' && this.now() >= r.deadline;
     if (this.closed || this.records.get(r.job.job_id) !== r || expired) throw new Fault('unavailable');
   }
-  async prepare(input: Admission, source: AsyncIterable<Buffer>): Promise<{job: Job; preparation: string}> {
+  async prepare(input: Admission, source: AsyncIterable<Buffer>,
+    verify?: (admission: Admission) => Promise<void>): Promise<{job: Job; preparation: string}> {
     this.authorize(input.principal);
     if (this.closed) throw new Fault('unavailable');
     this.sweep();
@@ -243,6 +244,7 @@ export class Dictation {
       if (existing.meta.session !== m.session || existing.meta.created !== m.created)
         throw new Fault('request_conflict');
       await existing.prepared;
+      if (verify) await verify(existing.meta);
       this.checkPreparation(existing);
       return {job: this.snapshot(existing), preparation: existing.preparation};
     }
@@ -257,6 +259,10 @@ export class Dictation {
       ]);
       this.checkPreparation(r);
       if (!received && r.job.state === 'queued') throw new Fault('invalid_request');
+      if (verify) {
+        await verify(m);
+        this.checkPreparation(r);
+      }
       if (r.phase === 'receiving') r.phase = 'prepared';
       r.resolve();
       return {job: this.snapshot(r), preparation: r.preparation};
