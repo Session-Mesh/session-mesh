@@ -955,8 +955,9 @@ def _pi_command(command, runtime, session_dir=None):
         raise web.HTTPBadRequest(text="Non-canonical Pi command")
     if session_dir:
         options = argv[1:]
-        if any(flag in ("--session-dir", "--continue", "-c", "--resume", "-r", "--session-id")
-               or flag.startswith(("--session-dir=", "--session-id=", "--session="))
+        if any(flag in ("--session-dir", "--continue", "-c", "--resume", "-r", "--session-id",
+                        "--fork", "--no-session")
+               or flag.startswith(("--session-dir=", "--session-id=", "--session=", "--fork="))
                for flag in options):
             raise web.HTTPConflict(text="Selected Pi profile refuses competing session options")
         sessions = [i for i, flag in enumerate(options) if flag == "--session"]

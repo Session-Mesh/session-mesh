@@ -216,7 +216,7 @@ asyncio.run(main())
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });
 
-test('selected Pi command refuses ambient resume and conflicting session directories before launch', () => {
+test('selected Pi command refuses conflicting history and persistence options before launch', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-selected-pi-'));
   try {
   const script = `
@@ -224,7 +224,9 @@ import sys
 sys.path.insert(0, ${JSON.stringify(repo)})
 import server
 for args in ('pi --session-dir /ambient', 'pi --session-dir=/ambient', 'pi --continue',
-             'pi --session /ambient/session.jsonl', 'pi --session=ambient'):
+             'pi --session /ambient/session.jsonl', 'pi --session=ambient',
+             'pi --fork /ambient/session.jsonl', 'pi --fork=/ambient/session.jsonl',
+             'pi --no-session'):
     try:
         server._pi_command(args, ('/usr/bin/pi', '/overlay'), '/selected')
         raise AssertionError('admitted: ' + args)
