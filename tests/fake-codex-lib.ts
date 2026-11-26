@@ -7,6 +7,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// On macOS a relocated system sleep can be killed at exec. Use the native test build there.
+const sleeper = process.platform === 'darwin'
+  ? path.resolve(import.meta.dirname, '../ocaml/_build/default/test/codex_test_sleeper.exe')
+  : fs.realpathSync('/bin/sleep');
+
 // codex|CODEX_HOME|session|arguments|session token|overlap. The rollout is held open (fd 3) by a process named codex,
 // except in a session named x-guess*: that one writes its folder in the rollout and closes it, so the listing can
 // only guess its conversation from the folder (cwd_unique). overlap is "yes" when the previous codex of the same
@@ -33,7 +38,7 @@ export function installFakeCodex(bin: string): {log: string; PATH: string} {
   const log = path.join(bin, 'launches.log');
   const real = path.join(bin, 'real');   // a `sleep` named codex: the process the listing recognises
   fs.mkdirSync(real);
-  fs.copyFileSync(fs.realpathSync('/bin/sleep'), path.join(real, 'codex'));
+  fs.copyFileSync(sleeper, path.join(real, 'codex'));
   fs.chmodSync(path.join(real, 'codex'), 0o755);
   fs.writeFileSync(path.join(bin, 'codex'), fakeCodex(log, real), {mode: 0o755});
   return {log, PATH: `${bin}:${process.env.PATH}`};

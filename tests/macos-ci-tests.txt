@@ -22,6 +22,7 @@ tests/agentcap-history.test.ts
 tests/agent-guide-copy.test.ts
 tests/agent-mail-live-list.test.ts
 tests/agent-mail-policy-pair.test.ts
+tests/backend-profile-launch-http.test.ts
 tests/backport-register-replay.test.ts
 tests/backport-register-workflow.test.ts
 tests/backport-workflow.test.ts
@@ -159,6 +160,7 @@ tests/restore-organisation-race.test.ts
 tests/restore-page-shell.test.ts
 tests/server-messages-drift.test.ts
 tests/server-robustness.test.ts
+tests/session-account-switch.test.ts
 tests/session-activity-idle.test.ts
 tests/shortcuts.test.ts
 tests/site-workflow.test.ts
