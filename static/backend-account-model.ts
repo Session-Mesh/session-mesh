@@ -433,7 +433,11 @@ export function createBackendAccountController(ports: BackendAccountPorts, provi
           || receipt.revision === snapshot.registry.registry_revision) return invalid();
         if (token !== generation) return false;
         operation.receipt = receipt;
-        await remember(receipt);
+        try { await remember(receipt); }
+        catch (error) {
+          if (error instanceof Error && error.message === 'provision-journal-changed') delete operation.receipt;
+          throw error;
+        }
         if (token !== generation) return false;
         const registry = await bounded(inspect, abort);
         if (!verifies(registry, receipt)) return invalid();

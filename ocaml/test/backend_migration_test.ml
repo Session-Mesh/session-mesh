@@ -1892,12 +1892,12 @@ let provision_recovery_refuses_changed_registry () =
     Alcotest.(check string) "intent retained" proof (read evidence);
     Alcotest.(check string) "registry retained" (original ^ " ") (read path))
 
-let provision_interrupted_before_allocation () =
+let provision_interrupted_before_allocation ?(point=M.Before_allocate) () =
   fixture (fun root ->
     let profile = `Assoc [("backend", s "codex"); ("label", s "Interrupted")] in
     (match Unix.fork () with
     | 0 ->
-        let checkpoint = function M.Before_allocate -> Unix.kill (Unix.getpid ()) Sys.sigkill | _ -> () in
+        let checkpoint actual = if actual = point then Unix.kill (Unix.getpid ()) Sys.sigkill in
         ignore (M.write_profile ~checkpoint ~provision:true ~root ~expected_revision:None ~profile ());
         Unix._exit 125
     | pid -> Alcotest.(check bool) "killed before allocation" true
@@ -1996,7 +1996,8 @@ let () =
             ("missing and aliased Mesh root", missing_or_aliased_mesh_root);
             ("explicit first-create recovery requires witnessed state", first_create_interruption);
             ("provision killed before first link", provision_interruption ~append:false ~point:Before_publish);
-            ("provision killed before allocation", provision_interrupted_before_allocation);
+            ("provision killed before allocation", (fun () -> provision_interrupted_before_allocation ()));
+            ("provision killed after intent rename", provision_interrupted_before_allocation ~point:M.After_intent_publish);
             ("provision refuses changed registry at recovery", provision_recovery_refuses_changed_registry);
             ("provision refuses replaced root", provision_recovery_refuses_replaced_root);
             ("inspection is read-only", provision_inspection_is_read_only);
