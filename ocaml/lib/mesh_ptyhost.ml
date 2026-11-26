@@ -464,7 +464,7 @@ let session_json ?(relaunch = true) s =
             ]
            @
            if relaunch then
-             [ `String "agent_relaunch_v1"; `String "agent_relaunch_bound_v1" ]
+             [ `String "agent_relaunch_v1"; `String "agent_relaunch_bound_v1"; `String "agent_relaunch_pi_v1" ]
            else []) );
     ]
 

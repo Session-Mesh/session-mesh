@@ -512,6 +512,9 @@ let accounts_carry ?expected_contexts ?(legacy_only = false) file kind conversat
                ~file ~kind ~conversation ~from_account ~to_account ()))
 
 let run = function
+  | [ "accounts"; "carry-capabilities"; "pi" ] ->
+      print_json (`Assoc [ ("version", `Int 1); ("revision_bound", `Bool true) ]);
+      0
   | [ "accounts"; "carry-capabilities" ] ->
       print_json (`Assoc [ ("version", `Int 1); ("legacy_only", `Bool true) ]);
       0

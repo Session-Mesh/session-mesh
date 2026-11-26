@@ -1539,7 +1539,7 @@ async def replace_session(old_name, old_created, base, cwd, command, agent, know
     """
     if settings_guard and (not settings_binding or not _relaunches_bound_in_place(source)):
         raise web.HTTPConflict(text="The PTY host cannot safely bind the agent process; nothing was stopped")
-    if known_agent in IN_PLACE_AGENTS and _relaunches_in_place(source):
+    if (known_agent in IN_PLACE_AGENTS or (known_agent == "pi" and switch and len(switch) > 2)) and _relaunches_in_place(source):
         try:
             return await relaunch_in_place(source, cwd, command, agent, known_agent, account, switch,
                                            settings_guard=settings_guard, settings_binding=settings_binding)
@@ -5544,6 +5544,8 @@ def _resolve_refusal(exc, name, kind, unknown):
                                f"{_shown_accounts(exc.candidates or [])}. Name one by an id that is no other "
                                "account's label, or ask the operator to change a label.")
     if exc.code == "account_no_agent":
+        if kind == "pi":
+            return unknown
         declared = next((a for a in accounts_projection() if a["id"] == name), None)
         if declared is not None:
             serves = ", ".join(ACCOUNT_MEMBER[k][2] for k in ACCOUNT_MEMBER if declared[k])
@@ -5561,8 +5563,9 @@ async def _switch_target(name, kind):
     ignoring ASCII case; never a prefix, never another agent's account, and a name that is one account's id and
     another's label designates neither. Without a usable accounts.json only ``default`` can be named."""
     shown = name if isinstance(name, str) and 0 < len(name) <= 64 and name.isprintable() else None
-    offered = [DEFAULT_ACCOUNT, *({**a, "label": account_label(a["id"], kind)} for a in accounts_projection() if a[kind])]
-    unknown = _switch_refusal("account_unknown", f"No {ACCOUNT_MEMBER[kind][2]} account “{shown or '?'}” is "
+    offered = [DEFAULT_ACCOUNT, *({**a, "label": account_label(a["id"], kind)} for a in accounts_projection() if a.get(kind))]
+    label = "Pi" if kind == "pi" else ACCOUNT_MEMBER[kind][2]
+    unknown = _switch_refusal("account_unknown", f"No {label} account “{shown or '?'}” is "
                               f"declared. Available: {_shown_accounts(offered)}.")
     if shown is None:
         raise unknown
@@ -5596,9 +5599,9 @@ async def _switch_request(source, body):
     """({"action", "account": target id}, current account id) of a switch request that can be carried out now,
     else a coded refusal. The target folder is prepared (created 0700 when missing) as for a launch."""
     kind = source["agent"]
-    if kind not in ACCOUNT_MEMBER:
-        raise _switch_refusal("agent_unsupported", "Account switching applies to Claude and Codex only.")
     native = _native_profile_mode()
+    if kind not in ACCOUNT_MEMBER and not (native and kind == "pi"):
+        raise _switch_refusal("agent_unsupported", "Account switching is unavailable for this agent.")
     if native and not NATIVE_SWITCH_QUALIFIED:
         raise _switch_refusal("switch_not_qualified", "Native profile switching is not qualified")
     await declared_accounts()
@@ -5630,8 +5633,7 @@ async def _switch_request(source, body):
                    "agent_start": source_context["process_start"],
                    "source": {"id": current, "context_revision": source_context["context_revision"]},
                    "target": {"id": target["id"], "context_revision": target_context["context_revision"]}}
-        _, _, data, pattern = _conversation_layout(kind, sid)
-        found = await asyncio.to_thread(_conversation_found_in_root, source_context["roots"]["config"], data, pattern)
+        found = await asyncio.to_thread(_native_switch_has_conversation, kind, sid, source_context)
     else:
         folder = None if current == DEFAULT_ACCOUNT["id"] else current
         found = await asyncio.to_thread(_conversation_found, kind, sid, folder)
@@ -5646,9 +5648,18 @@ async def _switch_request(source, body):
     return {"action": "switch_account", "account": target["id"]}, current, binding
 
 
+def _native_switch_has_conversation(kind, sid, context):
+    if kind == "pi":
+        return discover.pi_session_path(sid, context["roots"]["history"]) is not None
+    _, _, data, pattern = _conversation_layout(kind, sid)
+    return _conversation_found_in_root(context["roots"]["config"], data, pattern)
+
+
 def _carry_env(kind):
     """The carry's environment: the server's, with the default account's folder variable when it is absolute
     (what the default account's agents use, as _conversation_missing reads it)."""
+    if kind == "pi":
+        return work_child_env()
     variable = ACCOUNT_MEMBER[kind][1]
     configured = os.environ.get(variable) or ""
     return {**work_child_env(), **({variable: configured} if os.path.isabs(configured) else {})}
@@ -5804,6 +5815,17 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
     if native and not NATIVE_SWITCH_QUALIFIED:
         raise web.HTTPConflict(text="Native profile switching is not qualified")
     legacy_helper = None
+    pi_helper = None
+    if kind == "pi":
+        if not _native_switch_available(kind, raw):
+            raise web.HTTPConflict(text="Pi account switching requires a bound native terminal")
+        try:
+            pi_helper = await asyncio.to_thread(_carry_helper_snapshot, work_command("mesh-platform"))
+            capability = await _accounts_program("carry-capabilities", "pi", program=pi_helper[0])
+        except AccountsUnavailable as exc:
+            raise web.HTTPConflict(text="Pi transfer capability unavailable; nothing was stopped") from exc
+        if capability != {"version": 1, "revision_bound": True}:
+            raise web.HTTPConflict(text="Pi transfer capability unavailable; nothing was stopped")
     if not native:
         # Older helpers do not understand --legacy-only. Refuse before the
         # source agent is stopped, rather than discovering that after a carry.
@@ -5832,15 +5854,15 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
         source_context["conversation"] = binding["conversation"]
         target_context = await _switch_profile_context(item["account"], kind,
                                                        binding["target"]["context_revision"])
-        _, _, data, pattern = _conversation_layout(kind, conversation)
-        if not await asyncio.to_thread(_conversation_found_in_root, source_context["roots"]["config"], data, pattern):
+        if not await asyncio.to_thread(_native_switch_has_conversation, kind, conversation, source_context):
             raise web.HTTPConflict(text="The conversation is not in the current account's folder")
 
     carried = {}
 
     async def carry():
         _legacy_check_active()
-        if not native and await asyncio.to_thread(_carry_helper_snapshot, legacy_helper[0]) != legacy_helper:
+        helper = pi_helper or legacy_helper
+        if helper and await asyncio.to_thread(_carry_helper_snapshot, helper[0]) != helper:
             raise AccountsUnavailable('account carry helper changed', 'profile-context-changed')
         revisions = ((source_context["context_revision"], target_context["context_revision"])
                      if native else ("--legacy-only",))
@@ -5852,7 +5874,7 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
         _legacy_check_active()
         result = await _accounts_program("carry", str(ACCOUNTS_FILE), kind, conversation, item["from_account"],
                                          item["account"], *revisions, timeout=CARRY_TIMEOUT, env=environ,
-                                         program=legacy_helper[0] if legacy_helper else None)
+                                         program=helper[0] if helper else None)
         summary = result.get("carried")
         if not isinstance(summary, dict) or type(summary.get("replaced")) is not int or summary["replaced"] < 0:
             raise AccountsUnavailable("Invalid carry result", "carry_rollback_incomplete")
@@ -5933,8 +5955,11 @@ def _native_switch_available(kind, raw):
     bound = (account is None or account == DEFAULT_ACCOUNT["id"]
              or (isinstance(account, str) and ACCOUNT_ID_RE.fullmatch(account)
                  and _accounts_digest(meta.get("account_context_revision"))))
-    return bool(NATIVE_SWITCH_QUALIFIED and _native_profile_mode() and isinstance(kind, str)
-                and kind in ACCOUNT_MEMBER and bound and isinstance(capabilities, list) and "agent_relaunch_v1" in capabilities
+    supported = isinstance(kind, str) and (kind in ACCOUNT_MEMBER
+        or (kind == "pi" and account not in (None, DEFAULT_ACCOUNT["id"])
+            and isinstance(capabilities, list) and "agent_relaunch_pi_v1" in capabilities))
+    return bool(NATIVE_SWITCH_QUALIFIED and _native_profile_mode()
+                and supported and bound and isinstance(capabilities, list) and "agent_relaunch_v1" in capabilities
                 and "agent_relaunch_bound_v1" in capabilities)
 
 

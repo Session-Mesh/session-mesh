@@ -34,7 +34,7 @@ ACCOUNT_RE = re.compile(r"[a-z0-9-]{1,32}")
 CONTEXT_REVISION_RE = re.compile(r"[0-9a-f]{64}")
 CONVERSATION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{7,63}")
 # The agents whose conversation Mesh can carry to another account (mesh-platform accounts carry).
-SWITCHABLE_AGENTS = frozenset(("claude", "codex"))
+SWITCHABLE_AGENTS = frozenset(("claude", "codex", "pi"))
 SETTINGS_AGENTS = frozenset(("claude", "codex"))
 SETTINGS_EFFORTS = frozenset(("low", "medium", "high"))
 # Presets an agent may never request: a session without approvals or sandbox
@@ -345,7 +345,7 @@ class Requests:
         if not isinstance(account, str) or not ACCOUNT_RE.fullmatch(account):
             raise ValueError("Invalid account")
         if source["agent"] not in SWITCHABLE_AGENTS or source["agent"] not in resumable:
-            raise ValueError("Account switching applies to Claude and Codex only")
+            raise ValueError("Account switching is unavailable for this agent")
         if not isinstance(current_account, str) or not ACCOUNT_RE.fullmatch(current_account):
             raise ValueError("Invalid account")
         if account == current_account:
@@ -380,6 +380,8 @@ class Requests:
         account = from_account = None
         if action == "switch_account":
             account, from_account = self._switch(source, body, current_account, resumable)
+            if source["agent"] == "pi" and switch_binding is None:
+                raise ValueError("Pi switching requires a native profile binding")
             if switch_binding is not None:
                 switch_binding = self._switch_binding(switch_binding, source, from_account, account)
         elif "account" in body:

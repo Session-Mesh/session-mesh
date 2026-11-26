@@ -784,3 +784,42 @@ asyncio.run(main())
       env: {...process.env, HOME: root, MESH_CONF_DIR: root, XDG_RUNTIME_DIR: root}});
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });
+
+test('Pi switch rejects old PTYs and transfer helpers before stopping anything', () => {
+  const script = `
+import asyncio, sys
+sys.path.insert(0, ${JSON.stringify(repo)})
+import server
+
+server.NATIVE_SWITCH_QUALIFIED = True
+server._native_profile_mode = lambda: True
+server._carry_helper_snapshot = lambda _: ('/fixture/mesh-platform',)
+async def helper(*args, **options):
+    assert args == ('carry-capabilities', 'pi') and options['program'] == '/fixture/mesh-platform'
+    return {'version':1, 'legacy_only':True}
+server._accounts_program = helper
+async def stop(*_args, **_options):
+    raise AssertionError('an unavailable switch stopped the agent')
+server.replace_session = stop
+item = {'source':{'agent':'pi'},'from_account':'source','account':'target'}
+raw = {'meta':{'account':'source','account_context_revision':'a'*64},
+       'pty_capabilities':['agent_relaunch_v1','agent_relaunch_bound_v1']}
+async def refused(needle):
+    try:
+        await server._switch_session(item,raw,'22222222-2222-2222-2222-222222222222',['pi'])
+    except server.web.HTTPConflict as error:
+        assert needle in error.text, error.text
+    else:
+        raise AssertionError('unsupported switch admitted')
+async def main():
+    assert not server._native_switch_available('pi',raw)
+    await refused('bound native terminal')
+    raw['pty_capabilities'].append('agent_relaunch_pi_v1')
+    assert server._native_switch_available('pi',raw)
+    await refused('transfer capability unavailable')
+    raw['meta'].pop('account')
+    assert not server._native_switch_available('pi',raw)
+asyncio.run(main())
+`;
+  execFileSync(python, ['-I', '-c', script], {timeout: 10000});
+});
