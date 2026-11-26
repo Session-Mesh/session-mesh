@@ -480,3 +480,36 @@ let outcome_to_json outcome =
       ("bytes", `Int outcome.bytes);
       ("recovery_copies", `Int outcome.recovery_copies);
     ]
+
+let carry_pi_accounts ~uid ~file ~conversation ~from_account ~to_account
+    ~source_revision ~target_revision =
+  let* registry = resolver_result (R.load ~uid ~file) in
+  let find id = resolver_result (R.find registry { backend = R.Pi; id }) in
+  let* source = find from_account in
+  let* target = find to_account in
+  let* () =
+    if R.context_revision source = Some source_revision
+       && R.context_revision target = Some target_revision
+    then Ok ()
+    else fail "profile-context-changed" "selected Pi account context changed"
+  in
+  let history entry revision =
+    let* context =
+      resolver_result (R.launch_context ~uid ~expected_context:revision entry)
+    in
+    match List.assoc_opt "history" context.roots with
+    | Some root -> Ok root
+    | None -> fail "account_folder_refused" "Pi history root is unavailable"
+  in
+  let* source = history source source_revision in
+  let* target = history target target_revision in
+  let* carried = Carry_pi.carry ~uid ~source ~target ~conversation () in
+  Ok
+    {
+      files = carried.files;
+      copied = carried.copied;
+      replaced = carried.replaced;
+      unchanged = carried.unchanged;
+      bytes = carried.bytes;
+      recovery_copies = 0;
+    }
