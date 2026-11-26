@@ -806,7 +806,7 @@ _PROFILE_OVERRIDES = {
 }
 
 
-PI_PROFILE_UNAVAILABLE = "Pi profile sessions are not yet supported; the session or recovery offer was not changed"
+PI_PROFILE_UNAVAILABLE = "Pi requires a bound native account profile; the session or recovery offer was not changed"
 
 
 async def _profile_launch_context(account, agent, expected_revision=None):
@@ -815,8 +815,10 @@ async def _profile_launch_context(account, agent, expected_revision=None):
         if _native_profile_mode():
             raise web.HTTPConflict(text="Account profile context changed; resume refused")
         return None
-    if account is None or not (os.path.lexists(CONF_DIR / "backend-profiles.json")
-                               or os.path.lexists(CONF_DIR / "backend-profiles.migrated")):
+    native = _native_profile_mode()
+    if account is not None and agent == "pi" and not native:
+        raise web.HTTPConflict(text=PI_PROFILE_UNAVAILABLE)
+    if account is None or not native:
         if expected_revision is not None:
             raise web.HTTPConflict(text="Account profile context changed; resume refused")
         return None
@@ -1398,10 +1400,10 @@ def _native_profile_mode():
 
 
 async def _restart_profile_context(source, account, known_agent, switch):
-    if account is not None and known_agent == "pi":
-        raise web.HTTPConflict(text=PI_PROFILE_UNAVAILABLE)
     revision = ((source or {}).get("meta") or {}).get("account_context_revision")
     native = _native_profile_mode()
+    if account is not None and known_agent == "pi" and not native:
+        raise web.HTTPConflict(text=PI_PROFILE_UNAVAILABLE)
     if revision and not native:
         raise web.HTTPConflict(text="Account profile context changed; restart refused")
     if switch and native:

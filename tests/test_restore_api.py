@@ -81,10 +81,10 @@ async def restore(client, headers, *names):
 
 
 @pytest.mark.parametrize("sid", [None, SID])
-async def test_profiled_pi_restore_refuses_without_consuming_offer(client, auth_cookie, fake_host, tmp_path, sid):
+async def test_unbound_pi_restore_refuses_without_consuming_offer(client, auth_cookie, fake_host, tmp_path, sid):
     agent = {"type": "pi", "session_id": sid, "pid": 22, "argv": ["pi"]}
     item = mesh_item("pi-profile", tmp_path, 1.0, agent)
-    item.update(account="work", account_context_revision="a" * 64)
+    item.update(account="work")
     lose(tmp_path, item)
     before = respawn.lost_entry("pi-profile")
     status, body = await restore(client, auth_cookie, "pi-profile")
@@ -188,9 +188,9 @@ async def test_bound_named_checks_resolved_root_not_stale_cached_root(monkeypatc
     assert (await server._verified_restore_context(entry))['roots']['config'] == str(selected)
 
 
-async def test_exact_profiled_pi_restore_refuses_before_intent(monkeypatch, tmp_path):
+async def test_exact_unbound_pi_restore_refuses_before_intent(monkeypatch, tmp_path):
     entry = {"name": "pi-profile", "created": 1.0, "cwd": str(tmp_path), "account": "work",
-             "account_context_revision": "a" * 64, "agent": {"type": "pi", "session_id": None}}
+             "agent": {"type": "pi", "session_id": None}}
     events = []
 
     async def listed(**_kwargs):
