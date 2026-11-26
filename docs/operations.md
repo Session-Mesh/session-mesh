@@ -1294,7 +1294,7 @@ path or child output; clients translate them locally. Unexpected worker exit als
 dictation. Correct the configuration/runtime and restart the web service to retry.
 
 Audio preparation does not start inference until the bridge commits it against a live session.
-Matching retries share that preparation: a failed attempt leaves it available for another attempt,
+Matching retries share a completed preparation: a failed commit leaves it available for another attempt,
 or until its 15-second preparation deadline. During that interval, a fresh recording for the same
 session can be refused as busy.
 
@@ -1309,7 +1309,7 @@ session can be refused as busy.
 | `MESH_WHISPER_TIMEOUT` | `60` | Active-request timeout, seconds. |
 | `MESH_WHISPER_QUEUE_TTL` | `600` | Queue-wait deadline, seconds. |
 | `MESH_WHISPER_RESULT_TTL` | `1800` | Ready-result retention, seconds. |
-| `MESH_WHISPER_CAPTURE_SECONDS` | `120` | Recording-duration limit, seconds. |
+| `MESH_WHISPER_CAPTURE_SECONDS` | `120` | Browser recording-duration limit, seconds. |
 
 The endpoint receives a multipart POST containing only `file`, `response_format=json` and,
 when explicitly configured, `language`, without Mesh credentials. Enabled public configuration
