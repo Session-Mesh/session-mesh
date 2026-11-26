@@ -16,14 +16,13 @@ const quoted = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 async function useWrapper(lab: any, body: string): Promise<void> {
   const wrapper = path.join(lab.where.scratch, 'history-wrapper');
   fs.writeFileSync(wrapper, '#!/bin/sh\n' + body + '\n', {mode: 0o700});
-  lab.where.env.MESH_MESH_HISTORY_CMD = undefined;
-  lab.where.env.MESH_HISTORY_CMD = wrapper;
+  lab.where.env.MESH_MESH_HISTORY_CMD = wrapper;
   lab.where.env.MESH_HISTORY_DB_DISABLE = '1';
   lab.where.env.MESH_OPAM_SWITCH = path.join(lab.where.scratch, 'no-such-switch');
   await lab.restartServer();
 }
 
-test('historical non-exec wrapper and a wrapper which drains stdin work', async () => {
+test('non-exec wrapper and a wrapper which drains stdin work', async () => {
   await withHistoryLab(async lab => {
     for (const body of [
       `${quoted(helper)} "$@"`,
@@ -46,8 +45,7 @@ test('a wrapper which closes inherited descriptors is refused safely', async () 
     fs.writeFileSync(wrapper, `#!${process.execPath}\nconst {spawnSync} = require('node:child_process');\n` +
       `const r = spawnSync(${JSON.stringify(helper)}, process.argv.slice(2), {stdio: 'inherit'});\n` +
       `process.exit(r.status ?? 1);\n`, {mode: 0o700});
-    lab.where.env.MESH_MESH_HISTORY_CMD = undefined;
-    lab.where.env.MESH_HISTORY_CMD = wrapper;
+    lab.where.env.MESH_MESH_HISTORY_CMD = wrapper;
     lab.where.env.MESH_HISTORY_DB_DISABLE = '1';
     await lab.restartServer();
     const reply = await lab.call('GET', '/api/history');
