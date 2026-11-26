@@ -60,7 +60,19 @@ let registry_path () =
   Filename.concat dir "conversation-names.json"
 
 let read_registry_frame () =
-  let frame = In_channel.input_all stdin in
+  (* Leave room for the legacy 16 MiB rename payload and its JSON envelope. *)
+  let max_bytes = 32 * 1024 * 1024 in
+  let frame = Buffer.create 4096 in
+  let chunk = Bytes.create 4096 in
+  let rec read remaining =
+    let count = In_channel.input stdin chunk 0 (min remaining (Bytes.length chunk)) in
+    if count = remaining then invalid_arg "conversation-name frame too large";
+    if count > 0 then (
+      Buffer.add_subbytes frame chunk 0 count;
+      read (remaining - count))
+  in
+  read (max_bytes + 1);
+  let frame = Buffer.contents frame in
   let length = String.length frame in
   if length = 0 || String.index_opt frame '\n' <> Some (length - 1) then
     invalid_arg "expected one newline-terminated frame";

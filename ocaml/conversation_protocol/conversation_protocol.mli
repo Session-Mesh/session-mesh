@@ -10,8 +10,9 @@
     [clock_now] sets the wall clock for deterministic tests. On other
     operations, [now] is shorthand for [clock_now]. Both retain their JSON
     number representation when written to the store. Reads of an unreadable
-    store return an empty snapshot. Mutating requests fail with [registry_io]
-    and preserve the file. *)
+    store return an empty snapshot. A mutation against an unreadable store
+    returns [registry_unreadable] and preserves the file. Lock and other I/O
+    failures return [registry_io]. *)
 val execute :
   ?clock:(unit -> float) -> path:string -> Yojson.Safe.t -> Yojson.Safe.t
 

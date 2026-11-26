@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
+import {execFileSync, spawnSync} from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +14,25 @@ type Binding = {name: string; created: number; seen: number; label: string; alia
   agent: string | null; sid: string | null; closed_at: number | null};
 const file = 'conversation-names.json';
 const helper = process.env.MESH_MESH_HISTORY_CMD || path.join(REPO, 'ocaml/_build/default/bin/mesh_history_main.exe');
+
+test('the registry helper accepts exactly one frame within its byte limit', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-conversation-frame-'));
+  t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
+  const request = '{"version":1,"op":"snapshot"}';
+  const limit = 32 * 1024 * 1024;
+  const frame = request.padEnd(limit - 1) + '\n';
+  const run = (input: string) => spawnSync(helper, ['--conversation-names'], {
+    encoding: 'utf8', env: {MESH_CONF_DIR: dir}, input, timeout: 10000,
+  });
+  const accepted = run(frame);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(JSON.parse(accepted.stdout), {version: 1, result: []});
+  for (const malformed of [frame.slice(0, -1) + ' \n', request, request + '\n\n']) {
+    const rejected = run(malformed);
+    assert.equal(rejected.status, 64, rejected.stderr);
+    assert.equal(rejected.stdout, '');
+  }
+});
 
 test('reused names, switched conversations and aggregate aliases survive separate helper invocations', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-conversation-'));
