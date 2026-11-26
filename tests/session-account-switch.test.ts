@@ -214,6 +214,7 @@ describe('account switch requests', {skip: SKIP}, () => {
         assert.fail(`the fake agent ${pid} did not complete exec`);
       };
       const workPid = pidOf(work.name), travelPid = pidOf(travel.name), plainPid = pidOf(plain.name);
+      await Promise.all([workPid, travelPid, plainPid].map(awaitExec));
       assert.deepEqual([actualHome(workPid), actualHome(travelPid), actualHome(plainPid)],
         [workHome, travelHome, path.join(mesh.home, '.codex')]);
       const defaultAuth = path.join(mesh.home, '.codex', 'auth.json');

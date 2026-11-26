@@ -289,6 +289,7 @@ test('two tabs settle the same lost operation after a verified native acknowledg
     const operation = await page.evaluate(() => lab.recoveryOperation);
     assert.match(operation!, /^[a-f0-9]{32}$/);
     const other = await context.newPage(); await other.goto(`${base}/?lang=en`);
+    await other.locator('#open').filter({hasText: catalogs.en!['backendAccounts.title']!}).waitFor();
     await other.evaluate(value => { lab.recoveryOperation = value; }, operation);
     await other.locator('#open').click(); await statusIs(other, 'en', 'provisionUncertain');
     await control(other, 'recovery-inspect').click();
