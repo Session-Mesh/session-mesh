@@ -197,6 +197,7 @@
  (name ptyhost_exit_publication_test)
  (modules ptyhost_exit_publication_test ptyhost_exit_impl)
  (libraries
+  mesh_agent
   mesh_agent_resume_preset
   mesh_platform
   mesh_pty_agent_stop
@@ -301,7 +302,7 @@
 (test
  (name ptyhost_final_refusal_test)
  (modules ptyhost_final_refusal_test ptyhost_final_refusal_impl)
- (libraries mesh_agent_resume_preset mesh_platform mesh_pty_agent_stop
+ (libraries mesh_agent mesh_agent_resume_preset mesh_platform mesh_pty_agent_stop
   mesh_project_codec mesh_project_store mesh_project_observation mesh_pty_processes
   mesh_pty_support mesh_update_host mesh_wire ptyhost_blackbox test_scratch
   yojson eio_main eio.unix alcotest unix))
@@ -316,6 +317,7 @@
  (name ptyhost_isolation_test)
  (modules ptyhost_isolation_test ptyhost_isolation_impl)
  (libraries
+  mesh_agent
   mesh_agent_resume_preset
   mesh_platform
   mesh_pty_agent_stop
@@ -388,6 +390,7 @@
  (name project_test_host)
  (modules project_test_host project_test_host_impl)
  (libraries
+  mesh_agent
   mesh_agent_resume_preset
   mesh_platform
   mesh_pty_agent_stop
