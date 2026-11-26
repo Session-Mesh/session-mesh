@@ -64,7 +64,8 @@ function validInventoryItem(value: unknown): boolean {
 }
 
 // Read only the existing local inventory protocol. Never attach or send input.
-export async function liveInventory(socketPath: string, m: Admission): Promise<boolean> {
+export async function liveInventory(socketPath: string, m: Admission, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) throw new Fault('unavailable');
   return await new Promise<boolean>((resolve, reject) => {
     const socket = connect(socketPath);
     let data = Buffer.alloc(0), done = false;
@@ -72,11 +73,14 @@ export async function liveInventory(socketPath: string, m: Admission): Promise<b
       if (done) return;
       done = true;
       clearTimeout(deadline);
+      signal?.removeEventListener('abort', abort);
       socket.destroy();
       if (value === undefined) reject(new Fault('unavailable'));
       else resolve(value);
     };
     const deadline = setTimeout(() => finish(), 1000);
+    const abort = () => finish();
+    signal?.addEventListener('abort', abort, {once: true});
     socket.on('error', () => finish());
     socket.on('end', () => finish());
     socket.on('connect', () => {
@@ -202,7 +206,7 @@ export async function startService(
   if (!parent.isDirectory() || parent.isSymbolicLink() ||
       (parent.mode & 0o777) !== 0o700 || parent.uid !== process.getuid!())
     throw Error('Private dictation directory required');
-  const engine = new Dictation(config, {principal, isLive: m => liveInventory(inventorySocket, m)});
+  const engine = new Dictation(config, {principal, isLive: (m, signal) => liveInventory(inventorySocket, m, signal)});
   const server = createServer({maxHeaderSize: 8192, requestTimeout: 16000, headersTimeout: 5000},
     serviceHandler(config, engine, digest(secret)));
   server.maxConnections = 64;

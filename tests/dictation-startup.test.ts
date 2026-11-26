@@ -57,6 +57,17 @@ process.stdin.once('data',part=>{
   return {entry,hasIdentity:()=>fs.existsSync(marker),identity:()=>JSON.parse(fs.readFileSync(marker,'utf8')) as {pid:number;socket:string}};
 }
 
+test('a throwing startup callback still closes the fixture', {timeout: 10000}, async () => {
+  const failure = new Error('fixture startup callback failed');
+  let child: ChildProcess | undefined;
+  await assert.rejects(fixture(false, false, undefined, {onSpawn: value => {
+    child = value;
+    throw failure;
+  }}), error => error === failure);
+  assert.ok(child?.pid);
+  assert.ok(child.exitCode !== null || child.signalCode !== null);
+});
+
 test('cancelling startup preserves shutdown and reaps the partial worker',{timeout:10000},async t=>{
   const c=workerFixture(t,'process.stdin.resume();setInterval(()=>{},1000);');
   let child:ChildProcess|undefined;

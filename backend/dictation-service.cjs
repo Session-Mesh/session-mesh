@@ -418,7 +418,7 @@ var Dictation = class {
     this.controllers.add(controller);
     let timer;
     try {
-      if (!await this.isLive(r.meta)) throw new Fault("stale_session");
+      if (!await this.isLive(r.meta, controller.signal)) throw new Fault("stale_session");
       if (this.closed || r.job.state !== "processing") return;
       const deadline = this.now() + this.config.public.active_timeout_seconds * 1e3;
       const expire = () => {
@@ -622,7 +622,8 @@ function validInventoryItem(value) {
   const item = value;
   return typeof item.name === "string" && item.name.length > 0 && typeof item.pid === "number" && Number.isInteger(item.pid) && item.pid > 0 && typeof item.cwd === "string" && typeof item.created === "number" && Number.isFinite(item.created) && typeof item.activity === "number" && Number.isFinite(item.activity) && typeof item.attached === "number" && Number.isInteger(item.attached) && item.attached >= 0 && !!item.meta && typeof item.meta === "object" && !Array.isArray(item.meta);
 }
-async function liveInventory(socketPath, m) {
+async function liveInventory(socketPath, m, signal) {
+  if (signal?.aborted) throw new Fault("unavailable");
   return await new Promise((resolve, reject) => {
     const socket = (0, import_node_net2.connect)(socketPath);
     let data = Buffer.alloc(0), done = false;
@@ -630,11 +631,14 @@ async function liveInventory(socketPath, m) {
       if (done) return;
       done = true;
       clearTimeout(deadline);
+      signal?.removeEventListener("abort", abort);
       socket.destroy();
       if (value === void 0) reject(new Fault("unavailable"));
       else resolve(value);
     };
     const deadline = setTimeout(() => finish(), 1e3);
+    const abort = () => finish();
+    signal?.addEventListener("abort", abort, { once: true });
     socket.on("error", () => finish());
     socket.on("end", () => finish());
     socket.on("connect", () => {
@@ -764,7 +768,7 @@ async function startService(config, secret, socketPath, inventorySocket, princip
   const parent = await (0, import_promises2.lstat)((0, import_node_path.dirname)(socketPath));
   if (!parent.isDirectory() || parent.isSymbolicLink() || (parent.mode & 511) !== 448 || parent.uid !== process.getuid())
     throw Error("Private dictation directory required");
-  const engine = new Dictation(config, { principal, isLive: (m) => liveInventory(inventorySocket, m) });
+  const engine = new Dictation(config, { principal, isLive: (m, signal) => liveInventory(inventorySocket, m, signal) });
   const server = (0, import_node_http2.createServer)(
     { maxHeaderSize: 8192, requestTimeout: 16e3, headersTimeout: 5e3 },
     serviceHandler(config, engine, digest(secret))
