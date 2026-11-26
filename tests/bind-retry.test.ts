@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import {isBindCollision, retryBindCollision} from './helpers/bind-retry.ts';
+import {listensLoopbackFrom} from './helpers/listener-owner.ts';
 import {runServer, scratchHome, startMesh, type Scratch} from './mesh-server-lib.ts';
 
 const collision = (errno: number) =>
@@ -17,6 +18,7 @@ const collision = (errno: number) =>
 function fixture(outcomes: Array<string | null>) {
   const scratches: string[] = [];
   const ports: number[] = [];
+  const owners: Array<typeof listensLoopbackFrom | undefined> = [];
   const create: typeof scratchHome = async (_prefix, env = {}) => {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-bind-retry-'));
     scratches.push(scratch);
@@ -27,15 +29,27 @@ function fixture(outcomes: Array<string | null>) {
     return {scratch, home, confDir: path.join(home, 'config'), port,
       env: {MESH_PORT: String(port), ...env}};
   };
-  const run: typeof runServer = async (_where: Scratch) => {
+  const run: typeof runServer = async (_where: Scratch, _source?: string, owns?: typeof listensLoopbackFrom) => {
+    owners.push(owns);
     const result = outcomes.shift();
     assert.notEqual(result, undefined, 'unexpected extra attempt');
     const output = result ?? '';
     const child = {exitCode: 0, signalCode: null} as unknown as ChildProcess;
     return {child, result: {code: result === null ? null : 1, output, listened: result === null}, output: () => output};
   };
-  return {scratches, ports, dependencies: {scratchHome: create, runServer: run}};
+  return {scratches, ports, owners, dependencies: {scratchHome: create, runServer: run}};
 }
+
+test('strict loopback ownership is opt-in and forwarded to the server check', async () => {
+  const normal = fixture([null]);
+  const first = await startMesh('normal-', {}, undefined, normal.dependencies);
+  await first.stop();
+  assert.deepEqual(normal.owners, [undefined]);
+  const strict = fixture([null]);
+  const second = await startMesh('strict-', {}, undefined, {...strict.dependencies, owns: listensLoopbackFrom});
+  await second.stop();
+  assert.deepEqual(strict.owners, [listensLoopbackFrom]);
+});
 
 test('only Linux and macOS server bind collisions match', () => {
   assert.equal(isBindCollision(collision(98)), true);
