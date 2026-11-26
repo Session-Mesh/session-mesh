@@ -2760,6 +2760,11 @@ class Pane {
 
   attach(name, opts = {}) {
     if (localActionUnavailable()) return;
+    const session = find(name);
+    if (recoveredLineTarget?.pane === this &&
+        (recoveredLineTarget.name !== name || recoveredLineTarget.created !== session?.created)) {
+      saveRecoveredLine();
+    }
     this.detach();
     this.inputLease = this.inputLeaseFor(name);
     this.renderRetainedInput();
@@ -2773,7 +2778,7 @@ class Pane {
     // Output held for a finger belongs to the previous session: flushed later, it would be
     // parsed after the draining below and its queries answered to this session.
     this.queuedOutput = []; this.queuedBytes = 0;
-    const c = { name, created: find(name)?.created, cachedAck: !!find(name)?.provisional && !!this.inputAck,
+    const c = { name, created: session?.created, cachedAck: !!session?.provisional && !!this.inputAck,
       piFullscreenScroll: false, retry: 0, closed: false, terminal: null,
       ws: null, // real local socket: legacy paste identity/diagnostic compatibility only
       initializing: true, cacheRestore: opts.cacheRestore === true, waitingListing: !this.inputLease,
