@@ -8,6 +8,7 @@ export type ProvisionJournal = {
   // the intent. Concurrent tabs cannot both acquire the same empty journal.
   acquire(): Promise<{entry: Entry; acquired: boolean}>;
   save(id: string, value: string | null): Promise<void>;
+  remember?(id: string, value: string): Promise<boolean>;
   clearUncertain?(id: string): Promise<'cleared' | 'missing' | 'mismatch'>;
 };
 
@@ -32,6 +33,16 @@ export function provisionJournal(storage: Storage, indexedDB: IDBFactory, random
     }));
   }
   return {
+    async remember(id, value) {
+      if (!/^[a-f0-9]{32}$/.test(id)) return false;
+      return transact('readwrite', (store, done) => {
+        const request = store.get(id);
+        request.onsuccess = () => {
+          if (request.result?.id !== id || request.result?.value !== 'uncertain') { done(false); return; }
+          store.put({id, value}); done(true);
+        };
+      });
+    },
     async clearUncertain(id) {
       if (!/^[a-f0-9]{32}$/.test(id)) return 'mismatch' as const;
       let result: 'cleared' | 'missing' | 'mismatch' = 'mismatch';

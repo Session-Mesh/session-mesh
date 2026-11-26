@@ -268,6 +268,14 @@ write using the inspected revision, and its receipt cannot settle a creation jou
 replace host recovery, is not a cross-client custody record, and cannot interpret a host recovery
 without evidence linking that recovery to this request.
 
+Provisioning also retains a runner-side intent until it is explicitly acknowledged. This includes
+requests from older clients that do not send an operation ID: even after a success response, a
+later profile write is refused until the owner opens Accounts, inspects the retained provisioning
+result and confirms it. The owner can then issue a new request after reviewing the current registry.
+An old client cannot perform this acknowledgement itself. A server cannot distinguish a delivered
+response from one lost after publication, so it must not retire this evidence merely on return.
+The inspection and acknowledgement routes are owner-only; neither automatically replays creation.
+
 ### Managed first launch
 
 The owner-only, same-origin `POST /api/accounts/profiles/provision` accepts precisely a
