@@ -1916,7 +1916,10 @@ async def _relaunch_in_place(source, cwd, command, agent, known_agent, account=N
     source_context, context = switch[2:4] if native_switch else (None, await _restart_profile_context(source, account, known_agent, switch))
     account_env = context["env"] if context else await account_environment(target, known_agent)
     source_env = source_context["env"] if source_context else await account_environment(account, known_agent) if switch else account_env
-    command, notice, vibe = await _prepared_launch(known_agent, command, cwd, context)
+    pi_switch = native_switch and known_agent == "pi"
+    launch_context = source_context if pi_switch else context
+    command, notice, vibe = await _prepared_launch(known_agent, command, cwd, launch_context)
+    pi_target_runtime = await _pi_runtime(_profile_environ(context, "pi")) if pi_switch else None
     saved = await _arrangement_of(source["name"], source["created"])
     incarnation = (source["name"], source["created"])
     if settings_guard:
@@ -1991,9 +1994,18 @@ async def _relaunch_in_place(source, cwd, command, agent, known_agent, account=N
         except web.HTTPException:
             await undo_native_switch(AccountsUnavailable("Target account changed after carry", "profile-context-changed"),
                                      target_copy_remains=True)
+    target_launch = launch
+    if pi_switch:
+        try:
+            argv = _resume_argv({"type": "pi", "session_id": source_context["conversation"]}, context)
+            target_command = _pi_command(shlex.join(argv), pi_target_runtime, context["roots"]["history"])
+            target_launch = (source, created, cwd, target_command, agent, known_agent, notice, vibe)
+        except web.HTTPException:
+            await undo_native_switch(AccountsUnavailable("Carried Pi conversation unavailable", "conversation_not_found"),
+                                     target_copy_remains=True)
     try:
         if native_switch:
-            await _start_in_place(*launch, target, account_env, context=context, expected_identity=target_identity,
+            await _start_in_place(*target_launch, target, account_env, context=context, expected_identity=target_identity,
                                   validate_default_target=True, fence_id=fence["fence_id"] if fence else None)
         else:
             expected = restart_identity if context else None
