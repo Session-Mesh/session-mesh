@@ -47,6 +47,18 @@ test('normal helper refuses managed creation and does not offer a host-provision
       assert.equal(result.status, 0, result.stdout);
       return JSON.parse(result.stdout);
     };
+    const acknowledge = () => {
+      const call = (request: object) => {
+        const result = spawnSync(helper, [], {input: JSON.stringify(request), encoding: 'utf8', timeout: 5000,
+          env: {HOME: mesh.home, MESH_CONF_DIR: mesh.confDir, PATH: '/usr/bin:/bin'}});
+        assert.ifError(result.error);
+        assert.equal(result.status, 0, result.stdout);
+        return JSON.parse(result.stdout);
+      };
+      const inspected = call({version: 1, op: 'profiles.provision-inspect'});
+      assert.equal(inspected.data.outcome, 'published');
+      assert.equal(call({version: 1, op: 'profiles.provision-acknowledge', proof: inspected.data.proof}).data.outcome, 'published');
+    };
     const argv = nativePtyhost();
     host = startTestPtyhost(argv, {cwd: REPO, stdio: 'ignore',
       env: {HOME: mesh.home, PATH: '/usr/bin:/bin', SHELL: '/bin/sh', LANG: 'C.UTF-8',
@@ -82,6 +94,7 @@ test('normal helper refuses managed creation and does not offer a host-provision
       {method:'POST', headers, body:JSON.stringify({proof})});
     assert.equal(acknowledged.status, 200);
     const b = provision('Second fixture', a.registry_revision).data;
+    acknowledge();
     const raw = JSON.parse(fs.readFileSync(registry, 'utf8'));
     assert.deepEqual(raw.profiles.map((p: {enabled: boolean}) => p.enabled), [false, false]);
     for (const row of raw.profiles) {
