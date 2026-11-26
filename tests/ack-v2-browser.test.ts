@@ -6,6 +6,10 @@ import {TerminalMesh, skip, withoutSince} from './terminal-browser-lib.ts';
 
 declare const find: (name: string) => {created: number; provisional: boolean; pty_capabilities: string[]};
 declare const syncPanesWithListing: (observed: boolean) => void;
+declare const addPane: () => void;
+declare const closePane: (pane: unknown) => void;
+declare const setActive: (pane: unknown) => void;
+declare const panes: unknown[];
 declare const active: {
   conn: {ws: WebSocket & {announce: (cap?: object) => void; receipt: (ack: object) => void}} | null;
   inputAck: {state: string; pendingBytes: number; binding: {slot: number; generation: number} | null};
@@ -89,7 +93,7 @@ const installFakeBridge = () => {
 describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip}, () => {
   before(async () => { await mesh.start(); await mesh.newShell('v2-terminal'); });
   after(() => mesh.stop());
-  const open = () => mesh.signIn(viewport, installFakeBridge, undefined, {routes: async page => {
+  const open = (phone = false) => mesh.signIn(phone ? {width: 390, height: 780} : viewport, installFakeBridge, undefined, {phone, routes: async page => {
     await page.route('**/api/sessions*', async route => {
       try {
         const response = await route.fetch({url: withoutSince(route.request().url())});
@@ -336,7 +340,7 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     await page.context().close();
   });
 
-  test('an obsolete dirty draft can be forgotten while the current terminal has no ACK', async () => {
+  test('an obsolete dirty draft is logged and forgotten while the current terminal has no ACK', async () => {
     await mesh.newShell('no-ack-terminal');
     const page = await open();
     await page.route('**/api/sessions*', async route => {
@@ -373,10 +377,110 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
       syncPanesWithListing(true);
     });
     await page.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN && !active.inputAck);
-    await forget.waitFor({state: 'visible'});
-    page.once('dialog', dialog => dialog.accept());
-    await forget.click();
-    assert.equal(await forget.isVisible(), false);
+    await forget.waitFor({state: 'hidden'});
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mesh-obsolete-input-log') || '[]')
+      .some((entry: {name: string}) => entry.name === 'v2-terminal')), true);
+    await page.unrouteAll({behavior: 'wait'});
+    await page.context().close();
+  });
+
+  for (const phone of [false, true]) test(`retained text from a replaced attachment opens as an editable draft without replay (${phone ? 'phone' : 'desktop'})`, async () => {
+    if (phone) await mesh.newShell('recovery-other');
+    const page = await open(phone);
+    if (phone) await page.locator('#btn-menu').click();
+    await page.locator('#list .item[data-id="v2-terminal"]').click();
+    await page.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN);
+    await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
+    await page.evaluate(() => active.send('RECOVER THIS TEXT'));
+    assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1);
+    if (phone) await page.locator('#line-text').fill('existing draft');
+    const oldCreated = await page.evaluate(() => find('v2-terminal').created);
+    await page.route('**/api/sessions*', async route => {
+      const response = await route.fetch({url: withoutSince(route.request().url())});
+      const listing = await response.json();
+      const session = listing.mesh.find((row: {name: string}) => row.name === 'v2-terminal');
+      session.created = oldCreated + 1;
+      session.pty_capabilities = ['acknowledged_input_v1', 'acknowledged_input_v2'];
+      await route.fulfill({response, json: listing});
+    });
+    await page.evaluate(() => refresh());
+    await page.waitForFunction(() => window.__v2Sockets.length >= 2 && active?.conn?.ws?.readyState === WebSocket.OPEN);
+    await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
+    if (phone) {
+      assert.equal(await page.locator('#line-text').inputValue(), 'existing draft', 'never overwrite existing text');
+      await page.locator('#line-text').clear();
+      await page.waitForFunction(() => (document.querySelector('#line-text') as HTMLTextAreaElement).value === 'RECOVER THIS TEXT');
+    } else {
+      await page.locator('#dlg-compose[open]').waitFor();
+      assert.equal(await page.locator('#compose-text').inputValue(), 'RECOVER THIS TEXT');
+      await page.locator('#compose-text').fill('edited recovered text');
+      await page.locator('#dlg-compose [data-close-dialog]').click();
+      await page.locator('#dlg-compose').waitFor({state: 'hidden'});
+      await page.evaluate(() => (window as any).openCompose());
+      await page.locator('#dlg-compose[open]').waitFor();
+      assert.equal(await page.locator('#compose-text').inputValue(), 'edited recovered text', 'closing the editor preserves the draft');
+    }
+    assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1,
+      'recovery never replays the uncertain frame');
+    if (phone) {
+      await page.locator('#btn-menu').click();
+      await page.locator('#list .item[data-id="recovery-other"]').click();
+      await page.waitForFunction(() => active?.id === 'recovery-other');
+      assert.equal(await page.locator('#line-text').inputValue(), '', 'the recovered text stays with its session');
+      await page.locator('#line-text').fill('different session draft');
+      assert.equal(await page.locator('#line-text').inputValue(), 'different session draft');
+      assert.equal(await page.locator('.p-input-other-draft textarea').inputValue(), 'RECOVER THIS TEXT');
+      assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1,
+        'a recovered draft is not sent to a different session');
+      await page.locator('#line-text').clear();
+      await page.evaluate(() => { (window as any).__draftPane = active; addPane(); });
+      page.once('dialog', dialog => dialog.dismiss());
+      await page.evaluate(() => closePane((window as any).__draftPane));
+      assert.equal(await page.evaluate(() => panes.includes((window as any).__draftPane)), true,
+        'declining pane closure keeps its recovered draft');
+      await page.evaluate(() => setActive((window as any).__draftPane));
+      await page.locator('#btn-menu').click();
+      await page.locator('#list .item[data-id="v2-terminal"]').click();
+      await page.waitForFunction(() => active?.id === 'v2-terminal' && active.conn?.ws?.readyState === WebSocket.OPEN);
+      await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
+      await page.waitForFunction(() => (document.querySelector('#line-text') as HTMLTextAreaElement).value === 'RECOVER THIS TEXT');
+      assert.equal(await page.locator('.p-input-other-draft').count(), 0, 'the restored draft is not duplicated in the review panel');
+      await page.locator('#line-text').press('Enter');
+      await page.waitForFunction(() => window.__v2Frames.filter(f => f.kind === 'binary').length === 2);
+    }
+    await page.unrouteAll({behavior: 'wait'});
+    await page.context().close();
+  });
+
+  test('a logging failure keeps retained input for review without repeatedly reopening the editor', async () => {
+    const page = await open();
+    await page.locator('#list .item[data-id="v2-terminal"]').click();
+    await page.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN);
+    await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
+    await page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (key === 'mesh-obsolete-input-log') throw new DOMException('quota', 'QuotaExceededError');
+        return original.call(this, key, value);
+      };
+      active.send('KEEP THIS TEXT');
+    });
+    const oldCreated = await page.evaluate(() => find('v2-terminal').created);
+    await page.route('**/api/sessions*', async route => {
+      const response = await route.fetch({url: withoutSince(route.request().url())});
+      const listing = await response.json();
+      const session = listing.mesh.find((row: {name: string}) => row.name === 'v2-terminal');
+      session.created = oldCreated + 1;
+      session.pty_capabilities = ['acknowledged_input_v1', 'acknowledged_input_v2'];
+      await route.fulfill({response, json: listing});
+    });
+    await page.evaluate(() => refresh());
+    await page.waitForFunction(() => window.__v2Sockets.length >= 2 && active?.conn?.ws?.readyState === WebSocket.OPEN);
+    await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
+    await page.waitForFunction(() => [...active.inputAcks.values()].some((entry: any) => entry.recoveryBlocked));
+    assert.equal(await page.locator('#dlg-compose').isVisible(), false);
+    assert.equal(await page.locator('.p-input-drafts textarea').inputValue(), 'KEEP THIS TEXT');
+    assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1);
     await page.unrouteAll({behavior: 'wait'});
     await page.context().close();
   });

@@ -340,7 +340,7 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
     await page.context().close();
   });
 
-  test('only a warned explicit choice forgets an obsolete dirty draft record', async () => {
+  test('an obsolete dirty draft record is logged and forgotten without sending input', async () => {
     await mesh.newShell('ack-old-draft');
     await mesh.newShell('ack-new-draft');
     const page = await mesh.openPage('ack-old-draft', VIEWPORT, () => {
@@ -380,22 +380,20 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
       active.inputAck?.state === 'ready' && active.inputAck?.binding &&
       !active.conn?.v2AwaitingCapability && active.conn?.ws?.readyState === WebSocket.OPEN, old.created);
     const stale = page.locator('.pane.active .p-input-forget-draft');
-    await stale.waitFor({state: 'visible'});
-    assert.equal(await page.evaluate(() => reloadHolds().some(h => h.kind === 'input-draft')), true);
-    let warning = '';
-    page.once('dialog', dialog => { warning = dialog.message(); return dialog.dismiss(); });
-    await stale.click();
-    assert.match(warning, /unfinished|incomplete/i);
-    assert.equal(await stale.isVisible(), true);
-    await page.evaluate(() => active.send('CURRENT-DRAFT'));
+    await stale.waitFor({state: 'hidden'});
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mesh-obsolete-input-log') || '[]')
+      .some((entry: {name: string}) => entry.name === 'ack-old-draft')), true);
+    const transientDrafts = await page.evaluate(() => {
+      active.send('CURRENT-DRAFT');
+      return active.el.querySelectorAll('.p-input-drafts textarea').length;
+    });
+    assert.equal(transientDrafts, 0, 'ordinary input in flight does not add a review field beside an obsolete draft');
     await page.waitForFunction(() => active.inputAck?.pendingBytes === 0 && active.inputLease?.dirty);
     const result = await page.evaluate(() => {
       (window as typeof window & {__leaseControls: string[]}).__leaseControls.length = 0;
       return [...(active as InputPane & {inputAcks: Map<string, {lease: {dirty: boolean}}>}).inputAcks.keys()];
     });
-    assert.equal(result.length, 2);
-    page.once('dialog', dialog => dialog.accept());
-    await stale.click();
+    assert.equal(result.length, 1);
     assert.equal(await stale.isVisible(), false);
     assert.equal(await page.evaluate(() => (active as InputPane & {inputAcks: Map<string, unknown>}).inputAcks.size), 1);
     assert.equal(await page.evaluate(() => active.inputLease?.dirty), true,
