@@ -705,12 +705,12 @@ async def refused():
         return
     raise AssertionError('unsafe Pi selection accepted')
 async def main():
-    env = ('PI_CODING_AGENT_DIR=' + str(overlay)).encode() + bytes(1)
+    overlay_env = ('PI_CODING_AGENT_DIR=' + str(overlay)).encode() + bytes(1)
+    env = overlay_env + ('PI_CODING_AGENT_SESSION_DIR=' + str(history)).encode() + bytes(1)
     (proc / 'environ').write_bytes(env)
     assert (await verify())['process_start'] == '1234'
-    observed['argv'][2] = '/foreign-history'
+    (proc / 'environ').write_bytes(overlay_env + b'PI_CODING_AGENT_SESSION_DIR=/foreign-history' + bytes(1))
     await refused()
-    observed['argv'][2] = str(history)
     (proc / 'environ').write_bytes(env + b'OPENAI_API_KEY=fixture-ambient' + bytes(1))
     await refused()
     (proc / 'environ').write_bytes(env)
