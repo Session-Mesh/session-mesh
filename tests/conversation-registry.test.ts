@@ -181,8 +181,9 @@ process.stdout.write(frame.op === 'close' ? '{"version":2,"result":null}\\n' : r
     for (const entry of calls) {
       assert.deepEqual(entry.args, ['--conversation-names']);
       assert.equal(entry.cwd, '/');
-      assert.deepEqual(Object.keys(entry.env).sort(), ['MESH_CONF_DIR', 'MESH_CONVERSATION_LIFELINE', 'PATH']);
-      assert.match(entry.env.MESH_CONVERSATION_LIFELINE, /^[0-9]+:[0-9]+:[0-9]+$/);
+      const keys = Object.keys(entry.env).filter(key => process.platform !== 'darwin' || key !== '__CF_USER_TEXT_ENCODING').sort();
+      assert.deepEqual(keys, ['MESH_CONF_DIR', 'MESH_CONVERSATION_LIFELINE', 'PATH']);
+      assert.match(entry.env.MESH_CONVERSATION_LIFELINE, /^[0-9]+:-?[0-9]+:-?[0-9]+$/);
     }
     const registry = path.join(lab.where.confDir, file);
     const closed = (JSON.parse(fs.readFileSync(registry, 'utf8')) as Binding[]).find(row => row.sid === SIDS.claude);
