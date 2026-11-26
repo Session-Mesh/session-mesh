@@ -555,13 +555,6 @@ async def _sync_dictation_principal(app):
             app["dictation_principal"] = principal
 
 
-async def _dictation_live(name, created):
-    listed = await host({"op": "list"})
-    if not _valid_ptyhost_list(listed):
-        raise web.HTTPServiceUnavailable()
-    return any(item["name"] == name and item["created"] == created for item in listed)
-
-
 async def _dictation_exchange(client, headers, method, path, data):
     # Preserve the raw operation for typed validation, without URL normalization.
     if client.closed:
@@ -592,19 +585,10 @@ async def _dictation_transfer(request, headers, exchange):
 
     check_authority()
     if admission:
-        names, dates = request.headers.getall("X-Mesh-Session", []), request.headers.getall("X-Mesh-Created", [])
-        if len(names) != 1 or len(dates) != 1 or not NAME_RE.fullmatch(names[0]) or not dates[0].strip():
-            return _dictation_error("invalid_request", 400)
-        try:
-            created = float(dates[0])
-        except ValueError:
-            return _dictation_error("invalid_request", 400)
-        if not math.isfinite(created):
-            return _dictation_error("invalid_request", 400)
-        live = await _dictation_live(names[0], created)
+        status, payload = await exchange("POST", "/internal/admission", b"")
         check_authority()
-        if not live:
-            return _dictation_error("stale_session", 409)
+        if status != 200:
+            return web.json_response(payload, status=status, headers={"Cache-Control": "no-store"})
     status, payload = await exchange(request.method, request.rel_url.raw_path, request.content.iter_chunked(65536))
     check_authority()
     if admission and status == 202:

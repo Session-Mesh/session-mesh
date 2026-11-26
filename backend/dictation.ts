@@ -266,7 +266,7 @@ export class Dictation {
       throw error;
     } finally { clearTimeout(timeout); }
   }
-  async verifyPreparedSession(session: Admission): Promise<void> {
+  async verifySession(session: Admission): Promise<void> {
     const live = await this.isLive(session);
     // A revocation can arrive while the inventory is being read.
     this.authorize(session.principal);

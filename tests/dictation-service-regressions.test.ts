@@ -243,7 +243,7 @@ test('actual adapter isolates every public operation from decoded URL syntax',as
   fs.writeFileSync(preload,`const fs=require('node:fs'),http=require('node:http'),create=http.createServer;
 process.stdin.once('data',part=>fs.writeFileSync(${JSON.stringify(identity)},String(process.pid)));
 http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
- fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({method:req.method,encoded:/[%?#\\\\]/.test(req.url),admission:req.url==='/api/transcribe'})+'\\n');
+ fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({method:req.method,encoded:/[%?#\\\\]/.test(req.url),admission:req.url==='/api/transcribe',preflight:req.url==='/internal/admission'})+'\\n');
  return listener(req,res);
 });};`);
   const f=await fixture(true,false,undefined,{workerPreload:preload});
@@ -252,6 +252,9 @@ http.createServer=function(options,listener){return create.call(this,options,(re
     const headers={...f.auth,...identityHeaders(),'X-Mesh-Session':'nonexistent'};
     const ordinary=await f.call('/api/transcribe','POST',headers,'audio');
     assert.equal(ordinary.status,409);assert.equal(ordinary.body.error.code,'stale_session');
+    assert.deepEqual(JSON.parse(fs.readFileSync(trace,'utf8')),
+      {method:'POST',encoded:false,admission:false,preflight:true});
+    fs.writeFileSync(trace,'');
     const attacks=[
       '%2e%2e%2f%2e%2e%2fapi%2ftranscribe%23',
       '%2E%2E%2F%2E%2E%2Fapi%2Ftranscribe%23',

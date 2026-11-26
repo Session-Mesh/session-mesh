@@ -261,7 +261,7 @@ var Dictation = class {
       clearTimeout(timeout);
     }
   }
-  async verifyPreparedSession(session) {
+  async verifySession(session) {
     const live = await this.isLive(session);
     this.authorize(session.principal);
     if (!live) throw new Fault("stale_session");
@@ -690,10 +690,16 @@ async function dispatch(req, config, engine, send) {
     send(200, config.public);
     return;
   }
+  if (req.method === "POST" && path === "/internal/admission") {
+    await empty(req);
+    await engine.verifySession(metadata(req));
+    send(200, {});
+    return;
+  }
   if (req.method === "POST" && path === "/api/transcribe") {
     const admission2 = metadata(req);
     const result = await engine.prepare(admission2, req.iterator({ destroyOnReturn: false }));
-    await engine.verifyPreparedSession(admission2);
+    await engine.verifySession(admission2);
     send(202, result);
     return;
   }
