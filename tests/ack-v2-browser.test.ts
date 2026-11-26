@@ -19,7 +19,7 @@ declare const active: {
 };
 declare global {
   // eslint-disable-next-line no-var
-  var __v2Sockets: {url: string; announce(cap?: object): void; receipt(ack: object): void; close(): void}[];
+  var __v2Sockets: {url: string; announce(cap?: object): void; boundAndReplay(): void; receipt(ack: object): void; close(): void}[];
   // Number of upcoming upgrades refused before the socket opens.
   var __v2FailBeforeOpen: number;
   // eslint-disable-next-line no-var
@@ -60,6 +60,9 @@ const installFakeBridge = () => {
       created: Number(new URL(this.url).searchParams.get('input_ack_created')), slot: 4, generation: 17,
       actor_nonce: '0123456789abcdef0123456789abcdef'}) {
       this.onmessage?.(new MessageEvent('message', {data: JSON.stringify(cap)}));
+      this.boundAndReplay();
+    }
+    boundAndReplay() {
       if (this.readyState === RealSocket.OPEN) {
         const created = Number(new URL(this.url).searchParams.get('created'));
         const name = decodeURIComponent(new URL(this.url).pathname.split('/').at(-1)!);
@@ -384,8 +387,9 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     await page.context().close();
   });
 
-  for (const scenario of ['desktop', 'phone', 'phone with a second replacement'] as const) test(`retained text from a replaced attachment opens as an editable draft without replay (${scenario})`, async () => {
-    const phone = scenario !== 'desktop';
+  for (const scenario of ['desktop', 'desktop without ACK', 'phone', 'phone with a second replacement'] as const) test(`retained text from a replaced attachment opens as an editable draft without replay (${scenario})`, async () => {
+    const phone = scenario.startsWith('phone');
+    const legacy = scenario === 'desktop without ACK';
     if (phone) await mesh.newShell('recovery-other');
     const page = await open(phone);
     if (phone) await page.locator('#btn-menu').click();
@@ -402,12 +406,16 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
       const listing = await response.json();
       const session = listing.mesh.find((row: {name: string}) => row.name === 'v2-terminal');
       session.created = nextCreated;
-      session.pty_capabilities = ['acknowledged_input_v1', 'acknowledged_input_v2'];
+      session.pty_capabilities = legacy ? [] : ['acknowledged_input_v1', 'acknowledged_input_v2'];
       await route.fulfill({response, json: listing});
     });
     await page.evaluate(() => refresh());
     await page.waitForFunction(() => window.__v2Sockets.length >= 2 && active?.conn?.ws?.readyState === WebSocket.OPEN);
-    await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
+    await page.evaluate(noAck => {
+      const socket = window.__v2Sockets.at(-1)!;
+      if (noAck) socket.boundAndReplay();
+      else socket.announce();
+    }, legacy);
     if (phone) {
       assert.equal(await page.locator('#line-text').inputValue(), 'existing draft', 'never overwrite existing text');
       await page.locator('#line-text').clear();
@@ -424,6 +432,10 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     }
     assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1,
       'recovery never replays the uncertain frame');
+    if (legacy) {
+      await page.context().close();
+      return;
+    }
     if (scenario === 'phone with a second replacement') {
       const sockets = await page.evaluate(() => window.__v2Sockets.length);
       nextCreated++;
