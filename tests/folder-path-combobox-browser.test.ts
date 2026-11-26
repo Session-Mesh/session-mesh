@@ -64,18 +64,24 @@ describe('folder field of the New session dialog', {skip}, () => {
   const knownLoaded = (page: Page) => page.waitForFunction(root => [...document.querySelectorAll('#new-folder-list [role="option"]')]
     .some(option => option.textContent === root), work, {polling: 100, timeout: 10000});
 
+  function waitForOptions(page: Page, expected: string[]): Promise<unknown> {
+    return page.waitForFunction(want => JSON.stringify([...document.querySelectorAll('#new-folder-list [role="option"]')]
+      .map(option => option.textContent)) === want, JSON.stringify(expected), {polling: 100, timeout: 10000});
+  }
+
   /** Replace the field's text by typing it, then wait until the list holds `expected`. */
   async function typeAndWait(page: Page, text: string, expected: string[]): Promise<void> {
     await field(page).fill('');
     await field(page).pressSequentially(text);
-    await page.waitForFunction(want => JSON.stringify([...document.querySelectorAll('#new-folder-list [role="option"]')]
-      .map(option => option.textContent)) === want, JSON.stringify(expected), {polling: 100, timeout: 10000});
+    await waitForOptions(page, expected);
   }
 
   const listed = [path.join(work, 'alpha'), path.join(work, 'alpine'), path.join(work, HOSTILE), path.join(work, 'gamma')];
 
   test('the allowed folder first, nothing outside it; arrows, Enter and Tab accept, Escape closes the list only', async () => {
     const page = await dialog();
+    // Config roots can arrive before the directory scan and session recency.
+    await waitForOptions(page, [work, path.join(work, 'beta'), ...listed]);
     await field(page).press('ArrowDown');
     assert.deepEqual(await options(page), [work, path.join(work, 'beta'), ...listed], 'roots, open sessions, then GET /api/dirs');
     assert.equal(await field(page).getAttribute('aria-expanded'), 'true');
