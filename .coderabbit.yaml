@@ -16,6 +16,8 @@ reviews:
     allow_author_approval: false
     max_merge_risk: low
   high_level_summary: true
+  # Body edits start a fresh required CI run and cancel the one already in progress.
+  high_level_summary_in_walkthrough: true
   poem: false
   review_status: true
   collapse_walkthrough: true
