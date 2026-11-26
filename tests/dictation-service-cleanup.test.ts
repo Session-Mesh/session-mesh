@@ -30,7 +30,9 @@ const original=cp.spawn;let used=false;cp.spawn=function(file,args,options){
  const child=original.call(this,file,args,options);
  if(!used&&file===process.execPath&&args[0]===${JSON.stringify(executable)}){
   used=true;const stopped=child.kill('SIGSTOP'),start=birth(child.pid);
-  fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:child.pid,stopped,parent:process.pid,start}));
+  const marker=${JSON.stringify(marker)};
+  fs.writeFileSync(marker+'.tmp',JSON.stringify({pid:child.pid,stopped,parent:process.pid,start}));
+  fs.renameSync(marker+'.tmp',marker);
  }return child;};`);
   const runner=spawn(process.execPath,['--require',preload,'--experimental-strip-types',path.resolve('tests/dictation-service-protocol.test.ts')],{
     env:{PATH:process.env.PATH,MESH_PYTHON:process.env.MESH_PYTHON,MESH_PTYHOST_CMD:process.env.MESH_PTYHOST_CMD},stdio:['ignore','pipe','pipe']});
@@ -46,13 +48,21 @@ const original=cp.spawn;let used=false;cp.spawn=function(file,args,options){
     assert.equal(runner.exitCode,1,'the intentionally frozen scenario must fail, not pass');
     assert.equal(sameProcess(pid,start),false,'original worker must already be absent/reaped, even after reparenting');
   }finally{
-    if(!pid&&fs.existsSync(marker)){const fault=JSON.parse(fs.readFileSync(marker,'utf8'));if(fault.parent===runner.pid){pid=fault.pid;start=fault.start;}}
-    if(pid&&typeof start==='string'&&start.length)await recover(pid,start);
-    for(let i=0;i<200&&!ended;i++)await delay(10);
-    if(!ended)runner.kill('SIGTERM');
-    for(let i=0;i<200&&!ended;i++)await delay(10);
-    if(!ended){runner.kill('SIGKILL');for(let i=0;i<100&&!ended;i++)await delay(10);}
-    runner.stdout.destroy();runner.stderr.destroy();fs.rmSync(directory,{recursive:true,force:true});
+    try {
+      if(!pid&&fs.existsSync(marker)){const fault=JSON.parse(fs.readFileSync(marker,'utf8'));if(fault.parent===runner.pid){pid=fault.pid;start=fault.start;}}
+      if(pid&&typeof start==='string'&&start.length)await recover(pid,start);
+    } finally {
+      try {
+        for(let i=0;i<200&&!ended;i++)await delay(10);
+        if(!ended)runner.kill('SIGTERM');
+        for(let i=0;i<200&&!ended;i++)await delay(10);
+        if(!ended){runner.kill('SIGKILL');for(let i=0;i<100&&!ended;i++)await delay(10);}
+      } finally {
+        runner.stdout.destroy();
+        runner.stderr.destroy();
+        fs.rmSync(directory,{recursive:true,force:true});
+      }
+    }
   }
 });
 
@@ -63,7 +73,9 @@ test('retained birth identity recognizes an orphan until that same worker exits'
 const birth=${processBirth.toString()};
 const child=cp.spawn(process.execPath,[${JSON.stringify(executable)}],{env:{PATH:process.env.PATH,MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'},stdio:['pipe','ignore','ignore']});
 child.stdin.on('error',()=>{});child.kill('SIGSTOP');
-fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:child.pid,parent:process.pid,start:birth(child.pid)}));
+const marker=${JSON.stringify(marker)};
+fs.writeFileSync(marker+'.tmp',JSON.stringify({pid:child.pid,parent:process.pid,start:birth(child.pid)}));
+fs.renameSync(marker+'.tmp',marker);
 process.stdin.resume();process.stdin.once('end',()=>process.exit(1));`;
   const parent=spawn(process.execPath,['-e',code],{env:{PATH:process.env.PATH},stdio:['pipe','ignore','ignore']});
   let identity:{pid:number;parent:number;start:string}|null=null,ended=false;parent.on('exit',()=>{ended=true;});
@@ -74,9 +86,16 @@ process.stdin.resume();process.stdin.once('end',()=>process.exit(1));`;
     parent.stdin.end();for(let i=0;i<100&&!ended;i++)await delay(10);assert.ok(ended);
     assert.ok(sameProcess(identity!.pid,identity!.start),'changed PPID is not evidence of process absence');
   }finally{
-    if(!identity&&fs.existsSync(marker))identity=JSON.parse(fs.readFileSync(marker,'utf8'));
-    if(identity&&identity.parent===parent.pid)await recover(identity.pid,identity.start);
-    parent.stdin.end();for(let i=0;i<100&&!ended;i++)await delay(10);
-    if(!ended)parent.kill('SIGTERM');fs.rmSync(directory,{recursive:true,force:true});
+    try {
+      if(!identity&&fs.existsSync(marker))identity=JSON.parse(fs.readFileSync(marker,'utf8'));
+      if(identity&&identity.parent===parent.pid)await recover(identity.pid,identity.start);
+    } finally {
+      try {
+        parent.stdin.end();for(let i=0;i<100&&!ended;i++)await delay(10);
+        if(!ended)parent.kill('SIGTERM');
+      } finally {
+        fs.rmSync(directory,{recursive:true,force:true});
+      }
+    }
   }
 });
