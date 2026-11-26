@@ -71,11 +71,12 @@ export async function liveInventory(socketPath: string, m: Admission): Promise<b
     const finish = (value?: boolean) => {
       if (done) return;
       done = true;
+      clearTimeout(deadline);
       socket.destroy();
       if (value === undefined) reject(new Fault('unavailable'));
       else resolve(value);
     };
-    socket.setTimeout(1000, () => finish());
+    const deadline = setTimeout(() => finish(), 1000);
     socket.on('error', () => finish());
     socket.on('end', () => finish());
     socket.on('connect', () => {

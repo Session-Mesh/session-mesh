@@ -49,7 +49,7 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
   const ops:string[]=[];
   let inventoryHandler:((reply:(incarnation?:number)=>void)=>void)|null=null;
   const peers=new Set<net.Socket>();
-  const inventory=net.createServer(socket=>{peers.add(socket);socket.on('close',()=>peers.delete(socket));let bytes=Buffer.alloc(0);socket.on('error',()=>{});socket.on('data',(part:Buffer)=>{
+  const inventory=net.createServer({allowHalfOpen:true},socket=>{peers.add(socket);socket.on('close',()=>peers.delete(socket));let bytes=Buffer.alloc(0);socket.on('error',()=>{});socket.on('data',(part:Buffer)=>{
     bytes=Buffer.concat([bytes,part]);if(bytes.length<5||bytes.length<bytes.readUInt32BE(1)+5)return;
     if(bytes[0]!==67){socket.destroy();return;}
     const command=JSON.parse(bytes.subarray(5).toString());ops.push(command.op);inventoryCalls++;
@@ -90,12 +90,30 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
   }
   if(nodePath!==undefined)env.MESH_NODE=nodePath;
   const child=spawn(python(),['-B',path.join(root,'server.py')],{cwd:root,env,stdio:['ignore','ignore','pipe']});let errors='';child.stderr.on('data',b=>errors+=b);
+  let spawnError: Error | undefined;
+  child.once('error', error => { spawnError = error; });
   options.onSpawn?.(child);
   const call=(p:string,method='GET',headers:any={},body:string|Buffer='')=>request({hostname:'127.0.0.1',port,path:p,method,headers},body);
-  const close=async()=>{for(const release of upstreamReleases)release();if(child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');await until(()=>child.exitCode!==null||child.signalCode!==null);}child.stderr.destroy();for(const peer of peers)peer.destroy();upstream.closeAllConnections();await Promise.all([new Promise<void>(r=>inventory.close(()=>r())),new Promise<void>(r=>upstream.close(()=>r()))]);fs.rmSync(directory,{recursive:true,force:true});};
+  const close = async () => {
+    for (const release of upstreamReleases) release();
+    try {
+      if (child.pid && child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGTERM');
+        await until(() => child.exitCode !== null || child.signalCode !== null);
+      }
+    } finally {
+      if (child.pid && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      child.stderr.destroy();
+      for (const peer of peers) peer.destroy();
+      upstream.closeAllConnections();
+      await Promise.all([new Promise<void>(r => inventory.close(() => r())), new Promise<void>(r => upstream.close(() => r()))]);
+      fs.rmSync(directory, {recursive: true, force: true});
+    }
+  };
   try{
     const deadline=performance.now()+(options.startupWaitMs??5000);
     while(true){
+      if(spawnError)throw new Error('server fixture could not start',{cause:spawnError});
       if(child.exitCode!==null||child.signalCode!==null)throw Error(`server fixture failed: ${errors}`);
       try{if([401,403].includes((await call('/api/transcribe/config')).status))break;}catch{/* not listening yet */}
       if(performance.now()>=deadline)throw Error('server fixture startup timeout');

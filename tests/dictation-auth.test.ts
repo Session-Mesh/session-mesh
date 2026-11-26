@@ -50,6 +50,41 @@ for(const [label,kind,malformed,expected] of [
   }
 });
 
+test('liveInventory has a total deadline even while reply bytes arrive', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-inventory-'));
+  const socketPath = path.join(directory, 'inventory.sock');
+  let finishedSending = false;
+  const server = net.createServer({allowHalfOpen: true}, socket => {
+    socket.on('error', () => {});
+    socket.once('data', () => {
+      const header = Buffer.alloc(5);
+      header[0] = 67;
+      header.writeUInt32BE(4096, 1);
+      socket.write(header);
+      const drip = setInterval(() => socket.write(' '), 75);
+      const end = setTimeout(() => {
+        finishedSending = true;
+        socket.end();
+      }, 1800);
+      socket.once('close', () => {
+        clearInterval(drip);
+        clearTimeout(end);
+      });
+    });
+  });
+  try {
+    await new Promise<void>(resolve => server.listen(socketPath, resolve));
+    await assert.rejects(liveInventory(socketPath, {
+      principal: 'owner', client: randomUUID(), request: randomUUID(),
+      session: 'alpha', created: 1, mime: 'audio/webm',
+    }), error => error instanceof Fault && error.code === 'unavailable');
+    assert.equal(finishedSending, false);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(directory, {recursive: true, force: true});
+  }
+});
+
 test('private Unix service requires bridge secret, opaque principal, exact headers/JSON; prepare never infers before commit',async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-private-'));fs.chmodSync(directory,0o700);
   const secret=randomBytes(32).toString('hex'),socketPath=path.join(directory,'worker.sock');
@@ -201,7 +236,12 @@ test('authoritative logout succeeds through HTTP and native CLI while failed wor
 http.createServer=function(options,listener){return original.call(this,options,(req,res)=>{
   fs.appendFileSync(${JSON.stringify(trace)},req.url+'\\n');
   if(req.url==='/internal/principal'&&fs.existsSync(${JSON.stringify(marker)})){
-    res.writeHead(503,{'Content-Type':'application/json'});res.end('{}');return;
+    const unavailable=()=>{res.writeHead(503,{'Content-Type':'application/json'});res.end('{}');};
+    if(fs.readFileSync(${JSON.stringify(marker)},'utf8')==='slow'){
+      const timer=setTimeout(unavailable,3500);
+      res.once('close',()=>clearTimeout(timer));
+    }else unavailable();
+    return;
   }return listener(req,res);
 });};`);
   fs.writeFileSync(runtime,`#!/bin/sh\nexec ${quote(process.execPath)} --require ${quote(preload)} "$@"\n`,{mode:0o700});
@@ -215,8 +255,11 @@ http.createServer=function(options,listener){return original.call(this,options,(
     const admitted=await f.call('/api/transcribe','POST',headers,'old audio');assert.equal(admitted.status,202);
     const route=`/api/transcribe/${admitted.body.job_id}`;
     await until(async()=>(await f!.call(route,'GET',headers)).body.state==='ready');
-    fs.writeFileSync(trace,'');fs.writeFileSync(marker,'unavailable');
+    fs.writeFileSync(trace,'');fs.writeFileSync(marker,'slow');
+    const started = performance.now();
     const logout=await f.call('/api/logout-all','POST',f.auth);
+    assert.ok(performance.now() - started < 3000, 'logout does not wait for the optional worker response');
+    fs.writeFileSync(marker,'unavailable');
     assert.equal(logout.status,200,'the cookie generation was already revoked');
     assert.deepEqual(logout.body,{ok:true,generation:1});
     assert.ok(logout.headers['set-cookie']!.some(value=>value.startsWith('mesh_auth=""')));

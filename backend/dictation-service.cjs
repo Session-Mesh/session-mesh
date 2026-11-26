@@ -629,11 +629,12 @@ async function liveInventory(socketPath, m) {
     const finish = (value) => {
       if (done) return;
       done = true;
+      clearTimeout(deadline);
       socket.destroy();
       if (value === void 0) reject(new Fault("unavailable"));
       else resolve(value);
     };
-    socket.setTimeout(1e3, () => finish());
+    const deadline = setTimeout(() => finish(), 1e3);
     socket.on("error", () => finish());
     socket.on("end", () => finish());
     socket.on("connect", () => {
