@@ -39,7 +39,7 @@ const statusText = (page: Page) => page.locator('#sessions-status .sessions-stat
 describe('progressive session list', {skip}, () => {
   test('a server restart shows in the status line within seconds, and clears once listed', async () => {
     const page = await mesh.openPage('alpha', VIEW, undefined, watchErrors);
-    assert.equal(await statusText(page), '');
+    await page.waitForFunction(() => document.querySelector('#sessions-status .sessions-status-text')?.textContent === '');
     const box = await page.locator('#sessions-status').boundingBox();
     const listTop = (await page.locator('#list').boundingBox())!.y;
     const restarted = Date.now();
