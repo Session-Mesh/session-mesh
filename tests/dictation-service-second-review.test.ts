@@ -89,25 +89,37 @@ test('request lookup never presents a receiving or prepared reservation as queue
   }finally{resume?.();await d.close();}
 });
 
-for(const mode of ['absent','truncated','shape','utf8','timeout'] as const)test(`worker inventory ${mode} is classified without inference`,async()=>{
+for(const mode of ['absent','truncated','shape','utf8','timeout','shutdown'] as const)test(`worker inventory ${mode} is classified without inference`,async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-live-')),socketPath=path.join(directory,'inventory.sock');
   const peers=new Set<net.Socket>();
+  let requested = false;
   const server=net.createServer({allowHalfOpen:true},socket=>{
     peers.add(socket);socket.on('error',()=>{});socket.on('close',()=>peers.delete(socket));
     socket.once('data',()=>{
-      if(mode==='timeout')return;
+      requested = true;
+      if(mode==='timeout'||mode==='shutdown')return;
       if(mode==='truncated'){socket.end(Buffer.from([67,0]));return;}
       const body=mode==='utf8'?Buffer.from([0xff]):Buffer.from(mode==='shape'?'{}':'[]');
       const head=Buffer.alloc(5);head[0]=67;head.writeUInt32BE(body.length,1);socket.end(Buffer.concat([head,body]));
     });
   });
   await new Promise<void>(resolve=>server.listen(socketPath,resolve));
-  let calls=0;
-  const d=new Dictation(config(),{isLive:m=>liveInventory(socketPath,m),infer:async()=>{calls++;return 'must not run';}}),m=metadata();
+  let calls=0, aborted=false;
+  const d=new Dictation(config(),{isLive:(m, signal)=>{
+    signal.addEventListener('abort', () => { aborted = true; }, {once:true});
+    return liveInventory(socketPath,m,signal);
+  },infer:async()=>{calls++;return 'must not run';}}),m=metadata();
   try{
     const p=await d.prepare(m,audio());d.commit(m,p.job.job_id,p.preparation);
-    await until(()=>d.read(m,p.job.job_id).state==='error');
-    assert.equal(d.read(m,p.job.job_id).error?.code,mode==='absent'?'stale_session':'unavailable');
+    if(mode==='shutdown'){
+      await until(()=>requested);
+      await d.close();
+      assert.equal(aborted,true);
+      assert.equal(d.stats().active,0);
+    }else{
+      await until(()=>d.read(m,p.job.job_id).state==='error');
+      assert.equal(d.read(m,p.job.job_id).error?.code,mode==='absent'?'stale_session':'unavailable');
+    }
     assert.equal(calls,0);
   }finally{await d.close();for(const peer of peers)peer.destroy();await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(directory,{recursive:true,force:true});}
 });

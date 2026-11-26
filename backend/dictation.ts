@@ -160,10 +160,11 @@ interface RecordEntry {
 }
 export const PREPARATION_MS = 15000;
 type Infer = (chunks: Buffer[], meta: Admission, signal: AbortSignal) => Promise<string>;
+type IsLive = (meta: Admission, signal: AbortSignal) => Promise<boolean>;
 interface Options {
   now?: () => number;
   infer?: Infer;
-  isLive?: (meta: Admission) => Promise<boolean>;
+  isLive?: IsLive;
   principal?: string;
 }
 export class Dictation {
@@ -179,7 +180,7 @@ export class Dictation {
   private closed = false;
   private now: () => number;
   private infer: Infer;
-  private isLive: (meta: Admission) => Promise<boolean>;
+  private isLive: IsLive;
   private timer: NodeJS.Timeout;
   private principal: string | null;
   private revision = 0;
@@ -405,7 +406,7 @@ export class Dictation {
     this.controllers.add(controller);
     let timer: NodeJS.Timeout | undefined;
     try {
-      if (!await this.isLive(r.meta)) throw new Fault('stale_session');
+      if (!await this.isLive(r.meta, controller.signal)) throw new Fault('stale_session');
       if (this.closed || r.job.state !== 'processing') return;
       const deadline = this.now() + this.config.public.active_timeout_seconds * 1000;
       const expire = () => {
