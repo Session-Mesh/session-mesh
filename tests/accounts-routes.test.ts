@@ -15,7 +15,12 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import {after, before, describe, test} from 'node:test';
-import {REPO, type Mesh, type Scratch, startMesh} from './mesh-server-lib.ts';
+import {REPO, type Mesh, type Scratch, startMesh as startScratchMesh} from './mesh-server-lib.ts';
+import {retryBindCollision} from './helpers/bind-retry.ts';
+
+// These fixtures allocate fresh roots and ephemeral ports on every attempt.
+const startMesh = (...args: Parameters<typeof startScratchMesh>) =>
+  retryBindCollision(() => startScratchMesh(...args));
 import {createBackendAccountApi} from '../static/backend-account-api.ts';
 import {createBackendAccountController} from '../static/backend-account-model.ts';
 
@@ -156,12 +161,10 @@ let real: Mesh, empty: Mesh, missing: Mesh, fake: Mesh, fakeDir: string;
 before(async () => {
   if (skip) return;
   const common = {MESH_PROFILE_CMD: undefined, ANTHROPIC_API_KEY: SENTINEL, MESH_TEST_ACCOUNTS_SENTINEL: SENTINEL};
-  [real, empty, missing] = await Promise.all([
-    startMesh('accounts-routes-real-', {...common, MESH_MESH_PROFILE_CMD: HELPER}, registry),
-    startMesh('accounts-routes-empty-', {...common, MESH_MESH_PROFILE_CMD: HELPER},
-      where => fs.mkdirSync(where.confDir, {recursive: true, mode: 0o700})),
-    startMesh('accounts-routes-missing-', {...common, MESH_MESH_PROFILE_CMD: '/nonexistent/mesh-profile'}),
-  ]);
+  real = await startMesh('accounts-routes-real-', {...common, MESH_MESH_PROFILE_CMD: HELPER}, registry);
+  empty = await startMesh('accounts-routes-empty-', {...common, MESH_MESH_PROFILE_CMD: HELPER},
+    where => fs.mkdirSync(where.confDir, {recursive: true, mode: 0o700}));
+  missing = await startMesh('accounts-routes-missing-', {...common, MESH_MESH_PROFILE_CMD: '/nonexistent/mesh-profile'});
   let script = '';
   fake = await startMesh('accounts-routes-fake-', {...common}, where => {
     fakeDir = path.join(where.scratch, 'fake');
