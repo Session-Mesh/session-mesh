@@ -55,3 +55,27 @@ test('the History index still launches its existing override', async () => {
     assert.doesNotMatch(fs.readFileSync(marker, 'utf8'), /--conversation-names/);
   });
 });
+
+test('index and registry work together with a historical index helper', async () => {
+  await withHistoryLab(async lab => {
+    const marker = path.join(lab.where.scratch, 'history-index-calls');
+    const wrapper = path.join(lab.where.scratch, 'history-index-wrapper');
+    const indexHelper = process.env.MESH_TEST_LEGACY_HISTORY_CMD || helper;
+    fs.writeFileSync(wrapper, '#!/bin/sh\n' +
+      `printf '%s\\n' "$*" >> ${quoted(marker)}\n` +
+      `exec ${quoted(indexHelper)} "$@"\n`, {mode: 0o700});
+    fs.symlinkSync(helper, path.join(lab.bin, 'mesh-history'));
+    lab.where.env.MESH_MESH_HISTORY_CMD = undefined;
+    lab.where.env.MESH_HISTORY_CMD = wrapper;
+    lab.where.env.MESH_HISTORY_DB_DISABLE = undefined;
+    await lab.restartServer();
+    const session = await lab.create('claude');
+    await lab.rename(session.name, 'Concurrent index');
+    const reply = await lab.call('GET', '/api/history');
+    assert.equal(reply.status, 200, reply.text);
+    await waitFor('History index helper starts', 5000, () => fs.existsSync(marker));
+    assert.doesNotMatch(fs.readFileSync(marker, 'utf8'), /--conversation-names/);
+    const registry = JSON.parse(fs.readFileSync(path.join(lab.where.confDir, 'conversation-names.json'), 'utf8'));
+    assert.ok(registry.some((row: {name: string; label: string}) => row.name === session.name && row.label === 'Concurrent index'));
+  });
+});
