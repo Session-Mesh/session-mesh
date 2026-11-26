@@ -167,11 +167,11 @@ successful operations or catalogue observations; unsafe returned links are not r
 Paths must be canonical mirror-relative paths: no empty, dot or parent segments,
 leading/trailing slash or backslash. Unsupported spellings are refused before mutation.
 
-HTTP JSON MCP initialization, initialized notification and one explicit operation run
-under a 25-second total deadline with a 1 MiB response bound. The first version supports
-Notes' JSON HTTP transport, not SSE streaming, multi-round interactive tools or automatic
-OAuth negotiation. Upstream errors are deliberately generic to avoid logging capabilities.
-Mesh's session token is never sent to Notes.
+MCP initialization, the initialized notification and one explicit operation use Streamable
+HTTP under a 25-second total deadline with a 1 MiB response bound. Notes can reply with
+JSON or an SSE stream. Mesh reads an SSE stream through the response matching its request
+ID. Upstream errors use generic messages to protect capabilities, and Mesh sends only
+the configured Notes credential to Notes.
 
 An upstream success plus local recording failure returns `status: success` and
 `catalogue: not-recorded`, with the successful upstream result and a warning. Do **not**
