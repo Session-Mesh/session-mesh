@@ -44,6 +44,16 @@ export function createBackendAccountApi(request: AccountFetch, nativeProvision?:
   return {
     setProvisionCapability(value) { provision = backends(value); },
     inspect: signal => read('/api/accounts/profiles', signal),
+    inspectProvision: signal => read('/api/accounts/profiles/provision-inspect', signal),
+    listProvisionReceipts: signal => read('/api/accounts/profiles/provision-receipts', signal),
+    forgetProvisionReceipt: (proof, signal) => {
+      if (!/^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[a-f0-9]{64}$/.test(proof)) return Promise.reject(new Error('invalid-account-operation'));
+      return read('/api/accounts/profiles/provision-forget-receipt', signal, JSON.stringify({proof}));
+    },
+    acknowledgeProvision: (proof, signal) => {
+      if (!/^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[a-f0-9]{64}$/.test(proof)) return Promise.reject(new Error('invalid-account-operation'));
+      return read('/api/accounts/profiles/provision-acknowledge', signal, JSON.stringify({proof}));
+    },
     async load(signal) {
       // Sequential reads avoid an orphan second request if the first one refuses.
       const profiles = await read('/api/accounts/profiles', signal);
@@ -65,10 +75,10 @@ export function createBackendAccountApi(request: AccountFetch, nativeProvision?:
       backends: provision,
       managed: true as const,
       write(mutation, signal) {
-        const {version, op, registry_revision, profile} = mutation;
+        const {version, op, registry_revision, profile, operation_id} = mutation;
         if (version !== 1 || op !== 'profiles.provision' || !validProvisionInput(profile)
-          || !provision.includes(profile.backend)) return Promise.reject(new Error('invalid-account-operation'));
-        return read('/api/accounts/profiles/provision', signal, JSON.stringify({registry_revision, profile}));
+          || !provision.includes(profile.backend) || (operation_id !== undefined && !/^[a-f0-9]{32}$/.test(operation_id))) return Promise.reject(new Error('invalid-account-operation'));
+        return read('/api/accounts/profiles/provision', signal, JSON.stringify({registry_revision, profile, ...(operation_id ? {operation_id} : {})}));
       },
     } : undefined; },
   };

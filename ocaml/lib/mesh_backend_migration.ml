@@ -48,11 +48,14 @@ let target root = Filename.concat root "backend-profiles.json"
 let marker root = Filename.concat root "backend-profiles.migrated"
 let intent root = Filename.concat root ".backend-profiles.migration-intent"
 let first_intent root = Filename.concat root ".backend-profiles.create-intent"
+let provision_intent root = Filename.concat root ".backend-profiles.provision-intent"
 let migration_lock root = Filename.concat root ".backend-profiles.lock"
 (* A legacy switch records its uncertain outcome durably under this same
    lock. Never interpret or remove its evidence on behalf of the operator. *)
 let legacy_switch_marker root = Filename.concat root ".backend-profiles.legacy-switch"
 let hash bytes = Digestif.SHA256.(to_hex (digest_string bytes))
+let receipt_prefix = ".backend-profiles.provision-receipt-"
+let provision_receipt root proof = Filename.concat root (receipt_prefix ^ hash proof)
 let same a b = a.Unix.st_dev = b.Unix.st_dev && a.Unix.st_ino = b.Unix.st_ino
 
 let private_file st =
@@ -699,6 +702,7 @@ let migrate ~root =
              (* Refuse migration while a legacy switch or initial setup is active. *)
              let* () = absent ~error:Migration_busy (legacy_switch_marker root) in
              let* () = absent (first_intent root) in
+             let* () = absent ~error:Migration_busy (provision_intent root) in
              let existing =
                match Unix.lstat (target root) with
                | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
@@ -815,24 +819,44 @@ let read_first_intent root =
            else None)
 
 let cleanup_first_stage ~root ~stage ~identity =
-  match Unix.lstat (first_intent root) with
-  | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
-      cleanup_temp stage identity
-  | _ -> ()
+  let absent path = match Unix.lstat path with
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true | _ -> false in
+  if absent (first_intent root) && absent (provision_intent root)
+  then cleanup_temp stage identity
 
 type create_recovery = Unpublished_aborted | Published_reconciled
+
+let inspect_provision ~root =
+  let fail () = Error "profile-publication-uncertain" in
+  try
+    let* () = project "unsafe-configuration-root" (P.validate_private_root root) in
+    let* lock = Result.map_error error_code (acquire_migration_lock root) in
+    Fun.protect ~finally:(fun () -> Unix.close lock) (fun () ->
+      let directory = Unix.openfile root [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+        let root_id = Unix.fstat directory in
+        let path = provision_intent root in
+        let before = Unix.lstat path in
+        if not (same root_id (Unix.lstat root) && private_file before && before.Unix.st_size <= 4096)
+        then fail () else
+        let fd = Unix.openfile path [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
+        Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+          let bytes = Bytes.create before.Unix.st_size in
+          let rec loop n = if n = Bytes.length bytes then true else
+            let count = Unix.read fd bytes n (Bytes.length bytes - n) in
+            count > 0 && loop (n + count) in
+          if not (unchanged before (Unix.fstat fd) && loop 0 && unchanged before (Unix.fstat fd)
+                  && unchanged before (Unix.lstat path) && same root_id (Unix.lstat root)) then fail ()
+          else Ok (Printf.sprintf "%d:%d:%d:%d:%s" root_id.Unix.st_dev root_id.Unix.st_ino
+            before.Unix.st_dev before.Unix.st_ino (hash (Bytes.to_string bytes))))))
+  with Unix.Unix_error _ | Sys_error _ -> fail ()
 
 (* Host-only reconciliation: never publish a staged file. A separately
    recorded first-create inode may still be staged before its first link, or
    may already be published. Unverifiable state is left for the operator. *)
-let recover_created_profile ~root =
+let recover_created_profile_locked ~root ~apply =
   let fail () = Error "profile-publication-uncertain" in
-  let* () =
-    project "unsafe-configuration-root" (P.validate_private_root root)
-  in
   try
-    let* lock = Result.map_error error_code (acquire_migration_lock root) in
-    Fun.protect ~finally:(fun () -> Unix.close lock) (fun () ->
         let directory =
           Unix.openfile root [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0
         in
@@ -983,6 +1007,8 @@ let recover_created_profile ~root =
                                   && absent (marker root) && absent (intent root)
                                   && absent (legacy_switch_marker root))
                                then fail ()
+                               else if not apply then
+                                 Ok (if Option.is_some published then Published_reconciled else Unpublished_aborted)
                                else
                                  match published with
                                  | None ->
@@ -1022,18 +1048,270 @@ let recover_created_profile ~root =
                                      else (
                                        Unix.unlink (first_intent root);
                                        Unix.fsync directory;
-                                       Ok Published_reconciled)))
+                                       Ok Published_reconciled))
   with Unix.Unix_error _ | Sys_error _ -> fail ()
+
+let recover_created_profile ~root =
+  let* () = project "unsafe-configuration-root" (P.validate_private_root root) in
+  let* lock = Result.map_error error_code (acquire_migration_lock root) in
+  Fun.protect ~finally:(fun () -> Unix.close lock) (fun () ->
+    recover_created_profile_locked ~root ~apply:true)
+
+
+(* Explicit operator action. Never publish, adopt, or delete an allocated root.
+   An unreadable, altered or contradictory record remains in place. *)
+let recover_provision_with_checkpoint ?(apply = true) ~checkpoint ~root ~expected () =
+  let fail () = Error "profile-publication-uncertain" in
+  let allow_linked_target = ref false in
+  let read path =
+    let before = Unix.lstat path in
+    let verified_link = !allow_linked_target && path = target root
+      && before.Unix.st_kind = Unix.S_REG && before.Unix.st_uid = Unix.geteuid ()
+      && before.Unix.st_perm land 0o077 = 0 && before.Unix.st_nlink = 2 in
+    let matches after =
+      (unchanged before after || (verified_link && same before after
+        && after.Unix.st_kind = Unix.S_REG && after.Unix.st_uid = Unix.geteuid ()
+        && after.Unix.st_perm land 0o077 = 0 && after.Unix.st_nlink = 2
+        && before.Unix.st_size = after.Unix.st_size && before.Unix.st_mtime = after.Unix.st_mtime
+        && before.Unix.st_ctime = after.Unix.st_ctime)) in
+    if not (private_file before || verified_link) || before.Unix.st_size > 1048576 then None
+    else
+      let fd = Unix.openfile path [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+        if not (matches (Unix.fstat fd)) then None else
+        let bytes = Bytes.create before.Unix.st_size in
+        let rec loop n =
+          if n = Bytes.length bytes then true else
+          let count = Unix.read fd bytes n (Bytes.length bytes - n) in
+          count > 0 && loop (n + count)
+        in
+        if loop 0 && matches (Unix.fstat fd) && matches (Unix.lstat path)
+        then Some (before, Bytes.to_string bytes) else None)
+  in
+  try
+    let* () = project "unsafe-configuration-root" (P.validate_private_root root) in
+    let* lock = Result.map_error error_code (acquire_migration_lock root) in
+    Fun.protect ~finally:(fun () -> Unix.close lock) (fun () ->
+      let directory = Unix.openfile root [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+        let root_id = Unix.fstat directory in
+        let is_absent path = match Unix.lstat path with
+          | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true | _ -> false in
+        let receipt () =
+          match read (provision_receipt root expected) with
+          | Some (_, bytes) ->
+            (match Yojson.Safe.from_string bytes with
+            | `Assoc [("proof", `String proof); ("outcome", `String outcome); ("operation", operation); ("record", `String record)]
+                when String.ends_with ~suffix:(":" ^ hash record) proof
+                  && Yojson.Safe.Util.member "operation" (Yojson.Safe.from_string record) = operation
+                  && proof = expected && String.starts_with
+                  ~prefix:(Printf.sprintf "%d:%d:" root_id.Unix.st_dev root_id.Unix.st_ino) proof
+                  && same root_id (Unix.lstat root) ->
+              (match outcome with "published" -> Ok Published_reconciled
+                | "unpublished" -> Ok Unpublished_aborted | _ -> fail ())
+            | _ -> fail ())
+          | None -> fail () in
+        let* first = if is_absent (first_intent root) then Ok None
+          else Result.map Option.some (recover_created_profile_locked ~root ~apply:false) in
+        allow_linked_target := Option.is_some first;
+        if not (same root_id (Unix.lstat root)
+                && is_absent (intent root) && is_absent (legacy_switch_marker root)) then fail ()
+        else match (try read (provision_intent root) with Unix.Unix_error (Unix.ENOENT, _, _) -> None) with
+        | None -> receipt ()
+        | Some (identity, bytes) ->
+          let proof = Printf.sprintf "%d:%d:%d:%d:%s" root_id.Unix.st_dev root_id.Unix.st_ino
+              identity.Unix.st_dev identity.Unix.st_ino (hash bytes) in
+          if proof <> expected then receipt () else
+          let record = Yojson.Safe.from_string bytes in
+          let open Yojson.Safe.Util in
+          let fields = match record with `Assoc fields -> fields | _ -> [] in
+          let previous = member "previous" record and candidate = member "candidate" record in
+          let valid_hash s = String.length s = 64 && String.for_all (function '0'..'9' | 'a'..'f' -> true | _ -> false) s in
+          let valid_previous = match previous with `Null -> true | `String s -> valid_hash s | _ -> false in
+          if List.sort String.compare (List.map fst fields) <> ["candidate"; "candidate_dev"; "candidate_ino"; "id"; "kind"; "operation"; "previous"; "previous_dev"; "previous_ino"; "root_dev"; "root_ino"; "stage"; "version"]
+             || member "version" record <> `Int 1 || member "kind" record <> `String "provision"
+             || member "root_dev" record <> `Int root_id.Unix.st_dev || member "root_ino" record <> `Int root_id.Unix.st_ino
+             || (match member "operation" record with `Null -> false | `String id ->
+               not (String.length id = 32 && String.for_all (function '0'..'9' | 'a'..'f' -> true | _ -> false) id) | _ -> true)
+             || not valid_previous || (match candidate with `String s -> not (valid_hash s) | _ -> true)
+             || (match member "stage" record with `String s -> not (stage_name s) | _ -> true)
+             || (match member "candidate_dev" record, member "candidate_ino" record with `Int _, `Int _ -> false | _ -> true)
+             || (match member "id" record with `String s -> not (String.length s = 18 && String.starts_with ~prefix:"p-" s) | _ -> true)
+          then fail () else
+          let* () = match first with
+            | None -> Ok ()
+            | Some _ ->
+              (match read_first_intent root with
+              | Some (_, first_bytes) ->
+                let first_record = Yojson.Safe.from_string first_bytes in
+                if member "stage" first_record = member "stage" record
+                   && member "dev" first_record = member "candidate_dev" record
+                   && member "ino" first_record = member "candidate_ino" record
+                   && member "digest" first_record = candidate then Ok () else fail ()
+              | None -> fail ()) in
+          let current = match read (target root) with
+            | Some (st, content) -> Some (st, hash content)
+            | None -> raise (Unix.Unix_error (Unix.EPERM, "registry", ""))
+            | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None in
+          let result = if (match previous, current with
+            | `Null, None -> member "previous_dev" record = `Null && member "previous_ino" record = `Null
+            | `String a, Some (st, b) -> a = b && member "previous_dev" record = `Int st.Unix.st_dev
+                && member "previous_ino" record = `Int st.Unix.st_ino
+            | _ -> false)
+            then Some Unpublished_aborted
+            else if (match candidate, current with `String a, Some (st, b) -> a = b
+                && member "candidate_dev" record = `Int st.Unix.st_dev
+                && member "candidate_ino" record = `Int st.Unix.st_ino | _ -> false)
+            then Some Published_reconciled else None in
+          match result, read (provision_intent root) with
+          | Some result, Some (again, value) when unchanged identity again && value = bytes
+              && same root_id (Unix.lstat root)
+              && Option.fold ~none:true ~some:(fun outcome -> outcome = result) first ->
+              if not apply then Ok result else
+              let* () = match first with
+                | None -> Ok ()
+                | Some _ ->
+                  let* actual = recover_created_profile_locked ~root ~apply:true in
+                  if actual = result then Ok () else fail () in
+              (match first with Some _ -> checkpoint `First_reconciled | None -> ());
+              let receipt = Yojson.Safe.to_string (`Assoc [
+                ("proof", `String proof);
+                ("outcome", `String (match result with Published_reconciled -> "published" | Unpublished_aborted -> "unpublished"));
+                ("operation", member "operation" record); ("record", `String bytes)]) ^ "\n" in
+              let receipt_path = provision_receipt root proof in
+              let* () =
+                let exists = not (is_absent receipt_path) in
+                if exists then (match read receipt_path with
+                  | Some (_, value) when value = receipt -> Ok () | _ -> fail ())
+                else if Array.fold_left (fun n name -> if String.starts_with ~prefix:receipt_prefix name then n + 1 else n) 0 (Sys.readdir root) >= 256
+                then fail () else Ok () in
+              let stage, fd = create_temp root in
+              Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+                write_all fd receipt 0; Unix.fchmod fd 0o600; Unix.fsync fd);
+              Unix.rename stage receipt_path; Unix.fsync directory;
+              checkpoint `Receipt_published;
+              if not (same root_id (Unix.lstat root)) then fail () else (
+                Unix.unlink (provision_intent root); Unix.fsync directory;
+                checkpoint `Intent_removed; Ok result)
+          | _ -> fail ()))
+  with Unix.Unix_error _ | Sys_error _ | Yojson.Json_error _ -> fail ()
+
+let recover_provision ~root ~expected =
+  recover_provision_with_checkpoint ~checkpoint:(fun _ -> ()) ~root ~expected ()
+
+let inspect_provision_outcome ~root =
+  let* proof = inspect_provision ~root in
+  let* outcome = recover_provision_with_checkpoint ~apply:false ~checkpoint:(fun _ -> ()) ~root ~expected:proof () in
+  Ok (proof, outcome)
+
+let inspect_provision_operation ~root ~proof =
+  try
+    let path = provision_intent root in
+    let st = Unix.lstat path in
+    if not (private_file st) || st.Unix.st_size > 4096 then raise (Unix.Unix_error (Unix.EPERM, "intent", ""));
+    let fd = Unix.openfile path [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
+    let bytes = Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+      if not (unchanged st (Unix.fstat fd)) then raise (Unix.Unix_error (Unix.EPERM, "intent", ""));
+      let buffer = Bytes.create st.Unix.st_size in
+      let rec loop n = if n < Bytes.length buffer then
+        let count = Unix.read fd buffer n (Bytes.length buffer - n) in
+        if count = 0 then raise (Unix.Unix_error (Unix.EIO, "intent", "")) else loop (n + count) in
+      loop 0;
+      if not (unchanged st (Unix.fstat fd) && unchanged st (Unix.lstat path)) then raise (Unix.Unix_error (Unix.EPERM, "intent", ""));
+      Bytes.to_string buffer) in
+    let* current = inspect_provision ~root in
+    if current <> proof || not (unchanged st (Unix.lstat path)) then Error "profile-publication-uncertain" else
+    match Yojson.Safe.Util.member "operation" (Yojson.Safe.from_string bytes) with
+    | `Null -> Ok None
+    | `String id when String.length id = 32 && String.for_all (function '0'..'9' | 'a'..'f' -> true | _ -> false) id -> Ok (Some id)
+    | _ -> Error "profile-publication-uncertain"
+  with Unix.Unix_error _ | Sys_error _ | Yojson.Json_error _ -> Error "profile-publication-uncertain"
+
+let read_private_small path =
+  let st = Unix.lstat path in
+  if not (private_file st) || st.Unix.st_size > 4096 then None else
+  let fd = Unix.openfile path [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
+  Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+    let buffer = Bytes.create st.Unix.st_size in
+    let rec loop n = if n = Bytes.length buffer then true else
+      let count = Unix.read fd buffer n (Bytes.length buffer - n) in count > 0 && loop (n + count) in
+    if unchanged st (Unix.fstat fd) && loop 0 && unchanged st (Unix.fstat fd)
+       && unchanged st (Unix.lstat path) then Some (st, Bytes.to_string buffer) else None)
+
+let parse_receipt ~root_id ~path bytes =
+  let fail () = Error "profile-publication-uncertain" in
+  match Yojson.Safe.from_string bytes with
+  | `Assoc [("proof", `String proof); ("outcome", `String outcome); ("operation", operation); ("record", `String record)]
+    when String.ends_with ~suffix:(":" ^ hash record) proof
+      && Yojson.Safe.Util.member "operation" (Yojson.Safe.from_string record) = operation
+      && (match operation with `Null -> true | `String id -> String.length id = 32 && String.for_all (function '0'..'9' | 'a'..'f' -> true | _ -> false) id | _ -> false)
+      && Filename.basename path = receipt_prefix ^ hash proof
+      && String.starts_with ~prefix:(Printf.sprintf "%d:%d:" root_id.Unix.st_dev root_id.Unix.st_ino) proof ->
+      (match outcome with "published" -> Ok (proof, Published_reconciled, operation)
+        | "unpublished" -> Ok (proof, Unpublished_aborted, operation) | _ -> fail ())
+  | _ -> fail ()
+
+let with_receipts ~root f =
+  let fail () = Error "profile-publication-uncertain" in
+  try
+    let* () = project "unsafe-configuration-root" (P.validate_private_root root) in
+    let* lock = Result.map_error error_code (acquire_migration_lock root) in
+    Fun.protect ~finally:(fun () -> Unix.close lock) (fun () ->
+      let directory = Unix.openfile root [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
+        let root_id = Unix.fstat directory in
+        if not (same root_id (Unix.lstat root)) then fail () else f directory root_id))
+  with Unix.Unix_error _ | Sys_error _ | Yojson.Json_error _ -> fail ()
+
+let list_provision_receipts ~root =
+  with_receipts ~root (fun _ root_id ->
+    let names = Sys.readdir root |> Array.to_list |> List.filter (String.starts_with ~prefix:receipt_prefix) in
+    if List.length names > 256 then Error "profile-publication-uncertain" else
+    let rec loop acc = function
+      | [] -> Ok (List.rev acc)
+      | name :: rest ->
+        let path = Filename.concat root name in
+        let* _, bytes = match read_private_small path with Some v -> Ok v | None -> Error "profile-publication-uncertain" in
+        let* receipt = parse_receipt ~root_id ~path bytes in
+        loop (receipt :: acc) rest in
+    loop [] (List.sort String.compare names))
+
+let forget_provision_receipt ~root ~proof =
+  with_receipts ~root (fun directory root_id ->
+    let fail () = Error "profile-publication-uncertain" in
+    let path = provision_receipt root proof in
+    let* () = if String.starts_with ~prefix:(Printf.sprintf "%d:%d:" root_id.Unix.st_dev root_id.Unix.st_ino) proof
+      && String.length proof <= 256 then Ok () else fail () in
+    match read_private_small path with
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
+    | None -> fail ()
+    | Some (st, bytes) ->
+    let* recorded, _, _ = parse_receipt ~root_id ~path bytes in
+    if recorded <> proof then fail () else
+    let active = match read_private_small (provision_intent root) with
+      | Some (intent_id, data) -> Some (Printf.sprintf "%d:%d:%d:%d:%s" root_id.Unix.st_dev root_id.Unix.st_ino
+           intent_id.Unix.st_dev intent_id.Unix.st_ino (hash data))
+      | None -> raise (Unix.Unix_error (Unix.EPERM, "intent", ""))
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None in
+    if active = Some proof || not (same root_id (Unix.lstat root)) then fail () else
+    match read_private_small path with
+    | Some (again, value) when unchanged st again && value = bytes ->
+      Unix.unlink path; Unix.fsync directory; Ok ()
+    | _ -> fail ())
 
 (* All registry writers cooperate on the migration lock. A first registry is
    linked without replacement; an append replaces only the checked original
    after the complete candidate has been synced. Out-of-band same-UID changes
    are not a filesystem transaction and are outside the native custody model. *)
-type profile_publication_point = Before_publish | After_publish
+type profile_publication_point = Before_allocate | Before_publish | After_publish
 
 let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random_hex ())
-    ?managed_admit ~root ~expected_revision ~provision ~profile () =
+    ?managed_admit ?operation_id ~root ~expected_revision ~provision ~profile () =
   let fail code = Error code in
+  let* () = match operation_id with
+    | None -> Ok ()
+    | Some id when provision && String.length id = 32 && String.for_all (function '0'..'9' | 'a'..'f' -> true | _ -> false) id -> Ok ()
+    | Some _ -> fail "invalid-request" in
   let* () =
     if not provision then Ok ()
     else
@@ -1064,10 +1342,19 @@ let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random
   in
   (* Hold the lock for the entire operation, not merely the initial check. *)
   let run () =
+    let original_root = Unix.lstat root in
+    let check_root () =
+      if same original_root (Unix.lstat root) then Ok () else fail "unsafe-configuration-root" in
+    let* () = check_root () in
     let* () = check_provision_boundary () in
     let* () = if provision then Ok () else check_legacy_switch () in
     let* () =
       match Unix.lstat (first_intent root) with
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
+      | _ -> fail "profile-publication-uncertain"
+    in
+    let* () =
+      match Unix.lstat (provision_intent root) with
       | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
       | _ -> fail "profile-publication-uncertain"
     in
@@ -1218,6 +1505,38 @@ let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random
       ^ "\n"
     in
     let* candidate = project "invalid-profile-config" (P.of_string content) in
+    let* () = check_root () in
+    let prepared = if not provision then None else (
+      let stage, fd = create_temp root in
+      let identity = Unix.fstat fd in
+      Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+        write_all fd content 0; Unix.fchmod fd 0o600; Unix.fsync fd);
+      Some (stage, identity)) in
+    (* The record precedes allocation and survives all uncertain outcomes.
+       It is deliberately independent of the first-registry link journal. *)
+    let* () = if not provision then Ok () else (
+      let record = Yojson.Safe.to_string (`Assoc [
+        ("version", `Int 1); ("kind", `String "provision");
+        ("root_dev", `Int original_root.Unix.st_dev); ("root_ino", `Int original_root.Unix.st_ino);
+        ("operation", Option.fold ~none:`Null ~some:(fun id -> `String id) operation_id);
+        ("previous", Option.fold ~none:`Null ~some:(fun value -> `String value) current_revision);
+        ("previous_dev", Option.fold ~none:`Null ~some:(fun st -> `Int st.Unix.st_dev) initial);
+        ("previous_ino", Option.fold ~none:`Null ~some:(fun st -> `Int st.Unix.st_ino) initial);
+        ("stage", `String (Filename.basename (fst (Option.get prepared))));
+        ("candidate_dev", `Int (snd (Option.get prepared)).Unix.st_dev);
+        ("candidate_ino", `Int (snd (Option.get prepared)).Unix.st_ino);
+        ("candidate", `String (hash content));
+        ("id", List.assoc "id" fields)
+      ]) ^ "\n" in
+      let fd = Unix.openfile (provision_intent root)
+        [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC] 0o600 in
+      Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+        write_all fd record 0; Unix.fsync fd);
+      let directory = Unix.openfile root [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
+      Fun.protect ~finally:(fun () -> Unix.close directory) (fun () -> Unix.fsync directory);
+      Ok ()) in
+    if provision then checkpoint Before_allocate;
+    let* () = check_root () in
     let* () =
       match new_dirs with
       | [] -> Ok ()
@@ -1232,7 +1551,15 @@ let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random
           in
           let* () = project "unsafe-configuration-root" (P.validate_private_root root) in
           (match Unix.mkdir base 0o700 with
-           | exception Unix.Unix_error (Unix.EEXIST, _, _) -> fail "profile-already-exists"
+           | exception Unix.Unix_error (Unix.EEXIST, _, _) ->
+               (* mkdir performed no allocation. Retire only our newly written
+                  record, synchronously, before reporting the definite refusal. *)
+               if provision then (
+                 Unix.unlink (provision_intent root);
+                 Option.iter (fun (stage, identity) -> cleanup_temp stage identity) prepared;
+                 let fd = Unix.openfile root [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 in
+                 Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> Unix.fsync fd));
+               fail "profile-already-exists"
            | () ->
                List.iter (fun dir -> Unix.mkdir dir 0o700) children;
                List.iter
@@ -1257,6 +1584,7 @@ let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random
     Fun.protect ~finally:(fun () -> Unix.close directory) (fun () ->
         let root_identity = Unix.fstat directory in
         let check () =
+          let* () = check_root () in
           let* () = check_provision_boundary () in
           let* () =
             project "unsafe-configuration-root"
@@ -1309,13 +1637,18 @@ let write_profile ?(checkpoint = fun _ -> ()) ?(new_id = fun () -> "p-" ^ random
           in
           project "unsafe-profile-roots" (check_roots candidate)
         in
-        let stage, fd = create_temp root in
-         let stage_identity = Unix.fstat fd in
+        let stage, fd, stage_identity = match prepared with
+          | Some (stage, identity) ->
+              let fd = Unix.openfile stage [Unix.O_RDWR; Unix.O_CLOEXEC] 0 in
+              (stage, fd, identity)
+          | None -> let stage, fd = create_temp root in (stage, fd, Unix.fstat fd) in
          Fun.protect
            ~finally:(fun () ->
              cleanup_first_stage ~root ~stage ~identity:stage_identity)
           (fun () ->
             Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+                if not (private_file (Unix.fstat fd) && same stage_identity (Unix.fstat fd)) then
+                  raise (Unix.Unix_error (Unix.EPERM, "stage", ""));
                 write_all fd content 0;
                 Unix.fchmod fd 0o600;
                 Unix.fsync fd);
@@ -1358,5 +1691,11 @@ let create_profile ~root ~expected_revision ~profile =
 let provision_profile ~root ~expected_revision ~profile =
   write_profile ~provision:true ~root ~expected_revision ~profile ()
 
+let provision_profile_with_operation ~operation_id ~root ~expected_revision ~profile =
+  write_profile ~operation_id ~provision:true ~root ~expected_revision ~profile ()
+
 let provision_managed ~admit ~root ~expected_revision ~profile =
   write_profile ~managed_admit:admit ~provision:true ~root ~expected_revision ~profile ()
+
+let provision_managed_with_operation ~operation_id ~admit ~root ~expected_revision ~profile =
+  write_profile ~operation_id ~managed_admit:admit ~provision:true ~root ~expected_revision ~profile ()

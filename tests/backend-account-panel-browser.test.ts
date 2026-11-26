@@ -28,15 +28,16 @@ declare const lab: {
   calls: (ConsentMutation | ProfileMutation | ProvisionMutation)[]; loads: number; profiles: Profile[]; policy: Policy; holdWrite: boolean; holdLoad: boolean;
   fail: string | null; createFail: string | null; readFail: string | null; finishWrite: () => void; finishLoad: () => void;
   panel: {open: () => Promise<void>; close: () => void; refreshProvisionView: () => void};
-  provisionBackends: string[];
+  provisionBackends: string[]; recoveryCalls: string[]; recoveryFailOnce: boolean; lostProvision: boolean; recoveryOperation: string | null;
 };
 
 before(async () => {
   if (skip) return;
   const built = await build({stdin: {resolveDir: root, contents: `
     import {createBackendAccountPanel} from './static/backend-account-panel.ts';
-    import {provisionJournal} from './static/backend-account-provision-journal.ts';
+    import {provisionJournal, provisionRecoveryJournal} from './static/backend-account-provision-journal.ts';
     window.testProvisionJournal = () => provisionJournal(localStorage, indexedDB, crypto);
+    window.testRecoveryJournal = () => provisionRecoveryJournal(indexedDB);
     const catalog = await (await fetch('/catalog.json' + location.search)).json();
     const t = (key, params = {}) => {
       if (!(key in catalog)) throw new Error('Missing catalog key: ' + key);
@@ -49,7 +50,7 @@ before(async () => {
       profiles: backends.flatMap(backend => ['a', 'b', 'c'].map(id => ({backend, id, label: id === 'a' ? ${JSON.stringify(hostile)} : id === 'c' ? '界'.repeat(24) : 'Account ' + id,
         context_revision: digest, enabled: true, switch_qualified: false})))};
     const ref = ({backend, id, context_revision}) => ({backend, id, context_revision});
-    lab.provisionBackends = ['codex'];
+    lab.provisionBackends = ['codex']; lab.recoveryCalls = []; lab.recoveryFailOnce = false; lab.lostProvision = false; lab.recoveryOperation = null;
     const panel = createBackendAccountPanel(document.querySelector('main'), {t, timeoutMs: 10000,
       load: async () => {
         lab.loads++;
@@ -91,6 +92,10 @@ before(async () => {
         lab.registryRevision='b'.repeat(64);
         return reply({registry_revision:lab.registryRevision,profile:p});
       },
+      listProvisionReceipts: async () => reply({receipts:[{proof:'1:2:3:4:' + 'a'.repeat(64),operation:lab.recoveryOperation,outcome:'published'}]}),
+      forgetProvisionReceipt: async proof => { lab.recoveryCalls.push('forget:' + proof); return reply({forgotten:true}); },
+      inspectProvision: async () => { lab.recoveryCalls.push('inspect'); return reply({proof:'1:2:3:4:' + 'a'.repeat(64),operation:lab.recoveryOperation,outcome:'published'}); },
+      acknowledgeProvision: async proof => { lab.recoveryCalls.push(proof); if (lab.recoveryFailOnce) {lab.recoveryFailOnce = false; throw new Error('response lost');} return reply({outcome:'published'}); },
       inspect: async () => {
         if (lab.readFail) return {version:1,ok:false,http_status:503,code:lab.readFail};
         return reply({configured:true,registry_revision:lab.registryRevision,profiles:lab.profiles});
@@ -100,7 +105,8 @@ before(async () => {
         if (lab.createFail) return {http_status:lab.createFail==='profile-publication-uncertain'?503:409,
           version:1,ok:false,code:lab.createFail};
         const p={...request.profile,id:'p-0123456789abcdef',enabled:false,context_revision:digest,switch_qualified:false};
-        lab.profiles.push(p);lab.registryRevision='c'.repeat(64);
+        lab.profiles.push(p);lab.registryRevision='c'.repeat(64); lab.recoveryOperation=request.operation_id ?? null;
+        if (lab.lostProvision) throw new Error('response-lost');
         return reply({registry_revision:lab.registryRevision,profile:p});
       }},
     });
@@ -136,6 +142,165 @@ async function statusIs(page: Page, lang: string, phase: string) {
   await page.getByRole('status').filter({hasText: catalogs[lang]![`backendAccounts.status.${phase}`]!}).waitFor();
 }
 
+test('provision recovery requires inspection and explicit confirmation on desktop and phone', {skip}, async () => {
+  for (const width of [1440, 390]) {
+    const {page, context} = await fixture('fr', width);
+    try {
+      assert.equal(await control(page, 'recovery-confirm').isDisabled(), true);
+      await control(page, 'recovery-inspect').click();
+      await page.getByText(catalogs.fr!['backendAccounts.recoveryPublished']!).waitFor();
+      assert.deepEqual(await page.evaluate(() => lab.recoveryCalls), ['inspect']);
+      await control(page, 'recovery-confirm').click();
+      await page.getByText(catalogs.fr!['backendAccounts.recoveryConfirmed']!).waitFor();
+      assert.deepEqual(await page.evaluate(() => lab.recoveryCalls), ['inspect', '1:2:3:4:' + 'a'.repeat(64)]);
+    } finally { await context.close(); }
+  }
+});
+
+test('slow recovery storage does not stop account panel opening after inspection', {skip}, async () => {
+  const context = await browser.newContext(), page = await context.newPage();
+  try {
+    await page.addInitScript(() => {
+      const original = IDBFactory.prototype.open;
+      const handler = Object.getOwnPropertyDescriptor(IDBRequest.prototype, 'onsuccess')!;
+      IDBFactory.prototype.open = function(name: string, version?: number) {
+        const request = original.call(this, name, version);
+        if (name === 'mesh.backendAccounts.recovery.v1') {
+          Object.defineProperty(request, 'onsuccess', {configurable:true,
+            set(fn) { handler.set!.call(request, (event: Event) => setTimeout(() => fn.call(request, event), 500)); },
+            get() { return handler.get!.call(request); }});
+        }
+        return request;
+      };
+    });
+    await page.goto(`${base}/?lang=en`); await page.locator('#open').click();
+    await control(page, 'recovery-inspect').click();
+    await statusIs(page, 'en', 'ready');
+    assert.equal(await control(page, 'provision-account').isEnabled(), true);
+  } finally { await context.close(); }
+});
+
+test('interrupted receipt cleanup can be explicitly retried after reopening', {skip}, async () => {
+  const {page, context} = await fixture();
+  try {
+    const proof = '1:2:3:4:' + 'a'.repeat(64);
+    await page.evaluate(async value => (window as any).testRecoveryJournal().claim(JSON.stringify({cleanup:value})), proof);
+    await page.locator('dialog [data-focus="close"]').click();
+    await page.locator('#open').click();
+    await control(page,'receipt-retry-removal').click();
+    await page.getByText(catalogs.en!['backendAccounts.receiptRemoved']!).waitFor();
+    assert.equal(await page.evaluate(() => (window as any).testRecoveryJournal().load()),null);
+    assert.deepEqual(await page.evaluate(() => lab.recoveryCalls), ['forget:' + proof]);
+  } finally { await context.close(); }
+});
+
+test('receipt deletion requires two explicit actions and preserves a local retry', {skip}, async () => {
+  const {page, context} = await fixture();
+  try {
+    const proof = '1:2:3:4:' + 'a'.repeat(64);
+    await page.evaluate(async value => (window as any).testRecoveryJournal().claim(JSON.stringify({proof:value,operation:null})), proof);
+    await control(page,'receipts-inspect').click();
+    await control(page,'receipt-remove').click();
+    assert.deepEqual(await page.evaluate(() => lab.recoveryCalls), []);
+    await control(page,'receipt-confirm-removal').click();
+    await page.getByText(catalogs.en!['backendAccounts.receiptRemovalUnavailable']!).waitFor();
+    assert.deepEqual(await page.evaluate(() => lab.recoveryCalls), []);
+    await page.evaluate(async value => (window as any).testRecoveryJournal().clear(JSON.stringify({proof:value,operation:null})), proof);
+    await control(page,'receipt-confirm-removal').click();
+    await control(page,'receipt-confirm-removal').waitFor({state:'detached'});
+    assert.deepEqual(await page.evaluate(() => lab.recoveryCalls), ['forget:' + proof]);
+  } finally { await context.close(); }
+});
+
+test('recovery proof acquisition is atomic across tabs', {skip}, async () => {
+  const {page, context} = await fixture(); const second = await context.newPage();
+  try {
+    await second.goto(`${base}/?lang=en`);
+    const claim = (p: Page, proof: string) => p.evaluate(value => (window as any).testRecoveryJournal().claim(value), proof);
+    const [a, b] = await Promise.all([claim(page, 'proof-a'), claim(second, 'proof-b')]);
+    assert.equal(a, b);
+    assert.ok(a === 'proof-a' || a === 'proof-b');
+    const loser = a === 'proof-a' ? 'proof-b' : 'proof-a';
+    assert.equal(await second.evaluate(value => (window as any).testRecoveryJournal().clear(value), loser), a);
+    assert.equal(await page.evaluate(() => (window as any).testRecoveryJournal().load()), a);
+  } finally { await context.close(); }
+});
+
+test('recovery preserves its proof after a lost confirmation response and page reload', {skip}, async () => {
+  const {page, context} = await fixture();
+  try {
+    await page.evaluate(() => { lab.recoveryFailOnce = true; });
+    await control(page, 'recovery-inspect').click();
+    await page.getByText(catalogs.en!['backendAccounts.recoveryPublished']!).waitFor();
+    await control(page, 'recovery-confirm').click();
+    await page.getByText(catalogs.en!['backendAccounts.recoveryUnavailable']!).waitFor();
+    await page.reload(); await page.locator('#open').click();
+    await page.getByText(catalogs.en!['backendAccounts.recoveryRetry']!).waitFor();
+    await control(page, 'recovery-confirm').click();
+    await page.getByText(catalogs.en!['backendAccounts.recoveryConfirmed']!).waitFor();
+    assert.equal(await page.evaluate(() => (window as any).testRecoveryJournal().load()), null);
+  } finally { await context.close(); }
+});
+
+test('recovery clears only the matching uncertain browser journal', {skip}, async () => {
+  const {page, context} = await fixture();
+  try {
+    const result = await page.evaluate(async () => {
+      const j = (window as any).testProvisionJournal();
+      const entry = (await j.acquire()).entry;
+      const wrong = 'f'.repeat(32) === entry.id ? 'e'.repeat(32) : 'f'.repeat(32);
+      const wrongResult = await j.clearUncertain(wrong);
+      const still = await j.load();
+      await j.save(entry.id, 'confirmed receipt');
+      const receiptResult = await j.clearUncertain(entry.id);
+      const final = await j.load();
+      return {wrongResult, still, receiptResult, final};
+    });
+    assert.equal(result.wrongResult, 'missing'); assert.equal(result.still.value, 'uncertain');
+    assert.equal(result.receiptResult, 'mismatch'); assert.equal(result.final.value, 'confirmed receipt');
+  } finally { await context.close(); }
+});
+
+test('two tabs settle the same lost operation after a verified native acknowledgement', {skip}, async () => {
+  const {page, context} = await fixture();
+  try {
+    await page.evaluate(() => { lab.lostProvision = true; });
+    await control(page, 'provision-account').click(); await control(page, 'create-label').fill('Travel');
+    await control(page, 'save-account').click(); await statusIs(page, 'en', 'provisionUncertain');
+    const operation = await page.evaluate(() => lab.recoveryOperation);
+    assert.match(operation!, /^[a-f0-9]{32}$/);
+    const other = await context.newPage(); await other.goto(`${base}/?lang=en`);
+    await other.evaluate(value => { lab.recoveryOperation = value; }, operation);
+    await other.locator('#open').click(); await statusIs(other, 'en', 'provisionUncertain');
+    await control(other, 'recovery-inspect').click();
+    await other.getByText(catalogs.en!['backendAccounts.recoveryPublished']!).waitFor();
+    await control(other, 'recovery-confirm').click();
+    await other.getByText(catalogs.en!['backendAccounts.recoveryConfirmed']!).waitFor();
+    await control(page, 'refresh').click();
+    await statusIs(page, 'en', 'ready');
+    assert.equal(await control(page, 'provision-account').isEnabled(), true);
+    assert.deepEqual(await page.evaluate(() => lab.recoveryCalls), ['1:2:3:4:' + 'a'.repeat(64)]);
+  } finally { await context.close(); }
+});
+
+test('lost provision response is cleared only after exact operation recovery', {skip}, async () => {
+  const {page, context} = await fixture();
+  try {
+    await page.evaluate(() => { lab.lostProvision = true; });
+    await control(page, 'provision-account').click();
+    await control(page, 'create-label').fill('Travel');
+    await control(page, 'save-account').click();
+    await statusIs(page, 'en', 'provisionUncertain');
+    assert.match((await page.evaluate(() => lab.recoveryOperation))!, /^[a-f0-9]{32}$/);
+    await control(page, 'recovery-inspect').click();
+    await page.getByText(catalogs.en!['backendAccounts.recoveryPublished']!).waitFor();
+    await control(page, 'recovery-confirm').click();
+    await page.getByText(catalogs.en!['backendAccounts.recoveryConfirmed']!).waitFor();
+    await statusIs(page, 'en', 'ready');
+    assert.equal(await control(page, 'provision-account').isEnabled(), true);
+  } finally { await context.close(); }
+});
+
 test('capability repaint preserves the unsaved global confirmation', {skip}, async () => {
   const {page, context} = await fixture();
   try {
@@ -159,7 +324,7 @@ test('saving consent preserves an unsubmitted provision draft', {skip}, async ()
   } finally { await context.close(); }
 });
 
-test('blocked localStorage still permits account association but prevents provisioning', {skip}, async () => {
+test('blocked localStorage prevents account writes when provisioning state is unknown', {skip}, async () => {
   const context = await browser.newContext(), page = await context.newPage();
   try {
     await page.addInitScript(() => Object.defineProperty(window, 'localStorage', {get() { throw new DOMException('blocked', 'SecurityError'); }}));
@@ -167,9 +332,7 @@ test('blocked localStorage still permits account association but prevents provis
     await page.locator('#open').filter({hasText: catalogs.en!['backendAccounts.title']!}).click();
     await statusIs(page, 'en', 'provisionUncertain');
     assert.equal(await control(page, 'provision-account').isDisabled(), true);
-    assert.equal(await control(page, 'add-account').isEnabled(), true);
-    await control(page, 'add-account').click();
-    assert.equal(await control(page, 'create-id').isVisible(), true);
+    assert.equal(await control(page, 'add-account').isDisabled(), true);
     assert.equal(await page.evaluate(() => lab.calls.length), 0);
   } finally { await context.close(); }
 });
@@ -234,7 +397,9 @@ for (const lang of ['en','fr']) test(`component ${lang}: provision collects only
     assert.equal(await control(page,'save-account').isDisabled(),true);
     await page.evaluate(()=>{lab.createFail=null;});
     await control(page,'refresh').click();await statusIs(page,lang,'provisionUncertain');
-    const request={version:1,op:'profiles.provision',registry_revision:'a'.repeat(64),profile:{backend:'codex',label:'Travel'}};
+    const operation_id = (await page.evaluate(() => lab.calls[0] as ProvisionMutation)).operation_id;
+    assert.match(operation_id!, /^[a-f0-9]{32}$/);
+    const request={version:1,op:'profiles.provision',registry_revision:'a'.repeat(64),profile:{backend:'codex',label:'Travel'},operation_id};
     assert.deepEqual(await page.evaluate(()=>lab.calls),[request]);
     assert.equal(await control(page,'save-account').isDisabled(),true);
     await control(page,'close').click();
@@ -242,13 +407,12 @@ for (const lang of ['en','fr']) test(`component ${lang}: provision collects only
     await statusIs(page,lang,'provisionUncertain');
     assert.equal(await control(page,'provision-account').isDisabled(),true);
     assert.deepEqual(await page.evaluate(()=>({calls:lab.calls,loads:lab.loads})),{calls:[request],loads:3});
-    await control(page,'add-account').click(); // Association remains a separate form.
-    assert.equal(await control(page,'create-config').count(),1);
+    assert.equal(await control(page,'add-account').isDisabled(),true);
     await page.reload();
     await page.locator('#open').click();
     await statusIs(page,lang,'provisionUncertain');
     assert.equal(await control(page,'provision-account').isDisabled(),true);
-    assert.equal(await control(page,'add-account').isEnabled(),true);
+    assert.equal(await control(page,'add-account').isDisabled(),true);
     assert.ok(await page.locator('dialog li').count() > 0, 'runner registry is still inspectable');
     assert.deepEqual(await page.evaluate(()=>({calls:lab.calls,loads:lab.loads})),{calls:[],loads:0});
     const reopened = await context.newPage();

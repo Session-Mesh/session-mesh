@@ -8,6 +8,7 @@ export type ProvisionJournal = {
   // the intent. Concurrent tabs cannot both acquire the same empty journal.
   acquire(): Promise<{entry: Entry; acquired: boolean}>;
   save(id: string, value: string | null): Promise<void>;
+  clearUncertain?(id: string): Promise<'cleared' | 'missing' | 'mismatch'>;
 };
 
 export function provisionJournal(storage: Storage, indexedDB: IDBFactory, random: Crypto): ProvisionJournal {
@@ -31,6 +32,19 @@ export function provisionJournal(storage: Storage, indexedDB: IDBFactory, random
     }));
   }
   return {
+    async clearUncertain(id) {
+      if (!/^[a-f0-9]{32}$/.test(id)) return 'mismatch' as const;
+      let result: 'cleared' | 'missing' | 'mismatch' = 'mismatch';
+      await transact('readwrite', (store, done) => {
+        const request = store.get(id);
+        request.onsuccess = () => {
+          if (request.result === undefined) result = 'missing';
+          else if (request.result.id === id && request.result.value === 'uncertain') { store.delete(id); result = 'cleared'; }
+          done(undefined);
+        };
+      });
+      return result;
+    },
     async load() {
       const old = storage.getItem(legacy);
       if (old !== null) return {id: legacy, value: old};
@@ -69,5 +83,41 @@ export function provisionJournal(storage: Storage, indexedDB: IDBFactory, random
         done(undefined);
       });
     },
+  };
+}
+
+/** One durable, compare-and-set acknowledgement shared by all tabs. */
+export function provisionRecoveryJournal(indexedDB: IDBFactory) {
+  const open = () => new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open('mesh.backendAccounts.recovery.v1', 1);
+    let abandoned = false;
+    request.onupgradeneeded = () => request.result.createObjectStore('entries');
+    request.onsuccess = () => { if (abandoned) request.result.close(); else resolve(request.result); };
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => { abandoned = true; reject(new Error('recovery-journal-unavailable')); };
+  });
+  const transaction = async (mode: IDBTransactionMode, f: (store: IDBObjectStore, done: (value: string | null) => void) => void) => {
+    const db = await open();
+    return new Promise<string | null>((resolve, reject) => {
+      const tx = db.transaction('entries', mode), store = tx.objectStore('entries');
+      let value: string | null = null;
+      try { f(store, result => { value = result; }); } catch (error) { tx.abort(); db.close(); reject(error); return; }
+      tx.oncomplete = () => { db.close(); resolve(value); };
+      tx.onerror = tx.onabort = () => { db.close(); reject(tx.error ?? new Error('recovery-journal-failed')); };
+    });
+  };
+  return {
+    load: () => transaction('readonly', (store, done) => { const req = store.get('proof'); req.onsuccess = () => done(req.result ?? null); }),
+    claim: (proof: string) => transaction('readwrite', (store, done) => {
+      const req = store.get('proof'); req.onsuccess = () => {
+        if (req.result !== undefined && req.result !== proof) { done(req.result); return; }
+        store.put(proof, 'proof'); done(proof);
+      };
+    }),
+    clear: (proof: string) => transaction('readwrite', (store, done) => {
+      const req = store.get('proof'); req.onsuccess = () => {
+        if (req.result === proof) { store.delete('proof'); done(null); } else done(req.result ?? null);
+      };
+    }),
   };
 }

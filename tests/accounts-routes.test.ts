@@ -29,7 +29,9 @@ const WRITES = {'/api/accounts/consent/set-global': 'consent.set_global', '/api/
   '/api/accounts/consent/remove-pair': 'consent.remove_pair', '/api/accounts/consent/reset': 'consent.reset',
   '/api/accounts/profiles/create': 'profiles.create'} as const;
 const ROUTES: [string, string][] = [...Object.keys(READS).map(p => ['GET', p] as [string, string]),
-  ...Object.keys(WRITES).map(p => ['POST', p] as [string, string])];
+  ...Object.keys(WRITES).map(p => ['POST', p] as [string, string]),
+  ['GET', '/api/accounts/profiles/provision-inspect'], ['POST', '/api/accounts/profiles/provision-acknowledge'],
+  ['GET', '/api/accounts/profiles/provision-receipts'], ['POST', '/api/accounts/profiles/provision-forget-receipt']];
 const PUBLIC_KEYS = ['backend', 'context_revision', 'enabled', 'id', 'label', 'switch_qualified'];
 const SENTINEL = 'accounts-routes-sentinel-7c1f';
 
@@ -170,6 +172,36 @@ before(async () => {
 });
 after(async () => {
   await Promise.all([real, empty, missing, fake].filter(Boolean).map(mesh => mesh.stop()));
+});
+
+test('owner-only provisioning recovery requires the exact inspected proof', {skip}, async () => {
+  const mesh = await startMesh('account-recovery-', {MESH_MESH_PROFILE_CMD: HELPER},
+    where => fs.mkdirSync(where.confDir, {recursive: true, mode: 0o700}));
+  try {
+    const request = {version: 1, op: 'profiles.provision', registry_revision: null, profile: {backend: 'codex', label: 'Recovery'}, operation_id: 'b'.repeat(32)};
+    const helper = spawnSync(HELPER, [], {input: JSON.stringify(request), encoding: 'utf8',
+      env: {...process.env, MESH_CONF_DIR: mesh.confDir}});
+    assert.equal(helper.status, 0, helper.stderr);
+    const inspect = '/api/accounts/profiles/provision-inspect';
+    const ack = '/api/accounts/profiles/provision-acknowledge';
+    assert.equal((await call(mesh, 'GET', inspect, {cookie: null})).status, 401);
+    assert.equal((await call(mesh, 'POST', ack, {cookie: null, body: {proof: 'bad'}})).status, 401);
+    const found = await call(mesh, 'GET', inspect);
+    assert.equal(found.status, 200); assert.equal(found.json.data.outcome, 'published');
+    assert.equal(found.json.data.operation, 'b'.repeat(32));
+    const proof = found.json.data.proof;
+    assert.match(proof, /^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[a-f0-9]{64}$/);
+    assert.equal((await call(mesh, 'POST', ack, {body: {proof: proof + '0'}})).status, 503);
+    assert.equal((await call(mesh, 'GET', inspect)).status, 200);
+    const resolved = await call(mesh, 'POST', ack, {body: {proof}});
+    assert.equal(resolved.status, 200); assert.deepEqual(resolved.json.data, {outcome: 'published'});
+    assert.equal((await call(mesh, 'POST', ack, {body: {proof}})).status, 200);
+    const list = await call(mesh, 'GET', '/api/accounts/profiles/provision-receipts');
+    assert.equal(list.status, 200); assert.deepEqual(list.json.data.receipts, [{proof,operation:'b'.repeat(32),outcome:'published'}]);
+    assert.equal((await call(mesh, 'POST', '/api/accounts/profiles/provision-forget-receipt', {body:{proof}})).status,200);
+    assert.equal((await call(mesh, 'POST', ack, {body: {proof}})).status, 503);
+    assert.equal((await call(mesh, 'POST', '/api/accounts/profiles/provision-forget-receipt', {body:{proof}})).status,200);
+  } finally { await mesh.stop(); }
 });
 
 describe('only the owner browser crosses', {skip}, () => {

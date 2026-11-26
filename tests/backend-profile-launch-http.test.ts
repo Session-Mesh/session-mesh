@@ -75,6 +75,12 @@ test('normal helper refuses managed creation and does not offer a host-provision
     assert.equal((await refused.json()).code, 'profile-provision-unavailable');
     assert.equal(fs.existsSync(registry), false);
     const a = provision('First fixture', null).data;
+    const pending = await fetch(`${mesh.base}/api/accounts/profiles/provision-inspect`, {headers});
+    assert.equal(pending.status, 200);
+    const proof = (await pending.json()).data.proof;
+    const acknowledged = await fetch(`${mesh.base}/api/accounts/profiles/provision-acknowledge`,
+      {method:'POST', headers, body:JSON.stringify({proof})});
+    assert.equal(acknowledged.status, 200);
     const b = provision('Second fixture', a.registry_revision).data;
     const raw = JSON.parse(fs.readFileSync(registry, 'utf8'));
     assert.deepEqual(raw.profiles.map((p: {enabled: boolean}) => p.enabled), [false, false]);

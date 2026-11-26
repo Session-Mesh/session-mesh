@@ -56,7 +56,25 @@ val provision_managed :
 (** Publish an enabled managed profile only if the native capability admits it
     under the registry lock. No provider sign-in is performed. *)
 
+val provision_profile_with_operation : operation_id:string -> root:string -> expected_revision:string option -> profile:Yojson.Safe.t -> (string * Yojson.Safe.t, string) result
+
+val provision_managed_with_operation : operation_id:string -> admit:(unit -> bool) -> root:string -> expected_revision:string option -> profile:Yojson.Safe.t -> (string * Yojson.Safe.t, string) result
+
+val inspect_provision_operation : root:string -> proof:string -> (string option, string) result
+
 type create_recovery = Unpublished_aborted | Published_reconciled
+
+val list_provision_receipts : root:string -> ((string * create_recovery * Yojson.Safe.t) list, string) result
+val forget_provision_receipt : root:string -> proof:string -> (unit, string) result
+
+val inspect_provision : root:string -> (string, string) result
+(** Return an opaque, inode-bound proof of the current provision intent. *)
+
+val inspect_provision_outcome : root:string -> ((string * create_recovery), string) result
+
+val recover_provision : root:string -> expected:string -> (create_recovery, string) result
+(** Explicitly reconcile a durable provision intent against the unchanged old
+    registry or the exact published candidate. Never modifies allocated roots. *)
 
 val recover_created_profile : root:string -> (create_recovery, string) result
 (** Host-only reconciliation of an interrupted first create. For an absent

@@ -160,6 +160,32 @@ let handle ?(http = false) root raw =
                    | None -> []
                     | Some r -> List.map P.public_json (P.profiles r)) );
               ])
+    | `String "profiles.provision-receipts" ->
+        let* _ = exact [ "version"; "op" ] raw in
+        let* receipts = M.list_provision_receipts ~root in
+        Ok (`Assoc [("receipts", `List (List.map (fun (proof, outcome, operation) -> `Assoc [
+          ("proof", `String proof); ("operation", operation); ("outcome", `String
+            (match outcome with M.Published_reconciled -> "published" | M.Unpublished_aborted -> "unpublished"))]) receipts))])
+    | `String "profiles.provision-forget-receipt" ->
+        let* fields = exact [ "version"; "op"; "proof" ] raw in
+        let* proof = match List.assoc "proof" fields with
+          | `String proof when String.length proof <= 256 -> Ok proof | _ -> Error "invalid-request" in
+        let* () = M.forget_provision_receipt ~root ~proof in
+        Ok (`Assoc [("forgotten", `Bool true)])
+    | `String "profiles.provision-inspect" ->
+        let* _ = exact [ "version"; "op" ] raw in
+        let* proof, outcome = M.inspect_provision_outcome ~root in
+        let* operation = M.inspect_provision_operation ~root ~proof in
+        Ok (`Assoc [("proof", `String proof); ("operation", Option.fold ~none:`Null ~some:(fun id -> `String id) operation); ("outcome", `String
+          (match outcome with M.Published_reconciled -> "published" | M.Unpublished_aborted -> "unpublished"))])
+    | `String "profiles.provision-acknowledge" ->
+        let* fields = exact [ "version"; "op"; "proof" ] raw in
+        let* proof = match List.assoc "proof" fields with
+          | `String proof when String.length proof <= 256 -> Ok proof
+          | _ -> Error "invalid-request" in
+        let* outcome = M.recover_provision ~root ~expected:proof in
+        Ok (`Assoc [("outcome", `String
+          (match outcome with M.Published_reconciled -> "published" | M.Unpublished_aborted -> "unpublished"))])
     | `String "profiles.provision-capabilities" ->
         let* _ = exact [ "version"; "op" ] raw in
         let offers = List.filter (fun name -> Option.is_some (provision_executable ~root name)) provision_backends in
@@ -178,8 +204,14 @@ let handle ?(http = false) root raw =
           ("profiles", `List profiles) ])
     | `String (("profiles.create" | "profiles.provision") as operation) ->
         let* fields =
-          exact [ "version"; "op"; "registry_revision"; "profile" ] raw
+          if operation = "profiles.provision" && List.mem_assoc "operation_id" fields then
+            exact [ "version"; "op"; "registry_revision"; "profile"; "operation_id" ] raw
+          else exact [ "version"; "op"; "registry_revision"; "profile" ] raw
         in
+        let* operation_id = match List.assoc_opt "operation_id" fields with
+          | None -> Ok None
+          | Some (`String id) when String.length id = 32 && String.for_all (function '0'..'9' | 'a'..'f' -> true | _ -> false) id -> Ok (Some id)
+          | _ -> Error "invalid-request" in
         let* expected_revision =
           match List.assoc "registry_revision" fields with
           | `Null -> Ok None
@@ -188,7 +220,8 @@ let handle ?(http = false) root raw =
         let* profile = field "profile" fields in
         let* write =
           if operation <> "profiles.provision" then Ok M.create_profile
-          else if not http then Ok M.provision_profile
+          else if not http then (match operation_id with None -> Ok M.provision_profile
+            | Some operation_id -> Ok (M.provision_profile_with_operation ~operation_id))
           else
             let* input = exact [ "backend"; "label" ] profile in
             let* raw_backend = field "backend" input in
@@ -200,7 +233,9 @@ let handle ?(http = false) root raw =
             in
             let name = match raw_backend with `String name -> name | _ -> assert false in
             if Option.is_none (provision_executable ~root name) then Error "profile-provision-unavailable"
-            else Ok (M.provision_managed ~admit:(fun () -> Option.is_some (provision_executable ~root name)))
+            else match operation_id with
+              | None -> Ok (M.provision_managed ~admit:(fun () -> Option.is_some (provision_executable ~root name)))
+              | Some operation_id -> Ok (M.provision_managed_with_operation ~operation_id ~admit:(fun () -> Option.is_some (provision_executable ~root name)))
         in
         let* revision, created =
           write ~root ~expected_revision ~profile
@@ -347,6 +382,10 @@ let http_operations =
     "profiles.create";
     "profiles.provision";
     "profiles.provision-capabilities";
+    "profiles.provision-inspect";
+    "profiles.provision-acknowledge";
+    "profiles.provision-receipts";
+    "profiles.provision-forget-receipt";
     "consent.get";
     "consent.set_global";
     "consent.set_pair";
@@ -394,12 +433,17 @@ let () =
       "Usage: mesh-profile [--http <operation>]\n\
        \       mesh-profile migrate\n\
        \       mesh-profile recover-create\n\n\
+       \       mesh-profile recover-provision <intent-proof>\n\n\
+       \       mesh-profile inspect-provision\n\n\
        Default/--http: one JSON request on stdin.\n\
         migrate: host-only accounts.json conversion; no stdin request, no \
         overwrite.\n\
          recover-create: host-only reconciliation of an interrupted first alias \
          creation; either aborts an unpublished stage or verifies an existing \
          publication, never creates a registry or retries a request.\n\
+         recover-provision: host-only acknowledgement of a verified durable \
+         provision record; never creates or deletes account folders. A pending \
+         first-create record must be reconciled first.\n\
        Success: \
        {\"version\":1,\"ok\":true,\"data\":{\"aliases\":N,\"profiles\":N}}\n\
        Failure: {\"version\":1,\"ok\":false,\"code\":\"migration-...\"}\n\
@@ -427,6 +471,8 @@ let () =
     | [ _ ] -> Ok `Request
     | [ _; "migrate" ] -> Ok `Migrate
     | [ _; "recover-create" ] -> Ok `Recover_create
+    | [ _; "recover-provision"; expected ] -> Ok (`Recover_provision expected)
+    | [ _; "inspect-provision" ] -> Ok `Inspect_provision
     | [ _; "--http"; operation ] when List.mem operation http_operations ->
         Ok (`Http operation)
     | _ -> Error "unsupported-arguments"
@@ -465,6 +511,14 @@ let () =
                        | M.Unpublished_aborted -> "unpublished-aborted"
                        | M.Published_reconciled -> "published-reconciled") );
                  ])
+        | `Recover_provision expected ->
+            let* outcome = M.recover_provision ~root ~expected in
+            Ok (`Assoc [("outcome", `String (match outcome with
+              | M.Unpublished_aborted -> "unpublished-aborted"
+              | M.Published_reconciled -> "published-reconciled"))])
+        | `Inspect_provision ->
+            let* proof = M.inspect_provision ~root in
+            Ok (`Assoc [("proof", `String proof)])
     with
     | (Out_of_memory | Stack_overflow) as exn -> raise exn
     | _ -> Error "backend-helper-unavailable"
