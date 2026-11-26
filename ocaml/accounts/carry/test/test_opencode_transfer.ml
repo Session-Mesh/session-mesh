@@ -374,6 +374,12 @@ let refusals () =
           Some (Ok (200, obj [ ("version", s "2.3.3") ]))
       | _ -> None)
     "transfer_unsupported_version";
+  reject_before_import "different supported versions"
+    (function
+      | `Target, `Get, "/api/info", _ ->
+          Some (Ok (200, obj [ ("version", s "2.4.2") ]))
+      | _ -> None)
+    "transfer_unsupported_version";
   reject_before_import "active source"
     (function
       | `Source, `Get, "/api/session/active", _ ->

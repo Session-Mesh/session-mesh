@@ -3,7 +3,8 @@
 (* Copyright (c) 2026 Atacama <contact@atacama.tech>                            *)
 (******************************************************************************)
 
-(** One OpenCode 2.3.2 projected conversation transfer. No agent launch,
+(** One projected conversation transfer between matching OpenCode versions
+    (2.3.2 or 2.4.2). No agent launch,
     credential copy, whole database copy or live-session checkpoint. The caller
     must fence both accounts and provide validated, disjoint profile XDG roots,
     private operation runtime directories and workspace locations. HOME is the
@@ -81,7 +82,7 @@ val fork_transfer :
   receipt_directory:string ->
   operation_id:string ->
   (lineage, string) result
-(** Create a native 2.3.2 fork, verify that its inherited transcript equals
+(** Create a native fork, verify that its inherited transcript equals
     the complete idle parent except for native-remapped message IDs, then
     import it create-only and restore the exact native pending fork notice.
     [receipt_directory]
