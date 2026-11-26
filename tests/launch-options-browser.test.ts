@@ -86,10 +86,12 @@ async function openNew(page: Page, preset: string): Promise<Page> {
   // page received it with the listing).
   const folder = fs.mkdtempSync(path.join(mesh.home, 'work-'));
   await page.locator('#form-new input[name="cwd"]').fill(folder);
+  const configuration = await (await loaded).json();
+  await page.waitForFunction('revision => newAccountsReady && launchOptionsRevision === revision',
+    configuration.launch.agent_options_revision);
   // The radio itself is display:none (the label carries the style): click the label.
   await page.locator(`#form-new label:has(input[name="preset"][value="${preset}"])`).click();
-  const configuration = await (await loaded).json();
-  await page.waitForFunction('revision => launchOptionsRevision === revision', configuration.launch.agent_options_revision);
+  assert.equal(await page.locator(`#form-new input[name="preset"][value="${preset}"]`).isChecked(), true);
   return page;
 }
 
