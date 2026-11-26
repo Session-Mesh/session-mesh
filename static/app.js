@@ -7780,6 +7780,12 @@ function flushDirectField(inputType, held = false) {
   // Delivery may end direct mode synchronously. Only a still-waiting paste
   // should be recovered by that teardown; classify all other results below.
   delete direct.heldInputType;
+  // The terminal replay queue can be dropped with its socket. Preserve typed
+  // text in the review field before the queue can take ownership of it.
+  if (kind === "typed" && directPasteWaits(direct.pane)) {
+    recoverDirectText(direct, text, "line.directFailed");
+    return false;
+  }
   const paste = kind === "typed" ? null : pasteDirect(text, kind, held);
   if (paste === "waiting") {
     if (lineDirect === direct) direct.heldInputType = origin;

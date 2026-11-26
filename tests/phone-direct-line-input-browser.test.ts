@@ -51,6 +51,29 @@ describe('phone direct writing: what the field receives', {skip}, () => {
     assert.equal(await direct(page), true);
   });
 
+  test('typing during replay stays recoverable if the queue is cancelled', async () => {
+    const page = await phone('replay-direct', 'claude');
+    await page.keyboard.type('/');
+    await waitForShellLine(page, '/');
+    await forget(page);
+    const result = await page.evaluate(() => {
+      const pane = active as any;
+      const connection = pane.conn;
+      connection.replayPending = true;
+      try {
+        const textarea = document.querySelector('#line-text') as HTMLTextAreaElement;
+        textarea.value = 'after replay';
+        textarea.dispatchEvent(new InputEvent('input', {inputType: 'insertText', bubbles: true}));
+        pane.cancelReplayInput(connection);
+        return {recovered: lineRecovery?.text ?? null, target: lineRecovery?.target.displayName};
+      } finally {
+        connection.replayPending = false;
+      }
+    });
+    assert.deepEqual(result, {recovered: 'after replay', target: 'replay-direct'});
+    assert.deepEqual(await frames(page), []);
+  });
+
   test('backspace on the empty field erases at the terminal and keeps the mode', async () => {
     const page = await phone('erase', 'claude');
     await page.keyboard.type('/ab');
