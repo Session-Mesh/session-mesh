@@ -256,7 +256,27 @@
     "key": "server.switchRecoveryCopyRetained"
   },
   {
-    "pattern": "^Pi profile sessions are not yet supported; the session or recovery offer was not changed$",
+    "pattern": "^Pi switching requires two named profiles$",
+    "key": "server.piSwitchNeedsProfiles"
+  },
+  {
+    "pattern": "^Foreground Pi process unavailable; nothing was stopped$",
+    "key": "server.piForegroundUnavailable"
+  },
+  {
+    "pattern": "^Pi account context unavailable; nothing was stopped$",
+    "key": "server.piAccountUnavailable"
+  },
+  {
+    "pattern": "^Pi account switching requires a bound native terminal$",
+    "key": "server.piSwitchNeedsTerminal"
+  },
+  {
+    "pattern": "^Pi transfer capability unavailable; nothing was stopped$",
+    "key": "server.piTransferUnavailable"
+  },
+  {
+    "pattern": "^Pi requires a bound native account profile; the session or recovery offer was not changed$",
     "key": "server.piProfileUnavailable"
   },
   {
