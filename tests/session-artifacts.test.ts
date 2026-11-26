@@ -26,7 +26,7 @@ test("reference schema rejects active schemes, credentials, duplicates and revok
 });
 
 const helper = path.join(root,"ocaml/_build/default/bin/mesh_artifacts_main.exe");
-test("actual Mesh auth, native connector and durable catalogue against isolated Notes fixture", {
+for (const transport of ["application/json", "text/event-stream"]) test(`actual Mesh auth, native connector and durable catalogue via ${transport}`, {
   timeout:30000, skip:!existsSync(helper) && !process.env.MESH_REQUIRE_ARTIFACTS ? "built mesh-artifacts required; MESH_REQUIRE_ARTIFACTS=1 makes absence fail" : false,
 }, async () => {
   const home = await mkdtemp(path.join(tmpdir(),"mesh-artifacts-test-"));
@@ -35,6 +35,7 @@ test("actual Mesh auth, native connector and durable catalogue against isolated 
   let calls = 0;
   const upstream = http.createServer(async (req,res) => {
     assert.equal(req.headers.authorization,`Bearer ${secret}`);
+    assert.deepEqual(req.headers.accept?.split(",").map(value => value.trim()), ["application/json", "text/event-stream"]);
     const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
     const rpc = JSON.parse(Buffer.concat(chunks).toString());
     if (rpc.method === "notifications/initialized") {res.writeHead(202).end(); return;}
@@ -47,7 +48,15 @@ test("actual Mesh auth, native connector and durable catalogue against isolated 
       const share = {id:"fixture-share",token:secret,share_url:`http://127.0.0.1:${(upstream.address() as {port:number}).port}/s/${secret}#${secret}`,scope_path:args.path,scope_kind:"note",target_present:false};
       result = {isError:false,structuredContent:name === "mint_share" ? share : name === "revoke_share" ? {revoked:true} : {status:"ok"},content:[]};
     }
-    res.writeHead(200,{"content-type":"application/json"}).end(JSON.stringify({jsonrpc:"2.0",id:rpc.id,result}));
+    res.writeHead(200,{"content-type":`${transport}; charset=utf-8`});
+    if (transport === "application/json") {
+      res.end(JSON.stringify({jsonrpc:"2.0",id:rpc.id,result}));
+    } else {
+      res.write("\uFEFF: opening\r\ndata:\r\n\r\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\r\n\r\ndata: {\r");
+      await new Promise(resolve => setTimeout(resolve, 5));
+      // Leave the stream open. The connector must return as soon as its response arrives.
+      res.write(`\ndata: "jsonrpc":"2.0","id":${rpc.id},"result":${JSON.stringify(result)}\r\ndata: }\r\n\r\n`);
+    }
   });
   await new Promise<void>(resolve => upstream.listen(0,"127.0.0.1",resolve));
   const env = {...process.env};
@@ -118,7 +127,10 @@ asyncio.run(main())
     assert.match(stdout,/isolation: PASS/);
     assert.equal(calls,6,"exactly explicit operations; no publication on create, no mutation replay");
   } finally {
-    await new Promise<void>(resolve => upstream.close(() => resolve()));
+    await new Promise<void>(resolve => {
+      upstream.close(() => resolve());
+      upstream.closeAllConnections();
+    });
     await rm(home,{recursive:true,force:true});
   }
 });

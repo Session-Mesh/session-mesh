@@ -54,19 +54,80 @@ let configuration () =
   in
   (uri, token)
 
+let response_limit = 1024 * 1024
+
 let bounded_body body =
   let stream = Cohttp_lwt.Body.to_stream body and buffer = Buffer.create 1024 in
   let rec loop () =
     Lwt_stream.get stream >>= function
     | None -> Lwt.return (Buffer.contents buffer)
     | Some chunk ->
-        if Buffer.length buffer + String.length chunk > 1024 * 1024 then
+        if Buffer.length buffer + String.length chunk > response_limit then
           Lwt.fail A.Invalid
         else (
           Buffer.add_string buffer chunk;
           loop ())
   in
   loop ()
+
+let streamed_response id body =
+  let stream = Cohttp_lwt.Body.to_stream body in
+  let line = Buffer.create 256 and data = Buffer.create 1024 in
+  let first = ref true and after_cr = ref false in
+  let event () =
+    if Buffer.length data = 0 then None
+    else
+      let text = Buffer.contents data |> String.trim in
+      Buffer.clear data;
+      if text = "" then None
+      else
+        let json = Yojson.Safe.from_string text in
+        ignore (A.fields json);
+        if A.get "method" json = `Null && A.get "id" json = `Int id then
+          Some json
+        else None
+  in
+  let finish_line () =
+    let value = Buffer.contents line in
+    Buffer.clear line;
+    let value =
+      if !first && String.starts_with ~prefix:"\239\187\191" value then
+        String.sub value 3 (String.length value - 3)
+      else value
+    in
+    first := false;
+    if value = "" then event ()
+    else (
+      if value = "data" then Buffer.add_char data '\n'
+      else if String.starts_with ~prefix:"data:" value then (
+        let start = if String.starts_with ~prefix:"data: " value then 6 else 5 in
+        Buffer.add_substring data value start (String.length value - start);
+        Buffer.add_char data '\n');
+      None)
+  in
+  let rec read remaining =
+    Lwt_stream.get stream >>= function
+    | None -> Lwt.fail A.Invalid
+    | Some chunk -> scan remaining chunk 0
+  and scan remaining chunk index =
+    if index = String.length chunk then read remaining
+    else if remaining = 0 then Lwt.fail A.Invalid
+    else
+      let ch = chunk.[index] and previous_cr = !after_cr in
+      after_cr := ch = '\r';
+      let response =
+        match ch with
+        | '\n' when previous_cr -> None
+        | '\r' | '\n' -> finish_line ()
+        | _ ->
+            Buffer.add_char line ch;
+            None
+      in
+      match response with
+      | Some json -> Lwt.return json
+      | None -> scan (remaining - 1) chunk (index + 1)
+  in
+  read response_limit
 
 let payload result =
   match A.get "structuredContent" result with
@@ -111,7 +172,7 @@ let call tool args =
         ([
            ("authorization", "Bearer " ^ token);
            ("content-type", "application/json");
-           ("accept", "application/json");
+           ("accept", "application/json, text/event-stream");
            ("MCP-Protocol-Version", "2025-11-25");
          ]
         @
@@ -131,7 +192,6 @@ let call tool args =
     in
     Cohttp_lwt_unix.Client.call ~headers ~body `POST uri
     >>= fun (response, body) ->
-    bounded_body body >>= fun text ->
     let code = Cohttp.Response.status response |> Cohttp.Code.code_of_status in
     if code < 200 || code >= 300 then Lwt.fail A.Invalid
     else (
@@ -140,9 +200,21 @@ let call tool args =
        with
       | Some value -> session_id := Some (A.text 256 (`String value))
       | None -> ());
-      if notification then Lwt.return `Null
+      if notification then
+        bounded_body body >>= fun text ->
+        if code = 202 && text = "" then Lwt.return `Null else Lwt.fail A.Invalid
       else
-        let json = Yojson.Safe.from_string text in
+        let media_type =
+          Cohttp.Header.get (Cohttp.Response.headers response) "content-type"
+          |> Option.value ~default:"" |> fun value ->
+          String.split_on_char ';' value |> List.hd |> String.trim
+          |> String.lowercase_ascii
+        in
+        (match media_type with
+        | "application/json" -> bounded_body body >|= Yojson.Safe.from_string
+        | "text/event-stream" -> streamed_response id body
+        | _ -> Lwt.fail A.Invalid)
+        >>= fun json ->
         ignore (A.fields json);
         if
           A.get "id" json <> `Int id
