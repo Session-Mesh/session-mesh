@@ -126,7 +126,9 @@ async function dispatch(req: IncomingMessage, config: Config, engine: Dictation,
   engine.authorize(principal);
   if (req.method === 'GET' && path === '/api/transcribe/config') { send(200, config.public); return; }
   if (req.method === 'POST' && path === '/api/transcribe') {
-    const result = await engine.prepare(metadata(req), req.iterator({destroyOnReturn: false}));
+    const admission = metadata(req);
+    const result = await engine.prepare(admission, req.iterator({destroyOnReturn: false}));
+    await engine.verifyPreparedSession(admission);
     send(202, result);
     return;
   }

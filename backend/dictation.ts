@@ -266,6 +266,13 @@ export class Dictation {
       throw error;
     } finally { clearTimeout(timeout); }
   }
+  async verifyPreparedSession(session: Admission): Promise<void> {
+    const live = await this.isLive(session);
+    // A revocation can arrive while the inventory is being read.
+    this.authorize(session.principal);
+    if (!live) throw new Fault('stale_session');
+  }
+
   private reserve(m: Admission): RecordEntry {
     if (this.slots.has(this.slot(m))) throw new Fault('session_busy');
     if (this.records.size >= 256) throw new Fault('capacity_full');

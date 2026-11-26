@@ -10,7 +10,7 @@ import http from 'node:http';
 import {spawn} from 'node:child_process';
 import {randomBytes,randomUUID} from 'node:crypto';
 import vm from 'node:vm';
-import {fixture,identityHeaders,processBirth,request,until} from '../checks/dictation-fixture.ts';
+import {fixture,identityHeaders,processBirth,request,until, staticDictationInventory} from '../checks/dictation-fixture.ts';
 import {Dictation,configuration,Fault} from '../backend/dictation.ts';
 
 const insertedConfig=(extra={})=>configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed',...extra})!;
@@ -165,10 +165,11 @@ http.createServer=function(options,listener){return create.call(this,options,(re
  if(req.method==='POST'&&req.url==='/api/transcribe'){const iterator=req.iterator.bind(req);req.iterator=function(options){const source=iterator(options);return(async function*(){for await(const part of source){fs.writeFileSync(${JSON.stringify(received)},'received');yield part;}})();};}
  return listener(req,res);
 });};`);
+  const inventory = await staticDictationInventory(directory);
   const secret=randomBytes(32).toString('hex');
   const child=spawn(process.execPath,['--require',preload,path.resolve('backend/dictation-service.cjs')],{env:{PATH:process.env.PATH,MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'},stdio:['pipe','pipe','pipe']});
   let output='',errors='';child.stdout.on('data',p=>output+=p);child.stderr.on('data',p=>errors+=p);
-  child.stdin.write(JSON.stringify({secret,socket:socketPath,inventory:path.join(directory,'unused'),parent:process.pid,principal:'a'.repeat(64)})+'\n');
+  child.stdin.write(JSON.stringify({secret,socket:socketPath,inventory:inventory.socketPath,parent:process.pid,principal:'a'.repeat(64)})+'\n');
   let slow:http.ClientRequest|undefined;
   try{
     await until(()=>{if(child.exitCode!==null)throw Error(errors);return output.includes('ready\n');});
@@ -195,6 +196,7 @@ http.createServer=function(options,listener){return create.call(this,options,(re
   }finally{
     slow?.destroy();child.stdin.end();
     await until(()=>child.exitCode!==null||child.signalCode!==null);
+    await inventory.close();
     fs.rmSync(directory,{recursive:true,force:true});
   }
 });

@@ -129,3 +129,25 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
     return {call,close,auth,token,config,directory,port,child,ops,onInventory:(handler:typeof inventoryHandler)=>inventoryHandler=handler,get errors(){return errors;},get upstreamCalls(){return upstreamCalls;},get peakUpstream(){return peakUpstream;},get inventoryCalls(){return inventoryCalls;},setCreated:(n:number)=>created=n,setMalformed:(v:boolean)=>malformed=v,setResponse:(type:string,body:string)=>response={type,body},holdUpstream:()=>{holdUpstream=true;},releaseUpstream:()=>{upstreamReleases.shift()!();}};
   }catch(error){await close();throw error;}
 }
+
+export async function staticDictationInventory(directory: string) {
+  const socketPath = path.join(directory, 'fixture-pty.sock');
+  const server = net.createServer({allowHalfOpen: true}, socket => {
+    socket.once('error', () => socket.destroy());
+    socket.once('end', () => {
+      const row = {name: 'alpha', created: 1, activity: 1, pid: 123,
+        cwd: directory, attached: 0, meta: {}};
+      const body = Buffer.from(JSON.stringify([row]));
+      const header = Buffer.alloc(5);
+      header[0] = 67;
+      header.writeUInt32BE(body.length, 1);
+      socket.end(Buffer.concat([header, body]));
+    });
+    socket.resume();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socketPath, resolve);
+  });
+  return {socketPath, close: () => new Promise<void>(resolve => server.close(() => resolve()))};
+}
