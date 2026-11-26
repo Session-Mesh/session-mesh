@@ -1149,13 +1149,16 @@ class Pane {
     const other = [...this.inputAcks].filter(([key, entry]) =>
       !key.startsWith(`${this.conn?.name ?? ""}\0`) && (entry.input.pendingBytes || entry.lease?.dirty));
     const saved = [...(this.recoveredLineDrafts || [])];
+    const composeDraft = this.recoveredComposeDraft;
+    const savedCompose = composeDraft && !this.recoveredComposeOwner &&
+      (composeDraft.name !== this.conn?.name || composeDraft.created !== this.conn?.created) ? composeDraft : null;
     const forgetDraft = $(".p-input-forget-draft", container);
     forgetDraft.textContent = t("conn.inputForgetOldDraft");
     forgetDraft.hidden = !obsolete;
     // Routine ACKs must not move the terminal under the cursor or a finger.
     // Retained input needing review, including from an old attachment, still needs a choice.
     const reviewPending = entries.some(({ input }) => input !== current || input.state !== "sending");
-    container.hidden = !reviewPending && current?.state !== "halted" && !obsolete && !other.length && !saved.length;
+    container.hidden = !reviewPending && current?.state !== "halted" && !obsolete && !other.length && !saved.length && !savedCompose;
     if (touch && this.conn && this.recoveredLineDrafts?.has(`${this.conn.name}\0${this.conn.created}`))
       setTimeout(() => restoreSavedLine(this), 0);
     if (!this.restoreOldInputScheduled && entries.some((entry) => entry.input !== current &&
@@ -1166,10 +1169,11 @@ class Pane {
     const otherContainer = $(".p-input-other-drafts", container);
     const otherState = JSON.stringify([other.map(([key, entry]) =>
       [key, entry.input.pendingBytes, entry.input.pendingHumanBytes, entry.input.deliveryUncertain, entry.input.retainedText, !!entry.lease?.dirty]), saved]);
-    if (this.otherDraftsState !== otherState || !this.otherDraftsEntries ||
+    if (this.otherDraftsState !== otherState || this.otherDraftsCompose !== savedCompose || !this.otherDraftsEntries ||
         other.some(([key, entry], i) => this.otherDraftsEntries[i]?.[0] !== key || this.otherDraftsEntries[i]?.[1] !== entry)) {
       this.otherDraftsState = otherState;
       this.otherDraftsEntries = other;
+      this.otherDraftsCompose = savedCompose;
       otherContainer.replaceChildren();
       for (const [key, entry] of other) {
         const card = document.createElement("section");
@@ -1227,24 +1231,34 @@ class Pane {
         }
         otherContainer.append(card);
       }
-      for (const [key, value] of saved) {
+      const reviewDrafts = saved.map(([key, value]) => ({
+        name: key.split("\0", 1)[0], value,
+        matches: () => this.recoveredLineDrafts.get(key) === value,
+        discard: () => this.recoveredLineDrafts.delete(key),
+      }));
+      if (savedCompose) reviewDrafts.push({
+        name: savedCompose.name, value: savedCompose.text,
+        matches: () => this.recoveredComposeDraft === savedCompose && !this.recoveredComposeOwner,
+        discard: () => { this.recoveredComposeDraft = null; },
+      });
+      for (const {name, value, matches, discard: removeDraft} of reviewDrafts) {
         const card = document.createElement("section"); card.className = "p-input-other-draft";
-        const heading = document.createElement("strong"); heading.textContent = key.split("\0", 1)[0];
+        const heading = document.createElement("strong"); heading.textContent = name;
         const label = document.createElement("label"); label.textContent = t("conn.inputCopyDraft");
         const field = document.createElement("textarea"); field.readOnly = true; field.value = value;
         label.append(field); card.append(heading, label);
         const copy = document.createElement("button"); copy.type = "button"; copy.className = "btn ghost sm";
         copy.textContent = t("common.copy");
         copy.addEventListener("click", async () => {
-          if (this.recoveredLineDrafts.get(key) !== value) return;
+          if (!matches()) return;
           try { await navigator.clipboard.writeText(value); flash(t("clipboard.copied")); }
           catch { field.focus(); field.select(); flash(t("clipboard.copyDenied")); }
         });
         const discard = document.createElement("button"); discard.type = "button"; discard.className = "btn ghost sm";
         discard.textContent = t("conn.inputDiscard");
         discard.addEventListener("click", () => {
-          if (this.recoveredLineDrafts.get(key) !== value) return;
-          this.recoveredLineDrafts.delete(key); this.renderRetainedInput(); renderReloadStatus();
+          if (!matches()) return;
+          removeDraft(); this.renderRetainedInput(); renderReloadStatus();
         });
         card.append(copy, discard); otherContainer.append(card);
       }
@@ -7653,7 +7667,8 @@ function saveRecoveredLine() {
   const target = recoveredLineTarget;
   if (!target) return;
   const key = `${target.name}\0${target.created}`;
-  if (line.value) target.pane.recoveredLineDrafts.set(key, line.value);
+  // Once submitted, the pending operation or its recovery result owns the text.
+  if (line.value && !linePending?.operation && !lineRecovery) target.pane.recoveredLineDrafts.set(key, line.value);
   else target.pane.recoveredLineDrafts.delete(key);
   line.value = ""; recoveredLineTarget = null; fitLine();
 }
