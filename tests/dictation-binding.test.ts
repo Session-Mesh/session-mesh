@@ -509,7 +509,10 @@ test('relay waits for a strict native handshake and never falls back on refusal 
 });
 
 test('AC-7: conditional incarnation binding acknowledgement', {timeout: 30000}, async () => {
-  const where = await scratchHome('mesh-binding-', {SHELL: '/bin/bash', MESH_WHISPER_URL: ''});
+  const where = await scratchHome('mesh-binding-', {MESH_WHISPER_URL: ''});
+  const shell = path.join(where.home, 'fixture-shell');
+  fs.writeFileSync(shell, "#!/bin/sh\nexec /bin/bash --noprofile --norc -i\n", {mode: 0o700});
+  where.env.SHELL = shell;
   const command = process.env.MESH_PTYHOST_CMD;
   assert.ok(command && path.isAbsolute(command), 'MESH_PTYHOST_CMD must name the private native build');
   const host = spawn(command, [], {env: where.env, stdio: ['ignore', 'ignore', 'pipe']});
@@ -532,7 +535,14 @@ test('AC-7: conditional incarnation binding acknowledgement', {timeout: 30000}, 
       fs.rmSync(oracle, {force: true});
       assert.deepEqual(await native(socketPath, {op: 'new', name: 'alpha', cwd: where.home,
         command: `exec ${quote(process.execPath)} ${quote(editor)}`}), {ok: true, name: 'alpha'});
-      await until(() => fs.existsSync(oracle));
+      try {
+        await until(() => fs.existsSync(oracle));
+      } catch (error) {
+        const sessions = await native(socketPath, {op: 'list'});
+        const failed = sessions.find((session: {name: string}) => session.name === 'alpha');
+        const output = failed && await nativeReplay(socketPath, {op: 'attach_if', name: 'alpha', created: failed.created});
+        throw new Error(`editor fixture did not start: ${output?.replay ?? 'session exited'} ${hostErrors}`, {cause: error});
+      }
       const [session] = await native(socketPath, {op: 'list'});
       const created = session.created as number;
       const size = JSON.parse(fs.readFileSync(oracle, 'utf8'));
