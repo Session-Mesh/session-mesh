@@ -12,7 +12,7 @@ import {spawnSync} from 'node:child_process';
 import {randomUUID, randomBytes, createHmac} from 'node:crypto';
 import {configuration,Fault} from '../backend/dictation.ts';
 import {liveInventory, startService} from '../backend/dictation-service.ts';
-import {fixture,identityHeaders,request,until,processBirth,processState} from '../checks/dictation-fixture.ts';
+import {fixture,identityHeaders,request,until,processBirth,processState, staticDictationInventory} from '../checks/dictation-fixture.ts';
 
 for(const [label,kind,malformed,expected] of [
   ['accepts a valid C inventory frame',67,false,true],
@@ -88,7 +88,8 @@ test('liveInventory has a total deadline even while reply bytes arrive', async (
 test('private Unix service requires bridge secret, opaque principal, exact headers/JSON; prepare never infers before commit',async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-private-'));fs.chmodSync(directory,0o700);
   const secret=randomBytes(32).toString('hex'),socketPath=path.join(directory,'worker.sock');
-  const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'})!,secret,socketPath,path.join(directory,'missing-inventory'),'a'.repeat(64));
+  const inventory = await staticDictationInventory(directory);
+  const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'})!,secret,socketPath,inventory.socketPath,'a'.repeat(64));
   try{
     assert.equal(fs.statSync(socketPath).mode&0o777,0o600);
     const base={'X-Mesh-Bridge':secret,'X-Mesh-Principal':'a'.repeat(64),...identityHeaders()};
@@ -110,8 +111,8 @@ test('private Unix service requires bridge secret, opaque principal, exact heade
     assert.equal((await call(`/internal/commit/${id}`,'POST',internal,'{}')).status,200);
     assert.equal((await call(`/internal/commit/${id}`,'POST',internal,'{}')).status,200);
     await until(()=>service.engine.read({principal:base['X-Mesh-Principal'],client:base['X-Mesh-Dictation-Client']},id).state==='error');
-    assert.equal((await call(`/api/transcribe/${id}`)).body.error.code,'unavailable');
-  }finally{await service.close();fs.rmSync(directory,{recursive:true,force:true});}
+    assert.equal((await call(`/api/transcribe/${id}`)).body.error.code,'upstream_unavailable');
+  }finally{await service.close();await inventory.close();fs.rmSync(directory,{recursive:true,force:true});}
 });
 
 test('actual server default-off requires no Node; owner only config and safe disabled response',async()=>{
@@ -378,7 +379,8 @@ http.createServer=function(options,listener){return create.call(this,options,(re
 test('private principal transition is strict, authenticated, bounded and rejects delayed old admissions even with full handlers',async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-revoke-'));fs.chmodSync(directory,0o700);
   const secret=randomBytes(32).toString('hex'),socketPath=path.join(directory,'worker.sock'),old='a'.repeat(64),next='b'.repeat(64);
-  const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed',MESH_WHISPER_QUEUE_SIZE:'64'})!,secret,socketPath,path.join(directory,'missing'),old);
+  const inventory = await staticDictationInventory(directory);
+  const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed',MESH_WHISPER_QUEUE_SIZE:'64'})!,secret,socketPath,inventory.socketPath,old);
   const uploads:http.ClientRequest[]=[];
   const call=(principal:string,body:unknown,bridge=secret)=>request({socketPath,path:'/internal/principal',method:'POST',headers:{'X-Mesh-Bridge':bridge,'X-Mesh-Principal':principal,'Content-Type':'application/json'}},JSON.stringify(body));
   try{
@@ -399,7 +401,7 @@ test('private principal transition is strict, authenticated, bounded and rejects
     assert.equal((await request({socketPath,path:'/api/transcribe',method:'POST',headers},'late')).status,404,'old request arriving after revocation must not reserve a slot');
     assert.equal((await request({socketPath,path:'/api/transcribe',method:'POST',headers:{...headers,'X-Mesh-Principal':next}},'new')).status,202);
     assert.equal(service.engine.stats().records,1);
-  }finally{for(const req of uploads)req.destroy();await service.close();fs.rmSync(directory,{recursive:true,force:true});}
+  }finally{for(const req of uploads)req.destroy();await service.close();await inventory.close();fs.rmSync(directory,{recursive:true,force:true});}
 });
 
 test('actual logout-all retires queued work without oversubscribing a processing upstream',async()=>{

@@ -261,6 +261,11 @@ var Dictation = class {
       clearTimeout(timeout);
     }
   }
+  async verifyPreparedSession(session) {
+    const live = await this.isLive(session);
+    this.authorize(session.principal);
+    if (!live) throw new Fault("stale_session");
+  }
   reserve(m) {
     if (this.slots.has(this.slot(m))) throw new Fault("session_busy");
     if (this.records.size >= 256) throw new Fault("capacity_full");
@@ -686,7 +691,9 @@ async function dispatch(req, config, engine, send) {
     return;
   }
   if (req.method === "POST" && path === "/api/transcribe") {
-    const result = await engine.prepare(metadata(req), req.iterator({ destroyOnReturn: false }));
+    const admission2 = metadata(req);
+    const result = await engine.prepare(admission2, req.iterator({ destroyOnReturn: false }));
+    await engine.verifyPreparedSession(admission2);
     send(202, result);
     return;
   }
