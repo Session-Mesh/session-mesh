@@ -384,7 +384,8 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     await page.context().close();
   });
 
-  for (const phone of [false, true]) test(`retained text from a replaced attachment opens as an editable draft without replay (${phone ? 'phone' : 'desktop'})`, async () => {
+  for (const scenario of ['desktop', 'phone', 'phone with a second replacement'] as const) test(`retained text from a replaced attachment opens as an editable draft without replay (${scenario})`, async () => {
+    const phone = scenario !== 'desktop';
     if (phone) await mesh.newShell('recovery-other');
     const page = await open(phone);
     if (phone) await page.locator('#btn-menu').click();
@@ -423,6 +424,18 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     }
     assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1,
       'recovery never replays the uncertain frame');
+    if (scenario === 'phone with a second replacement') {
+      const sockets = await page.evaluate(() => window.__v2Sockets.length);
+      nextCreated++;
+      await page.evaluate(() => refresh());
+      await page.waitForFunction(count => window.__v2Sockets.length > count && active?.conn?.ws?.readyState === WebSocket.OPEN, sockets);
+      await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
+      assert.equal(await page.locator('#line-text').inputValue(), '');
+      assert.equal(await page.locator('.p-input-other-draft textarea').inputValue(), 'RECOVER THIS TEXT');
+      assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1);
+      await page.context().close();
+      return;
+    }
     if (!phone) {
       await page.locator('#dlg-compose [data-close-dialog]').click();
       const sockets = await page.evaluate(() => window.__v2Sockets.length);
