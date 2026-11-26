@@ -96,6 +96,7 @@ describe('phone direct writing: what the field receives', {skip}, () => {
   test('backspace from a keyboard that sends only beforeinput erases at the terminal', async () => {
     const page = await phone('erase-beforeinput', 'claude');
     await page.keyboard.type('/ab');
+    await waitForShellLine(page, '/ab');
     // Android keyboards send keydown with key "Unidentified": only beforeinput names the deletion.
     await page.evaluate(() => {
       const textarea = document.querySelector('#line-text') as HTMLTextAreaElement;
