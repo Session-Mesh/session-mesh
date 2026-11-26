@@ -721,7 +721,7 @@ def accounts_projection():
         offered = {(p["backend"], p["id"]) for p in profiles}
         return [{"id": a["id"], "label": a["label"],
                  "claude": ("claude", a["id"]) in offered, "codex": ("codex", a["id"]) in offered,
-                 "opencode": ("opencode-v2", a["id"]) in offered, "pi": False,
+                 "opencode": ("opencode-v2", a["id"]) in offered, "pi": ("pi", a["id"]) in offered,
                  "backend_labels": a["backend_labels"]} for a in _ACCOUNTS["accounts"]]
     return [{"id": a["id"], "label": a["label"], "claude": bool(a.get("claude_config_dir")),
              "codex": bool(a.get("codex_home")),
@@ -811,8 +811,6 @@ PI_PROFILE_UNAVAILABLE = "Pi profile sessions are not yet supported; the session
 
 async def _profile_launch_context(account, agent, expected_revision=None):
     """One backend-qualified native snapshot. Never interpret an invalid helper response as default credentials."""
-    if account is not None and agent == "pi":
-        raise web.HTTPConflict(text=PI_PROFILE_UNAVAILABLE)
     if expected_revision == "legacy":
         if _native_profile_mode():
             raise web.HTTPConflict(text="Account profile context changed; resume refused")
