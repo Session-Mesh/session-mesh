@@ -905,7 +905,7 @@ async def test_a_malformed_session_request_is_ignored(page, mesh, home_dir, mess
     doc = docs.write(home_dir, "p4b/goto/bad.html", ASKING_PAGE)
     fetched = await show_asking_document(page, mesh, doc)
     before = await mesh_state(page)
-    await post_on_click(page, messages)
+    await post_on_click(page, messages, keyboard=True)
     await assert_nothing_shown(page, before, fetched)
     assert await page.frame_locator(PANE_FRAME).locator("#caps").text_content() == ""
 
