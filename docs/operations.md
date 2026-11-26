@@ -1272,7 +1272,8 @@ Replace the illustrative URL with your service, then run `systemctl --user daemo
 `systemctl --user restart session-mesh.service`. On macOS, set the variables in the web job's
 `EnvironmentVariables` and restart that job as described under [macOS](#macos). Restart only the
 web service, not the PTY host: terminal sessions stay running, but in-flight recognition is lost.
-Source installs need Node on the web service's PATH, or an absolute executable path in `MESH_NODE`;
+Source installs need Node 22.13 or later in the 22.x line, or Node 24 or later, on the web
+service's PATH or at the absolute executable path in `MESH_NODE`;
 bundles select their bundled Node without changing the Node available to agents.
 
 Dictation is optional: invalid configuration or worker startup failure disables only dictation,

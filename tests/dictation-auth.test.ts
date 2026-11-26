@@ -221,7 +221,7 @@ test('logout preserves device-only semantics and closes bound sockets before ret
     await until(()=>frames.some(frame=>frame.kind===8));
     assert.equal(frames.find(frame=>frame.kind===8)!.data.readUInt16BE(0),1008);
     assert.equal((await f.call(route,'GET',headers)).status,401,'old cookie is revoked');
-    assert.equal((await f.call(route,'GET',{...f.auth,...identityHeaders()})).status,404,'master auth survives, old job does not');
+    assert.equal((await f.call(route,'GET',{...headers,...f.auth,Cookie:''})).status,404,'master auth survives, old job does not');
     assert.equal((await f.call('/api/transcribe','POST',{...f.auth,...identityHeaders()},'fresh audio')).status,202);
     assert.ok(f.ops.every(op=>op==='list'||op==='attach_if'),'no native input or mutation from retirement');
   }finally{socket?.destroy();await f.close();}
@@ -251,7 +251,8 @@ http.createServer=function(options,listener){return original.call(this,options,(
     f.setResponse('application/json','{"text":"old private transcript"}');
     const login=await f.call(`/login?token=${encodeURIComponent(f.token)}`);
     const cookie=login.headers['set-cookie']![0]!.split(';')[0]!;
-    const headers={...f.auth,...identityHeaders()},json={...headers,'Content-Type':'application/json'};
+    const identity=identityHeaders();
+    const headers={...f.auth,...identity},json={...headers,'Content-Type':'application/json'};
     const admitted=await f.call('/api/transcribe','POST',headers,'old audio');assert.equal(admitted.status,202);
     const route=`/api/transcribe/${admitted.body.job_id}`;
     await until(async()=>(await f!.call(route,'GET',headers)).body.state==='ready');
@@ -282,7 +283,7 @@ http.createServer=function(options,listener){return original.call(this,options,(
       assert.equal(result.status,503,`${method} ${target}`);assert.equal(result.body.error.code,'unavailable');
       assert.equal(result.body.text,undefined);assert.doesNotMatch(JSON.stringify(result.body),/old private transcript/);
     }
-    assert.equal((await f.call(route,'GET',{Cookie:freshCookie,...identityHeaders()})).status,503);
+    assert.equal((await f.call(route,'GET',{Cookie:freshCookie,...identity})).status,503);
     assert.equal(f.upstreamCalls,1,'no new inference while revocation is unconfirmed');
     const attempted=fs.readFileSync(trace,'utf8').trim().split('\n');
     assert.ok(attempted.length>=8);assert.ok(attempted.every(operation=>operation==='/internal/principal'),
@@ -321,7 +322,8 @@ test('actual pre/post-upload incarnation and malformed inventory fail closed wit
 for(const external of [false,true])test(`actual ${external?'external generation change':'logout-all'} retires ready jobs without stranding session slots`,async()=>{
   const f=await fixture();
   try{
-    const headers={...f.auth,...identityHeaders()};
+    const identity=identityHeaders();
+    const headers={...f.auth,...identity};
     const admitted=await f.call('/api/transcribe','POST',headers,'old audio');assert.equal(admitted.status,202);
     const route=`/api/transcribe/${admitted.body.job_id}`;
     await until(async()=>(await f.call(route,'GET',headers)).body.state==='ready');
@@ -332,7 +334,7 @@ for(const external of [false,true])test(`actual ${external?'external generation 
     const login=await f.call(`/login?token=${encodeURIComponent(f.token)}`);
     const cookie=login.headers['set-cookie']![0]!.split(';')[0]!;
     const next={Cookie:cookie,...identityHeaders()};
-    const old=await f.call(route,'GET',next);assert.equal(old.status,404);assert.equal(old.body.text,undefined);
+    const old=await f.call(route,'GET',{Cookie:cookie,...identity});assert.equal(old.status,404);assert.equal(old.body.text,undefined);
     const replacement=await f.call('/api/transcribe','POST',next,'new audio');
     assert.equal(replacement.status,202,JSON.stringify(replacement.body));
     assert.notEqual(replacement.body.job_id,admitted.body.job_id);
@@ -409,8 +411,8 @@ test('actual logout-all retires queued work without oversubscribing a processing
     assert.equal((await f.call('/api/logout-all','POST',f.auth,'{}')).status,200);
     f.setCreated(3);
     const next={...f.auth,...identityHeaders(),'X-Mesh-Created':'3'};
-    for(const id of [first.body.job_id,second.body.job_id]){
-      const old=await f.call(`/api/transcribe/${id}`,'GET',next);assert.equal(old.status,404);assert.equal(old.body.text,undefined);
+    for(const [id, original] of [[first.body.job_id,running],[second.body.job_id,queued]] as const){
+      const old=await f.call(`/api/transcribe/${id}`,'GET',original);assert.equal(old.status,404);assert.equal(old.body.text,undefined);
     }
     assert.equal((await f.call('/internal/principal','POST',next,'{"revision":99}')).status,404);
     const replacement=await f.call('/api/transcribe','POST',next,'new');assert.equal(replacement.status,202);
