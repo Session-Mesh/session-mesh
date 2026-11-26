@@ -362,3 +362,4 @@ tests/test_wire_vectors.py
 # tests/vibe-sweeper.test.ts
 # tests/view-filename-sandbox.test.ts
 # tests/wake-idle-gate.test.ts
+tests/pi-parallel-profiles-real.test.ts
