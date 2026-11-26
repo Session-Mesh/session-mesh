@@ -17,6 +17,7 @@ type Session = {id: string; parentID?: string; fork?: {sessionID: string; bounda
 type Export = {info: Session; messages: {id: string; type: string; text?: string; content?: unknown}[]};
 
 const binary = process.env.MESH_OC_LINEAGE_BINARY && path.resolve(process.env.MESH_OC_LINEAGE_BINARY);
+const expectedNativeVersion = process.env.MESH_OC_LINEAGE_NATIVE_VERSION ?? '2.3.2';
 const validBinary = binary && fs.existsSync(binary);
 const driver = process.env.MESH_OC_LINEAGE_DRIVER && path.resolve(process.env.MESH_OC_LINEAGE_DRIVER);
 const ocamlTest = process.env.MESH_OC_LINEAGE_OCAML_TEST && path.resolve(process.env.MESH_OC_LINEAGE_OCAML_TEST);
@@ -142,7 +143,8 @@ test('native fork, import, resume, fork back with nonempty context', {skip: !val
     provider = await startFakeProvider();
     a = await server(binary!, path.join(scratch, 'a'), work, provider.port);
     b = await server(binary!, path.join(scratch, 'b'), work, provider.port);
-    assert.equal((await a.api('GET', '/api/info')).value.data?.version ?? (await a.api('GET', '/api/info')).value.version, '2.3.2');
+    const info = (await a.api('GET', '/api/info')).value;
+    assert.equal(info.data?.version ?? info.version, expectedNativeVersion);
     const root = await post(a, '/api/session', {location: {directory: work}});
     const s = root.id as string;
     await post(a, `/api/session/${s}/prompt`,

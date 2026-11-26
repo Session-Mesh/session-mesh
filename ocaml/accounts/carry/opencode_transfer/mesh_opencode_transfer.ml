@@ -71,8 +71,15 @@ let get request context route =
 
 let version request context =
   match request context `Get "/api/info" None with
-  | Ok (200, response) when eq "version" "2.3.2" response -> Ok ()
+  | Ok (200, response) when eq "version" "2.3.2" response -> Ok "2.3.2"
+  | Ok (200, response) when eq "version" "2.4.2" response -> Ok "2.4.2"
   | _ -> Error "transfer_unsupported_version"
+
+let matching_versions request source target =
+  let* source_version = version request source in
+  let* target_version = version request target in
+  if source_version = target_version then Ok ()
+  else Error "transfer_unsupported_version"
 
 let empty_list ?(nonempty = "transfer_pending") request context route =
   let* value = get request context route in
@@ -437,8 +444,7 @@ let transfer_with_fork ?notice ?expected_messages fork ~request ~source ~target 
      || source.location <> target.location
   then Error "transfer_invalid_input"
   else
-    let* () = version request source in
-    let* () = version request target in
+    let* () = matching_versions request source target in
     let* () = inactive request source session_id in
     let* source_response =
       match
@@ -647,8 +653,7 @@ let fork_transfer ~request ~source ~target ~parent_native_id ~logical_id
   else if receipt_taken receipt_directory operation_id then
     Error "transfer_uncertain"
   else
-    let* () = version request source in
-    let* () = version request target in
+    let* () = matching_versions request source target in
     let* () = preflight request source parent_native_id in
     let* parent_response =
       match
