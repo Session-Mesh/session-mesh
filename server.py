@@ -881,10 +881,10 @@ async def _switch_profile_context(account, agent, expected_revision=None, observ
         try:
             values, binding = await asyncio.to_thread(
                 accountswitch.process_environment, observed_agent.get("pid"),
-                {"PI_CODING_AGENT_DIR", *overrides})
-            argv = observed_agent.get("argv") or []
-            if (any(values.get(key) for key in overrides) or argv.count("--session-dir") != 1
-                    or argv[argv.index("--session-dir") + 1:argv.index("--session-dir") + 2] != [context["roots"]["history"]]
+                {"PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", *overrides})
+            # Pi replaces its kernel command line with its process title.
+            if (any(values.get(key) for key in overrides)
+                    or values.get("PI_CODING_AGENT_SESSION_DIR") != context["roots"]["history"]
                     or not await asyncio.to_thread(pimcp.profile_overlay_matches,
                         values.get("PI_CODING_AGENT_DIR", ""), CONF_DIR, context["roots"]["config"])):
                 raise accountswitch.UnboundDefault("Pi profile differs from the observed process")
@@ -992,7 +992,10 @@ def _pi_command(command, runtime, session_dir=None):
             raise web.HTTPConflict(text="Pi conversation is outside the selected profile")
     executable, overlay = runtime
     extension = Path(__file__).with_name("pi_mesh_wake.mjs")
-    return f"PI_CODING_AGENT_DIR={shlex.quote(str(overlay))} " + shlex.join(
+    environment = f"PI_CODING_AGENT_DIR={shlex.quote(str(overlay))} "
+    if session_dir:
+        environment += f"PI_CODING_AGENT_SESSION_DIR={shlex.quote(session_dir)} "
+    return environment + shlex.join(
         [executable, "--extension", str(extension),
          *(["--session-dir", session_dir] if session_dir else []), *argv[1:]])
 
