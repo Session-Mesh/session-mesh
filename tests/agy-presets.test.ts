@@ -87,7 +87,8 @@ const headers = () => ({Authorization: `Bearer ${mesh.token()}`, Origin: mesh.ba
 const post = (route: string, body: unknown) =>
   fetch(`${mesh.base}${route}`, {method: 'POST', headers: headers(), body: JSON.stringify(body)});
 
-type Listed = {mesh: {id: string; known_agent: string | null; agent: {type: string; status?: string; session_id?: string} | null}[]};
+type Listed = {mesh: {id: string; known_agent: string | null; hook?: {type: string} | null;
+  agent: {type: string; status?: string; session_id?: string} | null}[]};
 async function listing(): Promise<Listed> {
   return await (await fetch(`${mesh.base}/api/sessions`, {headers: headers()})).json() as Listed;
 }
@@ -245,9 +246,10 @@ describe('Antigravity preset', () => {
     runHook(token, ['claude'], {hook_event_name: 'Stop', prompt_id: 'p', background_tasks: []});
     assert.equal((await rawEvent(token, {type: 'done', detail: {session: CONVERSATION}})).reason, 'foreign_source');
     await new Promise(resolve => setTimeout(resolve, 600));
-    const agent = await agentOf('agy-nest');
-    assert.equal(agent?.status, 'busy', 'no foreign finished turn');
-    assert.equal(agent?.session_id, CONVERSATION, 'the conversation of the session is not overwritten');
+    const session = (await listing()).mesh.find(item => item.id === 'agy-nest');
+    // Silence may change the displayed state to waiting while the hook still reports a live turn.
+    assert.equal(session?.hook?.type, 'working', 'no foreign finished turn');
+    assert.equal(session?.agent?.session_id, CONVERSATION, 'the conversation of the session is not overwritten');
     hook('agy-nest', 'Stop', stop(true));
     await until('the session\'s own end of turn', async () => (await agentOf('agy-nest'))?.status === 'idle');
   });
