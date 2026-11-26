@@ -367,13 +367,20 @@ async def test_output_is_intact_and_in_order_after_a_swipe(phone):
 async def test_output_is_held_while_the_finger_scrolls_and_released_after(phone):
     tab = await phone(PRINTING)
     await tab.evaluate(SPY_WRITES)
+    await tab.evaluate("""() => {
+      const hold = active.holdOutput;
+      active.holdOutput = function (...args) {
+        window.__holdStarted ??= performance.now();
+        return hold.apply(this, args);
+      };
+    }""")
     x, y0, y1 = await terminal_touch_path(tab, 40)
     await touch(tab, "touchStart", x, y0)
     await touch(tab, "touchMove", x, y1)
-    await tab.wait_for_timeout(50)
-    t0 = await tab.evaluate("performance.now()")
-    await tab.wait_for_timeout(600)
-    held = await tab.evaluate(f"window.__writes.filter(([t]) => t > {t0}).length")
+    await tab.wait_for_function("window.__holdStarted !== undefined")
+    t0 = await tab.evaluate("window.__holdStarted")
+    await tab.wait_for_function("performance.now() >= window.__holdStarted + 600")
+    held = await tab.evaluate(f"window.__writes.filter(([t]) => t > {t0} && t <= {t0} + 600).length")
     await touch(tab, "touchEnd", x, y1)
     await tab.wait_for_timeout(2500)   # the glide ends
     assert held == 0
