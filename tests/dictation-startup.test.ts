@@ -6,8 +6,29 @@ import {test, type TestContext} from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import {type ChildProcess} from 'node:child_process';
+import {spawnSync, type ChildProcess} from 'node:child_process';
 import {fixture, identityHeaders, processBirth, until} from '../checks/dictation-fixture.ts';
+
+test('dictation bootstrap rejects malformed UTF-8 before creating its socket', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-bootstrap-'));
+  t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
+  const socket = path.join(directory, 'worker.sock');
+  const line = JSON.stringify({
+    secret: 'a'.repeat(64), principal: 'b'.repeat(64),
+    parent: process.pid, socket, inventory: '/fixture/INVENTORY',
+  });
+  const input = Buffer.from(`${line}\n`);
+  input[input.indexOf('INVENTORY')] = 0xff;
+  const worker = spawnSync(process.execPath, ['backend/dictation-service.cjs'], {
+    env: {...process.env, MESH_WHISPER_URL: 'http://127.0.0.1:1/fixed'},
+    input, encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(worker.error, undefined);
+  assert.equal(worker.status, 1);
+  assert.equal(worker.stdout, '');
+  assert.equal(worker.stderr, 'Dictation worker unavailable.\n');
+  assert.equal(fs.existsSync(socket), false);
+});
 
 async function disabled(f:Awaited<ReturnType<typeof fixture>>,reason:string){
   assert.equal((await f.call('/api/sessions','GET',f.auth)).status,200,'ordinary API remains healthy');

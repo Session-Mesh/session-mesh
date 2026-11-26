@@ -805,6 +805,53 @@ async function startService(config, secret, socketPath, inventorySocket, princip
 }
 
 // backend/dictation-main.ts
+function parseBootstrap(line) {
+  const value = JSON.parse(line);
+  if (!value || typeof value.secret !== "string" || !/^[a-f0-9]{64}$/.test(value.secret) || typeof value.principal !== "string" || !/^[a-f0-9]{64}$/.test(value.principal) || typeof value.socket !== "string" || !value.socket.startsWith("/") || typeof value.inventory !== "string" || !value.inventory.startsWith("/") || value.parent !== process.ppid) {
+    throw new Error("Bootstrap invalid");
+  }
+  return {
+    secret: value.secret,
+    socket: value.socket,
+    inventory: value.inventory,
+    parent: value.parent,
+    principal: value.principal
+  };
+}
+function readBootstrap() {
+  return new Promise((resolve, reject) => {
+    let input = Buffer.alloc(0);
+    const cleanup = () => {
+      clearTimeout(timer);
+      process.stdin.off("data", receive);
+      process.stdin.off("end", closed);
+    };
+    const fail = (reason) => {
+      cleanup();
+      reject(new Error(reason));
+    };
+    const closed = () => fail("Bootstrap closed");
+    const receive = (part) => {
+      const newline = part.indexOf(10);
+      const size = newline < 0 ? part.length : newline;
+      if (input.length + size > 4096) {
+        fail("Bootstrap limit");
+        return;
+      }
+      input = Buffer.concat([input, part.subarray(0, size)]);
+      if (newline < 0) return;
+      cleanup();
+      try {
+        resolve(parseBootstrap(new TextDecoder("utf-8", { fatal: true }).decode(input)));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    const timer = setTimeout(() => fail("Bootstrap timeout"), 5e3);
+    process.stdin.on("data", receive);
+    process.stdin.once("end", closed);
+  });
+}
 async function main() {
   let config;
   try {
@@ -815,32 +862,7 @@ async function main() {
     return;
   }
   if (!config) throw Error("Disabled worker");
-  let input = "", ended = false;
-  process.stdin.once("end", () => {
-    ended = true;
-  });
-  const bootstrap = await new Promise((resolve, reject) => {
-    const receive = (part) => {
-      input += part.toString("utf8");
-      if (input.length > 4096) {
-        reject(Error("Bootstrap limit"));
-        return;
-      }
-      const end = input.indexOf("\n");
-      if (end < 0) return;
-      process.stdin.removeListener("data", receive);
-      try {
-        resolve(JSON.parse(input.slice(0, end)));
-      } catch {
-        reject(Error("Bootstrap invalid"));
-      }
-      input = "";
-    };
-    process.stdin.on("data", receive);
-    process.stdin.once("end", () => reject(Error("Bootstrap closed")));
-    setTimeout(() => reject(Error("Bootstrap timeout")), 5e3).unref();
-  });
-  if (!/^[a-f0-9]{64}$/.test(bootstrap.secret) || !/^[a-f0-9]{64}$/.test(bootstrap.principal) || bootstrap.parent !== process.ppid || !bootstrap.socket.startsWith("/") || !bootstrap.inventory.startsWith("/")) throw Error("Bootstrap invalid");
+  const bootstrap = await readBootstrap();
   const service = await startService(config, bootstrap.secret, bootstrap.socket, bootstrap.inventory, bootstrap.principal);
   let closing = false;
   const close = async () => {
@@ -857,7 +879,7 @@ async function main() {
   process.stdin.resume();
   process.on("SIGTERM", () => void close());
   process.on("SIGINT", () => void close());
-  if (ended) {
+  if (process.stdin.readableEnded || process.ppid !== bootstrap.parent) {
     await close();
     return;
   }
