@@ -267,7 +267,14 @@ export class Dictation {
     } finally { clearTimeout(timeout); }
   }
   async verifySession(session: Admission): Promise<void> {
-    const live = await this.isLive(session);
+    const controller = new AbortController();
+    this.controllers.add(controller);
+    let live: boolean;
+    try {
+      live = await this.isLive(session, controller.signal);
+    } finally {
+      this.controllers.delete(controller);
+    }
     // A revocation can arrive while the inventory is being read.
     this.authorize(session.principal);
     if (!live) throw new Fault('stale_session');
