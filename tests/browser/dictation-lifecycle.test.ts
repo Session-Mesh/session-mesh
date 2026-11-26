@@ -17,7 +17,8 @@ async function waitUploads(page: any, api: any, count: number): Promise<void> {
 test('synthetic cache return reconnects ordinary keyboard with Whisper disabled', async () => {
   await harness(async (page, api, sockets, writes) => {
     api.disable(); await page.reload();
-    await page.waitForFunction(() => active?.conn?.terminal?.isOpen() && !active.conn.replaying && !active.conn.draining);
+    await page.waitForFunction(() => active?.conn?.terminal?.isOpen() && !active.conn.replayPending
+      && !active.conn.replaying && !active.conn.draining);
     await typeNative(page, 'before');
     await page.evaluate(() => {
       (window as any).cachedSocket = active.conn.ws; (window as any).cachedLease = active.inputLease;
@@ -36,7 +37,10 @@ test('synthetic cache return reconnects ordinary keyboard with Whisper disabled'
       old.onmessage({data: new TextEncoder().encode('\x1b[6n').buffer}); old.onclose({});
     });
     await typeNative(page, 'after'); await page.keyboard.press('Enter');
-    assert.ok(wire(writes, key).join('').includes('after\r'));
+    const deadline = performance.now() + 5000;
+    while (!wire(writes, key).join('').includes('after\r') && performance.now() < deadline)
+      await page.waitForTimeout(10);
+    assert.ok(wire(writes, key).join('').includes('after\r'), 'the fixture received typing on the restored socket');
     assert.doesNotMatch(wire(writes, 'A:0').join(''), /\x1b\[\d+;\d+R/);
     assert.doesNotMatch(wire(writes, key).join(''), /\x1b\[\d+;\d+R/);
     assert.equal(await page.evaluate(() => active.inputLease.dirty), false);
