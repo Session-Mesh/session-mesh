@@ -341,6 +341,9 @@ describe('account switch requests', {skip: SKIP}, () => {
       fs.mkdirSync(folder!, {recursive: true, mode: 0o700});
       fs.writeFileSync(path.join(folder!, 'auth.json'), JSON.stringify({fakeAccount: value}), {mode: 0o600});
     }
+    // lsof reports canonical file paths, including the resolved macOS temporary root.
+    const [expectedDefault, expectedWork, expectedTravel] = [defaultHome, workHome, travelHome]
+      .map(home => process.platform === 'darwin' ? fs.realpathSync(home) : home);
     const [plain, work, moving] = await Promise.all([
       codexSession('parallel-default'), codexSession('parallel-work', 'work'), codexSession('parallel-moving', 'travel'),
     ]);
@@ -366,18 +369,18 @@ describe('account switch requests', {skip: SKIP}, () => {
     };
     const plainPid = pidOf(plain.name), workPid = pidOf(work.name), movingPid = pidOf(moving.name);
     assert.deepEqual(await Promise.all([actualHome(plainPid), actualHome(workPid), actualHome(movingPid)]),
-      [defaultHome, workHome, travelHome]);
+      [expectedDefault, expectedWork, expectedTravel]);
     const workAuth = fs.readFileSync(path.join(workHome, 'auth.json'), 'utf8');
     const defaultAuth = fs.readFileSync(path.join(defaultHome, 'auth.json'), 'utf8');
 
     const switched = await decide(await requested(moving, 'work'), true);
     assert.equal(switched.state, 'completed', JSON.stringify(switched));
     await launchOf(moving.name);
-    assert.equal(await actualHome(pidOf(moving.name)), workHome);
+    assert.equal(await actualHome(pidOf(moving.name)), expectedWork);
     assert.equal(launches().findLast(fields => fields[2] === moving.name)?.[4], moving.token, 'switch stays in the same PTY');
     assert.equal(pidOf(work.name), workPid, 'the other work session was not restarted');
-    assert.equal(await actualHome(workPid), workHome);
-    assert.equal(await actualHome(plainPid), defaultHome);
+    assert.equal(await actualHome(workPid), expectedWork);
+    assert.equal(await actualHome(plainPid), expectedDefault);
     assert.equal(fs.readFileSync(path.join(workHome, 'auth.json'), 'utf8'), workAuth);
     assert.equal(fs.readFileSync(path.join(defaultHome, 'auth.json'), 'utf8'), defaultAuth);
 
@@ -391,10 +394,10 @@ describe('account switch requests', {skip: SKIP}, () => {
     assert.equal(restarted.state, 'completed', JSON.stringify(restarted));
     assert.equal(restarted.result?.id, plain.name);
     await launchOf(plain.name);
-    assert.equal(await actualHome(pidOf(plain.name)), defaultHome, 'default remains default after another account was used');
+    assert.equal(await actualHome(pidOf(plain.name)), expectedDefault, 'default remains default after another account was used');
     assert.equal(launches().findLast(fields => fields[2] === plain.name)?.[4], plain.token, 'restart stays in the same PTY');
     assert.equal(pidOf(work.name), workPid);
-    assert.equal(await actualHome(workPid), workHome);
+    assert.equal(await actualHome(workPid), expectedWork);
     assert.equal(fs.readFileSync(path.join(defaultHome, 'auth.json'), 'utf8'), defaultAuth);
   });
 
