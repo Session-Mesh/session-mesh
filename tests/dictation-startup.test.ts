@@ -94,6 +94,10 @@ test('cancelling startup preserves shutdown and reaps the partial worker',{timeo
   let child:ChildProcess|undefined;
   const pending=fixture(true,false,undefined,{workerEntry:c.entry,onSpawn:value=>{child=value;}});
   void pending.catch(()=>{});
+  t.after(async () => {
+    const live = await pending.catch(() => undefined);
+    await live?.close();
+  });
   await until(c.hasIdentity);
   const identity=c.identity();
   assert.ok(child?.pid,'only signal the child created by this fixture');
@@ -146,9 +150,9 @@ test('post-startup worker loss clears enabled config and repeated fixture lifecy
   const sockets:string[]=[];
   for(let i=0;i<2;i++){
     const f=await fixture(true,false,undefined,{workerPreload:preload});
-    const identity=JSON.parse(fs.readFileSync(marker,'utf8')) as {pid:number;socket:string};
-    sockets.push(identity.socket);
     try{
+      const identity=JSON.parse(fs.readFileSync(marker,'utf8')) as {pid:number;socket:string};
+      sockets.push(identity.socket);
       assert.equal((await f.call('/api/transcribe/config','GET',f.auth)).body.enabled,true);
       process.kill(identity.pid,'SIGKILL');
       await until(async()=>(await f.call('/api/transcribe/config','GET',f.auth)).body.enabled===false);
@@ -175,9 +179,11 @@ process.stdin.once('end',()=>{
  process.kill(process.pid,'SIGSTOP');
 });`);
   const f=await fixture(true,false,undefined,{workerPreload:preload});
-  const identity=JSON.parse(fs.readFileSync(marker,'utf8')) as {pid:number;socket:string};
-  const birth=processBirth(identity.pid);assert.ok(birth);
+  let ownedWorker: {pid: number; birth: string} | undefined;
   try{
+    const identity=JSON.parse(fs.readFileSync(marker,'utf8')) as {pid:number;socket:string};
+    const birth=processBirth(identity.pid);assert.ok(birth);
+    ownedWorker = {pid: identity.pid, birth};
     f.child.kill('SIGTERM');
     await until(()=>fs.existsSync(interrupted));
     await until(()=>f.child.exitCode!==null||f.child.signalCode!==null);
@@ -185,10 +191,14 @@ process.stdin.once('end',()=>{
     assert.equal(fs.existsSync(path.dirname(identity.socket)),false);
     assert.doesNotMatch(f.errors,/Task was destroyed|Task exception was never retrieved|Unclosed client session/);
   }finally{
-    if(processBirth(identity.pid)===birth){
-      process.kill(identity.pid,'SIGKILL');
-      await until(()=>processBirth(identity.pid)!==birth);
+    try {
+      if (ownedWorker && processBirth(ownedWorker.pid) === ownedWorker.birth) {
+        const {pid, birth} = ownedWorker;
+        process.kill(pid, 'SIGKILL');
+        await until(() => processBirth(pid) !== birth);
+      }
+    } finally {
+      await f.close();
     }
-    await f.close();
   }
 });
