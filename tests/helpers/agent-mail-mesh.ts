@@ -41,8 +41,6 @@ export class AgentMesh {
 
   static async start(prefix: string, names: string[]): Promise<AgentMesh> {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}bin-`));
-    const shell = path.join(bin, 'plain-bash');
-    fs.writeFileSync(shell, '#!/bin/sh\nexec /bin/bash --noprofile --norc -i\n', {mode: 0o755});
     fs.writeFileSync(path.join(bin, 'claude'), [
       '#!/bin/sh',
       'if [ "$1" = "--version" ]; then exit 0; fi',
@@ -60,19 +58,19 @@ export class AgentMesh {
     const lab = new AgentMesh(mesh);
     lab.scratches.push(bin);
     try {
-    const runtime = path.join(mesh.home, 'run');
-    const nativeHost = nativePtyhost();
-    lab.hosts.push(spawn(nativeHost[0], nativeHost.slice(1), {cwd: REPO, stdio: 'ignore',
-      env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: runtime, LANG: 'C', SHELL: shell}}));
-    const socketPath = path.join(runtime, 'session-mesh', 'ptyhost.sock');
-    await waitFor('ptyhost answering', 10000, () => request(socketPath, {op: 'list'}).then(() => true, () => false));
-    const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({token: mesh.token()})});
-    lab.cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
-    assert.ok(lab.cookie, 'the owner signs in');
-    for (const name of names) lab.agents[name] = await lab.launch(name);
-    await lab.learnIncarnations();
-    return lab;
+      const runtime = path.join(mesh.home, 'run');
+      const nativeHost = nativePtyhost();
+      lab.hosts.push(spawn(nativeHost[0], nativeHost.slice(1), {cwd: REPO, stdio: 'ignore',
+        env: {PATH, HOME: mesh.home, XDG_RUNTIME_DIR: runtime, LANG: 'C', SHELL: shell}}));
+      const socketPath = path.join(runtime, 'session-mesh', 'ptyhost.sock');
+      await waitFor('ptyhost answering', 10000, () => request(socketPath, {op: 'list'}).then(() => true, () => false));
+      const login = await fetch(`${mesh.base}/login`, {method: 'POST', redirect: 'manual',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: new URLSearchParams({token: mesh.token()})});
+      lab.cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      assert.ok(lab.cookie, 'the owner signs in');
+      for (const name of names) lab.agents[name] = await lab.launch(name);
+      await lab.learnIncarnations();
+      return lab;
     } catch (error) { await lab.stop(); throw error; }
   }
 
