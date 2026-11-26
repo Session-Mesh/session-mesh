@@ -138,7 +138,8 @@ export class TerminalMesh {
     options: PageOptions = {}): Promise<Page> {
     const page = await this.signIn(viewport, init, watch, options);
     if (options.phone === true) await page.locator('#btn-menu').click();
-    await page.locator(`#list .item[data-id="${name}"]`).click();
+    // Status sections and pins can show the same session as the main list.
+    await page.locator(`#list .item[data-id="${name}"]:not(.todo .item, .pin-row .item)`).click();
     await page.waitForFunction(() => active?.conn?.ws?.readyState === 1, undefined, {timeout: 30000});
     await settle(page);
     return page;
