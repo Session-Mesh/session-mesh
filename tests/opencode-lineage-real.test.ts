@@ -283,7 +283,10 @@ test('native OCaml roundtrip removes only its target on success and refusal', {
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     await host.close(); host = undefined;
-    const run = (id: string) => execFileSync(ocamlTest!, ['test', 'adapter', '10'], {
+    const listing = execFileSync(ocamlTest!, ['list', '--color=never'], {encoding: 'utf8', timeout: 5_000});
+    const selected = /^adapter\s+(\d+)\s+isolated installed native roundtrip\.$/m.exec(listing);
+    assert.ok(selected, 'the native harness lists the installed roundtrip scenario');
+    const run = (id: string) => execFileSync(ocamlTest!, ['test', 'adapter', selected[1]!], {
       cwd: work, encoding: 'utf8', timeout: 30_000,
       env: {...process.env, MESH_OC_TRANSFER_BINARY: binary!, MESH_OC_TRANSFER_SOURCE: root,
         MESH_OC_TRANSFER_WORKSPACE: work, MESH_OC_TRANSFER_ID: id, MESH_OC_TRANSFER_EXPECTED: '4'},
