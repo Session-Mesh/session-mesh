@@ -11,20 +11,23 @@
 
 module Host = Ptyhost_isolation_impl
 
-(* A wall clock that fails once, on the first reading after [arm]. The host
-   reads it after every PTY read, so the failure lands in a session's output
-   fiber, an exception no handler there expects. *)
-let armed = ref false
+(* Fail the clock only after the victim's output has reached its replay.
+   With no observer or attached clients, the output fiber feeds that replay
+   and reads the clock without yielding. *)
+let armed : (unit -> bool) option ref = ref None
+let fault_injected = ref false
 
 module Faulty_clock = struct
   type t = float Eio.Time.clock_ty Eio.Resource.t
   type time = float
 
   let now base =
-    if !armed then (
-      armed := false;
-      failwith "injected clock failure")
-    else Eio.Time.now base
+    match !armed with
+    | Some ready when ready () ->
+        armed := None;
+        fault_injected := true;
+        failwith "injected clock failure"
+    | _ -> Eio.Time.now base
 
   let sleep_until base time = Eio.Time.sleep_until base time
 end
@@ -64,15 +67,20 @@ let a_failing_session_ends_alone () =
   let victim = find "victim" and survivor = find "survivor" in
   Fun.protect
     ~finally:(fun () ->
+      armed := None;
       List.iter (fun (s : Host.session) -> Host.signal s Sys.sigkill) !owned)
     (fun () ->
-      (* Let both shells draw their prompt and fall quiet. *)
-      Eio.Time.Mono.sleep mono 1.5;
-      armed := true;
+      let marker = "mesh-victim-output-marker" in
+      fault_injected := false;
+      armed := Some (fun () ->
+          Ptyhost_blackbox.contains
+            (Mesh_pty_support.Mesh_pty_replay.snapshot victim.replay) marker);
       ignore
         (Mesh_pty_support.Mesh_pty_input.enqueue victim.input
-           "echo victim-output\r");
+           ("echo " ^ marker ^ "\r"));
       Eio.Promise.await victim.done_;
+      Alcotest.(check bool) "the victim received the injected fault" true
+        !fault_injected;
       Alcotest.(check bool)
         "the failed session left the listing" false
         (List.memq victim !sessions);

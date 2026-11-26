@@ -289,6 +289,23 @@
 ; The exact host source again, for session-isolation checks that need an
 ; injected failure inside a session's fibers.
 
+; A separate test-only host makes the final idle validation fail after a real
+; signal. The production host source and executable have no fault switch.
+(rule
+ (target ptyhost_final_refusal_impl.ml)
+ (deps ../lib/mesh_ptyhost.ml)
+ (action
+  (with-stdout-to %{target}
+   (run sed "s/= Mesh_pty_agent_stop.Idle) = Some true/= Mesh_pty_agent_stop.Idle) = Some false/" %{dep:../lib/mesh_ptyhost.ml}))))
+
+(test
+ (name ptyhost_final_refusal_test)
+ (modules ptyhost_final_refusal_test ptyhost_final_refusal_impl)
+ (libraries mesh_agent_resume_preset mesh_platform mesh_pty_agent_stop
+  mesh_project_codec mesh_project_store mesh_project_observation mesh_pty_processes
+  mesh_pty_support mesh_update_host mesh_wire ptyhost_blackbox test_scratch
+  yojson eio_main eio.unix alcotest unix))
+
 (rule
  (target ptyhost_isolation_impl.ml)
  (deps ../lib/mesh_ptyhost.ml)

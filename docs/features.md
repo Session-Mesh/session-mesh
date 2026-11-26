@@ -1359,6 +1359,12 @@ an agent's menus and lists with the whole screen visible; with it open, it stays
 arming Ctrl with the keyboard closed, tap the input line to type the letter. "Panes" lists the
 open panes and "Actions" holds the top-bar buttons. A long press on a session opens its menu.
 
+When an older terminal host is in **limited mode**, buffered Send and composer insertion are
+unavailable on that connection. **Use live keyboard** in the terminal's banner opens its direct
+keyboard once replay has finished. Keys go immediately to that live terminal; any text already
+in the phone input line stays there and is not submitted. Selecting another connection restores
+the ordinary phone input line. This does not enable dictation or queued input on a limited host.
+
 **Direct writing.** A phone keyboard composes words and corrects them, so the input line holds
 your text and sends it as one paste. Agents, however, show their command and skill completion
 while you type, which needs each key at the terminal. So in a session whose foreground program is

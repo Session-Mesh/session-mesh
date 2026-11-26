@@ -48,6 +48,14 @@
     "key": "server.ptyhostInvalidReply"
   },
   {
+    "pattern": "^Invalid terminal incarnation$",
+    "key": "server.invalidTerminalIncarnation"
+  },
+  {
+    "pattern": "^Conflicting terminal incarnation$",
+    "key": "server.conflictingTerminalIncarnation"
+  },
+  {
     "pattern": "^Session replaced or stop already requested$",
     "key": "server.sessionReplacedOrStopRequested"
   },

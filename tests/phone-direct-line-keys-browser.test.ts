@@ -93,8 +93,9 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
       const message = await flashed(page);
       assert.ok(message.includes('control characters'), message);
       assert.deepEqual(await frames(page), [], `no ${via} after the refused text`);
-      assert.equal(await field(page), 'iew\u0001', 'the refused text remains for review');
-      assert.equal(await direct(page), true, 'the mode goes on: nothing was sent');
+      assert.equal(await page.locator('#line + section pre').textContent(), 'iew\u0001', 'the refused text remains available for review');
+      assert.equal(await page.locator('#line-text').getAttribute('readonly'), '', 'recovery prevents accidental submission');
+      assert.equal(await direct(page), false, 'direct mode ends while the refused text is reviewed');
     }
   });
 
@@ -108,8 +109,9 @@ describe('phone direct writing: the key bar follows the rule of Enter', {skip}, 
     await waitForFlash(page, 'not delivered as typed');
     assert.ok((await flashed(page)).includes('bracketed paste'));
     assert.deepEqual(await frames(page), []);
-    assert.equal(await field(page), 'iew\tx', 'the refused text remains for review');
-    assert.equal(await direct(page), true);
+    assert.equal(await page.locator('#line + section pre').textContent(), 'iew\tx', 'the refused text remains available for review');
+    assert.equal(await page.locator('#line-text').getAttribute('readonly'), '', 'recovery prevents accidental submission');
+    assert.equal(await direct(page), false);
   });
 
   test('held text that cannot be delivered stops the keys too', async () => {

@@ -21,18 +21,27 @@ export interface PtySize extends Geometry { readonly owner: PtySizeOwner }
 export type SizeMode = "claim" | "take" | "keep";
 
 const OWNERS: readonly string[] = ["you", "other", "none"];
-const validDimension = (value: unknown): value is number =>
-  Number.isInteger(value) && (value as number) >= 2 && (value as number) <= 1000;
+const validDimension = (value: unknown, maximum: number): value is number =>
+  Number.isInteger(value) && (value as number) >= 2 && (value as number) <= maximum;
 
-/** server.py's {t:"s", rows, cols, owner}; null for anything else. */
+function validPtySize(message: unknown, maximum: number): message is PtySize & {t: "s"} {
+  if (typeof message !== "object" || message === null) return false;
+  const { t, rows, cols, owner } = message as Record<string, unknown>;
+  return t === "s" && validDimension(rows, maximum) && validDimension(cols, maximum)
+    && typeof owner === "string" && OWNERS.includes(owner);
+}
+
+/** The host/relay accepts 2..65535; valid metadata need not be renderable. */
+export function isPtySizeFrame(message: unknown): boolean {
+  return validPtySize(message, 65535);
+}
+
+/** server.py's {t:"s", rows, cols, owner}, within the browser's 1000-cell-per-axis render cap. */
 export function parsePtySize(text: string): PtySize | null {
   let message: unknown;
   try { message = JSON.parse(text); } catch { return null; }
-  if (typeof message !== "object" || message === null) return null;
-  const { t, rows, cols, owner } = message as Record<string, unknown>;
-  if (t !== "s" || !validDimension(rows) || !validDimension(cols)
-      || typeof owner !== "string" || !OWNERS.includes(owner)) return null;
-  return { rows, cols, owner: owner as PtySizeOwner };
+  if (!validPtySize(message, 1000)) return null;
+  return { rows: message.rows, cols: message.cols, owner: message.owner };
 }
 
 export interface SizePlan {

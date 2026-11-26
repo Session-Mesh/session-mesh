@@ -87,6 +87,34 @@ describe('phone direct writing: how it ends', {skip}, () => {
     assert.equal(await field(page), '');
   });
 
+  test('a refused multiline paste stays in recovery after switching sessions', async () => {
+    const page = await phone('recover-a', 'claude');
+    await page.keyboard.type('/a');
+    await waitForShellLine(page, '/a');
+    await forget(page);
+    await page.evaluate(() => new Promise<void>(resolve => active.term.write('\x1b[?2004l', resolve)));
+    await page.evaluate(() => {
+      const field = document.querySelector<HTMLTextAreaElement>('#line-text')!;
+      field.value = 'first\nsecond';
+      flushDirectField('insertFromPaste');
+    });
+    await page.waitForFunction(() => !!lineRecovery);
+    assert.equal(await field(page), '');
+    assert.equal(await page.evaluate(() => lineRecovery?.target.displayName), 'recover-a');
+    await mesh.newShell('recover-b');
+    await page.evaluate(() => refresh());
+    await page.evaluate(() => { document.querySelector<HTMLElement>('#btn-menu')!.click(); });
+    await page.locator('#list .item[data-id="recover-b"]').click();
+    await page.waitForFunction(() => active?.id === 'recover-b');
+    await forget(page);
+    await page.locator('#line-text').press('Enter');
+    await page.waitForTimeout(300);
+    assert.deepEqual(await frames(page), []);
+    assert.equal(await field(page), '');
+    assert.equal(await page.evaluate(() => lineRecovery?.text), 'first\nsecond');
+    assert.equal(await page.evaluate(() => lineRecovery?.target.displayName), 'recover-a');
+  });
+
   test('another pane becoming active drops the mode at once, before any inventory refresh', async () => {
     const page = await phone('pane-a', 'claude');
     await mesh.newShell('pane-b');

@@ -109,15 +109,16 @@ describe('progressive session list', {skip}, () => {
     await page.context().close();
   });
 
-  test('malformed cached ACK identity cannot open a raw or ACK socket before the listing', async () => {
+  for (const invalid of ['not-an-incarnation', null, 'missing'] as const) test(`invalid cached ACK identity (${invalid}) cannot open a socket before the listing`, async () => {
     const page = await mesh.openPage('alpha', VIEW, undefined, watchErrors);
-    await page.evaluate(() => {
+    await page.evaluate((invalid) => {
       const known = JSON.parse(localStorage.getItem('mesh.knownSessions')!);
       const alpha = known.rows.find((row: {name: string}) => row.name === 'alpha');
-      alpha.created = 'not-an-incarnation';
+      if (invalid === 'missing') delete alpha.created;
+      else alpha.created = invalid;
       alpha.pty_capabilities = ['acknowledged_input_v2'];
       localStorage.setItem('mesh.knownSessions', JSON.stringify(known));
-    });
+    }, invalid);
     const sockets: string[] = [];
     page.on('websocket', socket => sockets.push(socket.url()));
     let answered = false;

@@ -27,6 +27,7 @@ export function browserEnv(base: NodeJS.ProcessEnv = process.env): Record<string
 }
 
 /** Launch options of a Chromium that shows the English interface. */
-export function chromiumLaunchOptions(executablePath: string, args: string[] = []): LaunchOptions {
-  return {executablePath, args: [...args, `--lang=${BROWSER_LOCALE}`], env: browserEnv()};
+export function chromiumLaunchOptions(executablePath: string, args: string[] = [],
+  options: Pick<LaunchOptions, 'headless' | 'chromiumSandbox'> = {}): LaunchOptions {
+  return {...options, executablePath, args: [...args, `--lang=${BROWSER_LOCALE}`], env: browserEnv()};
 }

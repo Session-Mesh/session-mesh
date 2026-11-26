@@ -86,13 +86,29 @@ function temporaryTracker(): string {
   return copy;
 }
 
-/** The answer events of the tracker for one question (the fixture holds a malformed line on purpose). */
-function answersOf(id: string): Record<string, unknown>[] {
-  const dir = path.join(tracker, 'events');
+/** Answer events in time order. Host-shard filenames do not order events;
+ * the fixture also holds a malformed line on purpose. */
+function answersOf(id: string, dir = path.join(tracker, 'events')): Record<string, unknown>[] {
   return fs.readdirSync(dir).sort().flatMap(name => fs.readFileSync(path.join(dir, name), 'utf8').split('\n'))
     .flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } })
-    .filter(event => event !== null && event.type === 'answer' && event.question === id);
+    .filter(event => event !== null && event.type === 'answer' && event.question === id)
+    .sort((a, b) => Date.parse(String(a.ts)) - Date.parse(String(b.ts)));
 }
+
+test('answer observations follow event time across host shards', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'work-answer-order-'));
+  const id = 'N-0000f001';
+  try {
+    const first = ownerAnswer(id, 'first answer');
+    const corrected = ownerAnswer(id, 'corrected answer', {ts: '2026-11-10T00:00:00Z'});
+    fs.writeFileSync(path.join(dir, '2026-11.a.jsonl'), JSON.stringify(corrected) + '\n');
+    fs.writeFileSync(path.join(dir, '2026-11.z.jsonl'), JSON.stringify(first) + '\n');
+    const answers = answersOf(id, dir);
+    assert.deepEqual(answers.map(event => [event.text, event.via]),
+      [['first answer', 'owner-web'], ['corrected answer', 'owner-web']]);
+    assert.equal(answers.at(-1)?.text, 'corrected answer');
+  } finally {fs.rmSync(dir, {recursive: true, force: true});}
+});
 
 before(async () => {
   if (skip) return;

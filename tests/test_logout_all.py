@@ -322,3 +322,46 @@ async def test_interop_the_command_never_reads_a_damaged_file_as_zero(junk):
     assert raised > 1_000_000
     assert cookiegen.read(server.GENERATION_FILE) == raised
     assert stat.S_IMODE(server.GENERATION_FILE.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize('credential', ['cookie', 'bearer'])
+async def test_logout_during_pty_attach_rechecks_credentials(client, auth_cookie, auth_bearer, monkeypatch, credential):
+    entered, release = asyncio.Event(), asyncio.Event()
+    written = []
+
+    class Writer:
+        closed = False
+        def close(self): self.closed = True
+        def write(self, data): written.append(data)
+        async def drain(self): pass
+
+    writer = Writer()
+    async def attach(*_args, **_kwargs):
+        entered.set()
+        await release.wait()
+        return asyncio.StreamReader(), writer, {}
+
+    monkeypatch.setattr(server.ptyhost, 'attach_info', attach)
+    opening = asyncio.create_task(client.ws_connect('/ws/alpha', headers=auth_cookie if credential == 'cookie' else auth_bearer))
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        assert (await logout_all(client, auth_bearer)).status == 200
+        release.set()
+        ws = await asyncio.wait_for(opening, 3)
+        if credential == 'cookie':
+            msg = await ws.receive(timeout=3)
+            assert msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED)
+            assert writer.closed and written == []
+        else:
+            await ws.send_bytes(b'live')
+            for _ in range(100):
+                if written:
+                    break
+                await asyncio.sleep(.01)
+            assert written and not writer.closed
+        await ws.close()
+    finally:
+        release.set()
+        if not opening.done():
+            opening.cancel()
+            await asyncio.gather(opening, return_exceptions=True)

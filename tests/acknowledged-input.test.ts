@@ -5,6 +5,137 @@ import { test } from "node:test";
 import { createAcknowledgedInput, terminalReportsOnly } from "../static/pane-actions.ts";
 
 const bytes = (s: string) => new TextEncoder().encode(s);
+test('locally retained input never transmits on reconnect without an explicit retry', () => {
+  const frames: Uint8Array[] = [];
+  const input = createAcknowledgedInput({version: 2, created: 42, send: frame => frames.push(frame), state: () => {}});
+  const nonce = 'a'.repeat(32);
+  assert.equal(input.connectV2(42, 1, 1, nonce, true), true);
+  assert.equal(input.retain(bytes('held')), true);
+  assert.equal(input.state, 'review');
+  assert.equal(input.retainedText, 'held');
+  assert.equal(frames.length, 0);
+  assert.equal(input.connectV2(42, 1, 1, nonce, true), true);
+  assert.equal(frames.length, 0);
+  assert.equal(input.retry(), true);
+  assert.equal(frames.length, 1);
+});
+test('retaining while an ACK is in flight does not send later bytes on a late receipt', () => {
+  const frames: Uint8Array[] = [];
+  const input = createAcknowledgedInput({version: 2, created: 42, send: frame => frames.push(frame), state: () => {}});
+  const nonce = 'b'.repeat(32);
+  assert.equal(input.connectV2(42, 2, 1, nonce, true), true);
+  assert.equal(input.write(bytes('first')), true);
+  assert.equal(input.retain(bytes('second')), true);
+  assert.equal(input.state, 'uncertain');
+  input.ackV2(42, 2, 1, 1, true);
+  assert.equal(frames.length, 1);
+  assert.equal(input.retainedText, 'firstsecond');
+  assert.equal(input.connectV2(42, 2, 1, nonce, true), true);
+  assert.equal(frames.length, 1);
+  assert.equal(input.state, 'uncertain');
+});
+test('a late receipt after reconnect cannot send review-only input', () => {
+  for (const version of [1, 2] as const) {
+    const frames: Uint8Array[] = [];
+    const id = 'actor';
+    const nonce = 'c'.repeat(32);
+    const input = createAcknowledgedInput({version, attachmentId: id, created: 42,
+      send: frame => frames.push(frame), state: () => {}});
+    const connect = () => version === 1 ? input.connect(42, id, true) : input.connectV2(42, 2, 1, nonce, true);
+    connect();
+    assert.equal(input.write(bytes('first')), true);
+    assert.equal(input.retain(bytes('second')), true);
+    connect();
+    if (version === 1) input.ack(42, id, 1, true);
+    else input.ackV2(42, 2, 1, 1, true);
+    assert.equal(frames.length, 1, `v${version} must not send retained input`);
+    assert.equal(input.retainedText, 'second');
+    assert.equal(input.state, 'review');
+    assert.equal(input.retry(), true);
+    assert.equal(frames.length, 2);
+  }
+});
+for (const version of [1, 2] as const) test(`v${version} fragmented input preserves bytes across two explicit review barriers`, () => {
+  const frames: Uint8Array[] = [];
+  const id = 'fragment-review', nonce = 'd'.repeat(32);
+  const input = createAcknowledgedInput({version, attachmentId: id, created: 42,
+    send: frame => frames.push(frame), state: () => {}});
+  const connect = () => version === 1 ? input.connect(42, id, true) : input.connectV2(42, 1, 1, nonce, true);
+  const ack = (seq: number) => version === 1 ? input.ack(42, id, seq, true) : input.ackV2(42, 1, 1, seq, true);
+  const first = Uint8Array.from({length: 70001}, (_, i) => i % 251);
+  const held = Uint8Array.from({length: 140003}, (_, i) => (i + 31) % 251);
+  const later = new Uint8Array([67]);
+  connect();
+  assert.equal(input.write(first), true);
+  assert.equal(input.retain(held), true);
+  connect();
+  ack(1); ack(2);
+  assert.equal(frames.length, 2, 'the original operation drains, but retained fragments require review');
+  assert.equal(input.pendingBytes, held.length);
+  assert.equal(input.state, 'review');
+  assert.equal(input.retry(), true);
+  assert.equal(frames.length, 3);
+  assert.equal(input.retain(later), true);
+  connect();
+  ack(3); ack(4); ack(5);
+  assert.equal(frames.length, 5, 'retrying the earlier batch cannot authorize a later retention');
+  assert.equal(input.pendingBytes, later.length);
+  assert.equal(input.state, 'review');
+  assert.equal(input.retry(), true);
+  ack(6);
+  assert.equal(input.pendingBytes, 0);
+  assert.equal(input.state, 'ready');
+  assert.deepEqual(Buffer.concat(frames.map(frame => Buffer.from(frame.subarray(4)))),
+    Buffer.concat([first, held, later]), 'every byte is delivered once, in order');
+  for (const [i, frame] of frames.entries())
+    assert.equal(new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(0), i + 1);
+  assert.equal(input.retain(new Uint8Array([68])), true);
+  connect();
+  assert.equal(input.discard(), true);
+  assert.equal(input.write(new Uint8Array([69])), true);
+  assert.equal(frames.length, 7);
+  const replacement = frames.at(-1)!;
+  assert.equal(new DataView(replacement.buffer, replacement.byteOffset, replacement.byteLength).getUint32(0), 7,
+    'discarding never-sent input reuses only its uncommitted sequence');
+  assert.deepEqual([...replacement.subarray(4)], [69]);
+});
+test('a blocked actor keeps offline input for review without allowing retry', () => {
+  const frames: Uint8Array[] = [];
+  const input = createAcknowledgedInput({version: 2, created: 42, send: frame => frames.push(frame), state: () => {}});
+  input.reject();
+  assert.equal(input.retain(bytes('held')), true);
+  assert.equal(input.retainedText, 'held');
+  assert.equal(input.state, 'halted');
+  assert.equal(input.connectV2(42, 1, 1, 'a'.repeat(32), true), false);
+  assert.equal(input.retry(), false);
+  assert.equal(frames.length, 0);
+});
+test('discarding retained input never revives a halted actor', () => {
+  for (const version of [1, 2] as const) {
+    const frames: Uint8Array[] = [];
+    const id = 'opaque-attachment-0123456789', nonce = 'c'.repeat(32);
+    const input = createAcknowledgedInput({version, attachmentId: id, created: 42,
+      send: frame => frames.push(frame), state: () => {}});
+    if (version === 1) {
+      input.connect(41, id, true);
+    } else {
+      assert.equal(input.connectV2(42, 1, 1, nonce, true), true);
+      assert.equal(input.write(bytes('first')), true);
+      input.ackV2(42, 1, 1, 1, false, 'invalid_frame');
+      assert.equal(input.discard(), true);
+    }
+    assert.equal(input.state, 'halted');
+    const before = frames.length;
+    assert.equal(input.retain(bytes('held')), true);
+    assert.equal(input.discard(), true);
+    assert.equal(input.state, 'halted');
+    if (version === 1) input.connect(42, id, true);
+    else assert.equal(input.connectV2(42, 1, 1, nonce, true), false);
+    assert.equal(input.write(bytes('new')), false);
+    assert.equal(input.retry(), false);
+    assert.equal(frames.length, before);
+  }
+});
 test("retained text is readable without replay and disappears on discard", () => {
   const sent: Uint8Array[] = [];
   const input = createAcknowledgedInput({version: 2, created: 42, send: frame => sent.push(frame), state: () => {}});

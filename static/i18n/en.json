@@ -2381,5 +2381,16 @@
   "server.switchMigrationChanged": "Account migration or switch context changed; inspect the session",
   "server.boundRestoreUnavailable": "Bound account conversation unavailable; restore refused",
   "server.switchStandbyCleanupUnconfirmed": "Standby cleanup unconfirmed; inspect before another action",
-  "server.switchSourceStopUnconfirmed": "Source stop unconfirmed; inspect before another action"
+  "server.switchSourceStopUnconfirmed": "Source stop unconfirmed; inspect before another action",
+  "dictation.inline.invalidIncarnation": "Invalid terminal incarnation.",
+  "compose.recovery.pageSuspended": "Page suspended; unsent draft kept for review.",
+  "conn.cachedUnconfirmed": "Restored terminal not confirmed — select the session again",
+  "server.invalidTerminalIncarnation": "Invalid terminal incarnation",
+  "server.conflictingTerminalIncarnation": "Conflicting terminal incarnation",
+  "terminal.limited": "Live terminal in limited mode: automatic sizing, queued input and dictation are unavailable.",
+  "terminal.limitedResize": "Resize to this pane",
+  "terminal.limitedKeyboard": "Use live keyboard",
+  "terminal.limitedKeyboardWaiting": "Wait for the live terminal to finish loading, then choose Use live keyboard again.",
+  "terminal.limitedInput": "This connection cannot verify delayed input. Text is kept; type directly in the live terminal.",
+  "paneActions.inputIdentityInvalid": "Invalid terminal input identity."
 }

@@ -15,6 +15,11 @@ val valid_session_name : string -> bool
 (** Pure existing host name policy: nonempty valid UTF-8 without NUL. No new
     length limit; this validates shape, not session identity or authority. *)
 
+(** [attach_if] pins its stream to the selected [created] value. An in-place
+    agent restart retires those streams, leases and queued/active conditional
+    input before advancing [created]. Legacy name-only attachments and their
+    ordinary input continue on the retained PTY. *)
+
 val valid_creation_receipt : string -> bool
 (** Validate the canonical boot-instance/generation receipt syntax only. A
     receipt is physical provenance, not an action permit. [new_bound] returns it

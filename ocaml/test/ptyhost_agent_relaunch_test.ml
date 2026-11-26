@@ -29,6 +29,17 @@ let agent_script =
    echo $$ > \"$HOME/agent.pid\"\n\
    echo \"start $$ ${CLAUDE_CONFIG_DIR-unset}\" >> \"$log\"\n\
    echo \"agent-start $$ ${CLAUDE_CONFIG_DIR-unset}\"\n\
+   if [ \"$1\" = backpressure ]; then\n\
+     stty -echo -icanon min 1 time 0\n\
+     trap 'echo \"hup $$\" >> \"$log\"; stty sane; exit 0' HUP\n\
+     : > \"$HOME/reader-ready\"\n\
+     dd bs=1 count=1 of=\"$HOME/prefix\" 2>/dev/null\n\
+     : > \"$HOME/prefix-seen\"\n\
+     while [ ! -f \"$HOME/allow-read\" ]; do sleep 0.02; done\n\
+     head -c 1048575 > \"$HOME/remainder\"\n\
+     : > \"$HOME/read-finished\"\n\
+     while :; do sleep 0.1; done\n\
+   fi\n\
    case \"$1\" in\n\
    stubborn) trap 'echo \"hup $$\" >> \"$log\"' HUP ;;\n\
    *) trap 'sleep 0.3; echo \"stop $$\" >> \"$log\"; exit 0' HUP ;;\n\
@@ -201,10 +212,17 @@ let switch_fence fixture op created fence_id =
 let fence_id = "switch-owner-0123456789abcdef"
 
 (* An attachment, and everything it has received so far. *)
-let attach fixture =
+let attach ?created fixture =
   let socket = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.connect socket (Unix.ADDR_UNIX fixture.socket_path);
-  let payload = {|{"op":"attach","name":"relaunch","rows":24,"cols":80}|} in
+  let payload =
+    Yojson.Basic.to_string
+      (`Assoc
+         ([ ("op", `String (if Option.is_some created then "attach_if" else "attach"));
+            ("name", `String "relaunch"); ("rows", `Int 24); ("cols", `Int 80) ]
+         @ Option.fold ~none:[]
+             ~some:(fun value -> [ ("created", value); ("size", `String "claim") ]) created))
+  in
   let head = Bytes.create 5 in
   Bytes.set head 0 'C';
   Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
@@ -222,6 +240,20 @@ let type_in socket text =
   Bytes.set_int32_be head 1 (Int32.of_int (String.length text));
   let frame = Bytes.to_string head ^ text in
   ignore (Unix.write_substring socket frame 0 (String.length frame))
+
+(* Large test frames may be split by the socket; send every byte. *)
+let type_in_all socket text =
+  Unix.setsockopt_float socket Unix.SO_SNDTIMEO 10.;
+  let head = Bytes.create 5 in
+  Bytes.set head 0 'D';
+  Bytes.set_int32_be head 1 (Int32.of_int (String.length text));
+  let frame = Bytes.to_string head ^ text in
+  let rec send offset =
+    if offset < String.length frame then
+      let n = Unix.write_substring socket frame offset (String.length frame - offset) in
+      if n = 0 then failwith "attachment closed during test frame" else send (offset + n)
+  in
+  send 0
 
 let write_frame socket kind payload =
   let head = Bytes.create 5 in
@@ -266,13 +298,13 @@ let ack_attachment fixture created id =
          ("input_ack_created", created); ("input_ack_id", `String id) ]));
   socket
 
-let v2_attachment ?(attach_fields = []) fixture fields =
+let v2_attachment ?(operation = "attach") ?(attach_fields = []) fixture fields =
   let socket = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.setsockopt_float socket Unix.SO_RCVTIMEO 3.;
   Unix.connect socket (Unix.ADDR_UNIX fixture.socket_path);
   write_frame socket 'C'
     (Yojson.Basic.to_string (`Assoc
-       ([ ("op", `String "attach"); ("name", `String "relaunch");
+       ([ ("op", `String operation); ("name", `String "relaunch");
           ("input_ack_v2", `Assoc fields) ] @ attach_fields)));
   let greeting = Yojson.Basic.from_string (snd (next_frame socket)) in
   if member "ok" greeting = `Bool true then ignore (next_frame socket);
@@ -495,6 +527,23 @@ let acknowledged_v2 () =
       (member "input_ack_v2" resumed_reply = ack);
     expect "ACK-lost retransmission after reconnect while fenced"
       (member "input_ack" (v2_input resumed 1 "a") = `Bool true);
+    Unix.close resumed;
+    ignore (wait_until "conditional fenced actor detached" 3. (fun () ->
+      member "attached" (the_session fixture) = `Int 0));
+    let denied, denied_reply = v2_attachment ~operation:"attach_if"
+      ~attach_fields:[("created", created)] fixture
+      [ ("mode", `String "new"); ("created", created) ] in
+    expect "conditional new actor refused under fence" (member "ok" denied_reply <> `Bool true);
+    Unix.close denied;
+    let resumed, resumed_reply = v2_attachment ~operation:"attach_if"
+      ~attach_fields:[("created", created)] fixture
+      [ ("mode", `String "resume"); ("created", created);
+        ("slot", member "slot" ack); ("generation", member "generation" ack);
+        ("actor_nonce", member "actor_nonce" ack) ] in
+    expect "conditional actor resumes under fence" (member "input_ack_v2" resumed_reply = ack);
+    expect "conditional fenced exact retry ACKed" (member "input_ack" (v2_input resumed 1 "a") = `Bool true);
+    expect "conditional fenced new input refused"
+      (member "reason" (v2_input resumed 2 "blocked") = `String "switch_input_fenced");
     expect "release" (member "ok"
       (switch_fence fixture "switch_input_release" created fence_id)
       = `Bool true);
@@ -822,6 +871,54 @@ let v1_capacity_across_incarnations () =
     expect "old incarnation still refused" (not (contains greeting "acknowledged_input_v1"));
     Unix.close stale)
 
+let conditional_v1_draft_clears () =
+  with_host (fun fixture ->
+    let created = member "created" (new_agent fixture) in
+    let id = "conditional-v1-0123456789abcdef" in
+    let v1 = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    Unix.setsockopt_float v1 Unix.SO_RCVTIMEO 3.;
+    Unix.connect v1 (Unix.ADDR_UNIX fixture.socket_path);
+    write_frame v1 'C' (Yojson.Basic.to_string (`Assoc [
+      ("op", `String "attach_if"); ("name", `String "relaunch");
+      ("created", created); ("size", `String "claim");
+      ("input_ack_created", created); ("input_ack_id", `String id) ]));
+    expect "conditional v1 negotiated" (contains (snd (next_frame v1)) "acknowledged_input_v1");
+    ignore (next_frame v1);
+    expect "conditional v1 input admitted" (member "input_ack" (v2_input v1 1 "draft") = `Bool true);
+    expect "draft blocks switch"
+      (member "reason" (switch_fence fixture "switch_input_acquire" created fence_id) = `String "input_pending");
+    write_frame v1 'H' (Yojson.Basic.to_string (`Assoc [ ("client_id", `String id); ("dirty", `Bool false) ]));
+    ignore (wait_until "conditional v1 draft clears" 3. (fun () ->
+      member "ok" (switch_fence fixture "switch_input_acquire" created fence_id) = `Bool true));
+    expect "release fence" (member "ok" (switch_fence fixture "switch_input_release" created fence_id) = `Bool true);
+    Unix.close v1)
+
+let conditional_acknowledged_input () =
+  with_host (fun fixture ->
+    let created = member "created" (new_agent fixture) in
+    let socket = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    Unix.connect socket (Unix.ADDR_UNIX fixture.socket_path);
+    write_frame socket 'C' (Yojson.Basic.to_string (`Assoc [
+      ("op", `String "attach_if"); ("name", `String "relaunch");
+      ("created", created); ("size", `String "claim");
+      ("input_ack_v2", `Assoc [ ("mode", `String "new"); ("created", created) ]) ]));
+    let _, raw = next_frame socket in
+    let reply = Yojson.Basic.from_string raw in
+    expect "exact incarnation accepted" (member "ok" reply = `Bool true);
+    expect "conditional input capability advertised" (contains raw "conditional_input_v1");
+    expect "acknowledged actor available" (contains raw "acknowledged_input_v2");
+    Unix.close socket;
+    let stale = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    Unix.connect stale (Unix.ADDR_UNIX fixture.socket_path);
+    write_frame stale 'C' (Yojson.Basic.to_string (`Assoc [
+      ("op", `String "attach_if"); ("name", `String "relaunch");
+      ("created", created); ("size", `String "claim");
+      ("input_ack_v2", `Assoc [ ("mode", `String "new"); ("created", `Int 1) ]) ]));
+    let _, denied = next_frame stale in
+    expect "mismatched acknowledged incarnation refused"
+      (member "ok" (Yojson.Basic.from_string denied) = `Bool false);
+    Unix.close stale)
+
 let acknowledged_input () =
   with_host (fun fixture ->
       let created = member "created" (new_agent fixture) in
@@ -962,6 +1059,134 @@ let received socket =
   drain ();
   Unix.clear_nonblock socket;
   Buffer.contents buffer
+
+let control socket kind fields =
+  let payload = Yojson.Basic.to_string (`Assoc fields) in
+  let head = Bytes.create 5 in
+  Bytes.set head 0 kind;
+  Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
+  let bytes = Bytes.to_string head ^ payload in
+  ignore (Unix.write_substring socket bytes 0 (String.length bytes))
+
+let await_size socket rows owner =
+  Unix.setsockopt_float socket Unix.SO_RCVTIMEO 5.;
+  let rec read () =
+    let head = read_exactly socket 5 in
+    let payload = read_exactly socket (Int32.to_int (Bytes.get_int32_be head 1)) in
+    if Bytes.get head 0 = 'S' then (
+      let size = Yojson.Basic.from_string (Bytes.to_string payload) in
+      if member "rows" size <> `Int rows || member "owner" size <> `String owner then read ())
+    else read ()
+  in
+  read ()
+
+let await_size_reads_matching_frame () =
+  let size rows owner = Printf.sprintf {|{"rows":%d,"owner":"%s"}|} rows owner in
+  let frame kind payload =
+    let head = Bytes.create 5 in
+    Bytes.set head 0 kind;
+    Bytes.set_int32_be head 1 (Int32.of_int (String.length payload));
+    Bytes.to_string head ^ payload
+  in
+  let matching = frame 'S' (size 26 "you") in
+  let after = frame 'D' "after the requested size" in
+  List.iter
+    (fun (label, frames) ->
+      let reader, writer = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      Fun.protect
+        ~finally:(fun () -> Unix.close reader; Unix.close writer)
+        (fun () ->
+          List.iter
+            (fun wire ->
+              expect "probe frame written"
+                (Unix.write_substring writer wire 0 (String.length wire)
+                = String.length wire))
+            (List.map (fun (kind, payload) -> frame kind payload) frames
+            @ [ matching; after ]);
+          Unix.shutdown writer Unix.SHUTDOWN_SEND;
+          await_size reader 26 "you";
+          (* The barrier must consume exactly through the matching S. *)
+          expect label
+            (Bytes.to_string (read_exactly reader (String.length after))
+            = after)))
+    [
+      ("C is not a size barrier", [ ('C', "{}") ]);
+      ("empty D is not a size barrier", [ ('D', "") ]);
+      ("different rows are not the requested size", [ ('S', size 25 "you") ]);
+      ("different owner is not the requested size", [ ('S', size 26 "other") ]);
+      ("matching S completes", []);
+      ( "C, empty D and mismatching S are skipped",
+        [ ('C', "{}"); ('D', ""); ('S', size 25 "you"); ('S', size 26 "other") ]
+      );
+    ]
+
+let send_to_retired send =
+  try send () with
+  | Unix.Unix_error ((Unix.EPIPE | Unix.ECONNRESET | Unix.ENOTCONN), _, _) -> ()
+
+let retired_write_errors_are_narrow () =
+  List.iter
+    (fun error -> send_to_retired (fun () -> raise (Unix.Unix_error (error, "write", ""))))
+    [ Unix.EPIPE; Unix.ECONNRESET; Unix.ENOTCONN ];
+  let propagated =
+    try
+      send_to_retired (fun () -> raise (Unix.Unix_error (Unix.EBADF, "write", "")));
+      false
+    with Unix.Unix_error (Unix.EBADF, _, _) -> true
+  in
+  expect "unrelated write errors remain visible" propagated
+
+let conditional_attachment_is_retired () =
+  with_host (fun fixture ->
+      let before = new_agent fixture in
+      let old = attach ~created:(member "created" before) fixture in
+      let lease dirty = [ ("client_id", `String "reused-client-identifier"); ("dirty", `Bool dirty) ] in
+      control old 'H' (lease true);
+      control old 'R' [ ("rows", `Int 26); ("cols", `Int 81); ("size", `String "take") ];
+      await_size old 26 "you";
+      let legacy = attach fixture in
+      let stopped = stop_agent fixture (member "created" before) in
+      expect "stopped" (member "ok" stopped = `Bool true);
+      let fresh = attach ~created:(member "created" stopped) fixture in
+      Fun.protect
+        ~finally:(fun () -> List.iter Unix.close [old; legacy; fresh])
+        (fun () ->
+          let stale = Filename.concat fixture.home "stale-input" in
+          send_to_retired (fun () -> type_in old ("printf stale > " ^ stale ^ "\r"));
+          let barrier = Filename.concat fixture.home "fresh-input" in
+          type_in fresh ("printf fresh > " ^ barrier ^ "\r");
+          ignore (wait_until "fresh conditional input" 5. (fun () -> Sys.file_exists barrier));
+          expect "old conditional D cannot enter the new incarnation" (not (Sys.file_exists stale));
+          let dirty_reason () =
+            member "reason" (send fixture [ ("op", `String "notify_if"); ("name", `String "relaunch");
+                ("created", member "created" stopped); ("agent", `String "claude");
+                ("notification_id", `String "fresh-notification"); ("through_seq", `Int 1);
+                ("count", `Int 1); ("idle_since", `Float 1e12) ])
+          in
+          expect "the old conditional dirty lease retires" (dirty_reason () <> `String "human_dirty");
+          expect "same PTY, legacy and fresh attachments only"
+            (member "pid" (the_session fixture) = member "pid" before
+             && member "attached" (the_session fixture) = `Int 2);
+          control fresh 'H' (lease true);
+          control fresh 'R' [ ("rows", `Int 41); ("cols", `Int 91); ("size", `String "take") ];
+          await_size fresh 41 "you";
+          List.iter
+            send_to_retired
+            [ (fun () -> control old 'H' (lease false));
+              (fun () -> control old 'R' [ ("rows", `Int 65); ("cols", `Int 105); ("size", `String "take") ]) ];
+          control fresh 'R' [ ("rows", `Int 42); ("cols", `Int 92); ("size", `String "keep") ];
+          await_size fresh 42 "you";
+          expect "old H(false) cannot clear the fresh lease" (dirty_reason () = `String "human_dirty");
+          control fresh 'H' (lease false);
+          control fresh 'R' [ ("rows", `Int 43); ("cols", `Int 92); ("size", `String "keep") ];
+          await_size fresh 43 "you";
+          expect "the fresh client can release its own lease" (dirty_reason () <> `String "human_dirty");
+          let legacy_marker = Filename.concat fixture.home "legacy-input" in
+          type_in legacy ("printf legacy > " ^ legacy_marker ^ "\r");
+          ignore (wait_until "legacy attachment still types" 5. (fun () -> Sys.file_exists legacy_marker));
+          expect "the new incarnation restarts under the other account"
+            (member "ok" (start_again fixture (member "created" stopped)) = `Bool true);
+          started fixture 2))
 
 let same_terminal () =
   with_host (fun fixture ->
@@ -1110,10 +1335,14 @@ let half_typed_line_is_erased () =
            (log_lines fixture));
       Unix.close desk)
 
-let input_during_stop_does_not_reach_shell () =
+let input_during_stop_does_not_reach_shell ~conditional () =
   with_host (fun fixture ->
       let session = new_agent ~mode:"stubborn" fixture in
-      let desk = attach fixture in
+      let desk = if conditional then attach ~created:(member "created" session) fixture else attach fixture in
+      if conditional then (
+        let kind, payload = next_frame desk in
+        expect "conditional desk attachment is accepted before stopping"
+          (kind = 'C' && member "ok" (Yojson.Basic.from_string payload) = `Bool true));
       let marker = Filename.concat fixture.home "unexpected-command" in
       let child = Unix.fork () in
       if child = 0 then (
@@ -1121,15 +1350,111 @@ let input_during_stop_does_not_reach_shell () =
         exit (if member "ok" result = `Bool true then 0 else 1));
       ignore (wait_until "stubborn agent received HUP" 5. (fun () ->
           List.exists (fun line -> String.starts_with ~prefix:"hup " line) (log_lines fixture)));
-      type_in desk ("touch " ^ Filename.quote marker ^ "\r");
-      type_in desk ("touch " ^ Filename.quote marker ^ "\r");
+      let send () = type_in desk ("touch " ^ Filename.quote marker ^ "\r") in
+      if conditional then (send_to_retired send; send_to_retired send)
+      else (send (); send ());
       let _, status = Unix.waitpid [] child in
       expect "stop completed" (status = Unix.WEXITED 0);
       let barrier = Filename.concat fixture.home "shell-barrier" in
-      type_in desk ("touch " ^ Filename.quote barrier ^ "\r");
+      let fresh = if conditional then attach ~created:(member "created" (the_session fixture)) fixture else desk in
+      type_in fresh ("touch " ^ Filename.quote barrier ^ "\r");
       ignore (wait_until "shell processed the barrier" 5. (fun () -> Sys.file_exists barrier));
       expect "held input did not reach the shell" (not (Sys.file_exists marker));
+      if conditional then Unix.close fresh;
       Unix.close desk)
+
+(* A real PTY whose agent deliberately stops reading forces an in-flight
+   conditional D write to block. The refusal must leave its bytes intact. *)
+let blocked_conditional_write_refuses_stop () =
+  with_host (fun fixture ->
+      let session = new_agent ~mode:"backpressure" fixture in
+      let created = member "created" session in
+      let agent = List.hd (agent_pids fixture) in
+      let path name = Filename.concat fixture.home name in
+      ignore (wait_until "raw reader ready" 5. (fun () -> Sys.file_exists (path "reader-ready")));
+      let desk = attach ~created fixture in
+      Fun.protect ~finally:(fun () -> Unix.close desk) (fun () ->
+        let payload = String.init (1024 * 1024) (fun i -> Char.chr (33 + ((i + (i / 97)) mod 94))) in
+        type_in_all desk payload;
+        ignore (wait_until "agent consumed frame prefix" 10. (fun () -> Sys.file_exists (path "prefix-seen")));
+        expect "the agent read the first byte" (file_contents (path "prefix") = String.sub payload 0 1);
+        let started_at = Unix.gettimeofday () in
+        let refused = stop_agent fixture created in
+        let elapsed = Unix.gettimeofday () -. started_at in
+        expect ("blocked stop refused: " ^ Yojson.Basic.to_string refused)
+          (member "reason" refused = `String "agent_changed");
+        expect "write drain deadline was observed" (elapsed >= 0.8);
+        expect "agent is still alive and has not received HUP"
+          (alive agent && not (List.exists (fun line -> String.starts_with ~prefix:"hup " line) (log_lines fixture)));
+        expect "incarnation remains unchanged" (member "created" (the_session fixture) = created);
+        close_out (open_out (path "allow-read"));
+        ignore (wait_until "agent drained full frame" 15. (fun () -> Sys.file_exists (path "read-finished")));
+        expect "entire original frame arrived once and in order"
+          (file_contents (path "prefix") ^ file_contents (path "remainder") = payload);
+        let stopped = stop_agent fixture created in
+        expect "agent can stop after draining" (member "ok" stopped = `Bool true)))
+
+let blocked_acknowledged_input_refuses_stop () =
+  with_host (fun fixture ->
+      let session = new_agent ~mode:"backpressure" fixture in
+      let created = member "created" session in
+      let agent = List.hd (agent_pids fixture) in
+      let path name = Filename.concat fixture.home name in
+      ignore (wait_until "raw reader ready" 5. (fun () -> Sys.file_exists (path "reader-ready")));
+      let socket, greeting = v2_new fixture created in
+      expect "acknowledged attachment accepted" (member "ok" greeting = `Bool true);
+      Fun.protect ~finally:(fun () -> Unix.close socket) (fun () ->
+        let payload = String.init (1024 * 1024) (fun i -> Char.chr (33 + ((i + (i / 97)) mod 94))) in
+        for seq = 1 to 16 do
+          let chunk = String.sub payload ((seq - 1) * 65536) 65536 in
+          expect "frame acknowledged" (member "input_ack" (v2_input socket seq chunk) = `Bool true)
+        done;
+        let last = String.sub payload (15 * 65536) 65536 in
+        expect "duplicate acknowledged without another write"
+          (member "input_ack" (v2_input socket 16 last) = `Bool true);
+        ignore (wait_until "agent consumed frame prefix" 10. (fun () -> Sys.file_exists (path "prefix-seen")));
+        let refused = stop_agent fixture created in
+        expect ("blocked stop refused: " ^ Yojson.Basic.to_string refused)
+          (member "reason" refused = `String "agent_changed");
+        expect "agent is alive and has not received HUP"
+          (alive agent && not (List.exists (fun line -> String.starts_with ~prefix:"hup " line) (log_lines fixture)));
+        expect "incarnation remains unchanged" (member "created" (the_session fixture) = created);
+        close_out (open_out (path "allow-read"));
+        ignore (wait_until "agent drained acknowledged frames" 15. (fun () -> Sys.file_exists (path "read-finished")));
+        expect "acknowledged bytes arrived once and in order"
+          (file_contents (path "prefix") ^ file_contents (path "remainder") = payload);
+        expect "agent can stop after draining" (member "ok" (stop_agent fixture created) = `Bool true)))
+
+let idle_blocked_acknowledged_input_refuses_stop () =
+  with_host (fun fixture ->
+      let reply = send fixture [ ("op", `String "new"); ("name", `String "relaunch");
+        ("cwd", `String fixture.home) ] in
+      expect "shell created" (member "ok" reply = `Bool true);
+      let session = the_session fixture in
+      let created = member "created" session in
+      let pid = match member "pid" session with `Int n -> n | _ -> failwith "shell pid" in
+      let ready = Filename.concat fixture.home "idle-raw-ready" in
+      let desk = attach ~created fixture in
+      Fun.protect ~finally:(fun () ->
+          (try Unix.kill pid Sys.sigcont with Unix.Unix_error _ -> ());
+          Unix.close desk) (fun () ->
+        type_in desk ("stty -icanon -echo min 1 time 0 && touch " ^ Filename.quote ready ^
+                      " && kill -STOP $$; stty sane\r");
+        ignore (wait_until "shell configured raw input" 5. (fun () -> Sys.file_exists ready));
+        Unix.sleepf 0.3;
+        Unix.kill pid Sys.sigstop;
+        let socket, greeting = v2_new fixture created in
+        expect "acknowledged attachment accepted" (member "ok" greeting = `Bool true);
+        Fun.protect ~finally:(fun () -> Unix.close socket) (fun () ->
+          for seq = 1 to 16 do
+            expect "frame acknowledged"
+              (member "input_ack" (v2_input socket seq (String.make 65536 'x')) = `Bool true)
+          done;
+          Unix.sleepf 2.2;
+          let refused = stop_agent fixture created in
+          expect ("idle stop refused: " ^ Yojson.Basic.to_string refused)
+            (member "reason" refused = `String "agent_changed");
+          expect "idle incarnation preserved" (member "created" (the_session fixture) = created))))
 
 let meta_keeps_the_nonce () =
   with_host (fun fixture ->
@@ -1345,6 +1670,7 @@ let retired_fence_host_restart () =
       expect "old host receipt cannot release on restarted host" (member "reason" stale = `String "stale_incarnation"))
 
 let () =
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   host_argv := [| Sys.argv.(1) |];
   Alcotest.run
     ~argv:
@@ -1355,8 +1681,14 @@ let () =
     [
       ( "stop_agent_if",
         [
+          Alcotest.test_case "await_size waits for the requested S" `Quick
+            await_size_reads_matching_frame;
           Alcotest.test_case "the agent restarts in the same terminal" `Slow
             same_terminal;
+          Alcotest.test_case "conditional attachments retire, legacy attachments stay" `Slow
+            conditional_attachment_is_retired;
+          Alcotest.test_case "retired write errors are narrowly handled" `Quick
+            retired_write_errors_are_narrow;
           Alcotest.test_case "an agent that ignores SIGHUP is killed" `Slow
             stubborn_agent_is_killed;
           Alcotest.test_case "refusals signal nothing" `Slow
@@ -1370,7 +1702,15 @@ let () =
           Alcotest.test_case "a half-typed line is erased before the launch"
             `Slow half_typed_line_is_erased;
           Alcotest.test_case "input during stop never reaches the shell" `Slow
-            input_during_stop_does_not_reach_shell;
+            (input_during_stop_does_not_reach_shell ~conditional:false);
+          Alcotest.test_case "conditional input during stop never reaches the shell" `Slow
+            (input_during_stop_does_not_reach_shell ~conditional:true);
+          Alcotest.test_case "a blocked conditional write refuses stop without loss" `Slow
+            blocked_conditional_write_refuses_stop;
+          Alcotest.test_case "blocked acknowledged frames refuse stop without loss" `Slow
+            blocked_acknowledged_input_refuses_stop;
+          Alcotest.test_case "idle shell with blocked acknowledged frames refuses stop" `Slow
+            idle_blocked_acknowledged_input_refuses_stop;
           Alcotest.test_case "the new meta keeps the nonce" `Slow
             meta_keeps_the_nonce;
           Alcotest.test_case "a pending launch is dropped by a stop" `Slow
@@ -1380,6 +1720,10 @@ let () =
           Alcotest.test_case "retired fences reject delayed acquire" `Slow retired_fence_races;
           Alcotest.test_case "retired fence capacity fails closed" `Slow retired_fence_capacity;
           Alcotest.test_case "old host receipt is stale" `Slow retired_fence_host_restart;
+           Alcotest.test_case "conditional acknowledged input" `Slow
+             conditional_acknowledged_input;
+          Alcotest.test_case "conditional v1 draft clears" `Slow
+            conditional_v1_draft_clears;
            Alcotest.test_case "acknowledged human input" `Slow
              acknowledged_input;
            Alcotest.test_case "v1 capacity and incarnation" `Slow
