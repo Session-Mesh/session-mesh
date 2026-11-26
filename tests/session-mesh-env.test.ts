@@ -17,9 +17,14 @@ const REPO = path.resolve(import.meta.dirname, '..');
 const PYTHON = process.env.MESH_PYTHON || 'python3';
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'session-mesh-env-'));
 const children: ChildProcess[] = [];
-after(() => {
-  for (const child of children) child.kill('SIGTERM');
-  fs.rmSync(scratch, {recursive: true, force: true});
+after(async () => {
+  await Promise.all(children.map(child => new Promise<void>((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
+    const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
+    child.kill('SIGTERM');
+  })));
+  fs.rmSync(scratch, {recursive: true, force: true, maxRetries: 5, retryDelay: 100});
 });
 
 function freePort(): Promise<number> {
