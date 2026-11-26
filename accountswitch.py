@@ -46,7 +46,16 @@ def process_default_context(kind, pid, proc_root=Path("/proc")):
     Refuse a disappearing/reused process, inaccessible procfs or duplicated relevant variables.
     The caller must independently establish that this PID is the session's foreground agent.
     """
-    if type(pid) is not int or pid <= 0 or kind not in _KINDS:
+    if kind not in _KINDS:
+        raise UnboundDefault("Agent process is unavailable")
+    keys = {"HOME", _KINDS[kind][0], *_OVERRIDES[kind]}
+    values, binding = process_environment(pid, keys, proc_root)
+    return {**default_context(kind, values), **binding}
+
+
+def process_environment(pid, selected, proc_root=Path("/proc")):
+    """Read only the requested keys and the incarnation of an owned process."""
+    if type(pid) is not int or pid <= 0:
         raise UnboundDefault("Agent process is unavailable")
     folder = proc_root / str(pid)
     try:
@@ -58,10 +67,10 @@ def process_default_context(kind, pid, proc_root=Path("/proc")):
             return fields[19]
 
         started = start_time()
-        raw = (folder / "environ").read_bytes()
+        with (folder / "environ").open("rb") as environment:
+            raw = environment.read(2_000_001)
         if len(raw) > 2_000_000 or started != start_time() or folder.stat().st_uid != os.geteuid():
             raise UnboundDefault("Agent process identity changed")
-        selected = {"HOME", _KINDS[kind][0], *_OVERRIDES[kind]}
         values = {}
         for part in raw.split(b"\0"):
             key, separator, value = part.partition(b"=")
@@ -72,8 +81,6 @@ def process_default_context(kind, pid, proc_root=Path("/proc")):
                 if name in values:
                     raise UnboundDefault("Agent environment has duplicate keys")
                 values[name] = os.fsdecode(value)
-        context = default_context(kind, values)
-        context.update(process_pid=pid, process_start=started.decode("ascii"))
-        return context
+        return values, {"process_pid": pid, "process_start": started.decode("ascii")}
     except (OSError, UnicodeError, IndexError) as exc:
         raise UnboundDefault("Agent environment is unavailable") from exc
