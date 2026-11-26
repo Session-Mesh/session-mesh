@@ -97,7 +97,6 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
   const child=spawn(python(),['-B',path.join(root,'server.py')],{cwd:root,env,stdio:['ignore','ignore','pipe']});let errors='';child.stderr.on('data',b=>errors+=b);
   let spawnError: Error | undefined;
   child.once('error', error => { spawnError = error; });
-  options.onSpawn?.(child);
   const call=(p:string,method='GET',headers:any={},body:string|Buffer='')=>request({hostname:'127.0.0.1',port,path:p,method,headers},body);
   const close = async () => {
     for (const release of upstreamReleases) release();
@@ -116,6 +115,7 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
     }
   };
   try{
+    options.onSpawn?.(child);
     const deadline=performance.now()+(options.startupWaitMs??5000);
     while(true){
       if(spawnError)throw new Error('server fixture could not start',{cause:spawnError});
@@ -124,8 +124,8 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
       if(performance.now()>=deadline)throw Error('server fixture startup timeout');
       await delay(10);
     }
+    const token=fs.readFileSync(path.join(config,'token'),'utf8').trim();
+    const auth={Authorization:`Bearer ${token}`};
+    return {call,close,auth,token,config,directory,port,child,ops,onInventory:(handler:typeof inventoryHandler)=>inventoryHandler=handler,get errors(){return errors;},get upstreamCalls(){return upstreamCalls;},get peakUpstream(){return peakUpstream;},get inventoryCalls(){return inventoryCalls;},setCreated:(n:number)=>created=n,setMalformed:(v:boolean)=>malformed=v,setResponse:(type:string,body:string)=>response={type,body},holdUpstream:()=>{holdUpstream=true;},releaseUpstream:()=>{upstreamReleases.shift()!();}};
   }catch(error){await close();throw error;}
-  const token=fs.readFileSync(path.join(config,'token'),'utf8').trim();
-  const auth={Authorization:`Bearer ${token}`};
-  return {call,close,auth,token,config,directory,port,child,ops,onInventory:(handler:typeof inventoryHandler)=>inventoryHandler=handler,get errors(){return errors;},get upstreamCalls(){return upstreamCalls;},get peakUpstream(){return peakUpstream;},get inventoryCalls(){return inventoryCalls;},setCreated:(n:number)=>created=n,setMalformed:(v:boolean)=>malformed=v,setResponse:(type:string,body:string)=>response={type,body},holdUpstream:()=>{holdUpstream=true;},releaseUpstream:()=>{upstreamReleases.shift()!();}};
 }
