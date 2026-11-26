@@ -34,6 +34,9 @@ declare const active: {id: string; provisional?: boolean; conn: {ws: WebSocket |
 declare let linePending: unknown;
 declare const line: HTMLTextAreaElement;
 declare function enterLine(): void;
+declare const Progress: typeof import('../static/known-sessions.ts');
+declare const store: {get(key: string, fallback: null): unknown};
+declare const KNOWN_KEY: string;
 
 type Held = {pending: boolean; readOnly: boolean; status: string};
 const held = (page: Page): Promise<Held> => page.evaluate(() => ({pending: !!linePending, readOnly: line.readOnly,
@@ -42,6 +45,12 @@ const held = (page: Page): Promise<Held> => page.evaluate(() => ({pending: !!lin
 /** Reload with every listing delayed, then Enter on a line while the pane is still unnamed. */
 async function holdLine(marker: string): Promise<Page> {
   const page = await mesh.openPage('alpha', VIEW);
+  // A reload can attach before the next listing only with a cached ACK identity.
+  await page.waitForFunction(() => {
+    const known = Progress.readKnown(store.get(KNOWN_KEY, null));
+    return ['alpha', 'beta'].every(name => known?.rows.some(row =>
+      row.name === name && row.created !== null && row.created > 0 && row.pty_capabilities?.length));
+  });
   await page.route('**/api/sessions*', async route => {
     try {
       const response = await route.fetch();
