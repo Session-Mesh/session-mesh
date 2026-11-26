@@ -18,7 +18,9 @@ declare function rowAuthoritative(session: any): boolean;
 type SavedPage = Window & {oldConnection: any; oldLease: any};
 
 describe('ordinary terminal incarnation recovery without dictation', {skip}, () => {
-  const mesh = new TerminalMesh({MESH_WHISPER_URL: ''});
+  // This suite exercises incarnation changes after a described inventory.
+  // Keep skeleton responses out of the gap between observing and selecting.
+  const mesh = new TerminalMesh({MESH_WHISPER_URL: '', MESH_TEST_SESSIONS_COMPLETE: '1'});
   const editor = path.join(mesh.home, 'input-witness.cjs');
   before(async () => {
     await mesh.start();
@@ -56,6 +58,26 @@ describe('ordinary terminal incarnation recovery without dictation', {skip}, () 
     await page.locator('.pane.active .xterm-helper-textarea').focus();
     await page.keyboard.type(text);
   }
+  async function observeReplacement(page: Page, name: string, original: number): Promise<void> {
+    await page.waitForFunction(async ({name, original}) => {
+      await refresh();
+      const session = find(name);
+      return session?.kind === 'mesh' && Number.isFinite(session.created)
+        && session.created !== original && rowAuthoritative(session);
+    }, {name, original}, {polling: 250});
+  }
+  async function waitForReplacementBinding(page: Page, original: number): Promise<void> {
+    try {
+      await page.waitForFunction(created => active.conn?.terminal?.isOpen()
+        && active.conn.created !== created && active.conn.terminal.isBound(active.id, active.conn.created), original);
+    } catch (error) {
+      const state = await page.evaluate(() => ({
+        session: active.id, connection: active.conn?.created, listed: find(active.id)?.created,
+        socket: active.conn?.ws?.readyState, ended: active.conn?.ended, refused: active.conn?.v2Refused,
+      }));
+      throw new Error(`Replacement terminal did not bind: ${JSON.stringify(state)}`, {cause: error});
+    }
+  }
   async function assertFreshInput(page: Page, oracle: string): Promise<void> {
     assert.equal(fs.readFileSync(oracle, 'utf8'), '', 'no previous input is replayed into the replacement');
     assert.equal(await page.evaluate(() => active.inputLease.dirty), false);
@@ -86,8 +108,8 @@ describe('ordinary terminal incarnation recovery without dictation', {skip}, () 
       await call(`/api/kill/${name}`, {created: original});
       const replacementInput = await create(name, 'new');
       release();
-      await page.waitForFunction(created => active.conn?.terminal?.isOpen()
-        && active.conn.created !== created && active.conn.terminal.isBound(active.id, active.conn.created), original);
+      await observeReplacement(page, name, original);
+      await waitForReplacementBinding(page, original);
       await settle(page);
       assert.equal(await page.evaluate(() => active.inputLease !== (window as unknown as SavedPage).oldLease), true);
       assert.equal(await page.evaluate(() => [...active.inputAcks.values()].some(entry =>
@@ -123,15 +145,11 @@ describe('ordinary terminal incarnation recovery without dictation', {skip}, () 
       assert.equal((await rows(page)).some(row => row.includes('STALE_OUTPUT')), false, 'stale output cannot reach the retained view');
       assert.equal(fs.readFileSync(replacementInput, 'utf8'), '', 'cached input and stale terminal replies never reach the new process');
       // An explicit user selection, unlike pageshow, grants authority to the current target.
-      await page.waitForFunction(({name, original}) => {
-        const session = find(name);
-        return session?.created !== original && session?.kind === 'mesh' && rowAuthoritative(session);
-      }, {name, original});
+      await observeReplacement(page, name, original);
       assert.equal(await page.evaluate(() => active.conn), null);
       assert.deepEqual(sockets, [], 'authoritative replacement inventory still cannot retarget the cached page');
-      await page.locator(`#list .item[data-id="${name}"]`).click();
-      await page.waitForFunction(created => active.conn?.terminal?.isOpen()
-        && active.conn.created !== created && active.conn.terminal.isBound(active.id, active.conn.created), original);
+      await page.locator(`#list button.item[data-id="${name}"]`).click();
+      await waitForReplacementBinding(page, original);
       await settle(page);
       await assertFreshInput(page, replacementInput);
     } finally {await page.context().close();}
