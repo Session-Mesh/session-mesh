@@ -169,11 +169,12 @@ export class Lab {
   }
 
   /** While on, no file can be created in the server's configuration folder: the snapshot cannot be rewritten
-   *  (the file system fails the write, nothing in the server is switched). The lock files of the board, the
-   *  organisation and the agent mail are created first: those stores only open them, and keep working. */
+   *  (the file system fails the write, nothing in the server is switched). Create the other stores'
+   *  locks first so a listing can still read them before the intended snapshot write fails. */
   makeConfigReadOnly(on: boolean): void {
     try {
-      if (on) for (const store of ['board', 'mesh', 'agent-mail']) fs.closeSync(fs.openSync(path.join(this.mesh.confDir, `${store}.json.lock`), 'a', 0o600));
+      if (on) for (const lock of ['board.json.lock', 'mesh.json.lock', 'agent-mail.json.lock', 'conversation-names.lock'])
+        fs.closeSync(fs.openSync(path.join(this.mesh.confDir, lock), 'a', 0o600));
       fs.chmodSync(this.mesh.confDir, on ? 0o500 : 0o700);
     } catch { /* the folder is already gone */ }
   }

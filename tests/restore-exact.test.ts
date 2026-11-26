@@ -225,7 +225,7 @@ test('an intent that cannot be written creates nothing; the same request then su
     lab = started;
     const refused = await lab.exact(lab.offers.alpha);
     lab.makeConfigReadOnly(false);
-    assert.equal(refused.status, 200, refused.text);
+    assert.equal(refused.status, 200, refused.text + "\n" + lab.mesh.output());
     assert.equal(refused.json?.code, 'not-restored', refused.text);
     assert.deepEqual(await lab.listed(), [], 'no shell was created');
     assert.equal(lab.starts(), 0);
