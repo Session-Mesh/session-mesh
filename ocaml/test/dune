@@ -3,6 +3,15 @@
  (modules mesh_history_test)
  (libraries mesh_history alcotest yojson unix sqlite3))
 
+(executable
+ (name codex_test_sleeper)
+ (modules codex_test_sleeper)
+ (libraries unix))
+
+(alias
+ (name runtest)
+ (deps codex_test_sleeper.exe))
+
 (test
  (name backend_profile_test)
  (modules backend_profile_test)
