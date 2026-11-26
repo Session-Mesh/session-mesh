@@ -341,3 +341,17 @@ test('preference read/write failures are honest safe-off; failed enable never ar
   f.flags({allowed: false}); f.toggle(true); assert.equal(f.value(), false);
   assert.deepEqual(f.counts(), {reads: 1, writes: 3});
 });
+
+test('a failed opt-out disarms this page and warns that the saved choice may return', async () => {
+  const f = preferenceFixture(true);
+  await f.controller.start();
+  f.flags({setError: true});
+  f.toggle(false);
+  assert.equal(f.value(), false);
+  assert.equal(f.saved(), true);
+  assert.equal(f.controller.preferenceMessage, 'storageOptOut');
+  f.flags({setError: false});
+  f.toggle(false);
+  assert.equal(f.saved(), false);
+  assert.equal(f.controller.preferenceMessage, '');
+});

@@ -112,7 +112,8 @@ export class DictationController {
       this.p.preference.write(enabled === true);
       this.automatic = enabled === true; this.preferenceMessage = '';
     } catch {
-      this.revokeAutomatic(); this.preferenceMessage = 'storageWrite';
+      this.revokeAutomatic();
+      this.preferenceMessage = enabled ? 'storageWrite' : 'storageOptOut';
     }
     this.notify();
   }

@@ -10,7 +10,7 @@ export function dictationLabel(state: DictationState): string {
   return state === 'idle' ? '' : translate(`dictation.state.${state}`);
 }
 // Only code-owned codes select catalog keys; untrusted server prose is never UI.
-const messages = new Set(['storageWrite', 'storageRead', 'unavailable', 'unsupported', 'nonempty', 'outstanding',
+const messages = new Set(['storageWrite', 'storageOptOut', 'storageRead', 'unavailable', 'unsupported', 'nonempty', 'outstanding',
   'microphoneBusy', 'ineligible', 'originalUnavailable', 'permissionTimeout', 'permissionDenied', 'audioLimit',
   'recordingError', 'microphoneInterrupted', 'durationLimit', 'invalidAudio', 'contextChanged', 'channelExpired',
   'resultExpired', 'admissionRejected', 'admissionUnconfirmed', 'draftChanged', 'statusUnavailable', 'jobMissing',

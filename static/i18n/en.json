@@ -2289,6 +2289,7 @@
   "dictation.state.recovery": "Review dictation — no automatic retry",
   "dictation.state.delivering": "Local input pending…",
   "dictation.message.storageWrite": "Storage unavailable — automatic sending disabled, preference not saved",
+  "dictation.message.storageOptOut": "Automatic sending is off on this page. The change could not be saved, so reloading may restore the previous setting.",
   "dictation.message.storageRead": "Storage unavailable — automatic sending disabled",
   "dictation.message.nonempty": "Empty the entire draft before dictating",
   "dictation.message.outstanding": "Finish or discard this session's dictation",

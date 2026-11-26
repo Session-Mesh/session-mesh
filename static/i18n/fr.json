@@ -2304,6 +2304,7 @@
   "dictation.state.recovery": "Dictée à vérifier — aucun renvoi automatique",
   "dictation.state.delivering": "Entrée locale en attente…",
   "dictation.message.storageWrite": "Stockage indisponible — envoi automatique désactivé, préférence non enregistrée",
+  "dictation.message.storageOptOut": "L’envoi automatique est désactivé sur cette page. Le changement n’a pas pu être enregistré. L’ancien réglage peut revenir au rechargement.",
   "dictation.message.storageRead": "Stockage indisponible — envoi automatique désactivé",
   "dictation.message.nonempty": "Vider exactement le brouillon avant de dicter",
   "dictation.message.outstanding": "Terminer ou abandonner la dictée de cette session",
