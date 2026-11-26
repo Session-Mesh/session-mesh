@@ -259,6 +259,7 @@ describe('progressive session list', {skip}, () => {
   });
 
   test('300 rows render without a long task and keep the DOM bounded', async () => {
+    const created = Date.now() / 1000;
     const page = await mesh.signIn(VIEW, () => {
       const tasks: number[] = [];
       (globalThis as unknown as {longTasks: number[]}).longTasks = tasks;
@@ -270,7 +271,7 @@ describe('progressive session list', {skip}, () => {
         const listing = await response.json() as {mesh: Record<string, unknown>[]};
         const now = Date.now() / 1000;
         for (let i = 0; i < 300; i++) {
-          listing.mesh.push({kind: 'mesh', id: `synthetic-${i}`, name: `synthetic-${i}`, created: now - i, activity: now - i * 7,
+          listing.mesh.push({kind: 'mesh', id: `synthetic-${i}`, name: `synthetic-${i}`, created: created - i, activity: now - i * 7,
             attached: 0, cwd: `/tmp/project-${i % 17}`, agent: null, known_agent: null, folder: null, rank: null, notice: null});
         }
         await route.fulfill({response, json: listing});
