@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {isBindCollision} from './helpers/bind-retry.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
 import {REPO, freePort, removeScratch, runServer, type Scratch, scratchHome, stopServer} from './mesh-server-lib.ts';
 import {type Intercept, type Proxy, startProxy} from './ptyhost-proxy-lib.ts';
@@ -72,7 +73,7 @@ export async function runHistoryServer(where: Scratch): ReturnType<typeof runSer
   for (let attempt = 0; ; attempt += 1) {
     const run = await runServer(where);
     if (run.result.listened || attempt === 4 ||
-        !/OSError: \[Errno (?:98|48)\] error while attempting to bind[^\n]*address already in use/i.test(run.result.output)) return run;
+        !isBindCollision(run.result.output)) return run;
     where.port = await freePort();
     where.env.MESH_PORT = String(where.port);
   }
