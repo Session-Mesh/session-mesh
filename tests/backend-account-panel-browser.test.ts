@@ -451,6 +451,7 @@ for (const lang of ['en','fr']) test(`component ${lang}: provision collects only
     assert.deepEqual(await page.evaluate(()=>({calls:lab.calls,loads:lab.loads})),{calls:[request],loads:3});
     assert.equal(await control(page,'add-account').isDisabled(),true);
     await page.reload();
+    await page.locator('#open').filter({hasText: catalogs[lang]!['backendAccounts.title']!}).waitFor();
     await page.locator('#open').click();
     await statusIs(page,lang,'provisionUncertain');
     assert.equal(await control(page,'provision-account').isDisabled(),true);
@@ -459,6 +460,7 @@ for (const lang of ['en','fr']) test(`component ${lang}: provision collects only
     assert.deepEqual(await page.evaluate(()=>({calls:lab.calls,loads:lab.loads})),{calls:[],loads:0});
     const reopened = await context.newPage();
     await reopened.goto(`${base}/?lang=${lang}`);
+    await reopened.locator('#open').filter({hasText: catalogs[lang]!['backendAccounts.title']!}).waitFor();
     await reopened.locator('#open').click();
     await statusIs(reopened,lang,'provisionUncertain');
     assert.equal(await control(reopened,'provision-account').isDisabled(),true);
