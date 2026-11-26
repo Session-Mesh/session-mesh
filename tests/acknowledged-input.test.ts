@@ -396,3 +396,32 @@ test("a v2 terminal rejection remains halted across disconnect and late receipts
   assert.equal(input.retry(), false);
   assert.equal(frames.length, 1);
 });
+
+for (const version of [1, 2] as const) {
+  test(`v${version} tracked input settles only on its receipt and never resumes itself`, async () => {
+    const frames: Uint8Array[] = [];
+    const outcomes: boolean[] = [];
+    const input = createAcknowledgedInput({version, attachmentId: 'actor', created: 42,
+      send: frame => frames.push(frame), state: () => {}});
+    const connect = () => version === 1 ? input.connect(42, 'actor', true)
+      : input.connectV2(42, 2, 1, 'a'.repeat(32), true);
+    const ack = (seq: number) => version === 1 ? input.ack(42, 'actor', seq, true)
+      : input.ackV2(42, 2, 1, seq, true);
+    const record = (accepted: boolean) => { outcomes.push(accepted); };
+    connect();
+    assert.equal(input.writeTracked(bytes('first'), false, record), true);
+    assert.equal(input.writeTracked(bytes('busy'), false, record), false);
+    assert.deepEqual(outcomes, []);
+    ack(1);
+    await Promise.resolve();
+    assert.deepEqual(outcomes, [true]);
+    assert.equal(input.incompleteHumanInput, true);
+    assert.equal(input.writeTracked(bytes('second'), false, record), true);
+    input.disconnect();
+    connect();
+    await Promise.resolve();
+    assert.deepEqual(outcomes, [true, false]);
+    assert.equal(input.retainedText, 'second');
+    assert.equal(frames.length, 2);
+  });
+}

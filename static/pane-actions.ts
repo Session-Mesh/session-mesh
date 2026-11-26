@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
-export {createRetainedLifetime} from './dictation.ts';
+export {createRetainedLifetime, browserDictationMedia} from './dictation.ts';
+export {createInlineDictationController} from './dictation-inline.ts';
+export {createInlineDictationView} from './dictation-inline-view.ts';
+export {createDictationChannel} from './dictation-channel.ts';
 export {createDictationModeObserver} from './terminal-mode.ts';
 export {createTerminalInputOrigin} from './terminal-origin.ts';
 // Pane-local presentation only. The app supplies data and keeps action authority.
@@ -336,9 +339,19 @@ export function createAcknowledgedInput(ports: {
   let incompleteHumanInput = false;
   let binding: { slot: number; generation: number; actorNonce: string } | null = null;
   let blocked = false;
-  const updateState = (value: RetainedInputState) => { state = value; ports.state(value); };
+  let tracked: {seq: number; settled: (accepted: boolean) => void} | undefined;
+  const settleTracked = (accepted: boolean) => {
+    const operation = tracked;
+    tracked = undefined;
+    if (operation) queueMicrotask(() => operation.settled(accepted));
+  };
+  const updateState = (value: RetainedInputState) => {
+    state = value;
+    if (value === "review" || value === "uncertain" || value === "halted") settleTracked(false);
+    ports.state(value);
+  };
   const size = () => pending.reduce((sum, frame) => sum + frame.data.length, 0);
-  const transmit = () => {
+  const transmit = (send = ports.send) => {
     if (!active || state === "halted") return;
     const frame = pending[0];
     if (!frame) return;
@@ -349,10 +362,10 @@ export function createAcknowledgedInput(ports: {
     // A failed/uncertain socket send must never allow automatic retry.
     sent = true;
     updateState("sending");
-    try { ports.send(payload); }
+    try { send(payload); }
     catch { updateState("uncertain"); }
   };
-  const enqueue = (bytes: Uint8Array, complete: boolean, retainOnly: boolean) => {
+  const enqueue = (bytes: Uint8Array, complete: boolean, retainOnly: boolean, send = ports.send) => {
     if ((!retainOnly && (blocked || state === "halted")) || !bytes.length || bytes.length > maxPending - size() ||
         nextSeq + Math.ceil(bytes.length / maxFrame) > 0x80000000) return false;
     const reportOnly = terminalReportsOnly(bytes);
@@ -365,7 +378,7 @@ export function createAcknowledgedInput(ports: {
     }
     completed = false;
     if (retainOnly) updateState(blocked || state === "halted" ? "halted" : sent ? "uncertain" : "review");
-    else if (wasEmpty && active && state === "ready") transmit();
+    else if (wasEmpty && active && state === "ready") transmit(send);
     else if (wasEmpty && state === "ready") updateState("review");
     return true;
   };
@@ -427,6 +440,14 @@ export function createAcknowledgedInput(ports: {
     write(bytes: Uint8Array, complete = false) {
       return enqueue(bytes, complete, false);
     },
+    writeTracked(bytes: Uint8Array, complete: boolean, settled: (accepted: boolean) => void, send = ports.send) {
+      if (!active || blocked || state !== "ready" || pending.length ||
+          bytes.length === 0 || bytes.length > maxFrame || nextSeq > 0x7fffffff) return false;
+      tracked = {seq: nextSeq, settled};
+      if (enqueue(bytes, complete, false, send)) return true;
+      tracked = undefined;
+      return false;
+    },
     retain(bytes: Uint8Array, complete = false) { return enqueue(bytes, complete, true); },
     ack(created: number, id: string, seq: number, ok: boolean, reason?: string) {
       if (ports.version === 2 || !active || created !== ports.created || id !== ports.attachmentId ||
@@ -443,6 +464,7 @@ export function createAcknowledgedInput(ports: {
         return;
       }
       const accepted = pending.shift();
+      if (tracked?.seq === seq) settleTracked(true);
       completed = accepted?.complete === true;
       if (accepted && !accepted.reportOnly)
         incompleteHumanInput = !accepted.complete;
@@ -466,6 +488,7 @@ export function createAcknowledgedInput(ports: {
         return;
       }
       const accepted = pending.shift();
+      if (tracked?.seq === seq) settleTracked(true);
       completed = accepted?.complete === true;
       if (accepted && !accepted.reportOnly) incompleteHumanInput = !accepted.complete;
       sent = false;
@@ -485,6 +508,7 @@ export function createAcknowledgedInput(ports: {
       const uncertain = sent;
       const halted = state === "halted";
       const first = head.seq;
+      settleTracked(false);
       pending.length = 0;
       sent = false;
       completed = false;
@@ -990,6 +1014,7 @@ export interface PastePorts {
   readonly paste: (pane: object, text: string) => void;
   readonly encode: (text: string) => Uint8Array;
   readonly send?: (pane: object, socket: PasteSocket, bytes: Uint8Array, complete: boolean) => boolean;
+  readonly sendTracked?: (bytes: Uint8Array, complete: boolean, settled: (accepted: boolean) => void) => boolean;
   readonly defer?: (binding: PasteBinding, text: string, resume: () => void, cancel: () => void) => {start(): void; settle(): void};
   readonly schedule: (callback: () => void) => void;
 }
@@ -1011,12 +1036,16 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
     && ports.open(binding.socket);
   const result = (attempt: Attempt, requestedBytes: number, kind: PasteResultKind): PasteResult => ({
     kind, requestedBytes, frames: attempt.frames, wireBytes: attempt.wireBytes,
-    unknownAttempt: attempt.unknown, reason: attempt.reason,
+    unknownAttempt: kind === "uncertain" && attempt.unknown, reason: attempt.reason,
   });
   const send = (attempt: Attempt, frame: string): void => {
     if (attempt.stopped) return;
     if (!valid(attempt.binding)) { attempt.stopped = true; attempt.reason = "guard"; return; }
     const bytes = ports.encode(frame);
+    if (ports.sendTracked) {
+      attempt.frames++; attempt.wireBytes += bytes.byteLength; attempt.joined += frame;
+      return;
+    }
     try {
       const accepted = ports.send
         ? ports.send(attempt.binding.pane, attempt.binding.socket, bytes, frame === "\r")
@@ -1051,6 +1080,24 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
         try {settle(result(attempt, requestedBytes, kind));}
         finally {deferred?.settle();}
       };
+      const sendTracked = (bytes: Uint8Array, complete: boolean, next: () => void): void => {
+        if (settled) return;
+        if (!valid(binding)) {
+          attempt.reason = "guard"; finish(attempt.unknown ? "uncertain" : "refused"); return;
+        }
+        try {
+          if (ports.sendTracked!(bytes, complete, accepted => {
+            if (settled) return;
+            if (accepted) next();
+            else {attempt.reason = "send"; finish("uncertain");}
+          })) {
+            attempt.unknown = true;
+            return;
+          }
+        } catch {attempt.unknown = true;}
+        attempt.reason = "send";
+        finish(attempt.unknown ? "uncertain" : "refused");
+      };
       const operation = { cancel: (): void => {
         if (settled) return;
         attempt.stopped = true; attempt.reason = "cancel";
@@ -1063,6 +1110,7 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
         if (!valid(binding)) { attempt.reason = "guard"; finish("refused"); return; }
         if (!text) {
           if (!enter) { attempt.reason = "incomplete"; finish("refused"); return; }
+          if (ports.sendTracked) {sendTracked(ports.encode("\r"), true, () => finish("submitted")); return;}
           send(attempt, "\r");
           finish(attempt.stopped ? (attempt.unknown ? "uncertain" : "refused") : "submitted");
           return;
@@ -1080,6 +1128,13 @@ export function createPasteDelivery(ports: PastePorts): PasteDelivery {
         }
         if (attempt.stopped) {
           finish(attempt.frames || attempt.unknown ? "uncertain" : "refused");
+          return;
+        }
+        if (ports.sendTracked) {
+          sendTracked(ports.encode(attempt.joined), false, () => {
+            if (!enter) {finish("paste"); return;}
+            sendTracked(ports.encode("\r"), true, () => finish("submitted"));
+          });
           return;
         }
         if (!enter) { finish("paste"); return; }
