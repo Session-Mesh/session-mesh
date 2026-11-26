@@ -2289,6 +2289,7 @@ class Pane {
     if (isHist(id)) return this.showHist(id, force);
     const s = find(id);
     if (!s) return;
+    this.cachedTerminalMoveBlockedId = null;
     const frame = $(".web", this.el);
     const src = s.kind === "board" ? `/static/board.html?v=${encodeURIComponent(loadedVersion)}&session=${encodeURIComponent(s.session)}`
       : s.kind === "demo" ? s.demoId === "legacy"
@@ -2405,6 +2406,7 @@ class Pane {
 
   clear(persist = true) {
     this.invalidateActionView();
+    this.cachedTerminalMoveBlockedId = null;
     this.actionKind = "empty";
     leaveSeen(this.id);
     this.back = null;
@@ -2851,7 +2853,10 @@ class Pane {
         protocol: (_terminal, limited) => {
           this.limitedBanner.hidden = !limited;
           this.limitedKeyboard.hidden = !limited || !touch;
-          if (!limited) { c.cacheRestore = false; this.sendSize(true); this.armAutoRedraw(c); }
+          if (!limited) {
+            if (c.cacheRestore) this.cachedTerminalMoveBlockedId = null;
+            c.cacheRestore = false; this.sendSize(true); this.armAutoRedraw(c);
+          }
         },
         ptySize: (_terminal, size) => {
           const initialClaim = c.pty === null && c.initialSizeClaim;
@@ -5981,7 +5986,7 @@ function syncPanesWithListing(observedInventory) {
     const moved = data.moved?.[p.id];
     if (moved && find(moved)) {
       if (p.conn?.cacheRestore) p.cancelCachedRestore(p.conn);
-      else p.show(moved);
+      else if (p.cachedTerminalMoveBlockedId !== p.id) p.show(moved);
       continue;
     }
     if (isHist(p.id)) {
@@ -9702,7 +9707,12 @@ function suspendLocalPage() {
   for (const pane of panes) {
     pane.invalidateActionView(); pane.detach();
     const binding = bindings.get(pane);
-    if (binding) binding.view = pane.actionView;
+    if (binding) {
+      binding.view = pane.actionView;
+      // Inventory may report a move before reattachment or after it is refused.
+      // Neither observation can select another terminal on behalf of the user.
+      pane.cachedTerminalMoveBlockedId = binding.id;
+    }
   }
   for (const handle of localTerminalHandles) handle.dispose();
   // Keep native lease history viable for fresh, inventory-validated sockets.
