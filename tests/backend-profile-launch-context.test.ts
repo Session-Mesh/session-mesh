@@ -723,3 +723,64 @@ asyncio.run(main())
       env: {...process.env, HOME: root, MESH_CONF_DIR: root, XDG_RUNTIME_DIR: root}});
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });
+
+test('Pi native relaunch keeps the source rollback command and derives a separate target command', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-pi-target-command-'));
+  try {
+    const script = `
+import asyncio, json, shlex, shutil, sys
+from pathlib import Path
+sys.path.insert(0, ${JSON.stringify(repo)})
+import server
+
+root = Path(${JSON.stringify(root)})
+sid = '22222222-2222-2222-2222-222222222222'
+def context(name):
+    base = root / name
+    config, history = base / 'config', base / 'history'
+    config.mkdir(parents=True)
+    history.mkdir()
+    return {'backend':'pi','id':name,'context_revision':'a'*64,
+            'roots':{'config':str(config),'history':str(history)},
+            'env':{'PI_CODING_AGENT_DIR':str(config)},'unset':[],'conversation':sid}
+source_ctx, target_ctx = context('source'), context('target')
+source = {'name':'pi','created':1,'pty_capabilities':['agent_relaunch_bound_v1']}
+source_file = Path(source_ctx['roots']['history']) / (sid + '.jsonl')
+target_file = Path(target_ctx['roots']['history']) / source_file.name
+source_file.write_text(json.dumps({'type':'session','version':3,'id':sid,'cwd':str(root)}) + '\\n')
+server._pi_runtime = lambda env: asyncio.sleep(0, result=('/usr/bin/pi', env['PI_CODING_AGENT_DIR']))
+server._arrangement_of = lambda *_: asyncio.sleep(0)
+server._validate_native_switch = lambda *_: asyncio.sleep(0)
+server._stop_agent = lambda *_, **_kw: asyncio.sleep(0, result=2)
+server._carry_arrangement = lambda *_: asyncio.sleep(0)
+server._switch_profile_context = lambda *_: asyncio.sleep(0, result=target_ctx)
+server._profile_launch_context = lambda *_: asyncio.sleep(0, result=source_ctx)
+started = []
+async def start(*args, **options):
+    started.append((shlex.split(args[3]), options['context']['id']))
+server._start_in_place = start
+async def carry():
+    shutil.copyfile(source_file,target_file)
+async def refuses():
+    raise server.AccountsUnavailable('fixture refused','conversation_not_found')
+async def invoke(copy):
+    return await server._relaunch_in_place(source,str(root),shlex.join(['pi','--session',str(source_file)]),
+                                           'pi','pi','source',('target',copy,source_ctx,target_ctx))
+async def main():
+    try:
+        await invoke(refuses)
+    except server.AccountSwitchUndone:
+        pass
+    else:
+        raise AssertionError('failed carry did not roll back')
+    assert len(started) == 1 and started[0][1] == 'source'
+    assert str(source_file) in started[0][0] and str(target_file) not in started[0][0]
+    assert await invoke(carry) == 'pi'
+    assert len(started) == 2 and started[1][1] == 'target'
+    assert str(target_file) in started[1][0] and str(source_file) not in started[1][0]
+asyncio.run(main())
+`;
+    execFileSync(python, ['-I', '-c', script], {timeout: 10000,
+      env: {...process.env, HOME: root, MESH_CONF_DIR: root, XDG_RUNTIME_DIR: root}});
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
