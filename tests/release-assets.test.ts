@@ -4,7 +4,7 @@
 // scripts/release-assets.sh, the files of a release, in a scratch git repository: `name` gives the
 // built programs their release names, `collect` and `collect-bundle` take from a build job's
 // artifact only the files of its own target, and `bundle` adds the code archive, the stamped
-// install.sh and SHA256SUMS to the 30 programs and the bundles: the 3 bundles, or the 2 Linux ones when
+// install.sh and SHA256SUMS to the 33 programs and the bundles: the 3 bundles, or the 2 Linux ones when
 // the macOS bundle was not qualified, and no other set.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -98,7 +98,7 @@ describe('release-assets.sh bundle', () => {
       for (const file of files) fs.unlinkSync(path.join(missing.dist, file));
       const refused = bundle(missing.source, missing.dist);
       assert.equal(refused.status, 1, name);
-      assert.match(refused.stderr, /must hold exactly the 30 programs and the 3 bundles .*, or the same without mesh-macos-arm64\.tar\.gz/);
+      assert.match(refused.stderr, /must hold exactly the 33 programs and the 3 bundles .*, or the same without mesh-macos-arm64\.tar\.gz/);
       assert.ok(!fs.existsSync(path.join(missing.dist, 'install.sh')));
     }
     const badTag = repository('bad-tag');
