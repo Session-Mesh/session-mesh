@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 import assert from 'node:assert/strict';
-import {execFile, spawnSync} from 'node:child_process';
+import {execFile, execFileSync, spawnSync} from 'node:child_process';
 import {mkdir, mkdtemp, readdir, rm, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
@@ -50,12 +50,21 @@ test('real Pi keeps parallel profiles isolated across exact resumes', {timeout: 
         apiKey: 'fixture-' + name, models: [{id: 'fake'}],
       }}}));
       const send = (message: string, transcript?: string) => new Promise<string>((resolve, reject) => {
-        const args = ['--print', '--offline', '--no-mcp', '--no-extensions', '--no-skills',
-          '--no-context-files', '--provider', 'test-local', '--model', 'fake', '--session-dir', history];
+        const args = ['pi', '--print', '--offline', '--no-mcp', '--no-extensions', '--no-skills',
+          '--no-context-files', '--provider', 'test-local', '--model', 'fake'];
         if (transcript) args.push('--session', transcript);
         args.push(message);
-        const child = execFile(pi, args, {cwd: profile, timeout: 15000,
-          env: {HOME: profile, PATH: process.env.PATH, PI_CODING_AGENT_DIR: profile, PI_OFFLINE: '1'}},
+        const env = {HOME: profile, PATH: process.env.PATH,
+          PI_CODING_AGENT_DIR: profile, PI_OFFLINE: '1'};
+        const command = execFileSync(process.env.MESH_PYTHON || 'python3', ['-c', [
+          'import os, shlex, shutil, sys',
+          'import agentmcp, pimcp, server',
+          'agentmcp.BOARD_MCP = sys.argv[4]',
+          'pimcp.binary = lambda environ: shutil.which(sys.argv[1])',
+          'runtime = pimcp.prepare(sys.argv[2], os.environ)',
+          'print(server._pi_command(shlex.join(sys.argv[5:]), runtime, sys.argv[3]))',
+        ].join('\n'), pi, profile + '-mesh', history, process.execPath, ...args], {env, encoding: 'utf8', timeout: 5000});
+        const child = execFile('/bin/sh', ['-c', command], {cwd: profile, timeout: 15000, env},
         (error, stdout, stderr) => error ? reject(new Error(stderr, {cause: error})) : resolve(stdout));
         child.stdin?.end();
       });
