@@ -181,6 +181,55 @@ let test_legacy_only_cli () =
     Alcotest.(check bool) "legacy target copied" true
       (Sys.file_exists (Filename.concat legacy transcript)))
 
+let test_pi_carry_requires_bound_revisions () =
+  let root = Filename.temp_dir "carrycli-pi" "" in
+  Fun.protect ~finally:(fun () -> remove root) (fun () ->
+      let root = Unix.realpath root in
+      let file = Filename.concat root "accounts.json" in
+      let profile id =
+        let config = Filename.concat root id in
+        Printf.sprintf
+          {|{"backend":"pi","id":"%s","label":"%s","enabled":true,"roots":{"config":"%s","history":"%s/sessions"}}|}
+          id id config config
+      in
+      write (Filename.concat root "backend-profiles.json")
+        (Printf.sprintf {|{"version":1,"profiles":[%s,%s]}|}
+           (profile "source") (profile "target"));
+      let args = ["accounts"; "carry"; file; "pi"; sid; "source"; "target"] in
+      let expect_refusal code args =
+        let status, body = run root args in
+        Alcotest.(check bool) code true
+          (status = Unix.WEXITED 1 && field "code" body = Some (`String code))
+      in
+      expect_refusal "agent_unsupported" args;
+      expect_refusal "profile-context-changed" (args @ [String.make 64 'a'; String.make 64 'b']);
+      Alcotest.(check bool) "rejected target not prepared" false
+        (Sys.file_exists (Filename.concat root "target"));
+      let revision id =
+        let status, body = run root ["accounts"; "launch-context"; file; "pi"; id] in
+        match status, Option.bind (field "context" body) (field "context_revision") with
+        | Unix.WEXITED 0, Some (`String revision) -> revision
+        | _ -> Alcotest.fail "missing Pi profile revision"
+      in
+      let source_revision = revision "source" and target_revision = revision "target" in
+      let name = "2026-11-22T10-00-00_" ^ sid ^ ".jsonl" in
+      let transcript =
+        Printf.sprintf
+          {|{"type":"session","version":3,"id":"%s","timestamp":"2026-11-22T10:00:00.000Z","cwd":"/work"}|}
+          sid
+        ^ "\n"
+        ^ {|{"type":"message","id":"a0000001","parentId":null,"timestamp":"2026-11-22T10:00:01.000Z","message":{"role":"user","content":"original context","timestamp":1}}|}
+        ^ "\n"
+      in
+      write (Filename.concat root ("source/sessions/" ^ name)) transcript;
+      let status, body = run root (args @ [source_revision; target_revision]) in
+      Alcotest.(check bool) "bound transfer completes" true (status = Unix.WEXITED 0);
+      Alcotest.(check bool) "one conversation copied" true
+        (Option.bind (field "carried" body) (field "copied") = Some (`Int 1));
+      Alcotest.(check string) "transcript preserved" transcript
+        (In_channel.with_open_bin (Filename.concat root ("target/sessions/" ^ name))
+           In_channel.input_all))
+
 let () =
   Alcotest.run "mesh-platform-accounts-carry"
     [
@@ -188,6 +237,8 @@ let () =
         [
           Alcotest.test_case "carry from the default account to an alias" `Quick
             test_carry_from_default_to_alias;
+          Alcotest.test_case "Pi carry requires exact profile revisions" `Quick
+            test_pi_carry_requires_bound_revisions;
           Alcotest.test_case "legacy-only pins source" `Quick test_legacy_only_cli;
           Alcotest.test_case "refusals leave nothing" `Quick
             test_refusals_leave_nothing;

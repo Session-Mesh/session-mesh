@@ -485,24 +485,31 @@ let accounts_carry ?expected_contexts ?(legacy_only = false) file kind conversat
     1
   in
   let uid = Unix.geteuid () in
-  match Carry.kind_of_string kind with
-  | None ->
-      refuse
-        {
-          Carry.code = "agent_unsupported";
-          message = "a conversation is carried for claude or codex only";
-        }
-  | Some _ when not (Carry.valid_conversation_id conversation) ->
-      refuse { Carry.code = "conversation_unknown"; message = "not a conversation id" }
-  | Some kind -> (
-      match
-        Carry.carry_accounts ?expected_contexts ~legacy_only ~uid ~getenv:Sys.getenv_opt ~file ~kind
-          ~conversation ~from_account ~to_account ()
-      with
-      | Ok outcome ->
-          print_json (`Assoc [ ("carried", Carry.outcome_to_json outcome) ]);
-          0
-      | Error error -> refuse error)
+  let report = function
+    | Ok outcome ->
+        print_json (`Assoc [ ("carried", Carry.outcome_to_json outcome) ]);
+        0
+    | Error error -> refuse error
+  in
+  match (kind, expected_contexts) with
+  | "pi", Some (source_revision, target_revision) when not legacy_only ->
+      report
+        (Carry.carry_pi_accounts ~uid ~file ~conversation ~from_account ~to_account
+           ~source_revision ~target_revision)
+  | _ -> (
+      match Carry.kind_of_string kind with
+      | None ->
+          refuse
+            {
+              Carry.code = "agent_unsupported";
+              message = "carry requires Claude, Codex, or a revision-bound Pi profile pair";
+            }
+      | Some _ when not (Carry.valid_conversation_id conversation) ->
+          refuse { Carry.code = "conversation_unknown"; message = "not a conversation id" }
+      | Some kind ->
+          report
+            (Carry.carry_accounts ?expected_contexts ~legacy_only ~uid ~getenv:Sys.getenv_opt
+               ~file ~kind ~conversation ~from_account ~to_account ()))
 
 let run = function
   | [ "accounts"; "carry-capabilities" ] ->
