@@ -392,3 +392,25 @@ test('fixed upstream multipart whitelist, no redirects, bounded JSON/status/upgr
     await until(()=>timed.read(t,pt.job.job_id).state==='error');assert.equal(timed.read(t,pt.job.job_id).error?.code,'upstream_timeout');await timed.close();
   }finally{upstream.closeAllConnections();await new Promise<void>(r=>upstream.close(()=>r()));}
 });
+
+test("a transcription completed at the deadline is rejected before the timer runs", async () => {
+  let now = 0;
+  const worker = new Dictation(config({MESH_WHISPER_TIMEOUT: "1"}), {
+    now: () => now,
+    infer: async () => {
+      now = 1000;
+      return "late transcript";
+    },
+  });
+  try {
+    const request = meta();
+    const prepared = await worker.prepare(request, audio("x"));
+    worker.commit(request, prepared.job.job_id, prepared.preparation);
+    await until(() => worker.stats().active === 0);
+    const result = worker.read(request, prepared.job.job_id);
+    assert.equal(result.state, "error");
+    assert.equal(result.error?.code, "upstream_timeout");
+  } finally {
+    await worker.close();
+  }
+});
