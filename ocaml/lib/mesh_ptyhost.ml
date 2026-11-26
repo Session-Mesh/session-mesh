@@ -380,7 +380,7 @@ let max_actor_generation =
 
 let is_agent_name name =
   name = "codex" || name = "claude" || name = "opencode" || name = "gemini"
-  || name = "agy" || name = "vibe" || name = "copilot"
+  || name = "agy" || name = "vibe" || name = "copilot" || name = "pi"
 
 (* Gemini CLI is a node script: argv[0] is node (or nodejs), and its entry
    point is the first argument that is not a node option (the installed link
@@ -410,9 +410,10 @@ let runs_agent (found : Mesh_platform.process) requested =
   if is_agent_name comm then comm = requested
   else
     match Mesh_platform.command_line found.pid with
-    | Ok (argv0 :: rest) ->
+    | Ok ((argv0 :: rest) as argv) ->
         agent_of_name (Filename.basename argv0) = requested
         || (requested = "gemini" && runs_gemini_script argv0 rest)
+        || (requested = "pi" && Mesh_agent_session.of_argv argv = Some "pi")
     | Ok [] | Error _ -> false
 
 (* The agent [requested] runs in the foreground group of session [s]. Any
@@ -1231,7 +1232,8 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
         in
         let agent =
           match get "agent" with
-          | Some (`String value) when is_agent_name value -> value
+          | Some (`String value)
+            when is_agent_name value && (value <> "pi" || Option.is_some expected) -> value
           | _ -> invalid_arg "agent"
         in
         match get "name" with

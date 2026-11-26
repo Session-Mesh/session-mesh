@@ -60,14 +60,14 @@ let agent_pids fixture =
       | _ -> None)
     (log_lines fixture)
 
-let with_host ?(grace = "0.5") ?lease_grace f =
+let with_host ?(grace = "0.5") ?lease_grace ?(agent_name = "claude") f =
   let scratch = Test_scratch.private_directory "pty-relaunch-" in
   let fixture =
     {
       home = Filename.concat scratch "home";
       socket_path = Filename.concat scratch "run/session-mesh/ptyhost.sock";
       agent =
-        Filename.concat scratch "bin/claude"
+        Filename.concat scratch ("bin/" ^ agent_name)
         ^ " "
         ^ Filename.concat scratch "bin/agent.sh";
       restart_host = (fun () -> failwith "host not started");
@@ -77,10 +77,10 @@ let with_host ?(grace = "0.5") ?lease_grace f =
     (fun dir -> Unix.mkdir (Filename.concat scratch dir) 0o700)
     [ "home"; "run"; "bin" ];
   write_shell (Filename.concat scratch "bin/agent.sh") agent_script;
-  (* A copy of bash named claude runs the script: its process is named claude
+  (* A renamed copy of bash runs the script with the requested process name
      on Linux and macOS alike (a script's own name is not, on macOS). *)
   write_shell
-    (Filename.concat scratch "bin/claude")
+    (Filename.concat scratch ("bin/" ^ agent_name))
     (file_contents (Unix.realpath "/bin/bash"));
   let shell = Filename.concat scratch "shell.sh" in
   write_shell shell "#!/bin/sh\nexec /bin/sh -i\n";
@@ -1300,6 +1300,33 @@ let bound_agent_refusal_signals_nothing () =
       expect "session incarnation unchanged"
         (member "created" (the_session fixture) = created))
 
+let pi_stop_requires_exact_process_identity () =
+  with_host ~agent_name:"pi" (fun fixture ->
+      let session = new_agent fixture in
+      let created = member "created" session in
+      let pid = List.hd (agent_pids fixture) in
+      let observed = Result.get_ok (Mesh_platform.process pid) in
+      let stop extra =
+        send fixture
+          ([( "op", `String "stop_agent_if"); ("name", `String "relaunch");
+            ("created", created); ("agent", `String "pi")] @ extra)
+      in
+      expect "unbound Pi stop is refused" (member "ok" (stop []) <> `Bool true);
+      let bound incarnation =
+        [("agent_pid", `Int pid);
+         ("agent_incarnation", `String (Int64.to_string incarnation))]
+      in
+      let stale = stop (bound (Int64.succ observed.incarnation)) in
+      expect "stale process is refused" (member "reason" stale = `String "agent_changed");
+      expect "Pi is still running" (alive pid);
+      let stopped = stop (bound observed.incarnation) in
+      expect ("exact Pi process stops: " ^ Yojson.Basic.to_string stopped)
+        (member "ok" stopped = `Bool true);
+      let after = the_session fixture in
+      expect "terminal shell survives" (member "pid" after = member "pid" session);
+      expect "session advances to the returned incarnation"
+        (member "created" after = member "created" stopped && member "created" after <> created))
+
 (* A shell without job control runs the agent in its own group: only a stop
    of the whole session could reach it, so nothing is signalled. *)
 let no_job_control_signals_nothing () =
@@ -1697,6 +1724,8 @@ let () =
             legacy_duplicate_fields_with_v2_marker;
           Alcotest.test_case "bound agent mismatch signals nothing" `Slow
             bound_agent_refusal_signals_nothing;
+          Alcotest.test_case "Pi stop requires exact process identity" `Slow
+            pi_stop_requires_exact_process_identity;
           Alcotest.test_case "a shell without job control: nothing signalled"
             `Slow no_job_control_signals_nothing;
           Alcotest.test_case "a half-typed line is erased before the launch"

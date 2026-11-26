@@ -12,6 +12,9 @@
 val agent_types : string list
 (** Every agent type the mesh knows, whether or not an adapter describes it. *)
 
+val of_argv : string list -> string option
+(** Identify an agent from its executable or known Node entry point. *)
+
 val kind_of : Mesh_agent_round.t -> Mesh_agent_round.process -> string option
 (** The agent type of a process: by its name, else by its command line (the
     basename of [argv.(0)], or the script a [node] process runs for Pi and
