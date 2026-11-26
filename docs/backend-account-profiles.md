@@ -3,11 +3,11 @@
 `mesh-profile` validates profile metadata, registers aliases and manages confirmation preferences. It does not launch an
 agent or switch a running session. On Linux, the web server can switch a Claude or Codex session between
 native profiles when its PTY host supports bound in-place relaunch. The owner must approve each request.
-macOS, Pi and OpenCode native-profile switches remain unavailable.
-Pi sessions without a selected profile retain their existing behavior. Selected Pi profiles are not
-offered for launch: launch and restart requests are refused before changing the session, and a
-refused restore leaves its recovery offer available. Profiled Pi support remains incomplete until
-its running conversation identity and safe restart can be established reliably.
+On Linux, Pi also supports switching between two named native profiles when its PTY and transfer
+helper both support revision-bound Pi operations. Pi launches and restores use the selected
+configuration and history roots. A restore with an unbound or missing conversation leaves its
+recovery offer available. macOS native-profile switching and OpenCode live switching remain
+unavailable.
 
 ## Identity and configuration
 
@@ -380,8 +380,9 @@ invalid registry never falls back to legacy credentials. Disabled profiles are n
 but their credential roots remain protected from document viewing. A carry resolves both accounts from
 one snapshot; later registry edits apply to the next operation. This is not live checkpoint or arbitrary
 same-user filesystem-race qualification. Enabled OpenCode profiles also admit backend-qualified
-launches; their live switches are not qualified. Pi profile metadata can be managed, but selected
-Pi launches and restarts remain unavailable, and refused recovery offers are retained.
+launches. For a named Pi profile, Mesh prepares a private configuration overlay and passes the
+profile's history directory explicitly. Restarts and recovery resolve the saved profile revision
+and locate the exact transcript within that history.
 
 The browser terminal opts into `acknowledged_input_v1` when the live inventory
 advertises it for this session. The attachment is bound to its current `created`
@@ -398,9 +399,11 @@ focus, mouse and query replies are still queued and ACKed without creating or
 clearing a human draft lease; mixed human bytes are not exempt. This does
 **not** inspect a native
 composer, queue, dialog or tool; it is not a checkpoint or live-switch receipt.
-For an approved Linux Claude/Codex switch, the request binds the conversation, both profile contexts,
+For an approved Linux switch, the request binds the conversation, both profile contexts,
 and the foreground process identity. The host verifies the process before each signal. A successful
 switch preserves the terminal and resumes the copied conversation in the target account. A failed
 carry resumes the source only while its context remains verifiable; an uncertain stop is reported for
 inspection and is not replayed automatically. The process check and signal, and the final directory
-check and launch admission, are separate operations rather than atomic guarantees.
+check and launch admission, are separate operations rather than atomic guarantees. Pi reports its
+active conversation from its extension. The switch requires the foreground process, the matching
+profile overlay and the selected history. The transfer copies only the conversation transcript.
