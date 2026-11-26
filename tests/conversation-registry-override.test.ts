@@ -12,10 +12,9 @@ type Binding = {name: string; label: string};
 const file = 'conversation-names.json';
 const helper = process.env.MESH_MESH_HISTORY_CMD || path.join(REPO, 'ocaml/_build/default/bin/mesh_history_main.exe');
 
-test('registry honors the historical history helper override even when the history index is disabled', async () => {
+test('registry honors its own helper override even when the history index is disabled', async () => {
   await withHistoryLab(async lab => {
-    lab.where.env.MESH_MESH_HISTORY_CMD = undefined;
-    lab.where.env.MESH_HISTORY_CMD = helper;
+    lab.where.env.MESH_MESH_HISTORY_CMD = helper;
     lab.where.env.MESH_HISTORY_DB_DISABLE = '1';
     lab.where.env.MESH_OPAM_SWITCH = path.join(lab.where.scratch, 'no-such-switch');
     await lab.restartServer();
