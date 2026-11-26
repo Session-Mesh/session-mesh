@@ -395,11 +395,12 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1);
     if (phone) await page.locator('#line-text').fill('existing draft');
     const oldCreated = await page.evaluate(() => find('v2-terminal').created);
+    let nextCreated = oldCreated + 1;
     await page.route('**/api/sessions*', async route => {
       const response = await route.fetch({url: withoutSince(route.request().url())});
       const listing = await response.json();
       const session = listing.mesh.find((row: {name: string}) => row.name === 'v2-terminal');
-      session.created = oldCreated + 1;
+      session.created = nextCreated;
       session.pty_capabilities = ['acknowledged_input_v1', 'acknowledged_input_v2'];
       await route.fulfill({response, json: listing});
     });
@@ -422,6 +423,18 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     }
     assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1,
       'recovery never replays the uncertain frame');
+    if (!phone) {
+      await page.locator('#dlg-compose [data-close-dialog]').click();
+      const sockets = await page.evaluate(() => window.__v2Sockets.length);
+      nextCreated++;
+      await page.evaluate(() => refresh());
+      await page.waitForFunction(count => window.__v2Sockets.length > count && active?.conn?.ws?.readyState === WebSocket.OPEN, sockets);
+      await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
+      const review = page.locator('.p-input-other-draft').filter({hasText: 'v2-terminal'});
+      assert.equal(await review.locator('textarea').inputValue(), 'edited recovered text');
+      await review.getByRole('button').last().click();
+      await review.waitFor({state: 'detached'});
+    }
     if (phone) {
       await page.locator('#btn-menu').click();
       await page.locator('#list .item[data-id="recovery-other"]').click();
@@ -447,6 +460,21 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
       assert.equal(await page.locator('.p-input-other-draft').count(), 0, 'the restored draft is not duplicated in the review panel');
       await page.locator('#line-text').press('Enter');
       await page.waitForFunction(() => window.__v2Frames.filter(f => f.kind === 'binary').length === 2);
+      const acknowledge = (seq: number) => page.evaluate(sequence => {
+        const original = (window as any).__draftPane;
+        const socket = window.__v2Sockets.find(candidate => candidate === original.conn.ws)!;
+        const {slot, generation} = original.inputAck.binding;
+        const created = Number(new URL(socket.url).searchParams.get('input_ack_created'));
+        socket.receipt({input_ack: true, seq: sequence, created, slot, generation});
+      }, seq);
+      await page.evaluate(() => setActive(panes.find(pane => pane !== (window as any).__draftPane)!));
+      await acknowledge(1);
+      await page.waitForFunction(() => window.__v2Frames.filter(f => f.kind === 'binary').length === 3);
+      await acknowledge(2);
+      await page.waitForFunction(() => !(document.querySelector('#line-text') as HTMLTextAreaElement).readOnly);
+      await page.evaluate(() => setActive((window as any).__draftPane));
+      assert.equal(await page.locator('#line-text').inputValue(), '', 'an acknowledged draft does not return after switching panes');
+      assert.equal(await page.evaluate(() => (window as any).__draftPane.recoveredLineDrafts.size), 0);
     }
     await page.unrouteAll({behavior: 'wait'});
     await page.context().close();
