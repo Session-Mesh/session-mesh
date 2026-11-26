@@ -2928,7 +2928,10 @@ class Pane {
         protocol: (_terminal, limited) => {
           this.limitedBanner.hidden = !limited;
           this.limitedKeyboard.hidden = !limited || !touch;
-          if (!limited) { this.sendSize(true); this.armAutoRedraw(c); }
+          if (!limited) {
+            this.sendSize(true); this.armAutoRedraw(c);
+            if (version === 0) this.renderRetainedInput();
+          }
         },
         ptySize: (_terminal, size) => {
           const initialClaim = c.pty === null && c.initialSizeClaim;
