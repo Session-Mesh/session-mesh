@@ -101,7 +101,7 @@ export async function scratchHome(prefix: string, extraEnv: NodeJS.ProcessEnv = 
 export type Exit = {code: number | null; output: string; listened: boolean};
 
 /** Run server.py until it listens or exits; the caller decides which one is expected. */
-export async function runServer(where: Scratch, source = REPO): Promise<{child: ChildProcess; result: Exit; output: () => string}> {
+export async function runServer(where: Scratch, source = REPO, owns = listensFrom): Promise<{child: ChildProcess; result: Exit; output: () => string}> {
   if (!OWNER_CHECK) throw new Error('Cannot verify server listener ownership: /proc or lsof required');
   let output = '';
   const [program, ...args] = [PYTHON, 'server.py'];
@@ -112,7 +112,7 @@ export async function runServer(where: Scratch, source = REPO): Promise<{child: 
   const closed = new Promise<void>(resolve => child.on('close', () => { exited = true; resolve(); }));
   try {
     for (let attempt = 0; attempt < 400 && !exited; attempt += 1) {
-      if (await listenerReady(child, where.port))
+      if (await listenerReady(child, where.port, owns))
         return {child, result: {code: null, output, listened: true}, output: () => output};
       await new Promise(resolve => setTimeout(resolve, 50));
     }
@@ -135,10 +135,11 @@ export async function stopServer(child: ChildProcess): Promise<void> {
 
 export async function startMesh(prefix: string, extraEnv: NodeJS.ProcessEnv = {},
                                 prepare?: (where: Scratch) => void,
-                                dependencies?: {scratchHome: typeof scratchHome; runServer: typeof runServer}): Promise<Mesh> {
+                                dependencies?: {scratchHome?: typeof scratchHome; runServer?: typeof runServer;
+                                  owns?: typeof listensFrom}): Promise<Mesh> {
   const where = await (dependencies?.scratchHome ?? scratchHome)(prefix, extraEnv);
   prepare?.(where);   // before the server reads anything: files it must find at start
-  const {child, result, output} = await (dependencies?.runServer ?? runServer)(where);
+  const {child, result, output} = await (dependencies?.runServer ?? runServer)(where, REPO, dependencies?.owns);
   if (!result.listened) {
     removeScratch(where.scratch);
     throw new Error(`server.py did not listen:\n${result.output}`);

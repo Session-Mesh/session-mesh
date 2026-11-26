@@ -89,6 +89,7 @@ tests/leak-guard-gitleaks-adapter.test.ts
 tests/leak-guard-hooks.test.ts
 tests/leak-guard-secret-exceptions.test.ts
 tests/leak-guard.test.ts
+tests/loopback-listener.test.ts
 tests/mailbox-panel.test.ts
 tests/mcp-trace-launch.test.ts
 tests/mesh-attach-name-taken.test.ts

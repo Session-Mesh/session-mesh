@@ -12,6 +12,7 @@ import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { type Mesh, startMesh } from './mesh-server-lib.ts';
 import { retryBindCollision } from './helpers/bind-retry.ts';
+import { listensLoopbackFrom } from './helpers/listener-owner.ts';
 
 let mesh: Mesh;
 let notes: string;
@@ -21,7 +22,7 @@ const PAGE = '<!doctype html><html><head><title>Plan</title></head><body><h1>Pla
   + '<script>window.parent.postMessage("ran", "*")</script></body></html>';
 
 before(async () => {
-  mesh = await retryBindCollision(() => startMesh('work-doc-route-'));
+  mesh = await retryBindCollision(() => startMesh('work-doc-route-', {}, undefined, {owns: listensLoopbackFrom}));
   notes = path.join(mesh.home, 'notes', '2026-11-20-fictional');
   fs.mkdirSync(notes, { recursive: true });
   fs.writeFileSync(path.join(notes, 'plan.html'), PAGE);
