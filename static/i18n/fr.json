@@ -485,6 +485,7 @@
   "line.heldLate": "ligne non envoyée : la liste des sessions n’a pas encore nommé cette session ; texte conservé, appuyez de nouveau sur Entrée",
   "line.heldMoved": "ligne non envoyée : le panneau a changé de session avant que la liste des sessions ne la nomme ; texte conservé",
   "line.noConnection": "connexion indisponible ; texte conservé",
+  "line.recoveredOtherSession": "Ce brouillon récupéré appartient à une autre session ; revenez-y avant de l’envoyer.",
   "line.noTarget": "cible indisponible ; texte conservé",
   "line.pending": "Collage envoyé localement ; Entrée en attente (aucune réception distante confirmée).",
   "line.placeholder": "Écrire à l'agent… (⏎ envoie)",

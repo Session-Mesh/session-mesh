@@ -87,6 +87,7 @@ let copyOnSelectDenied = false;   // the browser refused an automatic copy: said
 // An input that ends the program's line (Enter, ^C, ^D): the input lease is clean again after it.
 const completesInput = (str) => str === "\r" || str === "\x03" || str === "\x04";
 let lineDirect = null;   // phone direct writing: { pane, conn, session } (see "phone input line")
+let recoveredLineTarget = null;
 let fontSize = store.get("font", touch ? 12 : 13.5);
 const folded = new Set(store.get("folded", []));
 const MAX_PANES = 3;
@@ -584,10 +585,23 @@ function replayGeometry(text) {
     ? { rows: message.rows, cols: message.cols } : null;
 }
 
+// Keep only metadata: input text may contain credentials and must not enter logs.
+function logObsoleteInput(name, created) {
+  try {
+    const key = "mesh-obsolete-input-log";
+    const previous = JSON.parse(localStorage.getItem(key) || "[]");
+    if (!Array.isArray(previous)) return false;
+    previous.push({ name, created, forgottenAt: Date.now() });
+    localStorage.setItem(key, JSON.stringify(previous.slice(-100)));
+    return true;
+  } catch { return false; }
+}
+
 class Pane {
   constructor() {
     this.el = $("#pane-tpl").content.firstElementChild.cloneNode(true);
     this.inputAcks = new Map();
+    this.recoveredLineDrafts = new Map();
     $(".p-input-retry", this.el).addEventListener("click", () => {
       if (this.inputAck?.state === "halted" && this.inputAck.pendingBytes === 0) {
         const c = this.conn;
@@ -1122,22 +1136,36 @@ class Pane {
 
   renderRetainedInput() {
     const container = $(".p-input-review", this.el);
+    let stale = this.obsoleteDirtyInput();
+    while (stale && logObsoleteInput(this.conn.name, stale.key.split("\0")[1])) {
+      this.inputAcks.delete(stale.key);
+      this.inputLeases.delete(stale.key);
+      stale = this.obsoleteDirtyInput();
+    }
     const entries = this.activeSessionInputs().map(([, entry]) => entry).filter((entry) => entry.input.pendingBytes);
     const pending = entries.reduce((total, entry) => total + entry.input.pendingBytes, 0);
     const current = this.inputAck;
     const obsolete = this.obsoleteDirtyInput();
     const other = [...this.inputAcks].filter(([key, entry]) =>
       !key.startsWith(`${this.conn?.name ?? ""}\0`) && (entry.input.pendingBytes || entry.lease?.dirty));
+    const saved = [...(this.recoveredLineDrafts || [])];
     const forgetDraft = $(".p-input-forget-draft", container);
     forgetDraft.textContent = t("conn.inputForgetOldDraft");
     forgetDraft.hidden = !obsolete;
     // Routine ACKs must not move the terminal under the cursor or a finger.
     // Retained input needing review, including from an old attachment, still needs a choice.
     const reviewPending = entries.some(({ input }) => input !== current || input.state !== "sending");
-    container.hidden = !reviewPending && current?.state !== "halted" && !obsolete && !other.length;
+    container.hidden = !reviewPending && current?.state !== "halted" && !obsolete && !other.length && !saved.length;
+    if (touch && this.conn && this.recoveredLineDrafts?.has(`${this.conn.name}\0${this.conn.created}`))
+      setTimeout(() => restoreSavedLine(this), 0);
+    if (!this.restoreOldInputScheduled && entries.some((entry) => entry.input !== current &&
+        entry.input.pendingHumanBytes && !entry.recoveryBlocked)) {
+      this.restoreOldInputScheduled = true;
+      setTimeout(() => { this.restoreOldInputScheduled = false; restoreOldInputToEditor(this); }, 0);
+    }
     const otherContainer = $(".p-input-other-drafts", container);
-    const otherState = JSON.stringify(other.map(([key, entry]) =>
-      [key, entry.input.pendingBytes, entry.input.pendingHumanBytes, entry.input.deliveryUncertain, entry.input.retainedText, !!entry.lease?.dirty]));
+    const otherState = JSON.stringify([other.map(([key, entry]) =>
+      [key, entry.input.pendingBytes, entry.input.pendingHumanBytes, entry.input.deliveryUncertain, entry.input.retainedText, !!entry.lease?.dirty]), saved]);
     if (this.otherDraftsState !== otherState || !this.otherDraftsEntries ||
         other.some(([key, entry], i) => this.otherDraftsEntries[i]?.[0] !== key || this.otherDraftsEntries[i]?.[1] !== entry)) {
       this.otherDraftsState = otherState;
@@ -1199,12 +1227,36 @@ class Pane {
         }
         otherContainer.append(card);
       }
+      for (const [key, value] of saved) {
+        const card = document.createElement("section"); card.className = "p-input-other-draft";
+        const heading = document.createElement("strong"); heading.textContent = key.split("\0", 1)[0];
+        const label = document.createElement("label"); label.textContent = t("conn.inputCopyDraft");
+        const field = document.createElement("textarea"); field.readOnly = true; field.value = value;
+        label.append(field); card.append(heading, label);
+        const copy = document.createElement("button"); copy.type = "button"; copy.className = "btn ghost sm";
+        copy.textContent = t("common.copy");
+        copy.addEventListener("click", async () => {
+          if (this.recoveredLineDrafts.get(key) !== value) return;
+          try { await navigator.clipboard.writeText(value); flash(t("clipboard.copied")); }
+          catch { field.focus(); field.select(); flash(t("clipboard.copyDenied")); }
+        });
+        const discard = document.createElement("button"); discard.type = "button"; discard.className = "btn ghost sm";
+        discard.textContent = t("conn.inputDiscard");
+        discard.addEventListener("click", () => {
+          if (this.recoveredLineDrafts.get(key) !== value) return;
+          this.recoveredLineDrafts.delete(key); this.renderRetainedInput(); renderReloadStatus();
+        });
+        card.append(copy, discard); otherContainer.append(card);
+      }
     }
     const drafts = $(".p-input-drafts", container);
     const texts = [];
     if (!container.hidden && this.conn?.name) {
       for (const [key, entry] of this.activeSessionInputs()) {
         if (!entry.input.pendingHumanBytes) continue;
+        // In-flight input does not need review. Showing it while another draft
+        // keeps this panel open makes the terminal resize on every ACK.
+        if (entry.input === current && entry.input.state === "sending") continue;
         texts.push({ text: entry.input.retainedText, previous: key !== `${this.conn.name}\0${this.conn.created}` });
       }
     }
@@ -2288,6 +2340,7 @@ class Pane {
 
   show(id, force = false, opts = {}) {
     if (!localMeshEffectsAllowed()) return;
+    if (this === active && this.id !== id) saveRecoveredLine();
     if (isHist(id)) return this.showHist(id, force);
     const s = find(id);
     if (!s) return;
@@ -2407,6 +2460,7 @@ class Pane {
   }
 
   clear(persist = true) {
+    if (this === active) saveRecoveredLine();
     this.invalidateActionView();
     this.cachedTerminalMoveBlockedId = null;
     this.actionKind = "empty";
@@ -3761,6 +3815,7 @@ function setActive(p, persist = false) {
     if (persist) saveLayout();
     return;
   }
+  saveRecoveredLine();
   // the pane left had the focus outside its textarea (the phone input line, or a control the
   // switch went through); a focused textarea reports its own blur
   if (active?.mounted && document.activeElement !== active.term.textarea) active.reportFocus(false);
@@ -3772,6 +3827,7 @@ function setActive(p, persist = false) {
   for (const q of panes) q.el.classList.toggle("active", q === p);
   for (const g of workspaceGroups) g.el.classList.toggle("group-active", g === p?.group);
   p?.group?.select(p, false);
+  if (p?.conn && p.inputAcks) p.renderRetainedInput();
   if (persist) saveLayout();
   updateKeys();
   syncMobileRawScrollAction();
@@ -4116,7 +4172,9 @@ function closePane(p) {
   const i = panes.indexOf(p);
   if (i < 0) return;
   const pending = [...p.inputAcks.values()].reduce((sum, entry) => sum + entry.input.pendingBytes, 0);
-  const dirty = [...p.inputAcks.values()].some((entry) => entry.lease?.dirty);
+  const dirty = [...p.inputAcks.values()].some((entry) => entry.lease?.dirty) ||
+    !!p.recoveredLineDrafts?.size || !!p.recoveredComposeDraft?.text ||
+    (recoveredLineTarget?.pane === p && !!line.value);
   if ((pending || dirty) && !confirm((pending ? t("conn.inputCloseConfirm", { count: pending }) : "") +
       (dirty ? `${pending ? "\n\n" : ""}${t("conn.inputCloseDraftConfirm")}` : ""))) return;
   if (pending) for (const entry of p.inputAcks.values()) {
@@ -5340,6 +5398,8 @@ function reloadHolds() {
     if (count) add("input-ack", t("reload.hold.inputAck", { count }), pane);
     if ([...pane.inputAcks.values()].some((entry) => entry.lease?.dirty))
       add("input-draft", t("reload.hold.inputDraft"), pane);
+    if (pane.recoveredComposeDraft?.text) add("input-draft", t("reload.hold.inputDraft"), pane.recoveredComposeDraft);
+    if (pane.recoveredLineDrafts?.size) add("input-draft", t("reload.hold.inputDraft"), pane.recoveredLineDrafts);
   }
   if (fieldHoldsText()) add("draft", t("reload.hold.draft"));
   if (linePending) add("line-pending", t("reload.hold.linePending"), linePending);
@@ -7589,6 +7649,24 @@ lineStatus.hidden = true;
 lineStatus.style.cssText = "padding:6px 10px;overflow-wrap:anywhere;background:var(--panel);border-top:1px solid var(--line)";
 $("#line").after(lineStatus);
 let linePending = null, lineRecovery = null;
+function saveRecoveredLine() {
+  const target = recoveredLineTarget;
+  if (!target) return;
+  const key = `${target.name}\0${target.created}`;
+  if (line.value) target.pane.recoveredLineDrafts.set(key, line.value);
+  else target.pane.recoveredLineDrafts.delete(key);
+  line.value = ""; recoveredLineTarget = null; fitLine();
+}
+function restoreSavedLine(pane) {
+  const c = pane.conn;
+  if (!touch || active !== pane || !c || pane.id !== c.name || line.value || recoveredLineTarget ||
+      lineDirect || linePending || lineRecovery || $("#line").hidden) return;
+  const key = `${c.name}\0${c.created}`, saved = pane.recoveredLineDrafts.get(key);
+  if (!saved) return;
+  line.value = saved; pane.recoveredLineDrafts.delete(key);
+  recoveredLineTarget = {pane, name: c.name, created: c.created};
+  fitLine(); pane.renderRetainedInput(); renderReloadStatus();
+}
 function renderLineStatus() {
   lineStatus.replaceChildren();
   lineStatus.hidden = !linePending && !lineRecovery;
@@ -7911,6 +7989,10 @@ async function sendLine() {
   if (linePending || lineRecovery || !active?.conn) return;
   if (active.conn.terminal?.limited) { flash(t("terminal.limitedInput")); return; }
   const pane = active;
+  if (recoveredLineTarget && (recoveredLineTarget.pane !== pane ||
+      recoveredLineTarget.name !== pane.conn.name || recoveredLineTarget.created !== pane.conn.created)) {
+    flash(t("line.recoveredOtherSession")); return;
+  }
   if (residueHolds(pane)) return;   // once: the next Enter sends
   const text = line.value;
   const pending = { operation: null, done: false, hold: null };
@@ -7928,6 +8010,7 @@ async function sendLine() {
     if (linePending === pending) linePending = null;
     if (result.kind === "submitted") {
       if (line.value === text) line.value = "";
+      recoveredLineTarget = null;
       fitLine();
     } else {
       lineRecovery = { target, text, result };
@@ -7940,6 +8023,9 @@ function directBackspace() {   // the field is empty, so the key would do nothin
   if (directLineAlive()) writeDirect("\x7f");
 }
 $("#line").addEventListener("submit", (e) => { e.preventDefault(); enterLine(); line.focus(); });
+line.addEventListener("input", () => {
+  if (!line.value) { recoveredLineTarget = null; active?.renderRetainedInput(); }
+});
 line.addEventListener("keydown", (e) => {
   if (e.isComposing) return;
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enterLine(); }
@@ -8109,20 +8195,62 @@ function openCompose(preset = "", fromRecovery = false) {
     flash(t("compose.reviewPrevious")); return false;
   }
   const pane = active;
+  const recovered = pane.recoveredComposeDraft;
+  if (!preset && recovered && recovered.name === pane.conn.name && recovered.created === pane.conn.created)
+    preset = recovered.text;
   observePaneActions(pane);
   const target = paneTargets.capture(pane);
   if (!target) { flash(t("compose.noTarget")); return false; }
   const binding = paneInput.capture(pane, target);
   if (!binding) { paneTargets.release(target); flash(t("compose.noConnection")); return false; }
   composeOwner = MeshPaneActions.createComposeOwner(target, binding);
+  if (recovered && preset === recovered.text && recovered.name === pane.conn.name && recovered.created === pane.conn.created)
+    pane.recoveredComposeOwner = composeOwner;
   ctext.value = preset;
   cdlg.append(composeStatus);
   cdlg.showModal(); renderComposeStatus(); ctext.focus(); return true;
+}
+
+// Move only an older incarnation's retained human text. Never replay its ACK
+// frames: their delivery may be uncertain, and the editor requires a new user action.
+function restoreOldInputToEditor(pane) {
+  const c = pane.conn;
+  if (active !== pane || !c?.terminal?.isOpen() || lineDirect || linePending || lineRecovery) return;
+  const old = pane.activeSessionInputs().find(([, entry]) => entry.input !== pane.inputAck &&
+    entry.input.pendingHumanBytes && !entry.recoveryBlocked);
+  if (!old) return;
+  const [key, entry] = old, text = entry.input.retainedText;
+  // Control sequences and invalid UTF-8 cannot safely be reconstructed as text.
+  if (!text || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ufffd]/.test(text)) return;
+  if (touch) {
+    if (line.value || recoveredLineTarget || $("#line").hidden) return;
+    if (!logObsoleteInput(c.name, key.split("\0")[1])) { entry.recoveryBlocked = true; return; }
+    line.value = text;
+    recoveredLineTarget = { pane, name: c.name, created: c.created };
+    fitLine();
+  } else {
+    if (cdlg.open || composeRecovery.length || pickerGate.pending || pane.recoveredComposeDraft) return;
+    if (!openCompose(text, true)) return;
+    if (!logObsoleteInput(c.name, key.split("\0")[1])) { entry.recoveryBlocked = true; cdlg.close(); return; }
+    pane.recoveredComposeDraft = { name: c.name, created: c.created, text };
+    pane.recoveredComposeOwner = composeOwner;
+  }
+  pane.inputAcks.delete(key);
+  pane.inputLeases.delete(key);
+  entry.input.discard();
+  pane.renderRetainedInput();
+  renderReloadStatus();
 }
 function retireComposeOwner(owner) {
   if (!owner) return;
   owner.close(); owner.operation?.cancel(); paneTargets.release(owner.target);
   if (composeOwner !== owner) return;
+  const pane = owner.target.pane;
+  if (pane.recoveredComposeOwner === owner) {
+    if (pane.recoveredComposeDraft) pane.recoveredComposeDraft.text = ctext.value;
+    if (!ctext.value) pane.recoveredComposeDraft = null;
+    pane.recoveredComposeOwner = null;
+  }
   composeOwner = null; ctext.value = ""; renderComposeStatus();
 }
 function sendCompose(submit) {
@@ -8136,6 +8264,7 @@ function sendCompose(submit) {
   owner.operation = paneInput.deliver(owner.binding, text, submit, (result) => {
     const stillOpen = owner.settle(revision);
     paneTargets.release(owner.target);
+    if (owner.target.pane.recoveredComposeOwner === owner) owner.target.pane.recoveredComposeDraft = null;
     if (result.kind === (submit ? "submitted" : "paste")) {
       if (stillOpen && composeOwner === owner && ctext.value === text) {
         retireComposeOwner(owner); cdlg.close();
@@ -8150,6 +8279,7 @@ function sendCompose(submit) {
 }
 cdlg.addEventListener("close", () => {
   if (!cdlg.open) retireComposeOwner(composeOwner);
+  if (!cdlg.open) active?.renderRetainedInput();
   if (!cdlg.open) cdlg.after(composeStatus);
   if (pickerGate.pending?.destination.kind === "compose") adlg.after(pickerStatus);
   renderReloadStatus();

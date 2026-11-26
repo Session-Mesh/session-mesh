@@ -485,6 +485,7 @@
   "line.heldLate": "line not sent: the session list has not named this session yet; text kept, press Enter again",
   "line.heldMoved": "line not sent: the pane changed session before the session list named it; text kept",
   "line.noConnection": "connection unavailable; text kept",
+  "line.recoveredOtherSession": "This recovered draft belongs to another session; return to it before sending.",
   "line.noTarget": "target unavailable; text kept",
   "line.pending": "Paste sent locally; Enter pending (no remote receipt confirmed).",
   "line.placeholder": "Write to the agent… (⏎ sends)",
