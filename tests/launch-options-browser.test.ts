@@ -89,6 +89,9 @@ async function openNew(page: Page, preset: string): Promise<Page> {
   const configuration = await (await loaded).json();
   await page.waitForFunction('revision => newAccountsReady && launchOptionsRevision === revision',
     configuration.launch.agent_options_revision);
+  // Dismiss the suggestions before clicking: blur collapses their layout.
+  await page.locator('#form-new input[name="cwd"]').blur();
+  await page.locator('#new-folder-list').waitFor({state: 'hidden'});
   // The radio itself is display:none (the label carries the style): click the label.
   await page.locator(`#form-new label:has(input[name="preset"][value="${preset}"])`).click();
   assert.equal(await page.locator(`#form-new input[name="preset"][value="${preset}"]`).isChecked(), true);
@@ -317,6 +320,8 @@ describe('the Options field of New session', {skip}, () => {
       await page.locator('#btn-new').click();
       await page.locator('#dlg-new[open]').waitFor();
       await page.locator('#form-new input[name="cwd"]').fill(fs.mkdtempSync(path.join(mesh.home, 'work-')));
+      await page.locator('#form-new input[name="cwd"]').blur();
+      await page.locator('#new-folder-list').waitFor({state: 'hidden'});
       await page.locator('#form-new label:has(input[name="preset"][value="pi"])').click();
       await page.locator('#form-new input[name="options"]').fill('-e /tmp/typed-early.mjs');
       release();
