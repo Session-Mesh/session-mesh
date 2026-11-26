@@ -163,7 +163,9 @@ test('actual HTTP adapter denies session/document/Origin, discards forged privat
     const job=p.body.job_id;
     await until(async()=>(await f.call(`/api/transcribe/${job}`,'GET',headers)).body.state==='ready');
     assert.equal((await f.call(`/api/transcribe/request/${headers['X-Mesh-Request-Id']}`,'GET',headers)).body.job_id,job);
-    assert.equal((await f.call('/api/transcribe','POST',headers,'x')).body.job_id,job);
+    const repeat=await f.call('/api/transcribe','POST',headers,'x');
+    assert.equal(repeat.status,202,JSON.stringify(repeat.body));
+    assert.equal(repeat.body.job_id,job);
     assert.equal(f.upstreamCalls,1);
     assert.equal((await f.call(`/api/transcribe/${job}`,'GET',{...headers,'X-Mesh-Dictation-Client':randomUUID()})).status,404);
     assert.equal((await f.call('/api/transcribe','POST',{...f.auth,...identityHeaders()},'x')).body.error.code,'session_busy');
