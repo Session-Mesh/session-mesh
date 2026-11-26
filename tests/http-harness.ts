@@ -58,6 +58,8 @@ const CONCRETE: Record<string, string> = {
   '/api/demo-scene/@self/selected/revisions': '/api/demo-scene/@self/selected/revisions?demo_id=x',
   // The account reads refuse any query before running mesh-profile, so the answer does not depend on the helper.
   '/api/accounts/profiles': '/api/accounts/profiles?probe=1',
+  '/api/accounts/profiles/provision-inspect': '/api/accounts/profiles/provision-inspect?probe=1',
+  '/api/accounts/profiles/provision-receipts': '/api/accounts/profiles/provision-receipts?probe=1',
   '/api/accounts/consent': '/api/accounts/consent?probe=1',
   // The flow read also refuses a query before starting its optional journal helper.
   '/api/flow/events': '/api/flow/events?probe=1',
@@ -188,6 +190,10 @@ const ACCEPTED_STATUS = `
   GET /api/accounts/consent 400 invalid-request
   POST /api/accounts/consent/set-global 400 invalid-request
   POST /api/accounts/profiles/provision 400 invalid-request
+  GET /api/accounts/profiles/provision-inspect 400 invalid-request
+  GET /api/accounts/profiles/provision-receipts 400 invalid-request
+  POST /api/accounts/profiles/provision-acknowledge 400 invalid-request
+  POST /api/accounts/profiles/provision-forget-receipt 400 invalid-request
   POST /api/accounts/consent/set-pair 400 invalid-request
   POST /api/accounts/consent/remove-pair 400 invalid-request
   POST /api/accounts/consent/reset 400 invalid-request
