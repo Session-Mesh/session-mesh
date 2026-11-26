@@ -103,21 +103,24 @@ async def main():
         assert (await catalogue())[1]["references"] == []
         for _ in range(2):
             status,result = await operation("mint_share",{"path":"a.md","label":"A"})
-            assert status == 200 and result["catalogue"] == "recorded", result
+            assert status == 200 and result == {"status":"success","catalogue":"recorded"}, result
         status,result = await catalogue()
         assert status == 200 and len(result["references"]) == 1 and result["references"][0]["availability"] == "pending-target"
+        assert result["references"][0]["url"].startswith("http://127.0.0.1:"), "owner catalogue retains the reference"
         assert (await catalogue(auth=headers))[0] == 401
         status,result = await operation("revoke_share",{"id":"fixture-share"})
         assert result["catalogue"] == "recorded", result
         assert (await catalogue())[1]["references"][0]["url"] is None
         status,result = await operation("mint_share",{"path":"diskfail.md","label":"A"})
         assert status == 200 and result["status"] == "success" and result["catalogue"] == "not-recorded", result
+        assert set(result) == {"status","catalogue","warning"}, result
         os.chmod(server.CONF_DIR/"session-artifacts.json",0o600)
         pending = asyncio.create_task(operation("mint_share",{"path":"churn.md","label":"late"}))
         await asyncio.sleep(0.06)
         live[:] = [{"name":"fixture","created":2,"meta":{"nonce":sessiontoken.new_nonce()}}]
         status,result = await pending
         assert status == 200 and result["catalogue"] == "not-recorded", result
+        assert set(result) == {"status","catalogue","warning"}, result
         assert (await catalogue(2))[1]["references"] == []
         assert (await operation("mint_share",{"path":"a.md","label":"A"}))[0] == 401
     await runner.cleanup()

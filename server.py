@@ -4717,10 +4717,18 @@ async def api_session_notes(request):
                 outcome = await artifact_command({"op": "notes-record", "session": identity,
                     "generation": grant.get("generation"), "outcome": outcome, "attributed": current == original})
         except web.HTTPException:
-            outcome.pop("observation", None)
             outcome["catalogue"] = "not-recorded"
-            outcome["warning"] = "Upstream succeeded; reference not recorded. Do not replay the operation."
-    return web.json_response(outcome, status=403 if outcome.get("status") == "denied" else 200,
+    # The upstream payload and observation belong to the owner-only catalogue.
+    status = outcome.get("status")
+    if status not in ("success", "denied", "unavailable", "uncertain", "upstream-error"):
+        status = "uncertain"
+    reply = {"status": status}
+    if status == "success":
+        catalogue = outcome.get("catalogue")
+        reply["catalogue"] = catalogue if catalogue in ("recorded", "not-applicable") else "not-recorded"
+        if reply["catalogue"] == "not-recorded":
+            reply["warning"] = "Upstream succeeded; reference not recorded. Do not replay the operation."
+    return web.json_response(reply, status=403 if status == "denied" else 200,
                              headers={"Cache-Control": "no-store"})
 
 async def _demo_scene_get(name, version=None, expected_created=None, demo_id=None):

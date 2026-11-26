@@ -174,7 +174,8 @@ ID. Upstream errors use generic messages to protect capabilities, and Mesh sends
 the configured Notes credential to Notes.
 
 An upstream success plus local recording failure returns `status: success` and
-`catalogue: not-recorded`, with the successful upstream result and a warning. Do **not**
+`catalogue: not-recorded`, with a warning. Session responses carry operation and recording
+status. The owner can view recorded references in the private catalogue. Do **not**
 replay creation or minting to repair local recording. A lost response/interrupted helper
 is `uncertain`; it does not prove that Notes did nothing. There is no automatic mutation
 retry. Ordinary terminal actions are independent of connector networking.
