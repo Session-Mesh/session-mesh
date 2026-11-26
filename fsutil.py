@@ -78,11 +78,6 @@ def helper_command(program):
 
     if (explicit := os.environ.get(f"MESH_{program.upper().replace('-', '_')}_CMD")) is not None:
         return explicit if os.path.isabs(explicit) and os.path.isfile(explicit) else None
-    if program == "mesh-history" and (explicit := os.environ.get("MESH_HISTORY_CMD")):
-        # History accepts a relative executable from the server's working directory;
-        # the one-shot helper runs in /, so make the same path absolute first.
-        explicit = os.path.abspath(explicit)
-        return explicit if os.access(explicit, os.X_OK) else None
     dirs = [agentmcp.runtime_bin()] + ([] if os.environ.get("MESH_BIN_DIR") else [agentmcp.switch_bin()])
     return next((str(d / program) for d in dirs if (d / program).is_file()), None)
 
@@ -117,20 +112,10 @@ def conversation_request(op, **fields):
         # machine ints. Darwin can return an unsigned inode wider than that.
         # Encode the same signed value that the native helper will observe.
         inode = _ocaml_int(info.st_ino)
-        legacy_override = "MESH_MESH_HISTORY_CMD" not in os.environ and os.environ.get("MESH_HISTORY_CMD")
-        if legacy_override:
-            # The existing History override is an explicitly trusted command.
-            # Its wrappers already inherit this environment and working
-            # directory from history_db; preserve that contract here too.
-            import history
-            env = dict(os.environ, MESH_HISTORY_DB=str(history.CACHE_FILE.with_name("history.sqlite")))
-        else:
-            env = {"PATH": "/usr/bin:/bin"}
-        env.update(MESH_CONF_DIR=str(meshpaths.CONF_DIR),
-                   MESH_CONVERSATION_LIFELINE=f"{life_read}:{_ocaml_int(info.st_dev)}:{inode}")
         run = subprocess.run([command, "--conversation-names"], input=body + b"\n", stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL, cwd=None if legacy_override else "/",
-                             pass_fds=(life_read,), env=env)
+                             stderr=subprocess.DEVNULL, cwd="/", pass_fds=(life_read,),
+                             env={"PATH": "/usr/bin:/bin", "MESH_CONF_DIR": str(meshpaths.CONF_DIR),
+                                  "MESH_CONVERSATION_LIFELINE": f"{life_read}:{_ocaml_int(info.st_dev)}:{inode}"})
     finally:
         try:
             os.close(life_read)
