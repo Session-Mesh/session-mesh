@@ -117,10 +117,20 @@ def conversation_request(op, **fields):
         # machine ints. Darwin can return an unsigned inode wider than that.
         # Encode the same signed value that the native helper will observe.
         inode = _ocaml_int(info.st_ino)
+        legacy_override = "MESH_MESH_HISTORY_CMD" not in os.environ and os.environ.get("MESH_HISTORY_CMD")
+        if legacy_override:
+            # The existing History override is an explicitly trusted command.
+            # Its wrappers already inherit this environment and working
+            # directory from history_db; preserve that contract here too.
+            import history
+            env = dict(os.environ, MESH_HISTORY_DB=str(history.CACHE_FILE.with_name("history.sqlite")))
+        else:
+            env = {"PATH": "/usr/bin:/bin"}
+        env.update(MESH_CONF_DIR=str(meshpaths.CONF_DIR),
+                   MESH_CONVERSATION_LIFELINE=f"{life_read}:{_ocaml_int(info.st_dev)}:{inode}")
         run = subprocess.run([command, "--conversation-names"], input=body + b"\n", stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL, cwd="/", pass_fds=(life_read,),
-                             env={"MESH_CONF_DIR": str(meshpaths.CONF_DIR), "PATH": "/usr/bin:/bin",
-                                  "MESH_CONVERSATION_LIFELINE": f"{life_read}:{_ocaml_int(info.st_dev)}:{inode}"})
+                             stderr=subprocess.DEVNULL, cwd=None if legacy_override else "/",
+                             pass_fds=(life_read,), env=env)
     finally:
         try:
             os.close(life_read)
