@@ -321,6 +321,9 @@ test('actual pre/post-upload incarnation and malformed inventory fail closed wit
     const response=await pending;assert.equal(response.status,409);assert.equal(response.body.error.code,'stale_session');
     assert.equal(f.upstreamCalls,0);
     f.setCreated(1);f.setMalformed(true);assert.equal((await f.call('/api/transcribe','POST',headers,'a')).status,503);assert.equal(f.upstreamCalls,0);
+    f.setMalformed(false);
+    assert.equal((await f.call('/api/transcribe','POST',{...f.auth,...identityHeaders()},'new')).status,
+      202,'a failed post-upload check releases its preparation slot immediately');
   }finally{await f.close();}
 });
 
