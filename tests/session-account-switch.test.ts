@@ -206,13 +206,15 @@ describe('account switch requests', {skip: SKIP}, () => {
       const awaitExec = async (pid: number) => {
         for (let attempt = 0; attempt < 100; attempt++) {
           try {
-            if (fs.readlinkSync(`/proc/${pid}/exe`).endsWith('/real/codex')) return;
+            // The executable path can become visible before /proc exposes the new environment.
+            if (fs.readlinkSync(`/proc/${pid}/exe`).endsWith('/real/codex')
+                && fs.readFileSync(`/proc/${pid}/environ`).length > 0) return;
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
           }
           await sleep(100);
         }
-        assert.fail(`the fake agent ${pid} did not complete exec`);
+        assert.fail(`the fake agent ${pid} did not expose its environment after exec`);
       };
       const workPid = pidOf(work.name), travelPid = pidOf(travel.name), plainPid = pidOf(plain.name);
       await Promise.all([workPid, travelPid, plainPid].map(awaitExec));
