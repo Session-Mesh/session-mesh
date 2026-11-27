@@ -167,7 +167,7 @@ type process = {
 val process : int -> (process, error) result
 
 val darwin_process_environment_matches :
-  int -> incarnation:int64 -> key:string -> expected:string ->
+  ?unset:string list -> int -> incarnation:int64 -> key:string -> expected:string ->
   (bool, error) result
 (** On macOS, compare one environment value for a process owned by the
     effective user and bound to the supplied incarnation. No environment
@@ -247,9 +247,11 @@ module Parse : sig
       is dropped. *)
 
   val darwin_environment_matches :
-    string -> key:string -> expected:string -> (bool, error) result
+    ?unset:string list -> string -> key:string -> expected:string ->
+    (bool, error) result
   (** Check for one matching environment entry after the argument vector.
-      Refuse duplicate keys and truncated strings. This parser does not
+      All [unset] entries must be absent or empty. Refuse duplicate selected
+      keys, ambiguous arguments and truncated strings. This parser does not
       establish process ownership or identity. *)
 
   val darwin_state : int -> char option

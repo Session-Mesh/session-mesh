@@ -109,24 +109,36 @@ let darwin_procargs2_parts buffer =
 let darwin_procargs2 buffer =
   Result.map fst (darwin_procargs2_parts buffer)
 
-let darwin_environment_matches buffer ~key ~expected =
-  let prefix = key ^ "=" in
-  let rec scan position found =
+let darwin_environment_matches ?(unset = []) buffer ~key ~expected =
+  let selected = List.map (fun name -> (name, name ^ "=")) (key :: unset) in
+  let matching_key item =
+    List.find_opt (fun (_, prefix) -> String.starts_with ~prefix item) selected
+  in
+  let rec scan position seen matches =
     if position = String.length buffer || buffer.[position] = '\000' then
-      Ok (Option.value found ~default:false)
+      Ok (List.mem key seen && matches)
     else
       match String.index_from_opt buffer position '\000' with
       | None -> malformed "procargs2: unterminated environment string"
       | Some stop ->
           let item = String.sub buffer position (stop - position) in
-          if not (String.starts_with ~prefix item) then scan (stop + 1) found
-          else if Option.is_some found then malformed "procargs2: duplicate environment key"
-          else scan (stop + 1) (Some (item = prefix ^ expected))
+          match matching_key item with
+          | None -> scan (stop + 1) seen matches
+          | Some (name, _) when List.mem name seen ->
+              malformed "procargs2: duplicate environment key"
+          | Some (name, prefix) ->
+              let expected_item = if name = key then prefix ^ expected else prefix in
+              scan (stop + 1) (name :: seen) (matches && item = expected_item)
   in
   match darwin_procargs2_parts buffer with
   | Error error -> Error error
   | Ok ([], _) -> malformed "procargs2: missing argv"
-  | Ok (_, position) -> scan position None
+  | Ok (argv, position) ->
+      (* An empty argv[0] can shift the first environment entry into argv.
+         Do not infer absence from that ambiguous buffer. *)
+      if List.exists (fun item -> Option.is_some (matching_key item)) argv then
+        malformed "procargs2: selected environment key in argument vector"
+      else scan position [] true
 
 (* [tpgid] is <= 0 when the process has no controlling terminal (Linux reports
    -1; 0 can appear on other kernels). Handing that back as a group id would

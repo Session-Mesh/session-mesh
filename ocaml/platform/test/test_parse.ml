@@ -156,7 +156,7 @@ let test_procargs_recorded () =
 let test_procargs_environment () =
   let check suffix =
     Parse.darwin_environment_matches (recorded_procargs2 ^ suffix)
-      ~key:"CODEX_HOME" ~expected:"/tmp/profile"
+      ~unset:[ "OPENAI_BASE_URL" ] ~key:"CODEX_HOME" ~expected:"/tmp/profile"
   in
   let equal label expected actual =
     Alcotest.(check (result bool error_testable)) label (Ok expected) actual
@@ -165,6 +165,14 @@ let test_procargs_environment () =
   equal "exact match" true (check "PATH=/bin\000CODEX_HOME=/tmp/profile\000");
   equal "different value" false (check "CODEX_HOME=/tmp/other\000");
   equal "different key" false (check "EXT_CODEX_HOME=/tmp/profile\000");
+  equal "empty override" true
+    (check "OPENAI_BASE_URL=\000CODEX_HOME=/tmp/profile\000");
+  equal "nonempty override" false
+    (check "OPENAI_BASE_URL=override\000CODEX_HOME=/tmp/profile\000");
+  check_malformed "override shifted into argv"
+    (Parse.darwin_environment_matches
+       "\002\000\000\000/agent\000\000agent\000OPENAI_BASE_URL=override\000CODEX_HOME=/tmp/profile\000"
+       ~unset:[ "OPENAI_BASE_URL" ] ~key:"CODEX_HOME" ~expected:"/tmp/profile");
   check_malformed "duplicate key"
     (check "CODEX_HOME=/tmp/profile\000CODEX_HOME=/tmp/profile\000");
   check_malformed "unterminated entry" (check "CODEX_HOME=/tmp/profile")
