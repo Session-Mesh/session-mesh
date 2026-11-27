@@ -812,7 +812,7 @@ async def test_at_the_column_cap_the_conversation_replaces_the_other_pane_not_th
           document.querySelector('#go').click();
         }""" % SID)
     else:
-        await post_on_click(page, f"[{{smesh: 'goto-session', {GOTO}, token: t}}]")
+        await post_on_click(page, f"[{{smesh: 'goto-session', {GOTO}, token: t}}]", keyboard=True)
     await page.wait_for_function("(id) => active?.id === id", arg=HID, timeout=5000)
     assert await page.evaluate("[panes.length, workspaceGroups.length]") == [3 + int(hidden_sibling), 3]
     if hidden_sibling:
