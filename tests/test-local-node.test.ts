@@ -15,7 +15,7 @@ const SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'scripts', 'te
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'test-local-node-'));
 after(() => fs.rmSync(scratch, {recursive: true, force: true}));
 
-function run(failingFind: boolean, extraEnv: NodeJS.ProcessEnv = {}): {status: number | null; stderr: string; log: string; env: string} {
+function run(failingFind: boolean, extraEnv: NodeJS.ProcessEnv = {}, files: string[] = []): {status: number | null; stderr: string; log: string; env: string} {
   const dir = fs.mkdtempSync(path.join(scratch, 'case-'));
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
@@ -24,7 +24,7 @@ function run(failingFind: boolean, extraEnv: NodeJS.ProcessEnv = {}): {status: n
   fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$FAKE_LOG"; printf "LC_ALL=%s LANG=%s LANGUAGE=%s\\n" "$LC_ALL" "$LANG" "$LANGUAGE" > "$FAKE_LOG.env"\n', {mode: 0o755});
   if (failingFind) fs.writeFileSync(path.join(bin, 'find'), '#!/bin/sh\nprintf "tests/b.test.ts\\0"\nexit 1\n', {mode: 0o755});
   const log = path.join(dir, 'node.log');
-  const result = spawnSync('bash', ['-c', `source '${SCRIPT}'; node_tests`], {
+  const result = spawnSync('bash', ['-c', 'source "$1"; shift; node_tests "$@"', 'bash', SCRIPT, ...files], {
     cwd: dir, encoding: 'utf8', env: {...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, ...extraEnv},
   });
   return {status: result.status, stderr: result.stderr, log: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '',
@@ -43,6 +43,22 @@ test('a failing find fails the run and node is not started on a partial list', (
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /find failed/);
   assert.equal(result.log, '');
+});
+
+test('explicit test files are passed to node without discovering other tests', () => {
+  const files = ['tests/sub/c.test.cjs', 'tests/a.test.mjs'];
+  const result = run(true, {}, ['././tests/sub/c.test.cjs', files[1]]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.log.trim().split('\n').filter(line => line.startsWith('tests/')), files);
+});
+
+test('an invalid selected file refuses the whole run', () => {
+  for (const file of ['--test-only', 'tests/missing.test.ts', 'tests/not-a-test.ts', './tests/sub/../b.test.ts']) {
+    const result = run(false, {}, ['tests/a.test.mjs', file]);
+    assert.notEqual(result.status, 0, file);
+    assert.match(result.stderr, /expected an existing Node test under tests\//);
+    assert.equal(result.log, '', file);
+  }
 });
 
 const concurrencyOf = (log: string): number => Number(/^--test-concurrency=(\d+)$/m.exec(log)?.[1]);

@@ -60,6 +60,7 @@ scripts/test-local.sh                    # everything
 scripts/test-local.sh -k menu            # extra arguments go to pytest
 scripts/test-local.sh test-ui            # asset and type checks, demo compiler tests
 scripts/test-local.sh test-node          # Node tests, including browser scenarios
+scripts/test-local.sh test-node tests/test-scope.test.ts  # Build native helpers and run selected Node files
 scripts/test-local.sh test-server -k menu # Ruff and selected pytest tests
 scripts/test-local.sh test-server-parallel # Ruff, then browser and server pytest concurrently
 scripts/test-local.sh test-ptyhost       # native PTY and Projects integration gates
