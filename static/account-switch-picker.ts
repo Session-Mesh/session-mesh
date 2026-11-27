@@ -117,9 +117,9 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
     status.textContent = ports.t(`accountSwitch.${key}`)
       + (key === 'failed' && receipt.error ? ` ${ports.serverText(receipt.error)}` : '');
   };
-  const refreshReceipt = async (receipt: Remembered, generation: number) => {
+  const refreshReceipt = async (receipt: Remembered, generation: number, failures = 0) => {
     const displayed = () => dialog.open && receiptGeneration === generation && displayedReceipt === receipt;
-    if (!receipt.id || !displayed()) return;
+    if (!receipt.id || !displayed() || receipt.state === 'completed' || receipt.state === 'failed') return;
     try {
       const observed = await ports.status(receipt.id);
       if (!displayed()) return;
@@ -128,14 +128,16 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
       receipt.state = observed.state;
       if (typeof observed.result?.error === 'string') receipt.error = observed.result.error;
       else delete receipt.error;
+      failures = 0;
     } catch {
       if (!displayed()) return;
-      receipt.state = 'unknown'; // A failed status read cannot establish a successful result.
+      receipt.state = 'unknown';
+      failures = Math.min(failures + 1, 3);
     }
     persist();
     showReceipt(receipt);
-    if (!['completed', 'failed', 'unknown', 'execution_unknown'].includes(receipt.state))
-      doc.defaultView?.setTimeout(() => { void refreshReceipt(receipt, generation); }, 800);
+    if (!['completed', 'failed', 'execution_unknown'].includes(receipt.state))
+      doc.defaultView?.setTimeout(() => { void refreshReceipt(receipt, generation, failures); }, 800 * 2 ** failures);
   };
   const displayReceipt = (receipt: Remembered) => {
     displayedReceipt = receipt;
@@ -243,6 +245,7 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
       let profiles: readonly Profile[];
       try { profiles = await ports.profiles(); }
       catch { ports.notice(ports.t('accountSwitch.unavailable')); return; }
+      if (busy || dialog.open || doc.querySelector('dialog:modal')) return;
       const fresh = ports.source();
       if (attempt !== sequence || !fresh || !sameSwitchSource(source, fresh.session, fresh.authoritative)) {
         ports.notice(ports.t('accountSwitch.stale')); return;
