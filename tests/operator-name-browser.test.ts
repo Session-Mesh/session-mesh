@@ -180,9 +180,7 @@ describe('the operator name', { skip }, () => {
       await fresh.page.reload();
       await fresh.page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');
       if (!(await fresh.page.locator('#projects').isVisible())) await tap(fresh.page, 'btn-projects', width);
-      // The view comes back on the sheet left (static/work-view-state.ts); the entry screen would need it opened again.
-      await fresh.page.locator('.work-qsheet .work-question-waiting, .work-qsection-toggle').first().waitFor();
-      if (!(await fresh.page.locator('.work-qsheet').isVisible())) await openSheet(fresh.page);
+      // The Projects view restores this tab's open question after loading.
       await fresh.page.waitForFunction(text => document.querySelector('.work-qsheet .work-question-waiting')?.textContent === text, UNNAMED);
       await shot(page, `projects-${width}-unnamed`);
 
