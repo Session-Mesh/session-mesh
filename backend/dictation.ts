@@ -280,6 +280,14 @@ export class Dictation {
     if (!live) throw new Fault('stale_session');
   }
 
+  async verifyPreparation(session: Admission, result: {job: Job; preparation: string}): Promise<void> {
+    await this.verifySession(session);
+    const record = this.requests.get(this.key(session, session.request));
+    if (!record || record.job.job_id !== result.job.job_id || record.preparation !== result.preparation)
+      throw new Fault('unavailable');
+    this.checkPreparation(record);
+  }
+
   private reserve(m: Admission): RecordEntry {
     if (this.slots.has(this.slot(m))) throw new Fault('session_busy');
     if (this.records.size >= 256) throw new Fault('capacity_full');
