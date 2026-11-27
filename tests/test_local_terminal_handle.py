@@ -45,7 +45,7 @@ const context = vm.createContext({WebSocket: Socket, Uint8Array, TextEncoder, cr
   location: {protocol: 'https:', host: 'mesh.example'}, touch: false,
   inputLeaseTab: 'a'.repeat(32), humanInputScopes: new Map(), enc: new TextEncoder(), active: null, inventoryLoaded: true,
   lastListing: {management: {state: 'observed'}},
-  lineDirect: null, composeOwner: null,
+  lineDirect: null, lineRecovery: null, composeOwner: null, composeRecovery: [],
   // Exercise legacy raw input; acknowledged input is covered by the browser/native seam.
   find: name => ({id: name, kind: 'mesh', created: 42, pty_capabilities: []}),
   updateKeys: () => {}, flash: () => {}, refresh: () => refresh(),
@@ -65,6 +65,7 @@ assert.ok(start > 0 && end > start);
 vm.runInContext(app.slice(start, end) + '\nglobalThis.TestPane = Pane;', context);
 const pane = Object.assign(Object.create(context.TestPane.prototype), {
   id: 'shell/name', conn: null, inputLeases: new Map(), inputAcks: new Map(), inputLeaseSlot: 7,
+  recoveredLineDrafts: new Map(),
   limitedBanner: {hidden: true},
   limitedKeyboard: {hidden: true},
   termEl: {hidden: false, classList: {remove() {}}, removeAttribute() {}},
