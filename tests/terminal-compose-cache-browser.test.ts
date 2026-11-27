@@ -13,6 +13,7 @@ declare function openCompose(text: string): boolean;
 declare function setActive(pane: any): void;
 declare function sendCompose(submit: boolean): void;
 declare function sendLine(): Promise<void>;
+declare function saveRecoveredLine(): void;
 const en = JSON.parse(fs.readFileSync('static/i18n/en.json', 'utf8'));
 
 test('a cached unsent composer draft remains reviewable without retaining its old delivery binding', async () => {
@@ -69,7 +70,7 @@ test('suspending a recovered composer transfers its edited draft exactly once', 
   }, false, 'en');
 });
 
-for (const editor of ['composer', 'line'] as const) {
+for (const editor of ['composer', 'line', 'line after leaving the pane'] as const) {
   test(`discarding a refused recovered ${editor} releases its original lease`, async () => {
     await harness(async (page) => {
       await page.evaluate(async editor => {
@@ -93,6 +94,7 @@ for (const editor of ['composer', 'line'] as const) {
           recoveredLineTarget = {pane: active, name, created, entry};
           line.value = text;
           await sendLine();
+          if (editor === 'line after leaving the pane') saveRecoveredLine();
         }
       }, editor);
       await page.getByRole('button', {name: en['compose.discardResult'], exact: true}).click();

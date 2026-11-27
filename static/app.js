@@ -7733,10 +7733,10 @@ function renderLineStatus() {
     discard.addEventListener("click", () => {
       if (lineRecovery !== record) return;
       lineRecovery = null;
+      releaseDiscardedEditorDraft(record.recovered);
       if (line.value === record.text) {
         line.value = "";
         if (recoveredLineTarget === record.recovered) {
-          releaseDiscardedEditorDraft(record.recovered);
           recoveredLineTarget = null;
         }
       }
