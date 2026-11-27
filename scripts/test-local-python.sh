@@ -79,3 +79,28 @@ select_python() {
   # Node tests that start the real server read the interpreter from MESH_PYTHON.
   export PATH MESH_PYTHON="$PY"
 }
+
+# Give both halves separate scratch and pytest caches. The caller's existing
+# scratch is a child of a socket-safe directory, so allocate siblings there.
+parallel_pytest() (
+  local browser_pid server_pid failed=0
+  TMPDIR="${TMPDIR%/*}"
+  export TMPDIR
+
+  shard() (
+    mesh_prepare_test_tmpdir || exit
+    exec "$PY" -m pytest -q -m "$1" -o "cache_dir=$TMPDIR/.pytest_cache"
+  )
+
+  trap 'for pid in $(jobs -pr); do kill "$pid" 2>/dev/null || :; done; wait || :' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  shard browser &
+  browser_pid=$!
+  shard 'not browser' &
+  server_pid=$!
+  wait "$browser_pid" || failed=1
+  wait "$server_pid" || failed=1
+  trap - EXIT INT TERM
+  exit "$failed"
+)

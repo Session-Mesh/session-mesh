@@ -61,6 +61,7 @@ scripts/test-local.sh -k menu            # extra arguments go to pytest
 scripts/test-local.sh test-ui            # asset and type checks, demo compiler tests
 scripts/test-local.sh test-node          # Node tests, including browser scenarios
 scripts/test-local.sh test-server -k menu # Ruff and selected pytest tests
+scripts/test-local.sh test-server-parallel # Ruff, then browser and server pytest concurrently
 scripts/test-local.sh test-ptyhost       # native PTY and Projects integration gates
 scripts/test-local.sh test-diff main     # compare the working tree with a revision
 ```

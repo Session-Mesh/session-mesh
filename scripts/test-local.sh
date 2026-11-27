@@ -9,6 +9,7 @@
 #   scripts/test-local.sh -k menu    extra arguments go to pytest
 #   scripts/test-local.sh --preflight-only   check prerequisites only
 #   scripts/test-local.sh test-ui|test-server|test-node|test-ptyhost
+#   scripts/test-local.sh test-server-parallel   split pytest by browser marker
 #   scripts/test-local.sh test-diff <commit-or-branch>
 # Python: MESH_PYTHON when set, otherwise .venv/, created from the pinned
 # requirements, or completed when its install did not finish
@@ -35,7 +36,7 @@ case "${1:-}" in
     fi
     shift 2
     ;;
-  test-ui|test-server|test-node|test-ptyhost) target="$1"; shift ;;
+  test-ui|test-server|test-server-parallel|test-node|test-ptyhost) target="$1"; shift ;;
   test-*) echo 'test-local: unknown test target.' >&2; exit 2 ;;
 esac
 if [ "$target" != all ] && [ "$target" != test-server ] && [ "$#" -ne 0 ]; then
@@ -181,6 +182,10 @@ if [ "$target" != all ]; then
     test-server)
       "$PY" -m ruff check .
       "$PY" -m pytest -q "$@"
+      ;;
+    test-server-parallel)
+      "$PY" -m ruff check .
+      parallel_pytest
       ;;
     test-ptyhost) ptyhost_gate ;;
   esac
