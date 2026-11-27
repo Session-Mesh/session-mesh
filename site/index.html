@@ -33,7 +33,7 @@
     </nav>
     <div class="tabs js-only" role="tablist" aria-label="Sidebar">
       <button id="tab-live" class="cur" type="button" role="tab" aria-selected="true" aria-controls="list"><span class="dot unread" aria-hidden="true"></span>Live <span class="n" data-session-count>8</span></button>
-      <button id="tab-hist" type="button" role="tab" aria-selected="false" aria-controls="hlist" tabindex="-1">History <span class="n">2</span></button>
+      <button id="tab-hist" type="button" role="tab" aria-selected="false" aria-controls="hlist" tabindex="-1">History <span class="n">3</span></button>
     </div>
     <label class="sr-only" for="filter" id="filter-label">Filter the sessions</label>
     <input id="filter" class="filter js-only" type="search" placeholder="Filter…" autocomplete="off" spellcheck="false">
@@ -82,8 +82,11 @@
     <nav id="hlist" class="list js-only" aria-label="History" hidden>
       <p class="hlist-intro">In session-mesh this tab lists your past conversations; on this page it lists the releases.</p>
       <!-- history-sidebar:begin -->
-      <p class="group"><span>Releases</span><span class="count">2</span></p>
+      <p class="group"><span>Releases</span><span class="count">3</span></p>
       <ul class="items">
+        <li><a class="item hitem" href="#history/v0.1.2" data-hist="v0.1.2">
+          <span class="top"><span class="dot hist" aria-hidden="true"></span><span class="name">v0.1.2 — patch release</span></span>
+          <span class="last">Fixes for the phone keyboard, terminal replay, and project updates.</span></a></li>
         <li><a class="item hitem" href="#history/v0.1.1" data-hist="v0.1.1">
           <span class="top"><span class="dot hist" aria-hidden="true"></span><span class="name">v0.1.1 — patch release</span></span>
           <span class="last">A patch release of the 0.1 line: fixes, a native mesh-logout-all, and documentation.</span></a></li>
@@ -516,6 +519,7 @@ bash install.sh</code></pre>
         <p class="doc-h1">Releases</p>
         <ul class="doc-list doc-toc">
 <!-- history-toc:begin -->
+          <li><a href="#history/v0.1.2">v0.1.2 — patch release</a></li>
           <li><a href="#history/v0.1.1">v0.1.1 — patch release</a></li>
           <li><a href="#history/v0.1.0">v0.1.0 — first public release</a></li><!-- history-toc:end -->
         </ul>
@@ -526,6 +530,20 @@ bash install.sh</code></pre>
   </figure>
   <div class="hist-version">
 <!-- history-entries:begin -->
+    <article class="hentry" id="history/v0.1.2" data-slug="v0.1.2" aria-labelledby="ht-v0.1.2">
+      <p class="hmeta"><span class="tag">release</span></p>
+      <h3 class="htitle" id="ht-v0.1.2">v0.1.2 — patch release</h3>
+      <div class="hbody">
+        <p>Fixes for the phone keyboard, terminal replay, and project updates.</p>
+        <ul class="highlights">
+          <li>The phone key bar leaves the soft keyboard in its current state when you tap a key.</li>
+          <li>Opening a long-running full-screen session restores its alternate screen and mouse reporting from the retained terminal output.</li>
+          <li data-requires="projects">Projects reports cancelled observations as cancelled, and a configuration lock released during inspection returns a retryable busy result.</li>
+        </ul>
+        <p><a class="gh-changelog" href="https://github.com/Session-Mesh/session-mesh/blob/main/CHANGELOG.md">Full changelog on GitHub</a></p>
+      </div>
+      <p class="hnav js-only"><a class="hnav-prev" href="#history"><span aria-hidden="true">←</span> All releases</a></p>
+    </article>
     <article class="hentry" id="history/v0.1.1" data-slug="v0.1.1" aria-labelledby="ht-v0.1.1">
       <p class="hmeta"><span class="tag">release</span></p>
       <h3 class="htitle" id="ht-v0.1.1">v0.1.1 — patch release</h3>
