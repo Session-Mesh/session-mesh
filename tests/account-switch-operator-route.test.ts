@@ -122,9 +122,10 @@ async def main():
     else: raise AssertionError('replaced foreground process accepted')
     state['agent_start'] = '9'
     state['status'] = 'busy'
-    try: await server.api_operator_account_switch(req())
-    except web.HTTPConflict: pass
-    else: raise AssertionError('busy source accepted')
+    refused = await server.api_operator_account_switch(req())
+    assert refused.status == 409
+    assert json.loads(refused.text) == {'refused':'foreground_unavailable'}
+    assert not app['scheduled']
     state['status'] = 'idle'
     state['foreground'] = False
     try: await server.api_operator_account_switch(req())
