@@ -7,8 +7,12 @@ import {test, harness} from '../checks/dictation-browser-fixture.ts';
 
 declare const active: any, ctext: HTMLTextAreaElement, cdlg: HTMLDialogElement;
 declare const composeOwner: any, composeRecovery: any[];
+declare let recoveredLineTarget: any;
+declare const paneInput: any, line: HTMLTextAreaElement;
 declare function openCompose(text: string): boolean;
 declare function setActive(pane: any): void;
+declare function sendCompose(submit: boolean): void;
+declare function sendLine(): Promise<void>;
 const en = JSON.parse(fs.readFileSync('static/i18n/en.json', 'utf8'));
 
 test('a cached unsent composer draft remains reviewable without retaining its old delivery binding', async () => {
@@ -64,3 +68,35 @@ test('suspending a recovered composer transfers its edited draft exactly once', 
     assert.deepEqual(saved, {drafts: ['edited recovered draft'], retainsEntry: true, paneDraft: null, paneOwner: null});
   }, false, 'en');
 });
+
+for (const editor of ['composer', 'line'] as const) {
+  test(`discarding a refused recovered ${editor} releases its original lease`, async () => {
+    await harness(async (page) => {
+      await page.evaluate(async editor => {
+        const text = 'recovered draft';
+        const {name, created} = active.conn;
+        const entry = {
+          input: {pendingBytes: 0, incompleteHumanInput: false},
+          lease: {release() { (window as any).__draftReleased = true; }},
+        };
+        active.inputAcks.set(name + '\0' + created, entry);
+        paneInput.deliver = (_binding: unknown, _text: string, _enter: boolean, done: Function) => {
+          done({kind: 'refused', frames: 0, wireBytes: 0});
+          return {cancel() {}};
+        };
+        if (editor === 'composer') {
+          if (!openCompose(text)) throw new Error('composer unavailable');
+          active.recoveredComposeDraft = {name, created, text, entry};
+          active.recoveredComposeOwner = composeOwner;
+          sendCompose(true);
+        } else {
+          recoveredLineTarget = {pane: active, name, created, entry};
+          line.value = text;
+          await sendLine();
+        }
+      }, editor);
+      await page.getByRole('button', {name: en['compose.discardResult'], exact: true}).click();
+      assert.equal(await page.evaluate(() => (window as any).__draftReleased), true);
+    }, false, 'en');
+  });
+}

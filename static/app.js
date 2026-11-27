@@ -7733,7 +7733,13 @@ function renderLineStatus() {
     discard.addEventListener("click", () => {
       if (lineRecovery !== record) return;
       lineRecovery = null;
-      if (line.value === record.text) line.value = "";
+      if (line.value === record.text) {
+        line.value = "";
+        if (recoveredLineTarget === record.recovered) {
+          releaseDiscardedEditorDraft(record.recovered);
+          recoveredLineTarget = null;
+        }
+      }
       fitLine(); renderLineStatus(); line.focus();
     });
     lineStatus.append(details, copy, discard);
@@ -8022,6 +8028,7 @@ async function sendLine() {
   }
   if (residueHolds(pane)) return;   // once: the next Enter sends
   const text = line.value;
+  const recovered = recoveredLineTarget;
   const pending = { operation: null, done: false, hold: null };
   const target = await heldLineTarget(pane, pending);
   if (!target) return;
@@ -8040,7 +8047,7 @@ async function sendLine() {
       recoveredLineTarget = null;
       fitLine();
     } else {
-      lineRecovery = { target, text, result };
+      lineRecovery = { target, text, result, recovered };
     }
     renderLineStatus();
   });
@@ -8307,13 +8314,18 @@ function sendCompose(submit) {
   owner.operation = paneInput.deliver(owner.binding, text, submit, (result) => {
     const stillOpen = owner.settle(revision);
     paneTargets.release(owner.target);
-    if (owner.target.pane.recoveredComposeOwner === owner) owner.target.pane.recoveredComposeDraft = null;
+    const pane = owner.target.pane;
+    let entry;
+    if (pane.recoveredComposeOwner === owner) {
+      entry = pane.recoveredComposeDraft?.entry;
+      pane.recoveredComposeDraft = null;
+    }
     if (result.kind === (submit ? "submitted" : "paste")) {
       if (stillOpen && composeOwner === owner && ctext.value === text) {
         retireComposeOwner(owner); cdlg.close();
       }
     } else {
-      composeRecovery.push({ target: owner.target, text, result });
+      composeRecovery.push({ target: owner.target, text, result, entry });
       if (stillOpen && composeOwner === owner) { retireComposeOwner(owner); cdlg.close(); }
     }
     renderComposeStatus();
