@@ -3075,6 +3075,13 @@ def _apply_reported_state(mesh):
                     and agent.get("foreground") is True and isinstance(session, str)
                     and _HOOK_SESSION_RE["pi"].fullmatch(session)):
                 agent["session_id"], agent["identity_source"] = session, "pi_hook"
+                seq = detail.get("seq")
+                if (detail.get("hook") == "pi_activity" and type(seq) is int and seq > 0
+                        and entry.get("account") not in (None, DEFAULT_ACCOUNT["id"])
+                        and _accounts_digest(entry.get("account_context_revision"))):
+                    activity = _OPENCODE_HOOK_STATUS.get(hook.get("type"))
+                    if activity is not None:
+                        agent["status"], agent["waiting_for"] = activity
             continue
         state = _OPENCODE_HOOK_STATUS.get(hook.get("type"))
         if state is not None:
@@ -5556,7 +5563,7 @@ async def api_operator_account_switch(request):
             or not isinstance(target, dict) or set(target) != {"id", "label", "context_revision"}
             or not isinstance(expected["id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", expected["id"])
             or type(expected["created"]) not in (int, float) or not _finite_number(expected["created"])
-            or expected["created"] <= 0 or expected["agent"] not in ("claude", "codex")
+            or expected["created"] <= 0 or expected["agent"] not in ("claude", "codex", "pi")
             or not isinstance(expected["account"], str)
             or not sessionrequests.ACCOUNT_RE.fullmatch(expected["account"])
             or not _accounts_digest(expected["context_revision"])
@@ -5571,7 +5578,8 @@ async def api_operator_account_switch(request):
             or not _accounts_digest(target["context_revision"])):
         raise web.HTTPBadRequest(text="Invalid switch selection")
     if (not NATIVE_SWITCH_QUALIFIED or not _native_profile_mode()
-            or target["id"] in ("default", expected["account"])):
+            or target["id"] in ("default", expected["account"])
+            or (expected["agent"] == "pi" and expected["account"] == "default")):
         raise web.HTTPConflict(text="Native account switch unavailable")
     listed = await host({"op": "list"})
     raw = next((row for row in listed if isinstance(row, dict) and row.get("name") == expected["id"]

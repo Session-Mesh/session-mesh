@@ -127,7 +127,8 @@ generator calls `mesh-event` is in that generator's code.
 
 OpenCode and Pi have no `subscriptions`, so the table installs no consumer on their native hooks. That
 does not mean OpenCode reports no state: its plugin code translates its events and reports the state itself.
-Pi's extension wakes Pi and reports no state (see the matrix below).
+Pi's extension wakes Pi and reports its conversation and activity. Only a report bound to the
+foreground process of a named native profile supplies the idle observation for the account picker.
 
 ## Capability matrix
 
@@ -143,7 +144,7 @@ with a temporary home, no model), **read** (read in the installed package or bin
 | Copilot CLI 1.0.114 | plugin, per session, timeout 5 s | `sessionStart`, also on resume (read) | top-level `additionalContext` (read) | 6 hooks (code) | not wired |
 | Antigravity (agy) 1.5.9 | plugin, installed once by the user, timeout 5 s | `SessionStart`, probably not on resume (read, not verified) | `injectSteps` (read) | 2 hooks (code) | not wired |
 | OpenCode 1.18.35 | plugin code | none (read) | `experimental.chat.system.transform` in plugin code (read) | translated in the plugin (code) | not wired |
-| Pi 1.5.2 | extension code | `session_start` (read) | `pi.sendMessage(..., {deliverAs: "nextTurn"})` in extension code (read) | none; the extension wakes Pi (code) | not wired |
+| Pi 1.5.2 | extension code | `session_start` (read) | `pi.sendMessage(..., {deliverAs: "nextTurn"})` in extension code (read) | `session_start`, `agent_start`, `agent_end` (code) | not wired |
 | Codex 0.170.0 | native_config, per-run `-c` overrides, timeout 5 s, run only once trusted by the user | `SessionStart`, also on resume (run) | `hookSpecificOutput.additionalContext`, added as a developer message (run) | none | **wired**, folder only (run: after "Trust all", the sentence reached the request of a local stand-in model; see [Codex](#codex)) |
 
 Why the others are not wired in this first slice:

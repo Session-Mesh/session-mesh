@@ -9,7 +9,9 @@ configuration and history roots. A restore with an unbound or missing conversati
 recovery offer available. macOS native-profile switching and OpenCode live switching remain
 unavailable.
 
-The terminal-header operator picker is limited to eligible Claude Code and Codex sessions on Linux.
+The terminal-header operator picker supports eligible Claude Code, Codex and Pi sessions on Linux.
+Pi requires two named native profiles and a process-bound activity report from the Mesh Pi extension.
+Older Pi extensions report identity only and cannot establish whether the agent is idle.
 The owner chooses a qualified named profile and confirms
 transcript disclosure before the browser submits an owner-cookie-only request. The browser's source
 and destination are expected snapshots; the server rechecks the live native binding. Confirmation
