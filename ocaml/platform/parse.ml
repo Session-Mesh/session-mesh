@@ -117,8 +117,9 @@ let darwin_selected_environment ?(title_padding = false) buffer names =
   let rec scan position seen =
     if position = String.length buffer then Ok seen
     else if buffer.[position] = '\000' then
-      if skip_nuls buffer position = String.length buffer then Ok seen
-      else malformed "procargs2: data after empty environment entry"
+      (* Darwin can return data after an empty entry. Keep checking for
+         selected keys and duplicates until the entire buffer is consumed. *)
+      scan (skip_nuls buffer position) seen
     else
       match String.index_from_opt buffer position '\000' with
       | None -> malformed "procargs2: unterminated environment string"
@@ -144,7 +145,10 @@ let darwin_selected_environment ?(title_padding = false) buffer names =
       else
         (* A rewritten process title can leave zero padding before the
            inherited environment. *)
-        scan (if title_padding then skip_nuls buffer position else position) []
+        let next = skip_nuls buffer position in
+        if not title_padding && next <> position && next < String.length buffer then
+          malformed "procargs2: data after leading environment padding"
+        else scan next []
 
 let darwin_environment_matches ?(title_padding = false) ?(unset = []) buffer ~key ~expected =
   Result.map

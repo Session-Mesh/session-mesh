@@ -176,7 +176,7 @@ let test_procargs_environment () =
        ~unset:[ "OPENAI_BASE_URL" ] ~key:"CODEX_HOME" ~expected:"/tmp/profile");
   check_malformed "duplicate key"
     (check "CODEX_HOME=/tmp/profile\000CODEX_HOME=/tmp/profile\000");
-  check_malformed "override after empty entry"
+  equal "override after empty entry" false
     (check "CODEX_HOME=/tmp/profile\000\000OPENAI_BASE_URL=override\000");
   check_malformed "unterminated entry" (check "CODEX_HOME=/tmp/profile");
   let claude suffix =
@@ -185,7 +185,7 @@ let test_procargs_environment () =
       ~unset:[ "ANTHROPIC_AUTH_TOKEN" ] ~key:"CLAUDE_CONFIG_DIR" ~expected:"/tmp/profile"
   in
   equal "Claude environment follows title padding" true (claude "");
-  check_malformed "Claude override after empty entry"
+  equal "Claude override after empty entry" false
     (claude "\000ANTHROPIC_AUTH_TOKEN=override\000");
   let padded =
     recorded_procargs2 ^ "\000\000PI_CODING_AGENT_DIR=/tmp/overlay\000"
