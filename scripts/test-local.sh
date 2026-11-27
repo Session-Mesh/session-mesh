@@ -9,6 +9,7 @@
 #   scripts/test-local.sh -k menu    extra arguments go to pytest
 #   scripts/test-local.sh --preflight-only   check prerequisites only
 #   scripts/test-local.sh test-ui|test-server|test-node|test-ptyhost
+#   scripts/test-local.sh test-node tests/example.test.ts
 #   scripts/test-local.sh test-server-parallel   split pytest by browser marker
 #   scripts/test-local.sh test-diff <commit-or-branch>
 # Python: MESH_PYTHON when set, otherwise .venv/, created from the pinned
@@ -39,8 +40,8 @@ case "${1:-}" in
   test-ui|test-server|test-server-parallel|test-node|test-ptyhost) target="$1"; shift ;;
   test-*) echo 'test-local: unknown test target.' >&2; exit 2 ;;
 esac
-if [ "$target" != all ] && [ "$target" != test-server ] && [ "$#" -ne 0 ]; then
-  echo 'test-local: only test-server accepts extra arguments.' >&2
+if [ "$target" != all ] && [ "$target" != test-server ] && [ "$target" != test-node ] && [ "$#" -ne 0 ]; then
+  echo 'test-local: only test-server and test-node accept extra arguments.' >&2
   exit 2
 fi
 if [ "${1:-}" = --preflight-only ]; then
@@ -145,7 +146,7 @@ frontend_checks() {
 
 # Build, test and install the OCaml package, then point the tests at the installed programs.
 build_native_host() {
-  bash scripts/bootstrap.sh
+  bash scripts/bootstrap.sh "$@"
   local switch="${MESH_OPAM_SWITCH:-$(opam switch show)}"
   local bin
   bin="$(opam var --switch="$switch" bin)"
@@ -170,14 +171,16 @@ fi
 "$PY" scripts/check-test-environment.py requirements-dev.txt requirements-browser.txt
 prepare_scratch
 if [ "$target" != all ]; then
-  if [ "$target" != test-ui ]; then
+  if [ "$target" = test-node ] && [ "$#" -gt 0 ]; then
+    build_native_host --install-only
+  elif [ "$target" != test-ui ]; then
     build_native_host
   fi
   case "$target" in
     test-ui) frontend_checks ;;
     test-node)
       npm ci --ignore-scripts --no-audit --no-fund
-      node_tests
+      node_tests "$@"
       ;;
     test-server)
       "$PY" -m ruff check .

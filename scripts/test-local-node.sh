@@ -33,20 +33,33 @@ test_concurrency() {
 node_tests() {
   local files=() file list concurrency
   concurrency="$(test_concurrency)" || return 1
-  list="$(mktemp)" || return 1
-  if ! find tests -type f \( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \) \
-      -not -path '*/node_modules/*' -print0 > "$list"; then
-    rm -f "$list"
-    echo 'test-local: find failed while listing the Node tests.' >&2
-    return 1
-  fi
-  if ! sort -z "$list" > "$list.sorted"; then
+  if [ "$#" -gt 0 ]; then
+    for file in "$@"; do
+      while [[ "$file" == ./* ]]; do file="${file#./}"; done
+      case "$file" in
+        */../*|*/node_modules/*) ;;
+        tests/*.test.ts|tests/*.test.mjs|tests/*.test.cjs)
+          if [ -f "$file" ]; then files+=("$file"); continue; fi ;;
+      esac
+      printf 'test-local: expected an existing Node test under tests/: %s\n' "$file" >&2
+      return 1
+    done
+  else
+    list="$(mktemp)" || return 1
+    if ! find tests -type f \( -name '*.test.ts' -o -name '*.test.mjs' -o -name '*.test.cjs' \) \
+        -not -path '*/node_modules/*' -print0 > "$list"; then
+      rm -f "$list"
+      echo 'test-local: find failed while listing the Node tests.' >&2
+      return 1
+    fi
+    if ! sort -z "$list" > "$list.sorted"; then
+      rm -f "$list" "$list.sorted"
+      echo 'test-local: sort failed while listing the Node tests.' >&2
+      return 1
+    fi
+    while IFS= read -r -d '' file; do files+=("$file"); done < "$list.sorted"
     rm -f "$list" "$list.sorted"
-    echo 'test-local: sort failed while listing the Node tests.' >&2
-    return 1
   fi
-  while IFS= read -r -d '' file; do files+=("$file"); done < "$list.sorted"
-  rm -f "$list" "$list.sorted"
   # The interface language follows the environment of the browsers, and the tests assert English labels
   # (a test of another language sets its own locale): run them under a fixed locale, whatever the caller's.
   [ "${#files[@]}" -eq 0 ] ||
