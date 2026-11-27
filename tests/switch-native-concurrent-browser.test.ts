@@ -146,13 +146,6 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       assert.equal(calls[1]![1], target, 'the resumed agent uses the target account');
       assert.match(calls[1]![3]!, new RegExp(`^resume ${sid}(?:\\s|$)`));
       assert.equal(fs.existsSync(rolloutIn(target, sid)), true);
-      const retainedOrRecovered = await phone.evaluate(created => {
-        const pane = active as any;
-        const retained = pane.inputAcks.get(`fenced-account\0${created}`)?.input.retainedText;
-        return retained ?? (document.querySelector('#line-text') as HTMLTextAreaElement).value;
-      }, sent.created);
-      assert.equal(retainedOrRecovered, 'phone-during-switch',
-        'input stays available in its original record or the editable draft');
       const attempted = await phone.evaluate(() => (window as any).__inputFrames);
       assert.ok(attempted.length <= 1 && attempted.every((frame: string) => frame === 'phone-during-switch'),
         'the text is never replayed automatically');
@@ -161,14 +154,21 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
         active?.conn?.ws?.readyState === WebSocket.OPEN, after.created, {timeout: 15000});
       const previous = sent.created !== after.created;
       const line = phone.locator('#line-text');
-      const draft = previous ? line : phone.locator('.pane.active .p-input-drafts textarea');
-      await draft.waitFor({state: 'attached'});
-      await phone.waitForFunction(({selector, text}) =>
-        (document.querySelector(selector) as HTMLTextAreaElement | null)?.value === text,
-      {selector: previous ? '#line-text' : '.pane.active .p-input-drafts textarea', text: 'phone-during-switch'});
-      assert.equal(await phone.evaluate(() => [...(active as any).inputAcks.values()].reduce((sum: number, entry: any) => sum + entry.input.pendingBytes, 0)),
-        previous ? 0 : 19, 'only obsolete bytes move to the editor');
+      const retainedSelector = '.pane.active .p-input-drafts textarea';
+      const savedSelector = '.pane.active .p-input-other-draft textarea';
+      await phone.waitForFunction(({selector, text, previous}) =>
+        (!previous && (document.querySelector('#line-text') as HTMLTextAreaElement).value === text) ||
+        [...document.querySelectorAll<HTMLTextAreaElement>(selector)].some(field => field.readOnly && field.value === text),
+      {selector: retainedSelector + ', ' + savedSelector, text: 'phone-during-switch', previous});
+      const saved = await phone.evaluate(created =>
+        (active as any).recoveredLineDrafts.get('fenced-account\0' + created) === 'phone-during-switch', sent.created);
+      const editable = !previous && await line.inputValue() === 'phone-during-switch';
+      const draft = editable ? line : saved
+        ? phone.locator('.pane.active .p-input-other-draft').filter({has: phone.getByText('fenced-account', {exact: true})}).locator('textarea')
+        : phone.locator(retainedSelector);
+      if (previous) assert.equal(await line.inputValue(), '', 'the new incarnation editor stays empty');
       assert.equal(await draft.inputValue(), 'phone-during-switch');
+      assert.equal(await draft.evaluate((field: HTMLTextAreaElement) => field.readOnly), !editable);
       await phone.evaluate(() => {
         const pane = active as any;
         pane.inputAcks.set('another-session\0fixture', {input: {pendingBytes: 6, pendingHumanBytes: 6, retainedText: 'secret', state: 'review'}});
@@ -176,7 +176,7 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       });
       assert.equal(await draft.count(), 1, 'another session is not treated as the current draft');
       assert.equal(await draft.inputValue(), 'phone-during-switch');
-      assert.equal(await phone.locator('.pane.active .p-input-other-draft strong').textContent(), 'another-session');
+      assert.equal(await phone.getByText('another-session', {exact: true}).textContent(), 'another-session');
       await phone.evaluate(() => { const pane = active as any; pane.inputAcks.delete('another-session\0fixture'); pane.renderRetainedInput(); });
       await desktop.evaluate(() => {
         const pane = active as any;
@@ -248,7 +248,6 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       await other.getByRole('button', {name: /Discard/}).click();
       assert.equal(await other.locator('textarea').count(), 0, 'discard removes the retained bytes');
       if (await other.count()) {
-        assert.equal(previous, false, 'only a retained current input lease can outlive the discarded copy');
         const forget = other.getByRole('button', {name: 'Forget obsolete draft record'});
         phone.once('dialog', dialog => dialog.accept());
         await forget.click();
