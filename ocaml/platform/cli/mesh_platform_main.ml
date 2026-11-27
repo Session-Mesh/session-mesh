@@ -323,6 +323,34 @@ let image_request () =
       Some (url, notes)
   | _ -> None
 
+let accounts_confirm_environment pid incarnation =
+  let invalid () =
+    report Fun.id (Error ("malformed", "Invalid account environment check"))
+  in
+  let variable name =
+    String.length name > 0 && String.length name <= 128
+    && String.for_all (function 'A' .. 'Z' | '0' .. '9' | '_' -> true | _ -> false) name
+  in
+  match (Int64.of_string_opt incarnation, json_request 8192) with
+  | Some incarnation, Some (`Assoc fields) when incarnation > 0L -> (
+      match List.sort compare fields with
+      | [ ("expected", `String expected); ("key", `String key);
+          ("unset", `List entries) ]
+        when variable key && not (Filename.is_relative expected)
+             && not (String.contains expected '\000') && List.length entries <= 32 ->
+          let unset =
+            List.filter_map
+              (function `String name when variable name && name <> key -> Some name | _ -> None)
+              entries
+          in
+          if List.length (List.sort_uniq String.compare unset) <> List.length entries then
+            invalid ()
+          else
+            platform_report (fun matched -> `Assoc [ ("matches", `Bool matched) ])
+              (P.darwin_process_environment_matches ~unset pid ~incarnation ~key ~expected)
+      | _ -> invalid ())
+  | _ -> invalid ()
+
 let session_settings mode =
   let module S = Mesh_agent_settings in
   let string = function `String s -> Some s | _ -> None in
@@ -512,6 +540,8 @@ let accounts_carry ?expected_contexts ?(legacy_only = false) file kind conversat
                ~file ~kind ~conversation ~from_account ~to_account ()))
 
 let run = function
+  | [ "accounts"; "confirm-environment"; pid; incarnation ] ->
+      with_pid pid (fun pid -> accounts_confirm_environment pid incarnation)
   | [ "accounts"; "carry-capabilities"; "pi" ] ->
       print_json (`Assoc [ ("version", `Int 1); ("revision_bound", `Bool true) ]);
       0
