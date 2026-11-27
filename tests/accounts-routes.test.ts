@@ -582,6 +582,7 @@ function assertProfileAuthority(source: string) {
   assert.deepEqual(edges, [
     'new_session: context = await _managed_launch_context(managed_profile)',
     'new_session: if managed_profile is not None and await _managed_launch_context(managed_profile) != context:',
+    'api_operator_account_switch: ran = await _profile_run("operator-switch", "profiles.list", b"{}")',
     '_provision_capabilities: ran = await _profile_run("config", "profiles.provision-capabilities", b"{}")',
     '_managed_launch_context: ran = await _profile_run("managed-launch", managed_ref=ref)',
     'api_accounts: ran = await _profile_run("accounts", op, body)',
@@ -589,7 +590,7 @@ function assertProfileAuthority(source: string) {
   ]);
 }
 
-test('managed launch rejects divergent or malformed input before looking up the helper', () => {
+test('managed launch and operator listing reject divergent inputs before looking up the helper', () => {
   const check = spawnSync(process.env.MESH_PYTHON || 'python3', ['-B', '-c', `
 import asyncio
 import contextlib
@@ -609,6 +610,9 @@ cases = [
     (("managed-launch",), {"managed_ref": {**ref, "context_revision": "wrong"}}),
     (("managed-launch",), {"managed_ref": b'{}'}),
     (("config", "profiles.provision-capabilities", b"{}"), {"managed_ref": ref}),
+    (("operator-switch", "profiles.create", b"{}"), {}),
+    (("operator-switch", "profiles.list", b'{"profile":{}}'), {}),
+    (("operator-switch", "profiles.list", b"{}"), {"managed_ref": ref}),
 ]
 for args, kwargs in cases:
     with contextlib.suppress(TypeError, ValueError):

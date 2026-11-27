@@ -84,6 +84,12 @@ body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--mono); ove
 .account-badge[data-account-color="10"] { background: #a7dbce; }
 .account-badge[data-account-color="11"] { background: #e6bde0; }
 .pane-head .p-identity .account-badge { display: inline-block; vertical-align: middle; margin-left: 6px; }
+.pane-head button.account-badge { border: 0; cursor: pointer; font-family: inherit; }
+.pane-head button.account-badge:disabled { cursor: default; opacity: 1; }
+.pane-head button.account-badge:not(:disabled):focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+#dlg-account-switch { max-width: min(30rem, calc(100vw - 24px)); }
+#dlg-account-switch label { display: grid; gap: 6px; }
+#dlg-account-switch select { max-width: 100%; min-width: 0; }
 /* The New session Account choice: any number of aliases, one native list (keyboard and phone pickers), never wider than the dialog. */
 #new-account-row select { display: block; width: 100%; max-width: 100%; min-height: 36px; }
 .tag.known-agent { color: #9fcf9f; border-color: #315238; }
