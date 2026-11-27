@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 import assert from 'node:assert/strict';
 import {after, before, test} from 'node:test';
-import {chromium, type Browser} from 'playwright-core';
+import {chromium, type Browser, type Route} from 'playwright-core';
 import {startMesh, type Mesh} from './mesh-server-lib.ts';
 import {chromiumLaunchOptions} from './helpers/browser-launch.ts';
 
@@ -136,13 +136,15 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
     } finally {await context.close();}
   });
 
-for (const stalled of [false, true])
-test(`an uncertain Pi submission persists through close and reload without replay (stalled=${stalled})`, {skip}, async () => {
+for (const mode of ['transport', 'deadline', 'late-receipt', 'reload-before-reply', 'capacity'])
+test(`an uncertain Pi submission avoids replay (${mode})`, {skip}, async () => {
+  const stalled = mode !== 'transport';
   const context = await browser.newContext({serviceWorkers: 'block'});
   try {
     const page = await context.newPage();
     const revision = 'a'.repeat(64), other = 'b'.repeat(64);
     let posts = 0;
+    let pending: Route | undefined;
     let refuse = !stalled;
     await page.route('**/api/sessions*', route => route.fulfill({json: {
       mesh: [{kind: 'mesh', id: 'uncertain', name: 'uncertain', created: 123,
@@ -162,9 +164,11 @@ test(`an uncertain Pi submission persists through close and reload without repla
         refuse = false;
         return route.fulfill({status: 409, json: {refused: 'foreground_unavailable'}});
       }
-      if (stalled) return;
+      if (stalled) { pending = route; return; }
       return route.fulfill({status: 503, json: {error: 'reply lost'}});
     });
+    await page.route('**/api/session-actions/operator/switch/late', route =>
+      route.fulfill({json: {request: {id: 'late', action: 'switch_account', state: 'executing'}}}));
     await page.routeWebSocket('**/ws/**', socket => socket.onMessage(() => {}));
     await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
     await page.goto(`${mesh.base}/`);
@@ -180,13 +184,47 @@ test(`an uncertain Pi submission persists through close and reload without repla
       await dialog.waitFor({state: "visible"});
       assert.equal(await dialog.locator('[data-switch-confirm]').isEnabled(), true);
     }
+    if (mode === 'capacity') {
+      const saved = await page.evaluate(() => {
+        const raw = JSON.stringify(Array.from({length: 55}, (_, index) => ({
+          source: {id: `session-${index}`, created: 123, agent: 'pi'},
+          id: null, state: 'unknown',
+        })));
+        sessionStorage.setItem('mesh.accountSwitchReceipts.v1', raw);
+        return raw;
+      });
+      await page.reload();
+      await page.locator('#list .item[data-id="uncertain"]').click();
+      await badge.click();
+      await dialog.locator('[data-switch-confirm]').click();
+      await dialog.getByText(/inventory unavailable/i).waitFor();
+      assert.equal(posts, 0);
+      assert.equal(await page.evaluate(() => sessionStorage.getItem('mesh.accountSwitchReceipts.v1')), saved);
+      return;
+    }
     if (stalled) await page.clock.install();
     const sent = page.waitForRequest('**/api/session-actions/operator/switch');
     await dialog.locator('[data-switch-confirm]').click();
     await sent;
+    if (mode === 'reload-before-reply') {
+      await page.reload();
+      await page.locator('#list .item[data-id="uncertain"]').click();
+      await badge.click();
+      await dialog.locator('[data-switch-status]').getByText(/outcome unknown/i).waitFor();
+      assert.equal(posts, 1);
+      return;
+    }
     if (stalled) await page.clock.fastForward(11000);
 
     await dialog.locator('[data-switch-status]').getByText(/outcome unknown/i).waitFor();
+    if (mode === 'late-receipt') {
+      assert.ok(pending);
+      await pending.fulfill({status: 202, json: {request: {id: 'late', action: 'switch_account', state: 'approved'}}});
+      await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('mesh.accountSwitchReceipts.v1') ?? '[]')
+        .some((receipt: {id: string}) => receipt.id === 'late'));
+      assert.equal(posts, 1);
+      return;
+    }
     await dialog.locator('[data-switch-cancel]').click();
     await badge.click();
     await dialog.locator('[data-switch-status]').getByText(/outcome unknown/i).waitFor();
