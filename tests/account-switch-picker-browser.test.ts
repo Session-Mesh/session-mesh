@@ -24,7 +24,7 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
       const page = await context.newPage();
       const revision = 'a'.repeat(64), other = 'b'.repeat(64);
       let status = 'idle', account = 'work', requests = 0, created = 123;
-      let requestState = 'approved';
+      let requestState = 'approved', failStatusOnce = false, reads = 0;
       const listing = () => ({mesh: [{
         kind: 'mesh', id: 'bound-one', name: 'bound-one', label: 'bound-one', created,
         activity: 124, attached: 0, cwd: mesh.home, folder: null, rank: 0, notice: null,
@@ -53,10 +53,14 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
         await route.fulfill({status: 202, json: {request: {
           id: 'fixture', action: 'switch_account', state: 'approved'}}});
       });
-      await page.route('**/api/session-actions/operator/switch/fixture', route => route.fulfill({
-        json: {request: {id: 'fixture', action: 'switch_account', state: requestState,
-          result: requestState === 'failed' ? {error: 'Agent stop outcome uncertain; inspect the session before resuming'} : null}},
-      }));
+      await page.route('**/api/session-actions/operator/switch/fixture', route => {
+        reads++;
+        if (failStatusOnce) { failStatusOnce = false; return route.abort(); }
+        return route.fulfill({
+          json: {request: {id: 'fixture', action: 'switch_account', state: requestState,
+            result: requestState === 'failed' ? {error: 'Agent stop outcome uncertain; inspect the session before resuming'} : null}},
+        });
+      });
       await page.routeWebSocket('**/ws/**', socket => socket.onMessage(() => {}));
       await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
       await page.goto(`${mesh.base}/`);
@@ -67,6 +71,35 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
       assert.equal(await badge.getAttribute('type'), 'button');
       assert.equal(await badge.isEnabled(), true);
       assert.equal(await page.locator('#list .item[data-id="bound-one"] .account-badge').evaluate(el => el.tagName), 'SPAN');
+      const competingModal = await page.evaluate(async snapshot => {
+        const copy = document.querySelector<HTMLDialogElement>('#dlg-account-switch')!.cloneNode(true) as HTMLDialogElement;
+        copy.removeAttribute('id');
+        const foreground = document.createElement('dialog');
+        document.body.append(copy, foreground);
+        try {
+          const profiles = Promise.withResolvers<unknown[]>();
+          const picker = MeshPaneActions.createAccountSwitchPicker(copy, {
+            source: () => ({session: snapshot, authoritative: true}),
+            profiles: () => profiles.promise,
+            submit: () => { throw new Error('unexpected submission'); },
+            status: () => { throw new Error('unexpected status read'); },
+            t: (key: string) => key,
+            label: () => 'bound-one',
+            notice: () => {},
+            serverText: (value: string) => value,
+          });
+          const opened = picker.open(document.querySelector('.p-account')!);
+          foreground.showModal();
+          profiles.resolve([{backend: snapshot.agent.type, id: 'other', label: 'Personal',
+            enabled: true, context_revision: 'b'.repeat(64), switch_qualified: true}]);
+          await opened;
+          return {foreground: foreground.matches(':modal'), picker: copy.open};
+        } finally {
+          copy.remove();
+          foreground.remove();
+        }
+      }, listing().mesh[0]!);
+      assert.deepEqual(competingModal, {foreground: true, picker: false});
       await badge.focus();
       await page.keyboard.press('Enter');
       const dialog = page.locator('#dlg-account-switch');
@@ -117,17 +150,20 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
         await dialog.locator('[data-switch-cancel]').click();
         return;
       }
+      failStatusOnce = true;
       requestState = 'failed';
       await dialog.locator('[data-switch-status]').getByText(
         locale === 'fr-FR' ? /Arrêt de l’agent incertain/ : /Agent stop outcome uncertain/).waitFor();
       await dialog.locator('[data-switch-cancel]').click();
       status = 'idle';
+      const readsAfterFailure = reads;
       requestState = 'execution_unknown';
       await page.evaluate(() => refresh());
       await badge.click();
       await dialog.waitFor({state: 'visible'});
       await dialog.locator('[data-switch-status]').getByText(
-        locale === 'fr-FR' ? /inconnu/ : /unknown/i).waitFor();
+        locale === 'fr-FR' ? /Arrêt de l’agent incertain/ : /Agent stop outcome uncertain/).waitFor();
+      assert.equal(reads, readsAfterFailure, 'a known terminal receipt is not polled again');
       assert.equal(await dialog.locator('[data-switch-confirm]').isDisabled(), true,
         'an uncertain durable request must not be retried from its receipt');
       await dialog.locator('[data-switch-confirm]').click({force: true});
