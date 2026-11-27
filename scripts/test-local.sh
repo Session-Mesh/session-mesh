@@ -174,7 +174,10 @@ if [ "$target" != all ]; then
   fi
   case "$target" in
     test-ui) frontend_checks ;;
-    test-node) node_tests ;;
+    test-node)
+      npm ci --ignore-scripts --no-audit --no-fund
+      node_tests
+      ;;
     test-server)
       "$PY" -m ruff check .
       "$PY" -m pytest -q "$@"
