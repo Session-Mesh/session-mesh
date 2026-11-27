@@ -8276,9 +8276,9 @@ function restoreOldInputToEditor(pane) {
   renderReloadStatus();
 }
 function releaseDiscardedEditorDraft(target, entry = target?.entry) {
-  const pane = target?.pane;
-  if (!pane || pane.conn?.name !== target.name || pane.conn?.created !== target.created) return;
-  if (entry && entry.input === pane.inputAck && entry.lease === pane.inputLease &&
+  if (!target || !entry) return;
+  const original = target.pane.inputAcks.get(`${target.name}\0${target.created}`);
+  if (original?.input === entry.input && original.lease === entry.lease &&
       !entry.input.pendingBytes && !entry.input.incompleteHumanInput) entry.lease.release();
 }
 function retireComposeOwner(owner) {

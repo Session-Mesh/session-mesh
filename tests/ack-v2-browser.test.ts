@@ -12,6 +12,7 @@ declare const active: {
   conn: {ws: WebSocket & {announce: (cap?: object) => void; receipt: (ack: object) => void}} | null;
   inputAck: {state: string; pendingBytes: number; binding: {slot: number; generation: number} | null};
   inputLease: {dirty: boolean};
+  show: (name: string) => void;
   send: (text: string) => void;
   el: HTMLElement;
 };
@@ -482,8 +483,14 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     });
     assert.equal(await editor.inputValue(), 'RETAINED PHONE TEXT');
     assert.equal(await page.evaluate(() => active.inputLease.dirty), true);
-    await editor.fill('');
-    await page.waitForFunction(() => !active.inputLease.dirty);
+    await mesh.newShell('parked-draft-target');
+    await page.waitForFunction(() => !!find('parked-draft-target'));
+    const originalLease = await page.evaluateHandle(() => active.inputLease);
+    await page.evaluate(() => active.show('parked-draft-target'));
+    const card = page.locator('.p-input-other-draft').filter({has: page.locator('textarea')});
+    assert.equal(await card.locator('textarea').inputValue(), 'RETAINED PHONE TEXT');
+    await card.getByRole('button', {name: 'Discard input', exact: true}).click();
+    assert.equal(await originalLease.evaluate(lease => (lease as typeof lease & {releasePending: boolean}).releasePending), true);
     assert.equal(await page.evaluate(() => window.__v2Frames.filter(frame => frame.kind === 'binary').length), 0);
     await page.context().close();
   });
