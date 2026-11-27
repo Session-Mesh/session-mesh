@@ -141,7 +141,7 @@ let guide_does_not_promise_an_account_switch () =
   let guide = read_file (guide_path ()) in
   Alcotest.(check bool)
     "qualification does not grant permission to switch" true
-    (contains guide "does not grant permission to switch by itself");
+    (contains guide "Every switch requires an account change request the owner approves");
   Alcotest.(check bool)
     "names the request tool" true
     (contains guide "`session.account_switch_request`");
