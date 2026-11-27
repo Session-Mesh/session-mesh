@@ -68,11 +68,14 @@ export default function (pi) {
   const pending = new Map();
   if (!token || !Number.isInteger(port) || port < 1 || port > 65535) return;
 
-  function reportConversation(context) {
+  // Keep reports ordered within the process and after any older Pi process in
+  // the same terminal. Separate HTTP requests can arrive out of order.
+  let sequence = Math.floor(performance.timeOrigin * 1000);
+  function reportConversation(context, type) {
     const session = context.sessionManager.getSessionId?.();
     if (typeof session !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(session)) return;
-    const body = JSON.stringify({ type: "done", id: randomUUID(), at: Date.now() / 1000,
-      detail: { source: "pi", session, pid: process.pid } });
+    const body = JSON.stringify({ type, id: randomUUID(), at: Date.now() / 1000,
+      detail: { source: "pi", session, pid: process.pid, hook: "pi_activity", seq: ++sequence } });
     const req = http.request({ host: "127.0.0.1", port, agent: direct, method: "POST",
       path: "/api/event",
       headers: { Authorization: "MeshSession " + token, "Content-Type": "application/json",
@@ -186,11 +189,12 @@ export default function (pi) {
   pi.on("session_start", (_event, context) => {
     ctx = context;
     stopped = false;
-    reportConversation(context);
+    reportConversation(context, "done");
     // Without a session file no durable confirmation is possible.
     if (ctx.sessionManager.getSessionFile()) connect();
   });
-  pi.on("agent_end", (_event, context) => reportConversation(context));
+  pi.on("agent_start", (_event, context) => reportConversation(context, "working"));
+  pi.on("agent_end", (_event, context) => reportConversation(context, "done"));
   pi.on("message_end", event => {
     if (event.message.role !== "user") return;
     // Pi emits the event before appendMessage; run only after that event returns.

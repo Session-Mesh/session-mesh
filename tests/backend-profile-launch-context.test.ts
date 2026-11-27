@@ -671,6 +671,34 @@ for pid, foreground, received, source, accepted in (
   execFileSync(python, ['-I', '-c', script], {timeout: 10000});
 });
 
+test('only ordered, process-bound Pi activity can mark a named profile idle or busy', () => {
+  const script = `
+import sys
+sys.path.insert(0, ${JSON.stringify(repo)})
+import server
+
+sid = '22222222-2222-2222-2222-222222222222'
+state = server.EventState()
+def event(kind, seq, **overrides):
+    return {'type':kind, 'at':10, 'received':10,
+            'detail':{'source':'pi','pid':42,'session':sid,'hook':'pi_activity','seq':seq,**overrides}}
+
+done, working = event('done', 10), event('working', 11)
+assert state.apply('one', 'nonce', working)
+assert not state.apply('one', 'nonce', done)
+for hook, account, expected in (
+        (working, 'work', 'busy'), (event('done', 12), 'work', 'idle'),
+        (event('done', 12, pid=43), 'work', None), (event('done', 12), None, None),
+        (event('done', 12, hook='legacy'), 'work', None),
+        (event('done', True), 'work', None)):
+    agent = {'type':'pi','pid':42,'foreground':True,'started':10}
+    server._apply_reported_state([{'agent':agent,'hook':hook,'account':account,
+                                  'account_context_revision':'a'*64}])
+    assert agent.get('status') == expected, agent
+`;
+  execFileSync(python, ['-I', '-c', script], {timeout: 10000});
+});
+
 test('Pi switch preparation verifies its live overlay, profile history and provider environment', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-pi-live-profile-'));
   try {

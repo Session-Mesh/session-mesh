@@ -23,7 +23,7 @@ test('only exact, idle, revision-bound live Claude/Codex sessions expose a switc
     {agent: {...source.agent, status: 'busy'}},
     {agent: {...source.agent, foreground: false}},
     {agent: {...source.agent, pid: null}},
-    {agent: {...source.agent, type: 'pi'}}, {agent: {...source.agent, session_id: null}},
+    {agent: {...source.agent, type: 'opencode'}}, {agent: {...source.agent, session_id: null}},
     {account_context_revision: null}]) {
     assert.equal(switchSource({...source, ...changed}, true), null);
   }
@@ -35,6 +35,20 @@ test('only exact, idle, revision-bound live Claude/Codex sessions expose a switc
     'an id that also names another profile label is ambiguous in the native resolver');
   assert.equal(sameSwitchSource(switchSource(source, true)!, {...source, account: 'other'}), false);
   assert.equal(sameSwitchSource(switchSource(source, true)!, {...source, agent: {...source.agent, status: 'busy'}}), false);
+});
+
+test('Pi switches only between qualified named Pi profiles', () => {
+  const pi = {...source, agent: {...source.agent, type: 'pi'}};
+  const current = switchSource(pi, true);
+  assert.ok(current);
+  assert.equal(current.agent, 'pi');
+  assert.equal(switchSource({...pi, account: null, default_context_revision: revision}, true), null);
+  assert.equal(switchSource({...pi, agent: {...pi.agent, status: undefined}}, true), null);
+  assert.deepEqual(switchTargets(current, [
+    ...profiles, {...profiles[0]!, backend: 'pi'}, {...profiles[1]!, backend: 'pi'},
+    {...profiles[1]!, backend: 'pi', id: 'default', label: 'Default'},
+    {...profiles[1]!, backend: 'pi', id: 'legacy', label: 'Legacy', switch_qualified: false},
+  ]).map(p => p.id), ['other']);
 });
 
 test('a bound default session can offer only qualified named profiles', () => {
