@@ -13,6 +13,20 @@ import {SKIP, PROFILE_SKIP, CARRY, mesh, log, travelHome, workHome, sleep, launc
   consentPolicy, unchangedSource, ask, requested, refused, decide, launchOf,
   type Session, type Request} from './session-account-switch-fixture.ts';
 
+async function darwinAccountHome(pid: number): Promise<string> {
+  // The live fixture keeps its account's rollout open on fd 3, even after exec.
+  const deadline = performance.now() + 5000;
+  while (performance.now() < deadline) {
+    const result = spawnSync('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-d', '3', '-Fn'],
+      {encoding: 'utf8', timeout: Math.max(1, Math.ceil(deadline - performance.now()))});
+    assert.ifError(result.error);
+    const account = result.stdout.match(/^n(.+)\/sessions\/\d{4}\/\d{2}\/\d{2}\/rollout-[^/]+\.jsonl$/m);
+    if (result.status === 0 && account) return account[1];
+    await sleep(50);
+  }
+  assert.fail('the running fixture did not open its account rollout');
+}
+
 describe('account switch requests', {skip: SKIP}, () => {
   let source: Session;
 
@@ -186,7 +200,9 @@ describe('account switch requests', {skip: SKIP}, () => {
   });
 
   test('parallel native profiles isolate processes and an approved switch leaves the other sessions intact',
-    {skip: PROFILE_SKIP || (process.platform !== 'linux' ? '/proc process environment required' : false)}, async () => {
+    {skip: PROFILE_SKIP || (process.platform !== 'linux'
+      && !(process.platform === 'darwin' && process.env.MESH_TEST_DARWIN_NATIVE_SWITCH === '1')
+      ? 'bound native switching is not enabled' : false)}, async () => {
     const registry = installNativeProfiles();
     try {
       await nativeProfiles();
@@ -195,7 +211,8 @@ describe('account switch requests', {skip: SKIP}, () => {
         codexSession('native-work', 'work'), codexSession('native-travel', 'travel'), codexSession('native-default'),
       ]);
       const pidOf = (name: string) => Number(fs.readFileSync(`${log}.${name}`, 'utf8').trim());
-      const actualHome = (pid: number) => {
+      const actualHome = async (pid: number) => {
+        if (process.platform === 'darwin') return darwinAccountHome(pid);
         const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
         const homes = env.filter(item => item.startsWith('HOME='));
         const codexHomes = env.filter(item => item.startsWith('CODEX_HOME='));
@@ -203,7 +220,9 @@ describe('account switch requests', {skip: SKIP}, () => {
         assert.ok(codexHomes.length <= 1, 'the running agent exposes at most one CODEX_HOME');
         return codexHomes[0]?.slice(11) || path.join(homes[0]!.slice(5), '.codex');
       };
+      const expectedHome = (home: string) => process.platform === 'darwin' ? fs.realpathSync(home) : home;
       const awaitExec = async (pid: number) => {
+        if (process.platform === 'darwin') return;
         for (let attempt = 0; attempt < 100; attempt++) {
           try {
             // The executable path can become visible before /proc exposes the new environment.
@@ -218,11 +237,20 @@ describe('account switch requests', {skip: SKIP}, () => {
       };
       const workPid = pidOf(work.name), travelPid = pidOf(travel.name), plainPid = pidOf(plain.name);
       await Promise.all([workPid, travelPid, plainPid].map(awaitExec));
-      assert.deepEqual([actualHome(workPid), actualHome(travelPid), actualHome(plainPid)],
-        [workHome, travelHome, path.join(mesh.home, '.codex')]);
+      assert.deepEqual(await Promise.all([workPid, travelPid, plainPid].map(actualHome)),
+        [workHome, travelHome, path.join(mesh.home, '.codex')].map(expectedHome));
       const defaultAuth = path.join(mesh.home, '.codex', 'auth.json');
       fs.writeFileSync(defaultAuth, '{"fakeAccount":"default"}');
       fs.writeFileSync(path.join(workHome, 'auth.json'), '{"fakeAccount":"work-relogin"}');
+      const ttyOf = (pid: number) => {
+        const result = spawnSync('ps', ['-p', String(pid), '-o', 'tty='], {encoding: 'utf8'});
+        assert.ifError(result.error);
+        assert.equal(result.status, 0, result.stderr);
+        const tty = result.stdout.trim();
+        assert.match(tty, /^(?:pts\/\d+|ttys\w+)$/);
+        return tty;
+      };
+      const originalTty = ttyOf(workPid);
       const before = (await listed(work.name))!;
       const switched = await decide(await requested(work, 'travel'), true);
       assert.equal(switched.state, 'completed', JSON.stringify(switched));
@@ -230,12 +258,14 @@ describe('account switch requests', {skip: SKIP}, () => {
       const switchedPid = pidOf(work.name);
       assert.notEqual(switchedPid, workPid, 'the agent was relaunched');
       await awaitExec(switchedPid);
-      assert.equal(actualHome(switchedPid), travelHome);
+      assert.equal(await actualHome(switchedPid), expectedHome(travelHome));
+      assert.equal(ttyOf(switchedPid), originalTty, 'the new process keeps the original terminal');
       assert.equal((await listed(work.name))!.id, before.id);
       assert.equal(launches().findLast(fields => fields[2] === work.name)?.[4], work.token,
         'the relaunched agent keeps the session token');
       assert.deepEqual([pidOf(travel.name), pidOf(plain.name)], [travelPid, plainPid]);
-      assert.deepEqual([actualHome(travelPid), actualHome(plainPid)], [travelHome, path.join(mesh.home, '.codex')]);
+      assert.deepEqual(await Promise.all([travelPid, plainPid].map(actualHome)),
+        [travelHome, path.join(mesh.home, '.codex')].map(expectedHome));
       assert.equal(fs.readFileSync(defaultAuth, 'utf8'), '{"fakeAccount":"default"}');
       const made = await ask(plain, {action: 'restart'});
       assert.equal(made.status, 202, await made.clone().text());
@@ -246,10 +276,37 @@ describe('account switch requests', {skip: SKIP}, () => {
       const restartedPid = pidOf(plain.name);
       assert.notEqual(restartedPid, plainPid, 'restart launches a new agent');
       await awaitExec(restartedPid);
-      assert.equal(actualHome(restartedPid), path.join(mesh.home, '.codex'));
+      assert.equal(await actualHome(restartedPid), expectedHome(path.join(mesh.home, '.codex')));
       assert.equal(launches().findLast(fields => fields[2] === plain.name)?.[4], plain.token);
-      assert.equal(actualHome(switchedPid), travelHome);
-      assert.equal(actualHome(travelPid), travelHome);
+      assert.equal(await actualHome(switchedPid), expectedHome(travelHome));
+      assert.equal(await actualHome(travelPid), expectedHome(travelHome));
+
+      const newAgentPid = async (name: string, previous: number) => {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const pid = pidOf(name);
+          if (pid > 0 && pid !== previous) return pid;
+          await sleep(50);
+        }
+        assert.fail('the account switch did not start a new agent');
+      };
+      const defaultTty = ttyOf(restartedPid);
+      const movedDefault = await decide(await requested(plain, 'work'), true);
+      assert.equal(movedDefault.state, 'completed', JSON.stringify(movedDefault));
+      const namedPid = await newAgentPid(plain.name, restartedPid);
+      await awaitExec(namedPid);
+      assert.equal(await actualHome(namedPid), expectedHome(workHome));
+      assert.equal(ttyOf(namedPid), defaultTty);
+      assert.equal(launches().findLast(fields => fields[2] === plain.name)?.[4], plain.token);
+      assert.deepEqual([pidOf(work.name), pidOf(travel.name)], [switchedPid, travelPid]);
+
+      const returnedDefault = await decide(await requested(work, 'default'), true);
+      assert.equal(returnedDefault.state, 'completed', JSON.stringify(returnedDefault));
+      const returnedPid = await newAgentPid(work.name, switchedPid);
+      await awaitExec(returnedPid);
+      assert.equal(await actualHome(returnedPid), expectedHome(path.join(mesh.home, '.codex')));
+      assert.equal(ttyOf(returnedPid), originalTty);
+      assert.equal(launches().findLast(fields => fields[2] === work.name)?.[4], work.token);
+      assert.deepEqual([pidOf(plain.name), pidOf(travel.name)], [namedPid, travelPid]);
     } finally { fs.rmSync(registry); }
   });
 
@@ -352,19 +409,7 @@ describe('account switch requests', {skip: SKIP}, () => {
     const pidOf = (name: string) => Number(fs.readFileSync(`${log}.${name}`, 'utf8').trim());
     const environment = (pid: number) => fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
     const actualHome = async (pid: number) => {
-      if (process.platform === 'darwin') {
-        // The live fixture keeps its account's rollout open on fd 3, even after exec.
-        const deadline = performance.now() + 5000;
-        while (performance.now() < deadline) {
-          const result = spawnSync('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-d', '3', '-Fn'],
-            {encoding: 'utf8', timeout: Math.max(1, Math.ceil(deadline - performance.now()))});
-          assert.ifError(result.error);
-          const account = result.stdout.match(/^n(.+)\/sessions\/\d{4}\/\d{2}\/\d{2}\/rollout-[^/]+\.jsonl$/m);
-          if (result.status === 0 && account) return account[1];
-          await sleep(50);
-        }
-        assert.fail('the running fixture did not open its account rollout');
-      }
+      if (process.platform === 'darwin') return darwinAccountHome(pid);
       const env = environment(pid);
       const variable = env.find(item => item.startsWith('CODEX_HOME='));
       return variable ? variable.slice('CODEX_HOME='.length) : `${env.find(item => item.startsWith('HOME='))!.slice(5)}/.codex`;
