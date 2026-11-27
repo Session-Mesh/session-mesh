@@ -486,11 +486,16 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     await mesh.newShell('parked-draft-target');
     await page.waitForFunction(() => !!find('parked-draft-target'));
     const originalLease = await page.evaluateHandle(() => active.inputLease);
+    const frameCount = await page.evaluate(() => window.__v2Frames.length);
     await page.evaluate(() => active.show('parked-draft-target'));
     const card = page.locator('.p-input-other-draft').filter({has: page.locator('textarea')});
     assert.equal(await card.locator('textarea').inputValue(), 'RETAINED PHONE TEXT');
     await card.getByRole('button', {name: 'Discard input', exact: true}).click();
-    assert.equal(await originalLease.evaluate(lease => (lease as typeof lease & {releasePending: boolean}).releasePending), true);
+    assert.equal(await originalLease.evaluate(lease => lease.dirty), false);
+    assert.deepEqual(await page.evaluate(start => window.__v2Frames.slice(start)
+      .filter(frame => frame.kind === 'control' && new URL(frame.url).pathname.endsWith('/v2-terminal'))
+      .map(frame => JSON.parse(frame.data as string)).filter(frame => frame.t === 'h'), frameCount),
+    [{t: 'h', slot: 4, generation: 17, dirty: false}]);
     assert.equal(await page.evaluate(() => window.__v2Frames.filter(frame => frame.kind === 'binary').length), 0);
     await page.context().close();
   });
