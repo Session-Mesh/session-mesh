@@ -1388,6 +1388,9 @@ def agent_info(pid, kind):
     else:
         info = {"claude": claude_info, "codex": codex_info, "pi": pi_info, "opencode": opencode_info,
                 "gemini": gemini_info, "agy": agy_info, "vibe": vibe_info}[kind](pid)
+    # The account picker binds its observation to both PID and process start.
+    if kind in ("claude", "codex", "pi") and (started := proc_start(pid)) > 0:
+        info["started"] = started
     info["pid"] = pid
     info["argv"] = [a.decode(errors="ignore") for a in cmdline(pid)]
     return info

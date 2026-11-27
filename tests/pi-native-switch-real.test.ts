@@ -11,6 +11,7 @@ import {startTestPtyhost} from './helpers/managed-test-ptyhost.ts';
 import {nativePtyhost} from './helpers/native-ptyhost.ts';
 import {REPO, startMesh} from './mesh-server-lib.ts';
 import {attach, request, waitFor} from './ptyhost-wire-lib.ts';
+import {switchSource, switchTargets} from '../static/account-switch-picker.ts';
 
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
@@ -126,18 +127,15 @@ test(`real Pi ${initiator} switch keeps its shell and conversation`, {timeout: 9
           && session.switch_qualified === true;
       });
       const observed = await activePi();
+      const source = switchSource(observed, true);
+      assert.ok(source, 'the picker can bind its source using the real inventory');
       const profiles = await fetch(mesh.base + '/api/accounts/profiles', {headers: owner});
       assert.equal(profiles.status, 200);
       const {data} = await profiles.json();
-      const target = data.profiles.find((p: {id: string}) => p.id === 'target');
-      assert.equal(target.switch_qualified, true);
+      const targets = switchTargets(source, data.profiles);
+      assert.deepEqual(targets.map(p => p.id), ['target']);
       const route = '/api/session-actions/operator/switch';
-      const accepted = await post(route, {
-        source: {id: name, created: observed.created, agent: 'pi', account: observed.account,
-          context_revision: observed.account_context_revision, conversation: observed.agent.session_id,
-          agent_pid: observed.agent.pid, agent_started: observed.agent.started},
-        target: {id: target.id, label: target.label, context_revision: target.context_revision},
-      });
+      const accepted = await post(route, {source, target: targets[0]!});
       assert.equal(accepted.status, 202, await accepted.clone().text());
       const {request: receipt} = await accepted.json();
       await waitFor('operator Pi switch completes', 15000, async () => {
