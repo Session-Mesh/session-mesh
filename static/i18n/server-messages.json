@@ -4,6 +4,46 @@
     "key": "server.opencodeMultipleSessions"
   },
   {
+    "pattern": "^Operator switch: foreground conversation is no longer idle; nothing was stopped$",
+    "key": "server.switchNoLongerIdle"
+  },
+  {
+    "pattern": "^Unexpected switch query$",
+    "key": "server.switchUnexpectedQuery"
+  },
+  {
+    "pattern": "^Invalid switch selection$",
+    "key": "server.switchInvalidSelection"
+  },
+  {
+    "pattern": "^Native account switch unavailable$",
+    "key": "server.switchNativeUnavailable"
+  },
+  {
+    "pattern": "^Session or account changed$",
+    "key": "server.switchSessionOrAccountChanged"
+  },
+  {
+    "pattern": "^Foreground conversation unavailable or busy$",
+    "key": "server.switchForegroundUnavailable"
+  },
+  {
+    "pattern": "^Foreground process changed$",
+    "key": "server.switchForegroundChanged"
+  },
+  {
+    "pattern": "^Target profile unavailable or changed$",
+    "key": "server.switchTargetChanged"
+  },
+  {
+    "pattern": "^Switch binding changed$",
+    "key": "server.switchBindingChanged"
+  },
+  {
+    "pattern": "^Session changed before switch request$",
+    "key": "server.switchSessionChanged"
+  },
+  {
     "pattern": "^This OpenCode version is not supported by session-mesh \\(only 1\\.x and 2\\.x are\\): a conversation cannot be resumed$",
     "key": "server.opencodeUnsupportedResumeRefused"
   },
