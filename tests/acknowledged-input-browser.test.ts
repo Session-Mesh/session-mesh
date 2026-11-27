@@ -426,7 +426,11 @@ describe('acknowledged browser input against a real PTY host', {skip}, () => {
       await page.waitForFunction(() => active.inputAck?.pendingBytes === 0 && active.inputLease?.dirty);
       const entry = (await request(mesh.socketPath, {op: 'list_bound'}) as {name:string;created:number}[]).find(row => row.name === old)!;
       await page.evaluate(name => (active as any).show(name), current);
-      await page.waitForFunction(name => (active as any)?.conn?.name === name && active?.conn?.ws?.readyState === WebSocket.OPEN, current);
+      // Binding the new actor reasserts its clean lease. Finish that handshake before
+      // resetting the trace used to check the obsolete draft's Forget action.
+      await page.waitForFunction(name => (active as any)?.conn?.name === name
+        && active.inputAck?.state === 'ready' && active.inputAck.binding
+        && !active.conn?.v2AwaitingCapability, current);
       assert.deepEqual(await request(mesh.socketPath, {op: 'kill_if', name: old, created: entry.created}), {ok: true});
       await waitFor('old session gone', 10000, async () => !(await request(mesh.socketPath, {op: 'list'}) as {name:string}[]).some(row => row.name === old));
       const card = page.locator('.pane.active .p-input-other-draft');
