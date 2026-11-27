@@ -17,15 +17,19 @@ export function verifyAsset(file: string, asset: ReleaseAsset): void {
 
 export function fetchHistoricalReleases(target: string): void {
   if (!path.isAbsolute(target)) throw new Error('artifact directory must be absolute');
+  const {MESH_RELEASE_METADATA_TOKEN: token, ...curlEnv} = process.env;
+  if (token && !/^[A-Za-z0-9_]{1,1024}$/.test(token)) throw new Error('invalid release metadata token');
+  // Feed authorization through stdin so curl failures cannot print it in command arguments.
+  const config = token ? 'header = "Authorization: Bearer ' + token + '"\n' : '';
   // A fresh directory prevents an old or partial download from being reused.
   mkdirSync(target, {mode: 0o700});
   const releases: Release[] = [];
   let complete = false;
   for (let page = 1; page <= 10; page++) {
-    const raw = execFileSync('curl', [...curl, '--max-time', '60', '--max-filesize', '32000000',
+    const raw = execFileSync('curl', ['--disable', ...curl.filter(arg => arg !== '--location'), '--config', '-', '--max-time', '60', '--max-filesize', '32000000',
       '--header', 'Accept: application/vnd.github+json', '--header', 'User-Agent: session-mesh-migration-test',
       `https://api.github.com/repos/${repository}/releases?per_page=100&page=${page}`],
-      {encoding: 'utf8', maxBuffer: 32_000_000});
+      {env: curlEnv, input: config, encoding: 'utf8', maxBuffer: 32_000_000});
     const rows: unknown = JSON.parse(raw);
     if (!Array.isArray(rows) || rows.length > 100) throw new Error('invalid release page');
     releases.push(...rows as Release[]);
@@ -38,7 +42,7 @@ export function fetchHistoricalReleases(target: string): void {
     for (const item of [release.archive, release.host, release.platform, release.history]) {
       const file = path.join(dir, item.name);
       execFileSync('curl', [...curl, '--max-time', '180', '--max-filesize', String(item.size), '--output', file,
-        `https://github.com/${repository}/releases/download/${release.tag}/${item.name}`], {stdio: 'pipe'});
+        `https://github.com/${repository}/releases/download/${release.tag}/${item.name}`], {env: curlEnv, stdio: 'pipe'});
       verifyAsset(file, item);
     }
     chmodSync(path.join(dir, release.host.name), 0o700);
