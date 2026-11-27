@@ -311,18 +311,21 @@ describe('account switch requests', {skip: SKIP}, () => {
   });
 
   test('a bound Claude account switch keeps its conversation and terminal',
-    {skip: PROFILE_SKIP || (process.platform !== 'linux' && process.env.MESH_TEST_DARWIN_CLAUDE_SWITCH !== '1')}, async () => {
+    {skip: PROFILE_SKIP || (nativeCodexSwitch ? false : 'bound native switching is not enabled')}, async () => {
       const registry = installNativeProfiles();
       try {
         const content = JSON.parse(fs.readFileSync(registry, 'utf8'));
-        const history = path.join(clientClaude, 'projects');
-        fs.mkdirSync(history, {recursive: true, mode: 0o700});
-        content.profiles.push({backend: 'claude', id: 'client', label: 'Client', enabled: true,
-          roots: {config: clientClaude, history}});
+        const secondRoot = path.join(mesh.home, '.agent-accounts', 'claude-other', '.claude');
+        const roots = {default: path.join(mesh.home, '.claude'), client: clientClaude, other: secondRoot};
+        for (const id of ['client', 'other'] as const) {
+          const config = roots[id];
+          const history = path.join(config, 'projects');
+          fs.mkdirSync(history, {recursive: true, mode: 0o700});
+          content.profiles.push({backend: 'claude', id, label: id === 'client' ? 'Client' : 'Other',
+            enabled: true, roots: {config, history}});
+        }
         fs.writeFileSync(registry, JSON.stringify(content));
 
-        const session = await fixtureSession('claude', 'native-claude');
-        const launch = () => launches().findLast(fields => fields[2] === session.name)!;
         const terminal = (pid: string) => {
           const result = spawnSync('ps', ['-p', pid, '-o', 'tty='], {encoding: 'utf8'});
           assert.ifError(result.error);
@@ -331,17 +334,22 @@ describe('account switch requests', {skip: SKIP}, () => {
           assert.match(tty, /^(?:pts\/\d+|ttys\w+)$/);
           return tty;
         };
-        const first = launch();
-        const tty = terminal(first[5]!);
-        const switched = await decide(await requested(session, 'client'), true);
-        assert.equal(switched.state, 'completed', JSON.stringify(switched));
-        for (let attempt = 0; attempt < 100 && launch()[5] === first[5]; attempt++) await sleep(50);
-        const resumed = launch();
-        assert.notEqual(resumed[5], first[5]);
-        assert.deepEqual(resumed.slice(1, 5), [clientClaude, session.name, session.sid, session.token]);
-        assert.equal(terminal(resumed[5]!), tty);
-        assert.match(fs.readFileSync(path.join(history, 'test-workspace', session.sid + '.jsonl'), 'utf8'),
-          /test account transfer/);
+        for (const [from, to] of [['default', 'client'], ['client', 'other'], ['other', 'default']] as const) {
+          const session = await fixtureSession('claude', `native-claude-${from}`, from === 'default' ? undefined : from);
+          const launch = () => launches().findLast(fields => fields[2] === session.name)!;
+          const first = launch();
+          assert.equal(first[1], roots[from]);
+          const tty = terminal(first[5]!);
+          const switched = await decide(await requested(session, to), true);
+          assert.equal(switched.state, 'completed', JSON.stringify(switched));
+          for (let attempt = 0; attempt < 100 && launch()[5] === first[5]; attempt++) await sleep(50);
+          const resumed = launch();
+          assert.notEqual(resumed[5], first[5]);
+          assert.deepEqual(resumed.slice(1, 5), [roots[to], session.name, session.sid, session.token]);
+          assert.equal(terminal(resumed[5]!), tty);
+          assert.match(fs.readFileSync(path.join(roots[to], 'projects', 'test-workspace', session.sid + '.jsonl'), 'utf8'),
+            /test account transfer/);
+        }
       } finally {fs.rmSync(registry);}
     });
 

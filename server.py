@@ -6206,7 +6206,7 @@ def _with_account_labels(item):
 
 
 def _native_switch_platform_qualified(kind):
-    return NATIVE_SWITCH_QUALIFIED or (sys.platform == "darwin" and kind == "codex")
+    return NATIVE_SWITCH_QUALIFIED or (sys.platform == "darwin" and kind in ("codex", "claude"))
 
 
 def _native_switch_available(kind, raw):
