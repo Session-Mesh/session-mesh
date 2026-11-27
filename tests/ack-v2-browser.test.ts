@@ -6,10 +6,6 @@ import {TerminalMesh, skip, withoutSince} from './terminal-browser-lib.ts';
 
 declare const find: (name: string) => {created: number; provisional: boolean; pty_capabilities: string[]};
 declare const syncPanesWithListing: (observed: boolean) => void;
-declare const addPane: () => void;
-declare const closePane: (pane: unknown) => void;
-declare const setActive: (pane: unknown) => void;
-declare const panes: unknown[];
 declare const active: {
   conn: {ws: WebSocket & {announce: (cap?: object) => void; receipt: (ack: object) => void}} | null;
   inputAck: {state: string; pendingBytes: number; binding: {slot: number; generation: number} | null};
@@ -387,10 +383,9 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     await page.context().close();
   });
 
-  for (const scenario of ['desktop', 'desktop without ACK', 'phone', 'phone with a second replacement'] as const) test(`retained text from a replaced attachment opens as an editable draft without replay (${scenario})`, async () => {
+  for (const scenario of ['desktop', 'desktop without ACK', 'phone', 'phone with a second replacement'] as const) test(`retained text from a previous incarnation stays in read-only review without replay (${scenario})`, async () => {
     const phone = scenario.startsWith('phone');
     const legacy = scenario === 'desktop without ACK';
-    if (phone) await mesh.newShell('recovery-other');
     const page = await open(phone);
     if (phone) await page.locator('#btn-menu').click();
     await page.locator('#list .item[data-id="v2-terminal"]').click();
@@ -416,25 +411,15 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
       if (noAck) socket.boundAndReplay();
       else socket.announce();
     }, legacy);
+    const review = page.locator('.p-input-drafts textarea[data-previous="true"]');
+    await review.waitFor();
+    assert.equal(await review.inputValue(), 'RECOVER THIS TEXT');
+    assert.equal(await review.evaluate((field: HTMLTextAreaElement) => field.readOnly), true);
+    assert.equal(await page.locator('#dlg-compose').isVisible(), false);
     if (phone) {
       assert.equal(await page.locator('#line-text').inputValue(), 'existing draft', 'never overwrite existing text');
       await page.locator('#line-text').clear();
-      await page.waitForFunction(() => (document.querySelector('#line-text') as HTMLTextAreaElement).value === 'RECOVER THIS TEXT');
-    } else {
-      await page.locator('#dlg-compose[open]').waitFor();
-      assert.equal(await page.locator('#compose-text').inputValue(), 'RECOVER THIS TEXT');
-      await page.locator('#compose-text').fill('edited recovered text');
-      await page.locator('#dlg-compose [data-close-dialog]').click();
-      await page.locator('#dlg-compose').waitFor({state: 'hidden'});
-      await page.evaluate(() => (window as any).openCompose());
-      await page.locator('#dlg-compose[open]').waitFor();
-      assert.equal(await page.locator('#compose-text').inputValue(), 'edited recovered text', 'closing the editor preserves the draft');
-    }
-    assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1,
-      'recovery never replays the uncertain frame');
-    if (legacy) {
-      await page.context().close();
-      return;
+      assert.equal(await page.locator('#line-text').inputValue(), '', 'clearing the current editor never imports old input');
     }
     if (scenario === 'phone with a second replacement') {
       const sockets = await page.evaluate(() => window.__v2Sockets.length);
@@ -443,69 +428,34 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
       await page.waitForFunction(count => window.__v2Sockets.length > count && active?.conn?.ws?.readyState === WebSocket.OPEN, sockets);
       await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
       assert.equal(await page.locator('#line-text').inputValue(), '');
-      assert.equal(await page.locator('.p-input-other-draft textarea').inputValue(), 'RECOVER THIS TEXT');
-      assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1);
-      await page.context().close();
-      return;
+      assert.equal(await review.inputValue(), 'RECOVER THIS TEXT');
     }
-    if (!phone) {
-      await page.locator('#dlg-compose [data-close-dialog]').click();
-      const sockets = await page.evaluate(() => window.__v2Sockets.length);
-      nextCreated++;
-      await page.evaluate(() => refresh());
-      await page.waitForFunction(count => window.__v2Sockets.length > count && active?.conn?.ws?.readyState === WebSocket.OPEN, sockets);
-      await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
-      const review = page.locator('.p-input-other-draft').filter({hasText: 'v2-terminal'});
-      assert.equal(await review.locator('textarea').inputValue(), 'edited recovered text');
-      await review.getByRole('button').last().click();
-      await review.waitFor({state: 'detached'});
-    }
-    if (phone) {
-      await page.locator('#btn-menu').click();
-      await page.locator('#list .item[data-id="recovery-other"]').click();
-      await page.waitForFunction(() => active?.id === 'recovery-other');
-      assert.equal(await page.locator('#line-text').inputValue(), '', 'the recovered text stays with its session');
-      await page.locator('#line-text').fill('different session draft');
-      assert.equal(await page.locator('#line-text').inputValue(), 'different session draft');
-      assert.equal(await page.locator('.p-input-other-draft textarea').inputValue(), 'RECOVER THIS TEXT');
-      assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1,
-        'a recovered draft is not sent to a different session');
-      await page.locator('#line-text').clear();
-      await page.evaluate(() => { (window as any).__draftPane = active; addPane(); });
-      page.once('dialog', dialog => dialog.dismiss());
-      await page.evaluate(() => closePane((window as any).__draftPane));
-      assert.equal(await page.evaluate(() => panes.includes((window as any).__draftPane)), true,
-        'declining pane closure keeps its recovered draft');
-      await page.evaluate(() => setActive((window as any).__draftPane));
-      await page.locator('#btn-menu').click();
-      await page.locator('#list .item[data-id="v2-terminal"]').click();
-      await page.waitForFunction(() => active?.id === 'v2-terminal' && active.conn?.ws?.readyState === WebSocket.OPEN);
-      await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
-      await page.waitForFunction(() => (document.querySelector('#line-text') as HTMLTextAreaElement).value === 'RECOVER THIS TEXT');
-      assert.equal(await page.locator('.p-input-other-draft').count(), 0, 'the restored draft is not duplicated in the review panel');
-      await page.locator('#line-text').press('Enter');
-      await page.waitForFunction(() => window.__v2Frames.filter(f => f.kind === 'binary').length === 2);
-      const acknowledge = (seq: number) => page.evaluate(sequence => {
-        const original = (window as any).__draftPane;
-        const socket = window.__v2Sockets.find(candidate => candidate === original.conn.ws)!;
-        const {slot, generation} = original.inputAck.binding;
-        const created = Number(new URL(socket.url).searchParams.get('input_ack_created'));
-        socket.receipt({input_ack: true, seq: sequence, created, slot, generation});
-      }, seq);
-      await page.evaluate(() => setActive(panes.find(pane => pane !== (window as any).__draftPane)!));
-      await acknowledge(1);
-      await page.waitForFunction(() => window.__v2Frames.filter(f => f.kind === 'binary').length === 3);
-      await acknowledge(2);
-      await page.waitForFunction(() => !(document.querySelector('#line-text') as HTMLTextAreaElement).readOnly);
-      await page.evaluate(() => setActive((window as any).__draftPane));
-      assert.equal(await page.locator('#line-text').inputValue(), '', 'an acknowledged draft does not return after switching panes');
-      assert.equal(await page.evaluate(() => (window as any).__draftPane.recoveredLineDrafts.size), 0);
-    }
+    assert.equal(await page.evaluate(() => window.__v2Frames.filter(frame => frame.kind === 'binary').length), 1,
+      'the replacement never replays the previous input');
     await page.unrouteAll({behavior: 'wait'});
     await page.context().close();
   });
 
-  test('a logging failure keeps retained input for review without repeatedly reopening the editor', async () => {
+  test('unsent input returns to the editor after the same terminal actor reconnects', async () => {
+    const page = await open();
+    await page.locator('#list .item[data-id="v2-terminal"]').click();
+    await page.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN);
+    await page.evaluate(() => {
+      const socket = window.__v2Sockets.at(-1)!;
+      socket.announce();
+      socket.close();
+      active.send('UNSENT TEXT');
+    });
+    await page.waitForFunction(() => window.__v2Sockets.length === 2 && active?.conn?.ws?.readyState === WebSocket.OPEN);
+    await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
+    await page.locator('#dlg-compose[open]').waitFor();
+    assert.equal(await page.locator('#compose-text').inputValue(), 'UNSENT TEXT');
+    assert.equal(await page.evaluate(() => active.inputAck.pendingBytes), 0);
+    assert.equal(await page.evaluate(() => window.__v2Frames.filter(frame => frame.kind === 'binary').length), 0);
+    await page.context().close();
+  });
+
+  test('previous-incarnation text remains reviewable when the obsolete-draft log cannot be written', async () => {
     const page = await open();
     await page.locator('#list .item[data-id="v2-terminal"]').click();
     await page.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN);
@@ -530,9 +480,10 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     await page.evaluate(() => refresh());
     await page.waitForFunction(() => window.__v2Sockets.length >= 2 && active?.conn?.ws?.readyState === WebSocket.OPEN);
     await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
-    await page.waitForFunction(() => [...active.inputAcks.values()].some((entry: any) => entry.recoveryBlocked));
+    const review = page.locator('.p-input-drafts textarea[data-previous="true"]');
+    await review.waitFor();
+    assert.equal(await review.inputValue(), 'KEEP THIS TEXT');
     assert.equal(await page.locator('#dlg-compose').isVisible(), false);
-    assert.equal(await page.locator('.p-input-drafts textarea').inputValue(), 'KEEP THIS TEXT');
     assert.equal(await page.evaluate(() => window.__v2Frames.filter(f => f.kind === 'binary').length), 1);
     await page.unrouteAll({behavior: 'wait'});
     await page.context().close();
