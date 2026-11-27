@@ -49,16 +49,18 @@ test('suspending a recovered composer transfers its edited draft exactly once', 
   await harness(async (page) => {
     assert.equal(await page.evaluate(() => openCompose('recovered draft')), true);
     const saved = await page.evaluate(() => {
-      active.recoveredComposeDraft = {name: active.conn.name, created: active.conn.created, text: ctext.value};
+      const entry = {};
+      active.recoveredComposeDraft = {name: active.conn.name, created: active.conn.created, text: ctext.value, entry};
       active.recoveredComposeOwner = composeOwner;
       ctext.value = 'edited recovered draft';
       window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}));
       return {
         drafts: composeRecovery.map(record => record.text),
+        retainsEntry: composeRecovery[0].entry === entry,
         paneDraft: active.recoveredComposeDraft,
         paneOwner: active.recoveredComposeOwner,
       };
     });
-    assert.deepEqual(saved, {drafts: ['edited recovered draft'], paneDraft: null, paneOwner: null});
+    assert.deepEqual(saved, {drafts: ['edited recovered draft'], retainsEntry: true, paneDraft: null, paneOwner: null});
   }, false, 'en');
 });

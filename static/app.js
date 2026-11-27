@@ -1167,7 +1167,8 @@ class Pane {
     }
     const otherContainer = $(".p-input-other-drafts", container);
     const otherState = JSON.stringify([other.map(([key, entry]) =>
-      [key, entry.input.pendingBytes, entry.input.pendingHumanBytes, entry.input.deliveryUncertain, entry.input.retainedText, !!entry.lease?.dirty]), saved]);
+      [key, entry.input.pendingBytes, entry.input.pendingHumanBytes, entry.input.deliveryUncertain, entry.input.retainedText, !!entry.lease?.dirty]),
+      saved.map(([key, draft]) => [key, draft.text])]);
     if (this.otherDraftsState !== otherState || this.otherDraftsCompose !== savedCompose || !this.otherDraftsEntries ||
         other.some(([key, entry], i) => this.otherDraftsEntries[i]?.[0] !== key || this.otherDraftsEntries[i]?.[1] !== entry)) {
       this.otherDraftsState = otherState;
@@ -1230,15 +1231,18 @@ class Pane {
         }
         otherContainer.append(card);
       }
-      const reviewDrafts = saved.map(([key, value]) => ({
-        name: key.split("\0", 1)[0], value,
-        matches: () => this.recoveredLineDrafts.get(key) === value,
-        discard: () => this.recoveredLineDrafts.delete(key),
+      const reviewDrafts = saved.map(([key, draft]) => ({
+        name: draft.name, value: draft.text,
+        matches: () => this.recoveredLineDrafts.get(key) === draft,
+        discard: () => { releaseDiscardedEditorDraft(draft); this.recoveredLineDrafts.delete(key); },
       }));
       if (savedCompose) reviewDrafts.push({
         name: savedCompose.name, value: savedCompose.text,
         matches: () => this.recoveredComposeDraft === savedCompose && !this.recoveredComposeOwner,
-        discard: () => { this.recoveredComposeDraft = null; },
+        discard: () => {
+          releaseDiscardedEditorDraft({pane: this, ...savedCompose});
+          this.recoveredComposeDraft = null;
+        },
       });
       for (const {name, value, matches, discard: removeDraft} of reviewDrafts) {
         const card = document.createElement("section"); card.className = "p-input-other-draft";
@@ -7675,7 +7679,8 @@ function saveRecoveredLine() {
   if (!target) return;
   const key = `${target.name}\0${target.created}`;
   // Once submitted, the pending operation or its recovery result owns the text.
-  if (line.value && !linePending?.operation && !lineRecovery) target.pane.recoveredLineDrafts.set(key, line.value);
+  if (line.value && !linePending?.operation && !lineRecovery)
+    target.pane.recoveredLineDrafts.set(key, {...target, text: line.value});
   else target.pane.recoveredLineDrafts.delete(key);
   line.value = ""; recoveredLineTarget = null; fitLine();
 }
@@ -7685,8 +7690,8 @@ function restoreSavedLine(pane) {
       lineDirect || linePending || lineRecovery || $("#line").hidden) return;
   const key = `${c.name}\0${c.created}`, saved = pane.recoveredLineDrafts.get(key);
   if (!saved) return;
-  line.value = saved; pane.recoveredLineDrafts.delete(key);
-  recoveredLineTarget = {pane, name: c.name, created: c.created};
+  line.value = saved.text; pane.recoveredLineDrafts.delete(key);
+  recoveredLineTarget = saved;
   fitLine(); pane.renderRetainedInput(); renderReloadStatus();
 }
 function renderLineStatus() {
@@ -8153,6 +8158,7 @@ function renderComposeRecovery(record) {
   discard.addEventListener("click", () => {
     const index = composeRecovery.indexOf(record);
     if (index < 0) return;
+    releaseDiscardedEditorDraft(record.target, record.entry);
     composeRecovery.splice(index, 1); renderComposeStatus();
   });
   const transfer = document.createElement("button");
@@ -8161,6 +8167,12 @@ function renderComposeRecovery(record) {
     if (!composeRecovery.includes(record)) return;
     if (!confirm(t("compose.recovery.newDraftConfirm"))) return;
     if (!openCompose(record.text, true)) return;
+    const {pane, name, created} = composeOwner.target;
+    if (record.entry && pane === record.target.pane &&
+        name === record.target.name && created === record.target.created) {
+      pane.recoveredComposeDraft = {name, created, text: record.text, entry: record.entry};
+      pane.recoveredComposeOwner = composeOwner;
+    } else releaseDiscardedEditorDraft(record.target, record.entry);
     composeRecovery.splice(composeRecovery.indexOf(record), 1);
     renderComposeStatus();
   });
@@ -9833,10 +9845,12 @@ window.addEventListener("pageshow", (event) => {if (event.persisted) void resume
 document.addEventListener("focusin", () => { meshCacheFocusRevision++; });
 function retirePageInput(preserveDraft = false) {
   if (preserveDraft && composeOwner?.open && !composeOwner.pending && cdlg.open && ctext.value) {
-    composeRecovery.push({target: composeOwner.target, text: ctext.value,
-      result: {kind: "refused", frames: 0, wireBytes: 0, reason: t("compose.recovery.pageSuspended")}});
     const pane = composeOwner.target.pane;
-    if (pane.recoveredComposeOwner === composeOwner) pane.recoveredComposeDraft = null;
+    const draft = pane.recoveredComposeOwner === composeOwner ? pane.recoveredComposeDraft : null;
+    composeRecovery.push({target: composeOwner.target, text: ctext.value,
+      ...(draft?.entry ? {entry: draft.entry} : {}),
+      result: {kind: "refused", frames: 0, wireBytes: 0, reason: t("compose.recovery.pageSuspended")}});
+    if (draft) pane.recoveredComposeDraft = null;
   }
   endDirectLine();
   if (capActive && !capActive.file) resetCapture(capActive);

@@ -6,6 +6,8 @@ import {TerminalMesh, skip, withoutSince} from './terminal-browser-lib.ts';
 
 declare const find: (name: string) => {created: number; provisional: boolean; pty_capabilities: string[]};
 declare const syncPanesWithListing: (observed: boolean) => void;
+declare function saveRecoveredLine(): void;
+declare function restoreSavedLine(pane: typeof active): void;
 declare const active: {
   conn: {ws: WebSocket & {announce: (cap?: object) => void; receipt: (ack: object) => void}} | null;
   inputAck: {state: string; pendingBytes: number; binding: {slot: number; generation: number} | null};
@@ -456,6 +458,33 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     await page.locator('#compose-text').fill('');
     await page.evaluate(() => document.querySelector<HTMLDialogElement>('#dlg-compose')!.close());
     await page.waitForFunction(() => !active.inputLease.dirty);
+    await page.context().close();
+  });
+
+  test('discarding recovered phone text releases its hold after a storage round trip', async () => {
+    const page = await open(true);
+    await page.locator('#btn-menu').click();
+    await page.locator('#list .item[data-id="v2-terminal"]').click();
+    await page.waitForFunction(() => active?.conn?.ws?.readyState === WebSocket.OPEN);
+    await page.evaluate(() => {
+      const socket = window.__v2Sockets.at(-1)!;
+      socket.announce();
+      socket.close();
+      active.send('RETAINED PHONE TEXT');
+    });
+    await page.waitForFunction(() => window.__v2Sockets.length === 2 && active?.conn?.ws?.readyState === WebSocket.OPEN);
+    await page.evaluate(() => window.__v2Sockets.at(-1)!.announce());
+    const editor = page.locator('#line-text');
+    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#line-text')!.value === 'RETAINED PHONE TEXT');
+    await page.evaluate(() => {
+      saveRecoveredLine();
+      restoreSavedLine(active);
+    });
+    assert.equal(await editor.inputValue(), 'RETAINED PHONE TEXT');
+    assert.equal(await page.evaluate(() => active.inputLease.dirty), true);
+    await editor.fill('');
+    await page.waitForFunction(() => !active.inputLease.dirty);
+    assert.equal(await page.evaluate(() => window.__v2Frames.filter(frame => frame.kind === 'binary').length), 0);
     await page.context().close();
   });
 
