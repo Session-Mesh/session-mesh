@@ -125,6 +125,42 @@ def test_server_binds_default_to_observed_agent(monkeypatch):
     with pytest.raises(web.HTTPConflict):
         asyncio.run(server._switch_profile_context("default", "codex", observed_agent={**observed, "foreground": False}))
 
+@pytest.mark.parametrize("case", ["default_home", "wrong_terminal", "named_mismatch", "invalid_reply"])
+def test_darwin_account_confirmation_is_bound_to_the_original_terminal(monkeypatch, case):
+    calls = []
+    observed = {"type": "codex", "pid": 42, "foreground": True}
+    source = {"pid": 40}
+
+    async def host(message):
+        assert message == {"op": "processes", "pids": [42]}
+        return {"version": 1, "complete": True, "errors": [],
+                "processes": [{"pid": 42, "sid": 41 if case == "wrong_terminal" else 40, "incarnation": "1234"}]}
+
+    async def accounts(*args, request):
+        assert args == ("confirm-environment", "42", "1234")
+        calls.append(request)
+        return {"matches": "true" if case == "invalid_reply" else request["key"] == "HOME"}
+
+    monkeypatch.setattr(server, "host", host)
+    monkeypatch.setattr(server, "_accounts_program", accounts)
+
+    async def observe():
+        return await server._darwin_switch_observation(source, observed, "codex", "/tmp/account/.codex",
+                                                       default_home=None if case == "named_mismatch" else "/tmp/account")
+
+    if case != "default_home":
+        error = web.HTTPConflict if case == "wrong_terminal" else accountswitch.UnboundDefault
+        with pytest.raises(error):
+            asyncio.run(observe())
+        assert [request["key"] for request in calls] == ([] if case == "wrong_terminal" else ["CODEX_HOME"])
+        return
+    assert asyncio.run(observe()) == {"process_pid": 42, "process_start": "1234"}
+    assert [(request["key"], request["expected"]) for request in calls] == [
+        ("CODEX_HOME", "/tmp/account/.codex"), ("HOME", "/tmp/account")]
+    assert "CODEX_HOME" in calls[1]["unset"]
+    assert "OPENAI_API_KEY" in calls[0]["unset"] and "OPENAI_API_KEY" in calls[1]["unset"]
+
+
 
 def test_approved_native_switch_does_not_fall_back_when_registry_disappears(monkeypatch):
     events = []

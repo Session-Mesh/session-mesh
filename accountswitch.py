@@ -22,6 +22,13 @@ _OVERRIDES = {
 }
 
 
+def profile_environment_keys(kind):
+    """Return the environment variable for the account root and conflicting overrides."""
+    if kind not in _KINDS:
+        raise UnboundDefault("Agent process is unavailable")
+    return _KINDS[kind][0], _OVERRIDES[kind]
+
+
 def default_context(kind, environ):
     """Return only the root and its interoperable carry revision, or fail closed."""
     if kind not in _KINDS or any(environ.get(name) for name in _OVERRIDES[kind]):

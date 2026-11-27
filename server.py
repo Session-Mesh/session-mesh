@@ -494,15 +494,17 @@ def _accounts_signature():
     return (custody, *signatures)
 
 
-async def _accounts_program(*args, timeout=10, env=None, program=None):
+async def _accounts_program(*args, timeout=10, env=None, program=None, request=None):
     """The JSON answer of `mesh-platform accounts ARGS`; AccountsUnavailable on any refusal."""
     program, proc = program or work_command("mesh-platform"), None
     if not program:
         raise AccountsUnavailable("mesh-platform not found", code="helper-unavailable")
     try:
         proc = await asyncio.create_subprocess_exec(program, "accounts", *args, env=env or work_child_env(),
+                                                    stdin=asyncio.subprocess.PIPE if request is not None else None,
                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+        payload = json.dumps(request).encode() if request is not None else None
+        out, _ = await asyncio.wait_for(proc.communicate(payload), timeout)
         answer = json.loads(out)
     except (OSError, asyncio.TimeoutError) as exc:
         raise AccountsUnavailable(repr(exc), code="helper-unavailable") from exc
@@ -861,7 +863,33 @@ async def _profile_launch_context(account, agent, expected_revision=None):
         raise web.HTTPBadRequest(text=ACCOUNT_REFUSED) from exc
 
 
-async def _switch_profile_context(account, agent, expected_revision=None, observed_agent=None):
+async def _darwin_switch_observation(source, observed, agent, expected_root, *, default_home=None):
+    """Confirm a known account directory without exporting the process environment."""
+    if source is None:
+        raise accountswitch.UnboundDefault("Session identity is unavailable")
+    identity = await _foreground_process_identity(source, observed)
+    pid, incarnation = identity["agent_pid"], identity["agent_incarnation"]
+    variable, overrides = accountswitch.profile_environment_keys(agent)
+
+    async def matches(key, expected, unset):
+        reply = await _accounts_program("confirm-environment", str(pid), incarnation,
+                                        request={"key": key, "expected": expected, "unset": sorted(unset)})
+        if set(reply) != {"matches"} or type(reply["matches"]) is not bool:
+            raise accountswitch.UnboundDefault("Invalid profile confirmation")
+        return reply["matches"]
+
+    try:
+        confirmed = await matches(variable, expected_root, overrides)
+        if not confirmed and default_home is not None:
+            confirmed = await matches("HOME", default_home, {*overrides, variable})
+    except AccountsUnavailable as exc:
+        raise accountswitch.UnboundDefault("Agent environment is unavailable") from exc
+    if not confirmed:
+        raise accountswitch.UnboundDefault("Agent account folder differs from the recorded profile")
+    return {"process_pid": pid, "process_start": incarnation}
+
+
+async def _switch_profile_context(account, agent, expected_revision=None, observed_agent=None, source=None):
     """Resolve the exact native or observed default account for a pending switch.
 
     The default source must be the independently described foreground agent. The
@@ -895,7 +923,19 @@ async def _switch_profile_context(account, agent, expected_revision=None, observ
         if observed_agent is not None:
             if observed_agent.get("type") != agent or observed_agent.get("foreground") is not True:
                 raise accountswitch.UnboundDefault("Agent is not the foreground process")
-            selected = await asyncio.to_thread(accountswitch.process_default_context, agent, observed_agent.get("pid"))
+            if sys.platform == "darwin" and NATIVE_SWITCH_QUALIFIED:
+                if account != DEFAULT_ACCOUNT["id"]:
+                    context = await _profile_launch_context(account, agent, expected_revision)
+                    binding = await _darwin_switch_observation(source, observed_agent, agent, context["roots"]["config"])
+                    return {**context, **binding}
+                selected = accountswitch.default_context(agent, os.environ)
+                variable, _ = accountswitch.profile_environment_keys(agent)
+                fallback_home = os.environ.get("HOME") if not os.environ.get(variable) else None
+                binding = await _darwin_switch_observation(source, observed_agent, agent, selected["root"],
+                                                          default_home=fallback_home)
+                selected.update(binding)
+            else:
+                selected = await asyncio.to_thread(accountswitch.process_default_context, agent, observed_agent.get("pid"))
         if account != DEFAULT_ACCOUNT["id"]:
             context = await _profile_launch_context(account, agent, expected_revision)
             if selected is not None:
@@ -931,7 +971,7 @@ async def _validate_native_switch(source, kind, source_context, target_context):
     identity = {"id": source["name"], "created": source["created"], "agent": kind}
     if _switch_conversation(described, identity) != source_context["conversation"]:
         raise web.HTTPConflict(text="Conversation changed since the request; nothing was stopped")
-    actual = await _switch_profile_context(source_context["id"], kind, source_context["context_revision"], observed)
+    actual = await _switch_profile_context(source_context["id"], kind, source_context["context_revision"], observed, source)
     if (actual["process_pid"], actual["process_start"]) != (source_context["process_pid"], source_context["process_start"]):
         raise web.HTTPConflict(text="Foreground agent changed; nothing was stopped")
     await _switch_profile_context(target_context["id"], kind, target_context["context_revision"])
@@ -1458,7 +1498,7 @@ async def _restart_profile_context(source, account, known_agent, switch):
         described = await asyncio.to_thread(_describe_with_hooks, [source], False)
         entry = next((item for item in described["mesh"] if item.get("id") == source.get("name")
                       and item.get("created") == source.get("created")), None)
-        return await _switch_profile_context("default", known_agent, revision, (entry or {}).get("agent") or {})
+        return await _switch_profile_context("default", known_agent, revision, (entry or {}).get("agent") or {}, source)
     if not account or not native:
         return None
     if not _accounts_digest(revision):
@@ -1766,7 +1806,7 @@ def _relaunches_bound_in_place(source):
             and "agent_relaunch_bound_v1" in capabilities)
 
 
-async def _settings_process_binding(source, agent):
+async def _foreground_process_identity(source, agent):
     """Bind the checked foreground PID to the host's own process incarnation."""
     pid = agent.get("pid") if isinstance(agent, dict) else None
     if type(pid) is not int or pid <= 0 or agent.get("foreground") is not True:
@@ -1782,10 +1822,15 @@ async def _settings_process_binding(source, agent):
     incarnation = rows[0].get("incarnation")
     if not isinstance(incarnation, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", incarnation) or int(incarnation) > 2**63 - 1:
         raise web.HTTPConflict(text="The agent process identity is unavailable; nothing was stopped")
+    return {"agent_pid": pid, "agent_incarnation": incarnation}
+
+
+async def _settings_process_binding(source, agent):
+    identity = await _foreground_process_identity(source, agent)
     input_at = source.get("last_input")
     if not _finite_number(input_at):
         raise web.HTTPConflict(text="The agent process identity is unavailable; nothing was stopped")
-    return {"agent_pid": pid, "agent_incarnation": incarnation, "agent_input_at": input_at}
+    return {**identity, "agent_input_at": input_at}
 
 
 async def relaunch_in_place(source, cwd, command, agent, known_agent, account=None, switch=None, *, settings_guard=None, settings_binding=None):
@@ -5841,7 +5886,7 @@ async def _switch_request(source, body):
         source_revision = (raw.get("meta") or {}).get("account_context_revision")
         if current != DEFAULT_ACCOUNT["id"] and not _accounts_digest(source_revision):
             raise web.HTTPConflict(text="Account profile context unknown; nothing was stopped")
-        source_context = await _switch_profile_context(current, kind, source_revision, observed)
+        source_context = await _switch_profile_context(current, kind, source_revision, observed, raw)
         target_context = await _switch_profile_context(target["id"], kind)
         binding = {"backend": kind, "conversation": sid, "agent_pid": source_context["process_pid"],
                    "agent_start": source_context["process_start"],
@@ -6062,7 +6107,7 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
         if conversation != binding["conversation"]:
             raise web.HTTPConflict(text="Conversation changed since the request; nothing was stopped")
         source_context = await _switch_profile_context(item["from_account"], kind,
-                                                       binding["source"]["context_revision"], observed_agent or {})
+                                                       binding["source"]["context_revision"], observed_agent or {}, raw)
         if (source_context["process_pid"], source_context["process_start"]) != (binding["agent_pid"], binding["agent_start"]):
             raise web.HTTPConflict(text="Foreground agent changed since the request; nothing was stopped")
         source_context["conversation"] = binding["conversation"]
