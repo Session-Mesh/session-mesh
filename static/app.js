@@ -3033,6 +3033,10 @@ class Pane {
         releaseDiscardedEditorDraft({pane: this, ...draft});
       }
     }
+    for (const {target, entry} of composeRecovery) {
+      if (target.pane === this && target.name === this.conn.name && target.created === this.conn.created)
+        releaseDiscardedEditorDraft(target, entry);
+    }
     this.limitedBanner.hidden = true;
     this.limitedKeyboard.hidden = true;
     if (touch) this.term.textarea.setAttribute("inputmode", "none");
@@ -8295,7 +8299,7 @@ function restoreOldInputToEditor(pane) {
 function releaseDiscardedEditorDraft(target, entry = target?.entry) {
   if (!target || !entry) return;
   const original = target.pane.inputAcks.get(`${target.name}\0${target.created}`);
-  if (original?.input === entry.input && original.lease === entry.lease &&
+  if (original && entry.input && original.input === entry.input && original.lease === entry.lease &&
       !entry.input.pendingBytes && !entry.input.incompleteHumanInput) entry.lease.release();
 }
 function retireComposeOwner(owner) {
