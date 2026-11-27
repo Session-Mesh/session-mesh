@@ -44,3 +44,21 @@ test('a cached unsent composer draft remains reviewable without retaining its ol
     {text: 'draft sample', open: true, recovery: 0, target: 'B', reused: false});
   }, false, 'en');
 });
+
+test('suspending a recovered composer transfers its edited draft exactly once', async () => {
+  await harness(async (page) => {
+    assert.equal(await page.evaluate(() => openCompose('recovered draft')), true);
+    const saved = await page.evaluate(() => {
+      active.recoveredComposeDraft = {name: active.conn.name, created: active.conn.created, text: ctext.value};
+      active.recoveredComposeOwner = composeOwner;
+      ctext.value = 'edited recovered draft';
+      window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}));
+      return {
+        drafts: composeRecovery.map(record => record.text),
+        paneDraft: active.recoveredComposeDraft,
+        paneOwner: active.recoveredComposeOwner,
+      };
+    });
+    assert.deepEqual(saved, {drafts: ['edited recovered draft'], paneDraft: null, paneOwner: null});
+  }, false, 'en');
+});

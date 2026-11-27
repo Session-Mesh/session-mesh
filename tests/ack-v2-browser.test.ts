@@ -451,7 +451,11 @@ describe('v2 ACK browser binding against a fake bridge and real Chromium', {skip
     await page.locator('#dlg-compose[open]').waitFor();
     assert.equal(await page.locator('#compose-text').inputValue(), 'UNSENT TEXT');
     assert.equal(await page.evaluate(() => active.inputAck.pendingBytes), 0);
+    assert.equal(await page.evaluate(() => active.inputLease.dirty), true);
     assert.equal(await page.evaluate(() => window.__v2Frames.filter(frame => frame.kind === 'binary').length), 0);
+    await page.locator('#compose-text').fill('');
+    await page.evaluate(() => document.querySelector<HTMLDialogElement>('#dlg-compose')!.close());
+    await page.waitForFunction(() => !active.inputLease.dirty);
     await page.context().close();
   });
 

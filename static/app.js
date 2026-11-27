@@ -8046,7 +8046,11 @@ function directBackspace() {   // the field is empty, so the key would do nothin
 }
 $("#line").addEventListener("submit", (e) => { e.preventDefault(); enterLine(); line.focus(); });
 line.addEventListener("input", () => {
-  if (!line.value) { recoveredLineTarget = null; active?.renderRetainedInput(); }
+  if (!line.value) {
+    releaseDiscardedEditorDraft(recoveredLineTarget);
+    recoveredLineTarget = null;
+    active?.renderRetainedInput();
+  }
 });
 line.addEventListener("keydown", (e) => {
   if (e.isComposing) return;
@@ -8247,18 +8251,23 @@ function restoreOldInputToEditor(pane) {
   if (touch) {
     if (line.value || recoveredLineTarget || $("#line").hidden) return;
     line.value = text;
-    recoveredLineTarget = { pane, name: c.name, created: c.created };
+    recoveredLineTarget = { pane, name: c.name, created: c.created, entry };
     fitLine();
   } else {
     if (cdlg.open || composeRecovery.length || pickerGate.pending || pane.recoveredComposeDraft) return;
     if (!openCompose(text, true)) return;
-    pane.recoveredComposeDraft = { name: c.name, created: c.created, text };
+    pane.recoveredComposeDraft = { name: c.name, created: c.created, text, entry };
     pane.recoveredComposeOwner = composeOwner;
   }
   entry.input.discard();
-  entry.lease.release();
   pane.renderRetainedInput();
   renderReloadStatus();
+}
+function releaseDiscardedEditorDraft(target, entry = target?.entry) {
+  const pane = target?.pane;
+  if (!pane || pane.conn?.name !== target.name || pane.conn?.created !== target.created) return;
+  if (entry && entry.input === pane.inputAck && entry.lease === pane.inputLease &&
+      !entry.input.pendingBytes && !entry.input.incompleteHumanInput) entry.lease.release();
 }
 function retireComposeOwner(owner) {
   if (!owner) return;
@@ -8267,7 +8276,10 @@ function retireComposeOwner(owner) {
   const pane = owner.target.pane;
   if (pane.recoveredComposeOwner === owner) {
     if (pane.recoveredComposeDraft) pane.recoveredComposeDraft.text = ctext.value;
-    if (!ctext.value) pane.recoveredComposeDraft = null;
+    if (!ctext.value) {
+      releaseDiscardedEditorDraft(owner.target, pane.recoveredComposeDraft?.entry);
+      pane.recoveredComposeDraft = null;
+    }
     pane.recoveredComposeOwner = null;
   }
   composeOwner = null; ctext.value = ""; renderComposeStatus();
@@ -9823,6 +9835,8 @@ function retirePageInput(preserveDraft = false) {
   if (preserveDraft && composeOwner?.open && !composeOwner.pending && cdlg.open && ctext.value) {
     composeRecovery.push({target: composeOwner.target, text: ctext.value,
       result: {kind: "refused", frames: 0, wireBytes: 0, reason: t("compose.recovery.pageSuspended")}});
+    const pane = composeOwner.target.pane;
+    if (pane.recoveredComposeOwner === composeOwner) pane.recoveredComposeDraft = null;
   }
   endDirectLine();
   if (capActive && !capActive.file) resetCapture(capActive);
