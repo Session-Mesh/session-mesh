@@ -24,7 +24,13 @@ process.stdout.write=function(part){if(String(part).startsWith('{"socket":'))fs.
 http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
  log({event:'request',path:req.url});
  const rule=fs.existsSync(control)?JSON.parse(fs.readFileSync(control,'utf8')):null;
- if(rule&&rule.paths.some(path=>path.endsWith('*')?req.url.startsWith(path.slice(0,-1)):path===req.url)){const end=res.end;res.end=function(...args){
+ if(rule&&rule.paths.some(path=>path.endsWith('*')?req.url.startsWith(path.slice(0,-1)):path===req.url)){
+  if(rule.mode==='drop'){
+   log({event:'held',path:req.url});
+   const timer=setInterval(()=>{if(fs.existsSync(release)){clearInterval(timer);req.socket.destroy();}},5);
+   return;
+  }
+  const end=res.end;res.end=function(...args){
   const body=JSON.parse(args[0]);log({event:'held',path:req.url,job:body.job?.job_id??body.job_id});
   const timer=setInterval(()=>{if(fs.existsSync(release)){clearInterval(timer);end.apply(res,args);}},5);return res;
  };}return listener(req,res);
@@ -36,8 +42,34 @@ http.createServer=function(options,listener){return create.call(this,options,(re
    const events=():{event:string;path:string;job?:string}[]=>fs.existsSync(trace)?fs.readFileSync(trace,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[];
    const pauseRoutes=(paths:string[])=>fs.writeFileSync(control,JSON.stringify({paths}));
    const identity=()=>JSON.parse(fs.readFileSync(bootstrap,'utf8')) as {socket:string;pid:number};
-   return {f,events,pause:(route:string)=>pauseRoutes([route]),pauseRoutes,release:()=>fs.writeFileSync(release,'go'),clearTrace:()=>fs.writeFileSync(trace,''),socket:()=>identity().socket,identity};
+   return {f,events,pause:(route:string)=>pauseRoutes([route]),pauseRoutes,
+     drop:(route:string)=>fs.writeFileSync(control,JSON.stringify({paths:[route],mode:'drop'})),
+     release:()=>fs.writeFileSync(release,'go'),clearTrace:()=>fs.writeFileSync(trace,''),
+     socket:()=>identity().socket,identity};
 }
+
+for (const revoked of [true, false]) test(
+  `private transport failure ${revoked ? 'after cookie revocation returns 401' : 'without revocation returns 503'}`,
+  async t => {
+    const c = await controlled(t), f = c.f;
+    const login = await f.call(`/login?token=${encodeURIComponent(f.token)}`);
+    const cookie = login.headers['set-cookie']![0]!.split(';')[0]!;
+    c.drop('/api/transcribe');
+    const pending = f.call('/api/transcribe', 'POST', {Cookie:cookie, ...identityHeaders()}, 'synthetic audio');
+    void pending.catch(() => {});
+    await until(() => c.events().some(event => event.event === 'held' && event.path === '/api/transcribe'));
+    if (revoked) {
+      assert.equal((await f.call('/api/logout-all', 'POST', f.auth)).status, 200);
+    }
+    c.release();
+    const response = await pending;
+    assert.equal(response.status, revoked ? 401 : 503, JSON.stringify(response.body));
+    assert.equal(f.upstreamCalls, 0);
+    assert.equal(c.events().filter(event => event.event === 'request' &&
+      event.path.startsWith('/internal/commit/')).length, 0);
+    assert.doesNotMatch(JSON.stringify(response.body), /synthetic audio|job_id|preparation/);
+  },
+);
 
 for(const mode of ['initial liveness','preparation reply','final liveness','commit reply'] as const)
 for(const credential of ['cookie','master'] as const)test(`HTTP admission rechecks ${credential} generation after ${mode}`,async t=>{
