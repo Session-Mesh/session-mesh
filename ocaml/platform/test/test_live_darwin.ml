@@ -79,22 +79,30 @@ let test_child_environment () =
   let key = "MESH_TEST_PROFILE_ROOT" and expected = "/tmp/test-profile" in
   let executable = Unix.realpath Sys.executable_name in
   let argv = [| executable; "--environment-fixture" |] in
-  with_child ~env:[| key ^ "=" ^ expected |] executable argv
+  with_child
+    ~env:[| key ^ "=" ^ expected; "MESH_TEST_OVERRIDE=present"; "MESH_TEST_EMPTY=" |]
+    executable argv
     (fun child ->
       wait_for "exec test fixture" (fun () ->
           match command_line child with
           | Ok arguments when arguments = Array.to_list argv -> Some ()
           | _ -> None);
       let { incarnation; _ } = ok_or_fail "child" (process child) in
-      let matches ~incarnation ~expected =
-        darwin_process_environment_matches child ~incarnation ~key ~expected
+      let matches ?unset ~incarnation expected =
+        darwin_process_environment_matches ?unset child ~incarnation ~key ~expected
       in
       Alcotest.(check bool) "expected profile" true
-        (ok_or_fail "match" (matches ~incarnation ~expected));
+        (ok_or_fail "match" (matches ~incarnation expected));
       Alcotest.(check bool) "different profile" false
-        (ok_or_fail "mismatch" (matches ~incarnation ~expected:"/tmp/other"));
+        (ok_or_fail "mismatch" (matches ~incarnation "/tmp/other"));
+      Alcotest.(check bool) "present override refuses profile" false
+        (ok_or_fail "override"
+           (matches ~unset:[ "MESH_TEST_OVERRIDE" ] ~incarnation expected));
+      Alcotest.(check bool) "empty and absent overrides allow profile" true
+        (ok_or_fail "no override"
+           (matches ~unset:[ "MESH_TEST_EMPTY"; "MESH_TEST_ABSENT" ] ~incarnation expected));
       check_error "wrong incarnation" Not_found
-        (matches ~incarnation:(Int64.succ incarnation) ~expected))
+        (matches ~incarnation:(Int64.succ incarnation) expected))
 
 let test_working_directory_self () =
   Alcotest.(check string)
