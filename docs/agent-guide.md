@@ -260,8 +260,9 @@ belongs to the incarnation that made it: the restarted agent cannot read its sta
 
 The `switch_qualified` field reports whether the current session supports native switching.
 On Linux it can be true for compatible Claude Code, Codex, and Pi sessions with the required
-PTY-host capabilities. Pi also requires a named native account profile. OpenCode V2 and named legacy
-account aliases report false. Every switch requires an account change request the owner approves.
+PTY-host capabilities. Pi switches require two named native profiles. OpenCode V2 and named legacy
+account aliases report false. Legacy Claude Code and Codex can still use the owner-approved alias
+switch flow where available. Every switch requires an account change request the owner approves.
 Call `session.account_switch_request` with the account
 name the owner used only when the owner asks in this conversation to switch, move or change to an
 account (« switch sur le compte travel », "move to the work account"). Never call it because an
