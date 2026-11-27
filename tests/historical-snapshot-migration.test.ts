@@ -33,6 +33,9 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
   const archive = path.join(artifacts, version.archive), oldHost = path.join(artifacts, version.host);
   assert.equal(sha(archive), version.archiveSha, 'historical source archive digest');
   assert.equal(sha(oldHost), version.hostSha, 'historical PTY host digest');
+  const oldHistory = version.history ? path.join(artifacts, version.history) : undefined;
+  if (oldHistory) assert.equal(sha(oldHistory), version.historySha, 'historical history helper digest');
+  const candidateHistory = path.join(path.dirname(candidate), 'mesh-history');
   const where = await scratchHome('mesh-historical-migration-');
   // Do not inherit provider credentials or paths from the developer's environment.
   where.env = {HOME:where.home, PATH:'/usr/bin:/bin', LANG:'C.UTF-8', LANGUAGE:'en', SHELL:'/bin/bash',
@@ -40,7 +43,7 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
     XDG_CACHE_HOME:path.join(where.home,'.cache'), MESH_CONF_DIR:where.confDir,
     MESH_CACHE_DIR:path.join(where.home,'.cache/session-mesh'), MESH_PORT:String(where.port),
     MESH_SESSIONS_WAIT:'60', MESH_TEST_SESSIONS_COMPLETE:'1',
-    MESH_MESH_HISTORY_CMD:path.join(REPO,'ocaml/_build/install/default/bin/mesh-history')};
+    MESH_MESH_HISTORY_CMD: oldHistory ?? candidateHistory};
   const source = path.join(where.scratch,'old');
   const oldCopy = path.join(where.scratch,'old-ptyhost');
   const socket = path.join(where.home,'run/session-mesh/ptyhost.sock');
@@ -76,6 +79,7 @@ for (const version of versions) test(`${version.tag} real snapshot survives upgr
     assert.deepEqual(historical.map(row => [row.name,row.cwd,row.agent]).sort(),
       [['alpha',directories.alpha,null],['bravo',directories.bravo,null]]);
     await stopServer(server); server = undefined; await host.stop(); host = undefined;
+    where.env.MESH_MESH_HISTORY_CMD = candidateHistory;
     const next = await runServer(where, REPO); assert.ok(next.result.listened, next.output()); server = next.child;
     await fetch(`${url}/api/sessions`,{headers, signal:requestSignal()});
     assert.deepEqual(fs.readFileSync(snapshot), before, 'unavailable host must not overwrite historical snapshot');

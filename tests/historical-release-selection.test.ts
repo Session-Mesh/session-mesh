@@ -16,6 +16,7 @@ function release(tag_name: string, prerelease = false): Release {
     {name: `session-mesh-${tag_name}.tar.gz`, digest, size: 100},
     {name: 'mesh-ptyhost-linux-x86_64', digest, size: 100},
     {name: 'mesh-platform-linux-x86_64', digest, size: 100},
+    {name: 'mesh-history-linux-x86_64', digest, size: 100},
   ]};
 }
 
@@ -33,7 +34,10 @@ test('does not silently fall back when the latest release has incomplete or unsa
   assert.throws(() => selectHistoricalReleases([release('v0.1.9'), bad, nightly]), /invalid digest/);
   bad.assets[1]!.digest = digest; bad.assets.push({...bad.assets[1]!});
   assert.throws(() => selectHistoricalReleases([bad, nightly]), /duplicate/);
-  bad.assets.pop(); bad.assets[0]!.size = 200_000_001;
+  bad.assets.pop();
+  const withoutHistory = release('v0.1.10'); withoutHistory.assets.pop();
+  assert.throws(() => selectHistoricalReleases([withoutHistory, nightly]), /missing or duplicate mesh-history/);
+  bad.assets[0]!.size = 200_000_001;
   assert.throws(() => selectHistoricalReleases([bad, nightly]), /invalid digest or size/);
 });
 
@@ -60,7 +64,7 @@ test('dynamic manifest confines paths and rejects invalid digests', () => {
   const previous = process.env.MESH_HISTORICAL_DYNAMIC;
   const entry = (role:string, tag:string) => ({tag, archive:`${role}/session-mesh-${tag}.tar.gz`,
     host:`${role}/mesh-ptyhost-linux-x86_64`, platform:`${role}/mesh-platform-linux-x86_64`,
-    archiveSha:'a'.repeat(64), hostSha:'b'.repeat(64), platformSha:'c'.repeat(64)});
+    archiveSha:'a'.repeat(64), hostSha:'b'.repeat(64), platformSha:'c'.repeat(64), history:`${role}/mesh-history-linux-x86_64`, historySha:'d'.repeat(64)});
   const manifest = {version:1, stable:entry('stable', 'v0.1.1'), nightly:entry('nightly', 'v0.2.0-nightly.20261125')};
   const write = () => writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
   try {

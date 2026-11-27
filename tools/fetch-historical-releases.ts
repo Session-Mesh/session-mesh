@@ -35,7 +35,7 @@ export function fetchHistoricalReleases(target: string): void {
   const chosen = selectHistoricalReleases(releases);
   const fetchOne = (role: 'stable' | 'nightly', release: SelectedRelease) => {
     const dir = path.join(target, role); mkdirSync(dir, {mode: 0o700});
-    for (const item of [release.archive, release.host, release.platform]) {
+    for (const item of [release.archive, release.host, release.platform, release.history]) {
       const file = path.join(dir, item.name);
       execFileSync('curl', [...curl, '--max-time', '180', '--max-filesize', String(item.size), '--output', file,
         `https://github.com/${repository}/releases/download/${release.tag}/${item.name}`], {stdio: 'pipe'});
@@ -43,10 +43,12 @@ export function fetchHistoricalReleases(target: string): void {
     }
     chmodSync(path.join(dir, release.host.name), 0o700);
     chmodSync(path.join(dir, release.platform.name), 0o700);
+    chmodSync(path.join(dir, release.history.name), 0o700);
     return {tag: release.tag,
       archive: `${role}/${release.archive.name}`, archiveSha: release.archive.digest!.slice(7),
       host: `${role}/${release.host.name}`, hostSha: release.host.digest!.slice(7),
-      platform: `${role}/${release.platform.name}`, platformSha: release.platform.digest!.slice(7)};
+      platform: `${role}/${release.platform.name}`, platformSha: release.platform.digest!.slice(7),
+      history: `${role}/${release.history.name}`, historySha: release.history.digest!.slice(7)};
   };
   const manifest = {version: 1, stable: fetchOne('stable', chosen.stable), nightly: fetchOne('nightly', chosen.nightly)};
   writeFileSync(path.join(target, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, {mode: 0o600, flag: 'wx'});
