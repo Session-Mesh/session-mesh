@@ -699,6 +699,22 @@ for hook, account, expected in (
   execFileSync(python, ['-I', '-c', script], {timeout: 10000});
 });
 
+test('switchable agents include the observed process start in their inventory', () => {
+  const script = `
+import sys
+sys.path.insert(0, ${JSON.stringify(repo)})
+import discover
+
+discover.cmdline = lambda pid: []
+discover.proc_start = lambda pid: {42: 123.25, 43: 0}[pid]
+for kind in ('claude','codex','pi'):
+    setattr(discover, kind + '_info', lambda pid: {'type':kind})
+    assert discover.agent_info(42, kind)['started'] == 123.25
+    assert not discover.agent_info(43, kind).get('started')
+`;
+  execFileSync(python, ['-I', '-c', script], {timeout: 10000});
+});
+
 test('Pi switch preparation verifies its live overlay, profile history and provider environment', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-pi-live-profile-'));
   try {
