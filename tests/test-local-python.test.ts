@@ -16,6 +16,39 @@ const SCRIPT = path.join(REPO, 'scripts', 'test-local-python.sh');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'test-local-python-'));
 after(() => fs.rmSync(scratch, {recursive: true, force: true}));
 
+test('parallel pytest keeps both selections and propagates a shard failure', () => {
+  const fixture = fs.mkdtempSync(path.join(scratch, 'parallel-'));
+  const runner = path.join(fixture, 'pytest');
+  fs.writeFileSync(runner, `#!/bin/sh
+set -eu
+test "$1" = -m && test "$2" = pytest && test "$3" = -q && test "$4" = -m
+test "$6" = -o && test "$7" = "cache_dir=$TMPDIR/.pytest_cache"
+case "$5" in
+  browser) group=browser; peer=server ;;
+  'not browser') group=server; peer=browser ;;
+  *) exit 2 ;;
+esac
+printf '%s\\n' "$TMPDIR" > "$FIXTURE/$group"
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  if [ -s "$FIXTURE/$peer" ]; then exit 0; fi
+  sleep 0.1
+done
+exit 3
+`, {mode: 0o755});
+  const run = () => spawnSync('bash', ['-ec', `
+    source "$1"
+    mesh_prepare_test_tmpdir() { TMPDIR="$(mktemp -d "$TMPDIR/shard.XXXXXX")"; export TMPDIR; }
+    PY=$FIXTURE/pytest
+    TMPDIR=$FIXTURE/original
+    parallel_pytest
+  `, 'test', SCRIPT], {env: {...process.env, FIXTURE: fixture}, timeout: 5000});
+  assert.equal(run().status, 0);
+  const temporary = (group: string) => fs.readFileSync(path.join(fixture, group), 'utf8').trim();
+  assert.notEqual(temporary('browser'), temporary('server'));
+  fs.writeFileSync(runner, '#!/bin/sh\n[ "$5" != browser ]\n', {mode: 0o755});
+  assert.equal(run().status, 1);
+});
+
 // The stand-in: FAKE_VERSION (FAKE_VENV_VERSION for the .venv copy), FAKE_VENV_STATUS (venv fails
 // after writing bin/python, as a venv broken half-way), FAKE_PIP_STATUS; every call goes to FAKE_LOG.
 const STAND_IN = `#!/bin/sh
