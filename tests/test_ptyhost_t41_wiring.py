@@ -18,7 +18,7 @@ def test_local_suite_builds_the_host_before_every_test_that_starts_it():
     full = (ROOT / "scripts/test-local.sh").read_text()
     invocation = 'PYTHON="$PY" bash scripts/test-ptyhost-t41.sh "$NATIVE_HOST"'
     assert full.index("bash scripts/bootstrap.sh") < full.index('export MESH_PTYHOST_CMD="$NATIVE_HOST"')
-    run = full[full.index("\nrequire_tools\n"):]
+    run = full[full.index("# The host first:"):]
     assert run.index("\nbuild_native_host\n") < run.index("\nnode_tests\n") < run.index('"$PY" -m pytest -q "$@"')
     assert run.index('"$PY" -m pytest -q "$@"') < run.index("\nptyhost_gate\n")
     assert invocation in full

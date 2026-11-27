@@ -314,17 +314,28 @@ describe('the public CI as committed', () => {
       assert.match(parts, /if: matrix\.kind == 'python'/);
       assert.match(parts, /if: matrix\.kind == 'node'/);
       assert.match(gate, /name: browser tests \(Chromium, shard \$\{\{ matrix\.shard \}\} of 4\)/);
-      assert.match(gate, /needs: browser_parts/);
+      assert.match(gate, /needs: \[scope, browser_parts\]/);
       assert.match(gate, /needs\.browser_parts\.result/);
       assert.match(gate, /\"\$PARTS_RESULT\" != success/);
       assert.match(gate, /if: \"!cancelled\(\)\"/);
       const guard = (gate + '\n').match(/run: \|\n((?:          .*\n)+)/)?.[1];
       assert.ok(guard, 'missing required-check guard');
       for (const [parts, expected] of [['success', 0], ['failure', 1], ['skipped', 1], ['cancelled', 1]]) {
-        const result = spawnSync('bash', ['-c', guard], {env: {...process.env, PARTS_RESULT: String(parts)}});
+        const result = spawnSync('bash', ['-c', guard], {env: {...process.env, GITHUB_EVENT_NAME: 'merge_group', DOCS_ONLY: 'true', PARTS_RESULT: String(parts)}});
         assert.equal(result.status, expected, `guard accepted ${parts}`);
       }
-      assert.match(parts, /needs: native/);
+      for (const [event, docsOnly, parts, expected] of [
+        ['pull_request', 'true', 'skipped', 0],
+        ['pull_request', 'true', 'failure', 1],
+        ['pull_request', '', 'skipped', 1],
+        ['push', 'true', 'skipped', 1],
+      ] as const) {
+        const result = spawnSync('bash', ['-c', guard], {
+          env: {...process.env, GITHUB_EVENT_NAME: event, DOCS_ONLY: docsOnly, PARTS_RESULT: parts},
+        });
+        assert.equal(result.status, expected, `${event}, docs=${docsOnly}: ${parts}`);
+      }
+      assert.match(parts, /needs: \[scope, native\]/);
       assert.match(parts, /needs\.native\.result/);
       assert.match(parts, /\"\$NATIVE_RESULT\" != success/);
       const files = fs.readdirSync(path.join(ROOT, 'tests')).filter(file => file.endsWith('.test.ts'));
@@ -357,12 +368,12 @@ describe('the public CI as committed', () => {
       assert.match(parts, /i % 2 == shard/);
       assert.match(parts, /\$\{#selected\[@\]\} > 0/);
       assert.match(gate, /name: frontend and Node tests/);
-      assert.match(gate, /needs: frontend_parts/);
+      assert.match(gate, /needs: \[scope, frontend_parts\]/);
       assert.match(gate, /if: "!cancelled\(\)"/);
       const guard = (gate + '\n').match(/run: \|\n((?:          .*\n)+)/)?.[1];
       assert.ok(guard);
       for (const [result, status] of [['success', 0], ['failure', 1], ['skipped', 1], ['cancelled', 1]]) {
-        assert.equal(spawnSync('bash', ['-c', guard], {env: {...process.env, PARTS_RESULT: String(result)}}).status, status);
+        assert.equal(spawnSync('bash', ['-c', guard], {env: {...process.env, GITHUB_EVENT_NAME: 'merge_group', DOCS_ONLY: 'true', PARTS_RESULT: String(result)}}).status, status);
       }
       // Enumerate portably: this test is also run by the macOS job, whose
       // bash 3.2 has no mapfile and whose sort has no -z option.
