@@ -9,7 +9,7 @@ import {rolloutIn} from './fake-codex-lib.ts';
 import {REPO} from './mesh-server-lib.ts';
 import {createSessionRequestGate, setTranslator} from '../static/pane-actions.ts';
 import {SKIP, PROFILE_SKIP, CARRY, mesh, log, travelHome, workHome, sleep, launches, owner,
-  codexSession, listed, arrange, arrangement, LABEL, installNativeProfiles, nativeProfiles,
+  clientClaude, fixtureSession, codexSession, listed, arrange, arrangement, LABEL, installNativeProfiles, nativeProfiles,
   consentPolicy, unchangedSource, ask, requested, refused, decide, launchOf,
   type Session, type Request} from './session-account-switch-fixture.ts';
 
@@ -309,6 +309,41 @@ describe('account switch requests', {skip: SKIP}, () => {
       assert.deepEqual([pidOf(plain.name), pidOf(travel.name)], [namedPid, travelPid]);
     } finally { fs.rmSync(registry); }
   });
+
+  test('a bound Claude account switch keeps its conversation and terminal',
+    {skip: PROFILE_SKIP || (process.platform !== 'linux' && process.env.MESH_TEST_DARWIN_CLAUDE_SWITCH !== '1')}, async () => {
+      const registry = installNativeProfiles();
+      try {
+        const content = JSON.parse(fs.readFileSync(registry, 'utf8'));
+        const history = path.join(clientClaude, 'projects');
+        fs.mkdirSync(history, {recursive: true, mode: 0o700});
+        content.profiles.push({backend: 'claude', id: 'client', label: 'Client', enabled: true,
+          roots: {config: clientClaude, history}});
+        fs.writeFileSync(registry, JSON.stringify(content));
+
+        const session = await fixtureSession('claude', 'native-claude');
+        const launch = () => launches().findLast(fields => fields[2] === session.name)!;
+        const terminal = (pid: string) => {
+          const result = spawnSync('ps', ['-p', pid, '-o', 'tty='], {encoding: 'utf8'});
+          assert.ifError(result.error);
+          assert.equal(result.status, 0, result.stderr);
+          const tty = result.stdout.trim();
+          assert.match(tty, /^(?:pts\/\d+|ttys\w+)$/);
+          return tty;
+        };
+        const first = launch();
+        const tty = terminal(first[5]!);
+        const switched = await decide(await requested(session, 'client'), true);
+        assert.equal(switched.state, 'completed', JSON.stringify(switched));
+        for (let attempt = 0; attempt < 100 && launch()[5] === first[5]; attempt++) await sleep(50);
+        const resumed = launch();
+        assert.notEqual(resumed[5], first[5]);
+        assert.deepEqual(resumed.slice(1, 5), [clientClaude, session.name, session.sid, session.token]);
+        assert.equal(terminal(resumed[5]!), tty);
+        assert.match(fs.readFileSync(path.join(history, 'test-workspace', session.sid + '.jsonl'), 'utf8'),
+          /test account transfer/);
+      } finally {fs.rmSync(registry);}
+    });
 
   test('a legacy request queued before native registry activation is refused on approval without a stop or copy',
     {skip: PROFILE_SKIP}, async () => {

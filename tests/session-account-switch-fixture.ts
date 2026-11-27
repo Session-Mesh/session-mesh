@@ -46,6 +46,27 @@ before(async () => {
   bin = fs.mkdtempSync(path.join(os.tmpdir(), 'switch-bin-'));
   const installed = installFakeCodex(bin);
   log = installed.log;
+  fs.copyFileSync(path.join(bin, 'real', 'codex'), path.join(bin, 'real', 'claude'));
+  const claude = [
+    "#!/bin/sh",
+    "umask 077",
+    "while [ \"$#\" -gt 1 ]; do",
+    "  case \"$1\" in --session-id|--resume|-r) id=$2; break;; esac",
+    "  shift",
+    "done",
+    "test -n \"$id\" || exit 1",
+    "root=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"",
+    "folder=\"$root/projects/test-workspace\"",
+    "mkdir -p \"$folder\"",
+    "transcript=\"$folder/$id.jsonl\"",
+    "mkdir -p \"$HOME/.claude/sessions\"",
+    "printf '{\"sessionId\":\"%s\"}\\n' \"$id\" > \"$HOME/.claude/sessions/$$.json\"",
+    "test -f \"$transcript\" || printf '{\"type\":\"user\",\"sessionId\":\"%s\",\"message\":{\"role\":\"user\",\"content\":\"test account transfer\"}}\\n' \"$id\" > \"$transcript\"",
+    "printf 'claude|%s|%s|%s|%s|%s\\n' \"$root\" \"$MESH_SESSION\" \"$id\" \"$MESH_SESSION_TOKEN\" \"$$\" >> \"@LOG@\"",
+    "exec 3<\"$transcript\"; exec \"@BIN@/real/claude\" 300",
+    "",
+  ].join('\n').replace('@LOG@', log).replace('@BIN@', bin);
+  fs.writeFileSync(path.join(bin, 'claude'), claude, {mode: 0o755});
   const PATH = installed.PATH;
   mesh = await startMesh('switch-', {PATH, MESH_MESH_PLATFORM_CMD: PLATFORM, MESH_MESH_PROFILE_CMD: PROFILE,
     CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined});
@@ -83,7 +104,7 @@ before(async () => {
 after(async () => {
   // The fake agents outlive the PTY host; a process named codex left running would be seen by the next suites'
   // listings (they would read its rollout and write a cache).
-  if (bin) spawnSync('pkill', ['-KILL', '-f', path.join(bin, 'real', 'codex')]);
+  if (bin) for (const agent of ['codex', 'claude']) spawnSync('pkill', ['-KILL', '-f', path.join(bin, 'real', agent)]);
   host?.kill('SIGKILL');
   await mesh?.stop();
   if (bin) fs.rmSync(bin, {recursive: true, force: true});
@@ -96,9 +117,9 @@ const owner = () => ({Cookie: cookie, Origin: mesh.base, 'Content-Type': 'applic
 type Session = {name: string; token: string; sid: string};
 
 /** A Codex session started under ``account`` (absent: the default one), once the listing knows its conversation. */
-async function codexSession(name: string, account?: string, cwd?: string): Promise<Session> {
+async function fixtureSession(agent: 'codex' | 'claude', name: string, account?: string, cwd?: string): Promise<Session> {
   const response = await fetch(`${mesh.base}/api/new`, {method: 'POST', body: JSON.stringify({cwd: cwd ?? mesh.home,
-    preset: 'codex', name, ...account ? {account} : {}}),
+    preset: agent, name, ...account ? {account} : {}}),
   headers: {Authorization: `Bearer ${mesh.token()}`, Origin: mesh.base, 'Content-Type': 'application/json'}});
   assert.equal(response.status, 200, await response.clone().text());
   let token = '', sid = '';
@@ -107,9 +128,11 @@ async function codexSession(name: string, account?: string, cwd?: string): Promi
     sid = ((await listed(name))?.agent as {session_id?: string} | null)?.session_id ?? '';
     if (!(token && sid)) await sleep(200);
   }
-  assert.ok(token && sid, `the fake codex of ${name} is listed with its conversation`);
+  assert.ok(token && sid, `the fake ${agent} of ${name} is listed with its conversation`);
   return {name, token, sid};
 }
+
+const codexSession = (name: string, account?: string, cwd?: string) => fixtureSession('codex', name, account, cwd);
 
 async function listed(name: string): Promise<Record<string, unknown> | undefined> {
   const data = await (await fetch(`${mesh.base}/api/sessions`, {headers: {Authorization: `Bearer ${mesh.token()}`}}))
@@ -222,6 +245,6 @@ async function launchOf(name: string): Promise<[string, string]> {
 
 
 export {SKIP, PROFILE_SKIP, CARRY, mesh, log, travelHome, workHome, sleep, launches, owner,
-  codexSession, listed, arrange, arrangement, LABEL, installNativeProfiles, nativeProfiles,
+  clientClaude, fixtureSession, codexSession, listed, arrange, arrangement, LABEL, installNativeProfiles, nativeProfiles,
   consentPolicy, unchangedSource, ask, requested, refused, decide, launchOf};
 export type {Session, Request};
