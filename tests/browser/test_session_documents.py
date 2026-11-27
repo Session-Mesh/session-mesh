@@ -1041,7 +1041,8 @@ async def test_a_session_request_not_sent_by_the_pane_frame_is_ignored(page, mes
     doc = docs.write(home_dir, "p4b/goto/framed.html", ASKING_PAGE)
     fetched = await show_asking_document(page, mesh, doc)
     before = await mesh_state(page)
-    await post_on_click(page, "[]")   # a gesture in the focused frame, so only the sender refuses
+    # A native activation in the focused frame leaves the sender as the only rejected condition.
+    await post_on_click(page, "[]", keyboard=True)
     # the mesh window itself, with the frame's own token
     await page.evaluate(f"""() => {{
       window.caps = false;
