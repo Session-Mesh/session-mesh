@@ -25,6 +25,7 @@ after(async () => { await mesh?.stop(); });
 // has crossed the boundary. The middleware's own 403 (a foreign Origin) is bare and never answers a GET.
 const PLAIN = '403: the session cell uses a plain (non-agent) session\'s token, which the handler refuses by name';
 const HANDLER_ANSWERS: Record<string, string> = {
+  'GET /api/session-actions/operator/switch/{request_id}': '404: no operator switch receipt matches (see BLIND_CELLS)',
   'GET /view/{tail}': '403: an unsigned capability URL (a public GET; an unserved route answers 404)',
   'POST /api/config/launch': '403: no configuration elevation, named in the body',
   'POST /api/config/launch-options': '403: no configuration elevation, named in the body',
@@ -38,6 +39,7 @@ const HANDLER_ANSWERS: Record<string, string> = {
 // proved registered by a wrong-method probe ('a blind cell is still a registered route' below), so a removed
 // route is detected; the text says what stays blind.
 const BLIND_CELLS: Record<string, string> = {
+  'GET /api/session-actions/operator/switch/{request_id}': 'the cookie sees a bare 404 for a missing receipt; the operator route test verifies the successful lookup separately',
   'GET /api/portfolio/diff/{selector}': 'the GET with the cookie or the Bearer token: the handler answers the bare '
     + '"404: Not Found" to a query, to a PTY host error and to every selector it did not issue, and it issues one '
     + 'only when the optional worktree observer is installed inside the server checkout (_opam/bin). That answer '
