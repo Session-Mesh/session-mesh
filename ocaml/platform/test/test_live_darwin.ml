@@ -77,11 +77,13 @@ let test_command_line_self () =
 
 let test_child_environment () =
   let key = "MESH_TEST_PROFILE_ROOT" and expected = "/tmp/test-profile" in
-  with_child ~env:[| key ^ "=" ^ expected |] "/bin/sleep" [| "sleep"; "30" |]
+  let executable = Unix.realpath Sys.executable_name in
+  let argv = [| executable; "--environment-fixture" |] in
+  with_child ~env:[| key ^ "=" ^ expected |] executable argv
     (fun child ->
-      wait_for "exec sleep" (fun () ->
+      wait_for "exec test fixture" (fun () ->
           match command_line child with
-          | Ok [ "sleep"; "30" ] -> Some ()
+          | Ok arguments when arguments = Array.to_list argv -> Some ()
           | _ -> None);
       let { incarnation; _ } = ok_or_fail "child" (process child) in
       let matches ~incarnation ~expected =
