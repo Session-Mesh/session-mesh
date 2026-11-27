@@ -937,6 +937,19 @@ async def _validate_native_switch(source, kind, source_context, target_context):
     await _switch_profile_context(target_context["id"], kind, target_context["context_revision"])
 
 
+async def _operator_switch_idle(source, kind, source_context):
+    """Last observable idle snapshot before an operator's bound stop, not an atomic turn checkpoint."""
+    described = await asyncio.to_thread(_describe_with_hooks, [source], False)
+    identity = {"id": source["name"], "created": source["created"], "agent": kind}
+    entry = _session_action_entry(described, identity)
+    agent = entry["agent"] if entry else {}
+    if (agent.get("status") != "idle" or agent.get("foreground") is not True
+            or agent.get("pid") != source_context["process_pid"]
+            or agent.get("started") != discover.proc_start(source_context["process_pid"])
+            or _switch_conversation(described, identity) != source_context["conversation"]):
+        raise web.HTTPConflict(text="Operator switch: foreground conversation is no longer idle; nothing was stopped")
+
+
 def _switch_root_identity(context):
     def identity(role):
         info = os.stat(context["roots"][role], follow_symlinks=False)
@@ -1946,6 +1959,8 @@ async def _relaunch_in_place(source, cwd, command, agent, known_agent, account=N
     try:
         if settings_binding is not None and native_switch:
             raise web.HTTPConflict(text="Conflicting restart bindings; nothing was stopped")
+        if native_switch and len(switch) > 5 and switch[5] == "operator":
+            await _operator_switch_idle(source, known_agent, source_context)
         created = await _stop_agent(source, known_agent, settings_binding=settings_binding,
                                     profile_binding=source_context if native_switch else None, fence_id=fence["fence_id"] if fence else None,
                                     fence_state=fence_state)
@@ -2237,6 +2252,7 @@ def _list_sessions(mesh_raw, listed, read_at=None):
         d.update(id=s["name"], name=s["name"], kind="mesh", created=s["created"],
                  attached=s["attached"], activity=s["activity"],
                  pty_capabilities=_terminal_input_capabilities(s),
+                 switch_qualified=_native_switch_available(known_agent, s),
                  known_agent=known_agent if known_agent in AGENT_TYPES else None,
                  notice=_session_notice(s), **_account_fields(s),
                  **org["sessions"][s["name"]])
@@ -5513,6 +5529,131 @@ async def api_session_action_request(request):
                              headers={"Cache-Control": "no-store"})
 
 
+async def api_operator_account_switch(request):
+    """Owner-confirmed UI intent, never an agent request or a client-supplied approval policy.
+
+    The browser's inventory is an expected snapshot, not authority: bind and
+    revalidate the actual foreground process through the native switch path.
+    """
+    _require_owner_cookie(request)
+    if not same_origin(request) or request.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+        raise web.HTTPForbidden()
+    if request.query:
+        raise web.HTTPBadRequest(text="Unexpected switch query")
+    raw_body, refusal = await _accounts_body(request)
+    if refusal is not None:
+        return refusal
+    try:
+        body = json.loads(raw_body, object_pairs_hook=_accounts_unique_keys)
+    except (ValueError, RecursionError):
+        raise web.HTTPBadRequest(text="Invalid switch selection") from None
+    if not isinstance(body, dict) or set(body) != {"source", "target"}:
+        raise web.HTTPBadRequest(text="Invalid switch selection")
+    expected, target = body["source"], body["target"]
+    if (not isinstance(expected, dict) or set(expected) !=
+            {"id", "created", "agent", "account", "context_revision", "conversation",
+             "agent_pid", "agent_started"}
+            or not isinstance(target, dict) or set(target) != {"id", "label", "context_revision"}
+            or not isinstance(expected["id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", expected["id"])
+            or type(expected["created"]) not in (int, float) or not _finite_number(expected["created"])
+            or expected["created"] <= 0 or expected["agent"] not in ("claude", "codex")
+            or not isinstance(expected["account"], str)
+            or not sessionrequests.ACCOUNT_RE.fullmatch(expected["account"])
+            or not _accounts_digest(expected["context_revision"])
+            or not isinstance(expected["conversation"], str)
+            or not sessionrequests.CONVERSATION_RE.fullmatch(expected["conversation"])
+            or type(expected["agent_pid"]) is not int or expected["agent_pid"] <= 0
+            or type(expected["agent_started"]) not in (int, float)
+            or not _finite_number(expected["agent_started"]) or expected["agent_started"] <= 0
+            or not isinstance(target["id"], str)
+            or not sessionrequests.ACCOUNT_RE.fullmatch(target["id"])
+            or not isinstance(target["label"], str) or not 0 < len(target["label"]) <= 64
+            or not _accounts_digest(target["context_revision"])):
+        raise web.HTTPBadRequest(text="Invalid switch selection")
+    if (not NATIVE_SWITCH_QUALIFIED or not _native_profile_mode()
+            or target["id"] in ("default", expected["account"])):
+        raise web.HTTPConflict(text="Native account switch unavailable")
+    listed = await host({"op": "list"})
+    raw = next((row for row in listed if isinstance(row, dict) and row.get("name") == expected["id"]
+                and row.get("created") == expected["created"]), None)
+    if (raw is None or (raw.get("meta") or {}).get("known_agent") != expected["agent"]
+            or not _native_switch_available(expected["agent"], raw)
+            or (session_account(raw) or "default") != expected["account"]
+            or (raw.get("meta") or {}).get("account_context_revision") != expected["context_revision"]):
+        raise web.HTTPConflict(text="Session or account changed")
+    source = {"id": expected["id"], "created": expected["created"],
+              "agent": expected["agent"], "cwd": raw["cwd"]}
+    described = await asyncio.to_thread(_describe_with_hooks, listed)
+    entry = _session_action_entry(described, source)
+    if (not entry or entry["agent"].get("status") != "idle"
+            or entry["agent"].get("foreground") is not True
+            or (entry["agent"].get("pid"), entry["agent"].get("started")) !=
+               (expected["agent_pid"], expected["agent_started"])
+            or _switch_conversation(described, source) != expected["conversation"]):
+        raise web.HTTPConflict(text="Foreground conversation unavailable or busy")
+    initial = await _switch_profile_context(
+        expected["account"], expected["agent"], expected["context_revision"], entry["agent"])
+    if ((initial.get("process_pid"), discover.proc_start(expected["agent_pid"]))
+            != (expected["agent_pid"], expected["agent_started"])):
+        raise web.HTTPConflict(text="Foreground process changed")
+    ran = await _profile_run("operator-switch", "profiles.list", b"{}")
+    profiles = _profile_envelope("profiles.list", *ran) if ran is not None else None
+    if (not profiles or not profiles["ok"]
+            or not any(p["backend"] == expected["agent"] and p["id"] == target["id"]
+                        and p["label"] == target["label"]
+                        and p["context_revision"] == target["context_revision"]
+                        and p["enabled"] and not p.get("managed")
+                        for p in profiles["data"]["profiles"])):
+        raise web.HTTPConflict(text="Target profile unavailable or changed")
+    choice, current, binding = await _switch_request(source, {"action": "switch_account", "account": target["id"]})
+    if (current != expected["account"] or not binding
+            or binding["backend"] != expected["agent"] or binding["conversation"] != expected["conversation"]
+            or (binding["agent_pid"], binding["agent_start"]) !=
+               (initial["process_pid"], initial["process_start"])
+            or binding["source"] != {"id": current, "context_revision": expected["context_revision"]}
+            or binding["target"]["id"] != target["id"]
+            or (target["context_revision"] is not None
+                and binding["target"]["context_revision"] != target["context_revision"])):
+        raise web.HTTPConflict(text="Switch binding changed")
+    # Profile resolution and conversation discovery awaited above. Do not
+    # accept a choice after a new inventory has superseded its idle source.
+    latest, latest_raw = await _session_control_observation(source)
+    if (latest_raw is None or (latest_raw.get("meta") or {}).get("account_context_revision") != expected["context_revision"]
+            or (session_account(latest_raw) or "default") != current
+            or not _native_switch_available(expected["agent"], latest_raw)
+            or not latest or latest["agent"].get("status") != "idle"
+            or latest["agent"].get("foreground") is not True
+            or (latest["agent"].get("pid"), latest["agent"].get("started")) !=
+               (expected["agent_pid"], expected["agent_started"])
+            or _switch_conversation({"mesh": [latest]}, source) != expected["conversation"]):
+        raise web.HTTPConflict(text="Session changed before switch request")
+    try:
+        item = request.app["session_requests"].create(
+            source, choice, enabled_agents=set(AGENT_PRESETS), resumable=RESUMABLE_AGENT_PRESETS,
+            current_account=current, switch_binding={**binding, "initiator": "operator"}, unique_active_switch=True)
+        claim = request.app["session_requests"].claim(item["id"], secrets.token_hex(16))
+        approved = request.app["session_requests"].decide(item["id"], True, claim["claim_nonce"])
+    except ValueError as exc:
+        raise web.HTTPConflict(text=str(exc)) from exc
+    _schedule_session_action(request.app, item["id"])
+    return web.json_response({"request": _session_action_reply(approved)}, status=202,
+                             headers={"Cache-Control": "no-store"})
+
+
+async def api_operator_account_switch_status(request):
+    """Read only an operator's durable switch receipt; a bearer never learns its result."""
+    _require_owner_cookie(request)
+    if not same_origin(request) or request.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+        raise web.HTTPForbidden()
+    if request.query:
+        raise web.HTTPBadRequest()
+    item = request.app["session_requests"].status(request.match_info["request_id"])
+    if (item is None or item["action"] != "switch_account"
+            or (item.get("switch_binding") or {}).get("initiator") != "operator"):
+        raise web.HTTPNotFound()
+    return web.json_response({"request": _session_action_reply(item)}, headers={"Cache-Control": "no-store"})
+
+
 # ---- Account switch requests (session.account_switch_request): the session's agent asks to continue its
 # conversation under another account. Checked here before it is queued, then, once the owner approved it: the
 # exact source stopped, `mesh-platform accounts carry` copies the conversation, the agent resumes under the target;
@@ -5913,7 +6054,8 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
         try:
             name = await replace_session(raw["name"], raw["created"], raw["name"], raw["cwd"], shlex.join(argv), kind,
                                          kind, account=account,
-                                         switch=(target, carry, source_context, target_context, item["id"]) if native else (target, carry),
+                                         switch=(target, carry, source_context, target_context, item["id"],
+                                                 binding.get("initiator")) if native else (target, carry),
                                          source=raw)
         except AccountSwitchUndone as exc:   # the source was stopped all the same
             completed = not exc.target_copy_remains and not exc.target_copy_uncertain
@@ -6410,7 +6552,8 @@ async def _profile_run(authority, op=None, body=None, *, managed_ref=None):
     """Run the profile helper with bounded output and a stripped environment.
 
     The owner account routes use only declared HTTP operations. Config can
-    discover public offers; only managed launch may use the private resolver.
+    discover public offers, the operator switch can read the public listing,
+    and only managed launch may use the private resolver.
     """
     if (authority == "managed-launch" and op is None and body is None
             and _managed_profile_ref(managed_ref)):
@@ -6421,6 +6564,8 @@ async def _profile_run(authority, op=None, body=None, *, managed_ref=None):
     elif managed_ref is None and authority == "accounts" and op in ACCOUNTS_ROUTES.values():
         argv = ("--http", op)
     elif managed_ref is None and authority == "config" and op == "profiles.provision-capabilities" and body == b"{}":
+        argv = ("--http", op)
+    elif managed_ref is None and authority == "operator-switch" and op == "profiles.list" and body == b"{}":
         argv = ("--http", op)
     else:
         raise ValueError("unexpected mesh-profile operation for authority")
@@ -8500,6 +8645,8 @@ def make_app(*, session_request_path=None):
     app.router.add_post("/api/accounts/consent/reset", api_accounts)
     app.router.add_get("/api/session-actions/@self/request", api_session_action_request)
     app.router.add_post("/api/session-actions/@self/request", api_session_action_request)
+    app.router.add_post("/api/session-actions/operator/switch", api_operator_account_switch)
+    app.router.add_get("/api/session-actions/operator/switch/{request_id}", api_operator_account_switch_status)
     app.router.add_get("/api/session-actions/@self/accounts", api_session_accounts)
     app.router.add_post("/api/session-actions/{request_id}/recover-fence", api_session_action_recover_fence)
     app.router.add_post("/api/session-actions/{request_id}/claim", api_session_action_claim)

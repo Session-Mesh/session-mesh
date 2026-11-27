@@ -2562,7 +2562,12 @@ class Pane {
       unread: !!(mesh && s && lastSeen(s) > (seen[s.id] ?? seenSince ?? Infinity) + 1),
       boardModified: !!(mesh && boardModified.has(this.id)),
     });
-    showAccountBadge($(".p-account", this.el), mesh ? s : null);
+    const badge = $(".p-account", this.el);
+    showAccountBadge(badge, mesh ? s : null);
+    const authority = !!(mesh && rowAuthoritative(s) && localMeshEffectsAllowed());
+    badge.disabled = !MeshPaneActions.switchSource(s, authority)
+      && !(authority && accountSwitchPicker.hasReceipt(s));
+    badge.setAttribute("aria-label", t("accountSwitch.open", { account: badge.textContent }));
     // Only a session launched as a messaging agent has a mailbox; a plain shell does not.
     $('[data-act="compose"]', this.el).hidden = !mesh || !localMeshEffectsAllowed() || !MeshPaneActions.hasMailbox(s);
     $('[data-act="compose"]', this.el).disabled = !localMeshEffectsAllowed();
@@ -5614,6 +5619,48 @@ const sessionRequestGate = MeshPaneActions.createSessionRequestGate({
     } catch { return "retry"; }
   },
 });
+let accountSwitchPane = null;
+const accountSwitchPicker = MeshPaneActions.createAccountSwitchPicker($("#dlg-account-switch"), {
+  source: () => {
+    const s = accountSwitchPane && find(accountSwitchPane.id);
+    return s ? { session: s, authoritative: rowAuthoritative(s) && localMeshEffectsAllowed() } : null;
+  },
+  label: s => label(s),
+  t,
+  notice: text => flash(text),
+  profiles: async () => {
+    const response = await requestLocal("/api/accounts/profiles", { cache: "no-store" });
+    const body = await response.json();
+    if (!response.ok || body?.ok !== true || !Array.isArray(body.data?.profiles)) throw new Error();
+    return body.data.profiles;
+  },
+  submit: async (source, target) => {
+    const response = await requestLocal("/api/session-actions/operator/switch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, target }),
+    });
+    if (!response.ok) throw new Error();
+    const body = await response.json();
+    if (body?.request?.action !== "switch_account") throw new Error();
+    return body.request;
+  },
+  status: async id => {
+    const response = await requestLocal(`/api/session-actions/operator/switch/${encodeURIComponent(id)}`,
+      {cache: "no-store"});
+    if (!response.ok) throw new Error();
+    const body = await response.json();
+    if (body?.request?.action !== "switch_account") throw new Error();
+    return body.request;
+  },
+});
+document.addEventListener("click", event => {
+  const badge = event.target?.closest?.("#panes .pane .p-account");
+  if (!badge || badge.disabled) return;
+  const pane = panes.find(p => p.el === badge.closest(".pane"));
+  if (!pane) return;
+  accountSwitchPane = pane;
+  void accountSwitchPicker.open(badge);
+});
 const agentMailConsentDialog = $("#dlg-agent-mail-consent");
 const agentMailConsentDescription = $("#agent-mail-consent-description");
 const agentMailConsentStatus = $("#agent-mail-consent-status");
@@ -6033,6 +6080,7 @@ function applyInventorySnapshot(issue, { next, identities }) {
     inventoryLoaded = true;
     hostSilence.update(next, data.mesh, observedInventory);   // `data` is still the previous listing here
     data = next;
+    accountSwitchPicker.revalidate();
     if (observedInventory) rememberKnownSessions(next);
     if (localMeshEffectsAllowed()) {
       void sessionRequestGate.consider(next.sessionRequests);
