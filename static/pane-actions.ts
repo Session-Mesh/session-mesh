@@ -369,6 +369,12 @@ export function createAcknowledgedInput(ports: {
     else if (wasEmpty && state === "ready") updateState("review");
     return true;
   };
+  const retainedText = () => {
+    const decoder = new TextDecoder();
+    let text = "";
+    for (const frame of pending) if (!frame.reportOnly) text += decoder.decode(frame.data, {stream: true});
+    return text + decoder.decode();
+  };
   return {
     get version() { return ports.version ?? 1; },
     get state() { return state; },
@@ -381,11 +387,11 @@ export function createAcknowledgedInput(ports: {
     get pendingHumanBytes() {
       return pending.reduce((sum, frame) => sum + (frame.reportOnly ? 0 : frame.data.length), 0);
     },
-    get retainedText() {
-      const decoder = new TextDecoder();
-      let text = "";
-      for (const frame of pending) if (!frame.reportOnly) text += decoder.decode(frame.data, {stream: true});
-      return text + decoder.decode();
+    get retainedText() { return retainedText(); },
+    get editableRetainedText() {
+      return active && !sent && !blocked && !incompleteHumanInput && state === "review" &&
+        pending.length > 0 && pending.every(frame => frame.reviewOnly && !frame.reportOnly)
+        ? retainedText() : "";
     },
     connect(created: number, id: string, supported: boolean) {
       if (ports.version === 2) return;

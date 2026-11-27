@@ -1161,8 +1161,7 @@ class Pane {
     container.hidden = !reviewPending && current?.state !== "halted" && !obsolete && !other.length && !saved.length && !savedCompose;
     if (touch && this.conn && this.recoveredLineDrafts?.has(`${this.conn.name}\0${this.conn.created}`))
       setTimeout(() => restoreSavedLine(this), 0);
-    if (!this.restoreOldInputScheduled && entries.some((entry) => entry.input !== current &&
-        entry.input.pendingHumanBytes && !entry.recoveryBlocked)) {
+    if (!this.restoreOldInputScheduled && current?.editableRetainedText) {
       this.restoreOldInputScheduled = true;
       setTimeout(() => { this.restoreOldInputScheduled = false; restoreOldInputToEditor(this); }, 0);
     }
@@ -2930,7 +2929,7 @@ class Pane {
           this.limitedKeyboard.hidden = !limited || !touch;
           if (!limited) {
             this.sendSize(true); this.armAutoRedraw(c);
-            if (version === 0) this.renderRetainedInput();
+            this.renderRetainedInput();
           }
         },
         ptySize: (_terminal, size) => {
@@ -8234,33 +8233,30 @@ function openCompose(preset = "", fromRecovery = false) {
   cdlg.showModal(); renderComposeStatus(); ctext.focus(); return true;
 }
 
-// Move only an older incarnation's retained human text. Never replay its ACK
-// frames: their delivery may be uncertain, and the editor requires a new user action.
+// Move only unsent text into the editor for the same verified input actor.
 function restoreOldInputToEditor(pane) {
   const c = pane.conn;
-  if (active !== pane || !c?.terminal?.isOpen() || lineDirect || linePending || lineRecovery) return;
-  const old = pane.activeSessionInputs().find(([, entry]) => entry.input !== pane.inputAck &&
-    entry.input.pendingHumanBytes && !entry.recoveryBlocked);
-  if (!old) return;
-  const [key, entry] = old, text = entry.input.retainedText;
+  if (active !== pane || !c?.terminal?.isOpen() || !c.terminal.isBound(c.name, c.created) ||
+      lineDirect || linePending || lineRecovery) return;
+  const key = `${c.name}\0${c.created}`;
+  const entry = pane.inputAcks.get(key);
+  if (!entry || entry.input !== pane.inputAck || entry.lease !== pane.inputLease) return;
+  const text = entry.input.editableRetainedText;
   // Control sequences and invalid UTF-8 cannot safely be reconstructed as text.
   if (!text || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ufffd]/.test(text)) return;
   if (touch) {
     if (line.value || recoveredLineTarget || $("#line").hidden) return;
-    if (!logObsoleteInput(c.name, key.split("\0")[1])) { entry.recoveryBlocked = true; return; }
     line.value = text;
     recoveredLineTarget = { pane, name: c.name, created: c.created };
     fitLine();
   } else {
     if (cdlg.open || composeRecovery.length || pickerGate.pending || pane.recoveredComposeDraft) return;
     if (!openCompose(text, true)) return;
-    if (!logObsoleteInput(c.name, key.split("\0")[1])) { entry.recoveryBlocked = true; cdlg.close(); return; }
     pane.recoveredComposeDraft = { name: c.name, created: c.created, text };
     pane.recoveredComposeOwner = composeOwner;
   }
-  pane.inputAcks.delete(key);
-  pane.inputLeases.delete(key);
   entry.input.discard();
+  entry.lease.release();
   pane.renderRetainedInput();
   renderReloadStatus();
 }
