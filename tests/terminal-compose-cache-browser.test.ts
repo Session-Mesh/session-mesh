@@ -128,3 +128,23 @@ test('switching sessions releases a refused recovered line on its original trans
     await page.getByRole('button', {name: en['compose.discardResult'], exact: true}).click();
   }, false, 'en');
 });
+
+test('caching the page keeps the recovered composer text and releases its original lease', async () => {
+  await harness(async (page) => {
+    const state = await page.evaluate(() => {
+      const pane = active;
+      const {name, created} = pane.conn;
+      const lease = pane.inputLease;
+      if (!openCompose('recovered draft')) throw new Error('composer unavailable');
+      const entry = {input: {pendingBytes: 0, incompleteHumanInput: false}, lease};
+      pane.inputAcks.set(name + '\0' + created, entry);
+      pane.recoveredComposeDraft = {name, created, text: ctext.value, entry};
+      pane.recoveredComposeOwner = composeOwner;
+      lease.hold();
+      if (!lease.dirty) throw new Error('original lease was not held');
+      window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}));
+      return {dirty: lease.dirty, text: composeRecovery[0]?.text};
+    });
+    assert.deepEqual(state, {dirty: false, text: 'recovered draft'});
+  }, false, 'en');
+});
