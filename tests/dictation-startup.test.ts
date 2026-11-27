@@ -112,6 +112,17 @@ process.stdin.once('data',part=>{
   return {entry,hasIdentity:()=>fs.existsSync(marker),identity:()=>JSON.parse(fs.readFileSync(marker,'utf8')) as {pid:number;socket:string}};
 }
 
+test('a throwing pre-spawn callback removes its fixture', {timeout: 10000}, async () => {
+  const failure = new Error('fixture pre-spawn callback failed');
+  let directory: string | undefined;
+  await assert.rejects(fixture(false, false, undefined, {beforeSpawn: config => {
+    directory = path.dirname(config);
+    throw failure;
+  }}), error => error === failure);
+  assert.ok(directory);
+  assert.equal(fs.existsSync(directory), false);
+});
+
 test('a throwing startup callback still closes the fixture', {timeout: 10000}, async () => {
   const failure = new Error('fixture startup callback failed');
   let child: ChildProcess | undefined;

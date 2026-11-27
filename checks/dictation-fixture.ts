@@ -94,21 +94,19 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
     fs.writeFileSync(nodePath,`#!/bin/sh\nexec ${quote(process.execPath)} ${options.workerPreload?'--require '+quote(options.workerPreload):''} ${options.workerEntry?quote(options.workerEntry):'"$@"'}\n`,{mode:0o700});
   }
   if(nodePath!==undefined)env.MESH_NODE=nodePath;
-  options.beforeSpawn?.(config);
-  const child=spawn(python(),['-B',path.join(root,'server.py')],{cwd:root,env,stdio:['ignore','ignore','pipe']});let errors='';child.stderr.on('data',b=>errors+=b);
-  let spawnError: Error | undefined;
-  child.once('error', error => { spawnError = error; });
+  let startedChild: ReturnType<typeof spawn> | undefined;
   const call=(p:string,method='GET',headers:any={},body:string|Buffer='')=>request({hostname:'127.0.0.1',port,path:p,method,headers},body);
   const close = async () => {
+    const child = startedChild;
     for (const release of upstreamReleases) release();
     try {
-      if (child.pid && child.exitCode === null && child.signalCode === null) {
+      if (child?.pid && child.exitCode === null && child.signalCode === null) {
         child.kill('SIGTERM');
         await until(() => child.exitCode !== null || child.signalCode !== null);
       }
     } finally {
-      if (child.pid && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-      child.stderr.destroy();
+      if (child?.pid && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      child?.stderr?.destroy();
       for (const peer of peers) peer.destroy();
       upstream.closeAllConnections();
       await Promise.all([new Promise<void>(r => inventory.close(() => r())), new Promise<void>(r => upstream.close(() => r()))]);
@@ -116,6 +114,14 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
     }
   };
   try{
+    options.beforeSpawn?.(config);
+    const child = spawn(python(), ['-B', path.join(root, 'server.py')],
+      {cwd: root, env, stdio: ['ignore', 'ignore', 'pipe']});
+    startedChild = child;
+    let errors = '';
+    let spawnError: Error | undefined;
+    child.stderr.on('data', chunk => { errors += chunk; });
+    child.once('error', error => { spawnError = error; });
     options.onSpawn?.(child);
     const deadline=performance.now()+(options.startupWaitMs??5000);
     while(true){
