@@ -1798,9 +1798,8 @@ let session_accounts_tool client =
       "Read-only. The account alias this session's agent runs under \
        (\"current\", \"default\" for the default account), the aliases the \
        owner declared on the runner with the agents each one serves, and \
-       \"switch_qualified\", false: moving a conversation to another account \
-       is not verified for any agent, so it only happens through an account \
-       change request the owner approves (session.account_switch_request). \
+       \"switch_qualified\", whether this session supports native account switching. \
+       A switch requires a request the owner approves (session.account_switch_request). \
        Ids and labels only, never a folder. The session and the agent kind \
        are the ones the Mesh server recorded for this session's token, not \
        something you pass. Call it when the owner asks which account you run \
