@@ -8,6 +8,8 @@
 #   scripts/test-local.sh            everything
 #   scripts/test-local.sh -k menu    extra arguments go to pytest
 #   scripts/test-local.sh --preflight-only   check prerequisites only
+#   scripts/test-local.sh test-ui|test-server|test-node|test-ptyhost
+#   scripts/test-local.sh test-diff <commit-or-branch>
 # Python: MESH_PYTHON when set, otherwise .venv/, created from the pinned
 # requirements, or completed when its install did not finish
 # (scripts/test-local-python.sh). Chromium: MESH_CHROMIUM when set, otherwise the
@@ -21,6 +23,25 @@ cd "$(dirname "$0")/.."
 # reach a real socket. Every test sets its own runtime directory.
 unset MESH_RUNTIME_DIR
 preflight_only=0
+target=all
+case "${1:-}" in
+  test-diff)
+    [ "$#" -eq 2 ] || { echo 'test-local: test-diff requires one base revision.' >&2; exit 2; }
+    scope="$(bash scripts/test-scope.sh "$2")"
+    if [ "$scope" = docs ]; then
+      node --experimental-strip-types tools/leak-guard/cli.ts worktree
+      echo 'test-local: PASS (documentation diff)'
+      exit 0
+    fi
+    shift 2
+    ;;
+  test-ui|test-server|test-node|test-ptyhost) target="$1"; shift ;;
+  test-*) echo 'test-local: unknown test target.' >&2; exit 2 ;;
+esac
+if [ "$target" != all ] && [ "$target" != test-server ] && [ "$#" -ne 0 ]; then
+  echo 'test-local: only test-server accepts extra arguments.' >&2
+  exit 2
+fi
 if [ "${1:-}" = --preflight-only ]; then
   preflight_only=1
   shift
@@ -147,6 +168,22 @@ if [ "$preflight_only" -eq 1 ]; then
 fi
 "$PY" scripts/check-test-environment.py requirements-dev.txt requirements-browser.txt
 prepare_scratch
+if [ "$target" != all ]; then
+  if [ "$target" != test-ui ]; then
+    build_native_host
+  fi
+  case "$target" in
+    test-ui) frontend_checks ;;
+    test-node) node_tests ;;
+    test-server)
+      "$PY" -m ruff check .
+      "$PY" -m pytest -q "$@"
+      ;;
+    test-ptyhost) ptyhost_gate ;;
+  esac
+  echo "test-local: PASS ($target)"
+  exit 0
+fi
 # The host first: the frontend checks include project tests that start it, as in CI.
 build_native_host
 frontend_checks

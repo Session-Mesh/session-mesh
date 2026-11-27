@@ -79,7 +79,8 @@ describe('merge queue: every required check name is reported', () => {
         const condition = /^ {4}if: (.*)$/m.exec(body)?.[1];
         // The only job-level condition a required job may carry is the one that keeps it running when
         // a job it needs failed: any other could evaluate false, and a skipped required check counts as passing.
-        assert.ok(condition === undefined || condition === '"!cancelled()"', `a job-level condition could skip the job: ${condition}`);
+        assert.ok(condition === undefined || condition === '"!cancelled()"' ||
+          condition === "\"!cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.docs_only != 'true')\"", `a job-level condition could skip the job: ${condition}`);
         assert.doesNotMatch(body, /^ {4}needs:.*macos/m);
       });
     }
@@ -101,10 +102,10 @@ describe('merge queue: every required check name is reported', () => {
         for (const need of needs.replace(/[[\]]/g, '').split(',').map((item) => item.trim())) {
           const target = jobs.find((item) => item.name === need);
           assert.ok(target, `${workflow}: ${job.name} needs unknown job ${need}`);
-          if (requiredNames.has(nameOf(target.block.map((line) => line.raw).join('\n')))) continue;
+          if (need === 'scope' || requiredNames.has(nameOf(target.block.map((line) => line.raw).join('\n')))) continue;
           checked++;
-          assert.match(body, /^ {4}if: "!cancelled\(\)"$/m, `${job.name} needs the non-required job ${need}: it would be skipped when ${need} fails`);
-          const guard = /^ {6}- name: .*\n {8}env:\n {10}(\w+): \$\{\{ needs\.([\w-]+)\.result \}\}\n {8}run: \|\n((?: {10}.*\n?)+)/m.exec(body.split('    steps:\n')[1] ?? '');
+          assert.ok(body.includes('    if: "!cancelled()"') || body.includes("    if: \"!cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.docs_only != 'true')\""), `${job.name} needs the non-required job ${need}: it would be skipped when ${need} fails`);
+          const guard = /^ {6}- name: .*\n {8}env:\n(?: {10}DOCS_ONLY: .*\n)? {10}(\w+): \$\{\{ needs\.([\w-]+)\.result \}\}\n {8}run: \|\n((?: {10}.*\n?)+)/m.exec(body.split('    steps:\n')[1] ?? '');
           assert.ok(guard, `${job.name}: no guard step reading needs.${need}.result`);
           assert.equal(guard[2], need);
           assert.match(guard[3], new RegExp(`"\\$${guard[1]}" != success \\]\\]`));
@@ -117,7 +118,7 @@ describe('merge queue: every required check name is reported', () => {
 
   test('the three jobs that wait for the native PTY host carry the guard on needs.native.result', () => {
     const body = read('public-ci.yml');
-    assert.equal((body.match(/^ {4}needs: native$/gm) ?? []).length, 3);
+    assert.equal((body.match(/^ {4}needs: \[scope, native\]$/gm) ?? []).length, 3);
     assert.equal((body.match(/^ {10}NATIVE_RESULT: \$\{\{ needs\.native\.result \}\}$/gm) ?? []).length, 3);
     assert.equal((body.match(/^ {10}if \[\[ "\$NATIVE_RESULT" != success \]\]; then$/gm) ?? []).length, 3);
   });
@@ -136,8 +137,8 @@ describe('merge queue: every required check name is reported', () => {
   test('the non-required frontend matrix checks native before running either shard', () => {
     const name = 'frontend and Node tests (shard ${{ matrix.shard }} of 2)';
     const body = jobOf('public-ci.yml', name);
-    assert.match(body, /^ {4}needs: native$/m);
-    assert.match(body, /^ {4}if: "!cancelled\(\)"$/m);
+    assert.match(body, /^ {4}needs: \[scope, native\]$/m);
+    assert.ok(body.includes("    if: \"!cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.docs_only != 'true')\""));
     const steps = body.split('    steps:\n')[1];
     assert.ok(steps.startsWith('      - name: Fail unless the native PTY host job succeeded\n        env:'));
     assert.match(steps, /NATIVE_RESULT: \$\{\{ needs\.native\.result \}\}/);
@@ -174,7 +175,7 @@ describe('merge queue: every required check name is reported', () => {
     const reportedNames = new Set(Object.values(REQUIRED).flat());
     // Both helpers are non-required themselves; required jobs explicitly
     // guard their result, so neither failure can pass as a skipped check.
-    const helpers = new Set(['native PTY host (linux-x86_64)',
+    const helpers = new Set(['Classify changed files', 'native PTY host (linux-x86_64)',
       'browser ${{ matrix.kind }} tests (Chromium, shard ${{ matrix.shard }} of 4)',
       'frontend and Node tests (shard ${{ matrix.shard }} of 2)']);
     for (const workflow of Object.keys(REQUIRED)) {

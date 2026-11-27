@@ -17,8 +17,8 @@ on:
     branches: [main, "release/**"]
   pull_request:
     # The default three, plus `edited`: a pull request whose base branch is changed is checked
-    # again against the new base (the cla job; tools/cla-check/SPEC.md). Every job runs on it, so
-    # that no required check is left as skipped. A title or description edit also re-runs them.
+    # again against the new base (the cla job; tools/cla-check/SPEC.md). A title or description edit
+    # also re-runs the checks.
     types: [opened, synchronize, reopened, edited]
   # The merge queue (CONTRIBUTING.md, "Merge queue"): GitHub builds a temporary commit of the queued
   # pull request(s) on the base branch and waits for every required check on it. Every required
@@ -51,16 +51,38 @@ env:
   BASH32_IMAGE: bash:3.2@sha256:2556c2da19c32c1614d318645c73a7bf64d38be21cf69e98e3ca51f053983719
 
 jobs:
+  scope:
+    name: Classify changed files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - name: Check out pull request merge commit
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: scope
+        if: github.event_name == 'pull_request'
+        run: |
+          BASE_SHA="$(git rev-parse HEAD^1)"
+          # Use the base's classifier. An older base or a failed read runs everything.
+          if scope="$(git show "$BASE_SHA:scripts/test-scope.sh" | bash -s -- "$BASE_SHA")" && [[ "$scope" == docs ]]; then
+            echo 'docs_only=true' >> "$GITHUB_OUTPUT"
+          fi
+
   frontend_parts:
     name: frontend and Node tests (shard ${{ matrix.shard }} of 2)
     strategy:
       fail-fast: false
       matrix:
         shard: [0, 1]
-    needs: native
+    needs: [scope, native]
     # A skipped required check counts as passing for the ruleset, and `native` is not itself required:
     # the job runs even when `native` failed or was skipped, and its first step turns that into a red check.
-    if: "!cancelled()"
+    if: "!cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.docs_only != 'true')"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -216,15 +238,19 @@ jobs:
 
   frontend:
     name: frontend and Node tests
-    needs: frontend_parts
+    needs: [scope, frontend_parts]
     if: "!cancelled()"
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require both frontend shards
         env:
+          DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
           PARTS_RESULT: ${{ needs.frontend_parts.result }}
         run: |
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$DOCS_ONLY" == true && "$PARTS_RESULT" == skipped ]]; then
+            exit 0
+          fi
           if [[ "$PARTS_RESULT" != success ]]; then
             echo "frontend shards result: $PARTS_RESULT (success expected)"
             exit 1
@@ -232,10 +258,10 @@ jobs:
 
   python:
     name: ruff and pytest (without browser)
-    needs: native
+    needs: [scope, native]
     # A skipped required check counts as passing for the ruleset, and `native` is not itself required:
     # the job runs even when `native` failed or was skipped, and its first step turns that into a red check.
-    if: "!cancelled()"
+    if: "!cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.docs_only != 'true')"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -298,10 +324,10 @@ jobs:
 
   browser_parts:
     name: browser ${{ matrix.kind }} tests (Chromium, shard ${{ matrix.shard }} of 4)
-    needs: native
+    needs: [scope, native]
     # A skipped required check counts as passing for the ruleset, and `native` is not itself required:
     # the job runs even when `native` failed or was skipped, and its first step turns that into a red check.
-    if: "!cancelled()"
+    if: "!cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.docs_only != 'true')"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     # Run the Python and Node halves concurrently. Four shards per half keep
@@ -463,7 +489,7 @@ jobs:
   # succeeded; skipped, cancelled and failed parts cannot pass the guard.
   browser:
     name: browser tests (Chromium, shard ${{ matrix.shard }} of 4)
-    needs: browser_parts
+    needs: [scope, browser_parts]
     if: "!cancelled()"
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -474,8 +500,12 @@ jobs:
     steps:
       - name: Require every browser test shard
         env:
+          DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
           PARTS_RESULT: ${{ needs.browser_parts.result }}
         run: |
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$DOCS_ONLY" == true && "$PARTS_RESULT" == skipped ]]; then
+            exit 0
+          fi
           if [[ "$PARTS_RESULT" != success ]]; then
             echo "Browser test matrix did not succeed"
             exit 1
@@ -483,6 +513,8 @@ jobs:
 
   ocaml:
     name: OCaml build, tests and native ptyhost gate
+    needs: scope
+    if: "!cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.docs_only != 'true')"
     runs-on: ubuntu-24.04
     # Measured on a 2-vCPU runner: warm opam state (restore from the cache), about 7 minutes.
     # Cold (no cache entry yet, or a changed key): the compiler and every dependency are built
@@ -624,6 +656,8 @@ jobs:
   # more when the host must be rebuilt. The 45-minute timeout only ends a hung run.
   native:
     name: native PTY host (linux-x86_64)
+    needs: scope
+    if: "!cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.docs_only != 'true')"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
