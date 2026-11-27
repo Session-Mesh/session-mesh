@@ -11,7 +11,7 @@ export type SwitchSource = {id: string; created: number; agent: SwitchBackend; a
   context_revision: string; conversation: string; agent_pid: number; agent_started: number};
 export type SwitchTarget = {id: string; label: string; context_revision: string | null};
 export type SwitchReceipt = {id: string; state: string; result?: {error?: string} | null};
-type Remembered = {source: SwitchSource; id: string | null; state: string; error?: string};
+type Remembered = {source: Pick<SwitchSource, 'id' | 'created' | 'agent'>; id: string | null; state: string; error?: string};
 type Profile = {backend?: unknown; id?: unknown; label?: unknown; context_revision?: unknown;
   enabled?: unknown; switch_qualified?: unknown; managed?: unknown};
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -78,9 +78,12 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
   const storageKey = 'mesh.accountSwitchReceipts.v1';
   const receipts = new Map<string, Remembered>();
   const keyOf = (session: Session) => `${session.id}:${session.created}:${session.agent?.type}`;
+  const storageLimit = 8192;
+  let storageReadable = true;
   try {
     const raw = doc.defaultView?.sessionStorage.getItem(storageKey);
-    if (raw && raw.length <= 8192) {
+    if (raw && raw.length > storageLimit) storageReadable = false;
+    else if (raw) {
       for (const item of JSON.parse(raw) as Remembered[]) {
         if (item?.source && typeof item.source.id === 'string' && typeof item.source.created === 'number'
           && switchBackend(item.source.agent)
@@ -89,12 +92,17 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
             agent: {type: item.source.agent}}), item);
       }
     }
-  } catch { /* storage is optional; the in-memory receipt still prevents replay on reopen */ }
-  const remember = (receipt: Remembered) => {
-    receipts.set(keyOf({id: receipt.source.id, created: receipt.source.created,
-      agent: {type: receipt.source.agent}}), receipt);
-    try { doc.defaultView?.sessionStorage.setItem(storageKey, JSON.stringify([...receipts.values()].slice(-20))); }
-    catch { /* private storage can be unavailable */ }
+  } catch { storageReadable = false; }
+  const persist = () => {
+    if (!storageReadable || !doc.defaultView) return false;
+    const entries = [...receipts.values()].filter(item => !['completed', 'failed'].includes(item.state));
+    const reserved = entries.map(({source}) => ({source, id: 'x'.repeat(64), state: 'execution_unknown'}));
+    if (JSON.stringify(reserved).length > storageLimit) return false;
+    const raw = JSON.stringify(entries.map(({source, id, state}) => ({source, id, state})));
+    try {
+      doc.defaultView.sessionStorage.setItem(storageKey, raw);
+      return true;
+    } catch { return false; }
   };
   const receiptFor = (session: Session | null | undefined) => session && receipts.get(keyOf(session));
   const showReceipt = (receipt: Remembered) => {
@@ -124,7 +132,7 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
       if (!displayed()) return;
       receipt.state = 'unknown'; // A failed status read cannot establish a successful result.
     }
-    remember(receipt);
+    persist();
     showReceipt(receipt);
     if (!['completed', 'failed', 'unknown', 'execution_unknown'].includes(receipt.state))
       doc.defaultView?.setTimeout(() => { void refreshReceipt(receipt, generation); }, 800);
@@ -164,33 +172,52 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
     }
     const target = targets.find(p => p.id === to.value);
     if (!target) return;
-    busy = true; confirm.disabled = true; cancel.disabled = true; to.disabled = true;
     const source = selected;
+    const key = keyOf({id: source.id, created: source.created, agent: {type: source.agent}});
+    if (receipts.has(key)) return;
+    const receipt: Remembered = {
+      source: {id: source.id, created: source.created, agent: source.agent},
+      id: null, state: 'unknown',
+    };
+    receipts.set(key, receipt);
+    if (!persist()) {
+      receipts.delete(key);
+      status.textContent = ports.t('accountSwitch.unavailable');
+      return;
+    }
+    busy = true; confirm.disabled = true; cancel.disabled = true; to.disabled = true;
+    selected = null;
+    displayedReceipt = receipt;
     status.textContent = ports.t('accountSwitch.submitting');
-    // No retry: an interrupted reply may still have scheduled the durable operation.
-    let deadline: number | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      deadline = doc.defaultView!.setTimeout(() => reject(new Error()), 10000);
-    });
-    void Promise.race([ports.submit(source, target), timeout]).then(received => {
+    const ownsDisplay = () => dialog.open && displayedReceipt === receipt;
+    const settle = () => {
+      if (!ownsDisplay()) return;
+      busy = false; cancel.disabled = false;
+      displayReceipt(receipt);
+    };
+    const deadline = doc.defaultView!.setTimeout(settle, 10000);
+    // Observe the original request even after the UI deadline, without sending it again.
+    void Promise.resolve().then(() => ports.submit(source, target)).then(received => {
       if (received === null) {
-        dialog.close();
-        ports.notice(ports.t('accountSwitch.stale'));
+        receipts.delete(key);
+        persist();
+        if (ownsDisplay()) {
+          busy = false; cancel.disabled = false;
+          dialog.close();
+          ports.notice(ports.t('accountSwitch.stale'));
+        }
         return;
       }
       if (!received || typeof received.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(received.id)
-        || received.state !== 'approved') throw new Error();
-      const receipt: Remembered = {source, id: received.id, state: received.state};
-      selected = null;
-      remember(receipt); displayReceipt(receipt);
+        || received.state !== 'approved') return;
+      receipt.id = received.id;
+      receipt.state = received.state;
+      persist();
     }).catch(() => {
-      const receipt: Remembered = {source, id: null, state: 'unknown'};
-      selected = null;
-      remember(receipt); displayReceipt(receipt);
+      // A transport failure leaves the pre-submission marker in place.
     }).finally(() => {
       doc.defaultView!.clearTimeout(deadline);
-      busy = false; cancel.disabled = false;
-      // Only an observed new session incarnation permits another submission.
+      settle();
     });
   });
   return {
