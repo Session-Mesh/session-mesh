@@ -191,7 +191,7 @@
       <button type="button" class="btn ghost sm back" data-act="back" hidden>←</button>
       <div class="p-identity">
         <span class="p-name">—</span>
-        <span class="account-badge p-account" hidden></span>
+        <button type="button" class="account-badge p-account" hidden disabled></button>
         <details class="p-name-disclosure">
           <summary aria-label="Full name" data-i18n-aria-label="pane.fullName" data-i18n="pane.fullName">Full name</summary>
           <div class="p-full-name">—</div>
@@ -242,6 +242,19 @@
 </template>
 </div>
 
+<dialog id="dlg-account-switch" aria-labelledby="account-switch-title" aria-describedby="account-switch-warning">
+  <h2 id="account-switch-title" data-i18n="accountSwitch.title">Change account</h2>
+  <p data-switch-from></p>
+  <label><span data-i18n="accountSwitch.destination">Destination account</span>
+    <select data-switch-to></select>
+  </label>
+  <p id="account-switch-warning" data-switch-warning></p>
+  <p role="status" aria-live="polite" data-switch-status></p>
+  <div class="row">
+    <button type="button" class="btn ghost" data-switch-cancel data-i18n="common.cancel">Cancel</button>
+    <button type="button" class="btn primary" data-switch-confirm data-i18n="accountSwitch.confirm">Change account</button>
+  </div>
+</dialog>
 <dialog id="dlg-agent-mail-consent" aria-labelledby="agent-mail-consent-title" aria-describedby="agent-mail-consent-description agent-mail-consent-status">
   <form method="dialog">
     <h2 id="agent-mail-consent-title" data-i18n="mail.title">Message from another agent</h2>

@@ -355,7 +355,9 @@ class Requests:
     @staticmethod
     def _switch_binding(binding, source, from_account, account):
         """Validate a server-observed native pair; storing it grants no authority."""
-        if not isinstance(binding, dict) or set(binding) != {"backend", "source", "target", "conversation", "agent_pid", "agent_start"}:
+        required = {"backend", "source", "target", "conversation", "agent_pid", "agent_start"}
+        if (not isinstance(binding, dict) or set(binding) not in (required, required | {"initiator"})
+                or ("initiator" in binding and binding["initiator"] != "operator")):
             raise ValueError("Invalid switch binding")
         if (not isinstance(binding["conversation"], str) or not CONVERSATION_RE.fullmatch(binding["conversation"])
                 or type(binding["agent_pid"]) is not int or binding["agent_pid"] <= 0
@@ -371,7 +373,8 @@ class Requests:
                 raise ValueError("Invalid switch binding")
         return binding
 
-    def create(self, source, body, *, enabled_agents, resumable, current_account=None, conversation=None, switch_binding=None):
+    def create(self, source, body, *, enabled_agents, resumable, current_account=None, conversation=None,
+               switch_binding=None, unique_active_switch=False):
         if not isinstance(body, dict) or set(body) - {"action", "preset", "name", "model", "account", "effort"}:
             raise ValueError("Invalid request fields")
         action = body.get("action")
@@ -433,6 +436,13 @@ class Requests:
             source_count = self._db.execute(
                 f"SELECT count(*) FROM session_requests WHERE state IN ({active_slots}) "
                 "AND source_json = ?", (*ACTIVE_STATES, source_json)).fetchone()[0]
+            if unique_active_switch:
+                active_switches = self._db.execute(
+                    f"SELECT source_json FROM session_requests WHERE action = 'switch_account' "
+                    f"AND state IN ({active_slots})", ACTIVE_STATES).fetchall()
+                if any(all(self._decode(row["source_json"]).get(key) == source[key]
+                           for key in ("id", "created", "agent")) for row in active_switches):
+                    raise ValueError("An account switch is already pending for this session")
             if count >= MAX_ACTIVE_REQUESTS:
                 raise ValueError("Too many active session requests")
             if source_count >= MAX_ACTIVE_PER_SOURCE:

@@ -9,6 +9,18 @@ configuration and history roots. A restore with an unbound or missing conversati
 recovery offer available. macOS native-profile switching and OpenCode live switching remain
 unavailable.
 
+The terminal-header operator picker is limited to eligible Claude Code and Codex sessions on Linux.
+The owner chooses a qualified named profile and confirms
+transcript disclosure before the browser submits an owner-cookie-only request. The browser's source
+and destination are expected snapshots; the server rechecks the live native binding. Confirmation
+preferences do not bypass this dialog, and this route refuses a default destination. An agent's own
+switch request retains its separate owner-approval flow. The operator marker is durable with the
+native switch binding, including across a web restart; only that path requires another observed
+idle foreground conversation immediately before the bound stop. The host still binds the process
+incarnation and fences input, but the idle observation is not an atomic checkpoint of all
+possible provider, agent or terminal ingress. A default source requires its recorded context
+revision.
+
 ## Identity and configuration
 
 The private `backend-profiles.json` file under `MESH_CONF_DIR` contains

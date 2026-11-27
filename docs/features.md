@@ -493,6 +493,28 @@ shown separately from transport verification. Refresh is explicit.
 associations are inert references until their runtime identity can be verified. External account
 connectors, harness installation and advanced workflow actions remain future work.
 
+## Changing a live session's account
+
+For a qualified, idle Claude Code or Codex session on Linux, the account badge in its terminal
+header opens an account picker. It offers enabled, non-managed profiles of the **same backend**.
+Choose a destination and confirm: Mesh copies the conversation transcript to that account's
+folder and sends it to its provider, then resumes the agent in the same terminal. Opening or
+cancelling the picker changes nothing. The badges in the sidebar and pinned rows remain labels
+because those rows are themselves navigation buttons. Historical, unbound, busy and unsupported
+sessions cannot use this control.
+
+The confirmation is required for every switch from this picker. Saved account confirmation
+preferences do not currently bypass it; an agent's own switch request still requires separate
+human approval. A transcript copy does not promise preservation of unsent drafts, pending
+approvals or in-flight work. If a request fails or its outcome is uncertain, inspect the session
+and request status before trying again. Acceptance of a request is not completion: the picker
+shows the durable result (including failure or unknown outcome), and retains the receipt when
+closed and reopened in the same browser tab. A missing response remains uncertain and cannot
+be submitted again from that session's picker. If the agent starts working after confirmation
+but before its bound stop, a fresh observable idle check refuses the operator's switch without
+stopping it; this is not an atomic checkpoint against every possible new input. A default-account
+source requires a recorded context revision; an unbound default session cannot use the picker.
+
 ## Organising the sidebar
 
 - **Folders.** "+ Folder" creates a folder. Drag a session onto a folder to file it, onto another
