@@ -340,6 +340,13 @@ describe('account switch requests', {skip: SKIP}, () => {
           const first = launch();
           assert.equal(first[1], roots[from]);
           const tty = terminal(first[5]!);
+          const transcript = (profile: keyof typeof roots) =>
+            path.join(roots[profile], 'projects', 'test-workspace', session.sid + '.jsonl');
+          const marker = `source transcript marker for ${session.name}`;
+          assert.equal(fs.existsSync(transcript(to)), false);
+          fs.appendFileSync(transcript(from), JSON.stringify({
+            type: 'user', sessionId: session.sid, message: {role: 'user', content: marker},
+          }) + '\n');
           const switched = await decide(await requested(session, to), true);
           assert.equal(switched.state, 'completed', JSON.stringify(switched));
           for (let attempt = 0; attempt < 100 && launch()[5] === first[5]; attempt++) await sleep(50);
@@ -347,8 +354,7 @@ describe('account switch requests', {skip: SKIP}, () => {
           assert.notEqual(resumed[5], first[5]);
           assert.deepEqual(resumed.slice(1, 5), [roots[to], session.name, session.sid, session.token]);
           assert.equal(terminal(resumed[5]!), tty);
-          assert.match(fs.readFileSync(path.join(roots[to], 'projects', 'test-workspace', session.sid + '.jsonl'), 'utf8'),
-            /test account transfer/);
+          assert.ok(fs.readFileSync(transcript(to), 'utf8').includes(marker));
         }
       } finally {fs.rmSync(registry);}
     });

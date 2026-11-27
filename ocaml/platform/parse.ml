@@ -115,8 +115,10 @@ let darwin_selected_environment ?(title_padding = false) buffer names =
     List.find_opt (fun (_, prefix) -> String.starts_with ~prefix item) selected
   in
   let rec scan position seen =
-    if position = String.length buffer || buffer.[position] = '\000' then
-      Ok seen
+    if position = String.length buffer then Ok seen
+    else if buffer.[position] = '\000' then
+      if skip_nuls buffer position = String.length buffer then Ok seen
+      else malformed "procargs2: data after empty environment entry"
     else
       match String.index_from_opt buffer position '\000' with
       | None -> malformed "procargs2: unterminated environment string"
@@ -140,18 +142,18 @@ let darwin_selected_environment ?(title_padding = false) buffer names =
       if List.exists (fun item -> Option.is_some (matching_key item)) argv then
         malformed "procargs2: selected environment key in argument vector"
       else
-        (* Pi rewrites its process title. On Darwin its original argument
-           area can retain zero padding before the inherited environment. *)
+        (* A rewritten process title can leave zero padding before the
+           inherited environment. *)
         scan (if title_padding then skip_nuls buffer position else position) []
 
-let darwin_environment_matches ?(unset = []) buffer ~key ~expected =
+let darwin_environment_matches ?(title_padding = false) ?(unset = []) buffer ~key ~expected =
   Result.map
     (fun selected ->
       List.assoc_opt key selected = Some expected
       && List.for_all
            (fun name -> Option.value ~default:"" (List.assoc_opt name selected) = "")
            unset)
-    (darwin_selected_environment buffer (key :: unset))
+    (darwin_selected_environment ~title_padding buffer (key :: unset))
 
 (* [tpgid] is <= 0 when the process has no controlling terminal (Linux reports
    -1; 0 can appear on other kernels). Handing that back as a group id would

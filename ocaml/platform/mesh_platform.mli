@@ -259,7 +259,7 @@ module Parse : sig
       after the declared argument vector for processes that rewrite their title. *)
 
   val darwin_environment_matches :
-    ?unset:string list -> string -> key:string -> expected:string ->
+    ?title_padding:bool -> ?unset:string list -> string -> key:string -> expected:string ->
     (bool, error) result
   (** Check for one matching environment entry after the argument vector.
       All [unset] entries must be absent or empty. Refuse duplicate selected
