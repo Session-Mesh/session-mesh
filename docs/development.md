@@ -69,7 +69,9 @@ scripts/test-local.sh test-diff main     # compare the working tree with a revis
 
 Use individual targets for feedback during development. The Node, server and PTY
 targets build the native host. A diff confined to README.md and Markdown under
-docs runs the leak check. Other diffs run the full suite. Pull requests use the
+docs runs the leak check. Locally, a diff of Node test files with optional
+documentation runs the selected files when they all still exist. Other diffs run
+the full suite. Pull requests use the
 same documentation rule for the Linux CI suites. The merge queue and main run
 the full suites.
 
