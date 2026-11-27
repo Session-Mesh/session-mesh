@@ -608,28 +608,29 @@ def _dictation_internal_headers(headers, prepared):
     return internal
 
 
+def _check_dictation_authority(request, principal):
+    if not authed(request) or _dictation_principal(request.app) != principal:
+        raise web.HTTPUnauthorized()
+
+
 async def _dictation_transfer(request, headers, exchange):
     admission = request.method == "POST" and request.path == "/api/transcribe"
-
-    def check_authority():
-        if not authed(request) or _dictation_principal(request.app) != dict(headers)["X-Mesh-Principal"]:
-            raise web.HTTPUnauthorized()
-
-    check_authority()
+    principal = dict(headers)["X-Mesh-Principal"]
+    _check_dictation_authority(request, principal)
     if admission:
         status, payload = await exchange("POST", "/internal/admission", b"")
-        check_authority()
+        _check_dictation_authority(request, principal)
         if status != 200:
             return web.json_response(payload, status=status, headers={"Cache-Control": "no-store"})
     status, payload = await exchange(request.method, request.rel_url.raw_path, request.content.iter_chunked(65536))
-    check_authority()
+    _check_dictation_authority(request, principal)
     if admission and status == 202:
         # Matching attempts share a preparation. A failed attempt must leave it
         # for another attempt to commit, or for the worker's 15-second expiry.
         prepared = payload
         internal = _dictation_internal_headers(headers, prepared)
         status, payload = await exchange("POST", "/internal/commit/" + prepared["job"]["job_id"], b"{}", internal)
-        check_authority()
+        _check_dictation_authority(request, principal)
         if status == 200:
             status = 202
     return web.json_response(payload, status=status, headers={"Cache-Control": "no-store"})
@@ -652,8 +653,9 @@ async def api_dictation(request):
             return web.json_response({"enabled": False, "disabled_reason": request.app["dictation_disabled_reason"]},
                                      headers={"Cache-Control": "no-store"})
         return _dictation_error("disabled", 503)
+    principal = _dictation_principal(request.app)
     headers = [("X-Mesh-Bridge", request.app["dictation_secret"]),
-               ("X-Mesh-Principal", _dictation_principal(request.app))]
+               ("X-Mesh-Principal", principal)]
     # Closed whitelist preserves duplicate public metadata for typed rejection;
     # caller-supplied internal context is never forwarded.
     for name in ("Content-Type", "X-Mesh-Dictation-Client", "X-Mesh-Session",
@@ -665,11 +667,13 @@ async def api_dictation(request):
     try:
         await asyncio.wait_for(capacity.acquire(), 0.05)
     except asyncio.TimeoutError:
+        _check_dictation_authority(request, principal)
         return _dictation_error("unavailable", 503)
     try:
         await _sync_dictation_principal(request.app)
         return await _dictation_transfer(request, headers, exchange)
     except (asyncio.TimeoutError, aiohttp.ClientError, OSError, ValueError, web.HTTPServiceUnavailable):
+        _check_dictation_authority(request, principal)
         return _dictation_error("unavailable", 503)
     finally:
         capacity.release()
