@@ -23,10 +23,10 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
     try {
       const page = await context.newPage();
       const revision = 'a'.repeat(64), other = 'b'.repeat(64);
-      let status = 'idle', account = 'work', requests = 0;
+      let status = 'idle', account = 'work', requests = 0, created = 123;
       let requestState = 'approved';
       const listing = () => ({mesh: [{
-        kind: 'mesh', id: 'bound-one', name: 'bound-one', label: 'bound-one', created: 123,
+        kind: 'mesh', id: 'bound-one', name: 'bound-one', label: 'bound-one', created,
         activity: 124, attached: 0, cwd: mesh.home, folder: null, rank: 0, notice: null,
         account, account_label: account === 'work' ? 'Work' : 'Personal',
         account_context_revision: account === 'work' ? revision : other, known_agent: backend,
@@ -105,6 +105,18 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
       await page.evaluate(() => refresh());
       assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), true,
         'inventory changes must not conceal an admitted request receipt');
+      if (backend === 'pi') {
+        created = 125;
+        status = 'idle';
+        account = 'other';
+        await page.evaluate(() => refresh());
+        await badge.getByText('Personal', {exact: true}).waitFor();
+        requestState = 'completed';
+        await dialog.locator('[data-switch-status]').getByText(/Changement de compte terminé/i).waitFor();
+        assert.equal(requests, 1, 'reading an admitted receipt never repeats the switch');
+        await dialog.locator('[data-switch-cancel]').click();
+        return;
+      }
       requestState = 'failed';
       await dialog.locator('[data-switch-status]').getByText(
         locale === 'fr-FR' ? /échoué|aucun arrêt/ : /failed|nothing was stopped/i).waitFor();

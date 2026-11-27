@@ -73,6 +73,7 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
   const cancel = dialog.querySelector<HTMLButtonElement>('[data-switch-cancel]')!;
   let selected: SwitchSource | null = null, targets: SwitchTarget[] = [], busy = false, sequence = 0;
   let trigger: HTMLElement | null = null;
+  let displayedReceipt: Remembered | null = null, receiptGeneration = 0;
   const storageKey = 'mesh.accountSwitchReceipts.v1';
   const receipts = new Map<string, Remembered>();
   const keyOf = (session: Session) => `${session.id}:${session.created}:${session.agent?.type}`;
@@ -107,22 +108,30 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
     status.textContent = ports.t(`accountSwitch.${key}`)
       + (key === 'failed' && receipt.error ? ` ${receipt.error}` : '');
   };
-  const refreshReceipt = async (receipt: Remembered) => {
-    if (!receipt.id) return;
+  const refreshReceipt = async (receipt: Remembered, generation: number) => {
+    const displayed = () => dialog.open && receiptGeneration === generation && displayedReceipt === receipt;
+    if (!receipt.id || !displayed()) return;
     try {
       const observed = await ports.status(receipt.id);
+      if (!displayed()) return;
       if (observed.id !== receipt.id || !['approved', 'executing', 'completed', 'failed', 'execution_unknown'].includes(observed.state))
         throw new Error();
       receipt.state = observed.state;
       if (typeof observed.result?.error === 'string') receipt.error = observed.result.error;
       else delete receipt.error;
     } catch {
+      if (!displayed()) return;
       receipt.state = 'unknown'; // A failed status read cannot establish a successful result.
     }
     remember(receipt);
-    if (dialog.open && receiptFor(ports.source()?.session) === receipt) showReceipt(receipt);
-    if (dialog.open && !['completed', 'failed', 'unknown', 'execution_unknown'].includes(receipt.state))
-      doc.defaultView?.setTimeout(() => { if (dialog.open) void refreshReceipt(receipt); }, 800);
+    showReceipt(receipt);
+    if (!['completed', 'failed', 'unknown', 'execution_unknown'].includes(receipt.state))
+      doc.defaultView?.setTimeout(() => { void refreshReceipt(receipt, generation); }, 800);
+  };
+  const displayReceipt = (receipt: Remembered) => {
+    displayedReceipt = receipt;
+    showReceipt(receipt);
+    void refreshReceipt(receipt, ++receiptGeneration);
   };
   const current = () => {
     const now = ports.source();
@@ -137,6 +146,7 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
   };
   dialog.addEventListener('close', () => {
     selected = null;
+    displayedReceipt = null;
     if (trigger?.isConnected && doc.activeElement === doc.body) trigger.focus();
     trigger = null;
   });
@@ -162,12 +172,11 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
         || received.state !== 'approved') throw new Error();
       const receipt: Remembered = {source, id: received.id, state: received.state};
       selected = null;
-      remember(receipt); showReceipt(receipt);
-      void refreshReceipt(receipt);
+      remember(receipt); displayReceipt(receipt);
     }).catch(() => {
       const receipt: Remembered = {source, id: null, state: 'unknown'};
       selected = null;
-      remember(receipt); showReceipt(receipt);
+      remember(receipt); displayReceipt(receipt);
     }).finally(() => {
       busy = false; cancel.disabled = false;
       // Only an observed new session incarnation permits another submission.
@@ -184,9 +193,8 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
         if (previous) {
           selected = null; trigger = element;
           from.textContent = ports.t('accountSwitch.previous');
-          showReceipt(previous);
           dialog.showModal();
-          if (previous.id) void refreshReceipt(previous);
+          displayReceipt(previous);
           cancel.focus();
           return;
         }
