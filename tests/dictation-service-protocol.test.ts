@@ -88,7 +88,7 @@ async function privateCall(socketPath:string,headers:Record<string,string>,route
 }
 async function startWorker(directory:string,inventory:string,url:string,own:(child:ChildProcessWithoutNullStreams)=>void) {
   const socket=path.join(directory,'worker.sock'),secret=randomBytes(32).toString('hex');
-  const child=spawn(process.execPath,[path.resolve('backend/dictation-service.cjs')],{
+  const child=spawn(process.execPath,[path.resolve('backend/dictation-service.cjs'),'--worker'],{
     env:{PATH:process.env.PATH,MESH_WHISPER_URL:url},stdio:['pipe','pipe','pipe']});
   own(child);child.stdin.on('error',()=>{});
   let output='',errors='';child.stdout.on('data',p=>output+=p.toString());child.stderr.on('data',p=>errors+=p.toString());

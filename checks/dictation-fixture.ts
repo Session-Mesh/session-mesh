@@ -36,7 +36,7 @@ export function processState(pid:number):string|null {
   return result.status===0?result.stdout.trim().slice(0,1)||null:null;
 }
 
-interface FixtureOptions {childTempDepth?:number;workerEntry?:string;workerPreload?:string;whisperEnv?:NodeJS.ProcessEnv;startupWaitMs?:number;onSpawn?:(child:ChildProcess)=>void}
+interface FixtureOptions {childTempDepth?:number;workerEntry?:string;workerPreload?:string;whisperEnv?:NodeJS.ProcessEnv;startupWaitMs?:number;beforeSpawn?:(config:string)=>void;onSpawn?:(child:ChildProcess)=>void}
 export async function fixture(enabled=true,noNode=false,nodePath?:string,options:FixtureOptions={}){
   const root=process.cwd();
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-http-'));fs.chmodSync(directory,0o700);
@@ -94,6 +94,7 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
     fs.writeFileSync(nodePath,`#!/bin/sh\nexec ${quote(process.execPath)} ${options.workerPreload?'--require '+quote(options.workerPreload):''} ${options.workerEntry?quote(options.workerEntry):'"$@"'}\n`,{mode:0o700});
   }
   if(nodePath!==undefined)env.MESH_NODE=nodePath;
+  options.beforeSpawn?.(config);
   const child=spawn(python(),['-B',path.join(root,'server.py')],{cwd:root,env,stdio:['ignore','ignore','pipe']});let errors='';child.stderr.on('data',b=>errors+=b);
   let spawnError: Error | undefined;
   child.once('error', error => { spawnError = error; });

@@ -19,7 +19,8 @@ async function controlled(t:TestContext,childTempDepth=0){
   fs.writeFileSync(preload,`const fs=require('node:fs'),http=require('node:http'),create=http.createServer;
 const trace=${JSON.stringify(trace)},control=${JSON.stringify(control)},release=${JSON.stringify(release)};
 const log=row=>fs.appendFileSync(trace,JSON.stringify(row)+'\\n');
-process.stdin.once('data',part=>{const value=JSON.parse(part.toString().split('\\n')[0]);fs.writeFileSync(${JSON.stringify(bootstrap)},JSON.stringify({socket:value.socket,pid:process.pid}));});
+const write=process.stdout.write;
+process.stdout.write=function(part){if(String(part).startsWith('{"socket":'))fs.writeFileSync(${JSON.stringify(bootstrap)},JSON.stringify({socket:JSON.parse(String(part)).socket,pid:process.pid}));return write.apply(this,arguments);};
 http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
  log({event:'request',path:req.url});
  const rule=fs.existsSync(control)?JSON.parse(fs.readFileSync(control,'utf8')):null;

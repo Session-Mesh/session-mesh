@@ -36,6 +36,22 @@ test('failed socket startup preserves the live worker and its close is shared', 
   }
 });
 
+test('typed listener startup rejects a pre-cancelled worker before binding', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-start-abort-'));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, 'worker.sock');
+  const config = configuration({MESH_WHISPER_URL: 'http://127.0.0.1:1/fixed'})!;
+  const controller = new AbortController();
+  controller.abort();
+  t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
+  await assert.rejects(
+    startService(config, 'a'.repeat(64), socket, path.join(directory, 'inventory.sock'),
+      'b'.repeat(64), controller.signal),
+    {name: 'AbortError'},
+  );
+  assert.equal(fs.existsSync(socket), false);
+});
+
 for(const kind of ['json','empty','audio'] as const)test(`unfinished ${kind} rejection flushes a typed fault and closes without draining`,async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-body-'));fs.chmodSync(directory,0o700);
   const secret=randomBytes(32).toString('hex'),principal='a'.repeat(64),socketPath=path.join(directory,'worker.sock');
@@ -70,7 +86,7 @@ for(const early of [true,false])test(`worker handles bootstrap stdin EOF ${early
 promises.lstat=async(...args)=>{process.stdout.write('starting\\n');while(!fs.existsSync(${JSON.stringify(release)}))await new Promise(r=>setTimeout(r,5));return original(...args);};
 process.stdin.once('end',()=>process.stdout.write('eof\\n'));`);
   await build({entryPoints:['backend/dictation-main.ts'],outfile:worker,bundle:true,platform:'node',format:'cjs',target:'node22',logLevel:'silent'});
-  const child=spawn(process.execPath,['--require',preload,worker],{env:{PATH:process.env.PATH,HOME:directory,MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'},stdio:['pipe','pipe','pipe']});
+  const child=spawn(process.execPath,['--require',preload,worker,'--worker'],{env:{PATH:process.env.PATH,HOME:directory,MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'},stdio:['pipe','pipe','pipe']});
   let output='',errors='';child.stdout.on('data',part=>output+=part);child.stderr.on('data',part=>errors+=part);
   try{
     child.stdin.write(JSON.stringify({secret:'a'.repeat(64),principal:'b'.repeat(64),socket,inventory:path.join(directory,'missing'),parent:process.pid})+'\n');

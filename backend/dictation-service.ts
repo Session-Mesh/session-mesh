@@ -208,9 +208,15 @@ function serviceHandler(config: Config, engine: Dictation, expected: Buffer) {
 
 export async function startService(
   config: Config, secret: string, socketPath: string, inventorySocket: string, principal: string,
+  signal?: AbortSignal,
 ) {
+  const checkActive = () => {
+    if (signal?.aborted) throw new DOMException('Dictation startup cancelled', 'AbortError');
+  };
+  checkActive();
   if (!/^[a-f0-9]{64}$/.test(principal)) throw Error('Initial principal required');
   const parent = await lstat(dirname(socketPath));
+  checkActive();
   if (!parent.isDirectory() || parent.isSymbolicLink() ||
       (parent.mode & 0o777) !== 0o700 || parent.uid !== process.getuid!())
     throw Error('Private dictation directory required');
@@ -227,6 +233,7 @@ export async function startService(
     await Promise.all([stopped, engine.close()]);
   })();
   try {
+    checkActive();
     await new Promise<void>((resolve, reject) => {
       const failed = (error: Error) => {
         server.off('listening', ready);
@@ -240,7 +247,9 @@ export async function startService(
       server.once('listening', ready);
       server.listen(socketPath);
     });
+    checkActive();
     await chmod(socketPath, 0o600);
+    checkActive();
   } catch (error) {
     await close();
     throw error;

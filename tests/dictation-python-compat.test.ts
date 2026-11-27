@@ -13,7 +13,8 @@ test('the optional dictation bridge retains the documented Python 3.10 deadline 
   const bridge = source.slice(start, end);
   assert.doesNotMatch(bridge, /asyncio\.timeout\s*\(/, 'the context manager requires Python 3.11');
   assert.match(bridge, /asyncio\.wait_for\(worker\.stdout\.readline\(\), 5\)/);
-  assert.match(bridge, /asyncio\.wait_for\(worker\.wait\(\), 3\)/);
+  assert.match(bridge, /asyncio\.wait_for\(worker\.wait\(\), 3\)/,
+    'Python reaps its direct typed child after the bounded graceful close');
   assert.match(bridge, /asyncio\.wait_for\(capacity\.acquire\(\), 0\.05\)/);
   assert.match(bridge, /except asyncio\.TimeoutError:/);
 });

@@ -167,7 +167,7 @@ http.createServer=function(options,listener){return create.call(this,options,(re
 });};`);
   const inventory = await staticDictationInventory(directory);
   const secret=randomBytes(32).toString('hex');
-  const child=spawn(process.execPath,['--require',preload,path.resolve('backend/dictation-service.cjs')],{env:{PATH:process.env.PATH,MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'},stdio:['pipe','pipe','pipe']});
+  const child=spawn(process.execPath,['--require',preload,path.resolve('backend/dictation-service.cjs'),'--worker'],{env:{PATH:process.env.PATH,MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'},stdio:['pipe','pipe','pipe']});
   let output='',errors='';child.stdout.on('data',p=>output+=p);child.stderr.on('data',p=>errors+=p);
   child.stdin.write(JSON.stringify({secret,socket:socketPath,inventory:inventory.socketPath,parent:process.pid,principal:'a'.repeat(64)})+'\n');
   let slow:http.ClientRequest|undefined;
