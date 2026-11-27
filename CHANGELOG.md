@@ -212,6 +212,31 @@ The entries of changes merged since the move to changelog fragments are the file
   agent guide gains a short "Track your work" section that says which system to use for what,
   checked against the server's real tool list. See [docs/work-mcp.md](docs/work-mcp.md#registration).
 
+## 0.1.2
+
+- **A project configuration edit reports `busy` when another writer releases its lock during
+  inspection.** Previously this race could incorrectly report `invalid-config`. The edit is
+  refused and can be retried after reading the current revision.
+- **A cancelled project observation is reported as cancelled on a busy machine too.** When the
+  catalog validator was still exiting after its reply, the PTY host stopped it and reported the
+  observation as failed (`collector-failed`); it now reports it as cancelled.
+- **A full-screen agent opened late keeps its alternate screen and mouse wheel.** After pi,
+  OpenCode, Copilot or Antigravity had written more than the 2 MiB a replay keeps, a browser that
+  opened the session afterwards was on the normal screen with mouse reporting off, and the wheel
+  did nothing. The PTY host now starts a cut replay with the terminal modes the output had set
+  where the replay starts; it takes effect after a PTY host restart. See
+  [Terminal modes in a cut replay](docs/operations.md#terminal-modes-in-a-cut-replay).
+- **The phone key bar no longer brings up the keyboard.** A tap on Esc, Tab, Ctrl, the arrows,
+  ^C or ⏎ moved the focus to the input line, which opened the phone keyboard (in a browser tab
+  and in the installed app) and hid half the screen. The focus now stays where it was: a closed
+  keyboard stays closed and an open one stays open. See [Phone](docs/features.md#phone).
+- **A cut replay follows the browser terminal's modes more closely.** The PTY host now reads the
+  trimmed output as the browser's terminal does: a mode switch with a line feed before its `?`
+  counts, the rest of a title or DCS payload at the start of the replay is no longer shown as text,
+  a full reset keeps a hidden cursor hidden, and alternate scroll, which that terminal ignores, is
+  no longer restored. See
+  [Terminal modes in a cut replay](docs/operations.md#terminal-modes-in-a-cut-replay).
+
 ## 0.1.1
 
 A patch release of the 0.1 line: fixes, a native `mesh-logout-all`, and documentation.
