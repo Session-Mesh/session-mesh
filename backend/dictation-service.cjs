@@ -277,6 +277,13 @@ var Dictation = class {
     this.authorize(session.principal);
     if (!live) throw new Fault("stale_session");
   }
+  async verifyPreparation(session, result) {
+    await this.verifySession(session);
+    const record = this.requests.get(this.key(session, session.request));
+    if (!record || record.job.job_id !== result.job.job_id || record.preparation !== result.preparation)
+      throw new Fault("unavailable");
+    this.checkPreparation(record);
+  }
   reserve(m) {
     if (this.slots.has(this.slot(m))) throw new Fault("session_busy");
     if (this.records.size >= 256) throw new Fault("capacity_full");
@@ -711,7 +718,7 @@ async function dispatch(req, config, engine, send) {
   if (req.method === "POST" && path === "/api/transcribe") {
     const admission2 = metadata(req);
     const result = await engine.prepare(admission2, req.iterator({ destroyOnReturn: false }));
-    await engine.verifySession(admission2);
+    await engine.verifyPreparation(admission2, result);
     send(202, result);
     return;
   }

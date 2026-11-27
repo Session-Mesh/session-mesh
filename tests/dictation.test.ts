@@ -414,3 +414,16 @@ test("a transcription completed at the deadline is rejected before the timer run
     await worker.close();
   }
 });
+
+test('verification finishing after the preparation deadline refuses acceptance', async () => {
+  let now = 0;
+  const engine = new Dictation(config(), {
+    now: () => now,
+    isLive: async () => { now = 16_000; return true; },
+  });
+  try {
+    const request = meta();
+    const prepared = await engine.prepare(request, audio('clip'));
+    await assert.rejects(engine.verifyPreparation(request, prepared), code('unavailable'));
+  } finally { await engine.close(); }
+});
