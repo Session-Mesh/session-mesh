@@ -2,6 +2,35 @@
   "about": "Releases shown in the History tab of index.html, newest first. Edit this file, then run node site/tools/changelog-to-history.mjs. See site/README.md, section History: the releases.",
   "releases": [
     {
+      "version": "v0.1.2",
+      "title": "patch release",
+      "changelog_heading": "0.1.2",
+      "summary": "Fixes for the phone keyboard, terminal replay, and project updates.",
+      "highlights": [
+        {
+          "text": "The phone key bar leaves the soft keyboard in its current state when you tap a key.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "The phone key bar no longer brings up the keyboard." }
+          ]
+        },
+        {
+          "text": "Opening a long-running full-screen session restores its alternate screen and mouse reporting from the retained terminal output.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "A full-screen agent opened late keeps its alternate screen and mouse wheel." },
+            { "file": "CHANGELOG.md", "lead": "A cut replay follows the browser terminal's modes more closely." }
+          ]
+        },
+        {
+          "requires": "projects",
+          "text": "Projects reports cancelled observations as cancelled, and a configuration lock released during inspection returns a retryable busy result.",
+          "sources": [
+            { "file": "CHANGELOG.md", "lead": "A cancelled project observation is reported as cancelled on a busy machine too." },
+            { "file": "CHANGELOG.md", "heading": "0.1.2" }
+          ]
+        }
+      ]
+    },
+    {
       "version": "v0.1.1",
       "title": "patch release",
       "changelog_heading": "0.1.1",
