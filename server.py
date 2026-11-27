@@ -2249,10 +2249,18 @@ def _list_sessions(mesh_raw, listed, read_at=None):
         d = discover.describe(procs, s["pid"])
         _bind_profile_discovery(d, s)
         known_agent = (s.get("meta") or {}).get("known_agent")
+        switch_qualified = _native_switch_available(known_agent, s)
+        observed = d.get("agent")
+        # The web picker needs the current process start; the shared discovery
+        # rows do not carry this account-switch observation.
+        if (switch_qualified and observed and observed.get("type") == known_agent
+                and observed.get("foreground") is True and type(pid := observed.get("pid")) is int
+                and (started := discover.proc_start(pid)) > 0):
+            observed["started"] = started
         d.update(id=s["name"], name=s["name"], kind="mesh", created=s["created"],
                  attached=s["attached"], activity=s["activity"],
                  pty_capabilities=_terminal_input_capabilities(s),
-                 switch_qualified=_native_switch_available(known_agent, s),
+                 switch_qualified=switch_qualified,
                  known_agent=known_agent if known_agent in AGENT_TYPES else None,
                  notice=_session_notice(s), **_account_fields(s),
                  **org["sessions"][s["name"]])
@@ -3241,13 +3249,22 @@ def _event_record(body):
 
 
 async def _session_agent(name, created):
-    """The agent this live session was launched as (``known_agent``), or None for a plain shell."""
+    """The configured agent and PTY leader of this live incarnation."""
     for item in await host({"op": "list"}):
         if item.get("name") == name and item.get("created") == created:
             meta = item.get("meta") or {}
             agent = meta.get("known_agent") or meta.get("agent")
-            return agent if isinstance(agent, str) and agent else None
-    return None
+            return (agent if isinstance(agent, str) and agent else None), item.get("pid")
+    return None, None
+
+
+def _foreground_pi_report(leader_pid, reported_pid):
+    if type(leader_pid) is not int or type(reported_pid) is not int or reported_pid <= 0:
+        return False
+    procs = discover.snapshot()
+    leader, reporter = procs.get(leader_pid), procs.get(reported_pid)
+    return bool(leader and reporter and leader[6] > 0 and reporter[3] == leader[6]
+                and discover.session_agent(procs, leader_pid) == (reported_pid, "pi"))
 
 
 async def api_event(request):
@@ -3258,10 +3275,14 @@ async def api_event(request):
     if not state.take_token(name, nonce):
         raise web.HTTPTooManyRequests(headers={"Retry-After": "1"})
     event = _event_record(await _event_body(request))
-    agent = await _session_agent(name, request["mesh_session_created"])
+    agent, leader = await _session_agent(name, request["mesh_session_created"])
     reason = state.foreign(name, nonce, event, agent)
+    detail = event["detail"] or {}
+    if reason is None and detail.get("source") == "pi":
+        if agent != "pi" or not await asyncio.to_thread(_foreground_pi_report, leader, detail.get("pid")):
+            reason = "foreign_process"
     if reason is not None:
-        reported = (event["detail"] or {}).get("source")
+        reported = detail.get("source")
         print(f"event: ignored {event['type']} for {name}: {reason} "
               f"(session agent {agent}, reported source {reported!r})", flush=True)
         return web.json_response({"ok": True, "applied": False, "reason": reason})

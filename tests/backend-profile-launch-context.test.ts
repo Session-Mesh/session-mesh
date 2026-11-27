@@ -699,18 +699,78 @@ for hook, account, expected in (
   execFileSync(python, ['-I', '-c', script], {timeout: 10000});
 });
 
-test('switchable agents include the observed process start in their inventory', () => {
+test('the event route ignores Pi activity from outside the foreground agent before ordering reports', () => {
+  const script = `
+import asyncio, json, sys
+sys.path.insert(0, ${JSON.stringify(repo)})
+import server
+from types import SimpleNamespace
+
+state = server.EventState()
+class Request(dict):
+    app = {'event_state':state}
+
+async def listing(_):
+    return [{'name':'one','created':123,'pid':100,'meta':{'known_agent':'pi'}}]
+async def body(request):
+    return request['report']
+async def cancel(*args):
+    pass
+server.host = listing
+server._event_body = body
+server._cancel_pending_notice = cancel
+discover = server.discover
+discover.snapshot = lambda: {
+    100: ('bash','S',1,100,100,0,101), 101: ('pi','S',100,101,100,0,101),
+    102: ('pi','S',100,102,100,0,101)}
+discover.session_agent = lambda rows, pid: (101,'pi') if pid == 100 else None
+discover.proc_start = lambda pid: 1
+
+async def report(pid, seq, kind):
+    request = Request(mesh_session='one', mesh_session_nonce='nonce', mesh_session_created=123,
+        report={'type':kind, 'detail':{'source':'pi','pid':pid,
+            'session':'22222222-2222-2222-2222-222222222222','hook':'pi_activity','seq':seq}})
+    return json.loads((await server.api_event(request)).text)
+
+async def main():
+    assert (await report(101, 10, 'done'))['applied'] is True
+    assert (await report(102, 100, 'done'))['applied'] is False
+    assert (await report(101, 11, 'working'))['applied'] is True
+    assert state.current_type('one','nonce') == 'working'
+
+asyncio.run(main())
+`;
+  execFileSync(python, ['-I', '-c', script], {timeout: 10000});
+});
+
+test('only the qualified web inventory adds the observed process start to the shared discovery row', () => {
   const script = `
 import sys
 sys.path.insert(0, ${JSON.stringify(repo)})
-import discover
+import server
+from server import discover
 
+server.NATIVE_SWITCH_QUALIFIED = True
+server._native_profile_mode = lambda: True
+server.organize.view = lambda *args, **kwargs: {'sessions':{'one':{'rank':None}}, 'folders':[]}
+discover.snapshot = lambda: {}
+discover.external_sessions = lambda *args, **kwargs: []
 discover.cmdline = lambda pid: []
 discover.proc_start = lambda pid: {42: 123.25, 43: 0}[pid]
 for kind in ('claude','codex','pi'):
     setattr(discover, kind + '_info', lambda pid: {'type':kind})
-    assert discover.agent_info(42, kind)['started'] == 123.25
-    assert not discover.agent_info(43, kind).get('started')
+    raw = {'name':'one','pid':1,'created':123,'attached':0,'activity':124,
+           'meta':{'known_agent':kind,'account':'work','account_context_revision':'a'*64}}
+    for qualified, foreground, pid, expected in (
+            (True, True, 42, 123.25), (True, True, 43, None),
+            (True, False, 42, None), (False, True, 42, None)):
+        raw['pty_capabilities'] = ['agent_relaunch_v1','agent_relaunch_bound_v1',
+                                   'agent_relaunch_pi_v1'] if qualified else []
+        row = discover.agent_info(pid, kind)
+        assert 'started' not in row
+        discover.describe = lambda *args: {'agent':{**row,'foreground':foreground}}
+        session = server.list_sessions([raw], False)['mesh'][0]
+        assert session['switch_qualified'] is qualified and session['agent'].get('started') == expected, session
 `;
   execFileSync(python, ['-I', '-c', script], {timeout: 10000});
 });
