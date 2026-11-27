@@ -219,7 +219,11 @@ setTimeout(() => {}, 30000);
         body: JSON.stringify({preset: agent, name: `selected-${agent}`, cwd: mesh.home, account: 'work'})});
       assert.equal(response.status, 200, await response.clone().text());
     }
-    const recorded = () => fs.existsSync(record) ? fs.readFileSync(record, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
+    const recorded = () => {
+      if (!fs.existsSync(record)) return [];
+      // The last record can still be in flight while a fixture process appends it.
+      return fs.readFileSync(record, 'utf8').split('\n').slice(0, -1).map(line => JSON.parse(line));
+    };
     await waitFor('all four recording agents', 10000, () => recorded().length === 4);
     const calls = recorded();
     for (const [index, agent] of ['claude', 'codex', 'opencode', 'pi'].entries()) {
