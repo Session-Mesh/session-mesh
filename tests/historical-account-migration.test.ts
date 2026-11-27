@@ -54,6 +54,9 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
   assert.equal(sha(archive),nightly.archiveSha);
   assert.equal(sha(oldHost),nightly.hostSha);
   assert.equal(sha(oldPlatform),nightly.platformSha);
+  const oldHistory = nightly.history ? path.join(artifacts, nightly.history) : undefined;
+  if (oldHistory) assert.equal(sha(oldHistory), nightly.historySha, 'historical history helper digest');
+  const candidateHistory = path.join(path.dirname(candidateHost), 'mesh-history');
   const where = await scratchHome('mesh-historical-account-');
   const source = path.join(where.scratch,'old'), bin = path.join(where.scratch,'bin');
   const socket = path.join(where.home,'run/session-mesh/ptyhost.sock');
@@ -78,7 +81,7 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
       XDG_CACHE_HOME:path.join(where.home,'.cache'), MESH_CONF_DIR:where.confDir,
       MESH_CACHE_DIR:path.join(where.home,'.cache/session-mesh'), MESH_PORT:String(where.port),
       MESH_SESSIONS_WAIT:'60', MESH_TEST_SESSIONS_COMPLETE:'1', MESH_MESH_PLATFORM_CMD:oldPlatformCopy,
-      MESH_MESH_HISTORY_CMD:path.join(REPO,'ocaml/_build/install/default/bin/mesh-history')};
+      MESH_MESH_HISTORY_CMD: oldHistory ?? candidateHistory};
     host = startTestPtyhost([oldHostCopy],{cwd:source,env:hostEnv,stdio:'ignore'},socket); await host.ready;
     const prior = await runServer(where,source); assert.ok(prior.result.listened,prior.output()); server = prior.child;
     stopCurrentServer = onceAsync(() => stopServer(prior.child));
@@ -104,6 +107,7 @@ for (const removeAlias of [false,true]) test(`previous nightly account ${removeA
     host = undefined;
     if (removeAlias) fs.writeFileSync(accounts,JSON.stringify({v:1,accounts:[]}),{mode:0o600});
     where.env.MESH_MESH_PLATFORM_CMD = candidatePlatform;
+    where.env.MESH_MESH_HISTORY_CMD = candidateHistory;
     const next = await runServer(where,REPO); assert.ok(next.result.listened,next.output()); server = next.child;
     stopCurrentServer = onceAsync(() => stopServer(next.child));
     host = startTestPtyhost([candidateHost],{cwd:REPO,env:hostEnv,stdio:'ignore'},socket); await host.ready;

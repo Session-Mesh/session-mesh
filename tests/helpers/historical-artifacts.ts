@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 
-export type HistoricalRelease = {tag:string; archive:string; archiveSha:string; host:string; hostSha:string; platform?:string; platformSha?:string};
+export type HistoricalRelease = {tag:string; archive:string; archiveSha:string; host:string; hostSha:string; platform?:string; platformSha?:string; history?:string; historySha?:string};
 const pinned = {
   stable: {tag:'v0.1.1', archive:'session-mesh-v0.1.1.tar.gz', archiveSha:'f839e0b39dd031831da18bca7fe8654b2e1574222300dc3a2630260e2f2b6f6f', host:'mesh-ptyhost-linux-x86_64', hostSha:'276b2fe69e8ab1ff5def33a455bc444bc773a19913042f246dbd46999a5ad008'},
   nightly: {tag:'v0.2.0-nightly.20261124', archive:'session-mesh-v0.2.0-nightly.20261124.tar.gz', archiveSha:'58ea5761fc840ca2269e1a31c81566cb0c1fb6af6e94354c85be6989c2a63342', host:'nightly-20261124/mesh-ptyhost-linux-x86_64', hostSha:'23e83e42ee335315eebb950469f6a690682d5ec417a451997e4b32cfb446269a', platform:'nightly-20261124/mesh-platform-linux-x86_64', platformSha:'883ae2892e3c2aa93e89a1acf828002bd97a19afb68b6971d9b4d825ecc8011f'},
@@ -25,7 +25,8 @@ export function historicalArtifacts(root: string | undefined): {stable:Historica
     assert.equal(entry.archive, `${role}/session-mesh-${tag}.tar.gz`);
     assert.equal(entry.host, `${role}/mesh-ptyhost-linux-x86_64`);
     assert.equal(entry.platform, `${role}/mesh-platform-linux-x86_64`);
-    for (const key of ['archiveSha', 'hostSha', 'platformSha']) assert.match(String(entry[key]), /^[a-f0-9]{64}$/);
+    assert.equal(entry.history, `${role}/mesh-history-linux-x86_64`);
+    for (const key of ['archiveSha', 'hostSha', 'platformSha', 'historySha']) assert.match(String(entry[key]), /^[a-f0-9]{64}$/);
     return entry as HistoricalRelease;
   };
   return {stable:parse('stable'), nightly:parse('nightly')};

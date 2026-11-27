@@ -3,7 +3,7 @@
 
 export type ReleaseAsset = {name: string; digest: string | null; size: number};
 export type Release = {tag_name: string; draft: boolean; prerelease: boolean; assets: ReleaseAsset[]};
-export type SelectedRelease = {tag: string; archive: ReleaseAsset; host: ReleaseAsset; platform: ReleaseAsset};
+export type SelectedRelease = {tag: string; archive: ReleaseAsset; host: ReleaseAsset; platform: ReleaseAsset; history: ReleaseAsset};
 
 function asset(release: Release, name: string): ReleaseAsset {
   const matches = release.assets.filter(item => item.name === name);
@@ -16,7 +16,8 @@ function asset(release: Release, name: string): ReleaseAsset {
 
 function selected(release: Release): SelectedRelease {
   return {tag: release.tag_name, archive: asset(release, `session-mesh-${release.tag_name}.tar.gz`),
-    host: asset(release, 'mesh-ptyhost-linux-x86_64'), platform: asset(release, 'mesh-platform-linux-x86_64')};
+    host: asset(release, 'mesh-ptyhost-linux-x86_64'), platform: asset(release, 'mesh-platform-linux-x86_64'),
+    history: asset(release, 'mesh-history-linux-x86_64')};
 }
 
 /** Select by version/date, not API order. Missing assets fail closed. */
