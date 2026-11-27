@@ -76,7 +76,7 @@ let rec skip_nuls buffer position =
 
 let read_argv buffer ~argc ~start =
   let rec loop remaining position acc =
-    if remaining = 0 then Ok (List.rev acc)
+    if remaining = 0 then Ok (List.rev acc, position)
     else if position >= String.length buffer then
       malformed "procargs2: argv truncated (%d of %d strings)"
         (argc - remaining) argc
@@ -93,7 +93,7 @@ let read_argv buffer ~argc ~start =
    are skipped to find argv[0]. A leading empty argv[0] is a single NUL string
    and is therefore indistinguishable from that padding: it is lost, and the
    next argument is returned as argv[0]. *)
-let darwin_procargs2 buffer =
+let darwin_procargs2_parts buffer =
   if String.length buffer < 4 then
     malformed "procargs2: buffer shorter than 4 bytes"
   else
@@ -105,6 +105,28 @@ let darwin_procargs2 buffer =
       | None -> malformed "procargs2: unterminated exec path"
       | Some path_end ->
           read_argv buffer ~argc ~start:(skip_nuls buffer (path_end + 1))
+
+let darwin_procargs2 buffer =
+  Result.map fst (darwin_procargs2_parts buffer)
+
+let darwin_environment_matches buffer ~key ~expected =
+  let prefix = key ^ "=" in
+  let rec scan position found =
+    if position = String.length buffer || buffer.[position] = '\000' then
+      Ok (Option.value found ~default:false)
+    else
+      match String.index_from_opt buffer position '\000' with
+      | None -> malformed "procargs2: unterminated environment string"
+      | Some stop ->
+          let item = String.sub buffer position (stop - position) in
+          if not (String.starts_with ~prefix item) then scan (stop + 1) found
+          else if Option.is_some found then malformed "procargs2: duplicate environment key"
+          else scan (stop + 1) (Some (item = prefix ^ expected))
+  in
+  match darwin_procargs2_parts buffer with
+  | Error error -> Error error
+  | Ok ([], _) -> malformed "procargs2: missing argv"
+  | Ok (_, position) -> scan position None
 
 (* [tpgid] is <= 0 when the process has no controlling terminal (Linux reports
    -1; 0 can appear on other kernels). Handing that back as a group id would

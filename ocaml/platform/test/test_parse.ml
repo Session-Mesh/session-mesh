@@ -153,6 +153,22 @@ let test_procargs_recorded () =
     (Ok [ "/bin/sh"; "-c"; "read x"; "sh"; "two words"; ""; "last" ])
     (Parse.darwin_procargs2 recorded_procargs2)
 
+let test_procargs_environment () =
+  let check suffix =
+    Parse.darwin_environment_matches (recorded_procargs2 ^ suffix)
+      ~key:"CODEX_HOME" ~expected:"/tmp/profile"
+  in
+  let equal label expected actual =
+    Alcotest.(check (result bool error_testable)) label (Ok expected) actual
+  in
+  equal "environment unavailable" false (check "");
+  equal "exact match" true (check "PATH=/bin\000CODEX_HOME=/tmp/profile\000");
+  equal "different value" false (check "CODEX_HOME=/tmp/other\000");
+  equal "different key" false (check "EXT_CODEX_HOME=/tmp/profile\000");
+  check_malformed "duplicate key"
+    (check "CODEX_HOME=/tmp/profile\000CODEX_HOME=/tmp/profile\000");
+  check_malformed "unterminated entry" (check "CODEX_HOME=/tmp/profile")
+
 let test_darwin_state () =
   let check status expected =
     Alcotest.(check (option char))
@@ -172,6 +188,8 @@ let tests =
   [
     Alcotest.test_case "procargs2 recorded on macOS" `Quick
       test_procargs_recorded;
+    Alcotest.test_case "procargs2 exact environment match" `Quick
+      test_procargs_environment;
     Alcotest.test_case "darwin_state" `Quick test_darwin_state;
     Alcotest.test_case "linux_stat plain" `Quick test_stat_plain;
     Alcotest.test_case "linux_stat comm with spaces and parentheses" `Quick

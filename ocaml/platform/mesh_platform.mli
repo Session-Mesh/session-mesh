@@ -166,6 +166,13 @@ type process = {
 
 val process : int -> (process, error) result
 
+val darwin_process_environment_matches :
+  int -> incarnation:int64 -> key:string -> expected:string ->
+  (bool, error) result
+(** On macOS, compare one environment value for a process owned by the
+    effective user and bound to the supplied incarnation. No environment
+    values are returned. *)
+
 type process_scan = {
   processes : process list;  (** Sorted by pid. *)
   skipped : int;
@@ -238,6 +245,12 @@ module Parse : sig
       kernel pads after the exec path with NUL bytes, which are skipped, so
       padding cannot be told from an empty [argv.(0)]: a leading empty argument
       is dropped. *)
+
+  val darwin_environment_matches :
+    string -> key:string -> expected:string -> (bool, error) result
+  (** Check for one matching environment entry after the argument vector.
+      Refuse duplicate keys and truncated strings. This parser does not
+      establish process ownership or identity. *)
 
   val darwin_state : int -> char option
   (** A macOS process status ([p_stat]/[pbi_status]) as a Linux letter: SIDL (1)

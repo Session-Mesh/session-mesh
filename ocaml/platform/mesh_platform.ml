@@ -101,6 +101,11 @@ let command_line = Backend.command_line
 let working_directory = Backend.working_directory
 let open_file_paths = Backend.open_file_paths
 let process_owner = Backend.process_owner
+let darwin_process_environment_matches pid ~incarnation ~key ~expected =
+  match platform with
+  | Macos -> Backend_darwin.environment_matches pid ~incarnation ~key ~expected
+  | Linux | Other _ -> Error (Unsupported "process environment match needs macOS")
+
 let foreground_process_group = Backend.foreground_process_group
 let unix_socket_bound = Backend.unix_socket_bound
 

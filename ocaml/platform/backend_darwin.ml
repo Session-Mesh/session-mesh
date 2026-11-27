@@ -65,6 +65,22 @@ let command_line pid =
       | Error Darwin_stubs.Invalid -> explain_invalid_procargs pid
       | Error failure -> Error (error_of_failure "command line" failure))
 
+let environment_matches pid ~incarnation ~key ~expected =
+  with_pid pid (fun pid ->
+      let check_identity () =
+        let* _, _, _, _, _, status, uid, observed =
+          lift "process" (Darwin_stubs.process pid)
+        in
+        if uid <> Unix.geteuid () then Error Denied
+        else if status = zombie_status || observed <> incarnation then
+          Error Not_found
+        else Ok ()
+      in
+      let* () = check_identity () in
+      let* buffer = lift "process environment" (Darwin_stubs.procargs2 pid) in
+      let* () = check_identity () in
+      Parse.darwin_environment_matches buffer ~key ~expected)
+
 let working_directory pid =
   with_pid pid (fun pid ->
       let* path = lift "working directory" (Darwin_stubs.cwd pid) in
