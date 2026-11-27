@@ -27,11 +27,14 @@ let agent_script =
    if [ -f \"$HOME/agent.pid\" ] && kill -0 \"$(cat \"$HOME/agent.pid\")\" \
    2>/dev/null; then echo overlap >> \"$log\"; fi\n\
    echo $$ > \"$HOME/agent.pid\"\n\
-   echo \"start $$ ${CLAUDE_CONFIG_DIR-unset}\" >> \"$log\"\n\
-   echo \"agent-start $$ ${CLAUDE_CONFIG_DIR-unset}\"\n\
+   ready() {\n\
+     echo \"start $$ ${CLAUDE_CONFIG_DIR-unset}\" >> \"$log\"\n\
+     echo \"agent-start $$ ${CLAUDE_CONFIG_DIR-unset}\"\n\
+   }\n\
    if [ \"$1\" = backpressure ]; then\n\
      stty -echo -icanon min 1 time 0\n\
      trap 'echo \"hup $$\" >> \"$log\"; stty sane; exit 0' HUP\n\
+     ready\n\
      : > \"$HOME/reader-ready\"\n\
      dd bs=1 count=1 of=\"$HOME/prefix\" 2>/dev/null\n\
      : > \"$HOME/prefix-seen\"\n\
@@ -44,6 +47,7 @@ let agent_script =
    stubborn) trap 'echo \"hup $$\" >> \"$log\"' HUP ;;\n\
    *) trap 'sleep 0.3; echo \"stop $$\" >> \"$log\"; exit 0' HUP ;;\n\
    esac\n\
+   ready\n\
    while :; do sleep 0.1; done\n"
 
 let log_lines fixture =
