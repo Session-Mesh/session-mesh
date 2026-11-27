@@ -427,6 +427,16 @@ let test_account_environment_input () =
   in
   check "malformed"
     {|{"key":"CODEX_HOME","expected":"/tmp/profile","unset":["OPENAI_BASE_URL","OPENAI_BASE_URL"]}|};
+  check "malformed"
+    {|{"key":"CODEX_HOME","expected":"relative/profile","unset":[]}|};
+  check "malformed"
+    {|{"key":"CODEX_HOME","expected":"/tmp/profile","unset":["CODEX_HOME"]}|};
+  check "malformed"
+    (`Assoc
+       [ ("key", `String "CODEX_HOME");
+         ("expected", `String ("/" ^ String.make 8192 'x'));
+         ("unset", `List []) ]
+     |> Yojson.Safe.to_string);
   check
     (if Mesh_platform.platform = Mesh_platform.Macos then "not_found"
      else "unsupported")
