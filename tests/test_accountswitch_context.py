@@ -112,7 +112,8 @@ def test_actual_process_home_is_observed():
     assert result["root"].startswith("/")
 
 
-def test_server_binds_default_to_observed_agent(monkeypatch):
+def test_server_binds_default_to_linux_observed_agent(monkeypatch):
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="linux"))
     observed = {"type": "codex", "pid": 42, "foreground": True}
     selected = {**accountswitch.default_context("codex", {"HOME": "/tmp/alice"}),
                 "process_pid": 42, "process_start": "1234"}
@@ -124,6 +125,14 @@ def test_server_binds_default_to_observed_agent(monkeypatch):
         asyncio.run(server._switch_profile_context("default", "codex", "0" * 64, observed))
     with pytest.raises(web.HTTPConflict):
         asyncio.run(server._switch_profile_context("default", "codex", observed_agent={**observed, "foreground": False}))
+
+def test_darwin_native_switch_qualifies_only_codex(monkeypatch):
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(server, "NATIVE_SWITCH_QUALIFIED", False)
+    assert server._native_switch_platform_qualified("codex")
+    assert not any(server._native_switch_platform_qualified(kind)
+                   for kind in ("claude", "pi", "opencode", None))
+
 
 @pytest.mark.parametrize("case", ["default_home", "wrong_terminal", "named_mismatch", "invalid_reply"])
 def test_darwin_account_confirmation_is_bound_to_the_original_terminal(monkeypatch, case):
@@ -869,6 +878,7 @@ def test_switch_qualification_requires_supported_agent_and_bound_host(monkeypatc
 
 
 def test_unqualified_platform_refuses_even_a_capable_host(monkeypatch):
+    monkeypatch.setattr(server, "sys", SimpleNamespace(platform="unsupported"))
     monkeypatch.setattr(server, "NATIVE_SWITCH_QUALIFIED", False)
     monkeypatch.setattr(server, "_native_profile_mode", lambda: True)
     raw = {"meta": {}, "pty_capabilities": ["agent_relaunch_v1", "agent_relaunch_bound_v1"]}

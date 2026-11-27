@@ -923,7 +923,7 @@ async def _switch_profile_context(account, agent, expected_revision=None, observ
         if observed_agent is not None:
             if observed_agent.get("type") != agent or observed_agent.get("foreground") is not True:
                 raise accountswitch.UnboundDefault("Agent is not the foreground process")
-            if sys.platform == "darwin" and NATIVE_SWITCH_QUALIFIED:
+            if sys.platform == "darwin" and _native_switch_platform_qualified(agent):
                 if account != DEFAULT_ACCOUNT["id"]:
                     context = await _profile_launch_context(account, agent, expected_revision)
                     binding = await _darwin_switch_observation(source, observed_agent, agent, context["roots"]["config"])
@@ -5861,7 +5861,7 @@ async def _switch_request(source, body):
     native = _native_profile_mode()
     if kind not in ACCOUNT_MEMBER and not (native and kind == "pi"):
         raise _switch_refusal("agent_unsupported", "Account switching is unavailable for this agent.")
-    if native and not NATIVE_SWITCH_QUALIFIED:
+    if native and not _native_switch_platform_qualified(kind):
         raise _switch_refusal("switch_not_qualified", "Native profile switching is not qualified")
     await declared_accounts()
     target = await _switch_target(body["account"], kind)
@@ -6071,7 +6071,7 @@ async def _switch_session(item, raw, conversation, argv, observed_agent=None):
     # marker vanish afterwards; it must never fall back to legacy switching.
     if "switch_binding" in item and not native:
         raise web.HTTPConflict(text="Account profile context changed; nothing was stopped")
-    if native and not NATIVE_SWITCH_QUALIFIED:
+    if native and not _native_switch_platform_qualified(kind):
         raise web.HTTPConflict(text="Native profile switching is not qualified")
     legacy_helper = None
     pi_helper = None
@@ -6205,6 +6205,10 @@ def _with_account_labels(item):
             "from_label": _account_label_of(item["from_account"], backend)}
 
 
+def _native_switch_platform_qualified(kind):
+    return NATIVE_SWITCH_QUALIFIED or (sys.platform == "darwin" and kind == "codex")
+
+
 def _native_switch_available(kind, raw):
     if not isinstance(raw, dict) or not isinstance(raw.get("meta"), dict):
         return False
@@ -6218,7 +6222,7 @@ def _native_switch_available(kind, raw):
     supported = isinstance(kind, str) and (kind in ACCOUNT_MEMBER
         or (kind == "pi" and account not in (None, DEFAULT_ACCOUNT["id"])
             and isinstance(capabilities, list) and "agent_relaunch_pi_v1" in capabilities))
-    return bool(NATIVE_SWITCH_QUALIFIED and _native_profile_mode()
+    return bool(_native_switch_platform_qualified(kind) and _native_profile_mode()
                 and supported and bound and isinstance(capabilities, list) and "agent_relaunch_v1" in capabilities
                 and "agent_relaunch_bound_v1" in capabilities)
 
@@ -6907,7 +6911,7 @@ async def api_accounts(request):
         if ran is not None:
             print(f"accounts: mesh-profile {op} answered outside its envelope (exit {ran[0]})", flush=True)
         return accounts_refusal(503, "backend-helper-unavailable")
-    if op == "profiles.list" and reply["ok"] and NATIVE_SWITCH_QUALIFIED:
+    if op == "profiles.list" and reply["ok"] and (NATIVE_SWITCH_QUALIFIED or sys.platform == "darwin"):
         try:
             sessions = await host({"op": "list"})
         except (web.HTTPException, ValueError):

@@ -27,6 +27,8 @@ async function darwinAccountHome(pid: number): Promise<string> {
   assert.fail('the running fixture did not open its account rollout');
 }
 
+const nativeCodexSwitch = ['linux', 'darwin'].includes(process.platform);
+
 describe('account switch requests', {skip: SKIP}, () => {
   let source: Session;
 
@@ -162,7 +164,7 @@ describe('account switch requests', {skip: SKIP}, () => {
   });
 
   test('native profiles refuse before queueing, across profile and default directions despite skip consent',
-    {skip: process.platform === 'linux' ? 'native switches are qualified on Linux' : PROFILE_SKIP}, async () => {
+    {skip: nativeCodexSwitch ? 'native Codex switching is qualified' : PROFILE_SKIP}, async () => {
     const registry = installNativeProfiles();
     try {
       await nativeProfiles();
@@ -200,9 +202,7 @@ describe('account switch requests', {skip: SKIP}, () => {
   });
 
   test('parallel native profiles isolate processes and an approved switch leaves the other sessions intact',
-    {skip: PROFILE_SKIP || (process.platform !== 'linux'
-      && !(process.platform === 'darwin' && process.env.MESH_TEST_DARWIN_NATIVE_SWITCH === '1')
-      ? 'bound native switching is not enabled' : false)}, async () => {
+    {skip: PROFILE_SKIP || (nativeCodexSwitch ? false : 'bound native switching is not enabled')}, async () => {
     const registry = installNativeProfiles();
     try {
       await nativeProfiles();
@@ -327,7 +327,7 @@ describe('account switch requests', {skip: SKIP}, () => {
       await nativeProfiles();
       const decided = await decide(request, true);
       assert.equal(decided.state, 'failed', JSON.stringify(decided));
-      assert.equal(decided.result?.error, process.platform === 'linux'
+      assert.equal(decided.result?.error, nativeCodexSwitch
         ? 'Native account switch request has no valid binding' : 'Native profile switching is not qualified');
       assert.ok(!decided.result?.rolled_back, 'the source was never stopped');
       await unchangedSource(session, before, launchLog);
@@ -340,7 +340,7 @@ describe('account switch requests', {skip: SKIP}, () => {
   });
 
   test('the native migration marker refuses before preparing a missing legacy target folder',
-    {skip: process.platform === 'linux' ? 'native switches are qualified on Linux' : false}, async () => {
+    {skip: nativeCodexSwitch ? 'native Codex switching is qualified' : false}, async () => {
     const session = await codexSession('x-marker-refusal');
     const before = (await listed(session.name))!;
     const accountFile = path.join(mesh.confDir, 'accounts.json');

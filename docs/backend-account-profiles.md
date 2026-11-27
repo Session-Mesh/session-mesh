@@ -2,12 +2,12 @@
 
 `mesh-profile` validates profile metadata, registers aliases and manages confirmation preferences. It does not launch an
 agent or switch a running session. On Linux, the web server can switch a Claude or Codex session between
-native profiles when its PTY host supports bound in-place relaunch. The owner must approve each request.
+native profiles when its PTY host supports bound in-place relaunch. On macOS, this is available for Codex.
+The owner must approve each request.
 On Linux, Pi also supports switching between two named native profiles when its PTY and transfer
 helper both support revision-bound Pi operations. Pi launches and restores use the selected
 configuration and history roots. A restore with an unbound or missing conversation leaves its
-recovery offer available. macOS native-profile switching and OpenCode live switching remain
-unavailable.
+recovery offer available. Live switching for OpenCode and for Claude and Pi on macOS remains unavailable.
 
 The terminal-header operator picker supports eligible Claude Code, Codex and Pi sessions on Linux.
 Pi requires two named native profiles and a process-bound activity report from the Mesh Pi extension.
