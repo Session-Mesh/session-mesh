@@ -9,6 +9,39 @@ import os from 'node:os';
 import {spawnSync, type ChildProcess} from 'node:child_process';
 import {fixture, identityHeaders, processBirth, until} from '../checks/dictation-fixture.ts';
 
+test('one typed worker owns its private socket and exits on stdin EOF', {timeout: 10000}, async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-supervisor-'));
+  fs.chmodSync(directory, 0o700);
+  t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
+  const child = (await import('node:child_process')).spawn(process.execPath, ['backend/dictation-service.cjs'], {
+    env: {PATH: process.env.PATH, MESH_WHISPER_URL: 'http://127.0.0.1:1/fixed'},
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let output = '', errors = '';
+  child.stdout.on('data', part => output += part);
+  child.stderr.on('data', part => errors += part);
+  try {
+    const secret = 'a'.repeat(64);
+    child.stdin.write(JSON.stringify({parent: process.pid, secret, principal: 'b'.repeat(64),
+      inventory: path.join(directory, 'inventory.sock')}) + '\n');
+    await until(() => output.includes('\n'));
+    const started = JSON.parse(output.split('\n')[0]!) as {directory: string};
+    await until(() => output.split('\n').filter(Boolean).length === 2);
+    const ready = JSON.parse(output.split('\n')[1]!) as {socket: string; secret?: string};
+    assert.equal(started.directory, path.dirname(ready.socket));
+    assert.equal(ready.secret, undefined, 'credentials stay in the inherited input pipe');
+    assert.doesNotMatch(output, new RegExp(secret));
+    assert.equal(fs.statSync(ready.socket).mode & 0o777, 0o600);
+    child.stdin.end();
+    await until(() => child.exitCode !== null);
+    assert.equal(child.exitCode, 0, errors);
+    assert.equal(fs.existsSync(started.directory), false);
+  } finally {
+    child.stdin.end();
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }
+});
+
 test('dictation bootstrap rejects malformed UTF-8 before creating its socket', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-bootstrap-'));
   t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
@@ -19,7 +52,7 @@ test('dictation bootstrap rejects malformed UTF-8 before creating its socket', t
   });
   const input = Buffer.from(`${line}\n`);
   input[input.indexOf('INVENTORY')] = 0xff;
-  const worker = spawnSync(process.execPath, ['backend/dictation-service.cjs'], {
+  const worker = spawnSync(process.execPath, ['backend/dictation-service.cjs', '--worker'], {
     env: {...process.env, MESH_WHISPER_URL: 'http://127.0.0.1:1/fixed'},
     input, encoding: 'utf8', timeout: 5000,
   });
@@ -68,10 +101,11 @@ function workerFixture(t:TestContext,body:string){
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-startup-'));
   fs.chmodSync(directory,0o700);
   const entry=path.join(directory,'worker.cjs'),marker=path.join(directory,'identity');
-  fs.writeFileSync(entry,`const fs=require('node:fs');
+  fs.writeFileSync(entry,`const fs=require('node:fs'),path=require('node:path');
 process.stdin.once('data',part=>{
- const bootstrap=JSON.parse(part.toString().split('\\n')[0]);
- fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,socket:bootstrap.socket}));
+ const directory=fs.mkdtempSync('/tmp/mesh-dictation-'),socket=path.join(directory,'worker.sock');
+ fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,socket}));
+ process.stdout.write(JSON.stringify({directory})+'\\n');
  ${body}
 });`);
   t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
@@ -124,6 +158,17 @@ test('an early configuration rejection survives a closed bootstrap pipe',async t
   }
 });
 
+test('an explicit runtime executes the typed configuration rejection', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-inner-config-'));
+  fs.chmodSync(directory, 0o700);
+  t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
+  const runtime = path.join(directory, 'runtime');
+  fs.writeFileSync(runtime, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, {mode: 0o700});
+  const f = await fixture(true, false, runtime, {whisperEnv: {MESH_WHISPER_WORKERS: 'invalid'}});
+  try { await disabled(f, 'invalid_configuration'); }
+  finally { await f.close(); }
+});
+
 for(const mode of ['exit','bad handshake','timeout'] as const)test(`optional worker ${mode} has bounded cleanup`,{timeout:16000},async t=>{
   const c=workerFixture(t,mode==='exit'?"process.stderr.write('PRIVATE_SENTINEL');process.exit(1);":
     mode==='bad handshake'?"process.stdout.write('PRIVATE_SENTINEL\\n');process.stdin.resume();":
@@ -143,10 +188,11 @@ test('post-startup worker loss clears enabled config and repeated fixture lifecy
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-loss-'));
   fs.chmodSync(directory,0o700);t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
   const marker=path.join(directory,'identity'),preload=path.join(directory,'observe.cjs');
-  fs.writeFileSync(preload,`process.stdin.once('data',part=>{
- const b=JSON.parse(part.toString().split('\\n')[0]);
- require('node:fs').writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,socket:b.socket}));
-});`);
+  fs.writeFileSync(preload,`const fs=require('node:fs'),write=process.stdout.write;
+process.stdout.write=function(part){
+ if(String(part).startsWith('{"socket":'))fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,socket:JSON.parse(String(part)).socket}));
+ return write.apply(this,arguments);
+};`);
   const sockets:string[]=[];
   for(let i=0;i<2;i++){
     const f=await fixture(true,false,undefined,{workerPreload:preload});
@@ -168,11 +214,11 @@ test('interrupted shutdown still reaps a worker stopped during cleanup',{timeout
   fs.chmodSync(directory,0o700);t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
   const marker=path.join(directory,'identity'),interrupted=path.join(directory,'interrupted');
   const preload=path.join(directory,'interrupt.cjs');
-  fs.writeFileSync(preload,`const fs=require('node:fs');
-process.stdin.once('data',part=>{
- const b=JSON.parse(part.toString().split('\\n')[0]);
- fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,socket:b.socket}));
-});
+  fs.writeFileSync(preload,`const fs=require('node:fs'),write=process.stdout.write;
+process.stdout.write=function(part){
+ if(String(part).startsWith('{"socket":'))fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,socket:JSON.parse(String(part)).socket}));
+ return write.apply(this,arguments);
+};
 process.stdin.once('end',()=>{
  fs.writeFileSync(${JSON.stringify(interrupted)},'cleanup reached child stdin close');
  process.kill(process.ppid,'SIGINT');

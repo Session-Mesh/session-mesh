@@ -516,19 +516,46 @@ test('actual adapter rejects ambiguous Origin and Host headers before admission'
   }finally{await f.close();}
 });
 
+test('repaired high-precision generation starts dictation and retires its old jobs', async () => {
+  const f = await fixture(true, false, undefined, {
+    beforeSpawn: config => fs.writeFileSync(path.join(config, 'cookie-generation'), 'invalid-generation\n'),
+  });
+  try {
+    const generationFile = path.join(f.config, 'cookie-generation');
+    const generation = BigInt(fs.readFileSync(generationFile, 'utf8').trim());
+    assert.ok(generation > BigInt(Number.MAX_SAFE_INTEGER), 'native cookie-generation repair used time.time_ns()');
+    assert.equal((await f.call('/api/transcribe/config', 'GET', f.auth)).body.enabled, true);
+    const headers = {...f.auth, ...identityHeaders()};
+    const admitted = await f.call('/api/transcribe', 'POST', headers, 'synthetic audio');
+    assert.equal(admitted.status, 202);
+    const route = `/api/transcribe/${admitted.body.job_id}`;
+    await until(async () => (await f.call(route, 'GET', headers)).body.state === 'ready');
+    fs.writeFileSync(generationFile, `${generation + 1n}\n`);
+    assert.equal((await f.call(route, 'GET', headers)).status, 404, 'recheck retires the old principal');
+    const fresh = await f.call('/api/transcribe', 'POST', {...f.auth, ...identityHeaders()}, 'fresh audio');
+    assert.equal(fresh.status, 202);
+    await until(() => f.upstreamCalls === 2);
+    assert.equal(f.upstreamCalls, 2);
+  } finally { await f.close(); }
+});
+
 test('owned worker retires after actual parent death, leaving no listening socket',async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-worker-socket-'));
   const preload=path.join(directory,'observe.cjs'),bootstrap=path.join(directory,'socket');
-  fs.writeFileSync(preload,`process.stdin.once('data',part=>require('node:fs').writeFileSync(${JSON.stringify(bootstrap)},JSON.parse(part.toString().split('\\n')[0]).socket));`);
+  fs.writeFileSync(preload,`const fs=require('node:fs'),write=process.stdout.write;
+process.stdout.write=function(part){if(String(part).startsWith('{"socket":'))fs.writeFileSync(${JSON.stringify(bootstrap)},JSON.stringify({socket:JSON.parse(String(part)).socket,pid:process.pid,parent:process.ppid}));return write.apply(this,arguments);};`);
   const f=await fixture(true,false,undefined,{workerPreload:preload});
   try{
-    const socket=fs.readFileSync(bootstrap,'utf8');assert.equal(fs.statSync(path.dirname(socket)).mode&0o777,0o700);
+    const identity=JSON.parse(fs.readFileSync(bootstrap,'utf8')) as {socket:string;pid:number;parent:number};
+    const socket=identity.socket;assert.equal(fs.statSync(path.dirname(socket)).mode&0o777,0o700);
     // Resolve only this fixture's direct child; never identify it by a global
     // executable-name search. Keep birth identity across the parent's death.
     let worker:number|undefined;
     if(process.platform==='linux'){
       const children=fs.readFileSync(`/proc/${f.child.pid}/task/${f.child.pid}/children`,'utf8').trim().split(/\s+/);
       worker=Number(children.find(pid=>fs.readFileSync(`/proc/${pid}/cmdline`,'utf8').includes('dictation-service.cjs')));
+      assert.equal(worker,identity.pid,'the typed child is the direct reap target');
+      assert.equal(identity.parent,f.child.pid);
       assert.deepEqual(fs.readFileSync(`/proc/${worker}/cmdline`,'utf8').split('\0').filter(Boolean).slice(1),['--require',preload,path.resolve('backend/dictation-service.cjs')],'only the fixture preload and worker path, no credential arguments');
     }else{
       const result=spawnSync('ps',['-axo','pid=,ppid=,command='],{encoding:'utf8',timeout:2000});
@@ -537,11 +564,12 @@ test('owned worker retires after actual parent death, leaving no listening socke
         const row=/^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
         if(row&&Number(row[2])===f.child.pid&&/dictation-service\.cjs$/.test(row[3]!))worker=Number(row[1]);
       }
+      assert.equal(worker,identity.pid);
     }
     assert.ok(worker,'actual app-owned Node child with no credential arguments');
     const birth=processBirth(worker);assert.ok(birth);
     f.child.kill('SIGKILL');
-    await until(()=>!fs.existsSync(socket));
+    await until(()=>!fs.existsSync(path.dirname(socket)));
     await until(()=>processBirth(worker!)!==birth||processState(worker!)==='Z');
   }finally{await f.close();fs.rmSync(directory,{recursive:true,force:true});}
 });

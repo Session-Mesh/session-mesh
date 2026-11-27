@@ -23,6 +23,10 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// backend/dictation-main.ts
+var import_promises3 = require("node:fs/promises");
+var import_node_path2 = require("node:path");
+
 // backend/dictation.ts
 var import_node_crypto = require("node:crypto");
 var import_node_http = __toESM(require("node:http"));
@@ -784,12 +788,17 @@ function serviceHandler(config, engine, expected) {
     })();
   };
 }
-async function startService(config, secret, socketPath, inventorySocket, principal) {
+async function startService(config, secret, socketPath, inventorySocket, principal, signal) {
+  const checkActive = () => {
+    if (signal?.aborted) throw new DOMException("Dictation startup cancelled", "AbortError");
+  };
+  checkActive();
   if (!/^[a-f0-9]{64}$/.test(principal)) throw Error("Initial principal required");
   const parent = await (0, import_promises2.lstat)((0, import_node_path.dirname)(socketPath));
+  checkActive();
   if (!parent.isDirectory() || parent.isSymbolicLink() || (parent.mode & 511) !== 448 || parent.uid !== process.getuid())
     throw Error("Private dictation directory required");
-  const engine = new Dictation(config, { principal, isLive: (m, signal) => liveInventory(inventorySocket, m, signal) });
+  const engine = new Dictation(config, { principal, isLive: (m, signal2) => liveInventory(inventorySocket, m, signal2) });
   const server = (0, import_node_http2.createServer)(
     { maxHeaderSize: 8192, requestTimeout: 16e3, headersTimeout: 5e3 },
     serviceHandler(config, engine, digest(secret))
@@ -804,6 +813,7 @@ async function startService(config, secret, socketPath, inventorySocket, princip
     await Promise.all([stopped, engine.close()]);
   })();
   try {
+    checkActive();
     await new Promise((resolve, reject) => {
       const failed = (error) => {
         server.off("listening", ready);
@@ -817,7 +827,9 @@ async function startService(config, secret, socketPath, inventorySocket, princip
       server.once("listening", ready);
       server.listen(socketPath);
     });
+    checkActive();
     await (0, import_promises2.chmod)(socketPath, 384);
+    checkActive();
   } catch (error) {
     await close();
     throw error;
@@ -826,20 +838,12 @@ async function startService(config, secret, socketPath, inventorySocket, princip
 }
 
 // backend/dictation-main.ts
-function parseBootstrap(line) {
+function parseBootstrap(line, standalone) {
   const value = JSON.parse(line);
-  if (!value || typeof value.secret !== "string" || !/^[a-f0-9]{64}$/.test(value.secret) || typeof value.principal !== "string" || !/^[a-f0-9]{64}$/.test(value.principal) || typeof value.socket !== "string" || !value.socket.startsWith("/") || typeof value.inventory !== "string" || !value.inventory.startsWith("/") || value.parent !== process.ppid) {
-    throw new Error("Bootstrap invalid");
-  }
-  return {
-    secret: value.secret,
-    socket: value.socket,
-    inventory: value.inventory,
-    parent: value.parent,
-    principal: value.principal
-  };
+  if (!value || typeof value.secret !== "string" || !/^[a-f0-9]{64}$/.test(value.secret) || typeof value.principal !== "string" || !/^[a-f0-9]{64}$/.test(value.principal) || typeof value.inventory !== "string" || !value.inventory.startsWith("/") || value.parent !== process.ppid || (standalone ? typeof value.socket !== "string" || !value.socket.startsWith("/") : value.socket !== void 0)) throw Error("Bootstrap invalid");
+  return value;
 }
-function readBootstrap() {
+function readBootstrap(standalone) {
   return new Promise((resolve, reject) => {
     let input = Buffer.alloc(0);
     const cleanup = () => {
@@ -855,15 +859,12 @@ function readBootstrap() {
     const receive = (part) => {
       const newline = part.indexOf(10);
       const size = newline < 0 ? part.length : newline;
-      if (input.length + size > 4096) {
-        fail("Bootstrap limit");
-        return;
-      }
+      if (input.length + size > 4096) return fail("Bootstrap limit");
       input = Buffer.concat([input, part.subarray(0, size)]);
       if (newline < 0) return;
       cleanup();
       try {
-        resolve(parseBootstrap(new TextDecoder("utf-8", { fatal: true }).decode(input)));
+        resolve(parseBootstrap(new TextDecoder("utf-8", { fatal: true }).decode(input), standalone));
       } catch (error) {
         reject(error);
       }
@@ -874,6 +875,8 @@ function readBootstrap() {
   });
 }
 async function main() {
+  const standalone = process.argv[2] === "--worker";
+  if (process.argv.length > (standalone ? 3 : 2)) throw Error("Invalid worker mode");
   let config;
   try {
     config = configuration(process.env);
@@ -883,28 +886,60 @@ async function main() {
     return;
   }
   if (!config) throw Error("Disabled worker");
-  const bootstrap = await readBootstrap();
-  const service = await startService(config, bootstrap.secret, bootstrap.socket, bootstrap.inventory, bootstrap.principal);
-  let closing = false;
-  const close = async () => {
-    if (closing) return;
-    closing = true;
-    clearInterval(parentWatch);
-    await service.close();
-    process.exit(0);
-  };
-  const parentWatch = setInterval(() => {
-    if (process.ppid !== bootstrap.parent) void close();
-  }, 250);
-  process.stdin.on("end", () => void close());
-  process.stdin.resume();
-  process.on("SIGTERM", () => void close());
-  process.on("SIGINT", () => void close());
-  if (process.stdin.readableEnded || process.ppid !== bootstrap.parent) {
-    await close();
-    return;
+  const bootstrap = await readBootstrap(standalone);
+  const directory = standalone ? void 0 : await (0, import_promises3.mkdtemp)("/tmp/mesh-dictation-");
+  const socket = bootstrap.socket ?? (0, import_node_path2.join)(directory, "worker.sock");
+  const controller = new AbortController();
+  let started;
+  let closing;
+  try {
+    if (directory) process.stdout.write(JSON.stringify({ directory }) + "\n");
+    started = startService(
+      config,
+      bootstrap.secret,
+      socket,
+      bootstrap.inventory,
+      bootstrap.principal,
+      controller.signal
+    );
+    const close = () => closing ??= (async () => {
+      controller.abort();
+      clearInterval(parentWatch);
+      try {
+        const service = await started.catch(() => null);
+        if (service) await service.close();
+      } finally {
+        if (directory) await (0, import_promises3.rm)(directory, { recursive: true, force: true });
+      }
+      process.exit(0);
+    })();
+    const parentWatch = setInterval(() => {
+      if (process.ppid !== bootstrap.parent) void close();
+    }, 250);
+    process.stdin.on("end", () => void close());
+    process.stdin.resume();
+    process.on("SIGTERM", () => void close());
+    process.on("SIGINT", () => void close());
+    if (process.stdin.readableEnded || process.ppid !== bootstrap.parent) {
+      await close();
+      return;
+    }
+    try {
+      await started;
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      clearInterval(parentWatch);
+      throw error;
+    }
+    if (controller.signal.aborted) {
+      await close();
+      return;
+    }
+    process.stdout.write(standalone ? "ready\n" : JSON.stringify({ socket }) + "\n");
+  } catch (error) {
+    if (directory && !closing) await (0, import_promises3.rm)(directory, { recursive: true, force: true });
+    throw error;
   }
-  process.stdout.write("ready\n");
 }
 void main().catch(() => {
   process.stderr.write("Dictation worker unavailable.\n");

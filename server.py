@@ -31,7 +31,6 @@ import shutil
 import signal
 import stat
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -403,12 +402,10 @@ async def start_dictation(app):
         return
     reason = "worker_failed"
     try:
-        app["dictation_directory"] = tempfile.TemporaryDirectory(prefix="mesh-dictation-", dir="/tmp")
         app["dictation_secret"] = secrets.token_hex(32)
         app["dictation_principal"] = _dictation_principal(app)
         app["dictation_revision"] = 0
         app["dictation_principal_lock"] = asyncio.Lock()
-        socket = str(Path(app["dictation_directory"].name) / "worker.sock")
         node = os.environ.get("MESH_NODE", "node")
         if "MESH_NODE" in os.environ and not Path(node).is_absolute():
             reason = "invalid_configuration"
@@ -423,19 +420,47 @@ async def start_dictation(app):
         worker = app["dictation_worker"]
         pipe_failed = False
         try:
-            worker.stdin.write((json.dumps({"secret": app["dictation_secret"], "socket": socket,
-                                           "inventory": str(ptyhost.SOCK), "parent": os.getpid(),
-                                           "principal": app["dictation_principal"]}) + "\n").encode())
+            bootstrap = {"inventory": str(ptyhost.SOCK), "parent": os.getpid(),
+                         "secret": app["dictation_secret"], "principal": app["dictation_principal"]}
+            worker.stdin.write((json.dumps(bootstrap) + "\n").encode())
             await asyncio.wait_for(worker.stdin.drain(), 1)
         except (BrokenPipeError, ConnectionResetError):
             pipe_failed = True
         # An early configuration rejection may already have closed stdin. Read
         # only the bounded private handshake, never stderr or exception text.
-        handshake = await asyncio.wait_for(worker.stdout.readline(), 5)
-        if pipe_failed or handshake != b"ready\n":
-            if handshake == b"invalid_configuration\n":
-                reason = "invalid_configuration"
+        started = await asyncio.wait_for(worker.stdout.readline(), 5)
+        if started == b"invalid_configuration\n":
+            reason = "invalid_configuration"
             raise ValueError()
+        if pipe_failed or not started or len(started) > 256:
+            raise ValueError()
+        try:
+            directory = json.loads(started)
+            directory = directory["directory"]
+            if (not isinstance(directory, str) or not directory.startswith("/tmp/mesh-dictation-")
+                    or Path(directory).parent != Path("/tmp")):
+                raise ValueError()
+            directory_stat = os.lstat(directory)
+            if (not stat.S_ISDIR(directory_stat.st_mode) or directory_stat.st_uid != os.getuid()
+                    or stat.S_IMODE(directory_stat.st_mode) != 0o700):
+                raise ValueError()
+        except (ValueError, KeyError, TypeError, OSError):
+            raise ValueError() from None
+        app["dictation_directory"] = (directory, directory_stat.st_dev, directory_stat.st_ino)
+        handshake = await asyncio.wait_for(worker.stdout.readline(), 5)
+        if len(handshake) > 256:
+            raise ValueError()
+        try:
+            ready = json.loads(handshake)
+            socket = ready["socket"]
+            if socket != directory + "/worker.sock":
+                raise ValueError()
+            socket_stat = os.lstat(socket)
+            if (not stat.S_ISSOCK(socket_stat.st_mode) or socket_stat.st_uid != os.getuid()
+                    or stat.S_IMODE(socket_stat.st_mode) != 0o600):
+                raise ValueError()
+        except (ValueError, KeyError, TypeError):
+            raise ValueError() from None
         app["dictation_client"] = aiohttp.ClientSession(
             connector=aiohttp.UnixConnector(path=socket, limit=33),  # 32 public transfers + principal control
             cookie_jar=aiohttp.DummyCookieJar(), trust_env=False, auto_decompress=False,
@@ -526,7 +551,14 @@ async def _close_dictation(app, monitor):
             finally:
                 if directory:
                     with contextlib.suppress(OSError):
-                        directory.cleanup()
+                        path, device, inode = directory
+                        current = os.lstat(path)
+                        if (Path(path).parent == Path("/tmp") and
+                                Path(path).name.startswith("mesh-dictation-") and
+                                stat.S_ISDIR(current.st_mode) and current.st_uid == os.getuid() and
+                                stat.S_IMODE(current.st_mode) == 0o700 and
+                                (current.st_dev, current.st_ino) == (device, inode)):
+                            shutil.rmtree(path)
                 app.pop("dictation_cleanup", None)
 
 

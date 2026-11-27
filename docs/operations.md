@@ -1285,6 +1285,8 @@ web service, not the PTY host: terminal sessions stay running, but in-flight rec
 Source installs need Node 22.13 or later in the 22.x line, or Node 24 or later, on the web
 service's PATH or at the absolute executable path in `MESH_NODE`;
 bundles select their bundled Node without changing the Node available to agents.
+The optional typed worker owns its private socket directory and listener; the web bridge
+reaps that direct child and retains browser authentication and final authorization checks.
 
 Dictation is optional: invalid configuration or worker startup failure disables only dictation,
 not the web server. The authenticated, same-origin `GET /api/transcribe/config` returns
