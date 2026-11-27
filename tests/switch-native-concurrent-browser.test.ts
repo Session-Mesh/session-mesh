@@ -222,7 +222,9 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       assert.match(await phone.locator('.pane.active .p-input-state').innerText(), /7/);
       await phone.locator('.pane.active .p-input-discard').click();
       assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').count(), 0);
-      const other = phone.locator('.pane.active .p-input-other-draft');
+      const closedSessionCards = phone.locator('.pane.active .p-input-other-draft')
+        .filter({has: phone.locator('strong').filter({hasText: /^fenced-account$/})});
+      const other = closedSessionCards.filter({has: phone.locator('textarea')});
       assert.equal(await other.locator('strong').textContent(), 'fenced-account');
       assert.equal(await other.locator('textarea').inputValue(), 'phone-during-switch');
       await other.getByRole('button', {name: 'Copy', exact: true}).click();
@@ -247,12 +249,12 @@ describe('fenced native switch with desktop and phone', {skip}, () => {
       });
       await other.getByRole('button', {name: /Discard/}).click();
       assert.equal(await other.locator('textarea').count(), 0, 'discard removes the retained bytes');
-      if (await other.count()) {
-        const forget = other.getByRole('button', {name: 'Forget obsolete draft record'});
+      if (await closedSessionCards.count()) {
+        const forget = closedSessionCards.getByRole('button', {name: 'Forget obsolete draft record'});
         phone.once('dialog', dialog => dialog.accept());
         await forget.click();
       }
-      assert.equal(await other.count(), 0, 'forget removes only the chosen closed-session record');
+      assert.equal(await closedSessionCards.count(), 0, 'forget removes only the chosen closed-session record');
       assert.equal(await phone.locator('.pane.active .p-input-drafts textarea').inputValue(), 'draft B');
       assert.deepEqual(await phone.evaluate(() => (window as any).__inputFrames), attempted, 'discard never sends a frame');
     } finally {
