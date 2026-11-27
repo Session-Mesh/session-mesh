@@ -109,26 +109,27 @@ let darwin_procargs2_parts buffer =
 let darwin_procargs2 buffer =
   Result.map fst (darwin_procargs2_parts buffer)
 
-let darwin_environment_matches ?(unset = []) buffer ~key ~expected =
-  let selected = List.map (fun name -> (name, name ^ "=")) (key :: unset) in
+let darwin_selected_environment buffer names =
+  let selected = List.map (fun name -> (name, name ^ "=")) names in
   let matching_key item =
     List.find_opt (fun (_, prefix) -> String.starts_with ~prefix item) selected
   in
-  let rec scan position seen matches =
+  let rec scan position seen =
     if position = String.length buffer || buffer.[position] = '\000' then
-      Ok (List.mem key seen && matches)
+      Ok seen
     else
       match String.index_from_opt buffer position '\000' with
       | None -> malformed "procargs2: unterminated environment string"
       | Some stop ->
           let item = String.sub buffer position (stop - position) in
           match matching_key item with
-          | None -> scan (stop + 1) seen matches
-          | Some (name, _) when List.mem name seen ->
+          | None -> scan (stop + 1) seen
+          | Some (name, _) when List.mem_assoc name seen ->
               malformed "procargs2: duplicate environment key"
           | Some (name, prefix) ->
-              let expected_item = if name = key then prefix ^ expected else prefix in
-              scan (stop + 1) (name :: seen) (matches && item = expected_item)
+              let length = String.length prefix in
+              let value = String.sub item length (String.length item - length) in
+              scan (stop + 1) ((name, value) :: seen)
   in
   match darwin_procargs2_parts buffer with
   | Error error -> Error error
@@ -138,7 +139,16 @@ let darwin_environment_matches ?(unset = []) buffer ~key ~expected =
          Do not infer absence from that ambiguous buffer. *)
       if List.exists (fun item -> Option.is_some (matching_key item)) argv then
         malformed "procargs2: selected environment key in argument vector"
-      else scan position [] true
+      else scan position []
+
+let darwin_environment_matches ?(unset = []) buffer ~key ~expected =
+  Result.map
+    (fun selected ->
+      List.assoc_opt key selected = Some expected
+      && List.for_all
+           (fun name -> Option.value ~default:"" (List.assoc_opt name selected) = "")
+           unset)
+    (darwin_selected_environment buffer (key :: unset))
 
 (* [tpgid] is <= 0 when the process has no controlling terminal (Linux reports
    -1; 0 can appear on other kernels). Handing that back as a group id would
