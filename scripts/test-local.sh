@@ -29,13 +29,25 @@ target=all
 case "${1:-}" in
   test-diff)
     [ "$#" -eq 2 ] || { echo 'test-local: test-diff requires one base revision.' >&2; exit 2; }
-    scope="$(bash scripts/test-scope.sh "$2")"
+    selection="$(mktemp)"
+    if ! bash scripts/test-scope.sh "$2" --local-files > "$selection"; then
+      rm -f "$selection"
+      exit 1
+    fi
+    inputs=()
+    while IFS= read -r -d '' input; do inputs+=("$input"); done < "$selection"
+    rm -f "$selection"
+    scope="${inputs[0]}"
     if [ "$scope" = docs ]; then
       node --experimental-strip-types tools/leak-guard/cli.ts worktree
       echo 'test-local: PASS (documentation diff)'
       exit 0
     fi
     shift 2
+    if [ "$scope" = node ]; then
+      target=test-node
+      set -- "${inputs[@]:1}"
+    fi
     ;;
   test-ui|test-server|test-server-parallel|test-node|test-ptyhost) target="$1"; shift ;;
   test-*) echo 'test-local: unknown test target.' >&2; exit 2 ;;
