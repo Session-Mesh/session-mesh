@@ -22,10 +22,17 @@ test(`real Pi ${initiator} switch keeps its shell and conversation`, {timeout: 9
   const tools = ['fd', 'rg'].map(tool => [tool, spawnSync('/bin/sh', ['-c', 'command -v ' + tool], {encoding: 'utf8'}).stdout.trim()]);
   const platform = process.env.MESH_MESH_PLATFORM_CMD ??
     path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
+  const profile = process.env.MESH_MESH_PROFILE_CMD ??
+    path.join(REPO, 'ocaml/_build/default/bin/mesh_profile_main.exe');
+  const history = process.env.MESH_MESH_HISTORY_CMD ??
+    path.join(REPO, 'ocaml/_build/default/bin/mesh_history_main.exe');
   if (process.platform !== 'linux' || !pi || !fs.existsSync(platform) || tools.some(([, executable]) => !executable)) {
     t.skip('requires Pi, fd, rg, the native account helper and Linux process identities');
     return;
   }
+
+  assert.ok(fs.existsSync(profile), 'the native profile helper must be built');
+  assert.ok(fs.existsSync(history), 'the native history helper must be built');
 
   const turns: {authorization?: string; messages: unknown}[] = [];
   const inference = createServer(async (req, res) => {
@@ -47,7 +54,8 @@ test(`real Pi ${initiator} switch keeps its shell and conversation`, {timeout: 9
     let bin = '', shell = '';
     const histories: Record<string, string> = {};
     mesh = await startMesh('pi-native-switch-', {
-      MESH_MESH_PLATFORM_CMD: platform, MESH_SESSION: undefined, MESH_SESSION_TOKEN: undefined,
+      MESH_MESH_PLATFORM_CMD: platform, MESH_MESH_PROFILE_CMD: profile,
+      MESH_MESH_HISTORY_CMD: history, MESH_SESSION: undefined, MESH_SESSION_TOKEN: undefined,
     }, where => {
       const home = fs.realpathSync(where.home);
       bin = path.join(home, 'bin');
@@ -130,7 +138,7 @@ test(`real Pi ${initiator} switch keeps its shell and conversation`, {timeout: 9
       const source = switchSource(observed, true);
       assert.ok(source, 'the picker can bind its source using the real inventory');
       const profiles = await fetch(mesh.base + '/api/accounts/profiles', {headers: owner});
-      assert.equal(profiles.status, 200);
+      assert.equal(profiles.status, 200, await profiles.clone().text());
       const {data} = await profiles.json();
       const targets = switchTargets(source, data.profiles);
       assert.deepEqual(targets.map(p => p.id), ['target']);
