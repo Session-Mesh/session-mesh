@@ -3023,6 +3023,16 @@ class Pane {
 
   detach() {
     if (!this.conn) return;
+    // A recovered editor draft stays in the browser when its terminal closes.
+    // Release its reservation while the original transport is still bound.
+    const key = `${this.conn.name}\0${this.conn.created}`;
+    const recoveredLine = lineRecovery?.recovered;
+    for (const draft of [this.recoveredLineDrafts.get(key), recoveredLine, this.recoveredComposeDraft]) {
+      if (draft && draft.name === this.conn.name && draft.created === this.conn.created &&
+          (!draft.pane || draft.pane === this)) {
+        releaseDiscardedEditorDraft({pane: this, ...draft});
+      }
+    }
     this.limitedBanner.hidden = true;
     this.limitedKeyboard.hidden = true;
     if (touch) this.term.textarea.setAttribute("inputmode", "none");

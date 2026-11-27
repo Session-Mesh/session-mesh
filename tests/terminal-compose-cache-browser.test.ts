@@ -102,3 +102,29 @@ for (const editor of ['composer', 'line', 'line after leaving the pane'] as cons
     }, false, 'en');
   });
 }
+
+test('switching sessions releases a refused recovered line on its original transport', async () => {
+  await harness(async (page, _api, _sockets, writes) => {
+    const dirtyAfterSwitch = await page.evaluate(async () => {
+      const pane = active;
+      const {name, created} = pane.conn;
+      const lease = pane.inputLease;
+      const entry = {input: {pendingBytes: 0, incompleteHumanInput: false}, lease};
+      pane.inputAcks.set(name + '\0' + created, entry);
+      recoveredLineTarget = {pane, name, created, entry};
+      line.value = 'recovered draft';
+      paneInput.deliver = (_binding: unknown, _text: string, _enter: boolean, done: Function) => {
+        done({kind: 'refused', frames: 0, wireBytes: 0});
+        return {cancel() {}};
+      };
+      await sendLine();
+      lease.hold();
+      if (!lease.dirty) throw new Error('original lease was not held');
+      pane.show('B');
+      return lease.dirty;
+    });
+    assert.equal(dirtyAfterSwitch, false);
+    assert.ok((writes.get('A:0') ?? []).length > 0);
+    await page.getByRole('button', {name: en['compose.discardResult'], exact: true}).click();
+  }, false, 'en');
+});
