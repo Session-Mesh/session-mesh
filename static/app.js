@@ -5626,7 +5626,7 @@ const accountSwitchPicker = MeshPaneActions.createAccountSwitchPicker($("#dlg-ac
     return s ? { session: s, authoritative: rowAuthoritative(s) && localMeshEffectsAllowed() } : null;
   },
   label: s => label(s),
-  t,
+  t, serverText,
   notice: text => flash(text),
   profiles: async () => {
     const response = await requestLocal("/api/accounts/profiles", { cache: "no-store" });
@@ -5639,9 +5639,9 @@ const accountSwitchPicker = MeshPaneActions.createAccountSwitchPicker($("#dlg-ac
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source, target }),
     });
-    if (!response.ok) throw new Error();
     const body = await response.json();
-    if (body?.request?.action !== "switch_account") throw new Error();
+    if (response.status === 409 && body?.refused === "foreground_unavailable") return null;
+    if (!response.ok || body?.request?.action !== "switch_account") throw new Error();
     return body.request;
   },
   status: async id => {

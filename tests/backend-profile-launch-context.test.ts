@@ -720,10 +720,11 @@ server.host = listing
 server._event_body = body
 server._cancel_pending_notice = cancel
 discover = server.discover
+foreground = 101
 discover.snapshot = lambda: {
-    100: ('bash','S',1,100,100,0,101), 101: ('pi','S',100,101,100,0,101),
-    102: ('pi','S',100,102,100,0,101)}
-discover.session_agent = lambda rows, pid: (101,'pi') if pid == 100 else None
+    100: ('bash','S',1,100,100,0,foreground), 101: ('pi','S',100,101,100,0,foreground),
+    102: ('pi','S',100,102,100,0,foreground)}
+discover.session_agent = lambda rows, pid: (foreground,'pi') if pid == 100 else None
 discover.proc_start = lambda pid: 1
 
 async def report(pid, seq, kind):
@@ -733,10 +734,16 @@ async def report(pid, seq, kind):
     return json.loads((await server.api_event(request)).text)
 
 async def main():
+    global foreground
     assert (await report(101, 10, 'done'))['applied'] is True
     assert (await report(102, 100, 'done'))['applied'] is False
     assert (await report(101, 11, 'working'))['applied'] is True
     assert state.current_type('one','nonce') == 'working'
+    foreground = 102
+    assert (await report(102, 100, 'done'))['applied'] is True
+    foreground = 101
+    assert (await report(101, 10, 'done'))['reason'] == 'stale'
+    assert (await report(101, 12, 'working'))['applied'] is True
 
 asyncio.run(main())
 `;

@@ -2784,6 +2784,7 @@ class EventState:
         self._generations = {}
         # The first conversation an agy hook reported for an incarnation: see ``foreign``.
         self._pinned = {}
+        self._pi_sequences = {}
         self._metrics = {"samples": 0, "agree": 0, "unobservable": 0,
                          "disagreements": {}}
 
@@ -2845,7 +2846,7 @@ class EventState:
             return None
         return None if conversation == pinned else "foreign_conversation"
 
-    def apply(self, name, nonce, event):
+    def apply(self, name, nonce, event, *, pi_process=None):
         """Keep the newest event; False when ``event`` is older than the current one.
 
         ``at`` is the hook's own time, already clamped to the server's receipt
@@ -2856,7 +2857,16 @@ class EventState:
         """
         key = self._key(name, nonce)
         old = self._states.get(key)
-        if old is not None and self._older(old, event):
+        if pi_process is not None and (sequence := self._sequence(event)) is not None:
+            recent = self._pi_sequences.setdefault(key, {})
+            previous = recent.get(pi_process)
+            if previous is not None and sequence <= previous:
+                return False
+            recent.pop(pi_process, None)
+            recent[pi_process] = sequence
+            if len(recent) > EVENT_DEDUP_MAX:
+                del recent[next(iter(recent))]
+        elif old is not None and self._older(old, event):
             return False
         self._states[key] = event
         self._generation += 1
@@ -2995,6 +3005,7 @@ class EventState:
             self._compared = {key: value for key, value in self._compared.items() if key in live}
             self._generations = {key: value for key, value in self._generations.items() if key in live}
             self._pinned = {key: value for key, value in self._pinned.items() if key in live}
+            self._pi_sequences = {key: value for key, value in self._pi_sequences.items() if key in live}
         nonce_by_name = {name: nonce for name, nonce in live}
         for entry in mesh:
             key = entry["name"], nonce_by_name.get(entry["name"])
@@ -3260,11 +3271,14 @@ async def _session_agent(name, created):
 
 def _foreground_pi_report(leader_pid, reported_pid):
     if type(leader_pid) is not int or type(reported_pid) is not int or reported_pid <= 0:
-        return False
+        return None
     procs = discover.snapshot()
     leader, reporter = procs.get(leader_pid), procs.get(reported_pid)
-    return bool(leader and reporter and leader[6] > 0 and reporter[3] == leader[6]
-                and discover.session_agent(procs, leader_pid) == (reported_pid, "pi"))
+    if (leader and reporter and leader[6] > 0 and reporter[3] == leader[6]
+            and discover.session_agent(procs, leader_pid) == (reported_pid, "pi")
+            and (started := discover.proc_start(reported_pid)) > 0):
+        return reported_pid, started
+    return None
 
 
 async def api_event(request):
@@ -3278,8 +3292,11 @@ async def api_event(request):
     agent, leader = await _session_agent(name, request["mesh_session_created"])
     reason = state.foreign(name, nonce, event, agent)
     detail = event["detail"] or {}
+    pi_process = None
     if reason is None and detail.get("source") == "pi":
-        if agent != "pi" or not await asyncio.to_thread(_foreground_pi_report, leader, detail.get("pid")):
+        if agent == "pi":
+            pi_process = await asyncio.to_thread(_foreground_pi_report, leader, detail.get("pid"))
+        if pi_process is None:
             reason = "foreign_process"
     if reason is not None:
         reported = detail.get("source")
@@ -3289,7 +3306,7 @@ async def api_event(request):
     if state.duplicate(name, nonce, event["id"]):
         return web.json_response({"ok": True, "applied": False, "reason": "duplicate"})
     previous = state.current_type(name, nonce)
-    if not state.apply(name, nonce, event):
+    if not state.apply(name, nonce, event, pi_process=pi_process):
         return web.json_response({"ok": True, "applied": False, "reason": "stale"})
     if event["type"] == "done" and "agent_wakes" in request.app:
         request.app["agent_wakes"].trigger()   # a deferred wake may now be typed
@@ -5614,6 +5631,9 @@ async def api_operator_account_switch(request):
               "agent": expected["agent"], "cwd": raw["cwd"]}
     described = await asyncio.to_thread(_describe_with_hooks, listed)
     entry = _session_action_entry(described, source)
+    if entry and entry["agent"].get("status") == "busy":
+        return web.json_response({"refused": "foreground_unavailable"}, status=409,
+                                 headers={"Cache-Control": "no-store"})
     if (not entry or entry["agent"].get("status") != "idle"
             or entry["agent"].get("foreground") is not True
             or (entry["agent"].get("pid"), entry["agent"].get("started")) !=
