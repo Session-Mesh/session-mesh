@@ -906,16 +906,31 @@ async def _switch_profile_context(account, agent, expected_revision=None, observ
             raise web.HTTPConflict(text="Foreground Pi process unavailable; nothing was stopped")
         overrides = tuple(context["unset"])
         try:
-            values, binding = await asyncio.to_thread(
-                accountswitch.process_environment, observed_agent.get("pid"),
-                {"PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", *overrides})
-            # Pi replaces its kernel command line with its process title.
-            if (any(values.get(key) for key in overrides)
-                    or values.get("PI_CODING_AGENT_SESSION_DIR") != context["roots"]["history"]
-                    or not await asyncio.to_thread(pimcp.profile_overlay_matches,
-                        values.get("PI_CODING_AGENT_DIR", ""), CONF_DIR, context["roots"]["config"])):
+            history = context["roots"]["history"]
+            if sys.platform == "darwin":
+                if source is None:
+                    raise accountswitch.UnboundDefault("Session identity is unavailable")
+                identity = await _foreground_process_identity(source, observed_agent)
+                pid, incarnation = identity["agent_pid"], identity["agent_incarnation"]
+                answer = await _accounts_program(
+                    "observe-pi-overlay", str(pid), incarnation,
+                    request={"history": history, "overlay_root": str(CONF_DIR / "pi-agent-overlays"),
+                             "unset": sorted(overrides)})
+                overlay = answer.get("overlay")
+                if set(answer) != {"overlay"} or not isinstance(overlay, str):
+                    raise accountswitch.UnboundDefault("Pi profile differs from the observed process")
+                binding = {"process_pid": pid, "process_start": incarnation}
+            else:
+                values, binding = await asyncio.to_thread(
+                    accountswitch.process_environment, observed_agent.get("pid"),
+                    {"PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", *overrides})
+                # Pi replaces its kernel command line with its process title.
+                if any(values.get(key) for key in overrides) or values.get("PI_CODING_AGENT_SESSION_DIR") != history:
+                    raise accountswitch.UnboundDefault("Pi profile differs from the observed process")
+                overlay = values.get("PI_CODING_AGENT_DIR", "")
+            if not await asyncio.to_thread(pimcp.profile_overlay_matches, overlay, CONF_DIR, context["roots"]["config"]):
                 raise accountswitch.UnboundDefault("Pi profile differs from the observed process")
-        except accountswitch.UnboundDefault as exc:
+        except (accountswitch.UnboundDefault, AccountsUnavailable) as exc:
             raise web.HTTPConflict(text="Pi account context unavailable; nothing was stopped") from exc
         return {**context, **binding}
     try:
@@ -6206,7 +6221,7 @@ def _with_account_labels(item):
 
 
 def _native_switch_platform_qualified(kind):
-    return NATIVE_SWITCH_QUALIFIED or (sys.platform == "darwin" and kind in ("codex", "claude"))
+    return NATIVE_SWITCH_QUALIFIED or (sys.platform == "darwin" and kind in ("codex", "claude", "pi"))
 
 
 def _native_switch_available(kind, raw):

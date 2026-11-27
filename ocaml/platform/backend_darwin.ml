@@ -85,6 +85,25 @@ let environment_matches ?unset pid ~incarnation ~key ~expected =
   with_process_environment pid ~incarnation (fun buffer ->
       Parse.darwin_environment_matches ?unset buffer ~key ~expected)
 
+let pi_profile_overlay pid ~incarnation ~history ~overlay_root ~unset =
+  let overlay_key = "PI_CODING_AGENT_DIR"
+  and history_key = "PI_CODING_AGENT_SESSION_DIR" in
+  with_process_environment pid ~incarnation (fun buffer ->
+      let* selected =
+        Parse.darwin_selected_environment ~title_padding:true buffer
+          (overlay_key :: history_key :: unset)
+      in
+      match List.assoc_opt overlay_key selected with
+      | Some overlay
+        when List.assoc_opt history_key selected = Some history
+             && Filename.dirname overlay = overlay_root
+             && String.starts_with ~prefix:"session-" (Filename.basename overlay)
+             && List.for_all
+                  (fun name -> Option.value ~default:"" (List.assoc_opt name selected) = "")
+                  unset ->
+          Ok (Some overlay)
+      | _ -> Ok None)
+
 let working_directory pid =
   with_pid pid (fun pid ->
       let* path = lift "working directory" (Darwin_stubs.cwd pid) in

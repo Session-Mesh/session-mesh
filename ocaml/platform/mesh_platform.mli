@@ -173,6 +173,13 @@ val darwin_process_environment_matches :
     effective user and bound to the supplied incarnation. No environment
     values are returned. *)
 
+val darwin_pi_profile_overlay :
+  int -> incarnation:int64 -> history:string -> overlay_root:string -> unset:string list ->
+  (string option, error) result
+(** Observe only the Pi overlay path when the expected history, overlay parent,
+    provider environment and owned process incarnation match. The caller must
+    separately verify that the overlay belongs to the selected profile. *)
+
 type process_scan = {
   processes : process list;  (** Sorted by pid. *)
   skipped : int;
@@ -245,6 +252,11 @@ module Parse : sig
       kernel pads after the exec path with NUL bytes, which are skipped, so
       padding cannot be told from an empty [argv.(0)]: a leading empty argument
       is dropped. *)
+
+  val darwin_selected_environment :
+    ?title_padding:bool -> string -> string list -> ((string * string) list, error) result
+  (** Parse only selected entries. [title_padding] allows leading zeroes
+      after the declared argument vector for processes that rewrite their title. *)
 
   val darwin_environment_matches :
     ?unset:string list -> string -> key:string -> expected:string ->

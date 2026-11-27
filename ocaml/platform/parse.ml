@@ -109,7 +109,7 @@ let darwin_procargs2_parts buffer =
 let darwin_procargs2 buffer =
   Result.map fst (darwin_procargs2_parts buffer)
 
-let darwin_selected_environment buffer names =
+let darwin_selected_environment ?(title_padding = false) buffer names =
   let selected = List.map (fun name -> (name, name ^ "=")) names in
   let matching_key item =
     List.find_opt (fun (_, prefix) -> String.starts_with ~prefix item) selected
@@ -139,7 +139,10 @@ let darwin_selected_environment buffer names =
          Do not infer absence from that ambiguous buffer. *)
       if List.exists (fun item -> Option.is_some (matching_key item)) argv then
         malformed "procargs2: selected environment key in argument vector"
-      else scan position []
+      else
+        (* Pi rewrites its process title. On Darwin its original argument
+           area can retain zero padding before the inherited environment. *)
+        scan (if title_padding then skip_nuls buffer position else position) []
 
 let darwin_environment_matches ?(unset = []) buffer ~key ~expected =
   Result.map

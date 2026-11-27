@@ -79,8 +79,10 @@ let test_child_environment () =
   let key = "MESH_TEST_PROFILE_ROOT" and expected = "/tmp/test-profile" in
   let executable = Unix.realpath Sys.executable_name in
   let argv = [| executable; "--environment-fixture" |] in
+  let history = "/tmp/pi-history" and overlay = "/tmp/overlays/session-test" in
   with_child
-    ~env:[| key ^ "=" ^ expected; "MESH_TEST_OVERRIDE=present"; "MESH_TEST_EMPTY=" |]
+    ~env:[| key ^ "=" ^ expected; "MESH_TEST_OVERRIDE=present"; "MESH_TEST_EMPTY=";
+            "PI_CODING_AGENT_DIR=" ^ overlay; "PI_CODING_AGENT_SESSION_DIR=" ^ history |]
     executable argv
     (fun child ->
       wait_for "exec test fixture" (fun () ->
@@ -101,6 +103,18 @@ let test_child_environment () =
       Alcotest.(check bool) "empty and absent overrides allow profile" true
         (ok_or_fail "no override"
            (matches ~unset:[ "MESH_TEST_EMPTY"; "MESH_TEST_ABSENT" ] ~incarnation expected));
+      let observe ~history ~overlay_root ~unset =
+        ok_or_fail "Pi profile observation"
+          (darwin_pi_profile_overlay child ~incarnation ~history ~overlay_root ~unset)
+      in
+      Alcotest.(check (option string)) "Pi history and overlay match" (Some overlay)
+        (observe ~history ~overlay_root:"/tmp/overlays" ~unset:[ "MESH_TEST_EMPTY" ]);
+      Alcotest.(check (option string)) "Pi history mismatch" None
+        (observe ~history:"/tmp/other-history" ~overlay_root:"/tmp/overlays" ~unset:[]);
+      Alcotest.(check (option string)) "Pi overlay outside permitted root" None
+        (observe ~history ~overlay_root:"/tmp/other" ~unset:[]);
+      Alcotest.(check (option string)) "Pi provider override" None
+        (observe ~history ~overlay_root:"/tmp/overlays" ~unset:[ "MESH_TEST_OVERRIDE" ]);
       check_error "wrong incarnation" Not_found
         (matches ~incarnation:(Int64.succ incarnation) expected))
 

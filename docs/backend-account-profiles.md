@@ -4,10 +4,10 @@
 agent or switch a running session. On Linux, the web server can switch a Claude or Codex session between
 native profiles when its PTY host supports bound in-place relaunch. This is also available on macOS.
 The owner must approve each request.
-On Linux, Pi also supports switching between two named native profiles when its PTY and transfer
+On Linux and macOS, Pi also supports switching between two named native profiles when its PTY and transfer
 helper both support revision-bound Pi operations. Pi launches and restores use the selected
 configuration and history roots. A restore with an unbound or missing conversation leaves its
-recovery offer available. OpenCode live switching and Pi switching on macOS remain unavailable.
+recovery offer available. OpenCode live switching remains unavailable.
 
 The terminal-header operator picker supports eligible Claude Code, Codex and Pi sessions on Linux.
 Pi requires two named native profiles and a process-bound activity report from the Mesh Pi extension.

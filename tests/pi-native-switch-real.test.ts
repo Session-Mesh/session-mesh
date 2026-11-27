@@ -20,14 +20,16 @@ test(`real Pi ${initiator} switch keeps its shell and conversation`, {timeout: 9
   const probe = spawnSync('/bin/sh', ['-c', 'command -v pi'], {encoding: 'utf8'});
   const pi = probe.stdout.trim();
   const tools = ['fd', 'rg'].map(tool => [tool, spawnSync('/bin/sh', ['-c', 'command -v ' + tool], {encoding: 'utf8'}).stdout.trim()]);
+  tools.push(['node', process.execPath]);
   const platform = process.env.MESH_MESH_PLATFORM_CMD ??
     path.join(REPO, 'ocaml/_build/default/platform/cli/mesh_platform_main.exe');
   const profile = process.env.MESH_MESH_PROFILE_CMD ??
     path.join(REPO, 'ocaml/_build/default/bin/mesh_profile_main.exe');
   const history = process.env.MESH_MESH_HISTORY_CMD ??
     path.join(REPO, 'ocaml/_build/default/bin/mesh_history_main.exe');
-  if (process.platform !== 'linux' || !pi || !fs.existsSync(platform) || tools.some(([, executable]) => !executable)) {
-    t.skip('requires Pi, fd, rg, the native account helper and Linux process identities');
+  if (!['linux', 'darwin'].includes(process.platform) || !pi || !fs.existsSync(platform)
+      || tools.some(([, executable]) => !executable)) {
+    t.skip('requires Pi, fd, rg, the native account helper and a qualified process identity backend');
     return;
   }
 

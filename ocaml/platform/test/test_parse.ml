@@ -175,7 +175,18 @@ let test_procargs_environment () =
        ~unset:[ "OPENAI_BASE_URL" ] ~key:"CODEX_HOME" ~expected:"/tmp/profile");
   check_malformed "duplicate key"
     (check "CODEX_HOME=/tmp/profile\000CODEX_HOME=/tmp/profile\000");
-  check_malformed "unterminated entry" (check "CODEX_HOME=/tmp/profile")
+  check_malformed "unterminated entry" (check "CODEX_HOME=/tmp/profile");
+  let padded =
+    recorded_procargs2 ^ "\000\000PI_CODING_AGENT_DIR=/tmp/overlay\000"
+  in
+  let names = [ "PI_CODING_AGENT_DIR" ] in
+  Alcotest.(check (result (list (pair string string)) error_testable))
+    "Pi title padding is opt-in" (Ok [])
+    (Parse.darwin_selected_environment padded names);
+  Alcotest.(check (result (list (pair string string)) error_testable))
+    "Pi environment follows title padding"
+    (Ok [ ("PI_CODING_AGENT_DIR", "/tmp/overlay") ])
+    (Parse.darwin_selected_environment ~title_padding:true padded names)
 
 let test_darwin_state () =
   let check status expected =

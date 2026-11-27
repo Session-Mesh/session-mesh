@@ -442,6 +442,26 @@ let test_account_environment_input () =
      else "unsupported")
     {|{"key":"CODEX_HOME","expected":"/tmp/profile","unset":["OPENAI_BASE_URL"]}|}
 
+let test_pi_profile_observation_input () =
+  let argv =
+    [| "mesh-platform"; "accounts"; "observe-pi-overlay";
+       string_of_int (Unix.getpid ()); "1" |]
+  in
+  let check expected input =
+    let status, stdout_text, _ = run ~input argv in
+    Alcotest.(check bool) "exit 1" true (status = Unix.WEXITED 1);
+    Alcotest.(check string) "error kind" expected (kind_of stdout_text)
+  in
+  check "malformed" {|{"history":"relative","overlay_root":"/tmp/overlays","unset":[]}|};
+  check "malformed"
+    {|{"history":"/tmp/history","overlay_root":"/tmp/overlays","unset":["PI_CODING_AGENT_DIR"]}|};
+  check "malformed"
+    {|{"history":"/tmp/history","overlay_root":"/tmp/overlays","unset":["OVERRIDE","OVERRIDE"]}|};
+  check
+    (if Mesh_platform.platform = Mesh_platform.Macos then "not_found"
+     else "unsupported")
+    {|{"history":"/tmp/history","overlay_root":"/tmp/overlays","unset":["OVERRIDE"]}|}
+
 let tests =
   [
     Alcotest.test_case "require isolated-agent" `Quick
@@ -459,6 +479,8 @@ let tests =
     Alcotest.test_case "pid must be decimal digits" `Quick test_pid_is_decimal;
     Alcotest.test_case "account environment request" `Quick
       test_account_environment_input;
+    Alcotest.test_case "Pi profile observation request" `Quick
+      test_pi_profile_observation_input;
     Alcotest.test_case "invalid UTF-8 is replaced" `Quick
       test_invalid_utf_8_is_replaced;
   ]

@@ -126,12 +126,12 @@ def test_server_binds_default_to_linux_observed_agent(monkeypatch):
     with pytest.raises(web.HTTPConflict):
         asyncio.run(server._switch_profile_context("default", "codex", observed_agent={**observed, "foreground": False}))
 
-def test_darwin_native_switch_qualifies_codex_and_claude(monkeypatch):
+def test_darwin_native_switch_qualifies_supported_agents(monkeypatch):
     monkeypatch.setattr(server, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setattr(server, "NATIVE_SWITCH_QUALIFIED", False)
-    assert all(server._native_switch_platform_qualified(kind) for kind in ("codex", "claude"))
+    assert all(server._native_switch_platform_qualified(kind) for kind in ("codex", "claude", "pi"))
     assert not any(server._native_switch_platform_qualified(kind)
-                   for kind in ("pi", "opencode", None))
+                   for kind in ("opencode", None))
 
 
 @pytest.mark.parametrize("case", ["default_home", "wrong_terminal", "named_mismatch", "invalid_reply"])

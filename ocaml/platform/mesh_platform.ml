@@ -107,6 +107,12 @@ let darwin_process_environment_matches ?unset pid ~incarnation ~key ~expected =
       Backend_darwin.environment_matches ?unset pid ~incarnation ~key ~expected
   | Linux | Other _ -> Error (Unsupported "process environment match needs macOS")
 
+let darwin_pi_profile_overlay pid ~incarnation ~history ~overlay_root ~unset =
+  match platform with
+  | Macos ->
+      Backend_darwin.pi_profile_overlay pid ~incarnation ~history ~overlay_root ~unset
+  | Linux | Other _ -> Error (Unsupported "Pi profile observation needs macOS")
+
 let foreground_process_group = Backend.foreground_process_group
 let unix_socket_bound = Backend.unix_socket_bound
 
