@@ -4598,13 +4598,16 @@ async def api_kill(request):
         raise web.HTTPConflict(text="Session replaced or stop already requested")
     if killed != {"ok": True}:
         raise web.HTTPServiceUnavailable(text="Invalid ptyhost reply")
-    await asyncio.to_thread(fsutil.conversation_optional, "close", name=name, created=created)
-    await asyncio.to_thread(respawn.forget_live, name, created)   # forget only the killed identity
-    await asyncio.to_thread(board.remove, name, created)
-    SIGNALS.discard_if(lambda reference, identity: reference.get("type") == "board.updated"
-                       and reference.get("object", {}).get("id") == name and identity == created)
-    opens.discard_board_open(name, created)
-    opens.discard_demo_scene_open(name, created)
+    try:
+        await asyncio.to_thread(fsutil.conversation_optional, "close", name=name, created=created)
+    finally:
+        # The stop is confirmed even when the separate registry reply is unusable.
+        await asyncio.to_thread(respawn.forget_live, name, created)
+        await asyncio.to_thread(board.remove, name, created)
+        SIGNALS.discard_if(lambda reference, identity: reference.get("type") == "board.updated"
+                           and reference.get("object", {}).get("id") == name and identity == created)
+        opens.discard_board_open(name, created)
+        opens.discard_demo_scene_open(name, created)
     return web.json_response({"ok": True})
 
 
