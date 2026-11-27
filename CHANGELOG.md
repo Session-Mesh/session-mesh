@@ -71,11 +71,6 @@ The entries of changes merged since the move to changelog fragments are the file
   that the view is not available. The previous workspace stays behind the "Old view" button, and
   is shown once per page load when `work-read` is not installed. See
   [The Projects view and the project tracker](docs/features.md#the-projects-view-and-the-project-tracker).
-- **A project configuration edit that meets another writer's lock reports `busy`, never
-  `invalid-config`.** When the other writer released its lock between the failed exclusive create
-  and the inspection of the lock file, the vanished lock was reported as a missing configuration.
-  The edit now refuses `busy`, and the caller retries with a fresh revision as for any other busy
-  lock.
 - **The session list is computed with less repeated work.** Each listing re-decoded every line of
   the Codex rollouts and Claude transcripts it shows, even unchanged ones, listed the recent Codex
   rollouts once per identity rule, serialised the conversation-name file once per session, and
