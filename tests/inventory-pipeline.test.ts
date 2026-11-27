@@ -50,6 +50,7 @@ function page(inventory: (page: Page) => Loader): Page {
     sessionRequestGate: {consider: () => calls.push('session-actions')},
     agentMailConsentGate: {consider: () => calls.push('agent-mail')},
     mailboxPanel: {note: () => {}},
+    accountSwitchPicker: {revalidate: () => {}},
     MeshSessionActivity: {update: (previous: unknown) => { calls.push('activity'); return previous; }},
     hostSilence: {update: () => {}, silent: () => false},
     listBatch: {request: () => calls.push('renderLists')},
