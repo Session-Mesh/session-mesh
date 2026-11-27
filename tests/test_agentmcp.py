@@ -447,6 +447,7 @@ def test_a_snapshot_restored_without_the_bridge_carries_no_board_block(monkeypat
         snapshot = ["codex", *[w for v in LEGACY_CODEX_BOARD for w in ("-c", v)], *codex_board()]
     restored = restore(kind, snapshot)
     assert set(snapshot[1:]).difference({"-c", "--mcp-config"}).isdisjoint(restored)
+    assert agentmcp.strip_board(kind, restored) == restored
     assert "--mcp-config" not in restored
 
 
