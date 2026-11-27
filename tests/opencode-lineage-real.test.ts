@@ -307,6 +307,59 @@ test('native OCaml roundtrip removes only its target on success and refusal', {
   }
 });
 
+async function assertImportedTerminalRoute(root: string, work: string, sessionID: string): Promise<void> {
+  const plugin = path.join(root, 'route-proof');
+  const witness = path.join(root, 'terminal-route.json');
+  fs.mkdirSync(plugin, {mode: 0o700});
+  fs.writeFileSync(path.join(plugin, 'index.ts'), 'export default {id:"mesh.route-proof-server",setup(){}};');
+  fs.writeFileSync(path.join(plugin, 'tui.ts'), `
+    import {renameSync, writeFileSync} from "node:fs";
+    export default {id:"mesh.route-proof", setup(context) {
+      let reported = false;
+      context.ui.slot({append:"session.composer.top", render(input) {
+        if (!reported) {
+          const path = process.env.MESH_TEST_ROUTE_WITNESS;
+          writeFileSync(path + ".tmp", JSON.stringify({route:context.ui.router.current(), sessionID:input.sessionID}));
+          renameSync(path + ".tmp", path);
+          reported = true;
+        }
+        return null;
+      }});
+    }};
+  `);
+  const terminal = spawn('script', ['-qefc', 'stty rows 30 cols 120; exec "$MESH_TEST_BINARY" --standalone --session "$MESH_TEST_SESSION"', '/dev/null'], {
+    cwd: work, env: {
+      PATH: '/usr/bin:/bin', HOME: path.join(root, 'home'), TERM: 'xterm-256color',
+      XDG_CONFIG_HOME: path.join(root, 'config'), XDG_DATA_HOME: path.join(root, 'data'),
+      XDG_STATE_HOME: path.join(root, 'state'), XDG_CACHE_HOME: path.join(root, 'cache'),
+      XDG_RUNTIME_DIR: path.join(root, 'runtime'), TMPDIR: root,
+      OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1',
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({plugins:[{package:plugin}]}),
+      MESH_TEST_ROUTE_WITNESS: witness, MESH_TEST_BINARY: binary!, MESH_TEST_SESSION: sessionID,
+    },
+  });
+  const closed = new Promise<void>(resolve => terminal.once('close', () => resolve()));
+  let output = '';
+  let spawnError: Error | undefined;
+  terminal.once('error', error => { spawnError = error; });
+  for (const stream of [terminal.stdout, terminal.stderr]) {
+    stream.on('data', bytes => { output = (output + bytes.toString()).slice(-16_384); });
+  }
+  try {
+    const deadline = Date.now() + 15_000;
+    while (!fs.existsSync(witness) && !spawnError && terminal.exitCode === null && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.ifError(spawnError);
+    assert.ok(fs.existsSync(witness), `imported conversation did not open: ${output}`);
+    assert.deepEqual(JSON.parse(fs.readFileSync(witness, 'utf8')),
+      {route:{type:'session', sessionID}, sessionID});
+  } finally {
+    if (terminal.exitCode === null && terminal.signalCode === null) terminal.kill('SIGTERM');
+    await closed;
+  }
+}
+
 test('adapter records two durable logical epochs while native IDs change', {
   skip: !(validBinary && driver),
 }, async () => {
@@ -365,6 +418,11 @@ test('adapter records two durable logical epochs while native IDs change', {
     await b.close(); b = undefined;
     const onB = runAdapter('a', 'b', initialID, 1);
     assert.notEqual(onB, initialID);
+    if (process.platform === 'linux' && expectedNativeVersion === '2.4.2') {
+      const beforeTerminal = provider.requests.length;
+      await assertImportedTerminalRoute(path.join(scratch, 'b'), work, onB);
+      assert.equal(provider.requests.length, beforeTerminal, 'terminal resume sends no model input');
+    }
     b = await server(binary!, path.join(scratch, 'b'), work, provider.port);
     const beforeB = provider.requests.length;
     await api(b, 'POST', `/api/session/${onB}/prompt`, {text: 'CANARY_B_INTERVENING'});
@@ -379,6 +437,12 @@ test('adapter records two durable logical epochs while native IDs change', {
     await b.close(); b = undefined;
     const onA = runAdapter('b', 'a', onB, 2);
     assert.notEqual(onA, onB);
+    assert.notEqual(onA, initialID);
+    if (process.platform === 'linux' && expectedNativeVersion === '2.4.2') {
+      const beforeTerminal = provider.requests.length;
+      await assertImportedTerminalRoute(path.join(scratch, 'a'), work, onA);
+      assert.equal(provider.requests.length, beforeTerminal, 'return terminal resume sends no model input');
+    }
     b = await server(binary!, path.join(scratch, 'b'), work, provider.port);
     assert.deepEqual((await api(b, 'GET', `/api/experimental/session/${onB}/export`) as Export).messages,
       bTurn.messages, 'B original stays untouched after the return fork');
