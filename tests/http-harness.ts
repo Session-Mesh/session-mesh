@@ -163,6 +163,8 @@ const ACCEPTED_STATUS = `
   POST /api/session-actions/{request_id}/claim 400
   POST /api/session-actions/{request_id}/recover-fence 400
   POST /api/session-actions/{request_id}/decision 400
+  POST /api/session-actions/operator/switch 400 invalid-request
+  GET /api/session-actions/operator/switch/{request_id} 404
   POST /api/organize 400
   POST /api/restore/rebind 400
   POST /api/restore 400
