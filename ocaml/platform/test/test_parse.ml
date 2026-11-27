@@ -180,13 +180,24 @@ let test_procargs_environment () =
     (check "CODEX_HOME=/tmp/profile\000\000OPENAI_BASE_URL=override\000");
   check_malformed "unterminated entry" (check "CODEX_HOME=/tmp/profile");
   let claude suffix =
-    Parse.darwin_environment_matches ~title_padding:true
+    Parse.darwin_environment_matches
       (recorded_procargs2 ^ "\000\000CLAUDE_CONFIG_DIR=/tmp/profile\000" ^ suffix)
       ~unset:[ "ANTHROPIC_AUTH_TOKEN" ] ~key:"CLAUDE_CONFIG_DIR" ~expected:"/tmp/profile"
   in
   equal "Claude environment follows title padding" true (claude "");
   equal "Claude override after empty entry" false
     (claude "\000ANTHROPIC_AUTH_TOKEN=override\000");
+  let default_claude suffix =
+    Parse.darwin_environment_matches
+      (recorded_procargs2 ^ "\000\000HOME=/tmp/profile\000" ^ suffix)
+      ~unset:[ "CLAUDE_CONFIG_DIR"; "ANTHROPIC_AUTH_TOKEN" ]
+      ~key:"HOME" ~expected:"/tmp/profile"
+  in
+  equal "Claude HOME fallback follows title padding" true (default_claude "");
+  equal "Claude HOME fallback rejects explicit configuration" false
+    (default_claude "CLAUDE_CONFIG_DIR=/tmp/other\000");
+  equal "Claude HOME fallback rejects an override after empty entry" false
+    (default_claude "\000ANTHROPIC_AUTH_TOKEN=override\000");
   let padded =
     recorded_procargs2 ^ "\000\000PI_CODING_AGENT_DIR=/tmp/overlay\000"
   in

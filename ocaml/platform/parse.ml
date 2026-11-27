@@ -150,7 +150,11 @@ let darwin_selected_environment ?(title_padding = false) buffer names =
           malformed "procargs2: data after leading environment padding"
         else scan next []
 
-let darwin_environment_matches ?(title_padding = false) ?(unset = []) buffer ~key ~expected =
+let darwin_environment_matches ?(unset = []) buffer ~key ~expected =
+  let title_padding =
+    key = "CLAUDE_CONFIG_DIR"
+    || (key = "HOME" && List.mem "CLAUDE_CONFIG_DIR" unset)
+  in
   Result.map
     (fun selected ->
       List.assoc_opt key selected = Some expected

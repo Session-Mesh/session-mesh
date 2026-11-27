@@ -83,8 +83,7 @@ let with_process_environment pid ~incarnation inspect =
 
 let environment_matches ?unset pid ~incarnation ~key ~expected =
   with_process_environment pid ~incarnation (fun buffer ->
-      let title_padding = key = "CLAUDE_CONFIG_DIR" in
-      Parse.darwin_environment_matches ~title_padding ?unset buffer ~key ~expected)
+      Parse.darwin_environment_matches ?unset buffer ~key ~expected)
 
 let pi_profile_overlay pid ~incarnation ~history ~overlay_root ~unset =
   let overlay_key = "PI_CODING_AGENT_DIR"
