@@ -15,6 +15,7 @@ import {after, before, test} from 'node:test';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const SESSION = 'session-token-for-the-test';
+const CONVERSATION = '22222222-2222-2222-2222-222222222222';
 const NOTIFICATION = 'b'.repeat(32);
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-wake-no-proxy-'));
 
@@ -23,6 +24,10 @@ const seenByMesh: Seen[] = [];
 let proxyConnections = 0;
 let resolveAck: () => void = () => {};
 const acknowledged = new Promise<void>(resolve => { resolveAck = resolve; });
+type Activity = {type: string; detail: {source: string; session: string; pid: number; seq: number; hook: string}};
+const activities: Activity[] = [];
+let resolveActivity: () => void = () => {};
+const activityReported = new Promise<void>(resolve => { resolveActivity = resolve; });
 
 const mesh = http.createServer((request, response) => {
   seenByMesh.push({method: request.method ?? '', url: request.url ?? '',
@@ -30,6 +35,16 @@ const mesh = http.createServer((request, response) => {
   if (request.method === 'GET') {
     response.writeHead(200, {'Content-Type': 'application/x-ndjson'});
     response.write(JSON.stringify({notification_id: NOTIFICATION, count: 1}) + '\n');
+    return;
+  }
+  if (request.url === '/api/event') {
+    let body = '';
+    request.on('data', chunk => { body += chunk; });
+    request.on('end', () => {
+      activities.push(JSON.parse(body));
+      response.writeHead(200).end();
+      if (activities.length === 3) resolveActivity();
+    });
     return;
   }
   request.resume();
@@ -52,7 +67,8 @@ await writeFile(transcript, "");
 const { default: extension } = await import(process.env.TEST_EXTENSION);
 const handlers = {};
 const branch = [];
-const ctx = { sessionManager: { getSessionFile: () => transcript, getBranch: () => branch },
+const ctx = { sessionManager: { getSessionFile: () => transcript, getBranch: () => branch,
+  getSessionId: () => ${JSON.stringify(CONVERSATION)} },
   isIdle: () => true, hasPendingMessages: () => false };
 extension({
   on: (name, callback) => { handlers[name] = callback; },
@@ -63,6 +79,8 @@ extension({
   },
 });
 handlers.session_start({}, ctx);
+handlers.agent_start({}, ctx);
+handlers.agent_end({}, ctx);
 process.on("SIGTERM", () => { handlers.session_shutdown(); process.exit(0); });
 `;
 
@@ -86,7 +104,7 @@ after(() => {
   fs.rmSync(scratch, {recursive: true, force: true});
 });
 
-test('pi_mesh_wake reaches the mesh directly under NODE_USE_ENV_PROXY=1', async () => {
+test('Pi activity reports and wake acknowledgements reach Mesh directly under NODE_USE_ENV_PROXY=1', async () => {
   const proxyUrl = `http://127.0.0.1:${proxyPort}`;
   const env: NodeJS.ProcessEnv = {...process.env, NODE_USE_ENV_PROXY: '1', HTTP_PROXY: proxyUrl, http_proxy: proxyUrl,
     HTTPS_PROXY: proxyUrl, https_proxy: proxyUrl, MESH_SESSION_TOKEN: SESSION, MESH_PORT: String(meshPort),
@@ -98,14 +116,24 @@ test('pi_mesh_wake reaches the mesh directly under NODE_USE_ENV_PROXY=1', async 
   child.stdout.on('data', chunk => { output += chunk; });
   child.stderr.on('data', chunk => { output += chunk; });
   const exited = new Promise<void>(resolve => child.on('close', () => resolve()));
-  const outcome = await Promise.race([acknowledged.then(() => 'acknowledged'),
+  const outcome = await Promise.race([Promise.all([acknowledged, activityReported]).then(() => 'acknowledged'),
     new Promise(resolve => setTimeout(() => resolve('timeout'), 4000))]);
   child.kill('SIGTERM');
   await exited;
   assert.equal(proxyConnections, 0, `the proxy received a connection (${output})`);
   assert.equal(outcome, 'acknowledged', output);
-  assert.deepEqual(seenByMesh, [
+  assert.ok(seenByMesh.every(request => request.authorization === `MeshSession ${SESSION}`));
+  assert.deepEqual(seenByMesh.filter(request => request.url !== '/api/event'), [
     {method: 'GET', url: '/api/agent-mail/@self/pi-wakes', authorization: `MeshSession ${SESSION}`},
     {method: 'POST', url: '/api/agent-mail/@self/pi-wake-ack', authorization: `MeshSession ${SESSION}`},
   ]);
+  const ordered = activities.sort((a, b) => a.detail.seq - b.detail.seq);
+  assert.deepEqual(ordered.map(({type}) => type), ['done', 'working', 'done']);
+  for (const [index, event] of ordered.entries()) {
+    assert.equal(event.detail.source, 'pi');
+    assert.equal(event.detail.session, CONVERSATION);
+    assert.equal(event.detail.pid, child.pid);
+    assert.equal(event.detail.hook, 'pi_activity');
+    assert.equal(event.detail.seq, ordered[0]!.detail.seq + index);
+  }
 });

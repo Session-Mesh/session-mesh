@@ -16,8 +16,8 @@ before(async () => {
 });
 after(async () => { await browser?.close(); await mesh?.stop(); });
 
-for (const [width, locale] of [[1440, 'en-US'], [390, 'fr-FR']] as const)
-  test(`click, keyboard, cancellation and stale picker at ${width}px (${locale})`, {skip}, async () => {
+for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR', 'codex'], [390, 'fr-FR', 'pi']] as const)
+  test(`${backend} click, keyboard, cancellation and stale picker at ${width}px (${locale})`, {skip}, async () => {
     const context = await browser.newContext({viewport: {width, height: 900}, locale,
       isMobile: width === 390, hasTouch: width === 390, serviceWorkers: 'block'});
     try {
@@ -29,24 +29,24 @@ for (const [width, locale] of [[1440, 'en-US'], [390, 'fr-FR']] as const)
         kind: 'mesh', id: 'bound-one', name: 'bound-one', label: 'bound-one', created: 123,
         activity: 124, attached: 0, cwd: mesh.home, folder: null, rank: 0, notice: null,
         account, account_label: account === 'work' ? 'Work' : 'Personal',
-        account_context_revision: account === 'work' ? revision : other, known_agent: 'codex',
+        account_context_revision: account === 'work' ? revision : other, known_agent: backend,
         switch_qualified: true,
-        agent: {type: 'codex', status, foreground: true, pid: 77, started: 100,
+        agent: {type: backend, status, foreground: true, pid: 77, started: 100,
           session_id: '11111111-1111-1111-1111-111111111111'},
       }], external: [], folders: [], moved: {}, opens: {}, home: mesh.home, now: 2000, gen: 1, full: true});
       await page.route('**/api/sessions*', route => route.fulfill({json: listing()}));
       await page.route('**/api/accounts/profiles', route => route.fulfill({json: {
         version: 1, ok: true, http_status: 200, data: {configured: true, registry_revision: revision,
           profiles: [
-            {backend: 'codex', id: 'work', label: 'Work', enabled: true, context_revision: revision, switch_qualified: true},
-            {backend: 'codex', id: 'other', label: 'Personal', enabled: true, context_revision: other, switch_qualified: true},
+            {backend, id: 'work', label: 'Work', enabled: true, context_revision: revision, switch_qualified: true},
+            {backend, id: 'other', label: 'Personal', enabled: true, context_revision: other, switch_qualified: true},
             {backend: 'claude', id: 'wrong', label: 'Other backend', enabled: true, context_revision: other, switch_qualified: true},
-            {backend: 'codex', id: 'managed', label: 'Managed', managed: true, enabled: true, context_revision: other, switch_qualified: false},
+            {backend, id: 'managed', label: 'Managed', managed: true, enabled: true, context_revision: other, switch_qualified: false},
           ]}}}));
       await page.route('**/api/session-actions/operator/switch', async route => {
         requests++;
         const body = route.request().postDataJSON();
-        assert.deepEqual(body.source, {id: 'bound-one', created: 123, agent: 'codex', account: 'work',
+        assert.deepEqual(body.source, {id: 'bound-one', created: 123, agent: backend, account: 'work',
           context_revision: revision, conversation: '11111111-1111-1111-1111-111111111111',
           agent_pid: 77, agent_started: 100});
         assert.deepEqual(body.target, {id: 'other', label: 'Personal', context_revision: other});
@@ -124,7 +124,7 @@ for (const [width, locale] of [[1440, 'en-US'], [390, 'fr-FR']] as const)
     } finally {await context.close();}
   });
 
-test('an uncertain submission persists through close and reload without replay', {skip}, async () => {
+test('an uncertain Pi submission persists through close and reload without replay', {skip}, async () => {
   const context = await browser.newContext({serviceWorkers: 'block'});
   try {
     const page = await context.newPage();
@@ -133,13 +133,13 @@ test('an uncertain submission persists through close and reload without replay',
     await page.route('**/api/sessions*', route => route.fulfill({json: {
       mesh: [{kind: 'mesh', id: 'uncertain', name: 'uncertain', created: 123,
         activity: 124, attached: 0, cwd: mesh.home, rank: 0, account: 'work',
-        account_label: 'Work', account_context_revision: revision, known_agent: 'codex',
-        switch_qualified: true, agent: {type: 'codex', status: 'idle', foreground: true,
+        account_label: 'Work', account_context_revision: revision, known_agent: 'pi',
+        switch_qualified: true, agent: {type: 'pi', status: 'idle', foreground: true,
           pid: 77, started: 100, session_id: '11111111-1111-1111-1111-111111111111'}}],
       external: [], folders: [], moved: {}, opens: {}, home: mesh.home, now: 2000, gen: 1, full: true,
     }}));
     await page.route('**/api/accounts/profiles', route => route.fulfill({json: {
-      version: 1, ok: true, data: {profiles: [{backend: 'codex', id: 'other', label: 'Other',
+      version: 1, ok: true, data: {profiles: [{backend: 'pi', id: 'other', label: 'Other',
         enabled: true, switch_qualified: true, context_revision: other}]},
     }}));
     await page.route('**/api/session-actions/operator/switch', route => {

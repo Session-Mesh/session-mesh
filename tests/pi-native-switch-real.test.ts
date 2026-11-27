@@ -14,7 +14,8 @@ import {attach, request, waitFor} from './ptyhost-wire-lib.ts';
 
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
-test('real Pi switches named accounts without changing its shell or conversation', {timeout: 90000}, async t => {
+for (const initiator of ['agent', 'operator'] as const)
+test(`real Pi ${initiator} switch keeps its shell and conversation`, {timeout: 90000}, async t => {
   const probe = spawnSync('/bin/sh', ['-c', 'command -v pi'], {encoding: 'utf8'});
   const pi = probe.stdout.trim();
   const tools = ['fd', 'rg'].map(tool => [tool, spawnSync('/bin/sh', ['-c', 'command -v ' + tool], {encoding: 'utf8'}).stdout.trim()]);
@@ -118,17 +119,47 @@ test('real Pi switches named accounts without changing its shell or conversation
       const [session] = await request(socket, {op: 'list'}) as {attached: number}[];
       return session.attached === 0;
     });
-    const ask = await post('/api/session-actions/@self/request', {action: 'switch_account', account: 'target'},
-      {'Content-Type': 'application/json', Authorization: 'MeshSession ' + token});
-    assert.equal(ask.status, 202, await ask.clone().text());
-    const {request: pending} = await ask.json();
-    const claim = await post('/api/session-actions/' + pending.id + '/claim', {tab_nonce: 'b'.repeat(32)});
-    assert.equal(claim.status, 200, await claim.clone().text());
-    const {claim_nonce} = await claim.json();
-    const decision = await post('/api/session-actions/' + pending.id + '/decision', {approve: true, claim_nonce});
-    assert.equal(decision.status, 200, await decision.clone().text());
-    const {request: decided} = await decision.json();
-    assert.equal(decided.state, 'completed', JSON.stringify(decided));
+    if (initiator === 'operator') {
+      await waitFor('Pi source idle after the completed turn', 10000, async () => {
+        const session = await activePi();
+        return session?.agent?.status === 'idle' && session.agent.identity_source === 'pi_hook'
+          && session.switch_qualified === true;
+      });
+      const observed = await activePi();
+      const profiles = await fetch(mesh.base + '/api/accounts/profiles', {headers: owner});
+      assert.equal(profiles.status, 200);
+      const {data} = await profiles.json();
+      const target = data.profiles.find((p: {id: string}) => p.id === 'target');
+      assert.equal(target.switch_qualified, true);
+      const route = '/api/session-actions/operator/switch';
+      const accepted = await post(route, {
+        source: {id: name, created: observed.created, agent: 'pi', account: observed.account,
+          context_revision: observed.account_context_revision, conversation: observed.agent.session_id,
+          agent_pid: observed.agent.pid, agent_started: observed.agent.started},
+        target: {id: target.id, label: target.label, context_revision: target.context_revision},
+      });
+      assert.equal(accepted.status, 202, await accepted.clone().text());
+      const {request: receipt} = await accepted.json();
+      await waitFor('operator Pi switch completes', 15000, async () => {
+        const response = await fetch(`${mesh!.base}${route}/${receipt.id}`, {headers: owner});
+        assert.equal(response.status, 200);
+        const {request: observed} = await response.json();
+        assert.notEqual(observed.state, 'failed', JSON.stringify(observed));
+        return observed.state === 'completed';
+      });
+    } else {
+      const ask = await post('/api/session-actions/@self/request', {action: 'switch_account', account: 'target'},
+        {'Content-Type': 'application/json', Authorization: 'MeshSession ' + token});
+      assert.equal(ask.status, 202, await ask.clone().text());
+      const {request: pending} = await ask.json();
+      const claim = await post('/api/session-actions/' + pending.id + '/claim', {tab_nonce: 'b'.repeat(32)});
+      assert.equal(claim.status, 200, await claim.clone().text());
+      const {claim_nonce} = await claim.json();
+      const decision = await post('/api/session-actions/' + pending.id + '/decision', {approve: true, claim_nonce});
+      assert.equal(decision.status, 200, await decision.clone().text());
+      const {request: decided} = await decision.json();
+      assert.equal(decided.state, 'completed', JSON.stringify(decided));
+    }
     const [after] = await request(socket, {op: 'list'}) as Record<string, unknown>[];
     assert.equal(after.name, name);
     assert.equal(after.pid, before.pid);

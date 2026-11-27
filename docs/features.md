@@ -495,13 +495,14 @@ connectors, harness installation and advanced workflow actions remain future wor
 
 ## Changing a live session's account
 
-For a qualified, idle Claude Code or Codex session on Linux, the account badge in its terminal
+For a qualified, idle Claude Code, Codex or Pi session on Linux, the account badge in its terminal
 header opens an account picker. It offers enabled, non-managed profiles of the **same backend**.
 Choose a destination and confirm: Mesh copies the conversation transcript to that account's
 folder and sends it to its provider, then resumes the agent in the same terminal. Opening or
 cancelling the picker changes nothing. The badges in the sidebar and pinned rows remain labels
 because those rows are themselves navigation buttons. Historical, unbound, busy and unsupported
-sessions cannot use this control.
+sessions cannot use this control. Pi needs two named native profiles and the Mesh extension's
+activity reports; the default account is not eligible for Pi switches.
 
 The confirmation is required for every switch from this picker. Saved account confirmation
 preferences do not currently bypass it; an agent's own switch request still requires separate

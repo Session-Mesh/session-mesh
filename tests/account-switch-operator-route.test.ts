@@ -8,7 +8,8 @@ import path from 'node:path';
 import {test} from 'node:test';
 
 const repo = path.resolve(import.meta.dirname, '..');
-test('operator switch is cookie-only, same-origin, exact-bound and queued once', () => {
+for (const backend of ['codex', 'pi'] as const)
+test(`${backend} operator switch is cookie-only, same-origin, exact-bound and queued once`, () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-operator-switch-'));
   try {
     const script = `
@@ -17,15 +18,16 @@ from types import SimpleNamespace
 from aiohttp import web
 sys.path.insert(0, ${JSON.stringify(repo)})
 import server, sessionrequests
+backend = ${JSON.stringify(backend)}
 revision, target_revision = 'a'*64, 'b'*64
-source = {'id':'one','created':123,'agent':'codex','account':'work',
+source = {'id':'one','created':123,'agent':backend,'account':'work',
           'context_revision':revision,'conversation':'11111111-1111-1111-1111-111111111111',
           'agent_pid':77,'agent_started':100}
 target = {'id':'other','label':'Other','context_revision':target_revision}
 body = {'source':source,'target':target}
-raw = {'name':'one','created':123,'cwd':'/tmp','meta':{'known_agent':'codex','account':'work',
+raw = {'name':'one','created':123,'cwd':'/tmp','meta':{'known_agent':backend,'account':'work',
        'account_context_revision':revision},'pty_capabilities':['agent_relaunch_v1','agent_relaunch_bound_v1']}
-binding = {'backend':'codex','conversation':source['conversation'],'agent_pid':77,'agent_start':'9',
+binding = {'backend':backend,'conversation':source['conversation'],'agent_pid':77,'agent_start':'9',
            'source':{'id':'work','context_revision':revision},
            'target':{'id':'other','context_revision':target_revision}}
 server.NATIVE_SWITCH_QUALIFIED = True
@@ -41,18 +43,18 @@ async def declared(): return []
 server.declared_accounts = declared
 server._ACCOUNTS['file'] = 'ok'
 server._ACCOUNTS['accounts'] = [{'id':'other','label':'Other','codex_home':'/tmp/other'}]
-server._ACCOUNTS['launch_profiles'] = [{'backend':'codex','id':'other','label':'Other'}]
+server._ACCOUNTS['launch_profiles'] = [{'backend':backend,'id':'other','label':'Other'}]
 async def profiles(authority, op, payload):
     assert (authority,op,payload) == ('operator-switch','profiles.list',b'{}')
     return (0,b'{}\\n')
 server._profile_run = profiles
 server._profile_envelope = lambda op, code, out: {'ok':True,'data':{'profiles':[
-    {'backend':'codex','id':'other','context_revision':target_revision,'label':'Other',
+    {'backend':backend,'id':'other','context_revision':target_revision,'label':'Other',
      'enabled':True,'managed':False}]}}
 state = {'status':'idle', 'foreground':True, 'drop_foreground_on_bind':False,
          'target_revision':target_revision, 'agent_start':'9'}
 server._describe_with_hooks = lambda listed: {'mesh':[{'id':'one','created':123,
-    'agent':{'type':'codex','status':state['status'],'foreground':state['foreground'],'pid':77,
+    'agent':{'type':backend,'status':state['status'],'foreground':state['foreground'],'pid':77,
              'started':100,'session_id':source['conversation']}}]}
 async def context(account, backend, revision=None, observed=None):
     return {'process_pid':77,'process_start':'9'}
@@ -76,6 +78,11 @@ def receipt_req(rid, cookie='yes', authorization=None):
     request.match_info = {'request_id':rid}
     return request
 async def main():
+    if backend == 'pi':
+        try: await server.api_operator_account_switch(req())
+        except web.HTTPConflict: pass
+        else: raise AssertionError('Pi allowed without its native relaunch capability')
+        raw['pty_capabilities'].append('agent_relaunch_pi_v1')
     for request, status in [(req(cookie='no'),401),(req(authorization='Bearer agent'),401),
                             (req(origin='https://other'),403)]:
         try: await server.api_operator_account_switch(request)
@@ -144,8 +151,8 @@ async def main():
     try: await server.api_operator_account_switch_status(receipt_req('missing'))
     except web.HTTPNotFound: pass
     else: raise AssertionError('missing receipt returned')
-    agent_item = requests.create({'id':'agent','created':124,'agent':'codex','cwd':'/tmp'},
-        {'action':'switch_account','account':'other'}, enabled_agents={'codex'}, resumable={'codex'},
+    agent_item = requests.create({'id':'agent','created':124,'agent':backend,'cwd':'/tmp'},
+        {'action':'switch_account','account':'other'}, enabled_agents={backend}, resumable={backend},
         current_account='work', switch_binding=binding)
     try: await server.api_operator_account_switch_status(receipt_req(agent_item['id']))
     except web.HTTPNotFound: pass

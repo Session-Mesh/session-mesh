@@ -6,7 +6,8 @@ type Agent = {type?: unknown; status?: unknown; session_id?: unknown; foreground
 type Session = {kind?: unknown; id?: unknown; created?: unknown; account?: unknown;
   account_context_revision?: unknown; default_context_revision?: unknown; switch_qualified?: unknown;
   agent?: Agent | null};
-export type SwitchSource = {id: string; created: number; agent: 'claude' | 'codex'; account: string;
+type SwitchBackend = 'claude' | 'codex' | 'pi';
+export type SwitchSource = {id: string; created: number; agent: SwitchBackend; account: string;
   context_revision: string; conversation: string; agent_pid: number; agent_started: number};
 export type SwitchTarget = {id: string; label: string; context_revision: string | null};
 export type SwitchReceipt = {id: string; state: string; result?: {error?: string} | null};
@@ -15,6 +16,8 @@ type Profile = {backend?: unknown; id?: unknown; label?: unknown; context_revisi
   enabled?: unknown; switch_qualified?: unknown; managed?: unknown};
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const accountId = (value: unknown): value is string => typeof value === 'string' && /^[a-z0-9-]{1,32}$/.test(value);
+const switchBackend = (value: unknown): value is SwitchBackend =>
+  value === 'claude' || value === 'codex' || value === 'pi';
 
 /** This is a presentation gate, not authority: the server checks the native host again. */
 export function switchSource(session: Session | null | undefined, authoritative: boolean): SwitchSource | null {
@@ -22,7 +25,7 @@ export function switchSource(session: Session | null | undefined, authoritative:
     || typeof session.id !== 'string'
     || !/^[A-Za-z0-9_-]{1,48}$/.test(session.id)
     || typeof session.created !== 'number' || !Number.isFinite(session.created) || session.created <= 0
-    || (session.agent?.type !== 'claude' && session.agent?.type !== 'codex')
+    || !switchBackend(session.agent?.type)
     || session.agent.status !== 'idle' || session.agent.foreground !== true
     || typeof session.agent.pid !== 'number' || !Number.isSafeInteger(session.agent.pid) || session.agent.pid <= 0
     || typeof session.agent.started !== 'number' || !Number.isFinite(session.agent.started) || session.agent.started <= 0
@@ -30,7 +33,7 @@ export function switchSource(session: Session | null | undefined, authoritative:
     || !/^[0-9A-Za-z][0-9A-Za-z_-]{7,63}$/.test(session.agent.session_id)) return null;
   const account = session.account == null || session.account === '' ? 'default' : session.account;
   const revision = account === 'default' ? session.default_context_revision : session.account_context_revision;
-  if (!accountId(account) || !digest(revision)) return null;
+  if (!accountId(account) || !digest(revision) || (session.agent.type === 'pi' && account === 'default')) return null;
   return {id: session.id, created: session.created, agent: session.agent.type, account,
     context_revision: revision, conversation: session.agent.session_id,
     agent_pid: session.agent.pid, agent_started: session.agent.started};
@@ -78,7 +81,7 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
     if (raw && raw.length <= 8192) {
       for (const item of JSON.parse(raw) as Remembered[]) {
         if (item?.source && typeof item.source.id === 'string' && typeof item.source.created === 'number'
-          && (item.source.agent === 'claude' || item.source.agent === 'codex')
+          && switchBackend(item.source.agent)
           && (item.id === null || typeof item.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(item.id)))
           receipts.set(keyOf({id: item.source.id, created: item.source.created,
             agent: {type: item.source.agent}}), item);
