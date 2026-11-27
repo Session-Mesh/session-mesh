@@ -183,8 +183,13 @@ process.stdout.write(frame.op === 'close' ? '{"version":2,"result":null}\\n' : r
     lab.where.env.MESH_MESH_HISTORY_CMD = witness;
     lab.where.env.MESH_SESSION_TOKEN = 'private-server-env';
     await lab.restartServer();
+    const snapshot = path.join(lab.where.confDir, 'sessions-snapshot.json');
+    const stopped = {name: session.name, created: session.created, cwd: lab.where.home, agent: null};
+    fs.writeFileSync(snapshot, JSON.stringify({version: 1, live: [stopped], lost: []}));
     const kill = await lab.call('POST', '/api/kill/' + session.name, {created: session.created});
     assert.equal(kill.status, 500, kill.text);
+    assert.deepEqual(JSON.parse(fs.readFileSync(snapshot, 'utf8')).live, [],
+      'an invalid registry reply must not leave the stopped session restorable');
     assert.match(lab.serverOutput(), /RuntimeError: incompatible mesh-history conversation-name response/);
     const journal = fs.readFileSync(log, 'utf8');
     const calls = journal.trimEnd().split('\n').map(line => JSON.parse(line));
