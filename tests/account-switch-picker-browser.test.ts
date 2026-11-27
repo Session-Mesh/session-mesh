@@ -55,7 +55,7 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
       });
       await page.route('**/api/session-actions/operator/switch/fixture', route => route.fulfill({
         json: {request: {id: 'fixture', action: 'switch_account', state: requestState,
-          result: requestState === 'failed' ? {error: 'Source became busy; nothing was stopped'} : null}},
+          result: requestState === 'failed' ? {error: 'Agent stop outcome uncertain; inspect the session before resuming'} : null}},
       }));
       await page.routeWebSocket('**/ws/**', socket => socket.onMessage(() => {}));
       await page.goto(`${mesh.base}/login?token=${encodeURIComponent(mesh.token())}`);
@@ -119,7 +119,7 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
       }
       requestState = 'failed';
       await dialog.locator('[data-switch-status]').getByText(
-        locale === 'fr-FR' ? /échoué|aucun arrêt/ : /failed|nothing was stopped/i).waitFor();
+        locale === 'fr-FR' ? /Arrêt de l’agent incertain/ : /Agent stop outcome uncertain/).waitFor();
       await dialog.locator('[data-switch-cancel]').click();
       status = 'idle';
       requestState = 'execution_unknown';
@@ -136,12 +136,14 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
     } finally {await context.close();}
   });
 
-test('an uncertain Pi submission persists through close and reload without replay', {skip}, async () => {
+for (const stalled of [false, true])
+test(`an uncertain Pi submission persists through close and reload without replay (stalled=${stalled})`, {skip}, async () => {
   const context = await browser.newContext({serviceWorkers: 'block'});
   try {
     const page = await context.newPage();
     const revision = 'a'.repeat(64), other = 'b'.repeat(64);
     let posts = 0;
+    let refuse = !stalled;
     await page.route('**/api/sessions*', route => route.fulfill({json: {
       mesh: [{kind: 'mesh', id: 'uncertain', name: 'uncertain', created: 123,
         activity: 124, attached: 0, cwd: mesh.home, rank: 0, account: 'work',
@@ -156,6 +158,11 @@ test('an uncertain Pi submission persists through close and reload without repla
     }}));
     await page.route('**/api/session-actions/operator/switch', route => {
       posts++;
+      if (refuse) {
+        refuse = false;
+        return route.fulfill({status: 409, json: {refused: 'foreground_unavailable'}});
+      }
+      if (stalled) return;
       return route.fulfill({status: 503, json: {error: 'reply lost'}});
     });
     await page.routeWebSocket('**/ws/**', socket => socket.onMessage(() => {}));
@@ -165,7 +172,20 @@ test('an uncertain Pi submission persists through close and reload without repla
     const badge = page.locator('#panes .pane.active .p-account');
     await badge.click();
     const dialog = page.locator('#dlg-account-switch');
+    if (!stalled) {
+      await dialog.locator('[data-switch-confirm]').click();
+      await dialog.waitFor({state: 'hidden'});
+      assert.equal(posts, 1);
+      await badge.click();
+      await dialog.waitFor({state: "visible"});
+      assert.equal(await dialog.locator('[data-switch-confirm]').isEnabled(), true);
+    }
+    if (stalled) await page.clock.install();
+    const sent = page.waitForRequest('**/api/session-actions/operator/switch');
     await dialog.locator('[data-switch-confirm]').click();
+    await sent;
+    if (stalled) await page.clock.fastForward(11000);
+
     await dialog.locator('[data-switch-status]').getByText(/outcome unknown/i).waitFor();
     await dialog.locator('[data-switch-cancel]').click();
     await badge.click();
@@ -177,7 +197,7 @@ test('an uncertain Pi submission persists through close and reload without repla
     await page.locator('#panes .pane.active .p-account').click();
     await dialog.locator('[data-switch-status]').getByText(/outcome unknown/i).waitFor();
     assert.equal(await dialog.locator('[data-switch-confirm]').isDisabled(), true);
-    assert.equal(posts, 1);
+    assert.equal(posts, stalled ? 1 : 2);
   } finally {await context.close();}
 });
 

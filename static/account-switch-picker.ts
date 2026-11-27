@@ -58,10 +58,11 @@ export function switchTargets(source: SwitchSource, profiles: readonly Profile[]
 export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
   source(): {session: Session; authoritative: boolean} | null;
   profiles(): Promise<readonly Profile[]>;
-  submit(source: SwitchSource, target: SwitchTarget): Promise<SwitchReceipt>;
+  submit(source: SwitchSource, target: SwitchTarget): Promise<SwitchReceipt | null>;
   status(id: string): Promise<SwitchReceipt>;
   label(session: Session): string;
   t(key: string, params?: Record<string, string>): string;
+  serverText(text: string): string;
   notice(message: string): void;
 }) {
   const doc = dialog.ownerDocument;
@@ -106,7 +107,7 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
       : receipt.state === 'failed' ? 'failed'
         : receipt.state === 'unknown' || receipt.state === 'execution_unknown' ? 'unknown' : 'admitted';
     status.textContent = ports.t(`accountSwitch.${key}`)
-      + (key === 'failed' && receipt.error ? ` ${receipt.error}` : '');
+      + (key === 'failed' && receipt.error ? ` ${ports.serverText(receipt.error)}` : '');
   };
   const refreshReceipt = async (receipt: Remembered, generation: number) => {
     const displayed = () => dialog.open && receiptGeneration === generation && displayedReceipt === receipt;
@@ -167,7 +168,16 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
     const source = selected;
     status.textContent = ports.t('accountSwitch.submitting');
     // No retry: an interrupted reply may still have scheduled the durable operation.
-    void ports.submit(source, target).then(received => {
+    let deadline: number | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      deadline = doc.defaultView!.setTimeout(() => reject(new Error()), 10000);
+    });
+    void Promise.race([ports.submit(source, target), timeout]).then(received => {
+      if (received === null) {
+        dialog.close();
+        ports.notice(ports.t('accountSwitch.stale'));
+        return;
+      }
       if (!received || typeof received.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(received.id)
         || received.state !== 'approved') throw new Error();
       const receipt: Remembered = {source, id: received.id, state: received.state};
@@ -178,6 +188,7 @@ export function createAccountSwitchPicker(dialog: HTMLDialogElement, ports: {
       selected = null;
       remember(receipt); displayReceipt(receipt);
     }).finally(() => {
+      doc.defaultView!.clearTimeout(deadline);
       busy = false; cancel.disabled = false;
       // Only an observed new session incarnation permits another submission.
     });
