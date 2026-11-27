@@ -3,7 +3,8 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {test, harness} from '../checks/dictation-browser-fixture.ts';
+import {setTimeout as delay} from 'node:timers/promises';
+import {test, harness, type Writes} from '../checks/dictation-browser-fixture.ts';
 
 declare const active: any, ctext: HTMLTextAreaElement, cdlg: HTMLDialogElement;
 declare const composeOwner: any, composeRecovery: any[];
@@ -103,8 +104,26 @@ for (const editor of ['composer', 'line', 'line after leaving the pane'] as cons
   });
 }
 
+async function assertOriginalLeaseReleased(writes: Writes, from: number): Promise<void> {
+  const deadline = Date.now() + 3000;
+  do {
+    const controls = (writes.get('A:0') ?? []).slice(from).flatMap(frame => {
+      if (typeof frame !== 'string') return [];
+      const message = JSON.parse(frame);
+      return message.t === 'h' ? [message] : [];
+    });
+    const hold = controls.findIndex(frame => frame.dirty === true);
+    if (hold !== -1 && controls.slice(hold + 1).some(frame =>
+      frame.dirty === false && frame.client_id === controls[hold].client_id
+      && frame.slot === controls[hold].slot && frame.generation === controls[hold].generation)) return;
+    await delay(20);
+  } while (Date.now() < deadline);
+  assert.fail('expected a hold and release for the same lease on the original socket');
+}
+
 test('switching sessions releases a refused recovered line on its original transport', async () => {
   await harness(async (page, _api, _sockets, writes) => {
+    const from = writes.get('A:0')?.length ?? 0;
     const dirtyAfterSwitch = await page.evaluate(async () => {
       const pane = active;
       const {name, created} = pane.conn;
@@ -124,13 +143,14 @@ test('switching sessions releases a refused recovered line on its original trans
       return lease.dirty;
     });
     assert.equal(dirtyAfterSwitch, false);
-    assert.ok((writes.get('A:0') ?? []).length > 0);
+    await assertOriginalLeaseReleased(writes, from);
     await page.getByRole('button', {name: en['compose.discardResult'], exact: true}).click();
   }, false, 'en');
 });
 
 test('caching the page keeps the recovered composer text and releases its original lease', async () => {
-  await harness(async (page) => {
+  await harness(async (page, _api, _sockets, writes) => {
+    const from = writes.get('A:0')?.length ?? 0;
     const state = await page.evaluate(() => {
       const pane = active;
       const {name, created} = pane.conn;
@@ -146,5 +166,6 @@ test('caching the page keeps the recovered composer text and releases its origin
       return {dirty: lease.dirty, text: composeRecovery[0]?.text};
     });
     assert.deepEqual(state, {dirty: false, text: 'recovered draft'});
+    await assertOriginalLeaseReleased(writes, from);
   }, false, 'en');
 });
