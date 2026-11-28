@@ -276,7 +276,7 @@ describe('the Options field of New session', {skip}, () => {
     await openNew(page, 'pi');
     // The field holds only this launch's arguments: sending the default here would add it twice.
     assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '');
-    assert.match(await page.locator('#new-options-stored').innerText(), /-e \/tmp\/ext\.mjs/);
+    await waitStoredHint(page, '-e /tmp/ext.mjs');
     assert.equal(await page.locator('#form-new input[name="optionsDefault"]').isChecked(), false);
     await page.locator('#form-new label:has(input[name="preset"][value="codex"])').click();
     assert.equal(await page.locator('#form-new input[name="options"]').inputValue(), '', 'codex has no stored default');
@@ -290,7 +290,7 @@ describe('the Options field of New session', {skip}, () => {
     await page.reload();
     await page.waitForFunction('typeof meshContext !== "undefined" && meshContext !== null');
     await openNew(page, 'pi');
-    assert.match(await page.locator('#new-options-stored').innerText(), /-e \/tmp\/default\.mjs/);
+    await waitStoredHint(page, '-e /tmp/default.mjs');
     await page.locator('#form-new input[name="options"]').fill('-e /tmp/typed.mjs');
     await page.locator('#form-new input[name="optionsDefault"]').check();
     // Another agent: its own default (none), never Pi's text and never the "make it the default" box.
