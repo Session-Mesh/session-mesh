@@ -5,16 +5,13 @@
 
 module T = Mesh_opencode_transfer
 
-let context root workspace =
-  {
-    T.home = Filename.concat root "home";
-    config = Filename.concat root "config";
-    data = Filename.concat root "data";
-    state = Filename.concat root "state";
-    cache = Filename.concat root "cache";
-    runtime = Filename.concat root "runtime";
-    location = workspace;
-  }
+module R = Mesh_account_resolver
+module C = Mesh_accounts_carry
+
+let revision registry id =
+  match R.find registry { backend = R.Opencode_v2; id } with
+  | Ok entry -> Option.value ~default:"missing" (R.context_revision entry)
+  | Error _ -> "missing"
 
 let () =
   if Array.length Sys.argv <> 8 then (
@@ -29,23 +26,26 @@ let () =
   and epoch = int_of_string Sys.argv.(7) in
   let source_profile = Filename.basename source_root
   and target_profile = Filename.basename target_root in
+  let uid = Unix.geteuid () in
+  let file = Filename.concat (Filename.dirname source_root) "accounts.json" in
   let response =
-    match
-      T.run_fork ~binary ~source:(context source_root workspace)
-        ~target:(context target_root workspace) ~parent_native_id
-        ~logical_id:"mesh-logical-proof" ~epoch ~source_profile ~target_profile
-        ~receipt_directory ~operation_id:("proof-epoch-" ^ string_of_int epoch)
-    with
-    | Ok lineage ->
-        `Assoc
-          [
-            ("ok", `Bool true);
-            ("logical_id", `String lineage.logical_id);
-            ("epoch", `Int lineage.epoch);
-            ("parent_native_id", `String lineage.parent_native_id);
-            ("native_id", `String lineage.native_id);
-            ("messages", `Int lineage.messages);
-          ]
-    | Error code -> `Assoc [ ("ok", `Bool false); ("code", `String code) ]
+    match R.load ~uid ~file with
+    | Error error -> `Assoc [ ("ok", `Bool false); ("code", `String error.code) ]
+    | Ok registry ->
+        let source_revision =
+          Option.value ~default:(revision registry source_profile)
+            (Sys.getenv_opt "MESH_TEST_OPENCODE_SOURCE_REVISION")
+        in
+        (match C.carry_opencode_accounts ~uid ~file ~binary
+                 ~home:(Filename.concat source_root "home") ~workspace
+                 ~source_runtime:(Filename.concat source_root "runtime")
+                 ~target_runtime:(Filename.concat target_root "runtime")
+                 ~conversation:parent_native_id ~from_account:source_profile
+                 ~to_account:target_profile ~source_revision
+                 ~target_revision:(revision registry target_profile)
+                 ~logical_id:"mesh-logical-proof" ~epoch ~receipt_directory
+                 ~operation_id:("proof-epoch-" ^ string_of_int epoch) with
+        | Ok lineage -> `Assoc [ ("ok", `Bool true); ("lineage", T.lineage_to_json lineage) ]
+        | Error error -> `Assoc [ ("ok", `Bool false); ("code", `String error.code) ])
   in
   print_endline (Yojson.Safe.to_string response)

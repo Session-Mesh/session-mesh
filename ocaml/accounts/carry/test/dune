@@ -17,4 +17,4 @@
 (executable
  (name opencode_lineage_driver)
  (modules opencode_lineage_driver)
- (libraries mesh_opencode_transfer yojson))
+ (libraries mesh_opencode_transfer mesh_accounts_carry mesh_account_resolver unix yojson))

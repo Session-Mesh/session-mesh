@@ -5,7 +5,7 @@
 // adapter path, also MESH_OC_LINEAGE_DRIVER built by dune). Every process
 // has fresh private HOME/XDG/runtime and only the scripted loopback provider.
 import assert from 'node:assert/strict';
-import {execFileSync, spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
+import {execFileSync, spawn, spawnSync, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -20,7 +20,19 @@ const binary = process.env.MESH_OC_LINEAGE_BINARY && path.resolve(process.env.ME
 const expectedNativeVersion = process.env.MESH_OC_LINEAGE_NATIVE_VERSION ?? '2.3.2';
 const validBinary = binary && fs.existsSync(binary);
 const driver = process.env.MESH_OC_LINEAGE_DRIVER && path.resolve(process.env.MESH_OC_LINEAGE_DRIVER);
+const platform = process.env.MESH_MESH_PLATFORM_CMD ||
+  path.resolve(import.meta.dirname, '../ocaml/_build/default/platform/cli/mesh_platform_main.exe');
 const ocamlTest = process.env.MESH_OC_LINEAGE_OCAML_TEST && path.resolve(process.env.MESH_OC_LINEAGE_OCAML_TEST);
+
+function writeLineageProfiles(scratch: string): void {
+  fs.writeFileSync(path.join(scratch, 'backend-profiles.json'), JSON.stringify({
+    version: 1, profiles: ['a', 'b'].map(id => ({
+      id, backend: 'opencode-v2', label: id, enabled: true,
+      roots: Object.fromEntries(['config', 'data', 'state', 'cache'].map(role =>
+        [role, path.join(scratch, id, role)])),
+    })),
+  }), {mode: 0o600});
+}
 
 async function server(binaryPath: string, root: string, work: string, providerPort: number,
   startupMs = 15_000, observeSpawn?: (child: ChildProcessWithoutNullStreams) => void) {
@@ -361,7 +373,7 @@ async function assertImportedTerminalRoute(root: string, work: string, sessionID
 }
 
 test('adapter records two durable logical epochs while native IDs change', {
-  skip: !(validBinary && driver),
+  skip: !(validBinary && fs.existsSync(platform)),
 }, async () => {
   const scratch = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'mesh-oc-adapter-lineage-'));
   fs.chmodSync(scratch, 0o700);
@@ -385,26 +397,53 @@ test('adapter records two durable logical epochs while native IDs change', {
     }
     throw new Error('fixture did not become idle');
   };
+  const registry = path.join(scratch, 'accounts.json');
+  const revision = (account: string): string => JSON.parse(execFileSync(platform,
+    ['accounts', 'launch-context', registry, 'opencode-v2', account],
+    {cwd: work, timeout: 5000, encoding: 'utf8'})).context.context_revision;
   const runAdapter = (source: string, target: string, parentID: string, epoch: number) => {
-    const output = execFileSync(driver!, [binary!, path.join(scratch, source), path.join(scratch, target),
-      work, receipts, parentID, String(epoch)], {
-      cwd: work, env: {PATH: '/usr/bin:/bin', HOME: path.join(scratch, 'a', 'home'), TMPDIR: scratch},
-      timeout: 25_000, encoding: 'utf8',
-    });
-    const result = JSON.parse(output) as {ok: boolean; native_id?: string; logical_id?: string; epoch?: number;
-      parent_native_id?: string; code?: string};
+    const env = {PATH: '/usr/bin:/bin', HOME: path.join(scratch, source, 'home'), TMPDIR: scratch};
+    const request = {
+      binary, conversation: parentID, epoch, from_account: source, home: env.HOME,
+      logical_id: 'mesh-logical-proof', operation_id: `proof-epoch-${epoch}`,
+      receipt_directory: receipts, source_revision: revision(source),
+      source_runtime: path.join(scratch, source, 'runtime'), target_revision: revision(target),
+      target_runtime: path.join(scratch, target, 'runtime'), to_account: target, workspace: work,
+    };
+    const run = (sourceRevision = request.source_revision) => spawnSync(platform,
+      ['accounts', 'carry-opencode', registry], {
+        cwd: work, env, timeout: 25_000, encoding: 'utf8',
+        input: JSON.stringify({...request, source_revision: sourceRevision}),
+      });
+    if (epoch === 1) {
+      const stale = run('0'.repeat(64));
+      assert.equal(stale.status, 1, stale.stderr);
+      assert.equal(JSON.parse(stale.stdout).code, 'profile-context-changed');
+      assert.deepEqual(fs.readdirSync(receipts), [], 'a stale revision must not begin transfer');
+    }
+    const output = run();
+    if (output.error) throw output.error;
+    const result = JSON.parse(output.stdout) as { code?: string; lineage?: {
+      native_id: string; logical_id: string; epoch: number; parent_native_id: string;
+      source_profile: string; target_profile: string; boundary_message_id: string;
+    }};
     const refusal = fs.readdirSync(receipts).find(file => file.endsWith(`proof-epoch-${epoch}-refused`));
     const reason = refusal ? fs.readFileSync(path.join(receipts, refusal), 'utf8') : '';
-    assert.equal(result.ok, true,
+    assert.equal(output.status, 0,
       `adapter refused: ${result.code}; phases=${fs.readdirSync(receipts).join(',')}; reason=${reason}`);
-    assert.equal(result.epoch, epoch);
-    assert.equal(result.parent_native_id, parentID);
-    assert.equal(result.logical_id, 'mesh-logical-proof');
-    return result.native_id!;
+    const lineage = result.lineage!;
+    assert.equal(lineage.epoch, epoch);
+    assert.equal(lineage.parent_native_id, parentID);
+    assert.equal(lineage.logical_id, 'mesh-logical-proof');
+    assert.equal(lineage.source_profile, source);
+    assert.equal(lineage.target_profile, target);
+    assert.match(lineage.boundary_message_id, /^msg_/);
+    return lineage.native_id;
   };
   try {
     fs.mkdirSync(work, {mode: 0o700});
     fs.mkdirSync(receipts, {mode: 0o700});
+    writeLineageProfiles(scratch);
     provider = await startFakeProvider();
     a = await server(binary!, path.join(scratch, 'a'), work, provider.port);
     b = await server(binary!, path.join(scratch, 'b'), work, provider.port);
@@ -501,6 +540,7 @@ test('native completed summary remaps keepID on fork and imports; adapter refuse
   try {
     fs.mkdirSync(work, {mode: 0o700});
     fs.mkdirSync(receipts, {mode: 0o700});
+    writeLineageProfiles(scratch);
     provider = await startFakeProvider({compactionSummary: '## Objective\n- Preserve the scripted conversation.'});
     source = await server(binary!, path.join(scratch, 'a'), work, provider.port);
     target = await server(binary!, path.join(scratch, 'b'), work, provider.port);

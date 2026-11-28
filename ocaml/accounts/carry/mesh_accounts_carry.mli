@@ -235,3 +235,32 @@ val carry_pi_accounts :
 (** Transfer a conversation between two named native Pi histories whose
     revisions match one registry snapshot. The caller must first stop or
     checkpoint the source writer and hold its session relaunch fence. *)
+
+val exec_opencode_profile :
+  uid:int -> file:string -> profile:string -> revision:string ->
+  executable:string -> args:string list -> ('a, error) result
+(** Replace the current process while retaining a shared lock on the selected
+    profile data. The lock survives exec and conflicts with a native carry. *)
+
+val carry_opencode_accounts :
+  uid:int ->
+  file:string ->
+  binary:string ->
+  home:string ->
+  workspace:string ->
+  source_runtime:string ->
+  target_runtime:string ->
+  conversation:string ->
+  from_account:string ->
+  to_account:string ->
+  source_revision:string ->
+  target_revision:string ->
+  logical_id:string ->
+  epoch:int ->
+  receipt_directory:string ->
+  operation_id:string ->
+  (Mesh_opencode_transfer.lineage, error) result
+(** Transfer between named OpenCode profiles resolved from one revision-bound
+    registry snapshot, holding both profile carry locks. The live caller
+    must stop the source writer, exclude other live writers and hold the
+    PTY and operation fence through confirmed relaunch. *)

@@ -33,6 +33,20 @@ type lineage = {
   messages : int;
 }
 
+let lineage_to_json result : Yojson.Safe.t =
+  `Assoc
+    [
+      ("logical_id", `String result.logical_id);
+      ("epoch", `Int result.epoch);
+      ("source_profile", `String result.source_profile);
+      ("target_profile", `String result.target_profile);
+      ("parent_native_id", `String result.parent_native_id);
+      ("native_id", `String result.native_id);
+      ("boundary_message_id", `String result.boundary_message_id);
+      ("messages", `Int result.messages);
+    ]
+
+
 let ( let* ) = Result.bind
 let member key = function
   | `Assoc fields -> List.assoc_opt key fields
@@ -69,10 +83,14 @@ let get request context route =
   | Ok (200, response) -> required "data" response
   | _ -> Error "transfer_unavailable"
 
+let supported_versions = [ "2.3.2"; "2.4.2" ]
+
 let version request context =
   match request context `Get "/api/info" None with
-  | Ok (200, response) when eq "version" "2.3.2" response -> Ok "2.3.2"
-  | Ok (200, response) when eq "version" "2.4.2" response -> Ok "2.4.2"
+  | Ok (200, response) -> (
+      match member "version" response with
+      | Some (`String value) when List.mem value supported_versions -> Ok value
+      | _ -> Error "transfer_unsupported_version")
   | _ -> Error "transfer_unsupported_version"
 
 let matching_versions request source target =

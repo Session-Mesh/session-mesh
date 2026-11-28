@@ -126,7 +126,7 @@ let still_named ~path descriptor =
    transcript): two carries of one conversation into one folder never
    overlap, carries of other conversations go on. The lock is an fcntl lock,
    between processes; it ends with the process. The file stays. *)
-let with_lock ~uid ~target conversation f =
+let with_lock ?(shared = false) ~uid ~target conversation f =
   let path = join target lock_name in
   let* descriptor = open_lock ~uid ~target in
   let byte = Hashtbl.hash (String.lowercase_ascii conversation) in
@@ -135,7 +135,7 @@ let with_lock ~uid ~target conversation f =
     (fun () ->
       match
         ignore (Unix.lseek descriptor byte Unix.SEEK_SET);
-        Unix.lockf descriptor Unix.F_TLOCK 1
+        Unix.lockf descriptor (if shared then Unix.F_TRLOCK else Unix.F_TLOCK) 1
       with
       | () when still_named ~path descriptor -> f descriptor
       | () -> in_progress ()

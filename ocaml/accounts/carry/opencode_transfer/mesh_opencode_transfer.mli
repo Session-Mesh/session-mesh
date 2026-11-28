@@ -52,6 +52,9 @@ type lineage = {
   messages : int;
 }
 
+val lineage_to_json : lineage -> Yojson.Safe.t
+(** The verified logical and native identity of an imported conversation. *)
+
 val transfer :
   request:request ->
   source:context ->
@@ -114,6 +117,9 @@ val run :
     preflight is not an authoritative freeze: the caller must supply a separate
     fencing receipt. A successful report verifies an offline storage projection,
     not a live-safe transfer or resumable A-to-B-to-A operation. *)
+
+val supported_versions : string list
+(** Exact native versions accepted for transfer. *)
 
 val run_fork :
   binary:string ->
