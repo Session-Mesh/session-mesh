@@ -797,7 +797,7 @@ async function dispatchJob(req, path, engine, send) {
   throw new Fault("not_found");
 }
 var digest = (value) => (0, import_node_crypto2.createHash)("sha256").update(value).digest();
-function serviceHandler(config, engine, expected) {
+function serviceHandler(config, engine, expected, stopping) {
   let handlers = 0;
   const claims = createRelayClaims();
   return (req, res) => {
@@ -810,6 +810,7 @@ function serviceHandler(config, engine, expected) {
     void (async () => {
       let counted = false;
       try {
+        if (stopping()) throw new Fault("unavailable");
         if (!(0, import_node_crypto2.timingSafeEqual)(digest(single(req, "X-Mesh-Bridge")), expected)) {
           send(403, new Fault("not_found").json());
           return;
@@ -829,6 +830,82 @@ function serviceHandler(config, engine, expected) {
     })();
   };
 }
+function listenerLifecycle(server, engine) {
+  let closing, stopping = false, failed = false, ready = false;
+  let startupFailure;
+  let report;
+  const failure = new Promise((resolve) => {
+    report = resolve;
+  });
+  const close = () => {
+    if (closing) return closing;
+    stopping = true;
+    closing = (async () => {
+      const retired = engine.close();
+      if (server.listening) {
+        const stopped = new Promise((resolve) => server.close(() => resolve()));
+        server.closeAllConnections();
+        await Promise.all([stopped, retired]);
+      } else await retired;
+    })();
+    return closing;
+  };
+  const fatal = (kind) => {
+    if (!ready) {
+      startupFailure = new Error("Listener stopped during startup");
+      return;
+    }
+    if (stopping) return;
+    failed = true;
+    void close().catch(() => {
+    });
+    report(kind);
+  };
+  server.on("error", () => fatal("error"));
+  server.on("close", () => {
+    if (!stopping) fatal("close");
+  });
+  return {
+    close,
+    failure,
+    get stopping() {
+      return stopping;
+    },
+    get failed() {
+      return failed;
+    },
+    markReady() {
+      if (startupFailure) throw startupFailure;
+      ready = true;
+    }
+  };
+}
+function listenUntilReady(server, socketPath) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      server.off("listening", ready);
+      server.off("error", failed);
+      server.off("close", closed);
+    };
+    const failed = (error) => {
+      cleanup();
+      reject(error);
+    };
+    const closed = () => failed(new Error("Listener closed before readiness"));
+    const ready = () => {
+      cleanup();
+      resolve();
+    };
+    server.once("error", failed);
+    server.once("close", closed);
+    server.once("listening", ready);
+    try {
+      server.listen(socketPath);
+    } catch (error) {
+      failed(error);
+    }
+  });
+}
 async function startService(config, secret, socketPath, inventorySocket, principal, signal) {
   const checkActive = () => {
     if (signal?.aborted) throw new DOMException("Dictation startup cancelled", "AbortError");
@@ -840,42 +917,35 @@ async function startService(config, secret, socketPath, inventorySocket, princip
   if (!parent.isDirectory() || parent.isSymbolicLink() || (parent.mode & 511) !== 448 || parent.uid !== process.getuid())
     throw Error("Private dictation directory required");
   const engine = new Dictation(config, { principal, isLive: (m, signal2) => liveInventory(inventorySocket, m, signal2) });
+  let lifecycle;
   const server = (0, import_node_http2.createServer)(
     { maxHeaderSize: 8192, requestTimeout: 16e3, headersTimeout: 5e3 },
-    serviceHandler(config, engine, digest(secret))
+    serviceHandler(config, engine, digest(secret), () => lifecycle.stopping)
   );
   server.maxConnections = 64;
   server.keepAliveTimeout = 1e3;
   server.timeout = 16e3;
-  let closing;
-  const close = () => closing ??= (async () => {
-    const stopped = new Promise((resolve) => server.close(() => resolve()));
-    server.closeAllConnections();
-    await Promise.all([stopped, engine.close()]);
-  })();
+  lifecycle = listenerLifecycle(server, engine);
   try {
     checkActive();
-    await new Promise((resolve, reject) => {
-      const failed = (error) => {
-        server.off("listening", ready);
-        reject(error);
-      };
-      const ready = () => {
-        server.off("error", failed);
-        resolve();
-      };
-      server.once("error", failed);
-      server.once("listening", ready);
-      server.listen(socketPath);
-    });
+    await listenUntilReady(server, socketPath);
     checkActive();
     await (0, import_promises2.chmod)(socketPath, 384);
     checkActive();
+    lifecycle.markReady();
   } catch (error) {
-    await close();
+    await lifecycle.close();
     throw error;
   }
-  return { engine, server, close };
+  return {
+    engine,
+    server,
+    close: lifecycle.close,
+    failure: lifecycle.failure,
+    get failed() {
+      return lifecycle.failed;
+    }
+  };
 }
 
 // backend/dictation-main.ts
@@ -943,30 +1013,42 @@ async function main() {
       bootstrap.principal,
       controller.signal
     );
-    const close = () => closing ??= (async () => {
-      controller.abort();
-      clearInterval(parentWatch);
-      try {
-        const service = await started.catch(() => null);
-        if (service) await service.close();
-      } finally {
-        if (directory) await (0, import_promises3.rm)(directory, { recursive: true, force: true });
-      }
-      process.exit(0);
-    })();
+    const close = (failure = false) => {
+      if (failure) process.exitCode = 1;
+      if (closing) return closing;
+      closing = (async () => {
+        controller.abort();
+        clearInterval(parentWatch);
+        process.stdin.pause();
+        try {
+          const service2 = await started.catch(() => null);
+          if (service2) await service2.close();
+        } finally {
+          if (directory) await (0, import_promises3.rm)(directory, { recursive: true, force: true });
+        }
+      })();
+      return closing;
+    };
+    const shutdown = (failure = false) => {
+      void close(failure).catch(() => {
+        process.exitCode = 1;
+        process.stderr.write("Dictation worker unavailable.\n");
+      });
+    };
     const parentWatch = setInterval(() => {
-      if (process.ppid !== bootstrap.parent) void close();
+      if (process.ppid !== bootstrap.parent) shutdown();
     }, 250);
-    process.stdin.on("end", () => void close());
+    process.stdin.on("end", () => shutdown());
     process.stdin.resume();
-    process.on("SIGTERM", () => void close());
-    process.on("SIGINT", () => void close());
+    process.on("SIGTERM", () => shutdown());
+    process.on("SIGINT", () => shutdown());
     if (process.stdin.readableEnded || process.ppid !== bootstrap.parent) {
       await close();
       return;
     }
+    let service;
     try {
-      await started;
+      service = await started;
     } catch (error) {
       if (controller.signal.aborted) return;
       clearInterval(parentWatch);
@@ -976,6 +1058,11 @@ async function main() {
       await close();
       return;
     }
+    if (service.failed) {
+      await close(true);
+      return;
+    }
+    void service.failure.then(() => shutdown(true));
     process.stdout.write(standalone ? "ready\n" : JSON.stringify({ socket }) + "\n");
   } catch (error) {
     if (directory && !closing) await (0, import_promises3.rm)(directory, { recursive: true, force: true });

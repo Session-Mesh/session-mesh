@@ -52,6 +52,87 @@ test('typed listener startup rejects a pre-cancelled worker before binding', asy
   assert.equal(fs.existsSync(socket), false);
 });
 
+test('worker closes and removes its directory when the listener closes before readiness', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-listen-close-'));
+  const preload = path.join(directory, 'close.cjs');
+  fs.writeFileSync(preload, `const http = require('node:http'), create = http.createServer;
+http.createServer = function (...args) {
+  const server = create.apply(this, args), listen = server.listen;
+  server.listen = function (...address) {
+    listen.apply(this, address);
+    return this.close();
+  };
+  return server;
+};`);
+  const child = spawn(process.execPath, ['--require', preload, 'backend/dictation-service.cjs'], {
+    env: {PATH: process.env.PATH, MESH_WHISPER_URL: 'http://127.0.0.1:1/fixed'},
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let output = '', closed = false, workerDirectory: string | undefined;
+  child.stdout.on('data', part => output += part);
+  child.once('close', () => { closed = true; });
+  child.stderr.resume();
+  child.stdin.on('error', () => {});
+  t.after(async () => {
+    child.stdin.destroy();
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL');
+      await until(() => child.exitCode !== null || child.signalCode !== null);
+    }
+    if (workerDirectory) fs.rmSync(workerDirectory, {recursive: true, force: true});
+    fs.rmSync(directory, {recursive: true, force: true});
+  });
+  child.stdin.write(JSON.stringify({secret: 'a'.repeat(64), principal: 'b'.repeat(64),
+    inventory: path.join(directory, 'inventory.sock'), parent: process.pid}) + '\n');
+  await until(() => output.includes('\n'));
+  const owned = JSON.parse(output.split('\n')[0]).directory;
+  assert.match(owned, /^\/tmp\/mesh-dictation-[a-zA-Z0-9]+$/);
+  workerDirectory = owned;
+  await until(() => closed);
+  assert.equal(child.exitCode, 1, 'startup settles without closing the parent pipe or forcing a reap');
+  assert.equal(output.trimEnd().split('\n').length, 1, 'no ready acknowledgement');
+  assert.equal(fs.existsSync(owned), false, 'the worker cleans up its own private directory');
+});
+
+for(const kind of ['error','close'] as const)test(`post-ready typed listener ${kind} publishes one fatal event and retires its engine`,async t=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-listener-'));fs.chmodSync(directory,0o700);
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const socket=path.join(directory,'worker.sock'),principal='b'.repeat(64),secret='a'.repeat(64);
+  const inventory=await staticDictationInventory(directory);
+  const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'})!,
+    secret,socket,inventory.socketPath,principal);
+  try{
+    const headers={...identityHeaders(),'X-Mesh-Bridge':secret,'X-Mesh-Principal':principal};
+    assert.equal((await request({socketPath:socket,path:'/internal/relay/start',method:'POST',headers})).status,200);
+    assert.equal((await request({socketPath:socket,path:'/internal/relay/start',method:'POST',
+      headers:{...headers,'X-Mesh-Request-Id':randomUUID(),'X-Mesh-Created':'not-a-number'}})).status,400,
+      'a malformed ordinary request is not a listener failure');
+    const pending=service.failure;
+    if(kind==='error'){
+      service.server.emit('error',Error('synthetic listener fault'));
+      service.server.emit('error',Error('second listener fault'));
+    }
+    else service.server.close();
+    assert.equal(await pending,kind);
+    assert.equal(service.close(),service.close(),'cleanup shares a single promise');
+    await service.close();
+    assert.deepEqual(service.engine.stats(),{records:0,bytes:0,active:0,waiting:0});
+    assert.equal(service.server.listening,false);
+  }finally{await service.close();await inventory.close();}
+});
+
+test('intentional typed close remains a success, not a fatal listener event',async t=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-listener-'));fs.chmodSync(directory,0o700);
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const inventory=await staticDictationInventory(directory);
+  const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'})!,
+    'a'.repeat(64),path.join(directory,'worker.sock'),inventory.socketPath,'b'.repeat(64));
+  try{
+    await service.close();
+    assert.equal(service.failed,false);
+  }finally{await service.close();await inventory.close();}
+});
+
 for(const kind of ['json','empty','audio'] as const)test(`unfinished ${kind} rejection flushes a typed fault and closes without draining`,async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-body-'));fs.chmodSync(directory,0o700);
   const secret=randomBytes(32).toString('hex'),principal='a'.repeat(64),socketPath=path.join(directory,'worker.sock');

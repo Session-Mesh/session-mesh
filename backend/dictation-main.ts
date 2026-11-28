@@ -65,24 +65,38 @@ async function main() {
     if (directory) process.stdout.write(JSON.stringify({directory}) + '\n');
     started = startService(config, bootstrap.secret, socket, bootstrap.inventory,
       bootstrap.principal, controller.signal);
-    const close = () => closing ??= (async () => {
-      controller.abort();
-      clearInterval(parentWatch);
-      try {
-        const service = await started.catch(() => null);
-        if (service) await service.close();
-      } finally {
-        if (directory) await rm(directory, {recursive: true, force: true});
-      }
-      process.exit(0);
-    })();
-    const parentWatch = setInterval(() => { if (process.ppid !== bootstrap.parent) void close(); }, 250);
-    process.stdin.on('end', () => void close()); process.stdin.resume();
-    process.on('SIGTERM', () => void close()); process.on('SIGINT', () => void close());
+    const close = (failure = false) => {
+      if (failure) process.exitCode = 1;
+      if (closing) return closing;
+      closing = (async () => {
+        controller.abort();
+        clearInterval(parentWatch);
+        process.stdin.pause();
+        try {
+          const service = await started.catch(() => null);
+          if (service) await service.close();
+        } finally {
+          if (directory) await rm(directory, {recursive: true, force: true});
+        }
+      })();
+      return closing;
+    };
+    const shutdown = (failure = false) => {
+      void close(failure).catch(() => {
+        process.exitCode = 1;
+        process.stderr.write('Dictation worker unavailable.\n');
+      });
+    };
+    const parentWatch = setInterval(() => { if (process.ppid !== bootstrap.parent) shutdown(); }, 250);
+    process.stdin.on('end', () => shutdown()); process.stdin.resume();
+    process.on('SIGTERM', () => shutdown()); process.on('SIGINT', () => shutdown());
     if (process.stdin.readableEnded || process.ppid !== bootstrap.parent) { await close(); return; }
-    try { await started; }
+    let service;
+    try { service = await started; }
     catch (error) { if (controller.signal.aborted) return; clearInterval(parentWatch); throw error; }
     if (controller.signal.aborted) { await close(); return; }
+    if (service.failed) { await close(true); return; }
+    void service.failure.then(() => shutdown(true));
     process.stdout.write(standalone ? 'ready\n' : JSON.stringify({socket}) + '\n');
   } catch (error) {
     if (directory && !closing) await rm(directory, {recursive: true, force: true});

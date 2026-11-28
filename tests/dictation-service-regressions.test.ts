@@ -327,6 +327,6 @@ test('dictation compatibility boundary functions stay within 50 physical lines',
     assert.ok(physicalLength('server.py',name,'python')<=50,`${name} exceeds 50 lines`);
 });
 test('typed dictation service functions stay within 50 physical lines',()=>{
-  for(const name of ['startService','dispatch','dispatchRelay','createRelayClaims'])
+  for(const name of ['startService','listenerLifecycle','dispatch','dispatchRelay','createRelayClaims'])
     assert.ok(physicalLength('backend/dictation-service.ts',name,'typescript')<=50,`${name} exceeds 50 lines`);
 });

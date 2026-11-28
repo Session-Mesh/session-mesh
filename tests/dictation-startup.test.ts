@@ -42,6 +42,46 @@ test('one typed worker owns its private socket and exits on stdin EOF', {timeout
   }
 });
 
+for(const kind of ['error','close','error+eof'] as const)test(`post-ready ${kind} of the owned listener disables dictation and reaps its direct worker`,async t=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-listener-fixture-'));
+  const preload=path.join(directory,'fault.cjs'),trigger=path.join(directory,'trigger'),
+    marker=path.join(directory,'worker'),exit=path.join(directory,'exit');
+  fs.writeFileSync(preload,`const http=require('node:http'),fs=require('node:fs'),create=http.createServer;
+process.on('exit',code=>fs.writeFileSync(${JSON.stringify(exit)},String(code)));
+http.createServer=function(options,listener){const server=create.call(this,options,listener);
+server.once('listening',()=>fs.writeFileSync(${JSON.stringify(marker)},
+  JSON.stringify({pid:process.pid,socket:server.address()})));
+const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(trigger)})){
+  clearInterval(timer);${kind==='close'?"server.close()":
+    "server.emit('error',Error('synthetic listener fault'));"+(kind==='error+eof'?"process.stdin.emit('end');":"")};
+}},5);
+server.once('close',()=>clearInterval(timer));return server;};`);
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const f=await fixture(true,false,undefined,{workerPreload:preload});
+  try{
+    await until(async()=>(await f.call('/api/transcribe/config','GET',f.auth)).body.enabled===true);
+    await until(()=>fs.existsSync(marker));
+    const worker=JSON.parse(fs.readFileSync(marker,'utf8')) as {pid:number;socket:string};
+    assert.ok(processBirth(worker.pid));
+    f.holdUpstream();
+    const headers={...f.auth,...identityHeaders()};
+    const admitted=await f.call('/api/transcribe','POST',headers,'synthetic audio');
+    assert.equal(admitted.status,202);
+    await until(()=>f.upstreamCalls===1);
+    fs.writeFileSync(trigger,'go');
+    await until(async()=>(await f.call('/api/transcribe/config','GET',f.auth)).body.disabled_reason==='worker_failed');
+    await until(()=>processBirth(worker.pid)===null&&!fs.existsSync(path.dirname(worker.socket)));
+    await until(()=>fs.existsSync(exit));
+    assert.equal(fs.readFileSync(exit,'utf8'),'1','listener failure wins over overlapping EOF');
+    assert.deepEqual((await f.call('/api/transcribe/config','GET',f.auth)).body,
+      {enabled:false,disabled_reason:'worker_failed'});
+    assert.equal((await f.call('/api/sessions','GET',f.auth)).status,200);
+    assert.equal((await f.call('/api/transcribe','POST',{...f.auth,...identityHeaders()},'later')).body.error.code,'disabled');
+    assert.equal(f.upstreamCalls,1,'the retired engine cannot replay inference');
+    assert.doesNotMatch(f.errors,/Task exception was never retrieved|Traceback|synthetic listener fault/);
+  }finally{await f.close();}
+});
+
 test('dictation bootstrap rejects malformed UTF-8 before creating its socket', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-bootstrap-'));
   t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
