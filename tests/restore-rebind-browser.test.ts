@@ -56,8 +56,12 @@ describe('explicit restore profile binding', {skip}, () => {
       assert.equal(await page.getByRole('button',{name:'Confirm binding'}).count(),0);
       assert.deepEqual(actions,['preview','confirm']);
       assert.equal(reads, status === 409 ? 1 : 2, 'uncertain results are refreshed before another preview');
-      await page.getByRole('button',{name:'Review binding'}).waitFor({state:'visible'});
-      await page.getByRole('button',{name:'Review binding'}).click();
+      const review = page.getByRole('button',{name:'Review binding'});
+      await Promise.all([
+        page.waitForResponse(response => new URL(response.url()).pathname === '/api/restore/rebind'
+          && response.request().method() === 'POST' && response.request().postDataJSON().action === 'preview'),
+        review.click(),
+      ]);
       assert.deepEqual(actions,['preview','confirm','preview']);
     } finally { await context.close(); }
   });
