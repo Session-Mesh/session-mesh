@@ -338,6 +338,7 @@ type session = {
   mutable switch_input_fence : string option;
   retired_switch_fences : (string, unit) Hashtbl.t;
   replay : Mesh_pty_replay.t;
+  mutable last_output_geometry : (int * int) option;
   mutable clients : Mesh_pty_output.t list;
   mutable conditional_clients : (Mesh_pty_output.t * (unit -> unit)) list;
   mutable size_owner : Mesh_pty_output.t option;
@@ -1753,6 +1754,7 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
                           switch_input_fence = None;
                           retired_switch_fences = Hashtbl.create 16;
                           replay = Mesh_pty_replay.create ();
+                          last_output_geometry = None;
                           clients = [];
                           conditional_clients = [];
                           size_owner = None;
@@ -1799,6 +1801,10 @@ let dispatch ?project_store_hook ?project_observation_hook ?(preset = None)
                                      Cstruct.to_string
                                        (Cstruct.sub buffer 0 count)
                                    in
+                                   s.last_output_geometry <-
+                                     (try Some (s.geometry ())
+                                      with Invalid_argument _ | Eio.Io _
+                                         | Unix.Unix_error _ -> None);
                                    Mesh_pty_replay.feed s.replay data;
                                    observe observer env (Observe.Output count);
                                    List.iter
@@ -1951,6 +1957,17 @@ let announce_size s =
                 Mesh_pty_output.close client)
             watchers)
 
+(* A legacy replay has one best-effort size hint. A resize with no
+   subsequent output is not evidence that the latest bytes used that size. *)
+let retained_replay_geometry s =
+  try
+    let current = s.geometry () in
+    if Mesh_pty_replay.is_empty s.replay
+       || s.last_output_geometry = Some current
+    then Some current
+    else None
+  with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None
+
 let prepare_attach env observer sessions fields =
   let s =
     match List.assoc_opt "name" fields with
@@ -2066,15 +2083,9 @@ let prepare_attach env observer sessions fields =
               Some nonce
           | _ -> None
         in
-        (* The replay and the geometry it was last produced at, both taken
-           after nonce minting but before this client's geometry is applied,
-           as ptyhost.py does; the reply names the geometry when readable. *)
-
+        (* Capture replay metadata before applying this client's size. *)
         let snapshot = Mesh_pty_replay.replay s.replay in
-        let replay_geometry =
-          try Some (s.geometry ())
-          with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None
-        in
+        let replay_geometry = retained_replay_geometry s in
         (* "size":"claim": the geometry applies only while nobody owns the
            size, and the attachment receives S frames. Without it, as before,
            the attach takes the size. *)
@@ -2635,14 +2646,9 @@ let conditional_attach env observer sessions fields flow =
         else (
         let snapshot, replay_geometry =
           if List.assoc_opt "op" fields = Some (`String "attach_if") then
-            (* Capture retained bytes and current pre-attach geometry, as for
-               ordinary attach, but only after strict incarnation selection. *)
+            (* Strict incarnation selection precedes replay capture. *)
             let snapshot = Mesh_pty_replay.replay s.replay in
-            let replay_geometry =
-              try Some (s.geometry ())
-              with Invalid_argument _ | Eio.Io _ | Unix.Unix_error _ -> None
-            in
-            (Some snapshot, replay_geometry)
+            (Some snapshot, retained_replay_geometry s)
           else (None, None)
         in
         let watch = List.assoc_opt "size" fields = Some (`String "claim") in

@@ -205,6 +205,38 @@ for (const observed of [false, true]) test(`quiet legacy attach needs only its r
   await attachment.close();
 });
 
+test('retained output never advertises a later silent resize as its geometry', async t => {
+  const host = new Host('#!/bin/sh\nstty -echo\n: > "$HOME/ready"\nwhile IFS= read -r line; do stty size; done\n');
+  await host.ready();
+  const name = 'geometry';
+  assert.deepEqual(await host.request({op: 'new', name, cwd: host.home, command: null}), {ok: true, name});
+  await waitFor('silent shell ready', 5000, () => fs.existsSync(path.join(host.home, 'ready')));
+  const [{created, pid}] = await host.sessions();
+  strays.push(pid);
+  const open = async (fields: object) => {
+    const attachment = new Attachment(net.createConnection(host.socketPath));
+    t.after(() => attachment.close());
+    attachment.send('C', fields);
+    await waitFor('attach reply and replay', 5000, () => attachment.frames.length >= 2);
+    assert.equal(attachment.frames[0].kind, 'C');
+    assert.equal(attachment.frames[1].kind, 'D');
+    const reply = JSON.parse(attachment.frames[0].payload.toString());
+    assert.equal(reply.ok, true);
+    return {attachment, reply, bytes: attachment.frames[1].payload};
+  };
+  const initial = await open({op: 'attach', name, rows: 31, cols: 80});
+  initial.attachment.send('D', Buffer.from('size\n'));
+  await waitFor('output drawn at the initial width', 5000, () => initial.attachment.output().includes('31 80'));
+  const resize = await open({op: 'attach', name, rows: 37, cols: 120});
+  assert.match(resize.bytes.toString(), /31 80/);
+
+  for (const fields of [{op: 'attach', name}, {op: 'attach_if', name, created}]) {
+    const replay = await open(fields);
+    assert.deepEqual(replay.bytes, resize.bytes, 'the resize emitted no replacement output');
+    assert.equal(replay.reply.replay_geometry, undefined, 'uncertain geometry is omitted');
+  }
+});
+
 test('a second host refuses to start and leaves the running one reachable', async () => {
   const host = new Host(BASH);
   await host.ready();
