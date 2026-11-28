@@ -405,7 +405,7 @@ async def start_dictation(app):
     try:
         app["dictation_secret"] = secrets.token_hex(32)
         app["dictation_principal"] = _dictation_principal(app)
-        app["dictation_revision"] = 0
+        app["dictation_confirmed"] = True
         app["dictation_principal_lock"] = asyncio.Lock()
         node = os.environ.get("MESH_NODE", "node")
         if "MESH_NODE" in os.environ and not Path(node).is_absolute():
@@ -573,19 +573,43 @@ async def _sync_dictation_principal(app):
     if client is None:
         return
     async with app["dictation_principal_lock"]:
-        principal = _dictation_principal(app)
-        if principal != app["dictation_principal"]:
-            app["dictation_revision"] += 1
+        if app["dictation_confirmed"] and _dictation_principal(app) == app["dictation_principal"]:
+            return
+        # An unacknowledged comparison may already have changed the worker.
+        # Never cache it as confirmed; reread its epoch before any retry.
+        app["dictation_confirmed"] = False
+        for _ in range(2):
+            principal = _dictation_principal(app)
             headers = {"X-Mesh-Bridge": app["dictation_secret"], "X-Mesh-Principal": principal,
                        "Content-Type": "application/json"}
             try:
-                status, _ = await _dictation_exchange(client, headers, "POST", "/internal/principal",
-                                                     json.dumps({"revision": app["dictation_revision"]}).encode())
+                status, state = await _dictation_exchange(client, headers, "GET", "/internal/principal", b"")
             except (asyncio.TimeoutError, aiohttp.ClientError, OSError, ValueError):
-                raise web.HTTPServiceUnavailable() from None
-            if status != 200:
-                raise web.HTTPServiceUnavailable()
+                continue
+            if (_dictation_principal(app) != principal or status != 200 or not isinstance(state, dict)
+                    or set(state) != {"epoch", "principal"} or not isinstance(state["epoch"], str)
+                    or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", state["epoch"])
+                    or not isinstance(state["principal"], str)
+                    or not re.fullmatch(r"[a-f0-9]{64}", state["principal"])):
+                continue
+            # Even an equal read cannot confirm safety: an older comparison
+            # may still arrive with this epoch after an acknowledgement was lost.
+            # Rotate the observed epoch before admitting any public transfer.
+            try:
+                status, updated = await _dictation_exchange(
+                    client, headers, "POST", "/internal/principal",
+                    json.dumps({"expected_epoch": state["epoch"]}).encode())
+            except (asyncio.TimeoutError, aiohttp.ClientError, OSError, ValueError):
+                continue
+            if (_dictation_principal(app) != principal or status != 200 or not isinstance(updated, dict)
+                    or set(updated) != {"epoch", "principal"} or updated["principal"] != principal
+                    or not isinstance(updated["epoch"], str) or updated["epoch"] == state["epoch"]
+                    or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", updated["epoch"])):
+                continue
             app["dictation_principal"] = principal
+            app["dictation_confirmed"] = True
+            return
+        raise web.HTTPServiceUnavailable()
 
 
 async def _dictation_exchange(client, headers, method, path, data):
@@ -671,7 +695,7 @@ async def api_dictation(request):
         _check_dictation_authority(request, principal)
         return _dictation_error("unavailable", 503)
     try:
-        await _sync_dictation_principal(request.app)
+        await asyncio.wait_for(_sync_dictation_principal(request.app), timeout=2)
         return await _dictation_transfer(request, headers, exchange)
     except (asyncio.TimeoutError, aiohttp.ClientError, OSError, ValueError, web.HTTPServiceUnavailable):
         _check_dictation_authority(request, principal)

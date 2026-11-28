@@ -307,6 +307,130 @@ http.createServer=function(options,listener){return original.call(this,options,(
   }finally{if(f)await f.close();fs.rmSync(directory,{recursive:true,force:true});}
 });
 
+for (const reply of ['lost', 'error', 'timeout'] as const) test(`principal sync recovers a ${reply} transition acknowledgement without restarting its worker`, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-epoch-ack-'));
+  const preload = path.join(directory, 'worker.cjs'), trace = path.join(directory, 'trace');
+  const epochs = path.join(directory, 'epochs'), pid = path.join(directory, 'pid');
+  fs.writeFileSync(preload, `const http=require('node:http'),fs=require('node:fs'),create=http.createServer;
+http.createServer=function(options,listener){fs.writeFileSync(${JSON.stringify(pid)},String(process.pid));return create.call(this,options,(req,res)=>{
+  if(req.url==='/internal/principal'){
+    fs.appendFileSync(${JSON.stringify(trace)},req.method+'\\n');
+    if(req.method==='POST'){
+      const iterator=req.iterator.bind(req);
+      req.iterator=function(options){return(async function*(){
+        const parts=[];for await(const part of iterator(options)){parts.push(part);yield part;}
+        fs.appendFileSync(${JSON.stringify(epochs)},JSON.parse(Buffer.concat(parts).toString()).expected_epoch+'\\n');
+      })();};
+    }
+    if(req.method==='POST'&&!global.dropped){
+      global.dropped=true;
+      if(${JSON.stringify(reply)}==='lost'){
+        res.end=function(){res.socket.destroy();};
+      }else if(${JSON.stringify(reply)}==='timeout'){
+        const end=res.end.bind(res);
+        res.end=function(body){setTimeout(()=>{if(!res.destroyed)end(body);},3500);};
+      }else{
+        const writeHead=res.writeHead.bind(res);
+        res.writeHead=function(status,headers){return writeHead(status===200?503:status,headers);};
+      }
+    }
+  }
+  return listener(req,res);
+});};`);
+  const f = await fixture(true, false, undefined, {workerPreload: preload});
+  try {
+    const worker = fs.readFileSync(pid, 'utf8');
+    const headers = {...f.auth, ...identityHeaders()};
+    const old = await f.call('/api/transcribe', 'POST', headers, 'old audio');
+    assert.equal(old.status, 202);
+    await until(async () => (await f.call(`/api/transcribe/${old.body.job_id}`, 'GET', headers)).body.state === 'ready');
+    const started = performance.now();
+    const logout = await f.call('/api/logout-all', 'POST', f.auth);
+    assert.equal(logout.status, 200);
+    assert.ok(performance.now() - started < 3000, 'logout includes the control wait in its deadline');
+    assert.equal((await f.call(`/api/transcribe/${old.body.job_id}`, 'GET', headers)).status, 404);
+    assert.equal((await f.call('/api/transcribe', 'POST', {...f.auth, ...identityHeaders()}, 'new audio')).status, 202);
+    assert.deepEqual(fs.readFileSync(trace, 'utf8').trim().split('\n'), ['GET', 'POST', 'GET', 'POST'],
+      'recovery reads a fresh epoch and fences earlier uncertain transitions');
+    const compared=fs.readFileSync(epochs,'utf8').trim().split('\n');
+    assert.equal(compared.length,2);assert.notEqual(compared[0],compared[1],
+      'recovery never replays an uncertain epoch');
+    assert.equal(fs.readFileSync(pid, 'utf8'), worker);
+  } finally { await f.close(); fs.rmSync(directory, {recursive: true, force: true}); }
+});
+
+test('a restored valid generation fences a delayed prior control update without restarting the worker', async () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-epoch-fence-'));
+  const preload=path.join(directory,'worker.cjs'),held=path.join(directory,'held'),release=path.join(directory,'release');
+  const done=path.join(directory,'done'),trace=path.join(directory,'trace'),pid=path.join(directory,'pid');
+  fs.writeFileSync(preload,`const http=require('node:http'),fs=require('node:fs'),create=http.createServer;
+http.createServer=function(options,listener){fs.writeFileSync(${JSON.stringify(pid)},String(process.pid));return create.call(this,options,(req,res)=>{
+  if(req.url==='/internal/principal')fs.appendFileSync(${JSON.stringify(trace)},req.method+'\\n');
+  if(req.url==='/internal/principal'&&req.method==='POST'&&!global.held){
+    global.held=true;const parts=[];
+    req.on('data',chunk=>parts.push(chunk));
+    req.on('end',()=>{
+      const body=Buffer.concat(parts);
+      fs.writeFileSync(${JSON.stringify(held)},'ready');
+      const timer=setInterval(()=>{
+        if(!fs.existsSync(${JSON.stringify(release)}))return;
+        clearInterval(timer);
+        req.iterator=()=> (async function*(){yield body;fs.writeFileSync(${JSON.stringify(done)},'parsed');})();
+        listener(req,res);
+      },10);
+    });return;
+  }
+  return listener(req,res);
+});};`);
+  const f=await fixture(true,false,undefined,{workerPreload:preload});
+  try{
+    const worker=fs.readFileSync(pid,'utf8');
+    const generation=path.join(f.config,'cookie-generation');
+    assert.equal(fs.readFileSync(generation,'utf8').trim(),'0');
+    const logout=f.call('/api/logout-all','POST',f.auth);void logout.catch(()=>{});
+    await until(()=>fs.existsSync(held));
+    assert.equal((await logout).status,200);
+    fs.writeFileSync(generation,'0\n');
+    assert.equal((await f.call('/api/transcribe/config','GET',f.auth)).status,200);
+    assert.deepEqual(fs.readFileSync(trace,'utf8').trim().split('\n'),['GET','POST','GET','POST']);
+    fs.writeFileSync(release,'go');await until(()=>fs.existsSync(done));
+    assert.equal(fs.readFileSync(done,'utf8'),'parsed','the delayed control body reached typed validation');
+    assert.equal((await f.call('/api/transcribe/config','GET',f.auth)).status,200,
+      'the delayed comparison must not replace the now-authoritative principal');
+    assert.equal(f.upstreamCalls,0,'no old inference reaches the upstream');
+    assert.equal((await f.call('/api/transcribe','POST',{...f.auth,...identityHeaders()},'new audio')).status,202);
+    assert.equal(fs.readFileSync(pid,'utf8'),worker);
+  }finally{fs.writeFileSync(release,'go');await f.close();fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('public principal sync includes lock wait and slow control in its total deadline',async()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-epoch-lock-'));
+  const preload=path.join(directory,'worker.cjs'),held=path.join(directory,'held');
+  fs.writeFileSync(preload,`const http=require('node:http'),fs=require('node:fs'),create=http.createServer;
+http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
+  if(req.url==='/internal/principal'&&req.method==='GET'&&!global.held){
+    global.held=true;
+    const end=res.end.bind(res);
+    res.end=function(body){fs.writeFileSync(${JSON.stringify(held)},'held');
+      setTimeout(()=>{if(!res.destroyed)end(body);},3500);};
+  }
+  return listener(req,res);
+});};`);
+  const f=await fixture(true,false,undefined,{workerPreload:preload});
+  try{
+    fs.writeFileSync(path.join(f.config,'cookie-generation'),'1\n');
+    const first=f.call('/api/transcribe/config','GET',f.auth);void first.catch(()=>{});
+    await until(()=>fs.existsSync(held));
+    const started=performance.now();
+    const second=await f.call('/api/transcribe/config','GET',f.auth);
+    assert.ok([200,503].includes(second.status),'a queued request either recovers or fails closed');
+    assert.ok(performance.now()-started<3000,'lock wait is inside the public deadline');
+    assert.equal((await first).status,503);
+    assert.equal((await f.call('/api/transcribe/config','GET',f.auth)).status,200,
+      'timeout does not permanently poison the worker or principal sync');
+  }finally{await f.close();fs.rmSync(directory,{recursive:true,force:true});}
+});
+
 test('actual pre/post-upload incarnation and malformed inventory fail closed without inference',async()=>{
   const f=await fixture();
   try{
@@ -383,23 +507,40 @@ test('private principal transition is strict, authenticated, bounded and rejects
   const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed',MESH_WHISPER_QUEUE_SIZE:'64'})!,secret,socketPath,inventory.socketPath,old);
   const uploads:http.ClientRequest[]=[];
   const call=(principal:string,body:unknown,bridge=secret)=>request({socketPath,path:'/internal/principal',method:'POST',headers:{'X-Mesh-Bridge':bridge,'X-Mesh-Principal':principal,'Content-Type':'application/json'}},JSON.stringify(body));
+  const current=(principal:string,bridge=secret)=>request({socketPath,path:'/internal/principal',method:'GET',headers:{'X-Mesh-Bridge':bridge,'X-Mesh-Principal':principal}});
   try{
-    assert.equal((await call(next,{revision:1},'wrong')).status,403);
-    for(const body of [{revision:1,extra:true},{revision:'1'},{revision:-1},{revision:0.5}])assert.equal((await call(next,body)).status,400);
+    assert.equal((await current(next,'wrong')).status,403);
+    assert.equal((await call(next,{expected_epoch:randomUUID()},'wrong')).status,403);
+    const observed=await current(next);
+    assert.equal(observed.status,200);assert.equal(observed.body.principal,old);
+    assert.equal((await request({socketPath,path:'/internal/principal',method:'GET',
+      headers:{'X-Mesh-Bridge':secret,'X-Mesh-Principal':next}},'unexpected')).status,400);
+    const epoch=observed.body.epoch as string;
+    assert.match(epoch,/^[0-9a-f-]{36}$/);
+    for(const body of [{revision:1},{expected_epoch:epoch,extra:true},{expected_epoch:1},
+      {expected_epoch:null},{expected_epoch:'wrong'}])assert.equal((await call(next,body)).status,400);
     const pending=Array.from({length:32},(_,i)=>new Promise<number>((resolve,reject)=>{
       const req=http.request({socketPath,path:'/api/transcribe',method:'POST',headers:{...identityHeaders(),'X-Mesh-Session':`slow${i}`,'X-Mesh-Bridge':secret,'X-Mesh-Principal':old,'Content-Length':'2'},agent:false},res=>{res.resume();res.on('end',()=>resolve(res.statusCode!));});
       uploads.push(req);req.on('error',reject);req.write('a');
     }));for(const result of pending)void result.catch(()=>{});
     await until(()=>service.engine.stats().records===32);
-    assert.equal((await call(next,{revision:1})).status,200,'revocation has a reserved control lane');
+    assert.deepEqual((await current(next)).body,observed.body,'epoch read uses the reserved control lane');
+    const switched=await call(next,{expected_epoch:epoch});
+    assert.equal(switched.status,200,'revocation has a reserved control lane');
+    assert.equal(switched.body.principal,next);
+    assert.notEqual(switched.body.epoch,epoch);
     assert.deepEqual(service.engine.stats(),{records:0,bytes:0,active:0,waiting:0});
-    assert.equal((await call(next,{revision:1})).status,200,'exact replay is idempotent');
-    assert.equal((await call(old,{revision:0})).status,404);
-    assert.equal((await call(old,{revision:1})).status,404);
+    assert.equal((await call(next,{expected_epoch:epoch})).status,409,'stale replay never succeeds');
+    assert.equal((await call(old,{expected_epoch:epoch})).status,409);
+    const third='c'.repeat(64);
+    const advanced=await call(third,{expected_epoch:switched.body.epoch});
+    assert.equal(advanced.status,200);
+    assert.equal((await call(old,{expected_epoch:epoch})).status,409,'delayed old comparison cannot supersede newer transition');
+    assert.deepEqual((await current(next)).body,advanced.body);
     for(const req of uploads)req.end('b');assert.ok((await Promise.all(pending)).every(status=>[404,503].includes(status)));
     const headers={...identityHeaders(),'X-Mesh-Bridge':secret,'X-Mesh-Principal':old};
     assert.equal((await request({socketPath,path:'/api/transcribe',method:'POST',headers},'late')).status,404,'old request arriving after revocation must not reserve a slot');
-    assert.equal((await request({socketPath,path:'/api/transcribe',method:'POST',headers:{...headers,'X-Mesh-Principal':next}},'new')).status,202);
+    assert.equal((await request({socketPath,path:'/api/transcribe',method:'POST',headers:{...headers,'X-Mesh-Principal':third}},'new')).status,202);
     assert.equal(service.engine.stats().records,1);
   }finally{for(const req of uploads)req.destroy();await service.close();await inventory.close();fs.rmSync(directory,{recursive:true,force:true});}
 });

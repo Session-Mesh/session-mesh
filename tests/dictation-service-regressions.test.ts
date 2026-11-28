@@ -98,7 +98,7 @@ test('inserted tombstones retain the record cap and principal revocation removes
     await until(()=>d.read(m,p.job.job_id).state==='ready');d.settle(m,p.job.job_id,'inserted');
     for(let i=1;i<256;i++){const n=insertedMeta(),r=await d.prepare(n,insertedAudio());d.cancel(n,r.job.job_id);}
     await assert.rejects(d.prepare(insertedMeta(),insertedAudio()),insertedFault('capacity_full'));
-    d.activate('new',1);
+    d.activate('new',d.principalState().epoch);
     assert.throws(()=>d.settle(m,p.job.job_id,'inserted'),insertedFault('not_found'));
     assert.throws(()=>d.read({...m,principal:'new'},p.job.job_id),insertedFault('not_found'));
     assert.deepEqual(d.stats(),{records:0,bytes:0,active:0,waiting:0});

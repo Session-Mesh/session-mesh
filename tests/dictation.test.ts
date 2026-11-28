@@ -337,12 +337,19 @@ test('principal transitions retire all states but retain real running inference 
     const c=await d.prepare(queued,audio('ccc'));d.commit(queued,c.job.job_id,c.preparation);
     const pending=d.prepare(slow,receiving());void pending.catch(()=>{});await seen;
     assert.deepEqual(d.stats(),{records:4,bytes:9,active:1,waiting:1});
-    d.activate('new',1);
+    const oldEpoch=d.principalState().epoch;
+    d.activate('new',oldEpoch);
     assert.deepEqual(d.stats(),{records:0,bytes:4,active:1,waiting:0});
     for(const [m,id] of [[ready,a.job.job_id],[running,b.job.job_id],[queued,c.job.job_id]] as const)
       assert.throws(()=>d.read(m,id),code('not_found'));
     await assert.rejects(d.prepare(meta('late',{principal:'old'}),audio('late')),code('not_found'));
-    assert.throws(()=>d.activate('old',0),code('not_found'),'delayed transition cannot reactivate an old principal');
+    assert.throws(()=>d.activate('old',oldEpoch),code('invalid_state'),'delayed transition cannot reactivate an old principal');
+    const newEpoch=d.principalState().epoch;
+    assert.notEqual(newEpoch,oldEpoch);
+    d.activate('newer',newEpoch);
+    assert.throws(()=>d.activate('old',oldEpoch),code('invalid_state'));
+    assert.equal(d.principalState().principal,'newer');
+    d.activate('new',d.principalState().epoch);
     const next={...running,principal:'new',request:randomUUID()};
     const replacement=await d.prepare(next,audio('n'));d.commit(next,replacement.job.job_id,replacement.preparation);
     resume();await assert.rejects(pending);

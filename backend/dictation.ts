@@ -183,7 +183,7 @@ export class Dictation {
   private isLive: IsLive;
   private timer: NodeJS.Timeout;
   private principal: string | null;
-  private revision = 0;
+  private epoch = randomUUID();
 
   constructor(config: Config, options: Options = {}) {
     this.config = config;
@@ -197,18 +197,19 @@ export class Dictation {
   authorize(principal: string) {
     if (this.principal !== null && principal !== this.principal) throw new Fault('not_found');
   }
-  activate(principal: string, revision: number) {
-    if (!Number.isSafeInteger(revision) || revision < 0) throw new Fault('invalid_request');
-    if (revision === this.revision && principal === this.principal) return;
-    if (revision <= this.revision) throw new Fault('not_found');
+  principalState() { return {epoch: this.epoch, principal: this.principal}; }
+  activate(principal: string, expectedEpoch: string) {
+    uuid(expectedEpoch);
+    if (expectedEpoch !== this.epoch) throw new Fault('invalid_state');
     this.principal = principal;
-    this.revision = revision;
+    this.epoch = randomUUID();
     // Detach revoked records, not their in-flight operations: running audio and
     // upstream occupancy remain owned until the actual inference finishes.
     for (const r of this.records.values()) if (r.meta.principal !== principal) {
       this.terminal(r, 'cancelled', true);
       this.remove(r);
     }
+    return this.principalState();
   }
   private key(m: Owner, request: string) { return JSON.stringify([m.principal, uuid(m.client), uuid(request)]); }
   private slot(m: Admission) { return JSON.stringify([m.session, m.created]); }
