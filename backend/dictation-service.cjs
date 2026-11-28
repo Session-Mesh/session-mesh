@@ -174,7 +174,7 @@ var Dictation = class {
   isLive;
   timer;
   principal;
-  revision = 0;
+  epoch = (0, import_node_crypto.randomUUID)();
   constructor(config, options = {}) {
     this.config = config;
     this.principal = options.principal ?? null;
@@ -187,16 +187,19 @@ var Dictation = class {
   authorize(principal) {
     if (this.principal !== null && principal !== this.principal) throw new Fault("not_found");
   }
-  activate(principal, revision) {
-    if (!Number.isSafeInteger(revision) || revision < 0) throw new Fault("invalid_request");
-    if (revision === this.revision && principal === this.principal) return;
-    if (revision <= this.revision) throw new Fault("not_found");
+  principalState() {
+    return { epoch: this.epoch, principal: this.principal };
+  }
+  activate(principal, expectedEpoch) {
+    uuid(expectedEpoch);
+    if (expectedEpoch !== this.epoch) throw new Fault("invalid_state");
     this.principal = principal;
-    this.revision = revision;
+    this.epoch = (0, import_node_crypto.randomUUID)();
     for (const r of this.records.values()) if (r.meta.principal !== principal) {
       this.terminal(r, "cancelled", true);
       this.remove(r);
     }
+    return this.principalState();
   }
   key(m, request) {
     return JSON.stringify([m.principal, uuid(m.client), uuid(request)]);
@@ -696,11 +699,15 @@ async function dispatch(req, config, engine, send) {
     single(req, name, true);
   const principal = single(req, "X-Mesh-Principal");
   if (!/^[a-f0-9]{64}$/.test(principal)) throw new Fault("invalid_request");
+  if (req.method === "GET" && path === "/internal/principal") {
+    await empty(req);
+    send(200, engine.principalState());
+    return;
+  }
   if (req.method === "POST" && path === "/internal/principal") {
     const body = await object(req);
-    if (Object.keys(body).length !== 1 || !Object.hasOwn(body, "revision")) throw new Fault("invalid_request");
-    engine.activate(principal, body.revision);
-    send(200, {});
+    if (Object.keys(body).length !== 1 || !Object.hasOwn(body, "expected_epoch") || typeof body.expected_epoch !== "string") throw new Fault("invalid_request");
+    send(200, engine.activate(principal, body.expected_epoch));
     return;
   }
   if (req.method === "GET") await empty(req);
@@ -780,7 +787,7 @@ function serviceHandler(config, engine, expected) {
           send(403, new Fault("not_found").json());
           return;
         }
-        if (!(req.method === "POST" && req.url === "/internal/principal")) {
+        if (req.url !== "/internal/principal" || !["GET", "POST"].includes(req.method ?? "")) {
           if (handlers >= 32) throw new Fault("capacity_full");
           handlers++;
           counted = true;

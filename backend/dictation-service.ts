@@ -115,11 +115,16 @@ async function dispatch(req: IncomingMessage, config: Config, engine: Dictation,
   // Even config needs the parent-derived authenticated principal, not a job UUID.
   const principal = single(req, 'X-Mesh-Principal');
   if (!/^[a-f0-9]{64}$/.test(principal)) throw new Fault('invalid_request');
+  if (req.method === 'GET' && path === '/internal/principal') {
+    await empty(req);
+    send(200, engine.principalState());
+    return;
+  }
   if (req.method === 'POST' && path === '/internal/principal') {
     const body = await object(req);
-    if (Object.keys(body).length !== 1 || !Object.hasOwn(body, 'revision')) throw new Fault('invalid_request');
-    engine.activate(principal, body.revision as number);
-    send(200, {});
+    if (Object.keys(body).length !== 1 || !Object.hasOwn(body, 'expected_epoch') ||
+        typeof body.expected_epoch !== 'string') throw new Fault('invalid_request');
+    send(200, engine.activate(principal, body.expected_epoch));
     return;
   }
   if (req.method === 'GET') await empty(req);
@@ -192,7 +197,7 @@ function serviceHandler(config: Config, engine: Dictation, expected: Buffer) {
           return;
         }
         // Parent-only transitions must not wait behind the uploads they revoke.
-        if (!(req.method === 'POST' && req.url === '/internal/principal')) {
+        if (req.url !== '/internal/principal' || !['GET', 'POST'].includes(req.method ?? '')) {
           if (handlers >= 32) throw new Fault('capacity_full');
           handlers++;
           counted = true;
