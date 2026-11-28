@@ -626,10 +626,61 @@ async def _dictation_exchange(client, headers, method, path, data):
         return response.status, json.loads(payload)
 
 
-def _dictation_internal_headers(headers, prepared):
-    internal = [(key, value) for key, value in headers if key.lower() != "content-type"]
-    internal.extend((("Content-Type", "application/json"), ("X-Mesh-Preparation", prepared["preparation"])))
-    return internal
+def _dictation_relay_claim(payload, next_phase):
+    if (not isinstance(payload, dict) or set(payload) != {"next", "claim"}
+            or payload["next"] != next_phase or not isinstance(payload["claim"], str)
+            or len(payload["claim"]) > 512 or not re.fullmatch(r"[A-Za-z0-9_.-]+", payload["claim"])):
+        raise ValueError("Invalid private relay phase")
+    return payload["claim"]
+
+
+def _dictation_relay_failure(payload, status):
+    # Never reflect arbitrary private worker text (including a claim) into a
+    # browser error. These are the only errors emitted by the three phases.
+    public = {
+        "invalid_request": (400, "Invalid dictation request."),
+        "not_found": (404, "Dictation job not found."),
+        "session_busy": (409, "This session already has outstanding dictation."),
+        "stale_session": (409, "The session is no longer live."),
+        "request_conflict": (409, "The request belongs to another session."),
+        "invalid_state": (409, "Invalid dictation transition."),
+        "audio_too_large": (413, "Audio exceeds the configured limit."),
+        "unsupported_audio": (415, "Unsupported audio format."),
+        "queue_full": (429, "The dictation queue is full."),
+        "capacity_full": (429, "Dictation capacity is full."),
+        "unavailable": (503, "Dictation is unavailable."),
+    }
+    if (not isinstance(payload, dict) or set(payload) != {"error"}
+            or not isinstance(payload["error"], dict) or set(payload["error"]) != {"code", "message"}
+            or not isinstance(payload["error"].get("code"), str)
+            or payload["error"].get("code") not in public
+            or (status, payload["error"].get("message")) != public[payload["error"]["code"]]):
+        raise ValueError("Invalid private relay failure")
+    return web.json_response(payload, status=status, headers={"Cache-Control": "no-store"})
+
+
+def _dictation_relay_job(payload, headers):
+    if not isinstance(payload, dict) or set(payload) != {"next", "job"} or payload["next"] != "done":
+        raise ValueError("Invalid private relay completion")
+    job = payload["job"]
+    if (not isinstance(job, dict)
+            or set(job) != {"job_id", "request_id", "session", "created",
+                            "state", "text", "error", "outcome"}
+            or not isinstance(job["job_id"], str)
+            or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", job["job_id"])
+            or not isinstance(job["request_id"], str)
+            or job["request_id"] != dict(headers).get("X-Mesh-Request-Id", "").lower()
+            or job["session"] != dict(headers).get("X-Mesh-Session")
+            or isinstance(job["created"], bool) or not isinstance(job["created"], (int, float))
+            or not math.isfinite(job["created"])
+            or job["state"] not in ("queued", "processing", "ready", "error", "cancelled", "settled")
+            or (job["text"] is not None and not isinstance(job["text"], str))
+            or (job["outcome"] is not None and job["outcome"] not in ("submitted", "discarded", "inserted"))
+            or (job["error"] is not None and (not isinstance(job["error"], dict)
+                or set(job["error"]) != {"code", "message"}
+                or not all(isinstance(v, str) and len(v) <= 100 for v in job["error"].values())))):
+        raise ValueError("Invalid private relay job")
+    return job
 
 
 def _check_dictation_authority(request, principal):
@@ -637,26 +688,37 @@ def _check_dictation_authority(request, principal):
         raise web.HTTPUnauthorized()
 
 
-async def _dictation_transfer(request, headers, exchange):
-    admission = request.method == "POST" and request.path == "/api/transcribe"
-    principal = dict(headers)["X-Mesh-Principal"]
+async def _dictation_relay_transfer(request, headers, exchange, principal):
     _check_dictation_authority(request, principal)
-    if admission:
-        status, payload = await exchange("POST", "/internal/admission", b"")
-        _check_dictation_authority(request, principal)
-        if status != 200:
-            return web.json_response(payload, status=status, headers={"Cache-Control": "no-store"})
+    status, payload = await exchange("POST", "/internal/relay/start", b"")
+    _check_dictation_authority(request, principal)
+    if status != 200:
+        return _dictation_relay_failure(payload, status)
+    start_claim = _dictation_relay_claim(payload, "upload")
+    status, payload = await exchange("POST", "/internal/relay/upload", request.content.iter_chunked(65536),
+                                     [*headers, ("X-Mesh-Relay-Claim", start_claim)])
+    _check_dictation_authority(request, principal)
+    if status != 200:
+        return _dictation_relay_failure(payload, status)
+    # Matching attempts share a preparation. A failed attempt leaves it
+    # for another matching attempt or the worker's existing expiry.
+    commit_claim = _dictation_relay_claim(payload, "commit")
+    status, payload = await exchange("POST", "/internal/relay/commit", b"",
+                                     [*headers, ("X-Mesh-Relay-Claim", commit_claim)])
+    _check_dictation_authority(request, principal)
+    if status != 200:
+        return _dictation_relay_failure(payload, status)
+    return web.json_response(_dictation_relay_job(payload, headers), status=202,
+                             headers={"Cache-Control": "no-store"})
+
+
+async def _dictation_transfer(request, headers, exchange):
+    principal = dict(headers)["X-Mesh-Principal"]
+    if request.method == "POST" and request.path == "/api/transcribe":
+        return await _dictation_relay_transfer(request, headers, exchange, principal)
+    _check_dictation_authority(request, principal)
     status, payload = await exchange(request.method, request.rel_url.raw_path, request.content.iter_chunked(65536))
     _check_dictation_authority(request, principal)
-    if admission and status == 202:
-        # Matching attempts share a preparation. A failed attempt must leave it
-        # for another attempt to commit, or for the worker's 15-second expiry.
-        prepared = payload
-        internal = _dictation_internal_headers(headers, prepared)
-        status, payload = await exchange("POST", "/internal/commit/" + prepared["job"]["job_id"], b"{}", internal)
-        _check_dictation_authority(request, principal)
-        if status == 200:
-            status = 202
     return web.json_response(payload, status=status, headers={"Cache-Control": "no-store"})
 
 

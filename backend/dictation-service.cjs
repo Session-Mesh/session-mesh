@@ -227,6 +227,12 @@ var Dictation = class {
     if (!r || r.phase !== "committed") throw new Fault("not_found");
     return this.snapshot(r);
   }
+  commitRequest(m, preparation) {
+    this.authorize(m.principal);
+    const r = this.requests.get(this.key(m, m.request));
+    if (!r || r.meta.session !== m.session || r.meta.created !== m.created || r.meta.mime !== m.mime || r.preparation !== uuid(preparation)) throw new Fault("not_found");
+    return this.commit(m, r.job.job_id, preparation);
+  }
   checkPreparation(r) {
     this.authorize(r.meta.principal);
     const expired = r.expires !== null ? this.now() >= r.expires : r.phase !== "committed" && this.now() >= r.deadline;
@@ -692,7 +698,48 @@ async function liveInventory(socketPath, m, signal) {
     });
   });
 }
-async function dispatch(req, config, engine, send) {
+function createRelayClaims(now = () => performance.now()) {
+  const key = (0, import_node_crypto2.randomBytes)(32);
+  const identity = (m) => [m.principal, m.client, m.request, m.session, m.created, m.mime];
+  const mac = (encoded) => (0, import_node_crypto2.createHmac)("sha256", key).update("relay/upload/v1\0").update(encoded).digest();
+  return {
+    issue(m) {
+      const encoded = Buffer.from(JSON.stringify([now() + 15e3, (0, import_node_crypto2.randomBytes)(16).toString("hex"), ...identity(m)])).toString("base64url");
+      return `${encoded}.${mac(encoded).toString("base64url")}`;
+    },
+    accept(token, m) {
+      if (typeof token !== "string" || token.length > 512 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(token)) throw new Fault("invalid_request");
+      const [encoded, signature] = token.split(".");
+      const observed = Buffer.from(signature, "base64url");
+      if (observed.toString("base64url") !== signature || !(0, import_node_crypto2.timingSafeEqual)(observed, mac(encoded))) throw new Fault("not_found");
+      let fields;
+      try {
+        fields = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+      } catch {
+        throw new Fault("invalid_request");
+      }
+      if (!Array.isArray(fields) || fields.length !== 8 || typeof fields[0] !== "number" || !Number.isFinite(fields[0]) || typeof fields[1] !== "string" || !/^[0-9a-f]{32}$/.test(fields[1]) || JSON.stringify(fields.slice(2)) !== JSON.stringify(identity(m))) throw new Fault("not_found");
+      if (now() >= fields[0]) throw new Fault("unavailable");
+    }
+  };
+}
+async function dispatchRelay(req, path, engine, claims, send) {
+  const m = metadata(req);
+  if (path === "/internal/relay/start") {
+    await empty(req);
+    await engine.verifySession(m);
+    send(200, { next: "upload", claim: claims.issue(m) });
+  } else if (path === "/internal/relay/upload") {
+    claims.accept(single(req, "X-Mesh-Relay-Claim"), m);
+    const prepared = await engine.prepare(m, req.iterator({ destroyOnReturn: false }));
+    await engine.verifyPreparation(m, prepared);
+    send(200, { next: "commit", claim: prepared.preparation });
+  } else if (path === "/internal/relay/commit") {
+    await empty(req);
+    send(200, { next: "done", job: engine.commitRequest(m, single(req, "X-Mesh-Relay-Claim")) });
+  } else throw new Fault("not_found");
+}
+async function dispatch(req, config, engine, claims, send) {
   const path = req.url ?? "";
   if (/[?#%\\]/.test(path) || req.headers["content-encoding"] !== void 0) throw new Fault("invalid_request");
   for (const name of ["X-Mesh-Dictation-Client", "X-Mesh-Session", "X-Mesh-Created", "X-Mesh-Request-Id"])
@@ -712,21 +759,12 @@ async function dispatch(req, config, engine, send) {
   }
   if (req.method === "GET") await empty(req);
   engine.authorize(principal);
+  if (req.method === "POST" && path.startsWith("/internal/relay/")) {
+    await dispatchRelay(req, path, engine, claims, send);
+    return;
+  }
   if (req.method === "GET" && path === "/api/transcribe/config") {
     send(200, config.public);
-    return;
-  }
-  if (req.method === "POST" && path === "/internal/admission") {
-    await empty(req);
-    await engine.verifySession(metadata(req));
-    send(200, {});
-    return;
-  }
-  if (req.method === "POST" && path === "/api/transcribe") {
-    const admission2 = metadata(req);
-    const result = await engine.prepare(admission2, req.iterator({ destroyOnReturn: false }));
-    await engine.verifyPreparation(admission2, result);
-    send(202, result);
     return;
   }
   await dispatchJob(req, path, engine, send);
@@ -736,18 +774,6 @@ async function dispatchJob(req, path, engine, send) {
   const lookup = /^\/api\/transcribe\/request\/([^/]+)$/.exec(path);
   if (req.method === "GET" && lookup) {
     send(200, engine.lookup(m, uuid(lookup[1])));
-    return;
-  }
-  const internal = /^\/internal\/(commit|abort)\/([^/]+)$/.exec(path);
-  if (req.method === "POST" && internal) {
-    const body = await object(req);
-    if (Object.keys(body).length) throw new Fault("invalid_request");
-    const preparation = uuid(single(req, "X-Mesh-Preparation"));
-    if (internal[1] === "commit") send(200, engine.commit(m, uuid(internal[2]), preparation));
-    else {
-      engine.abort(m, uuid(internal[2]), preparation);
-      send(200, {});
-    }
     return;
   }
   const job = /^\/api\/transcribe\/([^/]+)(?:\/(cancel|settle))?$/.exec(path);
@@ -773,6 +799,7 @@ async function dispatchJob(req, path, engine, send) {
 var digest = (value) => (0, import_node_crypto2.createHash)("sha256").update(value).digest();
 function serviceHandler(config, engine, expected) {
   let handlers = 0;
+  const claims = createRelayClaims();
   return (req, res) => {
     const send = (status, body) => {
       if (res.destroyed) return;
@@ -792,7 +819,7 @@ function serviceHandler(config, engine, expected) {
           handlers++;
           counted = true;
         }
-        await dispatch(req, config, engine, send);
+        await dispatch(req, config, engine, claims, send);
       } catch (error) {
         const fault = error instanceof Fault ? error : new Fault("unavailable");
         send(fault.status, fault.json());
