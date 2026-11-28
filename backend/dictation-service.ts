@@ -150,7 +150,8 @@ async function dispatchRelay(req: IncomingMessage, path: string, engine: Dictati
     send(200, {next: 'commit', claim: prepared.preparation});
   } else if (path === '/internal/relay/commit') {
     await empty(req);
-    send(200, {next: 'done', job: engine.commitRequest(m, single(req, 'X-Mesh-Relay-Claim'))});
+    const job = await engine.commitRequest(m, single(req, 'X-Mesh-Relay-Claim'));
+    send(200, {next: 'done', job});
   } else throw new Fault('not_found');
 }
 async function dispatch(req: IncomingMessage, config: Config, engine: Dictation, claims: RelayClaims, send: Send) {
