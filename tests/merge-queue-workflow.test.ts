@@ -127,7 +127,7 @@ describe('merge queue: every required check name is reported', () => {
     for (const name of ['frontend and Node tests', 'ruff and pytest (without browser)', 'browser tests (Chromium, shard ${{ matrix.shard }} of 4)']) {
       const steps = jobOf('public-ci.yml', name).split('    steps:\n')[1];
       const guardName = name.startsWith('browser tests (Chromium')
-        ? 'Require every browser test shard' : name === 'frontend and Node tests'
+        ? 'Fail unless the native PTY host job succeeded' : name === 'frontend and Node tests'
           ? 'Require both frontend shards' : 'Fail unless the native PTY host job succeeded';
       assert.ok(steps.startsWith(`      - name: ${guardName}\n        env:`));
       assert.doesNotMatch(steps.split(/^ {6}- /m)[1], /^ {8}if:/m);
@@ -173,10 +173,9 @@ describe('merge queue: every required check name is reported', () => {
 
   test('a job that reports no required name is a known one: a new job is a decision about the ruleset', () => {
     const reportedNames = new Set(Object.values(REQUIRED).flat());
-    // Both helpers are non-required themselves; required jobs explicitly
+    // These helpers are non-required themselves; required jobs explicitly
     // guard their result, so neither failure can pass as a skipped check.
     const helpers = new Set(['Classify changed files', 'native PTY host (linux-x86_64)',
-      'browser ${{ matrix.kind }} tests (Chromium, shard ${{ matrix.shard }} of 4)',
       'frontend and Node tests (shard ${{ matrix.shard }} of 2)']);
     for (const workflow of Object.keys(REQUIRED)) {
       for (const job of jobBlocks(parseLines(read(workflow)))) {
