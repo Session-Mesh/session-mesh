@@ -102,6 +102,61 @@ test('a matching preparation waiter rechecks expiry and current record after its
   }finally{await d.close();}
 });
 
+test('preparation reuse binds the normalized audio format without discarding the original', async () => {
+  const d = new Dictation(config());
+  try {
+    const m = meta();
+    const first = await d.prepare(m, audio('original'));
+    await assert.rejects(d.prepare({...m, mime: 'audio/ogg'}, audio('mismatch')), code('request_conflict'));
+    const matching = await d.prepare({...m, mime: 'Audio/WebM; codecs="opus"'}, audio('ignored'));
+    assert.equal(matching.preparation, first.preparation);
+    assert.equal(matching.job.job_id, first.job.job_id);
+    assert.equal(d.stats().bytes, Buffer.byteLength('original'));
+  } finally { await d.close(); }
+});
+
+test('the first commit checks the exact live session; a committed retry only observes the job', async () => {
+  let live = false, checks = 0, calls = 0;
+  const d = new Dictation(config(), {
+    isLive: async () => { checks++; return live; },
+    infer: async () => { calls++; return 'transcript'; },
+  });
+  try {
+    const m = meta('alpha', {mime: 'audio/webm'});
+    const prepared = await d.prepare(m, audio('clip'));
+    await assert.rejects(async () => d.commitRequest(m, prepared.preparation), code('stale_session'));
+    assert.throws(() => d.lookup(m, m.request), code('not_found'));
+    assert.equal(calls, 0);
+
+    live = true;
+    const committed = await d.commitRequest(m, prepared.preparation);
+    assert.equal(committed.job_id, prepared.job.job_id);
+    await until(() => d.lookup(m, m.request).state === 'ready');
+    const verified = checks;
+    live = false;
+    assert.deepEqual(await d.commitRequest(m, prepared.preparation), d.lookup(m, m.request));
+    assert.equal(checks, verified);
+    assert.equal(calls, 1);
+  } finally { await d.close(); }
+});
+
+test('the first commit refuses a preparation that expires during inventory verification', async () => {
+  let now = 0, calls = 0;
+  const d = new Dictation(config(), {
+    now: () => now,
+    isLive: async () => { now = PREPARATION_MS; return true; },
+    infer: async () => { calls++; return 'transcript'; },
+  });
+  try {
+    const m = meta('alpha', {mime: 'audio/webm'});
+    const prepared = await d.prepare(m, audio('clip'));
+    await assert.rejects(async () => d.commitRequest(m, prepared.preparation), code('unavailable'));
+    assert.throws(() => d.lookup(m, m.request), code('not_found'));
+    assert.equal(d.stats().bytes, 0);
+    assert.equal(calls, 0);
+  } finally { await d.close(); }
+});
+
 test('two-phase global slots, ownership, dedupe and settled outcome are atomic', async () => {
   let calls = 0;
   const d = new Dictation(config(), {infer:async () => { calls++; return ' bonjour\r\nmonde '; }});

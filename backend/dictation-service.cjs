@@ -227,10 +227,15 @@ var Dictation = class {
     if (!r || r.phase !== "committed") throw new Fault("not_found");
     return this.snapshot(r);
   }
-  commitRequest(m, preparation) {
+  async commitRequest(m, preparation) {
     this.authorize(m.principal);
     const r = this.requests.get(this.key(m, m.request));
     if (!r || r.meta.session !== m.session || r.meta.created !== m.created || r.meta.mime !== m.mime || r.preparation !== uuid(preparation)) throw new Fault("not_found");
+    if (r.phase !== "committed") {
+      this.checkPreparation(r);
+      await this.verifySession(r.meta);
+      this.checkPreparation(r);
+    }
     return this.commit(m, r.job.job_id, preparation);
   }
   checkPreparation(r) {
@@ -244,7 +249,7 @@ var Dictation = class {
     this.sweep();
     const m = admission(input), existing = this.requests.get(this.key(m, m.request));
     if (existing) {
-      if (existing.meta.session !== m.session || existing.meta.created !== m.created)
+      if (existing.meta.session !== m.session || existing.meta.created !== m.created || existing.meta.mime !== m.mime)
         throw new Fault("request_conflict");
       await existing.prepared;
       this.checkPreparation(existing);
@@ -736,7 +741,8 @@ async function dispatchRelay(req, path, engine, claims, send) {
     send(200, { next: "commit", claim: prepared.preparation });
   } else if (path === "/internal/relay/commit") {
     await empty(req);
-    send(200, { next: "done", job: engine.commitRequest(m, single(req, "X-Mesh-Relay-Claim")) });
+    const job = await engine.commitRequest(m, single(req, "X-Mesh-Relay-Claim"));
+    send(200, { next: "done", job });
   } else throw new Fault("not_found");
 }
 async function dispatch(req, config, engine, claims, send) {

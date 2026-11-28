@@ -99,6 +99,7 @@ for(const kind of ['error','close'] as const)test(`post-ready typed listener ${k
   t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
   const socket=path.join(directory,'worker.sock'),principal='b'.repeat(64),secret='a'.repeat(64);
   const inventory=await staticDictationInventory(directory);
+  t.after(()=>inventory.close());
   const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'})!,
     secret,socket,inventory.socketPath,principal);
   try{
@@ -118,25 +119,28 @@ for(const kind of ['error','close'] as const)test(`post-ready typed listener ${k
     await service.close();
     assert.deepEqual(service.engine.stats(),{records:0,bytes:0,active:0,waiting:0});
     assert.equal(service.server.listening,false);
-  }finally{await service.close();await inventory.close();}
+  }finally{await service.close();}
 });
 
 test('intentional typed close remains a success, not a fatal listener event',async t=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-listener-'));fs.chmodSync(directory,0o700);
   t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
   const inventory=await staticDictationInventory(directory);
+  t.after(()=>inventory.close());
   const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'})!,
     'a'.repeat(64),path.join(directory,'worker.sock'),inventory.socketPath,'b'.repeat(64));
   try{
     await service.close();
     assert.equal(service.failed,false);
-  }finally{await service.close();await inventory.close();}
+  }finally{await service.close();}
 });
 
-for(const kind of ['json','empty','audio'] as const)test(`unfinished ${kind} rejection flushes a typed fault and closes without draining`,async()=>{
+for(const kind of ['json','empty','audio'] as const)test(`unfinished ${kind} rejection flushes a typed fault and closes without draining`,async t=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-body-'));fs.chmodSync(directory,0o700);
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
   const secret=randomBytes(32).toString('hex'),principal='a'.repeat(64),socketPath=path.join(directory,'worker.sock');
   const inventory=await staticDictationInventory(directory);
+  t.after(()=>inventory.close());
   const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed',MESH_WHISPER_MAX_BYTES:'4'})!,secret,socketPath,inventory.socketPath,principal);
   let upload:http.ClientRequest|undefined;
   try{
@@ -161,7 +165,7 @@ for(const kind of ['json','empty','audio'] as const)test(`unfinished ${kind} rej
     assert.equal(result.headers.connection,'close');
     await until(()=>upload!.destroyed);
     assert.deepEqual(service.engine.stats(),{records:0,bytes:0,active:0,waiting:0});
-  }finally{upload?.destroy();await service.close();await inventory.close();fs.rmSync(directory,{recursive:true,force:true});}
+  }finally{upload?.destroy();await service.close();}
 });
 
 for(const early of [true,false])test(`worker handles bootstrap stdin EOF ${early?'during':'after'} service startup with parent alive`,async()=>{
