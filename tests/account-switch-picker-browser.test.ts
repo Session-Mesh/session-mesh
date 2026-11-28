@@ -130,10 +130,10 @@ for (const [width, locale, backend] of [[1440, 'en-US', 'codex'], [390, 'fr-FR',
       await badge.click();
       await dialog.waitFor({state: 'visible'});
       await dialog.locator('[data-switch-confirm]').dblclick();
-      assert.equal(requests, 1, 'one confirmed operation at most');
       await dialog.waitFor({state: 'visible'});
       await dialog.locator('[data-switch-status]').getByText(
          locale === 'fr-FR' ? /Changement de compte accepté/ : /Account change accepted/).waitFor();
+      assert.equal(requests, 1, 'one confirmed operation at most');
       status = 'busy';
       await page.evaluate(() => refresh());
       assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), true,
