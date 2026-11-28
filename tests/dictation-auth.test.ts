@@ -10,6 +10,7 @@ import http from 'node:http';
 import net from 'node:net';
 import {spawnSync} from 'node:child_process';
 import {randomUUID, randomBytes, createHmac} from 'node:crypto';
+import {setTimeout as delay} from 'node:timers/promises';
 import {configuration,Fault} from '../backend/dictation.ts';
 import {createRelayClaims, liveInventory, startService} from '../backend/dictation-service.ts';
 import {fixture,identityHeaders,request,until,processBirth,processState, staticDictationInventory} from '../checks/dictation-fixture.ts';
@@ -498,30 +499,38 @@ http.createServer=function(options,listener){fs.writeFileSync(${JSON.stringify(p
 
 test('public principal sync includes lock wait and slow control in its total deadline',async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-epoch-lock-'));
-  const preload=path.join(directory,'worker.cjs'),held=path.join(directory,'held');
+  const preload=path.join(directory,'worker.cjs'),held=path.join(directory,'held'),release=path.join(directory,'release');
   fs.writeFileSync(preload,`const http=require('node:http'),fs=require('node:fs'),create=http.createServer;
-http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
-  if(req.url==='/internal/principal'&&req.method==='GET'&&!global.held){
-    global.held=true;
-    const end=res.end.bind(res);
-    res.end=function(body){fs.writeFileSync(${JSON.stringify(held)},'held');
-      setTimeout(()=>{if(!res.destroyed)end(body);},3500);};
-  }
-  return listener(req,res);
-});};`);
+ http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
+   if(req.url==='/internal/principal'&&req.method==='GET'&&!fs.existsSync(${JSON.stringify(release)})){
+     const end=res.end.bind(res);
+     res.end=function(body){fs.appendFileSync(${JSON.stringify(held)},'held\\n');
+       const timer=setInterval(()=>{
+         if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);if(!res.destroyed)end(body);}
+       },5);
+       res.once('close',()=>clearInterval(timer));return res;};
+   }
+   return listener(req,res);
+ });};`);
   const f=await fixture(true,false,undefined,{workerPreload:preload});
   try{
     fs.writeFileSync(path.join(f.config,'cookie-generation'),'1\n');
     const first=f.call('/api/transcribe/config','GET',f.auth);void first.catch(()=>{});
     await until(()=>fs.existsSync(held));
+    // Stagger the deadlines so the queued request can start its held
+    // control exchange after the first releases the lock.
+    await delay(300);
     const started=performance.now();
     const second=await f.call('/api/transcribe/config','GET',f.auth);
-    assert.ok([200,503].includes(second.status),'a queued request either recovers or fails closed');
-    assert.ok(performance.now()-started<3000,'lock wait is inside the public deadline');
+    assert.equal(second.status,503,'the queued request exhausts its original deadline before a control reply');
+    assert.ok(performance.now()-started<3000,'lock wait and control share one public deadline');
     assert.equal((await first).status,503);
+    assert.ok(fs.readFileSync(held,'utf8').trim().split('\n').length>=2,
+      'the worker also held the control exchange after lock acquisition');
+    fs.writeFileSync(release,'go');
     assert.equal((await f.call('/api/transcribe/config','GET',f.auth)).status,200,
       'timeout does not permanently poison the worker or principal sync');
-  }finally{await f.close();fs.rmSync(directory,{recursive:true,force:true});}
+  }finally{fs.writeFileSync(release,'go');await f.close();fs.rmSync(directory,{recursive:true,force:true});}
 });
 
 test('actual pre/post-upload incarnation and malformed inventory fail closed without inference',async()=>{
@@ -607,8 +616,12 @@ test('private principal transition is strict, authenticated, bounded and rejects
     assert.equal((await call(next,{expected_epoch:randomUUID()},'wrong')).status,403);
     const observed=await current(next);
     assert.equal(observed.status,200);assert.equal(observed.body.principal,old);
-    assert.equal((await request({socketPath,path:'/internal/principal',method:'GET',
-      headers:{'X-Mesh-Bridge':secret,'X-Mesh-Principal':next}},'unexpected')).status,400);
+    const unexpected='unexpected';
+    const framed=await request({socketPath,path:'/internal/principal',method:'GET',
+      headers:{'X-Mesh-Bridge':secret,'X-Mesh-Principal':next,
+        'Content-Length':Buffer.byteLength(unexpected)}},unexpected);
+    assert.equal(framed.status,400);
+    assert.equal(framed.body.error.code,'invalid_request');
     const epoch=observed.body.epoch as string;
     assert.match(epoch,/^[0-9a-f-]{36}$/);
     for(const body of [{revision:1},{expected_epoch:epoch,extra:true},{expected_epoch:1},

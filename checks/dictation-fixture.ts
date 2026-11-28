@@ -36,7 +36,7 @@ export function processState(pid:number):string|null {
   return result.status===0?result.stdout.trim().slice(0,1)||null:null;
 }
 
-interface FixtureOptions {childTempDepth?:number;workerEntry?:string;workerPreload?:string;whisperEnv?:NodeJS.ProcessEnv;startupWaitMs?:number;beforeSpawn?:(config:string)=>void;onSpawn?:(child:ChildProcess)=>void}
+interface FixtureOptions {childTempDepth?:number;workerEntry?:string;workerPreload?:string;whisperEnv?:NodeJS.ProcessEnv;startupWaitMs?:number;beforeSpawn?:(config:string)=>void;onSpawn?:(child:ChildProcess)=>void;sessions?:readonly string[]}
 export async function fixture(enabled=true,noNode=false,nodePath?:string,options:FixtureOptions={}){
   const root=process.cwd();
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-http-'));fs.chmodSync(directory,0o700);
@@ -55,14 +55,14 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
     const command=JSON.parse(bytes.subarray(5).toString());ops.push(command.op);inventoryCalls++;
     if(command.op==='attach_if'){
       socket.removeAllListeners('data');
-      const body=Buffer.from(JSON.stringify({ok:command.name==='alpha'&&command.created===created,pty_capabilities:['conditional_input_v1']}));
+      const body=Buffer.from(JSON.stringify({ok:(options.sessions??['alpha']).includes(command.name)&&command.created===created,pty_capabilities:['conditional_input_v1']}));
       const head=Buffer.alloc(5);head[0]=67;head.writeUInt32BE(body.length,1);
       socket.write(Buffer.concat([head,body,Buffer.from([68,0,0,0,0])]));return;
     }
     const listedCreated=created,listedMalformed=malformed;
     const reply=(incarnation=listedCreated)=>{
       if(socket.destroyed)return;
-      const body=Buffer.from(JSON.stringify(listedMalformed?{bad:true}:[{name:'alpha',created:incarnation,activity:1,pid:123,cwd:home,attached:0,pty_capabilities:['conditional_input_v1'],meta:{nonce:'a'.repeat(32)}}]));
+      const body=Buffer.from(JSON.stringify(listedMalformed?{bad:true}:(options.sessions??['alpha']).map(name=>({name,created:incarnation,activity:1,pid:123,cwd:home,attached:0,pty_capabilities:['conditional_input_v1'],meta:{nonce:'a'.repeat(32)}}))));
       const head=Buffer.alloc(5);head[0]=67;head.writeUInt32BE(body.length,1);socket.end(Buffer.concat([head,body]));
     };
     if(inventoryHandler)inventoryHandler(reply);else reply();
