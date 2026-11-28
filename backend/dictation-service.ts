@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Atacama <contact@atacama.tech>
 
 import {createServer, type IncomingMessage, type ServerResponse} from 'node:http';
-import {createHash, timingSafeEqual} from 'node:crypto';
+import {createHash, createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
 import {chmod, lstat} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import {connect} from 'node:net';
@@ -106,7 +106,54 @@ export async function liveInventory(socketPath: string, m: Admission, signal?: A
   });
 }
 type Send = (status: number, body: unknown) => void;
-async function dispatch(req: IncomingMessage, config: Config, engine: Dictation, send: Send) {
+export function createRelayClaims(now = () => performance.now()) {
+  const key = randomBytes(32);
+  const identity = (m: Admission) =>
+    [m.principal, m.client, m.request, m.session, m.created, m.mime];
+  const mac = (encoded: string) =>
+    createHmac('sha256', key).update('relay/upload/v1\0').update(encoded).digest();
+  return {
+    issue(m: Admission): string {
+      const encoded = Buffer.from(JSON.stringify([now() + 15000, randomBytes(16).toString('hex'), ...identity(m)]))
+        .toString('base64url');
+      return `${encoded}.${mac(encoded).toString('base64url')}`;
+    },
+    accept(token: string, m: Admission): void {
+      if (typeof token !== 'string' || token.length > 512 ||
+          !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(token)) throw new Fault('invalid_request');
+      const [encoded, signature] = token.split('.');
+      const observed = Buffer.from(signature, 'base64url');
+      if (observed.toString('base64url') !== signature ||
+          !timingSafeEqual(observed, mac(encoded))) throw new Fault('not_found');
+      let fields: unknown;
+      try { fields = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); }
+      catch { throw new Fault('invalid_request'); }
+      if (!Array.isArray(fields) || fields.length !== 8 ||
+          typeof fields[0] !== 'number' || !Number.isFinite(fields[0]) ||
+          typeof fields[1] !== 'string' || !/^[0-9a-f]{32}$/.test(fields[1]) ||
+          JSON.stringify(fields.slice(2)) !== JSON.stringify(identity(m))) throw new Fault('not_found');
+      if (now() >= fields[0]) throw new Fault('unavailable');
+    },
+  };
+}
+type RelayClaims = ReturnType<typeof createRelayClaims>;
+async function dispatchRelay(req: IncomingMessage, path: string, engine: Dictation, claims: RelayClaims, send: Send) {
+  const m = metadata(req);
+  if (path === '/internal/relay/start') {
+    await empty(req);
+    await engine.verifySession(m);
+    send(200, {next: 'upload', claim: claims.issue(m)});
+  } else if (path === '/internal/relay/upload') {
+    claims.accept(single(req, 'X-Mesh-Relay-Claim'), m);
+    const prepared = await engine.prepare(m, req.iterator({destroyOnReturn: false}));
+    await engine.verifyPreparation(m, prepared);
+    send(200, {next: 'commit', claim: prepared.preparation});
+  } else if (path === '/internal/relay/commit') {
+    await empty(req);
+    send(200, {next: 'done', job: engine.commitRequest(m, single(req, 'X-Mesh-Relay-Claim'))});
+  } else throw new Fault('not_found');
+}
+async function dispatch(req: IncomingMessage, config: Config, engine: Dictation, claims: RelayClaims, send: Send) {
   // Match the original HTTP path, never a URL parser's normalized operation.
   const path = req.url ?? '';
   if (/[?#%\\]/.test(path) || req.headers['content-encoding'] !== undefined) throw new Fault('invalid_request');
@@ -129,20 +176,11 @@ async function dispatch(req: IncomingMessage, config: Config, engine: Dictation,
   }
   if (req.method === 'GET') await empty(req);
   engine.authorize(principal);
+  if (req.method === 'POST' && path.startsWith('/internal/relay/')) {
+    await dispatchRelay(req, path, engine, claims, send);
+    return;
+  }
   if (req.method === 'GET' && path === '/api/transcribe/config') { send(200, config.public); return; }
-  if (req.method === 'POST' && path === '/internal/admission') {
-    await empty(req);
-    await engine.verifySession(metadata(req));
-    send(200, {});
-    return;
-  }
-  if (req.method === 'POST' && path === '/api/transcribe') {
-    const admission = metadata(req);
-    const result = await engine.prepare(admission, req.iterator({destroyOnReturn: false}));
-    await engine.verifyPreparation(admission, result);
-    send(202, result);
-    return;
-  }
   await dispatchJob(req, path, engine, send);
 }
 
@@ -150,15 +188,6 @@ async function dispatchJob(req: IncomingMessage, path: string, engine: Dictation
   const m = owner(req);
   const lookup = /^\/api\/transcribe\/request\/([^/]+)$/.exec(path);
   if (req.method === 'GET' && lookup) { send(200, engine.lookup(m, uuid(lookup[1]))); return; }
-  const internal = /^\/internal\/(commit|abort)\/([^/]+)$/.exec(path);
-  if (req.method === 'POST' && internal) {
-    const body = await object(req);
-    if (Object.keys(body).length) throw new Fault('invalid_request');
-    const preparation = uuid(single(req, 'X-Mesh-Preparation'));
-    if (internal[1] === 'commit') send(200, engine.commit(m, uuid(internal[2]), preparation));
-    else { engine.abort(m, uuid(internal[2]), preparation); send(200, {}); }
-    return;
-  }
   const job = /^\/api\/transcribe\/([^/]+)(?:\/(cancel|settle))?$/.exec(path);
   if (!job) throw new Fault('not_found');
   const id = uuid(job[1]);
@@ -180,6 +209,7 @@ async function dispatchJob(req: IncomingMessage, path: string, engine: Dictation
 const digest = (value: string) => createHash('sha256').update(value).digest();
 function serviceHandler(config: Config, engine: Dictation, expected: Buffer) {
   let handlers = 0;
+  const claims = createRelayClaims();
   return (req: IncomingMessage, res: ServerResponse) => {
     const send: Send = (status, body) => {
       if (res.destroyed) return;
@@ -202,7 +232,7 @@ function serviceHandler(config: Config, engine: Dictation, expected: Buffer) {
           handlers++;
           counted = true;
         }
-        await dispatch(req, config, engine, send);
+        await dispatch(req, config, engine, claims, send);
       } catch (error) {
         const fault = error instanceof Fault ? error : new Fault('unavailable');
         send(fault.status, fault.json());

@@ -54,10 +54,10 @@ for (const revoked of [true, false]) test(
     const c = await controlled(t), f = c.f;
     const login = await f.call(`/login?token=${encodeURIComponent(f.token)}`);
     const cookie = login.headers['set-cookie']![0]!.split(';')[0]!;
-    c.drop('/api/transcribe');
+    c.drop('/internal/relay/upload');
     const pending = f.call('/api/transcribe', 'POST', {Cookie:cookie, ...identityHeaders()}, 'synthetic audio');
     void pending.catch(() => {});
-    await until(() => c.events().some(event => event.event === 'held' && event.path === '/api/transcribe'));
+    await until(() => c.events().some(event => event.event === 'held' && event.path === '/internal/relay/upload'));
     if (revoked) {
       assert.equal((await f.call('/api/logout-all', 'POST', f.auth)).status, 200);
     }
@@ -66,7 +66,7 @@ for (const revoked of [true, false]) test(
     assert.equal(response.status, revoked ? 401 : 503, JSON.stringify(response.body));
     assert.equal(f.upstreamCalls, 0);
     assert.equal(c.events().filter(event => event.event === 'request' &&
-      event.path.startsWith('/internal/commit/')).length, 0);
+      event.path === '/internal/relay/commit').length, 0);
     assert.doesNotMatch(JSON.stringify(response.body), /synthetic audio|job_id|preparation/);
   },
 );
@@ -81,8 +81,8 @@ for(const credential of ['cookie','master'] as const)test(`HTTP admission rechec
     f.setResponse('application/json','{"text":"synthetic retained text"}');
     const admitted=await f.call('/api/transcribe','POST',headers,'synthetic audio');assert.equal(admitted.status,202);
     await until(async()=>(await f.call(`/api/transcribe/${admitted.body.job_id}`,'GET',headers)).body.state==='ready');
-    c.pause(`/internal/commit/${admitted.body.job_id}`);
-  }else if(mode==='preparation reply')c.pause('/api/transcribe');
+    c.pause('/internal/relay/commit');
+  }else if(mode==='preparation reply')c.pause('/internal/relay/upload');
   let held:((created?:number)=>void)|undefined,calls=0;
   if(mode==='initial liveness'||mode==='final liveness')f.onInventory(reply=>{
     calls++;
@@ -99,8 +99,8 @@ for(const credential of ['cookie','master'] as const)test(`HTTP admission rechec
   assert.equal(response.status,401,JSON.stringify(response.body));
   assert.doesNotMatch(JSON.stringify(response.body),/synthetic retained text/);
   const operations=c.events().filter(event=>event.event==='request').map(event=>event.path);
-  assert.equal(operations.filter(route=>route==='/api/transcribe').length,mode==='initial liveness'?0:1);
-  assert.equal(operations.filter(route=>route.startsWith('/internal/commit/')).length,mode==='commit reply'?1:0);
+  assert.equal(operations.filter(route=>route==='/internal/relay/upload').length,mode==='initial liveness'?0:1);
+  assert.equal(operations.filter(route=>route==='/internal/relay/commit').length,mode==='commit reply'?1:0);
   assert.equal(f.upstreamCalls,mode==='commit reply'?1:0);
 });
 
@@ -163,14 +163,22 @@ for(const credential of ['cookie','master'] as const)test(`worker loss during ${
   const login=await f.call(`/login?token=${encodeURIComponent(f.token)}`);
   const cookie={Cookie:login.headers['set-cookie']![0]!.split(';')[0]!};
   const headers={...(credential==='cookie'?cookie:f.auth),...identityHeaders()};
-  c.pauseRoutes(['/internal/principal',phase==='preparation reply'?'/api/transcribe':'/internal/commit/*']);
+  let priorJob:string|undefined;
+  if(phase==='preparation reply'){
+    const seed={...f.auth,...identityHeaders()};
+    const old=await f.call('/api/transcribe','POST',seed,'existing audio');
+    assert.equal(old.status,202);priorJob=old.body.job_id;
+    await until(async()=>(await f.call(`/api/transcribe/${priorJob}`,'GET',seed)).body.state==='ready');
+  }
+  c.clearTrace();
+  c.pauseRoutes(['/internal/principal',phase==='preparation reply'?'/internal/relay/upload':'/internal/relay/commit']);
   const pending=f.call('/api/transcribe','POST',headers,'synthetic private audio');
   void pending.catch(()=>{});
   await finish(pending);
 
   async function finish(pending:ReturnType<typeof f.call>){
     await until(()=>c.events().some(event=>event.event==='held'&&event.path!=='/internal/principal'));
-    const job=c.events().find(event=>event.event==='held'&&event.job)?.job;
+    const job=priorJob??c.events().find(event=>event.event==='held'&&event.job)?.job;
     assert.ok(job,'fixture observed an actual prepared/committed job');
     if(phase==='commit reply')await until(()=>f.upstreamCalls===1);
     const logout=f.call('/api/logout-all','POST',cookie);
@@ -189,9 +197,9 @@ for(const credential of ['cookie','master'] as const)test(`worker loss during ${
     const lookup=await f.call(`/api/transcribe/${job}`,'GET',{...identityHeaders(),...fresh});
     assert.equal(lookup.status,503);assert.equal(lookup.body.error.code,'disabled');
     assert.equal((await f.call('/api/sessions','GET',fresh)).status,200);
-    const commits=c.events().filter(event=>event.event==='request'&&event.path.startsWith('/internal/commit/'));
+    const commits=c.events().filter(event=>event.event==='request'&&event.path==='/internal/relay/commit');
     assert.equal(commits.length,phase==='preparation reply'?0:1);
-    assert.equal(f.upstreamCalls,phase==='preparation reply'?0:1);
+    assert.equal(f.upstreamCalls,1,'the pending transfer never adds inference after the held phase');
     await until(()=>processBirth(identity.pid)===null&&!fs.existsSync(path.dirname(identity.socket)));
     assert.doesNotMatch(f.errors,/synthetic private|Traceback|Task exception was never retrieved|Session is closed/);
     assert.doesNotMatch(JSON.stringify(transfer.body),/synthetic private|job_id|text/);

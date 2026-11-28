@@ -117,9 +117,12 @@ test('compiled worker commits transcription against the actual C-control PTY dae
   await new Promise<void>(resolve=>upstream.listen(0,'127.0.0.1',resolve));
   worker=await startWorker(directory,daemon.socket,`http://127.0.0.1:${(upstream.address() as net.AddressInfo).port}/fixed`,child=>{ownedWorker=child;});
   const headers={...worker.headers,'X-Mesh-Created':String(session.created)};
-  const prepared=await privateCall(worker.socket,headers,'/api/transcribe','POST','synthetic fixture');assert.equal(prepared.status,202);
-  const id=prepared.body.job.job_id;
-  assert.equal((await privateCall(worker.socket,{...headers,'Content-Type':'application/json','X-Mesh-Preparation':prepared.body.preparation},`/internal/commit/${id}`,'POST','{}')).status,200);
+  const started=await privateCall(worker.socket,headers,'/internal/relay/start','POST','');assert.equal(started.status,200);
+  const prepared=await privateCall(worker.socket,{...headers,'X-Mesh-Relay-Claim':started.body.claim},
+    '/internal/relay/upload','POST','synthetic fixture');assert.equal(prepared.status,200);
+  const committed=await privateCall(worker.socket,{...headers,'X-Mesh-Relay-Claim':prepared.body.claim},
+    '/internal/relay/commit','POST','');assert.equal(committed.status,200);
+  const id=committed.body.job.job_id;
   let job:any;await until(async()=>{job=(await privateCall(worker!.socket,headers,`/api/transcribe/${id}`)).body;return !['queued','processing'].includes(job.state);});
   assert.equal(job.state,'ready',JSON.stringify({state:job.state,error:job.error,actualControlKind:'C',calls}));
   assert.equal(job.text,'bonjour');assert.equal(calls,1);

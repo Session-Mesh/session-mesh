@@ -11,7 +11,7 @@ import net from 'node:net';
 import {spawnSync} from 'node:child_process';
 import {randomUUID, randomBytes, createHmac} from 'node:crypto';
 import {configuration,Fault} from '../backend/dictation.ts';
-import {liveInventory, startService} from '../backend/dictation-service.ts';
+import {createRelayClaims, liveInventory, startService} from '../backend/dictation-service.ts';
 import {fixture,identityHeaders,request,until,processBirth,processState, staticDictationInventory} from '../checks/dictation-fixture.ts';
 
 for(const [label,kind,malformed,expected] of [
@@ -98,21 +98,114 @@ test('private Unix service requires bridge secret, opaque principal, exact heade
     assert.equal((await call('/api/transcribe/config','GET',{'X-Mesh-Bridge':'wrong','X-Mesh-Principal':'a'.repeat(64)})).status,403);
     assert.equal((await call('/api/transcribe/config','GET',{...base,'X-Mesh-Principal':'cookie'})).status,400);
     assert.equal((await call('/api/transcribe?url=http://attacker','POST',base,'a')).status,400);
-    assert.equal((await call('/api/transcribe','POST',{...base,'Content-Encoding':'gzip'},'a')).status,400);
-    assert.equal((await call('/api/transcribe','POST',{...base,'X-Mesh-Created':['1','1']},'a')).status,400);
-    const p=await call('/api/transcribe','POST',base,'a');assert.equal(p.status,202);assert.equal(p.body.job.state,'queued');
-    const id=p.body.job.job_id;
+    assert.equal((await call('/internal/relay/start','POST',{...base,'Content-Encoding':'gzip'})).status,400);
+    assert.equal((await call('/internal/relay/start','POST',{...base,'X-Mesh-Created':['1','1']})).status,400);
+    const started=await call('/internal/relay/start','POST',base);assert.equal(started.status,200);
+    const p=await call('/internal/relay/upload','POST',{...base,'X-Mesh-Relay-Claim':started.body.claim},'a');
+    assert.equal(p.status,200);assert.equal(p.body.next,'commit');
     assert.equal(service.engine.stats().active,0);
+    const internal={...base,'X-Mesh-Relay-Claim':p.body.claim};
+    assert.equal((await call('/internal/relay/commit','POST',{...internal,'X-Mesh-Bridge':'wrong'})).status,403);
+    const committed=await call('/internal/relay/commit','POST',internal);assert.equal(committed.status,200);
+    const id=committed.body.job.job_id;
     assert.equal((await call(`/api/transcribe/${id}`,'GET',{...base,'X-Mesh-Principal':'b'.repeat(64)})).status,404);
     assert.equal((await call(`/api/transcribe/${id}`,'GET',{...base,'X-Mesh-Dictation-Client':randomUUID()})).status,404);
     for(const [suffix,body] of [['cancel','{"extra":1}'],['settle','{"outcome":"submitted","x":1}'],['settle','{"outcome":false}'],['cancel','x'.repeat(1025)]])assert.equal((await call(`/api/transcribe/${id}/${suffix}`,'POST',{...base,'Content-Type':'application/json'},body)).status,400);
-    const internal={...base,'Content-Type':'application/json','X-Mesh-Preparation':p.body.preparation};
-    assert.equal((await call(`/internal/commit/${id}`,'POST',{...internal,'X-Mesh-Bridge':'wrong'},'{}')).status,403);
-    assert.equal((await call(`/internal/commit/${id}`,'POST',internal,'{}')).status,200);
-    assert.equal((await call(`/internal/commit/${id}`,'POST',internal,'{}')).status,200);
+    assert.equal((await call('/internal/relay/commit','POST',internal)).status,200);
     await until(()=>service.engine.read({principal:base['X-Mesh-Principal'],client:base['X-Mesh-Dictation-Client']},id).state==='error');
     assert.equal((await call(`/api/transcribe/${id}`)).body.error.code,'upstream_unavailable');
   }finally{await service.close();await inventory.close();fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('private relay claims bind exact metadata, phase and deadline without storing per-request state',async()=>{
+  let now=10;
+  const claims=createRelayClaims(()=>now);
+  const headers=identityHeaders();
+  const m={principal:'a'.repeat(64),client:headers['X-Mesh-Dictation-Client'],
+    request:headers['X-Mesh-Request-Id'],session:headers['X-Mesh-Session'],created:1,mime:'audio/webm'};
+  const first=claims.issue(m);
+  assert.equal(claims.accept(first,m),undefined);
+  assert.throws(()=>claims.accept(first,{...m,principal:'b'.repeat(64)}),{code:'not_found'});
+  assert.throws(()=>claims.accept(first,{...m,session:'beta'}),{code:'not_found'});
+  assert.throws(()=>createRelayClaims(()=>now).accept(first,m),{code:'not_found'},
+    'a restarted worker cannot accept an earlier process claim');
+  assert.throws(()=>claims.accept(first.replace(/.$/,first.endsWith('0')?'1':'0'),m),{code:'not_found'});
+  now+=15000;
+  assert.throws(()=>claims.accept(first,m),{code:'unavailable'});
+});
+
+test('closed private relay starts, uploads and commits by exact request identity without exposing its claims',async()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-relay-'));fs.chmodSync(directory,0o700);
+  const secret=randomBytes(32).toString('hex'),socketPath=path.join(directory,'worker.sock');
+  const inventory=await staticDictationInventory(directory);
+  const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed'})!,secret,socketPath,inventory.socketPath,'a'.repeat(64));
+  const headers={...identityHeaders(),'X-Mesh-Bridge':secret,'X-Mesh-Principal':'a'.repeat(64)};
+  const call=(route:string,selected:any=headers,body='')=>request({socketPath,path:route,method:'POST',headers:selected},body);
+  try{
+    const start=await call('/internal/relay/start');assert.equal(start.status,200);
+    assert.deepEqual(Object.keys(start.body).sort(),['claim','next']);assert.equal(start.body.next,'upload');
+    const uploadHeaders={...headers,'X-Mesh-Relay-Claim':start.body.claim};
+    assert.equal((await call('/internal/relay/upload',{...uploadHeaders,'X-Mesh-Session':'other'},'a')).status,404);
+    assert.equal((await call('/internal/relay/upload',{...headers,'X-Mesh-Relay-Claim':'wrong'},'a')).status,400);
+    const prepared=await call('/internal/relay/upload',uploadHeaders,'a');assert.equal(prepared.status,200);
+    assert.deepEqual(Object.keys(prepared.body).sort(),['claim','next']);assert.equal(prepared.body.next,'commit');
+    assert.deepEqual(service.engine.stats(),{records:1,bytes:1,active:0,waiting:0});
+    assert.equal((await call('/internal/relay/commit',{...headers,'X-Mesh-Relay-Claim':randomUUID()})).status,404);
+    assert.equal((await call('/internal/relay/commit',{...headers,'X-Mesh-Relay-Claim':prepared.body.claim,
+      'X-Mesh-Request-Id':randomUUID()})).status,404);
+    const committed=await call('/internal/relay/commit',{...headers,'X-Mesh-Relay-Claim':prepared.body.claim});
+    assert.equal(committed.status,200);assert.equal(committed.body.next,'done');
+    assert.equal(committed.body.job.request_id,headers['X-Mesh-Request-Id']);
+    assert.equal((await call('/internal/relay/commit',{...headers,'X-Mesh-Relay-Claim':prepared.body.claim})).status,200,
+      'matching retries can commit an already committed preparation');
+    assert.equal((await call('/internal/relay/start',{...headers,'X-Mesh-Bridge':'wrong'})).status,403);
+  }finally{await service.close();await inventory.close();fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('public upload uses exactly three closed private relay phases and returns only its job',async()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-relay-phases-'));
+  const preload=path.join(directory,'trace.cjs'),trace=path.join(directory,'trace');
+  fs.writeFileSync(preload,`const http=require('node:http'),fs=require('node:fs'),create=http.createServer;
+http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
+  fs.appendFileSync(${JSON.stringify(trace)},req.method+' '+req.url+'\\n');return listener(req,res);
+});};`);
+  const f=await fixture(true,false,undefined,{workerPreload:preload});
+  try{
+    const reply=await f.call('/api/transcribe','POST',{...f.auth,...identityHeaders()},'audio');
+    assert.equal(reply.status,202,JSON.stringify(reply.body));
+    assert.deepEqual(Object.keys(reply.body).sort(),['job_id','request_id','session','created','state','text','error','outcome'].sort());
+    assert.deepEqual(fs.readFileSync(trace,'utf8').trim().split('\n'),[
+      'POST /internal/relay/start','POST /internal/relay/upload','POST /internal/relay/commit']);
+  }finally{await f.close();fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+for(const [phase,body,status] of [
+  ['start',{next:'upload',claim:'injected-private-token',extra:true},200],
+  ['start',{error:{code:'stale_session',message:'injected-private-token'}},409],
+  ['upload',{next:'commit',claim:'injected-private-token',extra:true},200],
+  ['commit',{next:'done',job:{job_id:'injected-private-token'}},200],
+  ['commit',{next:'done',job:{job_id:'injected-private-token',request_id:randomUUID(),
+    session:'alpha',created:1,state:'queued',text:null,error:null,outcome:null}},200],
+] as const)test(`public relay rejects malformed or private ${phase} envelope`,async()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-relay-envelope-'));
+  const preload=path.join(directory,'replace.cjs'),trace=path.join(directory,'trace');
+  fs.writeFileSync(preload,`const http=require('node:http'),fs=require('node:fs'),create=http.createServer;
+http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
+  if(req.url===${JSON.stringify('/internal/relay/'+phase)}){
+    const writeHead=res.writeHead;res.writeHead=function(_status,...args){
+      return writeHead.call(this,${status},...args);};
+    const end=res.end;res.end=function(){fs.appendFileSync(${JSON.stringify(trace)},req.url+'\\n');
+      return end.call(this,JSON.stringify(${JSON.stringify(body)}));};
+  }return listener(req,res);
+});};`);
+  const f=await fixture(true,false,undefined,{workerPreload:preload});
+  try{
+    const reply=await f.call('/api/transcribe','POST',{...f.auth,...identityHeaders()},'audio');
+    assert.equal(reply.status,503);
+    assert.equal(reply.body.error.code,'unavailable');
+    assert.doesNotMatch(JSON.stringify(reply.body),/injected-private-token/);
+    assert.equal(fs.readFileSync(trace,'utf8').trim(),'/internal/relay/'+phase);
+  }finally{await f.close();fs.rmSync(directory,{recursive:true,force:true});}
 });
 
 test('actual server default-off requires no Node; owner only config and safe disabled response',async()=>{
@@ -475,7 +568,7 @@ test('logout-all frees a receiving reservation before old upload completes; late
   const preload=path.join(directory,'observe.cjs'),received=path.join(directory,'received');
   fs.writeFileSync(preload,`const http=require('node:http'),fs=require('node:fs'),create=http.createServer;
 http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
- if(req.method==='POST'&&req.url==='/api/transcribe'){const iterator=req.iterator.bind(req);req.iterator=function(options){const source=iterator(options);return(async function*(){for await(const part of source){fs.writeFileSync(${JSON.stringify(received)},'received');yield part;}})();};}
+  if(req.method==='POST'&&req.url==='/internal/relay/upload'){const iterator=req.iterator.bind(req);req.iterator=function(options){const source=iterator(options);return(async function*(){for await(const part of source){fs.writeFileSync(${JSON.stringify(received)},'received');yield part;}})();};}
  return listener(req,res);
 });};`);
   const f=await fixture(true,false,undefined,{workerPreload:preload});let upload:http.ClientRequest|undefined;
@@ -503,7 +596,8 @@ http.createServer=function(options,listener){return create.call(this,options,(re
 test('private principal transition is strict, authenticated, bounded and rejects delayed old admissions even with full handlers',async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-revoke-'));fs.chmodSync(directory,0o700);
   const secret=randomBytes(32).toString('hex'),socketPath=path.join(directory,'worker.sock'),old='a'.repeat(64),next='b'.repeat(64);
-  const inventory = await staticDictationInventory(directory);
+  const inventory = await staticDictationInventory(directory,
+    ['alpha',...Array.from({length:32},(_,i)=>`slow${i}`)]);
   const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed',MESH_WHISPER_QUEUE_SIZE:'64'})!,secret,socketPath,inventory.socketPath,old);
   const uploads:http.ClientRequest[]=[];
   const call=(principal:string,body:unknown,bridge=secret)=>request({socketPath,path:'/internal/principal',method:'POST',headers:{'X-Mesh-Bridge':bridge,'X-Mesh-Principal':principal,'Content-Type':'application/json'}},JSON.stringify(body));
@@ -519,10 +613,17 @@ test('private principal transition is strict, authenticated, bounded and rejects
     assert.match(epoch,/^[0-9a-f-]{36}$/);
     for(const body of [{revision:1},{expected_epoch:epoch,extra:true},{expected_epoch:1},
       {expected_epoch:null},{expected_epoch:'wrong'}])assert.equal((await call(next,body)).status,400);
-    const pending=Array.from({length:32},(_,i)=>new Promise<number>((resolve,reject)=>{
-      const req=http.request({socketPath,path:'/api/transcribe',method:'POST',headers:{...identityHeaders(),'X-Mesh-Session':`slow${i}`,'X-Mesh-Bridge':secret,'X-Mesh-Principal':old,'Content-Length':'2'},agent:false},res=>{res.resume();res.on('end',()=>resolve(res.statusCode!));});
+    const pending:Promise<number>[]=[];
+    for(let i=0;i<32;i++){
+      const headers={...identityHeaders(),'X-Mesh-Session':`slow${i}`,'X-Mesh-Bridge':secret,'X-Mesh-Principal':old};
+      const started=await request({socketPath,path:'/internal/relay/start',method:'POST',headers});
+      assert.equal(started.status,200);
+      pending.push(new Promise<number>((resolve,reject)=>{
+      const req=http.request({socketPath,path:'/internal/relay/upload',method:'POST',headers:{...headers,
+        'X-Mesh-Relay-Claim':started.body.claim,'Content-Length':'2'},agent:false},res=>{res.resume();res.on('end',()=>resolve(res.statusCode!));});
       uploads.push(req);req.on('error',reject);req.write('a');
-    }));for(const result of pending)void result.catch(()=>{});
+      }));
+    }for(const result of pending)void result.catch(()=>{});
     await until(()=>service.engine.stats().records===32);
     assert.deepEqual((await current(next)).body,observed.body,'epoch read uses the reserved control lane');
     const switched=await call(next,{expected_epoch:epoch});
@@ -539,8 +640,12 @@ test('private principal transition is strict, authenticated, bounded and rejects
     assert.deepEqual((await current(next)).body,advanced.body);
     for(const req of uploads)req.end('b');assert.ok((await Promise.all(pending)).every(status=>[404,503].includes(status)));
     const headers={...identityHeaders(),'X-Mesh-Bridge':secret,'X-Mesh-Principal':old};
-    assert.equal((await request({socketPath,path:'/api/transcribe',method:'POST',headers},'late')).status,404,'old request arriving after revocation must not reserve a slot');
-    assert.equal((await request({socketPath,path:'/api/transcribe',method:'POST',headers:{...headers,'X-Mesh-Principal':third}},'new')).status,202);
+    assert.equal((await request({socketPath,path:'/internal/relay/start',method:'POST',headers})).status,404,'old request arriving after revocation must not reserve a slot');
+    const nextHeaders={...headers,'X-Mesh-Principal':third};
+    const resumed=await request({socketPath,path:'/internal/relay/start',method:'POST',headers:nextHeaders});
+    assert.equal(resumed.status,200);
+    assert.equal((await request({socketPath,path:'/internal/relay/upload',method:'POST',
+      headers:{...nextHeaders,'X-Mesh-Relay-Claim':resumed.body.claim}},'new')).status,200);
     assert.equal(service.engine.stats().records,1);
   }finally{for(const req of uploads)req.destroy();await service.close();await inventory.close();fs.rmSync(directory,{recursive:true,force:true});}
 });

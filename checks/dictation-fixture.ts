@@ -137,14 +137,14 @@ export async function fixture(enabled=true,noNode=false,nodePath?:string,options
   }catch(error){await close();throw error;}
 }
 
-export async function staticDictationInventory(directory: string) {
+export async function staticDictationInventory(directory: string, sessions = ['alpha']) {
   const socketPath = path.join(directory, 'fixture-pty.sock');
   const server = net.createServer({allowHalfOpen: true}, socket => {
     socket.once('error', () => socket.destroy());
     socket.once('end', () => {
-      const row = {name: 'alpha', created: 1, activity: 1, pid: 123,
-        cwd: directory, attached: 0, meta: {}};
-      const body = Buffer.from(JSON.stringify([row]));
+      const body = Buffer.from(JSON.stringify(sessions.map(name => ({
+        name, created: 1, activity: 1, pid: 123, cwd: directory, attached: 0, meta: {},
+      }))));
       const header = Buffer.alloc(5);
       header[0] = 67;
       header.writeUInt32BE(body.length, 1);

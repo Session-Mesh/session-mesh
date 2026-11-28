@@ -229,6 +229,13 @@ export class Dictation {
     if (!r || r.phase !== 'committed') throw new Fault('not_found');
     return this.snapshot(r);
   }
+  commitRequest(m: Admission, preparation: string): Job {
+    this.authorize(m.principal);
+    const r = this.requests.get(this.key(m, m.request));
+    if (!r || r.meta.session !== m.session || r.meta.created !== m.created ||
+        r.meta.mime !== m.mime || r.preparation !== uuid(preparation)) throw new Fault('not_found');
+    return this.commit(m, r.job.job_id, preparation);
+  }
   private checkPreparation(r: RecordEntry) {
     this.authorize(r.meta.principal);
     const expired = r.expires !== null ? this.now() >= r.expires :

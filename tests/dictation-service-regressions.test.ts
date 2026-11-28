@@ -162,7 +162,7 @@ test('current worker preserves replacement request mapping after delayed expired
   fs.writeFileSync(preload,`Object.defineProperty(globalThis.performance,'now',{value:()=>Number(require('node:fs').readFileSync(${JSON.stringify(clock)},'utf8'))});
 const http=require('node:http'),fs=require('node:fs'),create=http.createServer;
 http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
- if(req.method==='POST'&&req.url==='/api/transcribe'){const iterator=req.iterator.bind(req);req.iterator=function(options){const source=iterator(options);return(async function*(){for await(const part of source){fs.writeFileSync(${JSON.stringify(received)},'received');yield part;}})();};}
+ if(req.method==='POST'&&req.url==='/internal/relay/upload'){const iterator=req.iterator.bind(req);req.iterator=function(options){const source=iterator(options);return(async function*(){for await(const part of source){fs.writeFileSync(${JSON.stringify(received)},'received');yield part;}})();};}
  return listener(req,res);
 });};`);
   const inventory = await staticDictationInventory(directory);
@@ -173,10 +173,13 @@ http.createServer=function(options,listener){return create.call(this,options,(re
   let slow:http.ClientRequest|undefined;
   try{
     await until(()=>{if(child.exitCode!==null)throw Error(errors);return output.includes('ready\n');});
-    const headers={...identityHeaders(),'X-Mesh-Bridge':secret,'X-Mesh-Principal':'a'.repeat(64)};
-    const lookup=()=>request({socketPath,path:`/api/transcribe/request/${headers['X-Mesh-Request-Id']}`,headers});
-    const old=new Promise<{status:number;body:any}>((resolve,reject)=>{
-      slow=http.request({socketPath,path:'/api/transcribe',method:'POST',headers:{...headers,'Content-Length':'2'},agent:false},res=>{let body='';res.on('data',p=>body+=p);res.on('end',()=>resolve({status:res.statusCode!,body:JSON.parse(body)}));res.on('error',reject);});
+     const headers={...identityHeaders(),'X-Mesh-Bridge':secret,'X-Mesh-Principal':'a'.repeat(64)};
+     const lookup=()=>request({socketPath,path:`/api/transcribe/request/${headers['X-Mesh-Request-Id']}`,headers});
+     const begin=()=>request({socketPath,path:'/internal/relay/start',method:'POST',headers});
+     const initial=await begin();assert.equal(initial.status,200);
+     const old=new Promise<{status:number;body:any}>((resolve,reject)=>{
+       slow=http.request({socketPath,path:'/internal/relay/upload',method:'POST',headers:{...headers,
+         'X-Mesh-Relay-Claim':initial.body.claim,'Content-Length':'2'},agent:false},res=>{let body='';res.on('data',p=>body+=p);res.on('end',()=>resolve({status:res.statusCode!,body:JSON.parse(body)}));res.on('error',reject);});
       slow.on('error',reject);slow.write('a');
     });
     void old.catch(()=>{});
@@ -184,15 +187,20 @@ http.createServer=function(options,listener){return create.call(this,options,(re
     assert.equal((await lookup()).status,404,'receiving reservation is not public queued work');
     fs.writeFileSync(clock,'15001');
     assert.equal((await lookup()).status,404,'expired receiving admission swept');
-    const replacement=await request({socketPath,path:'/api/transcribe',method:'POST',headers},'b');
-    assert.equal(replacement.status,202,JSON.stringify(replacement.body));
+     const current=await begin();assert.equal(current.status,200);
+     const replacement=await request({socketPath,path:'/internal/relay/upload',method:'POST',
+       headers:{...headers,'X-Mesh-Relay-Claim':current.body.claim}},'b');
+     assert.equal(replacement.status,200,JSON.stringify(replacement.body));
     slow!.end('b');assert.equal((await old).status,503,'late old receiver really unwound');
     assert.equal((await lookup()).status,404,'prepared replacement remains hidden until commit');
-    const repeated=await request({socketPath,path:'/api/transcribe',method:'POST',headers},'c');
-    assert.equal(repeated.status,202);assert.equal(repeated.body.job.job_id,replacement.body.job.job_id);
-    const committed=await request({socketPath,path:`/internal/commit/${replacement.body.job.job_id}`,method:'POST',headers:{...headers,'Content-Type':'application/json','X-Mesh-Preparation':replacement.body.preparation}},'{}');
-    assert.equal(committed.status,200);
-    const recovered=await lookup();assert.equal(recovered.status,200);assert.equal(recovered.body.job_id,replacement.body.job.job_id);
+     const retry=await begin();assert.equal(retry.status,200);
+     const repeated=await request({socketPath,path:'/internal/relay/upload',method:'POST',
+       headers:{...headers,'X-Mesh-Relay-Claim':retry.body.claim}},'c');
+     assert.equal(repeated.status,200);assert.equal(repeated.body.claim,replacement.body.claim);
+     const committed=await request({socketPath,path:'/internal/relay/commit',method:'POST',
+       headers:{...headers,'X-Mesh-Relay-Claim':replacement.body.claim}});
+     assert.equal(committed.status,200);
+     const recovered=await lookup();assert.equal(recovered.status,200);assert.equal(recovered.body.job_id,committed.body.job.job_id);
   }finally{
     slow?.destroy();child.stdin.end();
     await until(()=>child.exitCode!==null||child.signalCode!==null);
@@ -243,7 +251,7 @@ test('actual adapter isolates every public operation from decoded URL syntax',as
   fs.writeFileSync(preload,`const fs=require('node:fs'),http=require('node:http'),create=http.createServer;
 process.stdin.once('data',part=>fs.writeFileSync(${JSON.stringify(identity)},String(process.pid)));
 http.createServer=function(options,listener){return create.call(this,options,(req,res)=>{
- fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({method:req.method,encoded:/[%?#\\\\]/.test(req.url),admission:req.url==='/api/transcribe',preflight:req.url==='/internal/admission'})+'\\n');
+ fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({method:req.method,encoded:/[%?#\\\\]/.test(req.url),admission:req.url==='/internal/relay/upload',preflight:req.url==='/internal/relay/start'})+'\\n');
  return listener(req,res);
 });};`);
   const f=await fixture(true,false,undefined,{workerPreload:preload});
@@ -315,10 +323,10 @@ function physicalLength(file:string,name:string,language:'python'|'typescript'):
   return end-start+1;
 }
 test('dictation compatibility boundary functions stay within 50 physical lines',()=>{
-  for(const name of ['api_dictation','_dictation_exchange','_dictation_internal_headers','_dictation_transfer'])
+  for(const name of ['api_dictation','_dictation_exchange','_dictation_relay_claim','_dictation_relay_transfer','_dictation_transfer'])
     assert.ok(physicalLength('server.py',name,'python')<=50,`${name} exceeds 50 lines`);
 });
 test('typed dictation service functions stay within 50 physical lines',()=>{
-  for(const name of ['startService','dispatch'])
+  for(const name of ['startService','dispatch','dispatchRelay','createRelayClaims'])
     assert.ok(physicalLength('backend/dictation-service.ts',name,'typescript')<=50,`${name} exceeds 50 lines`);
 });

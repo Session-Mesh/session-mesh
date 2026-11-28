@@ -12,7 +12,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {build} from 'esbuild';
 import {configuration} from '../backend/dictation.ts';
 import {startService} from '../backend/dictation-service.ts';
-import {identityHeaders,until} from '../checks/dictation-fixture.ts';
+import {identityHeaders,request,staticDictationInventory,until} from '../checks/dictation-fixture.ts';
 
 test('failed socket startup preserves the live worker and its close is shared', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-worker-'));
@@ -55,13 +55,20 @@ test('typed listener startup rejects a pre-cancelled worker before binding', asy
 for(const kind of ['json','empty','audio'] as const)test(`unfinished ${kind} rejection flushes a typed fault and closes without draining`,async()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'mesh-body-'));fs.chmodSync(directory,0o700);
   const secret=randomBytes(32).toString('hex'),principal='a'.repeat(64),socketPath=path.join(directory,'worker.sock');
-  const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed',MESH_WHISPER_MAX_BYTES:'4'})!,secret,socketPath,path.join(directory,'missing'),principal);
+  const inventory=await staticDictationInventory(directory);
+  const service=await startService(configuration({MESH_WHISPER_URL:'http://127.0.0.1:1/fixed',MESH_WHISPER_MAX_BYTES:'4'})!,secret,socketPath,inventory.socketPath,principal);
   let upload:http.ClientRequest|undefined;
   try{
+    const headers:Record<string,string>={...identityHeaders(),'X-Mesh-Bridge':secret,'X-Mesh-Principal':principal,'Content-Length':'100000',Connection:'keep-alive'};
+    if(kind==='audio'){
+      const started=await request({socketPath,method:'POST',path:'/internal/relay/start',
+        headers:{...headers,'Content-Length':'0'}});
+      assert.equal(started.status,200);
+      headers['X-Mesh-Relay-Claim']=started.body.claim;
+    }
     const result=await new Promise<{status:number;headers:http.IncomingHttpHeaders;body:any}>((resolve,reject)=>{
-      const headers={...identityHeaders(),'X-Mesh-Bridge':secret,'X-Mesh-Principal':principal,'Content-Length':'100000',Connection:'keep-alive'};
       if(kind==='json')headers['Content-Type']='application/json';
-      upload=http.request({socketPath,method:kind==='empty'?'GET':'POST',path:kind==='empty'?'/api/transcribe/config':kind==='json'?`/api/transcribe/${randomUUID()}/cancel`:'/api/transcribe',headers,agent:false},res=>{
+      upload=http.request({socketPath,method:kind==='empty'?'GET':'POST',path:kind==='empty'?'/api/transcribe/config':kind==='json'?`/api/transcribe/${randomUUID()}/cancel`:'/internal/relay/upload',headers,agent:false},res=>{
         const parts:Buffer[]=[];res.on('data',part=>parts.push(part));res.on('error',reject);
         res.on('end',()=>resolve({status:res.statusCode!,headers:res.headers,body:JSON.parse(Buffer.concat(parts).toString())}));
       });
@@ -73,7 +80,7 @@ for(const kind of ['json','empty','audio'] as const)test(`unfinished ${kind} rej
     assert.equal(result.headers.connection,'close');
     await until(()=>upload!.destroyed);
     assert.deepEqual(service.engine.stats(),{records:0,bytes:0,active:0,waiting:0});
-  }finally{upload?.destroy();await service.close();fs.rmSync(directory,{recursive:true,force:true});}
+  }finally{upload?.destroy();await service.close();await inventory.close();fs.rmSync(directory,{recursive:true,force:true});}
 });
 
 for(const early of [true,false])test(`worker handles bootstrap stdin EOF ${early?'during':'after'} service startup with parent alive`,async()=>{
