@@ -426,7 +426,7 @@ function prefixedBytes(prefix, bytes) {
 
 function localTerminalSocket(name, { rows, cols, created }, inputBinding = null) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  // replay_geometry=1: current PTY geometry captured before this attach's resize,
+  // replay_geometry=1: retained output geometry when the PTY host can establish it,
   // not historical per-byte geometry of a replay spanning several resize epochs.
   // pty_size=1: this pane follows the PTY size another device owns ({t:"s"}, Pane.applyPtySize).
   const conditional = typeof created === "number" && Number.isFinite(created) && created > 0;
@@ -1506,7 +1506,7 @@ class Pane {
   ownSize() {
     return this.conn?.replaySize ?? { rows: this.term.rows, cols: this.term.cols };
   }
-  // A replay is parsed at the current pre-attach geometry (a best-effort hint),
+  // A replay is parsed at its reported geometry when available,
   // then xterm takes this pane's size back and rewraps its rows (leaveReplayGeometry). The
   // resize is done now, not in a write of its own: output still queued before the replay is
   // wiped by the reset the replay starts with (replayPrefix). Meanwhile sizes sent are the

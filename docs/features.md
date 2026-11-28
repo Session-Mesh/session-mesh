@@ -551,8 +551,9 @@ working directory. Its labels say what the mesh observed and what it did not loo
 The terminal is xterm.js connected to the session's raw output; the last 2 MiB are replayed when a
 browser reconnects, and several browsers can show the same session at once. After a reconnection
 the replay replaces what the terminal showed, so the history appears once; a full-screen program on
-the alternate screen is redrawn in place instead. The replay is read at the terminal size the
-session had before this browser attached, then rewrapped to the browser's width.
+the alternate screen is redrawn in place instead. When the host supplies a size hint, the
+browser reads the replay at that size and rewraps it to the pane's width. After a resize with no
+new terminal output, the host omits the hint and the browser uses the pane's own size.
 
 - **Several browsers on one session: who sets the size.** A session has one terminal size, and a
   program such as Claude Code redraws its footer for that width only; a browser narrower than it
